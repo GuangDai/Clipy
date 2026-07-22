@@ -32,14 +32,14 @@ private func makeCanonical() throws -> CanonicalContent {
     try CanonicalContent(representations: [
         CanonicalRepresentation(
             content: ContentRepresentation(
-                typeIdentifier: pngType,
+                typeIdentifier: Self.pngType,
                 bytes: Data([0x89, 0x50])
             ),
             fingerprint: ContentFingerprint(rawValue: 11)
         ),
         CanonicalRepresentation(
             content: ContentRepresentation(
-                typeIdentifier: textType,
+                typeIdentifier: Self.textType,
                 bytes: Data([0x68, 0x69])
             ),
             fingerprint: ContentFingerprint(rawValue: 22)
@@ -50,7 +50,7 @@ private func makeCanonical() throws -> CanonicalContent {
 private func makeRevision(
     id: UUID,
     createdAt: Date = Date(timeIntervalSinceReferenceDate: 1_000),
-    representations: [(String, [UInt8])] = [(textType, [0x68, 0x65, 0x6C, 0x6C, 0x6F])]
+    representations: [(String, [UInt8])] = [(Self.textType, [0x68, 0x65, 0x6C, 0x6C, 0x6F])]
 ) -> ContentRevision {
     ContentRevision(
         id: RevisionID(rawValue: id),
@@ -159,20 +159,20 @@ private func smallLimits(
     // comparison is an exact-fidelity check of the container format.
     let revisions = [
         makeRevision(
-            id: revisionUUID1,
+            id: Self.revisionUUID1,
             createdAt: Date(timeIntervalSinceReferenceDate: 1_234_567.25),
-            representations: [(textType, [0x76, 0x31])]
+            representations: [(Self.textType, [0x76, 0x31])]
         ),
         makeRevision(
-            id: revisionUUID2,
+            id: Self.revisionUUID2,
             createdAt: Date(timeIntervalSinceReferenceDate: 2_345_678.5),
             representations: [
-                (pngType, [0x89, 0x50, 0x4E, 0x47]),
-                (textType, [0x76, 0x32]),
+                (Self.pngType, [0x89, 0x50, 0x4E, 0x47]),
+                (Self.textType, [0x76, 0x32]),
             ]
         ),
     ]
-    let activeRevisionID = RevisionID(rawValue: revisionUUID2)
+    let activeRevisionID = RevisionID(rawValue: Self.revisionUUID2)
 
     let blob = try RevisionStateBlobCodec.encode(
         revisions: revisions,
@@ -228,10 +228,10 @@ private func smallLimits(
 /// yields identical bytes.
 @Test func encodeIsDeterministic() throws {
     let revisions = [
-        makeRevision(id: revisionUUID1),
-        makeRevision(id: revisionUUID2),
+        makeRevision(id: Self.revisionUUID1),
+        makeRevision(id: Self.revisionUUID2),
     ]
-    let activeRevisionID = RevisionID(rawValue: revisionUUID1)
+    let activeRevisionID = RevisionID(rawValue: Self.revisionUUID1)
 
     let first = try RevisionStateBlobCodec.encode(
         revisions: revisions,
@@ -288,11 +288,11 @@ private func smallLimits(
     let limits = smallLimits(maximumRevisionsPerItem: 2)
     let blob = try wireBlob(
         revisions: [
-            storedRevision(revisionUUID1, representations: [storedRepresentation(textType, [0x31])]),
-            storedRevision(revisionUUID2, representations: [storedRepresentation(textType, [0x32])]),
-            storedRevision(foreignUUID, representations: [storedRepresentation(textType, [0x33])]),
+            storedRevision(Self.revisionUUID1, representations: [storedRepresentation(Self.textType, [0x31])]),
+            storedRevision(Self.revisionUUID2, representations: [storedRepresentation(Self.textType, [0x32])]),
+            storedRevision(Self.foreignUUID, representations: [storedRepresentation(Self.textType, [0x33])]),
         ],
-        activeRevisionID: revisionUUID2
+        activeRevisionID: Self.revisionUUID2
     )
     #expect(throws: CodecRejection.countExceedsBound(found: 3, bound: 2)) {
         try RevisionStateBlobCodec.decode(blob, canonical: canonical, limits: limits)
@@ -310,11 +310,11 @@ private func smallLimits(
     let sixtyBytes = [UInt8](repeating: 0x61, count: 60)
     let blob = try wireBlob(
         revisions: [
-            storedRevision(revisionUUID1, representations: [storedRepresentation(textType, sixtyBytes)]),
-            storedRevision(revisionUUID2, representations: [storedRepresentation(textType, sixtyBytes)]),
-            storedRevision(foreignUUID, representations: [storedRepresentation(textType, sixtyBytes)]),
+            storedRevision(Self.revisionUUID1, representations: [storedRepresentation(Self.textType, sixtyBytes)]),
+            storedRevision(Self.revisionUUID2, representations: [storedRepresentation(Self.textType, sixtyBytes)]),
+            storedRevision(Self.foreignUUID, representations: [storedRepresentation(Self.textType, sixtyBytes)]),
         ],
-        activeRevisionID: revisionUUID2
+        activeRevisionID: Self.revisionUUID2
     )
     #expect(throws: CodecRejection.totalBytesExceedBound(found: 180, bound: 128)) {
         try RevisionStateBlobCodec.decode(blob, canonical: canonical, limits: limits)
@@ -326,12 +326,12 @@ private func smallLimits(
     let canonical = try makeCanonical()
     let blob = try wireBlob(
         revisions: [
-            storedRevision(revisionUUID1, representations: [storedRepresentation(textType, [0x31])]),
-            storedRevision(revisionUUID1, representations: [storedRepresentation(pngType, [0x32])]),
+            storedRevision(Self.revisionUUID1, representations: [storedRepresentation(Self.textType, [0x31])]),
+            storedRevision(Self.revisionUUID1, representations: [storedRepresentation(Self.pngType, [0x32])]),
         ],
-        activeRevisionID: revisionUUID1
+        activeRevisionID: Self.revisionUUID1
     )
-    #expect(throws: RevisionStateCodecRejection.duplicateRevisionID(revisionUUID1)) {
+    #expect(throws: RevisionStateCodecRejection.duplicateRevisionID(Self.revisionUUID1)) {
         try RevisionStateBlobCodec.decode(blob, canonical: canonical)
     }
 }
@@ -341,12 +341,12 @@ private func smallLimits(
     let canonical = try makeCanonical()
     let blob = try wireBlob(
         revisions: [
-            storedRevision(revisionUUID1, representations: [storedRepresentation(textType, [0x31])]),
+            storedRevision(Self.revisionUUID1, representations: [storedRepresentation(Self.textType, [0x31])]),
         ],
-        activeRevisionID: foreignUUID
+        activeRevisionID: Self.foreignUUID
     )
     #expect(
-        throws: RevisionStateCodecRejection.activeRevisionIDNamesNoStoredRevision(foreignUUID)
+        throws: RevisionStateCodecRejection.activeRevisionIDNamesNoStoredRevision(Self.foreignUUID)
     ) {
         try RevisionStateBlobCodec.decode(blob, canonical: canonical)
     }
@@ -357,7 +357,7 @@ private func smallLimits(
     let canonical = try makeCanonical()
     let blob = try wireBlob(
         revisions: [
-            storedRevision(revisionUUID1, representations: [storedRepresentation(textType, [0x31])]),
+            storedRevision(Self.revisionUUID1, representations: [storedRepresentation(Self.textType, [0x31])]),
         ],
         activeRevisionID: nil
     )
@@ -371,8 +371,8 @@ private func smallLimits(
 @Test func decodeRejectsEmptyRevisionContent() throws {
     let canonical = try makeCanonical()
     let blob = try wireBlob(
-        revisions: [storedRevision(revisionUUID1, representations: [])],
-        activeRevisionID: revisionUUID1
+        revisions: [storedRevision(Self.revisionUUID1, representations: [])],
+        activeRevisionID: Self.revisionUUID1
     )
     #expect(throws: CodecRejection.emptyList) {
         try RevisionStateBlobCodec.decode(blob, canonical: canonical)
@@ -386,14 +386,14 @@ private func smallLimits(
     let blob = try wireBlob(
         revisions: [
             storedRevision(
-                revisionUUID1,
+                Self.revisionUUID1,
                 representations: [
-                    storedRepresentation(textType, [0x31]),
-                    storedRepresentation(pngType, [0x32]),
+                    storedRepresentation(Self.textType, [0x31]),
+                    storedRepresentation(Self.pngType, [0x32]),
                 ]
             ),
         ],
-        activeRevisionID: revisionUUID1
+        activeRevisionID: Self.revisionUUID1
     )
     #expect(throws: CodecRejection.nonNormalizedOrder) {
         try RevisionStateBlobCodec.decode(blob, canonical: canonical)
@@ -407,16 +407,16 @@ private func smallLimits(
     let blob = try wireBlob(
         revisions: [
             storedRevision(
-                revisionUUID1,
+                Self.revisionUUID1,
                 representations: [
-                    storedRepresentation(pngType, [0x31]),
-                    storedRepresentation(pngType, [0x32]),
+                    storedRepresentation(Self.pngType, [0x31]),
+                    storedRepresentation(Self.pngType, [0x32]),
                 ]
             ),
         ],
-        activeRevisionID: revisionUUID1
+        activeRevisionID: Self.revisionUUID1
     )
-    #expect(throws: CodecRejection.duplicateTypeIdentifier(pngType)) {
+    #expect(throws: CodecRejection.duplicateTypeIdentifier(Self.pngType)) {
         try RevisionStateBlobCodec.decode(blob, canonical: canonical)
     }
 }
@@ -427,13 +427,13 @@ private func smallLimits(
     let blob = try wireBlob(
         revisions: [
             storedRevision(
-                revisionUUID1,
-                representations: [storedRepresentation(tiffType, [0x31])]
+                Self.revisionUUID1,
+                representations: [storedRepresentation(Self.tiffType, [0x31])]
             ),
         ],
-        activeRevisionID: revisionUUID1
+        activeRevisionID: Self.revisionUUID1
     )
-    #expect(throws: RevisionStateCodecRejection.nonCanonicalRevisionType(tiffType)) {
+    #expect(throws: RevisionStateCodecRejection.nonCanonicalRevisionType(Self.tiffType)) {
         try RevisionStateBlobCodec.decode(blob, canonical: canonical)
     }
 }
@@ -444,13 +444,13 @@ private func smallLimits(
     let blob = try wireBlob(
         revisions: [
             storedRevision(
-                revisionUUID1,
-                representations: [storedRepresentation(textType, [])]
+                Self.revisionUUID1,
+                representations: [storedRepresentation(Self.textType, [])]
             ),
         ],
-        activeRevisionID: revisionUUID1
+        activeRevisionID: Self.revisionUUID1
     )
-    #expect(throws: CodecRejection.emptyBytes(typeIdentifier: textType)) {
+    #expect(throws: CodecRejection.emptyBytes(typeIdentifier: Self.textType)) {
         try RevisionStateBlobCodec.decode(blob, canonical: canonical)
     }
 }
@@ -463,13 +463,13 @@ private func smallLimits(
     let blob = try wireBlob(
         revisions: [
             storedRevision(
-                revisionUUID1,
+                Self.revisionUUID1,
                 representations: [
-                    storedRepresentation(textType, [UInt8](repeating: 0x61, count: 100))
+                    storedRepresentation(Self.textType, [UInt8](repeating: 0x61, count: 100))
                 ]
             ),
         ],
-        activeRevisionID: revisionUUID1
+        activeRevisionID: Self.revisionUUID1
     )
     #expect(
         throws: CodecRejection.representationBytesExceedBound(found: 100, bound: 64)
@@ -487,14 +487,14 @@ private func smallLimits(
     let blob = try wireBlob(
         revisions: [
             storedRevision(
-                revisionUUID1,
+                Self.revisionUUID1,
                 representations: [
-                    storedRepresentation(pngType, fortyBytes),
-                    storedRepresentation(textType, fortyBytes),
+                    storedRepresentation(Self.pngType, fortyBytes),
+                    storedRepresentation(Self.textType, fortyBytes),
                 ]
             ),
         ],
-        activeRevisionID: revisionUUID1
+        activeRevisionID: Self.revisionUUID1
     )
     #expect(throws: CodecRejection.totalBytesExceedBound(found: 80, bound: 64)) {
         try RevisionStateBlobCodec.decode(blob, canonical: canonical, limits: limits)
@@ -509,7 +509,7 @@ private func smallLimits(
     let blob = try wireBlob(
         revisions: [
             storedRevision(
-                revisionUUID1,
+                Self.revisionUUID1,
                 representations: [
                     storedRepresentation("a", [0x31]),
                     storedRepresentation("b", [0x32]),
@@ -519,7 +519,7 @@ private func smallLimits(
                 ]
             ),
         ],
-        activeRevisionID: revisionUUID1
+        activeRevisionID: Self.revisionUUID1
     )
     #expect(throws: CodecRejection.countExceedsBound(found: 5, bound: 4)) {
         try RevisionStateBlobCodec.decode(blob, canonical: canonical, limits: limits)
@@ -532,11 +532,11 @@ private func smallLimits(
     let blob = try wireBlob(
         revisions: [
             storedRevision(
-                revisionUUID1,
+                Self.revisionUUID1,
                 representations: [storedRepresentation("", [0x31])]
             ),
         ],
-        activeRevisionID: revisionUUID1
+        activeRevisionID: Self.revisionUUID1
     )
     #expect(throws: CodecRejection.emptyTypeIdentifier) {
         try RevisionStateBlobCodec.decode(blob, canonical: canonical)
@@ -551,11 +551,11 @@ private func smallLimits(
     let blob = try wireBlob(
         revisions: [
             storedRevision(
-                revisionUUID1,
+                Self.revisionUUID1,
                 representations: [storedRepresentation(oversized, [0x31])]
             ),
         ],
-        activeRevisionID: revisionUUID1
+        activeRevisionID: Self.revisionUUID1
     )
     #expect(
         throws: CodecRejection.typeIdentifierExceedsBound(found: 65, bound: 64)
@@ -632,11 +632,11 @@ private func smallLimits(
 /// `.persistence(.corruptStoredValue)` at the storage boundary.
 @Test func rejectionsMapToCorruptStoredValue() {
     #expect(
-        RevisionStateCodecRejection.duplicateRevisionID(revisionUUID1).historyFailure
+        RevisionStateCodecRejection.duplicateRevisionID(Self.revisionUUID1).historyFailure
             == .persistence(.corruptStoredValue)
     )
     #expect(
-        RevisionStateCodecRejection.activeRevisionIDNamesNoStoredRevision(foreignUUID)
+        RevisionStateCodecRejection.activeRevisionIDNamesNoStoredRevision(Self.foreignUUID)
             .historyFailure == .persistence(.corruptStoredValue)
     )
     #expect(
@@ -644,7 +644,7 @@ private func smallLimits(
             == .persistence(.corruptStoredValue)
     )
     #expect(
-        RevisionStateCodecRejection.nonCanonicalRevisionType(tiffType).historyFailure
+        RevisionStateCodecRejection.nonCanonicalRevisionType(Self.tiffType).historyFailure
             == .persistence(.corruptStoredValue)
     )
     #expect(
