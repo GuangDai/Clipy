@@ -18,13 +18,13 @@ struct RevisionStateBlobCodecTests {
 
 // MARK: - Fixtures
 
-private let pngType = "public.png"
-private let textType = "public.utf8-plain-text"
-private let tiffType = "public.tiff"
+private static let pngType = "public.png"
+private static let textType = "public.utf8-plain-text"
+private static let tiffType = "public.tiff"
 
-private let revisionUUID1 = UUID(uuidString: "00000000-0000-0000-0000-0000000000A1")!
-private let revisionUUID2 = UUID(uuidString: "00000000-0000-0000-0000-0000000000B2")!
-private let foreignUUID = UUID(uuidString: "00000000-0000-0000-0000-0000000000FF")!
+private static let revisionUUID1 = UUID(uuidString: "00000000-0000-0000-0000-0000000000A1")!
+private static let revisionUUID2 = UUID(uuidString: "00000000-0000-0000-0000-0000000000B2")!
+private static let foreignUUID = UUID(uuidString: "00000000-0000-0000-0000-0000000000FF")!
 
 /// The item's Canonical Content: two normalized representations (PNG sorts
 /// before UTF-8 text in stable Unicode scalar order).
