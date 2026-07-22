@@ -1,0 +1,61 @@
+name: Update HistoryCore symbol snapshot
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: symbol-snapshot-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  update-snapshot:
+    name: Regenerate public symbol snapshot
+    runs-on: macos-26
+    timeout-minutes: 15
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Enforce macOS 26 ARM runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          PRODUCT_VERSION="$(sw_vers -productVersion)"
+          MACHINE_ARCH="$(uname -m)"
+          echo "Detected macOS version: $PRODUCT_VERSION"
+          echo "Detected architecture: $MACHINE_ARCH"
+          if [[ "$PRODUCT_VERSION" != 26.* ]]; then
+            echo "Expected macOS 26.x, got $PRODUCT_VERSION"
+            exit 1
+          fi
+          if [[ "$MACHINE_ARCH" != arm64 ]]; then
+            echo "Expected arm64 runner, got $MACHINE_ARCH"
+            exit 1
+          fi
+
+      - name: Regenerate HistoryCore public symbol snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/public_symbol_snapshot.sh --update
+
+      - name: Commit and push snapshot update
+        shell: bash
+        run: |
+          set -euo pipefail
+          SNAPSHOT="Tests/HistoryCoreTests/SymbolSurface/HistoryCore.symbols.txt"
+          if [[ -z "$(git status --porcelain -- "$SNAPSHOT")" ]]; then
+            echo "Snapshot already up to date; nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- "$SNAPSHOT"
+          git diff --cached --stat
+          git commit -m "Update HistoryCore public symbol snapshot"
+          git push

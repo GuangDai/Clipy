@@ -77,6 +77,7 @@ else
 fi
 
 echo "public_symbol_snapshot: extracting symbol graph (target $TARGET_TRIPLE)..."
+mkdir -p "$WORK/symbolgraph"
 xcrun swift symbolgraph-extract \
     -module-name HistoryCore \
     -target "$TARGET_TRIPLE" \
