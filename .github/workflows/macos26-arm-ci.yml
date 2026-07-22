@@ -240,7 +240,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          matches=$(grep -Ein '(^|[^[:alpha:]])(warning:|error:|\*\* TEST FAILED \*\*|\*\* BUILD FAILED \*\*)([^[:alpha:]]|$)' "$LOG_DIR/app-build-test.log" || true)
+          # Tolerate headless-runner toolchain noise: the AppIntents metadata
+          # processor warns on every bundle without an AppIntents dependency —
+          # not a code warning (same class as Maccy's Metal/XPC exclusions).
+          matches=$(grep -Ein '(^|[^[:alpha:]])(warning:|error:|\*\* TEST FAILED \*\*|\*\* BUILD FAILED \*\*)([^[:alpha:]]|$)' "$LOG_DIR/app-build-test.log" \
+                    | grep -vE 'appintentsmetadataprocessor.*Metadata extraction skipped' || true)
           if [[ -n "$matches" ]]; then
             echo "$matches"
             echo "Warnings, errors, or failures found in app build/test log"
