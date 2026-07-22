@@ -3,10 +3,11 @@ import PackageDescription
 
 // Step-0 scaffold manifest (docs/roadmap/README.md §3, phase 0; target graph:
 // docs/01-architecture.md §1, target list: docs/06-cross-cutting.md §5).
-// The HistoryStorage→Fuse edge is deferred to roadmap step 3 — do not add it
-// here. xxh3 is package-internal (no product) and ships placeholder C source
-// until step 3. ClipyIntegrationTests is XcodeGen-hosted and is NOT declared
-// in this manifest.
+// The HistoryStorage→Fuse edge landed at roadmap step 3 (pinned below; first
+// imported at step 7). xxh3 is package-internal (no product) and vendors
+// pinned xxHash v0.8.3 since step 3 (see Sources/xxh3/VENDORED.md).
+// ClipyIntegrationTests is XcodeGen-hosted and is NOT declared in this
+// manifest.
 
 let package = Package(
     name: "Clipy",
@@ -18,6 +19,11 @@ let package = Package(
         .library(name: "PasteboardAdapter", targets: ["PasteboardAdapter"]),
         .library(name: "PresentationUI", targets: ["PresentationUI"]),
     ],
+    dependencies: [
+        // Tag 1.4.0 (NOT 2.0.0-rc.x, per docs/roadmap/07-external-deps.md and
+        // docs/AUDIT.md §4b).
+        .package(url: "https://github.com/krisk/fuse-swift.git", revision: "26ba868691b2d8b7bf2b1322951eb591be70ccca"),
+    ],
     targets: [
         .target(name: "HistoryCore"),
         .target(
@@ -26,7 +32,12 @@ let package = Package(
         ),
         .target(
             name: "HistoryStorage",
-            dependencies: ["HistoryCore", "HistoryDomain", "xxh3"]
+            dependencies: [
+                "HistoryCore",
+                "HistoryDomain",
+                "xxh3",
+                .product(name: "Fuse", package: "fuse-swift"),
+            ]
         ),
         .target(
             name: "PasteboardAdapter",
@@ -47,7 +58,8 @@ let package = Package(
         ),
         .testTarget(
             name: "HistoryCoreTests",
-            dependencies: ["HistoryCore"]
+            dependencies: ["HistoryCore"],
+            exclude: ["SymbolSurface"]
         ),
         .testTarget(
             name: "HistoryDomainTests",

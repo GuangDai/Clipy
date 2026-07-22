@@ -49,8 +49,8 @@ custom_rules:
   historystorage_import_confinement:
     name: "HistoryStorage import confinement"
     included: "Sources/HistoryStorage/"
-    # Blocklist target: SwiftData / ImageIO / xxh3 / HistoryCore / HistoryDomain
-    # are allowed. Fuse becomes an allowed import at roadmap step 3 once pinned.
+    # Blocklist target: SwiftData / ImageIO / xxh3 / Fuse / HistoryCore /
+    # HistoryDomain are allowed (Fuse pinned at roadmap step 3).
     regex: '^\s*(?:@_\w+\s+)*import\s+(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:AppKit|SwiftUI|PasteboardAdapter|PresentationUI)\b'
     message: "HistoryStorage must not import AppKit, SwiftUI, adapters, or PresentationUI (Part I §8)."
     severity: error
@@ -78,6 +78,14 @@ custom_rules:
     excluded: "Sources/HistoryStorage/"
     regex: '^\s*(?:@_\w+\s+)*import\s+(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?xxh3\b'
     message: "xxh3 is confined to HistoryStorage (Part I §8)."
+    severity: error
+
+  fuse_confinement:
+    name: "Fuse confinement"
+    included: "Sources/"
+    excluded: "Sources/HistoryStorage/"
+    regex: '^\s*(?:@_\w+\s+)*import\s+(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?Fuse\b'
+    message: "Fuse is confined to HistoryStorage (Part I §8)."
     severity: error
 
   # ---- Escape hatches and service locators (mirror of scripts/escape_hatch_scan.py) ----

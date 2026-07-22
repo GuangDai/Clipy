@@ -9,7 +9,9 @@ XCODEGEN_HOME="${XCODEGEN_HOME:-${TMPDIR:-/tmp}/xcodegen-$XCODEGEN_VERSION}"
 PROJECT_ROOT="${PROJECT_ROOT:-$PWD}"
 SPEC="$PROJECT_ROOT/ClipyApp/project.yml"
 
-if [[ ! -x "$XCODEGEN_HOME/bin/xcodegen" ]]; then
+XCODEGEN_BIN="$XCODEGEN_HOME/xcodegen/bin/xcodegen"
+
+if [[ ! -x "$XCODEGEN_BIN" ]]; then
   mkdir -p "$XCODEGEN_HOME"
   archive="$XCODEGEN_HOME/xcodegen.zip"
   curl -fsSL \
@@ -19,5 +21,5 @@ if [[ ! -x "$XCODEGEN_HOME/bin/xcodegen" ]]; then
 fi
 
 cd "$PROJECT_ROOT"
-"$XCODEGEN_HOME/bin/xcodegen" generate --spec "$SPEC"
+"$XCODEGEN_BIN" generate --spec "$SPEC"
 echo "Generated ClipyApp/ClipyApp.xcodeproj with XcodeGen $XCODEGEN_VERSION"

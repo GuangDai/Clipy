@@ -1,25 +1,21 @@
 /*
- * Step-0 PLACEHOLDER implementation of clipy_xxh3_64bits.
+ * Implementation of clipy_xxh3_64bits on top of the vendored, pinned xxHash
+ * v0.8.3 single-file sources (see VENDORED.md).
  *
- * This is NOT xxHash. It is a deterministic FNV-1a over the input bytes so the
- * package links and tests run before the pinned xxHash source lands at roadmap
- * step 3 (docs/roadmap/README.md §3). Hashes produced here are valid only
- * inside step-0 scaffolding and must never be persisted across the swap.
+ * The implementation is compiled in the sibling xxhash.c translation unit,
+ * which follows the header's own single-file build guidance:
+ *
+ *     #define XXH_STATIC_LINKING_ONLY
+ *     #define XXH_IMPLEMENTATION
+ *     #include "xxhash.h"
+ *
+ * so this file only needs the plain public declarations of XXH3_64bits.
  */
 
 #include "xxh3.h"
 
-uint64_t clipy_xxh3_64bits(const void *input, size_t length) {
-    const unsigned char *bytes = (const unsigned char *)input;
-    uint64_t hash = UINT64_C(14695981039346656037); /* FNV-1a offset basis */
-    size_t i;
+#include "xxhash.h"
 
-    if (input == NULL) {
-        return 0;
-    }
-    for (i = 0; i < length; i++) {
-        hash ^= (uint64_t)bytes[i];
-        hash *= UINT64_C(1099511628211); /* FNV-1a prime */
-    }
-    return hash;
+uint64_t clipy_xxh3_64bits(const void *input, size_t length) {
+    return (uint64_t)XXH3_64bits(input, length);
 }
