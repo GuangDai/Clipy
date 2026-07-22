@@ -78,9 +78,11 @@ fi
 
 echo "public_symbol_snapshot: extracting symbol graph (target $TARGET_TRIPLE)..."
 mkdir -p "$WORK/symbolgraph"
+SDK_PATH="$(xcrun --sdk macosx --show-sdk-path)"
 xcrun swift symbolgraph-extract \
     -module-name HistoryCore \
     -target "$TARGET_TRIPLE" \
+    -sdk "$SDK_PATH" \
     -I "$MODULE_DIR" \
     -output-dir "$WORK/symbolgraph"
 
