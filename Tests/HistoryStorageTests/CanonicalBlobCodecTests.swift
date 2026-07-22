@@ -9,6 +9,8 @@ import HistoryDomain
 import Testing
 @testable import HistoryStorage
 
+struct CanonicalBlobCodecTests {
+
 private let customType = "com.example.custom"
 private let pngType = "public.png"
 private let textType = "public.utf8-plain-text"
@@ -319,4 +321,5 @@ private func makeLimits(
     )
     // ...and the encode-side backstop is a storage invariant violation.
     #expect(CodecRejection.encodingFailed.historyFailure == .persistence(.invariantViolation))
+}
 }

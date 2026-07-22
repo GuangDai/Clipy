@@ -8,6 +8,8 @@ import HistoryCore
 import Testing
 @testable import HistoryStorage
 
+struct EffectiveTypeIdentifiersBlobCodecTests {
+
 /// A valid sorted, unique, non-empty projection list (Part V §15).
 private let sortedIdentifiers = [
     "com.example.custom",
@@ -182,4 +184,5 @@ private func makeLimits(
     #expect(throws: CodecRejection.nonNormalizedOrder) {
         try EffectiveTypeIdentifiersBlobCodec.decode(blob)
     }
+}
 }

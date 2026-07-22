@@ -14,6 +14,8 @@ import HistoryCore
 import HistoryDomain
 @testable import HistoryStorage
 
+struct RevisionStateBlobCodecTests {
+
 // MARK: - Fixtures
 
 private let pngType = "public.png"
@@ -669,4 +671,5 @@ private func smallLimits(
         CodecRejection.unknownBlobVersion(found: 2).historyFailure
             == .persistence(.corruptStoredValue)
     )
+}
 }

@@ -10,6 +10,8 @@ import HistoryDomain
 import Testing
 @testable import HistoryStorage
 
+struct SignatureBlobCodecTests {
+
 private let customType = "com.example.custom"
 private let pngType = "public.png"
 private let textType = "public.utf8-plain-text"
@@ -381,4 +383,5 @@ private func makeLimits(
     ) {
         try SignatureBlobCodec.validateCoverage(canonical: canonical, entries: entries)
     }
+}
 }
