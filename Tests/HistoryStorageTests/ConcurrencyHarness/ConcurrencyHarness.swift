@@ -95,8 +95,8 @@ actor SuspensionGate {
     /// rethrowing, so no task is left parked behind a failed test.
     func runParked<Paused: Sendable, Interfering: Sendable>(
         at point: String,
-        operation: @Sendable () async throws -> Paused,
-        whileCommitting interference: @Sendable () async throws -> Interfering
+        operation: @escaping @Sendable () async throws -> Paused,
+        whileCommitting interference: @escaping @Sendable () async throws -> Interfering
     ) async throws -> (paused: Paused, interfering: Interfering) {
         let task = Task { try await operation() }
         do {
