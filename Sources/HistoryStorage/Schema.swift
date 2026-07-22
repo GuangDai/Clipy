@@ -9,6 +9,7 @@
 /// no version-map/checkpoint row, no separate pin table or denormalized
 /// occupancy map, no enrichment or revision-retention metadata, and no
 /// migration bridge from the current Maccy models (§3.3).
+import Foundation
 import SwiftData
 
 /// The v1 schema (`HistorySchemaV1`) containing exactly `HistoryItemRow` and
