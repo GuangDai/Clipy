@@ -10,11 +10,17 @@ import HistoryCore
 /// production test seam is needed for reads).
 enum WSSupport {
     /// A unique temporary store URL for one test; the caller removes the
-    /// directory in a `defer` (see `removeStore`).
+    /// directory in a `defer` (see `removeStore`). The parent directory is
+    /// created up front — CoreData otherwise logs file-status diagnostics
+    /// when it has to create it implicitly.
     static func tempStoreURL(_ testName: String) -> URL {
-        FileManager.default.temporaryDirectory
+        let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("clipy-ws-\(testName)-\(UUID().uuidString)")
-            .appendingPathComponent("store.sqlite")
+        try? FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        return directory.appendingPathComponent("store.sqlite")
     }
 
     /// Removes the store directory created for `url` (its parent directory).
