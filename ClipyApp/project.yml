@@ -38,6 +38,11 @@ targets:
     platform: macOS
     sources:
       - Tests/ClipyIntegrationTests
+    settings:
+      # Explicit host path: the app target's PRODUCT_NAME (Clipy) differs from
+      # the target name (ClipyApp), and XcodeGen's inferred TEST_HOST uses the
+      # target name, which does not exist on disk.
+      TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Clipy.app/Contents/MacOS/Clipy"
     dependencies:
       - target: ClipyApp
 schemes:
