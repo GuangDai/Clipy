@@ -191,7 +191,6 @@ jobs:
       DERIVED_DATA: ${{ github.workspace }}/DerivedData
       RESULT_BUNDLES: ${{ github.workspace }}/ci-result-bundles
       LOG_DIR: ${{ github.workspace }}/ci-logs
-      XCODEGEN_HOME: ${{ runner.temp }}/xcodegen-2.45.4
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -209,6 +208,8 @@ jobs:
 
       - name: Generate twice and verify repeatability
         shell: bash
+        env:
+          XCODEGEN_HOME: ${{ runner.temp }}/xcodegen-2.45.4
         run: |
           set -euo pipefail
           bash scripts/generate-xcodeproj.sh 2>&1 | tee "$LOG_DIR/xcodegen-first.log"
