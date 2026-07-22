@@ -1,6 +1,6 @@
 # Module 1 — HistoryCore
 
-- **Status:** not-started
+- **Status:** done (step 1; see Progress below)
 - **Spec references:** `../03a-instruction-set.md` §1–§7, `../03b-instruction-set.md` §8–§12 (Part III, the entire caller interface); ownership `../01-architecture.md` §2; forbidden imports `../01-architecture.md` §8; safety bounds `../06-cross-cutting.md` §2.
 - **Dependencies:** Foundation only. Imports nothing else (no SwiftData/AppKit/SwiftUI/ImageIO/xxh3, no HistoryDomain/HistoryStorage).
 - **Test target:** `HistoryCoreTests`.
@@ -31,3 +31,8 @@ The complete public, Foundation-only surface between callers and retained Histor
 
 - The closed `HistoryAction` enum makes adding an action an owned source change across Core, Domain, Storage, tests (03a §1) — compiler-exhaustive switches must fail until handled.
 - IDs/tokens are package-init; this centralizes minting, it is not a security boundary (03a §2).
+
+## Progress
+
+- **Step 1 landed** at [`4e3e4fd`](https://github.com/GuangDai/Clipy/commit/4e3e4fd3e403c0e3f1050f74e3eb7b9d0efdb4bb) (03a §2–§7, 03b §8–§10, 06 §2); follow-ups [`e07a34a`](https://github.com/GuangDai/Clipy/commit/e07a34a8518ff9477d1dd6efd472e6e650813e7d) (CI `XCODEGEN_HOME` step env), [`6b50d2e`](https://github.com/GuangDai/Clipy/commit/6b50d2ec7d6fd4d1dd979a34cb2860cb7855833e) (symbolgraph-extract macOS SDK), [`1cf1715`](https://github.com/GuangDai/Clipy/commit/1cf1715d39fb54c6c18ca959a32921a7d74e1128) (snapshot lock; bot, workflow `symbol-snapshot.yml`).
+- **Evidence — green at run [29964640300](https://github.com/GuangDai/Clipy/actions/runs/29964640300) (macos-26 runner, HEAD `7994844`):** compiles Swift 6 complete strict-concurrency importing only Foundation; `HistoryCoreSurfaceTests` green; public symbol surface locked at `1cf1715` (`Tests/HistoryCoreTests/SymbolSurface/HistoryCore.symbols.txt`) and gate-enforced (`scripts/public_symbol_snapshot.sh`, workflow `symbol-snapshot.yml`); forbidden-import scan in force (Part VI §6).

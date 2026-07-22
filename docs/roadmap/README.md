@@ -1,7 +1,9 @@
 # Implementation Roadmap
 
-> **Status:** design-consolidated, scaffold not started (see `../06-cross-cutting.md`
-> §1 status boundary). This roadmap is a traceable map from the **design modules**
+> **Status:** design-consolidated; implementation in progress — M1 (steps 1–2)
+> complete, M2 steps 0/3/4/5 done and 6–8 pending, all CI-green (current state
+> per step: `../PROGRESS.md`; status boundary: `../06-cross-cutting.md` §1).
+> This roadmap is a traceable map from the **design modules**
 > (Part I §2 target graph) to **implementation work**, ordered by Part VI §5.
 > Every module cross-links the spec sections that define it and, where applicable,
 > the WS gates / Part VI proofs that bound it.
@@ -98,9 +100,32 @@ spec edit traces forward to its module(s).
 ## 5. Completion gating (from Part VI)
 
 - **Design consolidated** ✅ (Parts 00–06 + this roadmap; AUDIT.md CLEAN).
-- **Executable specification** ⛔ pending — Part VI §6 (compile/dependency) +
+- **Executable specification** ⛔ pending, in progress — Part VI §6 (compile/dependency) +
   §7 (schema/platform) + §9 (performance) + WS1–WS21 on the supported macOS runner,
   with the concurrency harness + transaction-injection seam delivered (step 5).
+  **M1 (pure compile, steps 1–2) is complete; M2 (steps 3–8) has steps 0/3/4/5
+  done and 6–8 pending.** All step evidence below is green on the
+  `macOS 26 ARM CI` workflow (macos-26 arm64) at HEAD `7994844`, run 29964640300:
+  - **Step 0 ✅** — SwiftPM target graph, source gates, XcodeGen app, CI
+    scaffold; Part VI §6 graph-level proofs (whole-graph Swift 6 build,
+    per-target import confinement, public-symbol snapshot, escape-hatch scan)
+    gate-enforced.
+  - **Step 1 ✅** — HistoryCore public surface (03a §2–§7, 03b §8–§10, 06 §2);
+    public symbol snapshot locked and gate-enforced.
+  - **Step 2 ✅** — HistoryDomain pure functional core (02 §2–§11) landed and
+    CI-green. Open item: the dedicated per-invariant D1–D19 test suite
+    (02 §14; acceptance-required) is still pending — current coverage is
+    smoke-level plus the WS gates that exercise the planners end-to-end.
+  - **Step 3 ✅** — dependencies pinned: vendored xxh3 (xxHash v0.8.3) + Fuse
+    1.4.0 revision pin.
+  - **Step 4 ✅** — SwiftData schema v1 + versioned codecs (05 §3–§4); §7.3
+    round-trip and §7.4 corruption-rejection proofs pass on the runner.
+  - **Step 5 ✅** — HistoryAuthority + capture path (05 §2, §5–§13) and the
+    concurrency harness + transaction-injection seam; WS1–WS3/WS5/WS19 gates and
+    §7.1 transaction-boundary / §7.6 forced-collision proofs pass on the runner.
+  - **Steps 6–8 ⛔ pending** — mutations (WS6–WS10/WS13/WS14/WS16/WS20/WS21),
+    reads + observation (WS4/WS11/WS12/WS17/WS18; §7.2/§7.5), thumbnail (WS15);
+    §9 runner fixtures still open. State 2 closes only at step 8.
 - **Product implementation complete** ⛔ pending — UI, pasteboard, packaging,
   accessibility, localization, product tests.
 

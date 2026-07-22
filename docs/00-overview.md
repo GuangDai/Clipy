@@ -1,6 +1,6 @@
 # Greenfield Clipboard Manager — v1 Design Specification
 
-> **Status (2026-07-17):** consolidated design candidate. No implementation or executable scaffold exists yet. The current Maccy repository is product-behavior reference material only; it is not the implementation described here. This specification becomes implementation-authoritative only after the Part VI compile, schema round-trip, and walking-skeleton gates pass.
+> **Status (2026-07-22):** consolidated design candidate; **scaffold proof pending** (Part VI §11). M1 (pure compile) is complete — HistoryCore and HistoryDomain have landed and are CI-green. M2 (executable specification) is in progress — dependencies pinned (xxh3 v0.8.3, Fuse 1.4.0), schema + versioned codecs proven (Part VI §7.3/§7.4), and Authority + capture path proven (WS1–WS3/WS5/WS19, §7.1/§7.6); mutations, reads + observation, and thumbnail remain pending. The current Maccy repository is product-behavior reference material only; it is not the implementation described here. This specification becomes implementation-authoritative ("executable v1 specification") only after all of Part VI §6–§9 and WS1–WS21 pass.
 
 ## 1. Purpose
 
