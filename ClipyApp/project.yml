@@ -1,0 +1,51 @@
+# XcodeGen spec for the ClipyApp application target and its hosted
+# ClipyIntegrationTests bundle (docs/01-architecture.md §9 item 6: the app
+# target is XcodeGen-owned; the library graph stays SwiftPM-owned).
+# Regenerate from the repo root with:
+#   xcodegen generate --spec ClipyApp/project.yml
+name: ClipyApp
+options:
+  bundleIdPrefix: com.clipy
+  deploymentTarget:
+    macOS: "26.0"
+settings:
+  SWIFT_VERSION: "6.0"
+  SWIFT_STRICT_CONCURRENCY: complete
+  GENERATE_INFOPLIST_FILE: YES
+packages:
+  Clipy:
+    path: ..
+targets:
+  ClipyApp:
+    type: application
+    platform: macOS
+    sources:
+      - Sources
+    settings:
+      PRODUCT_NAME: Clipy
+      INFOPLIST_KEY_LSUIElement: YES
+    dependencies:
+      - package: Clipy
+        product: HistoryCore
+      - package: Clipy
+        product: HistoryStorage
+      - package: Clipy
+        product: PasteboardAdapter
+      - package: Clipy
+        product: PresentationUI
+  ClipyIntegrationTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/ClipyIntegrationTests
+    dependencies:
+      - target: ClipyApp
+schemes:
+  ClipyApp:
+    build:
+      targets:
+        ClipyApp: all
+        ClipyIntegrationTests: [test]
+    test:
+      targets:
+        - ClipyIntegrationTests

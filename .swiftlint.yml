@@ -1,0 +1,104 @@
+# Clipy — SwiftLint gate configuration (docs/01-architecture.md Part I §8 / §9).
+#
+# SwiftLint runs on the macOS CI runner alongside the Xcode build. The portable
+# equivalent of these rules — enforced on any platform — lives in
+# scripts/import_gate.py and scripts/escape_hatch_scan.py (driven by
+# scripts/run_gates.sh). Keep the rule table below in sync with those scripts.
+#
+# At roadmap step 0 only the confinement / escape-hatch custom rules run.
+#
+# Matching notes:
+#   - `included`/`excluded` are regexes matched against each file's path.
+#   - Import regexes tolerate `@_exported import` and kind imports
+#     (`import struct Foo.Bar`); the module name is what is checked.
+
+only_rules:
+  - custom_rules
+
+excluded:
+  - .build
+
+custom_rules:
+
+  # ---- Import confinement (mirror of scripts/import_gate.py) ----
+
+  historycore_import_confinement:
+    name: "HistoryCore import confinement"
+    included: "Sources/HistoryCore/"
+    # Allowlist: Foundation and its submodules (prefix match) only.
+    regex: '^\s*(?:@_\w+\s+)*import\s+(?!(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?Foundation)\w'
+    message: "HistoryCore may import Foundation (and its submodules) only (Part I §8)."
+    severity: error
+
+  historydomain_import_confinement:
+    name: "HistoryDomain import confinement"
+    included: "Sources/HistoryDomain/"
+    # Allowlist: Foundation (+ submodules) and HistoryCore only.
+    regex: '^\s*(?:@_\w+\s+)*import\s+(?!(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:Foundation|HistoryCore)\b)\w'
+    message: "HistoryDomain may import Foundation and HistoryCore only (Part I §8)."
+    severity: error
+
+  historyperfrunner_import_confinement:
+    name: "HistoryPerfRunner import confinement"
+    included: "Sources/HistoryPerfRunner/"
+    # Allowlist: Foundation (+ submodules) and HistoryCore only.
+    regex: '^\s*(?:@_\w+\s+)*import\s+(?!(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:Foundation|HistoryCore)\b)\w'
+    message: "HistoryPerfRunner may import Foundation and HistoryCore only (Part I §8)."
+    severity: error
+
+  historystorage_import_confinement:
+    name: "HistoryStorage import confinement"
+    included: "Sources/HistoryStorage/"
+    # Blocklist target: SwiftData / ImageIO / xxh3 / HistoryCore / HistoryDomain
+    # are allowed. Fuse becomes an allowed import at roadmap step 3 once pinned.
+    regex: '^\s*(?:@_\w+\s+)*import\s+(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:AppKit|SwiftUI|PasteboardAdapter|PresentationUI)\b'
+    message: "HistoryStorage must not import AppKit, SwiftUI, adapters, or PresentationUI (Part I §8)."
+    severity: error
+
+  pasteboardadapter_import_confinement:
+    name: "PasteboardAdapter import confinement"
+    included: "Sources/PasteboardAdapter/"
+    # Blocklist target: AppKit is allowed; other adapters would be added here
+    # if a second adapter target ever appears (no adapter imports another).
+    regex: '^\s*(?:@_\w+\s+)*import\s+(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:HistoryDomain|HistoryStorage|SwiftUI|SwiftData)\b'
+    message: "PasteboardAdapter must not import HistoryDomain, HistoryStorage, SwiftUI, or SwiftData (Part I §8)."
+    severity: error
+
+  presentationui_import_confinement:
+    name: "PresentationUI import confinement"
+    included: "Sources/PresentationUI/"
+    # Blocklist target: SwiftUI is allowed.
+    regex: '^\s*(?:@_\w+\s+)*import\s+(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:HistoryDomain|HistoryStorage|AppKit|SwiftData)\b'
+    message: "PresentationUI must not import HistoryDomain, HistoryStorage, AppKit, or SwiftData (Part I §8)."
+    severity: error
+
+  xxh3_confinement:
+    name: "xxh3 confinement"
+    included: "Sources/"
+    excluded: "Sources/HistoryStorage/"
+    regex: '^\s*(?:@_\w+\s+)*import\s+(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?xxh3\b'
+    message: "xxh3 is confined to HistoryStorage (Part I §8)."
+    severity: error
+
+  # ---- Escape hatches and service locators (mirror of scripts/escape_hatch_scan.py) ----
+
+  no_unchecked_sendable:
+    name: "No @unchecked Sendable"
+    included: "(Sources|Tests)/"
+    regex: '@unchecked\s+Sendable'
+    message: "@unchecked Sendable is banned in the greenfield targets (Part I §8)."
+    severity: error
+
+  no_nonisolated_unsafe:
+    name: "No nonisolated(unsafe)"
+    included: "(Sources|Tests)/"
+    regex: 'nonisolated\s*\(\s*unsafe\s*\)'
+    message: "nonisolated(unsafe) is banned in the greenfield targets (Part I §8)."
+    severity: error
+
+  no_service_locator:
+    name: "No service locator"
+    included: "(Sources|Tests)/"
+    regex: '\bstatic\s+(?:let|var)\s+(?:shared|current)\b'
+    message: "Service-locator spelling 'static let/var shared|current' is banned (Part I §8); inject dependencies instead."
+    severity: error

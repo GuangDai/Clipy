@@ -1,0 +1,258 @@
+name: macOS 26 ARM CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: macos26-arm-ci-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  gates:
+    name: Lint + source gates
+    runs-on: macos-26
+    timeout-minutes: 15
+    env:
+      NSUnbufferedIO: YES
+      OS_ACTIVITY_MODE: disable
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
+      LOG_DIR: ${{ github.workspace }}/ci-logs
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Prepare log directories
+        shell: bash
+        run: mkdir -p "$LOG_DIR"
+
+      - name: Print runner and toolchain diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "== Date =="
+            date -u
+            echo
+            echo "== Runner =="
+            echo "RUNNER_OS=${RUNNER_OS:-}"
+            echo "RUNNER_ARCH=${RUNNER_ARCH:-}"
+            echo "ImageOS=${ImageOS:-}"
+            echo "ImageVersion=${ImageVersion:-}"
+            echo
+            echo "== macOS =="
+            sw_vers
+            echo
+            echo "== Kernel and CPU =="
+            uname -a
+            uname -m
+            echo
+            echo "== Xcode =="
+            xcode-select -p
+            xcodebuild -version
+            xcrun --sdk macosx --show-sdk-version
+            echo
+            echo "== Swift =="
+            swift --version
+          } 2>&1 | tee "$LOG_DIR/diagnostics.log"
+
+      - name: Enforce macOS 26 ARM runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          PRODUCT_VERSION="$(sw_vers -productVersion)"
+          MACHINE_ARCH="$(uname -m)"
+          echo "Detected macOS version: $PRODUCT_VERSION"
+          echo "Detected architecture: $MACHINE_ARCH"
+          if [[ "$PRODUCT_VERSION" != 26.* ]]; then
+            echo "Expected macOS 26.x, got $PRODUCT_VERSION"
+            exit 1
+          fi
+          if [[ "$MACHINE_ARCH" != arm64 ]]; then
+            echo "Expected arm64 runner, got $MACHINE_ARCH"
+            exit 1
+          fi
+
+      - name: Run source gates (import confinement, escape hatches, symbol snapshot)
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/run_gates.sh 2>&1 | tee "$LOG_DIR/source-gates.log"
+
+      - name: Run SwiftLint
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v swiftlint >/dev/null 2>&1; then
+            brew install swiftlint
+          fi
+          swiftlint version
+          swiftlint lint --quiet --strict --no-cache 2>&1 | tee "$LOG_DIR/swiftlint.log"
+
+      - name: Self-scan swiftlint log
+        shell: bash
+        run: |
+          set -euo pipefail
+          matches=$(grep -Ein '(^|[^[:alpha:]])(warning:|error:)([^[:alpha:]]|$)' "$LOG_DIR/swiftlint.log" || true)
+          if [[ -n "$matches" ]]; then
+            echo "$matches"
+            echo "SwiftLint warnings/errors found"
+            exit 1
+          fi
+
+      - name: Upload gate logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gates-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-logs
+          if-no-files-found: warn
+          retention-days: 14
+
+  spm-build-test:
+    name: SwiftPM build + test
+    needs: [gates]
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      NSUnbufferedIO: YES
+      OS_ACTIVITY_MODE: disable
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      LOG_DIR: ${{ github.workspace }}/ci-logs
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Prepare log directories
+        shell: bash
+        run: mkdir -p "$LOG_DIR"
+
+      - name: Enforce macOS 26 ARM runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(sw_vers -productVersion)" == 26.* ]]
+          [[ "$(uname -m)" == arm64 ]]
+
+      - name: Build package graph (Swift 6 strict concurrency)
+        shell: bash
+        run: |
+          set -o pipefail
+          swift build 2>&1 | tee "$LOG_DIR/spm-build.log"
+
+      - name: Run package tests
+        shell: bash
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee "$LOG_DIR/spm-test.log"
+
+      - name: Self-scan SPM logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          matches=$(grep -Ein '(^|[^[:alpha:]])(warning:|error:)([^[:alpha:]]|$)' \
+            "$LOG_DIR/spm-build.log" "$LOG_DIR/spm-test.log" || true)
+          if [[ -n "$matches" ]]; then
+            echo "$matches"
+            echo "Warnings or errors found in SPM logs"
+            exit 1
+          fi
+
+      - name: Upload SPM logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: spm-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-logs
+          if-no-files-found: warn
+          retention-days: 14
+
+  xcodeproj:
+    name: XcodeGen generate + app build/test
+    needs: [gates]
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      NSUnbufferedIO: YES
+      OS_ACTIVITY_MODE: disable
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
+      PROJECT: ClipyApp/ClipyApp.xcodeproj
+      SCHEME: ClipyApp
+      CONFIGURATION: Debug
+      DESTINATION: platform=macOS,arch=arm64
+      DERIVED_DATA: ${{ github.workspace }}/DerivedData
+      RESULT_BUNDLES: ${{ github.workspace }}/ci-result-bundles
+      LOG_DIR: ${{ github.workspace }}/ci-logs
+      XCODEGEN_HOME: ${{ runner.temp }}/xcodegen-2.45.4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Prepare log and result directories
+        shell: bash
+        run: mkdir -p "$LOG_DIR" "$RESULT_BUNDLES"
+
+      - name: Enforce macOS 26 ARM runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(sw_vers -productVersion)" == 26.* ]]
+          [[ "$(uname -m)" == arm64 ]]
+
+      - name: Generate twice and verify repeatability
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/generate-xcodeproj.sh 2>&1 | tee "$LOG_DIR/xcodegen-first.log"
+          cp -R "$PROJECT" "$RUNNER_TEMP/first-generated.xcodeproj"
+          bash scripts/generate-xcodeproj.sh 2>&1 | tee "$LOG_DIR/xcodegen-second.log"
+          diff -ru "$RUNNER_TEMP/first-generated.xcodeproj" "$PROJECT" \
+            | tee "$LOG_DIR/xcodegen-repeatability.diff"
+
+      - name: List generated project
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -list -json -project "$PROJECT" > "$LOG_DIR/project-list.json"
+
+      - name: Build and test generated app
+        shell: bash
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project "$PROJECT" -scheme "$SCHEME" \
+            -configuration "$CONFIGURATION" -destination "$DESTINATION" \
+            -derivedDataPath "$DERIVED_DATA" \
+            -resultBundlePath "$RESULT_BUNDLES/app.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            clean build test 2>&1 | tee "$LOG_DIR/app-build-test.log"
+
+      - name: Self-scan app build/test log
+        shell: bash
+        run: |
+          set -euo pipefail
+          matches=$(grep -Ein '(^|[^[:alpha:]])(warning:|error:|\*\* TEST FAILED \*\*|\*\* BUILD FAILED \*\*)([^[:alpha:]]|$)' "$LOG_DIR/app-build-test.log" || true)
+          if [[ -n "$matches" ]]; then
+            echo "$matches"
+            echo "Warnings, errors, or failures found in app build/test log"
+            exit 1
+          fi
+
+      - name: Upload xcodeproj evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: xcodeproj-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ci-logs
+            ci-result-bundles
+          if-no-files-found: warn
+          retention-days: 14
