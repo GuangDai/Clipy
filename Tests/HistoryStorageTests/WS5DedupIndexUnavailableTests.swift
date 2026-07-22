@@ -11,27 +11,16 @@
 /// hand-crafted but fully valid v1 rows — every blob is produced by the
 /// production codecs over a real prepared bundle.
 ///
-/// FAILURE-CASE VOCABULARY NOTE (documents a deviation from 06 §8 WS5's
-/// sentence): 06 §8 WS5, docs/05-authority-kernel.md §16, and
+/// FAILURE-CASE VOCABULARY: 06 §8 WS5, docs/05-authority-kernel.md §16, and
 /// docs/02-domain.md §5.1 all name `.temporarilyUnavailable(.dedupIndexRebuild)`
-/// as the capture-path producer for an unprovable Signature Index. In the
-/// current implementation the §7.1-step-5 retained-inventory load runs BEFORE
-/// the step-1 rebuild decision (Sources/HistoryStorage/FactLoaders.swift,
-/// `IngestFactLoader.loadFacts`) and rejects an over-bound retained store as
-/// `.persistence(.invariantViolation)` (`fetchRetainedInventory`, matching
-/// the §13 step-5 startup stance for an over-bound store). The capture-time
-/// rebuild's own over-bound guard and its `.dedupIndexRebuild` mapping
-/// (`rebuildSignatureIndex`) are therefore unreachable from any durable store
-/// state: a corrupt signature blob maps to `.persistence(.corruptStoredValue)`
-/// via the codec mapping first, and every entry-list property
-/// `SignatureIndex.build` rechecks is already enforced by
-/// `SignatureBlobCodec.decode`. This file asserts the failure the
-/// implementation actually produces; the fail-closed clauses WS5 exists to
-/// prove are asserted in full, and
-/// `signatureIndexBuildRejectsRetainedInputOverTheHardBound` pins the
-/// over-bound rejection the (currently unreachable) mapping consumes. If the
-/// implementation is changed to surface `.dedupIndexRebuild` on this path,
-/// flipping the single `#expect(throws:)` line below is the whole change.
+/// as the capture-path producer for an unprovable Signature Index, and that is
+/// what this test asserts. (History: an earlier `loadFacts` revision ran the
+/// §7.1-step-5 inventory load before the step-1 readiness resolution, so the
+/// over-bound store was rejected as `.persistence(.invariantViolation)` and the
+/// `.dedupIndexRebuild` mapping was unreachable. The loader now resolves
+/// readiness first against an id-only scalar fetch; an over-bound retained set
+/// always forces the rebuild path, whose bound check produces
+/// `.dedupIndexRebuild`.)
 import Foundation
 import HistoryCore
 import HistoryDomain
@@ -158,11 +147,10 @@ private static func makeRow(
             observedAt: Date(timeIntervalSinceReferenceDate: 700_011_000)
         )
     )
-    // WS5: the capture is REJECTED before planning with a typed failure —
-    // see the file header for why this is `.persistence(.invariantViolation)`
-    // in the current implementation rather than the spec sentence's
-    // `.temporarilyUnavailable(.dedupIndexRebuild)`.
-    await #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
+    // WS5: the capture is REJECTED before planning with the spec's typed
+    // failure — `.temporarilyUnavailable(.dedupIndexRebuild)` (06 §8 WS5,
+    // 05 §16, 02 §5.1).
+    await #expect(throws: HistoryFailure.temporarilyUnavailable(.dedupIndexRebuild)) {
         try await authority.commitCapture(captureBundle)
     }
 
@@ -240,8 +228,7 @@ private static func makeRow(
 /// WS5 mechanism, build seam (docs/05-authority-kernel.md §12, §7.1 step 1):
 /// `SignatureIndex.build` refuses a signature set larger than the hard
 /// retained-item bound with the exact over-bound rejection the capture-time
-/// rebuild maps to `.temporarilyUnavailable(.dedupIndexRebuild)` — see the
-/// file header for why that mapping is currently unreachable end-to-end.
+/// rebuild maps to `.temporarilyUnavailable(.dedupIndexRebuild)`.
 @Test func signatureIndexBuildRejectsRetainedInputOverTheHardBound() throws {
     let limits = Self.overBoundRetainedLimits()
     let signatures: [HistoryItemID: [ContentSignatureEntry]] = [

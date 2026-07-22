@@ -230,20 +230,22 @@ internal enum HistoryItemRowHydration {
 /// interleave a commit mid-load):
 ///
 /// 1. Require Signature Index state `.ready` *for the current retained ID
-///    set*: a ready index whose `itemIDs` differs from the fetched retained
-///    IDs is not ready for this interval, and an `.unready` index is not
-///    ready at all — either way, attempt one complete rebuild from every
-///    retained row's signature blob within the hard item bound (§12).
+///    set*: readiness is resolved against an id-only scalar fetch; an
+///    `.unready` index, a ready index whose `itemIDs` differs from the
+///    fetched retained IDs, or an over-bound retained set all force one
+///    complete rebuild from every retained row's signature blob within the
+///    hard item bound (§12). Rebuild failure — including the over-bound
+///    case — is `.temporarilyUnavailable(.dedupIndexRebuild)` (WS5, §16).
 /// 2. Intersect posting sets for all incoming signature entries (derived
 ///    from the prepared Canonical Content, the same entries preparation
 ///    constructed at §6.1 step 6) via `SignatureIndex.candidateIDs`.
 /// 3. Fetch and fully decode every candidate ID.
 /// 4. Fetch the lineage hint separately by business ID when a hint exists,
 ///    even when it is absent from the candidate intersection.
-/// 5. Fetch scalar retention summaries for every retained row (step 5 runs
-///    first here: one bounded scalar fetch yields both the retention
-///    inventory and the authoritative retained ID set the step-6 agreement
-///    checks compare against).
+/// 5. Fetch scalar retention summaries for every retained row (the retained
+///    set is already proved within the hard bound at step 1, so the
+///    inventory's own bound rejection is defensive; disagreement with the
+///    step-1 ID set is `.persistence(.invariantViolation)`).
 /// 6. Verify candidate IDs, retained IDs, and index generation agree before
 ///    constructing `IngestFacts`.
 ///
@@ -297,30 +299,39 @@ internal enum IngestFactLoader {
         signatureIndex: SignatureIndex,
         limits: HistoryLimits = .standard
     ) throws -> LoadResult {
-        // §7.1 step 5 first: the complete retained inventory doubles as the
-        // authoritative retained ID set for the step-6 agreement checks.
-        let inventory = try HistoryItemRowHydration.fetchRetainedInventory(
-            in: context,
-            limits: limits
-        )
-        let retainedIDs = Set(inventory.map(\.id))
-
         // §7.1 step 1: require a ready index *for the current retained ID
         // set*; otherwise attempt one complete rebuild within the hard item
-        // bound (§12). A ready index whose covered ID set disagrees with the
-        // store is not ready for this interval — within one serialized
-        // interval that can only follow an Authority-side delta bug, and the
-        // safe response is the same proved-complete rebuild, never planning
-        // from a partial candidacy.
+        // bound (§12). Readiness is resolved against a lightweight id-only
+        // scalar fetch (no summaries, no blobs). An over-bound retained set
+        // can never be "ready for the current retained ID set" — a healthy
+        // index is itself bound-limited — so it always forces the rebuild
+        // path, and the rebuild's bound check rejects it as
+        // `.temporarilyUnavailable(.dedupIndexRebuild)`: the WS5 producer
+        // (docs/06-cross-cutting.md §8, §16).
+        let retainedIDs = try fetchRetainedIDs(in: context, limits: limits)
         let index: SignatureIndex
         if case .ready = signatureIndex.state, signatureIndex.itemIDs == retainedIDs {
             index = signatureIndex
         } else {
             index = try rebuildSignatureIndex(
                 in: context,
-                retainedIDs: retainedIDs,
+                expectedRetainedIDs: retainedIDs,
                 limits: limits
             )
+        }
+
+        // §7.1 step 5: scalar retention summaries for every retained row.
+        // The retained set is already proved within the hard bound in this
+        // interval, so the inventory's own bound rejection is defensive.
+        let inventory = try HistoryItemRowHydration.fetchRetainedInventory(
+            in: context,
+            limits: limits
+        )
+        guard Set(inventory.map(\.id)) == retainedIDs else {
+            // Same-interval disagreement between two scalar fetches of the
+            // same table is a durable-state invariant failure, not a
+            // partial fact (§7.1 step 6).
+            throw HistoryFailure.persistence(.invariantViolation)
         }
 
         // §7.1 step 2 (docs/02-domain.md §9.1): intersect the posting sets
@@ -389,6 +400,36 @@ internal enum IngestFactLoader {
         return LoadResult(facts: facts, signatureIndex: index)
     }
 
+    /// Fetches the complete retained ID set with an id-only scalar fetch
+    /// (§7.1 step 1 readiness resolution). An over-bound set rejects the
+    /// rebuild path it inevitably forces → `.dedupIndexRebuild` (WS5); a
+    /// framework fetch failure means candidate proof is unavailable in this
+    /// interval → `.dedupIndexRebuild` as well (§16).
+    private static func fetchRetainedIDs(
+        in context: ModelContext,
+        limits: HistoryLimits
+    ) throws -> Set<HistoryItemID> {
+        var descriptor = FetchDescriptor<HistoryItemRow>()
+        descriptor.propertiesToFetch = [\.id]
+        descriptor.fetchLimit = limits.hardMaximumRetainedItems + 1
+        let rows: [HistoryItemRow]
+        do {
+            rows = try context.fetch(descriptor)
+        } catch {
+            throw HistoryFailure.temporarilyUnavailable(.dedupIndexRebuild)
+        }
+        guard rows.count <= limits.hardMaximumRetainedItems else {
+            throw HistoryFailure.temporarilyUnavailable(.dedupIndexRebuild)
+        }
+        var ids = Set<HistoryItemID>(minimumCapacity: rows.count)
+        for row in rows {
+            guard ids.insert(HistoryItemID(rawValue: row.id)).inserted else {
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
+        }
+        return ids
+    }
+
     /// Rebuilds the complete Signature Index from every retained row's
     /// signature blob within the hard item bound. docs/05-authority-kernel.md
     /// §7.1 step 1, §12 ("Ready means every retained row contributes every
@@ -399,8 +440,9 @@ internal enum IngestFactLoader {
     /// docs/02-domain.md §5.1, and `SignatureIndexRejection`'s documented
     /// capture-path mapping):
     ///
-    /// - a framework fetch failure or a `SignatureIndex.build` rejection
-    ///   means the index cannot be rebuilt to a proved-complete state →
+    /// - a framework fetch failure, an over-bound retained set, or a
+    ///   `SignatureIndex.build` rejection means the index cannot be rebuilt
+    ///   to a proved-complete state →
     ///   `.temporarilyUnavailable(.dedupIndexRebuild)` (the WS5 path,
     ///   docs/06-cross-cutting.md §8);
     /// - a corrupt signature blob is a decode failure →
@@ -410,14 +452,9 @@ internal enum IngestFactLoader {
     /// - a duplicate business ID, or a rebuild row set that disagrees with
     ///   the retained set fetched earlier in the same interval, is
     ///   `.persistence(.invariantViolation)`.
-    ///
-    /// (The retained-count bound is already enforced by the inventory fetch
-    /// before this runs; the repeated bound check here is defensive — its
-    /// `.dedupIndexRebuild` mapping matches `SignatureIndexRejection
-    /// .retainedCountExceedsBound` on this path.)
     private static func rebuildSignatureIndex(
         in context: ModelContext,
-        retainedIDs: Set<HistoryItemID>,
+        expectedRetainedIDs: Set<HistoryItemID>,
         limits: HistoryLimits
     ) throws -> SignatureIndex {
         var descriptor = FetchDescriptor<HistoryItemRow>()
@@ -446,7 +483,7 @@ internal enum IngestFactLoader {
         // Completeness proof: the rebuild input covers exactly the retained
         // set fetched in the same serialized interval — no row missing, no
         // row extra (§12, §7.1 step 6).
-        guard Set(signatures.keys) == retainedIDs else {
+        guard Set(signatures.keys) == expectedRetainedIDs else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
         do {
