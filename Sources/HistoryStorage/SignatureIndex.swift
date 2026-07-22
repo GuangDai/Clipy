@@ -255,7 +255,7 @@ internal struct SignatureIndex: Sendable, Equatable {
             throw SignatureIndexRejection.overlappingAdditionAndRemoval(itemID)
         }
         for (itemID, entries) in delta.additions {
-            try checkEntryList(entries, for: itemID)
+            try Self.checkEntryList(entries, for: itemID)
             guard entriesByItem[itemID] == nil else {
                 throw SignatureIndexRejection.additionAlreadyIndexed(itemID)
             }
@@ -288,7 +288,7 @@ internal struct SignatureIndex: Sendable, Equatable {
                 throw SignatureIndexRejection.overlappingAdditionAndRemoval(itemID)
             }
             for (itemID, entries) in delta.additions {
-                try checkEntryList(entries, for: itemID)
+                try Self.checkEntryList(entries, for: itemID)
                 guard entriesByItem[itemID] == nil else {
                     throw SignatureIndexRejection.additionAlreadyIndexed(itemID)
                 }
