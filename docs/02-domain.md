@@ -298,6 +298,7 @@ The fact loader must return the complete target lineage or `notFound`. It does n
 ```swift
 package struct RemoveFacts: Sendable {
     package let item: RetainedItemSummary?
+    package let pinnedOrder: CompletePinnedOrder
 }
 
 package struct ClearFacts: Sendable {
@@ -305,7 +306,9 @@ package struct ClearFacts: Sendable {
 }
 ```
 
-`ClearFacts.affected` is the complete set selected by the requested scope at the Authority linearization point. There is no partial clear.
+`RemoveFacts.pinnedOrder` is the same proven value pin planning loads (§5.2): removing a pinned item must compact the pinned lane in the same commit (§10, D12), which a target-only fact cannot plan.
+
+`ClearFacts.affected` is the complete set selected by the requested scope at the Authority linearization point. There is no partial clear. A clear needs no pinned-order fact: the v1 scopes either retain every pinned item (`.unpinned`) or remove every item (`.all`), and both results are trivially contiguous (D12).
 
 #### 5.5 Retention facts
 
@@ -523,6 +526,8 @@ Planning algorithm:
 6. Zip the final order with `0 ..< count` and emit `.assignPin` only for IDs whose ordinal changed, including the target.
 
 Unpin removes the target and shifts later ordinals. Pin/reorder/unpin never advances `ContentVersion`; the History Commit advances `ChangePosition` once.
+
+Removing a pinned item from the retained set compacts the lane exactly as unpin does: the remove plan emits the `.assignPin` shift for every pinned item after the removed one — the remaining order zipped against `0 ..< count`, emitting only changed ordinals — before its `.retire` mutation, so the one commit preserves D12 and the final-order revalidation (Part V §10) cannot fail on a gap. An unpinned removal emits no pin mutations.
 
 Numeric pin-slot collision is no longer a caller-visible failure mode. Uniqueness is guaranteed by planning a complete order and committing all affected assignments atomically.
 

@@ -338,7 +338,7 @@ Fetch target existence plus every row with a non-nil pin ordinal. Validate uniqu
 #### 7.3 Revision, remove, clear, retention
 
 - Revision fetches and decodes exactly the target item.
-- Remove fetches the target's scalar summary.
+- Remove fetches the target's scalar summary plus the complete pinned order (the §7.2 load): removing a pinned item compacts the pinned lane in the same commit (docs/02-domain.md §10, D12).
 - Clear fetches every ID/pin value selected by scope.
 - Retention fetches every retained ID, last-copied time, and pin ordinal.
 

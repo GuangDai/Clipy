@@ -211,11 +211,16 @@ specification) in progress.
   pre-release is deliberately not used — AUDIT §4b). `maxPatternLength` is a
   dead parameter in Fuse 1.4.0, so the 256-character fuzzy-query bound is
   enforced by `SearchWorker` itself at step 7 (03b §8).
-- **Open spec question for step 6 — pin-ordinal compaction on remove (flagged
-  by review agent-30).** `planRemove` (02 §8) emits a single
-  `.retire(itemID:, .userRemoval)`; `RemoveFacts` (02 §5.4) carries only the
-  target summary — no pinned order — so the planner cannot emit `.assignPin`
-  ordinal shifts, and removing a pinned item may leave a gap in the pin-ordinal
-  sequence. Whether compaction is required, and who emits it, must be resolved
-  against Part V §9 (the Domain→Stamped stamping rules) when `commitRemove` is
-  implemented at step 6.
+- **Resolved spec question — pin-ordinal compaction on remove (flagged by
+  review agent-30, resolved at step-6 start as AUDIT IMP6-01).** `planRemove`
+  originally emitted a single `.retire(itemID:, .userRemoval)` from a
+  target-only `RemoveFacts`, so removing a pinned item left a gap in the
+  pin-ordinal sequence that Part V §10's final-order revalidation would reject
+  — every such transaction had to fail. Part V §9 gives no mechanical answer
+  (the stamping table never invents shifts). The only D12-consistent
+  resolution: `RemoveFacts` now carries the proven `CompletePinnedOrder`
+  (02 §5.4) and `planRemove` emits the same compaction shifts unpin does
+  before its `.retire` (02 §10); the remove fact load includes the §7.2
+  pinned-order load (05 §7.3). Clear needs no such fact (`.unpinned` keeps all
+  pins, `.all` removes all rows — both trivially contiguous); retention never
+  retires pinned items (D13).

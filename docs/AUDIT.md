@@ -132,6 +132,17 @@ clarity fixes + the doc-size split.
 | verify-minor-3 | 03 §8 | added `(a+\|b)+` example for quantified-alternation rejection |
 | doc-split (§5) | 03 → 03a + 03b | split 736-line `03-instruction-set.md` into `03a` (§1–7, 348 lines) + `03b` (§8–12, 390 lines); updated 00 §4 (Part III = A+B), 00 §5 ("seven files" → Parts I–VI with III split), 06 §10 WS16 ref `Part III §10`→`Part III-B §10`; `03-instruction-set.md` filename now unreferenced |
 
+Implementation Pass (2026-07-22, roadmap step 6) — spec defect found while
+implementing `commitRemove`: `planRemove` could not preserve D12 when the
+target was pinned (its facts carried no pinned order, so no planner could emit
+the compaction shifts, and Part V §10's final-order revalidation would fail
+every such transaction). Resolved by the only D12-consistent reading: removal
+of a pinned item compacts the lane exactly as unpin does.
+
+| Finding | File:§ | Change |
+|---|---|---|
+| IMP6-01 | 02 §5.4, §10; 05 §7.3 | `RemoveFacts` gains `pinnedOrder: CompletePinnedOrder`; remove-of-pinned emits `.assignPin` compaction shifts before `.retire` (clear needs none — v1 scopes are trivially contiguous); remove fact load includes the §7.2 pinned-order load |
+
 Remaining (genuinely low-priority, deferred): S2-12/13/16, S3-04/07/08/09/13,
 S4-04/13/14, S5-13/18, S1-21/22/32, S5-09/16 — wording/traceability nits that do
 not affect correctness. Re-audit #2 + final verifier both CLEAN.

@@ -128,12 +128,17 @@ package struct RevisionFacts: Sendable {
 /// docs/02-domain.md §5.4
 ///
 /// A nil `item` means the target is absent from the retained set; planning
-/// rejects it with `.notFound`.
+/// rejects it with `.notFound`. `pinnedOrder` is the same proven value pin
+/// planning loads (§5.2): removing a pinned item must compact the pinned lane
+/// in the same commit (§10, D12 — AUDIT IMP6-01), which a target-only fact
+/// cannot plan.
 package struct RemoveFacts: Sendable {
     package let item: RetainedItemSummary?
+    package let pinnedOrder: CompletePinnedOrder
 
-    package init(item: RetainedItemSummary?) {
+    package init(item: RetainedItemSummary?, pinnedOrder: CompletePinnedOrder) {
         self.item = item
+        self.pinnedOrder = pinnedOrder
     }
 }
 

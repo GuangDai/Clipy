@@ -115,9 +115,13 @@ package func planUnpin(
 
 /// Plans the removal of one retained item.
 ///
-/// docs/02-domain.md §8. Removal is absence from the retained set (D15);
-/// there is no tombstone. The plan carries a single `.retire` mutation with
-/// reason `.userRemoval`.
+/// docs/02-domain.md §8, §10. Removal is absence from the retained set (D15);
+/// there is no tombstone. When the target is pinned, the plan first compacts
+/// the pinned lane exactly as unpin does — the remaining order zipped against
+/// `0 ..< count`, emitting `.assignPin` only for changed ordinals — so the
+/// one commit preserves D12 and the final-order revalidation (Part V §10)
+/// cannot fail on a gap (AUDIT IMP6-01); the `.retire` mutation with reason
+/// `.userRemoval` comes last.
 ///
 /// - Throws: `DomainRejection.notFound(itemID)` when the fact load found no
 ///   retained item with this ID (docs/06-cross-cutting.md WS16).
@@ -128,10 +132,18 @@ package func planRemove(
     guard facts.item != nil else {
         throw DomainRejection.notFound(itemID)
     }
-    return .commit(MutationPlan(
-        outcome: .removed(count: 1),
-        mutations: [.retire(itemID: itemID, reason: .userRemoval)]
-    ))
+    // §10 (AUDIT IMP6-01): removing a pinned item compacts the lane in the
+    // same commit. `pinShiftMutations` emits nothing for the removed target
+    // (absent from the final order) and a shift for every later pinned item
+    // whose ordinal changes; an unpinned target produces no pin mutations.
+    let originalOrder = facts.pinnedOrder.itemIDs
+    var mutations: [HistoryMutation] = []
+    if originalOrder.contains(itemID) {
+        let finalOrder = originalOrder.filter { $0 != itemID }
+        mutations = pinShiftMutations(from: originalOrder, to: finalOrder)
+    }
+    mutations.append(.retire(itemID: itemID, reason: .userRemoval))
+    return .commit(MutationPlan(outcome: .removed(count: 1), mutations: mutations))
 }
 
 // MARK: - Clear (docs/02-domain.md §5.4, §8)
