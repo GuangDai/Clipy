@@ -59,8 +59,9 @@ struct WorkloadFixture: Codable {
     let note: String
     /// Store medium (Part V §2): `.memory` for algorithmic workloads,
     /// `.persistent` for bullet 3's durable reopen. Recorded per §9's
-    /// "recorded fixtures" requirement.
-    let medium: String = ".memory"
+    /// "recorded fixtures" requirement. `var` so Codable decodes it and the
+    /// memberwise initializer accepts the `.persistent` override.
+    var medium: String = ".memory"
 }
 
 /// The complete fixture document written as JSON.
