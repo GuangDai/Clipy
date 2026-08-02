@@ -1803,17 +1803,23 @@ internal actor HistoryAuthority {
         var corpusRows: [SearchCorpusRow] = []
         corpusRows.reserveCapacity(rows.count)
         for row in rows {
+            // Bind the row's scalar values first: the non-Sendable @Model
+            // row must not be captured by the `mapCodecFailure` closures
+            // (actor-isolated context — sending the row risks data races).
+            let identifiersBlob = row.effectiveTypeIdentifiersBlob
+            let contentVersionRaw = row.contentVersionRaw
+            let rawPinOrdinal = row.pinOrdinal
             let typeIdentifiers = try mapCodecFailure {
                 try EffectiveTypeIdentifiersBlobCodec.decode(
-                    row.effectiveTypeIdentifiersBlob,
+                    identifiersBlob,
                     limits: limits
                 )
             }
             let contentVersion = try mapCodecFailure {
-                try RevisionStateBlobCodec.decodeContentVersion(row.contentVersionRaw)
+                try RevisionStateBlobCodec.decodeContentVersion(contentVersionRaw)
             }
             let pinOrdinal = try mapCodecFailure {
-                try RevisionStateBlobCodec.decodePinOrdinal(row.pinOrdinal)
+                try RevisionStateBlobCodec.decodePinOrdinal(rawPinOrdinal)
             }
             corpusRows.append(SearchCorpusRow(
                 id: HistoryItemID(rawValue: row.id),
