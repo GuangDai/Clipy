@@ -15,7 +15,7 @@ that violate the target's confinement rules:
                      today, so that set is currently empty; AppKit is allowed)
   PresentationUI     blocklist: HistoryDomain, HistoryStorage, AppKit, SwiftData
                      (SwiftUI is allowed)
-  HistoryPerfRunner  allowlist: Foundation, HistoryCore
+  HistoryPerfRunner  allowlist: Foundation, HistoryCore, HistoryStorage
 
 Global rules: ``import xxh3`` and ``import Fuse`` are forbidden outside
 HistoryStorage.
@@ -53,7 +53,7 @@ FUSE_OWNER = "HistoryStorage"
 ALLOWLIST: dict[str, frozenset[str]] = {
     "HistoryCore": frozenset({FOUNDATION}),
     "HistoryDomain": frozenset({FOUNDATION, "HistoryCore"}),
-    "HistoryPerfRunner": frozenset({FOUNDATION, "HistoryCore"}),
+    "HistoryPerfRunner": frozenset({FOUNDATION, "HistoryCore", "HistoryStorage"}),
 }
 
 # Blocklist targets: these specific imports are forbidden, anything else passes.
@@ -171,7 +171,7 @@ GOOD_FIXTURES: dict[str, str] = {
     ),
     "Sources/PasteboardAdapter/Good.swift": "import Foundation\nimport HistoryCore\nimport AppKit\n",
     "Sources/PresentationUI/Good.swift": "import Foundation\nimport HistoryCore\nimport SwiftUI\n",
-    "Sources/HistoryPerfRunner/Good.swift": "import Foundation\nimport HistoryCore\n",
+    "Sources/HistoryPerfRunner/Good.swift": "import Foundation\nimport HistoryCore\nimport HistoryStorage\n",
 }
 
 BAD_FIXTURES: dict[str, str] = {

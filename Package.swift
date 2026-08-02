@@ -54,7 +54,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "HistoryPerfRunner",
-            dependencies: ["HistoryCore"]
+            // HistoryStorage added at step 8: the §9 runner drives the public
+            // SwiftDataHistory concrete facade (docs/06-cross-cutting.md §9;
+            // docs/roadmap/README.md §3 step 8 — "release-like runner workload").
+            dependencies: ["HistoryCore", "HistoryStorage"]
         ),
         .testTarget(
             name: "HistoryCoreTests",

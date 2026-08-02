@@ -243,12 +243,13 @@ jobs:
           # Tolerate headless-runner toolchain noise: the AppIntents metadata
           # processor warns on every bundle without an AppIntents dependency —
           # not a code warning (same class as Maccy's Metal/XPC exclusions).
-          # Also excluded: the test-host app's LaunchServices connection
-          # chatter ("com.apple.linkd.autoShortcut" NSCocoaErrorDomain 4097),
-          # intermittent headless-runner runtime noise, not a test failure.
+          # Also excluded: any line naming the Apple-internal LaunchServices
+          # service "com.apple.linkd.autoShortcut" (NSCocoaErrorDomain 4097) —
+          # intermittent headless-runner noise whose long log lines may wrap,
+          # so the match must not anchor on a line prefix.
           matches=$(grep -Ein '(^|[^[:alpha:]])(warning:|error:|\*\* TEST FAILED \*\*|\*\* BUILD FAILED \*\*)([^[:alpha:]]|$)' "$LOG_DIR/app-build-test.log" \
                     | grep -vE 'appintentsmetadataprocessor.*Metadata extraction skipped' \
-                    | grep -vE '\[Connection\] .*com\.apple\.linkd\.autoShortcut' || true)
+                    | grep -vE 'com\.apple\.linkd\.autoShortcut' || true)
           if [[ -n "$matches" ]]; then
             echo "$matches"
             echo "Warnings, errors, or failures found in app build/test log"
@@ -263,5 +264,82 @@ jobs:
           path: |
             ci-logs
             ci-result-bundles
+          if-no-files-found: warn
+          retention-days: 14
+
+  perf-proofs:
+    # Part VI §9 performance proofs (docs/06-cross-cutting.md §9). Standalone
+    # (needs only gates): the release build compiles the full dependency graph,
+    # so a compile failure in any target fails this job independently. Running
+    # in parallel with spm-build-test and xcodeproj saves wall-clock time.
+    name: Perf proofs (§9)
+    needs: [gates]
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      NSUnbufferedIO: YES
+      OS_ACTIVITY_MODE: disable
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      LOG_DIR: ${{ github.workspace }}/ci-logs
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Prepare log directories
+        shell: bash
+        run: mkdir -p "$LOG_DIR"
+
+      - name: Enforce macOS 26 ARM runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(sw_vers -productVersion)" == 26.* ]]
+          [[ "$(uname -m)" == arm64 ]]
+
+      - name: Build HistoryPerfRunner (release)
+        shell: bash
+        run: |
+          set -o pipefail
+          swift build -c release --product HistoryPerfRunner 2>&1 | tee "$LOG_DIR/perf-build.log"
+
+      - name: Self-scan perf build log
+        shell: bash
+        run: |
+          set -euo pipefail
+          matches=$(grep -Ein '(^|[^[:alpha:]])(warning:|error:)([^[:alpha:]]|$)' \
+            "$LOG_DIR/perf-build.log" || true)
+          if [[ -n "$matches" ]]; then
+            echo "$matches"
+            echo "Warnings or errors found in perf build log"
+            exit 1
+          fi
+
+      - name: Run HistoryPerfRunner (§9 proofs)
+        shell: bash
+        run: |
+          set -o pipefail
+          swift run -c release HistoryPerfRunner "$LOG_DIR/perf-fixtures.json" 2>&1 | tee "$LOG_DIR/perf-run.log"
+
+      - name: Self-scan perf run log
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          matches=$(grep -Ein '(^|[^[:alpha:]])(warning:|error:)([^[:alpha:]]|$)' \
+            "$LOG_DIR/perf-run.log" || true)
+          if [[ -n "$matches" ]]; then
+            echo "$matches"
+            echo "Warnings or errors found in perf run log"
+            exit 1
+          fi
+
+      - name: Upload perf fixtures and logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: perf-fixtures-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ci-logs/perf-*.json
+            ci-logs/perf-*.log
           if-no-files-found: warn
           retention-days: 14

@@ -41,9 +41,11 @@ custom_rules:
   historyperfrunner_import_confinement:
     name: "HistoryPerfRunner import confinement"
     included: "Sources/HistoryPerfRunner/"
-    # Allowlist: Foundation (+ submodules) and HistoryCore only.
-    regex: '^\s*(?:@_\w+\s+)*import\s+(?!(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:Foundation|HistoryCore)\b)\w'
-    message: "HistoryPerfRunner may import Foundation and HistoryCore only (Part I §8)."
+    # Allowlist: Foundation (+ submodules), HistoryCore, and HistoryStorage.
+    # HistoryStorage added at step 8: the §9 runner drives the public
+    # SwiftDataHistory concrete facade (docs/06-cross-cutting.md §9).
+    regex: '^\s*(?:@_\w+\s+)*import\s+(?!(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:Foundation|HistoryCore|HistoryStorage)\b)\w'
+    message: "HistoryPerfRunner may import Foundation, HistoryCore, and HistoryStorage only (Part I §8)."
     severity: error
 
   historystorage_import_confinement:
