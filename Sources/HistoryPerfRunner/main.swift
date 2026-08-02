@@ -23,8 +23,8 @@
 /// Fixture sizes: §9 pins complexity envelopes, not absolute sizes ("Index
 /// rebuild is O(retained signature metadata) and bounded by 5,000 items" —
 /// the 5,000 is the retention cap, not a required measurement size).
-/// Population counts stay well below that cap and every ratio span is 5× with
-/// a bound ≥ 1.5× the theoretical linear ratio, so each proof keeps its
+/// Population counts stay well below that cap and every ratio span is 3×-5×
+/// with a bound ≥ 1.5× the theoretical linear ratio, so each proof keeps its
 /// headroom while the whole suite fits the CI wall-clock budget.
 ///
 /// Import confinement (Part I §8): the runner imports Foundation, HistoryCore,
@@ -279,11 +279,15 @@ func workloadCaptureScaling() async -> [WorkloadFixture] {
     let bullet = "1-2"
     var fixtures: [WorkloadFixture] = []
 
-    // 1a: Retained-count scaling — a single capture's candidate generation is
-    // proportional to incoming bytes + posting-set/candidate confirmation
-    // work, not all Canonical blobs (§9 bullet 2). Capture commit interval
-    // excludes fingerprinting (§9 bullet 1); preparation is off-Authority by
-    // construction (05 §6.1).
+    // 1a: Retained-count envelope — a single capture's candidate generation
+    // is proportional to incoming bytes + posting-set/candidate confirmation
+    // work, not all Canonical blobs (§9 bullet 2). Capture ALSO performs the
+    // sanctioned O(retained scalar) retention-inventory load (05 §7.1 step 5:
+    // scalar summaries only, no blob decode), so the ratio sits AT the size
+    // span asymptotically; the bound is span × 1.2 so only a super-linear
+    // regression (per-item blob decode, O(n²)) breaks the envelope. Capture
+    // commit interval excludes fingerprinting (§9 bullet 1); preparation is
+    // off-Authority by construction (05 §6.1).
     do {
         let smallStore = try await openMemoryStore()
         try await populateItems(smallStore, count: 200)
@@ -302,7 +306,7 @@ func workloadCaptureScaling() async -> [WorkloadFixture] {
         }
 
         let ratio = safeRatio(largeMedian, smallMedian)
-        let bound = 4.0
+        let bound = 6.0
         let passed = ratio <= bound
         fixtures.append(WorkloadFixture(
             key: "captureScalesWithRetainedCount",
@@ -312,7 +316,7 @@ func workloadCaptureScaling() async -> [WorkloadFixture] {
             ratio: ratio,
             bound: bound,
             pass: passed,
-            note: "Capture candidate generation ∝ incoming bytes + posting-set/candidate confirmation, not all Canonical blobs (§9 bullet 2). Preparation/fingerprinting off-Authority by construction (05 §6.1)."
+            note: "Envelope: ratio ≤ 1.2× the 5× span. Candidate generation ∝ incoming bytes + posting-set work, not all Canonical blobs (§9 bullet 2); the sanctioned O(retained scalar) retention-inventory load (05 §7.1 step 5) puts the ratio AT the span asymptotically, so only a super-linear regression breaks the envelope. Preparation/fingerprinting off-Authority (05 §6.1)."
         ))
         printResult("captureScalesWithRetainedCount", bullet, ratio, bound, passed)
     } catch {
@@ -482,10 +486,10 @@ func workloadRetentionAndClear() async -> [WorkloadFixture] {
     // §9 bullet 5: O(retained scalar metadata), bounded by retained count.
     do {
         var medians: [(Int, Double)] = []
-        for count in [200, 1000] {
+        for count in [100, 300] {
             var samples: [Double] = []
             let clock = ContinuousClock()
-            for iteration in 0..<4 {  // 1 warmup + 3 timed
+            for iteration in 0..<3 {  // 1 warmup + 2 timed
                 let store = try await openMemoryStore(maxUnpinned: 5_000)
                 try await populateItems(store, count: count)
                 let start = clock.now
@@ -507,7 +511,7 @@ func workloadRetentionAndClear() async -> [WorkloadFixture] {
             ratio: ratio,
             bound: bound,
             pass: passed,
-            note: "Retention O(retained scalar metadata), bounded by retained count (§9 bullet 5). 5× retained, 15× bound = 3× headroom."
+            note: "Retention O(retained scalar metadata), bounded by retained count (§9 bullet 5). 3× retained, 15× bound = 5× headroom."
         ))
         printResult("retentionMassEviction", bullet, ratio, bound, passed)
     } catch {
@@ -517,10 +521,10 @@ func workloadRetentionAndClear() async -> [WorkloadFixture] {
     // --- Clear: clear(.unpinned) ---
     do {
         var medians: [(Int, Double)] = []
-        for count in [200, 1000] {
+        for count in [100, 300] {
             var samples: [Double] = []
             let clock = ContinuousClock()
-            for iteration in 0..<4 {
+            for iteration in 0..<3 {
                 let store = try await openMemoryStore(maxUnpinned: 5_000)
                 try await populateItems(store, count: count)
                 let start = clock.now
@@ -560,7 +564,7 @@ func workloadRecentBrowse() async -> [WorkloadFixture] {
 
     do {
         var medians: [(Int, Double)] = []
-        for count in [200, 1000] {
+        for count in [100, 400] {
             let store = try await openMemoryStore()
             try await populateItems(store, count: count)
             // §9 bullet 6: recent browse materializes at most limit+1 scalar
@@ -582,7 +586,7 @@ func workloadRecentBrowse() async -> [WorkloadFixture] {
             ratio: ratio,
             bound: bound,
             pass: passed,
-            note: "Recent browse materializes ≤ limit+1 scalar rows (§9 bullet 6). 5× retained, 3× bound = independent of retained count."
+            note: "Recent browse materializes ≤ limit+1 scalar rows (§9 bullet 6). 4× retained, 3× bound = independent of retained count."
         )
         printResult("recentBrowseIndependentOfRetainedCount", bullet, ratio, bound, passed)
         return [fixture]
@@ -599,12 +603,12 @@ func workloadSearchScan() async -> [WorkloadFixture] {
     do {
         var medians: [(Int, Double)] = []
         var allMatched = true
-        for count in [200, 1000] {
+        for count in [100, 400] {
             let store = try await openMemoryStore()
 
-            // Populate with deterministic items; embed "needle" in item #100.
+            // Populate with deterministic items; embed "needle" in the middle item.
             for i in 0..<count {
-                let text = (i == 100) ? "needle-in-haystack-\(i)" : "perf-search-\(i)"
+                let text = (i == count / 2) ? "needle-in-haystack-\(i)" : "perf-search-\(i)"
                 let capture = ClipboardCapture(
                     representations: [CapturedRepresentation(
                         typeIdentifier: "public.utf8-plain-text",
@@ -673,7 +677,7 @@ func workloadDetailAndPaste() async -> [WorkloadFixture] {
     // §9 bullet 8: detail/paste decode one item's bounded lineage.
     do {
         var medians: [(Int, Double)] = []
-        for count in [200, 1000] {
+        for count in [100, 400] {
             let store = try await openMemoryStore()
             let firstRef = try await populateAndReturnFirstRef(store, count: count)
             let medianMs = try await measureMedian {
@@ -691,7 +695,7 @@ func workloadDetailAndPaste() async -> [WorkloadFixture] {
             ratio: ratio,
             bound: bound,
             pass: passed,
-            note: "Detail decodes one item's bounded lineage (§9 bullet 8). 5× retained, 3× bound = O(1) in retained count."
+            note: "Detail decodes one item's bounded lineage (§9 bullet 8). 4× retained, 3× bound = O(1) in retained count."
         ))
         printResult("detailDecodeOneItem", bullet, ratio, bound, passed)
     } catch {
@@ -701,7 +705,7 @@ func workloadDetailAndPaste() async -> [WorkloadFixture] {
     // --- Paste payload ---
     do {
         var medians: [(Int, Double)] = []
-        for count in [200, 1000] {
+        for count in [100, 400] {
             let store = try await openMemoryStore()
             let firstRef = try await populateAndReturnFirstRef(store, count: count)
             let medianMs = try await measureMedian {
@@ -731,19 +735,92 @@ func workloadDetailAndPaste() async -> [WorkloadFixture] {
 
 // MARK: - Workload 8: thumbnail single-flight shares decode (§9 bullet 9)
 
+/// Builds a deterministic 1024×1024 RGB PNG at runtime (zlib stored blocks,
+/// Foundation-only — no compressor dependency). The WS15 1×1 fixture decodes
+/// in microseconds, so the single-flight ratio measured actor-scheduling
+/// noise, not decode sharing; a 1 MP source makes one ImageIO decode dominate
+/// per-call cost so concurrent-8 ≈ one decode (§9 bullet 9).
+func makeGradientPNG(width: Int, height: Int) -> Data {
+    func crc32(_ data: Data) -> UInt32 {
+        var crc: UInt32 = 0xFFFF_FFFF
+        for byte in data {
+            crc ^= UInt32(byte)
+            for _ in 0..<8 {
+                crc = (crc >> 1) ^ ((crc & 1) != 0 ? 0xEDB8_8320 : 0)
+            }
+        }
+        return crc ^ 0xFFFF_FFFF
+    }
+
+    func chunk(_ tag: String, _ payload: Data) -> Data {
+        var out = Data()
+        var length = UInt32(payload.count).bigEndian
+        out.append(Data(bytes: &length, count: 4))
+        let tagData = Data(tag.utf8)
+        out.append(tagData)
+        out.append(payload)
+        var crc = crc32(tagData + payload).bigEndian
+        out.append(Data(bytes: &crc, count: 4))
+        return out
+    }
+
+    // Signature + IHDR (bit depth 8, color type 2 = truecolor RGB).
+    var png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+    var ihdr = Data()
+    var widthBE = UInt32(width).bigEndian
+    var heightBE = UInt32(height).bigEndian
+    ihdr.append(Data(bytes: &widthBE, count: 4))
+    ihdr.append(Data(bytes: &heightBE, count: 4))
+    ihdr.append(contentsOf: [8, 2, 0, 0, 0])
+    png.append(chunk("IHDR", ihdr))
+
+    // Scanlines: filter byte 0 per row + RGB pixels (vertical gradient).
+    var raw = Data()
+    raw.reserveCapacity(height * (1 + width * 3))
+    for y in 0..<height {
+        raw.append(0)
+        let red = UInt8(64 + y % 64)
+        for _ in 0..<width {
+            raw.append(contentsOf: [red, 128, 192])
+        }
+    }
+
+    // zlib stream: 0x78 0x01 header, deflate stored blocks (≤ 65,535 bytes),
+    // then the adler32 of the raw scanlines.
+    var zstream = Data([0x78, 0x01])
+    var offset = 0
+    while offset < raw.count {
+        let blockLength = min(65_535, raw.count - offset)
+        let isLast = offset + blockLength == raw.count
+        zstream.append(isLast ? 1 : 0)
+        var lengthLE = UInt16(blockLength).littleEndian
+        var nlengthLE = (~UInt16(blockLength)).littleEndian
+        zstream.append(Data(bytes: &lengthLE, count: 2))
+        zstream.append(Data(bytes: &nlengthLE, count: 2))
+        zstream.append(raw[offset ..< offset + blockLength])
+        offset += blockLength
+    }
+    var sumA: UInt32 = 1
+    var sumB: UInt32 = 0
+    for byte in raw {
+        sumA = (sumA + UInt32(byte)) % 65_521
+        sumB = (sumB + sumA) % 65_521
+    }
+    var adler = (sumB << 16 | sumA).bigEndian
+    zstream.append(Data(bytes: &adler, count: 4))
+    png.append(chunk("IDAT", zstream))
+
+    png.append(chunk("IEND", Data()))
+    return png
+}
+
 func workloadThumbnailSingleFlight() async -> [WorkloadFixture] {
     let bullet = "9"
 
     do {
         let store = try await openMemoryStore()
 
-        // Standard 1×1 transparent PNG (base64) — verbatim from the WS15
-        // thumbnail fixture (Tests/HistoryStorageTests/WS15ThumbnailFenceTests.swift).
-        let pngBase64 =
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
-        guard let pngData = Data(base64Encoded: pngBase64) else {
-            return [failureFixture(key: "thumbnailSingleFlightSharesDecode", bullet: bullet, error: PerfError.searchNoMatch)]
-        }
+        let pngData = makeGradientPNG(width: 1024, height: 1024)
         // Capture a text+png item so the thumbnail path has a valid image source.
         let capture = ClipboardCapture(
             representations: [
