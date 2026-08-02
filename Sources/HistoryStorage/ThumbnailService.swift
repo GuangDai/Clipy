@@ -251,11 +251,14 @@ internal actor ThumbnailWorker {
         let maxPixelSize = max(pixels.width, pixels.height)
 
         // The `as CFDictionary` target makes the literal values infer as `Any`,
-        // so `Int` (bridged to NSNumber/CFNumber) and `CFBoolean` coexist.
+        // so `Int` (bridged to NSNumber/CFNumber) and `CFBoolean` coexist. The
+        // `kCFBooleanTrue` constants are non-nil CoreFoundation globals —
+        // unwrapped explicitly so the IUO never coerces to `Any` (zero-warning
+        // rule, docs/AGENTS §4).
         let thumbnailOptions = [
-            kCGImageSourceCreateThumbnailFromImageAlways: kCFBooleanTrue,
+            kCGImageSourceCreateThumbnailFromImageAlways: kCFBooleanTrue!,
             kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
-            kCGImageSourceCreateThumbnailWithTransform: kCFBooleanTrue
+            kCGImageSourceCreateThumbnailWithTransform: kCFBooleanTrue!
         ] as CFDictionary
 
         guard let cgImage = CGImageSourceCreateThumbnailAtIndex(

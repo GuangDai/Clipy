@@ -258,7 +258,7 @@ private static func captureText(
                 // WS13: the armed capture fails with .persistence(.transaction)
                 // (docs/05-authority-kernel.md §16). The injection is one-shot
                 // and auto-disarms, so the next capture succeeds.
-                try? await history.perform(.capture(
+                _ = try? await history.perform(.capture(
                     WSSupport.textCapture(
                         "ws13 read doomed",
                         observedAt: Date(timeIntervalSinceReferenceDate: 700_520_100),

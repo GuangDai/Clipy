@@ -1626,24 +1626,89 @@ internal actor HistoryAuthority {
             \.pinOrdinal,
         ]
 
+        // Continuation anchors are lane-scoped (04 §6): a pinned anchor
+        // offsets the pinned lane; an unpinned anchor empties the pinned lane
+        // (every pinned row precedes it in the merge) and bounds the unpinned
+        // lane at the store level. The store-level bounds keep a continuation
+        // page's fetch at the same ≤ limit+1 shape as a first page's — an
+        // in-memory-only anchor application would re-fetch the same top slice
+        // and starve the continuation (WS18).
+        let laneAnchor: (ordinal: Int?, lastCopiedAt: Date, id: HistoryItemID)?
+        if let anchor = resolvedCursor?.anchor {
+            guard case .defaultOrder(let ordinal, let date, let id) = anchor else {
+                // A fuzzy anchor cannot name a recent-browse row — the query
+                // shape check above already rejected a search cursor, so this
+                // is a defensive invariant, not data.
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
+            laneAnchor = (ordinal, date, id)
+        } else {
+            laneAnchor = nil
+        }
+        let unpinnedAnchorActive = laneAnchor.map { $0.ordinal == nil } ?? false
+
         // Pinned lane: pinOrdinal != nil, sorted by pinOrdinal ascending.
-        var pinnedDescriptor = FetchDescriptor<HistoryItemRow>(
-            predicate: #Predicate { $0.pinOrdinal != nil }
-        )
-        pinnedDescriptor.propertiesToFetch = scalarProperties
-        pinnedDescriptor.sortBy = [SortDescriptor(\.pinOrdinal)]
-        pinnedDescriptor.fetchLimit = limit + 1
-        let pinnedRows: [HistoryItemRow]
-        do {
-            pinnedRows = try context.fetch(pinnedDescriptor)
-        } catch {
-            throw HistoryFailure.temporarilyUnavailable(.factProof)
+        // Skipped for an unpinned anchor (every pinned row precedes it in the
+        // merge order).
+        var pinnedOrdered: [ScalarReadRow] = []
+        if !unpinnedAnchorActive {
+            var pinnedDescriptor = FetchDescriptor<HistoryItemRow>(
+                predicate: #Predicate { $0.pinOrdinal != nil }
+            )
+            pinnedDescriptor.propertiesToFetch = scalarProperties
+            pinnedDescriptor.sortBy = [SortDescriptor(\.pinOrdinal)]
+            // A pinned continuation offsets the lane by the anchor ordinal:
+            // ordinals are unique and contiguous (D12), so the rows after a
+            // pinned anchor at ordinal k are exactly the lane rows past index
+            // k, and bounding the fetch by the anchor's lane offset avoids an
+            // optional-Int comparison predicate (§18's verify-against-the-SDK
+            // stance). This fetches up to k+limit+2 scalar rows: the §9
+            // "≤ limit+1" claim covers first pages and unpinned continuations
+            // (the store-level date bound below); pinned continuations are
+            // bounded by the pinned count instead — the claim is weakened
+            // there, correctness intact (06 §7.5's own fallback stance).
+            pinnedDescriptor.fetchLimit = (laneAnchor?.ordinal ?? -1) + 1 + limit + 1
+            let pinnedRows: [HistoryItemRow]
+            do {
+                pinnedRows = try context.fetch(pinnedDescriptor)
+            } catch {
+                throw HistoryFailure.temporarilyUnavailable(.factProof)
+            }
+            let lane = try orderPinnedLane(pinnedRows)
+            if let laneAnchor {
+                // §6: the anchored row must exist — the §6-step-3 position
+                // guard froze the state at the cursor's snapshot. Absence
+                // contradicts the snapshot: defensive `.snapshotExpired`.
+                let anchorValue = StoredOrderingAnchor.defaultOrder(
+                    pinnedOrdinal: laneAnchor.ordinal,
+                    lastCopiedAt: laneAnchor.lastCopiedAt,
+                    id: laneAnchor.id
+                )
+                guard let anchorIndex = lane.firstIndex(where: { $0.matches(anchorValue) }) else {
+                    throw HistoryFailure.snapshotExpired(current: currentPosition)
+                }
+                pinnedOrdered = Array(lane[(anchorIndex + 1)...])
+            } else {
+                pinnedOrdered = lane
+            }
         }
 
         // Unpinned lane: pinOrdinal == nil, sorted by lastCopiedAt descending.
-        var unpinnedDescriptor = FetchDescriptor<HistoryItemRow>(
-            predicate: #Predicate { $0.pinOrdinal == nil }
-        )
+        // An unpinned continuation additionally bounds the lane at the store
+        // level by `lastCopiedAt <= anchor` (non-optional Date comparison —
+        // the tie on `\.id` is resolved in memory by `orderUnpinnedLane`'s
+        // exactness guard, never trusted to the store).
+        var unpinnedDescriptor: FetchDescriptor<HistoryItemRow>
+        if unpinnedAnchorActive, let laneAnchor {
+            let anchorDate = laneAnchor.lastCopiedAt
+            unpinnedDescriptor = FetchDescriptor<HistoryItemRow>(
+                predicate: #Predicate { $0.pinOrdinal == nil && $0.lastCopiedAt <= anchorDate }
+            )
+        } else {
+            unpinnedDescriptor = FetchDescriptor<HistoryItemRow>(
+                predicate: #Predicate { $0.pinOrdinal == nil }
+            )
+        }
         unpinnedDescriptor.propertiesToFetch = scalarProperties
         unpinnedDescriptor.sortBy = [SortDescriptor(\.lastCopiedAt, order: .reverse)]
         unpinnedDescriptor.fetchLimit = limit + 1
@@ -1661,23 +1726,35 @@ internal actor HistoryAuthority {
         // no tie is possible there), re-fetch that lane with the hard bound
         // and order it fully in memory. Otherwise order the small slice by
         // the full key.
-        let pinnedOrdered = try orderPinnedLane(pinnedRows)
-        let unpinnedOrdered = try orderUnpinnedLane(unpinnedRows, limit: limit, in: context)
+        var unpinnedOrdered = try orderUnpinnedLane(
+            unpinnedRows,
+            limit: limit,
+            anchorDate: unpinnedAnchorActive ? laneAnchor?.lastCopiedAt : nil,
+            in: context
+        )
 
-        // Merge lanes: pinned first, then unpinned (03b §8). The continuation
-        // anchor drops rows up to and including the anchored row in the
-        // computed order (§6).
-        let merged: [ScalarReadRow]
-        if let anchor = resolvedCursor?.anchor {
-            let combined = pinnedOrdered + unpinnedOrdered
-            guard let anchorIndex = combined.firstIndex(where: { $0.matches(anchor) }) else {
-                // §16: the anchored row is absent — the snapshot expired.
+        // §6: apply the unpinned continuation anchor — drop rows up to and
+        // including the anchored row. The anchored row is present in the
+        // date-bounded lane (the §6-step-3 position guard froze the state at
+        // the cursor's snapshot); absence contradicts the snapshot —
+        // defensive `.snapshotExpired`. (More than limit+1 rows sharing the
+        // anchor's date would fire the exactness guard above, so the bounded
+        // lane this checks is complete at that date.)
+        if unpinnedAnchorActive, let laneAnchor {
+            let anchorValue = StoredOrderingAnchor.defaultOrder(
+                pinnedOrdinal: nil,
+                lastCopiedAt: laneAnchor.lastCopiedAt,
+                id: laneAnchor.id
+            )
+            guard let anchorIndex = unpinnedOrdered.firstIndex(where: { $0.matches(anchorValue) }) else {
                 throw HistoryFailure.snapshotExpired(current: currentPosition)
             }
-            merged = Array(combined[(anchorIndex + 1)...])
-        } else {
-            merged = pinnedOrdered + unpinnedOrdered
+            unpinnedOrdered = Array(unpinnedOrdered[(anchorIndex + 1)...])
         }
+
+        // Merge lanes: pinned first, then unpinned (03b §8). The continuation
+        // drops were applied per lane above (04 §6).
+        let merged = pinnedOrdered + unpinnedOrdered
 
         let pageSlice = Array(merged.prefix(limit))
         let rows: [HistoryRow] = try pageSlice.map { scalarRow in
@@ -2274,10 +2351,13 @@ private extension HistoryAuthority {
     /// rows[limit-1] and rows[limit] tie on `lastCopiedAt`, re-fetch the lane
     /// with the hard retained-item bound and order fully in memory; otherwise
     /// order the small slice by the full key. `\.id` is never trusted to sort
-    /// at the store level.
+    /// at the store level. `anchorDate` carries the continuation's store-level
+    /// `lastCopiedAt <= anchor` bound (04 §6) so the guard's re-fetch keeps
+    /// the same lane scope as the initial fetch (`nil` on a first page).
     func orderUnpinnedLane(
         _ rows: [HistoryItemRow],
         limit: Int,
+        anchorDate: Date?,
         in context: ModelContext
     ) throws -> [ScalarReadRow] {
         // Check whether the store-level sort is insufficient: a full slice
@@ -2288,9 +2368,16 @@ private extension HistoryAuthority {
 
         let source: [HistoryItemRow]
         if needsFullFetch {
-            var descriptor = FetchDescriptor<HistoryItemRow>(
-                predicate: #Predicate { $0.pinOrdinal == nil }
-            )
+            var descriptor: FetchDescriptor<HistoryItemRow>
+            if let anchorDate {
+                descriptor = FetchDescriptor<HistoryItemRow>(
+                    predicate: #Predicate { $0.pinOrdinal == nil && $0.lastCopiedAt <= anchorDate }
+                )
+            } else {
+                descriptor = FetchDescriptor<HistoryItemRow>(
+                    predicate: #Predicate { $0.pinOrdinal == nil }
+                )
+            }
             descriptor.propertiesToFetch = [
                 \.id,
                 \.contentVersionRaw,
