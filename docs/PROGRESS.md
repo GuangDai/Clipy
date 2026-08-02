@@ -11,8 +11,8 @@
 > criteria live in the design modules (`00`–`06`) and the roadmap module docs;
 > they are cited here, never restated as new semantics.
 
-**Current HEAD:** `7994844` — run 29964640300, all three jobs green
-(2026-07-22). Steps 0–5 landed; steps 6–9b not started. Phase position
+**Current HEAD:** `9c6801a` — run 30724821449, all three jobs green
+(2026-08-02). Steps 0–6 landed; steps 7–9b not started. Phase position
 (`roadmap/README.md` §3): M1 (pure compile) complete; M2 (executable
 specification) in progress.
 
@@ -179,6 +179,42 @@ specification) in progress.
   self-scan flagged CoreData file-status noise from WS temp-store creation;
   `bb1bced` creates the dirs upfront (green 29964233482). `7994844` fixed the
   WS5 producer path (see below) — green 29964640300.
+
+## Step 6 — HistoryStorage: mutations
+
+- **Status:** done. HEAD `9c6801a` green at run 30724821449 — all three jobs.
+  Gates WS6–WS10, WS13, WS14, WS16, WS20, WS21 pass on the commit/storage
+  side (public-read / observation / no-emission clauses defer to step 7 per
+  `roadmap/README.md` §3 WS-clause phasing).
+- **Roadmap:** `roadmap/03-historystorage.md` step 6 (Part V §6.2,
+  §7.2–§7.3, §8–§11; Part II §8, §10–§12).
+- **Delivered:** the five mutation fact loaders (`MutationFactLoaders` —
+  complete pinned order, pin, revision, remove, clear, retention; Part V
+  §7.2–§7.3); the seven step-6 `HistoryAuthority` methods — pin placement,
+  unpin, remove, clear, retention-policy commits plus the §6.2 two-phase
+  revision (`revisionPreparationSnapshot` + `commitRevision`) — all on the
+  capture path's fact-load/plan/stamp/transaction/post-commit spine, sharing
+  the extracted `executeStampedPlan` tail (Part V §9–§11); the real
+  `RevisionPreparationActor` (03a §5 decision resolution, Part VI hard-limit
+  validation with checked arithmetic, Revision-ID/timestamp minting, §15
+  projection); the WS20 `.revisionCommitEntry` suspension point; and the
+  IMP6-01 spec amendment — `RemoveFacts` carries the proven pinned order so
+  removing a pinned item compacts the lane in the same commit (02 §5.4/§10,
+  05 §7.3, AUDIT §3).
+
+| Commit | Subject |
+|---|---|
+| `315e6e0` | IMP6-01: pin-ordinal compaction on remove — RemoveFacts carries pinned order (02 §5.4/§10, 05 §7.3) |
+| `888a290` | Step 6 (impl): mutation commits — pin/unpin/remove/clear/retention + two-phase revision (05 §6.2/§7.2–§7.3/§9–§11, 02 §8) |
+| `47d4398` | Step 6 (tests): WS6-WS10, WS13, WS14, WS16, WS20, WS21 gates (06 §8) |
+| `9c6801a` | CI: exclude benign LaunchServices autoShortcut noise from app log scan |
+
+- **CI:** `315e6e0` green (30550057801); `888a290` green (30554426902);
+  `47d4398` red at the app job only (30724705323) — its log self-scan matched
+  intermittent LaunchServices "com.apple.linkd.autoShortcut" connection noise
+  from the headless test-host app (same class as the AppIntents exclusion);
+  excluded by `9c6801a` (green, 30724821449). The SwiftPM job carrying all
+  ten new WS suites was green on its first attempt.
 
 ## Notable decisions & deviations
 
