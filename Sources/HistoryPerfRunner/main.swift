@@ -1,9 +1,8 @@
 /// HistoryPerfRunner — release-like performance runner for the Part VI §9
 /// performance proofs (docs/06-cross-cutting.md §9). Drives the PUBLIC
-/// ClipboardHistory surface via the production SwiftDataHistory facade over
-/// persistent temporary stores. Each workload records fixture data (medians,
-/// complexity ratios, bounds) and exits non-zero if any complexity check
-/// fails.
+/// ClipboardHistory surface via the production SwiftDataHistory facade. Each
+/// workload records fixture data (medians, complexity ratios, bounds) and
+/// exits non-zero if any complexity check fails.
 ///
 /// Acceptance (docs/06-cross-cutting.md §9; docs/roadmap/README.md §3 step 8):
 /// the proofs are COMPLEXITY claims, not latency targets — "No numeric latency
@@ -12,6 +11,14 @@
 /// linear ratio so a noisy shared runner cannot flake within an order of
 /// magnitude. Machine metadata accompanies every fixture (§9: "recorded
 /// fixtures and machine metadata").
+///
+/// Store medium: §9 measures algorithmic complexity (rows/bytes scaling), not
+/// durability. Workloads that never reopen durable state run on `.memory`
+/// stores — Part V §2 states `.memory` changes the durability medium only and
+/// uses the same Authority, planners, codecs, and transaction path — so the
+/// measured algorithm is identical without paying per-commit fsync during
+/// (untimed) population. Bullet 3 (index rebuild across a durable reopen)
+/// uses `.persistent` stores. Each fixture records its medium.
 ///
 /// Import confinement (Part I §8): the runner imports Foundation, HistoryCore,
 /// and HistoryStorage — HistoryStorage was added to the HistoryPerfRunner
@@ -50,6 +57,10 @@ struct WorkloadFixture: Codable {
     let pass: Bool
     /// Human-readable note (spec citations, explanation).
     let note: String
+    /// Store medium (Part V §2): `.memory` for algorithmic workloads,
+    /// `.persistent` for bullet 3's durable reopen. Recorded per §9's
+    /// "recorded fixtures" requirement.
+    let medium: String = ".memory"
 }
 
 /// The complete fixture document written as JSON.
@@ -138,6 +149,25 @@ func openStore(url: URL, maxUnpinned: Int = 5_000) async throws -> SwiftDataHist
     try await SwiftDataHistory.open(
         configuration: HistoryConfiguration(
             persistence: .persistent(storeURL: url),
+            initialMaximumUnpinnedItems: maxUnpinned
+        )
+    )
+}
+
+/// Opens the public facade over an in-memory store.
+///
+/// §9 measures algorithmic complexity (rows/bytes scaling), not durability:
+/// Part V §2 states `.memory` changes the durability medium only and uses
+/// the same Authority, planners, codecs, and transaction path, so a workload
+/// that does not need to REOPEN durable state runs against the identical
+/// algorithm without paying per-commit fsync — population is the runner's
+/// dominant cost and is never part of a measurement. Only bullet 3 (index
+/// rebuild across a durable reopen) keeps `.persistent`; every fixture note
+/// records the medium.
+func openMemoryStore(maxUnpinned: Int = 5_000) async throws -> SwiftDataHistory {
+    try await SwiftDataHistory.open(
+        configuration: HistoryConfiguration(
+            persistence: .memory,
             initialMaximumUnpinnedItems: maxUnpinned
         )
     )
@@ -247,16 +277,9 @@ func workloadCaptureScaling() async -> [WorkloadFixture] {
     // excludes fingerprinting (§9 bullet 1); preparation is off-Authority by
     // construction (05 §6.1).
     do {
-        let smallURL = makeStoreURL("wl1a-small")
-        let largeURL = makeStoreURL("wl1a-large")
-        defer {
-            removeStoreDir(smallURL)
-            removeStoreDir(largeURL)
-        }
-
-        let smallStore = try await openStore(url: smallURL)
+        let smallStore = try await openMemoryStore()
         try await populateItems(smallStore, count: 200)
-        let largeStore = try await openStore(url: largeURL)
+        let largeStore = try await openMemoryStore()
         try await populateItems(largeStore, count: 2000)
 
         var smallNext = 200
@@ -291,9 +314,7 @@ func workloadCaptureScaling() async -> [WorkloadFixture] {
     // 1b: Body-size scaling — RECORDS byte-proportional scaling (no bound;
     // the expected behavior is linear-in-incoming-bytes per §9 bullet 2).
     do {
-        let url = makeStoreURL("wl1b-body")
-        defer { removeStoreDir(url) }
-        let store = try await openStore(url: url)
+        let store = try await openMemoryStore()
         try await populateItems(store, count: 200)
 
         var next = 200
@@ -382,7 +403,8 @@ func workloadIndexRebuild() async -> [WorkloadFixture] {
             ratio: ratio,
             bound: bound,
             pass: passed,
-            note: "Index rebuild O(retained signature metadata), bounded by 5,000 items (§9 bullet 3). 5× items, 8× bound = 1.6× linear headroom."
+            note: "Index rebuild O(retained signature metadata), bounded by 5,000 items (§9 bullet 3). 5× items, 8× bound = 1.6× linear headroom.",
+            medium: ".persistent"
         )
         printResult("indexRebuildLinearInRetainedSignatureMetadata", bullet, ratio, bound, passed)
         return [fixture]
@@ -400,9 +422,7 @@ func workloadPinReorder() async -> [WorkloadFixture] {
     do {
         var medians: [(Int, Double)] = []
         for pinnedCount in [50, 200] {
-            let url = makeStoreURL("wl3-pin-\(pinnedCount)")
-            defer { removeStoreDir(url) }
-            let store = try await openStore(url: url)
+            let store = try await openMemoryStore()
 
             // Capture items and pin each at .last (ordinal grows 0..<count).
             var refs: [HistoryItemReference] = []
@@ -457,9 +477,8 @@ func workloadRetentionAndClear() async -> [WorkloadFixture] {
         for count in [200, 2000] {
             var samples: [Double] = []
             let clock = ContinuousClock()
-            for iteration in 0..<6 {  // 1 warmup + 5 timed
-                let url = makeStoreURL("wl4-retention-\(count)-\(iteration)")
-                let store = try await openStore(url: url, maxUnpinned: 5_000)
+            for iteration in 0..<4 {  // 1 warmup + 3 timed
+                let store = try await openMemoryStore(maxUnpinned: 5_000)
                 try await populateItems(store, count: count)
                 let start = clock.now
                 _ = try await store.perform(.setRetentionPolicy(maximumUnpinnedItems: 1))
@@ -467,7 +486,6 @@ func workloadRetentionAndClear() async -> [WorkloadFixture] {
                 if iteration > 0 {  // discard warmup
                     samples.append(durationToMs(elapsed))
                 }
-                removeStoreDir(url)
             }
             medians.append((count, median(samples)))
         }
@@ -494,9 +512,8 @@ func workloadRetentionAndClear() async -> [WorkloadFixture] {
         for count in [200, 2000] {
             var samples: [Double] = []
             let clock = ContinuousClock()
-            for iteration in 0..<6 {
-                let url = makeStoreURL("wl4-clear-\(count)-\(iteration)")
-                let store = try await openStore(url: url, maxUnpinned: 5_000)
+            for iteration in 0..<4 {
+                let store = try await openMemoryStore(maxUnpinned: 5_000)
                 try await populateItems(store, count: count)
                 let start = clock.now
                 _ = try await store.perform(.clear(.unpinned))
@@ -504,7 +521,6 @@ func workloadRetentionAndClear() async -> [WorkloadFixture] {
                 if iteration > 0 {
                     samples.append(durationToMs(elapsed))
                 }
-                removeStoreDir(url)
             }
             medians.append((count, median(samples)))
         }
@@ -537,9 +553,7 @@ func workloadRecentBrowse() async -> [WorkloadFixture] {
     do {
         var medians: [(Int, Double)] = []
         for count in [200, 2000] {
-            let url = makeStoreURL("wl5-recent-\(count)")
-            defer { removeStoreDir(url) }
-            let store = try await openStore(url: url)
+            let store = try await openMemoryStore()
             try await populateItems(store, count: count)
             // §9 bullet 6: recent browse materializes at most limit+1 scalar
             // rows after the storage query/order strategy is proved.
@@ -578,9 +592,7 @@ func workloadSearchScan() async -> [WorkloadFixture] {
         var medians: [(Int, Double)] = []
         var allMatched = true
         for count in [200, 2000] {
-            let url = makeStoreURL("wl6-search-\(count)")
-            defer { removeStoreDir(url) }
-            let store = try await openStore(url: url)
+            let store = try await openMemoryStore()
 
             // Populate with deterministic items; embed "needle" in item #100.
             for i in 0..<count {
@@ -654,9 +666,7 @@ func workloadDetailAndPaste() async -> [WorkloadFixture] {
     do {
         var medians: [(Int, Double)] = []
         for count in [200, 2000] {
-            let url = makeStoreURL("wl7-detail-\(count)")
-            defer { removeStoreDir(url) }
-            let store = try await openStore(url: url)
+            let store = try await openMemoryStore()
             let firstRef = try await populateAndReturnFirstRef(store, count: count)
             let medianMs = try await measureMedian {
                 _ = try await store.details(for: firstRef.id)
@@ -684,9 +694,7 @@ func workloadDetailAndPaste() async -> [WorkloadFixture] {
     do {
         var medians: [(Int, Double)] = []
         for count in [200, 2000] {
-            let url = makeStoreURL("wl7-paste-\(count)")
-            defer { removeStoreDir(url) }
-            let store = try await openStore(url: url)
+            let store = try await openMemoryStore()
             let firstRef = try await populateAndReturnFirstRef(store, count: count)
             let medianMs = try await measureMedian {
                 _ = try await store.pastePayload(for: firstRef.id)
@@ -719,9 +727,7 @@ func workloadThumbnailSingleFlight() async -> [WorkloadFixture] {
     let bullet = "9"
 
     do {
-        let url = makeStoreURL("wl8-thumbnail")
-        defer { removeStoreDir(url) }
-        let store = try await openStore(url: url)
+        let store = try await openMemoryStore()
 
         // Standard 1×1 transparent PNG (base64) — verbatim from the WS15
         // thumbnail fixture (Tests/HistoryStorageTests/WS15ThumbnailFenceTests.swift).
