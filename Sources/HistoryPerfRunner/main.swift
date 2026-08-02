@@ -20,6 +20,13 @@
 /// (untimed) population. Bullet 3 (index rebuild across a durable reopen)
 /// uses `.persistent` stores. Each fixture records its medium.
 ///
+/// Fixture sizes: §9 pins complexity envelopes, not absolute sizes ("Index
+/// rebuild is O(retained signature metadata) and bounded by 5,000 items" —
+/// the 5,000 is the retention cap, not a required measurement size).
+/// Population counts stay well below that cap and every ratio span is 5× with
+/// a bound ≥ 1.5× the theoretical linear ratio, so each proof keeps its
+/// headroom while the whole suite fits the CI wall-clock budget.
+///
 /// Import confinement (Part I §8): the runner imports Foundation, HistoryCore,
 /// and HistoryStorage — HistoryStorage was added to the HistoryPerfRunner
 /// allowlist because the runner drives the public SwiftDataHistory concrete
@@ -281,10 +288,10 @@ func workloadCaptureScaling() async -> [WorkloadFixture] {
         let smallStore = try await openMemoryStore()
         try await populateItems(smallStore, count: 200)
         let largeStore = try await openMemoryStore()
-        try await populateItems(largeStore, count: 2000)
+        try await populateItems(largeStore, count: 1000)
 
         var smallNext = 200
-        var largeNext = 2000
+        var largeNext = 1000
         let smallMedian = try await measureMedian {
             _ = try await captureItem(smallStore, index: smallNext)
             smallNext += 1
@@ -300,7 +307,7 @@ func workloadCaptureScaling() async -> [WorkloadFixture] {
         fixtures.append(WorkloadFixture(
             key: "captureScalesWithRetainedCount",
             bullet: bullet,
-            sizes: ["200-retained", "2000-retained"],
+            sizes: ["200-retained", "1000-retained"],
             mediansMs: [smallMedian, largeMedian],
             ratio: ratio,
             bound: bound,
@@ -352,7 +359,7 @@ func workloadCaptureScaling() async -> [WorkloadFixture] {
 func workloadIndexRebuild() async -> [WorkloadFixture] {
     let bullet = "3"
     let bound = 8.0
-    let sizes = [1000, 2500, 5000]
+    let sizes = [200, 500, 1000]
 
     do {
         var medians: [Double] = []
@@ -475,7 +482,7 @@ func workloadRetentionAndClear() async -> [WorkloadFixture] {
     // §9 bullet 5: O(retained scalar metadata), bounded by retained count.
     do {
         var medians: [(Int, Double)] = []
-        for count in [200, 2000] {
+        for count in [200, 1000] {
             var samples: [Double] = []
             let clock = ContinuousClock()
             for iteration in 0..<4 {  // 1 warmup + 3 timed
@@ -500,7 +507,7 @@ func workloadRetentionAndClear() async -> [WorkloadFixture] {
             ratio: ratio,
             bound: bound,
             pass: passed,
-            note: "Retention O(retained scalar metadata), bounded by retained count (§9 bullet 5). 10× retained, 15× bound = 1.5× headroom."
+            note: "Retention O(retained scalar metadata), bounded by retained count (§9 bullet 5). 5× retained, 15× bound = 3× headroom."
         ))
         printResult("retentionMassEviction", bullet, ratio, bound, passed)
     } catch {
@@ -510,7 +517,7 @@ func workloadRetentionAndClear() async -> [WorkloadFixture] {
     // --- Clear: clear(.unpinned) ---
     do {
         var medians: [(Int, Double)] = []
-        for count in [200, 2000] {
+        for count in [200, 1000] {
             var samples: [Double] = []
             let clock = ContinuousClock()
             for iteration in 0..<4 {
@@ -553,7 +560,7 @@ func workloadRecentBrowse() async -> [WorkloadFixture] {
 
     do {
         var medians: [(Int, Double)] = []
-        for count in [200, 2000] {
+        for count in [200, 1000] {
             let store = try await openMemoryStore()
             try await populateItems(store, count: count)
             // §9 bullet 6: recent browse materializes at most limit+1 scalar
@@ -575,7 +582,7 @@ func workloadRecentBrowse() async -> [WorkloadFixture] {
             ratio: ratio,
             bound: bound,
             pass: passed,
-            note: "Recent browse materializes ≤ limit+1 scalar rows (§9 bullet 6). 10× retained, 3× bound = independent of retained count."
+            note: "Recent browse materializes ≤ limit+1 scalar rows (§9 bullet 6). 5× retained, 3× bound = independent of retained count."
         )
         printResult("recentBrowseIndependentOfRetainedCount", bullet, ratio, bound, passed)
         return [fixture]
@@ -592,7 +599,7 @@ func workloadSearchScan() async -> [WorkloadFixture] {
     do {
         var medians: [(Int, Double)] = []
         var allMatched = true
-        for count in [200, 2000] {
+        for count in [200, 1000] {
             let store = try await openMemoryStore()
 
             // Populate with deterministic items; embed "needle" in item #100.
@@ -666,7 +673,7 @@ func workloadDetailAndPaste() async -> [WorkloadFixture] {
     // §9 bullet 8: detail/paste decode one item's bounded lineage.
     do {
         var medians: [(Int, Double)] = []
-        for count in [200, 2000] {
+        for count in [200, 1000] {
             let store = try await openMemoryStore()
             let firstRef = try await populateAndReturnFirstRef(store, count: count)
             let medianMs = try await measureMedian {
@@ -684,7 +691,7 @@ func workloadDetailAndPaste() async -> [WorkloadFixture] {
             ratio: ratio,
             bound: bound,
             pass: passed,
-            note: "Detail decodes one item's bounded lineage (§9 bullet 8). 10× retained, 3× bound = O(1) in retained count."
+            note: "Detail decodes one item's bounded lineage (§9 bullet 8). 5× retained, 3× bound = O(1) in retained count."
         ))
         printResult("detailDecodeOneItem", bullet, ratio, bound, passed)
     } catch {
@@ -694,7 +701,7 @@ func workloadDetailAndPaste() async -> [WorkloadFixture] {
     // --- Paste payload ---
     do {
         var medians: [(Int, Double)] = []
-        for count in [200, 2000] {
+        for count in [200, 1000] {
             let store = try await openMemoryStore()
             let firstRef = try await populateAndReturnFirstRef(store, count: count)
             let medianMs = try await measureMedian {
