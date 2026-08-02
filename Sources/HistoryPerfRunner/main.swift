@@ -790,7 +790,7 @@ func makeGradientPNG(width: Int, height: Int) throws -> Data {
     // zlib stream: real deflate via Foundation's COMPRESSION_ZLIB (RFC 1950),
     // so the ImageIO decode pays genuine inflate cost — stored blocks would
     // decompress as a memcpy and the decode would not dominate the ratio.
-    let zstream = try (raw as NSData).compressed(using: .zlib)
+    let zstream = try (raw as NSData).compressed(using: .zlib) as Data
     png.append(chunk("IDAT", zstream))
 
     png.append(chunk("IEND", Data()))
