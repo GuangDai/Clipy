@@ -1,29 +1,31 @@
-/// The step-8 stub actor for the `SwiftDataHistory` facade field whose full
-/// implementation lands at roadmap step 8 (`ThumbnailService`), plus the
-/// step-6 `RevisionPreparationActor` implementation and the internal
+/// The step-6 `RevisionPreparationActor` implementation and the internal
 /// Sendable value types those signatures share.
 /// Owning spec: docs/roadmap/03-historystorage.md step-5 note; facade field
 /// list: docs/05-authority-kernel.md §2 (Part V).
 ///
-/// `SwiftDataHistory.open` constructs all five facade fields; a stub `actor`
-/// is still `Sendable`, so `SwiftDataHistory: Sendable` is derivable without
-/// escape hatches. The remaining stub pins the exact method signature the
-/// `SwiftDataHistory` facade already calls (the signature its step-8
-/// implementation keeps) and throws `StepDeferredError.notYetImplemented`
-/// (defined in SwiftDataHistory.swift); no stub carries state —
-/// `ThumbnailService` gains its flight table and `ThumbnailWorker` at
-/// step 8. (The `SearchWorker` stub left this file at roadmap step 7: its
-/// exact/fuzzy/regexp implementation now lives in SearchWorker.swift, with
-/// Fuse confined inside the actor per docs/01-architecture.md §6.)
+/// `SwiftDataHistory.open` constructs all five facade fields; every field is
+/// an `actor`, so `SwiftDataHistory: Sendable` is derivable without escape
+/// hatches. `ThumbnailService` moved to ThumbnailService.swift at roadmap
+/// step 8 (its flight table and owned `ThumbnailWorker` live there); this
+/// file now hosts only `RevisionPreparationActor` and the four value types
+/// (`PreparedRevisionBundle`, `RevisionPreparationSnapshot`,
+/// `SearchCorpusSnapshot`, `SearchCorpusRow`). The `SearchWorker` stub left
+/// this file at roadmap step 7: its exact/fuzzy/regexp implementation lives
+/// in SearchWorker.swift, with Fuse confined inside the actor per
+/// docs/01-architecture.md §6.
 ///
-/// This file also hosts the internal Sendable value types those signatures
-/// require that no other file owns (`PreparedRevisionBundle`,
-/// `RevisionPreparationSnapshot`, `SearchCorpusSnapshot`, `SearchCorpusRow`).
-/// Step 6 keeps the revision values beside their preparation actor here;
-/// `SearchCorpusSnapshot`/`SearchCorpusRow` stay here as the
-/// docs/05-authority-kernel.md §14.2 contract between the Authority (which
-/// captures the corpus) and the `SearchWorker` in SearchWorker.swift
-/// (which evaluates it).
+/// `StepDeferredError` (defined in SwiftDataHistory.swift) has NO users in
+/// this file after the step-8 edit: the `ThumbnailService` stub that threw it
+/// moved to ThumbnailService.swift with a full implementation, and the only
+/// remaining user is `HistoryAuthority.thumbnailSource` (also retired at
+/// step 8 by the parallel agent owning HistoryAuthority.swift).
+///
+/// This file hosts the internal Sendable value types those signatures
+/// require that no other file owns. Step 6 keeps the revision values beside
+/// their preparation actor here; `SearchCorpusSnapshot`/`SearchCorpusRow`
+/// stay here as the docs/05-authority-kernel.md §14.2 contract between the
+/// Authority (which captures the corpus) and the `SearchWorker` in
+/// SearchWorker.swift (which evaluates it).
 import Foundation
 import HistoryCore
 import HistoryDomain
@@ -302,37 +304,6 @@ internal actor RevisionPreparationActor {
                 proposedContent: proposed
             ),
             projection: projection
-        )
-    }
-}
-
-/// Thumbnail single-flight service (docs/05-authority-kernel.md §14.5).
-/// Step-5 stub; the flight table and its owned `ThumbnailWorker` land at
-/// roadmap step 8 (docs/06-cross-cutting.md §8, WS15).
-///
-/// The facade wires the pipeline: the Authority validates the dimensions,
-/// fetches exactly one item, verifies the requested Content Version, and
-/// returns immutable source image bytes (the facade answers `nil` itself when
-/// the item has no thumbnailable representation); this service then
-/// joins/creates the single-flight for the exact key and decodes off the
-/// Authority, after all SwiftData objects and context have been released.
-/// Completed bytes are not retained (docs/04-coherence.md §9).
-internal actor ThumbnailService {
-    internal init() {}
-
-    /// Decodes `sourceBytes` into an encoded thumbnail for one item at one
-    /// Effective Content state, sized to `pixels`
-    /// (docs/05-authority-kernel.md §14.5).
-    ///
-    /// Step-5 stub: always throws `StepDeferredError`. Step 8 implements the
-    /// version fence and single-flight decode.
-    internal func thumbnail(
-        _ sourceBytes: Data,
-        for item: HistoryItemReference,
-        pixels: PixelSize
-    ) async throws -> ThumbnailPayload {
-        throw StepDeferredError.notYetImplemented(
-            operation: "ThumbnailService.thumbnail"
         )
     }
 }

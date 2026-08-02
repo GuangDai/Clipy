@@ -1984,24 +1984,129 @@ internal actor HistoryAuthority {
         )
     }
 
-    // MARK: - Step-deferred surface (docs/roadmap/03-historystorage.md step 8)
+    // MARK: - Thumbnail source (docs/05-authority-kernel.md §14.5; docs/04-coherence.md §9)
 
-    // The step-8 `thumbnailSource` stub remains; its WS15 seam lands with the
-    // step-8 thumbnail implementation. It pins the exact method signature the
-    // `SwiftDataHistory` facade already calls and throws `StepDeferredError`
-    // (defined in SwiftDataHistory.swift), exactly like the sibling stub in
-    // ActorStubs.swift.
+    // Step 8 (step 8 in flight): `StepDeferredError` now remains only in
+    // ActorStubs.swift's ThumbnailService, which owns the off-Authority decode
+    // (§9 step 6). This method — the Authority side of the thumbnail
+    // single-flight — is the WS15 version fence (docs/06-cross-cutting.md §8).
 
-    /// Step 8 (docs/05-authority-kernel.md §14.5; docs/04-coherence.md §9):
-    /// verifies the requested Content Version and returns immutable source
-    /// image bytes (`nil` when the item has no supported image
-    /// representation) inside one non-suspending interval — the version
-    /// fence the off-Authority decode relies on.
+    /// The frozen v1 set of ImageIO-decodable image type identifiers whose
+    /// bytes are eligible as thumbnail source input. docs/04-coherence.md §9
+    /// ("supported image representation") — the spec does not enumerate the
+    /// set; v1 freezes the concrete decodable UTIs (not the abstract
+    /// `public.image`, even though CGImageSource sniffs bytes) so the source
+    /// representation is a pure, deterministic function of the content with no
+    /// framework conformance lookup.
+    private static let thumbnailImageTypeIdentifiers: Set<String> = [
+        "public.png",
+        "public.jpeg",
+        "public.tiff",
+        "public.heic",
+        "public.heif",
+        "com.compuserve.gif",
+        "public.bmp",
+    ]
+
+    /// Thumbnail source (docs/05-authority-kernel.md §14.5; docs/04-coherence.md
+    /// §9): verifies the requested Content Version and returns immutable source
+    /// image bytes — `nil` when the item has no supported image representation —
+    /// inside one non-suspending Authority interval.
+    ///
+    /// The §9 single-flight flow, steps 1–4 (the Authority's part):
+    /// 1. Validate that both `pixels` axes lie in
+    ///    `limits.thumbnailDimensionRange` (§9 step 1) — before any context.
+    /// 2. Fetch and fully hydrate exactly one row, then require
+    ///    `hydrated.contentVersion == item.contentVersion` (§9 step 2) — the
+    ///    version fence.
+    /// 3. Derive current Effective Content (§9 step 3) — the same pure
+    ///    derivation as `details(for:)` and `pastePayload(for:)`.
+    /// 4. Select the first representation (in the Effective Content's
+    ///    normalized type order) whose type identifier is in the frozen v1
+    ///    image set, and return its immutable `bytes` (§9 step 3→4). No match
+    ///    → `nil` (§9 step 4) — the facade then answers `nil` without entering
+    ///    ThumbnailService.
+    ///
+    /// "Steps 2–3 run inside one non-suspending `HistoryAuthority` interval,
+    /// so no commit can interleave between the version check (step 2) and the
+    /// Effective-Content derivation (step 3)" (docs/04-coherence.md §9). The
+    /// version fence is therefore about the off-Authority decode (step 6): if
+    /// the item changes during decode, the result is still correctly tagged
+    /// with the verified old reference. "A request whose reference was already
+    /// stale before step 2 fails there with `.staleContent`; current bytes are
+    /// never returned under an old key" (docs/04-coherence.md §9).
+    ///
+    /// - Throws: `.invalidInput(.invalidPixelSize)` when either `pixels` axis
+    ///   is outside `limits.thumbnailDimensionRange` (§16); `.notFound(id)`
+    ///   when the target is not retained; `.staleContent(expected:current:)`
+    ///   when the item's Content Version already differs from the reference's
+    ///   OCC token (§16 OCC mapping); the codec decode mappings
+    ///   (`.persistence(.corruptStoredValue)`, §4/§16);
+    ///   `.temporarilyUnavailable(.factProof)` for a framework fetch failure
+    ///   (§16); `.persistence(.invariantViolation)` for corrupt lineage
+    ///   (`effectiveContent` → `DomainRejection.corruptLineage`, mirrored from
+    ///   `details(for:)`).
     internal func thumbnailSource(
         for item: HistoryItemReference,
         pixels: PixelSize
     ) async throws -> Data? {
-        throw StepDeferredError.notYetImplemented(operation: "thumbnailSource")
+        // §9 step 1: validate both dimensions before any context — the fixed
+        // Part VI thumbnail-dimension interval (docs/06-cross-cutting.md §2).
+        guard limits.thumbnailDimensionRange.contains(pixels.width),
+              limits.thumbnailDimensionRange.contains(pixels.height)
+        else {
+            throw HistoryFailure.invalidInput(.invalidPixelSize)
+        }
+
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+
+        // ── Non-suspending read interval (§5; §9 steps 2–3): no `await` past
+        //    this line while the context or fetched row is live. No commit can
+        //    interleave between the version check and Effective-Content
+        //    derivation (docs/04-coherence.md §9). ──
+
+        // §9 step 2: fetch and fully hydrate exactly the target item.
+        guard let row = try HistoryItemRowHydration.fetchRow(
+            businessID: item.id,
+            in: context
+        ) else {
+            throw HistoryFailure.notFound(item.id)
+        }
+        let hydrated = try HistoryItemRowHydration.hydrate(row, limits: limits)
+
+        // §9 step 2: the version fence — a reference already stale before this
+        // point fails here; current bytes are never returned under an old key.
+        guard hydrated.contentVersion == item.contentVersion else {
+            throw HistoryFailure.staleContent(
+                expected: item.contentVersion,
+                current: hydrated.contentVersion
+            )
+        }
+
+        // §9 step 3: derive current Effective Content — the same pure
+        // derivation as `details(for:)`. A lineage inconsistency maps to
+        // `.persistence(.invariantViolation)` (mirrors `details(for:)`'s
+        // `catch is DomainRejection` → invariant-violation mapping).
+        let effective: EffectiveContent
+        do {
+            effective = try effectiveContent(of: hydrated)
+        } catch is DomainRejection {
+            throw HistoryFailure.persistence(.invariantViolation)
+        }
+
+        // §9 steps 3–4: select the first representation (in the Effective
+        // Content's normalized type order) whose type identifier is in the
+        // frozen v1 image set. No match → `nil` — the facade answers `nil`
+        // without entering ThumbnailService.
+        for representation in effective.representations {
+            if Self.thumbnailImageTypeIdentifiers.contains(
+                representation.typeIdentifier
+            ) {
+                return representation.bytes
+            }
+        }
+        return nil
     }
 
     // MARK: - Read-path helpers (docs/05-authority-kernel.md §14; docs/04-coherence.md §6)
