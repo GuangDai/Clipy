@@ -243,8 +243,12 @@ jobs:
           # Tolerate headless-runner toolchain noise: the AppIntents metadata
           # processor warns on every bundle without an AppIntents dependency —
           # not a code warning (same class as Maccy's Metal/XPC exclusions).
+          # Also excluded: the test-host app's LaunchServices connection
+          # chatter ("com.apple.linkd.autoShortcut" NSCocoaErrorDomain 4097),
+          # intermittent headless-runner runtime noise, not a test failure.
           matches=$(grep -Ein '(^|[^[:alpha:]])(warning:|error:|\*\* TEST FAILED \*\*|\*\* BUILD FAILED \*\*)([^[:alpha:]]|$)' "$LOG_DIR/app-build-test.log" \
-                    | grep -vE 'appintentsmetadataprocessor.*Metadata extraction skipped' || true)
+                    | grep -vE 'appintentsmetadataprocessor.*Metadata extraction skipped' \
+                    | grep -vE '\[Connection\] .*com\.apple\.linkd\.autoShortcut' || true)
           if [[ -n "$matches" ]]; then
             echo "$matches"
             echo "Warnings, errors, or failures found in app build/test log"
