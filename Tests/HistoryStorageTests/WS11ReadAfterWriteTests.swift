@@ -413,7 +413,7 @@ private static func replaceTextRequest(
 
     // §7.2: observe started AFTER the receipt yields a first page whose
     // position >= the commit's (04 §3). Drain exactly one page then cancel.
-    let stream = history.observe(HistoryObservationRequest(kind: .recent, limit: 10))
+    let stream = await history.observe(HistoryObservationRequest(kind: .recent, limit: 10))
     let consumeTask = Task {
         for try await page in stream {
             return page

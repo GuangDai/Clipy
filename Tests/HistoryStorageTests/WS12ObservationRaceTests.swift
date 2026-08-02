@@ -136,7 +136,7 @@ private static func installPositionRecheckPark(
     let commitPosition = commit.position
 
     // WS12: "then resume" — the first query runs against the committed state.
-    gate.resume(AuthoritySuspensionPoint.readEntry.rawValue)
+    await gate.resume(AuthoritySuspensionPoint.readEntry.rawValue)
 
     // WS12: "Its first yielded page must include the commit" — consume exactly
     // one page (bounded), then cancel the stream's producer (defer).
@@ -208,7 +208,7 @@ private static func installPositionRecheckPark(
 
     // WS12: resume — the recheck reads the durable position (now 1), finds
     // 1 ≠ P (0), and the loop body requeries firstPage at position 1.
-    gate.resume(AuthoritySuspensionPoint.positionRecheckEntry.rawValue)
+    await gate.resume(AuthoritySuspensionPoint.positionRecheckEntry.rawValue)
 
     // WS12: "first yielded page must include the commit" — the requery after
     // the discard produces a page that includes the commit.
@@ -335,7 +335,7 @@ private static func installPositionRecheckPark(
         }
 
         // WS12: resume — the replacement query reads position P3 and yields.
-        gate.resume(AuthoritySuspensionPoint.readEntry.rawValue)
+        await gate.resume(AuthoritySuspensionPoint.readEntry.rawValue)
 
         // §5 step 7: exactly ONE replacement page at the latest position.
         guard let replacementPage = try await iterator.next() else {

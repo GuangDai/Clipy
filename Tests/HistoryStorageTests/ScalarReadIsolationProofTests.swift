@@ -152,7 +152,7 @@ private static func makeRow(
     //        scalar projections. Like recentPage, the corpus fetch is
     //        scalar-only — no content blob decode (§14.2). ──
     let corpusRequest = HistoryBrowseRequest(
-        kind: .search,
+        kind: .search(text: "", mode: .exact),
         limit: 10,
         after: nil
     )
