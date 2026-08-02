@@ -45,6 +45,25 @@ internal struct ThumbnailFlightKey: Sendable, Hashable {
     internal let pixels: PixelSize
 }
 
+// MARK: - WS15 suspension point (docs/06-cross-cutting.md §8)
+
+/// Named suspension point of `ThumbnailService` for the deterministic
+/// concurrency harness (`SuspensionGate` in HistoryStorageTests; WS15).
+/// docs/roadmap/03-historystorage.md step-5 note (concurrency harness).
+///
+/// Test seam, compiled in always and harmless in production: the handler is
+/// `nil` unless a test installs one via @testable, so the point is a no-op
+/// outside the harness (no `#if DEBUG`). The point is placed where an
+/// `await` is legal — after the Authority's version fence returned immutable
+/// source bytes, before the flight is joined/created.
+internal enum ThumbnailServiceSuspensionPoint: String, Sendable {
+    /// On `thumbnail` entry, before the flight is joined/created — the WS15
+    /// fence-to-decode window: a revision committing here changes the item
+    /// "during decode", and the result must stay tagged with the verified old
+    /// reference (docs/04-coherence.md §9).
+    case decodeEntry = "ThumbnailService.thumbnail.entry"
+}
+
 // MARK: - ThumbnailService (docs/04-coherence.md §9)
 
 /// Owns the thumbnail flight table and its decode worker
@@ -68,7 +87,31 @@ internal actor ThumbnailService {
     /// The owned off-Authority decode worker (§9 step 6; §14.5).
     private let worker = ThumbnailWorker()
 
+    /// The roadmap-owned WS15 suspension handler; `nil` in production
+    /// (test seam — see `ThumbnailServiceSuspensionPoint`).
+    private var suspensionHandler: (
+        @Sendable (ThumbnailServiceSuspensionPoint) async -> Void
+    )?
+
     internal init() {}
+
+    // MARK: Roadmap-owned test seam (docs/roadmap/03-historystorage.md step-5 note; WS15)
+
+    /// Installs (or clears) the suspension handler the deterministic
+    /// concurrency harness drives for WS15 (docs/06-cross-cutting.md §8).
+    /// Test seam — `nil` in production, compiled in always, set via
+    /// @testable; see `ThumbnailServiceSuspensionPoint`.
+    internal func setSuspensionHandler(
+        _ handler: (@Sendable (ThumbnailServiceSuspensionPoint) async -> Void)?
+    ) {
+        suspensionHandler = handler
+    }
+
+    /// Suspends at `point` when the harness has installed a handler; a no-op
+    /// otherwise and always in production.
+    private func suspendIfRequested(_ point: ThumbnailServiceSuspensionPoint) async {
+        await suspensionHandler?(point)
+    }
 
     /// Joins or creates the single-flight for the exact key, then decodes
     /// `sourceBytes` into an encoded PNG thumbnail (§9 steps 5–7).
@@ -100,6 +143,11 @@ internal actor ThumbnailService {
         for item: HistoryItemReference,
         pixels: PixelSize
     ) async throws -> ThumbnailPayload {
+        // Roadmap-owned WS15 test seam: the legal suspension point of this
+        // path — source bytes verified, flight not yet joined/created, so a
+        // revision can commit in the fence-to-decode window (§9).
+        await suspendIfRequested(.decodeEntry)
+
         let key = ThumbnailFlightKey(item: item, pixels: pixels)
 
         // §9 step 5: join an existing in-flight decode for the exact key, or
