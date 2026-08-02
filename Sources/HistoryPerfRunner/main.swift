@@ -736,13 +736,15 @@ func workloadDetailAndPaste() async -> [WorkloadFixture] {
 // MARK: - Workload 8: thumbnail single-flight shares decode (§9 bullet 9)
 
 /// Builds a deterministic 1024×1024 RGB PNG at runtime (Foundation-only).
-/// The WS15 1×1 fixture decodes in microseconds, so the single-flight ratio
-/// measured actor-scheduling noise, not decode sharing; a 1 MP source with
-/// real deflate compression makes the ImageIO decode (~ms, inflate + unfilter
-/// of 3 MB scanlines) dominate per-call cost so concurrent-8 ≈ one decode
-/// (§9 bullet 9). The zlib stream comes from NSData's COMPRESSION_ZLIB —
-/// RFC 1950, exactly the IDAT payload format.
-func makeGradientPNG(width: Int, height: Int) throws -> Data {
+/// The WS15 1×1 fixture decodes in microseconds and a compressible pattern
+/// inflates as LZ77 match-copies — both make the single-flight ratio measure
+/// Authority version-fence scheduling instead of decode sharing (runs
+/// 30734054783, 30734466775). Incompressible xorshift noise forces genuine
+/// inflate + unfilter cost (~ms for 3 MB scanlines), so the decode dominates
+/// per-call cost and concurrent-8 ≈ one shared decode (§9 bullet 9). The
+/// zlib stream comes from NSData's COMPRESSION_ZLIB — RFC 1950, the IDAT
+/// payload format.
+func makeNoisePNG(width: Int, height: Int) throws -> Data {
     func crc32(_ data: Data) -> UInt32 {
         var crc: UInt32 = 0xFFFF_FFFF
         for byte in data {
@@ -776,14 +778,22 @@ func makeGradientPNG(width: Int, height: Int) throws -> Data {
     ihdr.append(contentsOf: [8, 2, 0, 0, 0])
     png.append(chunk("IHDR", ihdr))
 
-    // Scanlines: filter byte 0 per row + RGB pixels (vertical gradient).
+    // Scanlines: filter byte 0 per row + deterministic xorshift32 noise.
+    // Incompressible pixels make the deflate stream carry 3 MB of literals,
+    // so the decoder pays real inflate + unfilter cost per decode.
+    var prngState: UInt32 = 0x9E37_79B9
+    func nextByte() -> UInt8 {
+        prngState ^= prngState << 13
+        prngState ^= prngState >> 17
+        prngState ^= prngState << 5
+        return UInt8(truncatingIfNeeded: prngState)
+    }
     var raw = Data()
     raw.reserveCapacity(height * (1 + width * 3))
-    for y in 0..<height {
+    for _ in 0..<height {
         raw.append(0)
-        let red = UInt8(64 + y % 64)
-        for _ in 0..<width {
-            raw.append(contentsOf: [red, 128, 192])
+        for _ in 0..<(width * 3) {
+            raw.append(nextByte())
         }
     }
 
@@ -803,7 +813,7 @@ func workloadThumbnailSingleFlight() async -> [WorkloadFixture] {
     do {
         let store = try await openMemoryStore()
 
-        let pngData = try makeGradientPNG(width: 1024, height: 1024)
+        let pngData = try makeNoisePNG(width: 1024, height: 1024)
         // Capture a text+png item so the thumbnail path has a valid image source.
         let capture = ClipboardCapture(
             representations: [
