@@ -1711,7 +1711,10 @@ internal actor HistoryAuthority {
         }
         unpinnedDescriptor.propertiesToFetch = scalarProperties
         unpinnedDescriptor.sortBy = [SortDescriptor(\.lastCopiedAt, order: .reverse)]
-        unpinnedDescriptor.fetchLimit = limit + 1
+        // A continuation's date bound INCLUDES the anchored row, so the
+        // fetch carries one extra slot for it: limit+2 = anchor + page +
+        // lookahead (first pages fetch limit+1 = page + lookahead).
+        unpinnedDescriptor.fetchLimit = unpinnedAnchorActive ? limit + 2 : limit + 1
         let unpinnedRows: [HistoryItemRow]
         do {
             unpinnedRows = try context.fetch(unpinnedDescriptor)
@@ -1728,7 +1731,7 @@ internal actor HistoryAuthority {
         // the full key.
         var unpinnedOrdered = try orderUnpinnedLane(
             unpinnedRows,
-            limit: limit,
+            limit: unpinnedAnchorActive ? limit + 1 : limit,
             anchorDate: unpinnedAnchorActive ? laneAnchor?.lastCopiedAt : nil,
             in: context
         )
