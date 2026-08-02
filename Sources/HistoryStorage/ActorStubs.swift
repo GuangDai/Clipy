@@ -1,25 +1,29 @@
-/// Step-7/8 stub actors for the `SwiftDataHistory` facade fields whose full
-/// implementations land at roadmap steps 7–8, plus the step-6
-/// `RevisionPreparationActor` implementation and the internal Sendable value
-/// types those signatures share.
+/// The step-8 stub actor for the `SwiftDataHistory` facade field whose full
+/// implementation lands at roadmap step 8 (`ThumbnailService`), plus the
+/// step-6 `RevisionPreparationActor` implementation and the internal
+/// Sendable value types those signatures share.
 /// Owning spec: docs/roadmap/03-historystorage.md step-5 note; facade field
 /// list: docs/05-authority-kernel.md §2 (Part V).
 ///
 /// `SwiftDataHistory.open` constructs all five facade fields; a stub `actor`
 /// is still `Sendable`, so `SwiftDataHistory: Sendable` is derivable without
-/// escape hatches. Each remaining stub pins the exact method signature the
-/// `SwiftDataHistory` facade already calls (the signature its step-7/8
+/// escape hatches. The remaining stub pins the exact method signature the
+/// `SwiftDataHistory` facade already calls (the signature its step-8
 /// implementation keeps) and throws `StepDeferredError.notYetImplemented`
-/// (defined in SwiftDataHistory.swift); no stub carries state — the
-/// `SearchWorker` stub has no Fuse field yet (Fuse is added inside it at
-/// step 7), and `ThumbnailService` gains its flight table and
-/// `ThumbnailWorker` at step 8.
+/// (defined in SwiftDataHistory.swift); no stub carries state —
+/// `ThumbnailService` gains its flight table and `ThumbnailWorker` at
+/// step 8. (The `SearchWorker` stub left this file at roadmap step 7: its
+/// exact/fuzzy/regexp implementation now lives in SearchWorker.swift, with
+/// Fuse confined inside the actor per docs/01-architecture.md §6.)
 ///
 /// This file also hosts the internal Sendable value types those signatures
 /// require that no other file owns (`PreparedRevisionBundle`,
 /// `RevisionPreparationSnapshot`, `SearchCorpusSnapshot`, `SearchCorpusRow`).
 /// Step 6 keeps the revision values beside their preparation actor here;
-/// step 7 may relocate each search value beside the read path.
+/// `SearchCorpusSnapshot`/`SearchCorpusRow` stay here as the
+/// docs/05-authority-kernel.md §14.2 contract between the Authority (which
+/// captures the corpus) and the `SearchWorker` in SearchWorker.swift
+/// (which evaluates it).
 import Foundation
 import HistoryCore
 import HistoryDomain
@@ -298,33 +302,6 @@ internal actor RevisionPreparationActor {
                 proposedContent: proposed
             ),
             projection: projection
-        )
-    }
-}
-
-/// Search evaluation worker (docs/05-authority-kernel.md §14.2). Step-5 stub;
-/// the exact/fuzzy/regexp implementation lands at roadmap step 7.
-///
-/// The facade wires the two-step value pipeline: the Authority captures a
-/// bounded Sendable `SearchCorpusSnapshot`, then this worker evaluates the
-/// request over it off the Authority and returns the bounded page — the
-/// worker never reads SwiftData and never uses dedup Candidate Rank. The stub
-/// has no Fuse field yet — Fuse is confined inside this actor at step 7
-/// (roadmap step-5 note).
-internal actor SearchWorker {
-    internal init() {}
-
-    /// Evaluates `request` over `corpus`, returning the bounded page stamped
-    /// with the corpus position (docs/05-authority-kernel.md §14.2).
-    ///
-    /// Step-5 stub: always throws `StepDeferredError`. Step 7 implements the
-    /// three frozen search modes (docs/06-cross-cutting.md §8, WS17).
-    internal func page(
-        _ request: HistoryBrowseRequest,
-        in corpus: SearchCorpusSnapshot
-    ) throws -> HistoryPage {
-        throw StepDeferredError.notYetImplemented(
-            operation: "SearchWorker.page"
         )
     }
 }

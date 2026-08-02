@@ -1,10 +1,12 @@
 /// SwiftDataHistory — the production `ClipboardHistory` adapter: the public
 /// facade over the five internal actors, owning closed action dispatch
-/// (Part V §8), read forwarding (Part V §14), `open` startup
-/// (Part V §13), and public failure translation (Part V §16).
+/// (Part V §8), read forwarding and the subscribe-before-query observation
+/// loop (Part V §14; Part IV §5), `open` startup (Part V §13), and public
+/// failure translation (Part V §16).
 /// Owning spec: docs/05-authority-kernel.md §2 (public concrete adapter and
 /// internal actors); coherence: docs/04-coherence.md (Part IV); step phasing:
-/// docs/roadmap/03-historystorage.md (steps 5–8).
+/// docs/roadmap/03-historystorage.md (steps 5–8; as of step 7 only the
+/// step-8 thumbnail path remains deferred to `StepDeferredError`).
 ///
 /// `SwiftDataHistory` is a value of five `actor` references and nothing else:
 /// the `Sendable` conformance is fully derived from the fields, so no unsafe
@@ -16,14 +18,16 @@ import SwiftData
 // MARK: - Step-deferred error (transient; docs/roadmap/03-historystorage.md)
 
 /// Internal marker thrown by an actor method whose implementation lands at a
-/// later roadmap step (steps 6–8: mutations, reads/observation, thumbnail).
+/// later roadmap step (step 8: the thumbnail path).
 ///
-/// `StepDeferredError` is transient scaffolding for the step-5 slice: it is
-/// NOT a `HistoryFailure`, is never translated into one, and propagates
-/// through the `SwiftDataHistory` facade unchanged so a caller hitting a
+/// `StepDeferredError` is transient scaffolding: it is NOT a
+/// `HistoryFailure`, is never translated into one, and propagates through
+/// the `SwiftDataHistory` facade unchanged so a caller hitting a
 /// not-yet-implemented path sees a distinct programmer-visible failure rather
-/// than a misclassified public one. It is removed when steps 6–8 land
-/// (docs/roadmap/03-historystorage.md).
+/// than a misclassified public one. Steps 6–7 retired it from the mutation,
+/// read, and observation paths; its remaining users are the step-8
+/// `HistoryAuthority.thumbnailSource` and `ThumbnailService.thumbnail`, and
+/// it is removed when step 8 lands (docs/roadmap/03-historystorage.md).
 internal enum StepDeferredError: Error, Sendable {
     /// The named operation is implemented at a later roadmap step. The name
     /// is diagnostic-only — nothing branches on it.
@@ -44,8 +48,9 @@ internal enum StepDeferredError: Error, Sendable {
 /// `Sendable` conformance is derived without any escape hatch. The facade
 /// translates no semantics of its own: it validates nothing the actors own,
 /// dispatches actions through one closed switch (§8), forwards reads to the
-/// purpose-specific read paths (§14), and lets actor-thrown `HistoryFailure`s
-/// (and, during the step-5 slice, `StepDeferredError`s) propagate.
+/// purpose-specific read paths (§14) and owns the Part IV §5 observation
+/// loop, and lets actor-thrown `HistoryFailure`s (and, until the step-8
+/// thumbnail path lands, `StepDeferredError`s) propagate.
 public struct SwiftDataHistory: ClipboardHistory, Sendable {
     /// Sole writer; also serializes source snapshot capture and observer
     /// registration (docs/05-authority-kernel.md §2).
@@ -179,9 +184,8 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     /// generic existential, family tag, registry, visitor, or dynamic cast
     /// dispatch (§8).
     ///
-    /// Actor-thrown failures propagate unchanged: typed `HistoryFailure`s on
-    /// implemented paths (§16) and — during the step-5 slice —
-    /// `StepDeferredError` on paths that land at steps 6–8
+    /// Actor-thrown failures propagate unchanged as typed `HistoryFailure`s
+    /// (§16); every action path is implemented as of roadmap step 6
     /// (docs/roadmap/03-historystorage.md).
     public func perform(_ action: HistoryAction) async throws -> HistoryReceipt {
         switch action {
@@ -218,9 +222,12 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     /// A `.recent` page is read entirely inside one Authority interval from
     /// scalar projection fields only (§14.1). A `.search` page follows the
     /// two-step value pipeline: the Authority captures a bounded
-    /// `SearchCorpusSnapshot`, then `SearchWorker` evaluates the request over
-    /// it off-actor and returns the bounded page stamped with the corpus
-    /// position — the worker never reads SwiftData (§14.2;
+    /// `SearchCorpusSnapshot` plus the continuation anchor the next-page
+    /// cursor is minted from, then `SearchWorker` evaluates the request over
+    /// the snapshot off-actor — receiving the Authority's process marker so
+    /// the minted cursor binds this process/schema generation
+    /// (docs/04-coherence.md §6) — and returns the bounded page stamped with
+    /// the corpus position; the worker never reads SwiftData (§14.2;
     /// docs/04-coherence.md §7).
     public func browse(
         _ request: HistoryBrowseRequest
@@ -232,39 +239,108 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
                 after: request.after
             )
         case .search:
-            let corpus = try await authority.searchCorpusSnapshot(for: request)
-            return try await searchWorker.page(request, in: corpus)
+            let captured = try await authority.searchCorpusSnapshot(for: request)
+            return try await searchWorker.page(
+                request,
+                in: captured.snapshot,
+                continuationAnchor: captured.continuationAnchor,
+                processMarker: authority.cursorProcessMarker
+            )
         }
     }
 
     /// Observes the current first page for one query
     /// (docs/05-authority-kernel.md §14.4; docs/04-coherence.md §5).
     ///
-    /// This facade owns the Part IV §5 subscribe-before-query algorithm
-    /// (register the invalidation continuation before the first query,
-    /// discard pages older than a recorded invalidation, coalesce wake-ups
-    /// into one replacement page) and any `SearchWorker` task. That loop
-    /// lands at roadmap step 7 with the rest of the read surface
-    /// (docs/roadmap/03-historystorage.md); at step 5 the stream performs the
-    /// deferred first-page query and therefore finishes with the same failure
-    /// the one-shot read path produces (`StepDeferredError` until step 7).
+    /// The facade owns the Part IV §5 subscribe-before-query algorithm: the
+    /// invalidation continuation is registered with the Authority BEFORE any
+    /// query (§5 step 1); the first page is yielded only after the
+    /// race-closing recheck shows the durable position still equals the
+    /// page's (§5 steps 2–5); and each later invalidation newer than the
+    /// last yielded page produces exactly one replacement page, with the
+    /// subscriber's `.bufferingNewest(1)` buffer coalescing bursts (§5 steps
+    /// 6–8; §4). The loop also owns the search evaluation: a `.search`
+    /// observation runs its `SearchWorker` evaluation as a plain await
+    /// inside the producer task (§14.4), so cancelling the producer abandons
+    /// the in-flight evaluation with it.
     ///
-    /// Cancellation of the stream cancels the producer task; step 7's loop
-    /// additionally unregisters the invalidation continuation
-    /// (docs/04-coherence.md §5).
+    /// Cancellation unregisters the continuation and releases query/search
+    /// tasks (§5): terminating the stream cancels the producer task and hops
+    /// an idempotent unregistration onto the Authority (§14.4 — the
+    /// publisher's own termination hop then repeats the removal as a
+    /// no-op). Any query failure finishes the stream with that error (§5:
+    /// "until cancellation or failure"). An observation created after
+    /// restart gets current state as its first page; it does not replay past
+    /// commits (§5).
     public func observe(
         _ request: HistoryObservationRequest
     ) async -> AsyncThrowingStream<HistoryPage, Error> {
-        AsyncThrowingStream { continuation in
+        // §5 step 1: register the invalidation continuation BEFORE any
+        // query. Registration is a synchronous Authority operation (§14.4),
+        // so the await orders it strictly before the producer task's first
+        // authoritative read; a commit landing between registration and
+        // that read is already recorded in the subscriber's newest-value
+        // buffer (§4), which the phase-1 recheck below detects through the
+        // durable position rather than by peeking the buffer. The local
+        // `authority` binding keeps the termination hop capturing only the
+        // actor — no Task retains the facade.
+        let registration = await authority.registerInvalidationSubscriber()
+        let authority = self.authority
+        return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    _ = try await firstPage(for: request)
+                    // §5 steps 2–4: the first page (P = page.position), then
+                    // the race-closing recheck — while the durable position
+                    // has moved past the page, a commit interleaved between
+                    // registration and the query, so discard the page and
+                    // query again. Terminates because positions advance
+                    // monotonically (§1).
+                    var page = try await firstPage(for: request)
+                    while try await authority.currentPosition() != page.position {
+                        page = try await firstPage(for: request)
+                    }
+                    // §5 step 5.
+                    continuation.yield(page)
+
+                    // §5 steps 6–8: an invalidation at or behind the last
+                    // yielded page is a buffered wake-up the page already
+                    // covers (bufferingNewest(1) has also coalesced any
+                    // burst); a newer one produces ONE replacement page. No
+                    // phase-1 recheck here: the invalidation that woke the
+                    // loop is by construction at or behind the replacement
+                    // query's position (read-after-commit, §1), and a later
+                    // commit simply produces the next wake-up.
+                    for try await invalidation in registration.stream {
+                        guard invalidation.latestPosition > page.position else {
+                            continue
+                        }
+                        page = try await firstPage(for: request)
+                        continuation.yield(page)
+                    }
+                    // The publisher finished the registration stream
+                    // (Authority teardown, §14.4): end normally.
                     continuation.finish()
                 } catch {
+                    // §5: the loop repeats until cancellation or failure —
+                    // any query failure finishes the stream with that error.
                     continuation.finish(throwing: error)
                 }
             }
-            continuation.onTermination = { _ in task.cancel() }
+            // §5: "Cancellation unregisters the continuation and releases
+            // query/search tasks." Cancelling the producer ends its
+            // iteration (and abandons any in-flight SearchWorker
+            // evaluation — a plain await inside the producer, §14.4); the
+            // one-shot hop unregisters the token, which the publisher's own
+            // termination hop then repeats as a no-op (§14.4: "Cancellation
+            // removes the token"; removal is idempotent).
+            continuation.onTermination = { _ in
+                task.cancel()
+                _ = Task {
+                    await authority.unregisterInvalidationSubscriber(
+                        registration.subscription
+                    )
+                }
+            }
         }
     }
 
@@ -318,11 +394,15 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
 
     // MARK: Observation first page (docs/04-coherence.md §5)
 
-    /// The first-page query shared by `observe` — a cursorless `browse` for
-    /// the observation's query shape. Step 7's subscribe-before-query loop
-    /// reuses it for every replacement page (docs/04-coherence.md §5);
-    /// observation intentionally has no cursor (docs/03a-instruction-set.md
-    /// §7).
+    /// The first-page query of `observe`'s subscribe-before-query loop — a
+    /// cursorless `browse` for the observation's query shape; observation
+    /// intentionally has no cursor (docs/03a-instruction-set.md §7). The
+    /// loop reuses it for the phase-1 recheck requeries and for every
+    /// phase-2 replacement page (docs/04-coherence.md §5). A `.search` page
+    /// keeps the two-step value pipeline: the Authority captures the bounded
+    /// corpus plus the continuation anchor, and `SearchWorker` evaluates
+    /// off-actor with the Authority's process marker for cursor minting
+    /// (docs/05-authority-kernel.md §14.2; docs/04-coherence.md §6–§7).
     private func firstPage(
         for request: HistoryObservationRequest
     ) async throws -> HistoryPage {
@@ -334,8 +414,15 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
                 kind: request.kind,
                 limit: request.limit
             )
-            let corpus = try await authority.searchCorpusSnapshot(for: browseRequest)
-            return try await searchWorker.page(browseRequest, in: corpus)
+            let captured = try await authority.searchCorpusSnapshot(
+                for: browseRequest
+            )
+            return try await searchWorker.page(
+                browseRequest,
+                in: captured.snapshot,
+                continuationAnchor: captured.continuationAnchor,
+                processMarker: authority.cursorProcessMarker
+            )
         }
     }
 }

@@ -83,9 +83,9 @@ private enum TransactionApplyRejection: Error {
 /// Test seam, compiled in always and harmless in production: the handler is
 /// `nil` unless a test installs one via @testable, so every point is a no-op
 /// outside the harness (no `#if DEBUG`). Every point is placed where an
-/// `await` is legal — never inside a commit/read interval (§5). A later
-/// roadmap step adds its own point (WS12's registration/query seam at
-/// step 7) as its path lands.
+/// `await` is legal — never inside a commit/read interval (§5). The WS12
+/// registration/query seams landed at step 7; the WS15 step-8 seam is the
+/// only pending one.
 internal enum AuthoritySuspensionPoint: String, Sendable {
     /// On capture-commit entry, before the operation-local `ModelContext` is
     /// created — the last legal suspension before the non-suspending commit
@@ -97,6 +97,19 @@ internal enum AuthoritySuspensionPoint: String, Sendable {
     /// interval begins (docs/05-authority-kernel.md §5); the WS20 two-phase
     /// revision seam (docs/06-cross-cutting.md §8).
     case revisionCommitEntry = "HistoryAuthority.commitRevision.entry"
+
+    /// On read-path entry (recent browse or search corpus capture), before
+    /// the operation-local `ModelContext` is created — the WS12 seam that
+    /// parks the Authority between observer registration and the first
+    /// authoritative query (docs/06-cross-cutting.md §8; docs/04-coherence.md
+    /// §5).
+    case readEntry = "HistoryAuthority.read.entry"
+
+    /// On `currentPosition` entry, before the operation-local `ModelContext`
+    /// is created — the WS12 discard-path seam the observe loop's phase-1
+    /// race-closing recheck drives (docs/06-cross-cutting.md §8;
+    /// docs/04-coherence.md §5).
+    case positionRecheckEntry = "HistoryAuthority.currentPosition.entry"
 }
 
 /// The failure a test can inject inside the transaction closure.
@@ -156,6 +169,14 @@ internal actor HistoryAuthority {
     /// synchronous actor operations (§14.4).
     private var invalidationPublisher: HistoryInvalidationPublisher
 
+    /// The process-instance/schema marker stamped into every cursor this
+    /// Authority mints (docs/04-coherence.md §6). A cursor from a different
+    /// process or schema generation never decodes against this Authority;
+    /// `PageCursorCodec.decode` rejects the marker mismatch and the caller
+    /// maps it to `.snapshotExpired(current:)` (§16). Immutable for the
+    /// Authority's lifetime.
+    private let processMarker = UUID()
+
     /// Test seam: the harness-installed suspension handler, `nil` in
     /// production (see `AuthoritySuspensionPoint`).
     private var suspensionHandler: (@Sendable (AuthoritySuspensionPoint) async -> Void)?
@@ -182,6 +203,11 @@ internal actor HistoryAuthority {
         self.suspensionHandler = nil
         self.injectedTransactionFailure = nil
     }
+
+    /// The process-instance/schema marker for cursor minting (04 §6). The
+    /// `SearchWorker` call path mints cursors off-actor; it receives this
+    /// marker so the minted cursor binds this Authority's generation.
+    internal var cursorProcessMarker: UUID { processMarker }
 
     // MARK: Startup (docs/05-authority-kernel.md §13)
 
@@ -1471,47 +1497,494 @@ internal actor HistoryAuthority {
         )
     }
 
-    // MARK: - Step-deferred surface (docs/roadmap/03-historystorage.md steps 7–8)
+    // MARK: - Read paths (docs/05-authority-kernel.md §14; docs/04-coherence.md)
 
-    // The following Authority methods pin the signatures their step-7–8
-    // implementations will have — the `SwiftDataHistory` facade already
-    // dispatches to them (Part V §14) — and throw `StepDeferredError`
-    // (defined in SwiftDataHistory.swift), exactly like the sibling stubs in
-    // ActorStubs.swift. They are replaced, not wrapped, by the real
-    // implementations; each reuses this file's non-suspending read-interval
-    // spine (§5, §14).
+    // The step-7 read methods: position-only recheck, recent browse
+    // (§14.1), search corpus capture (§14.2), detail and paste (§14.3).
+    // Each reuses this file's non-suspending read-interval spine: the only
+    // `await` is the WS12 test seam at entry, before the context exists (§5).
 
-    /// Step 7 (docs/05-authority-kernel.md §14.1): recent browse — one
-    /// non-suspending interval reading the position and at most `limit + 1`
-    /// scalar projection rows, with cursor validation and expiry.
+    /// The position-only scalar read backing the observe loop's phase-1
+    /// race-closing recheck (docs/04-coherence.md §5) and WS12
+    /// (docs/06-cross-cutting.md §8).
+    ///
+    /// Flow: WS12 seam at entry → operation-local context → singleton fetch/
+    /// decode → return position. The single read interval contains no `await`
+    /// past context creation (§5).
+    ///
+    /// - Throws: `.temporarilyUnavailable(.factProof)` for a framework fetch
+    ///   failure; `.persistence(.invariantViolation)` for a duplicate/absent
+    ///   singleton; `.persistence(.corruptStoredValue)` for an out-of-range
+    ///   stored retention value (§16).
+    internal func currentPosition() async throws -> ChangePosition {
+        // WS12 seam: the one legal suspension point of this path — no
+        // context is live yet (§5).
+        await suspendIfRequested(.positionRecheckEntry)
+
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+
+        // ── Non-suspending read interval (§5): no `await` past this
+        //    line while the context is live. ──
+
+        let positionRow = try Self.fetchExactlyOnePositionRow(in: context)
+        let (currentPosition, _) = try Self.decodePositionRow(
+            positionRow,
+            limits: limits
+        )
+        return currentPosition
+    }
+
+    /// Recent browse (docs/05-authority-kernel.md §14.1): one non-suspending
+    /// interval reading the position and at most `limit + 1` scalar projection
+    /// rows per lane, with cursor validation and expiry.
+    /// docs/05-authority-kernel.md §14.1; docs/04-coherence.md §6
+    ///
+    /// Flow: WS12 seam at entry → limit validation → cursor decode+validation
+    /// when present → operation-local context → position read → scalar-only
+    /// two-lane fetch (pinned by `pinOrdinal` ascending; unpinned by
+    /// `lastCopiedAt DESC, id ASC`) → in-memory tie-break guard → continuation
+    /// anchor application → page assembly → cursor mint.
+    ///
+    /// No Canonical/revision blob is decoded (§14.1, §7.5); only scalar
+    /// projection fields plus the small `effectiveTypeIdentifiersBlob`.
+    ///
+    /// - Throws: `.invalidInput(.invalidPageLimit)` for an out-of-range limit
+    ///   (§16); `.snapshotExpired(current:)` for a cursor that is undecodable,
+    ///   generation-mismatched, shape-mismatched, position-mismatched, or whose
+    ///   anchor names no retained row (§16); `.temporarilyUnavailable(.factProof)`
+    ///   for a framework fetch failure; `.persistence(...)` for decode or
+    ///   invariant failures (§16).
     internal func recentPage(
         limit: Int,
         after: HistoryPageCursor?
     ) async throws -> HistoryPage {
-        throw StepDeferredError.notYetImplemented(operation: "recentPage")
+        // WS12 seam: the one legal suspension point of this path — no
+        // context is live yet (§5).
+        await suspendIfRequested(.readEntry)
+
+        // §16: validate the page-row limit before any context.
+        guard limits.pageRowLimitRange.contains(limit) else {
+            throw HistoryFailure.invalidInput(.invalidPageLimit)
+        }
+
+        // §6 step 1–2: decode the cursor (format version + process marker)
+        // and verify the query shape matches. The position check (§6 step 3)
+        // runs below inside the same non-suspending interval. A cursor decode
+        // or shape failure reads the current position for the
+        // `.snapshotExpired(current:)` mapping (§16).
+        let recentRequest = HistoryBrowseRequest(kind: .recent, limit: limit)
+        let resolvedCursor: ResolvedPageCursor?
+        if let cursor = after {
+            do {
+                resolvedCursor = try Self.decodeCursor(
+                    cursor,
+                    request: recentRequest,
+                    processMarker: processMarker
+                )
+            } catch is PageCursorRejection {
+                // §16: undecodable, marker-mismatched, or shape-mismatched
+                // cursor → `.snapshotExpired(current:)`.
+                let pos = try readPositionInLocalContext()
+                throw HistoryFailure.snapshotExpired(current: pos)
+            }
+        } else {
+            resolvedCursor = nil
+        }
+
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+
+        // ── Non-suspending read interval (§5): no `await` past this
+        //    line while the context or fetched rows are live. ──
+
+        let positionRow = try Self.fetchExactlyOnePositionRow(in: context)
+        let (currentPosition, _) = try Self.decodePositionRow(
+            positionRow,
+            limits: limits
+        )
+
+        // §6 step 3: current durable ChangePosition must equal the cursor
+        // position; any intervening commit expires the cursor (§16).
+        if let cursor = resolvedCursor {
+            guard cursor.position == currentPosition else {
+                throw HistoryFailure.snapshotExpired(current: currentPosition)
+            }
+        }
+
+        // §14.1: scalar-only two-lane fetch. The `propertiesToFetch` selects
+        // only the projection fields — no Canonical or revision blob is
+        // faulted (§7.5).
+        let scalarProperties: [PartialKeyPath<HistoryItemRow>] = [
+            \.id,
+            \.contentVersionRaw,
+            \.title,
+            \.effectiveTypeIdentifiersBlob,
+            \.lastCopiedAt,
+            \.copyCount,
+            \.lastSource,
+            \.pinOrdinal,
+        ]
+
+        // Pinned lane: pinOrdinal != nil, sorted by pinOrdinal ascending.
+        var pinnedDescriptor = FetchDescriptor<HistoryItemRow>(
+            predicate: #Predicate { $0.pinOrdinal != nil }
+        )
+        pinnedDescriptor.propertiesToFetch = scalarProperties
+        pinnedDescriptor.sortBy = [SortDescriptor(\.pinOrdinal)]
+        pinnedDescriptor.fetchLimit = limit + 1
+        let pinnedRows: [HistoryItemRow]
+        do {
+            pinnedRows = try context.fetch(pinnedDescriptor)
+        } catch {
+            throw HistoryFailure.temporarilyUnavailable(.factProof)
+        }
+
+        // Unpinned lane: pinOrdinal == nil, sorted by lastCopiedAt descending.
+        var unpinnedDescriptor = FetchDescriptor<HistoryItemRow>(
+            predicate: #Predicate { $0.pinOrdinal == nil }
+        )
+        unpinnedDescriptor.propertiesToFetch = scalarProperties
+        unpinnedDescriptor.sortBy = [SortDescriptor(\.lastCopiedAt, order: .reverse)]
+        unpinnedDescriptor.fetchLimit = limit + 1
+        let unpinnedRows: [HistoryItemRow]
+        do {
+            unpinnedRows = try context.fetch(unpinnedDescriptor)
+        } catch {
+            throw HistoryFailure.temporarilyUnavailable(.factProof)
+        }
+
+        // EXACTNESS GUARD (§14.1): `\.id` is not trusted to sort at the store
+        // level. If a lane's slice is full (limit+1 rows) AND rows[limit-1]
+        // and rows[limit] tie on the lane sort key (same lastCopiedAt for the
+        // unpinned lane; pinned lane sorts by pinOrdinal which is unique so
+        // no tie is possible there), re-fetch that lane with the hard bound
+        // and order it fully in memory. Otherwise order the small slice by
+        // the full key.
+        let pinnedOrdered = try orderPinnedLane(pinnedRows)
+        let unpinnedOrdered = try orderUnpinnedLane(unpinnedRows, limit: limit, in: context)
+
+        // Merge lanes: pinned first, then unpinned (03b §8). The continuation
+        // anchor drops rows up to and including the anchored row in the
+        // computed order (§6).
+        let merged: [ScalarReadRow]
+        if let anchor = resolvedCursor?.anchor {
+            let combined = pinnedOrdered + unpinnedOrdered
+            guard let anchorIndex = combined.firstIndex(where: { $0.matches(anchor) }) else {
+                // §16: the anchored row is absent — the snapshot expired.
+                throw HistoryFailure.snapshotExpired(current: currentPosition)
+            }
+            merged = Array(combined[(anchorIndex + 1)...])
+        } else {
+            merged = pinnedOrdered + unpinnedOrdered
+        }
+
+        let pageSlice = Array(merged.prefix(limit))
+        let rows: [HistoryRow] = try pageSlice.map { scalarRow in
+            try scalarRow.toHistoryRow(limits: limits)
+        }
+
+        // Mint the next cursor when more rows remain, binding the LAST
+        // RETURNED row's `.defaultOrder` anchor (§6).
+        let next: HistoryPageCursor?
+        if merged.count > limit, let lastReturned = pageSlice.last {
+            next = PageCursorCodec.encode(
+                ResolvedPageCursor(
+                    queryShape: .recent(limit: limit),
+                    position: currentPosition,
+                    anchor: lastReturned.defaultOrderAnchor
+                ),
+                processMarker: processMarker
+            )
+        } else {
+            next = nil
+        }
+
+        return HistoryPage(position: currentPosition, rows: rows, next: next)
     }
 
-    /// Step 7 (docs/05-authority-kernel.md §14.2): captures the bounded
-    /// `SearchCorpusSnapshot` (position plus scalar projection rows) the
-    /// `SearchWorker` evaluates off-actor.
+    /// Search corpus capture (docs/05-authority-kernel.md §14.2): captures
+    /// the bounded `SearchCorpusSnapshot` (position plus scalar projection
+    /// rows) the `SearchWorker` evaluates off-actor, plus the decoded
+    /// continuation anchor for a continuation page (`nil` for a first page).
+    /// docs/05-authority-kernel.md §14.2; docs/04-coherence.md §6–§7
+    ///
+    /// Flow: WS12 seam at entry → limit validation → cursor decode+validation
+    /// when present → operation-local context → position read → scalar-only
+    /// full-corpus fetch bounded by the hard retained-item maximum → default-
+    /// order sort → `SearchCorpusSnapshot` + decoded anchor.
+    ///
+    /// No Canonical/revision blob is decoded (§14.2); only scalar projection
+    /// fields plus the small `effectiveTypeIdentifiersBlob`.
+    ///
+    /// - Throws: `.invalidInput(.invalidPageLimit)` for an out-of-range limit
+    ///   (§16); `.snapshotExpired(current:)` for a cursor that is undecodable,
+    ///   generation-mismatched, shape-mismatched, or position-mismatched (§16);
+    ///   `.temporarilyUnavailable(.factProof)` for a framework fetch failure;
+    ///   `.persistence(...)` for decode or invariant failures (§16).
     internal func searchCorpusSnapshot(
         for request: HistoryBrowseRequest
-    ) async throws -> SearchCorpusSnapshot {
-        throw StepDeferredError.notYetImplemented(operation: "searchCorpusSnapshot")
+    ) async throws -> (snapshot: SearchCorpusSnapshot, continuationAnchor: StoredOrderingAnchor?) {
+        // WS12 seam: the one legal suspension point of this path — no
+        // context is live yet (§5).
+        await suspendIfRequested(.readEntry)
+
+        // §16: validate the page-row limit before any context.
+        guard limits.pageRowLimitRange.contains(request.limit) else {
+            throw HistoryFailure.invalidInput(.invalidPageLimit)
+        }
+
+        // §6 steps 1–2: decode the cursor and verify shape match. The
+        // position check runs inside the interval below.
+        let resolvedCursor: ResolvedPageCursor?
+        if let cursor = request.after {
+            do {
+                resolvedCursor = try Self.decodeCursor(
+                    cursor,
+                    request: request,
+                    processMarker: processMarker
+                )
+            } catch is PageCursorRejection {
+                // §16: cursor decode/shape failure → `.snapshotExpired`.
+                let pos = try readPositionInLocalContext()
+                throw HistoryFailure.snapshotExpired(current: pos)
+            }
+        } else {
+            resolvedCursor = nil
+        }
+
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+
+        // ── Non-suspending read interval (§5): no `await` past this
+        //    line while the context or fetched rows are live. ──
+
+        let positionRow = try Self.fetchExactlyOnePositionRow(in: context)
+        let (currentPosition, _) = try Self.decodePositionRow(
+            positionRow,
+            limits: limits
+        )
+
+        // §6 step 3: position recheck.
+        if let cursor = resolvedCursor {
+            guard cursor.position == currentPosition else {
+                throw HistoryFailure.snapshotExpired(current: currentPosition)
+            }
+        }
+
+        // §14.2: capture scalar fields for EVERY retained row, bounded by the
+        // hard retained-item maximum. Scalar-only — no content blob decode.
+        var descriptor = FetchDescriptor<HistoryItemRow>()
+        descriptor.propertiesToFetch = [
+            \.id,
+            \.contentVersionRaw,
+            \.title,
+            \.searchBody,
+            \.effectiveTypeIdentifiersBlob,
+            \.lastCopiedAt,
+            \.copyCount,
+            \.lastSource,
+            \.pinOrdinal,
+        ]
+        descriptor.fetchLimit = limits.hardMaximumRetainedItems + 1
+        let rows: [HistoryItemRow]
+        do {
+            rows = try context.fetch(descriptor)
+        } catch {
+            throw HistoryFailure.temporarilyUnavailable(.factProof)
+        }
+        guard rows.count <= limits.hardMaximumRetainedItems else {
+            throw HistoryFailure.persistence(.invariantViolation)
+        }
+
+        // Build the corpus rows and sort by the default order (pinned ordinal
+        // ascending, then lastCopiedAt DESC + id ASC) so exact/regexp preserve
+        // the default order (§14.2; 03b §8).
+        var corpusRows: [SearchCorpusRow] = []
+        corpusRows.reserveCapacity(rows.count)
+        for row in rows {
+            let typeIdentifiers = try mapCodecFailure {
+                try EffectiveTypeIdentifiersBlobCodec.decode(
+                    row.effectiveTypeIdentifiersBlob,
+                    limits: limits
+                )
+            }
+            let contentVersion = try mapCodecFailure {
+                try RevisionStateBlobCodec.decodeContentVersion(row.contentVersionRaw)
+            }
+            let pinOrdinal = try mapCodecFailure {
+                try RevisionStateBlobCodec.decodePinOrdinal(row.pinOrdinal)
+            }
+            corpusRows.append(SearchCorpusRow(
+                id: HistoryItemID(rawValue: row.id),
+                contentVersion: contentVersion,
+                title: row.title,
+                searchBody: row.searchBody,
+                typeIdentifiers: typeIdentifiers,
+                lastCopiedAt: row.lastCopiedAt,
+                copyCount: row.copyCount,
+                lastSource: row.lastSource,
+                pinOrdinal: pinOrdinal
+            ))
+        }
+        corpusRows.sort { lhs, rhs in
+            Self.defaultOrderIsOrdered(lhs, rhs)
+        }
+
+        let snapshot = SearchCorpusSnapshot(position: currentPosition, rows: corpusRows)
+        return (snapshot, resolvedCursor?.anchor)
     }
 
-    /// Step 7 (docs/05-authority-kernel.md §14.3): detail — fetches exactly
-    /// one row, decodes/validates its full lineage, and maps it to the
-    /// public detail DTO.
+    /// Detail (docs/05-authority-kernel.md §14.3; docs/03b-instruction-set.md
+    /// §9): fetches exactly one row, decodes/validates its full lineage, and
+    /// maps it to the public detail DTO.
+    ///
+    /// One non-suspending read interval: no WS12 seam — detail is a one-shot
+    /// caller query, not an observe-loop step.
+    ///
+    /// - Throws: `.notFound(id)` when the target is not retained; the codec
+    ///   decode mappings (`.persistence(.corruptStoredValue)`, §4/§16);
+    ///   `.temporarilyUnavailable(.factProof)` for a framework fetch failure;
+    ///   `.persistence(.invariantViolation)` for corrupt lineage
+    ///   (`effectiveContent` → `DomainRejection.corruptLineage`).
     internal func details(for id: HistoryItemID) async throws -> HistoryDetails {
-        throw StepDeferredError.notYetImplemented(operation: "details")
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+
+        // ── Non-suspending read interval (§5): no `await` past this
+        //    line while the context or fetched row is live. ──
+
+        guard let row = try HistoryItemRowHydration.fetchRow(
+            businessID: id,
+            in: context
+        ) else {
+            throw HistoryFailure.notFound(id)
+        }
+        let item = try HistoryItemRowHydration.hydrate(row, limits: limits)
+
+        // Derive current Effective Content (docs/02-domain.md §2.6).
+        let effective: EffectiveContent
+        do {
+            effective = try effectiveContent(of: item)
+        } catch is DomainRejection {
+            throw HistoryFailure.persistence(.invariantViolation)
+        }
+
+        // Map Canonical representations.
+        let canonicalRepresentations = item.canonical.representations.map {
+            representation in
+            HistoryRepresentation(
+                typeIdentifier: representation.content.typeIdentifier,
+                bytes: representation.content.bytes
+            )
+        }
+        // Map Effective representations.
+        let effectiveRepresentations = effective.representations.map {
+            representation in
+            HistoryRepresentation(
+                typeIdentifier: representation.typeIdentifier,
+                bytes: representation.bytes
+            )
+        }
+        // Map every stored revision.
+        let revisionSummaries = item.revisions.map { revision -> RevisionSummary in
+            let revisionTypeIdentifiers = revision.content.representations.map(
+                \.typeIdentifier
+            )
+            let byteCount = revision.content.representations.reduce(0) {
+                $0 + $1.bytes.count
+            }
+            let revisionTitle = ContentProjector.project(
+                revision.content,
+                limits: limits
+            ).title
+            return RevisionSummary(
+                id: revision.id,
+                createdAt: revision.createdAt,
+                isActive: revision.id == item.activeRevisionID,
+                title: revisionTitle,
+                typeIdentifiers: revisionTypeIdentifiers,
+                byteCount: byteCount
+            )
+        }
+        let occurrence = CopyOccurrenceSummary(
+            firstCopiedAt: item.occurrence.firstCopiedAt,
+            lastCopiedAt: item.occurrence.lastCopiedAt,
+            count: item.occurrence.count,
+            firstSource: item.occurrence.firstSource,
+            lastSource: item.occurrence.lastSource
+        )
+        return HistoryDetails(
+            item: HistoryItemReference(
+                id: item.id,
+                contentVersion: item.contentVersion
+            ),
+            canonical: canonicalRepresentations,
+            effective: effectiveRepresentations,
+            revisions: revisionSummaries,
+            occurrence: occurrence,
+            pinnedPosition: item.pinOrdinal?.rawValue
+        )
     }
 
-    /// Step 7 (docs/05-authority-kernel.md §14.3): paste — maps current
-    /// Effective Content plus the current reference and lineage hint.
+    /// Paste payload (docs/05-authority-kernel.md §14.3; docs/04-coherence.md
+    /// §8): fetches exactly one row, decodes/validates its full lineage, and
+    /// maps current Effective Content plus the current reference and lineage
+    /// hint.
+    ///
+    /// One non-suspending read interval: no WS12 seam — paste is a one-shot
+    /// caller query, not an observe-loop step.
+    ///
+    /// - Throws: `.notFound(id)` when the target is not retained; the codec
+    ///   decode mappings (`.persistence(.corruptStoredValue)`, §4/§16);
+    ///   `.temporarilyUnavailable(.factProof)` for a framework fetch failure;
+    ///   `.persistence(.invariantViolation)` for corrupt lineage
+    ///   (`effectiveContent` → `DomainRejection.corruptLineage`).
     internal func pastePayload(for id: HistoryItemID) async throws -> PastePayload {
-        throw StepDeferredError.notYetImplemented(operation: "pastePayload")
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+
+        // ── Non-suspending read interval (§5): no `await` past this
+        //    line while the context or fetched row is live. ──
+
+        guard let row = try HistoryItemRowHydration.fetchRow(
+            businessID: id,
+            in: context
+        ) else {
+            throw HistoryFailure.notFound(id)
+        }
+        let item = try HistoryItemRowHydration.hydrate(row, limits: limits)
+
+        let effective: EffectiveContent
+        do {
+            effective = try effectiveContent(of: item)
+        } catch is DomainRejection {
+            throw HistoryFailure.persistence(.invariantViolation)
+        }
+
+        let representations = effective.representations.map { representation in
+            HistoryRepresentation(
+                typeIdentifier: representation.typeIdentifier,
+                bytes: representation.bytes
+            )
+        }
+        return PastePayload(
+            item: HistoryItemReference(
+                id: item.id,
+                contentVersion: item.contentVersion
+            ),
+            representations: representations,
+            lineageHint: item.id
+        )
     }
+
+    // MARK: - Step-deferred surface (docs/roadmap/03-historystorage.md step 8)
+
+    // The step-8 `thumbnailSource` stub remains; its WS15 seam lands with the
+    // step-8 thumbnail implementation. It pins the exact method signature the
+    // `SwiftDataHistory` facade already calls and throws `StepDeferredError`
+    // (defined in SwiftDataHistory.swift), exactly like the sibling stub in
+    // ActorStubs.swift.
 
     /// Step 8 (docs/05-authority-kernel.md §14.5; docs/04-coherence.md §9):
     /// verifies the requested Content Version and returns immutable source
@@ -1523,6 +1996,218 @@ internal actor HistoryAuthority {
         pixels: PixelSize
     ) async throws -> Data? {
         throw StepDeferredError.notYetImplemented(operation: "thumbnailSource")
+    }
+
+    // MARK: - Read-path helpers (docs/05-authority-kernel.md §14; docs/04-coherence.md §6)
+
+    /// Reads the current ChangePosition in a fresh operation-local context
+    /// with no suspension — used to supply the `current:` argument of a
+    /// `.snapshotExpired` failure raised before the main read interval.
+    /// docs/04-coherence.md §6; docs/05-authority-kernel.md §16
+    private func readPositionInLocalContext() throws -> ChangePosition {
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let positionRow = try Self.fetchExactlyOnePositionRow(in: context)
+        let (currentPosition, _) = try Self.decodePositionRow(
+            positionRow,
+            limits: limits
+        )
+        return currentPosition
+    }
+
+    /// Decodes and validates the cursor's format version, process marker, and
+    /// query shape (§6 steps 1–2). The position check (§6 step 3) is deferred
+    /// to the caller's non-suspending interval. docs/04-coherence.md §6
+    ///
+    /// - Throws: `PageCursorRejection` for any decode or marker failure, or a
+    ///   shape mismatch (§16). The caller catches this and supplies the
+    ///   current position for the `.snapshotExpired(current:)` mapping.
+    private static func decodeCursor(
+        _ cursor: HistoryPageCursor,
+        request: HistoryBrowseRequest,
+        processMarker: UUID
+    ) throws -> ResolvedPageCursor {
+        let resolved = try PageCursorCodec.decode(cursor, processMarker: processMarker)
+        guard resolved.queryShape.matches(request) else {
+            throw PageCursorRejection.malformedCursor
+        }
+        return resolved
+    }
+
+    /// Default total-order comparison for scalar browse/search rows: pinned
+    /// rows first by `pinOrdinal` ascending, then unpinned by `lastCopiedAt`
+    /// descending and History Item ID bytes ascending (03b §8; 04 §7).
+    private static func defaultOrderIsOrdered(
+        _ lhs: SearchCorpusRow,
+        _ rhs: SearchCorpusRow
+    ) -> Bool {
+        switch (lhs.pinOrdinal, rhs.pinOrdinal) {
+        case (let l?, let r?):
+            // Both pinned: pinOrdinal ascending.
+            return l < r
+        case (_?, nil):
+            // Pinned before unpinned.
+            return true
+        case (nil, _?):
+            // Unpinned after pinned.
+            return false
+        case (nil, nil):
+            // Both unpinned: lastCopiedAt DESC, id ASC.
+            if lhs.lastCopiedAt != rhs.lastCopiedAt {
+                return lhs.lastCopiedAt > rhs.lastCopiedAt
+            }
+            return lhs.id < rhs.id
+        }
+    }
+}
+
+// MARK: - Scalar read row helper (docs/05-authority-kernel.md §14.1)
+
+/// One scalar projection row extracted from a fetched `HistoryItemRow`, with
+/// the decoded scalar fields `recentPage` needs to assemble a `HistoryRow` and
+/// mint the continuation anchor. No `@Model` instance escapes the read
+/// interval (§5).
+private struct ScalarReadRow {
+    private let id: HistoryItemID
+    private let contentVersion: ContentVersion
+    private let title: String
+    private let effectiveTypeIdentifiersBlob: Data
+    private let lastCopiedAt: Date
+    private let copyCount: UInt64
+    private let lastSource: String?
+    private let pinOrdinal: PinOrdinal?
+
+    fileprivate init(_ row: HistoryItemRow, limits: HistoryLimits) throws {
+        self.id = HistoryItemID(rawValue: row.id)
+        self.contentVersion = try mapCodecFailure {
+            try RevisionStateBlobCodec.decodeContentVersion(row.contentVersionRaw)
+        }
+        self.title = row.title
+        self.effectiveTypeIdentifiersBlob = row.effectiveTypeIdentifiersBlob
+        self.lastCopiedAt = row.lastCopiedAt
+        self.copyCount = row.copyCount
+        self.lastSource = row.lastSource
+        self.pinOrdinal = try mapCodecFailure {
+            try RevisionStateBlobCodec.decodePinOrdinal(row.pinOrdinal)
+        }
+    }
+
+    /// The `.defaultOrder` anchor for this row (04 §6).
+    fileprivate var defaultOrderAnchor: StoredOrderingAnchor {
+        .defaultOrder(
+            pinnedOrdinal: pinOrdinal?.rawValue,
+            lastCopiedAt: lastCopiedAt,
+            id: id
+        )
+    }
+
+    /// Whether this row matches the given continuation anchor (04 §6).
+    fileprivate func matches(_ anchor: StoredOrderingAnchor) -> Bool {
+        switch anchor {
+        case .defaultOrder(let pinnedOrdinal, let anchoredLastCopiedAt, let anchoredID):
+            return id == anchoredID
+                && lastCopiedAt == anchoredLastCopiedAt
+                && pinOrdinal?.rawValue == pinnedOrdinal
+        case .fuzzyUnpinned:
+            // The recent-browse path only produces `.defaultOrder` anchors;
+            // a fuzzy anchor never matches here.
+            return false
+        }
+    }
+
+    /// Maps this scalar row to a `HistoryRow`, decoding the small
+    /// `effectiveTypeIdentifiersBlob` projection (§14.1: the effective type
+    /// identifiers blob decode is a small scalar blob, not a content blob).
+    fileprivate func toHistoryRow(limits: HistoryLimits) throws -> HistoryRow {
+        let typeIdentifiers = try mapCodecFailure {
+            try EffectiveTypeIdentifiersBlobCodec.decode(
+                effectiveTypeIdentifiersBlob,
+                limits: limits
+            )
+        }
+        return HistoryRow(
+            item: HistoryItemReference(id: id, contentVersion: contentVersion),
+            title: title,
+            typeIdentifiers: typeIdentifiers,
+            lastCopiedAt: lastCopiedAt,
+            copyCount: copyCount,
+            lastSource: lastSource,
+            pinnedPosition: pinOrdinal?.rawValue,
+            search: nil
+        )
+    }
+}
+
+// MARK: - Lane ordering helpers (docs/05-authority-kernel.md §14.1)
+
+private extension HistoryAuthority {
+
+    /// Orders the pinned lane by the full key `(pinOrdinal ascending)`.
+    ///
+    /// The pinned lane sorts by `pinOrdinal`, which is unique and contiguous
+    /// (D12, proved at startup §13 step 9), so no tie is possible and the
+    /// small slice is ordered directly. A full slice (limit+1 rows) is still
+    /// safe: `pinOrdinal` alone is a total order over the pinned set.
+    func orderPinnedLane(
+        _ rows: [HistoryItemRow]
+    ) throws -> [ScalarReadRow] {
+        // The store already sorted by `\.pinOrdinal`; re-sort in memory to
+        // guarantee determinism regardless of store-level tie behavior.
+        let sorted = rows.sorted { ($0.pinOrdinal ?? 0) < ($1.pinOrdinal ?? 0) }
+        return try sorted.map { try ScalarReadRow($0, limits: limits) }
+    }
+
+    /// Orders the unpinned lane by the full key `(lastCopiedAt DESC, id ASC)`.
+    ///
+    /// EXACTNESS GUARD (§14.1): if the slice is full (limit+1 rows) AND
+    /// rows[limit-1] and rows[limit] tie on `lastCopiedAt`, re-fetch the lane
+    /// with the hard retained-item bound and order fully in memory; otherwise
+    /// order the small slice by the full key. `\.id` is never trusted to sort
+    /// at the store level.
+    func orderUnpinnedLane(
+        _ rows: [HistoryItemRow],
+        limit: Int,
+        in context: ModelContext
+    ) throws -> [ScalarReadRow] {
+        // Check whether the store-level sort is insufficient: a full slice
+        // with a tie at the page boundary means `\.id` ordering matters.
+        let needsFullFetch = rows.count == limit + 1
+            && rows.count >= 2
+            && rows[limit - 1].lastCopiedAt == rows[limit].lastCopiedAt
+
+        let source: [HistoryItemRow]
+        if needsFullFetch {
+            var descriptor = FetchDescriptor<HistoryItemRow>(
+                predicate: #Predicate { $0.pinOrdinal == nil }
+            )
+            descriptor.propertiesToFetch = [
+                \.id,
+                \.contentVersionRaw,
+                \.title,
+                \.effectiveTypeIdentifiersBlob,
+                \.lastCopiedAt,
+                \.copyCount,
+                \.lastSource,
+                \.pinOrdinal,
+            ]
+            descriptor.fetchLimit = limits.hardMaximumRetainedItems
+            do {
+                source = try context.fetch(descriptor)
+            } catch {
+                throw HistoryFailure.temporarilyUnavailable(.factProof)
+            }
+        } else {
+            source = rows
+        }
+
+        // Order by the full key: lastCopiedAt DESC, id ASC.
+        let sorted = source.sorted { lhs, rhs in
+            if lhs.lastCopiedAt != rhs.lastCopiedAt {
+                return lhs.lastCopiedAt > rhs.lastCopiedAt
+            }
+            return HistoryItemID(rawValue: lhs.id) < HistoryItemID(rawValue: rhs.id)
+        }
+        return try sorted.map { try ScalarReadRow($0, limits: limits) }
     }
 }
 
