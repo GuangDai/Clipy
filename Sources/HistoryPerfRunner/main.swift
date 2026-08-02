@@ -735,12 +735,14 @@ func workloadDetailAndPaste() async -> [WorkloadFixture] {
 
 // MARK: - Workload 8: thumbnail single-flight shares decode (§9 bullet 9)
 
-/// Builds a deterministic 1024×1024 RGB PNG at runtime (zlib stored blocks,
-/// Foundation-only — no compressor dependency). The WS15 1×1 fixture decodes
-/// in microseconds, so the single-flight ratio measured actor-scheduling
-/// noise, not decode sharing; a 1 MP source makes one ImageIO decode dominate
-/// per-call cost so concurrent-8 ≈ one decode (§9 bullet 9).
-func makeGradientPNG(width: Int, height: Int) -> Data {
+/// Builds a deterministic 1024×1024 RGB PNG at runtime (Foundation-only).
+/// The WS15 1×1 fixture decodes in microseconds, so the single-flight ratio
+/// measured actor-scheduling noise, not decode sharing; a 1 MP source with
+/// real deflate compression makes the ImageIO decode (~ms, inflate + unfilter
+/// of 3 MB scanlines) dominate per-call cost so concurrent-8 ≈ one decode
+/// (§9 bullet 9). The zlib stream comes from NSData's COMPRESSION_ZLIB —
+/// RFC 1950, exactly the IDAT payload format.
+func makeGradientPNG(width: Int, height: Int) throws -> Data {
     func crc32(_ data: Data) -> UInt32 {
         var crc: UInt32 = 0xFFFF_FFFF
         for byte in data {
@@ -785,29 +787,10 @@ func makeGradientPNG(width: Int, height: Int) -> Data {
         }
     }
 
-    // zlib stream: 0x78 0x01 header, deflate stored blocks (≤ 65,535 bytes),
-    // then the adler32 of the raw scanlines.
-    var zstream = Data([0x78, 0x01])
-    var offset = 0
-    while offset < raw.count {
-        let blockLength = min(65_535, raw.count - offset)
-        let isLast = offset + blockLength == raw.count
-        zstream.append(isLast ? 1 : 0)
-        var lengthLE = UInt16(blockLength).littleEndian
-        var nlengthLE = (~UInt16(blockLength)).littleEndian
-        zstream.append(Data(bytes: &lengthLE, count: 2))
-        zstream.append(Data(bytes: &nlengthLE, count: 2))
-        zstream.append(raw[offset ..< offset + blockLength])
-        offset += blockLength
-    }
-    var sumA: UInt32 = 1
-    var sumB: UInt32 = 0
-    for byte in raw {
-        sumA = (sumA + UInt32(byte)) % 65_521
-        sumB = (sumB + sumA) % 65_521
-    }
-    var adler = (sumB << 16 | sumA).bigEndian
-    zstream.append(Data(bytes: &adler, count: 4))
+    // zlib stream: real deflate via Foundation's COMPRESSION_ZLIB (RFC 1950),
+    // so the ImageIO decode pays genuine inflate cost — stored blocks would
+    // decompress as a memcpy and the decode would not dominate the ratio.
+    let zstream = try (raw as NSData).compressed(using: .zlib)
     png.append(chunk("IDAT", zstream))
 
     png.append(chunk("IEND", Data()))
@@ -820,7 +803,7 @@ func workloadThumbnailSingleFlight() async -> [WorkloadFixture] {
     do {
         let store = try await openMemoryStore()
 
-        let pngData = makeGradientPNG(width: 1024, height: 1024)
+        let pngData = try makeGradientPNG(width: 1024, height: 1024)
         // Capture a text+png item so the thumbnail path has a valid image source.
         let capture = ClipboardCapture(
             representations: [
