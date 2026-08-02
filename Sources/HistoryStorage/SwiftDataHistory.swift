@@ -54,23 +54,33 @@ internal enum StepDeferredError: Error, Sendable {
 public struct SwiftDataHistory: ClipboardHistory, Sendable {
     /// Sole writer; also serializes source snapshot capture and observer
     /// registration (docs/05-authority-kernel.md §2).
-    private let authority: HistoryAuthority
+    ///
+    /// The five actor fields are `internal`, not the Part V §2 snippet's
+    /// `private`: the deterministic concurrency harness (WS12/WS15,
+    /// docs/roadmap/03-historystorage.md step-5 note) installs suspension
+    /// handlers on the facade's own Authority from `@testable` tests, which
+    /// requires same-module visibility. Cross-module surface is unchanged —
+    /// `internal` members of a public struct are not reachable outside the
+    /// HistoryStorage module (docs/01-architecture.md §8), so the §2
+    /// isolation contract is preserved (deviation recorded in
+    /// docs/PROGRESS.md).
+    internal let authority: HistoryAuthority
 
     /// Prepares raw captures outside the commit interval
     /// (docs/05-authority-kernel.md §6.1).
-    private let ingestPreparation: IngestPreparationActor
+    internal let ingestPreparation: IngestPreparationActor
 
     /// Resolves revision drafts against a preparation snapshot outside the
     /// commit interval (docs/05-authority-kernel.md §6.2).
-    private let revisionPreparation: RevisionPreparationActor
+    internal let revisionPreparation: RevisionPreparationActor
 
     /// Evaluates search over a Sendable corpus snapshot off the Authority;
     /// never reads SwiftData (docs/05-authority-kernel.md §14.2).
-    private let searchWorker: SearchWorker
+    internal let searchWorker: SearchWorker
 
     /// Owns the thumbnail flight table and its worker
     /// (docs/05-authority-kernel.md §14.5; docs/04-coherence.md §9).
-    private let thumbnailService: ThumbnailService
+    internal let thumbnailService: ThumbnailService
 
     /// Assembles the facade from its five actors. Construction is internal to
     /// `open(configuration:)` — there is no other way to obtain a
