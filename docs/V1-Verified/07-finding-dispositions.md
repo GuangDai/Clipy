@@ -165,7 +165,7 @@ Current dispositions: 109 `in-progress`, 32 `deferred`, 31 `duplicate`,
 
 | Canonical finding ID | Status | Evidence / canonical relationship / next action |
 |---|---|---|
-| `ws18-unpinned-continuation-pagination-contract-violation-cluster` | `in-progress` | Anchor-index/tie exactness repair and adversarial same-date multi-page WS18 fixture are present; macOS proof remains. |
+| `ws18-unpinned-continuation-pagination-contract-violation-cluster` | `in-progress` | Anchor-index/tie exactness repair and adversarial same-date multi-page WS18 fixture are present. Run 31448195535 exposed a same-file `private` access error in that guard; the scalar timestamp now uses the narrowest valid `fileprivate` access and the macOS rerun remains. |
 
 ### Minor (18)
 

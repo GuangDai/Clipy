@@ -2349,7 +2349,7 @@ private struct ScalarReadRow {
     private let contentVersion: ContentVersion
     private let title: String
     private let effectiveTypeIdentifiersBlob: Data
-    private let lastCopiedAt: Date
+    fileprivate let lastCopiedAt: Date
     private let copyCount: UInt64
     private let lastSource: String?
     private let pinOrdinal: PinOrdinal?

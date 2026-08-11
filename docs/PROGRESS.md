@@ -376,7 +376,10 @@ supported macOS 26 / Swift 6.2 correctness and release-perf jobs**.
   ties take the hard-bounded §14.1 exactness fallback. The authoritative Part
   V/VI performance language now states these envelopes rather than weakening
   the claim only in this progress log. WS18 carries both same-date and
-  multi-pinned-page traversal regressions; macOS CI evidence is pending.
+  multi-pinned-page traversal regressions. Run 31448195535 exposed that the
+  same-file `HistoryAuthority` ordering extension could not read the scalar
+  row's `private` timestamp; the member now uses the narrowest valid
+  `fileprivate` access and macOS rerun evidence is pending.
 - **Facade actor fields `private` → `internal` (`963b90d`, 05 §2 snippet
   deviation).** Part V §2's illustrative snippet declares the five
   `SwiftDataHistory` actor fields `private`; the WS12/WS15 deterministic
