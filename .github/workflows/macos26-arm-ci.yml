@@ -421,7 +421,11 @@ jobs:
         timeout-minutes: 5
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
+          /usr/bin/time -l -o "$LOG_DIR/seed-smoke.time" \
+            "$ADMISSION_BIN" --admission seed-smoke \
+            "$SMOKE_STORE_URL" "$LOG_DIR/prepare-smoke.json" \
+            2>&1 | tee "$LOG_DIR/seed-smoke.log"
           /usr/bin/time -l -o "$LOG_DIR/prepare-smoke.time" \
             "$ADMISSION_BIN" --admission prepare-smoke \
             "$SMOKE_STORE_URL" "$LOG_DIR/prepare-smoke.json" \
@@ -432,10 +436,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "${{ steps.prepare_smoke.outcome }}" == success ]]
+          if [[ "${{ steps.prepare_smoke.outcome }}" != success ]]; then
+            echo "Prepare smoke processes did not complete"
+            exit 1
+          fi
           matches=$(grep -Ein \
             'CoreData: error: Failed to clone external data reference|No such file or directory|(^|[^[:alpha:]])(warning:|error:)([^[:alpha:]]|$)' \
-            "$LOG_DIR/prepare-smoke.log" || true)
+            "$LOG_DIR/seed-smoke.log" "$LOG_DIR/prepare-smoke.log" || true)
           if [[ -n "$matches" ]]; then
             echo "$matches"
             echo "Warnings, errors, or missing external data found in prepare smoke"
@@ -459,7 +466,11 @@ jobs:
         timeout-minutes: 10
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
+          /usr/bin/time -l -o "$LOG_DIR/seed.time" \
+            "$ADMISSION_BIN" --admission seed \
+            "$STORE_URL" "$LOG_DIR/prepare.json" \
+            2>&1 | tee "$LOG_DIR/seed.log"
           /usr/bin/time -l -o "$LOG_DIR/prepare.time" \
             "$ADMISSION_BIN" --admission prepare \
             "$STORE_URL" "$LOG_DIR/prepare.json" \
@@ -470,10 +481,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "${{ steps.prepare.outcome }}" == success ]]
+          if [[ "${{ steps.prepare.outcome }}" != success ]]; then
+            echo "Prepare processes did not complete"
+            exit 1
+          fi
           matches=$(grep -Ein \
             'CoreData: error: Failed to clone external data reference|No such file or directory|(^|[^[:alpha:]])(warning:|error:)([^[:alpha:]]|$)' \
-            "$LOG_DIR/prepare.log" || true)
+            "$LOG_DIR/seed.log" "$LOG_DIR/prepare.log" || true)
           if [[ -n "$matches" ]]; then
             echo "$matches"
             echo "Warnings, errors, or missing external data found in full preparation"
@@ -548,7 +562,7 @@ jobs:
             echo
             echo "Raw latency samples and machine metadata are in the JSON artifacts."
             echo
-            for mode in prepare-smoke prepare browse-ties exact-search; do
+            for mode in seed-smoke prepare-smoke seed prepare browse-ties exact-search; do
               time_file="$LOG_DIR/$mode.time"
               if [[ -f "$time_file" ]]; then
                 rss=$(awk '/maximum resident set size/ {print $1}' "$time_file")
@@ -633,5 +647,27 @@ jobs:
             and (.rawSamplesMs | length) == 101
             and .percentiles != null
           ' "$LOG_DIR/warm-open.json" >/dev/null
-          [[ -s "$LOG_DIR/browse-ties.time" ]]
-          [[ -s "$LOG_DIR/exact-search.time" ]]
+          for mode in seed-smoke prepare-smoke seed prepare browse-ties exact-search; do
+            if [[ ! -s "$LOG_DIR/$mode.time" ]]; then
+              echo "$mode RSS timing record is missing or empty"
+              exit 1
+            fi
+          done
+          if [[ ! -s "$LOG_DIR/warm-open-samples/warmup.time" ]]; then
+            echo "warm-open validation RSS timing record is missing or empty"
+            exit 1
+          fi
+          shopt -s nullglob
+          warm_time_files=(
+            "$LOG_DIR"/warm-open-samples/[0-9][0-9][0-9].time
+          )
+          if [[ "${#warm_time_files[@]}" -ne 101 ]]; then
+            echo "warm-open requires 101 child-process RSS timing records"
+            exit 1
+          fi
+          for time_file in "${warm_time_files[@]}"; do
+            if [[ ! -s "$time_file" ]]; then
+              echo "warm-open RSS timing record is empty: $time_file"
+              exit 1
+            fi
+          done

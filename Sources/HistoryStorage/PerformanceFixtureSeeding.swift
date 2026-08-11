@@ -35,7 +35,7 @@ extension SwiftDataHistory {
     /// tens of MiB of prepared/encoded values are live, while 5,000 rows need
     /// only 79 transactions instead of 5,000. Keep this fixed so fixture JSON
     /// can derive and verify the resulting Change Position.
-    internal static let performanceFixtureSeedBatchSize = 64
+    package static let performanceFixtureSeedBatchSize = 64
 
     /// Seeds a new, empty store for performance measurement.
     ///

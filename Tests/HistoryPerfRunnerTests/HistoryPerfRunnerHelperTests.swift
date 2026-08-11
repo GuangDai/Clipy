@@ -65,9 +65,83 @@ struct HistoryPerfRunnerHelperTests {
         ))
         #expect(AdmissionMode.prepare.profile == .full)
         #expect(AdmissionMode.prepareSmoke.profile == .prepareSmoke)
-        #expect(AdmissionMode.prepare.createsStore)
-        #expect(AdmissionMode.prepareSmoke.createsStore)
+        #expect(AdmissionMode.seed.profile == .full)
+        #expect(AdmissionMode.seedSmoke.profile == .prepareSmoke)
+        #expect(AdmissionMode.seed.createsStore)
+        #expect(AdmissionMode.seedSmoke.createsStore)
+        #expect(!AdmissionMode.prepare.createsStore)
+        #expect(!AdmissionMode.prepareSmoke.createsStore)
         #expect(!AdmissionMode.browseTies.createsStore)
+        #expect(AdmissionMode.prepare.expectedSeedMode == .seed)
+        #expect(AdmissionMode.prepareSmoke.expectedSeedMode == .seedSmoke)
+        #expect(AdmissionMode.seed.expectedSeedMode == nil)
+        #expect(AdmissionMode.prepare.isSetupFixture)
+        #expect(AdmissionMode.prepareSmoke.isSetupFixture)
+        #expect(!AdmissionMode.seed.isSetupFixture)
+    }
+
+    @Test func admissionSeedHandoffRoundTripsAndRejectsInvalidFacts() throws {
+        let fixture = AdmissionSeedFixture(
+            schemaVersion: 1,
+            mode: AdmissionMode.seed.rawValue,
+            corpusRows: 5_000,
+            bodyBytesPerRow: 256 * 1_024,
+            seededRows: 4_999,
+            seedTransactions: 79,
+            seedBatchSize: 64,
+            seedPosition: 79,
+            seedWallTimeMs: 42
+        )
+
+        let encoded = try JSONEncoder().encode(fixture)
+        let decoded = try JSONDecoder().decode(
+            AdmissionSeedFixture.self,
+            from: encoded
+        )
+        #expect(decoded == fixture)
+        #expect(try validateAdmissionSeedFixture(
+            decoded,
+            for: .prepare,
+            profile: .full
+        ) == fixture)
+
+        let wrongMode = AdmissionSeedFixture(
+            schemaVersion: fixture.schemaVersion,
+            mode: AdmissionMode.seedSmoke.rawValue,
+            corpusRows: fixture.corpusRows,
+            bodyBytesPerRow: fixture.bodyBytesPerRow,
+            seededRows: fixture.seededRows,
+            seedTransactions: fixture.seedTransactions,
+            seedBatchSize: fixture.seedBatchSize,
+            seedPosition: fixture.seedPosition,
+            seedWallTimeMs: fixture.seedWallTimeMs
+        )
+        #expect(throws: AdmissionError.unexpectedSeedFixture) {
+            try validateAdmissionSeedFixture(
+                wrongMode,
+                for: .prepare,
+                profile: .full
+            )
+        }
+
+        let wrongBatch = AdmissionSeedFixture(
+            schemaVersion: fixture.schemaVersion,
+            mode: fixture.mode,
+            corpusRows: fixture.corpusRows,
+            bodyBytesPerRow: fixture.bodyBytesPerRow,
+            seededRows: fixture.seededRows,
+            seedTransactions: 40,
+            seedBatchSize: 128,
+            seedPosition: 40,
+            seedWallTimeMs: fixture.seedWallTimeMs
+        )
+        #expect(throws: AdmissionError.unexpectedSeedFixture) {
+            try validateAdmissionSeedFixture(
+                wrongBatch,
+                for: .prepare,
+                profile: .full
+            )
+        }
     }
 
     @Test func admissionCaptureUsesProfileBoundAndUniqueEdgeMarkers() throws {

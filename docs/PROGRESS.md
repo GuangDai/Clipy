@@ -495,8 +495,9 @@ exclusions remain documented in the workflow history below.
   samples plus nearest-rank p50/p95/p99 for individual tie-heavy browse pages
   and worst-bound absent-term exact searches, with process peak RSS from
   `/usr/bin/time -l`. Warm-open samples use independently terminated child
-  processes after one full-corpus validation warmup. Setup is a one-shot wall
-  time, never a percentile. The job is record-only; the exact-search RSS is a
+  processes after one full-corpus validation warmup. Setup records the sum of
+  seed- and validation-process phase durations, never a percentile. The job is
+  record-only; the exact-search RSS is a
   structural ceiling rather than complete G8 evidence, and the GitHub runner
   is not an approved minimum-hardware profile for G5. Supported compile/run
   artifacts remain before the canonical evidence finding can leave
@@ -513,4 +514,16 @@ exclusions remain documented in the workflow history below.
   scans for the exact diagnostic before the full corpus runs. This changes
   disposable setup from cumulative O(N²) retained-inventory work and 5,000
   transactions to O(total bounded bytes + indexed creates) and O(N/64)
-  transactions, with O(64 × bounded-row-bytes) transient setup space.
+  transactions, with O(64 × bounded-row-bytes) transient setup space. Run
+  [31505519746](https://github.com/GuangDai/Clipy/actions/runs/31505519746)
+  measured 1,000-row setup at 21.74 seconds and 5,000-row setup at 116.90
+  seconds with no missing-external-data diagnostic, but also exposed that the
+  45-minute exact-search timeout was incorrectly masked by the completion
+  shell gate. The gate now explicitly requires successful mode outcomes,
+  complete 101-sample JSON, and non-empty timing records. Run
+  [31527425658](https://github.com/GuangDai/Clipy/actions/runs/31527425658)
+  then reproduced one intermittent `.interim` clone failure after all 4,999
+  seeded rows, proving lexical facade release was not a deterministic CoreData
+  teardown boundary. Seed and public validation now run as separate executable
+  invocations with a fail-closed primitive JSON handoff; supported rerun
+  evidence is pending.

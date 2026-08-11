@@ -314,18 +314,21 @@ retained-inventory load per row; transient setup space is bounded by one batch.
 It then performs two ordinary public captures: row zero must coalesce (forcing
 startup reconstruction plus seeded-index candidate hydration of external
 Canonical bytes), and the final distinct row must insert, leaving exactly
-5,000 rows. The seed facade is released and the persistent store reopened
-before those captures so separate live ModelContainers never overlap during
-setup. `ChangePosition` advances
-once per physical non-empty batch or public commit; readers capture its
-authoritative value and require it to remain stable instead of equating it with
-row count.
+5,000 rows. Seeding and public validation are separate executable invocations:
+the seed process writes a primitive handoff fixture and exits before the
+validation process reopens the store. Process termination is the deterministic
+`ModelContainer` teardown boundary, so separate live CoreData coordinators
+never overlap during setup. `ChangePosition` advances once per physical
+non-empty batch or public commit; readers capture its authoritative value and
+require it to remain stable instead of equating it with row count.
 
 The versioned fixtures record setup phase wall times/transaction counts,
 machine/toolchain metadata, all 101 raw measurement samples, and nearest-rank
 p50/p95/p99; macOS `/usr/bin/time -l` records process peak RSS. Corpus
-preparation is one setup wall-time observation and is never labeled as a
-percentile.
+preparation records the sum of the seed- and validation-process phase
+durations, excluding their process-launch gap, and is never labeled as a
+percentile. Separate `/usr/bin/time -l` records preserve each setup process's
+peak RSS.
 
 That lane has three deliberately different evidence units:
 

@@ -45,6 +45,8 @@ let admissionWarmupCount = admissionProfile.warmupCount
 let admissionPageLimit = admissionProfile.pageLimit
 
 enum AdmissionMode: String, Sendable, Equatable {
+    case seed
+    case seedSmoke = "seed-smoke"
     case prepare
     case prepareSmoke = "prepare-smoke"
     case browseTies = "browse-ties"
@@ -55,22 +57,45 @@ enum AdmissionMode: String, Sendable, Equatable {
 
     var createsStore: Bool {
         switch self {
-        case .prepare, .prepareSmoke:
+        case .seed, .seedSmoke:
             return true
-        case .browseTies, .exactSearch, .openOnce,
-             .openOnceAndValidate, .warmOpen:
+        case .prepare, .prepareSmoke, .browseTies, .exactSearch,
+             .openOnce, .openOnceAndValidate, .warmOpen:
             return false
         }
     }
 
     var profile: AdmissionProfile {
-        self == .prepareSmoke ? .prepareSmoke : .full
+        switch self {
+        case .seedSmoke, .prepareSmoke:
+            return .prepareSmoke
+        case .seed, .prepare, .browseTies, .exactSearch, .openOnce,
+             .openOnceAndValidate, .warmOpen:
+            return .full
+        }
+    }
+
+    var expectedSeedMode: AdmissionMode? {
+        switch self {
+        case .prepare:
+            return .seed
+        case .prepareSmoke:
+            return .seedSmoke
+        case .seed, .seedSmoke, .browseTies, .exactSearch, .openOnce,
+             .openOnceAndValidate, .warmOpen:
+            return nil
+        }
+    }
+
+    var isSetupFixture: Bool {
+        self == .prepare || self == .prepareSmoke
     }
 }
 
-enum AdmissionError: Error, Sendable {
+enum AdmissionError: Error, Sendable, Equatable {
     case storeAlreadyExists
     case storeMissing
+    case unexpectedSeedFixture
     case unexpectedPage
     case unexpectedPosition
 }
@@ -96,6 +121,18 @@ struct AdmissionFixture: Codable, Sendable {
     let percentiles: AdmissionPercentiles?
     let validation: [String: String]
     let notes: [String]
+}
+
+struct AdmissionSeedFixture: Codable, Sendable, Equatable {
+    let schemaVersion: UInt16
+    let mode: String
+    let corpusRows: Int
+    let bodyBytesPerRow: Int
+    let seededRows: Int
+    let seedTransactions: Int
+    let seedBatchSize: Int
+    let seedPosition: UInt64
+    let seedWallTimeMs: Double
 }
 
 private struct AdmissionOpenSample: Codable, Sendable {
@@ -249,7 +286,7 @@ private func makeAdmissionFixture(
         date: admissionDate(),
         corpusRows: profile.retainedRows,
         bodyBytesPerRow: profile.searchBodyBytes,
-        warmupCount: mode.createsStore ? 0 : profile.warmupCount,
+        warmupCount: mode.isSetupFixture ? 0 : profile.warmupCount,
         setupWallTimeMs: setupWallTimeMs,
         rawSamplesMs: samples,
         percentiles: admissionPercentilesIfSampled(samples),
@@ -258,8 +295,8 @@ private func makeAdmissionFixture(
     )
 }
 
-private func writeAdmissionFixture(
-    _ fixture: AdmissionFixture,
+private func writeAdmissionFixture<Fixture: Encodable>(
+    _ fixture: Fixture,
     to outputPath: String
 ) throws {
     let outputURL = URL(fileURLWithPath: outputPath)
@@ -272,59 +309,69 @@ private func writeAdmissionFixture(
     try encoder.encode(fixture).write(to: outputURL)
 }
 
-/// Owns the seed-phase facade so its ModelContainer is released before the
-/// validation phase reopens the persistent store. Besides matching the
-/// admission's later independent-process reads, this prevents temporary
-/// external-data references from one live coordinator being cloned by a
-/// second coordinator during setup.
-private func seedAdmissionRows(
-    storeURL: URL,
-    profile: AdmissionProfile,
-    seededRows: Int,
-    progress: @Sendable (Int) -> Void
-) async throws -> PerformanceFixtureSeedReceipt {
-    let history = try await openStore(
-        url: storeURL,
-        maxUnpinned: profile.retainedRows
-    )
-    return try await history.seedPerformanceFixture(
-        rowCount: seededRows,
-        makeCapture: { index in
-            admissionCapture(index: index, profile: profile)
-        },
-        progress: progress
-    )
+private func readAdmissionSeedFixture(
+    from outputPath: String
+) throws -> AdmissionSeedFixture {
+    let data = try Data(contentsOf: URL(fileURLWithPath: outputPath))
+    return try JSONDecoder().decode(AdmissionSeedFixture.self, from: data)
 }
 
-private func prepareAdmissionStore(
+@discardableResult
+func validateAdmissionSeedFixture(
+    _ fixture: AdmissionSeedFixture,
+    for mode: AdmissionMode,
+    profile: AdmissionProfile
+) throws -> AdmissionSeedFixture {
+    guard let expectedSeedMode = mode.expectedSeedMode,
+          fixture.schemaVersion == 1,
+          fixture.mode == expectedSeedMode.rawValue,
+          fixture.corpusRows == profile.retainedRows,
+          fixture.bodyBytesPerRow == profile.searchBodyBytes,
+          fixture.seededRows == profile.retainedRows - 1,
+          fixture.seedBatchSize == SwiftDataHistory.performanceFixtureSeedBatchSize
+    else {
+        throw AdmissionError.unexpectedSeedFixture
+    }
+    let completeBatches = fixture.seededRows / fixture.seedBatchSize
+    let partialBatch = fixture.seededRows % fixture.seedBatchSize == 0 ? 0 : 1
+    guard fixture.seedTransactions == completeBatches + partialBatch,
+          fixture.seedPosition == UInt64(fixture.seedTransactions),
+          fixture.seedWallTimeMs.isFinite,
+          fixture.seedWallTimeMs > 0
+    else {
+        throw AdmissionError.unexpectedSeedFixture
+    }
+    return fixture
+}
+
+private func seedAdmissionStore(
     storeURL: URL,
     outputPath: String,
     mode: AdmissionMode,
     profile: AdmissionProfile
 ) async throws {
-    guard !FileManager.default.fileExists(atPath: storeURL.path) else {
-        throw AdmissionError.storeAlreadyExists
-    }
     let clock = ContinuousClock()
-    let start = clock.now
-
-    // Seed all but the final distinct item in bounded physical batches. Two
-    // real public captures after a persistent reopen then prove startup can
-    // rebuild the seeded index, hydrate and coalesce external Canonical bytes
-    // at high N, and insert to the exact requested retained count.
     let seededRows = profile.retainedRows - 1
-    let seedStart = clock.now
-    let seedReceipt = try await seedAdmissionRows(
-        storeURL: storeURL,
-        profile: profile,
-        seededRows: seededRows,
+    let start = clock.now
+    // This facade lives until the dedicated seed CLI process exits. Process
+    // termination, not lexical scope, is the deterministic ModelContainer
+    // teardown boundary before validation reopens the persistent store.
+    let history = try await openStore(
+        url: storeURL,
+        maxUnpinned: profile.retainedRows
+    )
+    let seedReceipt = try await history.seedPerformanceFixture(
+        rowCount: seededRows,
+        makeCapture: { index in
+            admissionCapture(index: index, profile: profile)
+        },
         progress: { count in
             if count.isMultiple(of: 256) || count == seededRows {
                 print("  batch-seeded \(count)/\(seededRows) rows")
             }
         }
     )
-    let seedWallTimeMs = durationToMs(seedStart.duration(to: clock.now))
+    let seedWallTimeMs = durationToMs(start.duration(to: clock.now))
     let expectedSeedTransactions = (
         seededRows + seedReceipt.batchSize - 1
     ) / seedReceipt.batchSize
@@ -335,9 +382,43 @@ private func prepareAdmissionStore(
         throw AdmissionError.unexpectedPage
     }
 
-    // A new facade/container is intentional. It turns seeded durability and
-    // startup Signature Index reconstruction into prerequisites of both
-    // ordinary public validation captures.
+    let fixture = AdmissionSeedFixture(
+        schemaVersion: 1,
+        mode: mode.rawValue,
+        corpusRows: profile.retainedRows,
+        bodyBytesPerRow: profile.searchBodyBytes,
+        seededRows: seedReceipt.retainedRows,
+        seedTransactions: seedReceipt.transactionCount,
+        seedBatchSize: seedReceipt.batchSize,
+        seedPosition: seedReceipt.position.rawValue,
+        seedWallTimeMs: seedWallTimeMs
+    )
+    try writeAdmissionFixture(fixture, to: outputPath)
+}
+
+private func prepareAdmissionStore(
+    storeURL: URL,
+    outputPath: String,
+    mode: AdmissionMode,
+    profile: AdmissionProfile
+) async throws {
+    let seedFixture = try validateAdmissionSeedFixture(
+        readAdmissionSeedFixture(from: outputPath),
+        for: mode,
+        profile: profile
+    )
+    let seedPosition = ChangePosition(rawValue: seedFixture.seedPosition)
+    guard let expectedCoalescePosition = seedPosition.successor(),
+          let expectedInsertPosition = expectedCoalescePosition.successor()
+    else {
+        throw AdmissionError.unexpectedSeedFixture
+    }
+
+    // This invocation starts only after the seed process has exited. Public
+    // captures therefore prove durable startup reconstruction without two
+    // live CoreData coordinators sharing external-storage references.
+    let clock = ContinuousClock()
+    let validationStart = clock.now
     let history = try await openStore(
         url: storeURL,
         maxUnpinned: profile.retainedRows
@@ -365,19 +446,29 @@ private func prepareAdmissionStore(
     else {
         throw AdmissionError.unexpectedPage
     }
-    let elapsed = durationToMs(start.duration(to: clock.now))
 
     let page = try await history.browse(
         HistoryBrowseRequest(kind: .recent, limit: profile.pageLimit)
     )
-    guard seedReceipt.position.successor() == coalesceCommit.position,
+    guard expectedCoalescePosition == coalesceCommit.position,
           page.position == insertCommit.position,
-          coalesceCommit.position.successor() == insertCommit.position
+          expectedInsertPosition == insertCommit.position
     else {
         throw AdmissionError.unexpectedPosition
     }
     guard page.rows.count == profile.pageLimit else {
         throw AdmissionError.unexpectedPage
+    }
+    let validationWallTimeMs = durationToMs(
+        validationStart.duration(to: clock.now)
+    )
+    let setupWallTimeMs = seedFixture.seedWallTimeMs + validationWallTimeMs
+    guard validationWallTimeMs.isFinite,
+          validationWallTimeMs > 0,
+          setupWallTimeMs.isFinite,
+          setupWallTimeMs > 0
+    else {
+        throw AdmissionError.unexpectedSeedFixture
     }
 
     let fixture = makeAdmissionFixture(
@@ -385,25 +476,27 @@ private func prepareAdmissionStore(
         profile: profile,
         sampleUnit: "persistent-corpus-setup",
         samples: [],
-        setupWallTimeMs: elapsed,
+        setupWallTimeMs: setupWallTimeMs,
         validation: [
             "firstPageRows": String(page.rows.count),
             "publicCoalesceWallTimeMs": String(coalesceWallTimeMs),
             "publicInsertWallTimeMs": String(insertWallTimeMs),
             "position": String(page.position.rawValue),
             "publicValidationCaptures": "2",
-            "seedBatchSize": String(seedReceipt.batchSize),
-            "seedPosition": String(seedReceipt.position.rawValue),
-            "seedTransactions": String(seedReceipt.transactionCount),
-            "seedWallTimeMs": String(seedWallTimeMs),
-            "seededRows": String(seedReceipt.retainedRows),
+            "seedBatchSize": String(seedFixture.seedBatchSize),
+            "seedPosition": String(seedFixture.seedPosition),
+            "seedTransactions": String(seedFixture.seedTransactions),
+            "seedWallTimeMs": String(seedFixture.seedWallTimeMs),
+            "seededRows": String(seedFixture.seededRows),
+            "validationWallTimeMs": String(validationWallTimeMs),
         ],
         notes: [
-            "Setup is one wall-time observation, never a percentile sample.",
+            "Setup is the sum of seed- and validation-process phase durations, never a percentile sample.",
+            "The sum excludes the process-launch gap between those phases.",
             "All rows share one timestamp and carry the profile's full-bound search body.",
             "Bounded fixture batches use production preparation/codecs and the sole writer.",
-            "A persistent reopen, public coalesce, and distinct insert validate the seeded store.",
-            "Pair this JSON with the workflow's prepare.time peak-RSS record.",
+            "A separate process performs public coalesce and insert validation.",
+            "Pair this JSON with the workflow's seed and prepare peak-RSS records.",
         ]
     )
     try writeAdmissionFixture(fixture, to: outputPath)
@@ -683,6 +776,8 @@ private func summarizeAdmissionWarmOpen(
 
 /// Runs one dispatch-only admission mode. Arguments are exactly:
 /// `<mode> <store.sqlite> <fixture.json>`.
+/// Seed modes write a handoff fixture; the matching prepare mode consumes and
+/// replaces that same path with the final setup fixture.
 func runAdmission(arguments: [String]) async -> Int {
     guard let rawMode = arguments.first,
           let mode = AdmissionMode(rawValue: rawMode) else {
@@ -696,20 +791,23 @@ func runAdmission(arguments: [String]) async -> Int {
 
     do {
         let storeURL = URL(fileURLWithPath: arguments[1])
-        if !mode.createsStore,
-           !FileManager.default.fileExists(atPath: storeURL.path) {
+        let storeExists = FileManager.default.fileExists(atPath: storeURL.path)
+        if mode.createsStore, storeExists {
+            throw AdmissionError.storeAlreadyExists
+        }
+        if !mode.createsStore, !storeExists {
             throw AdmissionError.storeMissing
         }
         print("HistoryPerfRunner admission: starting \(mode.rawValue)")
         switch mode {
-        case .prepare:
-            try await prepareAdmissionStore(
+        case .seed, .seedSmoke:
+            try await seedAdmissionStore(
                 storeURL: storeURL,
                 outputPath: arguments[2],
                 mode: mode,
                 profile: mode.profile
             )
-        case .prepareSmoke:
+        case .prepare, .prepareSmoke:
             try await prepareAdmissionStore(
                 storeURL: storeURL,
                 outputPath: arguments[2],
