@@ -13,19 +13,22 @@ private struct HistoryLimitsFixture {
     var maximumRevisionsPerItem = 100
     var maximumTotalRevisionBytesPerItem = 256 * 1_048_576
     var hardMaximumRetainedItems = 5_000
-    var userMaximumUnpinnedRange = 1...5_000
+    var userMaximumUnpinnedLowerBound = 1
+    var userMaximumUnpinnedUpperBound = 5_000
     var defaultMaximumUnpinnedItems = 200
     var maximumSourceApplicationObservationUTF8Bytes = 1_024
     var maximumStoredTitleUTF8Bytes = 1_024
     var maximumStoredSearchBodyUTF8Bytes = 256 * 1_024
-    var pageRowLimitRange = 1...500
+    var pageRowLimitLowerBound = 1
+    var pageRowLimitUpperBound = 500
     var maximumSearchTermUTF8Bytes = 4_096
     var maximumRegexpPatternCharacters = 512
     var maximumFuzzyQueryCharacters = 64
     var maximumFuzzyTitleBodyPrefixCharacters = 5_000
     var maximumRegexpTitleBodyPrefixCharacters = 1_000
     var maximumBodySearchSnippetCharacters = 322
-    var thumbnailDimensionRange = 1...2_048
+    var thumbnailDimensionLowerBound = 1
+    var thumbnailDimensionUpperBound = 2_048
     var maximumEncodedThumbnailBytes = 16 * 1_048_576
 
     func make() -> HistoryLimits? {
@@ -38,19 +41,22 @@ private struct HistoryLimitsFixture {
             maximumRevisionsPerItem: maximumRevisionsPerItem,
             maximumTotalRevisionBytesPerItem: maximumTotalRevisionBytesPerItem,
             hardMaximumRetainedItems: hardMaximumRetainedItems,
-            userMaximumUnpinnedRange: userMaximumUnpinnedRange,
+            userMaximumUnpinnedLowerBound: userMaximumUnpinnedLowerBound,
+            userMaximumUnpinnedUpperBound: userMaximumUnpinnedUpperBound,
             defaultMaximumUnpinnedItems: defaultMaximumUnpinnedItems,
             maximumSourceApplicationObservationUTF8Bytes: maximumSourceApplicationObservationUTF8Bytes,
             maximumStoredTitleUTF8Bytes: maximumStoredTitleUTF8Bytes,
             maximumStoredSearchBodyUTF8Bytes: maximumStoredSearchBodyUTF8Bytes,
-            pageRowLimitRange: pageRowLimitRange,
+            pageRowLimitLowerBound: pageRowLimitLowerBound,
+            pageRowLimitUpperBound: pageRowLimitUpperBound,
             maximumSearchTermUTF8Bytes: maximumSearchTermUTF8Bytes,
             maximumRegexpPatternCharacters: maximumRegexpPatternCharacters,
             maximumFuzzyQueryCharacters: maximumFuzzyQueryCharacters,
             maximumFuzzyTitleBodyPrefixCharacters: maximumFuzzyTitleBodyPrefixCharacters,
             maximumRegexpTitleBodyPrefixCharacters: maximumRegexpTitleBodyPrefixCharacters,
             maximumBodySearchSnippetCharacters: maximumBodySearchSnippetCharacters,
-            thumbnailDimensionRange: thumbnailDimensionRange,
+            thumbnailDimensionLowerBound: thumbnailDimensionLowerBound,
+            thumbnailDimensionUpperBound: thumbnailDimensionUpperBound,
             maximumEncodedThumbnailBytes: maximumEncodedThumbnailBytes
         )
     }
@@ -135,27 +141,24 @@ private func rejectedLimits(for rejection: HistoryLimitsRejectionCase) -> Histor
     case .nonPositiveThumbnailBytes:
         fixture.maximumEncodedThumbnailBytes = 0
     case .nonPositiveUnpinnedRangeLowerBound:
-        fixture.userMaximumUnpinnedRange = 0...5_000
+        fixture.userMaximumUnpinnedLowerBound = 0
     case .nonPositivePageRangeLowerBound:
-        fixture.pageRowLimitRange = 0...500
+        fixture.pageRowLimitLowerBound = 0
     case .nonPositiveThumbnailRangeLowerBound:
-        fixture.thumbnailDimensionRange = 0...2_048
+        fixture.thumbnailDimensionLowerBound = 0
     case .malformedUnpinnedRange:
-        fixture.userMaximumUnpinnedRange = ClosedRange(
-            uncheckedBounds: (lower: 2, upper: 1)
-        )
+        fixture.userMaximumUnpinnedLowerBound = 2
+        fixture.userMaximumUnpinnedUpperBound = 1
     case .malformedPageRange:
-        fixture.pageRowLimitRange = ClosedRange(
-            uncheckedBounds: (lower: 2, upper: 1)
-        )
+        fixture.pageRowLimitLowerBound = 2
+        fixture.pageRowLimitUpperBound = 1
     case .malformedThumbnailRange:
-        fixture.thumbnailDimensionRange = ClosedRange(
-            uncheckedBounds: (lower: 2, upper: 1)
-        )
+        fixture.thumbnailDimensionLowerBound = 2
+        fixture.thumbnailDimensionUpperBound = 1
     case .unpinnedRangeExceedsHardMaximum:
-        fixture.userMaximumUnpinnedRange = 1...5_001
+        fixture.userMaximumUnpinnedUpperBound = 5_001
     case .defaultUnpinnedOutsideRange:
-        fixture.userMaximumUnpinnedRange = 1...100
+        fixture.userMaximumUnpinnedUpperBound = 100
         fixture.defaultMaximumUnpinnedItems = 101
     case .representationExceedsCapture:
         fixture.maximumRepresentationBytes = 65
@@ -187,10 +190,13 @@ func historyLimitsRejectsEveryInvalidProfile(
     fixture.maximumProposedRevisionBytes = 64
     fixture.maximumCaptureBytes = 64
     fixture.maximumTotalRevisionBytesPerItem = 64
-    fixture.userMaximumUnpinnedRange = 1...1
+    fixture.userMaximumUnpinnedLowerBound = 1
+    fixture.userMaximumUnpinnedUpperBound = 1
     fixture.defaultMaximumUnpinnedItems = 1
-    fixture.pageRowLimitRange = 1...1
-    fixture.thumbnailDimensionRange = 1...1
+    fixture.pageRowLimitLowerBound = 1
+    fixture.pageRowLimitUpperBound = 1
+    fixture.thumbnailDimensionLowerBound = 1
+    fixture.thumbnailDimensionUpperBound = 1
 
     #expect(fixture.make() != nil)
 }

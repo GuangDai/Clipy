@@ -332,10 +332,18 @@ supported macOS 26 / Swift 6.2 correctness and release-perf jobs**.
 ## V1 verification remediation — local proof closure (2026-08-11)
 
 - **Status:** implementation and portable evidence complete. The public-symbol
-  workflow 31448087991 and run 31448531234's gates, package build, app
-  build/test, and release-perf proof are green. Its SwiftPM test compilation
-  stopped on one ambiguous array-literal assertion; explicit `[Int]` operands
-  are local and the supported test rerun is pending.
+  workflow 31448087991 is green. Run 31448531234 proved gates, package build,
+  app build/test, and release performance; its array-literal test compilation
+  failure is repaired. Run 31449140919 repeated green gates, package build,
+  app build/test, and release performance, then reached test execution and
+  proved Xcode 26.6 traps on inverted `ClosedRange(uncheckedBounds:)`;
+  `HistoryLimits` now validates six scalar endpoints before constructing its
+  three ranges, and the supported test rerun is pending.
+- **HistoryCore limits:** the package-only initializer receives range endpoints
+  separately, validates positivity/order/containment, and constructs
+  `ClosedRange` values only after those checks. This makes all three malformed
+  range rejections genuine failable-initializer paths instead of pre-init
+  runtime traps.
   `docs/V1-Verified/07-finding-dispositions.md` remains the authoritative
   222-ID status ledger; no behavior item is promoted to `fixed` before that
   evidence lands.

@@ -26,7 +26,7 @@ public struct HistoryLimits: Sendable, Hashable {
 }
 ```
 
-`HistoryLimits` lives in `HistoryCore` (its Foundation-only home; the only production/value type defined in Part VI §2). `HistoryLimits.standard` is the only value production uses. Domain planner tests inject individual scalar bounds (for example `planCapture(... hardMaximumRetainedItems:)`); package-owned HistoryStorage/codec tests may construct a fully validated custom `HistoryLimits` through its package initializer when that is the narrowest way to prove a storage-bound rejection. No caller-facing API accepts custom limits.
+`HistoryLimits` lives in `HistoryCore` (its Foundation-only home; the only production/value type defined in Part VI §2). `HistoryLimits.standard` is the only value production uses. Domain planner tests inject individual scalar bounds (for example `planCapture(... hardMaximumRetainedItems:)`); package-owned HistoryStorage/codec tests may construct a fully validated custom `HistoryLimits` through its package initializer when that is the narrowest way to prove a storage-bound rejection. That initializer receives each range's lower and upper endpoint separately, rejects invalid ordering, and only then constructs `ClosedRange` values, so malformed bounds return `nil` instead of trapping before validation. No caller-facing API accepts custom limits.
 
 | Bound | v1 value |
 |---|---:|

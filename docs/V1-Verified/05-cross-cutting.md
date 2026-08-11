@@ -34,8 +34,16 @@
 ## 3. Public API surface & evolution safety
 
 - **Strengths:** `HistoryCore` is Foundation-only, fully `Sendable`, with disciplined access control (`public` seam, `package` minting, `package` DTO inits so callers can't forge rows/pages/details). The closed `HistoryAction` enum forces exhaustive switches; identity types use checked arithmetic (no token wrap). The public symbol snapshot gate prevents accidental leakage.
-- **`HistoryLimits.init?` is `public` but unused publicly** (`01-historycore`): `SwiftDataHistory.open` hard-codes `.standard`; no public API takes a `HistoryLimits`. Tightening to `package` compiles unchanged for all 5 in-repo callers and is locked by the symbol snapshot — the longer it stays `public`, the harder to retract.
-- **`HistoryLimits` range validation gap** (`01-historycore`): `pageRowLimitRange`/`thumbnailDimensionRange` have no `lower <= upper` guard; `ClosedRange(uncheckedBounds:)` can pass an inverted range. Narrow trigger, real.
+- **`HistoryLimits.init?` was `public` but unused publicly at the audited
+  baseline** (`01-historycore`): `SwiftDataHistory.open` hard-codes `.standard`
+  and no public API accepts custom limits. It is now `package`; all 10 current
+  production/test construction points use that seam, and symbol workflow
+  31448087991 confirms the public surface retraction.
+- **`HistoryLimits` range validation gap** (`01-historycore`): the baseline
+  correctly required a `lower <= upper` failable check but incorrectly assumed
+  an inverted `ClosedRange(uncheckedBounds:)` could reach it. Run 31449140919
+  proved that construction traps first; the local endpoint-based initializer
+  now validates ordering before constructing ranges, pending macOS rerun.
 - **Evolution:** the versioned blob codecs (`formatVersion: UInt16 = 1`) + `projectionSchemaVersion` give a clean forward path; `HistorySchemaV1` labels the migration stance (`05 §17`).
 
 ## 4. Test coverage (the dominant systemic gap)

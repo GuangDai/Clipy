@@ -90,10 +90,11 @@ public struct HistoryLimits: Sendable, Hashable {
     /// Creates a set of bounds, rejecting out-of-range or inconsistent
     /// combinations by returning `nil` (docs/06-cross-cutting.md §2).
     ///
-    /// Rejected: any non-positive scalar bound; a malformed range; a range
-    /// whose lower bound is below 1; `userMaximumUnpinnedRange` not contained in
-    /// `1...hardMaximumRetainedItems`; `defaultMaximumUnpinnedItems` outside
-    /// `userMaximumUnpinnedRange`; `maximumRepresentationBytes` exceeding
+    /// Rejected: any non-positive scalar bound; an inverted lower/upper bound
+    /// pair; a range whose lower bound is below 1; the user-unpinned bound pair
+    /// not contained in `1...hardMaximumRetainedItems`;
+    /// `defaultMaximumUnpinnedItems` outside that pair;
+    /// `maximumRepresentationBytes` exceeding
     /// `maximumProposedRevisionBytes` or `maximumCaptureBytes`; or
     /// `maximumProposedRevisionBytes` exceeding
     /// `maximumTotalRevisionBytesPerItem`. The fuzzy-query bound must not
@@ -111,19 +112,22 @@ public struct HistoryLimits: Sendable, Hashable {
         maximumRevisionsPerItem: Int,
         maximumTotalRevisionBytesPerItem: Int,
         hardMaximumRetainedItems: Int,
-        userMaximumUnpinnedRange: ClosedRange<Int>,
+        userMaximumUnpinnedLowerBound: Int,
+        userMaximumUnpinnedUpperBound: Int,
         defaultMaximumUnpinnedItems: Int,
         maximumSourceApplicationObservationUTF8Bytes: Int,
         maximumStoredTitleUTF8Bytes: Int,
         maximumStoredSearchBodyUTF8Bytes: Int,
-        pageRowLimitRange: ClosedRange<Int>,
+        pageRowLimitLowerBound: Int,
+        pageRowLimitUpperBound: Int,
         maximumSearchTermUTF8Bytes: Int,
         maximumRegexpPatternCharacters: Int,
         maximumFuzzyQueryCharacters: Int,
         maximumFuzzyTitleBodyPrefixCharacters: Int,
         maximumRegexpTitleBodyPrefixCharacters: Int,
         maximumBodySearchSnippetCharacters: Int,
-        thumbnailDimensionRange: ClosedRange<Int>,
+        thumbnailDimensionLowerBound: Int,
+        thumbnailDimensionUpperBound: Int,
         maximumEncodedThumbnailBytes: Int
     ) {
         guard maximumRepresentationsPerCaptureOrRevision >= 1,
@@ -150,16 +154,17 @@ public struct HistoryLimits: Sendable, Hashable {
               maximumEncodedThumbnailBytes >= 1
         else { return nil }
 
-        guard userMaximumUnpinnedRange.lowerBound <= userMaximumUnpinnedRange.upperBound,
-              pageRowLimitRange.lowerBound <= pageRowLimitRange.upperBound,
-              thumbnailDimensionRange.lowerBound <= thumbnailDimensionRange.upperBound,
-              userMaximumUnpinnedRange.lowerBound >= 1,
-              pageRowLimitRange.lowerBound >= 1,
-              thumbnailDimensionRange.lowerBound >= 1
+        guard userMaximumUnpinnedLowerBound >= 1,
+              pageRowLimitLowerBound >= 1,
+              thumbnailDimensionLowerBound >= 1,
+              userMaximumUnpinnedLowerBound <= userMaximumUnpinnedUpperBound,
+              pageRowLimitLowerBound <= pageRowLimitUpperBound,
+              thumbnailDimensionLowerBound <= thumbnailDimensionUpperBound
         else { return nil }
 
-        guard userMaximumUnpinnedRange.upperBound <= hardMaximumRetainedItems,
-              userMaximumUnpinnedRange.contains(defaultMaximumUnpinnedItems),
+        guard userMaximumUnpinnedUpperBound <= hardMaximumRetainedItems,
+              defaultMaximumUnpinnedItems >= userMaximumUnpinnedLowerBound,
+              defaultMaximumUnpinnedItems <= userMaximumUnpinnedUpperBound,
               maximumRepresentationBytes <= maximumProposedRevisionBytes,
               maximumRepresentationBytes <= maximumCaptureBytes,
               maximumProposedRevisionBytes <= maximumTotalRevisionBytesPerItem,
@@ -174,19 +179,21 @@ public struct HistoryLimits: Sendable, Hashable {
         self.maximumRevisionsPerItem = maximumRevisionsPerItem
         self.maximumTotalRevisionBytesPerItem = maximumTotalRevisionBytesPerItem
         self.hardMaximumRetainedItems = hardMaximumRetainedItems
-        self.userMaximumUnpinnedRange = userMaximumUnpinnedRange
+        self.userMaximumUnpinnedRange =
+            userMaximumUnpinnedLowerBound...userMaximumUnpinnedUpperBound
         self.defaultMaximumUnpinnedItems = defaultMaximumUnpinnedItems
         self.maximumSourceApplicationObservationUTF8Bytes = maximumSourceApplicationObservationUTF8Bytes
         self.maximumStoredTitleUTF8Bytes = maximumStoredTitleUTF8Bytes
         self.maximumStoredSearchBodyUTF8Bytes = maximumStoredSearchBodyUTF8Bytes
-        self.pageRowLimitRange = pageRowLimitRange
+        self.pageRowLimitRange = pageRowLimitLowerBound...pageRowLimitUpperBound
         self.maximumSearchTermUTF8Bytes = maximumSearchTermUTF8Bytes
         self.maximumRegexpPatternCharacters = maximumRegexpPatternCharacters
         self.maximumFuzzyQueryCharacters = maximumFuzzyQueryCharacters
         self.maximumFuzzyTitleBodyPrefixCharacters = maximumFuzzyTitleBodyPrefixCharacters
         self.maximumRegexpTitleBodyPrefixCharacters = maximumRegexpTitleBodyPrefixCharacters
         self.maximumBodySearchSnippetCharacters = maximumBodySearchSnippetCharacters
-        self.thumbnailDimensionRange = thumbnailDimensionRange
+        self.thumbnailDimensionRange =
+            thumbnailDimensionLowerBound...thumbnailDimensionUpperBound
         self.maximumEncodedThumbnailBytes = maximumEncodedThumbnailBytes
     }
 
@@ -205,19 +212,22 @@ public struct HistoryLimits: Sendable, Hashable {
         maximumRevisionsPerItem: 100,
         maximumTotalRevisionBytesPerItem: 256 * 1_048_576,
         hardMaximumRetainedItems: 5_000,
-        userMaximumUnpinnedRange: 1...5_000,
+        userMaximumUnpinnedLowerBound: 1,
+        userMaximumUnpinnedUpperBound: 5_000,
         defaultMaximumUnpinnedItems: 200,
         maximumSourceApplicationObservationUTF8Bytes: 1_024,
         maximumStoredTitleUTF8Bytes: 1_024,
         maximumStoredSearchBodyUTF8Bytes: 256 * 1_024,
-        pageRowLimitRange: 1...500,
+        pageRowLimitLowerBound: 1,
+        pageRowLimitUpperBound: 500,
         maximumSearchTermUTF8Bytes: 4_096,
         maximumRegexpPatternCharacters: 512,
         maximumFuzzyQueryCharacters: 64,
         maximumFuzzyTitleBodyPrefixCharacters: 5_000,
         maximumRegexpTitleBodyPrefixCharacters: 1_000,
         maximumBodySearchSnippetCharacters: 322,
-        thumbnailDimensionRange: 1...2_048,
+        thumbnailDimensionLowerBound: 1,
+        thumbnailDimensionUpperBound: 2_048,
         maximumEncodedThumbnailBytes: 16 * 1_048_576
     )!
 }

@@ -43,8 +43,8 @@ Current dispositions: 109 `in-progress`, 32 `deferred`, 31 `duplicate`,
 | `concurrent-rss-unbounded` | `duplicate` | Canonical target: `history-details-eager-full-lineage`. The same G8-gated eager inline-value design owns aggregate caller-retention risk. |
 | `history-details-eager-full-lineage` | `deferred` | Owner: HistoryCore/architecture. Trigger: G8 opens when a representative read-path RSS or copy-cost workload breaches budget. Residual risk is multiplicative resident memory across retained DTOs. |
 | `historylimits-public-init-exceeds-spec-surface` | `in-progress` | Initializer is now `package`; public symbol regeneration and macOS symbol-snapshot/CI proof remain. |
-| `limits-failable-init-rejection-paths-untested` | `in-progress` | Parameterized rejection coverage is present, including consistency/equality boundaries; macOS Swift test proof remains. |
-| `limits-pageRow-thumbnail-range-silent-malformed` | `in-progress` | Explicit lower/upper ordering guards and malformed-range cases are present; macOS proof remains. |
+| `limits-failable-init-rejection-paths-untested` | `in-progress` | Parameterized rejection coverage is present, including consistency/equality boundaries. Run 31449140919 reached execution and exposed the inverted-range fixture trap; the endpoint-based repair is local and macOS Swift test proof remains. |
+| `limits-pageRow-thumbnail-range-silent-malformed` | `in-progress` | The package initializer now accepts scalar lower/upper pairs, rejects inversion, and only then constructs its three ranges. This follows the canonical recommendation after run 31449140919 proved `uncheckedBounds` traps on Xcode 26.6; macOS rerun remains. |
 | `limits-doccomment-custom-construction-drift` | `documented` | HistoryCore/Part VI now distinguish `.standard` production use from package-owned fully validated custom codec/storage test profiles. |
 
 ### Nit (11)

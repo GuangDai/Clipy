@@ -18,7 +18,11 @@ The complete public, Foundation-only surface between callers and retained Histor
 - **Browse/search requests:** `SearchMode`, `HistoryBrowseKind`, `HistoryPageCursor`, `HistoryBrowseRequest`, `HistoryObservationRequest` (03a §7).
 - **Read DTOs:** `UTF16TextRange`, `SearchPresentation`, `HistoryRow`, `HistoryPage` (03b §8); `HistoryRepresentation`, `RevisionSummary`, `CopyOccurrenceSummary`, `HistoryDetails`, `PastePayload`, `PixelSize`, `ThumbnailFormat`, `ThumbnailPayload` (03b §9).
 - **Typed failures:** `HistoryFailure` + `InvalidInputReason`, `PinnedPlacementFailure`, `CapacityKind`, `UnavailableReason`, `PersistenceFailure` (03b §10).
-- **Safety bounds:** `HistoryLimits` — the Part VI §2 bounds as an immutable `Sendable, Hashable` value with `.standard` (the single value production and tests use). *(06 §2 sanctions HistoryCore as the Foundation-only home for this public type.)*
+- **Safety bounds:** `HistoryLimits` — the Part VI §2 bounds as an immutable
+  `Sendable, Hashable` value with `.standard` (the only production value) and
+  a validated package-only custom-profile seam for focused storage/codec
+  tests. *(06 §2 sanctions HistoryCore as the Foundation-only home for this
+  public type.)*
 
 ## Acceptance
 

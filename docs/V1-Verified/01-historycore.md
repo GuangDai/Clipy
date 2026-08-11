@@ -6,12 +6,24 @@
 >
 > **Orchestrator cross-check (independently confirmed against source):**
 > - `historylimits-public-init-exceeds-spec-surface` — verified: `Limits.swift:100` declares `public init?`; `SwiftDataHistory.open` hard-codes `.standard`; no public API takes a `HistoryLimits`. The `package` tightening would compile unchanged for all 5 in-repo callers.
-> - `limits-pageRow-thumbnail-range-silent-malformed` — verified: `Limits.swift:145-148` guards `lowerBound >= 1` for the three ranges but has no `lower <= upper` check; `ClosedRange(uncheckedBounds:)` bypasses the `...` trap, so an inverted programmatically-built range can pass validation (narrow trigger, but real).
+> - `limits-pageRow-thumbnail-range-silent-malformed` — the baseline correctly
+>   identified that range ordering belonged to the failable initializer, but
+>   incorrectly assumed `ClosedRange(uncheckedBounds:)` could carry inverted
+>   input. Supported run 31449140919 proved it traps before the initializer;
+>   the endpoint-based recommendation is therefore the required fix.
 > - `details-materializes-all-revisions-for-title` / `details-revision-searchbody-discarded` — schema (one denormalized title/searchBody per item, `Schema.swift:67-69`) confirms per-revision titles must be re-projected from decoded revisions; the ~384 MiB transient peak claim and the discarded-`searchBody` waste are structurally sound (full confirmation pending the HistoryAuthority module pass at `HistoryAuthority.swift:1976`).
 >
 > **Framing note (from C3-Critique):** HistoryCore is a thin, spec-pinned value/protocol layer; its genuine risks materialize *across* the boundary in HistoryStorage (`details()`/hydrate). The HistoryCore finding set describes them from the DTO seam outward — they re-appear, fully owned, in the HistoryAuthority report.
 >
 > Line numbers as-of HEAD `8f316c9` (2026-08-02).
+>
+> **Supported-runtime correction (2026-08-11):** run 31449140919 proved that
+> Xcode 26.6 traps even for inverted `ClosedRange(uncheckedBounds:)`,
+> superseding every baseline statement below that called that construction
+> non-trapping. The finding remains valid as an initializer-shape problem:
+> callers cannot present malformed ranges for failable validation. The local
+> repair now accepts six scalar endpoints, validates their order, and only then
+> constructs the three stored ranges; macOS rerun proof is pending.
 
 ---
 
@@ -51,8 +63,8 @@ the evidence added by the remediation batches.
 | `actorstubs-misleading-filename` | `in-progress` | Production content moved to `RevisionPreparationAndSearchCorpus.swift`; macOS build pending. |
 | `ws-support-sort-by-uuidstring-not-historyitemid` | `in-progress` | Walking-skeleton row ordering now calls `HistoryItemID.<`; macOS test pending. |
 | `historylimits-public-init-exceeds-spec-surface` | `in-progress` | Initializer is package-only; symbol regeneration and macOS proof pending. |
-| `limits-failable-init-rejection-paths-untested` | `in-progress` | Parameterized rejection cases are present; macOS proof pending. |
-| `limits-pageRow-thumbnail-range-silent-malformed` | `in-progress` | Explicit malformed-range validation/tests are present; macOS proof pending. |
+| `limits-failable-init-rejection-paths-untested` | `in-progress` | Parameterized rejection cases are present. Run 31449140919 reached execution and exposed the unconstructible inverted-range fixture; the endpoint-based initializer/test repair is local and macOS rerun proof is pending. |
+| `limits-pageRow-thumbnail-range-silent-malformed` | `in-progress` | The package initializer now receives all three ranges as separate scalar endpoint pairs, rejects inversion, then constructs `ClosedRange` values. This follows the finding's recommendation after run 31449140919 proved `uncheckedBounds` traps on the supported toolchain; macOS rerun proof is pending. |
 | `limits-representation-vs-revision-bytes-cross-bound-unchecked` | `in-progress` | Cross-bound validation/test is present; macOS proof pending. |
 
 ## 3. Findings
@@ -70,7 +82,7 @@ the evidence added by the remediation batches.
 | `history-details-eager-full-lineage` | `DetailDTOs.swift:77` | design / cross-boundary | `HistoryDetails` is a single flat value struct with eager `let` arrays for canonical+effective+revisions (`DetailDTOs.swift:79-81`); `details()` returns synchronously, so one call resident-holds up to ~192 MiB (canonical ≤128 + active-revision effective ≤64; COW-shared to ~128 when no revision active). Eager full-lineage materialization is the deferred G8 graft; the transient decode peak is reducible without a spec edit, but DTO-level laziness needs §9 + G8. | Two levers: (a) cap the TRANSIENT decode peak via summary-only hydrate (no spec edit — see `details-materializes`); (b) fault canonical/effective lazily OR add `details(for:including:)` selector — this DOES change §9 and is the G8 graft, deferred pending evidence. Documenting per-call resident cost is the zero-risk minimum. | `03b §9` (HistoryDetails); `06 §2` |
 | `historylimits-public-init-exceeds-spec-surface` | `Limits.swift:100` | API surface | `HistoryLimits.init?` is `public`, but no public HistoryCore/HistoryStorage API accepts a `HistoryLimits` argument (`SwiftDataHistory.open` hard-codes `.standard` at `SwiftDataHistory.swift:134`; `HistoryConfiguration` takes only persistence + `initialMaximumUnpinnedItems`). The spec says custom bounds flow only through the Domain planner seam (`planCapture`'s bare-Int `hardMaximumRetainedItems`), so public `init?` is wider than the "public = caller seam; package = minting" discipline applied to IDs/DTOs — allowing out-of-package minting of arbitrary valid bounds that nonetheless pass the consistency guards. | Tighten `public init?` to `package init?` — all five in-repo `HistoryLimits(` callers (WS5DedupIndexUnavailableTests + four BlobCodec tests) compile unchanged; ClipyApp has zero `HistoryLimits(` call sites. Locked by the symbol-snapshot gate, so the longer it stays public the harder it is to retract. | `06 §2` |
 | `limits-failable-init-rejection-paths-untested` | `Limits.swift:100` | test coverage | The init's entire safety rationale — its nil-returning rejection branches (non-positive scalars, `range lowerBound<1`, `userMaximumUnpinnedRange` containment, default-in-range, `representationBytes<=captureBytes`, `proposedRevisionBytes<=totalRevisionBytesPerItem`) — is exercised by ZERO tests. Only `standard!` (force-unwrap) and five HistoryStorage tests that build VALID values are covered. A regression that inverts or drops any guard would pass all current tests. | Add a parameterized nil-return test in `Tests/HistoryCoreTests/` asserting nil for each enumerated rejection PLUS the missing `repBytes>proposed` pair and the `pageRow`/`thumbnail` inverted-range cases. Pair with the range-bounds fix so the `ClosedRange` path also becomes a nil assertion. | `06 §2` (init? rejection contract, boundary-tests requirement) |
-| `limits-pageRow-thumbnail-range-silent-malformed` | `Limits.swift:145` | validation gap | A literal `5...1` traps at the `...` operator before `init?` runs (so this cycle's refutation of the "traps" framing was correct) — BUT `pageRowLimitRange` and `thumbnailDimensionRange` have NO `lower<=upper` guard and NO upper-bound check, so `ClosedRange(uncheckedBounds:)` (which does NOT trap) can pass an inverted range through validation, yielding a `HistoryLimits` where every subsequent `.contains` returns false. The surviving concern is the silent `uncheckedBounds` pass for pageRow/thumbnail, not the trapping literal. | Take each range's bounds as separate `Int` parameters (`userMaximumUnpinnedLower/Upper`, `pageRowLower/Upper`, `thumbnailLower/Upper`) and build the `ClosedRange` inside `init?` behind an explicit `lower<=upper` guard (plus upper-bound sanity) that returns nil. Restores the documented contract for all three range fields and makes the malformed case testable. Low realism but a true public-contract gap. | `06 §2`; `Limits.swift:88-99` docstring |
+| `limits-pageRow-thumbnail-range-silent-malformed` | `Limits.swift:145` | validation gap | The initializer accepted already-constructed `ClosedRange` values, so malformed ordering could not reach its failable validation contract: both `...` and, as supported run 31449140919 later proved, inverted `ClosedRange(uncheckedBounds:)` trap first. The baseline was wrong about `uncheckedBounds` but correct that the initializer shape made its ordering guard unprovable. | Take each range's bounds as separate `Int` parameters (`userMaximumUnpinnedLower/Upper`, `pageRowLower/Upper`, `thumbnailLower/Upper`) and build the `ClosedRange` inside `init?` behind an explicit `lower<=upper` guard that returns nil. Restores the documented contract for all three range fields and makes the malformed case testable. | `06 §2`; `Limits.swift:88-99` docstring |
 | `limits-doccomment-custom-construction-drift` | `Limits.swift:11` | docs drift | The Limits doc comment (`Limits.swift:11-14`) and spec `06-cross-cutting.md:25` claim `.standard` is the only value walking-skeleton tests use and that a test needing a different hard bound injects it at the `planCapture` scalar — but `WS5DedupIndexUnavailableTests` and all four BlobCodec tests DO construct full custom `HistoryLimits` and inject them via HistoryStorage internal seams (`HistoryAuthority.init(limits:)`, `SignatureIndex.build(limits:)`, codec `limits:` params). The doc's stated injection discipline does not match how the tests actually obtain over-bound coverage. | Amend the `Limits.swift:11-14` doc comment and `06-cross-cutting.md:25` to acknowledge that storage-layer bound tests inject custom `HistoryLimits` via HistoryStorage internal seams — OR refactor WS5/codec tests to drive over-bound rejection purely through the `planCapture` scalar as the comment claims. Resolve the drift in one direction. | `06 §2:25`; `Limits.swift:11-14` |
 
 ### Nit (11)
@@ -111,7 +123,13 @@ the evidence added by the remediation batches.
 
 HistoryCore holds no secrets and does no I/O; "security" here reduces to **admission-value validation completeness** and **identity determinism**.
 
-- **`HistoryLimits.init?` is the module's primary safety claim** but has three validation gaps: (a) `pageRowLimitRange`/`thumbnailDimensionRange` lack a `lower<=upper` guard and any upper-bound check, so `ClosedRange(uncheckedBounds:)` can pass an inverted range through validation (`Limits.swift:145-148`) — every subsequent `.contains` then returns false, silently breaking the row/thumbnail policies; (b) no `maximumRepresentationBytes <= maximumProposedRevisionBytes` cross-check (`Limits.swift:150-154`), admitting an internally-unsatisfiable profile; (c) the entire rejection contract — including all of (a)/(b) — is exercised by ZERO tests (`limits-failable-init-rejection-paths-untested`). A regression that inverts or drops any guard would pass the current suite. Runtime is self-correcting on (b) (`.byteLimit` failure) and `.standard` is unaffected by any of these, so severity is Minor, not Major.
+- **`HistoryLimits.init?` is the module's primary safety claim.** At baseline it
+  accepted preconstructed ranges, so invalid ordering trapped before failable
+  validation; the audit's claim that `uncheckedBounds` avoided that trap was
+  later disproved by run 31449140919. It also lacked the representation ≤
+  proposed-revision relation, and no rejection branch had direct tests. The
+  endpoint-based package initializer and parameterized suite now own all three
+  gaps; supported rerun proof remains.
 - **`ContentVersion.init(rawValue:)` accepts 0** (which `06 §7.4` treats as corrupt decode) — but the only minting path (`decodeContentVersion`) guards `rawValue>=1` first, so the claimed exploit path does not exist. Defense-in-depth nit only.
 - **Identity determinism** rests on `HistoryItemID.<`/`RevisionID.<` byte ordering, never directly asserted by tests; `<` is the final tie-break behind `lastCopiedAt` equality (rare), and the cited regression vector (uuidString vs raw byte) is a no-op for UUIDs, so real but small.
 
@@ -135,7 +153,11 @@ HistoryCore holds no secrets and does no I/O; "security" here reduces to **admis
 
 ## 9. Notable REFUTED (plausible concerns that are actually correct — for provenance)
 
-- **"A literal `5...1` traps so `init?` cannot return nil, therefore the doc lies."** Refuted correctly — a literal inverted `ClosedRange` is unconstructible (traps at `...`), so there is no reachable input for which `init?` *should* return nil but traps. BUT the refutation over-reached: the genuine residual survives as `limits-pageRow-thumbnail-range-silent-malformed` — `ClosedRange(uncheckedBounds:)` does NOT trap and can pass an inverted `pageRowLimitRange`/`thumbnailDimensionRange` through validation. Carried forward, reframed, Minor.
+- **"A literal `5...1` traps so `init?` cannot return nil."** Confirmed, not
+  refuted: run 31449140919 additionally proved inverted `uncheckedBounds`
+  traps on Xcode 26.6. The resolution is the finding's endpoint-based
+  initializer recommendation, which lets invalid ordering reach `init?` and
+  return `nil` without constructing a range first.
 - **"`identity-uuid-ordering` is a behavioral regression risk."** Refuted as severity: comparing `uuidString` characters instead of raw bytes is a **no-op for UUIDs** — lexicographic `uuidString` order is provably identical to raw-byte lexicographic order (hyphens at fixed positions; ASCII hex nibble order maps isomorphically to byte order). The test gap is real (`HistoryItemID.<` IS live and never directly asserted) but the function is four lines of trivially-correct code on a rare tie-break path → Nit.
 - **"`observe()` untyped `Error` is a Swift-concurrency limitation."** Refuted: `AsyncThrowingStream` is generic over its `Failure` type, so `AsyncThrowingStream<HistoryPage, HistoryFailure>` is legal Swift. The untyped `Error` is a deliberate spec choice (`03a §3`). Reclassified code defect → documentation nit.
 - **"The resident DTO is ~256 MiB."** Headline corrected: when `activeRevisionID==nil`, `effectiveContent` returns `canonical.representations.map(\\.content)` and `details()` wraps `representation.content.bytes` directly, so canonical and effective share `Data` buffers via COW → resident ~128 MiB. With an active revision, canonical(≤128)+effective(≤64) = ~192 MiB. The ~384 MiB figure is a **transient decode peak** (item holds canonical + all revisions simultaneously during hydrate), not the resident DTO. This COW sharing is **load-bearing but UNCONTRACTED** — see §10.
