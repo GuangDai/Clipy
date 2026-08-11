@@ -294,11 +294,35 @@ Correctness gates run first. Performance claims are accepted only from a release
 
 The manual performance-admission lane is dispatch-only and never runs on a
 push or pull request. It waits for source gates and SwiftPM correctness tests,
-then prepares one persistent 5,000-row corpus whose rows each carry a bounded
-256 KiB search projection. Its versioned fixtures record machine/toolchain
-metadata, all 101 raw samples, and nearest-rank p50/p95/p99; macOS
-`/usr/bin/time -l` records process peak RSS. Corpus preparation is one setup
-wall-time observation and is never labeled as a percentile.
+then runs a fixed 1,000 × 256 KiB preparation smoke before preparing one
+persistent 5,000-row corpus with the same per-row bound. The smoke crosses the
+750-to-1,000-row interval in which supported diagnostic run 31498144173 began
+emitting missing `.externalStorage` interim-file errors; a
+five-minute timeout is a liveness guard, not a product latency budget. Both
+preparations fail on any such CoreData diagnostic.
+
+Preparation uses a package-only, Authority-owned bounded seeder rather than
+replaying 5,000 public captures. Raw values still traverse the production
+ingest preparation, fingerprint, projection, and codecs. The Authority commits
+at most 64 new rows per transaction through the real encoded-row mapping,
+create mutations, Signature Index delta, invalidation, and position tail. An
+empty-store proof, batch-local ID set, expected position, and complete ready
+index replace per-batch full counts and per-row ID queries on this trusted
+disposable-fixture path; ordinary capture retains both checks. Thus setup performs 79
+seed transactions for 4,999 rows instead of 5,000 transactions plus a complete
+retained-inventory load per row; transient setup space is bounded by one batch.
+It then performs two ordinary public captures: row zero must coalesce (forcing
+seeded-index candidate hydration of external Canonical bytes), and the final
+distinct row must insert, leaving exactly 5,000 rows. `ChangePosition` advances
+once per physical non-empty batch or public commit; readers capture its
+authoritative value and require it to remain stable instead of equating it with
+row count.
+
+The versioned fixtures record setup phase wall times/transaction counts,
+machine/toolchain metadata, all 101 raw measurement samples, and nearest-rank
+p50/p95/p99; macOS `/usr/bin/time -l` records process peak RSS. Corpus
+preparation is one setup wall-time observation and is never labeled as a
+percentile.
 
 That lane has three deliberately different evidence units:
 

@@ -500,4 +500,17 @@ exclusions remain documented in the workflow history below.
   structural ceiling rather than complete G8 evidence, and the GitHub runner
   is not an approved minimum-hardware profile for G5. Supported compile/run
   artifacts remain before the canonical evidence finding can leave
-  `in-progress`.
+  `in-progress`. Diagnostic run
+  [31498144173](https://github.com/GuangDai/Clipy/actions/runs/31498144173)
+  passed every ordinary job but exposed the setup defect: the public-capture
+  loop reached only 1,500/5,000 rows and logged 599 CoreData failures cloning
+  missing `.externalStorage` `.interim` files (the first failures appeared
+  after the 750-row marker and before the 1,000-row marker). The pre-proof
+  replacement seeds 4,999 rows through Authority-owned fixed 64-row create
+  batches (79 transactions), then
+  requires one public coalesce and one public insert before measurement. A
+  fixed 1,000 × 256 KiB smoke crosses the reproduced failure boundary and
+  scans for the exact diagnostic before the full corpus runs. This changes
+  disposable setup from cumulative O(N²) retained-inventory work and 5,000
+  transactions to O(total bounded bytes + indexed creates) and O(N/64)
+  transactions, with O(64 × bounded-row-bytes) transient setup space.

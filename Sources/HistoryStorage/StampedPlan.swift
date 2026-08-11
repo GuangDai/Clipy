@@ -84,6 +84,17 @@ internal struct StoredNewItem: Sendable {
     internal let occurrence: CopyOccurrence
 }
 
+/// The encoded row payload and its still-typed Signature Index entries.
+///
+/// Keeping these values together gives ordinary capture stamping and the
+/// package-only performance-fixture seeder one encoding implementation. The
+/// fixture path may batch physical writes, but it must not invent a second
+/// Canonical/signature/projection wire format.
+internal struct EncodedNewItem: Sendable {
+    internal let stored: StoredNewItem
+    internal let signatureEntries: [ContentSignatureEntry]
+}
+
 /// The complete stamped payload of an `.appendRevision` mutation.
 /// docs/05-authority-kernel.md §9
 ///
@@ -293,22 +304,14 @@ internal enum CommitPlanStamper {
                 guard case .capture(let projection, _) = inputs else {
                     throw StampingRejection.missingStampingInputs
                 }
-                let entries = signatureEntries(of: item.canonical)
-                mutations.append(.create(StoredNewItem(
+                let encoded = try encodeNewItem(
                     id: item.id,
-                    contentVersion: .initial,
-                    canonicalBlob: try CanonicalBlobCodec.encode(item.canonical),
-                    revisionStateBlob: try RevisionStateBlobCodec.encode(
-                        revisions: [],
-                        activeRevisionID: nil
-                    ),
-                    canonicalSignatureBlob: try SignatureBlobCodec.encode(entries),
+                    canonical: item.canonical,
                     projection: projection,
-                    effectiveTypeIdentifiersBlob: try EffectiveTypeIdentifiersBlobCodec
-                        .encode(projection.effectiveTypeIdentifiers),
                     occurrence: item.occurrence
-                )))
-                additions[item.id] = entries
+                )
+                mutations.append(.create(encoded.stored))
+                additions[item.id] = encoded.signatureEntries
 
             case .recordCopy(let itemID, let occurrence):
                 mutations.append(.updateOccurrence(
@@ -381,6 +384,36 @@ internal enum CommitPlanStamper {
                 revisedNextVersion: revisedNextVersion
             ),
             indexDelta: SignatureIndexDelta(additions: additions, removals: removals)
+        )
+    }
+
+    /// Encodes one validated Canonical-state item exactly as capture stamping
+    /// does. The result intentionally retains typed signature entries beside
+    /// their durable blob so an Authority-owned batch can update its in-memory
+    /// Signature Index without decoding the bytes it just encoded.
+    internal static func encodeNewItem(
+        id: HistoryItemID,
+        canonical: CanonicalContent,
+        projection: ContentProjection,
+        occurrence: CopyOccurrence
+    ) throws -> EncodedNewItem {
+        let entries = signatureEntries(of: canonical)
+        return EncodedNewItem(
+            stored: StoredNewItem(
+                id: id,
+                contentVersion: .initial,
+                canonicalBlob: try CanonicalBlobCodec.encode(canonical),
+                revisionStateBlob: try RevisionStateBlobCodec.encode(
+                    revisions: [],
+                    activeRevisionID: nil
+                ),
+                canonicalSignatureBlob: try SignatureBlobCodec.encode(entries),
+                projection: projection,
+                effectiveTypeIdentifiersBlob: try EffectiveTypeIdentifiersBlobCodec
+                    .encode(projection.effectiveTypeIdentifiers),
+                occurrence: occurrence
+            ),
+            signatureEntries: entries
         )
     }
 

@@ -48,6 +48,49 @@ struct HistoryPerfRunnerHelperTests {
         #expect(sampled?.p99Ms == 42)
     }
 
+    @Test func admissionProfilesFreezeFullAndFailureReproductionShapes() {
+        #expect(AdmissionProfile.full == AdmissionProfile(
+            retainedRows: 5_000,
+            searchBodyBytes: 256 * 1_024,
+            sampleCount: 101,
+            warmupCount: 1,
+            pageLimit: 50
+        ))
+        #expect(AdmissionProfile.prepareSmoke == AdmissionProfile(
+            retainedRows: 1_000,
+            searchBodyBytes: 256 * 1_024,
+            sampleCount: 0,
+            warmupCount: 0,
+            pageLimit: 50
+        ))
+        #expect(AdmissionMode.prepare.profile == .full)
+        #expect(AdmissionMode.prepareSmoke.profile == .prepareSmoke)
+        #expect(AdmissionMode.prepare.createsStore)
+        #expect(AdmissionMode.prepareSmoke.createsStore)
+        #expect(!AdmissionMode.browseTies.createsStore)
+    }
+
+    @Test func admissionCaptureUsesProfileBoundAndUniqueEdgeMarkers() throws {
+        let profile = AdmissionProfile(
+            retainedRows: 2,
+            searchBodyBytes: 128,
+            sampleCount: 0,
+            warmupCount: 0,
+            pageLimit: 1
+        )
+        let first = admissionCapture(index: 7, profile: profile)
+        let second = admissionCapture(index: 8, profile: profile)
+        let firstBytes = try #require(first.representations.first?.bytes)
+        let secondBytes = try #require(second.representations.first?.bytes)
+
+        #expect(firstBytes.count == 128)
+        #expect(secondBytes.count == 128)
+        #expect(firstBytes != secondBytes)
+        #expect(firstBytes.starts(with: Data("admission-row-7-".utf8)))
+        let expectedSuffix = Data("-tail-7".utf8)
+        #expect(Data(firstBytes.suffix(expectedSuffix.count)) == expectedSuffix)
+    }
+
     @Test func pngCRC32MatchesPublishedCheckAndIHDRVectors() {
         // CRC-32/ISO-HDLC's published ASCII check vector.
         #expect(pngCRC32(Data("123456789".utf8)) == 0xCBF4_3926)

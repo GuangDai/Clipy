@@ -368,8 +368,10 @@ jobs:
         run: |
           set -euo pipefail
           store_url="$RUNNER_TEMP/clipy-performance-admission/store.sqlite"
-          mkdir -p "$LOG_DIR" "$(dirname "$store_url")"
+          smoke_store_url="$RUNNER_TEMP/clipy-performance-admission-smoke/store.sqlite"
+          mkdir -p "$LOG_DIR" "$(dirname "$store_url")" "$(dirname "$smoke_store_url")"
           echo "STORE_URL=$store_url" >> "$GITHUB_ENV"
+          echo "SMOKE_STORE_URL=$smoke_store_url" >> "$GITHUB_ENV"
 
       - name: Enforce supported runner and record diagnostics
         shell: bash
@@ -413,10 +415,48 @@ jobs:
             exit 1
           fi
 
+      - name: Prepare 1,000 × 256 KiB persistent smoke corpus
+        id: prepare_smoke
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -o pipefail
+          /usr/bin/time -l -o "$LOG_DIR/prepare-smoke.time" \
+            "$ADMISSION_BIN" --admission prepare-smoke \
+            "$SMOKE_STORE_URL" "$LOG_DIR/prepare-smoke.json" \
+            2>&1 | tee "$LOG_DIR/prepare-smoke.log"
+
+      - name: Require clean bounded prepare smoke
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${{ steps.prepare_smoke.outcome }}" == success ]]
+          matches=$(grep -Ein \
+            'CoreData: error: Failed to clone external data reference|No such file or directory|(^|[^[:alpha:]])(warning:|error:)([^[:alpha:]]|$)' \
+            "$LOG_DIR/prepare-smoke.log" || true)
+          if [[ -n "$matches" ]]; then
+            echo "$matches"
+            echo "Warnings, errors, or missing external data found in prepare smoke"
+            exit 1
+          fi
+          jq -e '
+            .mode == "prepare-smoke"
+            and .corpusRows == 1000
+            and .bodyBytesPerRow == 262144
+            and .validation.seededRows == "999"
+            and .validation.publicValidationCaptures == "2"
+            and .validation.seedBatchSize == "64"
+            and .validation.seedTransactions == "16"
+            and .validation.seedPosition == "16"
+            and .validation.position == "18"
+          ' "$LOG_DIR/prepare-smoke.json" >/dev/null
+
       - name: Prepare one persistent 5,000 × 256 KiB corpus
         id: prepare
         continue-on-error: true
-        timeout-minutes: 120
+        timeout-minutes: 10
         shell: bash
         run: |
           set -o pipefail
@@ -424,6 +464,32 @@ jobs:
             "$ADMISSION_BIN" --admission prepare \
             "$STORE_URL" "$LOG_DIR/prepare.json" \
             2>&1 | tee "$LOG_DIR/prepare.log"
+
+      - name: Require clean bounded full preparation
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${{ steps.prepare.outcome }}" == success ]]
+          matches=$(grep -Ein \
+            'CoreData: error: Failed to clone external data reference|No such file or directory|(^|[^[:alpha:]])(warning:|error:)([^[:alpha:]]|$)' \
+            "$LOG_DIR/prepare.log" || true)
+          if [[ -n "$matches" ]]; then
+            echo "$matches"
+            echo "Warnings, errors, or missing external data found in full preparation"
+            exit 1
+          fi
+          jq -e '
+            .mode == "prepare"
+            and .corpusRows == 5000
+            and .bodyBytesPerRow == 262144
+            and .validation.seededRows == "4999"
+            and .validation.publicValidationCaptures == "2"
+            and .validation.seedBatchSize == "64"
+            and .validation.seedTransactions == "79"
+            and .validation.seedPosition == "79"
+            and .validation.position == "81"
+          ' "$LOG_DIR/prepare.json" >/dev/null
 
       - name: Measure tie-heavy browse-page latency
         id: browse_ties
@@ -482,7 +548,7 @@ jobs:
             echo
             echo "Raw latency samples and machine metadata are in the JSON artifacts."
             echo
-            for mode in prepare browse-ties exact-search; do
+            for mode in prepare-smoke prepare browse-ties exact-search; do
               time_file="$LOG_DIR/$mode.time"
               if [[ -f "$time_file" ]]; then
                 rss=$(awk '/maximum resident set size/ {print $1}' "$time_file")
@@ -538,6 +604,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          [[ "${{ steps.prepare_smoke.outcome }}" == success ]]
           [[ "${{ steps.prepare.outcome }}" == success ]]
           [[ "${{ steps.browse_ties.outcome }}" == success ]]
           [[ "${{ steps.exact_search.outcome }}" == success ]]

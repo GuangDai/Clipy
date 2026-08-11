@@ -11,19 +11,61 @@ import Foundation
 import HistoryCore
 import HistoryStorage
 
-let admissionRetainedRows = 5_000
-let admissionSearchBodyBytes = 256 * 1_024
-let admissionSampleCount = 101
-let admissionWarmupCount = 1
-let admissionPageLimit = 50
+struct AdmissionProfile: Sendable, Equatable {
+    let retainedRows: Int
+    let searchBodyBytes: Int
+    let sampleCount: Int
+    let warmupCount: Int
+    let pageLimit: Int
+
+    static let full = AdmissionProfile(
+        retainedRows: 5_000,
+        searchBodyBytes: 256 * 1_024,
+        sampleCount: 101,
+        warmupCount: 1,
+        pageLimit: 50
+    )
+
+    /// Crosses the exact platform failure interval observed after the 750-row
+    /// marker and before 1,000, with identical per-row storage pressure.
+    static let prepareSmoke = AdmissionProfile(
+        retainedRows: 1_000,
+        searchBodyBytes: 256 * 1_024,
+        sampleCount: 0,
+        warmupCount: 0,
+        pageLimit: 50
+    )
+}
+
+let admissionProfile = AdmissionProfile.full
+let admissionRetainedRows = admissionProfile.retainedRows
+let admissionSearchBodyBytes = admissionProfile.searchBodyBytes
+let admissionSampleCount = admissionProfile.sampleCount
+let admissionWarmupCount = admissionProfile.warmupCount
+let admissionPageLimit = admissionProfile.pageLimit
 
 enum AdmissionMode: String, Sendable, Equatable {
     case prepare
+    case prepareSmoke = "prepare-smoke"
     case browseTies = "browse-ties"
     case exactSearch = "exact-search"
     case openOnce = "open-once"
     case openOnceAndValidate = "open-once-and-validate"
     case warmOpen = "warm-open"
+
+    var createsStore: Bool {
+        switch self {
+        case .prepare, .prepareSmoke:
+            return true
+        case .browseTies, .exactSearch, .openOnce,
+             .openOnceAndValidate, .warmOpen:
+            return false
+        }
+    }
+
+    var profile: AdmissionProfile {
+        self == .prepareSmoke ? .prepareSmoke : .full
+    }
 }
 
 enum AdmissionError: Error, Sendable {
@@ -150,15 +192,18 @@ private func admissionDate() -> String {
     return formatter.string(from: Date())
 }
 
-private func admissionCapture(index: Int) -> ClipboardCapture {
+func admissionCapture(
+    index: Int,
+    profile: AdmissionProfile = .full
+) -> ClipboardCapture {
     let prefix = Data("admission-row-\(index)-".utf8)
     let suffix = Data("-tail-\(index)".utf8)
-    precondition(prefix.count + suffix.count <= admissionSearchBodyBytes)
+    precondition(prefix.count + suffix.count <= profile.searchBodyBytes)
 
     // ASCII bytes are valid UTF-8 and make the durable search projection hit
     // its full 256 KiB bound. Build one row at a time so fixture preparation
     // retains O(bodyBytes), not O(rows × bodyBytes), in user-invisible setup.
-    var body = Data(repeating: 0x78, count: admissionSearchBodyBytes)
+    var body = Data(repeating: 0x78, count: profile.searchBodyBytes)
     body.replaceSubrange(0..<prefix.count, with: prefix)
     body.replaceSubrange(
         (body.count - suffix.count)..<body.count,
@@ -181,6 +226,7 @@ private func admissionCapture(index: Int) -> ClipboardCapture {
 
 private func makeAdmissionFixture(
     mode: AdmissionMode,
+    profile: AdmissionProfile = .full,
     sampleUnit: String,
     samples: [Double],
     setupWallTimeMs: Double? = nil,
@@ -201,9 +247,9 @@ private func makeAdmissionFixture(
             arguments: ["swift", "--version"]
         ),
         date: admissionDate(),
-        corpusRows: admissionRetainedRows,
-        bodyBytesPerRow: admissionSearchBodyBytes,
-        warmupCount: mode == .prepare ? 0 : admissionWarmupCount,
+        corpusRows: profile.retainedRows,
+        bodyBytesPerRow: profile.searchBodyBytes,
+        warmupCount: mode.createsStore ? 0 : profile.warmupCount,
         setupWallTimeMs: setupWallTimeMs,
         rawSamplesMs: samples,
         percentiles: admissionPercentilesIfSampled(samples),
@@ -228,7 +274,9 @@ private func writeAdmissionFixture(
 
 private func prepareAdmissionStore(
     storeURL: URL,
-    outputPath: String
+    outputPath: String,
+    mode: AdmissionMode,
+    profile: AdmissionProfile
 ) async throws {
     guard !FileManager.default.fileExists(atPath: storeURL.path) else {
         throw AdmissionError.storeAlreadyExists
@@ -237,41 +285,98 @@ private func prepareAdmissionStore(
     let start = clock.now
     let history = try await openStore(
         url: storeURL,
-        maxUnpinned: admissionRetainedRows
+        maxUnpinned: profile.retainedRows
     )
-    for index in 0..<admissionRetainedRows {
-        _ = try await capturePreparedItem(
-            history,
-            capture: admissionCapture(index: index)
-        )
-        if (index + 1).isMultiple(of: 250) {
-            print("  prepared \(index + 1)/\(admissionRetainedRows) rows")
+
+    // Seed all but the final distinct item in bounded physical batches. Two
+    // real public captures then prove the seeded candidate index can hydrate
+    // and coalesce external Canonical bytes at high N, and that an ordinary
+    // distinct insert reaches the exact requested retained count.
+    let seededRows = profile.retainedRows - 1
+    let seedStart = clock.now
+    let seedReceipt = try await history.seedPerformanceFixture(
+        rowCount: seededRows,
+        makeCapture: { index in
+            admissionCapture(index: index, profile: profile)
+        },
+        progress: { count in
+            if count.isMultiple(of: 256) || count == seededRows {
+                print("  batch-seeded \(count)/\(seededRows) rows")
+            }
         }
+    )
+    let seedWallTimeMs = durationToMs(seedStart.duration(to: clock.now))
+    let expectedSeedTransactions = (
+        seededRows + seedReceipt.batchSize - 1
+    ) / seedReceipt.batchSize
+    guard seedReceipt.retainedRows == seededRows,
+          seedReceipt.transactionCount == expectedSeedTransactions,
+          seedReceipt.position.rawValue == UInt64(seedReceipt.transactionCount)
+    else {
+        throw AdmissionError.unexpectedPage
+    }
+
+    let coalesceStart = clock.now
+    let coalesceReceipt = try await history.perform(.capture(
+        admissionCapture(index: 0, profile: profile)
+    ))
+    let coalesceWallTimeMs = durationToMs(
+        coalesceStart.duration(to: clock.now)
+    )
+    guard case .committed(let coalesceCommit) = coalesceReceipt,
+          case .coalesced = coalesceCommit.outcome
+    else {
+        throw AdmissionError.unexpectedPage
+    }
+
+    let insertStart = clock.now
+    let insertReceipt = try await history.perform(.capture(
+        admissionCapture(index: profile.retainedRows - 1, profile: profile)
+    ))
+    let insertWallTimeMs = durationToMs(insertStart.duration(to: clock.now))
+    guard case .committed(let insertCommit) = insertReceipt,
+          case .inserted = insertCommit.outcome
+    else {
+        throw AdmissionError.unexpectedPage
     }
     let elapsed = durationToMs(start.duration(to: clock.now))
 
     let page = try await history.browse(
-        HistoryBrowseRequest(kind: .recent, limit: admissionPageLimit)
+        HistoryBrowseRequest(kind: .recent, limit: profile.pageLimit)
     )
-    guard page.position.rawValue == UInt64(admissionRetainedRows) else {
+    guard seedReceipt.position.successor() == coalesceCommit.position,
+          page.position == insertCommit.position,
+          coalesceCommit.position.successor() == insertCommit.position
+    else {
         throw AdmissionError.unexpectedPosition
     }
-    guard page.rows.count == admissionPageLimit else {
+    guard page.rows.count == profile.pageLimit else {
         throw AdmissionError.unexpectedPage
     }
 
     let fixture = makeAdmissionFixture(
-        mode: .prepare,
+        mode: mode,
+        profile: profile,
         sampleUnit: "persistent-corpus-setup",
         samples: [],
         setupWallTimeMs: elapsed,
         validation: [
             "firstPageRows": String(page.rows.count),
+            "publicCoalesceWallTimeMs": String(coalesceWallTimeMs),
+            "publicInsertWallTimeMs": String(insertWallTimeMs),
             "position": String(page.position.rawValue),
+            "publicValidationCaptures": "2",
+            "seedBatchSize": String(seedReceipt.batchSize),
+            "seedPosition": String(seedReceipt.position.rawValue),
+            "seedTransactions": String(seedReceipt.transactionCount),
+            "seedWallTimeMs": String(seedWallTimeMs),
+            "seededRows": String(seedReceipt.retainedRows),
         ],
         notes: [
             "Setup is one wall-time observation, never a percentile sample.",
-            "All rows share one timestamp and carry a full-bound 256 KiB search body.",
+            "All rows share one timestamp and carry the profile's full-bound search body.",
+            "Bounded fixture batches use production preparation/codecs and the sole writer.",
+            "A public coalesce and distinct insert validate the seeded index before reads.",
             "Pair this JSON with the workflow's prepare.time peak-RSS record.",
         ]
     )
@@ -281,11 +386,12 @@ private func prepareAdmissionStore(
 private func traverseAdmissionRecent(
     _ history: SwiftDataHistory,
     validateUniqueIDs: Bool
-) async throws -> (rows: Int, pages: Int) {
+) async throws -> (rows: Int, pages: Int, position: ChangePosition) {
     var cursor: HistoryPageCursor?
     var rowCount = 0
     var pageCount = 0
     var uniqueIDs: Set<HistoryItemID> = []
+    var authoritativePosition: ChangePosition?
 
     repeat {
         let page = try await history.browse(HistoryBrowseRequest(
@@ -293,8 +399,15 @@ private func traverseAdmissionRecent(
             limit: admissionPageLimit,
             after: cursor
         ))
-        guard page.position.rawValue == UInt64(admissionRetainedRows) else {
-            throw AdmissionError.unexpectedPosition
+        if let authoritativePosition {
+            guard page.position == authoritativePosition else {
+                throw AdmissionError.unexpectedPosition
+            }
+        } else {
+            guard page.position.rawValue > 0 else {
+                throw AdmissionError.unexpectedPosition
+            }
+            authoritativePosition = page.position
         }
         guard !page.rows.isEmpty else {
             throw AdmissionError.unexpectedPage
@@ -314,13 +427,14 @@ private func traverseAdmissionRecent(
         }
     } while cursor != nil
 
-    guard rowCount == admissionRetainedRows,
+    guard let authoritativePosition,
+          rowCount == admissionRetainedRows,
           pageCount == admissionRetainedRows / admissionPageLimit,
           !validateUniqueIDs || uniqueIDs.count == admissionRetainedRows
     else {
         throw AdmissionError.unexpectedPage
     }
-    return (rowCount, pageCount)
+    return (rowCount, pageCount, authoritativePosition)
 }
 
 private func measureAdmissionBrowseTies(
@@ -345,7 +459,7 @@ private func measureAdmissionBrowseTies(
             limit: admissionPageLimit,
             after: cursor
         ))
-        guard page.position.rawValue == UInt64(admissionRetainedRows),
+        guard page.position == validation.position,
               page.rows.count == admissionPageLimit
         else {
             throw AdmissionError.unexpectedPage
@@ -376,6 +490,7 @@ private func measureAdmissionBrowseTies(
         validation: [
             "fallbackBoundarySamples": String(sampledFallbackBoundaries),
             "pagesPerTraversal": String(validation.pages),
+            "position": String(validation.position.rawValue),
             "rowsPerTraversal": String(validation.rows),
             "sampledContinuationPages": String(sampledContinuationPages),
             "sampledPages": String(samples.count),
@@ -405,7 +520,7 @@ private func measureAdmissionExactSearch(
         limit: admissionPageLimit
     )
     let validationPage = try await history.browse(request)
-    guard validationPage.position.rawValue == UInt64(admissionRetainedRows),
+    guard validationPage.position.rawValue > 0,
           validationPage.rows.isEmpty,
           validationPage.next == nil
     else {
@@ -414,7 +529,10 @@ private func measureAdmissionExactSearch(
 
     let samples = try await measureAdmissionSamples {
         let page = try await history.browse(request)
-        guard page.rows.isEmpty, page.next == nil else {
+        guard page.position == validationPage.position,
+              page.rows.isEmpty,
+              page.next == nil
+        else {
             throw AdmissionError.unexpectedPage
         }
     }
@@ -451,7 +569,7 @@ private func measureAdmissionOpenOnce(
     // The one untimed warmup process validates the corpus after measuring its
     // discarded open. Timed processes do no post-open read before exit, so
     // their latency and RSS remain attributable to the open construct.
-    let validation: (rows: Int, pages: Int)?
+    let validation: (rows: Int, pages: Int, position: ChangePosition)?
     if validateCorpus {
         validation = try await traverseAdmissionRecent(
             history,
@@ -552,7 +670,7 @@ func runAdmission(arguments: [String]) async -> Int {
 
     do {
         let storeURL = URL(fileURLWithPath: arguments[1])
-        if mode != .prepare,
+        if !mode.createsStore,
            !FileManager.default.fileExists(atPath: storeURL.path) {
             throw AdmissionError.storeMissing
         }
@@ -561,7 +679,16 @@ func runAdmission(arguments: [String]) async -> Int {
         case .prepare:
             try await prepareAdmissionStore(
                 storeURL: storeURL,
-                outputPath: arguments[2]
+                outputPath: arguments[2],
+                mode: mode,
+                profile: mode.profile
+            )
+        case .prepareSmoke:
+            try await prepareAdmissionStore(
+                storeURL: storeURL,
+                outputPath: arguments[2],
+                mode: mode,
+                profile: mode.profile
             )
         case .browseTies:
             try await measureAdmissionBrowseTies(

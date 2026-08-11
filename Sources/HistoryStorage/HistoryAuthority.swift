@@ -73,6 +73,16 @@ private enum TransactionApplyRejection: Error {
     case finalPinOrderViolated
 }
 
+/// How a `.create` mutation proves its business ID is absent before insert.
+/// Public behavior always performs the bounded durable lookup required by
+/// Part V §10. The package-only disposable-fixture path may reuse the
+/// Authority's already-complete ready Signature Index after additionally
+/// proving its whole plan contains creates and matching additions only.
+private enum CreateExistenceProof: Sendable {
+    case durableLookup
+    case readySignatureIndex
+}
+
 // MARK: - Roadmap-owned deterministic-test seams (docs/roadmap/03-historystorage.md step 5)
 
 /// Named suspension points of `HistoryAuthority` for the deterministic
@@ -414,6 +424,156 @@ internal actor HistoryAuthority {
         }
     }
 
+    // MARK: Package performance-fixture seeding
+
+    /// Proves the package-only performance seeder starts from a new empty
+    /// store and that its requested final row count fits both durable
+    /// retention policy and the hard bound. This read-only operation exists
+    /// solely to fail before a partial fixture is written.
+    internal func beginPerformanceFixtureSeed(
+        finalRetainedCount: Int
+    ) async throws -> ChangePosition {
+        try autoreleasepool {
+            let context = ModelContext(container)
+            context.autosaveEnabled = false
+            let positionRow = try Self.fetchExactlyOnePositionRow(in: context)
+            let (position, retention) = try Self.decodePositionRow(
+                positionRow,
+                limits: limits
+            )
+            let retainedCount: Int
+            do {
+                retainedCount = try context.fetchCount(
+                    FetchDescriptor<HistoryItemRow>()
+                )
+            } catch {
+                throw HistoryFailure.persistence(.openStore)
+            }
+
+            guard retainedCount == 0,
+                  position.rawValue == 0,
+                  signatureIndex.state == .ready,
+                  signatureIndex.itemCount == 0
+            else {
+                throw PerformanceFixtureSeedError.storeNotEmpty
+            }
+            guard finalRetainedCount <= retention.maximumUnpinnedItems,
+                  finalRetainedCount <= limits.hardMaximumRetainedItems
+            else {
+                throw PerformanceFixtureSeedError.capacityExceeded
+            }
+            return position
+        }
+    }
+
+    /// Commits one bounded fixture batch through the same stamped mutation,
+    /// transaction, Signature Index, invalidation, and position tail as an
+    /// ordinary History Commit. Each batch is one non-empty commit and thus
+    /// advances Change Position exactly once, regardless of row count.
+    internal func commitPerformanceFixtureSeedBatch(
+        _ preparedItems: [PreparedCaptureBundle],
+        expectedPreviousPosition: ChangePosition,
+        expectedRetainedCount: Int
+    ) async throws -> ChangePosition {
+        try autoreleasepool {
+            guard !preparedItems.isEmpty,
+                  preparedItems.count <= SwiftDataHistory.performanceFixtureSeedBatchSize
+            else {
+                throw PerformanceFixtureSeedError.invalidRowCount
+            }
+            let (nextRetainedCount, retainedOverflow) = expectedRetainedCount
+                .addingReportingOverflow(preparedItems.count)
+            guard !retainedOverflow else {
+                throw PerformanceFixtureSeedError.capacityExceeded
+            }
+
+            var seenIDs = Set<HistoryItemID>(minimumCapacity: preparedItems.count)
+            var additions: [HistoryItemID: [ContentSignatureEntry]] = [:]
+            additions.reserveCapacity(preparedItems.count)
+            var mutations: [StampedMutation] = []
+            mutations.reserveCapacity(preparedItems.count)
+            for prepared in preparedItems {
+                let capture = prepared.domain
+                guard capture.origin.lineageHint == nil else {
+                    throw PerformanceFixtureSeedError.invalidCaptureShape
+                }
+                let occurrence = CopyOccurrence(
+                    firstCopiedAt: capture.observedAt,
+                    lastCopiedAt: capture.observedAt,
+                    count: 1,
+                    firstSource: capture.origin.sourceApplication,
+                    lastSource: capture.origin.sourceApplication
+                )
+                let encoded: EncodedNewItem
+                do {
+                    encoded = try CommitPlanStamper.encodeNewItem(
+                        id: capture.candidateID,
+                        canonical: capture.canonical,
+                        projection: prepared.projection,
+                        occurrence: occurrence
+                    )
+                } catch let rejection as CodecRejection {
+                    throw rejection.historyFailure
+                }
+                let stored = encoded.stored
+                guard prepared.signatureEntries == encoded.signatureEntries,
+                      seenIDs.insert(stored.id).inserted
+                else {
+                    throw PerformanceFixtureSeedError.stateChanged
+                }
+                additions[stored.id] = encoded.signatureEntries
+                mutations.append(.create(stored))
+            }
+
+            let context = ModelContext(container)
+            context.autosaveEnabled = false
+            let positionRow = try Self.fetchExactlyOnePositionRow(in: context)
+            let (position, retention) = try Self.decodePositionRow(
+                positionRow,
+                limits: limits
+            )
+            guard position == expectedPreviousPosition,
+                  signatureIndex.state == .ready,
+                  signatureIndex.itemCount == expectedRetainedCount
+            else {
+                throw PerformanceFixtureSeedError.stateChanged
+            }
+            guard nextRetainedCount <= retention.maximumUnpinnedItems,
+                  nextRetainedCount <= limits.hardMaximumRetainedItems
+            else {
+                throw PerformanceFixtureSeedError.capacityExceeded
+            }
+            guard let nextPosition = position.successor() else {
+                throw HistoryFailure.capacityExceeded(.coherenceToken)
+            }
+            guard let finalMutation = mutations.last,
+                  case .create(let finalItem) = finalMutation
+            else {
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
+
+            let stamped = StampedCommitPlan(
+                position: nextPosition,
+                mutations: mutations,
+                receiptOutcome: .inserted(HistoryItemReference(
+                    id: finalItem.id,
+                    contentVersion: finalItem.contentVersion
+                )),
+                indexDelta: SignatureIndexDelta(
+                    additions: additions,
+                    removals: []
+                )
+            )
+            _ = try executeStampedPlan(
+                stamped,
+                expectedPreviousPosition: expectedPreviousPosition,
+                in: context,
+                createExistenceProof: .readySignatureIndex
+            )
+            return nextPosition
+        }
+    }
+
     // MARK: Capture commit (docs/05-authority-kernel.md §7.1, §9–§11)
 
     /// Commits one prepared capture: load proven-complete facts, plan
@@ -558,7 +718,8 @@ internal actor HistoryAuthority {
     private func executeStampedPlan(
         _ stamped: StampedCommitPlan,
         expectedPreviousPosition: ChangePosition,
-        in context: ModelContext
+        in context: ModelContext,
+        createExistenceProof: CreateExistenceProof = .durableLookup
     ) throws -> HistoryReceipt {
         // §9: prevalidate the index delta before the transaction so the
         // §11 post-commit dictionary application cannot fail after durable
@@ -570,12 +731,36 @@ internal actor HistoryAuthority {
             throw HistoryFailure.persistence(.invariantViolation)
         }
 
+        // The fixture-only fast path substitutes the complete ready index for
+        // one durable point query per create. Prove the plan is exactly a set
+        // of matching creates/additions before that proof can reach the
+        // transaction executor. The ordinary public path never selects it.
+        if case .readySignatureIndex = createExistenceProof {
+            var createIDs = Set<HistoryItemID>(
+                minimumCapacity: stamped.mutations.count
+            )
+            for mutation in stamped.mutations {
+                guard case .create(let item) = mutation,
+                      createIDs.insert(item.id).inserted
+                else {
+                    throw HistoryFailure.persistence(.invariantViolation)
+                }
+            }
+            guard signatureIndex.state == .ready,
+                  stamped.indexDelta.removals.isEmpty,
+                  createIDs == Set(stamped.indexDelta.additions.keys)
+            else {
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
+        }
+
         // §10: the only durable History Commit primitive. Closure success is
         // the commit boundary — no trailing save, no compensating rollback.
         try executeCommitTransaction(
             stamped,
             expectedPreviousPosition: expectedPreviousPosition,
-            in: context
+            in: context,
+            createExistenceProof: createExistenceProof
         )
 
         // §11 post-commit order, still isolated and without suspension:
@@ -605,9 +790,11 @@ internal actor HistoryAuthority {
     /// `ModelContext.transaction`.
     ///
     /// Rules (§10): no `await` in the closure or between fact load and
-    /// closure completion; the executor fetches rows by business ID (never
-    /// `registeredModel(for:)`); delete fetches the actual row; every
+    /// closure completion; production lookups fetch rows by business ID
+    /// (never `registeredModel(for:)`); delete fetches the actual row; every
     /// referenced row exists exactly once unless the stamped case is create;
+    /// trusted fixture creates may use the equivalent complete-index absence
+    /// proof validated by `executeStampedPlan` above;
     /// closure failure commits nothing — there is no receipt, index delta,
     /// or invalidation; closure success is the save boundary, with no
     /// trailing `save()`/`processPendingChanges()`/`rollback()`.
@@ -619,7 +806,8 @@ internal actor HistoryAuthority {
     private func executeCommitTransaction(
         _ plan: StampedCommitPlan,
         expectedPreviousPosition: ChangePosition,
-        in context: ModelContext
+        in context: ModelContext,
+        createExistenceProof: CreateExistenceProof
     ) throws {
         do {
             try context.transaction {
@@ -633,7 +821,12 @@ internal actor HistoryAuthority {
                     throw StorageInvariant.positionChanged
                 }
                 for mutation in plan.mutations {
-                    try self.apply(mutation, in: context, positionRow: meta)
+                    try self.apply(
+                        mutation,
+                        in: context,
+                        positionRow: meta,
+                        createExistenceProof: createExistenceProof
+                    )
                 }
                 if plan.requiresFinalPinOrderValidation {
                     try self.validateFinalPinOrder(in: context)
@@ -660,8 +853,10 @@ internal actor HistoryAuthority {
     /// docs/05-authority-kernel.md §9 (rename table), §10 (executor rules)
     ///
     /// Every payload is already absolute — the Authority never infers hidden
-    /// behavior from a case (docs/02-domain.md D18). Fetches go through the
-    /// bounded business-ID lookup (§5); a missing referenced row, a
+    /// behavior from a case (docs/02-domain.md D18). Production and
+    /// non-create fetches go through the bounded business-ID lookup (§5);
+    /// the trusted fixture create case arrives with the complete-index proof
+    /// checked by the shared commit tail. A missing referenced row, a
     /// duplicate create ID, or a revision base-version mismatch is
     /// `TransactionApplyRejection`, remapped to `.persistence(.transaction)`
     /// with every other closure failure (§16). Revision IDs are unique by
@@ -671,37 +866,29 @@ internal actor HistoryAuthority {
     private func apply(
         _ mutation: StampedMutation,
         in context: ModelContext,
-        positionRow: LastChangePositionRow
+        positionRow: LastChangePositionRow,
+        createExistenceProof: CreateExistenceProof
     ) throws {
         switch mutation {
         case .create(let item):
-            let existingRow = try HistoryItemRowHydration.fetchRow(
-                businessID: item.id,
-                in: context
-            )
             let duplicateCreateInjected = consumeTransactionFailureInjection(
                 .duplicateCreateID
             )
-            guard existingRow == nil, !duplicateCreateInjected else {
+            if case .durableLookup = createExistenceProof {
+                let existingRow = try HistoryItemRowHydration.fetchRow(
+                    businessID: item.id,
+                    in: context
+                )
+                guard existingRow == nil else {
+                    throw TransactionApplyRejection.duplicateCreateID(
+                        itemID: item.id
+                    )
+                }
+            }
+            guard !duplicateCreateInjected else {
                 throw TransactionApplyRejection.duplicateCreateID(itemID: item.id)
             }
-            context.insert(HistoryItemRow(
-                id: item.id.rawValue,
-                contentVersionRaw: item.contentVersion.rawValue,
-                canonicalBlob: item.canonicalBlob,
-                revisionStateBlob: item.revisionStateBlob,
-                canonicalSignatureBlob: item.canonicalSignatureBlob,
-                projectionSchemaVersion: item.projection.schemaVersion,
-                title: item.projection.title,
-                searchBody: item.projection.searchBody,
-                effectiveTypeIdentifiersBlob: item.effectiveTypeIdentifiersBlob,
-                firstCopiedAt: item.occurrence.firstCopiedAt,
-                lastCopiedAt: item.occurrence.lastCopiedAt,
-                copyCount: item.occurrence.count,
-                firstSource: item.occurrence.firstSource,
-                lastSource: item.occurrence.lastSource,
-                pinOrdinal: nil
-            ))
+            context.insert(Self.makeRow(for: item))
 
         case .updateOccurrence(let itemID, let occurrence):
             // Content Version and projections are preserved by absence from
@@ -749,6 +936,29 @@ internal actor HistoryAuthority {
             // the value was validated when the action entered (§2).
             positionRow.maximumUnpinnedItems = maximumUnpinnedItems
         }
+    }
+
+    /// The single mapping from an encoded create payload to the SwiftData
+    /// model. Both durable-lookup and trusted fixture creates use it, so the
+    /// performance seam cannot drift into a second row representation.
+    private static func makeRow(for item: StoredNewItem) -> HistoryItemRow {
+        HistoryItemRow(
+            id: item.id.rawValue,
+            contentVersionRaw: item.contentVersion.rawValue,
+            canonicalBlob: item.canonicalBlob,
+            revisionStateBlob: item.revisionStateBlob,
+            canonicalSignatureBlob: item.canonicalSignatureBlob,
+            projectionSchemaVersion: item.projection.schemaVersion,
+            title: item.projection.title,
+            searchBody: item.projection.searchBody,
+            effectiveTypeIdentifiersBlob: item.effectiveTypeIdentifiersBlob,
+            firstCopiedAt: item.occurrence.firstCopiedAt,
+            lastCopiedAt: item.occurrence.lastCopiedAt,
+            copyCount: item.occurrence.count,
+            firstSource: item.occurrence.firstSource,
+            lastSource: item.occurrence.lastSource,
+            pinOrdinal: nil
+        )
     }
 
     /// Fetches the unique row a non-create stamped mutation references, or
