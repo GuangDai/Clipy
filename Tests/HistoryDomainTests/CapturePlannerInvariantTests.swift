@@ -197,6 +197,21 @@ private func coalescedWinner(
         existing: sameSignatureDifferentBytes,
         incoming: incoming
     ))
+
+    // Swift String equality is canonically equivalent even when the stable
+    // persisted scalar order differs. The unrelated `f` representation makes
+    // a raw-scalar merge walk miss the later precomposed equivalent.
+    let canonicallyEquivalentIncoming = try captureCanonical([
+        ("e\u{301}", "same", 3),
+    ])
+    let canonicallyEquivalentExisting = try captureCanonical([
+        ("f", "unrelated", 4),
+        ("\u{e9}", "same", 5),
+    ])
+    #expect(canonicalContains(
+        existing: canonicallyEquivalentExisting,
+        incoming: canonicallyEquivalentIncoming
+    ))
 }
 
 @Test func fingerprintCollisionWithoutEqualBytesInsertsInsteadOfCoalescing() throws {

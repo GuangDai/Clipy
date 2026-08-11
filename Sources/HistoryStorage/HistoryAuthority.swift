@@ -399,13 +399,12 @@ internal actor HistoryAuthority {
             }
             signatures[itemID] = entries
         }
-        // §13 step 9 (D12): unique and exactly 0 ..< p — a sorted ordinal
-        // list equals the index range iff the set is contiguous and
-        // duplicate-free.
-        pinnedOrdinals.sort()
-        guard pinnedOrdinals.enumerated().allSatisfy({ offset, ordinal in
-            ordinal == offset
-        }) else {
+        // §13 step 9 (D12): unique and exactly 0 ..< p. Direct slot
+        // placement proves the permutation in O(P), without sorting.
+        guard PinnedOrderValidator.sourceOffsetsByOrdinal(
+            in: pinnedOrdinals,
+            ordinal: { $0 }
+        ) != nil else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
         do {
@@ -807,10 +806,10 @@ internal actor HistoryAuthority {
             // it never manufactures or persists a corrupt `@Model` row.
             ordinals.append(Int.max)
         }
-        ordinals.sort()
-        guard ordinals.enumerated().allSatisfy({ offset, ordinal in
-            ordinal == offset
-        }) else {
+        guard PinnedOrderValidator.sourceOffsetsByOrdinal(
+            in: ordinals,
+            ordinal: { $0 }
+        ) != nil else {
             throw TransactionApplyRejection.finalPinOrderViolated
         }
     }
@@ -2340,6 +2339,21 @@ internal actor HistoryAuthority {
 
 // MARK: - Scalar read row helper (docs/05-authority-kernel.md §14.1)
 
+/// The authoritative unpinned lane key: newest copy first, then the smallest
+/// business ID. It is shared by the exactness fallback's bounded selector and
+/// its continuation-anchor partition.
+private struct UnpinnedOrderKey: Comparable {
+    let lastCopiedAt: Date
+    let id: HistoryItemID
+
+    static func < (lhs: Self, rhs: Self) -> Bool {
+        if lhs.lastCopiedAt != rhs.lastCopiedAt {
+            return lhs.lastCopiedAt > rhs.lastCopiedAt
+        }
+        return lhs.id < rhs.id
+    }
+}
+
 /// One scalar projection row extracted from a fetched `HistoryItemRow`, with
 /// the decoded scalar fields `recentPage` needs to assemble a `HistoryRow` and
 /// mint the continuation anchor. No `@Model` instance escapes the read
@@ -2353,6 +2367,10 @@ private struct ScalarReadRow {
     private let copyCount: UInt64
     private let lastSource: String?
     private let pinOrdinal: PinOrdinal?
+
+    var unpinnedOrderKey: UnpinnedOrderKey {
+        UnpinnedOrderKey(lastCopiedAt: lastCopiedAt, id: id)
+    }
 
     fileprivate init(_ row: HistoryItemRow, limits: HistoryLimits) throws {
         self.id = HistoryItemID(rawValue: row.id)
@@ -2429,6 +2447,70 @@ private struct ScalarReadRow {
             pinnedPosition: pinOrdinal?.rawValue,
             search: nil
         )
+    }
+}
+
+/// Retains only the first `capacity` rows under the authoritative unpinned
+/// order. The heap root is the worst retained row, allowing a better row to
+/// replace it in `O(log L)` time while scratch remains `O(L)`.
+private struct BoundedBestUnpinnedRows {
+    private let capacity: Int
+    private var heap: [ScalarReadRow]
+
+    init(capacity: Int) {
+        self.capacity = capacity
+        heap = []
+        heap.reserveCapacity(capacity)
+    }
+
+    mutating func offer(_ row: ScalarReadRow) {
+        guard capacity > 0 else { return }
+        if heap.count < capacity {
+            heap.append(row)
+            siftUp(from: heap.count - 1)
+        } else if row.unpinnedOrderKey < heap[0].unpinnedOrderKey {
+            heap[0] = row
+            siftDown(from: 0)
+        }
+    }
+
+    var ordered: [ScalarReadRow] {
+        heap.sorted { $0.unpinnedOrderKey < $1.unpinnedOrderKey }
+    }
+
+    private mutating func siftUp(from startIndex: Int) {
+        var childIndex = startIndex
+        while childIndex > 0 {
+            let parentIndex = (childIndex - 1) / 2
+            guard heap[parentIndex].unpinnedOrderKey
+                < heap[childIndex].unpinnedOrderKey else {
+                return
+            }
+            heap.swapAt(parentIndex, childIndex)
+            childIndex = parentIndex
+        }
+    }
+
+    private mutating func siftDown(from startIndex: Int) {
+        var parentIndex = startIndex
+        while true {
+            let leftIndex = parentIndex * 2 + 1
+            guard leftIndex < heap.count else { return }
+
+            let rightIndex = leftIndex + 1
+            var worseChildIndex = leftIndex
+            if rightIndex < heap.count,
+               heap[leftIndex].unpinnedOrderKey
+                < heap[rightIndex].unpinnedOrderKey {
+                worseChildIndex = rightIndex
+            }
+            guard heap[parentIndex].unpinnedOrderKey
+                < heap[worseChildIndex].unpinnedOrderKey else {
+                return
+            }
+            heap.swapAt(parentIndex, worseChildIndex)
+            parentIndex = worseChildIndex
+        }
     }
 }
 
@@ -2541,9 +2623,77 @@ private extension HistoryAuthority {
         if !needsFullFetch {
             return orderedSlice
         }
-        return try source.sorted(by: unpinnedRowPrecedes).map {
-            try ScalarReadRow($0, limits: limits)
+        return try boundedExactUnpinnedRows(
+            source,
+            pageLimit: pageLimit,
+            continuationAnchor: continuationAnchor
+        )
+    }
+
+    /// Exact fallback selection after the date-only store order proved
+    /// insufficient. Every fetched model is converted to `ScalarReadRow`
+    /// before it can be discarded, preserving fail-closed validation of all
+    /// scalar fields. Only the anchor plus page/lookahead rows survive.
+    ///
+    /// SwiftData still materializes the bounded `N`-row fetch, but Swift-side
+    /// work falls from `O(N log N)` sorting plus `O(N)` scalar storage to
+    /// `O(N log L)` selection plus `O(L)` scalar storage for page limit `L`.
+    func boundedExactUnpinnedRows(
+        _ rows: [HistoryItemRow],
+        pageLimit: Int,
+        continuationAnchor: StoredOrderingAnchor?
+    ) throws -> [ScalarReadRow] {
+        let anchorKey: UnpinnedOrderKey?
+        if let continuationAnchor {
+            guard case .defaultOrder(
+                let pinnedOrdinal,
+                let lastCopiedAt,
+                let itemID
+            ) = continuationAnchor,
+            pinnedOrdinal == nil else {
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
+            anchorKey = UnpinnedOrderKey(
+                lastCopiedAt: lastCopiedAt,
+                id: itemID
+            )
+        } else {
+            anchorKey = nil
         }
+
+        // The caller drops the inclusive continuation anchor. Retain one
+        // extra post-anchor row so its existing `merged.count > limit` test
+        // can still prove and mint a next cursor.
+        var selection = BoundedBestUnpinnedRows(capacity: pageLimit + 1)
+        var foundAnchor: ScalarReadRow?
+        for model in rows {
+            let row = try ScalarReadRow(model, limits: limits)
+            guard let anchorKey, let continuationAnchor else {
+                selection.offer(row)
+                continue
+            }
+
+            let rowKey = row.unpinnedOrderKey
+            if rowKey == anchorKey {
+                guard row.matches(continuationAnchor), case nil = foundAnchor else {
+                    throw HistoryFailure.persistence(.invariantViolation)
+                }
+                foundAnchor = row
+            } else if anchorKey < rowKey {
+                // Strictly after the anchor: eligible for page+lookahead.
+                selection.offer(row)
+            }
+            // A row strictly before the anchor was already consumed. It was
+            // still fully scalar-validated above before being discarded.
+        }
+
+        var ordered = selection.ordered
+        if let foundAnchor {
+            ordered.insert(foundAnchor, at: 0)
+        }
+        // If the anchor was absent, leave it absent: the existing caller maps
+        // that frozen-snapshot contradiction to `.snapshotExpired`.
+        return ordered
     }
 
     /// Full unpinned order (03b §8): newest copy first, business ID as the
