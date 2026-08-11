@@ -14,6 +14,7 @@ CapacityKind.copyCount
 CapacityKind.retainedItems
 CapacityKind.revisionBytes
 CapacityKind.revisionCount
+CapacityKind.thumbnailBytes
 CapturedRepresentation
 ChangePosition
 ClearScope
@@ -72,12 +73,14 @@ InvalidInputReason
 InvalidInputReason.byteLimit
 InvalidInputReason.duplicateRepresentationType(_:)
 InvalidInputReason.emptyCapture
+InvalidInputReason.excludedFromHistory
 InvalidInputReason.incoherentRevisionDraft
 InvalidInputReason.invalidPageLimit
 InvalidInputReason.invalidPixelSize
 InvalidInputReason.invalidRegularExpression
 InvalidInputReason.invalidRetentionPolicy
 InvalidInputReason.invalidSearchTerm
+InvalidInputReason.invalidTimestamp
 InvalidInputReason.representationLimit
 InvalidInputReason.unsupportedRepresentationType(_:)
 PastePayload
@@ -151,9 +154,8 @@ init(itemID:expected:intent:)
 init(kind:limit:)
 init(kind:limit:after:)
 init(location:length:)
-init(maximumRepresentationsPerCaptureOrRevision:maximumTypeIdentifierUTF8Bytes:maximumRepresentationBytes:maximumCaptureBytes:maximumProposedRevisionBytes:maximumRevisionsPerItem:maximumTotalRevisionBytesPerItem:hardMaximumRetainedItems:userMaximumUnpinnedRange:defaultMaximumUnpinnedItems:maximumSourceApplicationObservationUTF8Bytes:maximumStoredTitleUTF8Bytes:maximumStoredSearchBodyUTF8Bytes:pageRowLimitRange:maximumSearchTermUTF8Bytes:maximumRegexpPatternCharacters:maximumFuzzyQueryCharacters:maximumFuzzyTitleBodyPrefixCharacters:maximumRegexpTitleBodyPrefixCharacters:maximumBodySearchSnippetCharacters:thumbnailDimensionRange:maximumEncodedThumbnailBytes:)
 init(position:outcome:)
-init(representations:origin:observedAt:)
+init(representations:origin:observedAt:isConcealed:)
 init(snippet:matchedRanges:)
 init(sourceApplication:lineageHint:)
 init(typeIdentifier:action:)
@@ -161,6 +163,7 @@ init(typeIdentifier:bytes:)
 init(width:height:)
 intent
 isActive
+isConcealed
 item
 itemID
 kind
