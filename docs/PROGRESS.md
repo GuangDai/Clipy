@@ -358,8 +358,10 @@ exclusions remain documented in the workflow history below.
   range rejections genuine failable-initializer paths instead of pre-init
   runtime traps.
   `docs/V1-Verified/07-finding-dispositions.md` remains the authoritative
-  222-ID status ledger: 110 fixed, 32 deferred, 31 duplicate, 30 not-a-defect,
-  19 documented, and no active or pending rows.
+  222-ID status ledger. The post-closure overlay below supersedes that run's
+  historical checksum; the current checksum is 111 fixed, 30 deferred, 31
+  duplicate, 30 not-a-defect, 19 documented, 1 in-progress, and no pending
+  rows.
 - **Domain:** 47 direct tests exercise all seven planners across commit/no-op,
   rejection, capacity, deterministic ordering, and complete mutation payloads;
   the suite records the exact D1–D19 ownership split.
@@ -465,8 +467,9 @@ exclusions remain documented in the workflow history below.
 ## Post-closure complexity pass (2026-08-11)
 
 - **Status:** in progress. The canonical 222-row ledger currently has one
-  reopened `in-progress` item; broader measurement-gated work remains
-  explicitly deferred until supported admission evidence exists.
+  `in-progress` performance-evidence item: 111 `fixed`, 30 `deferred`, and no
+  `pending` rows. Broader measurement-gated changes remain deferred until the
+  new supported admission artifacts can answer their exact trigger units.
 - **Pure bounded algorithms:** [`1168d1d`](https://github.com/GuangDai/Clipy/commit/1168d1d)
   starts signature intersection from the smallest posting, validates D12 pin
   permutations in O(P), removes payload hashing from Canonical containment,
@@ -483,4 +486,18 @@ exclusions remain documented in the workflow history below.
   failure; every independent job passed). The implementation now places full
   source hydration inside the exact-key task and gives joiners scalar fences;
   success/`nil`/failure/removal and the WS15 stale-join race are present.
-  Supported green CI remains before the canonical finding becomes `fixed`.
+  Supported run
+  [31494740863](https://github.com/GuangDai/Clipy/actions/runs/31494740863)
+  passed source/lint gates, SwiftPM build/tests, app build/test, and all 13
+  release workloads; `thumbnail-source-full-image-copy` is now `fixed`.
+- **Manual performance admission:** `HistoryPerfRunner` now has pre-proof code
+  for a dispatch-only persistent 5,000 × 256 KiB corpus. It records 101 raw
+  samples plus nearest-rank p50/p95/p99 for individual tie-heavy browse pages
+  and worst-bound absent-term exact searches, with process peak RSS from
+  `/usr/bin/time -l`. Warm-open samples use independently terminated child
+  processes after one full-corpus validation warmup. Setup is a one-shot wall
+  time, never a percentile. The job is record-only; the exact-search RSS is a
+  structural ceiling rather than complete G8 evidence, and the GitHub runner
+  is not an approved minimum-hardware profile for G5. Supported compile/run
+  artifacts remain before the canonical evidence finding can leave
+  `in-progress`.

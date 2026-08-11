@@ -274,11 +274,10 @@ Correctness gates run first. Performance claims are accepted only from a release
   the latter receives its anchor through the inclusive date bound.
   Ambiguous UUID ties use the Part V §14.1 correctness fallback, bounded by the
   5,000-item hard limit. WS18 proves that path's complete, non-overlapping
-  traversal. Supported 5,000-row tie-heavy incidence/cost measurement is
-  explicitly deferred under V1-Verified
-  `unpinned-exactness-guard-full-lane-refetch`; the current normal-case runner
-  envelope neither includes nor proves the fallback cost and must not be cited
-  to close that deferred item.
+  traversal. A separate manual admission workload uses 5,000 same-timestamp
+  rows, validates one complete traversal, and records 101 individual public
+  page calls so its p95 unit matches G2's browse-page budget. The normal-case
+  per-PR runner envelope still neither includes nor proves fallback cost.
 - v1 exact, fuzzy, and regexp search may each scan all bounded scalar search
   projections; no cache is added without G2 evidence. At each 100/400-row
   measurement point the release runner reuses one populated corpus for all
@@ -292,6 +291,32 @@ Correctness gates run first. Performance claims are accepted only from a release
   full joined corpus; revision summaries project only their bounded title.
 - Detail/paste decode one item's bounded lineage.
 - Thumbnail installs one exact-key source-to-decode task, so concurrent identical callers perform one bounded full Authority source fetch and one shared decode; joiners perform scalar dimension/existence/version fences and cannot receive stale bytes. Source-inclusive service tests cover shared success, `nil`, failure, and removal; WS15 proves version semantics and that a failed stale join does not cancel the creator. The release runner's direct-source convenience still prefetches once to isolate decode-sharing timing; it is not an RSS/copy measurement.
+
+The manual performance-admission lane is dispatch-only and never runs on a
+push or pull request. It waits for source gates and SwiftPM correctness tests,
+then prepares one persistent 5,000-row corpus whose rows each carry a bounded
+256 KiB search projection. Its versioned fixtures record machine/toolchain
+metadata, all 101 raw samples, and nearest-rank p50/p95/p99; macOS
+`/usr/bin/time -l` records process peak RSS. Corpus preparation is one setup
+wall-time observation and is never labeled as a percentile.
+
+That lane has three deliberately different evidence units:
+
+- tie-heavy recent browse records one public page call per sample after an
+  untimed complete/unique traversal;
+- absent-term exact search records a worst-bound 5,000 × 256 KiB process
+  high-water ceiling, not representative transient-hydration, concurrent DTO,
+  or copy-cost G8 evidence; and
+- warm persistent open records 101 timed opens in independent child processes
+  after one independently terminated validation/warmup process. OS caches stay
+  warm, and the recorded GitHub host is not yet an approved minimum-hardware
+  profile, so this fixture cannot alone admit G5.
+
+The manual job is record-only until an authoritative workload, hardware
+profile, and budget are approved. Completion is gated; observed latency or RSS
+does not pass or fail a graft by itself. These artifacts also do not prove
+crash-to-stable-storage/fsync behavior, SwiftData external-storage no-fault
+behavior, cold launch, or complete G8 concurrent-call residency.
 
 The runner owns a declarative workload-to-bullet map covering every bullet
 `1...9`. Each run fails if a named workload is missing, duplicated, unknown, or

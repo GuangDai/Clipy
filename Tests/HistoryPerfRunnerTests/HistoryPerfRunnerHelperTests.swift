@@ -28,6 +28,26 @@ struct HistoryPerfRunnerHelperTests {
         #expect(durationToMs(duration) == 2_250.5)
     }
 
+    @Test func nearestRankPercentilesSelectObservedSamples() {
+        let values = (1...101).reversed().map(Double.init)
+        #expect(nearestRankPercentile(values, percentile: 0) == 1)
+        #expect(nearestRankPercentile(values, percentile: 0.50) == 51)
+        #expect(nearestRankPercentile(values, percentile: 0.95) == 96)
+        #expect(nearestRankPercentile(values, percentile: 0.99) == 100)
+        #expect(nearestRankPercentile(values, percentile: 1) == 101)
+
+        let percentiles = admissionPercentiles(values)
+        #expect(percentiles.p50Ms == 51)
+        #expect(percentiles.p95Ms == 96)
+        #expect(percentiles.p99Ms == 100)
+
+        #expect(admissionPercentilesIfSampled([]) == nil)
+        let sampled = admissionPercentilesIfSampled([42])
+        #expect(sampled?.p50Ms == 42)
+        #expect(sampled?.p95Ms == 42)
+        #expect(sampled?.p99Ms == 42)
+    }
+
     @Test func pngCRC32MatchesPublishedCheckAndIHDRVectors() {
         // CRC-32/ISO-HDLC's published ASCII check vector.
         #expect(pngCRC32(Data("123456789".utf8)) == 0xCBF4_3926)

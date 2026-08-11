@@ -1606,7 +1606,15 @@ func runAll() async -> Int {
 @main
 struct PerfRunner {
     static func main() async {
-        let exitCode = await runAll()
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        let exitCode: Int
+        if arguments.first == "--admission" {
+            exitCode = await runAdmission(
+                arguments: Array(arguments.dropFirst())
+            )
+        } else {
+            exitCode = await runAll()
+        }
         exit(Int32(exitCode))
     }
 }

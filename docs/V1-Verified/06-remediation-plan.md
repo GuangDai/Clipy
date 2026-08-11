@@ -17,9 +17,10 @@
 > [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036)
 > closed the supported-runner gate. Independent standards, spec, and
 > compile-risk reviews found no remaining completion exception at that head.
-> The post-closure complexity pass later reopened
-> `thumbnail-source-full-image-copy`; the current 222-row ledger has 110
-> `fixed`, 31 `deferred`, 1 `in-progress`, and no `pending` findings.
+> The post-closure complexity pass fixed source-inclusive thumbnail hydration
+> in supported run 31494740863 and reopened the manual performance-evidence
+> lane. The current 222-row ledger has 111 `fixed`, 30 `deferred`, 1
+> `in-progress`, and no `pending` findings.
 
 ## Status rules
 

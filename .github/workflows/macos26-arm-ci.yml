@@ -343,3 +343,202 @@ jobs:
             ci-logs/perf-*.log
           if-no-files-found: warn
           retention-days: 14
+
+  performance-admission:
+    # Dispatch-only evidence for measurement-gated deferred work. Keeping this
+    # job in the established workflow lets a feature branch run its own version
+    # before merge; a new standalone workflow is not dispatchable until its
+    # workflow file exists on the default branch.
+    if: github.event_name == 'workflow_dispatch'
+    name: 5,000-row p50/p95/p99 + RSS evidence
+    needs: [gates, spm-build-test]
+    runs-on: macos-26
+    timeout-minutes: 300
+    env:
+      NSUnbufferedIO: YES
+      OS_ACTIVITY_MODE: disable
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      LOG_DIR: ${{ github.workspace }}/admission-logs
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Prepare evidence directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          store_url="$RUNNER_TEMP/clipy-performance-admission/store.sqlite"
+          mkdir -p "$LOG_DIR" "$(dirname "$store_url")"
+          echo "STORE_URL=$store_url" >> "$GITHUB_ENV"
+
+      - name: Enforce supported runner and record diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(sw_vers -productVersion)" == 26.* ]]
+          [[ "$(uname -m)" == arm64 ]]
+          {
+            date -u
+            sw_vers
+            uname -m
+            xcodebuild -version
+            xcrun --sdk macosx --show-sdk-version
+            swift --version
+            sysctl -n hw.model
+            sysctl -n machdep.cpu.brand_string
+            sysctl -n hw.memsize
+          } 2>&1 | tee "$LOG_DIR/diagnostics.log"
+
+      - name: Build admission runner (release)
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift build -c release --product HistoryPerfRunner \
+            2>&1 | tee "$LOG_DIR/build.log"
+          swift build -c release --show-bin-path \
+            2>&1 | tee "$LOG_DIR/bin-path.log"
+          ADMISSION_BIN="$(tail -n 1 "$LOG_DIR/bin-path.log")/HistoryPerfRunner"
+          [[ -x "$ADMISSION_BIN" ]]
+          echo "ADMISSION_BIN=$ADMISSION_BIN" >> "$GITHUB_ENV"
+
+      - name: Self-scan build diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          matches=$(grep -Ein '(^|[^[:alpha:]])(warning:|error:)([^[:alpha:]]|$)' \
+            "$LOG_DIR/build.log" "$LOG_DIR/bin-path.log" || true)
+          if [[ -n "$matches" ]]; then
+            echo "$matches"
+            echo "Warnings or errors found in admission build log"
+            exit 1
+          fi
+
+      - name: Prepare one persistent 5,000 × 256 KiB corpus
+        id: prepare
+        continue-on-error: true
+        timeout-minutes: 120
+        shell: bash
+        run: |
+          set -o pipefail
+          /usr/bin/time -l -o "$LOG_DIR/prepare.time" \
+            "$ADMISSION_BIN" --admission prepare \
+            "$STORE_URL" "$LOG_DIR/prepare.json" \
+            2>&1 | tee "$LOG_DIR/prepare.log"
+
+      - name: Measure tie-heavy browse-page latency
+        id: browse_ties
+        continue-on-error: true
+        timeout-minutes: 45
+        shell: bash
+        run: |
+          set -o pipefail
+          /usr/bin/time -l -o "$LOG_DIR/browse-ties.time" \
+            "$ADMISSION_BIN" --admission browse-ties \
+            "$STORE_URL" "$LOG_DIR/browse-ties.json" \
+            2>&1 | tee "$LOG_DIR/browse-ties.log"
+
+      - name: Measure worst-bound exact search
+        id: exact_search
+        continue-on-error: true
+        timeout-minutes: 45
+        shell: bash
+        run: |
+          set -o pipefail
+          /usr/bin/time -l -o "$LOG_DIR/exact-search.time" \
+            "$ADMISSION_BIN" --admission exact-search \
+            "$STORE_URL" "$LOG_DIR/exact-search.json" \
+            2>&1 | tee "$LOG_DIR/exact-search.log"
+
+      - name: Measure independent-process warm persistent open
+        id: warm_open
+        continue-on-error: true
+        timeout-minutes: 45
+        shell: bash
+        run: |
+          set -euo pipefail
+          samples_dir="$LOG_DIR/warm-open-samples"
+          mkdir -p "$samples_dir"
+          {
+            /usr/bin/time -l -o "$samples_dir/warmup.time" \
+              "$ADMISSION_BIN" --admission open-once-and-validate \
+              "$STORE_URL" "$samples_dir/000-warmup.json"
+            for ((index = 1; index <= 101; index++)); do
+              printf -v sample '%03d' "$index"
+              /usr/bin/time -l -o "$samples_dir/$sample.time" \
+                "$ADMISSION_BIN" --admission open-once \
+                "$STORE_URL" "$samples_dir/$sample.json"
+            done
+            "$ADMISSION_BIN" --admission warm-open \
+              "$STORE_URL" "$samples_dir" "$LOG_DIR/warm-open.json"
+          } 2>&1 | tee "$LOG_DIR/warm-open.log"
+
+      - name: Summarize peak RSS evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## Performance admission"
+            echo
+            echo "Raw latency samples and machine metadata are in the JSON artifacts."
+            echo
+            for mode in prepare browse-ties exact-search; do
+              time_file="$LOG_DIR/$mode.time"
+              if [[ -f "$time_file" ]]; then
+                rss=$(awk '/maximum resident set size/ {print $1}' "$time_file")
+                echo "- $mode maximum resident set size: ${rss:-unavailable} bytes"
+              fi
+            done
+            warm_time_files=(
+              "$LOG_DIR"/warm-open-samples/[0-9][0-9][0-9].time
+            )
+            rss=""
+            if [[ -f "${warm_time_files[0]}" ]]; then
+              rss=$(awk '
+                /maximum resident set size/ {
+                  if ($1 > maximum) maximum = $1
+                }
+                END {
+                  if (maximum > 0) print maximum
+                }
+              ' "${warm_time_files[@]}")
+            fi
+            echo "- warm-open maximum child-process resident set size: ${rss:-unavailable} bytes"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Self-scan admission logs
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          matches=$(grep -Ein '(^|[^[:alpha:]])(warning:|error:)([^[:alpha:]]|$)' \
+            "$LOG_DIR"/*.log || true)
+          if [[ -n "$matches" ]]; then
+            echo "$matches"
+            echo "Warnings or errors found in admission logs"
+            exit 1
+          fi
+
+      - name: Upload admission evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: performance-admission-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            admission-logs/*.json
+            admission-logs/*.log
+            admission-logs/*.time
+            admission-logs/warm-open-samples/*.json
+            admission-logs/warm-open-samples/*.time
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Require every admission mode to complete
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${{ steps.prepare.outcome }}" == success ]]
+          [[ "${{ steps.browse_ties.outcome }}" == success ]]
+          [[ "${{ steps.exact_search.outcome }}" == success ]]
+          [[ "${{ steps.warm_open.outcome }}" == success ]]
