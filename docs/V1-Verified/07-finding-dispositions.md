@@ -9,7 +9,9 @@
 > relationships, deferred ownership/triggers, and current remediation status.
 
 Statuses have exactly the meanings defined in `06-remediation-plan.md`.
-The remediation implementation and supported-runner proof are complete.
+The original remediation implementation and supported-runner proof are
+complete. A post-closure complexity pass is now active; any reopened row stays
+`in-progress` until its new regression and supported-runner evidence land.
 Public-symbol workflow
 [31448087991](https://github.com/GuangDai/Clipy/actions/runs/31448087991)
 generated the intended HistoryCore snapshot, and final code-head run
@@ -32,8 +34,8 @@ deferred, duplicate, documented, and not-a-defect dispositions are unchanged.
 | `04-perf-deps-stubs.md` | 1 | 1 | 19 | 14 | 35 |
 | **Total** | **3** | **14** | **112** | **93** | **222** |
 
-Current dispositions: 110 `fixed`, 32 `deferred`, 31 `duplicate`,
-30 `not-a-defect`, 19 `documented`, 0 `in-progress`, and 0 `pending`.
+Current dispositions: 110 `fixed`, 31 `deferred`, 31 `duplicate`,
+30 `not-a-defect`, 19 `documented`, 1 `in-progress`, and 0 `pending`.
 
 ## `01-historycore.md` — HistoryCore (20)
 
@@ -190,7 +192,7 @@ Current dispositions: 110 `fixed`, 32 `deferred`, 31 `duplicate`,
 | `per-candidate-fetch-row-loop-unbatched` | `duplicate` | Canonical target: `candidate-hydration-n-plus-1-queries`. |
 | `capture-time-signature-index-rebuild` | `deferred` | Owner: G5/Signature Index. Trigger: a forced-unready 5,000-row metadata rebuild exceeds 250 ms p95 on the supported runner or is observed frequently in production diagnostics. Residual risk: the rare repair path performs bounded O(N × representations) work before capture planning. |
 | `encode-inside-transaction-misclassified` | `fixed` | **Completed 2026-08-11:** public-symbol workflow [31448087991](https://github.com/GuangDai/Clipy/actions/runs/31448087991) and final code-head CI [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036) are green; the latter passed all source/lint gates, strict-concurrency builds, 314 tests in 41 suites, app build/test, and all 13 release workloads. **Pre-proof implementation record:** Effective-type blobs are now encoded during stamping and carried in immutable stored payloads, so codec failure precedes the transaction; macOS proof remains. |
-| `thumbnail-source-full-image-copy` | `deferred` | Owner: G8/thumbnail read graft. Trigger: a supported persistent-store RSS/copy trace breaches the representative thumbnail budget. Residual risk: concurrent callers may materialize the same bounded source `Data` before the service's decode single-flight seam. |
+| `thumbnail-source-full-image-copy` | `in-progress` | **Pre-proof implementation record:** The exact-key flight now owns source hydration through decode. C overlapping identical requests perform one full lineage/source hydration plus at most C−1 scalar dimension/existence/version fences, rather than C full hydrations. Direct tests cover shared success/`nil`/failure and post-completion removal; WS15 proves a stale join fails without cancelling the creator. This targets the structural concurrency amplification without claiming an absolute RSS budget; supported macOS CI and source-report closure remain. |
 | `scalar-property-list-triplicated` | `fixed` | **Completed 2026-08-11:** public-symbol workflow [31448087991](https://github.com/GuangDai/Clipy/actions/runs/31448087991) and final code-head CI [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036) are green; the latter passed all source/lint gates, strict-concurrency builds, 314 tests in 41 suites, app build/test, and all 13 release workloads. **Pre-proof implementation record:** One helper now owns the common recent/search/exactness-fallback scalar list and search adds only `searchBody`; macOS proof remains. |
 | `commit-tail-duplicated-cluster` | `fixed` | **Completed 2026-08-11:** public-symbol workflow [31448087991](https://github.com/GuangDai/Clipy/actions/runs/31448087991) and final code-head CI [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036) are green; the latter passed all source/lint gates, strict-concurrency builds, 314 tests in 41 suites, app build/test, and all 13 release workloads. **Pre-proof implementation record:** Capture now joins the same validate→transaction→index→publish→receipt tail as all mutations; walking-skeleton ordering proofs await macOS. |
 
@@ -298,7 +300,7 @@ Current dispositions: 110 `fixed`, 32 `deferred`, 31 `duplicate`,
 | `candidate-and-revision-id-not-injected` | `fixed` | **Completed 2026-08-11:** public-symbol workflow [31448087991](https://github.com/GuangDai/Clipy/actions/runs/31448087991) and final code-head CI [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036) are green; the latter passed all source/lint gates, strict-concurrency builds, 314 tests in 41 suites, app build/test, and all 13 release workloads. **Pre-proof implementation record:** Both preparation actors now accept package-only `@Sendable` identity/clock sources with fixed-ID/date tests; production retains UUID/Date defaults and the public seam is unchanged. macOS proof remains. |
 | `signatureindex-unit-test-coverage-thin` | `fixed` | **Completed 2026-08-11:** public-symbol workflow [31448087991](https://github.com/GuangDai/Clipy/actions/runs/31448087991) and final code-head CI [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036) are green; the latter passed all source/lint gates, strict-concurrency builds, 314 tests in 41 suites, app build/test, and all 13 release workloads. **Pre-proof implementation record:** Focused pure-value tests cover lifecycle, malformed build/deltas, fail-closed apply, empty/missing/intersection lookup, and valid map updates; obsolete generation-overflow coverage disappeared with the cargo counter. macOS proof remains. |
 | `signatureindex-validate-apply-duplication` | `fixed` | **Completed 2026-08-11:** public-symbol workflow [31448087991](https://github.com/GuangDai/Clipy/actions/runs/31448087991) and final code-head CI [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036) are green; the latter passed all source/lint gates, strict-concurrency builds, 314 tests in 41 suites, app build/test, and all 13 release workloads. **Pre-proof implementation record:** `validate` and spec-mandated post-commit revalidation now share one `checkDelta` implementation; macOS proof remains. |
-| `thumbnail-pipeline-concurrency-design-latent` | `deferred` | Owner: PresentationUI + HistoryStorage. Trigger: first real thumbnail consumer plus measured scroll cancellation/concurrency. Residual risk is retained source bytes/wasted decode. |
+| `thumbnail-pipeline-concurrency-design-latent` | `deferred` | Owner: PresentationUI + HistoryStorage. Trigger: first real thumbnail consumer plus measured scroll cancellation/concurrency. Remaining scope is caller-cancellation/reference-counting and superseded-work policy; exact-key source hydration is now single-flight. Residual risk is wasted decode after all consumers lose interest. |
 | `ingest-prep-actor-serializes-prep` | `deferred` | Owner: HistoryStorage. Trigger: measured preparation queueing or p95 capture-budget breach. Residual risk: concurrent captures can incur preparation head-of-line latency; current serialization bounds peak memory. |
 
 ### Nit (18)

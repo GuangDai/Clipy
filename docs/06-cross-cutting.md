@@ -291,7 +291,7 @@ Correctness gates run first. Performance claims are accepted only from a release
 - Projection retains at most the bounded search-body accumulator rather than a
   full joined corpus; revision summaries project only their bounded title.
 - Detail/paste decode one item's bounded lineage.
-- Thumbnail performs one bounded Authority source fetch and, after that fetch has produced immutable bytes, one shared concurrent decode for an identical key. WS15 and the facade smoke prove the complete source/version-fence path; the release runner prefetches the source once and times `ThumbnailService` steps 5–7 directly. It must not count eight intentionally actor-serialized Authority fetches as part of the single-flight decode ratio.
+- Thumbnail installs one exact-key source-to-decode task, so concurrent identical callers perform one bounded full Authority source fetch and one shared decode; joiners perform scalar dimension/existence/version fences and cannot receive stale bytes. Source-inclusive service tests cover shared success, `nil`, failure, and removal; WS15 proves version semantics and that a failed stale join does not cancel the creator. The release runner's direct-source convenience still prefetches once to isolate decode-sharing timing; it is not an RSS/copy measurement.
 
 The runner owns a declarative workload-to-bullet map covering every bullet
 `1...9`. Each run fails if a named workload is missing, duplicated, unknown, or

@@ -11,14 +11,15 @@
 > status ledger for all 222 canonical source-report IDs; this plan orders the
 > work and keeps only currently active items in its register.
 >
-> **Completed:** 2026-08-11. Public-symbol workflow
+> **Historical closure:** 2026-08-11. Public-symbol workflow
 > [31448087991](https://github.com/GuangDai/Clipy/actions/runs/31448087991)
 > and final code-head CI
 > [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036)
 > closed the supported-runner gate. Independent standards, spec, and
-> compile-risk reviews found no remaining completion exception. The 222-row
-> ledger now has 110 `fixed` and no `pending` or `in-progress` findings;
-> explicitly deferred evidence grafts remain deferred.
+> compile-risk reviews found no remaining completion exception at that head.
+> The post-closure complexity pass later reopened
+> `thumbnail-source-full-image-copy`; the current 222-row ledger has 110
+> `fixed`, 31 `deferred`, 1 `in-progress`, and no `pending` findings.
 
 ## Status rules
 

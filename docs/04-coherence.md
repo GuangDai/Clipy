@@ -177,15 +177,15 @@ internal struct ThumbnailFlightKey: Sendable, Hashable {
 
 Flow:
 
-1. Validate positive bounded dimensions.
-2. Fetch the item and require its current Content Version to equal the requested reference.
-3. Derive Effective Content and select the supported image representation as an immutable byte value.
-4. If no supported image representation exists, return `nil`.
-5. Join or create the flight for the exact `(ID, ContentVersion, dimensions)` key.
-6. Decode/downsample on `ThumbnailWorker`, enforce output bounds, encode PNG, and return a payload carrying the same key values.
-7. Remove the flight entry on success, failure, or cancellation. Completed bytes are not retained by HistoryStorage.
+1. Enter `ThumbnailService` with the exact `(ID, ContentVersion, dimensions)` key. Without suspending, join an existing source-to-decode task or install the creator task.
+2. The creator task validates positive bounded dimensions, fetches and fully hydrates exactly one item, and requires its current Content Version to equal the requested reference.
+3. In the same non-suspending `HistoryAuthority` interval, derive Effective Content and select the supported image representation as an immutable byte value.
+4. If no supported image representation exists, complete the shared task with `nil`.
+5. Before an existing-flight caller awaits the shared task, it validates dimensions, existence, and current Content Version through a scalar-only Authority projection. It does not hydrate content. A failed join does not cancel the creator's task.
+6. The creator decodes/downsamples on `ThumbnailWorker`, enforces output bounds, encodes PNG, and returns a payload carrying the same key values to every successful joiner.
+7. Remove the flight entry on task success, failure, or cancellation. Completed bytes are not retained by HistoryStorage.
 
-Steps 2–3 run inside one non-suspending `HistoryAuthority` interval, so no commit can interleave between the version check (step 2) and the Effective-Content derivation (step 3). The version fence is therefore about the off-Authority decode (step 6): if the item changes during decode, the result is still correctly tagged with the verified old reference, and the caller applies it only if its row still carries that reference. A request whose reference was already stale before step 2 fails there with `.staleContent`; current bytes are never returned under an old key. If the item changes after step 3, the old-version decode remains a valid result for the requested reference.
+Steps 2–3 run inside one non-suspending `HistoryAuthority` interval, so no commit can interleave between the creator's version check and Effective-Content derivation. The creator fence and each existing-flight caller's step-5 scalar fence together govern the off-Authority decode: if the item changes after a successful fence, the result remains correctly tagged with the verified old reference, and the caller applies it only if its row still carries that reference. A reference already stale at either fence fails with `.staleContent`; current bytes are never returned under an old key. Concurrent identical calls therefore retain one bounded full source value plus scalar join projections, rather than one full source value per caller.
 
 ### 10. Projection coherence
 

@@ -461,3 +461,26 @@ exclusions remain documented in the workflow history below.
   pinned-order load (05 §7.3). Clear needs no such fact (`.unpinned` keeps all
   pins, `.all` removes all rows — both trivially contiguous); retention never
   retires pinned items (D13).
+
+## Post-closure complexity pass (2026-08-11)
+
+- **Status:** in progress. The canonical 222-row ledger currently has one
+  reopened `in-progress` item; broader measurement-gated work remains
+  explicitly deferred until supported admission evidence exists.
+- **Pure bounded algorithms:** [`1168d1d`](https://github.com/GuangDai/Clipy/commit/1168d1d)
+  starts signature intersection from the smallest posting, validates D12 pin
+  permutations in O(P), removes payload hashing from Canonical containment,
+  uses a bounded O(N log K) retention selector for small victim counts, and
+  bounds the unpinned exactness fallback's retained scalar state to O(L).
+  Supported run
+  [31483423935](https://github.com/GuangDai/Clipy/actions/runs/31483423935)
+  passed all gates, 319 tests in 42 suites, app build/test, and all 13 release
+  workloads.
+- **Thumbnail source single-flight:** red-test commit
+  [`7be8d02`](https://github.com/GuangDai/Clipy/commit/7be8d02) and run
+  [31484363706](https://github.com/GuangDai/Clipy/actions/runs/31484363706)
+  prove the missing source-inclusive interface (the expected SwiftPM compile
+  failure; every independent job passed). The implementation now places full
+  source hydration inside the exact-key task and gives joiners scalar fences;
+  success/`nil`/failure/removal and the WS15 stale-join race are present.
+  Supported green CI remains before the canonical finding becomes `fixed`.

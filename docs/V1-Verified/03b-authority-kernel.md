@@ -218,11 +218,12 @@ None. The single-writer + OCC + in-transaction revalidation design holds; no dat
 >   value unready, one capture can pay O(retained signature metadata) while
 >   isolated. Healthy startup publishes only after constructing a ready index,
 >   so ordinary capture does not take this path.
-> - `thumbnail-source-full-image-copy` is **deferred** to G8. Owner: thumbnail
->   source/materialization. Trigger: representative concurrent thumbnail reads
->   exceed the G8 transient-RSS budget or source-copy p95. Residual risk: each
->   request may materialize the full Effective image `Data` before the existing
->   decode-only single-flight joins callers.
+> - `thumbnail-source-full-image-copy` is **in progress** in the post-closure
+>   complexity pass. The exact-key task now owns full source hydration through
+>   decode; overlapping joiners run scalar dimension/existence/version fences.
+>   Direct success/`nil`/failure/removal tests and WS15's stale-join race are
+>   present. Supported macOS CI remains before the canonical row can become
+>   `fixed`; no absolute G8 RSS claim is made by this structural repair.
 > - `validate-final-pin-order-conflates-count-bound` is **not-a-defect** in the
 >   current tree. Owner: none while the frozen §10/§16 contract stands. Trigger:
 >   reconsider only if transaction failures gain action-specific public

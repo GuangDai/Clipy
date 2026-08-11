@@ -2173,24 +2173,71 @@ internal actor HistoryAuthority {
         "public.bmp",
     ]
 
+    /// Existing-flight admission performs only the per-caller checks whose
+    /// result may have changed since the creator loaded its source: bounded
+    /// dimensions, target existence, and current Content Version. The scalar
+    /// projection deliberately excludes content blobs, so C identical callers
+    /// perform one complete source hydration plus at most C-1 small fences.
+    ///
+    /// The creator's full `thumbnailSource` task remains the fail-closed owner
+    /// of every lineage/projection/codec check. Join validation failure does
+    /// not mutate or cancel that task.
+    internal func validateThumbnailFlightJoin(
+        for item: HistoryItemReference,
+        pixels: PixelSize
+    ) async throws {
+        try validateThumbnailDimensions(pixels)
+
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let uuid = item.id.rawValue
+        var descriptor = FetchDescriptor<HistoryItemRow>(
+            predicate: #Predicate { row in row.id == uuid }
+        )
+        descriptor.propertiesToFetch = [\.id, \.contentVersionRaw]
+        descriptor.fetchLimit = 2
+        let rows: [HistoryItemRow]
+        do {
+            rows = try context.fetch(descriptor)
+        } catch {
+            throw HistoryFailure.temporarilyUnavailable(.factProof)
+        }
+        guard rows.count <= 1 else {
+            throw HistoryFailure.persistence(.invariantViolation)
+        }
+        guard let row = rows.first else {
+            throw HistoryFailure.notFound(item.id)
+        }
+
+        // Bind the immutable scalar before entering the failure-mapping
+        // closure; no @Model value crosses a closure or actor boundary.
+        let contentVersionRaw = row.contentVersionRaw
+        let current = try mapCodecFailure {
+            try RevisionStateBlobCodec.decodeContentVersion(contentVersionRaw)
+        }
+        guard current == item.contentVersion else {
+            throw HistoryFailure.staleContent(
+                expected: item.contentVersion,
+                current: current
+            )
+        }
+    }
+
     /// Thumbnail source (docs/05-authority-kernel.md §14.5; docs/04-coherence.md
     /// §9): verifies the requested Content Version and returns immutable source
     /// image bytes — `nil` when the item has no supported image representation —
     /// inside one non-suspending Authority interval.
     ///
-    /// The §9 single-flight flow, steps 1–4 (the Authority's part):
-    /// 1. Validate that both `pixels` axes lie in
-    ///    `limits.thumbnailDimensionRange` (§9 step 1) — before any context.
-    /// 2. Fetch and fully hydrate exactly one row, then require
-    ///    `hydrated.contentVersion == item.contentVersion` (§9 step 2) — the
-    ///    version fence.
+    /// The §9 creator flow, steps 2–4 (the Authority's full-load part):
+    /// 2. Validate both `pixels` axes before any context, fetch and fully
+    ///    hydrate exactly one row, then require
+    ///    `hydrated.contentVersion == item.contentVersion` — the version fence.
     /// 3. Derive current Effective Content (§9 step 3) — the same pure
     ///    derivation as `details(for:)` and `pastePayload(for:)`.
     /// 4. Select the first representation (in the Effective Content's
     ///    normalized type order) whose type identifier is in the frozen v1
     ///    image set, and return its immutable `bytes` (§9 step 3→4). No match
-    ///    → `nil` (§9 step 4) — the facade then answers `nil` without entering
-    ///    ThumbnailService.
+    ///    → `nil` (§9 step 4) through the already-installed flight.
     ///
     /// "Steps 2–3 run inside one non-suspending `HistoryAuthority` interval,
     /// so no commit can interleave between the version check (step 2) and the
@@ -2215,13 +2262,9 @@ internal actor HistoryAuthority {
         for item: HistoryItemReference,
         pixels: PixelSize
     ) async throws -> Data? {
-        // §9 step 1: validate both dimensions before any context — the fixed
+        // §9 step 2: validate both dimensions before any context — the fixed
         // Part VI thumbnail-dimension interval (docs/06-cross-cutting.md §2).
-        guard limits.thumbnailDimensionRange.contains(pixels.width),
-              limits.thumbnailDimensionRange.contains(pixels.height)
-        else {
-            throw HistoryFailure.invalidInput(.invalidPixelSize)
-        }
+        try validateThumbnailDimensions(pixels)
 
         let context = ModelContext(container)
         context.autosaveEnabled = false
@@ -2262,8 +2305,8 @@ internal actor HistoryAuthority {
 
         // §9 steps 3–4: select the first representation (in the Effective
         // Content's normalized type order) whose type identifier is in the
-        // frozen v1 image set. No match → `nil` — the facade answers `nil`
-        // without entering ThumbnailService.
+        // frozen v1 image set. No match → `nil` through the creator's shared
+        // source-to-decode task.
         for representation in effective.representations {
             if Self.thumbnailImageTypeIdentifiers.contains(
                 representation.typeIdentifier
@@ -2272,6 +2315,17 @@ internal actor HistoryAuthority {
             }
         }
         return nil
+    }
+
+    /// One owner for the Part VI thumbnail dimension envelope. Both the
+    /// creator's full source load and an existing-flight caller's scalar join
+    /// fence reject invalid dimensions before creating a `ModelContext`.
+    private func validateThumbnailDimensions(_ pixels: PixelSize) throws {
+        guard limits.thumbnailDimensionRange.contains(pixels.width),
+              limits.thumbnailDimensionRange.contains(pixels.height)
+        else {
+            throw HistoryFailure.invalidInput(.invalidPixelSize)
+        }
     }
 
     // MARK: - Read-path helpers (docs/05-authority-kernel.md §14; docs/04-coherence.md §6)

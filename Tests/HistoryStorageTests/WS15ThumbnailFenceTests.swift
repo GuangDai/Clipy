@@ -15,8 +15,9 @@
 ///
 /// The mid-decode interleaving uses the `ThumbnailServiceSuspensionPoint.decodeEntry`
 /// seam (`"ThumbnailService.thumbnail.entry"`) — the legal suspension point
-/// after the Authority returned immutable source bytes but before the flight is
-/// joined/created (ThumbnailService.swift). The deterministic concurrency
+/// after the creator's Authority fence returned immutable source bytes and the
+/// source-inclusive flight was installed, but before ImageIO decode
+/// (ThumbnailService.swift). The deterministic concurrency
 /// harness (`SuspensionGate` in ConcurrencyHarness/) drives the exact
 /// interleaving: the thumbnail Task parks at `.decodeEntry`, a revision commits
 /// during the park, the Task resumes and completes — its payload still carries
@@ -121,11 +122,12 @@ private static func replaceBothWithSecondPngRequest(
 /// remains tagged with the old reference and cannot be applied to the new row."
 ///
 /// The `.decodeEntry` seam parks `ThumbnailService` AFTER the Authority's
-/// version fence returned immutable source bytes (first PNG) but BEFORE the
-/// flight is joined/created. A revision committing during the park advances the
-/// item to Content Version 2, but the decode completes using the already-fetched
-/// source bytes and the result is tagged with the verified OLD reference
-/// (version 1) — it cannot be applied to the new row (04 §9 step 5 clause).
+/// version fence returned immutable source bytes (first PNG) and AFTER the
+/// source-inclusive flight was installed, but BEFORE ImageIO decode. A revision
+/// committing during the park advances the item to Content Version 2, but the
+/// decode completes using the already-fetched source bytes and the result is
+/// tagged with the verified OLD reference (version 1) — it cannot be applied
+/// to the new row (04 §9).
 @Test func revisionDuringDecodeLeavesResultTaggedWithTheOldReference() async throws {
     let storeURL = WSSupport.tempStoreURL("ws15-thumbnail-fence-decode")
     defer { WSSupport.removeStore(storeURL) }
@@ -170,8 +172,8 @@ private static func replaceBothWithSecondPngRequest(
     // Start the thumbnail request in a child Task. The Authority validates the
     // dimensions, verifies Content Version 1, derives Effective Content, selects
     // the public.png representation, and returns the FIRST png bytes — all inside
-    // one non-suspending interval (04 §9 steps 1–4). ThumbnailService then parks
-    // at .decodeEntry before joining/creating the flight (§9 step 5).
+    // one non-suspending interval (04 §9 steps 2–4). ThumbnailService then parks
+    // at .decodeEntry after installing the flight and before ImageIO decode.
     let requestedPixels = PixelSize(width: 32, height: 32)
     let task = Task { () -> ThumbnailPayload? in
         try await history.thumbnail(for: R1, pixels: requestedPixels)
@@ -200,6 +202,16 @@ private static func replaceBothWithSecondPngRequest(
     }
     #expect(R2.contentVersion.rawValue == 2)
 
+    // The old-key flight is still parked with its already-verified source.
+    // A request that begins after the revision must cross its own lightweight
+    // join fence and fail stale; it cannot receive the creator's old bytes.
+    await #expect(throws: HistoryFailure.staleContent(
+        expected: R1.contentVersion,
+        current: R2.contentVersion
+    )) {
+        try await history.thumbnail(for: R1, pixels: requestedPixels)
+    }
+
     // WS15: resume — the parked decode completes using the already-fetched FIRST
     // png bytes; the result is tagged with the OLD reference R1 (04 §9).
     await gate.resume(ThumbnailServiceSuspensionPoint.decodeEntry.rawValue)
@@ -223,7 +235,7 @@ private static func replaceBothWithSecondPngRequest(
 
     // WS15: "and cannot be applied to the new row" — the item's CURRENT Content
     // Version (2, via details) differs from the payload's (1, R1), so the
-    // caller must reject this payload for the current row (04 §9 step 5).
+    // caller must reject this payload for the current row (04 §9 coherence).
     let currentDetails = try await history.details(for: R1.id)
     #expect(
         currentDetails.item.contentVersion != payload.item.contentVersion,
@@ -303,8 +315,7 @@ private static func replaceBothWithSecondPngRequest(
 /// WS15 (docs/06-cross-cutting.md §8; 04 §9 step 4): "If no supported image
 /// representation exists, return `nil`." A text-only item has no
 /// representation whose type identifier is in the frozen v1 image set, so
-/// `thumbnailSource` answers `nil` and the facade returns `nil` without
-/// entering `ThumbnailService`.
+/// the already-installed source-to-decode flight completes with `nil`.
 @Test func textOnlyItemYieldsNilThumbnail() async throws {
     let storeURL = WSSupport.tempStoreURL("ws15-thumbnail-fence-text-only")
     defer { WSSupport.removeStore(storeURL) }
@@ -338,7 +349,7 @@ private static func replaceBothWithSecondPngRequest(
 
 // MARK: - Test 4: out-of-range pixel dimensions throw invalidPixelSize
 
-/// WS15 (docs/06-cross-cutting.md §8; 04 §9 step 1; §16): "Validate positive
+/// WS15 (docs/06-cross-cutting.md §8; 04 §9 step 2; §16): "Validate positive
 /// bounded dimensions." Both a zero dimension and a dimension above the Part VI
 /// `thumbnailDimensionRange` upper bound (06 §2: 1–2,048) throw
 /// `HistoryFailure.invalidInput(.invalidPixelSize)` at the Authority's
@@ -371,12 +382,12 @@ private static func replaceBothWithSecondPngRequest(
         return
     }
 
-    // WS15 (§9 step 1): a zero dimension is outside the 1–2,048 range (06 §2).
+    // WS15 (§9 step 2): a zero dimension is outside the 1–2,048 range (06 §2).
     await #expect(throws: HistoryFailure.invalidInput(.invalidPixelSize)) {
         try await history.thumbnail(for: reference, pixels: PixelSize(width: 0, height: 32))
     }
 
-    // WS15 (§9 step 1): a dimension one above the upper bound is outside the
+    // WS15 (§9 step 2): a dimension one above the upper bound is outside the
     // range (06 §2: thumbnailDimensionRange is 1...2_048).
     let aboveUpperBound = HistoryLimits.standard.thumbnailDimensionRange.upperBound + 1
     await #expect(throws: HistoryFailure.invalidInput(.invalidPixelSize)) {

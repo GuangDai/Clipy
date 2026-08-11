@@ -4,10 +4,11 @@
 > **Aggregate counts (final):** **222 findings — 3 critical, 14 major, 112 minor, 93 nit**. `07-finding-dispositions.md` is the canonical completeness/status ledger.
 > **Headline:** the architecture is sound and the code is unusually disciplined, but **three critical findings** (a process crash, a password-content leak, and a structurally invalid red performance-acceptance proof), **one systemic testability gap** (pure safety-critical algorithms are `private`, so the facade-only WS suite missed both product criticals), and **a small set of root causes** (a `§16 CapacityKind` gap, comment-overclaims treated as contracts, syntactic-proxy safety stories, per-`Character` `String` allocations) account for the majority of the severity.
 >
-> **Current remediation status (2026-08-11):** all supported-proof-dependent
-> findings are fixed by public-symbol workflow 31448087991 and code-head run
-> 31449682036. The canonical ledger has 110 fixed rows and no active or pending
-> rows; explicit deferred/duplicate/documented/not-a-defect decisions remain.
+> **Historical remediation closure (2026-08-11):** all then-active
+> supported-proof-dependent findings were fixed by public-symbol workflow
+> 31448087991 and code-head run 31449682036. A later complexity pass reopened
+> `thumbnail-source-full-image-copy`; the canonical ledger now has 110 fixed,
+> 31 deferred, 1 in-progress, and no pending rows.
 > Present-tense defect and test-gap descriptions below describe the audited
 > `8f316c9` baseline, not the remediated tree.
 

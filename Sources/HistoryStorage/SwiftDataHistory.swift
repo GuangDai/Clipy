@@ -361,28 +361,31 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     /// sized to `pixels`; `nil` when the item has no thumbnailable content
     /// (docs/05-authority-kernel.md §14.5; docs/04-coherence.md §9).
     ///
-    /// The facade wires the §9 pipeline: the Authority validates the
-    /// dimensions, fetches exactly one item, verifies the requested Content
-    /// Version, and derives immutable source image bytes — answering `nil`
-    /// itself when the item has no supported image representation — inside
-    /// one non-suspending interval; `ThumbnailService` then joins/creates the
-    /// single-flight for the exact key and decodes off the Authority, after
-    /// all SwiftData objects and context have been released. Completed bytes
-    /// are not retained (docs/04-coherence.md §9).
+    /// The facade supplies production Authority operations to the §9 deep
+    /// module. `ThumbnailService` first joins or installs an exact-key
+    /// source-to-decode task. Its creator performs the complete source/version
+    /// fence and then decodes off the Authority; an existing-flight caller
+    /// performs only a scalar dimension/existence/version fence before sharing
+    /// that task. Thus concurrent identical requests hydrate one bounded image
+    /// source, no SwiftData value crosses an actor boundary, and completed
+    /// bytes are not retained (docs/04-coherence.md §9).
     public func thumbnail(
         for item: HistoryItemReference,
         pixels: PixelSize
     ) async throws -> ThumbnailPayload? {
-        guard let sourceBytes = try await authority.thumbnailSource(
-            for: item,
-            pixels: pixels
-        ) else {
-            return nil
-        }
+        let authority = authority
         return try await thumbnailService.thumbnail(
-            sourceBytes,
             for: item,
-            pixels: pixels
+            pixels: pixels,
+            loadSource: {
+                try await authority.thumbnailSource(for: item, pixels: pixels)
+            },
+            validateJoin: {
+                try await authority.validateThumbnailFlightJoin(
+                    for: item,
+                    pixels: pixels
+                )
+            }
         )
     }
 

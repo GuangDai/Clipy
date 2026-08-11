@@ -654,7 +654,7 @@ Both fetch exactly one row and decode/validate its full lineage. Detail maps it 
 
 #### 14.5 Thumbnail source
 
-The Authority fetches exactly one item, verifies the requested Content Version, derives Effective Content, and returns immutable source image bytes. ImageIO decode occurs only after all SwiftData objects and context have been released.
+`ThumbnailService` installs an exact-key source-to-decode task before its first suspension. The creator asks the Authority to fetch and fully hydrate exactly one item, verify the requested Content Version, derive Effective Content, and return immutable source image bytes. An existing-flight caller instead asks the Authority for a scalar-only dimension/existence/version fence before awaiting that task. ImageIO decode occurs only after all SwiftData objects and context have been released; no joiner rehydrates the content blob.
 
 ### 15. Projection rules
 

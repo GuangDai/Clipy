@@ -185,12 +185,15 @@ V1V-03B-004 remains deliberately deferred under its recorded G2 trigger.
 | V1V-04-005 | 06 §9; `HistoryPerfRunner`; helper tests | **Completed 2026-08-11:** public-symbol workflow 31448087991 and supported code-head run 31449682036 are green. **Pre-proof implementation record:** Every gated fixture consumes one declarative scales/growth/bound/headroom table; preflight derives theoretical ratios, enforces finite bounds and the 1.5× floor, and allows only WL1a's named 1.2× exception. Extracted production CRC-32/xorshift32 helpers have independent KATs; macOS executable import/tests and release perf remain. |
 | V1V-03B-004 | 06 §9; V1V disposition ledger | Removed an unimplemented claim that the current runner records unpinned exactness-fallback incidence. WS18 owns correctness; a supported 5,000-row tie-heavy incidence/cost workload remains explicitly deferred to its recorded G2 owner/trigger/residual risk, and the normal-case browse envelope cannot close it. |
 | V1V-01-002 | 06 §2; `Limits.swift`; HistoryCore tests | **Completed 2026-08-11:** public-symbol workflow 31448087991 and supported code-head run 31449682036 are green. **Pre-proof implementation record:** Run 31449140919 disproved the audit's assumption that inverted `ClosedRange(uncheckedBounds:)` survives on Xcode 26.6. The package initializer now accepts scalar endpoints, rejects invalid ordering, and constructs all three ranges only after validation; the source report records the supported-runtime correction and keeps the finding in progress pending rerun. |
+| V1V-03B-005 | 04 §9; 05 §14.5; 06 §9; `ThumbnailService.swift`; WS15 | **Pre-proof implementation record:** The exact-key flight now owns source hydration through ImageIO decode. Concurrent joiners run scalar dimension/existence/version fences, reducing C overlapping identical requests from C full lineage/source hydrations to one full hydration plus at most C−1 scalar reads. A failed stale join does not cancel the creator. The creator still owns complete fail-closed lineage/projection/codec validation; when an already-corrupt store and a stale reference coexist, the public contract intentionally does not freeze which typed failure wins, but no path returns current bytes under an old key. Source-inclusive unit and WS15 race proof await supported macOS CI. |
 
 All remaining findings and their explicit owners/triggers are tracked in
 `docs/V1-Verified/07-finding-dispositions.md`. The supported CI, performance,
 symbol-surface, and independent completion-review prerequisites are complete.
-The canonical ledger has 110 fixed rows and no active or pending rows; its 32
-deferred items retain their explicit owners, triggers, and residual risks.
+The post-closure complexity pass has reopened one row: the canonical ledger
+currently has 110 fixed, 31 deferred, and 1 in-progress row with no pending
+rows. Every remaining deferred item retains an explicit owner, trigger, and
+residual risk.
 
 ### Roadmap (2026-07-20)
 
