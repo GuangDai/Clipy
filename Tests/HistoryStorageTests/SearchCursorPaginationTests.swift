@@ -112,8 +112,14 @@ private static func replacingAnchorID(
         let actual = page1.rows.map(\.item.id)
             + page2.rows.map(\.item.id)
             + page3.rows.map(\.item.id)
+        let pageCounts: [Int] = [
+            page1.rows.count,
+            page2.rows.count,
+            page3.rows.count,
+        ]
+        let expectedPageCounts: [Int] = [2, 2, 1]
         #expect(
-            [page1.rows.count, page2.rows.count, page3.rows.count] == [2, 2, 1],
+            pageCounts == expectedPageCounts,
             "\(Self.modeName(mode)) search must divide five rows into 2/2/1"
         )
         #expect(

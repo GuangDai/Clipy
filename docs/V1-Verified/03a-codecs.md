@@ -16,8 +16,11 @@
 > **Pagination remediation addendum (2026-08-09):**
 > `fuzzy-cursor-anchor-resume-untested` is **in-progress**. The shared
 > public-facade pagination suite now traverses fuzzy results across three
-> pages and pins missing-anchor plus post-commit expiry behavior; macOS CI is
-> pending. Detailed fixtures are tracked in the 03c source report.
+> pages and pins missing-anchor plus post-commit expiry behavior. Run
+> 31448531234 compiled production code and then exposed ambiguous literal
+> inference inside the Swift Testing page-count assertion; explicit `[Int]`
+> operands are now present and the macOS test rerun is pending. Detailed
+> fixtures are tracked in the 03c source report.
 
 ---
 

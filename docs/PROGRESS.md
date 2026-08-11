@@ -331,8 +331,11 @@ supported macOS 26 / Swift 6.2 correctness and release-perf jobs**.
 
 ## V1 verification remediation — local proof closure (2026-08-11)
 
-- **Status:** implementation and portable evidence complete; supported macOS
-  compile/test, public-symbol regeneration, and release-perf proof pending.
+- **Status:** implementation and portable evidence complete. The public-symbol
+  workflow 31448087991 and run 31448531234's gates, package build, app
+  build/test, and release-perf proof are green. Its SwiftPM test compilation
+  stopped on one ambiguous array-literal assertion; explicit `[Int]` operands
+  are local and the supported test rerun is pending.
   `docs/V1-Verified/07-finding-dispositions.md` remains the authoritative
   222-ID status ledger; no behavior item is promoted to `fixed` before that
   evidence lands.
@@ -349,6 +352,9 @@ supported macOS 26 / Swift 6.2 correctness and release-perf jobs**.
   comments-mode rejection; direct UTF-16 tests cover supplementary and
   combining content. A deterministic worker-entry seam proves a commit during
   old-snapshot evaluation cannot become the subscriber's first visible page.
+  The three-page search assertion now gives Swift Testing explicitly typed
+  page-count operands after run 31448531234 rejected its array literals as
+  ambiguous; rerun proof remains.
 - **Performance runner:** all 12 gated fixtures consume one declarative
   complexity-envelope table; WL1b is explicitly record-only. Preflight checks
   scale monotonicity, theoretical growth, finite bounds, the standard 1.5×

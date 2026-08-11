@@ -141,7 +141,9 @@ The module's **architecture is sound** — the two-step value pipeline (capture 
 > anchors; each mode also expires a structurally valid missing-row anchor at an
 > unchanged position and expires its old cursor after an intervening commit.
 > This also covers the `fuzzy-cursor-anchor-resume-untested` gap recorded by
-> the codec audit. macOS CI is pending.
+> the codec audit. Run 31448531234 reached test compilation and exposed an
+> ambiguous untyped array-literal comparison in the assertion macro; the
+> operands are now explicit `[Int]` values and macOS CI is pending.
 >
 > `test-gap-regexp-body-mode-untested`,
 > `ws17-fuzzy-unpinned-ordering-untested`, and
