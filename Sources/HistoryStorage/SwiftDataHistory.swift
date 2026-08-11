@@ -4,9 +4,8 @@
 /// loop (Part V §14; Part IV §5), `open` startup (Part V §13), and public
 /// failure translation (Part V §16).
 /// Owning spec: docs/05-authority-kernel.md §2 (public concrete adapter and
-/// internal actors); coherence: docs/04-coherence.md (Part IV); step phasing:
-/// docs/roadmap/03-historystorage.md (steps 5–8; as of step 7 only the
-/// step-8 thumbnail path remains deferred to `StepDeferredError`).
+/// internal actors); coherence: docs/04-coherence.md (Part IV); implementation
+/// sequence: docs/roadmap/03-historystorage.md (steps 5–8).
 ///
 /// `SwiftDataHistory` is a value of five `actor` references and nothing else:
 /// the `Sendable` conformance is fully derived from the fields, so no unsafe
@@ -14,25 +13,6 @@
 import Foundation
 import HistoryCore
 import SwiftData
-
-// MARK: - Step-deferred error (transient; docs/roadmap/03-historystorage.md)
-
-/// Internal marker thrown by an actor method whose implementation lands at a
-/// later roadmap step (step 8: the thumbnail path).
-///
-/// `StepDeferredError` is transient scaffolding: it is NOT a
-/// `HistoryFailure`, is never translated into one, and propagates through
-/// the `SwiftDataHistory` facade unchanged so a caller hitting a
-/// not-yet-implemented path sees a distinct programmer-visible failure rather
-/// than a misclassified public one. Steps 6–7 retired it from the mutation,
-/// read, and observation paths; its remaining users are the step-8
-/// `HistoryAuthority.thumbnailSource` and `ThumbnailService.thumbnail`, and
-/// it is removed when step 8 lands (docs/roadmap/03-historystorage.md).
-internal enum StepDeferredError: Error, Sendable {
-    /// The named operation is implemented at a later roadmap step. The name
-    /// is diagnostic-only — nothing branches on it.
-    case notYetImplemented(operation: String)
-}
 
 // MARK: - SwiftDataHistory (docs/05-authority-kernel.md §2)
 
@@ -49,8 +29,7 @@ internal enum StepDeferredError: Error, Sendable {
 /// translates no semantics of its own: it validates nothing the actors own,
 /// dispatches actions through one closed switch (§8), forwards reads to the
 /// purpose-specific read paths (§14) and owns the Part IV §5 observation
-/// loop, and lets actor-thrown `HistoryFailure`s (and, until the step-8
-/// thumbnail path lands, `StepDeferredError`s) propagate.
+/// loop, and lets actor-thrown `HistoryFailure`s propagate.
 public struct SwiftDataHistory: ClipboardHistory, Sendable {
     /// Sole writer; also serializes source snapshot capture and observer
     /// registration (docs/05-authority-kernel.md §2).
@@ -235,7 +214,7 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     /// `SearchCorpusSnapshot` plus the continuation anchor the next-page
     /// cursor is minted from, then `SearchWorker` evaluates the request over
     /// the snapshot off-actor — receiving the Authority's process marker so
-    /// the minted cursor binds this process/schema generation
+    /// the minted cursor binds this process instance
     /// (docs/04-coherence.md §6) — and returns the bounded page stamped with
     /// the corpus position; the worker never reads SwiftData (§14.2;
     /// docs/04-coherence.md §7).
@@ -293,7 +272,8 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         // buffer (§4), which the phase-1 recheck below detects through the
         // durable position rather than by peeking the buffer. The local
         // `authority` binding keeps the termination hop capturing only the
-        // actor — no Task retains the facade.
+        // actor; the producer Task separately captures this immutable,
+        // Sendable facade through `firstPage(for:)`.
         let registration = await authority.registerInvalidationSubscriber()
         let authority = self.authority
         return AsyncThrowingStream { continuation in
@@ -303,10 +283,14 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
                     // the race-closing recheck — while the durable position
                     // has moved past the page, a commit interleaved between
                     // registration and the query, so discard the page and
-                    // query again. Terminates because positions advance
-                    // monotonically (§1).
+                    // query again. Position monotonicity proves freshness,
+                    // not termination under an infinite write stream: v1
+                    // intentionally waits for one query/recheck interval
+                    // without an intervening commit rather than knowingly
+                    // yielding a stale first page (04 §5).
                     var page = try await firstPage(for: request)
                     while try await authority.currentPosition() != page.position {
+                        try Task.checkCancellation()
                         page = try await firstPage(for: request)
                     }
                     // §5 step 5.

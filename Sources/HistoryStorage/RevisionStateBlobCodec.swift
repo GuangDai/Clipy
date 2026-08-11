@@ -45,71 +45,11 @@ internal struct StoredRepresentationV1: Codable, Sendable {
     internal let bytes: Data
 }
 
-// MARK: - Revision-state rejection vocabulary (docs/05-authority-kernel.md §4)
-
-/// Rejection of revision-state decode checks the shared `CodecRejection`
-/// vocabulary does not cover. docs/05-authority-kernel.md §4
-///
-/// The generic checks (blob version, decode envelope, byte/count bounds,
-/// normalization, empty bytes) throw the shared `CodecRejection` cases; only
-/// the revision-lineage- and row-scalar-specific checks use this vocabulary.
-/// A later refactor can fold these cases into the shared enum.
-internal enum RevisionStateCodecRejection: Error, Sendable, Equatable {
-    /// Two stored revisions carry the same Revision ID (§4: "unique revision
-    /// IDs"; the decoder does not choose a duplicate).
-    case duplicateRevisionID(UUID)
-
-    /// The non-nil active Revision ID names no stored revision (§4: "when
-    /// non-nil it ... names exactly one stored revision";
-    /// docs/06-cross-cutting.md §7.4). Revision IDs are already proved
-    /// unique, so a match is exactly one revision.
-    case activeRevisionIDNamesNoStoredRevision(UUID)
-
-    /// The revision list is non-empty but the active Revision ID is nil
-    /// (§4: "`nil` is valid only when the revision list is empty", D3).
-    case nonEmptyRevisionListWithNilActiveID
-
-    /// A revision representation's type identifier is not one of the item's
-    /// Canonical representation types (§4: "normalized, non-empty revision
-    /// content containing only Canonical representation types").
-    case nonCanonicalRevisionType(String)
-
-    /// The stored Content Version is zero (§3.1: `contentVersionRaw` is
-    /// "always at least 1"; §4: "a valid (≥1) Content Version"). A `UInt64`
-    /// raw value cannot be negative, so zero is the only invalid value.
-    case invalidContentVersion(found: UInt64)
-
-    /// The stored copy count is zero; a retained item exists only through at
-    /// least one accepted capture (§4: "valid occurrence values";
-    /// docs/02-domain.md §3.1).
-    case zeroCopyCount
-
-    /// The stored last-copied time precedes the first-copied time; occurrence
-    /// recency is monotone (§4: "valid occurrence values"; D11).
-    case lastCopiedAtPrecedesFirstCopiedAt
-
-    /// A stored source-application observation exceeds the Part VI UTF-8 byte
-    /// bound (docs/06-cross-cutting.md §2: 1,024 bytes in `standard`).
-    case sourceObservationExceedsBound(found: Int, bound: Int)
-
-    /// The stored pin ordinal is negative (§4: "a non-negative pin ordinal
-    /// (negative is corruption)"; docs/02-domain.md §3.2).
-    case negativePinOrdinal(found: Int)
-}
-
-extension RevisionStateCodecRejection {
-    /// The docs/05-authority-kernel.md §16 boundary mapping: every decode
-    /// rejection is a corrupt persisted value.
-    internal var historyFailure: HistoryFailure {
-        .persistence(.corruptStoredValue)
-    }
-}
-
 // MARK: - Codec (docs/05-authority-kernel.md §4)
 
 /// Encodes validated revision state to its durable blob and decodes the blob
-/// back with the full §4 check set, failing closed with `CodecRejection` /
-/// `RevisionStateCodecRejection`. docs/05-authority-kernel.md §4
+/// back with the full §4 check set, failing closed with `CodecRejection`.
+/// docs/05-authority-kernel.md §4
 internal enum RevisionStateBlobCodec {
     /// The only blob version this codec reads or writes (§4: "known blob
     /// version (exactly 1 for each V1 blob)").
@@ -124,25 +64,34 @@ internal enum RevisionStateBlobCodec {
     /// coherence; decode re-verifies every one of them.
     internal static func encode(
         revisions: [ContentRevision],
+        appending appendedRevision: ContentRevision? = nil,
         activeRevisionID: RevisionID?
     ) throws -> Data {
+        var storedRevisions = revisions.map(Self.storedRevision)
+        if let appendedRevision {
+            storedRevisions.append(storedRevision(appendedRevision))
+        }
         let wire = RevisionStateBlobV1(
             formatVersion: formatVersion,
-            revisions: revisions.map { revision in
-                StoredRevisionV1(
-                    id: revision.id.rawValue,
-                    createdAt: revision.createdAt,
-                    representations: revision.content.representations.map { representation in
-                        StoredRepresentationV1(
-                            typeIdentifier: representation.typeIdentifier,
-                            bytes: representation.bytes
-                        )
-                    }
-                )
-            },
+            revisions: storedRevisions,
             activeRevisionID: activeRevisionID?.rawValue
         )
         return try encodeWire(wire)
+    }
+
+    private static func storedRevision(
+        _ revision: ContentRevision
+    ) -> StoredRevisionV1 {
+        StoredRevisionV1(
+            id: revision.id.rawValue,
+            createdAt: revision.createdAt,
+            representations: revision.content.representations.map { representation in
+                StoredRepresentationV1(
+                    typeIdentifier: representation.typeIdentifier,
+                    bytes: representation.bytes
+                )
+            }
+        )
     }
 
     // MARK: Decode
@@ -162,7 +111,7 @@ internal enum RevisionStateBlobCodec {
     ///   per-revision, and total per-item revision bytes within the Part VI
     ///   bounds (checked arithmetic — no byte-count calculation wraps);
     /// - every revision representation type is one of the item's Canonical
-    ///   representation types (§4);
+    ///   representation types (§4), and every revision creation time is finite;
     /// - Revision IDs are unique;
     /// - active ID coherence (§4, D3): a non-nil active ID names exactly one
     ///   stored revision; `nil` is valid only when the revision list is empty.
@@ -184,6 +133,22 @@ internal enum RevisionStateBlobCodec {
             )
         }
         let wire = try decodeWire(data)
+        return try decodeValidatedWire(
+            wire,
+            canonical: canonical,
+            limits: limits
+        )
+    }
+
+    /// Applies the complete §4 revision-state invariant set to an already
+    /// parsed wire value. Production decode enters here immediately after the
+    /// byte-envelope and JSON parse; tests also use this seam for non-finite
+    /// `Date` values that JSONEncoder correctly refuses to serialize.
+    internal static func decodeValidatedWire(
+        _ wire: RevisionStateBlobV1,
+        canonical: CanonicalContent,
+        limits: HistoryLimits = .standard
+    ) throws -> (revisions: [ContentRevision], activeRevisionID: RevisionID?) {
         guard wire.formatVersion == formatVersion else {
             throw CodecRejection.unknownBlobVersion(found: wire.formatVersion)
         }
@@ -204,6 +169,11 @@ internal enum RevisionStateBlobCodec {
         var revisions: [ContentRevision] = []
         revisions.reserveCapacity(wire.revisions.count)
         for stored in wire.revisions {
+            guard stored.createdAt.timeIntervalSinceReferenceDate.isFinite else {
+                throw CodecRejection.nonFiniteRevisionCreatedAt(
+                    stored.id
+                )
+            }
             guard !stored.representations.isEmpty else {
                 throw CodecRejection.emptyList
             }
@@ -214,6 +184,10 @@ internal enum RevisionStateBlobCodec {
                 )
             }
             var revisionBytes = 0
+            var typeIdentifiers: [String] = []
+            typeIdentifiers.reserveCapacity(stored.representations.count)
+            var contentRepresentations: [ContentRepresentation] = []
+            contentRepresentations.reserveCapacity(stored.representations.count)
             for representation in stored.representations {
                 try CodecValidation.validateTypeIdentifier(
                     representation.typeIdentifier,
@@ -240,6 +214,13 @@ internal enum RevisionStateBlobCodec {
                     )
                 }
                 revisionBytes = newRevisionBytes
+                typeIdentifiers.append(representation.typeIdentifier)
+                contentRepresentations.append(
+                    ContentRepresentation(
+                        typeIdentifier: representation.typeIdentifier,
+                        bytes: representation.bytes
+                    )
+                )
             }
             guard revisionBytes <= limits.maximumProposedRevisionBytes else {
                 throw CodecRejection.totalBytesExceedBound(
@@ -264,28 +245,27 @@ internal enum RevisionStateBlobCodec {
                 )
             }
             try CodecValidation.requireNormalizedTypeIdentifierOrder(
-                stored.representations.map(\.typeIdentifier)
+                typeIdentifiers
             )
-            for representation in stored.representations
-            where !canonicalTypes.contains(representation.typeIdentifier) {
-                throw RevisionStateCodecRejection.nonCanonicalRevisionType(
-                    representation.typeIdentifier
+            for typeIdentifier in typeIdentifiers where !canonicalTypes.contains(typeIdentifier) {
+                throw CodecRejection.nonCanonicalRevisionType(
+                    typeIdentifier
                 )
             }
             guard seenRevisionIDs.insert(stored.id).inserted else {
-                throw RevisionStateCodecRejection.duplicateRevisionID(stored.id)
+                throw CodecRejection.duplicateRevisionID(stored.id)
             }
             revisions.append(
                 ContentRevision(
                     id: RevisionID(rawValue: stored.id),
                     createdAt: stored.createdAt,
+                    // EffectiveContent deliberately has no throwing Domain
+                    // initializer (02 §2.4). The checks above are therefore
+                    // the complete persisted-state validation boundary: they
+                    // prove non-empty normalized content, byte bounds, and
+                    // Canonical-type containment before construction (§4).
                     content: EffectiveContent(
-                        representations: stored.representations.map { representation in
-                            ContentRepresentation(
-                                typeIdentifier: representation.typeIdentifier,
-                                bytes: representation.bytes
-                            )
-                        }
+                        representations: contentRepresentations
                     )
                 )
             )
@@ -293,13 +273,14 @@ internal enum RevisionStateBlobCodec {
         guard let activeRevisionID = wire.activeRevisionID else {
             // D3: a nil active ID is valid only for the Canonical state.
             guard revisions.isEmpty else {
-                throw RevisionStateCodecRejection.nonEmptyRevisionListWithNilActiveID
+                throw CodecRejection.nonEmptyRevisionListWithNilActiveID
             }
             return (revisions: revisions, activeRevisionID: nil)
         }
-        // Revision IDs are unique, so a match names exactly one revision.
-        guard revisions.contains(where: { $0.id.rawValue == activeRevisionID }) else {
-            throw RevisionStateCodecRejection.activeRevisionIDNamesNoStoredRevision(
+        // Revision IDs are unique, so the validation set answers membership
+        // directly without rescanning the bounded revision array.
+        guard seenRevisionIDs.contains(activeRevisionID) else {
+            throw CodecRejection.activeRevisionIDNamesNoStoredRevision(
                 activeRevisionID
             )
         }
@@ -313,7 +294,7 @@ internal enum RevisionStateBlobCodec {
     /// Version").
     internal static func decodeContentVersion(_ rawValue: UInt64) throws -> ContentVersion {
         guard rawValue >= 1 else {
-            throw RevisionStateCodecRejection.invalidContentVersion(found: rawValue)
+            throw CodecRejection.invalidContentVersion(found: rawValue)
         }
         return ContentVersion(rawValue: rawValue)
     }
@@ -321,8 +302,9 @@ internal enum RevisionStateBlobCodec {
     /// Decodes the row's occurrence fields into a `CopyOccurrence` (§3.1:
     /// "Full first/last time and source summary"; §4: "valid occurrence
     /// values"). Valid means: a copy count of at least one (the item exists
-    /// through an accepted capture), monotone recency (D11), and
-    /// source-application observations within the Part VI UTF-8 byte bound.
+    /// through an accepted capture), finite first/last timestamps, monotone
+    /// recency (D11), and source-application observations within the Part VI
+    /// UTF-8 byte bound.
     internal static func decodeOccurrence(
         firstCopiedAt: Date,
         lastCopiedAt: Date,
@@ -331,21 +313,14 @@ internal enum RevisionStateBlobCodec {
         lastSource: String?,
         limits: HistoryLimits = .standard
     ) throws -> CopyOccurrence {
-        guard copyCount >= 1 else {
-            throw RevisionStateCodecRejection.zeroCopyCount
-        }
+        try validateCopyCount(copyCount)
+        try validateFiniteFirstCopiedAt(firstCopiedAt)
+        try validateFiniteLastCopiedAt(lastCopiedAt)
         guard lastCopiedAt >= firstCopiedAt else {
-            throw RevisionStateCodecRejection.lastCopiedAtPrecedesFirstCopiedAt
+            throw CodecRejection.lastCopiedAtPrecedesFirstCopiedAt
         }
         for source in [firstSource, lastSource] {
-            guard let source else { continue }
-            let utf8ByteCount = source.utf8.count
-            guard utf8ByteCount <= limits.maximumSourceApplicationObservationUTF8Bytes else {
-                throw RevisionStateCodecRejection.sourceObservationExceedsBound(
-                    found: utf8ByteCount,
-                    bound: limits.maximumSourceApplicationObservationUTF8Bytes
-                )
-            }
+            try validateSourceObservation(source, limits: limits)
         }
         return CopyOccurrence(
             firstCopiedAt: firstCopiedAt,
@@ -356,6 +331,41 @@ internal enum RevisionStateBlobCodec {
         )
     }
 
+    /// Scalar-only paths consume copy dates without hydrating the complete
+    /// occurrence. These validators keep the same fail-closed vocabulary on
+    /// retention, recent, and search reads as full lineage decode (§4).
+    internal static func validateFiniteFirstCopiedAt(_ value: Date) throws {
+        guard value.timeIntervalSinceReferenceDate.isFinite else {
+            throw CodecRejection.nonFiniteFirstCopiedAt
+        }
+    }
+
+    internal static func validateFiniteLastCopiedAt(_ value: Date) throws {
+        guard value.timeIntervalSinceReferenceDate.isFinite else {
+            throw CodecRejection.nonFiniteLastCopiedAt
+        }
+    }
+
+    internal static func validateCopyCount(_ value: UInt64) throws {
+        guard value >= 1 else {
+            throw CodecRejection.zeroCopyCount
+        }
+    }
+
+    internal static func validateSourceObservation(
+        _ value: String?,
+        limits: HistoryLimits = .standard
+    ) throws {
+        guard let value else { return }
+        let utf8ByteCount = value.utf8.count
+        guard utf8ByteCount <= limits.maximumSourceApplicationObservationUTF8Bytes else {
+            throw CodecRejection.sourceObservationExceedsBound(
+                found: utf8ByteCount,
+                bound: limits.maximumSourceApplicationObservationUTF8Bytes
+            )
+        }
+    }
+
     /// Decodes the row's `pinOrdinal` (§3.1: "`nil` is unpinned"; §4: "a
     /// non-negative pin ordinal (negative is corruption)";
     /// docs/02-domain.md §3.2). The unique-contiguous pinned-order proof is a
@@ -363,7 +373,7 @@ internal enum RevisionStateBlobCodec {
     internal static func decodePinOrdinal(_ rawValue: Int?) throws -> PinOrdinal? {
         guard let rawValue else { return nil }
         guard rawValue >= 0 else {
-            throw RevisionStateCodecRejection.negativePinOrdinal(found: rawValue)
+            throw CodecRejection.negativePinOrdinal(found: rawValue)
         }
         return PinOrdinal(rawValue: rawValue)
     }
@@ -383,29 +393,7 @@ internal enum RevisionStateBlobCodec {
     /// including the active Revision ID. Generosity is safe: every exact §4
     /// bound is re-checked after parsing.
     internal static func maximumBlobBytes(limits: HistoryLimits = .standard) -> Int {
-        CodecValidation.clampedEnvelopeSum([
-            CodecValidation.clampedEnvelopeProduct(
-                limits.maximumRevisionsPerItem,
-                CodecValidation.clampedEnvelopeSum([
-                    CodecValidation.clampedEnvelopeProduct(
-                        limits.maximumRepresentationsPerCaptureOrRevision,
-                        CodecValidation.clampedEnvelopeSum([
-                            CodecValidation.clampedEnvelopeProduct(
-                                limits.maximumTypeIdentifierUTF8Bytes,
-                                8
-                            ),
-                            256,
-                        ])
-                    ),
-                    128,
-                ])
-            ),
-            CodecValidation.clampedEnvelopeProduct(
-                limits.maximumTotalRevisionBytesPerItem,
-                2
-            ),
-            4_096,
-        ])
+        CodecDecodeEnvelope.revisionState(limits: limits)
     }
 
     // MARK: Wire serialization

@@ -1,8 +1,11 @@
 # Implementation Roadmap
 
 > **Status:** design-consolidated; implementation in progress — M1 (steps 1–2)
-> complete, M2 steps 0/3/4/5 done and 6–8 pending, all CI-green (current state
-> per step: `../PROGRESS.md`; status boundary: `../06-cross-cutting.md` §1).
+> complete, **M2 (steps 3–8) in acceptance remediation**: implementation is
+> present, including the dedicated D1–D19 suite and corrected WL8 construct;
+> supported-macOS correctness and performance proof remains open. M3 (step 9
+> product wiring) is pending (current state per step:
+> `../PROGRESS.md`; status boundary: `../06-cross-cutting.md` §1).
 > This roadmap is a traceable map from the **design modules**
 > (Part I §2 target graph) to **implementation work**, ordered by Part VI §5.
 > Every module cross-links the spec sections that define it and, where applicable,
@@ -43,8 +46,10 @@ HistoryStorage}; the direct ClipyApp→HistoryCore edge (for `any ClipboardHisto
 is not drawn in the structural graph.
 
 Test targets mirror each owner (`HistoryCoreTests`, `HistoryDomainTests`,
-`HistoryStorageTests`, `PasteboardAdapterTests`, `PresentationUITests`,
-`ClipyIntegrationTests`), per Part VI §5.
+`HistoryStorageTests`, `HistoryPerfRunnerTests`, `PasteboardAdapterTests`,
+`PresentationUITests`, `ClipyIntegrationTests`), per Part VI §5. The runner
+test target is cross-cutting proof infrastructure rather than an eighth design
+module.
 
 ## 3. Implementation order (Part VI §5), grouped into phases
 
@@ -57,7 +62,7 @@ Test targets mirror each owner (`HistoryCoreTests`, `HistoryDomainTests`,
 
 **Steps** (module owner in bold):
 
-0. **scaffold (cross-cutting).** Create the SwiftPM package declaring the Part I §1 target graph as **placeholder/stub targets** — 7 production targets (6 SwiftPM libraries + ClipyApp via XcodeGen) + 6 test targets (Part VI §5). HistoryStorage is declared **without** its Fuse target-dependency edge (Fuse is an external SPM package that resolves only once pinned at step 3); `xxh3` is declared with placeholder source (real C/ObjC++ content lands at step 3). Add XcodeGen `project.yml` (Part I §9 item 6), SwiftLint/import-gate config (Part I §8), the public-symbol-no-leak snapshot harness, the no-`@unchecked Sendable` / `nonisolated(unsafe)` / no-service-locator source scan, **and the deterministic concurrency test harness scaffold** (required by WS12/13/15/20; its transaction-injection seam is finished inside `HistoryAuthority` at step 5), **and provision the Part VI §9 performance-runner scaffold** (release-like runner + recorded-fixture/machine-metadata capture; fixtures populate as HistoryStorage matures, §9 closes at step 8). `ClipyIntegrationTests` is an XcodeGen-hosted target (it exercises the composed app); the other five test targets are SwiftPM-owned. This step owns the Part VI §6 graph-level proofs: whole-graph Swift 6 build, per-target framework import confinement, all-targets public-symbol snapshot, and the global escape-hatch scan.
+0. **scaffold (cross-cutting).** Create the SwiftPM package declaring the Part I §1 target graph as **placeholder/stub targets** — 7 product/library targets (6 SwiftPM libraries + ClipyApp via XcodeGen), the non-product `HistoryPerfRunner` executable, and 6 initial test targets (Part VI §5). HistoryStorage is declared **without** its Fuse target-dependency edge (Fuse is an external SPM package that resolves only once pinned at step 3); `xxh3` is declared with placeholder source (real C/ObjC++ content lands at step 3). Add XcodeGen `project.yml` (Part I §9 item 6), SwiftLint/import-gate config (Part I §8), the public-symbol-no-leak snapshot harness, the no-`@unchecked Sendable` / `nonisolated(unsafe)` / no-service-locator source scan, **and the deterministic concurrency test harness scaffold** (required by WS12/13/15/20; its transaction-injection seam is finished inside `HistoryAuthority` at step 5), **and provision the Part VI §9 performance-runner scaffold** (release-like runner + recorded-fixture/machine-metadata capture; fixtures populate as HistoryStorage matures, §9 closes at step 8). `ClipyIntegrationTests` is XcodeGen-hosted (it exercises the composed app); the other five initial test targets are SwiftPM-owned. V1 verification later adds `HistoryPerfRunnerTests` at step 8's proof seam without adding a product target. This step owns the Part VI §6 graph-level proofs: whole-graph Swift 6 build, per-target framework import confinement, all-targets public-symbol snapshot, and the global escape-hatch scan.
 1. **Module 1 — HistoryCore:** compile public values + protocol; lock the symbol surface (Part VI §6).
 2. **Module 2 — HistoryDomain:** compile pure values, facts, planners; invariant tests (D1–D19).
 3. **Module 7 — integrate xxh3 + Fuse:** pin exact resolved revisions; swap the real C/ObjC++ source into the `xxh3` placeholder target; pin the Fuse 1.4.x SPM revision and **add the deferred HistoryStorage→Fuse package-dependency edge**; add the package-only deterministic xxh3 collision double. Both are then resolvable. **xxh3 is first used at step 5** (`IngestPreparationActor`, 05 §6.1); **Fuse is first used at step 7** (the full `SearchWorker` implementation for WS17 — the step-5 `SearchWorker` is a stub with no Fuse field). *(Incremental convention: step 0 declares HistoryStorage without the Fuse edge and xxh3 with placeholder source, so step 4's schema/codec code imports neither; step 3 pins real revisions and adds the Fuse edge; xxh3 is first imported at step 5, Fuse at step 7.)*
@@ -100,12 +105,11 @@ spec edit traces forward to its module(s).
 ## 5. Completion gating (from Part VI)
 
 - **Design consolidated** ✅ (Parts 00–06 + this roadmap; AUDIT.md CLEAN).
-- **Executable specification** ⛔ pending, in progress — Part VI §6 (compile/dependency) +
-  §7 (schema/platform) + §9 (performance) + WS1–WS21 on the supported macOS runner,
-  with the concurrency harness + transaction-injection seam delivered (step 5).
-  **M1 (pure compile, steps 1–2) is complete; M2 (steps 3–8) has steps 0/3/4/5
-  done and 6–8 pending.** All step evidence below is green on the
-  `macOS 26 ARM CI` workflow (macos-26 arm64) at HEAD `7994844`, run 29964640300:
+- **Executable specification** ⛔ in progress — Part VI §6
+  (compile/dependency), §7 (schema/platform), §9 (performance), and WS1–WS21
+  must all be green on the supported macOS runner. The implementation and
+  concurrency harness are present; their new and corrected proofs still require
+  supported-macOS execution:
   - **Step 0 ✅** — SwiftPM target graph, source gates, XcodeGen app, CI
     scaffold; Part VI §6 graph-level proofs (whole-graph Swift 6 build,
     per-target import confinement, public-symbol snapshot, escape-hatch scan)
@@ -113,19 +117,27 @@ spec edit traces forward to its module(s).
   - **Step 1 ✅** — HistoryCore public surface (03a §2–§7, 03b §8–§10, 06 §2);
     public symbol snapshot locked and gate-enforced.
   - **Step 2 ✅** — HistoryDomain pure functional core (02 §2–§11) landed and
-    CI-green. Open item: the dedicated per-invariant D1–D19 test suite
-    (02 §14; acceptance-required) is still pending — current coverage is
-    smoke-level plus the WS gates that exercise the planners end-to-end.
+    CI-green. The dedicated per-invariant D1–D19 suite (02 §14;
+    acceptance-required) is now present locally with 47 tests; supported-runner
+    `swift test` evidence is pending.
   - **Step 3 ✅** — dependencies pinned: vendored xxh3 (xxHash v0.8.3) + Fuse
     1.4.0 revision pin.
   - **Step 4 ✅** — SwiftData schema v1 + versioned codecs (05 §3–§4); §7.3
     round-trip and §7.4 corruption-rejection proofs pass on the runner.
   - **Step 5 ✅** — HistoryAuthority + capture path (05 §2, §5–§13) and the
     concurrency harness + transaction-injection seam; WS1–WS3/WS5/WS19 gates and
-    §7.1 transaction-boundary / §7.6 forced-collision proofs pass on the runner.
-  - **Steps 6–8 ⛔ pending** — mutations (WS6–WS10/WS13/WS14/WS16/WS20/WS21),
-    reads + observation (WS4/WS11/WS12/WS17/WS18; §7.2/§7.5), thumbnail (WS15);
-    §9 runner fixtures still open. State 2 closes only at step 8.
+    §7.1 transaction-boundary / §7.6 forced-collision proofs pass on the runner
+    (run 29964640300).
+  - **Step 6 ✅** — mutations (WS6–WS10/WS13/WS14/WS16/WS20/WS21); IMP6-01
+    pinned-remove compaction spec amendment (run 30724821449).
+  - **Step 7 ✅** — reads + observation (WS4/WS11/WS12/WS17/WS18; §7.2/§7.5
+    proofs; the deferred public-read/observation/no-emission clauses of
+    WS1–WS21 closed) (run 30731143421).
+  - **Step 8 ⚠️** — thumbnail single-flight implementation and WS15 are green.
+    Run 30731659350 was cancelled before Perf completed; latest run 30734778016
+    exposed an invalid WL8 construction. The corrected WL8 construct is present
+    locally; V1V-04-001 is awaiting release-runner evidence. **State 2 remains
+    open.**
 - **Product implementation complete** ⛔ pending — UI, pasteboard, packaging,
   accessibility, localization, product tests.
 

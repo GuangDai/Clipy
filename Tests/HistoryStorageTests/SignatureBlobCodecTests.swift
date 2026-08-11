@@ -97,7 +97,7 @@ private func makeLimits(
         pageRowLimitRange: 1...500,
         maximumSearchTermUTF8Bytes: 4_096,
         maximumRegexpPatternCharacters: 512,
-        maximumFuzzyQueryCharacters: 256,
+        maximumFuzzyQueryCharacters: 64,
         maximumFuzzyTitleBodyPrefixCharacters: 5_000,
         maximumRegexpTitleBodyPrefixCharacters: 1_000,
         maximumBodySearchSnippetCharacters: 322,

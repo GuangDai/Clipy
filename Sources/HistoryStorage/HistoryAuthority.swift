@@ -117,16 +117,34 @@ internal enum AuthoritySuspensionPoint: String, Sendable {
 /// seam); WS13: docs/06-cross-cutting.md §8.
 ///
 /// Test seam, compiled in always and harmless in production: disarmed unless
-/// a test arms it via @testable (no `#if DEBUG`). Arming is one-shot: the
-/// first transaction closure entered after arming throws at the injection
-/// point and disarms, so the exact WS13 interleaving — row mutation applied,
-/// singleton position not yet written — commits nothing (§10: "Closure
-/// failure commits nothing. There is no receipt, index delta, or
-/// invalidation").
-internal enum InjectedTransactionFailure: Error, Sendable {
+/// a test arms it via @testable (no `#if DEBUG`). Each case is one-shot and
+/// consumed only when its matching production guard is reached. The WS13
+/// case preserves its exact interleaving — row mutation applied, singleton
+/// position not yet written — while the guard-specific cases alter only a
+/// local decision value, never durable fixture state. Every injected guard
+/// failure therefore traverses the real transaction catch and commits nothing
+/// (§10: "Closure failure commits nothing. There is no receipt, index delta,
+/// or invalidation").
+internal enum InjectedTransactionFailure: Error, Sendable, Equatable {
     /// Throw after all row mutations and the final pin-order revalidation,
     /// immediately before the singleton position update (WS13).
     case beforeSingletonUpdate
+
+    /// Make the real §10 singleton-position guard observe a mismatch.
+    case positionChanged
+
+    /// Make the real non-create row-existence guard observe no row.
+    case missingRow
+
+    /// Make the real create-ID uniqueness guard observe a duplicate.
+    case duplicateCreateID
+
+    /// Make the real append-revision OCC guard observe a version mismatch.
+    case contentVersionMismatch
+
+    /// Add one impossible ordinal to the validator's local scalar snapshot so
+    /// its real D12 contiguity guard rejects the transaction.
+    case finalPinOrderViolated
 }
 
 // MARK: - HistoryAuthority (docs/05-authority-kernel.md §2, §5)
@@ -160,8 +178,8 @@ internal actor HistoryAuthority {
     /// The actor-owned Signature Index value (§12). `init()` (unready) at
     /// construction; `performStartup` replaces it with the §13 step-8 build;
     /// commits mutate it only through the prevalidated `apply(_:)` delta
-    /// (§9, §11). Capture-time rebuilds mint generation 0 themselves
-    /// (`SignatureIndex.build`); the loader returns the rebuilt index.
+    /// (§9, §11). Capture-time rebuilds replace it wholesale through
+    /// `SignatureIndex.build`; the loader returns the rebuilt value.
     private var signatureIndex: SignatureIndex
 
     /// The process-local invalidation signal (docs/04-coherence.md §4);
@@ -169,11 +187,13 @@ internal actor HistoryAuthority {
     /// synchronous actor operations (§14.4).
     private var invalidationPublisher: HistoryInvalidationPublisher
 
-    /// The process-instance/schema marker stamped into every cursor this
-    /// Authority mints (docs/04-coherence.md §6). A cursor from a different
-    /// process or schema generation never decodes against this Authority;
-    /// `PageCursorCodec.decode` rejects the marker mismatch and the caller
-    /// maps it to `.snapshotExpired(current:)` (§16). Immutable for the
+    /// The process-instance marker stamped into every cursor this Authority
+    /// mints (docs/04-coherence.md §6). `PageCursorCodec.decode` rejects a
+    /// marker minted by any other Authority/process and the caller maps the
+    /// mismatch to `.snapshotExpired(current:)` (§16). A schema deployment
+    /// necessarily starts a new process/Authority, so the random process
+    /// marker also invalidates pre-deployment cursors without duplicating the
+    /// durable schema version in this ephemeral token. Immutable for the
     /// Authority's lifetime.
     private let processMarker = UUID()
 
@@ -204,7 +224,7 @@ internal actor HistoryAuthority {
         self.injectedTransactionFailure = nil
     }
 
-    /// The process-instance/schema marker for cursor minting (04 §6). The
+    /// The process-instance marker for cursor minting (04 §6). The
     /// `SearchWorker` call path mints cursors off-actor; it receives this
     /// marker so the minted cursor binds this Authority's generation.
     internal var cursorProcessMarker: UUID { processMarker }
@@ -358,10 +378,14 @@ internal actor HistoryAuthority {
             _ = try mapCodecFailure {
                 try RevisionStateBlobCodec.decodeContentVersion(row.contentVersionRaw)
             }
-            // §13 step 7: the greenfield v1 schema requires projection
-            // schema version 1.
-            guard row.projectionSchemaVersion == ContentProjector.schemaVersion else {
-                throw HistoryFailure.persistence(.corruptStoredValue)
+            // §13 step 7: the greenfield v1 schema requires the known
+            // projection schema version. Reuse the same fail-closed validator
+            // as every read path (§4).
+            let projectionSchemaVersion = row.projectionSchemaVersion
+            try mapCodecFailure {
+                try ContentProjector.validateStoredSchemaVersion(
+                    projectionSchemaVersion
+                )
             }
             let pinOrdinal = try mapCodecFailure {
                 try RevisionStateBlobCodec.decodePinOrdinal(row.pinOrdinal)
@@ -379,7 +403,9 @@ internal actor HistoryAuthority {
         // list equals the index range iff the set is contiguous and
         // duplicate-free.
         pinnedOrdinals.sort()
-        guard pinnedOrdinals == Array(0 ..< pinnedOrdinals.count) else {
+        guard pinnedOrdinals.enumerated().allSatisfy({ offset, ordinal in
+            ordinal == offset
+        }) else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
         do {
@@ -398,9 +424,8 @@ internal actor HistoryAuthority {
     ///
     /// Flow (§9): create operation-local context → load exact facts via
     /// `IngestFactLoader` (which rebuilds the Signature Index first when
-    /// unready, §7.1 step 1) → `planCapture` → `.unchanged` releases the
-    /// context and returns (no receipt, index delta, or invalidation,
-    /// docs/04-coherence.md §4) → stamp via `CommitPlanStamper` →
+    /// unready, §7.1 step 1) → `planCapture` (which always commits insert or
+    /// coalesce) → stamp via `CommitPlanStamper` →
     /// prevalidate the index delta (§9) → one `ModelContext.transaction`
     /// (§10) → nonthrowing Signature Index delta → synchronous invalidation
     /// yield → `.committed` receipt (§11).
@@ -439,9 +464,8 @@ internal actor HistoryAuthority {
             limits: limits
         )
 
-        // §7.1: complete facts, rebuilding the index first when unready
-        // (`SignatureIndex.build` mints generation 0 itself; the loader
-        // returns the rebuilt index).
+        // §7.1: complete facts, rebuilding the index first when unready (the
+        // loader returns the wholesale `SignatureIndex.build` replacement).
         let load = try IngestFactLoader.loadFacts(
             in: context,
             prepared: prepared.domain,
@@ -465,10 +489,10 @@ internal actor HistoryAuthority {
         }
 
         guard case .commit(let mutationPlan) = planningResult else {
-            // §9: release the context and return — nothing is retained
-            // across the operation (§5), and a no-op yields no receipt,
-            // index delta, or invalidation (docs/04-coherence.md §4).
-            return .unchanged
+            // `planCapture` has no no-op outcome: equal content coalesces and
+            // distinct content inserts (docs/02-domain.md §9). Fail closed if
+            // that planner contract ever drifts behind the shared result type.
+            throw HistoryFailure.persistence(.invariantViolation)
         }
 
         // Copy Coalescing preserves the winner's loaded Content Version
@@ -511,52 +535,22 @@ internal actor HistoryAuthority {
             throw rejection.historyFailure
         }
 
-        // §9: prevalidate the index delta before the transaction so the
-        // §11 post-commit dictionary application cannot fail after durable
-        // commit. A prevalidation failure happens before any durable write
-        // and is an internal invariant violation (§12, §16).
-        do {
-            try signatureIndex.validate(stamped.indexDelta)
-        } catch {
-            throw HistoryFailure.persistence(.invariantViolation)
-        }
-
-        // §10: the only durable History Commit primitive. Closure success is
-        // the commit boundary — no trailing save, no compensating rollback.
-        try executeCommitTransaction(
+        return try executeStampedPlan(
             stamped,
             expectedPreviousPosition: currentPosition,
             in: context
         )
-
-        // §11 post-commit order, still isolated and without suspension:
-        // 1. apply the already validated nonthrowing Signature Index delta
-        //    (on detected divergence the index marks itself unready and the
-        //    committed state stays authoritative, §11–§12);
-        signatureIndex.apply(stamped.indexDelta)
-        // 2. synchronously yield one invalidation to registered
-        //    continuations (docs/04-coherence.md §4);
-        invalidationPublisher.publish(
-            HistoryInvalidation(latestPosition: stamped.position)
-        )
-        // 3. construct and return the committed receipt.
-        return .committed(HistoryCommit(
-            position: stamped.position,
-            outcome: stamped.receiptOutcome
-        ))
     }
 
     // MARK: Stamped-plan commit tail (docs/05-authority-kernel.md §9–§11)
 
-    /// §9–§11 tail shared by the step-6 commits: prevalidate the index delta,
+    /// §9–§11 tail shared by capture and mutation commits: prevalidate the index delta,
     /// execute the one atomic transaction, then apply the post-commit order
     /// without suspension (index delta → invalidation → committed receipt).
     /// docs/05-authority-kernel.md §9, §10, §11
     ///
-    /// `commitCapture` keeps this tail inline (it additionally owns the
-    /// unready-index rebuild of §7.1 step 1); the step-6 mutation commits
-    /// share it here so each one is exactly context → singleton → facts →
-    /// plan → stamp → tail (§9 flow).
+    /// Capture owns its §7.1 rebuild before planning, then joins the same tail
+    /// as every mutation: context → singleton → facts → plan → stamp → tail.
     ///
     /// - Throws: `.persistence(.invariantViolation)` when the delta
     ///   prevalidation fails — an internal invariant violation raised before
@@ -631,19 +625,25 @@ internal actor HistoryAuthority {
         do {
             try context.transaction {
                 let meta = try Self.fetchExactlyOnePositionRow(in: context)
-                guard meta.rawValue == expectedPreviousPosition.rawValue else {
+                let positionChangedInjected = self.consumeTransactionFailureInjection(
+                    .positionChanged
+                )
+                guard !positionChangedInjected,
+                      meta.rawValue == expectedPreviousPosition.rawValue
+                else {
                     throw StorageInvariant.positionChanged
                 }
                 for mutation in plan.mutations {
                     try self.apply(mutation, in: context, positionRow: meta)
                 }
-                try self.validateFinalPinOrder(in: context)
+                if plan.requiresFinalPinOrderValidation {
+                    try self.validateFinalPinOrder(in: context)
+                }
                 // Roadmap-owned WS13 seam: one-shot injection after row
                 // mutation, before the singleton update. Disarmed (nil) in
                 // production.
-                if let injection = self.injectedTransactionFailure {
-                    self.injectedTransactionFailure = nil
-                    throw injection
+                if self.consumeTransactionFailureInjection(.beforeSingletonUpdate) {
+                    throw InjectedTransactionFailure.beforeSingletonUpdate
                 }
                 // The singleton position is written last, inside the same
                 // transaction (§10, D6).
@@ -676,10 +676,14 @@ internal actor HistoryAuthority {
     ) throws {
         switch mutation {
         case .create(let item):
-            guard try HistoryItemRowHydration.fetchRow(
+            let existingRow = try HistoryItemRowHydration.fetchRow(
                 businessID: item.id,
                 in: context
-            ) == nil else {
+            )
+            let duplicateCreateInjected = consumeTransactionFailureInjection(
+                .duplicateCreateID
+            )
+            guard existingRow == nil, !duplicateCreateInjected else {
                 throw TransactionApplyRejection.duplicateCreateID(itemID: item.id)
             }
             context.insert(HistoryItemRow(
@@ -691,8 +695,7 @@ internal actor HistoryAuthority {
                 projectionSchemaVersion: item.projection.schemaVersion,
                 title: item.projection.title,
                 searchBody: item.projection.searchBody,
-                effectiveTypeIdentifiersBlob: try EffectiveTypeIdentifiersBlobCodec
-                    .encode(item.projection.effectiveTypeIdentifiers),
+                effectiveTypeIdentifiersBlob: item.effectiveTypeIdentifiersBlob,
                 firstCopiedAt: item.occurrence.firstCopiedAt,
                 lastCopiedAt: item.occurrence.lastCopiedAt,
                 copyCount: item.occurrence.count,
@@ -717,7 +720,12 @@ internal actor HistoryAuthority {
 
         case .appendRevision(let update):
             let row = try requireRow(update.itemID, in: context)
-            guard row.contentVersionRaw == update.expectedCurrentVersion.rawValue else {
+            let versionMismatchInjected = consumeTransactionFailureInjection(
+                .contentVersionMismatch
+            )
+            guard !versionMismatchInjected,
+                  row.contentVersionRaw == update.expectedCurrentVersion.rawValue
+            else {
                 throw TransactionApplyRejection.contentVersionMismatch(
                     itemID: update.itemID
                 )
@@ -729,8 +737,7 @@ internal actor HistoryAuthority {
             row.projectionSchemaVersion = update.projection.schemaVersion
             row.title = update.projection.title
             row.searchBody = update.projection.searchBody
-            row.effectiveTypeIdentifiersBlob = try EffectiveTypeIdentifiersBlobCodec
-                .encode(update.projection.effectiveTypeIdentifiers)
+            row.effectiveTypeIdentifiersBlob = update.effectiveTypeIdentifiersBlob
 
         case .delete(let itemID, _):
             // §10: delete fetches the actual row — no predicate delete over
@@ -754,10 +761,12 @@ internal actor HistoryAuthority {
         _ itemID: HistoryItemID,
         in context: ModelContext
     ) throws -> HistoryItemRow {
-        guard let row = try HistoryItemRowHydration.fetchRow(
+        let row = try HistoryItemRowHydration.fetchRow(
             businessID: itemID,
             in: context
-        ) else {
+        )
+        let missingRowInjected = consumeTransactionFailureInjection(.missingRow)
+        guard !missingRowInjected, let row else {
             throw TransactionApplyRejection.missingRow(itemID: itemID)
         }
         return row
@@ -766,12 +775,13 @@ internal actor HistoryAuthority {
     /// §10: revalidates the final pinned order inside the transaction
     /// closure — ordinals non-negative, unique, and exactly `0 ..< p` (D12)
     /// — before closure success. The fetch is scalar (`pinOrdinal` only) and
-    /// bounded by the hard retained-item maximum (§7.3), and unpinned rows
-    /// are skipped in memory — the same shape as the §13 step-9 startup
-    /// proof, avoiding any optional-`#Predicate` runtime-translation
-    /// dependency (§18's verify-against-the-SDK stance).
+    /// bounded by the hard retained-item maximum (§7.3). It runs only for a
+    /// plan that may affect the pinned lane, and uses the same verified
+    /// optional-ordinal predicate as the recent pinned-lane fetch (§14.1).
     private func validateFinalPinOrder(in context: ModelContext) throws {
-        var descriptor = FetchDescriptor<HistoryItemRow>()
+        var descriptor = FetchDescriptor<HistoryItemRow>(
+            predicate: #Predicate { $0.pinOrdinal != nil }
+        )
         descriptor.propertiesToFetch = [\.pinOrdinal]
         descriptor.fetchLimit = limits.hardMaximumRetainedItems + 1
         let rows: [HistoryItemRow]
@@ -792,8 +802,15 @@ internal actor HistoryAuthority {
             }
             ordinals.append(ordinal)
         }
+        if consumeTransactionFailureInjection(.finalPinOrderViolated) {
+            // The seam changes only this operation-local scalar proof value;
+            // it never manufactures or persists a corrupt `@Model` row.
+            ordinals.append(Int.max)
+        }
         ordinals.sort()
-        guard ordinals == Array(0 ..< ordinals.count) else {
+        guard ordinals.enumerated().allSatisfy({ offset, ordinal in
+            ordinal == offset
+        }) else {
             throw TransactionApplyRejection.finalPinOrderViolated
         }
     }
@@ -872,7 +889,10 @@ internal actor HistoryAuthority {
     /// returned stream fires the publisher's termination callback, which
     /// hops back onto the Authority and removes the token (§14.4:
     /// "Cancellation removes the token"); the weak hop avoids a
-    /// publisher→continuation→actor retain cycle. Step 7's
+    /// publisher→continuation→actor retain cycle. The termination callback is
+    /// synchronous and cannot await an actor hop, so this short-lived Task owns
+    /// exactly one idempotent dictionary removal; there is no result or longer
+    /// operation that a parent task would need to join. Step 7's
     /// `SwiftDataHistory.observe` loop is the caller.
     internal func registerInvalidationSubscriber() -> (
         subscription: HistoryInvalidationSubscription,
@@ -904,13 +924,25 @@ internal actor HistoryAuthority {
         suspensionHandler = handler
     }
 
-    /// Arms (or clears) the one-shot transaction failure of WS13. Test seam
-    /// — disarmed in production, compiled in always, set via @testable; see
-    /// `InjectedTransactionFailure`.
+    /// Arms (or clears) one one-shot transaction failure. Test seam —
+    /// disarmed in production, compiled in always, set via @testable; WS13
+    /// uses `.beforeSingletonUpdate`, while direct defensive-guard proofs use
+    /// the matching guard-specific cases. See `InjectedTransactionFailure`.
     internal func setTransactionFailureInjection(
         _ injection: InjectedTransactionFailure?
     ) {
         injectedTransactionFailure = injection
+    }
+
+    /// Consumes one armed injection only at its matching production guard.
+    /// A guard-specific case therefore cannot accidentally fall through to
+    /// WS13's later generic failure point and create a false-positive test.
+    private func consumeTransactionFailureInjection(
+        _ expected: InjectedTransactionFailure
+    ) -> Bool {
+        guard injectedTransactionFailure == expected else { return false }
+        injectedTransactionFailure = nil
+        return true
     }
 
     /// Suspends at `point` when the harness has installed a handler; a no-op
@@ -1504,6 +1536,30 @@ internal actor HistoryAuthority {
     // Each reuses this file's non-suspending read-interval spine: the only
     // `await` is the WS12 test seam at entry, before the context exists (§5).
 
+    /// One owner for the projection scalars fetched by recent/search reads
+    /// and the unpinned exactness fallback. Search adds only `searchBody`;
+    /// keeping the common list here prevents one read path silently omitting
+    /// a field that `ScalarReadRow`/`SearchCorpusRow` consumes (§14.1–§14.2).
+    private static func scalarProjectionProperties(
+        includingSearchBody: Bool
+    ) -> [PartialKeyPath<HistoryItemRow>] {
+        var properties: [PartialKeyPath<HistoryItemRow>] = [
+            \.id,
+            \.contentVersionRaw,
+            \.projectionSchemaVersion,
+            \.title,
+            \.effectiveTypeIdentifiersBlob,
+            \.lastCopiedAt,
+            \.copyCount,
+            \.lastSource,
+            \.pinOrdinal,
+        ]
+        if includingSearchBody {
+            properties.append(\.searchBody)
+        }
+        return properties
+    }
+
     /// The position-only scalar read backing the observe loop's phase-1
     /// race-closing recheck (docs/04-coherence.md §5) and WS12
     /// (docs/06-cross-cutting.md §8).
@@ -1612,27 +1668,22 @@ internal actor HistoryAuthority {
             }
         }
 
-        // §14.1: scalar-only two-lane fetch. The `propertiesToFetch` selects
-        // only the projection fields — no Canonical or revision blob is
-        // faulted (§7.5).
-        let scalarProperties: [PartialKeyPath<HistoryItemRow>] = [
-            \.id,
-            \.contentVersionRaw,
-            \.title,
-            \.effectiveTypeIdentifiersBlob,
-            \.lastCopiedAt,
-            \.copyCount,
-            \.lastSource,
-            \.pinOrdinal,
-        ]
+        // §14.1: scalar-only two-lane fetch. `propertiesToFetch` requests only
+        // projection fields, and this path never accesses or decodes Canonical
+        // or revision blobs. Whether SwiftData also suppresses external-storage
+        // faulting is the separate supported-platform §7.5 performance proof.
+        let scalarProperties = Self.scalarProjectionProperties(
+            includingSearchBody: false
+        )
 
         // Continuation anchors are lane-scoped (04 §6): a pinned anchor
         // offsets the pinned lane; an unpinned anchor empties the pinned lane
         // (every pinned row precedes it in the merge) and bounds the unpinned
-        // lane at the store level. The store-level bounds keep a continuation
-        // page's fetch at the same ≤ limit+1 shape as a first page's — an
-        // in-memory-only anchor application would re-fetch the same top slice
-        // and starve the continuation (WS18).
+        // lane at the store level. Pinned continuations use FetchDescriptor's
+        // sorted-result offset; unpinned continuations carry one extra anchor
+        // slot because their UUID tie-break cannot be expressed portably in a
+        // SwiftData predicate. An in-memory-only anchor application would
+        // re-fetch the same top slice and starve the continuation (WS18).
         let laneAnchor: (ordinal: Int?, lastCopiedAt: Date, id: HistoryItemID)?
         if let anchor = resolvedCursor?.anchor {
             guard case .defaultOrder(let ordinal, let date, let id) = anchor else {
@@ -1657,17 +1708,20 @@ internal actor HistoryAuthority {
             )
             pinnedDescriptor.propertiesToFetch = scalarProperties
             pinnedDescriptor.sortBy = [SortDescriptor(\.pinOrdinal)]
-            // A pinned continuation offsets the lane by the anchor ordinal:
-            // ordinals are unique and contiguous (D12), so the rows after a
-            // pinned anchor at ordinal k are exactly the lane rows past index
-            // k, and bounding the fetch by the anchor's lane offset avoids an
-            // optional-Int comparison predicate (§18's verify-against-the-SDK
-            // stance). This fetches up to k+limit+2 scalar rows: the §9
-            // "≤ limit+1" claim covers first pages and unpinned continuations
-            // (the store-level date bound below); pinned continuations are
-            // bounded by the pinned count instead — the claim is weakened
-            // there, correctness intact (06 §7.5's own fallback stance).
-            pinnedDescriptor.fetchLimit = (laneAnchor?.ordinal ?? -1) + 1 + limit + 1
+            // Ordinals are unique and contiguous (D12). A continuation starts
+            // its sorted subrange AT ordinal k so the complete `(ordinal,
+            // lastCopiedAt,id)` anchor can be verified before it is dropped;
+            // accepting the offset without that check would turn a malformed
+            // package cursor into a silent skip. `fetchOffset` still avoids
+            // the former O(k+limit) prefix fetch.
+            let pinnedContinuationActive = laneAnchor?.ordinal != nil
+            if let ordinal = laneAnchor?.ordinal {
+                guard ordinal >= 0, ordinal < limits.hardMaximumRetainedItems else {
+                    throw HistoryFailure.snapshotExpired(current: currentPosition)
+                }
+                pinnedDescriptor.fetchOffset = ordinal
+            }
+            pinnedDescriptor.fetchLimit = limit + (pinnedContinuationActive ? 2 : 1)
             let pinnedRows: [HistoryItemRow]
             do {
                 pinnedRows = try context.fetch(pinnedDescriptor)
@@ -1676,18 +1730,15 @@ internal actor HistoryAuthority {
             }
             let lane = try orderPinnedLane(pinnedRows)
             if let laneAnchor {
-                // §6: the anchored row must exist — the §6-step-3 position
-                // guard froze the state at the cursor's snapshot. Absence
-                // contradicts the snapshot: defensive `.snapshotExpired`.
                 let anchorValue = StoredOrderingAnchor.defaultOrder(
                     pinnedOrdinal: laneAnchor.ordinal,
                     lastCopiedAt: laneAnchor.lastCopiedAt,
                     id: laneAnchor.id
                 )
-                guard let anchorIndex = lane.firstIndex(where: { $0.matches(anchorValue) }) else {
+                guard lane.first?.matches(anchorValue) == true else {
                     throw HistoryFailure.snapshotExpired(current: currentPosition)
                 }
-                pinnedOrdered = Array(lane[(anchorIndex + 1)...])
+                pinnedOrdered = Array(lane.dropFirst())
             } else {
                 pinnedOrdered = lane
             }
@@ -1698,43 +1749,58 @@ internal actor HistoryAuthority {
         // level by `lastCopiedAt <= anchor` (non-optional Date comparison —
         // the tie on `\.id` is resolved in memory by `orderUnpinnedLane`'s
         // exactness guard, never trusted to the store).
-        var unpinnedDescriptor: FetchDescriptor<HistoryItemRow>
-        if unpinnedAnchorActive, let laneAnchor {
-            let anchorDate = laneAnchor.lastCopiedAt
-            unpinnedDescriptor = FetchDescriptor<HistoryItemRow>(
-                predicate: #Predicate { $0.pinOrdinal == nil && $0.lastCopiedAt <= anchorDate }
-            )
-        } else {
-            unpinnedDescriptor = FetchDescriptor<HistoryItemRow>(
-                predicate: #Predicate { $0.pinOrdinal == nil }
-            )
-        }
-        unpinnedDescriptor.propertiesToFetch = scalarProperties
-        unpinnedDescriptor.sortBy = [SortDescriptor(\.lastCopiedAt, order: .reverse)]
-        // A continuation's date bound INCLUDES the anchored row, so the
-        // fetch carries one extra slot for it: limit+2 = anchor + page +
-        // lookahead (first pages fetch limit+1 = page + lookahead).
-        unpinnedDescriptor.fetchLimit = unpinnedAnchorActive ? limit + 2 : limit + 1
-        let unpinnedRows: [HistoryItemRow]
-        do {
-            unpinnedRows = try context.fetch(unpinnedDescriptor)
-        } catch {
-            throw HistoryFailure.temporarilyUnavailable(.factProof)
-        }
+        // Fetch only the unpinned capacity left after the pinned lane. When
+        // pinned already supplies page+lookahead, no unpinned row is touched;
+        // otherwise the two lane slices total at most pageLimit+1. An unpinned
+        // continuation has no pinned slice and fetches pageLimit+2 because its
+        // inclusive date predicate also returns the anchor.
+        let unpinnedPageLimit = unpinnedAnchorActive
+            ? limit
+            : max(0, limit - pinnedOrdered.count)
+        var unpinnedOrdered: [ScalarReadRow] = []
+        let shouldFetchUnpinned = unpinnedAnchorActive || pinnedOrdered.count <= limit
+        if shouldFetchUnpinned {
+            var unpinnedDescriptor: FetchDescriptor<HistoryItemRow>
+            if unpinnedAnchorActive, let laneAnchor {
+                let anchorDate = laneAnchor.lastCopiedAt
+                unpinnedDescriptor = FetchDescriptor<HistoryItemRow>(
+                    predicate: #Predicate { $0.pinOrdinal == nil && $0.lastCopiedAt <= anchorDate }
+                )
+            } else {
+                unpinnedDescriptor = FetchDescriptor<HistoryItemRow>(
+                    predicate: #Predicate { $0.pinOrdinal == nil }
+                )
+            }
+            unpinnedDescriptor.propertiesToFetch = scalarProperties
+            unpinnedDescriptor.sortBy = [SortDescriptor(\.lastCopiedAt, order: .reverse)]
+            unpinnedDescriptor.fetchLimit = unpinnedAnchorActive
+                ? unpinnedPageLimit + 2
+                : unpinnedPageLimit + 1
+            let unpinnedRows: [HistoryItemRow]
+            do {
+                unpinnedRows = try context.fetch(unpinnedDescriptor)
+            } catch {
+                throw HistoryFailure.temporarilyUnavailable(.factProof)
+            }
 
-        // EXACTNESS GUARD (§14.1): `\.id` is not trusted to sort at the store
-        // level. If a lane's slice is full (limit+1 rows) AND rows[limit-1]
-        // and rows[limit] tie on the lane sort key (same lastCopiedAt for the
-        // unpinned lane; pinned lane sorts by pinOrdinal which is unique so
-        // no tie is possible there), re-fetch that lane with the hard bound
-        // and order it fully in memory. Otherwise order the small slice by
-        // the full key.
-        var unpinnedOrdered = try orderUnpinnedLane(
-            unpinnedRows,
-            limit: unpinnedAnchorActive ? limit + 1 : limit,
-            anchorDate: unpinnedAnchorActive ? laneAnchor?.lastCopiedAt : nil,
-            in: context
-        )
+            let unpinnedContinuationAnchor: StoredOrderingAnchor?
+            if unpinnedAnchorActive, let laneAnchor {
+                unpinnedContinuationAnchor = .defaultOrder(
+                    pinnedOrdinal: nil,
+                    lastCopiedAt: laneAnchor.lastCopiedAt,
+                    id: laneAnchor.id
+                )
+            } else {
+                unpinnedContinuationAnchor = nil
+            }
+            unpinnedOrdered = try orderUnpinnedLane(
+                unpinnedRows,
+                pageLimit: unpinnedPageLimit,
+                continuationAnchor: unpinnedContinuationAnchor,
+                anchorDate: unpinnedAnchorActive ? laneAnchor?.lastCopiedAt : nil,
+                in: context
+            )
+        }
 
         // §6: apply the unpinned continuation anchor — drop rows up to and
         // including the anchored row. The anchored row is present in the
@@ -1768,14 +1834,21 @@ internal actor HistoryAuthority {
         // RETURNED row's `.defaultOrder` anchor (§6).
         let next: HistoryPageCursor?
         if merged.count > limit, let lastReturned = pageSlice.last {
-            next = PageCursorCodec.encode(
-                ResolvedPageCursor(
-                    queryShape: .recent(limit: limit),
-                    position: currentPosition,
-                    anchor: lastReturned.defaultOrderAnchor
-                ),
-                processMarker: processMarker
-            )
+            do {
+                next = try PageCursorCodec.encode(
+                    ResolvedPageCursor(
+                        queryShape: .recent(limit: limit),
+                        position: currentPosition,
+                        anchor: lastReturned.defaultOrderAnchor
+                    ),
+                    processMarker: processMarker
+                )
+            } catch {
+                // Minting uses already validated row scalars. Encoder failure
+                // is therefore an internal invariant, never caller cursor
+                // expiry (05 §16).
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
         } else {
             next = nil
         }
@@ -1855,17 +1928,9 @@ internal actor HistoryAuthority {
         // §14.2: capture scalar fields for EVERY retained row, bounded by the
         // hard retained-item maximum. Scalar-only — no content blob decode.
         var descriptor = FetchDescriptor<HistoryItemRow>()
-        descriptor.propertiesToFetch = [
-            \.id,
-            \.contentVersionRaw,
-            \.title,
-            \.searchBody,
-            \.effectiveTypeIdentifiersBlob,
-            \.lastCopiedAt,
-            \.copyCount,
-            \.lastSource,
-            \.pinOrdinal,
-        ]
+        descriptor.propertiesToFetch = Self.scalarProjectionProperties(
+            includingSearchBody: true
+        )
         descriptor.fetchLimit = limits.hardMaximumRetainedItems + 1
         let rows: [HistoryItemRow]
         do {
@@ -1888,7 +1953,29 @@ internal actor HistoryAuthority {
             // (actor-isolated context — sending the row risks data races).
             let identifiersBlob = row.effectiveTypeIdentifiersBlob
             let contentVersionRaw = row.contentVersionRaw
+            let projectionSchemaVersion = row.projectionSchemaVersion
+            let title = row.title
+            let searchBody = row.searchBody
+            let lastCopiedAt = row.lastCopiedAt
+            let copyCount = row.copyCount
+            let lastSource = row.lastSource
             let rawPinOrdinal = row.pinOrdinal
+            try mapCodecFailure {
+                try ContentProjector.validateStoredProjection(
+                    schemaVersion: projectionSchemaVersion,
+                    title: title,
+                    searchBody: searchBody,
+                    limits: limits
+                )
+                try RevisionStateBlobCodec.validateFiniteLastCopiedAt(
+                    lastCopiedAt
+                )
+                try RevisionStateBlobCodec.validateCopyCount(copyCount)
+                try RevisionStateBlobCodec.validateSourceObservation(
+                    lastSource,
+                    limits: limits
+                )
+            }
             let typeIdentifiers = try mapCodecFailure {
                 try EffectiveTypeIdentifiersBlobCodec.decode(
                     identifiersBlob,
@@ -1904,12 +1991,12 @@ internal actor HistoryAuthority {
             corpusRows.append(SearchCorpusRow(
                 id: HistoryItemID(rawValue: row.id),
                 contentVersion: contentVersion,
-                title: row.title,
-                searchBody: row.searchBody,
+                title: title,
+                searchBody: searchBody,
                 typeIdentifiers: typeIdentifiers,
-                lastCopiedAt: row.lastCopiedAt,
-                copyCount: row.copyCount,
-                lastSource: row.lastSource,
+                lastCopiedAt: lastCopiedAt,
+                copyCount: copyCount,
+                lastSource: lastSource,
                 pinOrdinal: pinOrdinal
             ))
         }
@@ -1980,10 +2067,10 @@ internal actor HistoryAuthority {
             let byteCount = revision.content.representations.reduce(0) {
                 $0 + $1.bytes.count
             }
-            let revisionTitle = ContentProjector.project(
+            let revisionTitle = ContentProjector.projectTitle(
                 revision.content,
                 limits: limits
-            ).title
+            )
             return RevisionSummary(
                 id: revision.id,
                 createdAt: revision.createdAt,
@@ -2066,9 +2153,8 @@ internal actor HistoryAuthority {
 
     // MARK: - Thumbnail source (docs/05-authority-kernel.md §14.5; docs/04-coherence.md §9)
 
-    // Step 8 (step 8 in flight): `StepDeferredError` now remains only in
-    // ActorStubs.swift's ThumbnailService, which owns the off-Authority decode
-    // (§9 step 6). This method — the Authority side of the thumbnail
+    // ThumbnailService.swift owns the off-Authority decode (§9 step 6). This
+    // method — the Authority side of the thumbnail
     // single-flight — is the WS15 version fence (docs/06-cross-cutting.md §8).
 
     /// The frozen v1 set of ImageIO-decodable image type identifiers whose
@@ -2270,14 +2356,31 @@ private struct ScalarReadRow {
 
     fileprivate init(_ row: HistoryItemRow, limits: HistoryLimits) throws {
         self.id = HistoryItemID(rawValue: row.id)
+        let projectionSchemaVersion = row.projectionSchemaVersion
+        let title = row.title
+        let lastCopiedAt = row.lastCopiedAt
+        let copyCount = row.copyCount
+        let lastSource = row.lastSource
+        try mapCodecFailure {
+            try ContentProjector.validateStoredSchemaVersion(
+                projectionSchemaVersion
+            )
+            try ContentProjector.validateStoredTitle(title, limits: limits)
+            try RevisionStateBlobCodec.validateFiniteLastCopiedAt(lastCopiedAt)
+            try RevisionStateBlobCodec.validateCopyCount(copyCount)
+            try RevisionStateBlobCodec.validateSourceObservation(
+                lastSource,
+                limits: limits
+            )
+        }
         self.contentVersion = try mapCodecFailure {
             try RevisionStateBlobCodec.decodeContentVersion(row.contentVersionRaw)
         }
-        self.title = row.title
+        self.title = title
         self.effectiveTypeIdentifiersBlob = row.effectiveTypeIdentifiersBlob
-        self.lastCopiedAt = row.lastCopiedAt
-        self.copyCount = row.copyCount
-        self.lastSource = row.lastSource
+        self.lastCopiedAt = lastCopiedAt
+        self.copyCount = copyCount
+        self.lastSource = lastSource
         self.pinOrdinal = try mapCodecFailure {
             try RevisionStateBlobCodec.decodePinOrdinal(row.pinOrdinal)
         }
@@ -2342,32 +2445,72 @@ private extension HistoryAuthority {
     func orderPinnedLane(
         _ rows: [HistoryItemRow]
     ) throws -> [ScalarReadRow] {
-        // The store already sorted by `\.pinOrdinal`; re-sort in memory to
-        // guarantee determinism regardless of store-level tie behavior.
-        let sorted = rows.sorted { ($0.pinOrdinal ?? 0) < ($1.pinOrdinal ?? 0) }
-        return try sorted.map { try ScalarReadRow($0, limits: limits) }
+        // The FetchDescriptor already sorts by `\.pinOrdinal`. D12 proves
+        // every ordinal is unique, so there is no store-level tie to resolve.
+        return try rows.map { try ScalarReadRow($0, limits: limits) }
     }
 
     /// Orders the unpinned lane by the full key `(lastCopiedAt DESC, id ASC)`.
     ///
-    /// EXACTNESS GUARD (§14.1): if the slice is full (limit+1 rows) AND
-    /// rows[limit-1] and rows[limit] tie on `lastCopiedAt`, re-fetch the lane
-    /// with the hard retained-item bound and order fully in memory; otherwise
-    /// order the small slice by the full key. `\.id` is never trusted to sort
-    /// at the store level. `anchorDate` carries the continuation's store-level
-    /// `lastCopiedAt <= anchor` bound (04 §6) so the guard's re-fetch keeps
-    /// the same lane scope as the initial fetch (`nil` on a first page).
+    /// EXACTNESS GUARD (§14.1): a first page re-fetches when its page/lookahead
+    /// boundary ties on `lastCopiedAt`. A continuation also re-fetches when
+    /// same-date rows that sort before the anchor contaminate the bounded
+    /// fetch head, when the anchor is absent from a full slice, or when its
+    /// true post-anchor page/lookahead boundary ties. `\.id` is never trusted
+    /// to sort at the store level. `anchorDate` carries the continuation's
+    /// store-level `lastCopiedAt <= anchor` bound (04 §6) so the guard's
+    /// re-fetch keeps the same lane scope as the initial fetch (`nil` on a
+    /// first page).
     func orderUnpinnedLane(
         _ rows: [HistoryItemRow],
-        limit: Int,
+        pageLimit: Int,
+        continuationAnchor: StoredOrderingAnchor?,
         anchorDate: Date?,
         in context: ModelContext
     ) throws -> [ScalarReadRow] {
-        // Check whether the store-level sort is insufficient: a full slice
-        // with a tie at the page boundary means `\.id` ordering matters.
-        let needsFullFetch = rows.count == limit + 1
-            && rows.count >= 2
-            && rows[limit - 1].lastCopiedAt == rows[limit].lastCopiedAt
+        try validateFiniteLastCopiedDates(in: rows)
+        let orderedSlice = try rows.sorted(by: unpinnedRowPrecedes).map {
+            try ScalarReadRow($0, limits: limits)
+        }
+        // When pinned rows fill the page exactly, one unpinned row is fetched
+        // only as existence lookahead. Its UUID tie order cannot affect the
+        // returned page or its pinned anchor, so no exactness fallback is
+        // needed for this zero-capacity lane.
+        if pageLimit == 0 {
+            return orderedSlice
+        }
+        let fetchDepth = pageLimit + (continuationAnchor == nil ? 1 : 2)
+        let sliceIsFull = rows.count == fetchDepth
+
+        let needsFullFetch: Bool
+        if !sliceIsFull {
+            // Fewer rows than the fetch limit proves the complete bounded lane
+            // is already present; anchor validation remains the caller's job.
+            needsFullFetch = false
+        } else if let continuationAnchor {
+            if let anchorIndex = orderedSlice.firstIndex(where: {
+                $0.matches(continuationAnchor)
+            }) {
+                let rowsAfterAnchor = orderedSlice.count - anchorIndex - 1
+                let pageBoundaryTies = rowsAfterAnchor > pageLimit
+                    && orderedSlice[anchorIndex + pageLimit].lastCopiedAt
+                        == orderedSlice[anchorIndex + pageLimit + 1].lastCopiedAt
+
+                // `anchorIndex > 0` means already-consumed same-date siblings
+                // occupied fetch slots before the anchor. The bounded slice
+                // can no longer prove page+lookahead completeness even when
+                // its final two store-level dates differ (V1V-03B-001).
+                needsFullFetch = anchorIndex > 0 || pageBoundaryTies
+            } else {
+                // A full date-bounded slice can omit the anchor when a large
+                // same-date group is returned in an unspecified store order.
+                // Re-fetch before deciding the snapshot is contradictory.
+                needsFullFetch = true
+            }
+        } else {
+            needsFullFetch = orderedSlice[pageLimit - 1].lastCopiedAt
+                == orderedSlice[pageLimit].lastCopiedAt
+        }
 
         let source: [HistoryItemRow]
         if needsFullFetch {
@@ -2381,51 +2524,50 @@ private extension HistoryAuthority {
                     predicate: #Predicate { $0.pinOrdinal == nil }
                 )
             }
-            descriptor.propertiesToFetch = [
-                \.id,
-                \.contentVersionRaw,
-                \.title,
-                \.effectiveTypeIdentifiersBlob,
-                \.lastCopiedAt,
-                \.copyCount,
-                \.lastSource,
-                \.pinOrdinal,
-            ]
+            descriptor.propertiesToFetch = Self.scalarProjectionProperties(
+                includingSearchBody: false
+            )
             descriptor.fetchLimit = limits.hardMaximumRetainedItems
             do {
                 source = try context.fetch(descriptor)
             } catch {
                 throw HistoryFailure.temporarilyUnavailable(.factProof)
             }
+            try validateFiniteLastCopiedDates(in: source)
         } else {
             source = rows
         }
 
-        // Order by the full key: lastCopiedAt DESC, id ASC.
-        let sorted = source.sorted { lhs, rhs in
-            if lhs.lastCopiedAt != rhs.lastCopiedAt {
-                return lhs.lastCopiedAt > rhs.lastCopiedAt
-            }
-            return HistoryItemID(rawValue: lhs.id) < HistoryItemID(rawValue: rhs.id)
+        if !needsFullFetch {
+            return orderedSlice
         }
-        return try sorted.map { try ScalarReadRow($0, limits: limits) }
+        return try source.sorted(by: unpinnedRowPrecedes).map {
+            try ScalarReadRow($0, limits: limits)
+        }
     }
-}
 
-// MARK: - Failure translation helpers (docs/05-authority-kernel.md §16)
+    /// Full unpinned order (03b §8): newest copy first, business ID as the
+    /// deterministic tie-breaker. Kept as one helper so guard inspection and
+    /// the authoritative re-fetch cannot drift.
+    func unpinnedRowPrecedes(_ lhs: HistoryItemRow, _ rhs: HistoryItemRow) -> Bool {
+        if lhs.lastCopiedAt != rhs.lastCopiedAt {
+            return lhs.lastCopiedAt > rhs.lastCopiedAt
+        }
+        return HistoryItemID(rawValue: lhs.id) < HistoryItemID(rawValue: rhs.id)
+    }
 
-/// Translates a throwing codec/scalar-decode call into the §16 boundary
-/// vocabulary: decode rejections are corrupt persisted values, the
-/// encode-side backstop is an invariant violation. Errors that are not codec
-/// rejections propagate unchanged (there is no stringly-typed re-labeling,
-/// §16).
-private func mapCodecFailure<T>(_ body: () throws -> T) throws -> T {
-    do {
-        return try body()
-    } catch let rejection as CodecRejection {
-        throw rejection.historyFailure
-    } catch let rejection as RevisionStateCodecRejection {
-        throw rejection.historyFailure
+    /// Validate ordering scalars before any comparator sees them. NaN would
+    /// make the comparator non-strict; infinity is likewise outside the v1
+    /// durable Date contract (§4).
+    func validateFiniteLastCopiedDates(in rows: [HistoryItemRow]) throws {
+        for row in rows {
+            let lastCopiedAt = row.lastCopiedAt
+            try mapCodecFailure {
+                try RevisionStateBlobCodec.validateFiniteLastCopiedAt(
+                    lastCopiedAt
+                )
+            }
+        }
     }
 }
 
@@ -2442,8 +2584,6 @@ private extension DomainRejection {
             return .invalidPinnedPlacement(failure)
         case .invalidRevisionDraft:
             return .invalidInput(.incoherentRevisionDraft)
-        case .revisionNotFound(let revisionID):
-            return .revisionNotFound(revisionID)
         case .corruptLineage:
             return .persistence(.invariantViolation)
         case .capacityExceeded(let kind):
@@ -2462,7 +2602,7 @@ private extension SignatureIndexRejection {
         switch self {
         case .retainedCountExceedsBound:
             return .persistence(.invariantViolation)
-        case .emptySignatureEntries, .duplicateEntry:
+        case .emptySignatureEntries, .duplicateEntry, .duplicateTypeIdentifier:
             return .persistence(.corruptStoredValue)
         case .additionAlreadyIndexed, .removalNotIndexed, .overlappingAdditionAndRemoval:
             return .persistence(.invariantViolation)

@@ -4,11 +4,9 @@
 /// paths, plus the `.notFound` / `.invalidPinnedPlacement` failure producers
 /// on an absent ID.
 ///
-/// Phasing (docs/roadmap/README.md §3, WS-clause phasing note): WS16's "the
-/// ID absent from subsequent browse/detail/paste" clause is a step-7 (reads +
-/// observation) clause and is NOT asserted here — `browse`, `details(for:)`,
-/// and `pastePayload(for:)` still throw the internal `StepDeferredError`.
-/// This file closes the step-6 clauses — the `.committed` receipt with
+/// This file closes WS16's step-6 commit clauses; the separately landed
+/// step-7 read suites own absence from browse/detail/paste. It asserts the
+/// `.committed` receipt with
 /// `.removed(count: 1)` and Change Position advanced exactly once; the
 /// pinned-lane compaction inside the remove commit (AUDIT IMP6-01,
 /// docs/02-domain.md §10: the survivors re-zip against `0 ..< count` in the

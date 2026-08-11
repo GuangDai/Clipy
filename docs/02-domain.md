@@ -25,10 +25,15 @@ package struct ContentRepresentation: Sendable, Hashable {
 }
 ```
 
-Equality is byte-exact on `(typeIdentifier, bytes)`. A normalized content set:
+Equality uses Swift `String` canonical equivalence for `typeIdentifier` and
+byte-exact `Data` equality for `bytes`. This matches the value and hashing
+semantics used by Canonical/Effective Content and the Signature Index; it does
+not normalize or rewrite the stored identifier spelling. A normalized content
+set:
 
 - is non-empty;
-- contains at most one representation for each `typeIdentifier`;
+- contains at most one representation for each canonically equivalent
+  `typeIdentifier`;
 - contains no representation whose `bytes` is empty (zero length);
 - is sorted by `typeIdentifier` using a stable Unicode scalar ordering;
 - contains no transient/private pasteboard type rejected by preparation;
@@ -262,7 +267,8 @@ Construction guarantees:
 
 - `hintedItem` is fetched directly by business ID when a hint exists; it is independent of signature candidacy.
 - `candidates.items` contains every retained item whose Canonical signature can cover every incoming signature entry.
-- Every candidate is loaded sufficiently to perform byte-exact confirmation.
+- Every candidate is loaded sufficiently to confirm a canonically equivalent
+  type identifier and byte-exact payload bytes.
 - `retention.allItems` contains every retained item exactly once.
 - Failure to establish any guarantee is a Storage fact-loading failure mapped to `HistoryFailure.temporarilyUnavailable` — `.factProof` for an action-specific fact load, or `.dedupIndexRebuild` when the Signature Index itself cannot be rebuilt to a proved-complete state (Part V §7.1 step 1, §16) — or a persistence-corruption failure. The Domain planner is not invoked with a partial fact.
 
@@ -336,13 +342,12 @@ package enum DomainRejection: Error, Sendable, Equatable {
     )
     case invalidPinnedPlacement(PinnedPlacementFailure)
     case invalidRevisionDraft
-    case revisionNotFound(RevisionID)
     case corruptLineage
     case capacityExceeded(CapacityKind)
 }
 ```
 
-Planners throw only this package vocabulary. `HistoryStorage` maps it exhaustively to the public `HistoryFailure` cases in Part III: `notFound`→`.notFound`, `staleContent`→`.staleContent`, `invalidPinnedPlacement`→`.invalidPinnedPlacement`, `invalidRevisionDraft`→`.invalidInput(.incoherentRevisionDraft)`, `revisionNotFound`→`.revisionNotFound`, `capacityExceeded`→`.capacityExceeded`, and the defensive `corruptLineage`→`.persistence(.invariantViolation)`. Persistence corruption and fact-proof availability are normally caught at the Storage fact-loading boundary before planning; `corruptLineage` exists only as the planner's defensive backstop if a validated fact is internally inconsistent (e.g. an active revision ID that names no stored revision). A planner is never invoked with a known-incomplete fact.
+Planners throw only this package vocabulary. `HistoryStorage` maps it exhaustively to the public `HistoryFailure` cases in Part III: `notFound`→`.notFound`, `staleContent`→`.staleContent`, `invalidPinnedPlacement`→`.invalidPinnedPlacement`, `invalidRevisionDraft`→`.invalidInput(.incoherentRevisionDraft)`, `capacityExceeded`→`.capacityExceeded`, and the defensive `corruptLineage`→`.persistence(.invariantViolation)`. A missing revert target is discovered while Storage resolves the caller's Revision ID into prepared content and therefore throws public `.revisionNotFound` directly; no Domain planner accepts an unresolved Revision ID. Persistence corruption and fact-proof availability are normally caught at the Storage fact-loading boundary before planning; `corruptLineage` exists only as the planner's defensive backstop if a validated fact is internally inconsistent (e.g. an active revision ID that names no stored revision). A planner is never invoked with a known-incomplete fact.
 
 ### 7. Strong semantic mutation plan
 
@@ -477,14 +482,18 @@ package func canonicalContains(
 ) -> Bool
 ```
 
-It returns true when every incoming `(typeIdentifier, bytes)` appears byte-exactly in the existing Canonical Content. Set containment is reflexive, antisymmetric, and transitive; it is a partial order, not an equivalence relation because it is not symmetric.
+It returns true when every incoming representation appears in the existing
+Canonical Content with a canonically equivalent `typeIdentifier` and
+byte-exact payload bytes. Set containment is reflexive, antisymmetric, and
+transitive under the §2.1 equality semantics; it is a partial order, not an
+equivalence relation because it is not symmetric.
 
 This preserves the useful “rich copy absorbs a later plain-only copy” behavior while refusing hash-only matches.
 
 #### 9.3 Matching lanes
 
-1. **Lineage lane.** If a direct retained hint exists and incoming content is byte-set-equal to the hinted item's current Effective Content, the hinted item wins. Containment is insufficient in this lane; equality prevents a spoofed hint from discarding representations.
-2. **Canonical lane.** Byte-confirm `canonicalContains(existing, incoming)` for every complete signature candidate. Effective Content and inactive revisions do not participate.
+1. **Lineage lane.** If a direct retained hint exists and incoming content is representation-set-equal under §2.1 to the hinted item's current Effective Content, the hinted item wins. Containment is insufficient in this lane; equality prevents a spoofed hint from discarding representations.
+2. **Canonical lane.** Confirm `canonicalContains(existing, incoming)` under §2.1 for every complete signature candidate. Effective Content and inactive revisions do not participate.
 3. **Insert.** Insert only when both lanes have no confirmed winner and candidate completeness has already been proven.
 
 #### 9.4 Deterministic winner

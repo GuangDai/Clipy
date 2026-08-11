@@ -1,5 +1,4 @@
-/// The step-6 `RevisionPreparationActor` implementation and the internal
-/// Sendable value types those signatures share.
+/// Revision preparation plus the immutable search-corpus transfer values.
 /// Owning spec: docs/roadmap/03-historystorage.md step-5 note; facade field
 /// list: docs/05-authority-kernel.md §2 (Part V).
 ///
@@ -9,16 +8,10 @@
 /// step 8 (its flight table and owned `ThumbnailWorker` live there); this
 /// file now hosts only `RevisionPreparationActor` and the four value types
 /// (`PreparedRevisionBundle`, `RevisionPreparationSnapshot`,
-/// `SearchCorpusSnapshot`, `SearchCorpusRow`). The `SearchWorker` stub left
-/// this file at roadmap step 7: its exact/fuzzy/regexp implementation lives
+/// `SearchCorpusSnapshot`, `SearchCorpusRow`). `SearchWorker` moved out at
+/// roadmap step 7: its exact/fuzzy/regexp implementation lives
 /// in SearchWorker.swift, with Fuse confined inside the actor per
 /// docs/01-architecture.md §6.
-///
-/// `StepDeferredError` (defined in SwiftDataHistory.swift) has NO users in
-/// this file after the step-8 edit: the `ThumbnailService` stub that threw it
-/// moved to ThumbnailService.swift with a full implementation, and the only
-/// remaining user is `HistoryAuthority.thumbnailSource` (also retired at
-/// step 8 by the parallel agent owning HistoryAuthority.swift).
 ///
 /// This file hosts the internal Sendable value types those signatures
 /// require that no other file owns. Step 6 keeps the revision values beside
@@ -34,9 +27,8 @@ import HistoryDomain
 /// the durable bounded projection computed from the proposed Effective Content
 /// (docs/05-authority-kernel.md §6.2).
 ///
-/// Defined here at roadmap step 5 so the `RevisionPreparationActor` stub can
-/// pin its step-6 signature; step 6 may relocate it beside
-/// `PreparedCaptureBundle` in IngestPreparation.swift.
+/// Defined at roadmap step 5 to pin the `RevisionPreparationActor` step-6
+/// signature; it remains beside its owner and immutable transfer values.
 internal struct PreparedRevisionBundle: Sendable {
     /// The complete proposed revision for pure Domain planning; Storage minted
     /// the candidate Revision ID and timestamp (docs/02-domain.md §4).
@@ -50,9 +42,8 @@ internal struct PreparedRevisionBundle: Sendable {
 /// by `HistoryAuthority` as a Sendable value — no row or context escapes
 /// (docs/05-authority-kernel.md §6.2).
 ///
-/// Defined here at roadmap step 5 so the `RevisionPreparationActor` stub can
-/// pin its step-6 signature; step 6 may relocate it beside the fact
-/// loaders/hydration in FactLoaders.swift.
+/// Defined at roadmap step 5 to pin the `RevisionPreparationActor` step-6
+/// signature; it remains beside its owner and immutable transfer values.
 internal struct RevisionPreparationSnapshot: Sendable {
     /// The target's validated Canonical Content (docs/02-domain.md §2.3).
     let canonical: CanonicalContent
@@ -70,8 +61,8 @@ internal struct RevisionPreparationSnapshot: Sendable {
 /// Captured within one `HistoryAuthority` interval
 /// (docs/05-authority-kernel.md §14.2).
 ///
-/// Defined here at roadmap step 5 so the `SearchWorker` stub can pin its
-/// step-7 signature; step 7 may relocate it beside the read path.
+/// Defined at roadmap step 5 to pin the `SearchWorker` step-7 signature and
+/// retained as the immutable Authority-to-worker transfer value.
 internal struct SearchCorpusSnapshot: Sendable {
     /// The durable position the corpus was read at; stamps the returned page.
     let position: ChangePosition
@@ -124,10 +115,24 @@ internal actor RevisionPreparationActor {
     /// (docs/06-cross-cutting.md §2); focused tests inject smaller bounds.
     private let limits: HistoryLimits
 
+    /// Package-injected revision identity and clock dependencies. Production
+    /// uses UUID/Date entropy; deterministic tests can pin both without
+    /// moving generation into the pure Domain (docs/01-architecture.md §4).
+    private let makeRevisionID: @Sendable () -> RevisionID
+    private let now: @Sendable () -> Date
+
     /// Creates the preparation actor. Production uses the default
     /// `HistoryLimits.standard` (docs/06-cross-cutting.md §2).
-    internal init(limits: HistoryLimits = .standard) {
+    internal init(
+        limits: HistoryLimits = .standard,
+        makeRevisionID: @escaping @Sendable () -> RevisionID = {
+            RevisionID(rawValue: UUID())
+        },
+        now: @escaping @Sendable () -> Date = { Date() }
+    ) {
         self.limits = limits
+        self.makeRevisionID = makeRevisionID
+        self.now = now
     }
 
     /// Resolves `request` against `source` into a `PreparedRevisionBundle`,
@@ -289,8 +294,8 @@ internal actor RevisionPreparationActor {
         // already rejected a stale `request.expected` when capturing the
         // snapshot, and Domain planning rechecks both tokens against the
         // reloaded facts (§6.2; docs/02-domain.md §11 steps 1–2).
-        let candidateRevisionID = RevisionID(rawValue: UUID())
-        let createdAt = Date()
+        let candidateRevisionID = makeRevisionID()
+        let createdAt = now()
 
         // Step 4 — revision projection uses the prepared proposed Effective
         // Content (§15).

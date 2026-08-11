@@ -2,17 +2,18 @@
 /// the opaque `HistoryPageCursor` payload.
 /// Owning spec: docs/04-coherence.md §6 (cursor semantics: complete normalized
 /// query shape + page ChangePosition + complete last-row ordering anchor +
-/// process-instance/schema marker), §16 (failure translation: cursor shape,
+/// process-instance marker), §16 (failure translation: cursor shape,
 /// generation, or position mismatch → `.snapshotExpired`); bounds:
 /// docs/06-cross-cutting.md §2.
 ///
 /// `HistoryPageCursor.payload` is the only public surface; callers never
 /// inspect or mint it. Decode validates the wire format, the format version,
-/// and the process-instance/schema marker exactly, then returns a
+/// and the process-instance marker exactly, then returns a
 /// `ResolvedPageCursor`. ANY decode or marker failure throws one typed
-/// `PageCursorRejection`; the caller maps every case to
+/// decode-side `PageCursorRejection`; the caller maps those cases to
 /// `.snapshotExpired(current:)` — an undecodable or mismatched cursor is an
 /// EXPIRED/INVALID cursor (§16), NEVER codec corruption of durable state.
+/// The separate encode-side rejection is an internal invariant violation.
 ///
 /// `HistoryItemID`, `SearchMode`, and `ChangePosition` are not `Codable` in
 /// `HistoryCore`; the cursor's Codable conformance is manual, encoding each
@@ -101,17 +102,17 @@ internal enum StoredOrderingAnchor: Sendable, Hashable {
 
 // MARK: - Cursor rejection (docs/05-authority-kernel.md §16)
 
-/// One typed reason a cursor could not be resolved. Every case maps to
+/// One typed cursor-codec rejection. Decode-side cases map to
 /// `.snapshotExpired(current:)` (§16: "cursor shape, generation, or position
-/// mismatch → `.snapshotExpired`") — an undecodable or mismatched cursor is an
-/// expired/invalid cursor, never codec corruption of durable state.
-internal enum PageCursorRejection: Error, Sendable {
+/// mismatch → `.snapshotExpired`"); the encode-side case maps to an internal
+/// invariant violation at the minting boundary.
+internal enum PageCursorRejection: Error, Sendable, Equatable {
     /// The payload is not a decodable v1 container at all — foreign bytes,
     /// truncation, or a well-formed container of the wrong shape.
     case malformedCursor
     /// `formatVersion` is not exactly 1.
     case unknownCursorVersion(found: UInt16)
-    /// The process-instance/schema marker does not match this Authority.
+    /// The process-instance marker does not match this Authority.
     case processMarkerMismatch
     /// Encoding a previously validated cursor failed. Unreachable for valid
     /// input; an encode-side failure is an internal invariant violation, not
@@ -158,11 +159,21 @@ private extension StoredQueryShape {
     }
 
     init(fromWire wire: StoredQueryShapeWire) throws {
+        let limits = HistoryLimits.standard
+        guard limits.pageRowLimitRange.contains(wire.limit) else {
+            throw PageCursorRejection.malformedCursor
+        }
         switch wire.kind {
         case "recent":
+            guard wire.text == nil, wire.mode == nil else {
+                throw PageCursorRejection.malformedCursor
+            }
             self = .recent(limit: wire.limit)
         case "search":
             guard let text = wire.text, let modeTag = wire.mode else {
+                throw PageCursorRejection.malformedCursor
+            }
+            guard text.utf8.count <= limits.maximumSearchTermUTF8Bytes else {
                 throw PageCursorRejection.malformedCursor
             }
             let mode = try StoredQueryShape.mode(fromTag: modeTag)
@@ -216,7 +227,12 @@ private extension StoredOrderingAnchor {
     init(fromWire wire: StoredOrderingAnchorWire) throws {
         switch wire.kind {
         case "defaultOrder":
-            guard let lastCopiedAt = wire.lastCopiedAt, let id = wire.id else {
+            guard wire.score == nil,
+                  wire.pinnedOrdinal.map({ $0 >= 0 }) ?? true,
+                  let lastCopiedAt = wire.lastCopiedAt,
+                  lastCopiedAt.timeIntervalSinceReferenceDate.isFinite,
+                  let id = wire.id
+            else {
                 throw PageCursorRejection.malformedCursor
             }
             self = .defaultOrder(
@@ -225,8 +241,11 @@ private extension StoredOrderingAnchor {
                 id: HistoryItemID(rawValue: id)
             )
         case "fuzzyUnpinned":
-            guard let score = wire.score,
+            guard wire.pinnedOrdinal == nil,
+                  let score = wire.score,
+                  score.isFinite,
                   let lastCopiedAt = wire.lastCopiedAt,
+                  lastCopiedAt.timeIntervalSinceReferenceDate.isFinite,
                   let id = wire.id else {
                 throw PageCursorRejection.malformedCursor
             }
@@ -245,9 +264,9 @@ private extension StoredOrderingAnchor {
 
 /// Versioned wire value of the opaque cursor payload. `formatVersion` is
 /// exactly 1 for every cursor `PageCursorCodec` writes; decode rejects any
-/// other version. The `processMarker` is the Authority's process-instance/
-/// schema marker (04 §6). The query shape and anchor are carried as their
-/// Codable wire forms.
+/// other version. The `processMarker` is the Authority's process-instance
+/// marker (04 §6). The query shape and anchor are carried as their Codable
+/// wire forms.
 private struct PageCursorBlobV1: Codable, Sendable {
     let formatVersion: UInt16
     let processMarker: UUID
@@ -265,16 +284,23 @@ internal enum PageCursorCodec {
     /// The only cursor version this codec reads or writes.
     private static let formatVersion: UInt16 = 1
 
+    /// Pre-parse cursor envelope. A valid search term may consume 4,096 UTF-8
+    /// bytes and JSON escaping can expand one input byte to six ASCII bytes;
+    /// two KiB covers every fixed field and container delimiter (04 §6).
+    internal static let maximumPayloadBytes =
+        HistoryLimits.standard.maximumSearchTermUTF8Bytes * 6 + 2_048
+
     // MARK: Encode
 
     /// Encodes a resolved cursor deterministically with the Authority's
-    /// process marker. The encode never throws for a valid `ResolvedPageCursor`
-    /// built by the read paths; a failure is surfaced as
-    /// `PageCursorRejection.encodingFailed` and mapped by the caller.
+    /// process marker. Encoding is infallible for the finite primitive values
+    /// built by the read paths; any encoder rejection is nevertheless surfaced
+    /// as `PageCursorRejection.encodingFailed` so the minting boundary can map
+    /// it to `.persistence(.invariantViolation)` immediately.
     internal static func encode(
         _ resolved: ResolvedPageCursor,
         processMarker: UUID
-    ) -> HistoryPageCursor {
+    ) throws -> HistoryPageCursor {
         let blob = PageCursorBlobV1(
             formatVersion: formatVersion,
             processMarker: processMarker,
@@ -282,32 +308,30 @@ internal enum PageCursorCodec {
             queryShape: resolved.queryShape.wire,
             anchor: resolved.anchor.wire
         )
-        // Encode failure is unreachable for the values the read paths build
-        // (Codable wire forms are synthesized over primitive Codable types).
-        // Return an empty payload on the impossible failure — the next decode
-        // of that payload throws `.malformedCursor`, which the caller maps to
-        // `.snapshotExpired`. This keeps `encode` non-throwing so the
-        // SearchWorker's cursor-mint path (the only encode site) stays
-        // throwing-clean.
-        let data: Data
         do {
-            data = try CodecWireFormat.makeEncoder().encode(blob)
+            let payload = try CodecWireFormat.makeEncoder().encode(blob)
+            guard payload.count <= maximumPayloadBytes else {
+                throw PageCursorRejection.encodingFailed
+            }
+            return HistoryPageCursor(payload: payload)
         } catch {
-            return HistoryPageCursor(payload: Data())
+            throw PageCursorRejection.encodingFailed
         }
-        return HistoryPageCursor(payload: data)
     }
 
     // MARK: Decode
 
     /// Decodes an opaque cursor, validating the wire format, format version,
-    /// and process marker exactly. ANY failure throws one
-    /// `PageCursorRejection` — the caller maps every case to
+    /// and process marker exactly. ANY failure throws one decode-side
+    /// `PageCursorRejection`, which the caller maps to
     /// `.snapshotExpired(current:)` (§16).
     internal static func decode(
         _ cursor: HistoryPageCursor,
         processMarker: UUID
     ) throws -> ResolvedPageCursor {
+        guard cursor.payload.count <= maximumPayloadBytes else {
+            throw PageCursorRejection.malformedCursor
+        }
         let blob: PageCursorBlobV1
         do {
             blob = try CodecWireFormat.makeDecoder().decode(

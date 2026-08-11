@@ -80,6 +80,7 @@ internal struct StoredNewItem: Sendable {
     internal let revisionStateBlob: Data
     internal let canonicalSignatureBlob: Data
     internal let projection: ContentProjection
+    internal let effectiveTypeIdentifiersBlob: Data
     internal let occurrence: CopyOccurrence
 }
 
@@ -96,6 +97,7 @@ internal struct StoredRevisionUpdate: Sendable {
     internal let nextVersion: ContentVersion
     internal let revisionStateBlob: Data
     internal let projection: ContentProjection
+    internal let effectiveTypeIdentifiersBlob: Data
 }
 
 /// The precomputed Signature Index effect of one plan.
@@ -123,6 +125,28 @@ internal struct StampedCommitPlan: Sendable {
     internal let mutations: [StampedMutation]
     internal let receiptOutcome: HistoryCommitOutcome
     internal let indexDelta: SignatureIndexDelta
+
+    /// Whether §10 must re-prove D12 before transaction success. Revision,
+    /// occurrence, create, retention-only deletion, and policy mutations
+    /// cannot change the pinned lane. User removal and clear stay
+    /// conservative because their target/scope may include pinned rows.
+    internal var requiresFinalPinOrderValidation: Bool {
+        mutations.contains { mutation in
+            switch mutation {
+            case .setPinOrdinal:
+                return true
+            case .delete(_, let reason):
+                switch reason {
+                case .userRemoval, .clear:
+                    return true
+                case .retention:
+                    return false
+                }
+            case .create, .updateOccurrence, .appendRevision, .setRetentionPolicy:
+                return false
+            }
+        }
+    }
 }
 
 // MARK: - Stamping inputs (docs/05-authority-kernel.md §9)
@@ -280,6 +304,8 @@ internal enum CommitPlanStamper {
                     ),
                     canonicalSignatureBlob: try SignatureBlobCodec.encode(entries),
                     projection: projection,
+                    effectiveTypeIdentifiersBlob: try EffectiveTypeIdentifiersBlobCodec
+                        .encode(projection.effectiveTypeIdentifiers),
                     occurrence: item.occurrence
                 )))
                 additions[item.id] = entries
@@ -313,7 +339,8 @@ internal enum CommitPlanStamper {
                     throw StampingRejection.contentVersionExhausted(itemID: itemID)
                 }
                 let revisionStateBlob = try RevisionStateBlobCodec.encode(
-                    revisions: existingRevisions + [revision],
+                    revisions: existingRevisions,
+                    appending: revision,
                     activeRevisionID: activeRevisionID
                 )
                 revisedNextVersion = nextVersion
@@ -322,7 +349,9 @@ internal enum CommitPlanStamper {
                     expectedCurrentVersion: currentVersion,
                     nextVersion: nextVersion,
                     revisionStateBlob: revisionStateBlob,
-                    projection: projection
+                    projection: projection,
+                    effectiveTypeIdentifiersBlob: try EffectiveTypeIdentifiersBlobCodec
+                        .encode(projection.effectiveTypeIdentifiers)
                 )))
 
             case .retire(let itemID, let reason):

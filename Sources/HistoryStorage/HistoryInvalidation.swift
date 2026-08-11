@@ -98,12 +98,6 @@ internal struct HistoryInvalidationPublisher: Sendable {
 
     internal init() {}
 
-    /// The number of registered subscriptions. Diagnostic surface for the
-    /// WS12 harness and Authority assertions; not used by the signal path.
-    internal var subscriptionCount: Int {
-        continuations.count
-    }
-
     /// Registers a new subscriber and returns its token and stream.
     /// docs/04-coherence.md §5 step 1 (register before the first query);
     /// docs/05-authority-kernel.md §14.4.
@@ -154,15 +148,4 @@ internal struct HistoryInvalidationPublisher: Sendable {
         continuations.removeValue(forKey: subscription)?.finish()
     }
 
-    /// Finishes every stream and removes every token. Used when the
-    /// Authority itself is torn down; process teardown needs no replay
-    /// handling because the signal has no post-restart replay by design
-    /// (§4).
-    internal mutating func finishAll() {
-        let remaining = continuations
-        continuations.removeAll()
-        for continuation in remaining.values {
-            continuation.finish()
-        }
-    }
 }

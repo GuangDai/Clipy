@@ -105,6 +105,8 @@ internal enum CanonicalBlobCodec {
             )
         }
         var totalBytes = 0
+        var representations: [CanonicalRepresentation] = []
+        representations.reserveCapacity(wire.representations.count)
         for stored in wire.representations {
             try CodecValidation.validateTypeIdentifier(stored.typeIdentifier, limits: limits)
             guard !stored.bytes.isEmpty else {
@@ -124,20 +126,20 @@ internal enum CanonicalBlobCodec {
                 )
             }
             totalBytes = newTotal
+            representations.append(
+                CanonicalRepresentation(
+                    content: ContentRepresentation(
+                        typeIdentifier: stored.typeIdentifier,
+                        bytes: stored.bytes
+                    ),
+                    fingerprint: ContentFingerprint(rawValue: stored.fingerprint)
+                )
+            )
         }
         guard totalBytes <= limits.maximumCaptureBytes else {
             throw CodecRejection.totalBytesExceedBound(
                 found: totalBytes,
                 bound: limits.maximumCaptureBytes
-            )
-        }
-        let representations = wire.representations.map { stored in
-            CanonicalRepresentation(
-                content: ContentRepresentation(
-                    typeIdentifier: stored.typeIdentifier,
-                    bytes: stored.bytes
-                ),
-                fingerprint: ContentFingerprint(rawValue: stored.fingerprint)
             )
         }
         do {
@@ -159,20 +161,7 @@ internal enum CanonicalBlobCodec {
     /// punctuation, and fingerprint digits; 4,096 covers the fixed container.
     /// Generosity is safe: every exact §4 bound is re-checked after parsing.
     internal static func maximumBlobBytes(limits: HistoryLimits = .standard) -> Int {
-        CodecValidation.clampedEnvelopeSum([
-            CodecValidation.clampedEnvelopeProduct(limits.maximumCaptureBytes, 2),
-            CodecValidation.clampedEnvelopeProduct(
-                limits.maximumRepresentationsPerCaptureOrRevision,
-                CodecValidation.clampedEnvelopeSum([
-                    CodecValidation.clampedEnvelopeProduct(
-                        limits.maximumTypeIdentifierUTF8Bytes,
-                        8
-                    ),
-                    256,
-                ])
-            ),
-            4_096,
-        ])
+        CodecDecodeEnvelope.canonical(limits: limits)
     }
 
     // MARK: Wire serialization

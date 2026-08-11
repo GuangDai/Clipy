@@ -11,10 +11,14 @@
 > criteria live in the design modules (`00`–`06`) and the roadmap module docs;
 > they are cited here, never restated as new semantics.
 
-**Current HEAD:** `9c6801a` — run 30724821449, all three jobs green
-(2026-08-02). Steps 0–6 landed; steps 7–9b not started. Phase position
-(`roadmap/README.md` §3): M1 (pure compile) complete; M2 (executable
-specification) in progress.
+**Current audited baseline HEAD:** `8f316c9` (2026-08-02). Steps 0–8 are
+implemented; step 9 (product wiring) is not started. Latest baseline run
+`30734778016` has the three correctness jobs green and **Perf proofs (§9)
+red**. The V1-verification remediation working tree now contains the dedicated
+D1–D19 suite, the corrected WL8 construct, and the remaining local proof
+closures described below. Phase position (`roadmap/README.md` §3): M1 (pure
+compile) complete; **M2 acceptance remains open until those changes pass the
+supported macOS 26 / Swift 6.2 correctness and release-perf jobs**.
 
 ## Step 0 — scaffold (cross-cutting)
 
@@ -22,8 +26,10 @@ specification) in progress.
   proven green as part of run 29904895327 (`4d0693b`).
 - **Roadmap:** `roadmap/README.md` §3 step 0 (Part VI §5/§6).
 - **Delivered:** SwiftPM package declaring the Part I §1 target graph as stub
-  targets — 7 production targets (6 SwiftPM libraries + ClipyApp via XcodeGen)
-  + 6 test targets (Part VI §5); HistoryStorage declared **without** its Fuse
+  targets — 7 product/library targets (6 SwiftPM libraries + ClipyApp via
+  XcodeGen), the non-product `HistoryPerfRunner` executable, and 6 initial test
+  targets (Part VI §5; `HistoryPerfRunnerTests` is added by the V1 verification
+  remediation); HistoryStorage declared **without** its Fuse
   edge (resolves only once pinned at step 3); `xxh3` declared with placeholder
   source. XcodeGen `project.yml` (Part I §9 item 6), SwiftLint + import-gate
   config (Part I §8), the public-symbol no-leak snapshot harness, the
@@ -78,9 +84,11 @@ specification) in progress.
   init and `effectiveContent(of:)` (02 §2); retained state incl. `PinOrdinal`
   (§3); prepared-input types, minting left to Storage (§4); action-specific
   complete facts + `DomainRejection` (§5–§6); strong mutation plan (§7); the
-  seven pure planners (§8); `canonicalContains` (§9.2); D1–D19 invariant tests
-  (§14), incl. planner determinism (D16). No I/O, actor, clock, UUID/Date
-  generation, or async (02 §1).
+  seven pure planners (§8); and `canonicalContains` (§9.2). The remediation
+  tree adds a 47-test direct Domain suite across all seven planners and records
+  the D1–D19 ownership matrix, including Storage-owned stamping and structural
+  fact/Sendable proofs. Supported macOS execution remains the M2 acceptance
+  item. No I/O, actor, clock, UUID/Date generation, or async (02 §1).
 
 | Commit | Subject |
 |---|---|
@@ -216,6 +224,137 @@ specification) in progress.
   excluded by `9c6801a` (green, 30724821449). The SwiftPM job carrying all
   ten new WS suites was green on its first attempt.
 
+## Step 7 — HistoryStorage: reads + observation
+
+- **Status:** done. Gates WS4, WS11, WS12, WS17, WS18 pass; the deferred
+  public-read / observation / no-emission clauses of WS1–WS21 close in
+  `WSReadClosureATests.swift` / `WSReadClauseClosureBTests.swift`; proofs §7.2
+  (fresh-context visibility — second BLOCKER retired) and §7.5 (scalar read
+  isolation) pass on the runner. Green at run 30731659350 alongside step 8
+  (see the CI narrative below — the step's gates were finalized by two
+  follow-up fix commits).
+- **Roadmap:** `roadmap/03-historystorage.md` step 7 (Part V §14; Part IV
+  §1–§7; Part III-B §8–§9).
+- **Delivered:** `recentPage` (scalar two-lane fetch, pinned ordinal then
+  recency/ID, store-level continuation anchors with a boundary-tie exactness
+  guard; Part V §14.1); the versioned `PageCursorCodec` (04 §6: query shape +
+  position + ordering anchor + process marker, manual Codable wire forms
+  because HistoryCore identity types are deliberately not `Codable`);
+  `searchCorpusSnapshot` (§14.2, scalar corpus in default order) + the real
+  `SearchWorker` — exact / fuzzy (Fuse 1.4.0, pinned-first, self-enforced
+  64-Character query bound) / regexp (conservative unsafe-pattern guards)
+  with UTF-16 matched ranges and the frozen body-excerpt algorithm (03b §8);
+  `details` / `pastePayload` (§14.3); the `observe` subscribe-before-query
+  loop with the position-recheck discard path and `bufferingNewest(1)`
+  coalescing (04 §5); `currentPosition` plus the WS12 `.readEntry` /
+  `.positionRecheckEntry` suspension points.
+
+| Commit | Subject |
+|---|---|
+| `d8fd950` | Step 7 (impl): reads + observation — recentPage/cursor codec, SearchWorker+Fuse, details/paste, observe loop (05 §14, 04 §5–§7, 03b §8–§9) |
+| `c2c0580` | Fix data-race error: bind row scalars before mapCodecFailure closures (searchCorpusSnapshot) |
+| `963b90d` | Step 7: facade actor fields private→internal for the WS12/WS15 harness (05 §2 deviation) |
+| `59444d9` | Step 7 (tests): WS4/WS11/WS12/WS17/WS18 + deferred read clauses + §7.2/§7.5 proofs (06 §8/§7) |
+| `72fa778` | Fix step-7 test compile errors: .search(text:mode:) case, missing awaits |
+| `ff0706f` | Fix WS11 test: explicit Task closure return type HistoryPage? |
+| `06f9761` | Fix recentPage continuation anchors (store-level lane bounds, WS18) |
+| `4dbec39` | WS18: fetch limit+2 for unpinned continuations — anchor row consumes one slot |
+
+- **CI:** `d8fd950` red (30729393154, both build jobs) — Swift 6 strict
+  concurrency rejected capturing the non-Sendable `@Model` row in the
+  actor-isolated `mapCodecFailure` closures of `searchCorpusSnapshot`;
+  `c2c0580` binds the Sendable scalar values first (green, 30729512984).
+  `59444d9` red (30730028403, SwiftPM job) — three test compile errors
+  (`.search` bare case, two missing `await`s), fixed by `72fa778`; that run
+  also surfaced a `Task` closure return-type inference failure in WS11,
+  fixed by `ff0706f`. The next run (30730499770, carrying step-8 commits)
+  had WS18's pagination gate catch a real step-7 defect: `recentPage`
+  applied continuation anchors only in memory while the store fetch stayed
+  `limit+1`, starving continuation pages — anchors moved to store-level lane
+  bounds (`06f9761`), plus one anchor-slot depth fix (`4dbec39`, SwiftPM
+  green 30731143421).
+
+## Step 8 — HistoryStorage: thumbnail single-flight + §9 acceptance
+
+- **Status:** implementation done; acceptance in remediation. Gate WS15
+  (thumbnail version fence) passes. Run `30731659350` was cancelled before
+  Perf completed; latest run `30734778016` exposes an invalid WL8 construction: eight facade
+  calls serialize through `HistoryAuthority` before the single-flight seam.
+  WL8 must pass after measuring the production `ThumbnailService` with one
+  prefetched source before M2 can close.
+- **Roadmap:** `roadmap/03-historystorage.md` step 8 (Part IV §9; Part V
+  §14.5; Part VI §9).
+- **Delivered:** `HistoryAuthority.thumbnailSource` — dimension validation,
+  one-item fetch, the Content-Version fence (`.staleContent` for an already
+  stale reference; current bytes never returned under an old key),
+  Effective-Content derivation, and the frozen v1 ImageIO-decodable type set
+  (concrete UTIs, no abstract `public.image`) — one non-suspending interval
+  (04 §9 steps 1–4, 05 §14.5); `ThumbnailService` single-flight table +
+  owned `ThumbnailWorker` — join-or-create per exact key, ImageIO
+  downsample + PNG re-encode off-Authority, 16 MiB output bound, flight
+  entry removed on success/failure/cancellation, completed bytes never
+  retained (04 §9 steps 5–7); the WS15 `.decodeEntry` suspension seam; and
+  the §9 `HistoryPerfRunner` rewrite — 13 workload fixtures across the 9
+  bullets (exact/fuzzy/regexp are distinct fixtures), median-of-5 timings
+  against declarative complexity-envelope ratio checks (no numeric latency
+  targets, §9), JSON fixtures + machine metadata uploaded as CI artifacts.
+
+| Commit | Subject |
+|---|---|
+| `6902cbb` | Step 8 (impl): thumbnail single-flight — Authority source fence + ThumbnailService/Worker ImageIO decode (04 §9, 05 §14.5) |
+| `60f4d5b` | Step 8: WS15 suspension seam on ThumbnailService (.decodeEntry) |
+| `06f9761` | Fix recentPage continuation anchors + CFBoolean warning + WS15 gate |
+| `4dbec39` | WS18: fetch limit+2 for unpinned continuations — anchor row consumes one slot |
+| `c1bd259` | CI: unwrap-proof autoShortcut exclusion; §9 perf runner (workloads + perf-proofs job) |
+
+- **CI:** `6902cbb` red (30730499770, both build jobs) — the app job's log
+  self-scan caught two real warnings (`kCFBooleanTrue` IUO coerced to `Any`),
+  fixed inside `06f9761`; the SwiftPM job caught the WS18 continuation-anchor
+  starvation (see step 7) plus a `try?`-unused test warning. `06f9761` red
+  (30730996351) — one anchor-slot depth bug (the date-bounded fetch includes
+  the anchored row; it now fetches limit+2, `4dbec39`, SwiftPM green
+  30731143421). `4dbec39` red at the app job — the autoShortcut exclusion
+  missed line-WRAPPED variants of the noise; the exclusion now matches the
+  service name anywhere in the line (`c1bd259`). Run 30731659350 was cancelled
+  while the Perf job was still running and produced no §9 pass evidence. The
+  audited baseline `8f316c9` is red at latest run `30734778016` only in `Perf
+  proofs (§9)` because WL8 includes Authority serialization; the correctness
+  jobs remain green. Remediation V1V-04-001
+  isolates steps 5–7 of the production thumbnail pipeline after one prefetch;
+  release-runner evidence is pending. V1V-04-002…04 additionally repair the
+  runner's median/ratio/sample contracts, WL1b timed construct, versioned
+  non-PII fixtures, structural §9 workload map, failure-log wording, dead
+  helpers, and U+0130 Fuse range proof. V1V-04-005 adds the single declarative
+  scales/growth/bound/headroom table plus direct CRC-32/xorshift32 KATs.
+  `HistoryPerfRunnerTests` is present; all code/test items remain in-progress
+  until macOS SwiftPM/perf CI runs.
+
+## V1 verification remediation — local proof closure (2026-08-11)
+
+- **Status:** implementation and portable evidence complete; supported macOS
+  compile/test, public-symbol regeneration, and release-perf proof pending.
+  `docs/V1-Verified/07-finding-dispositions.md` remains the authoritative
+  222-ID status ledger; no behavior item is promoted to `fixed` before that
+  evidence lands.
+- **Domain:** 47 direct tests exercise all seven planners across commit/no-op,
+  rejection, capacity, deterministic ordering, and complete mutation payloads;
+  the suite records the exact D1–D19 ownership split.
+- **Authority/facts:** one-shot transaction injections now reach the position
+  guard and all four concrete apply guards through normal APIs, proving typed
+  failure plus row/position rollback. Capture reuses one duplicate-checked
+  scalar inventory for retained-ID and retention facts on the healthy path;
+  stale/unready state adds only the signature-metadata rebuild scan.
+- **Search/observation:** direct regexp/parser tests cover nested/POSIX sets,
+  ICU quoted literals, backreferences, alternation/quantifiers, and inline
+  comments-mode rejection; direct UTF-16 tests cover supplementary and
+  combining content. A deterministic worker-entry seam proves a commit during
+  old-snapshot evaluation cannot become the subscriber's first visible page.
+- **Performance runner:** all 12 gated fixtures consume one declarative
+  complexity-envelope table; WL1b is explicitly record-only. Preflight checks
+  scale monotonicity, theoretical growth, finite bounds, the standard 1.5×
+  headroom floor, and WL1a's sole 1.2× exception. Pure helper tests pin the PNG
+  CRC and deterministic noise stream used by WL8.
+
 ## Notable decisions & deviations
 
 - **WS5 `.dedupIndexRebuild` producer fix (`7994844`).** An earlier `loadFacts`
@@ -227,14 +366,44 @@ specification) in progress.
   path, whose bound check produces `.temporarilyUnavailable(.dedupIndexRebuild)`
   (06 §8 WS5, 05 §16, 02 §5.1). Recorded in
   `Tests/HistoryStorageTests/WS5DedupIndexUnavailableTests.swift`.
-- **Transient `StepDeferredError` for steps 6–8 paths.** Step-5 stub actors and
-  the not-yet-implemented `HistoryAuthority` methods throw internal
-  `StepDeferredError.notYetImplemented` — deliberately NOT a `HistoryFailure`,
-  never translated into one, propagating through the `SwiftDataHistory` facade
-  unchanged so a not-yet-implemented path fails loud and distinct rather than
-  misclassified as a public failure. Removed when steps 6–8 land
-  (`Sources/HistoryStorage/SwiftDataHistory.swift`, `ActorStubs.swift`,
-  `HistoryAuthority.swift`).
+- **Recent-page bounds reconciled by V1V-03B-001/002.** Pinned continuations
+  now use SwiftData's documented sorted-result `fetchOffset` at
+  `anchorOrdinal`, avoiding both the unproved optional-Int predicate and the
+  former quadratic prefix fetch while retaining the anchor for full
+  `(ordinal,date,id)` validation. Lane reads are capacity-aware: first pages
+  normally materialize at most `limit + 1` scalars; pinned and unpinned
+  continuations need `limit + 2` for their validated/inclusive anchor. Ambiguous ID
+  ties take the hard-bounded §14.1 exactness fallback. The authoritative Part
+  V/VI performance language now states these envelopes rather than weakening
+  the claim only in this progress log. WS18 carries both same-date and
+  multi-pinned-page traversal regressions; macOS CI evidence is pending.
+- **Facade actor fields `private` → `internal` (`963b90d`, 05 §2 snippet
+  deviation).** Part V §2's illustrative snippet declares the five
+  `SwiftDataHistory` actor fields `private`; the WS12/WS15 deterministic
+  harness must install suspension handlers on the facade's OWN Authority
+  from `@testable` tests, which requires same-module visibility. `internal`
+  members of a public struct are unreachable outside the HistoryStorage
+  module, so the Part I §8 surface contract is unchanged. Recorded in the
+  field's doc comment.
+- **Observation discard path uses a position recheck, not buffer peeking
+  (04 §5 steps 3–4).** `AsyncThrowingStream` offers no non-blocking peek,
+  so the `observe` loop closes the registration→first-query race by
+  re-reading the durable position (`HistoryAuthority.currentPosition`) and
+  discarding/requerying while it is newer than the page — the §5 guarantee
+  ("a commit in between is recorded") is preserved through read-after-commit
+  (04 §1/§3) rather than by consuming the newest-value buffer; the buffered
+  invalidation is later skipped by the phase-2 `latestPosition > position`
+  guard. WS12 drives both paths via the `.readEntry` /
+  `.positionRecheckEntry` suspension points.
+- **`searchCorpusSnapshot` returns a labeled tuple.** The step-5 stub's
+  pinned return type gained `continuationAnchor` so the Authority (which
+  alone can decode/validate cursors against its process marker) passes the
+  decoded anchor to `SearchWorker.page` — cursor decode and marker ownership
+  stay on the Authority per 04 §6; the worker never sees a raw cursor.
+- **Dead `StepDeferredError` scaffold was removed by the V1 verification
+  cleanup.** Steps 6–8 had already retired every throw site; the zero-use type
+  and contradictory step-phasing comments are now gone and it is not part of
+  the reachable failure vocabulary.
 - **Symbol-snapshot updater workflow.** `.github/workflows/symbol-snapshot.yml`
   is `workflow_dispatch`-only, runs on macos-26, and commits the regenerated
   HistoryCore public-symbol snapshot as the bot (`contents: write`) — it
@@ -245,8 +414,8 @@ specification) in progress.
   records the pin) with a package-only forced-collision double for Storage
   tests; Fuse is pinned at the exact 1.4.0 tag commit (the 2.0.0-rc.x
   pre-release is deliberately not used — AUDIT §4b). `maxPatternLength` is a
-  dead parameter in Fuse 1.4.0, so the 256-character fuzzy-query bound is
-  enforced by `SearchWorker` itself at step 7 (03b §8).
+  dead parameter in Fuse 1.4.0, so `SearchWorker` enforces the engine-safe
+  64-character fuzzy-query bound itself (03b §8; V1V-03C-001).
 - **Resolved spec question — pin-ordinal compaction on remove (flagged by
   review agent-30, resolved at step-6 start as AUDIT IMP6-01).** `planRemove`
   originally emitted a single `.retire(itemID:, .userRemoval)` from a

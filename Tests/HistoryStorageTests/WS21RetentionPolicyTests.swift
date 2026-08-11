@@ -30,9 +30,8 @@
 /// no public-read or observation clause — every assertion here is
 /// commit/storage side: receipts plus the INDEPENDENT second
 /// `ModelContainer` over the same on-disk store (see `WSSupport`). The
-/// public reads (`browse`, `details`, `pastePayload`, `observe`) land at
-/// roadmap step 7 and are never called here (they still throw the internal
-/// `StepDeferredError`).
+/// public reads (`browse`, `details`, `pastePayload`, `observe`) are covered by
+/// the separate step-7 suites and are intentionally not called here.
 import Foundation
 import HistoryCore
 import HistoryDomain

@@ -215,9 +215,6 @@ package enum DomainRejection: Error, Sendable, Equatable {
     /// The prepared revision failed Domain-level revalidation.
     /// docs/02-domain.md §6, §11 steps 2 and 4
     case invalidRevisionDraft
-    /// The referenced Revision does not exist on the target item.
-    /// docs/02-domain.md §6
-    case revisionNotFound(RevisionID)
     /// A validated fact proved internally inconsistent (e.g. an active
     /// revision ID naming no stored revision). Defensive backstop only.
     /// docs/02-domain.md §6, §11 step 3

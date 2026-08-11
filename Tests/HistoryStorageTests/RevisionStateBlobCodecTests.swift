@@ -72,11 +72,12 @@ private func storedRepresentation(
 
 private func storedRevision(
     _ id: UUID,
+    createdAt: Date = Date(timeIntervalSinceReferenceDate: 1_000),
     representations: [StoredRepresentationV1]
 ) -> StoredRevisionV1 {
     StoredRevisionV1(
         id: id,
-        createdAt: Date(timeIntervalSinceReferenceDate: 1_000),
+        createdAt: createdAt,
         representations: representations
     )
 }
@@ -331,7 +332,7 @@ private func smallLimits(
         ],
         activeRevisionID: Self.revisionUUID1
     )
-    #expect(throws: RevisionStateCodecRejection.duplicateRevisionID(Self.revisionUUID1)) {
+    #expect(throws: CodecRejection.duplicateRevisionID(Self.revisionUUID1)) {
         try RevisionStateBlobCodec.decode(blob, canonical: canonical)
     }
 }
@@ -346,9 +347,55 @@ private func smallLimits(
         activeRevisionID: Self.foreignUUID
     )
     #expect(
-        throws: RevisionStateCodecRejection.activeRevisionIDNamesNoStoredRevision(Self.foreignUUID)
+        throws: CodecRejection.activeRevisionIDNamesNoStoredRevision(Self.foreignUUID)
     ) {
         try RevisionStateBlobCodec.decode(blob, canonical: canonical)
+    }
+}
+
+/// §7.4/D3: a non-nil active ID is corruption even when the stored
+/// revision list is completely empty.
+@Test func decodeRejectsEmptyRevisionListWithNonNilActiveID() throws {
+    let canonical = try makeCanonical()
+    let blob = try wireBlob(
+        revisions: [],
+        activeRevisionID: Self.foreignUUID
+    )
+    #expect(
+        throws: CodecRejection.activeRevisionIDNamesNoStoredRevision(
+            Self.foreignUUID
+        )
+    ) {
+        try RevisionStateBlobCodec.decode(blob, canonical: canonical)
+    }
+}
+
+/// §4: every decoded revision timestamp must be a finite value before it
+/// enters Domain ordering. The wire-value seam is intentional here because
+/// JSONEncoder rejects non-conforming floating-point dates before it can
+/// serialize this otherwise structurally valid corruption fixture.
+@Test func decodeRejectsNonFiniteRevisionCreationDates() throws {
+    let canonical = try makeCanonical()
+    for interval in [Double.nan, Double.infinity, -Double.infinity] {
+        let wire = RevisionStateBlobV1(
+            formatVersion: 1,
+            revisions: [storedRevision(
+                Self.revisionUUID1,
+                createdAt: Date(timeIntervalSinceReferenceDate: interval),
+                representations: [storedRepresentation(Self.textType, [0x31])]
+            )],
+            activeRevisionID: Self.revisionUUID1
+        )
+        #expect(
+            throws: CodecRejection.nonFiniteRevisionCreatedAt(
+                Self.revisionUUID1
+            )
+        ) {
+            try RevisionStateBlobCodec.decodeValidatedWire(
+                wire,
+                canonical: canonical
+            )
+        }
     }
 }
 
@@ -361,7 +408,7 @@ private func smallLimits(
         ],
         activeRevisionID: nil
     )
-    #expect(throws: RevisionStateCodecRejection.nonEmptyRevisionListWithNilActiveID) {
+    #expect(throws: CodecRejection.nonEmptyRevisionListWithNilActiveID) {
         try RevisionStateBlobCodec.decode(blob, canonical: canonical)
     }
 }
@@ -433,7 +480,7 @@ private func smallLimits(
         ],
         activeRevisionID: Self.revisionUUID1
     )
-    #expect(throws: RevisionStateCodecRejection.nonCanonicalRevisionType(Self.tiffType)) {
+    #expect(throws: CodecRejection.nonCanonicalRevisionType(Self.tiffType)) {
         try RevisionStateBlobCodec.decode(blob, canonical: canonical)
     }
 }
@@ -567,7 +614,7 @@ private func smallLimits(
 /// §7.4: a zero Content Version (docs/05-authority-kernel.md §3.1: always at
 /// least 1).
 @Test func decodeRejectsZeroContentVersion() {
-    #expect(throws: RevisionStateCodecRejection.invalidContentVersion(found: 0)) {
+    #expect(throws: CodecRejection.invalidContentVersion(found: 0)) {
         try RevisionStateBlobCodec.decodeContentVersion(0)
     }
 }
@@ -575,7 +622,7 @@ private func smallLimits(
 /// §7.4: invalid occurrence values — a zero copy count; a retained item
 /// exists only through at least one accepted capture.
 @Test func decodeRejectsZeroCopyCount() {
-    #expect(throws: RevisionStateCodecRejection.zeroCopyCount) {
+    #expect(throws: CodecRejection.zeroCopyCount) {
         try RevisionStateBlobCodec.decodeOccurrence(
             firstCopiedAt: Date(timeIntervalSinceReferenceDate: 100),
             lastCopiedAt: Date(timeIntervalSinceReferenceDate: 100),
@@ -589,7 +636,7 @@ private func smallLimits(
 /// §7.4: invalid occurrence values — recency precedes the first copy (D11
 /// monotone occurrence).
 @Test func decodeRejectsOccurrenceRecencyPrecedingFirstCopy() {
-    #expect(throws: RevisionStateCodecRejection.lastCopiedAtPrecedesFirstCopiedAt) {
+    #expect(throws: CodecRejection.lastCopiedAtPrecedesFirstCopiedAt) {
         try RevisionStateBlobCodec.decodeOccurrence(
             firstCopiedAt: Date(timeIntervalSinceReferenceDate: 200),
             lastCopiedAt: Date(timeIntervalSinceReferenceDate: 100),
@@ -600,12 +647,45 @@ private func smallLimits(
     }
 }
 
+/// §4: a first-copy timestamp must be finite; NaN and either infinity are
+/// corruption even when the last-copy timestamp would otherwise compare as
+/// monotone.
+@Test func decodeRejectsNonFiniteFirstCopiedAt() {
+    for interval in [Double.nan, Double.infinity, -Double.infinity] {
+        #expect(throws: CodecRejection.nonFiniteFirstCopiedAt) {
+            try RevisionStateBlobCodec.decodeOccurrence(
+                firstCopiedAt: Date(timeIntervalSinceReferenceDate: interval),
+                lastCopiedAt: Date(timeIntervalSinceReferenceDate: 200),
+                copyCount: 1,
+                firstSource: nil,
+                lastSource: nil
+            )
+        }
+    }
+}
+
+/// §4: a last-copy timestamp must be finite before recency ordering or
+/// cursor materialization can consume it.
+@Test func decodeRejectsNonFiniteLastCopiedAt() {
+    for interval in [Double.nan, Double.infinity, -Double.infinity] {
+        #expect(throws: CodecRejection.nonFiniteLastCopiedAt) {
+            try RevisionStateBlobCodec.decodeOccurrence(
+                firstCopiedAt: Date(timeIntervalSinceReferenceDate: 100),
+                lastCopiedAt: Date(timeIntervalSinceReferenceDate: interval),
+                copyCount: 1,
+                firstSource: nil,
+                lastSource: nil
+            )
+        }
+    }
+}
+
 /// §7.4: invalid occurrence values — a source-application observation beyond
 /// the Part VI UTF-8 byte bound.
 @Test func decodeRejectsOversizeSourceObservation() {
     let limits = smallLimits(maximumSourceApplicationObservationUTF8Bytes: 16)
     #expect(
-        throws: RevisionStateCodecRejection.sourceObservationExceedsBound(
+        throws: CodecRejection.sourceObservationExceedsBound(
             found: 17,
             bound: 16
         )
@@ -623,7 +703,7 @@ private func smallLimits(
 
 /// §7.4: a negative pin ordinal is corruption.
 @Test func decodeRejectsNegativePinOrdinal() {
-    #expect(throws: RevisionStateCodecRejection.negativePinOrdinal(found: -1)) {
+    #expect(throws: CodecRejection.negativePinOrdinal(found: -1)) {
         try RevisionStateBlobCodec.decodePinOrdinal(-1)
     }
 }
@@ -632,39 +712,51 @@ private func smallLimits(
 /// `.persistence(.corruptStoredValue)` at the storage boundary.
 @Test func rejectionsMapToCorruptStoredValue() {
     #expect(
-        RevisionStateCodecRejection.duplicateRevisionID(Self.revisionUUID1).historyFailure
+        CodecRejection.duplicateRevisionID(Self.revisionUUID1).historyFailure
             == .persistence(.corruptStoredValue)
     )
     #expect(
-        RevisionStateCodecRejection.activeRevisionIDNamesNoStoredRevision(Self.foreignUUID)
+        CodecRejection.activeRevisionIDNamesNoStoredRevision(Self.foreignUUID)
             .historyFailure == .persistence(.corruptStoredValue)
     )
     #expect(
-        RevisionStateCodecRejection.nonEmptyRevisionListWithNilActiveID.historyFailure
+        CodecRejection.nonEmptyRevisionListWithNilActiveID.historyFailure
             == .persistence(.corruptStoredValue)
     )
     #expect(
-        RevisionStateCodecRejection.nonCanonicalRevisionType(Self.tiffType).historyFailure
+        CodecRejection.nonCanonicalRevisionType(Self.tiffType).historyFailure
             == .persistence(.corruptStoredValue)
     )
     #expect(
-        RevisionStateCodecRejection.invalidContentVersion(found: 0).historyFailure
+        CodecRejection.invalidContentVersion(found: 0).historyFailure
             == .persistence(.corruptStoredValue)
     )
     #expect(
-        RevisionStateCodecRejection.zeroCopyCount.historyFailure
+        CodecRejection.zeroCopyCount.historyFailure
             == .persistence(.corruptStoredValue)
     )
     #expect(
-        RevisionStateCodecRejection.lastCopiedAtPrecedesFirstCopiedAt.historyFailure
+        CodecRejection.lastCopiedAtPrecedesFirstCopiedAt.historyFailure
             == .persistence(.corruptStoredValue)
     )
     #expect(
-        RevisionStateCodecRejection.sourceObservationExceedsBound(found: 17, bound: 16)
+        CodecRejection.nonFiniteRevisionCreatedAt(Self.revisionUUID1)
             .historyFailure == .persistence(.corruptStoredValue)
     )
     #expect(
-        RevisionStateCodecRejection.negativePinOrdinal(found: -1).historyFailure
+        CodecRejection.nonFiniteFirstCopiedAt.historyFailure
+            == .persistence(.corruptStoredValue)
+    )
+    #expect(
+        CodecRejection.nonFiniteLastCopiedAt.historyFailure
+            == .persistence(.corruptStoredValue)
+    )
+    #expect(
+        CodecRejection.sourceObservationExceedsBound(found: 17, bound: 16)
+            .historyFailure == .persistence(.corruptStoredValue)
+    )
+    #expect(
+        CodecRejection.negativePinOrdinal(found: -1).historyFailure
             == .persistence(.corruptStoredValue)
     )
     #expect(

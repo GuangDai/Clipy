@@ -8,7 +8,11 @@ This Part distinguishes three states:
 2. **Executable specification:** the public scaffold compiles and every proof/walking-skeleton gate below passes on the supported macOS runner.
 3. **Product implementation complete:** UI, pasteboard behavior, packaging, accessibility, localization, and non-skeleton product tests pass.
 
-This document set may reach state 1 without claiming states 2 or 3. At the time of this revision, no greenfield implementation exists.
+The document set has reached state 1. The greenfield implementation exists
+through roadmap step 8, but the current V1-verification remediation still
+awaits supported macOS 26 / Swift 6.2 correctness, symbol-surface, and §9
+release-perf proof before state 2 can be claimed. Product wiring and state 3
+remain outside that claim.
 
 ### 2. Fixed v1 safety bounds
 
@@ -22,7 +26,7 @@ public struct HistoryLimits: Sendable, Hashable {
 }
 ```
 
-`HistoryLimits` lives in `HistoryCore` (its Foundation-only home; the only production/value type defined in Part VI §2). `HistoryLimits.standard` is the only value production and the `SwiftDataHistory` walking-skeleton tests use. A test that needs a different hard bound (e.g. WS9's reduced retained-item count) injects the bound at the Domain planner seam (`planCapture(... hardMaximumRetainedItems:)`), not by altering `HistoryLimits`.
+`HistoryLimits` lives in `HistoryCore` (its Foundation-only home; the only production/value type defined in Part VI §2). `HistoryLimits.standard` is the only value production uses. Domain planner tests inject individual scalar bounds (for example `planCapture(... hardMaximumRetainedItems:)`); package-owned HistoryStorage/codec tests may construct a fully validated custom `HistoryLimits` through its package initializer when that is the narrowest way to prove a storage-bound rejection. No caller-facing API accepts custom limits.
 
 | Bound | v1 value |
 |---|---:|
@@ -42,7 +46,7 @@ public struct HistoryLimits: Sendable, Hashable {
 | Page/observation row limit | 1–500 |
 | Search term UTF-8 bytes | 4,096 |
 | Regexp pattern Characters | 512 |
-| Fuzzy query Characters | 256 |
+| Fuzzy query Characters | 64 (Fuse 1.4.0 single-`Int` bitap ceiling) |
 | Fuzzy title/body prefix | 5,000 Characters each |
 | Regexp title/body prefix | 1,000 Characters each |
 | Body search snippet | 322 Characters including ellipses |
@@ -72,7 +76,7 @@ None of these types, tables, protocols, or state machines belongs to v1. The tri
 | G5 | Persistent startup checkpoint | Metadata-only startup/index rebuild p95 exceeds 250 ms at 5,000 items on the minimum supported hardware profile. |
 | G6 | Multi-state materialization lifecycle/publish fence | At least 20% of thumbnail work is measured as superseded or discarded despite cancellation and single-flight. |
 | G7 | Localized search projection | Product requirements specify locale-sensitive matching and migration behavior; fixtures define normalization and ordering for supported locales. |
-| G8 | Blob-store handle/streaming content abstraction | A representative workload exceeds the capture-path memory budget or shows p95 copy cost that cannot be solved within the bounded inline-value design. |
+| G8 | Blob-store handle/streaming content abstraction | A representative capture- or read-path workload exceeds its memory budget, or shows p95 copy cost that cannot be solved within the bounded inline-value design. Read-path evidence includes peak transient hydration RSS and aggregate resident DTO bytes under representative concurrent callers. |
 
 Every admitted cache must satisfy the Part IV cache law. G2 must define durable record schema, retention, cursor expiration, crash consistency, and replay completeness before any collection cache can depend on it.
 
@@ -91,7 +95,8 @@ Each requires an approved product specification and a fresh architecture review.
 
 ### 5. Scaffold file and target plan
 
-The first implementation work must create only these production targets:
+The first implementation work must create only these product/library targets,
+plus the non-product `HistoryPerfRunner` proof executable:
 
 ```text
 HistoryCore
@@ -101,6 +106,7 @@ PasteboardAdapter
 PresentationUI
 ClipyApp
 xxh3
+HistoryPerfRunner
 ```
 
 Test targets mirror the owner target:
@@ -109,12 +115,17 @@ Test targets mirror the owner target:
 HistoryCoreTests
 HistoryDomainTests
 HistoryStorageTests
+HistoryPerfRunnerTests
 PasteboardAdapterTests
 PresentationUITests
 ClipyIntegrationTests
 ```
 
-The scaffold must not add an implementation target for a deferred feature. `HistoryStorageTests` uses both persistent temporary stores and the same implementation's in-memory configuration.
+The scaffold must not add an implementation target for a deferred feature.
+`HistoryPerfRunnerTests` imports the executable target only to prove its pure
+§9 helpers and declarative coverage/envelope tables; workload acceptance still
+runs the release executable itself. `HistoryStorageTests` uses both persistent
+temporary stores and the same implementation's in-memory configuration.
 
 Recommended implementation order:
 
@@ -149,7 +160,7 @@ The macOS runner must prove:
 1. **Transaction boundary:** closure success durably commits item mutations and singleton position once; closure failure commits neither. No extra `save()` is required.
 2. **Fresh-context visibility:** after a committed receipt, a newly created serialized read context sees the commit immediately.
 3. **Codec round trip:** Canonical bytes/fingerprints, full revisions including the active revision, active ID, occurrence first/last source, pin ordinal, and projections survive restart.
-4. **Corruption rejection:** the Part V §4 decode checks are exhaustive and each fails closed as `.persistence(.corruptStoredValue)` or `.persistence(.invariantViolation)`: unknown blob version; unbounded or oversize byte/count values; duplicate or unnormalized type identifiers, or an empty-bytes representation; a Canonical representation lacking fingerprint/signature coverage; duplicate revision IDs or revision-history overflow; a non-nil active ID naming no stored revision, or a non-empty revision list with a nil active ID; revision content that is empty, non-normalized, or contains a non-Canonical type; a zero or invalid Content Version; invalid occurrence values; a negative pin ordinal; and an `effectiveTypeIdentifiersBlob` that is not a valid versioned sorted-unique list.
+4. **Corruption rejection:** the Part V §4 decode checks are exhaustive and each fails closed as `.persistence(.corruptStoredValue)` or `.persistence(.invariantViolation)`: unknown blob version; unbounded or oversize byte/count values; duplicate or unnormalized type identifiers, or an empty-bytes representation; a Canonical representation lacking fingerprint/signature coverage; duplicate revision IDs or revision-history overflow; a non-nil active ID naming no stored revision, or a non-empty revision list with a nil active ID; revision content that is empty, non-normalized, or contains a non-Canonical type; a zero or invalid Content Version; zero copy count, over-bound source observations, invalid or non-finite occurrence/revision dates; a negative pin ordinal; an `effectiveTypeIdentifiersBlob` that is not a valid versioned sorted-unique list; an unknown projection schema version; an over-bound stored title; and an over-bound stored search body. Fixtures pin the consuming-path boundaries: startup rejects schema corruption; recent and search validate every occurrence/projection scalar they consume before sorting or cursor minting; full hydration validates the complete occurrence and all projection scalars.
 5. **Scalar read isolation:** recent/search/startup paths do not decode Canonical or revision blobs. If SwiftData cannot prove no fault, the performance claim is removed and an alternative projection schema is designed; correctness tests must still pass.
 6. **Signature completeness:** startup postings cover every retained Canonical signature entry; forced xxh3 collision still requires byte confirmation.
 7. **No invalid platform API:** business-ID lookup uses a fetch, not `registeredModel(for:)`; no undocumented refresh method appears.
@@ -217,7 +228,7 @@ After insert, coalesce, pin reorder, and multiple revisions, reopen the store. A
 
 #### WS15 — Thumbnail version fence
 
-Start a thumbnail request for one reference, revise the item during decode, and verify the old result remains tagged with the old reference and cannot be applied to the new row. A request begun with an already stale reference fails rather than returning current bytes under the old key.
+Start a thumbnail request for one reference, revise the item during decode, and verify the old result remains tagged with the old reference and cannot be applied to the new row. A request begun with an already stale reference fails rather than returning current bytes under the old key. At the package worker seam, assert encoded output exactly at the byte envelope is admitted, one byte over returns `.capacityExceeded(.thumbnailBytes)`, and PNG destination/finalization failure is classified as encode-side `.persistence(.invariantViolation)`, not stored-value corruption.
 
 #### WS16 — Remove and not-found failures
 
@@ -225,7 +236,7 @@ Insert an item, then `perform(.remove(id))`. Expect `.removed(count: 1)`, `Chang
 
 #### WS17 — Search modes and matched ranges
 
-Populate the store with known rows. For each frozen mode — exact (title-then-body substring), fuzzy (Fuse, pinned-first, score then recency then ID), regexp (`NSRegularExpression`, 1,000-Character prefixes) — assert the ranked rows, pinned-first ordering, and that `SearchPresentation.matchedRanges` are UTF-16 offsets that index correctly into `HistoryRow.title` (title match, `snippet == nil`) or into `snippet` (body match). Assert an invalid regexp returns `invalidInput(.invalidRegularExpression)` before scanning and a fuzzy query over 256 Characters returns `invalidInput(.invalidSearchTerm)`. (Covers the three search modes and their failure producers, and the Fuse-range→UTF-16 translation.)
+Populate the store with known rows. For each frozen mode — exact (title-then-body substring), fuzzy (Fuse, pinned-first, score then recency then ID), regexp (`NSRegularExpression`, 1,000-Character prefixes) — assert the ranked rows, pinned-first ordering, and that `SearchPresentation.matchedRanges` are UTF-16 offsets that index correctly into `HistoryRow.title` (title match, `snippet == nil`) or into `snippet` (body match). Assert the common 4,096-UTF-8-byte search-term boundary for all three modes. Assert invalid, nested-quantifier, backreference, and quantified-alternation regexp forms (including `(a|a)+b` and `(a|ab)+c` against a long all-`a` row) return `invalidInput(.invalidRegularExpression)` before scanning; assert unquantified alternation remains admitted. Assert fuzzy queries through 64 Characters are admitted and queries over 64 Characters return `invalidInput(.invalidSearchTerm)` before Fuse is called. Include 65–89 and 90+ regression cases, which exercise the dependency's historical empty-result and checked-overflow windows without entering them. (Covers the three search modes and their failure producers, the common byte envelope, conservative regexp admission, the Fuse word-width fence, and the Fuse-range→UTF-16 translation.)
 
 #### WS18 — Pagination and cursor expiry
 
@@ -249,13 +260,58 @@ Correctness gates run first. Performance claims are accepted only from a release
 
 - Capture commit interval excludes pasteboard access, fingerprinting, rich-text projection, and image decode.
 - Healthy capture candidate generation is proportional to incoming bytes plus posting-set/candidate confirmation work, not all Canonical blobs.
-- Index rebuild is O(retained signature metadata) and bounded by 5,000 items.
+- Warm persistent-store open is measured at 200/500/1,000 retained-metadata
+  rows within the 5,000-item hard bound. The timed public
+  `SwiftDataHistory.open` construct includes `ModelContainer`/SQLite open,
+  singleton and startup validation, scalar-metadata reads, and Signature Index
+  rebuild; it is not an isolated index-rebuild timer, cold-start proof,
+  deterministic-teardown proof, or G5 absolute-latency fixture.
 - Pin reorder is O(pinned count), bounded by retained count.
 - User retention and clear are O(retained scalar metadata), bounded by retained count.
-- Recent browse materializes at most `limit + 1` scalar rows after the storage query/order strategy is proved.
-- v1 search may scan all bounded scalar search projections; no cache is added without G2 evidence.
+- Recent browse normally materializes at most `limit + 1` scalar rows across
+  both lanes for a first page. Pinned and unpinned continuations materialize at
+  most `limit + 2`: the former verifies and drops its complete offset anchor;
+  the latter receives its anchor through the inclusive date bound.
+  Ambiguous UUID ties use the Part V §14.1 correctness fallback, bounded by the
+  5,000-item hard limit. WS18 proves that path's complete, non-overlapping
+  traversal. Supported 5,000-row tie-heavy incidence/cost measurement is
+  explicitly deferred under V1-Verified
+  `unpinned-exactness-guard-full-lane-refetch`; the current normal-case runner
+  envelope neither includes nor proves the fallback cost and must not be cited
+  to close that deferred item.
+- v1 exact, fuzzy, and regexp search may each scan all bounded scalar search
+  projections; no cache is added without G2 evidence. At each 100/400-row
+  measurement point the release runner reuses one populated corpus for all
+  three public modes, requires the planted row to match, and gates every 4×
+  row span at an 8× envelope. These are bounded-corpus complexity envelopes,
+  not absolute-latency or G2 admission evidence.
+- Exact body excerpting may traverse the full bounded projection but
+  materializes only its at-most-320-Character retained window (plus at most two
+  ellipses), never a full `[Character]` copy of the stored search body.
+- Projection retains at most the bounded search-body accumulator rather than a
+  full joined corpus; revision summaries project only their bounded title.
 - Detail/paste decode one item's bounded lineage.
-- Thumbnail performs one bounded source fetch and one shared concurrent decode for an identical key.
+- Thumbnail performs one bounded Authority source fetch and, after that fetch has produced immutable bytes, one shared concurrent decode for an identical key. WS15 and the facade smoke prove the complete source/version-fence path; the release runner prefetches the source once and times `ThumbnailService` steps 5–7 directly. It must not count eight intentionally actor-serialized Authority fetches as part of the single-flight decode ratio.
+
+The runner owns a declarative workload-to-bullet map covering every bullet
+`1...9`. Each run fails if a named workload is missing, duplicated, unknown, or
+emits a drifted free-form bullet label, and records any structural coverage
+failure in the versioned fixture document. A second declarative table is the
+single source of truth for every gated workload's measurement scales, expected
+growth (`linear` or corpus-independent `constant`), bound, and headroom policy;
+workload bodies consume those values directly. Before any expensive fixture is
+built, the runner requires positive strictly increasing scales, derives the
+large/small span and theoretical ratio, requires a positive finite bound, and
+checks at least 1.5× headroom. WL1a is the only named exception: its sanctioned
+O(retained-scalar) inventory load uses a 5× span with a 6× bound, so the table
+requires its explicit 1.2× retained-inventory policy and rejects that policy on
+every other workload. Invalid structure is recorded and fails the run.
+
+Pure runner helpers have direct SwiftPM tests: median, ratio, duration
+conversion, coverage/envelope validation, PNG CRC-32 using published check and
+IHDR vectors, and the deterministic xorshift32 state/byte stream. The supported
+macOS release run remains the acceptance proof for the workload measurements
+themselves.
 
 No numeric latency target in a future PR may be declared satisfied by the current repository's implementation; it must measure the greenfield scaffold.
 
@@ -294,6 +350,9 @@ The review must also verify:
 
 ### 11. Completion statement
 
-After the document self-review passes, the design is **consolidated**. It must still be described as “scaffold proof pending.”
+After the document self-review passes, the design is **consolidated**. Until
+the current implementation passes Sections 6–9 and WS1–WS21 on the supported
+runner, describe it as “implemented through roadmap step 8; executable-v1
+acceptance pending,” not as an unimplemented scaffold.
 
 Only after Sections 6–9 and WS1–WS21 pass may the header be changed to “executable v1 specification.” Only product implementation and its separate acceptance tests may call the greenfield refactor complete.

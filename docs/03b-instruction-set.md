@@ -86,14 +86,23 @@ unpinned rows: lastCopiedAt descending, HistoryItemID bytes ascending
 Search behavior is frozen as follows:
 
 - An empty term is equivalent to `.recent` and carries no search presentation.
+- Every non-empty mode first enforces the Part VI 4,096-UTF-8-byte search-term
+  bound. An over-bound value returns `invalidInput(.invalidSearchTerm)` before
+  regexp compilation, Fuse pattern construction, or corpus scanning;
+  mode-specific Character bounds are checked only after this common envelope.
 - Exact is a case-insensitive literal substring search. It checks title first and, only when title does not match, the full bounded `searchBody`. It returns the first match and preserves the default row order.
 - Regexp first rejects an invalid or known unsafe pattern, then uses Foundation `NSRegularExpression` (an NFA engine, hence the conservative unsafe-pattern guards). It scans at most the first 1,000 Characters of title and, only on title miss, the first 1,000 Characters of body, returns the first match, and preserves the default row order.
-- Fuzzy uses `krisk/fuse-swift` 1.4.x with `threshold` 0.7, `location` 0, `distance` 100, and `isCaseSensitive` false — all fixed and fixture-locked. It scans at most the first 5,000 Characters of title and, only on title miss, the first 5,000 Characters of body. Fuse 1.4.0 does **not** enforce its `maxPatternLength` option (the parameter is unread in that release, so the documented "return nil" never fires); the SearchWorker therefore enforces the Part VI fuzzy-query bound (256 Characters) itself — a query exceeding it is rejected as `invalidInput(.invalidSearchTerm)` before Fuse is called. Fuse returns match ranges as Character offsets into its own lowercased working copy; the SearchWorker translates those to UTF-16 offsets into the original (non-lowercased) title or excerpt before building `matchedRanges`. Results preserve the default pinned-first order: pinned rows first, ordered by `pinOrdinal` ascending (matching the default order); then unpinned rows, ordered by ascending Fuse score, then `lastCopiedAt` descending, then History Item ID bytes ascending.
+- Fuzzy uses `krisk/fuse-swift` 1.4.x with `threshold` 0.7, `location` 0, `distance` 100, and case-insensitive semantics — all fixed and fixture-locked. The worker creates its pattern with an `isCaseSensitive: false` Fuse instance, lowercases each scanned prefix exactly once, proves the lowercase copy preserves Character count, and evaluates that already-lowercased copy through an otherwise-identical `isCaseSensitive: true` Fuse instance. This is semantically the same 1.4.0 algorithm without its redundant second lowercase allocation. It scans at most the first 5,000 Characters of title and, only on title miss, the first 5,000 Characters of body. Fuse 1.4.0 does **not** enforce its `maxPatternLength` option (the parameter is unread in that release, so the documented "return nil" never fires), and its bitap represents a pattern in one 64-bit `Int`; the SearchWorker therefore enforces the Part VI fuzzy-query bound (**64 Characters**) itself. A query exceeding it is rejected as `invalidInput(.invalidSearchTerm)` before Fuse is called, avoiding the dependency's unrepresentable-mask and checked-overflow paths. Fuse returns match ranges as Character offsets into the aligned lowercase working copy; the SearchWorker translates those to UTF-16 offsets into the original (non-lowercased) title or excerpt before building `matchedRanges`. Results preserve the default pinned-first order: pinned rows first, ordered by `pinOrdinal` ascending (matching the default order); then unpinned rows, ordered by ascending Fuse score, then `lastCopiedAt` descending, then History Item ID bytes ascending.
 - A title match has `snippet == nil` and UTF-16 ranges relative to `HistoryRow.title`. A body match supplies a deterministic bounded excerpt in `snippet`; its ranges are relative to that excerpt.
 
-Body excerpt construction is fixed: sort match ranges; if the body is shorter than 320 Characters the window is the whole body and no ellipses are added; otherwise center a window of at most 320 Characters on the earliest match (when the match itself is longer, retain its first 320 Characters), distribute remaining context equally before/after with the extra Character after — context that would extend past a body edge is redistributed to the other side; add `…` at each edge where text was omitted — a leading ellipsis appears only when the window starts after the body start, a trailing ellipsis only when it ends before the body end; clip later ranges to the retained window; then convert the retained ranges to UTF-16 offsets into the final snippet, shifting each range right by the length of the leading ellipsis only when one is present. The final snippet is at most 322 Characters.
+Body excerpt construction is fixed: sort match ranges; if the body is 320 Characters or shorter the window is the whole body and no ellipses are added; otherwise center a window of at most 320 Characters on the earliest match (when the match itself is longer, retain its first 320 Characters), distribute remaining context equally before/after with the extra Character after — context that would extend past a body edge is redistributed to the other side; add `…` at each edge where text was omitted — a leading ellipsis appears only when the window starts after the body start, a trailing ellipsis only when it ends before the body end; clip later ranges to the retained window; then convert the retained ranges to UTF-16 offsets into the final snippet, shifting each range right by the length of the leading ellipsis only when one is present. The final snippet is at most 322 Characters.
 
-Regexp admission rejects, returning `invalidInput(.invalidRegularExpression)` in every case: a pattern over the Part VI 512-Character limit; a pattern that fails Foundation `NSRegularExpression` compilation; a quantified group that itself contains a quantifier and is quantified (e.g. `(a+)+`); a quantified alternation group whose branches contain quantifiers (e.g. `(a+|b)+`); and any backreference — the features that risk catastrophic NFA backtracking or unbounded work. Plain non-capturing groups `(?:…)`, anchors, and character-class constructs are permitted *unless* they participate in a rejected nested-quantifier form. These conservative guards intentionally reject some valid but risky patterns; regexp search never executes a rejected pattern.
+Exact search still scans the full bounded `searchBody`, but excerpt production
+must not materialize that body as a `[Character]` or other second full-text
+buffer. It may traverse the original `String`; owned body-derived text and
+UTF-16 offset storage are bounded by the retained excerpt window.
+
+Regexp admission rejects, returning `invalidInput(.invalidRegularExpression)` in every case: a pattern over the Part VI 512-Character limit; a pattern that fails Foundation `NSRegularExpression` compilation; a quantified group that itself contains a quantifier and is quantified (e.g. `(a+)+`); **any quantified group containing alternation** (including `(a+|b)+`, `(a|a)+`, and `(a|ab)+`); any backreference; and any inline flag clause that enables ICU comments/free-spacing mode (`x`). Comments mode is conservatively excluded because ignored whitespace and `#` line comments would otherwise require a second complete lexical grammar before the nested-quantifier proof. Plain non-capturing groups `(?:…)`, anchors, unquantified alternation, comments-mode-disabled flag clauses, and character-class constructs are permitted *unless* they participate in a rejected nested-quantifier/alternation form. The scanner recognizes nested ICU/POSIX sets plus `\Q…\E` quoted literals both outside and inside sets. These conservative guards intentionally reject some valid but risky patterns; regexp search never executes a rejected pattern.
 
 Search scores and Fuse objects remain internal. Fixture tests own Unicode conversion, unsafe-regexp rejection, title-before-body behavior, tie-breakers, and excerpt/range stability.
 
@@ -254,10 +263,12 @@ public enum HistoryFailure: Error, Sendable, Equatable {
 
 public enum InvalidInputReason: Sendable, Equatable {
     case emptyCapture
+    case excludedFromHistory
     case duplicateRepresentationType(String)
     case unsupportedRepresentationType(String)
     case representationLimit
     case byteLimit
+    case invalidTimestamp
     case incoherentRevisionDraft
     case invalidRegularExpression
     case invalidPageLimit
@@ -277,6 +288,7 @@ public enum CapacityKind: Sendable, Equatable {
     case revisionCount
     case revisionBytes
     case copyCount
+    case thumbnailBytes
     case coherenceToken
 }
 
@@ -325,7 +337,8 @@ let receipt = try await history.perform(
                 sourceApplication: frontmostBundleID,
                 lineageHint: snapshot.historyItemID  // adapter-decoded prior-paste hint; nil if none
             ),
-            observedAt: observedAt
+            observedAt: observedAt,
+            isConcealed: snapshot.isConcealed
         )
     )
 )

@@ -10,11 +10,9 @@
 /// complete Signature Index from durable signature metadata without decoding
 /// content blobs and revalidate the full pinned ordinal set.
 ///
-/// Phasing (docs/roadmap/README.md §3, WS-clause phasing note): WS14's
-/// "match pre-restart public results" clause is a step-7 (reads +
-/// observation) clause — `browse`/`details` still throw `StepDeferredError` —
-/// and is NOT asserted here. This file closes the step-6 clauses, all seen
-/// through an INDEPENDENT second `ModelContainer` over the same on-disk
+/// This file closes WS14's step-6 durable-reconstruction clauses; the
+/// separately landed step-7 read suites own the public-result clauses. All
+/// assertions are seen through an INDEPENDENT second `ModelContainer` over the same on-disk
 /// store (see `WSSupport`): (i) the position singleton equals the
 /// pre-restart commit count; (ii) every row's Content Version, occurrence
 /// fields, §15 projection fields, and pin ordinal match the pre-restart

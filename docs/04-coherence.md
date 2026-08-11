@@ -86,6 +86,16 @@ The observation algorithm hides the classic “initial query versus subscription
 
 Because registration happens before the first query, a commit in between is recorded. Because the page carries its source position, the observer can discard an obsolete result deterministically.
 
+V1 deliberately prioritizes a fresh first emission over a fixed retry count:
+phase 1 waits until one query/recheck interval contains no intervening commit.
+Position monotonicity proves that every discarded page is older; it does not
+prove termination under a hypothetical infinite write stream. A sustained
+writer can therefore delay the first emission, and cancellation is the bounded
+exit. The producer checks cancellation between requeries. Yielding a page that
+the recheck already proved stale would violate step 4 and is not an accepted
+liveness shortcut; revisit this tradeoff only if a supported product workload
+demonstrates observer-start starvation.
+
 Cancellation unregisters the continuation and releases query/search tasks. An observation created after restart gets current state as its first page; it does not replay past commits.
 
 ### 6. Browse pagination
@@ -95,17 +105,31 @@ Cancellation unregisters the continuation and releases query/search tasks. An ob
 - the complete normalized query shape;
 - the page's `ChangePosition`;
 - the complete last-row ordering anchor;
-- a process-instance/schema marker.
+- a process-instance marker.
 
 For recent history, the anchor includes pin group, pin ordinal or last-copied timestamp, and final History Item ID. Search cursors additionally bind the normalized term and mode-specific ordering anchor.
 
 Before serving a continuation page, `browse` verifies:
 
 1. the request shape matches the cursor;
-2. the cursor belongs to this process/schema generation;
+2. the cursor belongs to this process instance;
 3. current durable `ChangePosition` equals the cursor position.
 
 Any intervening commit expires the cursor with `.snapshotExpired(current:)`. This intentionally favors simple, explicit snapshot semantics over trying to merge writes into an old paginated view.
+
+The marker is intentionally process-scoped rather than a composite schema
+hash. A schema deployment necessarily replaces the process and its
+`HistoryAuthority`, which mints a new random marker, so process binding already
+invalidates every pre-deployment cursor. V1 has no in-process schema transition.
+
+The opaque v1 JSON payload is deterministically encoded with sorted keys,
+explicit base64-`Data` and deferred-to-`Date` strategies. Decode applies a
+pre-parse envelope of `6 × maximumSearchTermUTF8Bytes + 2 KiB` (the sixfold
+term allowance covers worst-case JSON escaping), then validates every known
+shape/anchor field: page limit, term byte bound, mutually exclusive optional
+slots, non-negative pin ordinal, and finite dates/scores. Unknown JSON keys are
+ignored for forward-compatible metadata only; they cannot alter v1 semantics,
+and any evolution that relies on one must increment the cursor format version.
 
 Observation is limited to the first page. Additional pages are explicit one-shot browse calls and restart from page one after expiration.
 

@@ -6,10 +6,8 @@
 /// rejected `.staleContent` with no commit, and a revert to Canonical
 /// appends a NEW active revision while the old one stays byte-identical.
 ///
-/// Phasing (docs/roadmap/README.md §3, WS-clause phasing note): WS6's
-/// "Effective-derived … paste updated" clause is a step-7 (reads +
-/// observation) clause and is NOT asserted here — the paste-payload read
-/// still throws `StepDeferredError`; this file closes the step-6 clauses:
+/// This file closes WS6's step-6 commit clauses; the separately landed
+/// step-7 read suites own the "Effective-derived … paste updated" clause:
 /// the `.committed` receipts with `.revised(reference)` at one successor
 /// Content Version each (docs/02-domain.md §11, §13), the Change Position
 /// advancing exactly once per commit (docs/02-domain.md §13), the

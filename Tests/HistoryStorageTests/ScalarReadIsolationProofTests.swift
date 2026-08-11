@@ -16,9 +16,11 @@
 ///   signature metadata, never content blobs),
 ///   §14.1 (recentPage — scalar-only two-lane fetch),
 ///   §14.2 (searchCorpusSnapshot — scalar-only full-corpus fetch)
-/// - The §7.5 performance claim (no fault-in by SwiftData) is a platform
-///   concern proven by the performance runner, not here; this file proves the
-///   correctness stance — scalar paths must not depend on content blobs.
+/// - The §7.5 performance question (whether SwiftData suppresses faulting of
+///   non-requested external-storage attributes) still requires a
+///   supported-platform trace; neither this test nor the current runner proves
+///   it. This file proves only the correctness stance — scalar paths never
+///   access/decode and therefore must not depend on content blobs.
 import Foundation
 import HistoryCore
 import HistoryDomain
@@ -106,8 +108,10 @@ private static func makeRow(
     let authority = try await WSSupport.makeAuthority(storeURL: storeURL)
 
     // ── (b) §14.1: recentPage returns the row with correct scalar
-    //        projections. The scalar-only fetch avoids faulting the corrupted
-    //        content blobs entirely (§14.1 `propertiesToFetch`). ──
+    //        projections. The scalar-only path never accesses or decodes the
+    //        corrupted content blobs (§14.1 `propertiesToFetch`). Actual
+    //        external-storage fault suppression remains the separate macOS
+    //        performance proof named in the file header. ──
     let recentPage = try await authority.recentPage(limit: 10, after: nil)
     // §7.5: the page carries the corrupted row's scalar projection intact.
     #expect(

@@ -1,12 +1,22 @@
-/// HistoryDomain construction smoke tests (roadmap step 2): the validating
-/// `CanonicalContent` initializer's accept/reject paths (docs/02-domain.md
-/// §2.1, §2.3), `PinOrdinal` ordering (§3.2), and the `RetentionPolicy` value
-/// floor (§5.5, D19).
+/// HistoryDomain value-construction tests and the index for the direct
+/// D1–D19 planner suite (docs/02-domain.md §14; docs/06-cross-cutting.md §8).
 ///
-/// These keep the test target building while the full D1–D19 invariant suite
-/// (docs/02-domain.md §14, docs/06-cross-cutting.md §8) lands in the next
-/// slice. Package-only members are reachable from this same-package test
-/// target via `@testable import`.
+/// The runtime matrix is split by owning seam:
+///
+/// - `CapturePlannerInvariantTests`: D1, D3, D7, D9–D11, D13–D14, D16,
+///   D18–D19 through `planCapture` plus `effectiveContent`;
+/// - `PinRevisionPlannerInvariantTests`: D2–D4, D12, D15–D16, D18 through
+///   `planPinnedPlacement`, `planUnpin`, `planRemove`, `planClear`, and
+///   `planRevision`;
+/// - `RetentionPlannerTests`: D13, D16, D18–D19 through `planRetention`;
+/// - this file: Canonical value validation/fingerprint-independent equality
+///   (D7), immutable value construction (D17), PinOrdinal ordering (D12), and
+///   the admitted retention floor value (D19).
+///
+/// D5/D6 token stamping belongs to HistoryStorage rather than a Domain
+/// planner; D8 fact completeness and D17 Sendable/import purity are structural
+/// proofs enforced by fact types and portable gates. Package-only members are
+/// reachable from this same-package test target via `@testable import`.
 import Foundation
 import Testing
 @testable import HistoryDomain

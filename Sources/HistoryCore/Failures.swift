@@ -37,14 +37,21 @@ public enum HistoryFailure: Error, Sendable, Equatable {
 public enum InvalidInputReason: Sendable, Equatable {
     /// A capture carried no representations.
     case emptyCapture
+    /// A capture was marked concealed, private, transient, or auto-generated
+    /// and must not be retained in History.
+    case excludedFromHistory
     /// A capture carried two representations with the same type identifier.
     case duplicateRepresentationType(String)
-    /// A representation type identifier cannot be stored by the interface.
+    /// A representation type identifier is empty, exceeds the fixed UTF-8
+    /// envelope, or otherwise cannot be stored by the interface.
     case unsupportedRepresentationType(String)
     /// A capture exceeded the configured representation count limit.
     case representationLimit
-    /// A capture exceeded the configured byte limit.
+    /// A representation is empty or a capture/representation exceeds its
+    /// configured byte limit; this is the capture-input size vocabulary.
     case byteLimit
+    /// A caller-supplied observation timestamp is NaN or infinite.
+    case invalidTimestamp
     /// A Revision Draft is not coherent with its target Revision.
     case incoherentRevisionDraft
     /// A search term is not a valid regular expression.
@@ -83,6 +90,8 @@ public enum CapacityKind: Sendable, Equatable {
     case revisionBytes
     /// The per-item copy occurrence count limit.
     case copyCount
+    /// The encoded thumbnail output byte limit.
+    case thumbnailBytes
     /// The coherence token budget.
     case coherenceToken
 }

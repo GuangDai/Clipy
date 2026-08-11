@@ -49,6 +49,10 @@ internal enum SignatureIndexRejection: Error, Sendable, Equatable {
     /// every Canonical signature entry exactly once"; §4).
     case duplicateEntry(item: HistoryItemID, typeIdentifier: String)
 
+    /// One item contributes more than one entry for the same Canonical type,
+    /// even when fingerprint/count evidence differs (§2.1, §12).
+    case duplicateTypeIdentifier(item: HistoryItemID, typeIdentifier: String)
+
     /// A create delta names an item that already has postings (§12: "Create
     /// adds all entries" — for a new row, never an existing one).
     case additionAlreadyIndexed(HistoryItemID)
@@ -65,7 +69,7 @@ internal enum SignatureIndexRejection: Error, Sendable, Equatable {
 // MARK: - SignatureIndex (docs/05-authority-kernel.md §12)
 
 /// The Signature Index: an in-memory ContentSignatureEntry → retained
-/// HistoryItemID posting map with an `.unready` / `.ready(generation:)`
+/// HistoryItemID posting map with an `.unready` / `.ready`
 /// lifecycle. docs/05-authority-kernel.md §12
 ///
 /// Ready means every retained row contributes every Canonical signature entry
@@ -86,14 +90,12 @@ internal struct SignatureIndex: Sendable, Equatable {
 
     /// Lifecycle state. docs/05-authority-kernel.md §12
     ///
-    /// `generation` starts at 0 for each complete build and advances by one —
-    /// checked, never wrapping (docs/06-cross-cutting.md §2) — per applied
-    /// non-empty delta, so a capture fact load can prove no commit
-    /// interleaved between its lookup and its `IngestFacts` construction
-    /// (§7.1 step 6).
+    /// Readiness is sufficient because every fact load and plan→transaction→
+    /// apply sequence is one non-suspending `HistoryAuthority` interval; a
+    /// counter could not add an independent interleaving proof (§5, §7.1).
     internal enum State: Sendable, Equatable {
         case unready
-        case ready(generation: UInt64)
+        case ready
     }
 
     /// The current lifecycle state (§12). Readable by the owning Authority
@@ -104,11 +106,14 @@ internal struct SignatureIndex: Sendable, Equatable {
     /// ContentSignatureEntry → retained HistoryItemID posting set (§12).
     ///
     /// The posting key is the complete entry — type identifier, fingerprint
-    /// evidence, and byte count. Only an equal entry can byte-confirm (xxh3
-    /// is deterministic over equal bytes, and equal bytes have equal length),
-    /// so keying on the full entry prunes posting sets without ever dropping
-    /// a true candidate; a fingerprint collision can only add a candidate
-    /// that mandatory byte confirmation then rejects (§12, D7).
+    /// evidence, and byte count. For correctly derived metadata, equal bytes
+    /// have equal xxh3 and length, so the full key does not drop a true
+    /// candidate; a fingerprint collision can only add a candidate that
+    /// mandatory byte confirmation then rejects (§12, D7). Signature decode
+    /// deliberately does not recompute xxh3 from Canonical bytes, however: a
+    /// silently corrupted stored fingerprint can exclude a true candidate
+    /// and a later identical capture can therefore create a recoverable
+    /// duplicate. It still cannot create a false byte-confirmed match.
     private var postings: [ContentSignatureEntry: Set<HistoryItemID>]
 
     /// Reverse map: retained item → its complete signature entry list,
@@ -118,6 +123,10 @@ internal struct SignatureIndex: Sendable, Equatable {
     /// (§12).
     private var entriesByItem: [HistoryItemID: [ContentSignatureEntry]]
 
+    /// Exact retained-ID coverage, maintained with both maps so a capture fact
+    /// load does not materialize another O(N) set.
+    private var indexedItemIDs: Set<HistoryItemID>
+
     /// A fresh, unready index (§12 `.unready`). `HistoryAuthority` creates
     /// this on entry; `open` (§13) or the capture-time rebuild (§7.1 step 1)
     /// replaces it with a `build(from:limits:)` result.
@@ -125,17 +134,20 @@ internal struct SignatureIndex: Sendable, Equatable {
         state = .unready
         postings = [:]
         entriesByItem = [:]
+        indexedItemIDs = []
     }
 
     /// Designated initializer from already-validated maps.
     private init(
         state: State,
         postings: [ContentSignatureEntry: Set<HistoryItemID>],
-        entriesByItem: [HistoryItemID: [ContentSignatureEntry]]
+        entriesByItem: [HistoryItemID: [ContentSignatureEntry]],
+        indexedItemIDs: Set<HistoryItemID>
     ) {
         self.state = state
         self.postings = postings
         self.entriesByItem = entriesByItem
+        self.indexedItemIDs = indexedItemIDs
     }
 
     // MARK: Complete construction (§13 step 8; §7.1 step 1)
@@ -169,6 +181,7 @@ internal struct SignatureIndex: Sendable, Equatable {
             )
         }
         var postings: [ContentSignatureEntry: Set<HistoryItemID>] = [:]
+        postings.reserveCapacity(signatures.values.reduce(0) { $0 + $1.count })
         var entriesByItem: [HistoryItemID: [ContentSignatureEntry]] = [:]
         entriesByItem.reserveCapacity(signatures.count)
         for (itemID, entries) in signatures {
@@ -179,9 +192,10 @@ internal struct SignatureIndex: Sendable, Equatable {
             }
         }
         return SignatureIndex(
-            state: .ready(generation: 0),
+            state: .ready,
             postings: postings,
-            entriesByItem: entriesByItem
+            entriesByItem: entriesByItem,
+            indexedItemIDs: Set(signatures.keys)
         )
     }
 
@@ -196,7 +210,7 @@ internal struct SignatureIndex: Sendable, Equatable {
     /// store" and "every fact-load checks that candidate IDs remain retained
     /// in its serialized Authority interval".
     internal var itemIDs: Set<HistoryItemID> {
-        Set(entriesByItem.keys)
+        indexedItemIDs
     }
 
     /// The number of retained items currently indexed.
@@ -211,19 +225,20 @@ internal struct SignatureIndex: Sendable, Equatable {
     /// Returns `nil` when unready — candidacy is unprovable, and the caller
     /// follows §7.1 step 1 (attempt one complete rebuild, else fail capture
     /// with `.temporarilyUnavailable(.dedupIndexRebuild)`) instead of ever
-    /// planning from a partial set. An empty `entries` list yields an empty
-    /// candidate set: unreachable in production (Canonical Content is
-    /// non-empty, docs/02-domain.md §2.3) and fail-safe. A missing posting
+    /// planning from a partial set. An empty `entries` list yields `nil`:
+    /// unreachable in production (Canonical Content is non-empty,
+    /// docs/02-domain.md §2.3) and treated as unprovable rather than a
+    /// vacuously complete candidate set. A missing posting
     /// set intersects as empty — no retained item can byte-confirm an entry
     /// it does not post. Completeness, not correctness of any single match,
     /// is what this proves: every returned ID still requires full content
     /// confirmation (docs/02-domain.md §9.2) and the §7.1 step-6 agreement
-    /// check against retained IDs and generation.
+    /// check against retained IDs.
     internal func candidateIDs(
         matching entries: [ContentSignatureEntry]
     ) -> Set<HistoryItemID>? {
         guard case .ready = state else { return nil }
-        guard let first = entries.first else { return [] }
+        guard let first = entries.first else { return nil }
         var candidates = postings[first] ?? []
         for entry in entries.dropFirst() {
             guard !candidates.isEmpty else { break }
@@ -251,18 +266,7 @@ internal struct SignatureIndex: Sendable, Equatable {
     /// - Throws: `SignatureIndexRejection` on the first unprovable condition.
     internal func validate(_ delta: SignatureIndexDelta) throws {
         guard case .ready = state else { return }
-        for itemID in delta.additions.keys where delta.removals.contains(itemID) {
-            throw SignatureIndexRejection.overlappingAdditionAndRemoval(itemID)
-        }
-        for (itemID, entries) in delta.additions {
-            try Self.checkEntryList(entries, for: itemID)
-            guard entriesByItem[itemID] == nil else {
-                throw SignatureIndexRejection.additionAlreadyIndexed(itemID)
-            }
-        }
-        for itemID in delta.removals where entriesByItem[itemID] == nil {
-            throw SignatureIndexRejection.removalNotIndexed(itemID)
-        }
+        try checkDelta(delta)
     }
 
     /// Applies an already validated delta after transaction success —
@@ -278,30 +282,22 @@ internal struct SignatureIndex: Sendable, Equatable {
     /// one nevertheless detects divergence the index is marked unready (the
     /// caller still invalidates observers, and the committed state stays
     /// authoritative, §11). Removals delete all of the item's entries and
-    /// every emptied posting set (§12); additions insert every entry. A
-    /// non-empty applied delta advances `generation` by one with checked
-    /// arithmetic — no arithmetic counter wraps (docs/06-cross-cutting.md §2).
+    /// every emptied posting set (§12); additions insert every entry. A valid
+    /// delta preserves `.ready`; Authority isolation is the interleaving proof.
     internal mutating func apply(_ delta: SignatureIndexDelta) {
-        guard case let .ready(generation) = state else { return }
+        guard case .ready = state else { return }
         do {
-            for itemID in delta.additions.keys where delta.removals.contains(itemID) {
-                throw SignatureIndexRejection.overlappingAdditionAndRemoval(itemID)
-            }
-            for (itemID, entries) in delta.additions {
-                try Self.checkEntryList(entries, for: itemID)
-                guard entriesByItem[itemID] == nil else {
-                    throw SignatureIndexRejection.additionAlreadyIndexed(itemID)
-                }
-            }
-            for itemID in delta.removals where entriesByItem[itemID] == nil {
-                throw SignatureIndexRejection.removalNotIndexed(itemID)
-            }
+            try checkDelta(delta)
         } catch {
             markUnready()
             return
         }
         for itemID in delta.removals {
             guard let entries = entriesByItem.removeValue(forKey: itemID) else {
+                markUnready()
+                return
+            }
+            guard indexedItemIDs.remove(itemID) != nil else {
                 markUnready()
                 return
             }
@@ -321,17 +317,15 @@ internal struct SignatureIndex: Sendable, Equatable {
         }
         for (itemID, entries) in delta.additions {
             entriesByItem[itemID] = entries
+            guard indexedItemIDs.insert(itemID).inserted else {
+                markUnready()
+                return
+            }
             for entry in entries {
                 postings[entry, default: []].insert(itemID)
             }
         }
-        guard !delta.additions.isEmpty || !delta.removals.isEmpty else { return }
-        let (nextGeneration, overflow) = generation.addingReportingOverflow(1)
-        guard !overflow else {
-            markUnready()
-            return
-        }
-        state = .ready(generation: nextGeneration)
+        state = .ready
     }
 
     /// Drops readiness and every posting (§12 `.unready`; §11 divergence
@@ -348,13 +342,33 @@ internal struct SignatureIndex: Sendable, Equatable {
         state = .unready
         postings.removeAll()
         entriesByItem.removeAll()
+        indexedItemIDs.removeAll()
     }
 
-    // MARK: Shared entry-list check (§12)
+    // MARK: Shared delta and entry-list checks (§9, §12)
+
+    /// The single structural proof shared by pre-transaction validation and
+    /// post-commit defensive revalidation. Keeping the checks here prevents
+    /// the two passes required by §11 from drifting apart.
+    private func checkDelta(_ delta: SignatureIndexDelta) throws {
+        for itemID in delta.removals where delta.additions[itemID] != nil {
+            throw SignatureIndexRejection.overlappingAdditionAndRemoval(itemID)
+        }
+        for (itemID, entries) in delta.additions {
+            try Self.checkEntryList(entries, for: itemID)
+            guard entriesByItem[itemID] == nil else {
+                throw SignatureIndexRejection.additionAlreadyIndexed(itemID)
+            }
+        }
+        for itemID in delta.removals where entriesByItem[itemID] == nil {
+            throw SignatureIndexRejection.removalNotIndexed(itemID)
+        }
+    }
 
     /// The entry-list well-formedness shared by construction and delta
     /// checks: non-empty (Canonical Content is non-empty, docs/02-domain.md
-    /// §2.3) with no duplicate entry — each row contributes every Canonical
+    /// §2.3), with neither an exactly repeated entry nor two entries for one
+    /// Canonical type identifier — each row contributes each Canonical type's
     /// signature entry exactly once (§12).
     private static func checkEntryList(
         _ entries: [ContentSignatureEntry],
@@ -363,13 +377,23 @@ internal struct SignatureIndex: Sendable, Equatable {
         guard !entries.isEmpty else {
             throw SignatureIndexRejection.emptySignatureEntries(item: itemID)
         }
-        var seen = Set<ContentSignatureEntry>()
-        seen.reserveCapacity(entries.count)
-        for entry in entries where !seen.insert(entry).inserted {
-            throw SignatureIndexRejection.duplicateEntry(
-                item: itemID,
-                typeIdentifier: entry.typeIdentifier
-            )
+        var seenEntries = Set<ContentSignatureEntry>()
+        seenEntries.reserveCapacity(entries.count)
+        var seenTypeIdentifiers = Set<String>()
+        seenTypeIdentifiers.reserveCapacity(entries.count)
+        for entry in entries {
+            guard seenEntries.insert(entry).inserted else {
+                throw SignatureIndexRejection.duplicateEntry(
+                    item: itemID,
+                    typeIdentifier: entry.typeIdentifier
+                )
+            }
+            guard seenTypeIdentifiers.insert(entry.typeIdentifier).inserted else {
+                throw SignatureIndexRejection.duplicateTypeIdentifier(
+                    item: itemID,
+                    typeIdentifier: entry.typeIdentifier
+                )
+            }
         }
     }
 }

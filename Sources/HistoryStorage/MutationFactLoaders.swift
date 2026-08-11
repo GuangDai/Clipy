@@ -92,7 +92,9 @@ internal enum MutationFactLoaders {
         // 0 ..< count — a sorted ordinal list equals the index range iff
         // the set is contiguous and duplicate-free.
         pinned.sort { $0.ordinal < $1.ordinal }
-        guard pinned.map(\.ordinal) == Array(0 ..< pinned.count) else {
+        guard pinned.enumerated().allSatisfy({ offset, item in
+            item.ordinal == offset
+        }) else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
         return CompletePinnedOrder(itemIDs: pinned.map(\.id))

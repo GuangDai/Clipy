@@ -123,6 +123,67 @@ private static func captureItems(
     #expect(allPageIDs.count == 7, "WS18: exactly 7 rows across all pages")
 }
 
+/// WS18/05 §14.1 exactness guard: a continuation anchor need not be the
+/// first row in its `lastCopiedAt` tie group. Rows in the same group that sort
+/// before the anchor have already been returned, but still occupy slots in a
+/// date-bounded store fetch. The continuation must therefore refill from the
+/// authoritative lane rather than mistaking a short post-anchor slice for the
+/// final page.
+@Test func unpinnedDateTieBeforeAnchorDoesNotCreateGapOrPrematureEnd() async throws {
+    let storeURL = WSSupport.tempStoreURL("ws18-unpinned-anchor-head-tie")
+    defer { WSSupport.removeStore(storeURL) }
+    let history = try await WSSupport.openHistory(storeURL: storeURL)
+
+    let tiedDate = Date(timeIntervalSinceReferenceDate: 700_030_000)
+    var tiedIDs: [HistoryItemID] = []
+    for index in 0..<3 {
+        let receipt = try await history.perform(
+            .capture(WSSupport.textCapture(
+                "ws18 tied item \(index)",
+                observedAt: tiedDate,
+                source: "com.example.ws18.tie"
+            ))
+        )
+        guard case .committed(let commit) = receipt,
+              case .inserted(let reference) = commit.outcome else {
+            Issue.record("WS18: expected tied capture \(index) to insert, got \(receipt)")
+            return
+        }
+        tiedIDs.append(reference.id)
+    }
+
+    var olderIDsNewestFirst: [HistoryItemID] = []
+    for index in 0..<4 {
+        let receipt = try await history.perform(
+            .capture(WSSupport.textCapture(
+                "ws18 older item \(index)",
+                observedAt: Date(timeIntervalSinceReferenceDate: 700_020_000 + Double(index)),
+                source: "com.example.ws18.older"
+            ))
+        )
+        guard case .committed(let commit) = receipt,
+              case .inserted(let reference) = commit.outcome else {
+            Issue.record("WS18: expected older capture \(index) to insert, got \(receipt)")
+            return
+        }
+        olderIDsNewestFirst.insert(reference.id, at: 0)
+    }
+
+    let expected = tiedIDs.sorted() + olderIDsNewestFirst
+    var actual: [HistoryItemID] = []
+    var cursor: HistoryPageCursor?
+    repeat {
+        let page = try await history.browse(
+            HistoryBrowseRequest(kind: .recent, limit: 2, after: cursor)
+        )
+        actual.append(contentsOf: page.rows.map(\.item.id))
+        cursor = page.next
+    } while cursor != nil
+
+    #expect(actual == expected, "WS18: tied continuation covers the full authoritative order")
+    #expect(Set(actual).count == expected.count, "WS18: tied continuation has no overlap")
+}
+
 /// WS18/04 §6 step 3: after any intervening commit, reusing an old cursor
 /// fails with `.snapshotExpired(current:)` — the cursor's bound position no
 /// longer equals the durable position. The `current:` argument is the new
@@ -280,5 +341,95 @@ private static func captureItems(
         page2.position == page1.position,
         "WS18/04 §6: continuation position == page1 position"
     )
+}
+
+/// WS18/05 §14.1: pinned continuations use the ordinal as a sorted fetch
+/// offset. Multiple pinned pages must therefore cover the lane once, then
+/// cross into the unpinned recency lane without rescanning or skipping rows.
+@Test func multiplePinnedContinuationPagesReachUnpinnedLaneExactlyOnce() async throws {
+    let storeURL = WSSupport.tempStoreURL("ws18-multiple-pinned-pages")
+    defer { WSSupport.removeStore(storeURL) }
+    let history = try await WSSupport.openHistory(storeURL: storeURL)
+
+    let ids = try await Self.captureItems(history, count: 7, base: 700_040_000)
+    for id in ids.prefix(5) {
+        let receipt = try await history.perform(.placePinned(id, at: .last))
+        guard case .committed = receipt else {
+            Issue.record("WS18: expected pin-at-last commit, got \(receipt)")
+            return
+        }
+    }
+
+    let expected = Array(ids.prefix(5)) + [ids[6], ids[5]]
+    var actual: [HistoryItemID] = []
+    var cursor: HistoryPageCursor?
+    repeat {
+        let page = try await history.browse(
+            HistoryBrowseRequest(kind: .recent, limit: 2, after: cursor)
+        )
+        actual.append(contentsOf: page.rows.map(\.item.id))
+        cursor = page.next
+    } while cursor != nil
+
+    #expect(actual == expected, "WS18: pinned offsets preserve complete two-lane order")
+    #expect(Set(actual).count == expected.count, "WS18: pinned offsets produce no overlap")
+}
+
+/// A pinned offset is an optimization, not authority to skip anchor
+/// validation. A structurally valid package cursor whose ID or ordinal does
+/// not name the row at that offset must expire instead of returning a shifted
+/// page (04 §6; 05 §14.1).
+@Test func malformedPinnedContinuationAnchorExpires() async throws {
+    let storeURL = WSSupport.tempStoreURL("ws18-malformed-pinned-anchor")
+    defer { WSSupport.removeStore(storeURL) }
+    let history = try await WSSupport.openHistory(storeURL: storeURL)
+
+    let ids = try await Self.captureItems(history, count: 4, base: 700_050_000)
+    for id in ids.prefix(3) {
+        _ = try await history.perform(.placePinned(id, at: .last))
+    }
+    let firstPage = try await history.browse(
+        HistoryBrowseRequest(kind: .recent, limit: 1)
+    )
+    let validCursor = try #require(firstPage.next)
+
+    func mutatedCursor(
+        id: UUID? = nil,
+        pinnedOrdinal: Int? = nil
+    ) throws -> HistoryPageCursor {
+        var root = try #require(
+            JSONSerialization.jsonObject(with: validCursor.payload)
+                as? [String: Any]
+        )
+        var anchor = try #require(root["anchor"] as? [String: Any])
+        if let id { anchor["id"] = id.uuidString }
+        if let pinnedOrdinal { anchor["pinnedOrdinal"] = pinnedOrdinal }
+        root["anchor"] = anchor
+        return HistoryPageCursor(payload: try JSONSerialization.data(
+            withJSONObject: root,
+            options: [.sortedKeys]
+        ))
+    }
+
+    let foreignID = UUID(
+        uuidString: "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF"
+    )!
+    let expectedFailure = HistoryFailure.snapshotExpired(
+        current: firstPage.position
+    )
+    await #expect(throws: expectedFailure) {
+        try await history.browse(HistoryBrowseRequest(
+            kind: .recent,
+            limit: 1,
+            after: try mutatedCursor(id: foreignID)
+        ))
+    }
+    await #expect(throws: expectedFailure) {
+        try await history.browse(HistoryBrowseRequest(
+            kind: .recent,
+            limit: 1,
+            after: try mutatedCursor(pinnedOrdinal: 4_999)
+        ))
+    }
 }
 }

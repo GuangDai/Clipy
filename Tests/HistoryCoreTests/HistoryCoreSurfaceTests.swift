@@ -32,12 +32,44 @@ import Testing
     #expect(limits.pageRowLimitRange == (1...500))
     #expect(limits.maximumSearchTermUTF8Bytes == 4_096)
     #expect(limits.maximumRegexpPatternCharacters == 512)
-    #expect(limits.maximumFuzzyQueryCharacters == 256)
+    #expect(limits.maximumFuzzyQueryCharacters == 64)
     #expect(limits.maximumFuzzyTitleBodyPrefixCharacters == 5_000)
     #expect(limits.maximumRegexpTitleBodyPrefixCharacters == 1_000)
     #expect(limits.maximumBodySearchSnippetCharacters == 322)
     #expect(limits.thumbnailDimensionRange == (1...2_048))
     #expect(limits.maximumEncodedThumbnailBytes == 16 * 1_048_576) // 16 MiB
+}
+
+/// The validated limits value must not admit a custom profile that can route an
+/// unrepresentable pattern into Fuse 1.4.0's single-`Int` bitap (03b §8;
+/// 06 §2; V1-Verified/03c `fuse-bitap-crash-and-corruption`).
+@Test func historyLimitsRejectsFuzzyQueryBoundBeyondFuseWordWidth() {
+    let limits = HistoryLimits(
+        maximumRepresentationsPerCaptureOrRevision: 32,
+        maximumTypeIdentifierUTF8Bytes: 512,
+        maximumRepresentationBytes: 64 * 1_048_576,
+        maximumCaptureBytes: 128 * 1_048_576,
+        maximumProposedRevisionBytes: 64 * 1_048_576,
+        maximumRevisionsPerItem: 100,
+        maximumTotalRevisionBytesPerItem: 256 * 1_048_576,
+        hardMaximumRetainedItems: 5_000,
+        userMaximumUnpinnedRange: 1...5_000,
+        defaultMaximumUnpinnedItems: 200,
+        maximumSourceApplicationObservationUTF8Bytes: 1_024,
+        maximumStoredTitleUTF8Bytes: 1_024,
+        maximumStoredSearchBodyUTF8Bytes: 256 * 1_024,
+        pageRowLimitRange: 1...500,
+        maximumSearchTermUTF8Bytes: 4_096,
+        maximumRegexpPatternCharacters: 512,
+        maximumFuzzyQueryCharacters: 65,
+        maximumFuzzyTitleBodyPrefixCharacters: 5_000,
+        maximumRegexpTitleBodyPrefixCharacters: 1_000,
+        maximumBodySearchSnippetCharacters: 322,
+        thumbnailDimensionRange: 1...2_048,
+        maximumEncodedThumbnailBytes: 16 * 1_048_576
+    )
+
+    #expect(limits == nil)
 }
 
 // MARK: - Identity coherence values (docs/03a-instruction-set.md §2)
@@ -52,6 +84,33 @@ import Testing
     #expect(ChangePosition.zero.rawValue == 0)
     #expect(ChangePosition.zero.successor() == ChangePosition(rawValue: 1))
     #expect(ChangePosition(rawValue: UInt64.max).successor() == nil)
+}
+
+@Test func identityOrderingUsesCanonicalUUIDBytesAndIsTrichotomous() {
+    let firstByteLow = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+    let firstByteHigh = UUID(uuidString: "01000000-0000-0000-0000-000000000000")!
+    let lastByteHigh = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+
+    let itemLow = HistoryItemID(rawValue: firstByteLow)
+    let itemFirstHigh = HistoryItemID(rawValue: firstByteHigh)
+    let itemLastHigh = HistoryItemID(rawValue: lastByteHigh)
+    #expect(itemLow < itemFirstHigh)
+    #expect(itemLow < itemLastHigh)
+    #expect(!(itemLow < itemLow))
+    #expect(!(itemFirstHigh < itemLow))
+
+    let revisionLow = RevisionID(rawValue: firstByteLow)
+    let revisionFirstHigh = RevisionID(rawValue: firstByteHigh)
+    let revisionLastHigh = RevisionID(rawValue: lastByteHigh)
+    #expect(revisionLow < revisionFirstHigh)
+    #expect(revisionLow < revisionLastHigh)
+    #expect(!(revisionLow < revisionLow))
+    #expect(!(revisionFirstHigh < revisionLow))
+}
+
+@Test func historyItemIDDescriptionIsItsCanonicalUUIDString() {
+    let raw = UUID(uuidString: "12345678-90AB-CDEF-1234-567890ABCDEF")!
+    #expect(HistoryItemID(rawValue: raw).description == raw.uuidString)
 }
 
 // MARK: - Caller-construction smoke tests (public initializers)
@@ -92,10 +151,12 @@ import Testing
             )
         ],
         origin: CopyOriginObservation(sourceApplication: nil, lineageHint: nil),
-        observedAt: observedAt
+        observedAt: observedAt,
+        isConcealed: true
     )
 
     #expect(capture.observedAt == observedAt)
+    #expect(capture.isConcealed)
 }
 
 @Test func revisionRequestConstruction() {

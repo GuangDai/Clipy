@@ -104,19 +104,7 @@ internal enum EffectiveTypeIdentifiersBlobCodec {
     /// fixed container. Generosity is safe: every exact §4 bound is
     /// re-checked after parsing.
     internal static func maximumBlobBytes(limits: HistoryLimits = .standard) -> Int {
-        CodecValidation.clampedEnvelopeSum([
-            CodecValidation.clampedEnvelopeProduct(
-                limits.maximumRepresentationsPerCaptureOrRevision,
-                CodecValidation.clampedEnvelopeSum([
-                    CodecValidation.clampedEnvelopeProduct(
-                        limits.maximumTypeIdentifierUTF8Bytes,
-                        8
-                    ),
-                    256,
-                ])
-            ),
-            4_096,
-        ])
+        CodecDecodeEnvelope.effectiveTypeIdentifiers(limits: limits)
     }
 
     // MARK: Wire serialization

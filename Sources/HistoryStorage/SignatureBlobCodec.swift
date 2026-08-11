@@ -165,13 +165,13 @@ internal enum SignatureBlobCodec {
         for representation in canonical.representations {
             canonicalTypes.insert(representation.content.typeIdentifier)
         }
-        for entry in entries where !canonicalTypes.contains(entry.typeIdentifier) {
-            throw CodecRejection.signatureCoverageOrphanedEntry(
-                typeIdentifier: entry.typeIdentifier
-            )
-        }
         var entriesByType = [String: ContentSignatureEntry](minimumCapacity: entries.count)
         for entry in entries {
+            guard canonicalTypes.contains(entry.typeIdentifier) else {
+                throw CodecRejection.signatureCoverageOrphanedEntry(
+                    typeIdentifier: entry.typeIdentifier
+                )
+            }
             entriesByType[entry.typeIdentifier] = entry
         }
         for representation in canonical.representations {
@@ -205,19 +205,7 @@ internal enum SignatureBlobCodec {
     /// digits; 4,096 covers the fixed container. Generosity is safe: every
     /// exact §4 bound is re-checked after parsing.
     internal static func maximumBlobBytes(limits: HistoryLimits = .standard) -> Int {
-        CodecValidation.clampedEnvelopeSum([
-            CodecValidation.clampedEnvelopeProduct(
-                limits.maximumRepresentationsPerCaptureOrRevision,
-                CodecValidation.clampedEnvelopeSum([
-                    CodecValidation.clampedEnvelopeProduct(
-                        limits.maximumTypeIdentifierUTF8Bytes,
-                        8
-                    ),
-                    256,
-                ])
-            ),
-            4_096,
-        ])
+        CodecDecodeEnvelope.signature(limits: limits)
     }
 
     // MARK: Wire serialization

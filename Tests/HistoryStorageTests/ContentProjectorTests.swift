@@ -1,0 +1,98 @@
+/// Bounded projection tests (docs/05-authority-kernel.md §15;
+/// docs/06-cross-cutting.md §2, §9). Projection must discard whitespace-only
+/// representations and construct the stored corpus without first materializing
+/// an unbounded joined body.
+import Foundation
+import HistoryCore
+import HistoryDomain
+import Testing
+@testable import HistoryStorage
+
+private func effectiveTextContent(
+    _ representations: [(typeIdentifier: String, text: String)]
+) -> EffectiveContent {
+    EffectiveContent(
+        representations: representations.map {
+            ContentRepresentation(
+                typeIdentifier: $0.typeIdentifier,
+                bytes: Data($0.text.utf8)
+            )
+        }
+    )
+}
+
+@Test func projectionSkipsWhitespaceOnlyRepresentations() {
+    let content = effectiveTextContent([
+        ("public.plain-text", " \r\n\t "),
+        ("public.utf8-plain-text", "  Useful title\r\nbody "),
+    ])
+
+    let projection = ContentProjector.project(content)
+
+    #expect(projection.title == "Useful title")
+    #expect(projection.searchBody == "  Useful title\nbody ")
+}
+
+@Test func projectionStreamsSearchBodyAtUnicodeBoundary() {
+    let bound = HistoryLimits.standard.maximumStoredSearchBodyUTF8Bytes
+    let prefix = String(repeating: "a", count: bound - 1)
+    let content = effectiveTextContent([
+        ("public.plain-text", prefix),
+        ("public.utf8-plain-text", "🙂tail"),
+    ])
+
+    let projection = ContentProjector.project(content)
+
+    // The separator consumes the final byte. The following grapheme is not
+    // split, and no later text is accumulated beyond the durable bound.
+    #expect(projection.searchBody == prefix + "\n")
+    #expect(projection.searchBody.utf8.count == bound)
+}
+
+@Test func titleOnlyProjectionMatchesFullProjection() {
+    let content = effectiveTextContent([
+        ("public.plain-text", " \n First title \nbody"),
+        ("public.utf8-plain-text", String(repeating: "later", count: 80_000)),
+    ])
+
+    #expect(
+        ContentProjector.projectTitle(content)
+            == ContentProjector.project(content).title
+    )
+}
+
+@Test func projectionNormalizesCRLFAndLoneCRInOnePass() {
+    let content = effectiveTextContent([
+        ("public.plain-text", "\r\n  First\rSecond\r\nThird"),
+    ])
+
+    let projection = ContentProjector.project(content)
+
+    #expect(projection.title == "First")
+    #expect(projection.searchBody == "\n  First\nSecond\nThird")
+}
+
+@Test func malformedUTF8DoesNotFallBackToMojibakeUTF16() {
+    let content = EffectiveContent(representations: [ContentRepresentation(
+        typeIdentifier: "public.html",
+        bytes: Data([0xFF, 0xFE, 0x00, 0xD8])
+    )])
+
+    let projection = ContentProjector.project(content)
+
+    #expect(projection.title == "public.html")
+    #expect(projection.searchBody.isEmpty)
+}
+
+@Test func explicitUTF16TypeDecodesUTF16WithoutUTF8Fallback() {
+    let text = "UTF-16 title"
+    let content = EffectiveContent(representations: [ContentRepresentation(
+        typeIdentifier: "public.utf16-plain-text",
+        bytes: text.data(using: .utf16)!
+    )])
+
+    let projection = ContentProjector.project(content)
+
+    #expect(projection.title == text)
+    #expect(projection.searchBody == text)
+}

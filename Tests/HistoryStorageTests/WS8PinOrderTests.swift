@@ -6,10 +6,9 @@
 /// (`HistoryAuthority.commitPinnedPlacement` / `commitUnpin`;
 /// docs/02-domain.md §10, docs/05-authority-kernel.md §9).
 ///
-/// Phasing (docs/roadmap/README.md §3, WS-clause phasing note): WS8's
-/// "assert public order" clause is a step-7 (reads + observation) clause —
-/// `browse` still throws `StepDeferredError` — and is NOT asserted here.
-/// This file closes the step-6 clauses: the `.placedPinned(id)` /
+/// This file closes WS8's step-6 commit clauses; the separately landed
+/// step-7 read suites own the public-order clause. It asserts the
+/// `.placedPinned(id)` /
 /// `.unpinned(id)` receipt outcomes, exactly one Change Position advance per
 /// non-no-op action and no advance for a no-op placement (docs/02-domain.md
 /// §13), Content Version untouched by pin/reorder/unpin (§13: `.assignPin`

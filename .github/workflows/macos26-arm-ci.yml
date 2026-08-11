@@ -79,7 +79,7 @@ jobs:
             exit 1
           fi
 
-      - name: Run source gates (import confinement, escape hatches, symbol snapshot)
+      - name: Run source gates (imports, safety, vendor integrity/symbols, API snapshot)
         shell: bash
         run: |
           set -euo pipefail

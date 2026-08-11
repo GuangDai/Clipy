@@ -4,7 +4,9 @@
 #   1. scripts/import_gate.py          — per-target import confinement (Part I §8)
 #   2. scripts/escape_hatch_scan.py    — no @unchecked Sendable / nonisolated(unsafe)
 #                                        / service-locator spellings (Part I §8)
-#   3. scripts/public_symbol_snapshot.sh — HistoryCore public symbol surface
+#   3. scripts/vendor_integrity_gate.py — pinned xxHash source byte identity
+#   4. scripts/xxh3_symbol_gate.sh      — vendored C symbol confinement
+#   5. scripts/public_symbol_snapshot.sh — HistoryCore public symbol surface
 #                                        (Part VI §6); macOS + xcrun only, skipped
 #                                        elsewhere.
 #
@@ -15,17 +17,27 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 status=0
 
-echo "== gate 1/3: import confinement =="
+echo "== gate 1/5: import confinement =="
 if ! python3 "$REPO_ROOT/scripts/import_gate.py"; then
     status=1
 fi
 
-echo "== gate 2/3: escape-hatch / service-locator scan =="
+echo "== gate 2/5: escape-hatch / service-locator scan =="
 if ! python3 "$REPO_ROOT/scripts/escape_hatch_scan.py"; then
     status=1
 fi
 
-echo "== gate 3/3: HistoryCore public symbol snapshot =="
+echo "== gate 3/5: vendored dependency integrity =="
+if ! python3 "$REPO_ROOT/scripts/vendor_integrity_gate.py"; then
+    status=1
+fi
+
+echo "== gate 4/5: vendored xxh3 symbol confinement =="
+if ! "$REPO_ROOT/scripts/xxh3_symbol_gate.sh"; then
+    status=1
+fi
+
+echo "== gate 5/5: HistoryCore public symbol snapshot =="
 if [[ "$(uname -s)" == "Darwin" ]] && command -v xcrun >/dev/null 2>&1; then
     if ! "$REPO_ROOT/scripts/public_symbol_snapshot.sh"; then
         status=1

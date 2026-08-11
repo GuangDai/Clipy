@@ -41,25 +41,30 @@ public struct CopyOriginObservation: Sendable, Hashable {
 
 /// A single raw clipboard observation handed to History via
 /// `HistoryAction.capture`: the observed representations, the observed copy
-/// origin, and the observation timestamp.
+/// origin, the observation timestamp, and pasteboard-level concealment.
 ///
 /// This is an observation, not trusted Domain state — it contains no
 /// fingerprint, item ID to create, or version to mint. `HistoryStorage`
-/// validates and prepares it.
+/// validates and prepares it. `isConcealed` describes the whole pasteboard
+/// item: concealed content must never be retained even when its ordinary data
+/// appears in a sibling representation.
 ///
 /// docs/03a-instruction-set.md §4
 public struct ClipboardCapture: Sendable, Hashable {
     public let representations: [CapturedRepresentation]
     public let origin: CopyOriginObservation
     public let observedAt: Date
+    public let isConcealed: Bool
 
     public init(
         representations: [CapturedRepresentation],
         origin: CopyOriginObservation,
-        observedAt: Date
+        observedAt: Date,
+        isConcealed: Bool = false
     ) {
         self.representations = representations
         self.origin = origin
         self.observedAt = observedAt
+        self.isConcealed = isConcealed
     }
 }

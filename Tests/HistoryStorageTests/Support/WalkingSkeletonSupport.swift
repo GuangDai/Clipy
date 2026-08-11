@@ -96,7 +96,9 @@ enum WSSupport {
     static func fetchRows(_ container: ModelContainer) throws -> [HistoryItemRow] {
         let context = ModelContext(container)
         let rows = try context.fetch(FetchDescriptor<HistoryItemRow>())
-        return rows.sorted { $0.id.uuidString < $1.id.uuidString }
+        return rows.sorted {
+            HistoryItemID(rawValue: $0.id) < HistoryItemID(rawValue: $1.id)
+        }
     }
 
     /// Fetches the position singleton (fails the test via `try` if absent

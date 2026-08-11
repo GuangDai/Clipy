@@ -64,10 +64,25 @@ internal enum CodecRejection: Error, Sendable, Equatable {
     /// bound.
     case representationBytesExceedBound(found: Int, bound: Int)
 
-    /// Total Canonical representation bytes exceed the Part VI per-capture
-    /// bound. Totals use checked arithmetic — no byte-count calculation wraps
-    /// (docs/06-cross-cutting.md §2).
+    /// Total representation bytes exceed their Part VI aggregate bound.
+    /// Totals use checked arithmetic — no byte-count calculation wraps
+    /// (docs/06-cross-cutting.md §2). `found == Int.max` is the deliberate
+    /// diagnostic sentinel when the mathematical overflow total cannot be
+    /// represented by `Int`.
     case totalBytesExceedBound(found: Int, bound: Int)
+
+    /// A scalar projection row names a schema version this greenfield v1
+    /// reader does not understand (§4: known projection schema version).
+    case unknownProjectionSchemaVersion(found: UInt16)
+
+    /// A stored title exceeds the Part VI UTF-8 byte bound. Projection fields
+    /// are durable derived data and are re-validated on every path that reads
+    /// them; corruption is never silently truncated at read time (§4).
+    case storedTitleExceedsBound(found: Int, bound: Int)
+
+    /// A stored search body exceeds the Part VI UTF-8 byte bound, under the
+    /// same fail-closed scalar-projection rule as `storedTitleExceedsBound`.
+    case storedSearchBodyExceedsBound(found: Int, bound: Int)
 
     /// A signature entry's `byteCount` is below 1; Canonical bytes are
     /// non-empty, so a non-positive stored count is corruption (§4).
@@ -100,6 +115,21 @@ internal enum CodecRejection: Error, Sendable, Equatable {
     /// representation's byte length (§4: bidirectional coverage).
     case signatureCoverageByteCountMismatch(typeIdentifier: String)
 
+    // Revision-lineage and row-scalar checks share this same decode
+    // vocabulary so every call site has one exhaustive §16 mapping.
+    case duplicateRevisionID(UUID)
+    case activeRevisionIDNamesNoStoredRevision(UUID)
+    case nonEmptyRevisionListWithNilActiveID
+    case nonCanonicalRevisionType(String)
+    case invalidContentVersion(found: UInt64)
+    case zeroCopyCount
+    case lastCopiedAtPrecedesFirstCopiedAt
+    case nonFiniteRevisionCreatedAt(UUID)
+    case nonFiniteFirstCopiedAt
+    case nonFiniteLastCopiedAt
+    case sourceObservationExceedsBound(found: Int, bound: Int)
+    case negativePinOrdinal(found: Int)
+
     /// Encoding a previously validated value failed. Unreachable for valid
     /// input; an encode-side failure is an internal invariant violation, not
     /// a corrupt stored value (docs/05-authority-kernel.md §16).
@@ -126,15 +156,40 @@ extension CodecRejection {
              .emptyBytes,
              .representationBytesExceedBound,
              .totalBytesExceedBound,
+             .unknownProjectionSchemaVersion,
+             .storedTitleExceedsBound,
+             .storedSearchBodyExceedsBound,
              .nonPositiveSignatureByteCount,
              .signatureByteCountExceedsBound,
              .signatureCoverageCountMismatch,
              .signatureCoverageMissingEntry,
              .signatureCoverageOrphanedEntry,
              .signatureCoverageFingerprintMismatch,
-             .signatureCoverageByteCountMismatch:
+             .signatureCoverageByteCountMismatch,
+             .duplicateRevisionID,
+             .activeRevisionIDNamesNoStoredRevision,
+             .nonEmptyRevisionListWithNilActiveID,
+             .nonCanonicalRevisionType,
+             .invalidContentVersion,
+             .zeroCopyCount,
+             .lastCopiedAtPrecedesFirstCopiedAt,
+             .nonFiniteRevisionCreatedAt,
+             .nonFiniteFirstCopiedAt,
+             .nonFiniteLastCopiedAt,
+             .sourceObservationExceedsBound,
+             .negativePinOrdinal:
             return .persistence(.corruptStoredValue)
         }
+    }
+}
+
+/// Applies the one exhaustive codec rejection mapping at every storage
+/// boundary. Non-codec errors propagate unchanged (§16).
+internal func mapCodecFailure<T>(_ body: () throws -> T) throws -> T {
+    do {
+        return try body()
+    } catch let rejection as CodecRejection {
+        throw rejection.historyFailure
     }
 }
 
@@ -206,6 +261,82 @@ internal enum CodecValidation {
     }
 }
 
+// MARK: - Decode-envelope sizing (docs/05-authority-kernel.md §4)
+
+/// The single owner of the four durable JSON blob envelope formulas.
+///
+/// These constants deliberately overestimate JSON expansion: base64 is less
+/// than 2×, one identifier scalar needs at most the 8× allowance used by the
+/// v1 proof, per-element structural headroom covers keys/numbers/punctuation,
+/// and the fixed allowance covers each outer container. Exact count and byte
+/// limits are still checked after parsing. Central ownership keeps a future
+/// Part VI limit or wire-shape change from silently drifting one codec's
+/// pre-parse allocation boundary away from the other three.
+internal enum CodecDecodeEnvelope {
+    private static let base64ExpansionAllowance = 2
+    private static let identifierExpansionAllowance = 8
+    private static let representationStructuralBytes = 256
+    private static let revisionStructuralBytes = 128
+    private static let containerStructuralBytes = 4_096
+
+    internal static func canonical(limits: HistoryLimits) -> Int {
+        CodecValidation.clampedEnvelopeSum([
+            CodecValidation.clampedEnvelopeProduct(
+                limits.maximumCaptureBytes,
+                base64ExpansionAllowance
+            ),
+            representationCollection(limits: limits),
+            containerStructuralBytes,
+        ])
+    }
+
+    internal static func signature(limits: HistoryLimits) -> Int {
+        CodecValidation.clampedEnvelopeSum([
+            representationCollection(limits: limits),
+            containerStructuralBytes,
+        ])
+    }
+
+    internal static func effectiveTypeIdentifiers(limits: HistoryLimits) -> Int {
+        CodecValidation.clampedEnvelopeSum([
+            representationCollection(limits: limits),
+            containerStructuralBytes,
+        ])
+    }
+
+    internal static func revisionState(limits: HistoryLimits) -> Int {
+        let oneRevision = CodecValidation.clampedEnvelopeSum([
+            representationCollection(limits: limits),
+            revisionStructuralBytes,
+        ])
+        return CodecValidation.clampedEnvelopeSum([
+            CodecValidation.clampedEnvelopeProduct(
+                limits.maximumRevisionsPerItem,
+                oneRevision
+            ),
+            CodecValidation.clampedEnvelopeProduct(
+                limits.maximumTotalRevisionBytesPerItem,
+                base64ExpansionAllowance
+            ),
+            containerStructuralBytes,
+        ])
+    }
+
+    private static func representationCollection(limits: HistoryLimits) -> Int {
+        let oneRepresentation = CodecValidation.clampedEnvelopeSum([
+            CodecValidation.clampedEnvelopeProduct(
+                limits.maximumTypeIdentifierUTF8Bytes,
+                identifierExpansionAllowance
+            ),
+            representationStructuralBytes,
+        ])
+        return CodecValidation.clampedEnvelopeProduct(
+            limits.maximumRepresentationsPerCaptureOrRevision,
+            oneRepresentation
+        )
+    }
+}
+
 // MARK: - Container format (docs/05-authority-kernel.md §4)
 
 /// The one deterministic container format shared by the v1 blob codecs.
@@ -216,14 +347,31 @@ internal enum CodecValidation {
 /// while JSON round-trips them exactly; base64 `Data` encoding and a
 /// canonical key order make encoding one validated value twice yield
 /// identical bytes (§4: "Encode ... is deterministic").
+///
+/// Durable decode call sites always apply `CodecDecodeEnvelope` before this
+/// parser. Foundation's `JSONDecoder` materializes an array before the codec
+/// can enforce its semantic element-count bound, so the byte envelope is the
+/// intentional pre-allocation defense and count checks are post-parse. A
+/// streaming/count-prefixed v2 wire format is warranted only if supported-runner
+/// allocation evidence breaches the Part VI resource gates or a future
+/// untrusted import path makes local-store corruption an adversarial surface.
 internal enum CodecWireFormat {
     internal static func makeEncoder() -> JSONEncoder {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
+        encoder.dataEncodingStrategy = .base64
+        encoder.dateEncodingStrategy = .deferredToDate
         return encoder
     }
 
     internal static func makeDecoder() -> JSONDecoder {
-        JSONDecoder()
+        // A fresh mutable coder is intentional: codec entry points are static
+        // and may run under different actors. Sharing JSONDecoder would need
+        // an isolated owner and is only justified by measured construction
+        // cost rather than assumed per-row allocation savings.
+        let decoder = JSONDecoder()
+        decoder.dataDecodingStrategy = .base64
+        decoder.dateDecodingStrategy = .deferredToDate
+        return decoder
     }
 }

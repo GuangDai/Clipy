@@ -50,13 +50,19 @@ let package = Package(
         .target(
             name: "xxh3",
             path: "Sources/xxh3",
-            publicHeadersPath: "include"
+            publicHeadersPath: "include",
+            // Compile the vendored implementation as translation-unit-local
+            // inline code. Only Clipy's wrapper remains a global symbol;
+            // scripts/xxh3_symbol_gate.sh proves that boundary.
+            cSettings: [.define("XXH_INLINE_ALL")]
         ),
         .executableTarget(
             name: "HistoryPerfRunner",
             // HistoryStorage added at step 8: the §9 runner drives the public
-            // SwiftDataHistory concrete facade (docs/06-cross-cutting.md §9;
-            // docs/roadmap/README.md §3 step 8 — "release-like runner workload").
+            // SwiftDataHistory concrete facade. WL8 also calls the package
+            // ThumbnailService seam after one prefetched immutable source so
+            // it measures the shared decode rather than Authority serialization
+            // (docs/06-cross-cutting.md §9; V1-Verified/04).
             dependencies: ["HistoryCore", "HistoryStorage"]
         ),
         .testTarget(
@@ -71,6 +77,10 @@ let package = Package(
         .testTarget(
             name: "HistoryStorageTests",
             dependencies: ["HistoryStorage", "HistoryDomain", "HistoryCore"]
+        ),
+        .testTarget(
+            name: "HistoryPerfRunnerTests",
+            dependencies: [.target(name: "HistoryPerfRunner")]
         ),
         .testTarget(
             name: "PasteboardAdapterTests",

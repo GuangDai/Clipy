@@ -9,9 +9,9 @@ import Foundation
 /// One field corresponds to one row of the §2 table, in table order; byte
 /// counts use binary units (1 KiB = 1,024 bytes, 1 MiB = 1,048,576 bytes).
 /// `standard` holds exactly the table values and is the only value production
-/// and the walking-skeleton tests use; a test that needs a different hard
-/// bound injects it at the Domain planner seam, not via a custom
-/// `HistoryLimits`.
+/// uses. Domain tests inject individual scalar bounds at planner seams;
+/// package-owned storage/codec tests may construct a validated custom value to
+/// prove an otherwise unreachable boundary without widening the public seam.
 public struct HistoryLimits: Sendable, Hashable {
 
     /// §2 table: "Representations per capture/revision" — 32.
@@ -66,7 +66,9 @@ public struct HistoryLimits: Sendable, Hashable {
     /// §2 table: "Regexp pattern Characters" — 512.
     public let maximumRegexpPatternCharacters: Int
 
-    /// §2 table: "Fuzzy query Characters" — 256.
+    /// §2 table: "Fuzzy query Characters" — 64. Fuse 1.4.0's bitap stores
+    /// its pattern mask in one 64-bit `Int`, so longer queries must be
+    /// rejected before entering the dependency.
     public let maximumFuzzyQueryCharacters: Int
 
     /// §2 table: "Fuzzy title/body prefix" — 5,000 Characters each.
@@ -88,16 +90,19 @@ public struct HistoryLimits: Sendable, Hashable {
     /// Creates a set of bounds, rejecting out-of-range or inconsistent
     /// combinations by returning `nil` (docs/06-cross-cutting.md §2).
     ///
-    /// Rejected: any non-positive scalar bound; a range whose lower bound is
-    /// below 1; `userMaximumUnpinnedRange` not contained in
+    /// Rejected: any non-positive scalar bound; a malformed range; a range
+    /// whose lower bound is below 1; `userMaximumUnpinnedRange` not contained in
     /// `1...hardMaximumRetainedItems`; `defaultMaximumUnpinnedItems` outside
     /// `userMaximumUnpinnedRange`; `maximumRepresentationBytes` exceeding
-    /// `maximumCaptureBytes`; or `maximumProposedRevisionBytes` exceeding
-    /// `maximumTotalRevisionBytesPerItem`.
+    /// `maximumProposedRevisionBytes` or `maximumCaptureBytes`; or
+    /// `maximumProposedRevisionBytes` exceeding
+    /// `maximumTotalRevisionBytesPerItem`. The fuzzy-query bound must not
+    /// exceed 64, the word width of Fuse 1.4.0's bitap representation, and
+    /// the snippet bound must fit one retained Character plus two ellipses.
     ///
     /// Validation compares values only — it performs no counter or byte-count
     /// arithmetic, so no calculation can wrap (§2 rules).
-    public init?(
+    package init?(
         maximumRepresentationsPerCaptureOrRevision: Int,
         maximumTypeIdentifierUTF8Bytes: Int,
         maximumRepresentationBytes: Int,
@@ -138,19 +143,27 @@ public struct HistoryLimits: Sendable, Hashable {
               maximumFuzzyQueryCharacters >= 1,
               maximumFuzzyTitleBodyPrefixCharacters >= 1,
               maximumRegexpTitleBodyPrefixCharacters >= 1,
-              maximumBodySearchSnippetCharacters >= 1,
+              // A body excerpt may need one retained Character plus both
+              // ellipses; smaller profiles make the frozen window algorithm
+              // unable to represent a non-empty interior safely.
+              maximumBodySearchSnippetCharacters >= 3,
               maximumEncodedThumbnailBytes >= 1
         else { return nil }
 
-        guard userMaximumUnpinnedRange.lowerBound >= 1,
+        guard userMaximumUnpinnedRange.lowerBound <= userMaximumUnpinnedRange.upperBound,
+              pageRowLimitRange.lowerBound <= pageRowLimitRange.upperBound,
+              thumbnailDimensionRange.lowerBound <= thumbnailDimensionRange.upperBound,
+              userMaximumUnpinnedRange.lowerBound >= 1,
               pageRowLimitRange.lowerBound >= 1,
               thumbnailDimensionRange.lowerBound >= 1
         else { return nil }
 
         guard userMaximumUnpinnedRange.upperBound <= hardMaximumRetainedItems,
               userMaximumUnpinnedRange.contains(defaultMaximumUnpinnedItems),
+              maximumRepresentationBytes <= maximumProposedRevisionBytes,
               maximumRepresentationBytes <= maximumCaptureBytes,
-              maximumProposedRevisionBytes <= maximumTotalRevisionBytesPerItem
+              maximumProposedRevisionBytes <= maximumTotalRevisionBytesPerItem,
+              maximumFuzzyQueryCharacters <= 64
         else { return nil }
 
         self.maximumRepresentationsPerCaptureOrRevision = maximumRepresentationsPerCaptureOrRevision
@@ -200,7 +213,7 @@ public struct HistoryLimits: Sendable, Hashable {
         pageRowLimitRange: 1...500,
         maximumSearchTermUTF8Bytes: 4_096,
         maximumRegexpPatternCharacters: 512,
-        maximumFuzzyQueryCharacters: 256,
+        maximumFuzzyQueryCharacters: 64,
         maximumFuzzyTitleBodyPrefixCharacters: 5_000,
         maximumRegexpTitleBodyPrefixCharacters: 1_000,
         maximumBodySearchSnippetCharacters: 322,

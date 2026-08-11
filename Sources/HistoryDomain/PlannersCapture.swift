@@ -77,18 +77,34 @@ package func planCapture(
     }
 
     // Lane 2 — canonical (docs/02-domain.md §9.3.2): byte-confirm every
-    // complete candidate, then pick the deterministic §9.4 winner.
+    // complete candidate, cache the §9.4 facts established while doing so,
+    // then pick the deterministic winner. Canonical byte equality is paid
+    // once per candidate rather than once for each `min` comparison.
     if winner == nil {
-        winner = facts.candidates.items
-            .filter { canonicalContains(existing: $0.canonical, incoming: capture.canonical) }
-            .min { canonicalWinnerRanksBefore($0, $1, incoming: capture.canonical) }
+        winner = facts.candidates.items.lazy
+            .compactMap { item -> ConfirmedCanonicalCandidate? in
+                let isExactCanonicalMatch = item.canonical == capture.canonical
+                guard isExactCanonicalMatch || canonicalContains(
+                    existing: item.canonical,
+                    incoming: capture.canonical
+                ) else {
+                    return nil
+                }
+                return ConfirmedCanonicalCandidate(
+                    item: item,
+                    isExactCanonicalMatch: isExactCanonicalMatch,
+                    extraRepresentationCount: item.canonical.representations.count
+                        - capture.canonical.representations.count
+                )
+            }
+            .min(by: canonicalWinnerRanksBefore)?.item
     }
 
     // Primary mutation: coalesce (§9.5) or insert (§9.3.3).
     let primaryID: HistoryItemID
     let primaryMutation: HistoryMutation
     let outcome: PlannedOutcome
-    let projectedRecency: (id: HistoryItemID, lastCopiedAt: Date)?
+    let isInsert: Bool
     if let winner {
         let existing = winner.occurrence
         let (foldedCount, overflow) = existing.count.addingReportingOverflow(1)
@@ -109,7 +125,7 @@ package func planCapture(
         primaryID = winner.id
         primaryMutation = .recordCopy(itemID: winner.id, occurrence: folded)
         outcome = .coalesced(winner.id)
-        projectedRecency = (id: winner.id, lastCopiedAt: folded.lastCopiedAt)
+        isInsert = false
     } else {
         // docs/02-domain.md §3.1: a new item initializes all first/last values
         // from the accepted capture and sets count = 1.
@@ -127,47 +143,44 @@ package func planCapture(
             occurrence: occurrence
         ))
         outcome = .inserted(capture.candidateID)
-        projectedRecency = nil
+        isInsert = true
     }
 
-    // Retention on the projected post-mutation inventory (§12, D14): the
-    // primary's recency effect is visible before victims are chosen.
-    let isInsert = projectedRecency == nil
-    let projected: [RetainedItemSummary]
-    if let projectedRecency {
-        projected = facts.retention.allItems.map { summary in
-            guard summary.id == projectedRecency.id else { return summary }
-            return RetainedItemSummary(
-                id: summary.id,
-                lastCopiedAt: projectedRecency.lastCopiedAt,
-                pinOrdinal: summary.pinOrdinal
-            )
-        }
-    } else {
-        projected = facts.retention.allItems + [
-            RetainedItemSummary(
-                id: capture.candidateID,
-                lastCopiedAt: capture.observedAt,
-                pinOrdinal: nil
-            )
-        ]
-    }
-
-    let unpinned = projected.filter { $0.pinOrdinal == nil }
-    // Pinned items are exempt (D13); the primary is never its own victim (§12).
-    let eligible = evictionOrdered(unpinned.filter { $0.id != primaryID })
-    let userPolicyVictims = max(0, unpinned.count - retention.maximumUnpinnedItems)
+    // Derive the projected counts before allocating or sorting an eviction
+    // inventory. An insert adds one unpinned row; a coalesce changes only the
+    // primary's recency, and the primary is ineligible as its own victim, so
+    // that recency never affects the ordering of eligible rows (§12, D14).
+    let retainedCount = facts.retention.allItems.count + (isInsert ? 1 : 0)
+    let unpinnedCount = facts.retention.allItems.lazy
+        .filter { $0.pinOrdinal == nil }
+        .count + (isInsert ? 1 : 0)
+    let userPolicyVictims = max(
+        0,
+        unpinnedCount - retention.maximumUnpinnedItems
+    )
     // Only an insert can push the retained total past the hard bound; a
     // coalesce leaves the total unchanged.
-    let hardBoundVictims = isInsert ? max(0, projected.count - hardMaximumRetainedItems) : 0
+    let hardBoundVictims = isInsert
+        ? max(0, retainedCount - hardMaximumRetainedItems)
+        : 0
     let victimCount = max(userPolicyVictims, hardBoundVictims)
+
+    var mutations: [HistoryMutation] = [primaryMutation]
+    guard victimCount > 0 else {
+        return .commit(MutationPlan(outcome: outcome, mutations: mutations))
+    }
+
+    // Pinned items are exempt (D13); the primary is never its own victim
+    // (§12). Establishing this order is paid only when a victim can exist.
+    let eligible = evictionOrdered(facts.retention.allItems.filter {
+        $0.pinOrdinal == nil && $0.id != primaryID
+    })
     guard victimCount <= eligible.count else {
         // D19: the user policy alone can always be satisfied; only the global
         // hard retained-item bound forces this failure (§12).
         throw DomainRejection.capacityExceeded(.retainedItems)
     }
 
-    var mutations: [HistoryMutation] = [primaryMutation]
     for victim in eligible.prefix(victimCount) {
         mutations.append(.retire(itemID: victim.id, reason: .retention))
     }
@@ -188,12 +201,17 @@ package func planRetention(
     policy: RetentionPolicy
 ) -> PlanningResult {
     let unpinned = facts.inventory.allItems.filter { $0.pinOrdinal == nil }
-    let victims = evictionOrdered(unpinned)
-        .prefix(max(0, unpinned.count - policy.maximumUnpinnedItems))
 
-    if policy == facts.currentPolicy, victims.isEmpty {
+    // The unchanged case depends only on the persisted policy and unpinned
+    // count. Return before establishing an eviction order when no victim can
+    // exist; ordering remains necessary for every over-limit plan (§12, D16).
+    if policy == facts.currentPolicy,
+       unpinned.count <= policy.maximumUnpinnedItems {
         return .unchanged
     }
+
+    let victims = evictionOrdered(unpinned)
+        .prefix(max(0, unpinned.count - policy.maximumUnpinnedItems))
 
     var mutations: [HistoryMutation] = [
         .setRetentionPolicy(maximumUnpinnedItems: policy.maximumUnpinnedItems)
@@ -207,29 +225,35 @@ package func planRetention(
     ))
 }
 
+/// One byte-confirmed lane-2 candidate plus the rank facts computed during
+/// confirmation. Keeping these facts beside the item prevents the minimum
+/// reduction from repeatedly walking Canonical bytes (docs/02-domain.md §9.4).
+private struct ConfirmedCanonicalCandidate {
+    let item: HistoryItemState
+    let isExactCanonicalMatch: Bool
+    let extraRepresentationCount: Int
+}
+
 /// The deterministic winner rank of docs/02-domain.md §9.4: returns true when
 /// `lhs` ranks before `rhs` — exact Canonical equality first, then fewest
 /// extra representations, then most recent `lastCopiedAt`, then smallest
 /// `HistoryItemID` bytes (the stable final tie-breaker, D9).
 private func canonicalWinnerRanksBefore(
-    _ lhs: HistoryItemState,
-    _ rhs: HistoryItemState,
-    incoming: CanonicalContent
+    _ lhs: ConfirmedCanonicalCandidate,
+    _ rhs: ConfirmedCanonicalCandidate
 ) -> Bool {
-    let lhsExact = lhs.canonical == incoming
-    let rhsExact = rhs.canonical == incoming
-    if lhsExact != rhsExact { return lhsExact }
-
-    // Containment was already confirmed, so each count is non-negative.
-    let lhsExtra = lhs.canonical.representations.count - incoming.representations.count
-    let rhsExtra = rhs.canonical.representations.count - incoming.representations.count
-    if lhsExtra != rhsExtra { return lhsExtra < rhsExtra }
-
-    if lhs.occurrence.lastCopiedAt != rhs.occurrence.lastCopiedAt {
-        return lhs.occurrence.lastCopiedAt > rhs.occurrence.lastCopiedAt
+    if lhs.isExactCanonicalMatch != rhs.isExactCanonicalMatch {
+        return lhs.isExactCanonicalMatch
+    }
+    if lhs.extraRepresentationCount != rhs.extraRepresentationCount {
+        return lhs.extraRepresentationCount < rhs.extraRepresentationCount
     }
 
-    return lhs.id < rhs.id
+    if lhs.item.occurrence.lastCopiedAt != rhs.item.occurrence.lastCopiedAt {
+        return lhs.item.occurrence.lastCopiedAt > rhs.item.occurrence.lastCopiedAt
+    }
+
+    return lhs.item.id < rhs.item.id
 }
 
 /// The eviction order of docs/02-domain.md §12: `lastCopiedAt` ascending,

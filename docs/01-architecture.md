@@ -16,6 +16,9 @@ ClipyApp
           └────────────────→ Fuse
 
 HistoryDomain ─────────────→ HistoryCore
+
+HistoryPerfRunner ─────────→ HistoryCore + HistoryStorage
+                             (proof executable; no shipped product surface)
 ```
 
 There is no `DomainCore` target. The few values that must appear in both the caller interface and Domain planning—`HistoryItemID`, `RevisionID`, `ContentVersion`, and `ChangePosition`—belong to `HistoryCore`. Everything else in `HistoryDomain` is `package` by default.
@@ -32,6 +35,7 @@ There is no `DomainCore` target. The few values that must appear in both the cal
 | `ClipyApp` | Composition root | Concrete construction, lifecycle, paste orchestration, dependency injection | Domain decisions or duplicate persistence paths |
 | `xxh3` | Package-internal C/ObjC++ sibling | 64-bit representation fingerprints | Item identity or final dedup decisions |
 | `Fuse` | External Swift library used internally | Threshold-based fuzzy matching inside `SearchWorker` | Public search score or cross-actor matcher state |
+| `HistoryPerfRunner` | Package executable, no product surface | Part VI §9 release-like workloads, machine metadata, and versioned fixtures | Caller APIs, alternate writers, production state, absolute-latency claims |
 
 #### Access rules
 
@@ -94,9 +98,9 @@ There are two real implementations of the public seam for different purposes: `S
 
 ```text
 NSPasteboard
-  → PasteboardAdapter freezes raw typed bytes + source observation
+  → PasteboardAdapter freezes raw typed bytes + source/concealment observation
   → ClipboardHistory.perform(.capture(ClipboardCapture))
-  → IngestPreparationActor validates, filters, normalizes, fingerprints, projects
+  → IngestPreparationActor rejects whole private/concealed items, then validates, normalizes, fingerprints, projects
   → HistoryAuthority loads complete IngestFacts
   → HistoryDomain plans insert or recordCopy plus retention victims
   → Authority stamps versions and commits one SwiftData transaction
@@ -232,6 +236,7 @@ These are required future gates, not current claims:
 4. The public `HistoryCore` symbol surface is snapshot-tested so package-only Domain/Storage vocabulary cannot leak accidentally.
 5. App-level tests construct `SwiftDataHistory` with an in-memory store; they do not replace the semantic write path.
 6. XcodeGen deterministically produces the application project while the library graph remains SwiftPM-owned.
+7. Portable dependency gates reject byte drift in the pinned vendored xxHash sources and prove that only Clipy's wrapper is a global C symbol; production-wrapper known-answer tests pin digest behavior on macOS arm64.
 
 ### 10. Platform facts versus design choices
 

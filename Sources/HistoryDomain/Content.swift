@@ -12,10 +12,12 @@ import HistoryCore
 /// One typed byte representation of clipboard content.
 /// docs/02-domain.md §2.1
 ///
-/// Equality is byte-exact on `(typeIdentifier, bytes)`. A normalized content
-/// set is non-empty, contains at most one representation per
-/// `typeIdentifier`, contains no empty-bytes representation, and is sorted by
-/// `typeIdentifier` using a stable Unicode scalar ordering. Two
+/// Equality uses Swift String equality (Unicode canonical equivalence) for
+/// `typeIdentifier` and byte-exact Data equality for `bytes`. A normalized
+/// content set is non-empty, contains at most one representation per
+/// canonically equivalent `typeIdentifier`, contains no empty-bytes
+/// representation, and is sorted by `typeIdentifier` using a stable Unicode
+/// scalar ordering. Two
 /// representations with the same type identifier and different bytes are
 /// ambiguous input — preparation rejects them with a typed invalid-input
 /// failure rather than choosing by iteration order.
@@ -132,6 +134,9 @@ package struct CanonicalContent: Sendable, Hashable {
     /// list is sorted by type identifier in stable Unicode scalar order.
     /// Fingerprint coverage is verified by construction — every
     /// `CanonicalRepresentation` structurally carries its fingerprint.
+    /// Maintainers adding a new normalized-set invariant must also add the
+    /// corresponding pre-proof and canary at IngestPreparation §6.1; its
+    /// catch deliberately classifies any missed invariant as a Storage bug.
     ///
     /// - Throws: `CanonicalContentRejection` when any requirement fails.
     package init(representations: [CanonicalRepresentation]) throws {

@@ -21,6 +21,15 @@ import HistoryCore
 import HistoryDomain
 import Fuse
 
+/// Named test-only suspension points for the off-Authority search evaluator.
+/// The handler is always nil in production and is compiled in so `@testable`
+/// observation proofs can place a commit inside the snapshot→evaluation
+/// interval without retaining any SwiftData value across the suspension
+/// (docs/04-coherence.md §5/§7; docs/06-cross-cutting.md §8 WS12).
+internal enum SearchWorkerSuspensionPoint: String, Sendable {
+    case evaluationEntry = "SearchWorker.page.evaluationEntry"
+}
+
 /// Search evaluation worker (docs/05-authority-kernel.md §14.2). Roadmap
 /// step 7: the three frozen search modes plus the recent-equivalent empty
 /// term (docs/03b-instruction-set.md §8; docs/06-cross-cutting.md §8 WS17).
@@ -32,9 +41,10 @@ import Fuse
 /// offsets into the returned title/snippet, never `String.Index` values.
 internal actor SearchWorker {
     /// The fixed `HistoryLimits.standard` safety profile
-    /// (docs/06-cross-cutting.md §2): the 512-Character regexp-pattern
-    /// bound, the 256-Character fuzzy-query bound, the 1,000/5,000-Character
-    /// regexp/fuzzy scan prefixes, and the 322-Character snippet bound.
+    /// (docs/06-cross-cutting.md §2): the common 4,096-UTF-8-byte search-term
+    /// bound, the 512-Character regexp-pattern bound, the 64-Character
+    /// fuzzy-query bound, the 1,000/5,000-Character regexp/fuzzy scan prefixes,
+    /// and the 322-Character snippet bound.
     private let limits: HistoryLimits
 
     /// The confined fuzzy matcher (docs/01-architecture.md §6). Frozen
@@ -44,15 +54,41 @@ internal actor SearchWorker {
     /// parameter in the pinned 1.4.0 revision (stored, never read — see
     /// `Fuse/Classes/Fuse.swift` at krisk/fuse-swift
     /// 26ba868691b2d8b7bf2b1322951eb591be70ccca; docs/AUDIT.md §4b), so the
-    /// 256-Character query bound is enforced by `page` itself before Fuse
+    /// 64-Character query bound is enforced by `page` itself before Fuse
     /// is called.
     private let fuse: Fuse
+
+    /// Same scoring parameters, but case-sensitive because `fuzzyMatch`
+    /// supplies the single pre-lowercased working copy. This avoids Fuse
+    /// allocating a second lowercase string after the alignment proof.
+    private let prelowercasedFuse: Fuse
+
+    /// Deterministic observation-test seam. Nil outside `@testable` tests;
+    /// only immutable corpus/request values are live when it is awaited.
+    private var suspensionHandler: (
+        @Sendable (SearchWorkerSuspensionPoint) async -> Void
+    )?
 
     /// Creates the worker with the fixed safety profile and the frozen
     /// Fuse parameter set (03b §8).
     internal init() {
         self.limits = .standard
         self.fuse = Fuse(location: 0, distance: 100, threshold: 0.7, isCaseSensitive: false)
+        self.prelowercasedFuse = Fuse(
+            location: 0,
+            distance: 100,
+            threshold: 0.7,
+            isCaseSensitive: true
+        )
+        self.suspensionHandler = nil
+    }
+
+    /// Installs or clears the deterministic evaluation-entry handler.
+    /// Production never installs one, so the seam is a no-op there.
+    internal func setSuspensionHandler(
+        _ handler: (@Sendable (SearchWorkerSuspensionPoint) async -> Void)?
+    ) {
+        suspensionHandler = handler
     }
 
     /// One evaluated row in final page order: the corpus scalar row, its
@@ -94,10 +130,13 @@ internal actor SearchWorker {
     /// - Parameter processMarker: The Authority-owned process-instance
     ///   marker the minted cursor binds to (04 §6); the facade forwards it
     ///   — this worker never mints markers.
-    /// - Throws: `HistoryFailure.invalidInput(.invalidRegularExpression)`
-    ///   for a rejected regexp pattern (before any scanning, 03b §8);
-    ///   `.invalidInput(.invalidSearchTerm)` for a fuzzy query over the
-    ///   256-Character bound (before Fuse is called, 03b §8);
+    /// - Throws: `HistoryFailure.invalidInput(.invalidSearchTerm)` for any
+    ///   non-empty search term over the Part VI 4,096-UTF-8-byte bound, before
+    ///   mode-specific admission; the same failure is used for a fuzzy query
+    ///   over the 64-Character bound before Fuse is called (03b §8; 06 §2);
+    ///   `.invalidInput(.invalidRegularExpression)` for a rejected regexp
+    ///   pattern after the shared byte bound passes (before any scanning,
+    ///   03b §8);
     ///   `.snapshotExpired(current:)` when the continuation anchor names
     ///   no row in the computed order (04 §6).
     internal func page(
@@ -105,13 +144,28 @@ internal actor SearchWorker {
         in corpus: SearchCorpusSnapshot,
         continuationAnchor: StoredOrderingAnchor?,
         processMarker: UUID
-    ) throws -> HistoryPage {
+    ) async throws -> HistoryPage {
         guard case .search(let term, let mode) = request.kind else {
             // The facade routes `.recent` to the Authority's §14.1
             // interval; a `.recent` kind here is a wiring violation —
             // the §16 defensive internal-invariant mapping.
             throw HistoryFailure.persistence(.invariantViolation)
         }
+
+        // Part VI §2: the UTF-8 byte bound is common to every search mode and
+        // therefore precedes regexp/fuzzy Character-specific admission. This
+        // also prevents a small number of extremely wide grapheme clusters
+        // from bypassing the scalar input envelope.
+        guard term.utf8.count <= limits.maximumSearchTermUTF8Bytes else {
+            throw HistoryFailure.invalidInput(.invalidSearchTerm)
+        }
+
+        // WS12/search-observation seam: the Authority has already released
+        // its operation-local context and handed over this immutable snapshot.
+        // A test may now commit while evaluation is parked, proving the page
+        // keeps the old position and the facade's phase-1 recheck discards it.
+        await suspensionHandler?(.evaluationEntry)
+        try Task.checkCancellation()
 
         // 03b §8: an EMPTY term (zero Characters) is equivalent to
         // `.recent` and carries no search presentation. A non-empty term
@@ -172,14 +226,21 @@ internal actor SearchWorker {
         // returned page.
         let next: HistoryPageCursor?
         if survivors.count > request.limit, let lastReturned = pageSlice.last {
-            next = PageCursorCodec.encode(
-                ResolvedPageCursor(
-                    queryShape: .search(text: term, mode: mode, limit: request.limit),
-                    position: corpus.position,
-                    anchor: lastReturned.anchor
-                ),
-                processMarker: processMarker
-            )
+            do {
+                next = try PageCursorCodec.encode(
+                    ResolvedPageCursor(
+                        queryShape: .search(text: term, mode: mode, limit: request.limit),
+                        position: corpus.position,
+                        anchor: lastReturned.anchor
+                    ),
+                    processMarker: processMarker
+                )
+            } catch {
+                // A cursor is minted only from already validated scalar/search
+                // values. Encoding failure is therefore an internal invariant,
+                // never an expired caller cursor (05 §16).
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
         } else {
             next = nil
         }
@@ -262,17 +323,21 @@ internal actor SearchWorker {
             ) else {
                 continue
             }
+            // Convert the match bounds without walking the body prefix twice:
+            // the two distance operations cover disjoint prefix/match
+            // segments. `bodyExcerpt` then materializes only its bounded
+            // window, never the complete stored search body (03b §8; 06 §2).
             let lower = row.searchBody.distance(
                 from: row.searchBody.startIndex,
                 to: found.lowerBound
             )
-            let upper = row.searchBody.distance(
-                from: row.searchBody.startIndex,
+            let matchLength = row.searchBody.distance(
+                from: found.lowerBound,
                 to: found.upperBound
             )
             let excerpt = Self.bodyExcerpt(
                 body: row.searchBody,
-                characterRanges: [lower..<upper],
+                characterRanges: [lower..<(lower + matchLength)],
                 snippetLimit: limits.maximumBodySearchSnippetCharacters
             )
             evaluated.append(
@@ -295,9 +360,9 @@ internal actor SearchWorker {
     /// admission rejects an invalid or known unsafe pattern BEFORE any
     /// scanning; evaluation scans at most the first 1,000 Characters of
     /// title and, only on title miss, the first 1,000 Characters of body;
-    /// the first match wins; the default row order is preserved. Because
-    /// the scanned text is the prefix, the body excerpt windows the prefix
-    /// — the only text this mode admits.
+    /// the first match wins; the default row order is preserved. The body
+    /// excerpt windows only that bounded prefix, while its trailing ellipsis
+    /// still records when the stored body continues beyond the scan bound.
     private func evaluateRegexp(
         term: String,
         in corpus: SearchCorpusSnapshot
@@ -353,9 +418,11 @@ internal actor SearchWorker {
             }
             // Only on title miss: the first 1,000 Characters of body
             // (03b §8).
-            let bodyPrefix = String(
-                row.searchBody.prefix(limits.maximumRegexpTitleBodyPrefixCharacters)
+            let bodyScan = Self.boundedCharacterPrefix(
+                of: row.searchBody,
+                maximumCharacters: limits.maximumRegexpTitleBodyPrefixCharacters
             )
+            let bodyPrefix = bodyScan.text
             guard let match = regex.firstMatch(
                 in: bodyPrefix,
                 range: NSRange(
@@ -383,7 +450,8 @@ internal actor SearchWorker {
             let excerpt = Self.bodyExcerpt(
                 body: bodyPrefix,
                 characterRanges: [lower..<upper],
-                snippetLimit: limits.maximumBodySearchSnippetCharacters
+                snippetLimit: limits.maximumBodySearchSnippetCharacters,
+                bodySuffixWasOmitted: bodyScan.suffixWasOmitted
             )
             evaluated.append(
                 EvaluatedRow(
@@ -404,11 +472,12 @@ internal actor SearchWorker {
     ///
     /// - any backreference — `\1`…`\9` or named `\k<…>` — outside a
     ///   character class (`\0` is an octal escape, not a backreference);
-    /// - a quantified group whose body contains a quantifier anywhere
-    ///   inside it (e.g. `(a+)+`), which also covers a quantified
-    ///   alternation group whose branches contain quantifiers (e.g.
-    ///   `(a+|b)+`) and nested forms like `((a+))+` (the body-flag
-    ///   propagates from child to parent on group close).
+    /// - a quantified group whose body contains either a quantifier or an
+    ///   alternation anywhere inside it. This rejects nested quantifiers such
+    ///   as `(a+)+`, quantified alternation whose branches contain quantifiers
+    ///   such as `(a+|b)+`, and overlapping alternation without inner
+    ///   quantifiers such as `(a|a)+` / `(a|ab)+`. Both body flags propagate
+    ///   from child to parent on group close, so nested forms are covered.
     ///
     /// Plain non-capturing groups `(?:…)`, anchors, and character-class
     /// constructs stay admissible unless they participate in a rejected
@@ -417,14 +486,19 @@ internal actor SearchWorker {
     /// and `{n}`/`{n,}`/`{n,m}` intervals; an unescaped `{` that does not
     /// form an interval is a literal. ICU `(?#…)` comments are skipped to
     /// their closing `)` so comment text cannot desynchronize the group
-    /// scan. These guards intentionally reject some valid but risky
+    /// scan. Any inline flag clause that enables ICU comments mode (`x`) is
+    /// rejected conservatively: whitespace and `#` line comments would make
+    /// a second structural grammar necessary to prove the same safety
+    /// properties. These guards intentionally reject some valid but risky
     /// patterns (03b §8); anything the scanner misreads structurally is
     /// still caught by the compilation check that follows.
-    private static func containsRejectedPatternShape(_ pattern: String) -> Bool {
+    internal static func containsRejectedPatternShape(_ pattern: String) -> Bool {
         let characters = Array(pattern)
         var index = 0
-        var inCharacterClass = false
+        var characterClassDepth = 0
+        var inQuotedLiteral = false
         var openGroupBodyContainsQuantifier: [Bool] = []
+        var openGroupBodyContainsAlternation: [Bool] = []
 
         func markInnermostGroup() {
             guard !openGroupBodyContainsQuantifier.isEmpty else { return }
@@ -433,15 +507,48 @@ internal actor SearchWorker {
             ] = true
         }
 
+        func markInnermostGroupAlternation() {
+            guard !openGroupBodyContainsAlternation.isEmpty else { return }
+            openGroupBodyContainsAlternation[
+                openGroupBodyContainsAlternation.count - 1
+            ] = true
+        }
+
         while index < characters.count {
             let character = characters[index]
-            if inCharacterClass {
+            if inQuotedLiteral {
+                if character == "\\",
+                   index + 1 < characters.count,
+                   characters[index + 1] == "E" {
+                    inQuotedLiteral = false
+                    index += 2
+                } else {
+                    index += 1
+                }
+                continue
+            }
+            if characterClassDepth > 0 {
                 if character == "\\" {
+                    if index + 1 < characters.count,
+                       characters[index + 1] == "Q" {
+                        // ICU supports `\Q…\E` inside sets as well as outside
+                        // them. Preserve the enclosing set depth while quoted
+                        // brackets pass through as literals; otherwise a
+                        // quoted `[` can hide a real `(class+)+` shape.
+                        inQuotedLiteral = true
+                    }
                     index += 2
                     continue
                 }
-                if character == "]" {
-                    inCharacterClass = false
+                // ICU UnicodeSet syntax admits nested sets and POSIX classes
+                // (`[[a-z][A-Z]]`, `[[:alpha:]]`). Track every unescaped
+                // bracket so an inner `]` cannot expose a class-literal `+`
+                // as a group quantifier (V1-Verified/03c). A literal bracket
+                // in a UnicodeSet is escaped, handled by the branch above.
+                if character == "[" {
+                    characterClassDepth += 1
+                } else if character == "]" {
+                    characterClassDepth -= 1
                 }
                 index += 1
                 continue
@@ -451,16 +558,26 @@ internal actor SearchWorker {
                 let next = index + 1
                 if next < characters.count {
                     let escaped = characters[next]
-                    if ("1"..."9").contains(escaped) || escaped == "k" {
+                    if escaped == "Q" {
+                        // ICU `\Q…\E` quotes every structural token inside;
+                        // skipping it prevents both false positives and a
+                        // quoted `[` from desynchronizing class depth.
+                        inQuotedLiteral = true
+                    } else if ("1"..."9").contains(escaped) || escaped == "k" {
                         return true
                     }
                 }
                 index += 2
             case "[":
-                inCharacterClass = true
+                characterClassDepth = 1
                 index += 1
             case "(":
-                if index + 2 < characters.count,
+                if inlineFlagClauseEnablesComments(
+                    at: index,
+                    in: characters
+                ) {
+                    return true
+                } else if index + 2 < characters.count,
                    characters[index + 1] == "?",
                    characters[index + 2] == "#" {
                     var cursor = index + 3
@@ -470,16 +587,26 @@ internal actor SearchWorker {
                     index = cursor + 1
                 } else {
                     openGroupBodyContainsQuantifier.append(false)
+                    openGroupBodyContainsAlternation.append(false)
                     index += (
                         index + 1 < characters.count
                             && characters[index + 1] == "?"
                     ) ? 2 : 1
                 }
+            case "|":
+                // Any alternation inside a group makes a quantifier on that
+                // group conservatively unsafe. Escaped pipes and pipes inside
+                // character classes were consumed by the branches above.
+                markInnermostGroupAlternation()
+                index += 1
             case ")":
                 let bodyContainsQuantifier =
                     openGroupBodyContainsQuantifier.popLast() ?? false
+                let bodyContainsAlternation =
+                    openGroupBodyContainsAlternation.popLast() ?? false
                 let isQuantified = isQuantifierToken(at: index + 1, in: characters)
-                if isQuantified && bodyContainsQuantifier {
+                if isQuantified,
+                   bodyContainsQuantifier || bodyContainsAlternation {
                     return true
                 }
                 // Propagate to the parent: either this group is itself
@@ -489,6 +616,11 @@ internal actor SearchWorker {
                 // `((a+))+` are rejected (03b §8).
                 if isQuantified || bodyContainsQuantifier {
                     markInnermostGroup()
+                }
+                // A nested alternation remains an alternation contained by its
+                // parent, so an outer quantifier is rejected as well.
+                if bodyContainsAlternation {
+                    markInnermostGroupAlternation()
                 }
                 index += 1
             case "*", "+", "?":
@@ -504,6 +636,38 @@ internal actor SearchWorker {
             default:
                 index += 1
             }
+        }
+        return false
+    }
+
+    /// Detects an ICU inline flag clause that enables comments/free-spacing
+    /// mode: `(?x)`, mixed forms such as `(?imx-s)`, and scoped forms such as
+    /// `(?x:...)`. A mention after `-` disables the flag and is not itself an
+    /// enablement. The compiler remains the authority for malformed clauses;
+    /// this helper only decides whether the conservative preflight can safely
+    /// interpret the pattern's lexical structure.
+    private static func inlineFlagClauseEnablesComments(
+        at groupStart: Int,
+        in characters: [Character]
+    ) -> Bool {
+        guard groupStart + 2 < characters.count,
+              characters[groupStart + 1] == "?" else {
+            return false
+        }
+        var cursor = groupStart + 2
+        var enabling = true
+        while cursor < characters.count {
+            let flag = characters[cursor]
+            if flag == "-" {
+                enabling = false
+                cursor += 1
+                continue
+            }
+            guard "ismwx".contains(flag) else { return false }
+            if flag == "x", enabling {
+                return true
+            }
+            cursor += 1
         }
         return false
     }
@@ -557,7 +721,7 @@ internal actor SearchWorker {
 
     // MARK: - Fuzzy mode (03b §8)
 
-    /// Fuse search over the bounded prefixes (03b §8): the 256-Character
+    /// Fuse search over the bounded prefixes (03b §8): the 64-Character
     /// query bound is enforced before Fuse is called; evaluation scans at
     /// most the first 5,000 Characters of title and, only on title miss,
     /// the first 5,000 Characters of body. Ordering preserves the default
@@ -571,9 +735,11 @@ internal actor SearchWorker {
     ) throws -> [EvaluatedRow] {
         // Fuse 1.4.0 does not enforce its `maxPatternLength` option (the
         // parameter is unread in the pinned revision, so the documented
-        // "return nil" never fires); the worker enforces the Part VI
-        // 256-Character fuzzy-query bound itself, before Fuse is called
-        // (03b §8; docs/AUDIT.md §4b).
+        // "return nil" never fires). Fuse 1.4.0's bitap stores its pattern
+        // mask in one 64-bit Int; longer patterns either cannot represent the
+        // completion bit or can overflow inside Fuse. The worker therefore
+        // enforces the Part VI 64-Character bound before Fuse is called
+        // (03b §8; 06 §2; V1-Verified/03c).
         guard term.count <= limits.maximumFuzzyQueryCharacters else {
             throw HistoryFailure.invalidInput(.invalidSearchTerm)
         }
@@ -602,23 +768,27 @@ internal actor SearchWorker {
                     score: titleMatch.score,
                     search: SearchPresentation(
                         snippet: nil,
-                        matchedRanges: titleMatch.utf16Ranges
+                        matchedRanges: Self.utf16Ranges(
+                            from: titleMatch.characterRanges,
+                            in: titlePrefix
+                        )
                     )
                 )
             } else {
                 // Only on title miss: the first 5,000 Characters of body
-                // (03b §8). The excerpt windows that scanned prefix — the
-                // only text this mode admits.
-                let bodyPrefix = String(
-                    row.searchBody.prefix(
-                        limits.maximumFuzzyTitleBodyPrefixCharacters
-                    )
+                // (03b §8). The excerpt windows that scanned prefix and
+                // records a trailing ellipsis when the stored body continues.
+                let bodyScan = Self.boundedCharacterPrefix(
+                    of: row.searchBody,
+                    maximumCharacters: limits.maximumFuzzyTitleBodyPrefixCharacters
                 )
+                let bodyPrefix = bodyScan.text
                 if let bodyMatch = fuzzyMatch(pattern: pattern, in: bodyPrefix) {
                     let excerpt = Self.bodyExcerpt(
                         body: bodyPrefix,
                         characterRanges: bodyMatch.characterRanges,
-                        snippetLimit: limits.maximumBodySearchSnippetCharacters
+                        snippetLimit: limits.maximumBodySearchSnippetCharacters,
+                        bodySuffixWasOmitted: bodyScan.suffixWasOmitted
                     )
                     hit = FuzzyHit(
                         corpusRow: row,
@@ -680,37 +850,37 @@ internal actor SearchWorker {
 
     /// Runs the frozen-parameter Fuse matcher over one scanned string.
     ///
-    /// Fuse 1.4.0's `_search` lowercases its working copy internally when
-    /// `isCaseSensitive == false` (`text = text.lowercased()`,
-    /// `Fuse/Classes/Fuse.swift` at the pinned revision) and reports match
-    /// ranges as `CountableClosedRange<Int>` Character offsets into that
-    /// lowercased copy. Swift's `lowercased()` performs Unicode default
+    /// Fuse 1.4.0 normally lowercases its working copy internally. This
+    /// worker instead creates that lowercase copy once, proves its Character
+    /// alignment, and passes it through an otherwise-identical case-sensitive
+    /// matcher so Fuse does not allocate it again. Fuse reports match ranges
+    /// as `CountableClosedRange<Int>` Character offsets into that copy.
+    /// Swift's `lowercased()` performs Unicode default
     /// lowercasing, whose only multi-scalar expansion (U+0130 →
     /// U+0069 U+0307) stays within one extended grapheme cluster, so
     /// Character indices never shift; the count check below proves the
     /// working copy's Character indices align 1:1 with the original's, and
     /// a hypothetical future Unicode change that broke the alignment makes
     /// the field a miss rather than a guess (03b §8: lower-casing must
-    /// not shift offsets). Passing the ORIGINAL string (not a
-    /// pre-lowercased one) is what guarantees this worker's working copy
-    /// is byte-identical to Fuse's internal one.
+    /// not shift offsets).
     ///
-    /// - Returns: the Fuse score (internal only), the ranges translated
-    ///   to UTF-16 offsets into the ORIGINAL `scanned` string, and the
-    ///   same ranges as half-open Character offsets for the excerpt
-    ///   algorithm; `nil` when Fuse reports no match.
+    /// - Returns: the Fuse score (internal only) and half-open Character
+    ///   ranges aligned with the original string; the title caller performs
+    ///   UTF-16 translation, while the body caller passes the ranges directly
+    ///   to the bounded excerpt algorithm.
     private func fuzzyMatch(
         pattern: Fuse.Pattern,
         in scanned: String
     ) -> (
         score: Double,
-        utf16Ranges: [UTF16TextRange],
         characterRanges: [Range<Int>]
     )? {
-        guard scanned.lowercased().count == scanned.count else {
+        let scannedCharacterCount = scanned.count
+        let lowercased = scanned.lowercased()
+        guard lowercased.count == scannedCharacterCount else {
             return nil
         }
-        guard let result = fuse.search(pattern, in: scanned) else {
+        guard let result = prelowercasedFuse.search(pattern, in: lowercased) else {
             return nil
         }
         var characterRanges: [Range<Int>] = []
@@ -718,14 +888,14 @@ internal actor SearchWorker {
         for range in result.ranges {
             // Defensive: Fuse's ranges index its working copy, which the
             // count check just aligned with `scanned`.
-            guard range.lowerBound >= 0, range.upperBound < scanned.count else {
+            guard range.lowerBound >= 0,
+                  range.upperBound < scannedCharacterCount else {
                 continue
             }
             characterRanges.append(range.lowerBound..<(range.upperBound + 1))
         }
         return (
             result.score,
-            Self.utf16Ranges(from: characterRanges, in: scanned),
             characterRanges
         )
     }
@@ -735,7 +905,7 @@ internal actor SearchWorker {
     /// The frozen body-match excerpt construction (03b §8, verbatim):
     ///
     /// 1. sort match ranges;
-    /// 2. a body shorter than 320 Characters keeps the whole body and adds
+    /// 2. a body 320 Characters or shorter keeps the whole body and adds
     ///    no ellipses;
     /// 3. otherwise center a window of at most 320 Characters on the
     ///    earliest match — a longer match keeps its first 320 Characters —
@@ -744,7 +914,8 @@ internal actor SearchWorker {
     ///    extend past a body edge to the other side;
     /// 4. add `…` at each edge where text was omitted — a leading ellipsis
     ///    only when the window starts after the body start, a trailing one
-    ///    only when it ends before the body end;
+    ///    when it ends before this input or the caller reports that the
+    ///    stored body continues beyond a regexp/fuzzy scan prefix;
     /// 5. clip later ranges to the retained window;
     /// 6. convert the retained ranges to UTF-16 offsets into the final
     ///    snippet, shifting each right by the leading-ellipsis length only
@@ -760,13 +931,20 @@ internal actor SearchWorker {
     /// Ranges are half-open Character offsets into `body`. (A zero-length
     /// match — possible under regexp mode — centers a window but clips
     /// away, contributing no snippet range.)
-    private static func bodyExcerpt(
+    ///
+    /// Internal only so direct `@testable` worked examples can pin this frozen
+    /// pure algorithm independently of the SwiftData/Fuse integration proof.
+    internal static func bodyExcerpt(
         body: String,
         characterRanges: [Range<Int>],
-        snippetLimit: Int
+        snippetLimit: Int,
+        bodySuffixWasOmitted: Bool = false
     ) -> (snippet: String, ranges: [UTF16TextRange]) {
-        let characters = Array(body)
-        let count = characters.count
+        // `String.count` walks the body but does not materialize a
+        // `[Character]`. The only owned text below is `windowText`, whose size
+        // is bounded by the snippet window. This matters in exact mode where
+        // `body` may be the full 256-KiB stored projection (06 §2).
+        let count = body.count
         let windowCapacity = snippetLimit - 2
         let sortedRanges = characterRanges.sorted {
             $0.lowerBound < $1.lowerBound
@@ -811,9 +989,18 @@ internal actor SearchWorker {
         }
 
         let hasLeadingEllipsis = windowLower > 0
-        let hasTrailingEllipsis = windowUpper < count
+        let hasTrailingEllipsis = windowUpper < count || bodySuffixWasOmitted
+        let windowLowerIndex = body.index(
+            body.startIndex,
+            offsetBy: windowLower
+        )
+        let windowUpperIndex = body.index(
+            windowLowerIndex,
+            offsetBy: windowUpper - windowLower
+        )
+        let windowText = String(body[windowLowerIndex..<windowUpperIndex])
         var snippet = hasLeadingEllipsis ? "…" : ""
-        snippet.append(contentsOf: characters[windowLower..<windowUpper])
+        snippet.append(contentsOf: windowText)
         if hasTrailingEllipsis {
             snippet.append("…")
         }
@@ -821,27 +1008,42 @@ internal actor SearchWorker {
         // Clip to the window, then convert to UTF-16 offsets into the
         // final snippet, shifting right by the leading ellipsis only when
         // present (03b §8 steps 5–6).
-        let windowOffsets = utf16PrefixOffsets(
-            of: String(characters[windowLower..<windowUpper])
-        )
-        var ranges: [UTF16TextRange] = []
-        ranges.reserveCapacity(sortedRanges.count)
-        for range in sortedRanges {
+        let clippedRanges = sortedRanges.compactMap { range -> Range<Int>? in
             let clippedLower = max(range.lowerBound, windowLower)
             let clippedUpper = min(range.upperBound, windowUpper)
-            guard clippedLower < clippedUpper else { continue }
-            let inWindowLower = clippedLower - windowLower
-            let inWindowUpper = clippedUpper - windowLower
-            ranges.append(
-                UTF16TextRange(
-                    location: windowOffsets[inWindowLower]
-                        + (hasLeadingEllipsis ? 1 : 0),
-                    length: windowOffsets[inWindowUpper]
-                        - windowOffsets[inWindowLower]
-                )
+            guard clippedLower < clippedUpper else { return nil }
+            return (clippedLower - windowLower)..<(clippedUpper - windowLower)
+        }
+        let maximumMatchedOffset = clippedRanges.map(\.upperBound).max() ?? 0
+        let windowOffsets = utf16PrefixOffsets(
+            of: windowText,
+            through: maximumMatchedOffset
+        )
+        let ranges = clippedRanges.map { range in
+            UTF16TextRange(
+                location: windowOffsets[range.lowerBound]
+                    + (hasLeadingEllipsis ? 1 : 0),
+                length: windowOffsets[range.upperBound]
+                    - windowOffsets[range.lowerBound]
             )
         }
         return (snippet, ranges)
+    }
+
+    /// Materializes at most `maximumCharacters` and reports whether the
+    /// original string continues. Computing the end index is bounded by the
+    /// same scan limit, avoiding an O(full-body) `count` just to decide the
+    /// excerpt's trailing ellipsis.
+    private static func boundedCharacterPrefix(
+        of text: String,
+        maximumCharacters: Int
+    ) -> (text: String, suffixWasOmitted: Bool) {
+        let end = text.index(
+            text.startIndex,
+            offsetBy: maximumCharacters,
+            limitedBy: text.endIndex
+        ) ?? text.endIndex
+        return (String(text[..<end]), end != text.endIndex)
     }
 
     // MARK: - UTF-16 translation (03b §8; docs/04-coherence.md §7)
@@ -850,11 +1052,15 @@ internal actor SearchWorker {
     /// `text`. A `String`'s UTF-16 view is the concatenation of its
     /// Characters' UTF-16 views, so per-Character prefix sums give exact
     /// code-unit offsets for any Character boundary.
-    private static func utf16Ranges(
+    internal static func utf16Ranges(
         from characterRanges: [Range<Int>],
         in text: String
     ) -> [UTF16TextRange] {
-        let offsets = utf16PrefixOffsets(of: text)
+        let maximumMatchedOffset = characterRanges.map(\.upperBound).max() ?? 0
+        let offsets = utf16PrefixOffsets(
+            of: text,
+            through: maximumMatchedOffset
+        )
         return characterRanges.map { range in
             UTF16TextRange(
                 location: offsets[range.lowerBound],
@@ -864,15 +1070,18 @@ internal actor SearchWorker {
     }
 
     /// `offsets[i]` is the number of UTF-16 code units preceding Character
-    /// `i` in `text`; `offsets[text.count]` is the whole string's UTF-16
-    /// length.
-    private static func utf16PrefixOffsets(of text: String) -> [Int] {
+    /// `i` in `text`. Only offsets through the furthest matched boundary are
+    /// built; no caller needs the suffix after that boundary.
+    private static func utf16PrefixOffsets(
+        of text: String,
+        through maximumCharacterOffset: Int
+    ) -> [Int] {
         var offsets: [Int] = []
-        offsets.reserveCapacity(text.count + 1)
+        offsets.reserveCapacity(maximumCharacterOffset + 1)
         offsets.append(0)
         var total = 0
-        for character in text {
-            total += String(character).utf16.count
+        for character in text.prefix(maximumCharacterOffset) {
+            total += character.utf16.count
             offsets.append(total)
         }
         return offsets

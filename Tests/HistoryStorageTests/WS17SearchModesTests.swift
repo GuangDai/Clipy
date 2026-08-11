@@ -252,7 +252,8 @@ private static func populateFixture(
 
 /// WS17 + 03b §8 (regexp): a valid pattern matches like exact (title first,
 /// default order preserved, `snippet == nil` for title match). An invalid
-/// pattern — `(a+)+` (nested quantifier) or a backreference `(a)\1` — throws
+/// pattern — `(a+)+` (nested quantifier), a quantified alternation such as
+/// `(a|a)+b`, or a backreference `(a)\1` — throws
 /// `.invalidInput(.invalidRegularExpression)` BEFORE scanning.
 @Test func regexpModeValidPatternTitleFirstAndUnsafePatternsRejectedBeforeScan() async throws {
     let storeURL = WSSupport.tempStoreURL("ws17-regexp")
@@ -290,6 +291,53 @@ private static func populateFixture(
         "WS17/03b §8 (regexp): the UTF-16 range extracts 'Alpha' from the title"
     )
 
+    // Alternation itself remains admissible; the conservative rejection is
+    // specifically for a group that is subsequently quantified.
+    let alternationPage = try await history.browse(HistoryBrowseRequest(
+        kind: .search(text: "(Alpha|beta)", mode: .regexp),
+        limit: 50
+    ))
+    #expect(
+        alternationPage.rows.map(\.item.id)
+            == [fixture.alphaID, fixture.betaAlphaID]
+    )
+
+    // ICU POSIX bracket expressions contain an inner `]` that must not close
+    // the surrounding character class in the preflight scanner. The `+`
+    // below is a literal class member, so only the safe one-character group
+    // is quantified and the pattern remains admissible (03b §8).
+    let posixClassPage = try await history.browse(HistoryBrowseRequest(
+        kind: .search(text: "([[:alpha:]+])+", mode: .regexp),
+        limit: 50
+    ))
+    #expect(!posixClassPage.rows.isEmpty)
+
+    let nestedClassPage = try await history.browse(HistoryBrowseRequest(
+        kind: .search(text: "([[a-z][A-Z]+])+", mode: .regexp),
+        limit: 50
+    ))
+    #expect(!nestedClassPage.rows.isEmpty)
+
+    // ICU quoting makes every token literal; the preflight scanner must not
+    // reinterpret the nested-quantifier spelling inside `\Q…\E`.
+    let quotedLiteralPage = try await history.browse(HistoryBrowseRequest(
+        kind: .search(text: "\\Q(a+)+\\E", mode: .regexp),
+        limit: 50
+    ))
+    #expect(quotedLiteralPage.rows.isEmpty)
+
+    // The input below would make an admitted overlapping-alternation pattern
+    // catastrophically backtrack. It is deliberately retained in the real
+    // corpus so these assertions prove admission happens before scanning; no
+    // detached timeout is used because Foundation regexp work is synchronous
+    // and cannot be cancelled safely once started.
+    _ = try await Self.captureText(
+        history,
+        text: String(repeating: "a", count: 4_096),
+        observedAt: Date(timeIntervalSinceReferenceDate: 700_050_100),
+        source: "com.example.ws17.regexp-redos"
+    )
+
     // 03b §8 + WS17: `(a+)+` — a quantified group whose body contains a
     // quantifier — is rejected BEFORE scanning with
     // `.invalidInput(.invalidRegularExpression)`.
@@ -308,16 +356,37 @@ private static func populateFixture(
             limit: 50
         ))
     }
+
+    // A quantified group containing alternation is conservatively rejected
+    // even when its branches contain no inner quantifier. Both patterns have
+    // overlapping prefixes and would otherwise scan the long all-`a` row.
+    for pattern in [
+        "(a|a)+b",
+        "(a|ab)+c",
+        "([[:alpha:]]+)+",
+        "([[a-z][A-Z]]+)+",
+        "([\\Q[\\E]+)+",
+        "(?x)# [\n(a+)+",
+        "(?ix-s:# [\n(a+)+)",
+    ] {
+        await #expect(throws: HistoryFailure.invalidInput(.invalidRegularExpression)) {
+            try await history.browse(HistoryBrowseRequest(
+                kind: .search(text: pattern, mode: .regexp),
+                limit: 50
+            ))
+        }
+    }
 }
 
 // MARK: - FUZZY mode
 
 /// WS17 + 03b §8 (fuzzy): a typo'd term matches the pinned item first
 /// (pinned-first regardless of score); unpinned rows are ordered by score
-/// then recency then ID. A fuzzy query over the 256-Character bound throws
+/// then recency then ID. Fuse 1.4.0's bitap uses one 64-bit `Int`, so queries
+/// through 64 Characters are admitted and every longer query throws
 /// `.invalidInput(.invalidSearchTerm)` before Fuse is called. Scores are
 /// internal — the test asserts ORDER, not exact scores.
-@Test func fuzzyModePinnedFirstScoreOrderAndOverLengthQueryRejected() async throws {
+@Test func fuzzyModePinnedFirstScoreOrderAndBitapWidthBoundary() async throws {
     let storeURL = WSSupport.tempStoreURL("ws17-fuzzy")
     defer { WSSupport.removeStore(storeURL) }
     let history = try await WSSupport.openHistory(storeURL: storeURL)
@@ -365,14 +434,115 @@ private static func populateFixture(
         )
     }
 
-    // 03b §8 + WS17: a 257-Character query exceeds the 256-Character fuzzy-
-    // query bound and is rejected as `.invalidInput(.invalidSearchTerm)`
-    // BEFORE Fuse is called (Fuse 1.4.0 does not enforce its own
-    // maxPatternLength).
-    let overLengthQuery = String(repeating: "a", count: 257)
-    await #expect(throws: HistoryFailure.invalidInput(.invalidSearchTerm)) {
+    // 03b §8 + WS17: 64 Characters is the largest pattern Fuse 1.4.0's
+    // single-Int bitap can represent. These boundary queries must reach the
+    // matcher without an admission failure (whether they match is irrelevant).
+    for length in [1, 63, 64] {
+        _ = try await history.browse(HistoryBrowseRequest(
+            kind: .search(text: String(repeating: "q", count: length), mode: .fuzzy),
+            limit: 50
+        ))
+    }
+
+    // 03b §8 + WS17: every pattern beyond the 64-bit ceiling is rejected
+    // BEFORE Fuse is called. The sweep pins both historical failure windows:
+    // 65...89 silently returned no matches, while 90+ could overflow inside
+    // Fuse and trap the process. The no-substring inputs ensure no early row
+    // match can mask the engine boundary.
+    for length in [65, 89, 90, 100, 200, 256] {
+        let overLengthQuery = String(repeating: "q", count: length)
+        await #expect(throws: HistoryFailure.invalidInput(.invalidSearchTerm)) {
+            try await history.browse(HistoryBrowseRequest(
+                kind: .search(text: overLengthQuery, mode: .fuzzy),
+                limit: 50
+            ))
+        }
+    }
+}
+
+/// WS17 + 03b §8 (fuzzy): U+0130 lowercases to two Unicode scalars but one
+/// extended grapheme cluster. Fuse searches its lowercased working copy, so
+/// the alignment guard must preserve the original title's Character offsets;
+/// the returned public range is UTF-16-relative to the original U+0130 text.
+/// This pins the real behavior (aligned match), rather than incorrectly
+/// treating the scalar expansion as a Character-count shift.
+@Test func fuzzyModeU0130ExpansionKeepsOriginalUTF16Offsets() async throws {
+    let storeURL = WSSupport.tempStoreURL("ws17-fuzzy-u0130")
+    defer { WSSupport.removeStore(storeURL) }
+    let history = try await WSSupport.openHistory(storeURL: storeURL)
+
+    let title = "\u{0130}stanbul"
+    #expect(title.lowercased().unicodeScalars.count == title.unicodeScalars.count + 1)
+    #expect(title.lowercased().count == title.count)
+    let reference = try await Self.captureText(
+        history,
+        text: title,
+        observedAt: Date(timeIntervalSinceReferenceDate: 700_050_100),
+        source: "com.example.ws17.u0130"
+    )
+
+    let page = try await history.browse(HistoryBrowseRequest(
+        kind: .search(text: "\u{0130}", mode: .fuzzy),
+        limit: 50
+    ))
+    let row = try #require(page.rows.first)
+    #expect(row.item.id == reference.id)
+    let search = try #require(row.search)
+    #expect(search.snippet == nil)
+    let range = try #require(search.matchedRanges.first)
+    #expect(Self.substring(row.title, utf16Range: range) == "\u{0130}")
+}
+
+// MARK: - Shared search-term admission
+
+/// Part VI §2's 4,096-byte search-term bound applies at the shared
+/// `SearchWorker.page` entry, before regexp/fuzzy Character-specific admission.
+/// A deliberately wide extended grapheme cluster makes the byte boundary
+/// independent from Character count: both fixtures contain exactly 64
+/// Characters, so regexp's 512-Character and fuzzy's 64-Character bounds admit
+/// them. Every mode therefore observes the same public byte-limit failure.
+@Test func allSearchModesEnforceUTF8ByteBoundBeforeModeSpecificAdmission() async throws {
+    let storeURL = WSSupport.tempStoreURL("ws17-search-term-bytes")
+    defer { WSSupport.removeStore(storeURL) }
+    let history = try await WSSupport.openHistory(storeURL: storeURL)
+
+    // `a` (one UTF-8 byte) plus twenty-one U+20D0 combining marks (three bytes
+    // each) is one Character and exactly 64 UTF-8 bytes.
+    let boundaryCluster = "a" + String(repeating: "\u{20D0}", count: 21)
+    let justOverCluster = "a"
+        + String(repeating: "\u{20D0}", count: 20)
+        + String(repeating: "\u{0301}", count: 2)
+    let boundaryTerm = String(repeating: boundaryCluster, count: 64)
+    let overBoundTerm = String(repeating: boundaryCluster, count: 63)
+        + justOverCluster
+
+    #expect(boundaryCluster.count == 1)
+    #expect(boundaryTerm.count == 64)
+    #expect(boundaryTerm.utf8.count == 4_096)
+    #expect(overBoundTerm.count == 64)
+    #expect(overBoundTerm.utf8.count == 4_097)
+
+    for mode in [SearchMode.exact, .regexp, .fuzzy] {
+        // Equality is admitted. The empty corpus makes the result irrelevant;
+        // successful return is the observable boundary contract.
+        _ = try await history.browse(HistoryBrowseRequest(
+            kind: .search(text: boundaryTerm, mode: mode),
+            limit: 50
+        ))
+
+        await #expect(throws: HistoryFailure.invalidInput(.invalidSearchTerm)) {
+            try await history.browse(HistoryBrowseRequest(
+                kind: .search(text: overBoundTerm, mode: mode),
+                limit: 50
+            ))
+        }
+    }
+
+    // An ASCII regexp over its 512-Character limit but below 4,096 UTF-8 bytes
+    // reaches the mode-specific guard after passing the shared byte guard.
+    await #expect(throws: HistoryFailure.invalidInput(.invalidRegularExpression)) {
         try await history.browse(HistoryBrowseRequest(
-            kind: .search(text: overLengthQuery, mode: .fuzzy),
+            kind: .search(text: String(repeating: "a", count: 513), mode: .regexp),
             limit: 50
         ))
     }

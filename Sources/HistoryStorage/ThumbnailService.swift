@@ -78,7 +78,7 @@ internal enum ThumbnailServiceSuspensionPoint: String, Sendable {
 /// The actor holds the flight dictionary and the owned `ThumbnailWorker`; the
 /// worker owns no state, so every decode is independent and only immutable
 /// `Sendable` values cross the actor boundary (§14.5; Part VI §6).
-internal actor ThumbnailService {
+package actor ThumbnailService {
 
     /// One in-flight decode per exact key; the value is shared so concurrent
     /// callers for the same key await the same `Task` (§9 step 5).
@@ -93,7 +93,7 @@ internal actor ThumbnailService {
         @Sendable (ThumbnailServiceSuspensionPoint) async -> Void
     )?
 
-    internal init() {}
+    package init() {}
 
     // MARK: Roadmap-owned test seam (docs/roadmap/03-historystorage.md step-5 note; WS15)
 
@@ -133,12 +133,10 @@ internal actor ThumbnailService {
     /// - Returns: A PNG-encoded `ThumbnailPayload` tagged with `item`.
     /// - Throws: `HistoryFailure.persistence(.corruptStoredValue)` when the
     ///   source bytes are not a decodable image (§16: decode failure →
-    ///   corrupt stored value); `HistoryFailure.persistence(.invariantViolation)`
-    ///   when the encoded PNG exceeds `maximumEncodedThumbnailBytes` (the
-    ///   16 MiB output bound is a defensive safety envelope — §16 has no
-    ///   thumbnail-capacity case and a bounded downsample cannot realistically
-    ///   hit it).
-    internal func thumbnail(
+    ///   corrupt stored value); `.capacityExceeded(.thumbnailBytes)` when a
+    ///   valid encoded PNG exceeds `maximumEncodedThumbnailBytes`; or
+    ///   `.persistence(.invariantViolation)` when PNG encoding itself fails.
+    package func thumbnail(
         _ sourceBytes: Data,
         for item: HistoryItemReference,
         pixels: PixelSize
@@ -212,10 +210,10 @@ internal actor ThumbnailWorker {
     /// 2. **Encode/bound**: `CGImageDestination` re-encodes the downsampled
     ///    `CGImage` as PNG (`UTType.png.identifier`); the encoded bytes must
     ///    be ≤ `HistoryLimits.standard.maximumEncodedThumbnailBytes` (06 §2:
-    ///    16 MiB). §16 has no thumbnail-capacity case and a bounded downsample
-    ///    cannot realistically hit 16 MiB, so this is a defensive backstop —
-    ///    exceed maps to `.persistence(.invariantViolation)` (an internal
-    ///    safety-envelope violation, not a caller-input or capacity failure).
+    ///    16 MiB). Valid high-entropy output can exceed that envelope, so the
+    ///    public result is `.capacityExceeded(.thumbnailBytes)` rather than a
+    ///    persistence or invariant failure. Destination/finalization failure
+    ///    remains an encode-side `.persistence(.invariantViolation)`.
     ///
     /// The payload carries the SAME key values it was requested with: `item`
     /// is the request's reference, `pixels` is the request's extent — so the
@@ -223,8 +221,9 @@ internal actor ThumbnailWorker {
     /// intervening commits (§9; WS15).
     ///
     /// - Throws: `HistoryFailure.persistence(.corruptStoredValue)` for a
-    ///   nil source or nil thumbnail; `HistoryFailure.persistence(.invariantViolation)`
-    ///   when the encoded PNG exceeds the output bound.
+    ///   nil source or nil thumbnail; `.capacityExceeded(.thumbnailBytes)`
+    ///   when the encoded PNG exceeds the output bound; or
+    ///   `.persistence(.invariantViolation)` when PNG encoding itself fails.
     internal func decodeThumbnail(
         sourceBytes: Data,
         item: HistoryItemReference,
@@ -274,10 +273,8 @@ internal actor ThumbnailWorker {
         // Phase 2 — re-encode as PNG and enforce the output bound (06 §2).
         //
         // The encoded bytes must be ≤ maximumEncodedThumbnailBytes (16 MiB).
-        // §16 has no thumbnail-capacity case and no CapacityKind fits a
-        // thumbnail output bound; a bounded downsample of a decodable image
-        // cannot realistically produce a 16 MiB PNG, so this is a defensive
-        // safety envelope — exceed is an internal invariant violation.
+        // A valid high-entropy image may exceed the envelope after PNG
+        // overhead, so exceeding it is a typed capacity failure.
         let mutableData = CFDataCreateMutable(
             kCFAllocatorDefault,
             0
@@ -289,21 +286,23 @@ internal actor ThumbnailWorker {
             nil
         ) else {
             // Could not create the encoder — a defensive internal failure.
-            throw HistoryFailure.persistence(.invariantViolation)
+            throw Self.encodingFailure
         }
 
         CGImageDestinationAddImage(destination, cgImage, nil)
 
         guard CGImageDestinationFinalize(destination) else {
-            // Finalize failed — the downsampled image could not be encoded.
-            throw HistoryFailure.persistence(.corruptStoredValue)
+            // The source decoded successfully; failure to encode the derived
+            // image is an encode-side invariant, not stored-value corruption.
+            throw Self.encodingFailure
         }
 
         let encodedBytes = mutableData as Data
 
-        guard encodedBytes.count <= limits.maximumEncodedThumbnailBytes else {
-            throw HistoryFailure.persistence(.invariantViolation)
-        }
+        try Self.validateEncodedThumbnailByteCount(
+            encodedBytes.count,
+            limits: limits
+        )
 
         return ThumbnailPayload(
             item: item,
@@ -311,5 +310,20 @@ internal actor ThumbnailWorker {
             format: .png,
             encodedBytes: encodedBytes
         )
+    }
+
+    /// One owner for PNG destination/finalization failure classification.
+    internal static let encodingFailure = HistoryFailure.persistence(
+        .invariantViolation
+    )
+
+    /// Pure byte-envelope validation shared with the boundary regression.
+    internal static func validateEncodedThumbnailByteCount(
+        _ found: Int,
+        limits: HistoryLimits
+    ) throws {
+        guard found <= limits.maximumEncodedThumbnailBytes else {
+            throw HistoryFailure.capacityExceeded(.thumbnailBytes)
+        }
     }
 }

@@ -150,20 +150,23 @@ public struct ClipboardCapture: Sendable, Hashable {
     public let representations: [CapturedRepresentation]
     public let origin: CopyOriginObservation
     public let observedAt: Date
+    public let isConcealed: Bool
 
     public init(
         representations: [CapturedRepresentation],
         origin: CopyOriginObservation,
-        observedAt: Date
+        observedAt: Date,
+        isConcealed: Bool = false
     ) {
         self.representations = representations
         self.origin = origin
         self.observedAt = observedAt
+        self.isConcealed = isConcealed
     }
 }
 ```
 
-These are observations, not trusted Domain state. They contain no Canonical marker, fingerprint, title, search text, item ID to create, or version to mint. `HistoryStorage` validates and prepares them.
+These are observations, not trusted Domain state. They contain no Canonical marker, fingerprint, title, search text, item ID to create, or version to mint. `isConcealed` is a pasteboard-item observation: the adapter sets it when the item carries a concealment/private marker; it is not inferred from any one retainable payload representation. `HistoryStorage` validates and prepares the values and rejects the whole capture before fingerprinting when this flag or a recognized sibling exclusion marker is present. `observedAt` must be finite; NaN or infinity is `.invalidInput(.invalidTimestamp)` before fingerprinting. The concealment default preserves source compatibility for non-pasteboard callers, while marker detection remains the defense-in-depth path.
 
 ### 5. Closed History Action set
 
@@ -345,4 +348,3 @@ public struct HistoryObservationRequest: Sendable, Hashable {
 Observation intentionally has no cursor: it tracks the current first page for one query. Additional pages are one-shot `browse` requests. A cursor is opaque, bound to the complete query shape and snapshot position, and has process-local v1 validity.
 
 Invalid regular expressions and out-of-range limits are typed input failures. Search evaluation has exactly the three v1 modes above; dedup ranking is unrelated and not public.
-

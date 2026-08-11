@@ -163,14 +163,23 @@ package func planClear(
     scope: ClearScope,
     facts: ClearFacts
 ) -> PlanningResult {
-    guard !facts.affected.isEmpty else {
+    // Both v1 scopes select a set whose remaining pinned lane is trivially
+    // contiguous. Keep the switch here as an evolution forcing function: a
+    // future partial-pinned scope must revisit D12 at the planner seam.
+    let affected: [RetainedItemSummary]
+    switch scope {
+    case .unpinned, .all:
+        affected = facts.affected
+    }
+
+    guard !affected.isEmpty else {
         return .unchanged
     }
-    let mutations = facts.affected.map {
+    let mutations = affected.map {
         HistoryMutation.retire(itemID: $0.id, reason: .clear)
     }
     return .commit(MutationPlan(
-        outcome: .cleared(count: facts.affected.count),
+        outcome: .cleared(count: affected.count),
         mutations: mutations
     ))
 }
@@ -295,10 +304,11 @@ private func pinShiftMutations(
 ///
 /// docs/02-domain.md §11 step 4: the content must be normalized per §2.1 —
 /// non-empty, no empty-bytes representation, at most one representation per
-/// type identifier, sorted by type identifier in stable Unicode scalar order
-/// (a strictly increasing sequence proves both uniqueness and order, using the
-/// same Unicode-scalar comparison as the `CanonicalContent` validator in
-/// §2.3) — and must contain only Canonical representation types. Storage
+/// canonically equivalent type identifier, sorted by type identifier in stable
+/// Unicode scalar order — and must contain only Canonical representation types.
+/// String equality and scalar order have different Unicode-equivalence
+/// semantics, so uniqueness and ordering are checked independently, matching
+/// the `CanonicalContent` validator in §2.3. Storage
 /// preparation has already enforced the numeric bounds; the Domain does not
 /// re-assert limits it does not receive (§11 step 4).
 private func isNormalizedRevisionContent(
@@ -308,9 +318,12 @@ private func isNormalizedRevisionContent(
     let representations = proposed.representations
     guard !representations.isEmpty else { return false }
     let canonicalTypes = Set(canonical.representations.map { $0.content.typeIdentifier })
+    var seenTypes = Set<String>()
+    seenTypes.reserveCapacity(representations.count)
     for (index, representation) in representations.enumerated() {
         guard !representation.bytes.isEmpty,
-              canonicalTypes.contains(representation.typeIdentifier)
+              canonicalTypes.contains(representation.typeIdentifier),
+              seenTypes.insert(representation.typeIdentifier).inserted
         else {
             return false
         }

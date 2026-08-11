@@ -53,7 +53,10 @@ public protocol ClipboardHistory: Sendable {
     /// replacement pages (not deltas) as retained History changes.
     ///
     /// Observation intentionally has no cursor: additional pages are one-shot
-    /// `browse` requests.
+    /// `browse` requests. The v1 surface deliberately uses an untyped stream
+    /// failure because that is the frozen Part III contract; implementations
+    /// still throw `HistoryFailure`, so callers that need its cases must cast
+    /// the received `Error` to `HistoryFailure`.
     ///
     /// docs/03a-instruction-set.md §3, §7; guarantee
     /// docs/03b-instruction-set.md §11 item 5.

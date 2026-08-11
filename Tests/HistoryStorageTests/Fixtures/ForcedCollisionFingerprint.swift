@@ -25,14 +25,4 @@ enum ForcedCollisionFingerprint {
         _ = bytes
         return collisionValue
     }
-
-    /// Length digest: returns the input's byte count, so inputs of different
-    /// lengths produce different digests. Tests use this when they need a
-    /// deterministic double that still distinguishes items — the
-    /// non-colliding counterpart to ``digest(of:)``.
-    static func lengthDigest(of bytes: some Sequence<UInt8>) -> UInt64 {
-        var count: UInt64 = 0
-        for _ in bytes { count &+= 1 }
-        return count
-    }
 }

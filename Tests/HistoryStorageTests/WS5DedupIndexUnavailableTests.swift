@@ -18,9 +18,9 @@
 /// §7.1-step-5 inventory load before the step-1 readiness resolution, so the
 /// over-bound store was rejected as `.persistence(.invariantViolation)` and the
 /// `.dedupIndexRebuild` mapping was unreachable. The loader now resolves
-/// readiness first against an id-only scalar fetch; an over-bound retained set
-/// always forces the rebuild path, whose bound check produces
-/// `.dedupIndexRebuild`.)
+/// readiness from its single complete scalar inventory, using the explicit
+/// capture purpose; an over-bound retained set therefore produces
+/// `.dedupIndexRebuild` before planning.)
 import Foundation
 import HistoryCore
 import HistoryDomain
@@ -31,7 +31,7 @@ import Testing
 struct WS5DedupIndexUnavailableTests {
 
 /// `HistoryLimits` with the hard retained-item bound squeezed to 1 and every
-/// other value copied from `.standard` (the checked public init rejects
+/// other value copied from `.standard` (the validated package init rejects
 /// inconsistent combinations, so `userMaximumUnpinnedRange` and
 /// `defaultMaximumUnpinnedItems` collapse to the only values compatible with
 /// a hard bound of 1: `1...1` and `1`).
@@ -75,7 +75,8 @@ private static func overBoundRetainedLimits() -> HistoryLimits {
 private static func makeRow(
     from bundle: PreparedCaptureBundle,
     observedAt: Date,
-    source: String?
+    source: String?,
+    pinOrdinal: Int? = nil
 ) throws -> HistoryItemRow {
     try HistoryItemRow(
         id: bundle.domain.candidateID.rawValue,
@@ -93,8 +94,136 @@ private static func makeRow(
         copyCount: 1,
         firstSource: source,
         lastSource: source,
-        pinOrdinal: nil
+        pinOrdinal: pinOrdinal
     )
+}
+
+/// Seeds two production-codec-valid rows and proves the default inventory
+/// purpose maps an over-bound durable set to an invariant violation. The
+/// capture-specific mapping is independently pinned by the WS5 facade test
+/// below; together they make the action-specific split explicit rather than
+/// dependent on which overlapping fetch happens first.
+@Test func defaultInventoryPurposeMapsOverBoundStateToInvariantViolation() async throws {
+    let storeURL = WSSupport.tempStoreURL("fact-loader-over-bound-inventory")
+    defer { WSSupport.removeStore(storeURL) }
+
+    let preparation = IngestPreparationActor()
+    let firstObservedAt = Date(timeIntervalSinceReferenceDate: 700_009_000)
+    let secondObservedAt = Date(timeIntervalSinceReferenceDate: 700_009_100)
+    let first = try await preparation.prepare(
+        WSSupport.textCapture("inventory over-bound one", observedAt: firstObservedAt)
+    )
+    let second = try await preparation.prepare(
+        WSSupport.textCapture("inventory over-bound two", observedAt: secondObservedAt)
+    )
+    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let context = ModelContext(container)
+    context.insert(try Self.makeRow(from: first, observedAt: firstObservedAt, source: nil))
+    context.insert(try Self.makeRow(from: second, observedAt: secondObservedAt, source: nil))
+    try context.save()
+
+    #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
+        try HistoryItemRowHydration.fetchRetainedInventory(
+            in: context,
+            limits: Self.overBoundRetainedLimits()
+        )
+    }
+}
+
+/// Direct durable-corruption proof for D12: ordinals `0, 2` are non-negative
+/// and individually decodable, but the collection has a gap and must fail as
+/// `.persistence(.invariantViolation)` rather than being repaired.
+@Test func completePinnedOrderRejectsOrdinalGap() async throws {
+    try await Self.expectPinnedOrderFailure(
+        ordinals: [0, 2],
+        storeLabel: "fact-loader-pin-gap"
+    )
+}
+
+/// Direct durable-corruption proof for D12: two distinct business IDs at
+/// ordinal zero violate uniqueness/contiguity and fail closed.
+@Test func completePinnedOrderRejectsDuplicateOrdinal() async throws {
+    try await Self.expectPinnedOrderFailure(
+        ordinals: [0, 0],
+        storeLabel: "fact-loader-pin-duplicate"
+    )
+}
+
+/// A ready index stale behind a valid retained row is rebuilt wholesale from
+/// signature metadata before candidacy. The returned facts contain the exact
+/// retained row once, proving the reachable index/store-divergence recovery
+/// path without exposing a test-only initializer capable of corrupting the
+/// index's private postings/item-ID invariant.
+@Test func staleReadyIndexRebuildsBeforeCandidateHydration() async throws {
+    let storeURL = WSSupport.tempStoreURL("fact-loader-stale-ready-index")
+    defer { WSSupport.removeStore(storeURL) }
+
+    let observedAt = Date(timeIntervalSinceReferenceDate: 700_009_500)
+    let preparation = IngestPreparationActor()
+    let bundle = try await preparation.prepare(
+        WSSupport.textCapture("stale ready index candidate", observedAt: observedAt)
+    )
+    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let context = ModelContext(container)
+    context.insert(try Self.makeRow(from: bundle, observedAt: observedAt, source: nil))
+    try context.save()
+
+    // Ready for an empty store, therefore stale for the one-row store above.
+    let staleIndex = try SignatureIndex.build(from: [:])
+    #expect(staleIndex.state == .ready)
+    #expect(staleIndex.itemIDs.isEmpty)
+
+    let load = try IngestFactLoader.loadFacts(
+        in: context,
+        prepared: bundle.domain,
+        signatureIndex: staleIndex
+    )
+    let itemID = bundle.domain.candidateID
+    #expect(load.signatureIndex.state == .ready)
+    #expect(load.signatureIndex.itemIDs == Set([itemID]))
+    #expect(load.facts.candidates.items.map(\.id) == [itemID])
+    #expect(load.facts.retention.allItems.map(\.id) == [itemID])
+}
+
+private static func expectPinnedOrderFailure(
+    ordinals: [Int],
+    storeLabel: String
+) async throws {
+    let storeURL = WSSupport.tempStoreURL(storeLabel)
+    defer { WSSupport.removeStore(storeURL) }
+
+    let preparation = IngestPreparationActor()
+    var preparedRows: [(bundle: PreparedCaptureBundle, observedAt: Date, ordinal: Int)] = []
+    preparedRows.reserveCapacity(ordinals.count)
+    for (offset, ordinal) in ordinals.enumerated() {
+        let observedAt = Date(
+            timeIntervalSinceReferenceDate: 700_009_200 + Double(offset)
+        )
+        let bundle = try await preparation.prepare(
+            WSSupport.textCapture(
+                "malformed pinned order \(storeLabel) \(offset)",
+                observedAt: observedAt
+            )
+        )
+        preparedRows.append((bundle, observedAt, ordinal))
+    }
+
+    // No `await` occurs after this operation-local context is created.
+    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let context = ModelContext(container)
+    for prepared in preparedRows {
+        context.insert(try Self.makeRow(
+            from: prepared.bundle,
+            observedAt: prepared.observedAt,
+            source: nil,
+            pinOrdinal: prepared.ordinal
+        ))
+    }
+    try context.save()
+
+    #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
+        try MutationFactLoaders.loadCompletePinnedOrder(in: context)
+    }
 }
 
 /// WS5 (docs/06-cross-cutting.md §8): with the Signature Index stale behind
