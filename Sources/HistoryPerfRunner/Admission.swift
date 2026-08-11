@@ -272,6 +272,30 @@ private func writeAdmissionFixture(
     try encoder.encode(fixture).write(to: outputURL)
 }
 
+/// Owns the seed-phase facade so its ModelContainer is released before the
+/// validation phase reopens the persistent store. Besides matching the
+/// admission's later independent-process reads, this prevents temporary
+/// external-data references from one live coordinator being cloned by a
+/// second coordinator during setup.
+private func seedAdmissionRows(
+    storeURL: URL,
+    profile: AdmissionProfile,
+    seededRows: Int,
+    progress: @Sendable (Int) -> Void
+) async throws -> PerformanceFixtureSeedReceipt {
+    let history = try await openStore(
+        url: storeURL,
+        maxUnpinned: profile.retainedRows
+    )
+    return try await history.seedPerformanceFixture(
+        rowCount: seededRows,
+        makeCapture: { index in
+            admissionCapture(index: index, profile: profile)
+        },
+        progress: progress
+    )
+}
+
 private func prepareAdmissionStore(
     storeURL: URL,
     outputPath: String,
@@ -283,22 +307,17 @@ private func prepareAdmissionStore(
     }
     let clock = ContinuousClock()
     let start = clock.now
-    let history = try await openStore(
-        url: storeURL,
-        maxUnpinned: profile.retainedRows
-    )
 
     // Seed all but the final distinct item in bounded physical batches. Two
-    // real public captures then prove the seeded candidate index can hydrate
-    // and coalesce external Canonical bytes at high N, and that an ordinary
-    // distinct insert reaches the exact requested retained count.
+    // real public captures after a persistent reopen then prove startup can
+    // rebuild the seeded index, hydrate and coalesce external Canonical bytes
+    // at high N, and insert to the exact requested retained count.
     let seededRows = profile.retainedRows - 1
     let seedStart = clock.now
-    let seedReceipt = try await history.seedPerformanceFixture(
-        rowCount: seededRows,
-        makeCapture: { index in
-            admissionCapture(index: index, profile: profile)
-        },
+    let seedReceipt = try await seedAdmissionRows(
+        storeURL: storeURL,
+        profile: profile,
+        seededRows: seededRows,
         progress: { count in
             if count.isMultiple(of: 256) || count == seededRows {
                 print("  batch-seeded \(count)/\(seededRows) rows")
@@ -316,6 +335,13 @@ private func prepareAdmissionStore(
         throw AdmissionError.unexpectedPage
     }
 
+    // A new facade/container is intentional. It turns seeded durability and
+    // startup Signature Index reconstruction into prerequisites of both
+    // ordinary public validation captures.
+    let history = try await openStore(
+        url: storeURL,
+        maxUnpinned: profile.retainedRows
+    )
     let coalesceStart = clock.now
     let coalesceReceipt = try await history.perform(.capture(
         admissionCapture(index: 0, profile: profile)
@@ -376,7 +402,7 @@ private func prepareAdmissionStore(
             "Setup is one wall-time observation, never a percentile sample.",
             "All rows share one timestamp and carry the profile's full-bound search body.",
             "Bounded fixture batches use production preparation/codecs and the sole writer.",
-            "A public coalesce and distinct insert validate the seeded index before reads.",
+            "A persistent reopen, public coalesce, and distinct insert validate the seeded store.",
             "Pair this JSON with the workflow's prepare.time peak-RSS record.",
         ]
     )

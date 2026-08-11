@@ -13,74 +13,36 @@ struct PerformanceFixtureSeedingTests {
         let storeURL = WSSupport.tempStoreURL("performance-fixture-seed")
         defer { WSSupport.removeStore(storeURL) }
 
-        let history = try await WSSupport.openHistory(
-            storeURL: storeURL,
-            maximumUnpinned: 200
-        )
-        let seeded = try await history.seedPerformanceFixture(rowCount: 65) { index in
-            Self.capture(index: index, bodyBytes: 256 * 1_024)
-        }
+        // Keep every external-data-owning facade/container inside a nested
+        // frame. It unwinds before the outer defer removes the store support
+        // directory, so CoreData never tries to detach a blob after its
+        // source files have already been deleted.
+        try await Self.exerciseLargeFixture(storeURL: storeURL)
+    }
+
+    private static func exerciseLargeFixture(storeURL: URL) async throws {
+        let seeded = try await Self.seedLargeFixture(storeURL: storeURL)
         #expect(seeded.retainedRows == 65)
         #expect(seeded.transactionCount == 2)
         #expect(seeded.batchSize == 64)
         #expect(seeded.position.rawValue == 2)
 
-        let coalescedReceipt = try await history.perform(.capture(
-            Self.capture(index: 0, bodyBytes: 256 * 1_024)
-        ))
-        guard case .committed(let coalescedCommit) = coalescedReceipt,
-              case .coalesced(let coalescedReference) = coalescedCommit.outcome
-        else {
-            Issue.record("expected seeded Canonical content to coalesce")
-            return
-        }
-        #expect(coalescedCommit.position.rawValue == 3)
+        let validated = try await Self.validateLargeFixture(storeURL: storeURL)
+        #expect(validated.coalescedPosition.rawValue == 3)
+        #expect(validated.insertedPosition.rawValue == 4)
 
-        let insertedReceipt = try await history.perform(.capture(
-            Self.capture(index: 65, bodyBytes: 256 * 1_024)
-        ))
-        guard case .committed(let insertedCommit) = insertedReceipt,
-              case .inserted = insertedCommit.outcome
-        else {
-            Issue.record("expected the distinct post-seed capture to insert")
-            return
-        }
-        #expect(insertedCommit.position.rawValue == 4)
-
-        let page = try await history.browse(HistoryBrowseRequest(
-            kind: .recent,
-            limit: 100
-        ))
-        #expect(page.position == insertedCommit.position)
-        #expect(page.rows.count == 66)
-        #expect(Set(page.rows.map(\.item.id)).count == 66)
-
-        let details = try await history.details(for: coalescedReference.id)
-        let canonicalBytes = try #require(details.canonical.first?.bytes)
-        #expect(canonicalBytes.count == 256 * 1_024)
-        let payload = try await history.pastePayload(for: coalescedReference.id)
-        #expect(payload.representations.first?.bytes == canonicalBytes)
-
-        let verificationContainer = try WSSupport.makeContainer(storeURL: storeURL)
-        let rows = try WSSupport.fetchRows(verificationContainer)
-        #expect(rows.count == 66)
-        let stored = try #require(rows.first { $0.id == coalescedReference.id.rawValue })
-        let canonical = try CanonicalBlobCodec.decode(stored.canonicalBlob)
-        let revisionState = try RevisionStateBlobCodec.decode(
-            stored.revisionStateBlob,
-            canonical: canonical
+        // Decode every stored value while its ModelContext is alive, then
+        // return only immutable proof values. Returning `@Model` rows from a
+        // short-lived context makes CoreData clone external references into
+        // `.LINKS` and is not a valid actor/context-boundary test pattern.
+        let stored = try Self.storedProof(
+            storeURL: storeURL,
+            itemID: validated.coalescedReference.id
         )
-        #expect(revisionState.revisions.isEmpty)
-        #expect(revisionState.activeRevisionID == nil)
-        let signatures = try SignatureBlobCodec.decode(stored.canonicalSignatureBlob)
-        try SignatureBlobCodec.validateCoverage(
-            canonical: canonical,
-            entries: signatures
-        )
-        let effectiveTypes = try EffectiveTypeIdentifiersBlobCodec.decode(
-            stored.effectiveTypeIdentifiersBlob
-        )
-        #expect(effectiveTypes == ["public.utf8-plain-text"])
+        #expect(stored.rowCount == 66)
+        #expect(stored.revisionCount == 0)
+        #expect(stored.activeRevisionID == nil)
+        #expect(stored.effectiveTypes == ["public.utf8-plain-text"])
 
         let reopened = try await WSSupport.openHistory(
             storeURL: storeURL,
@@ -90,7 +52,7 @@ struct PerformanceFixtureSeedingTests {
             kind: .recent,
             limit: 100
         ))
-        #expect(reopenedPage.position == insertedCommit.position)
+        #expect(reopenedPage.position == validated.insertedPosition)
         #expect(reopenedPage.rows.count == 66)
 
         let reopenedCoalesce = try await reopened.perform(.capture(
@@ -102,7 +64,7 @@ struct PerformanceFixtureSeedingTests {
             Issue.record("expected rebuilt startup index to coalesce seeded content")
             return
         }
-        #expect(finalReference.id == coalescedReference.id)
+        #expect(finalReference.id == validated.coalescedReference.id)
         #expect(finalCommit.position.rawValue == 5)
     }
 
@@ -132,6 +94,10 @@ struct PerformanceFixtureSeedingTests {
         let storeURL = WSSupport.tempStoreURL("performance-fixture-rollback")
         defer { WSSupport.removeStore(storeURL) }
 
+        try await Self.exerciseMultirowRollback(storeURL: storeURL)
+    }
+
+    private static func exerciseMultirowRollback(storeURL: URL) async throws {
         let history = try await WSSupport.openHistory(
             storeURL: storeURL,
             maximumUnpinned: 10
@@ -169,6 +135,127 @@ struct PerformanceFixtureSeedingTests {
             return
         }
         #expect(commit.position.rawValue == 2)
+    }
+
+    private struct PublicValidation: Sendable {
+        let coalescedReference: HistoryItemReference
+        let coalescedPosition: ChangePosition
+        let insertedPosition: ChangePosition
+    }
+
+    private struct StoredProof: Sendable {
+        let rowCount: Int
+        let revisionCount: Int
+        let activeRevisionID: RevisionID?
+        let effectiveTypes: [String]
+    }
+
+    private enum FixtureTestError: Error {
+        case unexpectedReceipt
+        case missingStoredRow
+    }
+
+    /// The facade and its ModelContainer leave scope before validation opens
+    /// the same persistent store, matching an independent setup process.
+    private static func seedLargeFixture(
+        storeURL: URL
+    ) async throws -> PerformanceFixtureSeedReceipt {
+        let history = try await WSSupport.openHistory(
+            storeURL: storeURL,
+            maximumUnpinned: 200
+        )
+        return try await history.seedPerformanceFixture(rowCount: 65) { index in
+            Self.capture(index: index, bodyBytes: 256 * 1_024)
+        }
+    }
+
+    /// Reopen first, then force the seeded-index coalesce, ordinary insert,
+    /// scalar browse, details, and paste paths over full external bytes.
+    private static func validateLargeFixture(
+        storeURL: URL
+    ) async throws -> PublicValidation {
+        let history = try await WSSupport.openHistory(
+            storeURL: storeURL,
+            maximumUnpinned: 200
+        )
+        let coalescedReceipt = try await history.perform(.capture(
+            Self.capture(index: 0, bodyBytes: 256 * 1_024)
+        ))
+        guard case .committed(let coalescedCommit) = coalescedReceipt,
+              case .coalesced(let coalescedReference) = coalescedCommit.outcome
+        else {
+            throw FixtureTestError.unexpectedReceipt
+        }
+
+        let insertedReceipt = try await history.perform(.capture(
+            Self.capture(index: 65, bodyBytes: 256 * 1_024)
+        ))
+        guard case .committed(let insertedCommit) = insertedReceipt,
+              case .inserted = insertedCommit.outcome
+        else {
+            throw FixtureTestError.unexpectedReceipt
+        }
+
+        let page = try await history.browse(HistoryBrowseRequest(
+            kind: .recent,
+            limit: 100
+        ))
+        #expect(page.position == insertedCommit.position)
+        #expect(page.rows.count == 66)
+        #expect(Set(page.rows.map(\.item.id)).count == 66)
+
+        let details = try await history.details(for: coalescedReference.id)
+        let canonicalBytes = try #require(details.canonical.first?.bytes)
+        #expect(canonicalBytes.count == 256 * 1_024)
+        let payload = try await history.pastePayload(for: coalescedReference.id)
+        #expect(payload.representations.first?.bytes == canonicalBytes)
+
+        return PublicValidation(
+            coalescedReference: coalescedReference,
+            coalescedPosition: coalescedCommit.position,
+            insertedPosition: insertedCommit.position
+        )
+    }
+
+    /// An independent container verifies durable codecs without allowing an
+    /// `@Model`, `ModelContext`, or external-data reference to escape scope.
+    private static func storedProof(
+        storeURL: URL,
+        itemID: HistoryItemID
+    ) throws -> StoredProof {
+        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let context = ModelContext(container)
+        let rowCount = try context.fetchCount(FetchDescriptor<HistoryItemRow>())
+        let uuid = itemID.rawValue
+        var descriptor = FetchDescriptor<HistoryItemRow>(
+            predicate: #Predicate { $0.id == uuid }
+        )
+        descriptor.fetchLimit = 2
+        let rows = try context.fetch(descriptor)
+        guard rows.count == 1, let row = rows.first else {
+            throw FixtureTestError.missingStoredRow
+        }
+        let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
+        let revisionState = try RevisionStateBlobCodec.decode(
+            row.revisionStateBlob,
+            canonical: canonical
+        )
+        let signatures = try SignatureBlobCodec.decode(
+            row.canonicalSignatureBlob
+        )
+        try SignatureBlobCodec.validateCoverage(
+            canonical: canonical,
+            entries: signatures
+        )
+        let effectiveTypes = try EffectiveTypeIdentifiersBlobCodec.decode(
+            row.effectiveTypeIdentifiersBlob
+        )
+        return StoredProof(
+            rowCount: rowCount,
+            revisionCount: revisionState.revisions.count,
+            activeRevisionID: revisionState.activeRevisionID,
+            effectiveTypes: effectiveTypes
+        )
     }
 
     private static func capture(index: Int, bodyBytes: Int) -> ClipboardCapture {

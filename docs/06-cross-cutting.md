@@ -312,8 +312,11 @@ disposable-fixture path; ordinary capture retains both checks. Thus setup perfor
 seed transactions for 4,999 rows instead of 5,000 transactions plus a complete
 retained-inventory load per row; transient setup space is bounded by one batch.
 It then performs two ordinary public captures: row zero must coalesce (forcing
-seeded-index candidate hydration of external Canonical bytes), and the final
-distinct row must insert, leaving exactly 5,000 rows. `ChangePosition` advances
+startup reconstruction plus seeded-index candidate hydration of external
+Canonical bytes), and the final distinct row must insert, leaving exactly
+5,000 rows. The seed facade is released and the persistent store reopened
+before those captures so separate live ModelContainers never overlap during
+setup. `ChangePosition` advances
 once per physical non-empty batch or public commit; readers capture its
 authoritative value and require it to remain stable instead of equating it with
 row count.
