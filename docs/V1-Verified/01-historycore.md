@@ -23,7 +23,24 @@
 > non-trapping. The finding remains valid as an initializer-shape problem:
 > callers cannot present malformed ranges for failable validation. The local
 > repair now accepts six scalar endpoints, validates their order, and only then
-> constructs the three stored ranges; macOS rerun proof is pending.
+> constructs the three stored ranges. Run 31449682036 proves every rejection
+> path and the package-only surface green.
+
+> **Final supported-runner closure (2026-08-11):** every remediation item in
+> this report that was awaiting supported macOS, symbol-surface, or release-perf
+> proof is now `fixed`. Public-symbol workflow
+> [31448087991](https://github.com/GuangDai/Clipy/actions/runs/31448087991)
+> and final code-head run
+> [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036)
+> are green. The latter passed all source/lint gates, strict-concurrency builds,
+> 314 tests in 41 suites, generated-app build/test, all 13 release workloads,
+> and the workflow's diagnostic self-scans; no unexcluded warning/error
+> diagnostic remained. The narrow AppIntents-metadata and headless
+> `com.apple.linkd.autoShortcut` exclusions remain documented. Detailed
+> `in-progress`/`pending` wording below is retained only as pre-proof
+> chronology; current per-finding
+> status is authoritative in `07-finding-dispositions.md`. Deferred, duplicate,
+> documented, and not-a-defect findings are unchanged.
 
 ---
 
@@ -58,14 +75,14 @@ the evidence added by the remediation batches.
 | `g8-trigger-does-not-cover-read-path-rss` | `documented` | G8 now admits representative read-path transient and aggregate resident-memory evidence. |
 | `limits-doccomment-custom-construction-drift` | `documented` | `Limits.swift` and Part VI now distinguish production `.standard`, scalar Domain injection, and validated package-only storage/codec fixtures. |
 | `observe-stream-untyped-error` | `documented` | The protocol comment states the frozen untyped stream contract and caller `HistoryFailure` cast. |
-| `identity-comparable-untested` | `in-progress` | Known first/last-byte UUID ordering, equality, and reverse-order cases cover both ID types; macOS Swift test pending. |
-| `historyitemid-description-untested-revisionid-asymmetry` | `in-progress` | A fixed UUID asserts the public description; the spec-mandated RevisionID asymmetry is unchanged. macOS test pending. |
-| `actorstubs-misleading-filename` | `in-progress` | Production content moved to `RevisionPreparationAndSearchCorpus.swift`; macOS build pending. |
-| `ws-support-sort-by-uuidstring-not-historyitemid` | `in-progress` | Walking-skeleton row ordering now calls `HistoryItemID.<`; macOS test pending. |
-| `historylimits-public-init-exceeds-spec-surface` | `in-progress` | Initializer is package-only; symbol regeneration and macOS proof pending. |
-| `limits-failable-init-rejection-paths-untested` | `in-progress` | Parameterized rejection cases are present. Run 31449140919 reached execution and exposed the unconstructible inverted-range fixture; the endpoint-based initializer/test repair is local and macOS rerun proof is pending. |
-| `limits-pageRow-thumbnail-range-silent-malformed` | `in-progress` | The package initializer now receives all three ranges as separate scalar endpoint pairs, rejects inversion, then constructs `ClosedRange` values. This follows the finding's recommendation after run 31449140919 proved `uncheckedBounds` traps on the supported toolchain; macOS rerun proof is pending. |
-| `limits-representation-vs-revision-bytes-cross-bound-unchecked` | `in-progress` | Cross-bound validation/test is present; macOS proof pending. |
+| `identity-comparable-untested` | `fixed` | **Completed 2026-08-11:** supported proof is green in run [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036). **Pre-proof implementation record:** Known first/last-byte UUID ordering, equality, and reverse-order cases cover both ID types; macOS Swift test pending. |
+| `historyitemid-description-untested-revisionid-asymmetry` | `fixed` | **Completed 2026-08-11:** supported proof is green in run [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036). **Pre-proof implementation record:** A fixed UUID asserts the public description; the spec-mandated RevisionID asymmetry is unchanged. macOS test pending. |
+| `actorstubs-misleading-filename` | `fixed` | **Completed 2026-08-11:** supported proof is green in run [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036). **Pre-proof implementation record:** Production content moved to `RevisionPreparationAndSearchCorpus.swift`; macOS build pending. |
+| `ws-support-sort-by-uuidstring-not-historyitemid` | `fixed` | **Completed 2026-08-11:** supported proof is green in run [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036). **Pre-proof implementation record:** Walking-skeleton row ordering now calls `HistoryItemID.<`; macOS test pending. |
+| `historylimits-public-init-exceeds-spec-surface` | `fixed` | **Completed 2026-08-11:** supported proof is green in run [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036). **Pre-proof implementation record:** Initializer is package-only; symbol regeneration and macOS proof pending. |
+| `limits-failable-init-rejection-paths-untested` | `fixed` | **Completed 2026-08-11:** supported proof is green in run [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036). **Pre-proof implementation record:** Parameterized rejection cases are present. Run 31449140919 reached execution and exposed the unconstructible inverted-range fixture; the endpoint-based initializer/test repair is local and macOS rerun proof is pending. |
+| `limits-pageRow-thumbnail-range-silent-malformed` | `fixed` | **Completed 2026-08-11:** supported proof is green in run [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036). **Pre-proof implementation record:** The package initializer now receives all three ranges as separate scalar endpoint pairs, rejects inversion, then constructs `ClosedRange` values. This follows the finding's recommendation after run 31449140919 proved `uncheckedBounds` traps on the supported toolchain; macOS rerun proof is pending. |
+| `limits-representation-vs-revision-bytes-cross-bound-unchecked` | `fixed` | **Completed 2026-08-11:** supported proof is green in run [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036). **Pre-proof implementation record:** Cross-bound validation/test is present; macOS proof pending. |
 
 ## 3. Findings
 

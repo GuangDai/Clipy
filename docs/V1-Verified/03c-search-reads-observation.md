@@ -14,9 +14,25 @@
 >
 > Line numbers as-of HEAD `8f316c9`.
 >
-> **Remediation tracking (2026-08-09):** findings remain historical audit
-> evidence; the `Status` column records work against the current tree. A code
-> change is not marked `fixed` until its macOS regression test is green.
+> **Remediation tracking:** findings remain historical audit evidence. Current
+> status is the final supported-runner closure below and the canonical ledger;
+> detailed 2026-08-09 `in-progress` prose is retained as chronology.
+
+> **Final supported-runner closure (2026-08-11):** every remediation item in
+> this report that was awaiting supported macOS, symbol-surface, or release-perf
+> proof is now `fixed`. Public-symbol workflow
+> [31448087991](https://github.com/GuangDai/Clipy/actions/runs/31448087991)
+> and final code-head run
+> [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036)
+> are green. The latter passed all source/lint gates, strict-concurrency builds,
+> 314 tests in 41 suites, generated-app build/test, all 13 release workloads,
+> and the workflow's diagnostic self-scans; no unexcluded warning/error
+> diagnostic remained. The narrow AppIntents-metadata and headless
+> `com.apple.linkd.autoShortcut` exclusions remain documented. Detailed
+> `in-progress`/`pending` wording below is retained only as pre-proof
+> chronology; current per-finding
+> status is authoritative in `07-finding-dispositions.md`. Deferred, duplicate,
+> documented, and not-a-defect findings are unchanged.
 
 ---
 
@@ -51,7 +67,7 @@ The module's **architecture is sound** — the two-step value pipeline (capture 
 
 | ID | Status | file:line | category | summary | recommendation | spec ref |
 |---|---|---|---|---|---|---|
-| `fuse-bitap-crash-and-corruption` | **in-progress** (2026-08-09; macOS CI pending) | `SearchWorker.swift:577` | correctness / DoS | The 256-Character fuzzy-query bound admits patterns the pinned Fuse 1.4.0's 64-bit-Int bitap cannot represent: query length 65–89 silently yields empty results (Swift smart-shift `<<` returns 0 for shift ≥ bitWidth, so mask=0 and the completion check never fires), and length ≥90 makes `Fuse._search` reach `i=63` where `(1<<63)-1 = Int.min-1` **traps** under Swift checked arithmetic — an **uncatchable process crash** (not a thrown `Error`) from ordinary user input. Corruption is deterministic and uniform (`createPattern` runs once at `:585` and is reused across all rows). | Lowered `HistoryLimits.maximumFuzzyQueryCharacters` from 256 → **64**, made custom profiles over 64 invalid, amended `03b §8` / `06 §2` / WS17, and added the public-facade sweep `[1,63,64,65,89,90,100,200,256]`. Pending supported-runner verification before `fixed`. | `docs/03b §8`; `docs/06 §2`; `AUDIT.md` V1V-03C-001 |
+| `fuse-bitap-crash-and-corruption` | **fixed** (2026-08-11; supported proof green in run 31449682036) | `SearchWorker.swift:577` | correctness / DoS | The 256-Character fuzzy-query bound admits patterns the pinned Fuse 1.4.0's 64-bit-Int bitap cannot represent: query length 65–89 silently yields empty results (Swift smart-shift `<<` returns 0 for shift ≥ bitWidth, so mask=0 and the completion check never fires), and length ≥90 makes `Fuse._search` reach `i=63` where `(1<<63)-1 = Int.min-1` **traps** under Swift checked arithmetic — an **uncatchable process crash** (not a thrown `Error`) from ordinary user input. Corruption is deterministic and uniform (`createPattern` runs once at `:585` and is reused across all rows). | Lowered `HistoryLimits.maximumFuzzyQueryCharacters` from 256 → **64**, made custom profiles over 64 invalid, amended `03b §8` / `06 §2` / WS17, and added the public-facade sweep `[1,63,64,65,89,90,100,200,256]`. Pending supported-runner verification before `fixed`. | `docs/03b §8`; `docs/06 §2`; `AUDIT.md` V1V-03C-001 |
 
 #### Major
 

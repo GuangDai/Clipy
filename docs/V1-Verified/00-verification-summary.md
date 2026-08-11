@@ -1,11 +1,21 @@
 # Clipy V1 — Codebase Architecture Verification (Master Summary)
 
-> **What this is:** a deep, multi-angle verification of the **v1 implementation** (`Sources/`) against the design specification (`docs/00–06`), covering correctness, time/space complexity, efficiency, concurrency/isolation, security & privacy, edge cases, exposed API surface, test coverage, and spec conformance. **No code was modified** — this is an analysis report only.
+> **What this is:** a deep, multi-angle verification of the **v1 implementation** (`Sources/`) against the design specification (`docs/00–06`), covering correctness, time/space complexity, efficiency, concurrency/isolation, security & privacy, edge cases, exposed API surface, test coverage, and spec conformance. The audit at `8f316c9` was analysis-only; the dated remediation overlays record the later implementation and proof work.
 > **Method:** seven module-level plus one cross-cutting **3-cycle 审查(Review)→调研(Research)→批评(Critique)** workflows (the user-mandated 9-step structure), run serially. Each cycle's Review surfaced candidate findings across dimension bundles; Research independently verified each against Apple docs MCP, the repo spec, web sources, and source re-reads (skeptic-first, default REFUTED); Critique synthesized, ranked, corrected, and deepened. Per module: ~22 agents, ~50–92 min, ~1.6–2.5M tokens. The orchestrator independently cross-checked every headline finding against the source.
 > **Output location:** `docs/V1-Verified/` (Markdown — per the user's explicit instruction, not HTML).
 > **HEAD audited:** `8f316c9` (2026-08-02).
 > **Remediation tracking:** the audit narrative is historical; the mechanically
 > complete current status ledger is `07-finding-dispositions.md`.
+>
+> **Final remediation closure (2026-08-11):** all 109 findings that were
+> awaiting supported-runner proof are `fixed`. Public-symbol workflow
+> [31448087991](https://github.com/GuangDai/Clipy/actions/runs/31448087991)
+> and final code-head run
+> [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036)
+> are green; the latter passed 314 tests in 41 suites and all 13 release
+> workloads. Final dispositions are 110 `fixed`, 32 `deferred`, 31 `duplicate`,
+> 30 `not-a-defect`, 19 `documented`, and no active or pending rows. Historical
+> defect descriptions and recommendations below remain as audit provenance.
 
 ## Reports in this directory
 
@@ -19,8 +29,8 @@
 | `03d-index-ingest-thumbnail-facade.md` | Signature index, ingest, thumbnail, facade | **1** | 0 | 11 | 18 | 30 | ✅ final |
 | `04-perf-deps-stubs.md` | Perf runner, xxh3, Fuse, stubs | **1** | 1 | 19 | 14 | 35 | ✅ final |
 | `05-cross-cutting.md` | Security / API / tests / complexity / gates synthesis | — | — | — | — | — | ✅ synthesis |
-| `06-remediation-plan.md` | Ordered remediation batches and active work | — | — | — | — | — | 🚧 active |
-| `07-finding-dispositions.md` | Canonical status ledger and completeness checksum | **3** | **14** | **112** | **93** | **222** | 🚧 active |
+| `06-remediation-plan.md` | Ordered remediation batches and completion evidence | — | — | — | — | — | ✅ complete |
+| `07-finding-dispositions.md` | Canonical status ledger and completeness checksum | **3** | **14** | **112** | **93** | **222** | ✅ complete |
 | **`00-verification-summary.md`** | **This file** | **3** | **14** | **112** | **93** | **222** | — |
 
 *All seven modules completed the full 3-cycle (审查→调研→批评) verification; every headline finding was independently confirmed by the orchestrator against the source.*
@@ -29,24 +39,18 @@
 
 **The architecture is sound and the code is unusually disciplined** — downward-only target graph, single-writer `HistoryAuthority` with an OCC position-guard that converts the scariest concurrency hazard (actor-reentrancy double-commit) into a *detected spurious rollback*, immutable-`Sendable`-only boundary crossings, exhaustive fail-closed blob codecs, Foundation-only public surface, checked arithmetic on all coherence tokens, and three layered source gates. The spec-to-code traceability is excellent. **There is no structural or architectural failure.**
 
-**However, the verification found 3 critical and 14 major defects** that should be addressed before v1 ships, plus ~200 minor/nit items. The criticals are:
+**The baseline verification found 3 critical and 14 major defects**, plus
+~200 minor/nit items. The supported remediation above closes every non-deferred
+implementation/proof item. The three baseline criticals were:
 
-1. **`fuse-bitap-crash-and-corruption`** (`SearchWorker.swift:577`) — a fuzzy query of **≥90 characters traps the process** (`(1<<63)-1` under Swift's overflow-checking `-`); 65–89 chars silently returns empty results. The spec's 256-char bound is incompatible with the pinned Fuse 1.4.0's 64-bit bitap. **Remediation: `in-progress` (2026-08-09)** — code/spec now cap all profiles at 64 and WS17 carries the full boundary sweep; macOS CI evidence is pending. *(03c)*
-2. **`concealed-type-leak-flat-schema`** (`IngestPreparation.swift:172`) — password-manager content carried as `public.utf8-plain-text` next to a `org.nspasteboard.ConcealedType` marker **is retained, fingerprinted, indexed, and made searchable/pasteable** — exactly the leak the code comment claims to prevent. Root cause is the flat `ClipboardCapture` data model (no pasteboard-level flag). **Remediation: `in-progress` (2026-08-09)** — `ClipboardCapture.isConcealed`, whole-capture marker rejection, six-marker coverage, and no-hash/no-commit regressions are present; public-symbol regeneration and macOS CI are pending. *(03d)*
-3. **`wl8-currently-red-on-master-blocks-section9-acceptance`** (`.github/workflows/macos26-arm-ci.yml`) — the §9 performance-acceptance gate is **red on master by design**: `wl8` measures end-to-end `store.thumbnail()` which serializes 8× through the Authority *before* reaching the single-flight, so the ratio cannot converge. **Remediation: `in-progress` (2026-08-09)** — current remote run `30734778016` confirms red; WL8 now times the production `ThumbnailService` after one prefetch and retains the facade path only as an untimed smoke. Release-runner evidence is pending. *(04)*
+1. **`fuse-bitap-crash-and-corruption`** (`SearchWorker.swift:577`) — a fuzzy query of **≥90 characters trapped the process** and 65–89 silently returned empty results. **Remediation: `fixed`** — all profiles cap fuzzy queries at 64 and WS17's complete boundary sweep is green in run 31449682036. *(03c)*
+2. **`concealed-type-leak-flat-schema`** (`IngestPreparation.swift:172`) — password-manager content next to a concealed marker could be retained and surfaced. **Remediation: `fixed`** — pasteboard-level concealment, whole-capture rejection, six-marker coverage, no-hash/no-commit regressions, and the public-symbol snapshot are green in workflows 31448087991/31449682036. *(03d)*
+3. **`wl8-currently-red-on-master-blocks-section9-acceptance`** (`.github/workflows/macos26-arm-ci.yml`) — the baseline proof measured Authority serialization rather than single-flight sharing. **Remediation: `fixed`** — WL8 measures the production `ThumbnailService` after one prefetch, retains an untimed facade smoke, and passes in the 13-workload release run 31449682036. *(04)*
 
-The major WS18 unpinned-continuation gap is also **in-progress**: the exactness
-guard now accounts for the anchor's true index and a same-timestamp multi-page
-fixture proves the intended no-gap/no-overlap traversal once macOS CI runs.
-The projection-scalar contract is likewise **in-progress**: one validator now
-guards schema/title/searchBody at startup, recent, search, and hydration, with
-persistent corruption fixtures awaiting supported-runner execution.
-Regexp quantified-alternation admission and the previously dead 4,096-byte
-search-term envelope are also **in-progress**, each with public WS17 boundary
-fixtures awaiting macOS CI.
-The thumbnail failure-vocabulary cluster is **in-progress**: over-envelope
-valid PNG output now uses `CapacityKind.thumbnailBytes`, while destination and
-finalization failures share an encode-side invariant mapping.
+The major WS18 continuation, projection-scalar, regexp-admission, search-term
+envelope, and thumbnail failure-vocabulary remediation clusters are also
+**fixed**. Their adversarial and persistent-store fixtures all pass in run
+31449682036.
 
 ## The systemic root causes (fix these, and ~60% of the findings dissolve)
 
@@ -62,9 +66,9 @@ These six patterns recur across modules; addressing them is the highest-leverage
 ## Complexity & efficiency — the highest-ROI reductions
 
 - **`searchCorpusSnapshot` per-keystroke rebuild** (cross-module: 03a/03b/03c) — cache keyed by `ChangePosition`, invalidated on corpus-touching commits. *Single highest-leverage fix.*
-- **`projection-joins-full-body-before-truncation`** (03c) — **in-progress**:
-  bounded streaming accumulation and the title-only revision path are
-  implemented with direct regressions; macOS CI is pending.
+- **`projection-joins-full-body-before-truncation`** (03c) — **fixed**:
+  bounded streaming accumulation and the title-only revision path pass their
+  direct regressions in run 31449682036.
 - **`evictionOrdered` before `victimCount`** (02) — derive `victimCount` first, gate the sort.
 - **`validateFinalPinOrder` per commit** (03b) — `pinOrdinal != nil` predicate (O(P)); gate on plan content.
 - **`details()` summary-only hydrate + `projectTitleOnly`** (01, 03b) — skip non-active revision bytes + redundant `searchBody` projection.
@@ -73,7 +77,12 @@ These six patterns recur across modules; addressing them is the highest-leverage
 
 ## Test coverage — the dominant gap
 
-Every module's deepest finding cluster is **test coverage of pure safety-critical paths**: HistoryDomain planners (D1-D19, zero direct tests — the roadmap's own Acceptance blocker), SearchWorker helpers (why the critical shipped), `SignatureIndex.apply` divergence paths (one assertion), `IngestPreparation` rejection branches (where critical #2 lives), `PageCursorCodec` (zero), HistoryAuthority defensive guards (one injected case). The concurrency harness + forced-collision infrastructure is genuinely strong; the gap is direct unit coverage of the pure core. See `05-cross-cutting.md §4`.
+At the audited baseline, every module's deepest finding cluster was **test
+coverage of pure safety-critical paths**. Remediation added direct planner,
+search/projector, Signature Index, ingest, cursor, codec, and Authority-guard
+coverage; run 31449682036 passes 314 tests in 41 suites. The baseline analysis
+remains useful provenance for why those suites were added. See
+`05-cross-cutting.md §4`.
 
 ## Gates & CI
 

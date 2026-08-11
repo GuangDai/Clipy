@@ -3,6 +3,13 @@
 > **Scope:** horizontal synthesis across the seven per-module reports (`01-historycore` … `04-perf-deps-stubs`). Distills the **systemic patterns** and **cross-module root causes** that the per-module findings instantiate, rather than re-listing every finding. Each item cites its source report(s) and `file:line`.
 > **Aggregate counts (final):** **222 findings — 3 critical, 14 major, 112 minor, 93 nit**. `07-finding-dispositions.md` is the canonical completeness/status ledger.
 > **Headline:** the architecture is sound and the code is unusually disciplined, but **three critical findings** (a process crash, a password-content leak, and a structurally invalid red performance-acceptance proof), **one systemic testability gap** (pure safety-critical algorithms are `private`, so the facade-only WS suite missed both product criticals), and **a small set of root causes** (a `§16 CapacityKind` gap, comment-overclaims treated as contracts, syntactic-proxy safety stories, per-`Character` `String` allocations) account for the majority of the severity.
+>
+> **Current remediation status (2026-08-11):** all supported-proof-dependent
+> findings are fixed by public-symbol workflow 31448087991 and code-head run
+> 31449682036. The canonical ledger has 110 fixed rows and no active or pending
+> rows; explicit deferred/duplicate/documented/not-a-defect decisions remain.
+> Present-tense defect and test-gap descriptions below describe the audited
+> `8f316c9` baseline, not the remediated tree.
 
 ## 1. The "fix these first" list (severity-ranked, cross-module)
 
@@ -42,8 +49,9 @@
 - **`HistoryLimits` range validation gap** (`01-historycore`): the baseline
   correctly required a `lower <= upper` failable check but incorrectly assumed
   an inverted `ClosedRange(uncheckedBounds:)` could reach it. Run 31449140919
-  proved that construction traps first; the local endpoint-based initializer
-  now validates ordering before constructing ranges, pending macOS rerun.
+  proved that construction traps first; the endpoint-based initializer now
+  validates ordering before constructing ranges, and all rejection paths pass
+  in run 31449682036.
 - **Evolution:** the versioned blob codecs (`formatVersion: UInt16 = 1`) + `projectionSchemaVersion` give a clean forward path; `HistorySchemaV1` labels the migration stance (`05 §17`).
 
 ## 4. Test coverage (the dominant systemic gap)

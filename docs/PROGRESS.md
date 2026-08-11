@@ -11,14 +11,18 @@
 > criteria live in the design modules (`00`–`06`) and the roadmap module docs;
 > they are cited here, never restated as new semantics.
 
-**Current audited baseline HEAD:** `8f316c9` (2026-08-02). Steps 0–8 are
-implemented; step 9 (product wiring) is not started. Latest baseline run
-`30734778016` has the three correctness jobs green and **Perf proofs (§9)
-red**. The V1-verification remediation working tree now contains the dedicated
-D1–D19 suite, the corrected WL8 construct, and the remaining local proof
-closures described below. Phase position (`roadmap/README.md` §3): M1 (pure
-compile) complete; **M2 acceptance remains open until those changes pass the
-supported macOS 26 / Swift 6.2 correctness and release-perf jobs**.
+**Audit baseline:** `8f316c9` (2026-08-02). **Verified remediation code
+head:** `2fb7845` (2026-08-11). Steps 0–8 are implemented and M2/state 2 is
+complete; step 9 (product wiring), M3, and state 3 are not started.
+Public-symbol workflow
+[31448087991](https://github.com/GuangDai/Clipy/actions/runs/31448087991)
+is green. Final code-head run
+[31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036)
+passed all source/lint gates, Swift 6 strict-concurrency builds, 314 tests in 41
+suites, generated-app build/test, all 13 release workloads, and the workflow's
+diagnostic self-scans. No unexcluded warning/error diagnostic remained; the
+narrow AppIntents-metadata and headless `com.apple.linkd.autoShortcut`
+exclusions remain documented in the workflow history below.
 
 ## Step 0 — scaffold (cross-cutting)
 
@@ -87,8 +91,9 @@ supported macOS 26 / Swift 6.2 correctness and release-perf jobs**.
   seven pure planners (§8); and `canonicalContains` (§9.2). The remediation
   tree adds a 47-test direct Domain suite across all seven planners and records
   the D1–D19 ownership matrix, including Storage-owned stamping and structural
-  fact/Sendable proofs. Supported macOS execution remains the M2 acceptance
-  item. No I/O, actor, clock, UUID/Date generation, or async (02 §1).
+  fact/Sendable proofs. The 47-test direct suite is green in run 31449682036,
+  closing the D1–D19 M2 acceptance item. No I/O, actor, clock, UUID/Date
+  generation, or async (02 §1).
 
 | Commit | Subject |
 |---|---|
@@ -276,12 +281,11 @@ supported macOS 26 / Swift 6.2 correctness and release-perf jobs**.
 
 ## Step 8 — HistoryStorage: thumbnail single-flight + §9 acceptance
 
-- **Status:** implementation done; acceptance in remediation. Gate WS15
-  (thumbnail version fence) passes. Run `30731659350` was cancelled before
-  Perf completed; latest run `30734778016` exposes an invalid WL8 construction: eight facade
-  calls serialize through `HistoryAuthority` before the single-flight seam.
-  WL8 must pass after measuring the production `ThumbnailService` with one
-  prefetched source before M2 can close.
+- **Status:** done and accepted. Gate WS15 and all 13 §9 release workloads pass
+  in run 31449682036. Historical runs `30731659350`/`30734778016` exposed the
+  invalid WL8 construction; remediation now measures the production
+  `ThumbnailService` from one prefetched source and retains the facade path as
+  an untimed wiring smoke.
 - **Roadmap:** `roadmap/03-historystorage.md` step 8 (Part IV §9; Part V
   §14.5; Part VI §9).
 - **Delivered:** `HistoryAuthority.thumbnailSource` — dimension validation,
@@ -321,32 +325,41 @@ supported macOS 26 / Swift 6.2 correctness and release-perf jobs**.
   proofs (§9)` because WL8 includes Authority serialization; the correctness
   jobs remain green. Remediation V1V-04-001
   isolates steps 5–7 of the production thumbnail pipeline after one prefetch;
-  release-runner evidence is pending. V1V-04-002…04 additionally repair the
+  run 31449682036 proves the corrected construct green. V1V-04-002…04 additionally repair the
   runner's median/ratio/sample contracts, WL1b timed construct, versioned
   non-PII fixtures, structural §9 workload map, failure-log wording, dead
   helpers, and U+0130 Fuse range proof. V1V-04-005 adds the single declarative
   scales/growth/bound/headroom table plus direct CRC-32/xorshift32 KATs.
-  `HistoryPerfRunnerTests` is present; all code/test items remain in-progress
-  until macOS SwiftPM/perf CI runs.
+  `HistoryPerfRunnerTests` is present; run 31449682036 proves the package tests
+  and all 13 release workloads green.
 
-## V1 verification remediation — local proof closure (2026-08-11)
+## V1 verification remediation — supported-runner closure (2026-08-11)
 
-- **Status:** implementation and portable evidence complete. The public-symbol
-  workflow 31448087991 is green. Run 31448531234 proved gates, package build,
-  app build/test, and release performance; its array-literal test compilation
-  failure is repaired. Run 31449140919 repeated green gates, package build,
-  app build/test, and release performance, then reached test execution and
-  proved Xcode 26.6 traps on inverted `ClosedRange(uncheckedBounds:)`;
-  `HistoryLimits` now validates six scalar endpoints before constructing its
-  three ranges, and the supported test rerun is pending.
+- **Status:** complete. Public-symbol workflow 31448087991 is green. Final
+  code-head run 31449682036 passed every source/lint gate, 314 tests in 41
+  suites, app build/test, all 13 release workloads, and the workflow's
+  diagnostic self-scans. No unexcluded warning/error diagnostic remained; the
+  narrow AppIntents-metadata and headless `com.apple.linkd.autoShortcut`
+  exclusions remained in force. Earlier runs 31448531234 and 31449140919 exposed the
+  Swift Testing inference and inverted-`ClosedRange` fixture failures; both
+  repairs are included in, and proven by, the final run.
+
+| Commit | Subject |
+|---|---|
+| `28e6335` | Close the audited v1 correctness, proof, API, performance-runner, and documentation gaps |
+| `9d65dcb` | Regenerate the HistoryCore public-symbol snapshot (bot; workflow 31448087991) |
+| `88641ad` | Fix WS18 scalar-row ordering access exposed by supported compilation |
+| `1b72f68` | Fix Swift Testing page-count inference exposed by supported compilation |
+| `2fb7845` | Validate six HistoryLimits endpoints before constructing ClosedRange values |
+
 - **HistoryCore limits:** the package-only initializer receives range endpoints
   separately, validates positivity/order/containment, and constructs
   `ClosedRange` values only after those checks. This makes all three malformed
   range rejections genuine failable-initializer paths instead of pre-init
   runtime traps.
   `docs/V1-Verified/07-finding-dispositions.md` remains the authoritative
-  222-ID status ledger; no behavior item is promoted to `fixed` before that
-  evidence lands.
+  222-ID status ledger: 110 fixed, 32 deferred, 31 duplicate, 30 not-a-defect,
+  19 documented, and no active or pending rows.
 - **Domain:** 47 direct tests exercise all seven planners across commit/no-op,
   rejection, capacity, deterministic ordering, and complete mutation payloads;
   the suite records the exact D1–D19 ownership split.
@@ -362,12 +375,13 @@ supported macOS 26 / Swift 6.2 correctness and release-perf jobs**.
   old-snapshot evaluation cannot become the subscriber's first visible page.
   The three-page search assertion now gives Swift Testing explicitly typed
   page-count operands after run 31448531234 rejected its array literals as
-  ambiguous; rerun proof remains.
+  ambiguous; it passes in run 31449682036.
 - **Performance runner:** all 12 gated fixtures consume one declarative
   complexity-envelope table; WL1b is explicitly record-only. Preflight checks
   scale monotonicity, theoretical growth, finite bounds, the standard 1.5×
   headroom floor, and WL1a's sole 1.2× exception. Pure helper tests pin the PNG
-  CRC and deterministic noise stream used by WL8.
+  CRC and deterministic noise stream used by WL8. All 13 release workloads
+  pass in run 31449682036.
 
 ## Notable decisions & deviations
 
@@ -393,7 +407,7 @@ supported macOS 26 / Swift 6.2 correctness and release-perf jobs**.
   multi-pinned-page traversal regressions. Run 31448195535 exposed that the
   same-file `HistoryAuthority` ordering extension could not read the scalar
   row's `private` timestamp; the member now uses the narrowest valid
-  `fileprivate` access and macOS rerun evidence is pending.
+  `fileprivate` access, and WS18 passes in run 31449682036.
 - **Facade actor fields `private` → `internal` (`963b90d`, 05 §2 snippet
   deviation).** Part V §2's illustrative snippet declares the five
   `SwiftDataHistory` actor fields `private`; the WS12/WS15 deterministic
@@ -423,10 +437,11 @@ supported macOS 26 / Swift 6.2 correctness and release-perf jobs**.
   the reachable failure vocabulary.
 - **Symbol-snapshot updater workflow.** `.github/workflows/symbol-snapshot.yml`
   is `workflow_dispatch`-only, runs on macos-26, and commits the regenerated
-  HistoryCore public-symbol snapshot as the bot (`contents: write`) — it
-  produced `1cf1715`. Bot pushes do not trigger the macOS CI workflow, so
-  `1cf1715` has no CI run of its own; the snapshot is enforced by the gates job
-  on every subsequent push.
+  HistoryCore public-symbol snapshot as the bot (`contents: write`). It
+  produced the original `1cf1715` lock and remediation snapshot `9d65dcb`
+  (workflow 31448087991). Bot pushes do not trigger the macOS CI workflow; the
+  snapshot is enforced by the gates job on every subsequent push, including
+  final code-head run 31449682036.
 - **Dependency pins.** xxHash is vendored at v0.8.3 (`Sources/xxh3/VENDORED.md`
   records the pin) with a package-only forced-collision double for Storage
   tests; Fuse is pinned at the exact 1.4.0 tag commit (the 2.0.0-rc.x

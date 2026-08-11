@@ -8,11 +8,11 @@ This Part distinguishes three states:
 2. **Executable specification:** the public scaffold compiles and every proof/walking-skeleton gate below passes on the supported macOS runner.
 3. **Product implementation complete:** UI, pasteboard behavior, packaging, accessibility, localization, and non-skeleton product tests pass.
 
-The document set has reached state 1. The greenfield implementation exists
-through roadmap step 8, but the current V1-verification remediation still
-awaits supported macOS 26 / Swift 6.2 correctness, symbol-surface, and §9
-release-perf proof before state 2 can be claimed. Product wiring and state 3
-remain outside that claim.
+The document set has reached states 1 and 2. The greenfield implementation
+through roadmap step 8 is an **executable v1 specification**: public-symbol
+workflow 31448087991 and supported macOS run 31449682036 prove Sections 6–9,
+WS1–WS21, 314 tests in 41 suites, and all 13 release workloads green. Product
+wiring and state 3 remain outside that claim.
 
 ### 2. Fixed v1 safety bounds
 
@@ -350,9 +350,8 @@ The review must also verify:
 
 ### 11. Completion statement
 
-After the document self-review passes, the design is **consolidated**. Until
-the current implementation passes Sections 6–9 and WS1–WS21 on the supported
-runner, describe it as “implemented through roadmap step 8; executable-v1
-acceptance pending,” not as an unimplemented scaffold.
-
-Only after Sections 6–9 and WS1–WS21 pass may the header be changed to “executable v1 specification.” Only product implementation and its separate acceptance tests may call the greenfield refactor complete.
+The design is **consolidated**, and supported run 31449682036 proves Sections
+6–9 and WS1–WS21 green. The implementation may therefore be described as an
+“executable v1 specification” through roadmap step 8. Only product
+implementation and its separate acceptance tests may call the greenfield
+refactor complete.

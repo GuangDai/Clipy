@@ -11,6 +11,22 @@
 >
 > Line numbers as-of HEAD `8f316c9`.
 
+> **Final supported-runner closure (2026-08-11):** every remediation item in
+> this report that was awaiting supported macOS, symbol-surface, or release-perf
+> proof is now `fixed`. Public-symbol workflow
+> [31448087991](https://github.com/GuangDai/Clipy/actions/runs/31448087991)
+> and final code-head run
+> [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036)
+> are green. The latter passed all source/lint gates, strict-concurrency builds,
+> 314 tests in 41 suites, generated-app build/test, all 13 release workloads,
+> and the workflow's diagnostic self-scans; no unexcluded warning/error
+> diagnostic remained. The narrow AppIntents-metadata and headless
+> `com.apple.linkd.autoShortcut` exclusions remain documented. Detailed
+> `in-progress`/`pending` wording below is retained only as pre-proof
+> chronology; current per-finding
+> status is authoritative in `07-finding-dispositions.md`. Deferred, duplicate,
+> documented, and not-a-defect findings are unchanged.
+
 ---
 
 ## 1. Executive summary
@@ -35,7 +51,7 @@ None. The single-writer + OCC + in-transaction revalidation design holds; no dat
 
 | ID | Status | Location | Category | Summary | Recommendation | Spec |
 |---|---|---|---|---|---|---|
-| ws18-unpinned-continuation-pagination-contract-violation-cluster | **in-progress** (2026-08-11; run 31448195535 exposed a same-file access-control compile error; local repair applied, rerun pending) | HistoryAuthority.swift:2370 | Correctness | `orderUnpinnedLane`'s exactness guard indexes `rows[param_limit-1]`/`rows[param_limit]` against the **parameter** limit (= `outer_limit+1` for continuations at the call site line 1734), which does NOT align with the true post-anchor-drop page boundary (`anchorIndex+outer_limit`). Three manifestations: (a) **head contamination** — same-`lastCopiedAt` rows before the anchor consume the `limit+2` fetch budget without being the anchor, so after the anchor drop `merged.count <= limit` and `next = nil` (line 1770), orphaning all older rows from recent-browse (still searchable); (b) **bottom-tie-at-wrong-position** — a same-date group straddling the TRUE boundary is missed because the guard inspects the wrong slots, so `\.id` is silently trusted at the real boundary (violates §14.1) and the wrong row can become the next anchor; (c) **all-same-date traversal** re-fetches the whole lane every page. Verified by trace against code (limit=3, r1–r4@D1 / r5–r7@D0 continuation: page2 returns `[r4, r5]`, `next=nil`, r6/r7 unreachable). | The guard now sorts the bounded slice by the complete key, locates the real anchor, and safely re-fetches when already-consumed same-date siblings contaminate the head, the anchor is absent from a full slice, or the true post-anchor page/lookahead boundary ties. WS18 adds a seven-row same-time-head fixture and traverses every page, asserting exact order and no gap/overlap. The scalar row's validated immutable timestamp now uses the narrowest same-file access needed by the ordering extension. Pending supported-runner verification before `fixed`. | §14.1; 04 §6; 06 §8 WS18; V1V-03B-001 |
+| ws18-unpinned-continuation-pagination-contract-violation-cluster | **fixed** (2026-08-11; supported proof green in run 31449682036) | HistoryAuthority.swift:2370 | Correctness | `orderUnpinnedLane`'s exactness guard indexes `rows[param_limit-1]`/`rows[param_limit]` against the **parameter** limit (= `outer_limit+1` for continuations at the call site line 1734), which does NOT align with the true post-anchor-drop page boundary (`anchorIndex+outer_limit`). Three manifestations: (a) **head contamination** — same-`lastCopiedAt` rows before the anchor consume the `limit+2` fetch budget without being the anchor, so after the anchor drop `merged.count <= limit` and `next = nil` (line 1770), orphaning all older rows from recent-browse (still searchable); (b) **bottom-tie-at-wrong-position** — a same-date group straddling the TRUE boundary is missed because the guard inspects the wrong slots, so `\.id` is silently trusted at the real boundary (violates §14.1) and the wrong row can become the next anchor; (c) **all-same-date traversal** re-fetches the whole lane every page. Verified by trace against code (limit=3, r1–r4@D1 / r5–r7@D0 continuation: page2 returns `[r4, r5]`, `next=nil`, r6/r7 unreachable). | The guard now sorts the bounded slice by the complete key, locates the real anchor, and safely re-fetches when already-consumed same-date siblings contaminate the head, the anchor is absent from a full slice, or the true post-anchor page/lookahead boundary ties. WS18 adds a seven-row same-time-head fixture and traverses every page, asserting exact order and no gap/overlap. The scalar row's validated immutable timestamp now uses the narrowest same-file access needed by the ordering extension. Pending supported-runner verification before `fixed`. | §14.1; 04 §6; 06 §8 WS18; V1V-03B-001 |
 
 ### Minor (18)
 

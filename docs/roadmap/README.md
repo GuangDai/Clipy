@@ -1,10 +1,10 @@
 # Implementation Roadmap
 
-> **Status:** design-consolidated; implementation in progress — M1 (steps 1–2)
-> complete, **M2 (steps 3–8) in acceptance remediation**: implementation is
-> present, including the dedicated D1–D19 suite and corrected WL8 construct;
-> supported-macOS correctness and performance proof remains open. M3 (step 9
-> product wiring) is pending (current state per step:
+> **Status:** design-consolidated; M1 (steps 1–2) and **M2 (steps 3–8) are
+> complete**. Public-symbol workflow 31448087991 and supported macOS run
+> 31449682036 prove the symbol surface, 314 tests in 41 suites, app build/test,
+> and all 13 release workloads green. M3 (step 9 product wiring) is pending
+> (current state per step:
 > `../PROGRESS.md`; status boundary: `../06-cross-cutting.md` §1).
 > This roadmap is a traceable map from the **design modules**
 > (Part I §2 target graph) to **implementation work**, ordered by Part VI §5.
@@ -105,11 +105,9 @@ spec edit traces forward to its module(s).
 ## 5. Completion gating (from Part VI)
 
 - **Design consolidated** ✅ (Parts 00–06 + this roadmap; AUDIT.md CLEAN).
-- **Executable specification** ⛔ in progress — Part VI §6
+- **Executable specification** ✅ complete (state 2) — Part VI §6
   (compile/dependency), §7 (schema/platform), §9 (performance), and WS1–WS21
-  must all be green on the supported macOS runner. The implementation and
-  concurrency harness are present; their new and corrected proofs still require
-  supported-macOS execution:
+  are green on supported run 31449682036:
   - **Step 0 ✅** — SwiftPM target graph, source gates, XcodeGen app, CI
     scaffold; Part VI §6 graph-level proofs (whole-graph Swift 6 build,
     per-target import confinement, public-symbol snapshot, escape-hatch scan)
@@ -118,8 +116,7 @@ spec edit traces forward to its module(s).
     public symbol snapshot locked and gate-enforced.
   - **Step 2 ✅** — HistoryDomain pure functional core (02 §2–§11) landed and
     CI-green. The dedicated per-invariant D1–D19 suite (02 §14;
-    acceptance-required) is now present locally with 47 tests; supported-runner
-    `swift test` evidence is pending.
+    acceptance-required) passes all 47 tests in run 31449682036.
   - **Step 3 ✅** — dependencies pinned: vendored xxh3 (xxHash v0.8.3) + Fuse
     1.4.0 revision pin.
   - **Step 4 ✅** — SwiftData schema v1 + versioned codecs (05 §3–§4); §7.3
@@ -133,11 +130,10 @@ spec edit traces forward to its module(s).
   - **Step 7 ✅** — reads + observation (WS4/WS11/WS12/WS17/WS18; §7.2/§7.5
     proofs; the deferred public-read/observation/no-emission clauses of
     WS1–WS21 closed) (run 30731143421).
-  - **Step 8 ⚠️** — thumbnail single-flight implementation and WS15 are green.
-    Run 30731659350 was cancelled before Perf completed; latest run 30734778016
-    exposed an invalid WL8 construction. The corrected WL8 construct is present
-    locally; V1V-04-001 is awaiting release-runner evidence. **State 2 remains
-    open.**
+  - **Step 8 ✅** — thumbnail single-flight, WS15, and all 13 §9 release
+    workloads are green in run 31449682036. Historical runs
+    30731659350/30734778016 exposed the invalid WL8 construction; the corrected
+    production-service measurement is now proven. **State 2 is complete.**
 - **Product implementation complete** ⛔ pending — UI, pasteboard, packaging,
   accessibility, localization, product tests.
 

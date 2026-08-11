@@ -13,14 +13,30 @@
 >
 > Line numbers as-of HEAD `8f316c9` (2026-08-02).
 >
-> **Pagination remediation addendum (2026-08-09):**
-> `fuzzy-cursor-anchor-resume-untested` is **in-progress**. The shared
+> **Pagination remediation chronology (2026-08-09):**
+> `fuzzy-cursor-anchor-resume-untested` was **in-progress**. The shared
 > public-facade pagination suite now traverses fuzzy results across three
 > pages and pins missing-anchor plus post-commit expiry behavior. Run
 > 31448531234 compiled production code and then exposed ambiguous literal
 > inference inside the Swift Testing page-count assertion; explicit `[Int]`
-> operands are now present and the macOS test rerun is pending. Detailed
-> fixtures are tracked in the 03c source report.
+> operands are now present. The corrected suite passes in run 31449682036;
+> detailed fixtures are tracked in the 03c source report.
+
+> **Final supported-runner closure (2026-08-11):** every remediation item in
+> this report that was awaiting supported macOS, symbol-surface, or release-perf
+> proof is now `fixed`. Public-symbol workflow
+> [31448087991](https://github.com/GuangDai/Clipy/actions/runs/31448087991)
+> and final code-head run
+> [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036)
+> are green. The latter passed all source/lint gates, strict-concurrency builds,
+> 314 tests in 41 suites, generated-app build/test, all 13 release workloads,
+> and the workflow's diagnostic self-scans; no unexcluded warning/error
+> diagnostic remained. The narrow AppIntents-metadata and headless
+> `com.apple.linkd.autoShortcut` exclusions remain documented. Detailed
+> `in-progress`/`pending` wording below is retained only as pre-proof
+> chronology; current per-finding
+> status is authoritative in `07-finding-dispositions.md`. Deferred, duplicate,
+> documented, and not-a-defect findings are unchanged.
 
 ---
 
@@ -47,7 +63,7 @@ None. The module has no correctness, security, or data-loss defect that fires on
 
 | ID | Status | file:line | category | summary | recommendation | spec ref |
 |---|---|---|---|---|---|---|
-| `projection-title-searchbody-bounds-not-decode-verified` | **in-progress** (2026-08-09; macOS CI pending) | `ContentProjector.swift:29` | decode-contract | Spec §4 line 225, the `:29-30` doc comment, and `AUDIT.md S3-R4` all assert decode re-verifies `projectionSchemaVersion==v1`, stored `title` (≤1,024 UTF-8 B), `searchBody` (≤256 KiB). **No read/codec path enforces any of the three.** hydrate (`FactLoaders.swift:106-154`) checks contentVersion/occurrence/pinOrdinal but not these; `ScalarReadRow.init` (`HistoryAuthority.swift:2271-2284`) copies `title` verbatim; `searchCorpusSnapshot` (`:1907-1908`) copies `title`+`searchBody` verbatim; `buildSignatureIndexAtStartup` (`:363`) checks projectionSchemaVersion only at launch. The sibling bound IS decode-enforced at `RevisionStateBlobCodec.swift:340-349`. | Implemented one shared fail-closed projection validator with explicit `CodecRejection` cases. Startup validates schema; recent validates schema/title; search and full hydration validate schema/title/body. Persistent corruption fixtures cover all three and preserve recent's no-searchBody isolation. Pending supported-runner verification before `fixed`. | §4 line 225; 06 §7.4; `AUDIT.md` V1V-03A-001 |
+| `projection-title-searchbody-bounds-not-decode-verified` | **fixed** (2026-08-11; supported proof green in run 31449682036) | `ContentProjector.swift:29` | decode-contract | Spec §4 line 225, the `:29-30` doc comment, and `AUDIT.md S3-R4` all assert decode re-verifies `projectionSchemaVersion==v1`, stored `title` (≤1,024 UTF-8 B), `searchBody` (≤256 KiB). **No read/codec path enforces any of the three.** hydrate (`FactLoaders.swift:106-154`) checks contentVersion/occurrence/pinOrdinal but not these; `ScalarReadRow.init` (`HistoryAuthority.swift:2271-2284`) copies `title` verbatim; `searchCorpusSnapshot` (`:1907-1908`) copies `title`+`searchBody` verbatim; `buildSignatureIndexAtStartup` (`:363`) checks projectionSchemaVersion only at launch. The sibling bound IS decode-enforced at `RevisionStateBlobCodec.swift:340-349`. | Implemented one shared fail-closed projection validator with explicit `CodecRejection` cases. Startup validates schema; recent validates schema/title; search and full hydration validate schema/title/body. Persistent corruption fixtures cover all three and preserve recent's no-searchBody isolation. Pending supported-runner verification before `fixed`. | §4 line 225; 06 §7.4; `AUDIT.md` V1V-03A-001 |
 | `search-corpus-per-query-full-materialization-on-actor` | `duplicate` → `search-corpus-materializes-full-inline-searchbody` | `HistoryAuthority.swift:1805` | performance / cache | `searchCorpusSnapshot` runs once per `browse(.search)`/observe page (`SwiftDataHistory.swift:252,427`), fetches ALL retained rows (`fetchLimit=5001`) with `title`+`searchBody` materialized inline (no `.externalStorage`), builds a full `[SearchCorpusRow]` copy, sorts O(N log N) on the serial Authority actor — then discards and rebuilds on every keystroke, every continuation page, every observe wake/invalidation. Zero position-keyed cache at either layer. Worst-case ~1.25 GiB inline String held during build (COW → ~1×, not 2×). | Canonical target `search-corpus-materializes-full-inline-searchbody` owns the G2/projection-schema evidence gate, trigger, and residual memory risk; no unmeasured v1 cache is added. | §14.2 (two-step shape), §5; 00 §2; 04 §12; 06 G2 |
 
 ### Minor
