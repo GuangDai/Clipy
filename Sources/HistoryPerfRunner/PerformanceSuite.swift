@@ -1601,7 +1601,7 @@ func runAll() async -> Int {
     }
 }
 
-// MARK: - @main
+// MARK: - Executable entry point
 
 @main
 struct PerfRunner {
