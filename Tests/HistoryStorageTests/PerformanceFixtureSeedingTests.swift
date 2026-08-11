@@ -9,25 +9,28 @@ import Testing
 @testable import HistoryStorage
 
 struct PerformanceFixtureSeedingTests {
+    private static let batchedFixtureBodyBytes = 128
+    private static let externalFixtureBodyBytes = 256 * 1_024
+
     @Test func boundedSeedReopensAndSupportsPublicCoalesceInsertAndReads() async throws {
         let storeURL = WSSupport.tempStoreURL("performance-fixture-seed")
         defer { WSSupport.removeStore(storeURL) }
 
-        // Keep every external-data-owning facade/container inside a nested
-        // frame. It unwinds before the outer defer removes the store support
-        // directory, so CoreData never tries to detach a blob after its
-        // source files have already been deleted.
-        try await Self.exerciseLargeFixture(storeURL: storeURL)
+        // The cross-batch unit proof uses inline payloads so same-process
+        // framework teardown cannot emit external-storage diagnostics after
+        // the assertions finish. The admission smoke owns the 1,000-row,
+        // 256-KiB-per-row external-storage proof in its isolated process.
+        try await Self.exerciseBatchedFixture(storeURL: storeURL)
     }
 
-    private static func exerciseLargeFixture(storeURL: URL) async throws {
-        let seeded = try await Self.seedLargeFixture(storeURL: storeURL)
+    private static func exerciseBatchedFixture(storeURL: URL) async throws {
+        let seeded = try await Self.seedBatchedFixture(storeURL: storeURL)
         #expect(seeded.retainedRows == 65)
         #expect(seeded.transactionCount == 2)
         #expect(seeded.batchSize == 64)
         #expect(seeded.position.rawValue == 2)
 
-        let validated = try await Self.validateLargeFixture(storeURL: storeURL)
+        let validated = try await Self.validateBatchedFixture(storeURL: storeURL)
         #expect(validated.coalescedPosition.rawValue == 3)
         #expect(validated.insertedPosition.rawValue == 4)
 
@@ -56,7 +59,7 @@ struct PerformanceFixtureSeedingTests {
         #expect(reopenedPage.rows.count == 66)
 
         let reopenedCoalesce = try await reopened.perform(.capture(
-            Self.capture(index: 0, bodyBytes: 256 * 1_024)
+            Self.capture(index: 0, bodyBytes: Self.batchedFixtureBodyBytes)
         ))
         guard case .committed(let finalCommit) = reopenedCoalesce,
               case .coalesced(let finalReference) = finalCommit.outcome
@@ -108,7 +111,7 @@ struct PerformanceFixtureSeedingTests {
 
         await #expect(throws: HistoryFailure.persistence(.transaction)) {
             try await history.seedPerformanceFixture(rowCount: 3) { index in
-                Self.capture(index: index, bodyBytes: 256 * 1_024)
+                Self.capture(index: index, bodyBytes: Self.externalFixtureBodyBytes)
             }
         }
 
@@ -119,14 +122,14 @@ struct PerformanceFixtureSeedingTests {
         }
 
         let retry = try await history.seedPerformanceFixture(rowCount: 3) { index in
-            Self.capture(index: index, bodyBytes: 256 * 1_024)
+            Self.capture(index: index, bodyBytes: Self.externalFixtureBodyBytes)
         }
         #expect(retry.retainedRows == 3)
         #expect(retry.transactionCount == 1)
         #expect(retry.position.rawValue == 1)
 
         let coalesced = try await history.perform(.capture(
-            Self.capture(index: 0, bodyBytes: 256 * 1_024)
+            Self.capture(index: 0, bodyBytes: Self.externalFixtureBodyBytes)
         ))
         guard case .committed(let commit) = coalesced,
               case .coalesced = commit.outcome
@@ -157,7 +160,7 @@ struct PerformanceFixtureSeedingTests {
 
     /// The facade and its ModelContainer leave scope before validation opens
     /// the same persistent store, matching an independent setup process.
-    private static func seedLargeFixture(
+    private static func seedBatchedFixture(
         storeURL: URL
     ) async throws -> PerformanceFixtureSeedReceipt {
         let history = try await WSSupport.openHistory(
@@ -165,13 +168,13 @@ struct PerformanceFixtureSeedingTests {
             maximumUnpinned: 200
         )
         return try await history.seedPerformanceFixture(rowCount: 65) { index in
-            Self.capture(index: index, bodyBytes: 256 * 1_024)
+            Self.capture(index: index, bodyBytes: Self.batchedFixtureBodyBytes)
         }
     }
 
     /// Reopen first, then force the seeded-index coalesce, ordinary insert,
-    /// scalar browse, details, and paste paths over full external bytes.
-    private static func validateLargeFixture(
+    /// scalar browse, details, and paste paths over the durable seeded bytes.
+    private static func validateBatchedFixture(
         storeURL: URL
     ) async throws -> PublicValidation {
         let history = try await WSSupport.openHistory(
@@ -179,7 +182,7 @@ struct PerformanceFixtureSeedingTests {
             maximumUnpinned: 200
         )
         let coalescedReceipt = try await history.perform(.capture(
-            Self.capture(index: 0, bodyBytes: 256 * 1_024)
+            Self.capture(index: 0, bodyBytes: Self.batchedFixtureBodyBytes)
         ))
         guard case .committed(let coalescedCommit) = coalescedReceipt,
               case .coalesced(let coalescedReference) = coalescedCommit.outcome
@@ -188,7 +191,7 @@ struct PerformanceFixtureSeedingTests {
         }
 
         let insertedReceipt = try await history.perform(.capture(
-            Self.capture(index: 65, bodyBytes: 256 * 1_024)
+            Self.capture(index: 65, bodyBytes: Self.batchedFixtureBodyBytes)
         ))
         guard case .committed(let insertedCommit) = insertedReceipt,
               case .inserted = insertedCommit.outcome
@@ -206,7 +209,7 @@ struct PerformanceFixtureSeedingTests {
 
         let details = try await history.details(for: coalescedReference.id)
         let canonicalBytes = try #require(details.canonical.first?.bytes)
-        #expect(canonicalBytes.count == 256 * 1_024)
+        #expect(canonicalBytes.count == Self.batchedFixtureBodyBytes)
         let payload = try await history.pastePayload(for: coalescedReference.id)
         #expect(payload.representations.first?.bytes == canonicalBytes)
 
