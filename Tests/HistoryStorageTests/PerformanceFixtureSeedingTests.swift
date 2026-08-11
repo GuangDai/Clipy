@@ -10,7 +10,6 @@ import Testing
 
 struct PerformanceFixtureSeedingTests {
     private static let batchedFixtureBodyBytes = 128
-    private static let externalFixtureBodyBytes = 256 * 1_024
 
     @Test func boundedSeedReopensAndSupportsPublicCoalesceInsertAndReads() async throws {
         let storeURL = WSSupport.tempStoreURL("performance-fixture-seed")
@@ -101,6 +100,10 @@ struct PerformanceFixtureSeedingTests {
     }
 
     private static func exerciseMultirowRollback(storeURL: URL) async throws {
+        // Rollback is representation-independent. Keep this proof inline: a
+        // deliberately failed external-storage transaction can leave CoreData
+        // teardown holding transient `.interim` references even though the
+        // durable rows, position, and index all rolled back correctly.
         let history = try await WSSupport.openHistory(
             storeURL: storeURL,
             maximumUnpinned: 10
@@ -111,7 +114,7 @@ struct PerformanceFixtureSeedingTests {
 
         await #expect(throws: HistoryFailure.persistence(.transaction)) {
             try await history.seedPerformanceFixture(rowCount: 3) { index in
-                Self.capture(index: index, bodyBytes: Self.externalFixtureBodyBytes)
+                Self.capture(index: index, bodyBytes: Self.batchedFixtureBodyBytes)
             }
         }
 
@@ -122,14 +125,14 @@ struct PerformanceFixtureSeedingTests {
         }
 
         let retry = try await history.seedPerformanceFixture(rowCount: 3) { index in
-            Self.capture(index: index, bodyBytes: Self.externalFixtureBodyBytes)
+            Self.capture(index: index, bodyBytes: Self.batchedFixtureBodyBytes)
         }
         #expect(retry.retainedRows == 3)
         #expect(retry.transactionCount == 1)
         #expect(retry.position.rawValue == 1)
 
         let coalesced = try await history.perform(.capture(
-            Self.capture(index: 0, bodyBytes: Self.externalFixtureBodyBytes)
+            Self.capture(index: 0, bodyBytes: Self.batchedFixtureBodyBytes)
         ))
         guard case .committed(let commit) = coalesced,
               case .coalesced = commit.outcome
