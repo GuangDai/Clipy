@@ -506,7 +506,7 @@ jobs:
       - name: Measure worst-bound exact search
         id: exact_search
         continue-on-error: true
-        timeout-minutes: 45
+        timeout-minutes: 90
         shell: bash
         run: |
           set -o pipefail
@@ -604,8 +604,34 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "${{ steps.prepare_smoke.outcome }}" == success ]]
-          [[ "${{ steps.prepare.outcome }}" == success ]]
-          [[ "${{ steps.browse_ties.outcome }}" == success ]]
-          [[ "${{ steps.exact_search.outcome }}" == success ]]
-          [[ "${{ steps.warm_open.outcome }}" == success ]]
+          require_success() {
+            local mode="$1"
+            local outcome="$2"
+            if [[ "$outcome" != success ]]; then
+              echo "$mode admission mode did not complete: $outcome"
+              exit 1
+            fi
+          }
+          require_success prepare-smoke "${{ steps.prepare_smoke.outcome }}"
+          require_success prepare "${{ steps.prepare.outcome }}"
+          require_success browse-ties "${{ steps.browse_ties.outcome }}"
+          require_success exact-search "${{ steps.exact_search.outcome }}"
+          require_success warm-open "${{ steps.warm_open.outcome }}"
+
+          jq -e '
+            .mode == "browse-ties"
+            and (.rawSamplesMs | length) == 101
+            and .percentiles != null
+          ' "$LOG_DIR/browse-ties.json" >/dev/null
+          jq -e '
+            .mode == "exact-search"
+            and (.rawSamplesMs | length) == 101
+            and .percentiles != null
+          ' "$LOG_DIR/exact-search.json" >/dev/null
+          jq -e '
+            .mode == "warm-open"
+            and (.rawSamplesMs | length) == 101
+            and .percentiles != null
+          ' "$LOG_DIR/warm-open.json" >/dev/null
+          [[ -s "$LOG_DIR/browse-ties.time" ]]
+          [[ -s "$LOG_DIR/exact-search.time" ]]
