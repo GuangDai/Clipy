@@ -51,6 +51,7 @@ enum AdmissionMode: String, Sendable, Equatable {
     case prepareSmoke = "prepare-smoke"
     case browseTies = "browse-ties"
     case exactSearch = "exact-search"
+    case exactSearchProbe = "exact-search-probe"
     case openOnce = "open-once"
     case openOnceAndValidate = "open-once-and-validate"
     case warmOpen = "warm-open"
@@ -60,6 +61,7 @@ enum AdmissionMode: String, Sendable, Equatable {
         case .seed, .seedSmoke:
             return true
         case .prepare, .prepareSmoke, .browseTies, .exactSearch,
+             .exactSearchProbe,
              .openOnce, .openOnceAndValidate, .warmOpen:
             return false
         }
@@ -69,7 +71,8 @@ enum AdmissionMode: String, Sendable, Equatable {
         switch self {
         case .seedSmoke, .prepareSmoke:
             return .prepareSmoke
-        case .seed, .prepare, .browseTies, .exactSearch, .openOnce,
+        case .seed, .prepare, .browseTies, .exactSearch, .exactSearchProbe,
+             .openOnce,
              .openOnceAndValidate, .warmOpen:
             return .full
         }
@@ -81,7 +84,8 @@ enum AdmissionMode: String, Sendable, Equatable {
             return .seed
         case .prepareSmoke:
             return .seedSmoke
-        case .seed, .seedSmoke, .browseTies, .exactSearch, .openOnce,
+        case .seed, .seedSmoke, .browseTies, .exactSearch, .exactSearchProbe,
+             .openOnce,
              .openOnceAndValidate, .warmOpen:
             return nil
         }
@@ -98,6 +102,7 @@ enum AdmissionError: Error, Sendable, Equatable {
     case unexpectedSeedFixture
     case unexpectedPage
     case unexpectedPosition
+    case diagnosticConfigurationMissing
 }
 
 struct AdmissionPercentiles: Codable, Sendable {
@@ -133,6 +138,39 @@ struct AdmissionSeedFixture: Codable, Sendable, Equatable {
     let seedBatchSize: Int
     let seedPosition: UInt64
     let seedWallTimeMs: Double
+}
+
+/// One Debug-only diagnostic request. This deliberately has no raw-sample or
+/// percentile fields, so it cannot be mistaken for canonical Release evidence.
+struct AdmissionExactSearchProbeFixture: Codable, Sendable, Equatable {
+    let schemaVersion: UInt16
+    let mode: String
+    let evidenceClass: String
+    let buildConfiguration: String
+    let traceEnvironmentEnabled: Bool
+    let canonicalPercentileEvidence: Bool
+    let publicRequestCount: Int
+    let corpusRows: Int
+    let bodyBytesPerRow: Int
+    let elapsedMs: Double
+    let position: UInt64
+    let matchedRows: Int
+    let hasNextPage: Bool
+    let completionMarker: String
+}
+
+/// Privacy-safe checkpoints for the long-running admission measurement. The
+/// event carries only workload control-flow facts: never query text, row
+/// content, item identifiers, or store paths (06 §9; V1-Verified G2/G8).
+enum AdmissionProgressEvent: Sendable, Equatable {
+    case validationBegan
+    case validationCompleted(elapsedMs: Double)
+    case warmupBegan(index: Int, total: Int)
+    case warmupCompleted(index: Int, total: Int, elapsedMs: Double)
+    case sampleBegan(index: Int, total: Int)
+    case sampleCompleted(index: Int, total: Int, elapsedMs: Double)
+    case diagnosticRequestBegan
+    case diagnosticRequestCompleted(elapsedMs: Double)
 }
 
 private struct AdmissionOpenSample: Codable, Sendable {
@@ -179,25 +217,88 @@ func admissionPercentilesIfSampled(
     return admissionPercentiles(samples)
 }
 
+private func admissionProgressElapsedText(_ elapsedMs: Double) -> String {
+    String(
+        format: "%.3f",
+        locale: Locale(identifier: "en_US_POSIX"),
+        elapsedMs
+    )
+}
+
+func admissionProgressLine(
+    mode: AdmissionMode,
+    event: AdmissionProgressEvent
+) -> String {
+    let prefix = "HistoryPerfRunner admission progress mode=\(mode.rawValue)"
+    switch event {
+    case .validationBegan:
+        return "\(prefix) phase=validation state=begin"
+    case let .validationCompleted(elapsedMs):
+        return "\(prefix) phase=validation state=completed "
+            + "elapsed_ms=\(admissionProgressElapsedText(elapsedMs))"
+    case let .warmupBegan(index, total):
+        return "\(prefix) phase=warmup index=\(index) total=\(total) state=begin"
+    case let .warmupCompleted(index, total, elapsedMs):
+        return "\(prefix) phase=warmup index=\(index) total=\(total) "
+            + "state=completed elapsed_ms=\(admissionProgressElapsedText(elapsedMs))"
+    case let .sampleBegan(index, total):
+        return "\(prefix) phase=sample index=\(index) total=\(total) state=begin"
+    case let .sampleCompleted(index, total, elapsedMs):
+        return "\(prefix) phase=sample index=\(index) total=\(total) "
+            + "state=completed elapsed_ms=\(admissionProgressElapsedText(elapsedMs))"
+    case .diagnosticRequestBegan:
+        return "\(prefix) phase=diagnostic-request state=begin"
+    case let .diagnosticRequestCompleted(elapsedMs):
+        return "\(prefix) phase=diagnostic-request state=completed "
+            + "elapsed_ms=\(admissionProgressElapsedText(elapsedMs))"
+    }
+}
+
+private func writeAdmissionProgress(
+    mode: AdmissionMode,
+    event: AdmissionProgressEvent
+) {
+    // FileHandle writes immediately even when the runner is piped through tee;
+    // a timeout therefore leaves the last entered/completed checkpoint behind.
+    try? FileHandle.standardError.write(
+        contentsOf: Data("\(admissionProgressLine(mode: mode, event: event))\n".utf8)
+    )
+}
+
 func measureAdmissionSamples(
     warmups: Int = admissionWarmupCount,
     samples: Int = admissionSampleCount,
+    progress: ((AdmissionProgressEvent) -> Void)? = nil,
     operation: () async throws -> Void
 ) async throws -> [Double] {
     precondition(warmups >= 0)
     precondition(samples > 0)
-    for _ in 0..<warmups {
+    let clock = ContinuousClock()
+    for index in 0..<warmups {
+        progress?(.warmupBegan(index: index + 1, total: warmups))
+        let start = clock.now
         try await operation()
+        progress?(.warmupCompleted(
+            index: index + 1,
+            total: warmups,
+            elapsedMs: durationToMs(start.duration(to: clock.now))
+        ))
         await Task.yield()
     }
 
-    let clock = ContinuousClock()
     var values: [Double] = []
     values.reserveCapacity(samples)
-    for _ in 0..<samples {
+    for index in 0..<samples {
+        progress?(.sampleBegan(index: index + 1, total: samples))
         let start = clock.now
         try await operation()
-        values.append(durationToMs(start.duration(to: clock.now)))
+        let elapsedMs = durationToMs(start.duration(to: clock.now))
+        values.append(elapsedMs)
+        progress?(.sampleCompleted(
+            index: index + 1,
+            total: samples,
+            elapsedMs: elapsedMs
+        ))
         // Yield outside the measured interval so released facades/DTOs get a
         // scheduling opportunity without contaminating operation latency.
         await Task.yield()
@@ -626,18 +727,79 @@ private func measureAdmissionBrowseTies(
     try writeAdmissionFixture(fixture, to: outputPath)
 }
 
-private func measureAdmissionExactSearch(
-    storeURL: URL,
-    outputPath: String
-) async throws {
-    let history = try await openStore(url: storeURL)
-    let request = HistoryBrowseRequest(
+private func admissionExactSearchRequest() -> HistoryBrowseRequest {
+    HistoryBrowseRequest(
         kind: .search(
             text: "term-that-does-not-exist-in-the-admission-corpus",
             mode: .exact
         ),
         limit: admissionPageLimit
     )
+}
+
+private func measureAdmissionExactSearchProbe(
+    storeURL: URL,
+    outputPath: String
+) async throws {
+    #if DEBUG
+    guard ProcessInfo.processInfo.environment["CLIPY_SEARCH_TRACE"] == "1" else {
+        throw AdmissionError.diagnosticConfigurationMissing
+    }
+
+    let history = try await openStore(url: storeURL)
+    let request = admissionExactSearchRequest()
+    let clock = ContinuousClock()
+    writeAdmissionProgress(
+        mode: .exactSearchProbe,
+        event: .diagnosticRequestBegan
+    )
+    let start = clock.now
+    let page = try await history.browse(request)
+    let elapsedMs = durationToMs(start.duration(to: clock.now))
+    guard elapsedMs.isFinite,
+          elapsedMs > 0,
+          page.position.rawValue > 0,
+          page.rows.isEmpty,
+          page.next == nil
+    else {
+        throw AdmissionError.unexpectedPage
+    }
+    writeAdmissionProgress(
+        mode: .exactSearchProbe,
+        event: .diagnosticRequestCompleted(elapsedMs: elapsedMs)
+    )
+    try writeAdmissionFixture(AdmissionExactSearchProbeFixture(
+        schemaVersion: 1,
+        mode: AdmissionMode.exactSearchProbe.rawValue,
+        evidenceClass: "debug-diagnostic",
+        buildConfiguration: "debug",
+        traceEnvironmentEnabled: true,
+        canonicalPercentileEvidence: false,
+        publicRequestCount: 1,
+        corpusRows: admissionRetainedRows,
+        bodyBytesPerRow: admissionSearchBodyBytes,
+        elapsedMs: elapsedMs,
+        position: page.position.rawValue,
+        matchedRows: page.rows.count,
+        hasNextPage: page.next != nil,
+        completionMarker: "single-public-exact-search-completed"
+    ), to: outputPath)
+    #else
+    _ = storeURL
+    _ = outputPath
+    throw AdmissionError.diagnosticConfigurationMissing
+    #endif
+}
+
+private func measureAdmissionExactSearch(
+    storeURL: URL,
+    outputPath: String
+) async throws {
+    let history = try await openStore(url: storeURL)
+    let request = admissionExactSearchRequest()
+    let clock = ContinuousClock()
+    writeAdmissionProgress(mode: .exactSearch, event: .validationBegan)
+    let validationStart = clock.now
     let validationPage = try await history.browse(request)
     guard validationPage.position.rawValue > 0,
           validationPage.rows.isEmpty,
@@ -645,8 +807,16 @@ private func measureAdmissionExactSearch(
     else {
         throw AdmissionError.unexpectedPage
     }
+    writeAdmissionProgress(
+        mode: .exactSearch,
+        event: .validationCompleted(
+            elapsedMs: durationToMs(validationStart.duration(to: clock.now))
+        )
+    )
 
-    let samples = try await measureAdmissionSamples {
+    let samples = try await measureAdmissionSamples(progress: { event in
+        writeAdmissionProgress(mode: .exactSearch, event: event)
+    }) {
         let page = try await history.browse(request)
         guard page.position == validationPage.position,
               page.rows.isEmpty,
@@ -821,6 +991,11 @@ func runAdmission(arguments: [String]) async -> Int {
             )
         case .exactSearch:
             try await measureAdmissionExactSearch(
+                storeURL: storeURL,
+                outputPath: arguments[2]
+            )
+        case .exactSearchProbe:
+            try await measureAdmissionExactSearchProbe(
                 storeURL: storeURL,
                 outputPath: arguments[2]
             )

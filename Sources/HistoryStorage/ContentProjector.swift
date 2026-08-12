@@ -44,6 +44,14 @@ internal struct ContentProjection: Sendable {
     internal let effectiveTypeIdentifiers: [String]
 }
 
+/// Byte counts already computed while fail-closed projection validation runs.
+/// Debug search tracing consumes them; Release callers discard the value, so
+/// correctness validation has one implementation in every configuration.
+internal struct StoredProjectionSize: Equatable, Sendable {
+    let titleUTF8Bytes: Int
+    let searchBodyUTF8Bytes: Int
+}
+
 // MARK: - Projector (docs/05-authority-kernel.md §15)
 
 /// Pure, deterministic projection from Effective Content to its bounded
@@ -73,10 +81,11 @@ internal enum ContentProjector {
     /// Re-validates a durable title at its read boundary. The write-side
     /// projector truncates valid values; an over-bound stored value is
     /// corruption, not input to truncate or repair locally.
+    @discardableResult
     internal static func validateStoredTitle(
         _ title: String,
         limits: HistoryLimits
-    ) throws {
+    ) throws -> Int {
         let found = title.utf8.count
         guard found <= limits.maximumStoredTitleUTF8Bytes else {
             throw CodecRejection.storedTitleExceedsBound(
@@ -84,13 +93,15 @@ internal enum ContentProjector {
                 bound: limits.maximumStoredTitleUTF8Bytes
             )
         }
+        return found
     }
 
     /// Re-validates a durable search body under the same fail-closed rule.
+    @discardableResult
     internal static func validateStoredSearchBody(
         _ searchBody: String,
         limits: HistoryLimits
-    ) throws {
+    ) throws -> Int {
         let found = searchBody.utf8.count
         guard found <= limits.maximumStoredSearchBodyUTF8Bytes else {
             throw CodecRejection.storedSearchBodyExceedsBound(
@@ -98,18 +109,27 @@ internal enum ContentProjector {
                 bound: limits.maximumStoredSearchBodyUTF8Bytes
             )
         }
+        return found
     }
 
     /// Full validation used by lineage hydration and search corpus reads.
+    @discardableResult
     internal static func validateStoredProjection(
         schemaVersion: UInt16,
         title: String,
         searchBody: String,
         limits: HistoryLimits
-    ) throws {
+    ) throws -> StoredProjectionSize {
         try validateStoredSchemaVersion(schemaVersion)
-        try validateStoredTitle(title, limits: limits)
-        try validateStoredSearchBody(searchBody, limits: limits)
+        let titleUTF8Bytes = try validateStoredTitle(title, limits: limits)
+        let searchBodyUTF8Bytes = try validateStoredSearchBody(
+            searchBody,
+            limits: limits
+        )
+        return StoredProjectionSize(
+            titleUTF8Bytes: titleUTF8Bytes,
+            searchBodyUTF8Bytes: searchBodyUTF8Bytes
+        )
     }
 
     // MARK: Projection

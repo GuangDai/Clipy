@@ -96,3 +96,18 @@ private func effectiveTextContent(
     #expect(projection.title == text)
     #expect(projection.searchBody == text)
 }
+
+@Test func storedProjectionValidationReturnsItsExistingUTF8Counts() throws {
+    let title = "Title 🙂"
+    let body = "Body with e\u{301} and 🇺🇳"
+
+    let size = try ContentProjector.validateStoredProjection(
+        schemaVersion: ContentProjector.schemaVersion,
+        title: title,
+        searchBody: body,
+        limits: .standard
+    )
+
+    #expect(size.titleUTF8Bytes == title.utf8.count)
+    #expect(size.searchBodyUTF8Bytes == body.utf8.count)
+}

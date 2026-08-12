@@ -215,6 +215,13 @@ internal actor HistoryAuthority {
     /// production (see `InjectedTransactionFailure`).
     private var injectedTransactionFailure: InjectedTransactionFailure?
 
+#if DEBUG
+    /// Opt-in aggregate search tracing. This field and every call site are
+    /// absent from Release builds; tests may replace the environment-backed
+    /// stderr probe with an in-memory sink.
+    private var searchDebugProbe = SearchDebugProbe.environmentConfigured()
+#endif
+
     /// The singleton row's well-known key (§3.2: always "retained-history").
     private static let positionSingletonKey = "retained-history"
 
@@ -238,6 +245,14 @@ internal actor HistoryAuthority {
     /// `SearchWorker` call path mints cursors off-actor; it receives this
     /// marker so the minted cursor binds this Authority's generation.
     internal var cursorProcessMarker: UUID { processMarker }
+
+#if DEBUG
+    /// Installs a Debug-only search probe without introducing a second
+    /// persistence implementation or a global logger.
+    internal func setSearchDebugProbe(_ probe: SearchDebugProbe) {
+        searchDebugProbe = probe
+    }
+#endif
 
     // MARK: Startup (docs/05-authority-kernel.md §13)
 
@@ -2087,9 +2102,26 @@ internal actor HistoryAuthority {
     internal func searchCorpusSnapshot(
         for request: HistoryBrowseRequest
     ) async throws -> (snapshot: SearchCorpusSnapshot, continuationAnchor: StoredOrderingAnchor?) {
+#if DEBUG
+        let debugClock = ContinuousClock()
+        let debugTrace = SearchDebugTrace(id: UUID(), startedAt: debugClock.now)
+        let debugTraceID = debugTrace.id
+        let debugTotalStart = debugTrace.startedAt
+        searchDebugProbe.record(
+            traceID: debugTraceID,
+            component: "authority",
+            phase: "entry",
+            phaseElapsed: debugTotalStart.duration(to: debugClock.now),
+            totalElapsed: debugTotalStart.duration(to: debugClock.now)
+        )
+#endif
         // WS12 seam: the one legal suspension point of this path — no
         // context is live yet (§5).
         await suspendIfRequested(.readEntry)
+
+#if DEBUG
+        let debugAdmissionStart = debugClock.now
+#endif
 
         // §16: validate the page-row limit before any context.
         guard limits.pageRowLimitRange.contains(request.limit) else {
@@ -2115,8 +2147,30 @@ internal actor HistoryAuthority {
             resolvedCursor = nil
         }
 
+#if DEBUG
+        searchDebugProbe.record(
+            traceID: debugTraceID,
+            component: "authority",
+            phase: "request-admission",
+            phaseElapsed: debugAdmissionStart.duration(to: debugClock.now),
+            totalElapsed: debugTotalStart.duration(to: debugClock.now)
+        )
+        let debugContextStart = debugClock.now
+#endif
+
         let context = ModelContext(container)
         context.autosaveEnabled = false
+
+#if DEBUG
+        searchDebugProbe.record(
+            traceID: debugTraceID,
+            component: "authority",
+            phase: "context-create",
+            phaseElapsed: debugContextStart.duration(to: debugClock.now),
+            totalElapsed: debugTotalStart.duration(to: debugClock.now)
+        )
+        let debugPositionStart = debugClock.now
+#endif
 
         // ── Non-suspending read interval (§5): no `await` past this
         //    line while the context or fetched rows are live. ──
@@ -2134,6 +2188,24 @@ internal actor HistoryAuthority {
             }
         }
 
+#if DEBUG
+        searchDebugProbe.record(
+            traceID: debugTraceID,
+            component: "authority",
+            phase: "position-read",
+            phaseElapsed: debugPositionStart.duration(to: debugClock.now),
+            totalElapsed: debugTotalStart.duration(to: debugClock.now)
+        )
+        let debugFetchStart = debugClock.now
+        searchDebugProbe.record(
+            traceID: debugTraceID,
+            component: "authority",
+            phase: "corpus-fetch-begin",
+            phaseElapsed: .zero,
+            totalElapsed: debugTotalStart.duration(to: debugClock.now)
+        )
+#endif
+
         // §14.2: capture scalar fields for EVERY retained row, bounded by the
         // hard retained-item maximum. Scalar-only — no content blob decode.
         var descriptor = FetchDescriptor<HistoryItemRow>()
@@ -2150,6 +2222,29 @@ internal actor HistoryAuthority {
         guard rows.count <= limits.hardMaximumRetainedItems else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
+
+#if DEBUG
+        searchDebugProbe.record(
+            traceID: debugTraceID,
+            component: "authority",
+            phase: "corpus-fetch",
+            phaseElapsed: debugFetchStart.duration(to: debugClock.now),
+            totalElapsed: debugTotalStart.duration(to: debugClock.now),
+            rowsProcessed: rows.count,
+            rowsTotal: rows.count
+        )
+        let debugProjectionStart = debugClock.now
+        var debugTitleUTF8Bytes = 0
+        var debugBodyUTF8Bytes = 0
+        searchDebugProbe.record(
+            traceID: debugTraceID,
+            component: "authority",
+            phase: "corpus-projection-begin",
+            phaseElapsed: .zero,
+            totalElapsed: debugTotalStart.duration(to: debugClock.now),
+            rowsTotal: rows.count
+        )
+#endif
 
         // Build the corpus rows and sort by the default order (pinned ordinal
         // ascending, then lastCopiedAt DESC + id ASC) so exact/regexp preserve
@@ -2169,8 +2264,8 @@ internal actor HistoryAuthority {
             let copyCount = row.copyCount
             let lastSource = row.lastSource
             let rawPinOrdinal = row.pinOrdinal
-            try mapCodecFailure {
-                try ContentProjector.validateStoredProjection(
+            let projectionSize = try mapCodecFailure {
+                let size = try ContentProjector.validateStoredProjection(
                     schemaVersion: projectionSchemaVersion,
                     title: title,
                     searchBody: searchBody,
@@ -2184,7 +2279,14 @@ internal actor HistoryAuthority {
                     lastSource,
                     limits: limits
                 )
+                return size
             }
+#if DEBUG
+            debugTitleUTF8Bytes += projectionSize.titleUTF8Bytes
+            debugBodyUTF8Bytes += projectionSize.searchBodyUTF8Bytes
+#else
+            _ = projectionSize
+#endif
             let typeIdentifiers = try mapCodecFailure {
                 try EffectiveTypeIdentifiersBlobCodec.decode(
                     identifiersBlob,
@@ -2197,7 +2299,23 @@ internal actor HistoryAuthority {
             let pinOrdinal = try mapCodecFailure {
                 try RevisionStateBlobCodec.decodePinOrdinal(rawPinOrdinal)
             }
-            corpusRows.append(SearchCorpusRow(
+            let corpusRow: SearchCorpusRow
+#if DEBUG
+            corpusRow = SearchCorpusRow(
+                id: HistoryItemID(rawValue: row.id),
+                contentVersion: contentVersion,
+                title: title,
+                searchBody: searchBody,
+                debugTitleUTF8Bytes: projectionSize.titleUTF8Bytes,
+                debugSearchBodyUTF8Bytes: projectionSize.searchBodyUTF8Bytes,
+                typeIdentifiers: typeIdentifiers,
+                lastCopiedAt: lastCopiedAt,
+                copyCount: copyCount,
+                lastSource: lastSource,
+                pinOrdinal: pinOrdinal
+            )
+#else
+            corpusRow = SearchCorpusRow(
                 id: HistoryItemID(rawValue: row.id),
                 contentVersion: contentVersion,
                 title: title,
@@ -2207,13 +2325,94 @@ internal actor HistoryAuthority {
                 copyCount: copyCount,
                 lastSource: lastSource,
                 pinOrdinal: pinOrdinal
-            ))
+            )
+#endif
+            corpusRows.append(corpusRow)
+#if DEBUG
+            let debugProcessedRows = corpusRows.count
+            let debugIsProgressBoundary = debugProcessedRows.isMultiple(
+                of: SearchDebugProbe.progressRowInterval
+            )
+            if debugIsProgressBoundary || debugProcessedRows == rows.count {
+                searchDebugProbe.record(
+                    traceID: debugTraceID,
+                    component: "authority",
+                    phase: "corpus-projection-progress",
+                    phaseElapsed: debugProjectionStart.duration(to: debugClock.now),
+                    totalElapsed: debugTotalStart.duration(to: debugClock.now),
+                    rowsProcessed: debugProcessedRows,
+                    rowsTotal: rows.count,
+                    titleUTF8Bytes: debugTitleUTF8Bytes,
+                    bodyUTF8Bytes: debugBodyUTF8Bytes
+                )
+            }
+#endif
         }
+#if DEBUG
+        searchDebugProbe.record(
+            traceID: debugTraceID,
+            component: "authority",
+            phase: "corpus-projection-complete",
+            phaseElapsed: debugProjectionStart.duration(to: debugClock.now),
+            totalElapsed: debugTotalStart.duration(to: debugClock.now),
+            rowsProcessed: corpusRows.count,
+            rowsTotal: rows.count,
+            titleUTF8Bytes: debugTitleUTF8Bytes,
+            bodyUTF8Bytes: debugBodyUTF8Bytes
+        )
+        let debugSortStart = debugClock.now
+        searchDebugProbe.record(
+            traceID: debugTraceID,
+            component: "authority",
+            phase: "corpus-sort-begin",
+            phaseElapsed: .zero,
+            totalElapsed: debugTotalStart.duration(to: debugClock.now),
+            rowsTotal: corpusRows.count
+        )
+#endif
         corpusRows.sort { lhs, rhs in
             Self.defaultOrderIsOrdered(lhs, rhs)
         }
 
-        let snapshot = SearchCorpusSnapshot(position: currentPosition, rows: corpusRows)
+#if DEBUG
+        searchDebugProbe.record(
+            traceID: debugTraceID,
+            component: "authority",
+            phase: "corpus-sort",
+            phaseElapsed: debugSortStart.duration(to: debugClock.now),
+            totalElapsed: debugTotalStart.duration(to: debugClock.now),
+            rowsProcessed: corpusRows.count,
+            rowsTotal: rows.count,
+            titleUTF8Bytes: debugTitleUTF8Bytes,
+            bodyUTF8Bytes: debugBodyUTF8Bytes
+        )
+#endif
+
+#if DEBUG
+        let snapshot = SearchCorpusSnapshot(
+            position: currentPosition,
+            rows: corpusRows,
+            debugTrace: debugTrace
+        )
+#else
+        let snapshot = SearchCorpusSnapshot(
+            position: currentPosition,
+            rows: corpusRows
+        )
+#endif
+#if DEBUG
+        searchDebugProbe.record(
+            traceID: debugTraceID,
+            component: "authority",
+            phase: "complete",
+            phaseElapsed: debugTotalStart.duration(to: debugClock.now),
+            totalElapsed: debugTotalStart.duration(to: debugClock.now),
+            rowsProcessed: corpusRows.count,
+            rowsTotal: rows.count,
+            titleUTF8Bytes: debugTitleUTF8Bytes,
+            bodyUTF8Bytes: debugBodyUTF8Bytes
+        )
+#endif
         return (snapshot, resolvedCursor?.anchor)
     }
 

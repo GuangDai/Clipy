@@ -526,4 +526,20 @@ exclusions remain documented in the workflow history below.
   seeded rows, proving lexical facade release was not a deterministic CoreData
   teardown boundary. Seed and public validation now run as separate executable
   invocations with a fail-closed primitive JSON handoff; supported rerun
-  evidence is pending.
+  [31529727208](https://github.com/GuangDai/Clipy/actions/runs/31529727208)
+  completed the 5,000-row setup in 124.5 seconds with no missing-external-data
+  diagnostic, and completed browse/warm-open evidence, but the absent-term
+  exact step was killed at 90 minutes. Its log contained only the mode-start
+  line, its timing file was empty, and no JSON existed: the runner performed
+  one validation, one warmup, and 101 measured public searches before writing
+  any result, repeatedly materializing and scanning roughly 1.22 GiB per
+  request (at least 125 GiB across the mode) with no progress checkpoint.
+  The follow-up adds opt-in `#if DEBUG` JSON checkpoints inside the real
+  Authority/SearchWorker path for fetch, projection/validation, sort, exact
+  title/body scan, and page construction, with progress every 250 rows and no
+  clipboard/query/source/path fields. A separate one-request Debug probe runs
+  first on the same full corpus; failure preserves its partial trace and skips
+  the 90-minute Release and later warm-open steps. A successful probe proceeds
+  directly to the canonical Release path, which still records all 101
+  independent calls with immediate validation, warmup, and per-sample
+  begin/completion checkpoints. Supported diagnostic evidence is pending.

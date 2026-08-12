@@ -342,6 +342,19 @@ That lane has three deliberately different evidence units:
   warm, and the recorded GitHub host is not yet an approved minimum-hardware
   profile, so this fixture cannot alone admit G5.
 
+Before the canonical absent-term exact-search measurement, the same manual job
+runs one explicitly Debug-only diagnostic request over that already-prepared
+5,000 × 256 KiB corpus. `CLIPY_SEARCH_TRACE=1` enables privacy-safe source
+checkpoints for context/position access, corpus fetch, projection validation,
+sorting, exact title/body scanning, and page materialization; progress is
+reported every 250 rows without recording the query, clipboard text, item IDs,
+source applications, or store path. Its fixture is labeled
+`debug-diagnostic`, contains no sample array or percentiles, and is never G2,
+G5, or G8 evidence. Failure or timeout skips the 90-minute canonical exact
+step and the later warm-open step, so the job preserves the partial trace and
+fails promptly. A successful probe proceeds directly to the unchanged Release
+measurement with 101 independent public calls.
+
 The manual job is record-only until an authoritative workload, hardware
 profile, and budget are approved. Completion is gated; observed latency or RSS
 does not pass or fail a graft by itself. These artifacts also do not prove

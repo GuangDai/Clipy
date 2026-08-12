@@ -48,6 +48,63 @@ struct HistoryPerfRunnerHelperTests {
         #expect(sampled?.p99Ms == 42)
     }
 
+    @Test func admissionSampleProgressBracketsEveryOperation() async throws {
+        var events: [AdmissionProgressEvent] = []
+        var operationCount = 0
+
+        let samples = try await measureAdmissionSamples(
+            warmups: 2,
+            samples: 3,
+            progress: { events.append($0) }
+        ) {
+            operationCount += 1
+        }
+
+        #expect(operationCount == 5)
+        #expect(samples.count == 3)
+        #expect(events.count == 10)
+        #expect(events[0] == .warmupBegan(index: 1, total: 2))
+        #expect(Self.isCompletedWarmup(events[1], index: 1, total: 2))
+        #expect(events[2] == .warmupBegan(index: 2, total: 2))
+        #expect(Self.isCompletedWarmup(events[3], index: 2, total: 2))
+        #expect(events[4] == .sampleBegan(index: 1, total: 3))
+        #expect(Self.isCompletedSample(events[5], index: 1, total: 3))
+        #expect(events[6] == .sampleBegan(index: 2, total: 3))
+        #expect(Self.isCompletedSample(events[7], index: 2, total: 3))
+        #expect(events[8] == .sampleBegan(index: 3, total: 3))
+        #expect(Self.isCompletedSample(events[9], index: 3, total: 3))
+    }
+
+    @Test func admissionProgressLinesAreStructuredAndPrivacySafe() {
+        #expect(admissionProgressLine(
+            mode: .exactSearch,
+            event: .validationBegan
+        ) == "HistoryPerfRunner admission progress mode=exact-search "
+            + "phase=validation state=begin")
+        #expect(admissionProgressLine(
+            mode: .exactSearch,
+            event: .validationCompleted(elapsedMs: 12.5)
+        ) == "HistoryPerfRunner admission progress mode=exact-search "
+            + "phase=validation state=completed elapsed_ms=12.500")
+        #expect(admissionProgressLine(
+            mode: .exactSearch,
+            event: .sampleCompleted(index: 9, total: 101, elapsedMs: 42.25)
+        ) == "HistoryPerfRunner admission progress mode=exact-search "
+            + "phase=sample index=9 total=101 state=completed elapsed_ms=42.250")
+
+        let line = admissionProgressLine(
+            mode: .exactSearch,
+            event: .sampleBegan(index: 10, total: 101)
+        )
+        #expect(!line.contains("term-that-does-not-exist"))
+        #expect(!line.contains("store.sqlite"))
+        #expect(admissionProgressLine(
+            mode: .exactSearchProbe,
+            event: .diagnosticRequestCompleted(elapsedMs: 1_234.5)
+        ) == "HistoryPerfRunner admission progress mode=exact-search-probe "
+            + "phase=diagnostic-request state=completed elapsed_ms=1234.500")
+    }
+
     @Test func admissionProfilesFreezeFullAndFailureReproductionShapes() {
         #expect(AdmissionProfile.full == AdmissionProfile(
             retainedRows: 5_000,
@@ -67,17 +124,49 @@ struct HistoryPerfRunnerHelperTests {
         #expect(AdmissionMode.prepareSmoke.profile == .prepareSmoke)
         #expect(AdmissionMode.seed.profile == .full)
         #expect(AdmissionMode.seedSmoke.profile == .prepareSmoke)
+        #expect(AdmissionMode.exactSearchProbe.profile == .full)
         #expect(AdmissionMode.seed.createsStore)
         #expect(AdmissionMode.seedSmoke.createsStore)
         #expect(!AdmissionMode.prepare.createsStore)
         #expect(!AdmissionMode.prepareSmoke.createsStore)
         #expect(!AdmissionMode.browseTies.createsStore)
+        #expect(!AdmissionMode.exactSearchProbe.createsStore)
         #expect(AdmissionMode.prepare.expectedSeedMode == .seed)
         #expect(AdmissionMode.prepareSmoke.expectedSeedMode == .seedSmoke)
         #expect(AdmissionMode.seed.expectedSeedMode == nil)
+        #expect(AdmissionMode.exactSearchProbe.expectedSeedMode == nil)
         #expect(AdmissionMode.prepare.isSetupFixture)
         #expect(AdmissionMode.prepareSmoke.isSetupFixture)
         #expect(!AdmissionMode.seed.isSetupFixture)
+    }
+
+    @Test func exactSearchProbeFixtureIsExplicitlyNonCanonical() throws {
+        let fixture = AdmissionExactSearchProbeFixture(
+            schemaVersion: 1,
+            mode: AdmissionMode.exactSearchProbe.rawValue,
+            evidenceClass: "debug-diagnostic",
+            buildConfiguration: "debug",
+            traceEnvironmentEnabled: true,
+            canonicalPercentileEvidence: false,
+            publicRequestCount: 1,
+            corpusRows: 5_000,
+            bodyBytesPerRow: 256 * 1_024,
+            elapsedMs: 1_234.5,
+            position: 81,
+            matchedRows: 0,
+            hasNextPage: false,
+            completionMarker: "single-public-exact-search-completed"
+        )
+
+        let encoded = try JSONEncoder().encode(fixture)
+        #expect(try JSONDecoder().decode(
+            AdmissionExactSearchProbeFixture.self,
+            from: encoded
+        ) == fixture)
+        let json = String(decoding: encoded, as: UTF8.self)
+        #expect(!json.contains("rawSamplesMs"))
+        #expect(!json.contains("percentiles"))
+        #expect(json.contains("canonicalPercentileEvidence"))
     }
 
     @Test func admissionSeedHandoffRoundTripsAndRejectsInvalidFacts() throws {
@@ -262,6 +351,36 @@ struct HistoryPerfRunnerHelperTests {
                 "indexRebuildLinearInRetainedSignatureMetadata"
             ]?.bulletLabel == nil
         )
+    }
+
+    private static func isCompletedWarmup(
+        _ event: AdmissionProgressEvent,
+        index: Int,
+        total: Int
+    ) -> Bool {
+        guard case let .warmupCompleted(
+            actualIndex,
+            actualTotal,
+            elapsedMs
+        ) = event else {
+            return false
+        }
+        return actualIndex == index && actualTotal == total && elapsedMs >= 0
+    }
+
+    private static func isCompletedSample(
+        _ event: AdmissionProgressEvent,
+        index: Int,
+        total: Int
+    ) -> Bool {
+        guard case let .sampleCompleted(
+            actualIndex,
+            actualTotal,
+            elapsedMs
+        ) = event else {
+            return false
+        }
+        return actualIndex == index && actualTotal == total && elapsedMs >= 0
     }
 
     @Test func section9ComplexityEnvelopeTableIsInternallyValid() {

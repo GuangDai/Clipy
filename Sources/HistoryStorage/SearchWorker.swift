@@ -69,6 +69,12 @@ internal actor SearchWorker {
         @Sendable (SearchWorkerSuspensionPoint) async -> Void
     )?
 
+#if DEBUG
+    /// Opt-in aggregate tracing for the off-Authority half of the search
+    /// pipeline. The probe and all event work are absent from Release builds.
+    private var searchDebugProbe = SearchDebugProbe.environmentConfigured()
+#endif
+
     /// Creates the worker with the fixed safety profile and the frozen
     /// Fuse parameter set (03b §8).
     internal init() {
@@ -90,6 +96,13 @@ internal actor SearchWorker {
     ) {
         suspensionHandler = handler
     }
+
+#if DEBUG
+    /// Replaces the environment-backed probe for deterministic Debug tests.
+    internal func setSearchDebugProbe(_ probe: SearchDebugProbe) {
+        searchDebugProbe = probe
+    }
+#endif
 
     /// One evaluated row in final page order: the corpus scalar row, its
     /// search presentation (`nil` on the recent-equivalent lane, 03b §8),
@@ -145,6 +158,19 @@ internal actor SearchWorker {
         continuationAnchor: StoredOrderingAnchor?,
         processMarker: UUID
     ) async throws -> HistoryPage {
+#if DEBUG
+        let debugClock = ContinuousClock()
+        let debugTotalStart = corpus.debugTrace.startedAt
+        let debugTraceID = corpus.debugTrace.id
+        searchDebugProbe.record(
+            traceID: debugTraceID,
+            component: "worker",
+            phase: "entry",
+            phaseElapsed: debugTotalStart.duration(to: debugClock.now),
+            totalElapsed: debugTotalStart.duration(to: debugClock.now),
+            rowsTotal: corpus.rows.count
+        )
+#endif
         guard case .search(let term, let mode) = request.kind else {
             // The facade routes `.recent` to the Authority's §14.1
             // interval; a `.recent` kind here is a wiring violation —
@@ -167,6 +193,10 @@ internal actor SearchWorker {
         await suspensionHandler?(.evaluationEntry)
         try Task.checkCancellation()
 
+#if DEBUG
+        let debugEvaluationStart = debugClock.now
+#endif
+
         // 03b §8: an EMPTY term (zero Characters) is equivalent to
         // `.recent` and carries no search presentation. A non-empty term
         // is never re-trimmed or altered — normalized term equality is
@@ -185,6 +215,20 @@ internal actor SearchWorker {
             }
         }
 
+#if DEBUG
+        searchDebugProbe.record(
+            traceID: debugTraceID,
+            component: "worker",
+            phase: "evaluation-complete",
+            phaseElapsed: debugEvaluationStart.duration(to: debugClock.now),
+            totalElapsed: debugTotalStart.duration(to: debugClock.now),
+            rowsProcessed: corpus.rows.count,
+            rowsTotal: corpus.rows.count,
+            matchedRows: evaluated.count
+        )
+        let debugContinuationStart = debugClock.now
+#endif
+
         // Continuation (04 §6): the cursor anchor names the last row of
         // the previous page in this exact computed order; an absent anchor
         // means the cursor no longer matches this snapshot and fails
@@ -200,6 +244,20 @@ internal actor SearchWorker {
         } else {
             survivors = evaluated[...]
         }
+
+#if DEBUG
+        searchDebugProbe.record(
+            traceID: debugTraceID,
+            component: "worker",
+            phase: "continuation",
+            phaseElapsed: debugContinuationStart.duration(to: debugClock.now),
+            totalElapsed: debugTotalStart.duration(to: debugClock.now),
+            rowsProcessed: survivors.count,
+            rowsTotal: evaluated.count,
+            matchedRows: evaluated.count
+        )
+        let debugMaterializationStart = debugClock.now
+#endif
 
         let pageSlice = survivors.prefix(request.limit)
         let rows = pageSlice.map { evaluatedRow -> HistoryRow in
@@ -244,6 +302,29 @@ internal actor SearchWorker {
         } else {
             next = nil
         }
+
+#if DEBUG
+        searchDebugProbe.record(
+            traceID: debugTraceID,
+            component: "worker",
+            phase: "page-materialization",
+            phaseElapsed: debugMaterializationStart.duration(to: debugClock.now),
+            totalElapsed: debugTotalStart.duration(to: debugClock.now),
+            rowsProcessed: rows.count,
+            rowsTotal: evaluated.count,
+            matchedRows: evaluated.count
+        )
+        searchDebugProbe.record(
+            traceID: debugTraceID,
+            component: "worker",
+            phase: "complete",
+            phaseElapsed: debugTotalStart.duration(to: debugClock.now),
+            totalElapsed: debugTotalStart.duration(to: debugClock.now),
+            rowsProcessed: rows.count,
+            rowsTotal: corpus.rows.count,
+            matchedRows: evaluated.count
+        )
+#endif
 
         return HistoryPage(position: corpus.position, rows: rows, next: next)
     }
@@ -291,11 +372,65 @@ internal actor SearchWorker {
         in corpus: SearchCorpusSnapshot
     ) -> [EvaluatedRow] {
         var evaluated: [EvaluatedRow] = []
+#if DEBUG
+        let debugClock = ContinuousClock()
+        let debugStart = debugClock.now
+        var debugProcessedRows = 0
+        var debugTitleRows = 0
+        var debugBodyRows = 0
+        var debugTitleUTF8Bytes = 0
+        var debugBodyUTF8Bytes = 0
+        var debugTitleMatches = 0
+        var debugBodyMatches = 0
+        var debugTitleElapsed = Duration.zero
+        var debugBodyElapsed = Duration.zero
+        searchDebugProbe.record(
+            traceID: corpus.debugTrace.id,
+            component: "worker",
+            phase: "exact-scan-begin",
+            phaseElapsed: .zero,
+            totalElapsed: corpus.debugTrace.startedAt.duration(to: debugClock.now),
+            rowsTotal: corpus.rows.count
+        )
+
+        func recordProgressIfNeeded() {
+            let isProgressBoundary = debugProcessedRows.isMultiple(
+                of: SearchDebugProbe.progressRowInterval
+            )
+            let isLastRow = debugProcessedRows == corpus.rows.count
+            guard isProgressBoundary || isLastRow else {
+                return
+            }
+            searchDebugProbe.record(
+                traceID: corpus.debugTrace.id,
+                component: "worker",
+                phase: "exact-scan-progress",
+                phaseElapsed: debugStart.duration(to: debugClock.now),
+                totalElapsed: corpus.debugTrace.startedAt.duration(to: debugClock.now),
+                rowsProcessed: debugProcessedRows,
+                rowsTotal: corpus.rows.count,
+                matchedRows: debugTitleMatches + debugBodyMatches,
+                titleUTF8Bytes: debugTitleUTF8Bytes,
+                bodyUTF8Bytes: debugBodyUTF8Bytes,
+                titleMatches: debugTitleMatches,
+                bodyMatches: debugBodyMatches
+            )
+        }
+#endif
         for row in corpus.rows {
-            if let found = row.title.range(
+#if DEBUG
+            debugTitleRows += 1
+            debugTitleUTF8Bytes += row.debugTitleUTF8Bytes
+            let debugTitleStart = debugClock.now
+#endif
+            let titleMatch = row.title.range(
                 of: term,
                 options: [.caseInsensitive, .literal]
-            ) {
+            )
+#if DEBUG
+            debugTitleElapsed += debugTitleStart.duration(to: debugClock.now)
+#endif
+            if let found = titleMatch {
                 // Title match: `snippet == nil`, UTF-16 ranges relative to
                 // `HistoryRow.title` (03b §8).
                 let nsRange = NSRange(found, in: row.title)
@@ -312,15 +447,33 @@ internal actor SearchWorker {
                         anchor: Self.defaultOrderAnchor(for: row)
                     )
                 )
+#if DEBUG
+                debugTitleMatches += 1
+                debugProcessedRows += 1
+                recordProgressIfNeeded()
+#endif
                 continue
             }
             // Only on title miss: the full bounded searchBody (03b §8).
             // Exact mode has no scan prefix; the excerpt therefore windows
             // the complete bounded projection text.
-            guard let found = row.searchBody.range(
+#if DEBUG
+            debugBodyRows += 1
+            debugBodyUTF8Bytes += row.debugSearchBodyUTF8Bytes
+            let debugBodyStart = debugClock.now
+#endif
+            let bodyMatch = row.searchBody.range(
                 of: term,
                 options: [.caseInsensitive, .literal]
-            ) else {
+            )
+#if DEBUG
+            debugBodyElapsed += debugBodyStart.duration(to: debugClock.now)
+#endif
+            guard let found = bodyMatch else {
+#if DEBUG
+                debugProcessedRows += 1
+                recordProgressIfNeeded()
+#endif
                 continue
             }
             // Convert the match bounds without walking the body prefix twice:
@@ -350,7 +503,55 @@ internal actor SearchWorker {
                     anchor: Self.defaultOrderAnchor(for: row)
                 )
             )
+#if DEBUG
+            debugBodyMatches += 1
+            debugProcessedRows += 1
+            recordProgressIfNeeded()
+#endif
         }
+#if DEBUG
+        let debugTotalElapsed = debugStart.duration(to: debugClock.now)
+        searchDebugProbe.record(
+            traceID: corpus.debugTrace.id,
+            component: "worker",
+            phase: "exact-title-scan",
+            phaseElapsed: debugTitleElapsed,
+            totalElapsed: corpus.debugTrace.startedAt.duration(to: debugClock.now),
+            rowsProcessed: debugTitleRows,
+            rowsTotal: corpus.rows.count,
+            matchedRows: debugTitleMatches + debugBodyMatches,
+            titleUTF8Bytes: debugTitleUTF8Bytes,
+            titleMatches: debugTitleMatches,
+            bodyMatches: debugBodyMatches
+        )
+        searchDebugProbe.record(
+            traceID: corpus.debugTrace.id,
+            component: "worker",
+            phase: "exact-body-scan",
+            phaseElapsed: debugBodyElapsed,
+            totalElapsed: corpus.debugTrace.startedAt.duration(to: debugClock.now),
+            rowsProcessed: debugBodyRows,
+            rowsTotal: corpus.rows.count,
+            matchedRows: debugTitleMatches + debugBodyMatches,
+            bodyUTF8Bytes: debugBodyUTF8Bytes,
+            titleMatches: debugTitleMatches,
+            bodyMatches: debugBodyMatches
+        )
+        searchDebugProbe.record(
+            traceID: corpus.debugTrace.id,
+            component: "worker",
+            phase: "exact-scan-complete",
+            phaseElapsed: debugTotalElapsed,
+            totalElapsed: corpus.debugTrace.startedAt.duration(to: debugClock.now),
+            rowsProcessed: debugProcessedRows,
+            rowsTotal: corpus.rows.count,
+            matchedRows: debugTitleMatches + debugBodyMatches,
+            titleUTF8Bytes: debugTitleUTF8Bytes,
+            bodyUTF8Bytes: debugBodyUTF8Bytes,
+            titleMatches: debugTitleMatches,
+            bodyMatches: debugBodyMatches
+        )
+#endif
         return evaluated
     }
 

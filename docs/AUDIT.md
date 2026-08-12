@@ -38,6 +38,7 @@ Verdict: `CONFIRMED` (real defect, fix) · `REFUTED` (looks wrong, is correct) �
 | IND-03 | major | 03 §8, 06 §2, 01 §4 | Fuse `maxPatternLength` default 32 vs 256-char fuzzy bound → long queries silently nil | CONFIRMED | fixed |
 | IND-04 | minor | 03 §8, 01 §4 | Fuse `location`/`distance` (relevance-affecting) undiscussed | CONFIRMED | fixed |
 | IND-05 | nit | 01 §4 | "Fuse 1.4.x" version unverified; dep not named precisely; Sendable-by-confinement implicit | REFUTED | fixed (repo named `krisk/fuse-swift`, 1.4.0 confirmed latest stable; non-Sendable confinement documented in Module 7) |
+| IND-06 | minor | 06 §9 | 90-minute exact admission emitted no phase/sample progress; Debug-only source trace was not distinguished from canonical Release evidence | CONFIRMED | fixed |
 | WF-* | — | — | Historical workflow register; findings were merged into §4 and the design change log. | merged | historical |
 
 ### Design-correct confirmations (REFUTED-as-fine, kept for provenance)
@@ -80,6 +81,7 @@ Pass 1 (2026-07-19) — all 15 MAJORS + ~20 minors/nits; re-audit follows.
 | S1-05/S1-30/S1-31 | 06 | added WS16 (remove+notFound/placement), WS17 (search+ranges+failures), WS18 (pagination+snapshotExpired), WS19 (out-of-order monotonicity), WS20 (concurrent revision+coalesce) |
 | S1-15 | 00 §1, 06 §10 | `docs/greenfield/`→`docs/` |
 | S1-16 | 00 §5, 01 §5.5, 04 §4 | CONTEXT.md references → inline (no external-file dependency) |
+| IND-06 | 06 §9 | added one-request Debug diagnostic trace, privacy boundary, fail-fast relationship to the unchanged 101-call Release evidence, and explicit non-evidence status |
 
 Outstanding after Pass 1 → addressed in Pass 2 (same date):
 

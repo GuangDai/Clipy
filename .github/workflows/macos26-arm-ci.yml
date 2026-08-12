@@ -391,24 +391,41 @@ jobs:
             sysctl -n hw.memsize
           } 2>&1 | tee "$LOG_DIR/diagnostics.log"
 
-      - name: Build admission runner (release)
+      - name: Build isolated Release and Debug admission runners
         shell: bash
         run: |
           set -euo pipefail
-          swift build -c release --product HistoryPerfRunner \
+          release_scratch="$RUNNER_TEMP/clipy-admission-release-build"
+          debug_scratch="$RUNNER_TEMP/clipy-admission-debug-build"
+          swift build -c release --scratch-path "$release_scratch" \
+            --product HistoryPerfRunner \
             2>&1 | tee "$LOG_DIR/build.log"
-          swift build -c release --show-bin-path \
+          swift build -c release --scratch-path "$release_scratch" \
+            --show-bin-path \
             2>&1 | tee "$LOG_DIR/bin-path.log"
           ADMISSION_BIN="$(tail -n 1 "$LOG_DIR/bin-path.log")/HistoryPerfRunner"
           [[ -x "$ADMISSION_BIN" ]]
+          [[ "$ADMISSION_BIN" == */release/HistoryPerfRunner ]]
+          swift build -c debug --scratch-path "$debug_scratch" \
+            --product HistoryPerfRunner \
+            2>&1 | tee "$LOG_DIR/debug-build.log"
+          swift build -c debug --scratch-path "$debug_scratch" \
+            --show-bin-path \
+            2>&1 | tee "$LOG_DIR/debug-bin-path.log"
+          ADMISSION_DEBUG_BIN="$(tail -n 1 "$LOG_DIR/debug-bin-path.log")/HistoryPerfRunner"
+          [[ -x "$ADMISSION_DEBUG_BIN" ]]
+          [[ "$ADMISSION_DEBUG_BIN" == */debug/HistoryPerfRunner ]]
+          [[ "$ADMISSION_DEBUG_BIN" != "$ADMISSION_BIN" ]]
           echo "ADMISSION_BIN=$ADMISSION_BIN" >> "$GITHUB_ENV"
+          echo "ADMISSION_DEBUG_BIN=$ADMISSION_DEBUG_BIN" >> "$GITHUB_ENV"
 
       - name: Self-scan build diagnostics
         shell: bash
         run: |
           set -euo pipefail
           matches=$(grep -Ein '(^|[^[:alpha:]])(warning:|error:)([^[:alpha:]]|$)' \
-            "$LOG_DIR/build.log" "$LOG_DIR/bin-path.log" || true)
+            "$LOG_DIR/build.log" "$LOG_DIR/bin-path.log" \
+            "$LOG_DIR/debug-build.log" "$LOG_DIR/debug-bin-path.log" || true)
           if [[ -n "$matches" ]]; then
             echo "$matches"
             echo "Warnings or errors found in admission build log"
@@ -517,6 +534,51 @@ jobs:
             "$STORE_URL" "$LOG_DIR/browse-ties.json" \
             2>&1 | tee "$LOG_DIR/browse-ties.log"
 
+      - name: Run one Debug exact-search diagnostic probe
+        id: exact_search_probe
+        continue-on-error: true
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set -euo pipefail
+          CLIPY_SEARCH_TRACE=1 \
+            /usr/bin/time -l -o "$LOG_DIR/exact-search-probe.time" \
+            "$ADMISSION_DEBUG_BIN" --admission exact-search-probe \
+            "$STORE_URL" "$LOG_DIR/exact-search-probe.json" \
+            2>&1 | tee "$LOG_DIR/exact-search-probe.log"
+
+      - name: Require complete Debug exact-search diagnostics
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.exact_search_probe.outcome }}" != success ]]; then
+            echo "exact-search-probe admission mode did not complete: ${{ steps.exact_search_probe.outcome }}"
+            exit 1
+          fi
+          jq -e '
+            .schemaVersion == 1
+            and .mode == "exact-search-probe"
+            and .evidenceClass == "debug-diagnostic"
+            and .buildConfiguration == "debug"
+            and .traceEnvironmentEnabled == true
+            and .canonicalPercentileEvidence == false
+            and .publicRequestCount == 1
+            and .corpusRows == 5000
+            and .bodyBytesPerRow == 262144
+            and .elapsedMs > 0
+            and .position > 0
+            and .matchedRows == 0
+            and .hasNextPage == false
+            and .completionMarker == "single-public-exact-search-completed"
+            and (has("rawSamplesMs") | not)
+            and (has("percentiles") | not)
+          ' "$LOG_DIR/exact-search-probe.json" >/dev/null
+          if [[ ! -s "$LOG_DIR/exact-search-probe.time" ]]; then
+            echo "exact-search-probe RSS timing record is missing or empty"
+            exit 1
+          fi
+
       - name: Measure worst-bound exact search
         id: exact_search
         continue-on-error: true
@@ -562,7 +624,7 @@ jobs:
             echo
             echo "Raw latency samples and machine metadata are in the JSON artifacts."
             echo
-            for mode in seed-smoke prepare-smoke seed prepare browse-ties exact-search; do
+            for mode in seed-smoke prepare-smoke seed prepare browse-ties exact-search-probe exact-search; do
               time_file="$LOG_DIR/$mode.time"
               if [[ -f "$time_file" ]]; then
                 rss=$(awk '/maximum resident set size/ {print $1}' "$time_file")

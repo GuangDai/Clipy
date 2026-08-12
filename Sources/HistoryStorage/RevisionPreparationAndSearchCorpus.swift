@@ -69,6 +69,11 @@ internal struct SearchCorpusSnapshot: Sendable {
     /// Scalar projection rows for every retained item (bounded by the hard
     /// retained-item maximum, docs/06-cross-cutting.md §2).
     let rows: [SearchCorpusRow]
+#if DEBUG
+    /// Correlates privacy-safe Authority and SearchWorker checkpoints. The
+    /// identifier and the field itself are absent from Release builds.
+    let debugTrace: SearchDebugTrace
+#endif
 }
 
 /// One retained item's scalar projection inside a `SearchCorpusSnapshot`
@@ -83,6 +88,12 @@ internal struct SearchCorpusRow: Sendable {
     let title: String
     /// Durable bounded search-body projection (Part V §15).
     let searchBody: String
+#if DEBUG
+    /// Byte sizes already computed by fail-closed projection validation. They
+    /// keep SearchWorker instrumentation from walking either String again.
+    let debugTitleUTF8Bytes: Int
+    let debugSearchBodyUTF8Bytes: Int
+#endif
     /// Sorted unique effective type identifiers (Part V §15).
     let typeIdentifiers: [String]
     /// Occurrence summary scalars.
