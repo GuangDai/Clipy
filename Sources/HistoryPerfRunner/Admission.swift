@@ -162,7 +162,19 @@ struct AdmissionExactSearchProbeFixture: Codable, Sendable, Equatable {
 /// Privacy-safe checkpoints for the long-running admission measurement. The
 /// event carries only workload control-flow facts: never query text, row
 /// content, item identifiers, or store paths (06 §9; V1-Verified G2/G8).
+enum AdmissionPreparationPhase: String, Sendable, Equatable {
+    case openStore = "open-store"
+    case publicCoalesce = "public-coalesce"
+    case publicInsert = "public-insert"
+    case recentBrowse = "recent-browse"
+}
+
 enum AdmissionProgressEvent: Sendable, Equatable {
+    case preparationPhaseBegan(AdmissionPreparationPhase)
+    case preparationPhaseCompleted(
+        AdmissionPreparationPhase,
+        elapsedMs: Double
+    )
     case validationBegan
     case validationCompleted(elapsedMs: Double)
     case warmupBegan(index: Int, total: Int)
@@ -231,6 +243,11 @@ func admissionProgressLine(
 ) -> String {
     let prefix = "HistoryPerfRunner admission progress mode=\(mode.rawValue)"
     switch event {
+    case let .preparationPhaseBegan(phase):
+        return "\(prefix) phase=\(phase.rawValue) state=begin"
+    case let .preparationPhaseCompleted(phase, elapsedMs):
+        return "\(prefix) phase=\(phase.rawValue) state=completed "
+            + "elapsed_ms=\(admissionProgressElapsedText(elapsedMs))"
     case .validationBegan:
         return "\(prefix) phase=validation state=begin"
     case let .validationCompleted(elapsedMs):
@@ -520,16 +537,39 @@ private func prepareAdmissionStore(
     // live CoreData coordinators sharing external-storage references.
     let clock = ContinuousClock()
     let validationStart = clock.now
+    let openStart = clock.now
+    writeAdmissionProgress(
+        mode: mode,
+        event: .preparationPhaseBegan(.openStore)
+    )
     let history = try await openStore(
         url: storeURL,
         maxUnpinned: profile.retainedRows
     )
+    writeAdmissionProgress(
+        mode: mode,
+        event: .preparationPhaseCompleted(
+            .openStore,
+            elapsedMs: durationToMs(openStart.duration(to: clock.now))
+        )
+    )
     let coalesceStart = clock.now
+    writeAdmissionProgress(
+        mode: mode,
+        event: .preparationPhaseBegan(.publicCoalesce)
+    )
     let coalesceReceipt = try await history.perform(.capture(
         admissionCapture(index: 0, profile: profile)
     ))
     let coalesceWallTimeMs = durationToMs(
         coalesceStart.duration(to: clock.now)
+    )
+    writeAdmissionProgress(
+        mode: mode,
+        event: .preparationPhaseCompleted(
+            .publicCoalesce,
+            elapsedMs: coalesceWallTimeMs
+        )
     )
     guard case .committed(let coalesceCommit) = coalesceReceipt,
           case .coalesced = coalesceCommit.outcome
@@ -538,18 +578,41 @@ private func prepareAdmissionStore(
     }
 
     let insertStart = clock.now
+    writeAdmissionProgress(
+        mode: mode,
+        event: .preparationPhaseBegan(.publicInsert)
+    )
     let insertReceipt = try await history.perform(.capture(
         admissionCapture(index: profile.retainedRows - 1, profile: profile)
     ))
     let insertWallTimeMs = durationToMs(insertStart.duration(to: clock.now))
+    writeAdmissionProgress(
+        mode: mode,
+        event: .preparationPhaseCompleted(
+            .publicInsert,
+            elapsedMs: insertWallTimeMs
+        )
+    )
     guard case .committed(let insertCommit) = insertReceipt,
           case .inserted = insertCommit.outcome
     else {
         throw AdmissionError.unexpectedPage
     }
 
+    let recentStart = clock.now
+    writeAdmissionProgress(
+        mode: mode,
+        event: .preparationPhaseBegan(.recentBrowse)
+    )
     let page = try await history.browse(
         HistoryBrowseRequest(kind: .recent, limit: profile.pageLimit)
+    )
+    writeAdmissionProgress(
+        mode: mode,
+        event: .preparationPhaseCompleted(
+            .recentBrowse,
+            elapsedMs: durationToMs(recentStart.duration(to: clock.now))
+        )
     )
     guard expectedCoalescePosition == coalesceCommit.position,
           page.position == insertCommit.position,

@@ -359,8 +359,8 @@ exclusions remain documented in the workflow history below.
   runtime traps.
   `docs/V1-Verified/07-finding-dispositions.md` remains the authoritative
   222-ID status ledger. The post-closure overlay below supersedes that run's
-  historical checksum; the current checksum is 111 fixed, 30 deferred, 31
-  duplicate, 30 not-a-defect, 19 documented, 1 in-progress, and no pending
+  historical checksum; the current checksum is 111 fixed, 29 deferred, 31
+  duplicate, 30 not-a-defect, 19 documented, 2 in-progress, and no pending
   rows.
 - **Domain:** 47 direct tests exercise all seven planners across commit/no-op,
   rejection, capacity, deterministic ordering, and complete mutation payloads;
@@ -466,10 +466,10 @@ exclusions remain documented in the workflow history below.
 
 ## Post-closure complexity pass (2026-08-11)
 
-- **Status:** in progress. The canonical 222-row ledger currently has one
-  `in-progress` performance-evidence item: 111 `fixed`, 30 `deferred`, and no
+- **Status:** in progress. The canonical 222-row ledger currently has two
+  `in-progress` performance-evidence items: 111 `fixed`, 29 `deferred`, and no
   `pending` rows. Broader measurement-gated changes remain deferred until the
-  new supported admission artifacts can answer their exact trigger units.
+  new supported artifacts can answer their exact trigger units.
 - **Pure bounded algorithms:** [`1168d1d`](https://github.com/GuangDai/Clipy/commit/1168d1d)
   starts signature intersection from the smallest posting, validates D12 pin
   permutations in O(P), removes payload hashing from Canonical containment,
@@ -542,4 +542,18 @@ exclusions remain documented in the workflow history below.
   the 90-minute Release and later warm-open steps. A successful probe proceeds
   directly to the canonical Release path, which still records all 101
   independent calls with immediate validation, warmup, and per-sample
-  begin/completion checkpoints. Supported diagnostic evidence is pending.
+  begin/completion checkpoints. Run
+  [31597596383](https://github.com/GuangDai/Clipy/actions/runs/31597596383)
+  then completed the 4,999-row seed cleanly but emitted one missing `.interim`
+  clone 31 seconds into the separate 5,000-row validation process; validation
+  still returned position 81 and 50 recent rows, so the clean-log gate failed
+  before the Debug search probe could run. That run also exposed an independent
+  WL2 harness flaw: same-process best-effort teardown produced an 8.137× warm
+  open ratio against the 8× envelope. The next iteration puts startup,
+  capture, and recent-read model lifetimes inside operation-local autorelease
+  pools, adds immediate prepare phases plus opt-in Debug storage-lifecycle
+  checkpoints, and lets the short probe run after a non-throwing preparation
+  diagnostic while still skipping all long canonical measurements. WL2 now
+  populates, warms, and internally times each open in a fresh child process;
+  launch/teardown time is excluded and the 8× bound is unchanged. Supported
+  diagnostic evidence is pending.

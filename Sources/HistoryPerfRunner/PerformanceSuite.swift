@@ -843,42 +843,33 @@ func workloadPersistentStoreOpenScaling() async -> [WorkloadFixture] {
     let sizes = envelope.measurementScales
 
     do {
+        let executableURL = try performanceRunnerExecutableURL()
         var medians: [Double] = []
         for size in sizes {
             let url = makeStoreURL("wl2-open-\(size)")
+            defer { removeStoreDir(url) }
 
-            // Phase 1: populate the store (untimed) in an inner scope so the
-            // facade is released before the measurement reopens it.
-            do {
-                let populateStore = try await openStore(url: url)
-                try await populateItems(populateStore, count: size)
-            }
-            await Task.yield()
-
-            // Phase 2: measure repeated public SwiftDataHistory.open calls.
-            // This is deliberately the complete warm persistent-store-open
-            // construct: ModelContainer/SQLite open, singleton and startup
-            // validation, scalar metadata reads, and Signature Index rebuild
-            // (05 §13). It is not an isolated index-rebuild timer, cold-start
-            // proof, or G5 absolute-latency fixture. Inner scope + yield makes
-            // facade release best-effort; SwiftData exposes no deterministic
-            // close/teardown seam, so the fixture records a scaling envelope
-            // rather than making a resource-teardown claim.
-            let clock = ContinuousClock()
-            // Warmup.
-            _ = try await openStore(url: url)
-            await Task.yield()
-            // Timed.
-            var samples: [Double] = []
-            for _ in 0..<5 {
-                let start = clock.now
-                _ = try await openStore(url: url)
-                let elapsed = start.duration(to: clock.now)
-                samples.append(durationToMs(elapsed))
-                await Task.yield()
-            }
+            // Phase 1: a dedicated untimed child populates through the public
+            // facade and exits. The parent never owns this workload's
+            // ModelContainer, so no best-effort lexical teardown can overlap a
+            // measured open.
+            // Phase 2: one discarded warmup and all five samples run in fresh
+            // child processes. Each child clocks only its public
+            // `SwiftDataHistory.open`; parent-observed launch and teardown time
+            // never enters the sample value.
+            let samples = try runPersistentOpenChildSequence(populate: {
+                try populatePersistentOpenStoreInChild(
+                    executableURL: executableURL,
+                    storeURL: url,
+                    rowCount: size
+                )
+            }, measure: {
+                try measurePersistentOpenInChild(
+                    executableURL: executableURL,
+                    storeURL: url
+                )
+            })
             medians.append(median(samples))
-            removeStoreDir(url)
         }
 
         let ratio = safeRatio(medians[medians.count - 1], medians[0])
@@ -891,7 +882,7 @@ func workloadPersistentStoreOpenScaling() async -> [WorkloadFixture] {
             ratio: ratio,
             bound: bound,
             pass: passed,
-            note: "Warm repeated persistent-store open over retained metadata: ModelContainer/SQLite open, singleton/startup validation, scalar metadata reads, and Signature Index rebuild (§9 bullet 3; 05 §13). This is not an isolated rebuild, cold-start, teardown, or G5 absolute-latency proof. \(envelope.scaleSpan)× items, \(bound)× bound = \(envelope.headroomFactor)× linear headroom.",
+            note: "Warm persistent-store opens over retained metadata run in fresh child processes; each child reports only its internal public SwiftDataHistory.open duration, excluding launch and teardown. The sample includes ModelContainer/SQLite open, singleton/startup validation, scalar metadata reads, and Signature Index rebuild (§9 bullet 3; 05 §13). This is not an isolated rebuild, cold-start, or G5 absolute-latency proof. \(envelope.scaleSpan)× items, \(bound)× bound = \(envelope.headroomFactor)× linear headroom.",
             medium: ".persistent"
         )
         printResult(key, bullet, ratio, bound, passed)
@@ -1608,7 +1599,13 @@ struct PerfRunner {
     static func main() async {
         let arguments = Array(CommandLine.arguments.dropFirst())
         let exitCode: Int
-        if arguments.first == "--admission" {
+        if let rawMode = arguments.first,
+           let childMode = PersistentOpenChildMode(rawValue: rawMode) {
+            exitCode = await runPersistentOpenChild(
+                mode: childMode,
+                arguments: Array(arguments.dropFirst())
+            )
+        } else if arguments.first == "--admission" {
             exitCode = await runAdmission(
                 arguments: Array(arguments.dropFirst())
             )

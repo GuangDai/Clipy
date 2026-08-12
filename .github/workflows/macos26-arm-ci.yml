@@ -494,7 +494,9 @@ jobs:
             2>&1 | tee "$LOG_DIR/prepare.log"
 
       - name: Require clean bounded full preparation
+        id: prepare_cleanliness
         if: always()
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -524,6 +526,7 @@ jobs:
 
       - name: Measure tie-heavy browse-page latency
         id: browse_ties
+        if: always() && steps.prepare_cleanliness.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 45
         shell: bash
@@ -536,19 +539,22 @@ jobs:
 
       - name: Run one Debug exact-search diagnostic probe
         id: exact_search_probe
+        if: always() && steps.prepare.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 15
         shell: bash
         run: |
           set -euo pipefail
-          CLIPY_SEARCH_TRACE=1 \
+          CLIPY_SEARCH_TRACE=1 CLIPY_STORAGE_TRACE=1 \
             /usr/bin/time -l -o "$LOG_DIR/exact-search-probe.time" \
             "$ADMISSION_DEBUG_BIN" --admission exact-search-probe \
             "$STORE_URL" "$LOG_DIR/exact-search-probe.json" \
             2>&1 | tee "$LOG_DIR/exact-search-probe.log"
 
       - name: Require complete Debug exact-search diagnostics
-        if: always()
+        id: exact_search_probe_gate
+        if: always() && steps.prepare.outcome == 'success'
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -574,6 +580,17 @@ jobs:
             and (has("rawSamplesMs") | not)
             and (has("percentiles") | not)
           ' "$LOG_DIR/exact-search-probe.json" >/dev/null
+          for marker in \
+            '"event":"clipy.storage.lifecycle".*"phase":"startup.fetch.begin"' \
+            '"event":"clipy.storage.lifecycle".*"phase":"startup.fetch.complete"' \
+            '"event":"clipy.search.trace".*"phase":"entry"' \
+            '"event":"clipy.search.trace".*"phase":"complete"'
+          do
+            if ! grep -E "$marker" "$LOG_DIR/exact-search-probe.log" >/dev/null; then
+              echo "Missing required Debug trace marker: $marker"
+              exit 1
+            fi
+          done
           if [[ ! -s "$LOG_DIR/exact-search-probe.time" ]]; then
             echo "exact-search-probe RSS timing record is missing or empty"
             exit 1
@@ -581,6 +598,10 @@ jobs:
 
       - name: Measure worst-bound exact search
         id: exact_search
+        if: >-
+          always()
+          && steps.prepare_cleanliness.outcome == 'success'
+          && steps.exact_search_probe_gate.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 90
         shell: bash
@@ -593,6 +614,10 @@ jobs:
 
       - name: Measure independent-process warm persistent open
         id: warm_open
+        if: >-
+          always()
+          && steps.prepare_cleanliness.outcome == 'success'
+          && steps.exact_search_probe_gate.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 45
         shell: bash
@@ -690,6 +715,9 @@ jobs:
           }
           require_success prepare-smoke "${{ steps.prepare_smoke.outcome }}"
           require_success prepare "${{ steps.prepare.outcome }}"
+          require_success prepare-cleanliness "${{ steps.prepare_cleanliness.outcome }}"
+          require_success exact-search-probe "${{ steps.exact_search_probe.outcome }}"
+          require_success exact-search-probe-gate "${{ steps.exact_search_probe_gate.outcome }}"
           require_success browse-ties "${{ steps.browse_ties.outcome }}"
           require_success exact-search "${{ steps.exact_search.outcome }}"
           require_success warm-open "${{ steps.warm_open.outcome }}"

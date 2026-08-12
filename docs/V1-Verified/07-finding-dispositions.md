@@ -22,8 +22,8 @@ whose only remaining condition was that proof is now `fixed`; deliberately
 deferred, duplicate, documented, and not-a-defect dispositions are unchanged.
 The source-inclusive thumbnail extension is additionally fixed by supported
 run [31494740863](https://github.com/GuangDai/Clipy/actions/runs/31494740863).
-The dispatch-only absolute performance-evidence lane is the sole current
-`in-progress` row.
+The dispatch-only absolute performance-evidence lane and the WL2
+independent-process rerun are the two current `in-progress` rows.
 
 ## Inventory checksum
 
@@ -38,8 +38,8 @@ The dispatch-only absolute performance-evidence lane is the sole current
 | `04-perf-deps-stubs.md` | 1 | 1 | 19 | 14 | 35 |
 | **Total** | **3** | **14** | **112** | **93** | **222** |
 
-Current dispositions: 111 `fixed`, 30 `deferred`, 31 `duplicate`,
-30 `not-a-defect`, 19 `documented`, 1 `in-progress`, and 0 `pending`.
+Current dispositions: 111 `fixed`, 29 `deferred`, 31 `duplicate`,
+30 `not-a-defect`, 19 `documented`, 2 `in-progress`, and 0 `pending`.
 
 ## `01-historycore.md` — HistoryCore (20)
 
@@ -349,7 +349,7 @@ Current dispositions: 111 `fixed`, 30 `deferred`, 31 `duplicate`,
 | Canonical finding ID | Status | Evidence / canonical relationship / next action |
 |---|---|---|
 | `wl2-measures-full-open-not-just-index-rebuild` | `fixed` | **Completed 2026-08-11:** public-symbol workflow [31448087991](https://github.com/GuangDai/Clipy/actions/runs/31448087991) and final code-head CI [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036) are green; the latter passed all source/lint gates, strict-concurrency builds, 314 tests in 41 suites, app build/test, and all 13 release workloads. **Pre-proof implementation record:** WL2 now honestly names warm persistent-store-open scaling across container/open/singleton/startup/index work; map/tests/spec are aligned and macOS perf proof remains. |
-| `wl2-implicit-dealloc-no-deterministic-seam` | `deferred` | Owner: Performance + SwiftData platform evidence. Trigger: deterministic teardown API availability or repeated-open variance/flakes. The manual admission lane avoids same-process teardown ambiguity through child-process exit but does not change WL2's existing same-process scaling construct; both retain warm OS caches. Residual risk: framework teardown and cache warmth perturb WL2 samples, so it is not cold-start evidence. |
+| `wl2-implicit-dealloc-no-deterministic-seam` | `in-progress` | Run 31597596383 triggered the recorded variance condition with an 8.137× ratio against the unchanged 8× envelope. WL2 population, warmup, and every sample now run in independently terminated children, and each child reports only its internally timed public open. OS caches remain warm, so this is not cold-start or G5 evidence; supported macOS proof is pending. |
 | `median-helper-wrong-even-count-no-guard-mislabeled` | `fixed` | **Completed 2026-08-11:** public-symbol workflow [31448087991](https://github.com/GuangDai/Clipy/actions/runs/31448087991) and final code-head CI [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036) are green; the latter passed all source/lint gates, strict-concurrency builds, 314 tests in 41 suites, app build/test, and all 13 release workloads. **Pre-proof implementation record:** Even samples average both middle values, empty input fails explicitly, WL4 uses five timed samples, WL8 separates wall time, and odd/even tests are local; macOS perf proof remains. |
 | `bounds-magic-numbers-no-invariant-check` | `fixed` | **Completed 2026-08-11:** public-symbol workflow [31448087991](https://github.com/GuangDai/Clipy/actions/runs/31448087991) and final code-head CI [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036) are green; the latter passed all source/lint gates, strict-concurrency builds, 314 tests in 41 suites, app build/test, and all 13 release workloads. **Pre-proof implementation record:** Every gated workload now consumes one declarative scales/growth/bound/headroom table. Preflight and direct tests prove positive increasing scales, derived linear/constant ratios, finite bounds, the standard 1.5× floor, and WL1a's sole named 1.2× exception; macOS Swift/perf proof remains. |
 | `wl4-retention-clear-bound-too-loose-to-catch-quadratic` | `fixed` | **Completed 2026-08-11:** public-symbol workflow [31448087991](https://github.com/GuangDai/Clipy/actions/runs/31448087991) and final code-head CI [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036) are green; the latter passed all source/lint gates, strict-concurrency builds, 314 tests in 41 suites, app build/test, and all 13 release workloads. **Pre-proof implementation record:** WL4 now uses one warmup plus five timed samples and a 6× bound over a 3× corpus, rejecting nominal quadratic 9× scaling; perf CI remains. |

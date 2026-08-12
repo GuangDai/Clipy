@@ -19,8 +19,8 @@
 > compile-risk reviews found no remaining completion exception at that head.
 > The post-closure complexity pass fixed source-inclusive thumbnail hydration
 > in supported run 31494740863 and reopened the manual performance-evidence
-> lane. The current 222-row ledger has 111 `fixed`, 30 `deferred`, 1
-> `in-progress`, and no `pending` findings.
+> lane plus the WL2 independent-process rerun. The current 222-row ledger has
+> 111 `fixed`, 29 `deferred`, 2 `in-progress`, and no `pending` findings.
 
 ## Status rules
 

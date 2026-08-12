@@ -8,7 +8,7 @@
 > supported-proof-dependent findings were fixed by public-symbol workflow
 > 31448087991 and code-head run 31449682036. A later complexity pass reopened
 > the performance-evidence lane; the canonical ledger now has 111 fixed,
-> 30 deferred, 1 in-progress, and no pending rows. Source-inclusive thumbnail
+> 29 deferred, 2 in-progress, and no pending rows. Source-inclusive thumbnail
 > hydration is fixed by supported run 31494740863.
 > Present-tense defect and test-gap descriptions below describe the audited
 > `8f316c9` baseline, not the remediated tree.

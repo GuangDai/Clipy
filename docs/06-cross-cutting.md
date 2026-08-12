@@ -264,8 +264,10 @@ Correctness gates run first. Performance claims are accepted only from a release
   rows within the 5,000-item hard bound. The timed public
   `SwiftDataHistory.open` construct includes `ModelContainer`/SQLite open,
   singleton and startup validation, scalar-metadata reads, and Signature Index
-  rebuild; it is not an isolated index-rebuild timer, cold-start proof,
-  deterministic-teardown proof, or G5 absolute-latency fixture.
+  rebuild. Population, warmup, and each of the five samples run in fresh child
+  processes; a child clocks only the public open, excluding process launch and
+  teardown. This is not an isolated index-rebuild timer, cold-start proof,
+  external-storage teardown proof, or G5 absolute-latency fixture.
 - Pin reorder is O(pinned count), bounded by retained count.
 - User retention and clear are O(retained scalar metadata), bounded by retained count.
 - Recent browse normally materializes at most `limit + 1` scalar rows across
@@ -317,10 +319,15 @@ Canonical bytes), and the final distinct row must insert, leaving exactly
 5,000 rows. Seeding and public validation are separate executable invocations:
 the seed process writes a primitive handoff fixture and exits before the
 validation process reopens the store. Process termination is the deterministic
-`ModelContainer` teardown boundary, so separate live CoreData coordinators
-never overlap during setup. `ChangePosition` advances once per physical
-non-empty batch or public commit; readers capture its authoritative value and
-require it to remain stable instead of equating it with row count.
+boundary proving that separate live CoreData coordinators do not overlap; it
+does not claim an undocumented external-storage finalization barrier. Within
+validation, startup, each public capture commit, and recent browse drain an
+operation-local autorelease pool before the next operation can create another
+context, so fetched `@Model` backing references cannot accumulate across those
+serialized intervals. `ModelContext.transaction` remains the sole commit
+primitive. `ChangePosition` advances once per physical non-empty batch or
+public commit; readers capture its authoritative value and require it to
+remain stable instead of equating it with row count.
 
 The versioned fixtures record setup phase wall times/transaction counts,
 machine/toolchain metadata, all 101 raw measurement samples, and nearest-rank
@@ -343,17 +350,22 @@ That lane has three deliberately different evidence units:
   profile, so this fixture cannot alone admit G5.
 
 Before the canonical absent-term exact-search measurement, the same manual job
-runs one explicitly Debug-only diagnostic request over that already-prepared
-5,000 × 256 KiB corpus. `CLIPY_SEARCH_TRACE=1` enables privacy-safe source
-checkpoints for context/position access, corpus fetch, projection validation,
-sorting, exact title/body scanning, and page materialization; progress is
+preparation emits immediate open/coalesce/insert/recent begin/completion
+checkpoints. If preparation completed but the clean-log gate caught a
+non-throwing framework diagnostic, the same manual job still runs one
+explicitly Debug-only diagnostic request over that corpus, then uploads its
+artifacts while skipping every long canonical measurement.
+`CLIPY_SEARCH_TRACE=1` enables privacy-safe search checkpoints for
+context/position access, corpus fetch, projection validation, sorting, exact
+title/body scanning, and page materialization; `CLIPY_STORAGE_TRACE=1` adds
+startup/context-lifecycle timings and aggregate row counts. Progress is
 reported every 250 rows without recording the query, clipboard text, item IDs,
 source applications, or store path. Its fixture is labeled
 `debug-diagnostic`, contains no sample array or percentiles, and is never G2,
 G5, or G8 evidence. Failure or timeout skips the 90-minute canonical exact
 step and the later warm-open step, so the job preserves the partial trace and
-fails promptly. A successful probe proceeds directly to the unchanged Release
-measurement with 101 independent public calls.
+fails promptly. A successful probe after clean preparation proceeds directly
+to the unchanged Release measurement with 101 independent public calls.
 
 The manual job is record-only until an authoritative workload, hardware
 profile, and budget are approved. Completion is gated; observed latency or RSS

@@ -17,6 +17,9 @@
 ///
 /// - a fresh `ModelContext(container)` is created per isolated operation and
 ///   never crosses an actor boundary;
+/// - startup, public capture, and recent-browse context intervals are bounded
+///   by operation-local autorelease pools so SwiftData/CoreData backing
+///   references drain before the next Authority operation begins;
 /// - no `await` occurs while a commit context, fetched row, complete fact,
 ///   or commit plan is live (the one `await` in `commitCapture` is the test
 ///   suspension point at entry, before the context exists);
@@ -220,6 +223,12 @@ internal actor HistoryAuthority {
     /// absent from Release builds; tests may replace the environment-backed
     /// stderr probe with an in-memory sink.
     private var searchDebugProbe = SearchDebugProbe.environmentConfigured()
+
+    /// Opt-in storage lifecycle tracing. Fixed, privacy-safe phase events
+    /// expose where a context-bound operation last made progress without
+    /// retaining a logger, context, or row across Authority operations.
+    private var storageLifecycleDebugProbe = StorageLifecycleDebugProbe
+        .environmentConfigured()
 #endif
 
     /// The singleton row's well-known key (§3.2: always "retained-history").
@@ -251,6 +260,14 @@ internal actor HistoryAuthority {
     /// persistence implementation or a global logger.
     internal func setSearchDebugProbe(_ probe: SearchDebugProbe) {
         searchDebugProbe = probe
+    }
+
+    /// Installs a Debug-only lifecycle probe for supported-platform tests and
+    /// diagnostics. The probe is a Sendable value with a synchronous sink.
+    internal func setStorageLifecycleDebugProbe(
+        _ probe: StorageLifecycleDebugProbe
+    ) {
+        storageLifecycleDebugProbe = probe
     }
 #endif
 
@@ -290,20 +307,37 @@ internal actor HistoryAuthority {
             throw HistoryFailure.invalidInput(.invalidRetentionPolicy)
         }
 
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
+        try autoreleasepool {
+            let context = ModelContext(container)
+            context.autosaveEnabled = false
+#if DEBUG
+            let startupFetchClock = ContinuousClock()
+            let startupFetchStart = startupFetchClock.now
+            storageLifecycleDebugProbe.record(phase: .startupFetchBegin)
+#endif
 
-        // §13 steps 3–4: load-or-create the singleton; validate exactly one.
-        try Self.ensurePositionSingleton(
-            in: context,
-            initialMaximumUnpinnedItems: initialMaximumUnpinnedItems
-        )
+            // §13 steps 3–4: load-or-create the singleton; validate exactly one.
+            try Self.ensurePositionSingleton(
+                in: context,
+                initialMaximumUnpinnedItems: initialMaximumUnpinnedItems
+            )
 
-        // §13 steps 5–9: scalar scan, Signature Index build, pin-order proof.
-        signatureIndex = try Self.buildSignatureIndexAtStartup(
-            in: context,
-            limits: limits
-        )
+            // §13 steps 5–9: scalar scan, Signature Index build, pin-order proof.
+            signatureIndex = try Self.buildSignatureIndexAtStartup(
+                in: context,
+                limits: limits
+            )
+#if DEBUG
+            storageLifecycleDebugProbe.record(
+                phase: .startupFetchComplete,
+                elapsed: startupFetchStart.duration(to: startupFetchClock.now),
+                rows: signatureIndex.itemCount
+            )
+#endif
+        }
+#if DEBUG
+        storageLifecycleDebugProbe.record(phase: .startupAutoreleasePoolDrained)
+#endif
     }
 
     /// §13 steps 3–4: create the singleton at position 0 for a new store,
@@ -624,8 +658,28 @@ internal actor HistoryAuthority {
         // path — no context, row, fact, or plan is live yet (§5).
         await suspendIfRequested(.captureCommitEntry)
 
+        let receipt = try autoreleasepool {
+            try commitCaptureInLocalContext(prepared)
+        }
+#if DEBUG
+        storageLifecycleDebugProbe.record(phase: .captureAutoreleasePoolDrained)
+#endif
+        return receipt
+    }
+
+    /// The synchronous half of `commitCapture`, split out so every context,
+    /// fetched row, fact, and plan is released before its caller drains the
+    /// operation-local autorelease pool.
+    private func commitCaptureInLocalContext(
+        _ prepared: PreparedCaptureBundle
+    ) throws -> HistoryReceipt {
         let context = ModelContext(container)
         context.autosaveEnabled = false
+#if DEBUG
+        let captureFactLoadClock = ContinuousClock()
+        let captureFactLoadStart = captureFactLoadClock.now
+        storageLifecycleDebugProbe.record(phase: .captureFactLoadBegin)
+#endif
 
         // ── Non-suspending commit interval (§5): no `await` past this
         //    line while the context, facts, or commit plan is live. ──
@@ -647,6 +701,12 @@ internal actor HistoryAuthority {
             limits: limits
         )
         signatureIndex = load.signatureIndex
+#if DEBUG
+        storageLifecycleDebugProbe.record(
+            phase: .captureFactLoadComplete,
+            elapsed: captureFactLoadStart.duration(to: captureFactLoadClock.now)
+        )
+#endif
 
         // Pure planning (docs/02-domain.md §8): insert-or-coalesce plus
         // same-commit retention victims.
@@ -709,11 +769,23 @@ internal actor HistoryAuthority {
             throw rejection.historyFailure
         }
 
-        return try executeStampedPlan(
+#if DEBUG
+        let captureTransactionClock = ContinuousClock()
+        let captureTransactionStart = captureTransactionClock.now
+        storageLifecycleDebugProbe.record(phase: .captureTransactionBegin)
+#endif
+        let receipt = try executeStampedPlan(
             stamped,
             expectedPreviousPosition: currentPosition,
             in: context
         )
+#if DEBUG
+        storageLifecycleDebugProbe.record(
+            phase: .captureTransactionComplete,
+            elapsed: captureTransactionStart.duration(to: captureTransactionClock.now)
+        )
+#endif
+        return receipt
     }
 
     // MARK: Stamped-plan commit tail (docs/05-authority-kernel.md §9–§11)
@@ -1843,6 +1915,21 @@ internal actor HistoryAuthority {
         // context is live yet (§5).
         await suspendIfRequested(.readEntry)
 
+        let page = try autoreleasepool {
+            try recentPageInLocalContext(limit: limit, after: after)
+        }
+#if DEBUG
+        storageLifecycleDebugProbe.record(phase: .recentAutoreleasePoolDrained)
+#endif
+        return page
+    }
+
+    /// The synchronous half of `recentPage`, keeping every fetched model and
+    /// its CoreData backing reference inside the caller's autorelease pool.
+    private func recentPageInLocalContext(
+        limit: Int,
+        after: HistoryPageCursor?
+    ) throws -> HistoryPage {
         // §16: validate the page-row limit before any context.
         guard limits.pageRowLimitRange.contains(limit) else {
             throw HistoryFailure.invalidInput(.invalidPageLimit)
@@ -1899,6 +1986,11 @@ internal actor HistoryAuthority {
         let scalarProperties = Self.scalarProjectionProperties(
             includingSearchBody: false
         )
+#if DEBUG
+        let recentFetchClock = ContinuousClock()
+        let recentFetchStart = recentFetchClock.now
+        storageLifecycleDebugProbe.record(phase: .recentFetchBegin)
+#endif
 
         // Continuation anchors are lane-scoped (04 §6): a pinned anchor
         // offsets the pinned lane; an unpinned anchor empties the pinned lane
@@ -1947,11 +2039,22 @@ internal actor HistoryAuthority {
             }
             pinnedDescriptor.fetchLimit = limit + (pinnedContinuationActive ? 2 : 1)
             let pinnedRows: [HistoryItemRow]
+#if DEBUG
+            let pinnedFetchStart = recentFetchClock.now
+            storageLifecycleDebugProbe.record(phase: .recentPinnedFetchBegin)
+#endif
             do {
                 pinnedRows = try context.fetch(pinnedDescriptor)
             } catch {
                 throw HistoryFailure.temporarilyUnavailable(.factProof)
             }
+#if DEBUG
+            storageLifecycleDebugProbe.record(
+                phase: .recentPinnedFetchComplete,
+                elapsed: pinnedFetchStart.duration(to: recentFetchClock.now),
+                rows: pinnedRows.count
+            )
+#endif
             let lane = try orderPinnedLane(pinnedRows)
             if let laneAnchor {
                 let anchorValue = StoredOrderingAnchor.defaultOrder(
@@ -2001,11 +2104,22 @@ internal actor HistoryAuthority {
                 ? unpinnedPageLimit + 2
                 : unpinnedPageLimit + 1
             let unpinnedRows: [HistoryItemRow]
+#if DEBUG
+            let unpinnedFetchStart = recentFetchClock.now
+            storageLifecycleDebugProbe.record(phase: .recentUnpinnedFetchBegin)
+#endif
             do {
                 unpinnedRows = try context.fetch(unpinnedDescriptor)
             } catch {
                 throw HistoryFailure.temporarilyUnavailable(.factProof)
             }
+#if DEBUG
+            storageLifecycleDebugProbe.record(
+                phase: .recentUnpinnedFetchComplete,
+                elapsed: unpinnedFetchStart.duration(to: recentFetchClock.now),
+                rows: unpinnedRows.count
+            )
+#endif
 
             let unpinnedContinuationAnchor: StoredOrderingAnchor?
             if unpinnedAnchorActive, let laneAnchor {
@@ -2017,6 +2131,10 @@ internal actor HistoryAuthority {
             } else {
                 unpinnedContinuationAnchor = nil
             }
+#if DEBUG
+            let unpinnedOrderStart = recentFetchClock.now
+            storageLifecycleDebugProbe.record(phase: .recentUnpinnedOrderBegin)
+#endif
             unpinnedOrdered = try orderUnpinnedLane(
                 unpinnedRows,
                 pageLimit: unpinnedPageLimit,
@@ -2024,7 +2142,21 @@ internal actor HistoryAuthority {
                 anchorDate: unpinnedAnchorActive ? laneAnchor?.lastCopiedAt : nil,
                 in: context
             )
+#if DEBUG
+            storageLifecycleDebugProbe.record(
+                phase: .recentUnpinnedOrderComplete,
+                elapsed: unpinnedOrderStart.duration(to: recentFetchClock.now),
+                rows: unpinnedOrdered.count
+            )
+#endif
         }
+#if DEBUG
+        storageLifecycleDebugProbe.record(
+            phase: .recentFetchComplete,
+            elapsed: recentFetchStart.duration(to: recentFetchClock.now),
+            rows: pinnedOrdered.count + unpinnedOrdered.count
+        )
+#endif
 
         // §6: apply the unpinned continuation anchor — drop rows up to and
         // including the anchored row. The anchored row is present in the
@@ -3073,11 +3205,25 @@ private extension HistoryAuthority {
                 includingSearchBody: false
             )
             descriptor.fetchLimit = limits.hardMaximumRetainedItems
+#if DEBUG
+            let fallbackFetchClock = ContinuousClock()
+            let fallbackFetchStart = fallbackFetchClock.now
+            storageLifecycleDebugProbe.record(
+                phase: .recentUnpinnedFallbackFetchBegin
+            )
+#endif
             do {
                 source = try context.fetch(descriptor)
             } catch {
                 throw HistoryFailure.temporarilyUnavailable(.factProof)
             }
+#if DEBUG
+            storageLifecycleDebugProbe.record(
+                phase: .recentUnpinnedFallbackFetchComplete,
+                elapsed: fallbackFetchStart.duration(to: fallbackFetchClock.now),
+                rows: source.count
+            )
+#endif
             try validateFiniteLastCopiedDates(in: source)
         } else {
             source = rows

@@ -28,6 +28,72 @@ struct HistoryPerfRunnerHelperTests {
         #expect(durationToMs(duration) == 2_250.5)
     }
 
+    @Test func persistentOpenChildReportsOnlyOneInternalDuration() throws {
+        let encoded = try encodePersistentOpenChildDuration(12.5)
+
+        #expect(String(decoding: encoded, as: UTF8.self) == "12.5\n")
+        #expect(try decodePersistentOpenChildDuration(encoded) == 12.5)
+    }
+
+    @Test func persistentOpenChildRejectsInvalidOrNoisyOutput() {
+        let invalidOutputs = [
+            Data(),
+            Data("0\n".utf8),
+            Data("-1\n".utf8),
+            Data("nan\n".utf8),
+            Data("12.5\n13.5\n".utf8),
+            Data("HistoryPerfRunner: 12.5\n".utf8),
+        ]
+
+        for output in invalidOutputs {
+            #expect(throws: PersistentOpenChildError.invalidMeasurement) {
+                try decodePersistentOpenChildDuration(output)
+            }
+        }
+    }
+
+    @Test func persistentOpenWorkloadRunsPopulateWarmupAndFiveSamples() throws {
+        var events: [String] = []
+        var measurementCount = 0
+
+        let samples = try runPersistentOpenChildSequence(populate: {
+            events.append("populate")
+        }, measure: {
+            measurementCount += 1
+            events.append("measure-\(measurementCount)")
+            return Double(measurementCount)
+        })
+
+        #expect(persistentOpenChildSampleCount == 5)
+        #expect(measurementCount == 6)
+        #expect(events == [
+            "populate",
+            "measure-1",
+            "measure-2",
+            "measure-3",
+            "measure-4",
+            "measure-5",
+            "measure-6",
+        ])
+        #expect(samples == [2, 3, 4, 5, 6])
+    }
+
+    @Test func persistentOpenChildFailureOutputCannotExposeStoreFacts() {
+        let populate = String(
+            decoding: persistentOpenChildFailureOutput(mode: .populate),
+            as: UTF8.self
+        )
+        let measure = String(
+            decoding: persistentOpenChildFailureOutput(mode: .measure),
+            as: UTF8.self
+        )
+
+        #expect(populate == "HistoryPerfRunner WL2 child failed mode=populate\n")
+        #expect(measure == "HistoryPerfRunner WL2 child failed mode=measure\n")
+        #expect(!populate.contains("/"))
+        #expect(!measure.contains("/"))
+    }
+
     @Test func nearestRankPercentilesSelectObservedSamples() {
         let values = (1...101).reversed().map(Double.init)
         #expect(nearestRankPercentile(values, percentile: 0) == 1)
@@ -76,6 +142,36 @@ struct HistoryPerfRunnerHelperTests {
     }
 
     @Test func admissionProgressLinesAreStructuredAndPrivacySafe() {
+        let preparationPhases: [AdmissionPreparationPhase] = [
+            .openStore,
+            .publicCoalesce,
+            .publicInsert,
+            .recentBrowse,
+        ]
+        let expectedPhaseNames = [
+            "open-store",
+            "public-coalesce",
+            "public-insert",
+            "recent-browse",
+        ]
+        for (phase, expectedName) in zip(
+            preparationPhases,
+            expectedPhaseNames
+        ) {
+            #expect(admissionProgressLine(
+                mode: .prepare,
+                event: .preparationPhaseBegan(phase)
+            ) == "HistoryPerfRunner admission progress mode=prepare "
+                + "phase=\(expectedName) state=begin")
+            #expect(admissionProgressLine(
+                mode: .prepare,
+                event: .preparationPhaseCompleted(
+                    phase,
+                    elapsedMs: 4_321.25
+                )
+            ) == "HistoryPerfRunner admission progress mode=prepare "
+                + "phase=\(expectedName) state=completed elapsed_ms=4321.250")
+        }
         #expect(admissionProgressLine(
             mode: .exactSearch,
             event: .validationBegan
