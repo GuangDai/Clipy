@@ -3,6 +3,7 @@
 /// the matcher may accelerate only the all-ASCII subset and must otherwise
 /// delegate the whole comparison to Foundation (03b §8; IND-07).
 import Foundation
+import HistoryCore
 import Testing
 @testable import HistoryStorage
 
