@@ -257,9 +257,15 @@ and a 256-failed-verification budget switches adversary-shaped corpora to the
 linear KMP automaton, preserving the O(n + m) worst case. Case comparison
 accepts exactly each letter's two ASCII cases (never a blanket `| 0x20` fold,
 which collides distinct bytes); Foundation remains the complete semantic
-oracle, and one ineligible byte anywhere still delegates the whole comparison.
-New differential tests lock word-boundary/decoy layouts and
-non-ASCII/CR-behind-match fallback layouts against that oracle. A NEON
+oracle. Eligibility is prefix-scoped: a `.caseInsensitive + .literal` match
+has exactly the needle's length, so proving `[0, s + m)` all-ASCII and CR-free
+suffices for an accelerated result at `s` — an earlier Foundation-visible
+match (including one relying on non-ASCII folds such as U+212A) would lie
+wholly inside that prefix, and both coordinates are prefix-determined. Hit
+rows therefore stop at the match end like Foundation instead of proving the
+whole body; absent rows still prove every byte before the accelerated nil
+verdict. New differential tests lock word-boundary/decoy layouts and
+non-ASCII/CR fallback layouts against that oracle. A NEON
 `SIMD16` port was evaluated against the researched pure-Swift idioms and
 deferred: the published `((a^b) &- 1) &>> 7` equality idiom has false
 positives (e.g. `a^b = 0x81`), so the UInt64 SWAR form ships first and the

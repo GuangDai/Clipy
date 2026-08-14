@@ -249,27 +249,41 @@ private static func asciiString(
     }
 }
 
-/// A candidate found by a fast prefilter must never be returned when a later
-/// byte disproves all-ASCII/CR eligibility: the whole comparison falls back
-/// to Foundation (03b §8 semantics; the mixed-coordinate hazard the CR
-/// exclusion exists for). Each layout plants a would-be ASCII match first
-/// and the disproving scalar after it, at word-boundary distances.
-@Test func nonASCIIBehindAnASCIIRegionStillDelegatesWholeComparison() {
+/// Bytes at or past the match end cannot change the returned offsets, but
+/// they may still expose fallback routing: a non-ASCII scalar after the
+/// prefix is irrelevant to the match (prefix-scoped eligibility), while one
+/// BEFORE or INSIDE the would-be match must route the whole comparison to
+/// Foundation (03b §8 semantics; the mixed-coordinate hazard the CR
+/// exclusion exists for). Every layout asserts result-equality against the
+/// oracle regardless of the route taken.
+@Test func nonASCIIOrCRAroundAMatchNeverChangesTheResult() {
     for lead in [0, 7, 8, 15, 16, 31] {
         let prefix = String(repeating: "y", count: lead)
-        let mixed = prefix + "needle" + "\u{212A}" // KELVIN SIGN after the match
-        let match = ExactLiteralMatcher(term: "needle").firstMatch(in: mixed)
+        // A fold-capable scalar AFTER the prefix cannot create an earlier
+        // Foundation match (any such match lies wholly inside
+        // `[0, s + m)`), so the first-match result is unchanged either way.
+        let kelvinAfter = prefix + "needle" + "\u{212A}"
         #expect(
-            match == Self.foundationMatch(term: "needle", in: mixed),
-            "mixed-script lead=\(lead)"
+            ExactLiteralMatcher(term: "needle").firstMatch(in: kelvinAfter)
+                == Self.foundationMatch(term: "needle", in: kelvinAfter),
+            "kelvin-after lead=\(lead)"
         )
-        // CR behind the match: CRLF re-clustering can move Character
-        // coordinates, so Foundation must decide the whole string.
+        // CR behind the prefix: Character/UTF-16 offsets are prefix-counted,
+        // so the match coordinates are identical.
         let crBody = prefix + "needle" + "\r" + "z"
         #expect(
             ExactLiteralMatcher(term: "needle").firstMatch(in: crBody)
                 == Self.foundationMatch(term: "needle", in: crBody),
             "cr-behind lead=\(lead)"
+        )
+        // A fold-capable scalar BEFORE the would-be match can create an
+        // earlier Foundation-visible match (U+212A matches ASCII `k`), so
+        // the whole comparison must delegate.
+        let kelvinNeedleEarlier = prefix + "\u{212A}" + "ey-needle"
+        #expect(
+            ExactLiteralMatcher(term: "key").firstMatch(in: kelvinNeedleEarlier)
+                == Self.foundationMatch(term: "key", in: kelvinNeedleEarlier),
+            "kelvin-inside lead=\(lead)"
         )
     }
 }

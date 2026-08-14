@@ -119,11 +119,21 @@ package struct ExactLiteralMatcher: Sendable {
 
     /// Performs exactly one eligibility/search pass over the UTF-8 bytes.
     ///
-    /// Eligibility is proven for EVERY byte before an accelerated verdict is
-    /// returned: the word sweep checks its eight bytes, the scalar automaton
-    /// pass (tail bytes and adversary switch) checks its own. One ineligible
-    /// byte anywhere forfeits the whole comparison to Foundation — never a
-    /// provisional ASCII-prefix result from a mixed string.
+    /// Eligibility contract for an accelerated (non-Foundation) result at
+    /// offset `s`: every byte of the PREFIX `[0, s + needle.count)` is
+    /// all-ASCII and CR-free. That prefix is sufficient because a
+    /// `.caseInsensitive + .literal` Foundation match has exactly the
+    /// needle's length, so any earlier Foundation-visible match lies wholly
+    /// inside `[0, s + m)` — and one that would rely on non-ASCII case
+    /// folding (e.g. U+212A KELVIN SIGN matching `k`) also needs its
+    /// non-ASCII byte inside that prefix. Both match coordinates are
+    /// prefix-determined (Character and UTF-16 counts), so bytes at or
+    /// beyond `s + m` cannot change the returned offsets. A byte past the
+    /// prefix therefore never forces a fallback: the scan stops at
+    /// `s + m` instead of proving the whole body, matching Foundation's
+    /// early exit on hit rows. With no match, every byte is proven eligible
+    /// before the accelerated nil verdict; one ineligible byte anywhere in
+    /// the scanned span forfeits the whole comparison to Foundation.
     ///
     /// SWAR vocabulary (the identities glibc/musl use for `memchr`/`memmem`):
     /// a word contains byte `b` iff `word ^ splat(b)` contains a zero byte,
@@ -149,8 +159,37 @@ package struct ExactLiteralMatcher: Sendable {
             var useAutomaton = false
             var automatonMatched = 0
             var index = 0
+            // Once a word-path verify succeeds, only the prefix through
+            // `matchEndLimit` still needs its eligibility proven; the scan
+            // then stops instead of walking the whole body.
+            var matchEndLimit = -1
 
             while index < count {
+                if matchEndLimit >= 0 {
+                    if index >= matchEndLimit {
+                        return .evaluated(match(at: firstMatchOffset!, needle: needle))
+                    }
+                    // Finish mode: eligibility only, still word-shaped.
+                    if let rawBase, count &- index >= 8 {
+                        let word = rawBase
+                            .loadUnaligned(fromByteOffset: index, as: UInt64.self)
+                        if word & Self.swarHighs != 0
+                            || Self.containsByte(word, 0x0D) {
+                            // Conservative by at most 7 trailing bytes of
+                            // word overshoot; the result stays Foundation's.
+                            return .requiresFoundation
+                        }
+                        index &+= 8
+                        continue
+                    }
+                    let raw = utf8[index]
+                    if raw >= 0x80 || raw == 0x0D {
+                        return .requiresFoundation
+                    }
+                    index &+= 1
+                    continue
+                }
+
                 if !useAutomaton, let rawBase, count &- index >= 8 {
                     let word = rawBase
                         .loadUnaligned(fromByteOffset: index, as: UInt64.self)
@@ -171,6 +210,7 @@ package struct ExactLiteralMatcher: Sendable {
                                     count: count
                                 ) {
                                     firstMatchOffset = start
+                                    matchEndLimit = start &+ needle.count
                                     break wordScan
                                 }
                                 failedVerifications &+= 1
@@ -207,7 +247,12 @@ package struct ExactLiteralMatcher: Sendable {
                 }
                 if automatonMatched == needle.count {
                     if firstMatchOffset == nil {
-                        firstMatchOffset = index &+ 1 &- needle.count
+                        // The automaton eligibility-checked every byte it
+                        // consumed, and the match ends at this index — the
+                        // whole prefix `[0, s + m)` is already proven.
+                        return .evaluated(
+                            match(at: index &+ 1 &- needle.count, needle: needle)
+                        )
                     }
                     automatonMatched = failureTable[automatonMatched - 1]
                 }
@@ -215,14 +260,18 @@ package struct ExactLiteralMatcher: Sendable {
             }
 
             return .evaluated(firstMatchOffset.map { offset in
-                ExactLiteralMatch(
-                    characterOffset: offset,
-                    characterLength: needle.count,
-                    utf16Offset: offset,
-                    utf16Length: needle.count
-                )
+                match(at: offset, needle: needle)
             })
         }
+    }
+
+    private func match(at offset: Int, needle: [UInt8]) -> ExactLiteralMatch {
+        ExactLiteralMatch(
+            characterOffset: offset,
+            characterLength: needle.count,
+            utf16Offset: offset,
+            utf16Length: needle.count
+        )
     }
 
     /// Verifies one candidate offset against the folded needle. Bounded by
