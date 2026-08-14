@@ -17,7 +17,8 @@ extension SearchWorker {
     /// still records when the stored body continues beyond the scan bound.
     internal func evaluateRegexp(
         term: String,
-        in corpus: SearchCorpusSnapshot
+        in corpus: SearchCorpusSnapshot,
+        directive: ScanDirective
     ) throws -> [EvaluatedRow] {
         // Admission (03b §8), every rejection is
         // `.invalidInput(.invalidRegularExpression)`: a pattern over the
@@ -38,7 +39,53 @@ extension SearchWorker {
         }
 
         var evaluated: [EvaluatedRow] = []
-        for row in corpus.rows {
+        var scanTracker = OrderPreservingScanTracker(directive: directive)
+#if DEBUG
+        let debugClock = ContinuousClock()
+        let debugStart = debugClock.now
+        var debugProcessedRows = 0
+        var debugTitleMatches = 0
+        var debugBodyMatches = 0
+        var debugTitleUTF8Bytes = 0
+        var debugBodyUTF8Bytes = 0
+        searchDebugProbe.record(
+            traceID: corpus.debugTrace.id,
+            component: "worker",
+            phase: "regexp-scan-begin",
+            phaseElapsed: .zero,
+            totalElapsed: corpus.debugTrace.startedAt.duration(to: debugClock.now),
+            rowsTotal: corpus.rows.count
+        )
+
+        func recordProgressIfNeeded() {
+            let isProgressBoundary = debugProcessedRows.isMultiple(
+                of: SearchDebugProbe.progressRowInterval
+            )
+            let isLastRow = debugProcessedRows == corpus.rows.count
+            guard isProgressBoundary || isLastRow else {
+                return
+            }
+            searchDebugProbe.record(
+                traceID: corpus.debugTrace.id,
+                component: "worker",
+                phase: "regexp-scan-progress",
+                phaseElapsed: debugStart.duration(to: debugClock.now),
+                totalElapsed: corpus.debugTrace.startedAt.duration(to: debugClock.now),
+                rowsProcessed: debugProcessedRows,
+                rowsTotal: corpus.rows.count,
+                matchedRows: debugTitleMatches + debugBodyMatches,
+                titleUTF8Bytes: debugTitleUTF8Bytes,
+                bodyUTF8Bytes: debugBodyUTF8Bytes,
+                titleMatches: debugTitleMatches,
+                bodyMatches: debugBodyMatches
+            )
+        }
+#endif
+        scan: for row in corpus.rows {
+#if DEBUG
+            debugProcessedRows += 1
+            debugTitleUTF8Bytes += row.debugTitleUTF8Bytes
+#endif
             let titlePrefix = String(
                 row.title.prefix(limits.maximumRegexpTitleBodyPrefixCharacters)
             )
@@ -56,25 +103,39 @@ extension SearchWorker {
                 evaluated.append(
                     EvaluatedRow(
                         corpusRow: row,
-                        search: SearchPresentation(
+                        search: .ready(SearchPresentation(
                             snippet: nil,
                             matchedRanges: [UTF16TextRange(
                                 location: match.range.location,
                                 length: match.range.length
                             )]
-                        ),
+                        )),
                         anchor: Self.defaultOrderAnchor(for: row)
                     )
                 )
-                continue
+#if DEBUG
+                debugTitleMatches += 1
+#endif
+                if !scanTracker.recordMatch(
+                    ofRow: Self.defaultOrderAnchor(for: row)
+                ) {
+                    break scan
+                }
+#if DEBUG
+                recordProgressIfNeeded()
+#endif
+                continue scan
             }
             // Only on title miss: the first 1,000 Characters of body
             // (03b §8).
+#if DEBUG
+            debugBodyUTF8Bytes += row.debugSearchBodyUTF8Bytes
+#endif
             let bodyScan = Self.boundedCharacterPrefix(
                 of: row.searchBody,
                 maximumCharacters: limits.maximumRegexpTitleBodyPrefixCharacters
             )
-            let bodyPrefix = bodyScan.text
+            let bodyPrefix = String(bodyScan.text)
             guard let match = regex.firstMatch(
                 in: bodyPrefix,
                 range: NSRange(
@@ -82,14 +143,20 @@ extension SearchWorker {
                     in: bodyPrefix
                 )
             ) else {
-                continue
+#if DEBUG
+                recordProgressIfNeeded()
+#endif
+                continue scan
             }
             // Convert the UTF-16 match to Character offsets for the
             // excerpt algorithm. The conversion cannot fail — the range
             // was produced against this very string — but a failed
             // conversion is treated as a miss rather than a crash.
             guard let found = Range(match.range, in: bodyPrefix) else {
-                continue
+#if DEBUG
+                recordProgressIfNeeded()
+#endif
+                continue scan
             }
             let lower = bodyPrefix.distance(
                 from: bodyPrefix.startIndex,
@@ -99,23 +166,48 @@ extension SearchWorker {
                 from: bodyPrefix.startIndex,
                 to: found.upperBound
             )
-            let excerpt = Self.bodyExcerpt(
-                body: bodyPrefix,
-                characterRanges: [lower..<upper],
-                snippetLimit: limits.maximumBodySearchSnippetCharacters,
-                bodySuffixWasOmitted: bodyScan.suffixWasOmitted
-            )
+            // The 03b §8 excerpt defers to page materialization with the
+            // scan-bound and omitted-suffix facts recorded during the scan.
             evaluated.append(
                 EvaluatedRow(
                     corpusRow: row,
-                    search: SearchPresentation(
-                        snippet: excerpt.snippet,
-                        matchedRanges: excerpt.ranges
+                    search: .bodyExcerpt(
+                        characterRanges: [lower..<upper],
+                        maximumCharacters: limits
+                            .maximumRegexpTitleBodyPrefixCharacters,
+                        bodySuffixWasOmitted: bodyScan.suffixWasOmitted
                     ),
                     anchor: Self.defaultOrderAnchor(for: row)
                 )
             )
+#if DEBUG
+            debugBodyMatches += 1
+#endif
+            if !scanTracker.recordMatch(
+                ofRow: Self.defaultOrderAnchor(for: row)
+            ) {
+                break scan
+            }
+#if DEBUG
+            recordProgressIfNeeded()
+#endif
         }
+#if DEBUG
+        searchDebugProbe.record(
+            traceID: corpus.debugTrace.id,
+            component: "worker",
+            phase: "regexp-scan-complete",
+            phaseElapsed: debugStart.duration(to: debugClock.now),
+            totalElapsed: corpus.debugTrace.startedAt.duration(to: debugClock.now),
+            rowsProcessed: debugProcessedRows,
+            rowsTotal: corpus.rows.count,
+            matchedRows: debugTitleMatches + debugBodyMatches,
+            titleUTF8Bytes: debugTitleUTF8Bytes,
+            bodyUTF8Bytes: debugBodyUTF8Bytes,
+            titleMatches: debugTitleMatches,
+            bodyMatches: debugBodyMatches
+        )
+#endif
         return evaluated
     }
 

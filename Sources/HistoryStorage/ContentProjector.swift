@@ -166,6 +166,15 @@ internal enum ContentProjector {
         var remainingSearchBodyBytes = limits.maximumStoredSearchBodyUTF8Bytes
         var hasSearchBodyPart = false
         for representation in content.representations {
+            // Both sinks complete: nothing later can contribute. A textual
+            // representation can only add search-body bytes (budget already
+            // exhausted) or a title (already found), so its full decode and
+            // newline-normalization copy are skipped entirely — decisive
+            // when a capture carries multi-megabyte representations after
+            // the first one already filled the 256-KiB body budget.
+            if title != nil, remainingSearchBodyBytes == 0 {
+                break
+            }
             guard let text = decodedText(of: representation) else { continue }
             let normalized = normalizingNewlines(text)
             if title == nil {

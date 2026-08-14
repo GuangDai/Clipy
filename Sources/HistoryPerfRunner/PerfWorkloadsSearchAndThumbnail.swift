@@ -212,15 +212,39 @@ func workloadDetailAndPaste() async -> [WorkloadFixture] {
 /// Kept as a pure package-internal helper so the fixture's chunk integrity is
 /// pinned by published known-answer vectors rather than trusted transitively
 /// through ImageIO decode success.
-func pngCRC32(_ data: Data) -> UInt32 {
-    var crc: UInt32 = 0xFFFF_FFFF
-    for byte in data {
-        crc ^= UInt32(byte)
-        for _ in 0..<8 {
-            crc = (crc >> 1) ^ ((crc & 1) != 0 ? 0xEDB8_8320 : 0)
+///
+/// Table-driven: one lookup per byte instead of eight shift iterations —
+/// the IDAT chunk checksums ~3 MB per fixture build, and the bitwise form
+/// spent ~25 M loop iterations per PNG. The table is derived from the same
+/// reflected recurrence, so every published check value is unchanged.
+private enum PNGCRC32Table {
+    static let entries: [UInt32] = {
+        var table = [UInt32](repeating: 0, count: 256)
+        for index in 0..<256 {
+            var value = UInt32(index)
+            for _ in 0..<8 {
+                value = (value >> 1) ^ ((value & 1) != 0 ? 0xEDB8_8320 : 0)
+            }
+            table[index] = value
         }
+        return table
+    }()
+}
+
+/// Incremental CRC update over `data`, starting from `crc` (pass
+/// `0xFFFF_FFFF` to begin a fresh checksum). Lets callers checksum
+/// concatenated ranges without materializing the concatenation.
+private func crc32Update(_ crc: UInt32, over data: Data) -> UInt32 {
+    var crc = crc
+    for byte in data {
+        crc = (crc >> 8)
+            ^ PNGCRC32Table.entries[Int((crc ^ UInt32(byte)) & 0xFF)]
     }
-    return crc ^ 0xFFFF_FFFF
+    return crc
+}
+
+func pngCRC32(_ data: Data) -> UInt32 {
+    crc32Update(0xFFFF_FFFF, over: data) ^ 0xFFFF_FFFF
 }
 
 /// Deterministic Marsaglia xorshift32 stream used only to make the thumbnail
@@ -257,12 +281,18 @@ struct XorShift32: Sendable {
 func makeNoisePNG(width: Int, height: Int) throws -> Data {
     func chunk(_ tag: String, _ payload: Data) -> Data {
         var out = Data()
+        out.reserveCapacity(payload.count + 12)
         var length = UInt32(payload.count).bigEndian
         out.append(Data(bytes: &length, count: 4))
         let tagData = Data(tag.utf8)
         out.append(tagData)
         out.append(payload)
-        var crc = pngCRC32(tagData + payload).bigEndian
+        // Incremental CRC over tag then payload: the IDAT checksum alone
+        // covers ~3 MB, and a `tagData + payload` concatenation would copy
+        // all of it just to be discarded.
+        var crcValue = crc32Update(0xFFFF_FFFF, over: tagData)
+        crcValue = crc32Update(crcValue, over: payload)
+        var crc = (crcValue ^ 0xFFFF_FFFF).bigEndian
         out.append(Data(bytes: &crc, count: 4))
         return out
     }
@@ -279,9 +309,12 @@ func makeNoisePNG(width: Int, height: Int) throws -> Data {
 
     // Scanlines: filter byte 0 per row + deterministic xorshift32 noise.
     // Incompressible pixels make the deflate stream carry 3 MB of literals,
-    // so the decoder pays real inflate + unfilter cost per decode.
+    // so the decoder pays real inflate + unfilter cost per decode. Built as
+    // one [UInt8] with reserved capacity and converted in a single Data
+    // init — per-byte Data.append reallocated the backing store millions
+    // of times per fixture.
     var byteGenerator = XorShift32(seed: 0x9E37_79B9)
-    var raw = Data()
+    var raw = [UInt8]()
     raw.reserveCapacity(height * (1 + width * 3))
     for _ in 0..<height {
         raw.append(0)
@@ -289,11 +322,12 @@ func makeNoisePNG(width: Int, height: Int) throws -> Data {
             raw.append(byteGenerator.nextByte())
         }
     }
+    let rawData = Data(raw)
 
     // zlib stream: real deflate via Foundation's COMPRESSION_ZLIB (RFC 1950),
     // so the ImageIO decode pays genuine inflate cost — stored blocks would
     // decompress as a memcpy and the decode would not dominate the ratio.
-    let zstream = try (raw as NSData).compressed(using: .zlib) as Data
+    let zstream = try (rawData as NSData).compressed(using: .zlib) as Data
     png.append(chunk("IDAT", zstream))
 
     png.append(chunk("IEND", Data()))

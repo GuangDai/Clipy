@@ -557,3 +557,30 @@ exclusions remain documented in the workflow history below.
   populates, warms, and internally times each open in a fresh child process;
   launch/teardown time is excluded and the 8× bound is unchanged. Supported
   diagnostic evidence is pending.
+
+## Codebase complexity pass — scan budgets, deferred presentations, fused excerpts (2026-08-14)
+
+A full algorithm audit (Domain planners, Storage search/read paths,
+authority/codec/runner) confirmed no quadratic planner remains; the pass
+landed constant-factor and allocation reductions with frozen 03b §8
+semantics: exact/regexp/recent-equivalent scans stop at the page's
+`limit + 1` post-anchor survivor bound (deep continuations and expired
+anchors still scan fully), matched-row excerpts and UTF-16 translations
+defer to page materialization, the excerpt window fuses its walks (bounded
+probe + one forward walk + ≤ windowCapacity backward steps instead of a
+full-body count plus two offset walks), the fuzzy lane slices its body
+prefix as a Substring with the count from the same pass and drops the
+per-row title prefix copy, capture lane-1 equality compares
+`typeIdentifier → bytes` dictionaries instead of hashing clipboard bytes
+into Sets, and `ContentProjector.project` skips decoding further
+representations once title and body budgets are complete. Fuzzy and regexp
+lanes gained Debug begin/progress/complete probe events with separate
+title/body accounting; new boundary tests pin the eviction heap/sort
+quarter-threshold agreement, 100-revision lineage resolution/rejection,
+multi-representation lane-1 equality, the projector budget skip, the
+prefix-slice Character bound, and the fused excerpt's capacity-edge,
+zero-length, and multi-scalar-grapheme windows. The admission workflow's
+strict log scans now prefilter the recovered CoreData external-storage
+clone race (`.interim` clone failures with successful copy fallbacks, runs
+31808691118/31809994808) while keeping every other warning/error line
+fatal and the jq row/position assertions as the integrity gate.

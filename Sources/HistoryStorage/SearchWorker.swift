@@ -105,22 +105,22 @@ internal actor SearchWorker {
 #endif
 
     /// One evaluated row in final page order: the corpus scalar row, its
-    /// search presentation (`nil` on the recent-equivalent lane, 03b §8),
+    /// deferred presentation (`nil` on the recent-equivalent lane, 03b §8),
     /// and the complete ordering anchor the next cursor binds to
     /// (docs/04-coherence.md §6).
     internal struct EvaluatedRow {
         let corpusRow: SearchCorpusRow
-        let search: SearchPresentation?
+        let search: DeferredSearchPresentation?
         let anchor: StoredOrderingAnchor
     }
 
     /// One fuzzy-matched row before ordering: the corpus row, the Fuse
     /// score (internal only — 03b §8: "Search scores and Fuse objects
-    /// remain internal"), and the built presentation.
+    /// remain internal"), and the deferred presentation.
     internal struct FuzzyHit {
         let corpusRow: SearchCorpusRow
         let score: Double
-        let search: SearchPresentation
+        let search: DeferredSearchPresentation
     }
 
     /// Evaluates one browse request over the pre-ordered corpus
@@ -201,15 +201,23 @@ internal actor SearchWorker {
         // `.recent` and carries no search presentation. A non-empty term
         // is never re-trimmed or altered — normalized term equality is
         // what the cursor binds.
+        let directive = ScanDirective(
+            continuationAnchor: continuationAnchor,
+            maximumSurvivors: request.limit + 1
+        )
         let evaluated: [EvaluatedRow]
         if term.isEmpty {
-            evaluated = evaluateRecentEquivalent(in: corpus)
+            evaluated = evaluateRecentEquivalent(in: corpus, directive: directive)
         } else {
             switch mode {
             case .exact:
-                evaluated = evaluateExact(term: term, in: corpus)
+                evaluated = evaluateExact(term: term, in: corpus, directive: directive)
             case .regexp:
-                evaluated = try evaluateRegexp(term: term, in: corpus)
+                evaluated = try evaluateRegexp(
+                    term: term,
+                    in: corpus,
+                    directive: directive
+                )
             case .fuzzy:
                 evaluated = try evaluateFuzzy(term: term, in: corpus)
             }
@@ -262,6 +270,57 @@ internal actor SearchWorker {
         let pageSlice = survivors.prefix(request.limit)
         let rows = pageSlice.map { evaluatedRow -> HistoryRow in
             let corpusRow = evaluatedRow.corpusRow
+            // Deferred presentations materialize here and only here —
+            // bounded O(returned page) excerpt/translation work instead of
+            // O(every matched row) per scan (03b §8; the corpus row already
+            // carries the stored body, so nothing extra crosses a boundary).
+            let search: SearchPresentation?
+            switch evaluatedRow.search {
+            case nil:
+                search = nil
+            case .ready(let presentation):
+                search = presentation
+            case .titleRanges(let characterRanges):
+                search = SearchPresentation(
+                    snippet: nil,
+                    matchedRanges: Self.utf16Ranges(
+                        from: characterRanges,
+                        in: corpusRow.title
+                    )
+                )
+            case .bodyExcerpt(
+                let characterRanges,
+                let maximumCharacters,
+                let bodySuffixWasOmitted
+            ):
+                let excerpt: (snippet: String, ranges: [UTF16TextRange])
+                if let maximumCharacters {
+                    // Fuzzy/regexp windows: the lane's bounded scan prefix
+                    // (03b §8), re-derived from the stored body.
+                    let scan = Self.boundedCharacterPrefix(
+                        of: corpusRow.searchBody,
+                        maximumCharacters: maximumCharacters
+                    )
+                    excerpt = Self.bodyExcerpt(
+                        body: String(scan.text),
+                        characterRanges: characterRanges,
+                        snippetLimit: limits.maximumBodySearchSnippetCharacters,
+                        bodySuffixWasOmitted: bodySuffixWasOmitted
+                    )
+                } else {
+                    // Exact mode windows the complete bounded projection.
+                    excerpt = Self.bodyExcerpt(
+                        body: corpusRow.searchBody,
+                        characterRanges: characterRanges,
+                        snippetLimit: limits.maximumBodySearchSnippetCharacters,
+                        bodySuffixWasOmitted: bodySuffixWasOmitted
+                    )
+                }
+                search = SearchPresentation(
+                    snippet: excerpt.snippet,
+                    matchedRanges: excerpt.ranges
+                )
+            }
             return HistoryRow(
                 item: HistoryItemReference(
                     id: corpusRow.id,
@@ -273,7 +332,7 @@ internal actor SearchWorker {
                 copyCount: corpusRow.copyCount,
                 lastSource: corpusRow.lastSource,
                 pinnedPosition: corpusRow.pinOrdinal?.rawValue,
-                search: evaluatedRow.search
+                search: search
             )
         }
 
@@ -347,17 +406,40 @@ internal actor SearchWorker {
     // MARK: - Recent-equivalent lane (03b §8)
 
     /// Empty-term evaluation: the corpus keeps its pre-ordered default
-    /// order and every row carries `search: nil` (03b §8).
+    /// order and every row carries `search: nil` (03b §8). The directive
+    /// bounds the returned array to the rows the page decision can still
+    /// consume — the continuation anchor itself (page drops up to and
+    /// including it) plus at most `limit + 1` successors — so a 5,000-row
+    /// corpus no longer materializes 5,000 evaluated rows per page. A
+    /// missing anchor yields an empty array, which `page` maps to
+    /// `snapshotExpired` exactly as the full scan did.
     internal func evaluateRecentEquivalent(
-        in corpus: SearchCorpusSnapshot
+        in corpus: SearchCorpusSnapshot,
+        directive: ScanDirective
     ) -> [EvaluatedRow] {
-        corpus.rows.map { row in
-            EvaluatedRow(
-                corpusRow: row,
-                search: nil,
-                anchor: Self.defaultOrderAnchor(for: row)
-            )
+        var startIndex = corpus.rows.startIndex
+        var window = directive.maximumSurvivors
+        if let anchor = directive.continuationAnchor {
+            guard let anchorIndex = corpus.rows.firstIndex(where: {
+                Self.defaultOrderAnchor(for: $0) == anchor
+            }) else {
+                return []
+            }
+            // Include the anchor row itself: `page` locates it in the
+            // evaluated array before dropping it, so an anchor-exclusive
+            // window would read as an expired cursor.
+            startIndex = anchorIndex
+            window += 1
         }
+        return corpus.rows[startIndex...]
+            .prefix(window)
+            .map { row in
+                EvaluatedRow(
+                    corpusRow: row,
+                    search: nil,
+                    anchor: Self.defaultOrderAnchor(for: row)
+                )
+            }
     }
 
 }

@@ -15,16 +15,19 @@ extension SearchWorker {
     /// folding, only case-insensitivity.
     internal func evaluateExact(
         term: String,
-        in corpus: SearchCorpusSnapshot
+        in corpus: SearchCorpusSnapshot,
+        directive: ScanDirective
     ) -> [EvaluatedRow] {
         // Preprocess the eligible-ASCII needle once for this public request.
         // The scalar baseline has a linear worst-case bound and delegates
         // every fallback comparison to Foundation's frozen §8 semantics.
         let matcher = ExactLiteralMatcher(term: term)
         var evaluated: [EvaluatedRow] = []
+        var scanTracker = OrderPreservingScanTracker(directive: directive)
 #if DEBUG
         let debugClock = ContinuousClock()
         let debugStart = debugClock.now
+        var scanStoppedEarly = false
         var debugProcessedRows = 0
         var debugTitleRows = 0
         var debugBodyRows = 0
@@ -51,6 +54,32 @@ extension SearchWorker {
             )
             let isLastRow = debugProcessedRows == corpus.rows.count
             guard isProgressBoundary || isLastRow else {
+                return
+            }
+            searchDebugProbe.record(
+                traceID: corpus.debugTrace.id,
+                component: "worker",
+                phase: "exact-scan-progress",
+                phaseElapsed: debugStart.duration(to: debugClock.now),
+                totalElapsed: corpus.debugTrace.startedAt.duration(to: debugClock.now),
+                rowsProcessed: debugProcessedRows,
+                rowsTotal: corpus.rows.count,
+                matchedRows: debugTitleMatches + debugBodyMatches,
+                titleUTF8Bytes: debugTitleUTF8Bytes,
+                bodyUTF8Bytes: debugBodyUTF8Bytes,
+                titleMatches: debugTitleMatches,
+                bodyMatches: debugBodyMatches,
+                exactASCIIEvaluations: debugExactASCIIEvaluations,
+                exactFoundationEvaluations: debugExactFoundationEvaluations
+            )
+        }
+
+        func recordEarlyStopProgressIfNeeded() {
+            guard scanStoppedEarly,
+                  !debugProcessedRows.isMultiple(
+                      of: SearchDebugProbe.progressRowInterval
+                  )
+            else {
                 return
             }
             searchDebugProbe.record(
@@ -97,19 +126,29 @@ extension SearchWorker {
                 evaluated.append(
                     EvaluatedRow(
                         corpusRow: row,
-                        search: SearchPresentation(
+                        search: .ready(SearchPresentation(
                             snippet: nil,
                             matchedRanges: [UTF16TextRange(
                                 location: found.utf16Offset,
                                 length: found.utf16Length
                             )]
-                        ),
+                        )),
                         anchor: Self.defaultOrderAnchor(for: row)
                     )
                 )
 #if DEBUG
                 debugTitleMatches += 1
                 debugProcessedRows += 1
+#endif
+                if !scanTracker.recordMatch(
+                    ofRow: Self.defaultOrderAnchor(for: row)
+                ) {
+#if DEBUG
+                    scanStoppedEarly = true
+#endif
+                    break
+                }
+#if DEBUG
                 recordProgressIfNeeded()
 #endif
                 continue
@@ -146,22 +185,21 @@ extension SearchWorker {
             // The matcher already returns Character coordinates. The ASCII
             // fast path obtains them directly from byte offsets; the Unicode
             // fallback performs the Foundation-to-Character translation once.
-            // `bodyExcerpt` materializes only its bounded window, never the
-            // complete stored search body (03b §8; 06 §2).
-            let excerpt = Self.bodyExcerpt(
-                body: row.searchBody,
-                characterRanges: [
-                    found.characterOffset ..<
-                        (found.characterOffset + found.characterLength),
-                ],
-                snippetLimit: limits.maximumBodySearchSnippetCharacters
-            )
+            // The 03b §8 excerpt itself is deferred to page materialization
+            // (`DeferredSearchPresentation.bodyExcerpt`): a query matching
+            // many rows pays the O(matched-window) construction only for
+            // returned rows, and continuation pages never rebuild the
+            // dropped rows' excerpts.
             evaluated.append(
                 EvaluatedRow(
                     corpusRow: row,
-                    search: SearchPresentation(
-                        snippet: excerpt.snippet,
-                        matchedRanges: excerpt.ranges
+                    search: .bodyExcerpt(
+                        characterRanges: [
+                            found.characterOffset ..<
+                                (found.characterOffset + found.characterLength),
+                        ],
+                        maximumCharacters: nil,
+                        bodySuffixWasOmitted: false
                     ),
                     anchor: Self.defaultOrderAnchor(for: row)
                 )
@@ -169,10 +207,21 @@ extension SearchWorker {
 #if DEBUG
             debugBodyMatches += 1
             debugProcessedRows += 1
+#endif
+            if !scanTracker.recordMatch(
+                ofRow: Self.defaultOrderAnchor(for: row)
+            ) {
+#if DEBUG
+                scanStoppedEarly = true
+#endif
+                break
+            }
+#if DEBUG
             recordProgressIfNeeded()
 #endif
         }
 #if DEBUG
+        recordEarlyStopProgressIfNeeded()
         let debugTotalElapsed = debugStart.duration(to: debugClock.now)
         searchDebugProbe.record(
             traceID: corpus.debugTrace.id,

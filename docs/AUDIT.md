@@ -290,8 +290,10 @@ cadence are locked by tests, and admission percentiles are now per-rank
 support-gated — p50 needs n ≥ 3, p95 n ≥ 20, p99 n ≥ 100 (ceil(p·n) < n),
 otherwise the rank encodes as JSON null instead of a disguised sample
 maximum — with the matcher A/B lane carrying per-case corpus sizes (the
-repeated-prefix adversary runs 8 bodies because its Foundation side is the
-pathological one) plus one unbuffered stderr progress line per case so a
+repeated-prefix adversary runs 2 bodies — instrumented runs measured its
+Foundation side near 12 s per 256 KiB body, an O(n·m) NSString pathology, so
+the case proves the compiled side's linearity at a size its fallback can
+finish) plus one unbuffered stderr progress line per case so a
 stalled dispatch shows exactly where its budget went. The completed screen
 ([31806199483](https://github.com/GuangDai/Clipy/actions/runs/31806199483))
 passed all 13 cases: every eligible-ASCII case's paired median came in at
@@ -299,6 +301,63 @@ passed all 13 cases: every eligible-ASCII case's paired median came in at
 0.98x–1.02x (gate overhead is free), so `productionIntegrationEligible` is
 true — which admits the subsequent one-to-three-call same-store Release
 comparison, not G2/G8 evidence.
+
+**2026-08-14 complexity pass (search-worker scan budget, deferred
+presentations, fused excerpt walk, capture-path byte-hashing):** a
+three-lane algorithm audit (HistoryDomain pure planners, HistoryStorage
+search/read paths, authority/codec/runner) found no remaining quadratic
+planner — pin compaction is dictionary-indexed O(m), dedup candidates pay
+byte confirmation once, `effectiveContent` is a single O(k) walk, and
+eviction already uses a bounded heap below the quarter threshold — so the
+pass targeted the search evaluator and the capture path's constant factors:
+(1) order-preserving lanes now carry the page's scan directive — after the
+continuation anchor, at most `limit + 1` matched rows can still influence
+the page or its `next` cursor, so exact/regexp scans stop there and the
+recent-equivalent lane materializes only the bounded window (a deep
+continuation still scans fully until its anchor; a missing anchor still
+expires the cursor); (2) matched-row presentations defer to page
+materialization — excerpt text, UTF-16 translation, and the scan-prefix
+re-derivation are paid only for returned rows, never for the rows a bounded
+page drops and never rebuilt per continuation page; (3) the frozen 03b §8
+excerpt window is computed by a fused walk — at most `windowCapacity + 1`
+Characters decide the whole-body branch, one forward walk to the pre-clamp
+upper bound records the window indices, and the rare end-clamp pays a
+bounded ≤ windowCapacity backward step, replacing the full-body `count`
+walk plus up to two `index(offsetBy:)` walks per excerpt (semantics proven
+identical against the existing worked examples plus new capacity-edge,
+zero-length-match, and multi-scalar-grapheme cases); (4) the fuzzy lane
+slices its 5,000-Character body prefix as a `Substring` with the Character
+count derived from the same pass (one bounded copy for Fuse, no per-row
+title prefix copy — titles are ≤ 1,024 UTF-8 bytes and the whole title is
+provably the scanned prefix), and (5) capture lane-1 byte-set equality now
+builds `typeIdentifier → bytes` dictionaries instead of hashing every
+clipboard byte into a `Set` — the exact shape `canonicalContains` already
+documented as correct one lane below — while `ContentProjector.project`
+stops decoding further representations once the title and the 256-KiB body
+budget are both complete (a later representation can contribute neither).
+The runner's PNG checksum is table-driven and incremental (no ~3 MiB
+concatenation per chunk) and its scanlines build one reserved `[UInt8]`
+converted in a single `Data` init. Debug instrumentation now covers every
+search lane — fuzzy and regexp gained begin/progress/complete events with
+separate title/body accounting, locked by tests alongside the exact lane's
+— and new boundary tests pin the eviction heap/sort quarter-threshold
+agreement, 100-revision lineage resolution/rejection, multi-representation
+lane-1 equality (positive and one-byte-different negative), the projector's
+budget-complete skip, and the prefix-slice Character bound. HistoryDomain
+itself stays probe-free by design: its purity rules (no I/O, actors,
+clocks, or mutable statics) ban hook-style instrumentation, so its
+observability remains its fully self-describing plan values plus these
+boundary tests. The dispatch-only admission workflow's strict log scans now
+prefilter the known-benign CoreData external-storage clone race (runs
+[31808691118](https://github.com/GuangDai/Clipy/actions/runs/31808691118),
+[31809994808](https://github.com/GuangDai/Clipy/actions/runs/31809994808);
+same runner image as the green run) — a later transaction in the same
+process attempts to clone an earlier batch's external record from its
+already-consumed `.interim` staging name, logs the failure, and CoreData's
+copy fallback completes the save — stripping only those multi-line error
+blocks while every other warning/error or missing-file line stays fatal and
+the per-phase jq row/position/transaction assertions remain the
+data-integrity gate.
 
 All remaining findings and their explicit owners/triggers are tracked in
 `docs/V1-Verified/07-finding-dispositions.md`. The supported CI, performance,
