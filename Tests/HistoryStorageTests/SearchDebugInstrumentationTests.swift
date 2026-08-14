@@ -117,6 +117,8 @@ struct SearchDebugInstrumentationTests {
         #expect(bodyScan.rowsTotal == 3)
         #expect(bodyScan.bodyUTF8Bytes > 0)
         #expect(bodyScan.matchedRows == 0)
+        #expect(bodyScan.exactASCIIEvaluations == 6)
+        #expect(bodyScan.exactFoundationEvaluations == 0)
 
         let rendered = captured.compactMap(\.jsonLine).joined(separator: "\n")
         for fragment in privateFragments {

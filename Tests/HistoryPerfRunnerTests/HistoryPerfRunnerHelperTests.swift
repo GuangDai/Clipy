@@ -221,19 +221,23 @@ struct HistoryPerfRunnerHelperTests {
         #expect(AdmissionMode.seed.profile == .full)
         #expect(AdmissionMode.seedSmoke.profile == .prepareSmoke)
         #expect(AdmissionMode.exactSearchProbe.profile == .full)
+        #expect(AdmissionMode.exactMatcherAB.profile == .full)
         #expect(AdmissionMode.seed.createsStore)
         #expect(AdmissionMode.seedSmoke.createsStore)
         #expect(!AdmissionMode.prepare.createsStore)
         #expect(!AdmissionMode.prepareSmoke.createsStore)
         #expect(!AdmissionMode.browseTies.createsStore)
         #expect(!AdmissionMode.exactSearchProbe.createsStore)
+        #expect(!AdmissionMode.exactMatcherAB.createsStore)
         #expect(AdmissionMode.prepare.expectedSeedMode == .seed)
         #expect(AdmissionMode.prepareSmoke.expectedSeedMode == .seedSmoke)
         #expect(AdmissionMode.seed.expectedSeedMode == nil)
         #expect(AdmissionMode.exactSearchProbe.expectedSeedMode == nil)
+        #expect(AdmissionMode.exactMatcherAB.expectedSeedMode == nil)
         #expect(AdmissionMode.prepare.isSetupFixture)
         #expect(AdmissionMode.prepareSmoke.isSetupFixture)
         #expect(!AdmissionMode.seed.isSetupFixture)
+        #expect(!AdmissionMode.exactMatcherAB.isSetupFixture)
     }
 
     @Test func exactSearchProbeFixtureIsExplicitlyNonCanonical() throws {

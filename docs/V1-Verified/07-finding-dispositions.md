@@ -22,8 +22,9 @@ whose only remaining condition was that proof is now `fixed`; deliberately
 deferred, duplicate, documented, and not-a-defect dispositions are unchanged.
 The source-inclusive thumbnail extension is additionally fixed by supported
 run [31494740863](https://github.com/GuangDai/Clipy/actions/runs/31494740863).
-The dispatch-only absolute performance-evidence lane and the WL2
-independent-process rerun are the two current `in-progress` rows.
+The dispatch-only absolute performance-evidence lane, the WL2
+independent-process rerun, and IND-07's exact-search complexity review are the
+three current `in-progress` rows.
 
 ## Inventory checksum
 
@@ -38,8 +39,8 @@ independent-process rerun are the two current `in-progress` rows.
 | `04-perf-deps-stubs.md` | 1 | 1 | 19 | 14 | 35 |
 | **Total** | **3** | **14** | **112** | **93** | **222** |
 
-Current dispositions: 111 `fixed`, 29 `deferred`, 31 `duplicate`,
-30 `not-a-defect`, 19 `documented`, 2 `in-progress`, and 0 `pending`.
+Current dispositions: 111 `fixed`, 28 `deferred`, 31 `duplicate`,
+30 `not-a-defect`, 19 `documented`, 3 `in-progress`, and 0 `pending`.
 
 ## `01-historycore.md` — HistoryCore (20)
 
@@ -237,7 +238,7 @@ Current dispositions: 111 `fixed`, 29 `deferred`, 31 `duplicate`,
 | Canonical finding ID | Status | Evidence / canonical relationship / next action |
 |---|---|---|
 | `regex-overlapping-alternation-redos` | `fixed` | **Completed 2026-08-11:** public-symbol workflow [31448087991](https://github.com/GuangDai/Clipy/actions/runs/31448087991) and final code-head CI [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036) are green; the latter passed all source/lint gates, strict-concurrency builds, 314 tests in 41 suites, app build/test, and all 13 release workloads. **Pre-proof implementation record:** Quantified-alternation shapes are conservatively rejected and long-input facade regressions are present; macOS proof remains. |
-| `search-corpus-materializes-full-inline-searchbody` | `deferred` | Owner: G2/HistoryStorage projection schema + Performance. Trigger: a supported 5,000-row representative-body workload breaches RSS/copy budget and selects a bounded storage/fetch shape. The pre-proof absent-term workload will record the 256 KiB-per-row structural process high-water ceiling, but it lacks representative bodies, baseline/fault/copy attribution, concurrent DTO residency, and an approved budget. Residual risk: one snapshot may materialize the full ~1.28-GiB structural envelope; no unmeasured cache is added. |
+| `search-corpus-materializes-full-inline-searchbody` | `in-progress` | IND-07 owns a separate conservative exact-candidate-index design review because G2 governs result/collection caches, not candidate evidence. A compiled eligible-ASCII linear matcher is the first implementation slice, while Foundation remains the fallback semantic oracle and still decides every non-ASCII/CR-bearing comparison. That slice does not remove full body hydration, and any Release latency/allocation benefit remains to be measured. Before any candidate index ships, Part VI must admit the provisionally named G9 graft, representative corpora must prove candidate rate and zero false negatives, and same-position selection/hydration plus fail-open unready/corrupt behavior must be specified. Residual risk remains one full ~1.22-GiB snapshot per request until that graft lands. |
 | `projection-joins-full-body-before-truncation` | `fixed` | **Completed 2026-08-11:** public-symbol workflow [31448087991](https://github.com/GuangDai/Clipy/actions/runs/31448087991) and final code-head CI [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036) are green; the latter passed all source/lint gates, strict-concurrency builds, 314 tests in 41 suites, app build/test, and all 13 release workloads. **Pre-proof implementation record:** Projection now streams into the byte envelope and revision summaries use a title-only path; direct regressions exist, pending macOS proof. |
 | `exact-body-excerpt-full-array` | `fixed` | **Completed 2026-08-11:** public-symbol workflow [31448087991](https://github.com/GuangDai/Clipy/actions/runs/31448087991) and final code-head CI [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036) are green; the latter passed all source/lint gates, strict-concurrency builds, 314 tests in 41 suites, app build/test, and all 13 release workloads. **Pre-proof implementation record:** Full `[Character]` materialization was replaced with `String.Index` traversal and a bounded window; five direct worked examples await macOS proof. |
 | `no-direct-unit-tests-for-search-projector-internals` | `fixed` | **Completed 2026-08-11:** public-symbol workflow [31448087991](https://github.com/GuangDai/Clipy/actions/runs/31448087991) and final code-head CI [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036) are green; the latter passed all source/lint gates, strict-concurrency builds, 314 tests in 41 suites, app build/test, and all 13 release workloads. **Pre-proof implementation record:** Projector, excerpt, regexp preflight, and original-string UTF-16 translation now have direct `@testable` suites; actor-confined Fuse behavior is covered through public fuzzy boundary/Unicode fixtures. The direct matrix includes nested quantifiers/alternation, backreferences, nested/POSIX sets, quoted literals inside/outside sets, comments-mode admission, ellipses, clipping, and supplementary/combining UTF-16 widths. macOS proof remains. |

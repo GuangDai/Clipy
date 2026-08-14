@@ -1,12 +1,13 @@
 /// Manual performance-admission workloads for measurement-gated deferred
 /// work (docs/06-cross-cutting.md §9; V1-Verified G2/G5/G8).
 ///
-/// These workloads are intentionally absent from per-push CI. A dispatch-only
-/// workflow runs the release binary against one 5,000-row persistent corpus,
-/// records all 101 latency samples plus nearest-rank p50/p95/p99, and wraps
-/// each process with macOS `/usr/bin/time -l` for peak-RSS evidence. Results
-/// are record-only until an authoritative product budget is admitted; this
-/// runner must not turn an observed value into a passing threshold by itself.
+/// These workloads are intentionally absent from per-push CI. The full
+/// dispatch runs the release binary against one 5,000-row persistent corpus,
+/// records 101 latency samples plus nearest-rank p50/p95/p99, and wraps each
+/// process with macOS `/usr/bin/time -l` for peak-RSS evidence. A separate
+/// short, store-free Release A/B can reject matcher experiments before that
+/// cost. Results are record-only until an authoritative product budget is
+/// admitted; this runner must not invent one from its own observation.
 import Foundation
 import HistoryCore
 import HistoryStorage
@@ -51,6 +52,7 @@ enum AdmissionMode: String, Sendable, Equatable {
     case prepareSmoke = "prepare-smoke"
     case browseTies = "browse-ties"
     case exactSearch = "exact-search"
+    case exactMatcherAB = "exact-matcher-ab"
     case exactSearchProbe = "exact-search-probe"
     case openOnce = "open-once"
     case openOnceAndValidate = "open-once-and-validate"
@@ -61,6 +63,7 @@ enum AdmissionMode: String, Sendable, Equatable {
         case .seed, .seedSmoke:
             return true
         case .prepare, .prepareSmoke, .browseTies, .exactSearch,
+             .exactMatcherAB,
              .exactSearchProbe,
              .openOnce, .openOnceAndValidate, .warmOpen:
             return false
@@ -71,7 +74,8 @@ enum AdmissionMode: String, Sendable, Equatable {
         switch self {
         case .seedSmoke, .prepareSmoke:
             return .prepareSmoke
-        case .seed, .prepare, .browseTies, .exactSearch, .exactSearchProbe,
+        case .seed, .prepare, .browseTies, .exactSearch, .exactMatcherAB,
+             .exactSearchProbe,
              .openOnce,
              .openOnceAndValidate, .warmOpen:
             return .full
@@ -84,7 +88,8 @@ enum AdmissionMode: String, Sendable, Equatable {
             return .seed
         case .prepareSmoke:
             return .seedSmoke
-        case .seed, .seedSmoke, .browseTies, .exactSearch, .exactSearchProbe,
+        case .seed, .seedSmoke, .browseTies, .exactSearch, .exactMatcherAB,
+             .exactSearchProbe,
              .openOnce,
              .openOnceAndValidate, .warmOpen:
             return nil
@@ -103,6 +108,8 @@ enum AdmissionError: Error, Sendable, Equatable {
     case unexpectedPage
     case unexpectedPosition
     case diagnosticConfigurationMissing
+    case exactMatcherMismatch
+    case invalidExactMatcherMeasurement
 }
 
 struct AdmissionPercentiles: Codable, Sendable {
@@ -157,6 +164,46 @@ struct AdmissionExactSearchProbeFixture: Codable, Sendable, Equatable {
     let matchedRows: Int
     let hasNextPage: Bool
     let completionMarker: String
+}
+
+/// Record-only Release A/B for IND-07's scalar matcher baseline. It never
+/// opens SwiftData and cannot be used as G2/G8 or candidate-index evidence.
+struct AdmissionExactMatcherABFixture: Codable, Sendable {
+    let schemaVersion: UInt16
+    let mode: String
+    let evidenceClass: String
+    let machine: MachineMetadata
+    let swiftVersion: String
+    let date: String
+    let bodiesPerSample: Int
+    let bodyBytes: Int
+    let warmupCount: Int
+    let sampleCount: Int
+    let constructionsPerSample: Int
+    let productionIntegrationEligible: Bool
+    let scopeLimitations: [String]
+    let cases: [AdmissionExactMatcherABCase]
+}
+
+struct AdmissionExactMatcherABCase: Codable, Sendable {
+    let name: String
+    let decisionClass: String
+    let maximumPairedMedianRatio: Double
+    let termUTF8Bytes: Int
+    let logicalBytesPerSample: Int
+    let foundationRawSamplesMs: [Double]
+    let compiledRawSamplesMs: [Double]
+    let pairedRawRatios: [Double]
+    let foundationMedianMs: Double
+    let compiledMedianMs: Double
+    let compiledToFoundationRatio: Double
+    let pairedMedianRatio: Double
+    let pairedP25Ratio: Double
+    let pairedP75Ratio: Double
+    let passesDecisionThreshold: Bool
+    let compiledConstructionRawSamplesMs: [Double]
+    let compiledConstructionMedianMs: Double
+    let checksum: UInt64
 }
 
 /// Privacy-safe checkpoints for the long-running admission measurement. The
@@ -800,6 +847,499 @@ private func admissionExactSearchRequest() -> HistoryBrowseRequest {
     )
 }
 
+private struct AdmissionMatcherABInput {
+    let name: String
+    let decisionClass: String
+    let maximumPairedMedianRatio: Double
+    let term: String
+    let makeBody: (Int) -> String
+}
+
+/// One 256-KiB ASCII value with a short per-body discriminator. The caller's
+/// prefix/suffix must themselves be ASCII so logical bytes equal UTF-8 bytes.
+private func admissionMatcherBody(
+    index: Int,
+    prefix: String = "",
+    repeating byte: Character = "x",
+    suffix: String = ""
+) -> String {
+    let discriminator = "[\(index)]"
+    let fixedBytes = prefix.utf8.count
+        + discriminator.utf8.count
+        + suffix.utf8.count
+    precondition(fixedBytes <= admissionSearchBodyBytes)
+    return prefix
+        + discriminator
+        + String(repeating: byte, count: admissionSearchBodyBytes - fixedBytes)
+        + suffix
+}
+
+/// A source-shaped, all-ASCII body. Repeating a realistic lexical mix avoids
+/// treating the deliberately low-entropy admission fixture as representative
+/// matcher evidence while preserving an exact 256-KiB envelope.
+private func admissionMatcherSourceBody(index: Int) -> String {
+    let prefix = "[\(index)]"
+    let source = """
+    struct ClipboardRow: Sendable {
+        let identifier: UUID
+        let title: String
+        let searchBody: String
+        func contains(_ term: String) -> Bool { title.contains(term) }
+    }
+
+    """
+    let remaining = admissionSearchBodyBytes - prefix.utf8.count
+    let repetitions = (remaining / source.utf8.count) + 1
+    return prefix + String(String(repeating: source, count: repetitions).prefix(remaining))
+}
+
+/// Deterministic high-entropy ASCII without test-run randomness. The alphabet
+/// excludes neither case nor digits, so it exercises a very different byte
+/// distribution from the synthetic repeated-`x` admission corpus.
+private func admissionMatcherHighEntropyBody(index: Int) -> String {
+    let alphabet = Array(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_".utf8
+    )
+    var state = UInt64(index + 1) &* 0x9E37_79B9_7F4A_7C15
+    var bytes: [UInt8] = []
+    bytes.reserveCapacity(admissionSearchBodyBytes)
+    while bytes.count < admissionSearchBodyBytes {
+        state ^= state << 13
+        state ^= state >> 7
+        state ^= state << 17
+        bytes.append(alphabet[Int(state % UInt64(alphabet.count))])
+    }
+    return String(decoding: bytes, as: UTF8.self)
+}
+
+private func admissionExactMatcherABInputs() -> [AdmissionMatcherABInput] {
+    [
+        AdmissionMatcherABInput(
+            name: "admission-absent-48",
+            decisionClass: "primary",
+            maximumPairedMedianRatio: 0.80,
+            term: "term-that-does-not-exist-in-the-admission-corpus",
+            makeBody: { admissionMatcherBody(index: $0) }
+        ),
+        AdmissionMatcherABInput(
+            name: "early-hit-16",
+            decisionClass: "representative",
+            maximumPairedMedianRatio: 1.10,
+            term: "early-needle-hit",
+            makeBody: {
+                admissionMatcherBody(index: $0, prefix: "EARLY-NEEDLE-HIT")
+            }
+        ),
+        AdmissionMatcherABInput(
+            name: "middle-hit-16",
+            decisionClass: "representative",
+            maximumPairedMedianRatio: 1.10,
+            term: "middle-needle-hit",
+            makeBody: { index in
+                let discriminator = "[\(index)]"
+                let marker = "MIDDLE-NEEDLE-HIT"
+                let leading = discriminator
+                    + String(
+                        repeating: "x",
+                        count: (admissionSearchBodyBytes / 2)
+                            - discriminator.utf8.count
+                    )
+                return leading
+                    + marker
+                    + String(
+                        repeating: "x",
+                        count: admissionSearchBodyBytes
+                            - leading.utf8.count
+                            - marker.utf8.count
+                    )
+            }
+        ),
+        AdmissionMatcherABInput(
+            name: "late-hit-16",
+            decisionClass: "representative",
+            maximumPairedMedianRatio: 1.10,
+            term: "late-needle-hit!",
+            makeBody: {
+                admissionMatcherBody(index: $0, suffix: "LATE-NEEDLE-HIT!")
+            }
+        ),
+        AdmissionMatcherABInput(
+            name: "absent-needle-1",
+            decisionClass: "representative",
+            maximumPairedMedianRatio: 1.10,
+            term: "z",
+            makeBody: { admissionMatcherBody(index: $0) }
+        ),
+        AdmissionMatcherABInput(
+            name: "absent-needle-64",
+            decisionClass: "representative",
+            maximumPairedMedianRatio: 1.10,
+            term: String(repeating: "y", count: 64),
+            makeBody: { admissionMatcherBody(index: $0) }
+        ),
+        AdmissionMatcherABInput(
+            name: "repeated-prefix-4096",
+            decisionClass: "adversarial",
+            maximumPairedMedianRatio: 1.10,
+            term: String(repeating: "a", count: 4_095) + "b",
+            makeBody: {
+                admissionMatcherBody(index: $0, repeating: "a")
+            }
+        ),
+        AdmissionMatcherABInput(
+            name: "source-absent-16",
+            decisionClass: "representative",
+            maximumPairedMedianRatio: 1.10,
+            term: "token-never-here",
+            makeBody: admissionMatcherSourceBody
+        ),
+        AdmissionMatcherABInput(
+            name: "source-common-hit-4",
+            decisionClass: "representative",
+            maximumPairedMedianRatio: 1.10,
+            term: "func",
+            makeBody: admissionMatcherSourceBody
+        ),
+        AdmissionMatcherABInput(
+            name: "high-entropy-absent-10",
+            decisionClass: "representative",
+            maximumPairedMedianRatio: 1.10,
+            term: "q9ZxP4LmN7",
+            makeBody: admissionMatcherHighEntropyBody
+        ),
+        AdmissionMatcherABInput(
+            name: "unicode-needle-fallback",
+            decisionClass: "fallback",
+            maximumPairedMedianRatio: 1.25,
+            term: "CAFÉ",
+            makeBody: { index in
+                let prefix = "[\(index)]"
+                return prefix
+                    + String(
+                        repeating: "x",
+                        count: admissionSearchBodyBytes
+                            - prefix.utf8.count
+                            - "café".utf8.count
+                    )
+                    + "café"
+            }
+        ),
+        AdmissionMatcherABInput(
+            name: "late-unicode-fallback",
+            decisionClass: "fallback",
+            maximumPairedMedianRatio: 1.25,
+            term: "needle",
+            makeBody: { index in
+                let prefix = "[\(index)]"
+                return prefix
+                    + String(
+                        repeating: "x",
+                        count: admissionSearchBodyBytes
+                            - prefix.utf8.count
+                            - "😀".utf8.count
+                    )
+                    + "😀"
+            }
+        ),
+        AdmissionMatcherABInput(
+            name: "late-cr-fallback",
+            decisionClass: "fallback",
+            maximumPairedMedianRatio: 1.25,
+            term: "needle",
+            makeBody: { index in
+                admissionMatcherBody(
+                    index: index,
+                    suffix: "\r\n"
+                )
+            }
+        ),
+    ]
+}
+
+private struct AdmissionMatcherPairSamples {
+    let foundation: [Double]
+    let compiled: [Double]
+    let pairedRatios: [Double]
+    let checksum: UInt64
+}
+
+private func foundationExactMatch(
+    term: String,
+    in body: String
+) -> ExactLiteralMatch? {
+    guard let range = body.range(
+        of: term,
+        options: [.caseInsensitive, .literal]
+    ) else {
+        return nil
+    }
+    let utf16Range = NSRange(range, in: body)
+    return ExactLiteralMatch(
+        characterOffset: body.distance(
+            from: body.startIndex,
+            to: range.lowerBound
+        ),
+        characterLength: body.distance(
+            from: range.lowerBound,
+            to: range.upperBound
+        ),
+        utf16Offset: utf16Range.location,
+        utf16Length: utf16Range.length
+    )
+}
+
+private func admissionMix(_ value: Int, into checksum: inout UInt64) {
+    checksum ^= UInt64(value) &+ 0x9E37_79B9_7F4A_7C15
+    checksum &*= 1_099_511_628_211
+}
+
+private func admissionMix(
+    _ match: ExactLiteralMatch?,
+    ordinal: Int,
+    into checksum: inout UInt64
+) {
+    admissionMix(ordinal + 1, into: &checksum)
+    guard let match else {
+        admissionMix(0, into: &checksum)
+        return
+    }
+    admissionMix(1, into: &checksum)
+    admissionMix(match.characterOffset + 1, into: &checksum)
+    admissionMix(match.characterLength + 1, into: &checksum)
+    admissionMix(match.utf16Offset + 1, into: &checksum)
+    admissionMix(match.utf16Length + 1, into: &checksum)
+}
+
+private func foundationExactChecksum(
+    term: String,
+    bodies: [String]
+) -> UInt64 {
+    var checksum: UInt64 = 14_695_981_039_346_656_037
+    for (ordinal, body) in bodies.enumerated() {
+        admissionMix(
+            foundationExactMatch(term: term, in: body),
+            ordinal: ordinal,
+            into: &checksum
+        )
+    }
+    return checksum
+}
+
+private func compiledExactChecksum(
+    matcher: ExactLiteralMatcher,
+    bodies: [String]
+) -> UInt64 {
+    var checksum: UInt64 = 14_695_981_039_346_656_037
+    for (ordinal, body) in bodies.enumerated() {
+        admissionMix(
+            matcher.firstMatch(in: body),
+            ordinal: ordinal,
+            into: &checksum
+        )
+    }
+    return checksum
+}
+
+private func timedMatcherOperation(
+    _ operation: () -> UInt64
+) -> (elapsedMs: Double, checksum: UInt64) {
+    let clock = ContinuousClock()
+    let start = clock.now
+    let checksum = autoreleasepool(invoking: operation)
+    return (durationToMs(start.duration(to: clock.now)), checksum)
+}
+
+/// Measures one Foundation/compiled pair per round, alternating AB and BA.
+/// The paired ratios therefore compare the same warmed corpus at adjacent
+/// points instead of comparing two separately blocked 11-sample runs.
+private func measurePairedMatcherSamples(
+    warmups: Int,
+    iterations: Int,
+    foundation: () -> UInt64,
+    compiled: () -> UInt64
+) throws -> AdmissionMatcherPairSamples {
+    var foundationSamples: [Double] = []
+    var compiledSamples: [Double] = []
+    var pairedRatios: [Double] = []
+    foundationSamples.reserveCapacity(iterations)
+    compiledSamples.reserveCapacity(iterations)
+    pairedRatios.reserveCapacity(iterations)
+    var checksum: UInt64 = 0
+
+    for round in 0..<(warmups + iterations) {
+        let foundationResult: (elapsedMs: Double, checksum: UInt64)
+        let compiledResult: (elapsedMs: Double, checksum: UInt64)
+        if round.isMultiple(of: 2) {
+            foundationResult = timedMatcherOperation(foundation)
+            compiledResult = timedMatcherOperation(compiled)
+        } else {
+            compiledResult = timedMatcherOperation(compiled)
+            foundationResult = timedMatcherOperation(foundation)
+        }
+        guard foundationResult.checksum == compiledResult.checksum else {
+            throw AdmissionError.exactMatcherMismatch
+        }
+        guard foundationResult.elapsedMs.isFinite,
+              compiledResult.elapsedMs.isFinite,
+              foundationResult.elapsedMs > 0,
+              compiledResult.elapsedMs > 0
+        else {
+            throw AdmissionError.invalidExactMatcherMeasurement
+        }
+        guard round >= warmups else { continue }
+        foundationSamples.append(foundationResult.elapsedMs)
+        compiledSamples.append(compiledResult.elapsedMs)
+        pairedRatios.append(
+            compiledResult.elapsedMs / foundationResult.elapsedMs
+        )
+        checksum &+= foundationResult.checksum &* UInt64(round + 1)
+    }
+
+    return AdmissionMatcherPairSamples(
+        foundation: foundationSamples,
+        compiled: compiledSamples,
+        pairedRatios: pairedRatios,
+        checksum: checksum
+    )
+}
+
+private func measureMatcherConstruction(
+    term: String,
+    warmups: Int,
+    iterations: Int,
+    constructionsPerSample: Int
+) throws -> (samples: [Double], checksum: UInt64) {
+    let operation = {
+        var checksum: UInt64 = 14_695_981_039_346_656_037
+        for ordinal in 0..<constructionsPerSample {
+            let matcher = ExactLiteralMatcher(term: term)
+            admissionMix(
+                matcher.firstMatch(in: term),
+                ordinal: ordinal,
+                into: &checksum
+            )
+        }
+        return checksum
+    }
+    for _ in 0..<warmups {
+        _ = timedMatcherOperation(operation)
+    }
+    var samples: [Double] = []
+    samples.reserveCapacity(iterations)
+    var checksum: UInt64 = 0
+    for ordinal in 0..<iterations {
+        let result = timedMatcherOperation(operation)
+        guard result.elapsedMs.isFinite, result.elapsedMs > 0 else {
+            throw AdmissionError.invalidExactMatcherMeasurement
+        }
+        samples.append(result.elapsedMs)
+        checksum &+= result.checksum &* UInt64(ordinal + 1)
+    }
+    return (samples, checksum)
+}
+
+private func measureAdmissionExactMatcherAB(outputPath: String) throws {
+    // 32 MiB exceeds the private/cache footprint of the supported Apple-
+    // silicon runner class while remaining a short, allocation-stable lane.
+    let bodiesPerSample = 128
+    let warmups = 2
+    let iterations = 11
+    let constructionsPerSample = 256
+    var fixtures: [AdmissionExactMatcherABCase] = []
+
+    for input in admissionExactMatcherABInputs() {
+        let bodies = (0..<bodiesPerSample).map(input.makeBody)
+        precondition(bodies.allSatisfy {
+            $0.utf8.count == admissionSearchBodyBytes
+        })
+        let matcher = ExactLiteralMatcher(term: input.term)
+
+        // Correctness is outside the timed region and compares every row and
+        // all four coordinate fields. The rolling hash below is only an
+        // optimization barrier, never the semantic proof.
+        let expected = bodies.map {
+            foundationExactMatch(term: input.term, in: $0)
+        }
+        let actual = bodies.map { matcher.firstMatch(in: $0) }
+        guard expected == actual else {
+            throw AdmissionError.exactMatcherMismatch
+        }
+
+        let paired = try measurePairedMatcherSamples(
+            warmups: warmups,
+            iterations: iterations,
+            foundation: {
+                foundationExactChecksum(term: input.term, bodies: bodies)
+            },
+            compiled: {
+                compiledExactChecksum(matcher: matcher, bodies: bodies)
+            }
+        )
+        let construction = try measureMatcherConstruction(
+            term: input.term,
+            warmups: warmups,
+            iterations: iterations,
+            constructionsPerSample: constructionsPerSample
+        )
+        let foundationMedian = median(paired.foundation)
+        let compiledMedian = median(paired.compiled)
+        let pairedMedian = median(paired.pairedRatios)
+        fixtures.append(AdmissionExactMatcherABCase(
+            name: input.name,
+            decisionClass: input.decisionClass,
+            maximumPairedMedianRatio: input.maximumPairedMedianRatio,
+            termUTF8Bytes: input.term.utf8.count,
+            logicalBytesPerSample: bodiesPerSample * admissionSearchBodyBytes,
+            foundationRawSamplesMs: paired.foundation,
+            compiledRawSamplesMs: paired.compiled,
+            pairedRawRatios: paired.pairedRatios,
+            foundationMedianMs: foundationMedian,
+            compiledMedianMs: compiledMedian,
+            compiledToFoundationRatio: compiledMedian / foundationMedian,
+            pairedMedianRatio: pairedMedian,
+            pairedP25Ratio: nearestRankPercentile(
+                paired.pairedRatios,
+                percentile: 0.25
+            ),
+            pairedP75Ratio: nearestRankPercentile(
+                paired.pairedRatios,
+                percentile: 0.75
+            ),
+            passesDecisionThreshold: pairedMedian
+                <= input.maximumPairedMedianRatio,
+            compiledConstructionRawSamplesMs: construction.samples,
+            compiledConstructionMedianMs: median(construction.samples),
+            checksum: paired.checksum ^ construction.checksum
+        ))
+    }
+
+    try writeAdmissionFixture(AdmissionExactMatcherABFixture(
+        schemaVersion: 2,
+        mode: AdmissionMode.exactMatcherAB.rawValue,
+        evidenceClass: "release-matcher-ab-record-only",
+        machine: admissionMachineMetadata(),
+        swiftVersion: commandOutput(
+            "/usr/bin/xcrun",
+            arguments: ["swift", "--version"]
+        ),
+        date: admissionDate(),
+        bodiesPerSample: bodiesPerSample,
+        bodyBytes: admissionSearchBodyBytes,
+        warmupCount: warmups,
+        sampleCount: iterations,
+        constructionsPerSample: constructionsPerSample,
+        productionIntegrationEligible: fixtures.allSatisfy(
+            \.passesDecisionThreshold
+        ),
+        scopeLimitations: [
+            "Record-only matcher screening; not G2, G8, or candidate-index evidence.",
+            "Logical bytes are corpus size, not bytes actually inspected by early-hit or fallback paths.",
+            "Production integration also requires a one-to-three-call same-store Release end-to-end comparison.",
+        ],
+        cases: fixtures
+    ), to: outputPath)
+}
+
 private func measureAdmissionExactSearchProbe(
     storeURL: URL,
     outputPath: String
@@ -1024,12 +1564,14 @@ func runAdmission(arguments: [String]) async -> Int {
 
     do {
         let storeURL = URL(fileURLWithPath: arguments[1])
-        let storeExists = FileManager.default.fileExists(atPath: storeURL.path)
-        if mode.createsStore, storeExists {
-            throw AdmissionError.storeAlreadyExists
-        }
-        if !mode.createsStore, !storeExists {
-            throw AdmissionError.storeMissing
+        if mode != .exactMatcherAB {
+            let storeExists = FileManager.default.fileExists(atPath: storeURL.path)
+            if mode.createsStore, storeExists {
+                throw AdmissionError.storeAlreadyExists
+            }
+            if !mode.createsStore, !storeExists {
+                throw AdmissionError.storeMissing
+            }
         }
         print("HistoryPerfRunner admission: starting \(mode.rawValue)")
         switch mode {
@@ -1057,6 +1599,8 @@ func runAdmission(arguments: [String]) async -> Int {
                 storeURL: storeURL,
                 outputPath: arguments[2]
             )
+        case .exactMatcherAB:
+            try measureAdmissionExactMatcherAB(outputPath: arguments[2])
         case .exactSearchProbe:
             try await measureAdmissionExactSearchProbe(
                 storeURL: storeURL,

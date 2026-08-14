@@ -39,6 +39,7 @@ Verdict: `CONFIRMED` (real defect, fix) · `REFUTED` (looks wrong, is correct) �
 | IND-04 | minor | 03 §8, 01 §4 | Fuse `location`/`distance` (relevance-affecting) undiscussed | CONFIRMED | fixed |
 | IND-05 | nit | 01 §4 | "Fuse 1.4.x" version unverified; dep not named precisely; Sendable-by-confinement implicit | REFUTED | fixed (repo named `krisk/fuse-swift`, 1.4.0 confirmed latest stable; non-Sendable confinement documented in Module 7) |
 | IND-06 | minor | 06 §9 | 90-minute exact admission emitted no phase/sample progress; Debug-only source trace was not distinguished from canonical Release evidence | CONFIRMED | fixed |
+| IND-07 | major | 03b §8; 04 §7/§12; 05 §14.2; 06 §3/§9 | Exact search invokes a general Unicode substring operation for each title/body after materializing up to 5,000 × 256 KiB bodies; the existing G2 result-cache graft does not define a conservative candidate-index seam | CONFIRMED | in-progress |
 | WF-* | — | — | Historical workflow register; findings were merged into §4 and the design change log. | merged | historical |
 
 ### Design-correct confirmations (REFUTED-as-fine, kept for provenance)
@@ -190,11 +191,68 @@ V1V-03B-004 remains deliberately deferred under its recorded G2 trigger.
 | V1V-03B-005 | 04 §9; 05 §14.5; 06 §9; `ThumbnailService.swift`; WS15 | **Completed 2026-08-11:** supported run [31494740863](https://github.com/GuangDai/Clipy/actions/runs/31494740863) passed source/lint gates, strict SwiftPM build/tests, app build/test, and all 13 release workloads. **Pre-proof implementation record:** The exact-key flight now owns source hydration through ImageIO decode. Concurrent joiners run scalar dimension/existence/version fences, reducing C overlapping identical requests from C full lineage/source hydrations to one full hydration plus at most C−1 scalar reads. A failed stale join does not cancel the creator. The creator still owns complete fail-closed lineage/projection/codec validation; when an already-corrupt store and a stale reference coexist, the public contract intentionally does not freeze which typed failure wins, but no path returns current bytes under an old key. |
 | V1V-04-006 | 06 §3/§9; `HistoryPerfRunner/Admission.swift`; `macos26-arm-ci.yml` | **Pre-proof implementation record:** Added a dispatch-only persistent 5,000 × 256 KiB admission lane after source and SwiftPM correctness gates. Versioned fixtures separate setup phase duration from 101-sample nearest-rank p50/p95/p99. Tie-heavy latency is sampled per public page, exact-search RSS is labeled a worst-bound process ceiling rather than complete G8 evidence, and warm opens run in independently terminated child processes after a full-corpus validation warmup. Diagnostic run 31498144173 exposed two setup defects: only 1,500/5,000 rows completed and 599 CoreData external-data clone attempts referenced missing `.interim` files. The replacement keeps the Authority as sole writer and changes fixture construction from 5,000 public captures/cumulative O(N²) inventory work to 79 bounded create transactions. Runs 31527425658 and 31597596383 proved that lexical release and then process separation still allowed an intermittent external clone during full validation. The follow-up bounds startup/capture/recent context-backed objects with operation-local autorelease pools, emits fixed prepare-phase and opt-in Debug storage-lifecycle checkpoints, preserves short diagnostics after a clean-log failure while skipping long measurements, and isolates every WL2 population/open in a child process whose sample excludes launch/teardown. A fixed 1,000-row same-size smoke and exact CoreData log rejection remain unchanged. Results remain record-only; approved-minimum-hardware G5, representative concurrent-call G8, fsync/crash, and general external-storage no-fault evidence remain outside its claims. Supported rerun evidence is pending. |
 
+### Deferred exact-search complexity review (2026-08-12)
+
+IND-07 was opened after the manual admission trace reported approximately 125
+seconds for each absent-term exact request. That trace is diagnostic rather
+than canonical G2/G8 evidence, but the source path independently proves the
+structural amplification: one validation, one warmup, and 101 samples can each
+materialize the complete 5,000 × 256 KiB body envelope, or about 125.7 GiB of
+logical body values across the process lifetime.
+
+A throwaway, deterministic candidate-filter prototype was run and removed
+after recording these results:
+
+- the artificial admission corpus is eliminated entirely by a case-folded
+  128-bit ASCII byte-presence proof (0/5,000 candidates; about 80 KiB total
+  row metadata), so that corpus alone must not choose the production shape;
+- 3,201 planted-substring/case differential checks produced zero false
+  negatives under the prototype's ASCII-only coverage rule;
+- a one-hash trigram bitset over a high-entropy 256 KiB row is approximately
+  98.2%, 86.5%, 63.2%, and 39.3% occupied at 8, 16, 32, and 64 KiB per row.
+  Thus 8 KiB is effectively saturated, while 32 KiB is the first tested size
+  near a 65% occupancy target (156.25 MiB for 5,000 rows).
+
+The implementation order under review is deliberately layered:
+
+1. compile one matcher per public request; use linear KMP for the eligible
+   ASCII subset (excluding CRLF-coordinate ambiguity) and preserve Foundation
+   as the complete fallback semantic oracle;
+2. propose a separate G9 conservative exact-candidate-index graft rather than
+   misclassifying it as G2's result/collection cache; Part VI must admit it
+   before implementation;
+3. test a byte-presence front filter plus one-hash trigrams against
+   representative text, source, high-entropy, repeated-prefix, Unicode, and
+   forced-collision corpora before choosing fixed or adaptive storage;
+4. permit exclusion only for complete, current, proven-ASCII coverage. Short,
+   Unicode, missing, stale, corrupt, or unready evidence fails open to full
+   candidate hydration; Foundation decides every fallback comparison, while
+   the eligible-ASCII matcher is differential-tested against that oracle.
+
+The first matcher step establishes a linear ASCII baseline and reusable needle
+preprocessing. Whether it improves Release latency or allocation over
+Foundation remains a measurement question; it does **not** close
+`search-corpus-materializes-full-inline-searchbody`. Avoiding the 1.22 GiB
+per-request hydration requires the separately reviewed, provisionally named G9
+seam.
+
+The dispatch-only matcher screen fixes that decision rule before observing its
+result. It compares equal four-coordinate outputs over a 32 MiB corpus in two
+warmups plus 11 adjacent AB/BA pairs. The primary admission-absent case must be
+at least 20% faster (`paired median <= 0.80`), every representative/adversarial
+case may regress by at most 10%, and each Foundation fallback may regress by at
+most 25%. The 13 cases include early/middle/late hits, source-shaped and
+high-entropy ASCII, short/long absent needles, a repeated-prefix adversary, and
+Unicode/CR fallbacks. Even a complete pass only admits a subsequent one-to-three
+call same-store Release comparison; it cannot establish G2/G8 or candidate-index
+evidence and does not justify the 101-sample lane by itself.
+
 All remaining findings and their explicit owners/triggers are tracked in
 `docs/V1-Verified/07-finding-dispositions.md`. The supported CI, performance,
 symbol-surface, and independent completion-review prerequisites are complete.
-The post-closure complexity pass has reopened two evidence rows: the canonical
-ledger currently has 111 fixed, 29 deferred, and 2 in-progress rows with no pending
+The post-closure complexity pass has reopened three evidence/complexity rows:
+the canonical
+ledger currently has 111 fixed, 28 deferred, and 3 in-progress rows with no pending
 rows. Every remaining deferred item retains an explicit owner, trigger, and
 residual risk.
 

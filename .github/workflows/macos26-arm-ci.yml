@@ -8,6 +8,15 @@ on:
     branches:
       - master
   workflow_dispatch:
+    inputs:
+      admission_scope:
+        description: "Dispatch-only performance lane"
+        required: true
+        default: full
+        type: choice
+        options:
+          - full
+          - exact-matcher-ab
 
 concurrency:
   group: macos26-arm-ci-${{ github.ref }}
@@ -175,6 +184,9 @@ jobs:
           retention-days: 14
 
   xcodeproj:
+    if: >-
+      github.event_name != 'workflow_dispatch'
+      || inputs.admission_scope == 'full'
     name: XcodeGen generate + app build/test
     needs: [gates]
     runs-on: macos-26
@@ -272,6 +284,9 @@ jobs:
     # (needs only gates): the release build compiles the full dependency graph,
     # so a compile failure in any target fails this job independently. Running
     # in parallel with spm-build-test and xcodeproj saves wall-clock time.
+    if: >-
+      github.event_name != 'workflow_dispatch'
+      || inputs.admission_scope == 'full'
     name: Perf proofs (§9)
     needs: [gates]
     runs-on: macos-26
@@ -344,12 +359,163 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  exact-matcher-ab:
+    # A short Release A/B for IND-07. This deliberately skips persistent-store
+    # preparation and the 101-call admission lane so matcher experiments can be
+    # accepted or rejected before paying the full-corpus measurement cost.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      && inputs.admission_scope == 'exact-matcher-ab'
+    name: Exact matcher Release A/B
+    needs: [gates, spm-build-test]
+    runs-on: macos-26
+    timeout-minutes: 10
+    env:
+      NSUnbufferedIO: YES
+      OS_ACTIVITY_MODE: disable
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      LOG_DIR: ${{ github.workspace }}/matcher-ab-logs
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Prepare evidence directory
+        shell: bash
+        run: mkdir -p "$LOG_DIR"
+
+      - name: Enforce supported runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(sw_vers -productVersion)" == 26.* ]]
+          [[ "$(uname -m)" == arm64 ]]
+
+      - name: Build Release matcher runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          scratch="$RUNNER_TEMP/clipy-matcher-ab-build"
+          swift build -c release --scratch-path "$scratch" \
+            --product HistoryPerfRunner \
+            2>&1 | tee "$LOG_DIR/build.log"
+          swift build -c release --scratch-path "$scratch" \
+            --show-bin-path \
+            2>&1 | tee "$LOG_DIR/bin-path.log"
+          runner="$(tail -n 1 "$LOG_DIR/bin-path.log")/HistoryPerfRunner"
+          [[ -x "$runner" ]]
+          echo "MATCHER_AB_BIN=$runner" >> "$GITHUB_ENV"
+
+      - name: Run exact matcher A/B
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$MATCHER_AB_BIN" --admission exact-matcher-ab \
+            "$RUNNER_TEMP/unused-store.sqlite" \
+            "$LOG_DIR/exact-matcher-ab.json" \
+            2>&1 | tee "$LOG_DIR/exact-matcher-ab.log"
+
+      - name: Validate record-only A/B fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '
+            .schemaVersion == 2
+            and .mode == "exact-matcher-ab"
+            and .evidenceClass == "release-matcher-ab-record-only"
+            and .bodiesPerSample == 128
+            and .bodyBytes == 262144
+            and .warmupCount == 2
+            and .sampleCount == 11
+            and .constructionsPerSample == 256
+            and (.scopeLimitations | length) == 3
+            and (.cases | length) == 13
+            and ([.cases[].name] | sort) == [
+              "absent-needle-1",
+              "absent-needle-64",
+              "admission-absent-48",
+              "early-hit-16",
+              "high-entropy-absent-10",
+              "late-cr-fallback",
+              "late-hit-16",
+              "late-unicode-fallback",
+              "middle-hit-16",
+              "repeated-prefix-4096",
+              "source-absent-16",
+              "source-common-hit-4",
+              "unicode-needle-fallback"
+            ]
+            and ([.cases[].name] | unique | length) == 13
+            and all(.cases[];
+              (.foundationRawSamplesMs | length) == 11
+              and (.compiledRawSamplesMs | length) == 11
+              and (.pairedRawRatios | length) == 11
+              and (.compiledConstructionRawSamplesMs | length) == 11
+              and all(.foundationRawSamplesMs[]; . > 0)
+              and all(.compiledRawSamplesMs[]; . > 0)
+              and all(.pairedRawRatios[]; . > 0)
+              and all(.compiledConstructionRawSamplesMs[]; . > 0)
+              and .foundationMedianMs > 0
+              and .compiledMedianMs > 0
+              and .compiledToFoundationRatio > 0
+              and .pairedMedianRatio > 0
+              and .pairedP25Ratio > 0
+              and .pairedP75Ratio > 0
+              and .pairedP25Ratio <= .pairedMedianRatio
+              and .pairedMedianRatio <= .pairedP75Ratio
+              and .compiledConstructionMedianMs > 0
+              and .maximumPairedMedianRatio > 0
+              and (.passesDecisionThreshold
+                == (.pairedMedianRatio <= .maximumPairedMedianRatio))
+              and (((.compiledToFoundationRatio
+                - (.compiledMedianMs / .foundationMedianMs)) | fabs)
+                < 0.000000001)
+              and .logicalBytesPerSample == 33554432)
+            and (.productionIntegrationEligible
+              == all(.cases[]; .passesDecisionThreshold))
+          ' "$LOG_DIR/exact-matcher-ab.json" >/dev/null
+          matches=$(grep -Ein \
+            '(^|[^[:alpha:]])(warning:|error:)([^[:alpha:]]|$)' \
+            "$LOG_DIR"/*.log || true)
+          if [[ -n "$matches" ]]; then
+            echo "$matches"
+            echo "Warnings or errors found in matcher A/B logs"
+            exit 1
+          fi
+
+      - name: Summarize matcher A/B
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## Exact matcher Release A/B"
+            echo
+            echo "Record-only paired compiled/Foundation ratios; lower is better."
+            jq -r \
+              '.cases[] | "- \(.name): \(.pairedMedianRatio)x (limit \(.maximumPairedMedianRatio), pass=\(.passesDecisionThreshold))"' \
+              "$LOG_DIR/exact-matcher-ab.json"
+            echo
+            jq -r '"Production-integration screening result: \(.productionIntegrationEligible)"' \
+              "$LOG_DIR/exact-matcher-ab.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload matcher A/B evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: exact-matcher-ab-${{ github.run_id }}-${{ github.run_attempt }}
+          path: matcher-ab-logs/*
+          if-no-files-found: error
+          retention-days: 30
+
   performance-admission:
     # Dispatch-only evidence for measurement-gated deferred work. Keeping this
     # job in the established workflow lets a feature branch run its own version
     # before merge; a new standalone workflow is not dispatchable until its
     # workflow file exists on the default branch.
-    if: github.event_name == 'workflow_dispatch'
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      && inputs.admission_scope == 'full'
     name: 5,000-row p50/p95/p99 + RSS evidence
     needs: [gates, spm-build-test]
     runs-on: macos-26

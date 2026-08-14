@@ -23,6 +23,8 @@ internal struct SearchDebugEvent: Codable, Equatable, Sendable {
     let bodyUTF8Bytes: Int
     let titleMatches: Int
     let bodyMatches: Int
+    let exactASCIIEvaluations: Int
+    let exactFoundationEvaluations: Int
 
     /// Stable one-line JSON keeps CI logs streamable and machine-readable.
     /// Sorted keys make fixture and unit-test diagnostics deterministic.
@@ -91,12 +93,14 @@ internal struct SearchDebugProbe: Sendable {
         titleUTF8Bytes: Int = 0,
         bodyUTF8Bytes: Int = 0,
         titleMatches: Int = 0,
-        bodyMatches: Int = 0
+        bodyMatches: Int = 0,
+        exactASCIIEvaluations: Int = 0,
+        exactFoundationEvaluations: Int = 0
     ) {
         guard isEnabled else { return }
         sink(SearchDebugEvent(
             event: "clipy.search.trace",
-            schemaVersion: 1,
+            schemaVersion: 2,
             traceID: traceID,
             component: component,
             phase: phase,
@@ -108,7 +112,9 @@ internal struct SearchDebugProbe: Sendable {
             titleUTF8Bytes: titleUTF8Bytes,
             bodyUTF8Bytes: bodyUTF8Bytes,
             titleMatches: titleMatches,
-            bodyMatches: bodyMatches
+            bodyMatches: bodyMatches,
+            exactASCIIEvaluations: exactASCIIEvaluations,
+            exactFoundationEvaluations: exactFoundationEvaluations
         ))
     }
 
