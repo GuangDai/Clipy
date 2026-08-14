@@ -236,8 +236,8 @@ struct ExactLiteralMatcherDebugRouteTests {
 
     /// Dense head-byte corpora (nearly every byte is a candidate) keep the
     /// FIRST match correct while staying linear. "nn" + "nnx" concatenates
-    /// to "nnnnx…", whose first `nnx` occurrence starts at offset 1 — the
-    /// decoy at 0 must not shadow it.
+    /// to "nnnnx…", whose first `nnx` occurrence starts at offset 2 — the
+    /// overlapping candidates at 0 and 1 must not shadow it.
     @Test func denseHeadByteCorpusFindsFirstMatchLinearly() {
         let body = "nn" + "nnx" + String(repeating: "nna", count: 40)
         let result = Self.route(term: "nnx", in: body)
@@ -245,7 +245,7 @@ struct ExactLiteralMatcherDebugRouteTests {
         #expect(
             result.match == Self.foundationMatch(term: "nnx", in: body)
         )
-        #expect(result.match?.characterOffset == 1)
+        #expect(result.match?.characterOffset == 2)
     }
 
     // MARK: - Tail-only strings
