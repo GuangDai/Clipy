@@ -28,13 +28,17 @@ V2-05 answers one question:
 
 X1 (`V2-00` §3) and X2 (`V2-00` §3) bundle onto one substrate:
 
-1. **`ExternalGateway` — the single trust boundary (X1).** A `Sendable` internal
-   facade in `HistoryStorage` that is the *only* surface external callers reach.
+1. **`ExternalGateway` — the single trust boundary (X1).** A `Sendable`
+   internal actor in `HistoryStorage` that external callers reach only through
+   the public `ExternalHistoryFacade` (§6.5, CRIT-M3).
    Every external request is validated at the gateway, gated against the
    requesting connection's durable capability grant, and — for writes — routed
    through `HistoryAuthority` (the sole writer, `00` §3.3). No external path
-   creates a `ModelContext`, loads a planning fact, decodes a Canonical/revision
-   blob, or bypasses the v1 stamping/transaction stages (decision 16, `V2-00` §5).
+   creates a `ModelContext`, loads a planning fact, or bypasses the v1
+   stamping/transaction stages (decision 16, `V2-00` §5). The gateway itself
+   decodes no blob; an external `.details`/`.pastePayload` read does cause
+   lineage decode **inside the Authority** via the unchanged v1 projection
+   (`05` §14.3), never in the gateway.
 2. **Connections and grants (X1).** Durable, user-enrolled connections
    (`ConnectionRow`) each carrying a granted capability set (`GrantRow`); the
    user (via the UX, V2-07) enrolls and revokes. For V2 the single enrolled
@@ -1171,8 +1175,8 @@ hatch). Wall-clock is not monotonic; a backwards move under-compresses audit
 
 V2-05 introduces **no new SwiftPM target**. The brief's "`HistoryGateway`
 module" is realized as three logical concerns placed on existing targets, to
-preserve the v1 single-SwiftData-owner rule (`00` §3.4, `01` §4 — "`import
-SwiftData` appears only in `HistoryStorage`"):
+preserve the v1 single-SwiftData-owner rule (`00` §3.4; the quoted import rule
+is `01` §8 / `06` §6: "`import SwiftData` appears only in `HistoryStorage`"):
 
 - **Public surface** (`ExternalHistory`, `GatewayAdminHistory` protocols; the
   DTOs `ExternalConnectionID`, `ExternalCapability`, `ConnectionEnrollKind`,
@@ -1394,15 +1398,21 @@ under `X-COMPILE-2` / `X-SECURITY-1`; `V2-facts.md` cycle 5, facts 1, 2, 4 —
 the pattern Apple's sample code demonstrates, e.g., WWDC24's `OpenAssetIntent`
 declares `@Dependency` for its "Navigation Manager"). **Swift 6 strict-
 concurrency risk:** a Swift Forums report documents a known crash against
-`AppDependencyManager` / `@Dependency` in Swift 6 mode; `X-COMPILE-2` must
-therefore confirm CRASH-FREE resolution under a Siri/Shortcuts-invoked
+`AppDependencyManager` / `@Dependency` in Swift 6 mode (queue-assertion crash
+whenever any `@Dependency` is used in an `AppIntent`; verified and recorded in
+`V2-facts.md` cycle 5:
+https://forums.swift.org/t/appdependencymanager-and-dependency-usage-crashes-in-swift-6-mode/73226);
+`X-COMPILE-2`
+must therefore confirm CRASH-FREE resolution under a Siri/Shortcuts-invoked
 `perform()` on macOS 26 (not just compilation), and the §6.5 carve-out's
 soundness rests on that confirmation. V2-05 preserves the **intent** of `01` §8
 by four controls:
 
-1. **The authoritative writer is never registered into `.shared`.** `ClipyApp`
-   constructs `HistoryAuthority` locally (as v1 does, `05` §2) and holds it
-   privately. What is registered into `AppDependencyManager.shared` is a
+1. **The authoritative writer is never registered into `.shared`.** v1
+   constructs `HistoryAuthority` **inside**
+   `SwiftDataHistory.open(configuration:)` (`05` §2); `ClipyApp` constructs
+   `SwiftDataHistory` and never receives an Authority reference (see below).
+   What is registered into `AppDependencyManager.shared` is a
    **capability-scoped `ExternalHistory` facade** — a thin `Sendable` struct
    that holds a `Sendable` reference to the gateway actor and a baked-in
    `ExternalConnectionID`. The facade creates no `ModelContext` and routes
@@ -1595,7 +1605,7 @@ public enum ExternalResponse: Sendable {
 }
 
 public enum ExternalReadResult: Sendable {
-    case page(HistoryPage)             // reuses v1 HistoryPage (03a §7)
+    case page(HistoryPage) // reuses v1 HistoryPage (03b §8)
     case details(HistoryDetails)       // reuses v1 HistoryDetails (03b)
     case pastePayload(PastePayload)    // reuses v1 PastePayload (03b)
 }
@@ -2140,9 +2150,10 @@ extends the set:
 
 - **D32 External-single-writer.** Every external write routes through
   `HistoryAuthority`; no external path creates a `ModelContext`, loads a
-  planning fact, decodes a Canonical/revision blob, or bypasses the v1
-  stamping/transaction stages. (The V2-05 analogue of V2-01 D22 / V2-03 D28;
-  preserves `00` §3.3.)
+  planning fact, or bypasses the v1 stamping/transaction stages; the gateway
+  itself decodes no Canonical/revision blob (external `readContent` decodes
+  lineage only inside the Authority via `05` §14.3). (The V2-05 analogue of
+  V2-01 D22 / V2-03 D28; preserves `00` §3.3.)
 - **D33 Capability-gated execution (authoritative gate at the save boundary).**
   An external request executes only if its connection is active and its grant
   set covers the requested capability at the **save-boundary in-closure

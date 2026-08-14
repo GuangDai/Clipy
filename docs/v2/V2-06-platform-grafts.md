@@ -63,7 +63,8 @@ closure.
 
 V2-06 makes **no concrete platform claim without an MCP-verified citation or an
 assigned V2 proof gate** (`V2-00` §8). Verified facts (cited inline; full
-records in `.tmp/v2-research/V2-06-facts.md`):
+records in `.tmp/v2-research/V2-06-facts.md`; the "Fact N" references below are
+that sidecar's numbering, which DC-1 promotion must renumber in place):
 
 - **P2 — Foundation locale APIs (verified).** `NSString.localizedStandardContains(_:)`
   and `NSString.localizedStandardRange(of:)` perform a **case and diacritic
@@ -111,8 +112,9 @@ records in `.tmp/v2-research/V2-06-facts.md`):
   as the unchanged-detector and does not depend on a CoreData generation token
   (§3.3). Source: Apple docs `coredata/nspersistentstorecoordinator`.
 
-Open platform questions are carried as proof gates in §11 (P1-PLATFORM-1/2,
-P2-PLATFORM-1/2, P3-PLATFORM-1/2, and the P1/P2/P3 PERF gates).
+Open platform questions are carried as proof gates in §3.7/§4.6/§5.7
+(P1-PLATFORM-1/2, P2-PLATFORM-1/2/3, P3-PLATFORM-1..5, and the P1/P2/P3 PERF
+gates).
 
 ---
 
@@ -277,8 +279,9 @@ untouched, `05` §11). Therefore `checkpoint.positionRaw == currentPosition`
 create/delete occurred ⟹ the retained ID set and every retained row's Canonical
 signature entries are identical to the checkpointed state ⟹ the checkpointed
 index is complete and current. The detector is the v1-owned `ChangePosition`
-counter (collision-free by D6 and the checked-successor rule, `02` §13 / `05`
-§10), not a fingerprint and not a CoreData generation token (§2; `P1-PLATFORM-1`).
+counter (monotone by D6 and collision-free by the checked-successor rule, `02`
+§13; stamping vocabulary `05` §9), not a fingerprint and not a CoreData
+generation token (§2; `P1-PLATFORM-1`).
 Position advance is treated
 **conservatively**: any advance forces a rebuild even though the advancing
 commit may have been a signature-preserving coalesce or pin — fail-safe rebuild
@@ -628,7 +631,8 @@ internal func effectiveSearchOptions(_ locale: Locale) -> NSString.CompareOption
     // set for a region-tagged system locale, silently disabling width folding
     // for the default system-locale path - a stated G7 trigger use case (§4.1).
     // `locale.language.languageCode?.identifier` (Locale.Language.LanguageCode,
-    // macOS 13.0+, MCP-verified, within the macOS 26+ target) yields the bare
+    // macOS 13.0+; the direct symbol URL did not resolve — recorded OPEN in
+    // `V2-facts.md` cycle 5, pinned by `P2-COMPILE-1`) yields the bare
     // language code ("ja") regardless of region/script tagging.
     if let lang = locale.language.languageCode?.identifier,
        LocalizedSearchLimits.cjkLocaleIdentifiers.contains(lang) {
@@ -722,9 +726,12 @@ public struct LocalizedSearchStatus: Sendable, Hashable {
   identifier governs the exact-search predicate, so a bad locale identifier is a
   bad search-term-input in the v1 vocabulary sense; P2 overloads this case for
   locale-identifier rejection at the config boundary; no new enum case is added.
-  `V2-00` §8(h) sanctions adding cases to v1 non-frozen cross-module enums, so
-  `.invalidLocaleIdentifier` could be added for a more precise producer, but P2
-  chooses overload-reuse to minimize enum surface — the choice is deliberate, not
+  `V2-00` §8(h) sanctions addition only for its six *named* enums
+  (`HistoryAction`, `HistoryCommitOutcome`, `CapacityKind`, `HistoryMutation`,
+  `PlannedOutcome`, `StampedMutation`) — `InvalidInputReason` is not among
+  them, so a `.invalidLocaleIdentifier` case would need an 8(h) amendment
+  first; P2 therefore chooses overload-reuse to minimize enum surface — the
+  choice is deliberate, not
   forced by a frozen-enum prohibition). **Callers disambiguate by call-site
   context: `.invalidInput(.invalidSearchTerm)` is the locale-rejection channel
   only on `setLocalizedSearchLocale` (the config setter the caller just
@@ -850,9 +857,12 @@ a **new internal streaming protocol** for opt-in chunked consumption.
   `P3-PLATFORM-1`.
 
 **Evidence trigger (admits design work).** Lifts `06` §3 G8. Trigger: a
-representative workload **exceeds the capture-path memory budget** or shows
-**p95 copy cost unsolvable within the bounded inline-value design** (`V2-00` §3
-P3). Until the trigger fires, P3 is design only.
+representative **capture- or read-path** workload **exceeds its memory
+budget** (read-path evidence: peak transient hydration RSS and aggregate
+resident DTO bytes under representative concurrent callers) or shows **p95
+copy cost unsolvable within the bounded inline-value design** (`06` §3 G8
+verbatim; the `V2-00` §3 P3 row matches). Until the trigger fires, P3 is
+design only.
 
 ### 5.2 Platform finding and storage-tier decision
 
@@ -947,7 +957,7 @@ the same v1 normalization/uniqueness/non-empty rules. The fingerprint coverage
 bidirectional check (`05` §4) is preserved: every Canonical representation —
 inline or handle — has a signature entry and vice versa. Any violation is
 `.persistence(.corruptStoredValue)` / `.persistence(.invariantViolation)`
-(`05` §16). `CanonicalSignatureBlobV1` (`05` §4) is **unchanged** — signatures
+(`05` §16). `SignatureBlobV1` (`05` §4) is **unchanged** — signatures
 are metadata, not large-byte payloads.
 
 > **Handle `xxh3` semantics (Lens B).** `StoredBlobHandleV1` is shared by
@@ -1240,8 +1250,10 @@ internal actor BlobStore {
 ```
 
 `SwiftDataHistory` gains a `BlobStore` stored field (an `actor`, so the derived
-`Sendable` conformance is preserved, `01` §6). **This raises the stored-field
-count from five to six** (v1 `05` §2 / `01` §6 state "five actor stored fields");
+`Sendable` conformance is preserved, `01` §6). Each admitted graft appends its
+own actor fields — there is no single global count while grafts compose, and
+v1's "five actor stored fields" (`05` §2 / `01` §6) is superseded by the M1
+field ledger; P3's own contribution is one `BlobStore` field;
 the change is acknowledged here under the V2 self-review gate (`V2-00` §8), not
 a silent edit to those v1 statements — `BlobStore` is an `actor`, so each field
 remains `Sendable` and the derived conformance holds. `IngestPreparationActor`
@@ -1348,7 +1360,8 @@ unchanged.
   during `open` (synchronous), so for a large-rep store it can materially
   extend first-launch time; the M1 plan therefore records an explicit duration
   bound (or a `P3-PERF` measurement) for M1 migration on a worst-case large-rep
-  store (≤ 5,000 items × 32 reps × 64 MiB ceiling) so the G5 startup budget and
+  store (≤ 5,000 items × (≤128 MiB Canonical + 256 MiB revisions) reachable
+  worst case, `06` §2) so the G5 startup budget and
   first-launch UX are not silently inflated by the eager spool. The frozen V1
   decoders remain available only as the migration's *input*, not as a read-side
   fallback.
@@ -1509,9 +1522,10 @@ locale APIs; no locale data leaves the process.
 
 ### 7.3 P3 — blob-store handle / streaming content abstraction
 
-**Record 1 — Lifted exclusion + evidence trigger.** Lifts `06` §3 G8. Trigger: a
-representative workload exceeds the capture-path memory budget or shows p95 copy
-cost unsolvable within the bounded inline-value design (`V2-00` §3 P3). The
+**Record 1 — Lifted exclusion + evidence trigger.** Lifts `06` §3 G8. Trigger:
+a representative capture- or read-path workload exceeds its memory budget or
+shows p95 copy cost unsolvable within the bounded inline-value design (`06`
+§3 G8 verbatim). The
 verified `.externalStorage` opacity finding (§2, Fact 8) is recorded as the
 reason the graft takes the blob-store-tier form rather than a pure read-stream
 over `.externalStorage`.

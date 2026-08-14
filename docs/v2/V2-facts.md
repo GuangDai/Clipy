@@ -1306,3 +1306,116 @@ its sourceUrl is cited in the linked cycle-4 entry; no new fetch was needed.
 
 No new OPEN gates introduced by this cycle; the cycle-4 OPEN summary
 (`RET-PLATFORM-2`, `RET-PLATFORM-3`, `RET-PERF-3`) stands.
+
+## Cycle 5 verified facts (2026-08-15, multi-round V2 document review)
+
+Appended 2026-08-15 during the 审查–调查–批评 review pass over the V2 docs.
+Each entry: claim / verdict / correct statement / sourceUrl. Verdicts are
+VERIFIED (fetched), OPEN (URL unresolvable; proof gate retained), or LOCATED
+(external primary source found for a previously uncited claim). This cycle
+advances DC-1 (durable promotion) for the V2-05 App Intents, V2-06 P2 string,
+V2-04 C2 file, and V2-01 executor platform claims.
+
+### App Intents dependency injection (V2-05 X1)
+
+- **Claim (V2-05 §6.5 / roadmap gate maintenance):** `AppDependencyManager` is a
+  real App Intents type with a `.shared` singleton and registration methods, so
+  the single sanctioned framework-owned `.shared` registration in ClipyApp is
+  possible.
+  - **Verdict:** VERIFIED.
+  - **Correct statement:** `final class AppDependencyManager` in **AppIntents**
+    — "An object that manages the registration and initialization of an app
+    intent's dependencies." macOS 13.0+ (iOS 16.0+), so present on macOS 26.
+    Lists a type property `shared` and three `add(key:dependency:)` overloads;
+    `init()` is documented for dependency injection during testing. The
+    `@Dependency` property wrapper is not described on this page (OPEN below).
+  - **sourceUrl:** https://sosumi.ai/documentation/appintents/appdependencymanager
+    (Apple original: https://developer.apple.com/documentation/appintents/appdependencymanager)
+
+- **Claim (V2-05 §6.5, "Swift 6 strict-concurrency risk"):** a Swift Forums
+  report documents a known crash against `AppDependencyManager` /
+  `@Dependency` in Swift 6 mode.
+  - **Verdict:** LOCATED (primary source found; previously uncited).
+  - **Correct statement:** Swift Forums thread "AppDependencyManager and
+    @Dependency usage crashes in Swift 6 mode" (Nov 2024, tagged swift6):
+    Swift 6 mode causes a runtime crash from a queue assertion if any
+    `@Dependency` is used in an `AppIntent`. This is the report V2-05 §6.5
+    relies on; `X-COMPILE-2` must still confirm crash-free resolution on
+    macOS 26 (compilation alone is insufficient — the report is a runtime
+    queue-assertion crash).
+  - **sourceUrl:** https://forums.swift.org/t/appdependencymanager-and-dependency-usage-crashes-in-swift-6-mode/73226
+
+- **Claim:** the `@Dependency` property wrapper's exact declaration/availability.
+  - **Verdict:** OPEN.
+  - **Correct statement:** The symbol URL
+    `…/documentation/appintents/dependency` returned 404 via Sosumi; the
+    wrapper is exercised by every V2-05 §6.6 App Intent. `X-COMPILE-2`
+    (cold/warm `@Dependency` order, Swift 6 crash-freedom) retains it.
+
+### Foundation string search (V2-06 P2)
+
+- **Claim (V2-06 §4 query-time branch):** `NSString.range(of:options:range:locale:)`
+  is the locale-parameterized exact-match primitive.
+  - **Verdict:** VERIFIED.
+  - **Correct statement:** `func range(of searchString: String, options mask:
+    NSString.CompareOptions = [], range rangeOfReceiverToSearch: NSRange,
+    locale: Locale?) -> NSRange` — macOS 10.5+ (iOS 2.0+), present on macOS 26.
+    Passing `nil` uses the system locale; `Locale.current` is the user's
+    locale; the locale influences equality checking (Apple's example: Turkish
+    case-insensitive "I"/"ı"). Returns `{NSNotFound, 0}` when not found.
+  - **sourceUrl:** https://sosumi.ai/documentation/foundation/nsstring/range(of:options:range:locale:)
+
+- **Claim (V2-06 §4 CJK width folding):** a width-insensitive compare option
+  exists for East-Asian width folding.
+  - **Verdict:** VERIFIED.
+  - **Correct statement:** `struct CompareOptions` (`NSString.CompareOptions`,
+    an OptionSet) includes `widthInsensitive` ("ignores full-width vs
+    half-width character differences, as found in East Asian scripts") and
+    `diacriticInsensitive` ("Search ignores diacritic marks"), alongside
+    `caseInsensitive`, `literal`, `backwards`, `anchored`, `numeric`,
+    `forcedOrdering`, `regularExpression`. macOS 10.0+. Grounds P2's
+    `.widthInsensitive` insertion for Japanese language codes and the
+    diacritic-insensitive default the localizedStandard family already
+    provides.
+  - **sourceUrl:** https://sosumi.ai/documentation/foundation/nsstring/compareoptions
+
+### Foundation backup exclusion (V2-04 C2)
+
+- **Claim (V2-04 §6.6 / roadmap C.6 "backup-exclusion reassertion"):** a
+  documented URL resource key excludes cache files from backups and must be
+  reapplied on every write.
+  - **Verdict:** VERIFIED.
+  - **Correct statement:** `static let isExcludedFromBackupKey: URLResourceKey`
+    — "A key for indicating whether the system excludes the resource from all
+    backups of app data"; the value is a read-write Boolean `NSNumber`;
+    macOS 10.8+. Load-bearing caveat, quoted: "Set this property each time you
+    save a file because some common file operations cause this property to
+    reset to `false`." This is precisely why C2's atomic temp-write + replace
+    must reassert the flag on every file replacement, not only at directory
+    creation (V2-04 §6.6 already specifies reassertion; the fact grounds it).
+  - **sourceUrl:** https://sosumi.ai/documentation/foundation/urlresourcekey/isexcludedfrombackupkey
+
+### Swift custom actor executors (V2-01 EnrichmentWorker)
+
+- **Claim (V2-01 §6.2 "custom non-cooperative executor"):** an actor can pin
+    its execution to a custom serial executor so a blocking body never occupies
+    the default cooperative executor.
+  - **Verdict:** VERIFIED.
+  - **Correct statement:** `nonisolated var unownedExecutor:
+    UnownedSerialExecutor { get }` on `actor` — macOS 10.15+; "This property
+    must always evaluate to the same executor for a given actor instance, and
+    holding on to the actor must keep the executor alive." Implicitly accessed
+    when work is scheduled onto the actor (side effects discouraged). The
+    customization mechanism is SE-0392 (Swift 5.9+), which also permits
+    bridging a dispatch queue as a serial executor. Grounds V2-01's decision
+    to run blocking `VNImageRequestHandler.perform(_:)` on the worker actor
+    with a custom executor (E1-PERF-6) instead of a detached Task.
+  - **sourceUrl:** https://sosumi.ai/documentation/swift/actor/unownedexecutor
+    (proposal: https://github.com/swiftlang/swift-evolution/blob/main/proposals/0392-custom-actor-executors.md)
+
+### Summary of OPEN retained gates (cycle 5)
+
+- `@Dependency` property-wrapper exact declaration — OPEN; retained under
+  `X-COMPILE-2` (V2-05).
+- `Locale.Language.LanguageCode` direct symbol URL — OPEN (404 via Sosumi);
+  the V2-06 §4 code comment now cites this cycle; retained under `P2-COMPILE-1`.

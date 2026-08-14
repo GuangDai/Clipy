@@ -56,8 +56,9 @@ pure, Foundation-only, and unaware that caches exist.
 ### 1.1 What V2-04 is NOT
 
 - **Not a generic materialization framework.** The deleted generic
-  `ItemKey<Purpose>` / `OutputParams` / five-store framework (`04` §11, Part VI
-  §10) is **not reintroduced** (`V2-00` §3.1). `ThumbnailSourceFingerprint` and
+  `ItemKey<Purpose>` / `OutputParams` framework (`04` §11) and the deleted
+  "five-store materialization frameworks" (`00` §2 Excluded) are **not
+  reintroduced** (`V2-00` §3.1). `ThumbnailSourceFingerprint` and
   `ThumbnailCacheKey` are purpose-specific (thumbnail only); they share **no**
   generic type, protocol, or store with `V2-01`'s enrichment fingerprint.
   "Per-purpose pattern" means a repeated design, never a reusable generic API
@@ -65,7 +66,9 @@ pure, Foundation-only, and unaware that caches exist.
 - **Not a redefinition of v1 thumbnail.** v1 single-flight + the version fence
   (`04` §9) are preserved unchanged; V2-04 *retains* the completed bytes that v1
   discards and *consults* that retained state before re-decoding. The v1
-  fetch-time version fence (steps 2–3) runs identically; the decode
+  fetch-time version fence (steps 2–3) runs identically per creator task; a
+  joined caller still runs the v1 step-5 scalar fence (subsumed here by the
+  per-caller source fetch, §8.1); the decode
   (`ThumbnailWorker`, ImageIO) runs identically on a miss.
 - **Not multi-process or external-facing.** The disk cache lives in the app's
   own container; `NSFileCoordinator` coordinates across in-process presenters
@@ -124,8 +127,9 @@ stamp, by design. V2-04 is the graft that supplies them, purpose-specifically.
   (coordinated read/write, macOS 10.7+, non-`Sendable` → actor-confined,
   `V2-04-facts.md` fact 1). Crash-safe: a corrupt/missing/expired disk entry
   degrades to a miss (re-decode), NEVER wrong bytes (§6.3).
-- **C3 (G6): publish-fence materialization lifecycle.** A multi-state lifecycle
-  (`pending → decoding → ready → superseded → discarded`, §7) that extends v1
+- **C3 (G6): publish-fence materialization lifecycle.** A six-state lifecycle
+  (`pending → decoding → ready → published` | `superseded → discarded`, §7.2;
+  `.published` and `.discarded` are terminal) that extends v1
   single-flight + the version fence with an explicit publish-time fence,
   preventing a superseded materialization result from being *published as
   current* to a newer row state (D31; tag-and-observe — the payload is still
@@ -431,7 +435,10 @@ internal actor ThumbnailCache {
     // this actor (an `await` outside the Authority interval, mirroring V2-03
     // CollectionCache §7.1 M1).
     func lookup(_ key: ThumbnailCacheKey) async -> Data?   // PNG bytes or nil
-    func insert(_ key: ThumbnailCacheKey, png: Data) async // evict-to-cap on insert
+    func insert(_ key: ThumbnailCacheKey, png: Data,
+                contentVersion: ContentVersion, builtAt: Date) async
+                // DC-12: entry provenance + LRU anchor come from the
+                // inserter; evict-to-cap on insert
     func flush(materializerVersion: UInt16) async          // evict every entry
                                                            // whose key version differs
     // NOTE: no invalidate(itemID:) — C1 retirement is LRU-lazy (§5.4), not
@@ -569,7 +576,8 @@ invalidation is safe — only latency suffers):
   not even position-fenced — a thumbnail request is guarded by the v1 fetch-
   time reference fence, `04` §9.) A retired item's entries are reclaimed
   **lazily by LRU** (§5.3): a lingering retired-item entry is harmless —
-  `itemID` is never reused (`02` §9 step 9 / §14 D1), so it can never hit a different item —
+  `itemID` is never reused (`02` §7 plan invariant 9 / §14 D1), so it can
+  never hit a different item —
   so delaying reclamation to the LRU path is correctness-preserving (over-
   retention is a memory cost, not a correctness cost). V2-04 therefore **adds
   no consumer** of the `HistoryInvalidation` yield for C1.
@@ -880,7 +888,7 @@ the read path treats any unreadable file as a miss.
 v1 single-flight + the fetch-time version fence (`04` §9) already ensure
 correctness: a stale-reference request fails (`.staleContent`), a result is
 tagged with its verified reference, and the caller applies it only if its row
-still carries that reference (`04` §9 step 6). The G6 trigger
+still carries that reference (`04` §9 closing fence paragraph). The G6 trigger
 ("≥ 20% of thumbnail work is superseded or discarded despite cancellation and
 single-flight") measures that a substantial fraction of completed decodes are
 discarded at the caller — because the item was revised mid-decode, the view
@@ -889,8 +897,9 @@ scrolled away, or a newer request superseded an in-flight one.
 C3 makes the materialization lifecycle an **explicit, tracked state machine**
 with a **publish-time fence**, extending (not replacing) the v1 fetch-time
 fence. **C3 is a tag-and-observe design, not a delivery-prevention design:** the
-v1 caller-side contract (`04` §9 step 6 — "applies it only if its row still
-carries that reference") remains the sole delivery arbiter, unchanged; a
+v1 caller-side contract (`04` §9 closing fence paragraph — "applies it only if
+its row still carries that reference") remains the sole delivery arbiter,
+unchanged; a
 superseded result is still *returned to the caller*, tagged with its fetch-time-
 verified reference, exactly as in v1. C3 does **not** stop the caller from
 receiving a superseded payload — it makes the supersession *observable*. Its
@@ -953,7 +962,7 @@ internal enum ThumbnailMaterializationState: Sendable, Hashable {
                         // (tagged, NOT dropped) - the result was superseded
                         // (NOT delivered AS CURRENT); the payload was still
                         // returned to the caller tagged with its fetch-time
-                        // reference per the v1 contract (04 §9 step 6, §7.3).
+                        // reference per the v1 contract (04 §9 closing fence paragraph, §7.3).
                         // The bytes MAY still have been inserted into C1/C2
                         // (stamp-keyed safe insertion, §7.3).
 }
@@ -1054,7 +1063,7 @@ ThumbnailService.thumbnail(for ref: HistoryItemReference, pixels: PixelSize):
                                 encodedBytes: cached)   [delivered per v1 contract:
                                                          caller applies only if its
                                                          row still carries ref;
-                                                         04 §9 step 6. The fence did
+                                                         04 §9 closing fence paragraph. The fence did
                                                          not re-publish; it tagged.]
   else:
     [single-flight join/create on cacheKey — v1 04 §9 step 5, join key
@@ -1094,7 +1103,7 @@ to match (e.g., a revert) will correctly hit. This is the key consequence of
 stamp-keying — insertion is unconditional on caller currency; only *publication-
 as-current* is tagged (the lifecycle tag), and the payload is returned to the
 caller in both branches. Delivery/application is governed by the v1 caller-side
-check (`04` §9 step 6), not by C3. (Under a `ContentVersion`-keyed design, a
+check (`04` §9 closing fence paragraph), not by C3. (Under a `ContentVersion`-keyed design, a
 superseded result's insertion would key on a stale CV and could be served under
 a wrong state; stamp-keying eliminates that risk. This is a second reason —
 beyond the G4 benefit — to prefer stamp-keying, §3.2.)
@@ -1104,7 +1113,7 @@ superseded materialization result is never *published as current* (delivered
 under a reference that is no longer the item's current `ContentVersion`); the
 publish fence **tags** the result (`.published` vs `.superseded → .discarded`)
 and the payload is returned to the caller in both branches. The v1 caller-side
-contract (`04` §9 step 6: "applies it only if its row still carries that
+contract (`04` §9 closing fence paragraph: "applies it only if its row still carries that
 reference") is the **sole delivery arbiter** (unchanged) — C3 makes supersession
 observable, it does not prevent delivery. C3 makes the lifecycle explicit and
 tracked; it preserves the v1 invariant and extends it with the
@@ -1776,7 +1785,8 @@ macOS 26:
   on toggle-off, §6.5/§10).
 - **C1-PERF-1 (decode p95).** Thumbnail decode p95 is within the v1 budget on
   the minimum supported hardware — this is the C1/G1 evidence trigger itself
-  (`06` §9); it measures the greenfield scaffold.
+(`06` §3 G1: decode p95 above 16 ms and ≥ 30% identical completed requests);
+it measures the greenfield scaffold.
 - **C1-PERF-2 (cache hit reduces net end-to-end thumbnail latency).** Under
   representative scrolling, ≥ 30% of identical completed requests hit C1 (the G1
   trigger's reuse fraction) **and** a hit is materially faster than a miss on
@@ -1916,9 +1926,16 @@ collision-free version and no background drain to two-layer the fence). A byte-
 exact fence (retaining source bytes or recovering them from revision history,
 D4) would eliminate the residual at disproportionate cost and is not taken.
 
-**The cache-law fixture proofs (`C1-PERF-2` / `C2-PLATFORM-2`).** Parallel V2
-fixtures pin: (a) hit == miss byte-identical for the same key (or
-visually-equivalent PNG if `C2-PLATFORM-3` cannot prove byte-determinism, §3.2);
+**The cache-law fixture proofs (`C1-PERF-2` / `C2-PLATFORM-2`).** Stable
+fixture IDs (the IDs the roadmap's C.2–C.6 slices cite): `V2-WS-C1-1` =
+(a)+(b) cache-law/eviction; `V2-WS-C1-2` = (e) injected-collision + the
+single-flight join-key substitution; `V2-WS-C2-1` = (d) restart + (f)
+corruption/torn-write + C1 promotion; `V2-WS-C2-2` =
+sweep/opt-out/backup-exclusion; `V2-WS-C2-3` = upgrade/downgrade-refusal
+one-way door; `V2-WS-C3-1` = the C3 supersession/join/cancel/cleanup
+extension of WS15 below. The fixtures pin: (a) hit == miss byte-identical
+for the same key (or visually-equivalent PNG if `C2-PLATFORM-3` cannot
+prove byte-determinism, §3.2);
 (b) eviction produces a miss that re-decodes to the same bytes; (c) C2-disabled
 is byte-for-byte v1; (d) restart: C1 empty + C2-persistent-hit both produce the
 same bytes as a fresh decode; (e) the D7 residual is fixture-demonstrated only
@@ -1979,7 +1996,8 @@ crash-safe (corrupt file = miss, atomic-write prevents torn files); no
 ## 14. New invariants D29–D31 (extend `02` §14)
 
 V2-04 owns **D29–D31** — the next free numbers after V2-03's D25–D28 (V2-02 owns
-D23–D24, V2-01 owns D20–D22), per the `V2-00` §4 global D-invariant registry.
+D23–D24, V2-01 owns D20–D22), per the global D-invariant allocation
+registry in `V2-roadmap` §14.
 
 - **D29 Materialization-cache single-writer + transparency.** Thumbnail cache
   durable config (`ThumbnailCacheConfigRow`) is written only through
@@ -2035,8 +2053,9 @@ D23–D24, V2-01 owns D20–D22), per the `V2-00` §4 global D-invariant registr
   `ContentVersion` before delivery and **tags** the result: current →
   `.published`; superseded → `.superseded → .discarded`. **The payload is
   returned to the caller in both branches**, tagged with its fetch-time-
-  verified reference; the v1 caller-side contract (`04` §9 step 6 "applies it
-  only if its row still carries that reference") is the **sole delivery
+  verified reference; the v1 caller-side contract (`04` §9 closing fence
+  paragraph "applies it only if its row still carries that reference") is
+  the **sole delivery
   arbiter** (unchanged — C3 does not prevent delivery, it makes supersession
   observable). The fence table entry is **reaped on reaching a terminal state**
   (`.published`/`.discarded`), so the table holds only in-flight

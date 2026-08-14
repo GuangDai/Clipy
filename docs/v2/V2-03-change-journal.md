@@ -530,8 +530,11 @@ internal final class JournalConfigRow {
     @Attribute(.unique)
     var key: String                       // always "change-journal"
 
-    var cacheEnabled: Bool                // G2 collection-cache gate; default true
-                                          // (J1 ships cache-on when admitted on G2)
+    var cacheEnabled: Bool                // G2 collection-cache gate; default
+                                          // false (enabled only when J1 is
+                                          // admitted on recorded G2 evidence —
+                                          // DC-10; a reconnect-only admission
+                                          // stays cache-off)
     var maxJournalAgeSeconds: Double      // TimeInterval; clamped to JournalLimits
     var maxJournalRecordCount: Int        // clamped to JournalLimits
 
@@ -570,9 +573,11 @@ internal final class JournalConfigRow {
                                           // M2): prevents a cursor minted against
                                           // store-A being replayed against store-B
                                           // (store recreate, backup restore, multi-
-                                          // profile) — the durable analogue of v1's
-                                          // "process-instance/schema marker" on
-                                          // HistoryPageCursor (04 §6).
+                                          // profile) — the durable analogue of
+                                          // v1's process-instance marker on
+                                          // `HistoryPageCursor` (`04` §6 —
+                                          // process-scoped, explicitly not a
+                                          // schema hash).
     var configSchemaVersion: UInt16       // 1 for V2-03
 }
 ```
@@ -604,7 +609,7 @@ advances monotonically (a compaction pass never un-deletes rows); it is reset to
 
 `storeInstance` is minted once (`UUID()`) at the first `open` that bootstraps the
 singleton and never changes for the life of that store file. It is the durable
-analogue of v1's per-process `HistoryPageCursor` "process-instance/schema marker"
+analogue of v1's per-process `HistoryPageCursor` process-instance marker
 (`04` §6): because `ReconnectCursor` is **cross-restart** (persisted by a
 consumer across process launches), a process-local marker would be useless (it
 changes every launch); a durable per-store UUID survives restart but differs
@@ -629,7 +634,8 @@ singletons, and before the facade is published:
 1. fetch the `JournalConfigRow` singleton (`key == "change-journal"`); validate
    exactly-one or zero;
 2. **if absent (migrated v1 store):** create exactly one row with defaults
-   (`cacheEnabled == true`, `generation == 1`, `materializerVersion == 1`,
+   (`cacheEnabled == false` until recorded G2 evidence — DC-10;
+    `generation == 1`, `materializerVersion == 1`,
    `compactionFloor == 0`, `storeInstance == UUID()` minted here,
    `configSchemaVersion == 1`, bounds clamped to `JournalLimits`);
 3. **if present:** validate `configSchemaVersion == 1` and field ranges (fail-
@@ -720,9 +726,11 @@ Authority commit kernel (05 §9 / §10), V2-03-extended:
 Every `05` §10 transaction rule is preserved:
 
 - **No `await`** in the closure or between fact load and closure completion
-  (`05` §10). `appendHistoryChangeRow` is non-throwing-synchronous save for the
-  codec encode + `context.insert(row)`; it performs no I/O beyond the insert
-  SwiftData already performs for the item mutations.
+  (`05` §10). `appendHistoryChangeRow` is synchronous (non-suspending); it
+  may throw (codec encode), which aborts the whole commit per `05` §10 — the
+  same fail-closed behavior as v1's own commit-path codec encodes; it
+  performs no I/O beyond the insert SwiftData already performs for the item
+  mutations.
 - **Closure failure commits nothing** — neither item mutations, nor the singleton
   position, nor the HCR row (`05` §10). D25 holds: a crash mid-closure leaves no
   partial HCR entry, because the HCR row and the singleton position share the
@@ -992,7 +1000,7 @@ so the five stored fields are a private encoding contract the journal owns
 end-to-end.
 
 It is **distinct from the v1 `HistoryPageCursor`** (`04` §6, which encodes a
-browse query shape + page anchor + position + **process-instance/schema marker**
+browse query shape + page anchor + position + **process-instance marker**
 for in-session pagination). A `ReconnectCursor` encodes a journal resume point
 for **cross-restart** replay. The two do not collide: `ReconnectCursor` carries
 no query shape and no page anchor; it carries a journal position, two version
@@ -1257,11 +1265,12 @@ leaves the frozen v1 `HistoryFailure` enum untouched. Justification against
    **distinct** `ReconnectHistory` protocol (`V2-00` §6.5). A failure case
    carried by one protocol should not be reused to label a failure produced by a
    different protocol.
-3. **Avoids the V2-02 enum-addition OPEN question.** V2-02 (`V2-02` §8.2)
-   recorded an OPEN interpretive question whether enum-case **addition** to a
-   frozen v1 public enum is "extension by addition" (permitted) or
-   "redefinition" (forbidden). V2-03 sidesteps that question entirely by not
-   touching `HistoryFailure`. This is the safest V2 posture and the consistent
+3. **Avoids the V2-02 enum-addition question.** V2-02 (`V2-02` §8.2) recorded
+   the interpretive question whether enum-case **addition** to a frozen v1
+   public enum is "extension by addition" (permitted) or "redefinition"
+   (forbidden); `V2-00` §8(h) has since **resolved** it in favor of sanctioned
+   addition. V2-03 still does not touch `HistoryFailure`. This is the safest
+   V2 posture and the consistent
    one: V2-01 likewise added `EnrichmentStatus` rather than a `HistoryFailure`
    case for its distinct concern (`V2-01` §8).
 
@@ -1284,8 +1293,9 @@ injected into `HistoryAuthority` at `open`, defaulting to `Date.now` in
 production and injectable in tests. **V2-03 reuses this seam; it adds no new
 service-locator or injection point** (`J1-COMPILE-1` stays free of a new escape
 hatch). What V2-03 does add is a **per-commit clock read where v1 did not read
-the clock on that commit path**: v1 reads the clock only for capture/revise
-(`firstCopiedAt`/`lastCopiedAt`/revision `createdAt`) and V2-02 reads it only on
+the clock on that commit path**: v1 reads a clock only in *preparation*, off
+the commit interval (revision `createdAt`; capture times are caller-supplied
+`observedAt`), and V2-02 reads it only on
 R1-carrying commits; the HCR is **always-on**, so the clock is now read on every
 History Commit (pin / unpin / remove / clear / retire / policySet / revise too,
 not only capture). The read is one `Date.now`-equivalent inside the serialized
@@ -1391,7 +1401,7 @@ depends on both being `Sendable`; `CollectionCacheKey: Hashable, Sendable` (abov
 requires `NormalizedQueryShape: Hashable, Sendable`):
 
 ```swift
-// SortAnchor captures the v1 browse sort order (04 §6 line 131:
+// SortAnchor captures the v1 browse sort order (04 §7:
 // "every sort ends with lastCopiedAt descending and History Item ID bytes
 // ascending"). v1 ships ONE fixed sort order, so for V2-03 this is a single-
 // case enum carried in the cache key for forward-compatibility (a future
@@ -1686,7 +1696,7 @@ unbounded. V2-03 defines a compaction policy **separate from history retention**
                // the age bound (no age-driven deletion). NOTE: a naive
                // maxSequenceWhere WITHOUT the predecessor cap would set ageFloor
                // == maxSequence when all rows are too-old, deleting the head and
-               // violating D25 (§16, line 2337-2339: deleteFloor < max(sequence)).
+               // violating D25 (§16: deleteFloor < max(sequence)).
   countFloor = (maxSequence >= effectiveMaxJournalRecordCount)
                  ? (maxSequence - effectiveMaxJournalRecordCount)
                  : 0
@@ -1823,6 +1833,9 @@ JOURNAL REBASE (inside the Authority, at open or on detected divergence):
   -> reset JournalConfigRow.compactionFloor = 0   // C1: no rows survive, so no
                                                   // floor; generation bump already
                                                   // expires every cursor regardless
+  -> reset JournalConfigRow.journalBytes = 0   // the running payload-byte
+                                               // counter must not outlive the
+                                               // rows it summed (DC-9)
   -> leave JournalConfigRow.storeInstance unchanged  // M2: rebase does not change
                                                      // the store identity (same
                                                      // store file, restarted journal)
@@ -1856,8 +1869,9 @@ state"). `J1-PLATFORM-2` confirms the rebase behavior on the macOS 26 runner.
 The HCR + collection cache work identically in the `.memory` store (the HCR is a
 SwiftData table in the in-memory store; the collection cache is in-memory either
 way). The reconnect cursor in `.memory` is process-lifetime (lost on process
-exit, since the store is in-memory) — acceptable, because `.memory` is for tests
-(`05` §2). The startup invariant check (§9.1) runs on `.memory` too.
+exit, since the store is in-memory) — acceptable, because `.memory` is the
+deterministic test medium (`01` §4 / `03a` §3; `05` §2 changes the durability
+medium only). The startup invariant check (§9.1) runs on `.memory` too.
 
 ## 10. Code model
 
@@ -2214,7 +2228,7 @@ V2-03 provides the data hooks V2-07 (UX) consumes; it owns no SwiftUI:
 
 ### Record 1 — Lifted exclusion + evidence trigger
 
-- **J1** lifts `00` §2 ("Durable HistoryChange Record journal and reconnect
+- **J1** lifts `00` §2 ("Durable History Change Record journal and reconnect
   cursor") and `06` §3 G2 ("Collection cache plus durable History Change Record
   journal"). Evidence trigger (`V2-00` §3 J1): **either** (a) at the hard
   retained bound (5,000 items), recent/search p95 > 50 ms **or** Authority queue
@@ -2408,7 +2422,8 @@ equivalence (§15).
   `SchemaMigrationPlan` (`V2-02` §3.3 incremental-shipping note), not a
   modification of an already-shipped schema. **Data bootstrap (not migration):**
   a lightweight migration adds schema, not data; `SwiftDataHistory.open` creates
-  the `JournalConfigRow` singleton (`cacheEnabled == true`, `generation == 1`,
+  the `JournalConfigRow` singleton (`cacheEnabled == false` until recorded
+  G2 evidence — DC-10; `generation == 1`,
   bounds clamped) if absent (§4.6), mirroring v1 `LastChangePositionRow` creation
   (`05` §13 step 3) and V2-01/V2-02's config singletons, so a migrated v1 store
   starts with a configured journal and an **empty HCR table**.
@@ -2457,7 +2472,7 @@ state.
 ## 16. New invariants D25–D28 (extend `02` §14)
 
 V2-03 owns **D25–D28** — the next free numbers after V2-02's D23–D24 (V2-01 owns
-D20–D22), per the `V2-00` §4 global D-invariant registry discipline. (The design
+D20–D22), per the global D-invariant allocation registry in `V2-roadmap` §14. (The design
 brief numbered these D27–D30, skipping D25–D26; that numbering is corrected here
 to avoid colliding with future V2 docs' D25–D26 claims.)
 
@@ -2616,7 +2631,8 @@ new contract:
   (simulated store recreate); assert `.storeMismatch` (M2). No partial replay in
   any case (`J1-PLATFORM-4`).
 - **V2-WS-J1-4 (collection cache law + page non-collision, M8).** With
-  `cacheEnabled == true`, perform the same browse under hit/miss/eviction/
+  `cacheEnabled == true` (explicitly enabled for the fixture; the bootstrap
+default is off — DC-10), perform the same browse under hit/miss/eviction/
   disabled/restart; assert byte-identical `HistoryPage` values and failures
   (only latency differs) (`J1-PERF-2`, D27). **Page non-collision (M8):** assert
   a page-1 result is served from the cache on a repeated page-1 query, and a

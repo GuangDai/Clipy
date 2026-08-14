@@ -5,8 +5,10 @@
 > retention behavior; V2-02 owns the three new user-facing retention dimensions
 > and their graft onto the v1 planner/facts/commit seam. It redefines no v1
 > public type, `HistoryAction` case, `HistoryMutation` case, `PlannedOutcome`
-> case, `CapacityKind` case, schema column, codec, invariant (D1–D19), or proof
-> gate. New V2 cases are added to closed v1 enums only as the sanctioned
+> case, `CapacityKind` case, schema column, codec, or proof gate; no D1–D19
+> invariant is weakened or redefined — D19 alone is explicitly *extended*
+> (narrowed to the count dimension by D24, Record 2; sanctioned `V2-00`
+> §8(e)/(g)). New V2 cases are added to closed v1 enums only as the sanctioned
 > "owned exhaustive-switch change" (`V2-00` §6.5; `03a` §1). Like v1 and V2-01 at
 > consolidation time, V2-02 is "design-consolidated, scaffold proof pending."
 
@@ -47,7 +49,8 @@ fact / commit / stamping seam v1 uses:
 
 Every V2-02 retention retirement and revision prune is a **History Commit**:
 it advances `ChangePosition` exactly once (D6), runs in the same `ModelContext.
-transaction` as any primary mutation (D14), and yields the standard
+transaction` as any primary mutation (`02` §12 one-History-Commit rule; D14's
+projected-state inclusion is preserved, §4), and yields the standard
 `HistoryInvalidation` (v1 observation is unchanged). V2-02 introduces **no new
 actor** and **no cache**; it is planner/facts/commit-surface only.
 
@@ -324,7 +327,10 @@ internal final class RetentionExpansionConfigRow {
 
     // R2
     var storagePolicyEnabled: Bool
-    var storageMaxBytes: Int        // Int64 on macOS; holds the 5,000 x 384 MiB worst case (128 MiB Canonical + 256 MiB revisions per item, 06 §2)
+    var storageMaxBytes: Int        // Int64 on macOS; holds the 5,000 x 384
+                                    // MiB worst case (≤128 MiB Canonical —
+                                    // the `06` §2 capture-admission ceiling —
+                                    // plus the 256 MiB revision bound, `06` §2)
 
     // R3
     var revisionPolicyEnabled: Bool
@@ -405,7 +411,10 @@ internal final class RetainedBytesRow {
     // V2-03 §4.1's no-@Relationship choice, for the opposite lifecycle goal
     // (V2-03 keeps its row; V2-02 deletes its row with the item).
     @Attribute(.unique)
-    var itemIDRaw: String          // HistoryItemID raw; 1:1 with HistoryItemRow
+    var itemID: UUID               // HistoryItemID.rawValue; 1:1 with
+                                   // HistoryItemRow (v1 business IDs are
+                                   // UUID-backed, `03a` §2 — DC-04 resolved
+                                   // to UUID, matching V2-01 §3.3)
 
     var canonicalBytes: Int        // sum of StoredSignatureEntryV1.byteCount (05 §4)
     var revisionCount: Int         // count of stored revisions
@@ -484,7 +493,7 @@ Authority.commitCapture:
   fact data** beyond the v1 retention summary (R1 is the cheapest dimension).
 - **R2** retires oldest eligible unpinned items until projected total retained,
   in the same v1 eviction order as R1 (`lastCopiedAt ascending, id ascending`,
-  `02` §12) for determinism (D9/D16)
+  `02` §12) for determinism (D16; D9 governs dedup-winner ties, not retirement)
   bytes ≤ `storage.maxTotalBytes`. Per-item bytes come from the expansion
   inventory (§3.2). If `pinned bytes + primary bytes > maxTotalBytes`, capture
   fails `.capacityExceeded(.storageBytes)` (§8) — the R2 analog of v1's
@@ -731,7 +740,7 @@ Given an item's ordered revision list `R = [r0, r1, …, r_{n−1}]` (append ord
   with no ties: revision IDs are unique within an item (`02` §2.5 rule 2) and the
   list is totally ordered by append order (`02` §2.5 rule 1), so no ID tie-breaker
   is required (D9 determinism holds from append order alone; the v1
-  `lastCopiedAt ascending, id ascending` eviction tie-break, `02` §12 / §9.4,
+  `lastCopiedAt ascending, id ascending` eviction tie-break, `02` §12,
   applies to *item* retirement, not to within-item revision order).
 - The active revision `ra` is always retained. After pruning, `activeRevisionID`
   still names exactly one present revision (D3 preserved).
@@ -1032,7 +1041,8 @@ Domain mints no `Date()` (`02` §1). `.setRetentionPolicies` R1 introduces a
 v1's only time source is the caller-supplied capture `observedAt`, `02` §4
 `PreparedCapture.observedAt`; `.setRetentionPolicies` carries no `observedAt`).
 The seam reuses the existing Storage-side time source that mints revision
-`createdAt` (`02` §2.5 `PreparedRevision.createdAt`, which the Domain also
+`createdAt` (`02` §4 `PreparedRevision.createdAt`; the persisted
+`ContentRevision.createdAt` is `02` §2.5; the Domain also
 receives as a value and never mints): a `Sendable` clock witness (a
 `() -> Date` closure or equivalent `RetentionClock` protocol) injected into
 `HistoryAuthority` at `open` - not a `@Model`/`@unchecked` field, not a stored
@@ -1166,8 +1176,10 @@ public enum CapacityKind: Sendable, Equatable {
     case revisionCount
     case revisionBytes
     case copyCount
+    case thumbnailBytes   // v1 (03b §10; restored — an earlier draft of
+                          // this list omitted it)
     case coherenceToken
-    case storageBytes   // V2-02 (new): R2 budget unsatisfiable
+    case storageBytes     // V2-02 (new): R2 budget unsatisfiable
 }
 ```
 
@@ -1204,7 +1216,7 @@ handle the new cases (proof gate `RET-COMPILE-2`):
 - `PlannedOutcome` switch (receipt mapping, `02` §7).
 - `CapacityKind` switches (failure consumers).
 - All v1 walking-skeleton and invariant tests that switch over these enums
-  (`06` §8, §10).
+  (`06` §7–§8; the D1–D19 invariant suites, `02` §14).
 
 A v1 caller holding `any ClipboardHistory` and ignoring V2-02 is unaffected:
 the new `HistoryAction` case is never sent by v1 code, and the new
@@ -1259,9 +1271,10 @@ fallback is a contingency only, not an open blocker.
   - R1 `maxAge`: `1 s <= maxAge <= 3,650 d` (10 years; a practical upper bound;
     a value above it is rejected as a misconfigured sentinel, not an "enabled
     but never fires" state - `agePolicyEnabled` already gates firing).
-  - R2 `maxTotalBytes`: `1 <= maxTotalBytes <= 5,000 x 384 MiB` (the worst-case
-    store footprint, `06` §2: 5,000 items x (128 MiB Canonical + 256 MiB
-    revisions)); a budget above the worst case is rejected as meaningless.
+  - R2 `maxTotalBytes`: `1 <= maxTotalBytes <= 5,000 x 384 MiB` (the
+    worst-case store footprint: 5,000 items x (≤128 MiB Canonical + 256 MiB
+    revisions), `06` §2); a budget above the worst case is rejected as
+    meaningless.
     `storagePolicyEnabled` gates firing.
   - R3 `maxRevisionsPerItem`: `1 <= maxRevisionsPerItem <= 100` (the active
     revision must survive, so `>= 1`; `<= 100` is the `06` §2 hard bound).
@@ -1899,7 +1912,11 @@ Implementation must verify against the macOS 26 SDK rather than copy pseudocode
 (`05` §18, `00` §5):
 
 - [MigrationStage.lightweight(fromVersion:toVersion:)](https://developer.apple.com/documentation/swiftdata/migrationstage/lightweight(fromversion:toversion:)) — additive schema migration (macOS 14.0+; present on macOS 26). Re-verified this cycle; both arguments are `VersionedSchema`-conforming types (`V2-facts.md` cycle-3).
-- [MigrationStage.custom(fromVersion:toVersion:willMigrate:didMigrate:)](https://developer.apple.com/documentation/swiftdata/migrationstage/custom(fromversion:toversion:willmigrate:didmigrate:)) — the data-transform sibling; V2-02 uses **lightweight** only (no data transformation: the new table is empty, policies default-disabled). Referenced for completeness.
+- [MigrationStage.custom(fromVersion:toVersion:willMigrate:didMigrate:)](https://developer.apple.com/documentation/swiftdata/migrationstage/custom(fromversion:toversion:willmigrate:didmigrate:))
+  — the data-transform sibling; V2-02's schema add is **lightweight** only,
+  and the `RetainedBytesRow` projection rebuild is exactly one
+  `MigrationStage.custom` backfill (§3.3b, `RET-PLATFORM-1b`, M1.4 — before
+  `open` returns, never inventing bytes). Referenced for completeness.
 - [ModelContainer](https://developer.apple.com/documentation/swiftdata/modelcontainer) — automatic (lightweight) migration of additive schema preserves existing persisted data (`V2-facts.md` cycle-2 fact; behavioral prose for `RET-PLATFORM-1`).
 - [FetchDescriptor propertiesToFetch](https://developer.apple.com/documentation/swiftdata/fetchdescriptor/propertiestofetch) - attribute-subset fetch mechanism (fetches whole attribute *values* for specified key paths, lazily faults the rest on access); **cannot** project an `.externalStorage` blob's byte length without materializing its content (`V2-facts.md` cycle 4: REFUTED as a size-without-content mechanism). This REFUTED result is the justification for adopting the `RetainedBytesRow` scalar projection (§3.3b) rather than an on-demand size fetch: the planning path reads the scalar column and decodes no blob (`RET-PLATFORM-2` resolved).
 - Foundation `Date` / `TimeInterval` — R1 age arithmetic (`observedAt`, `now − maxAge`); v1 already uses `Date`/`TimeInterval` throughout (`02` §3.1). No macOS-26-specific API.

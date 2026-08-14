@@ -565,9 +565,11 @@ single-snippet-per-row contract (`SearchPresentation` carries one snippet + one
 
 **Cross-row ranking differs by mode.** For **exact/regexp**, results preserve the
 default row order (title/body/enrichment first-match, `03b` §8) - field
-precedence holds within and across rows. For **fuzzy**, v1 ranks purely by
-ascending Fuse score, then `lastCopiedAt` descending, then ID bytes ascending
-(`03b` §8) - **not** by field precedence: an enrichment-only-match row at a
+precedence holds within and across rows. For **fuzzy**, v1 ranks by ascending
+Fuse score, then `lastCopiedAt` descending, then ID bytes ascending (`03b` §8;
+pinned rows still come first, ordered by `pinOrdinal` — the Fuse ordering
+governs the unpinned segment) - **not** by field precedence: an
+enrichment-only-match row at a
 better Fuse score **can** outrank a `searchBody`-match row at a worse score.
 This is a behavior change from v1 fuzzy (enrichment is now a fuzzy input) and is
 fixture-locked in the V2 parallel fixtures (§10): a fixture pins the cross-row
@@ -1280,8 +1282,9 @@ The analog of Part VI §6 (compile), §7 (schema/platform), §9 (perf) on macOS 
   (supplying `versionIdentifier` and the unchanged model set
   `{HistoryItemRow, LastChangePositionRow}`) to anchor the migration - this does
   not modify v1's `v1Schema` value, models, rows, or behavior (an additive,
-  behavior-preserving change `05` §17 anticipates: "a future schema change
-  increments it and adds a migration plan"). `HistorySchemaV2` is the frozen v1
+behavior-preserving change anticipated by `05` §3, which states "a future
+schema change increments it and adds a migration plan" in its Part V §17
+migration stance). `HistorySchemaV2` is the frozen v1
   models plus `EnrichmentRow`/`EnrichmentConfigRow`; the migration is a
   `SchemaMigrationPlan` with the lightweight stage, purely additive, no v1 row
   or column rewritten. Confirms a v1 store opens under the V2 plan with v1 rows
@@ -1416,8 +1419,10 @@ transparent cache and substitutes the derivation-fence law (D21).
 - **Projection layer (rebuild):** enrichment text is a rebuildable projection.
   Loss or schema advance triggers re-derivation from source bytes (re-OCR). No
   migration invents missing bytes, reinterprets an old `ContentVersion`, reuses
-  removed IDs, or enables capture before Signature Index / enrichment
-  completeness is restored (`V2-00` §5 decision 18).
+  removed IDs, or enables capture before Signature Index completeness is
+  restored (`V2-00` §5 decision 18, verbatim "Signature Index / change-journal
+  completeness"; E1's analogue is enrichment-index completeness, restored by
+  the orphan/startup sweep, §6.4).
 
 ### Record 6 — Security boundary
 

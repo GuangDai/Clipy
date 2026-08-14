@@ -13,6 +13,11 @@
 > design documents remain frozen against V2 semantic edits and authoritative for
 > v1; the v1 implementation may continue updating its living `PROGRESS.md` while
 > steps 6–9 land.
+>
+> **Re-baselined (2026-08-15):** the §2 baseline rows and the V2-0 status were
+> re-checked against the landed v1 tree — steps 6–8 are implemented,
+> remediated, and verification-audited (`docs/V1-Verified/`, supported run
+> 31449682036). See the review record `V2-REVIEW.md` for this pass.
 
 ## 1. How to use this roadmap
 
@@ -65,17 +70,18 @@ the named performance/security gates are part of completion.
 | Area | Current state | V2 consequence |
 |---|---|---|
 | v1 scaffold, Core, Domain, dependencies, schema/codecs, capture | Steps 0–5 landed and CI-green | Reuse; do not reopen or fold V2 semantics into these steps. |
-| v1 mutations | Step 6 pending | Blocks V2-02 revision/retention composition and complete journal kind coverage. |
-| v1 reads, search, observation | Step 7 pending | Blocks enrichment search, reconnect-backed reads, collection caching, localized search, and V2 UI refresh proofs. |
-| v1 thumbnail path | Step 8 pending | Blocks every V2-04 slice. |
-| v1 product wiring | Step 9 pending | Blocks V2-05 App Intents composition and all V2-07 UI integration. |
-| v1 invariant suite | The tree contains only `DomainSmokeTests`; the v1 module roadmap says the dedicated D1–D19 suite is pending, while `PROGRESS.md` currently overstates it as delivered | Reconcile the v1 progress record and land the actual per-invariant suite before extending it. |
+| v1 mutations, reads, search, observation, thumbnail (steps 6–8) | Landed, remediated, and verification-audited — `docs/V1-Verified/` reports plus the final disposition ledger (no pending rows); supported code-head run 31449682036 green (314 tests, 41 suites) | Unblocks V2-02/V2-03/V2-04 design closure. V2-0's remaining entry gap is the recorded state-2 declaration below, not steps 6–8. |
+| v1 product wiring | Step 9 pending (`PasteboardAdapter`/`PresentationUI` remain step-0 scaffolds) | Blocks V2-05 App Intents composition and all V2-07 UI integration, as before. |
+| v1 invariant suite | Planner invariant suites now exist (`CapturePlannerInvariantTests`, `CapturePlannerRankAndCapacityTests`, `PinRevisionPlannerInvariantTests`, `RevisionPlannerInvariantTests`, `RetentionPlannerTests`, plus the HistoryStorage WS suites); the earlier "only `DomainSmokeTests`" row was stale | The D1–D19-by-number evidence question is tracked by the V1-Verified dispositions; each graft's Record 2 extends it for D20+. |
 | V2 trigger evidence | Trigger definitions exist; a durable firing ledger does not | Every implementation track is gated. |
-| V2 platform evidence | Some facts are in `V2-facts.md`; V2-03..V2-07 also cite temporary `.tmp/v2-research` sidecars | Durable evidence promotion is required before scaffold work. |
+| V2 platform evidence | `V2-facts.md` cycles 1–5 hold the E1, RET, X1 App-Intents, P2 string, C2 file, and executor facts; V2-03..V2-06 still cite temporary `.tmp/v2-research` sidecars | Remaining sidecar promotion (DC-01) is still required before scaffold work. |
 
 ### Step V2-0 — finish and freeze the v1 executable specification
 
-**Status:** blocked on v1 roadmap steps 6–8.
+**Status:** v1 steps 6–8 have landed and been audited (2026-08-15 re-baseline,
+`docs/V1-Verified/`, run 31449682036); the remaining V2-0 work is the recorded
+state-2 declaration, the D1–D19 evidence reconciliation, and (capability-local
+only) step 9.
 
 Deliver:
 
@@ -220,16 +226,16 @@ document and its proof gates before starting the affected slice.
 | DC-01 | V2 facts / all modules | Promote the V2-03..V2-07 fact sidecars out of `.tmp`, add the missing V2-05 cycle-5 facts, and make every citation resolve durably. |
 | DC-02 | M1 / V2-02 | Reconcile the required `RetainedBytesRow` custom backfill with statements that V2-02 is lightweight-only. Prove the legal SwiftData stage topology before schema code lands. |
 | DC-03 | M1 / all schema grafts | Choose consolidated versus incremental shipping. Every shipped `VersionedSchema` is immutable; later grafts receive the next version instead of mutating an already-shipped `HistorySchemaV2`. |
-| DC-04 | V2-02 | Change or justify `RetainedBytesRow.itemIDRaw: String`; the v1 business ID is UUID-backed. Reconcile “disabled is byte-for-byte v1” with mandatory 1:1 byte-projection maintenance, and fix insert/coalesce/first-revision wording. |
+| DC-04 | V2-02 | Change or justify `RetainedBytesRow.itemIDRaw: String`; the v1 business ID is UUID-backed. Reconcile “disabled is byte-for-byte v1” with mandatory 1:1 byte-projection maintenance, and fix insert/coalesce/first-revision wording. *(2026-08-15: the field is now `itemID: UUID` in V2-02 §3.3 per this direction; the projection-maintenance and insert/coalesce/first-revision wording items remain open.)* |
 | DC-05 | V2-01 | Make the persist-time source-selection fence implementable for mixed PDF+image content. The Authority cannot repeat the worker-only PDF probe from the current `PendingEnrichment` fields. |
 | DC-06 | V2-01 | Reconcile zero-blob-decode search with the claimed scalar/blob inconsistency detection; choose encoded `kind == none` versus an empty not-applicable blob. |
 | DC-07 | V2-01 | Specify one coherent inbox loss/backpressure/rescan policy, the claimed secondary ordering inputs, OCR text normalization, and recovery after the terminal retry cap. |
 | DC-08 | V2-01/V2-02/V2-03/V2-07 | Decide sibling public reads: `enrichmentEnabled()` (OPEN-3), batch `enrichmentStatuses(for:)` (OPEN-6), current retained bytes (OPEN-2), and `JournalAdminHistory` (OPEN-5). Omit dependent UI if an API is not admitted. |
-| DC-09 | V2-03 | Reset `journalBytes` during rebase; distinguish legitimate empty bootstrap/rebase from accidental loss of the journal head; define a bounded deterministic `CollectionCacheLimits`/eviction policy and a concretely bounded `AffectedItemsBlobV1` decoder. |
-| DC-10 | V2-03 | If J1 is admitted only for reconnect, default the collection cache off until G2 evidence exists. Purpose-qualify journal versus thumbnail materializer-version methods and values. |
+| DC-09 | V2-03 | Reset `journalBytes` during rebase; distinguish legitimate empty bootstrap/rebase from accidental loss of the journal head; define a bounded deterministic `CollectionCacheLimits`/eviction policy and a concretely bounded `AffectedItemsBlobV1` decoder. *(2026-08-15: the `journalBytes = 0` reset is applied to the §9.2 rebase sequence; the other three items remain open.)* |
+| DC-10 | V2-03 | If J1 is admitted only for reconnect, default the collection cache off until G2 evidence exists. Purpose-qualify journal versus thumbnail materializer-version methods and values. *(2026-08-15: `cacheEnabled` bootstrap default flipped to `false` in V2-03 §2.3, §4.6, and Record 5; the fixture at §17 that enables the cache now says so explicitly; the materializer-version qualification remains open.)* |
 | DC-11 | V2-04 | Obtain explicit recorded review/product sign-off for the stamp-collision residual, the load-bearing single-flight join-key substitution, and materializer-version downgrade refusal, or redesign the keying. |
-| DC-12 | V2-04 | Make cache insert APIs carry `contentVersion`/`builtAt`, specify C3 metrics collection, choose a concrete bounded disk wire format/decoder, and resolve whether C1 requires both G1 and G4 or G1 admits the internal S1 substrate. |
-| DC-13 | V2-03/V2-04 | Reconcile the cross-doc thumbnail-key description (`ContentVersion` versus source fingerprint) and map every V2-04 cache-law, collision, restart, joined-caller, corruption, sweep, and version-door obligation to the roadmap-owned stable fixtures. |
+| DC-12 | V2-04 | Make cache insert APIs carry `contentVersion`/`builtAt`, specify C3 metrics collection, choose a concrete bounded disk wire format/decoder, and resolve whether C1 requires both G1 and G4 or G1 admits the internal S1 substrate. *(2026-08-15: the C1 `insert` signature now carries `contentVersion`/`builtAt`; the other three items remain open.)* |
+| DC-13 | V2-03/V2-04 | Reconcile the cross-doc thumbnail-key description (`ContentVersion` versus source fingerprint) and map every V2-04 cache-law, collision, restart, joined-caller, corruption, sweep, and version-door obligation to the roadmap-owned stable fixtures. *(2026-08-15: the stable fixture IDs `V2-WS-C1-1/2`, `V2-WS-C2-1/2/3`, `V2-WS-C3-1` are now defined in V2-04 Record 4, so the roadmap's C.2–C.6 citations resolve; the thumbnail-key reconciliation remains open.)* |
 | DC-14 | V2-05 | Reconcile deterministic unique `GrantRow.grantKey` with re-grant creating a new row. |
 | DC-15 | V2-05 | Define audit compaction so the surviving suffix validates; the current first-survivor-only rehash leaves later links stale unless the boundary representation changes. |
 | DC-16 | V2-05 | Make audit payload/DTOs represent optional commit positions and rebase range/reason; include every integrity-bearing column in the hash or narrow D36; provide a reachable recovery mode when normal `open` rejects a broken chain. |

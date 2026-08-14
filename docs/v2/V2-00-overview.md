@@ -89,7 +89,7 @@ preserve:
 | X2 | Operation Record auditing + Audit/Connections domains | `00` §2; `06` §4 | X1 approved (audit is X1's consequence; subsumption justified in V2-05 Record 1) | V2-05 |
 | P1 | Persistent startup checkpoint | `06` §3 G5 | Metadata-only startup/index rebuild p95 > 250 ms at 5,000 items on the minimum supported hardware profile | V2-06 |
 | P2 | Localized search projection (G7 slot; V2-06 implements query-time, no projection column) | `06` §3 G7 | Product requirement for locale-sensitive matching + migration behavior; fixtures define normalization/ordering for supported locales | V2-06 |
-| P3 | Blob-store handle/streaming content abstraction | `06` §3 G8 | A representative workload exceeds the capture-path memory budget or shows p95 copy cost unsolvable within the bounded inline-value design | V2-06 |
+| P3 | Blob-store handle/streaming content abstraction | `06` §3 G8 | A representative capture- **or read-path** workload exceeds its memory budget (read-path evidence: peak transient hydration RSS and aggregate resident DTO bytes under representative concurrent callers) or shows p95 copy cost unsolvable within the bounded inline-value design | V2-06 |
 | M1 | V1 -> V2 schema / blob / projection migration | `05` §17 | Any of the above ships | each |
 
 *The trigger column above is a summary; the canonical verbatim triggers live in
@@ -307,7 +307,9 @@ remains snapshot-replacement (Part IV §5).
   `HistoryChangeKind` carve-out is MOOT (V2-03 pre-emptively renamed it
   `JournalEntryKind`); bare `R1`/`R2`/`R3` tokens (V2-02 graft IDs / dimension
   labels) do not match the deleted-v1 phrase "R0 / R1 / R2 as shipped tiers"
-  (`06` §10) and need no carve-out.
+  (`06` §10) and need no carve-out; (j) the global D-invariant allocation
+  registry (D20→D39 by owning doc) lives in `V2-roadmap` §14 — per-doc
+  "next free numbers" claims must cite that registry, not this §4.
 
 ## 9. Naming and placement
 
