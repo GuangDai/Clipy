@@ -73,7 +73,7 @@ struct ExactLiteralMatcherDebugRouteTests {
         let lengths = [0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 64, 65]
         let needles = ["z", "zz", "zz-no-match", String(repeating: "z", count: 64)]
         for length in lengths {
-            let body = pad(length)
+            let body = Self.pad(length)
             for needle in needles {
                 let result = Self.route(term: needle, in: body)
                 #expect(
@@ -91,7 +91,7 @@ struct ExactLiteralMatcherDebugRouteTests {
     /// oracle's coordinates exactly.
     @Test func hitsAtWordAlignmentsStayLinearAndExact() {
         for lead in [0, 1, 7, 8, 15, 16, 31, 32, 33, 63, 64] {
-            let body = pad(lead) + "needle" + pad(9)
+            let body = Self.pad(lead) + "needle" + Self.pad(9)
             let result = Self.route(term: "needle", in: body)
             #expect(result.usedASCIILinearPath, "lead=\(lead)")
             #expect(
@@ -106,7 +106,7 @@ struct ExactLiteralMatcherDebugRouteTests {
         for body in [
             "nEeDlE",
             "prefix-nEeDlE-suffix",
-            pad(16) + "NeEdLe",
+            Self.pad(16) + "NeEdLe",
         ] {
             let result = Self.route(term: "needle", in: body)
             #expect(result.usedASCIILinearPath, body)
@@ -119,10 +119,10 @@ struct ExactLiteralMatcherDebugRouteTests {
     /// linearly and match the oracle.
     @Test func nonLetterHeadNeedlesStayLinearAndExact() {
         let cases: [(String, String)] = [
-            ("12345", pad(8) + "12345" + pad(8)),
+            ("12345", Self.pad(8) + "12345" + Self.pad(8)),
             ("[x]", "y [x] z"),
-            ("a b", pad(15) + "a b"),
-            ("--", pad(31) + "--" + pad(2)),
+            ("a b", Self.pad(15) + "a b"),
+            ("--", Self.pad(31) + "--" + Self.pad(2)),
         ]
         for (term, body) in cases {
             let result = Self.route(term: term, in: body)
@@ -153,12 +153,12 @@ struct ExactLiteralMatcherDebugRouteTests {
     /// may exist, e.g. U+212A matching `k`).
     @Test func ineligibleByteInsidePrefixRoutesToFoundation() {
         for lead in [0, 3, 7, 8, 15, 16] {
-            let kelvinBefore = Self.pad(lead) + "\u{212A}" + "ey-needle"
+            let kelvinBefore = Self.Self.pad(lead) + "\u{212A}" + "ey-needle"
             #expect(
                 !Self.route(term: "key", in: kelvinBefore).usedASCIILinearPath,
                 "kelvin lead=\(lead)"
             )
-            let crInside = Self.pad(lead) + "nee\rdle"
+            let crInside = Self.Self.pad(lead) + "nee\rdle"
             #expect(
                 !Self.route(term: "needle", in: crInside).usedASCIILinearPath,
                 "cr-inside lead=\(lead)"
@@ -185,14 +185,14 @@ struct ExactLiteralMatcherDebugRouteTests {
     @Test func nonASCIIPastPrefixKeepsLinearRoute() {
         // Match ends at 6; word [0,8) is checked; finish mode sees
         // index 8 >= matchEndLimit 6 and returns before reaching the Kelvin.
-        let far = "needle" + pad(9) + "\u{212A}"
+        let far = "needle" + Self.pad(9) + "\u{212A}"
         #expect(Self.route(term: "needle", in: far).usedASCIILinearPath)
         #expect(
             Self.route(term: "needle", in: far).match
                 == Self.foundationMatch(term: "needle", in: far)
         )
         // CR equally past the prefix.
-        let crFar = "needle" + pad(9) + "\r" + "z"
+        let crFar = "needle" + Self.pad(9) + "\r" + "z"
         #expect(Self.route(term: "needle", in: crFar).usedASCIILinearPath)
         #expect(
             Self.route(term: "needle", in: crFar).match
@@ -207,7 +207,7 @@ struct ExactLiteralMatcherDebugRouteTests {
     @Test func ineligibleByteInOvershootWindowIsConservativelyFoundation() {
         // Match at 14, end 20; word [16,24) is the finish word. A CR at 21
         // is past the prefix but inside that word.
-        let body = pad(14) + "needle" + "abc\r" + "z"
+        let body = Self.pad(14) + "needle" + "abc\r" + "z"
         let result = Self.route(term: "needle", in: body)
         #expect(!result.usedASCIILinearPath)
         #expect(result.match == Self.foundationMatch(term: "needle", in: body))
