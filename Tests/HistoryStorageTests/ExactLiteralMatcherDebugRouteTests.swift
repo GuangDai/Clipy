@@ -109,7 +109,7 @@ struct ExactLiteralMatcherDebugRouteTests {
             Self.pad(16) + "NeEdLe",
         ] {
             let result = Self.route(term: "needle", in: body)
-            #expect(result.usedASCIILinearPath, body)
+            #expect(result.usedASCIILinearPath, "body=\(body)")
             #expect(result.match == Self.foundationMatch(term: "needle", in: body))
         }
     }
@@ -126,7 +126,7 @@ struct ExactLiteralMatcherDebugRouteTests {
         ]
         for (term, body) in cases {
             let result = Self.route(term: term, in: body)
-            #expect(result.usedASCIILinearPath, term)
+            #expect(result.usedASCIILinearPath, "term=\(term)")
             #expect(result.match == Self.foundationMatch(term: term, in: body))
         }
     }
@@ -138,7 +138,7 @@ struct ExactLiteralMatcherDebugRouteTests {
     @Test func ineligibleTermsRouteToFoundation() {
         for term in ["café", "need\u{212A}le", "ne\r edle", "\rneedle"] {
             let result = Self.route(term: term, in: "some café body with needle")
-            #expect(!result.usedASCIILinearPath, term)
+            #expect(!result.usedASCIILinearPath, "term=\(term)")
             #expect(
                 result.match == Self.foundationMatch(
                     term: term,
@@ -153,12 +153,12 @@ struct ExactLiteralMatcherDebugRouteTests {
     /// may exist, e.g. U+212A matching `k`).
     @Test func ineligibleByteInsidePrefixRoutesToFoundation() {
         for lead in [0, 3, 7, 8, 15, 16] {
-            let kelvinBefore = Self.Self.pad(lead) + "\u{212A}" + "ey-needle"
+            let kelvinBefore = Self.pad(lead) + "\u{212A}" + "ey-needle"
             #expect(
                 !Self.route(term: "key", in: kelvinBefore).usedASCIILinearPath,
                 "kelvin lead=\(lead)"
             )
-            let crInside = Self.Self.pad(lead) + "nee\rdle"
+            let crInside = Self.pad(lead) + "nee\rdle"
             #expect(
                 !Self.route(term: "needle", in: crInside).usedASCIILinearPath,
                 "cr-inside lead=\(lead)"
@@ -255,7 +255,7 @@ struct ExactLiteralMatcherDebugRouteTests {
     @Test func tailOnlyStringsStayLinearAndExact() {
         for body in ["", "n", "ne", "needl", "needle", "needlex"] {
             let result = Self.route(term: "needle", in: body)
-            #expect(result.usedASCIILinearPath, body)
+            #expect(result.usedASCIILinearPath, "body=\(body)")
             #expect(
                 result.match == Self.foundationMatch(term: "needle", in: body)
             )
