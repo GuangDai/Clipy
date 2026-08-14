@@ -12,11 +12,13 @@ struct AdmissionMatcherABInput {
     let maximumPairedMedianRatio: Double
     let term: String
     /// Per-case corpus size. The default 128-body (32 MiB) corpus fits the
-    /// supported-runner cache envelope; the repeated-prefix adversary uses 8
-    /// because its FOUNDATION side is the pathological one (a 4,096-byte
-    /// needle over 256 KiB of `a` approaches O(n·m) in NSString), which at
-    /// 128 bodies × 13 paired rounds cannot finish inside any sane step
-    /// ceiling. The compiled side proves its own linearity at either size.
+    /// supported-runner cache envelope; the repeated-prefix adversary uses 2
+    /// because its FOUNDATION side is the pathological one — the
+    /// 2026-08-14 instrumented dispatch measured NSString at roughly 12 s
+    /// per 256 KiB `a` body for a 4,096-byte needle (~0.17 MB/s, ~60× below
+    /// its own absent-needle average), so even 8 bodies exceeded 21 minutes.
+    /// The case exists to prove the compiled side stays linear on that
+    /// shape; two bodies keep a paired Foundation baseline on record.
     let bodiesPerSample: Int
     let makeBody: (Int) -> String
 
@@ -164,7 +166,7 @@ func admissionExactMatcherABInputs() -> [AdmissionMatcherABInput] {
             decisionClass: "adversarial",
             maximumPairedMedianRatio: 1.10,
             term: String(repeating: "a", count: 4_095) + "b",
-            bodiesPerSample: 8,
+            bodiesPerSample: 2,
             makeBody: {
                 admissionMatcherBody(index: $0, repeating: "a")
             }
