@@ -81,9 +81,13 @@ func measureAdmissionExactSearch(
         )
     )
 
-    let samples = try await measureAdmissionSamples(progress: { event in
-        writeAdmissionProgress(mode: .exactSearch, event: event)
-    }) {
+    let samples = try await measureAdmissionSamples(
+        warmups: admissionExactSearchWarmupCount,
+        samples: admissionExactSearchSampleCount,
+        progress: { event in
+            writeAdmissionProgress(mode: .exactSearch, event: event)
+        }
+    ) {
         let page = try await history.browse(request)
         guard page.position == validationPage.position,
               page.rows.isEmpty,
@@ -103,6 +107,7 @@ func measureAdmissionExactSearch(
         notes: [
             "Each public search snapshots 5,000 inline 256 KiB searchBody projections before exact evaluation.",
             "The absent term forces a complete bounded-corpus scan without result DTO retention.",
+            "IND-07 measurement budget: 11 samples (reduced from the 101-sample profile budget) because each absent-term request costs roughly 125 s; at n = 11 the nearest-rank p95 and p99 both select the sample maximum.",
             "Peak RSS is a worst-bound process high-water ceiling, not "
                 + "transient-hydration attribution or representative "
                 + "concurrent-DTO G8 evidence.",

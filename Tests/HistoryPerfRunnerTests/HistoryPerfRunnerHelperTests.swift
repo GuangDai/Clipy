@@ -201,6 +201,17 @@ struct HistoryPerfRunnerHelperTests {
             + "phase=diagnostic-request state=completed elapsed_ms=1234.500")
     }
 
+    @Test func exactSearchAdmissionUsesReducedSampleBudget() {
+        // IND-07 measurement-budget freeze: the absent-term worst-bound scan
+        // costs ~125 s per request against the 5,000 × 256 KiB corpus, so the
+        // 101-sample profile budget cannot complete inside the dispatch lane's
+        // 90-minute step ceiling. exact-search carries its own reduced budget;
+        // at n = 11 the nearest-rank p95/p99 both select the sample maximum,
+        // which the fixture notes must state.
+        #expect(admissionExactSearchWarmupCount == 1)
+        #expect(admissionExactSearchSampleCount == 11)
+    }
+
     @Test func admissionProfilesFreezeFullAndFailureReproductionShapes() {
         #expect(AdmissionProfile.full == AdmissionProfile(
             retainedRows: 5_000,

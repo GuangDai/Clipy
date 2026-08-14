@@ -893,9 +893,12 @@ jobs:
             and (.rawSamplesMs | length) == 101
             and .percentiles != null
           ' "$LOG_DIR/browse-ties.json" >/dev/null
+          # exact-search carries the reduced IND-07 measurement budget
+          # (11 samples; the 101-sample profile budget cannot finish inside
+          # the step ceiling at ~125 s per absent-term request).
           jq -e '
             .mode == "exact-search"
-            and (.rawSamplesMs | length) == 101
+            and (.rawSamplesMs | length) == 11
             and .percentiles != null
           ' "$LOG_DIR/exact-search.json" >/dev/null
           jq -e '

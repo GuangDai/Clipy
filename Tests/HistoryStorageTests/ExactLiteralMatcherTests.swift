@@ -205,4 +205,72 @@ private static func asciiString(
             )
     )
 }
+
+/// A block-scanning implementation (SIMD/SWAR word prefilter ahead of the
+/// scalar KMP verify) must stay exactly Foundation-equivalent across every
+/// alignment of needle and haystack around the machine-word boundaries
+/// (8 and 16 bytes) that chunked loops process. Fixed adversarial layouts:
+/// matches landing on, spanning, and one-off each boundary; decoy first
+/// bytes (both cases) that fail verification before a later true match; and
+/// the same layouts with an uppercase haystack against a lowercase needle.
+@Test func wordBoundaryAndDecoyLayoutsMatchFoundation() {
+    let chunkSizes = [7, 8, 9, 15, 16, 17, 31, 32, 33]
+    for chunk in chunkSizes {
+        for shift in [0, 1, 2, 7] {
+            let prefix = String(repeating: "x", count: chunk + shift)
+            // Decoy: first byte matches the needle head (wrong case), the
+            // tail diverges; the true match starts one byte later.
+            let decoyHaystack = prefix + "Nxxdle-zzz-needle-tail"
+            #expect(
+                ExactLiteralMatcher(term: "needle").firstMatch(in: decoyHaystack)
+                    == Self.foundationMatch(term: "needle", in: decoyHaystack),
+                "decoy chunk=\(chunk) shift=\(shift)"
+            )
+            // Boundary-spanning match with case-flipped haystack copy.
+            let casedHaystack = prefix + "nEeDlE" + "-suffix"
+            #expect(
+                ExactLiteralMatcher(term: "needle").firstMatch(in: casedHaystack)
+                    == Self.foundationMatch(term: "needle", in: casedHaystack),
+                "cased chunk=\(chunk) shift=\(shift)"
+            )
+            // Absent needle whose first byte is present in many word-aligned
+            // positions: every chunk produces candidates that must verify.
+            let absentHaystack = prefix + "n" + String(repeating: "nxd", count: chunk + 4)
+            #expect(
+                ExactLiteralMatcher(term: "needle").firstMatch(in: absentHaystack)
+                    == nil,
+                "absent chunk=\(chunk) shift=\(shift)"
+            )
+            #expect(
+                Self.foundationMatch(term: "needle", in: absentHaystack) == nil,
+                "oracle agrees the absent layout has no match"
+            )
+        }
+    }
+}
+
+/// A candidate found by a fast prefilter must never be returned when a later
+/// byte disproves all-ASCII/CR eligibility: the whole comparison falls back
+/// to Foundation (03b §8 semantics; the mixed-coordinate hazard the CR
+/// exclusion exists for). Each layout plants a would-be ASCII match first
+/// and the disproving scalar after it, at word-boundary distances.
+@Test func nonASCIIBehindAnASCIIRegionStillDelegatesWholeComparison() {
+    for lead in [0, 7, 8, 15, 16, 31] {
+        let prefix = String(repeating: "y", count: lead)
+        let mixed = prefix + "needle" + "\u{212A}" // KELVIN SIGN after the match
+        let match = ExactLiteralMatcher(term: "needle").firstMatch(in: mixed)
+        #expect(
+            match == Self.foundationMatch(term: "needle", in: mixed),
+            "mixed-script lead=\(lead)"
+        )
+        // CR behind the match: CRLF re-clustering can move Character
+        // coordinates, so Foundation must decide the whole string.
+        let crBody = prefix + "needle" + "\r" + "z"
+        #expect(
+            ExactLiteralMatcher(term: "needle").firstMatch(in: crBody)
+                == Self.foundationMatch(term: "needle", in: crBody),
+            "cr-behind lead=\(lead)"
+        )
+    }
+}
 }

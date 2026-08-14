@@ -45,6 +45,17 @@ let admissionSampleCount = admissionProfile.sampleCount
 let admissionWarmupCount = admissionProfile.warmupCount
 let admissionPageLimit = admissionProfile.pageLimit
 
+/// Reduced per-mode measurement budget for `--admission exact-search`
+/// (IND-07): the absent-term worst-bound scan costs roughly 125 s per
+/// request over the 5,000 × 256 KiB corpus, so the profile's 101-sample
+/// budget cannot finish inside the dispatch lane's 90-minute step ceiling
+/// (104 × 125 s ≈ 3.6 h). Thirteen total requests (one validation outside
+/// this budget, one warmup, eleven samples) complete in roughly half an
+/// hour. At n = 11 the nearest-rank p95 and p99 both select the sample
+/// maximum; the fixture notes record that limitation.
+let admissionExactSearchWarmupCount = 1
+let admissionExactSearchSampleCount = 11
+
 enum AdmissionMode: String, Sendable, Equatable {
     case seed
     case seedSmoke = "seed-smoke"
