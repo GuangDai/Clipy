@@ -32,7 +32,7 @@ internal struct ScalarReadRow {
     internal let contentVersion: ContentVersion
     internal let title: String
     internal let effectiveTypeIdentifiersBlob: Data
-    fileprivate let lastCopiedAt: Date
+    internal let lastCopiedAt: Date
     internal let copyCount: UInt64
     internal let lastSource: String?
     internal let pinOrdinal: PinOrdinal?
@@ -41,7 +41,7 @@ internal struct ScalarReadRow {
         UnpinnedOrderKey(lastCopiedAt: lastCopiedAt, id: id)
     }
 
-    fileprivate init(_ row: HistoryItemRow, limits: HistoryLimits) throws {
+    internal init(_ row: HistoryItemRow, limits: HistoryLimits) throws {
         self.id = HistoryItemID(rawValue: row.id)
         let projectionSchemaVersion = row.projectionSchemaVersion
         let title = row.title
@@ -74,7 +74,7 @@ internal struct ScalarReadRow {
     }
 
     /// The `.defaultOrder` anchor for this row (04 §6).
-    fileprivate var defaultOrderAnchor: StoredOrderingAnchor {
+    internal var defaultOrderAnchor: StoredOrderingAnchor {
         .defaultOrder(
             pinnedOrdinal: pinOrdinal?.rawValue,
             lastCopiedAt: lastCopiedAt,
@@ -83,7 +83,7 @@ internal struct ScalarReadRow {
     }
 
     /// Whether this row matches the given continuation anchor (04 §6).
-    fileprivate func matches(_ anchor: StoredOrderingAnchor) -> Bool {
+    internal func matches(_ anchor: StoredOrderingAnchor) -> Bool {
         switch anchor {
         case .defaultOrder(let pinnedOrdinal, let anchoredLastCopiedAt, let anchoredID):
             return id == anchoredID
@@ -99,7 +99,7 @@ internal struct ScalarReadRow {
     /// Maps this scalar row to a `HistoryRow`, decoding the small
     /// `effectiveTypeIdentifiersBlob` projection (§14.1: the effective type
     /// identifiers blob decode is a small scalar blob, not a content blob).
-    fileprivate func toHistoryRow(limits: HistoryLimits) throws -> HistoryRow {
+    internal func toHistoryRow(limits: HistoryLimits) throws -> HistoryRow {
         let typeIdentifiers = try mapCodecFailure {
             try EffectiveTypeIdentifiersBlobCodec.decode(
                 effectiveTypeIdentifiersBlob,

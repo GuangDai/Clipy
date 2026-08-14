@@ -3,7 +3,7 @@
 import Foundation
 import HistoryCore
 import HistoryDomain
-import SwiftData
+import Fuse
 
 extension SearchWorker {
     // MARK: - Fuzzy mode (03b §8)
