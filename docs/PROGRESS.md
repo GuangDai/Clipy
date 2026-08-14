@@ -583,4 +583,9 @@ zero-length, and multi-scalar-grapheme windows. The admission workflow's
 strict log scans now prefilter the recovered CoreData external-storage
 clone race (`.interim` clone failures with successful copy fallbacks, runs
 31808691118/31809994808) while keeping every other warning/error line
-fatal and the jq row/position assertions as the integrity gate.
+fatal and the jq row/position assertions as the integrity gate. Supported full-scope run
+[31815028830](https://github.com/GuangDai/Clipy/actions/runs/31815028830)
+is green end to end, including the evidence lane under the prefilter;
+the recent-equivalent window fix it required (anchor row must stay in the
+evaluated array for `page` to drop) is locked by the new continuation
+test.

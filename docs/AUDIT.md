@@ -357,7 +357,12 @@ already-consumed `.interim` staging name, logs the failure, and CoreData's
 copy fallback completes the save — stripping only those multi-line error
 blocks while every other warning/error or missing-file line stays fatal and
 the per-phase jq row/position/transaction assertions remain the
-data-integrity gate.
+data-integrity gate. Supported full-scope run
+[31815028830](https://github.com/GuangDai/Clipy/actions/runs/31815028830)
+is green end to end — gates, SwiftPM (384 tests), app build/test, §9
+proofs, and the 5,000-row evidence lane completing cleanly under the
+prefilter for the first time since the race began reproducing; the
+matcher A/B lane remains separately scoped (green at 31806199483).
 
 All remaining findings and their explicit owners/triggers are tracked in
 `docs/V1-Verified/07-finding-dispositions.md`. The supported CI, performance,
