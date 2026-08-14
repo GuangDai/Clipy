@@ -292,7 +292,13 @@ otherwise the rank encodes as JSON null instead of a disguised sample
 maximum — with the matcher A/B lane carrying per-case corpus sizes (the
 repeated-prefix adversary runs 8 bodies because its Foundation side is the
 pathological one) plus one unbuffered stderr progress line per case so a
-stalled dispatch shows exactly where its budget went.
+stalled dispatch shows exactly where its budget went. The completed screen
+([31806199483](https://github.com/GuangDai/Clipy/actions/runs/31806199483))
+passed all 13 cases: every eligible-ASCII case's paired median came in at
+0.000x–0.036x of Foundation, and the three Foundation-fallback cases at
+0.98x–1.02x (gate overhead is free), so `productionIntegrationEligible` is
+true — which admits the subsequent one-to-three-call same-store Release
+comparison, not G2/G8 evidence.
 
 All remaining findings and their explicit owners/triggers are tracked in
 `docs/V1-Verified/07-finding-dispositions.md`. The supported CI, performance,
