@@ -135,7 +135,11 @@ package struct ExactLiteralMatcher: Sendable {
             return .requiresFoundation
         }
 
-        return text.withUTF8 { utf8 -> ASCIIScanResult in
+        // withUTF8 may native-ify the storage, so it needs a mutable local;
+        // for already-native strings (every stored search body) this is a
+        // retain, not a copy.
+        var mutableText = text
+        return mutableText.withUTF8 { utf8 -> ASCIIScanResult in
             let count = utf8.count
             let rawBase = utf8.baseAddress.map { UnsafeRawPointer($0) }
             let head = needle[0]

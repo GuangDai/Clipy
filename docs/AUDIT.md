@@ -247,6 +247,29 @@ Unicode/CR fallbacks. Even a complete pass only admits a subsequent one-to-three
 call same-store Release comparison; it cannot establish G2/G8 or candidate-index
 evidence and does not justify the 101-sample lane by itself.
 
+**2026-08-14 matcher step 2 (word-prefilter scan + measurement budget):** the
+eligible-ASCII matcher's scan now follows the scalar shape glibc/musl `memmem`
+and Rust `memchr::memmem` use (verified against their sources plus simdjson and
+Arm NEON movemask literature): one 8-byte SWAR sweep per word answers
+all-ASCII eligibility, no-CR eligibility, and case-folded needle-head presence;
+candidate offsets pay a folded verification that re-checks every needle byte;
+and a 256-failed-verification budget switches adversary-shaped corpora to the
+linear KMP automaton, preserving the O(n + m) worst case. Case comparison
+accepts exactly each letter's two ASCII cases (never a blanket `| 0x20` fold,
+which collides distinct bytes); Foundation remains the complete semantic
+oracle, and one ineligible byte anywhere still delegates the whole comparison.
+New differential tests lock word-boundary/decoy layouts and
+non-ASCII/CR-behind-match fallback layouts against that oracle. A NEON
+`SIMD16` port was evaluated against the researched pure-Swift idioms and
+deferred: the published `((a^b) &- 1) &>> 7` equality idiom has false
+positives (e.g. `a^b = 0x81`), so the UInt64 SWAR form ships first and the
+same A/B lane quantifies any later vector port. The exact-search admission
+budget is reduced from 101 to 11 samples (frozen by test; fixture note and
+workflow jq updated): at roughly 125 s per absent-term request, the 101-sample
+budget needed about 3.6 hours against the lane's 90-minute step ceiling, while
+thirteen total requests land near half an hour; at n = 11 the nearest-rank
+p95/p99 both select the sample maximum.
+
 All remaining findings and their explicit owners/triggers are tracked in
 `docs/V1-Verified/07-finding-dispositions.md`. The supported CI, performance,
 symbol-surface, and independent completion-review prerequisites are complete.
