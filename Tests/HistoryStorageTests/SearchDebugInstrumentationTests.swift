@@ -203,5 +203,150 @@ struct SearchDebugInstrumentationTests {
             pair.0 <= pair.1
         })
     }
+
+    /// Route accounting: the completion event must separate title hits from
+    /// body hits, sum only the bytes actually scanned per lane, and count
+    /// compiled-ASCII vs Foundation evaluations — the exact counters a later
+    /// IND-07 debugging session needs at a glance.
+    @Test func exactScanSeparatesTitleAndBodyRouteAccounting() async throws {
+        func customRow(
+            _ index: Int,
+            title: String,
+            body: String
+        ) -> SearchCorpusRow {
+            SearchCorpusRow(
+                id: HistoryItemID(rawValue: UUID()),
+                contentVersion: .initial,
+                title: title,
+                searchBody: body,
+                debugTitleUTF8Bytes: title.utf8.count,
+                debugSearchBodyUTF8Bytes: body.utf8.count,
+                typeIdentifiers: ["public.utf8-plain-text"],
+                lastCopiedAt: Date(
+                    timeIntervalSinceReferenceDate: 710_200_000 + Double(index)
+                ),
+                copyCount: 1,
+                lastSource: nil,
+                pinOrdinal: nil
+            )
+        }
+
+        let titleHit = customRow(
+            0,
+            title: "NEEDLE-alpha-title",
+            body: "plain-body-alpha-never-scanned"
+        )
+        let bodyHit = customRow(
+            1,
+            title: "plain-title-beta",
+            body: "prefix beta needle-in-body suffix"
+        )
+        let foundationTitle = customRow(
+            2,
+            title: "t\u{EF}tle-c\u{E9}-non-ascii",
+            body: "plain-body-gamma"
+        )
+        let trace = SearchDebugTrace(
+            id: UUID(),
+            startedAt: ContinuousClock().now
+        )
+        let corpus = SearchCorpusSnapshot(
+            position: ChangePosition(rawValue: 1),
+            rows: [titleHit, bodyHit, foundationTitle],
+            debugTrace: trace
+        )
+        let (events, continuation) = AsyncStream<SearchDebugEvent>.makeStream(
+            bufferingPolicy: .unbounded
+        )
+        let probe = SearchDebugProbe(isEnabled: true) { event in
+            _ = continuation.yield(event)
+        }
+        let worker = SearchWorker()
+        await worker.setSearchDebugProbe(probe)
+
+        let page = try await worker.page(
+            HistoryBrowseRequest(
+                kind: .search(text: "needle", mode: .exact),
+                limit: 10
+            ),
+            in: corpus,
+            continuationAnchor: nil,
+            processMarker: UUID()
+        )
+        #expect(page.rows.count == 2)
+        await worker.setSearchDebugProbe(SearchDebugProbe(isEnabled: false))
+        continuation.finish()
+
+        var captured: [SearchDebugEvent] = []
+        for await event in events {
+            captured.append(event)
+        }
+        let complete = try #require(
+            captured.first { $0.phase == "exact-scan-complete" }
+        )
+        #expect(complete.titleMatches == 1)
+        #expect(complete.bodyMatches == 1)
+        #expect(complete.matchedRows == 2)
+        #expect(complete.exactASCIIEvaluations == 4)
+        #expect(complete.exactFoundationEvaluations == 1)
+        #expect(complete.titleUTF8Bytes
+            == titleHit.title.utf8.count
+                + bodyHit.title.utf8.count
+                + foundationTitle.title.utf8.count)
+        #expect(complete.bodyUTF8Bytes
+            == bodyHit.searchBody.utf8.count
+                + foundationTitle.searchBody.utf8.count)
+
+        let titleScan = try #require(
+            captured.first { $0.phase == "exact-title-scan" }
+        )
+        #expect(titleScan.rowsProcessed == 3)
+        let bodyScan = try #require(
+            captured.first { $0.phase == "exact-body-scan" }
+        )
+        #expect(bodyScan.rowsProcessed == 2)
+    }
+
+    /// Progress cadence: a 505-row corpus must flush exactly at the 250-row
+    /// interval multiples and once more on the final row — no more, no less.
+    @Test func progressCadenceFiresOnIntervalMultiplesAndLastRow() async throws {
+        let trace = SearchDebugTrace(
+            id: UUID(),
+            startedAt: ContinuousClock().now
+        )
+        let corpus = SearchCorpusSnapshot(
+            position: ChangePosition(rawValue: 1),
+            rows: (0..<505).map { Self.row(index: $0) },
+            debugTrace: trace
+        )
+        let (events, continuation) = AsyncStream<SearchDebugEvent>.makeStream(
+            bufferingPolicy: .unbounded
+        )
+        let probe = SearchDebugProbe(isEnabled: true) { event in
+            _ = continuation.yield(event)
+        }
+        let worker = SearchWorker()
+        await worker.setSearchDebugProbe(probe)
+
+        _ = try await worker.page(
+            HistoryBrowseRequest(
+                kind: .search(text: "absent", mode: .exact),
+                limit: 10
+            ),
+            in: corpus,
+            continuationAnchor: nil,
+            processMarker: UUID()
+        )
+        await worker.setSearchDebugProbe(SearchDebugProbe(isEnabled: false))
+        continuation.finish()
+
+        var captured: [SearchDebugEvent] = []
+        for await event in events {
+            captured.append(event)
+        }
+        let progress = captured.filter { $0.phase == "exact-scan-progress" }
+        #expect(progress.map(\.rowsProcessed) == [250, 500, 505])
+        #expect(progress.allSatisfy { $0.rowsTotal == 505 })
+    }
 }
 #endif

@@ -101,17 +101,55 @@ struct HistoryPerfRunnerHelperTests {
         #expect(nearestRankPercentile(values, percentile: 0.95) == 96)
         #expect(nearestRankPercentile(values, percentile: 0.99) == 100)
         #expect(nearestRankPercentile(values, percentile: 1) == 101)
+    }
 
-        let percentiles = admissionPercentiles(values)
-        #expect(percentiles.p50Ms == 51)
-        #expect(percentiles.p95Ms == 96)
-        #expect(percentiles.p99Ms == 100)
+    /// Nearest-rank percentiles are only reported when the sample count can
+    /// select a rank BELOW the maximum: ceil(p·n) < n requires n ≥ 3 for p50
+    /// (ceil(0.5·2) = 1… the 1st of 2 — supported at 3 for a non-degenerate
+    /// median), n ≥ 20 for p95, and n ≥ 100 for p99. Below a threshold the
+    /// rank encodes as JSON null instead of a disguised sample maximum —
+    /// the 11-sample exact-search budget therefore reports p50 only.
+    @Test func admissionPercentilesReportOnlySupportedRanks() {
+        #expect(admissionP50MinimumSamples == 3)
+        #expect(admissionP95MinimumSamples == 20)
+        #expect(admissionP99MinimumSamples == 100)
 
-        #expect(admissionPercentilesIfSampled([]) == nil)
-        let sampled = admissionPercentilesIfSampled([42])
-        #expect(sampled?.p50Ms == 42)
-        #expect(sampled?.p95Ms == 42)
-        #expect(sampled?.p99Ms == 42)
+        // 101 samples: every rank is supported and selects an interior
+        // sample (p99 = the 100th of 101, not the max).
+        let full = admissionPercentilesIfSupported((1...101).reversed().map(Double.init))
+        #expect(full?.p50Ms == 51)
+        #expect(full?.p95Ms == 96)
+        #expect(full?.p99Ms == 100)
+
+        // 100 samples: p99 selects the 99th (supported exactly at the floor).
+        let hundred = admissionPercentilesIfSupported((1...100).map(Double.init))
+        #expect(hundred?.p99Ms == 99)
+        // 99 samples: p99 would select the maximum — unsupported.
+        let ninetyNine = admissionPercentilesIfSupported((1...99).map(Double.init))
+        #expect(ninetyNine?.p99Ms == nil)
+        #expect(ninetyNine?.p95Ms != nil)
+
+        // 20 samples: p95 selects the 19th (supported at the floor).
+        let twenty = admissionPercentilesIfSupported((1...20).map(Double.init))
+        #expect(twenty?.p95Ms == 19)
+        #expect(twenty?.p99Ms == nil)
+        // 19 samples: p95 would select the maximum — unsupported.
+        let nineteen = admissionPercentilesIfSupported((1...19).map(Double.init))
+        #expect(nineteen?.p95Ms == nil)
+        #expect(nineteen?.p50Ms == 10)
+
+        // 11 samples (the exact-search budget): p50 only.
+        let eleven = admissionPercentilesIfSupported((1...11).map(Double.init))
+        #expect(eleven?.p50Ms == 6)
+        #expect(eleven?.p95Ms == nil)
+        #expect(eleven?.p99Ms == nil)
+
+        // Below the p50 floor nothing is reported.
+        #expect(admissionPercentilesIfSupported([]) == nil)
+        #expect(admissionPercentilesIfSupported([42]) == nil)
+        #expect(admissionPercentilesIfSupported([1, 2]) == nil)
+        // 3 samples: the first supported p50.
+        #expect(admissionPercentilesIfSupported([3, 1, 2])?.p50Ms == 2)
     }
 
     @Test func admissionSampleProgressBracketsEveryOperation() async throws {

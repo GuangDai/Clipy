@@ -107,7 +107,7 @@ func measureAdmissionExactSearch(
         notes: [
             "Each public search snapshots 5,000 inline 256 KiB searchBody projections before exact evaluation.",
             "The absent term forces a complete bounded-corpus scan without result DTO retention.",
-            "IND-07 measurement budget: 11 samples (reduced from the 101-sample profile budget) because each absent-term request costs roughly 125 s; at n = 11 the nearest-rank p95 and p99 both select the sample maximum.",
+            "IND-07 measurement budget: 11 samples (reduced from the 101-sample profile budget) because each absent-term request costs roughly 125 s; per-rank support gating reports p50 only — p95 and p99 encode as null below their 20/100-sample nearest-rank support floors instead of a disguised sample maximum.",
             "Peak RSS is a worst-bound process high-water ceiling, not "
                 + "transient-hydration attribution or representative "
                 + "concurrent-DTO G8 evidence.",

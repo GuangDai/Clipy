@@ -32,7 +32,7 @@ func makeAdmissionFixture(
         warmupCount: mode.isSetupFixture ? 0 : profile.warmupCount,
         setupWallTimeMs: setupWallTimeMs,
         rawSamplesMs: samples,
-        percentiles: admissionPercentilesIfSampled(samples),
+        percentiles: admissionPercentilesIfSupported(samples),
         validation: validation,
         notes: notes
     )

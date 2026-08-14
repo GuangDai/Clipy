@@ -282,7 +282,17 @@ absent-term worst-bound request measured p50 1.59 s / p95 2.39 s over the
 trace that opened IND-07 — roughly 79× on p50 — with the exact-search step
 finishing in 24.4 s and 1.59 GiB peak process RSS (worst-bound ceiling,
 record-only; still not G2/G8 evidence, and the per-request 1.22 GiB corpus
-hydration remains until the G9 seam).
+hydration remains until the G9 seam). Follow-ups the same day: a Debug-only
+route-instrumentation suite pins the matcher's compiled/Foundation routing
+(word alignments, prefix-scoped finish mode, adversary switch, randomized
+sweep), the worker probe's title/body route accounting and 250-row progress
+cadence are locked by tests, and admission percentiles are now per-rank
+support-gated — p50 needs n ≥ 3, p95 n ≥ 20, p99 n ≥ 100 (ceil(p·n) < n),
+otherwise the rank encodes as JSON null instead of a disguised sample
+maximum — with the matcher A/B lane carrying per-case corpus sizes (the
+repeated-prefix adversary runs 8 bodies because its Foundation side is the
+pathological one) plus one unbuffered stderr progress line per case so a
+stalled dispatch shows exactly where its budget went.
 
 All remaining findings and their explicit owners/triggers are tracked in
 `docs/V1-Verified/07-finding-dispositions.md`. The supported CI, performance,

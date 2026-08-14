@@ -473,7 +473,9 @@ jobs:
               and (((.compiledToFoundationRatio
                 - (.compiledMedianMs / .foundationMedianMs)) | fabs)
                 < 0.000000001)
-              and .logicalBytesPerSample == 33554432)
+              and .logicalBytesPerSample == (.bodiesPerSample * 262144)
+              and .bodiesPerSample >= 8
+              and .bodiesPerSample <= 128)
             and (.productionIntegrationEligible
               == all(.cases[]; .passesDecisionThreshold))
           ' "$LOG_DIR/exact-matcher-ab.json" >/dev/null
@@ -891,23 +893,33 @@ jobs:
           require_success exact-search "${{ steps.exact_search.outcome }}"
           require_success warm-open "${{ steps.warm_open.outcome }}"
 
+          # 101 samples support every nearest-rank percentile (p50/p95/p99
+          # each select below the sample maximum; see AdmissionFixtures).
           jq -e '
             .mode == "browse-ties"
             and (.rawSamplesMs | length) == 101
-            and .percentiles != null
+            and .percentiles.p50Ms > 0
+            and .percentiles.p95Ms > 0
+            and .percentiles.p99Ms > 0
           ' "$LOG_DIR/browse-ties.json" >/dev/null
           # exact-search carries the reduced IND-07 measurement budget
           # (11 samples; the 101-sample profile budget cannot finish inside
-          # the step ceiling at ~125 s per absent-term request).
+          # the step ceiling). Per-rank support gating: p95 needs n >= 20
+          # and p99 needs n >= 100, so at n = 11 both encode as null and
+          # only p50 is admissible.
           jq -e '
             .mode == "exact-search"
             and (.rawSamplesMs | length) == 11
-            and .percentiles != null
+            and .percentiles.p50Ms > 0
+            and .percentiles.p95Ms == null
+            and .percentiles.p99Ms == null
           ' "$LOG_DIR/exact-search.json" >/dev/null
           jq -e '
             .mode == "warm-open"
             and (.rawSamplesMs | length) == 101
-            and .percentiles != null
+            and .percentiles.p50Ms > 0
+            and .percentiles.p95Ms > 0
+            and .percentiles.p99Ms > 0
           ' "$LOG_DIR/warm-open.json" >/dev/null
           for mode in seed-smoke prepare-smoke seed prepare browse-ties exact-search; do
             if [[ ! -s "$LOG_DIR/$mode.time" ]]; then

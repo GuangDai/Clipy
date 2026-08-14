@@ -2,11 +2,20 @@ import Foundation
 import HistoryCore
 import HistoryStorage
 
-struct AdmissionPercentiles: Codable, Sendable {
+/// Nearest-rank percentiles with per-rank support gating: a rank is
+/// reported only when the sample count can select below the maximum
+/// (`ceil(p*n) < n`), otherwise it encodes as JSON null instead of a
+/// disguised sample maximum. The 11-sample exact-search budget therefore
+/// carries p50 only (docs/AUDIT.md IND-07 measurement budget).
+struct AdmissionPercentiles: Codable, Sendable, Equatable {
     let p50Ms: Double
-    let p95Ms: Double
-    let p99Ms: Double
+    let p95Ms: Double?
+    let p99Ms: Double?
 }
+
+let admissionP50MinimumSamples = 3
+let admissionP95MinimumSamples = 20
+let admissionP99MinimumSamples = 100
 
 struct AdmissionFixture: Codable, Sendable {
     let schemaVersion: UInt16
@@ -80,6 +89,7 @@ struct AdmissionExactMatcherABCase: Codable, Sendable {
     let decisionClass: String
     let maximumPairedMedianRatio: Double
     let termUTF8Bytes: Int
+    let bodiesPerSample: Int
     let logicalBytesPerSample: Int
     let foundationRawSamplesMs: [Double]
     let compiledRawSamplesMs: [Double]
@@ -149,20 +159,20 @@ func nearestRankPercentile(
     return ordered[min(ordered.count - 1, rank - 1)]
 }
 
-func admissionPercentiles(_ samples: [Double]) -> AdmissionPercentiles {
-    AdmissionPercentiles(
-        p50Ms: nearestRankPercentile(samples, percentile: 0.50),
-        p95Ms: nearestRankPercentile(samples, percentile: 0.95),
-        p99Ms: nearestRankPercentile(samples, percentile: 0.99)
-    )
-}
-
-func admissionPercentilesIfSampled(
+func admissionPercentilesIfSupported(
     _ samples: [Double]
 ) -> AdmissionPercentiles? {
-    guard !samples.isEmpty else {
+    guard samples.count >= admissionP50MinimumSamples else {
         return nil
     }
-    return admissionPercentiles(samples)
+    return AdmissionPercentiles(
+        p50Ms: nearestRankPercentile(samples, percentile: 0.50),
+        p95Ms: samples.count >= admissionP95MinimumSamples
+            ? nearestRankPercentile(samples, percentile: 0.95)
+            : nil,
+        p99Ms: samples.count >= admissionP99MinimumSamples
+            ? nearestRankPercentile(samples, percentile: 0.99)
+            : nil
+    )
 }
 
