@@ -369,7 +369,7 @@ jobs:
     name: Exact matcher Release A/B
     needs: [gates, spm-build-test]
     runs-on: macos-26
-    timeout-minutes: 10
+    timeout-minutes: 30
     env:
       NSUnbufferedIO: YES
       OS_ACTIVITY_MODE: disable
@@ -406,7 +406,10 @@ jobs:
           echo "MATCHER_AB_BIN=$runner" >> "$GITHUB_ENV"
 
       - name: Run exact matcher A/B
-        timeout-minutes: 5
+        # 13 cases x (2 warmups + 11 samples) x 2 sides x 32 MiB; the
+        # Foundation oracle alone needs several seconds per absent-case
+        # operation, so the full screen runs ~10-15 minutes.
+        timeout-minutes: 25
         shell: bash
         run: |
           set -euo pipefail

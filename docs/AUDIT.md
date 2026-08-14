@@ -274,7 +274,15 @@ budget is reduced from 101 to 11 samples (frozen by test; fixture note and
 workflow jq updated): at roughly 125 s per absent-term request, the 101-sample
 budget needed about 3.6 hours against the lane's 90-minute step ceiling, while
 thirteen total requests land near half an hour; at n = 11 the nearest-rank
-p95/p99 both select the sample maximum.
+p95/p99 both select the sample maximum. Supported admission run
+[31795729218](https://github.com/GuangDai/Clipy/actions/runs/31795729218)
+then completed the whole 5,000-row dispatch lane for the first time: the
+absent-term worst-bound request measured p50 1.59 s / p95 2.39 s over the
+5,000 × 256 KiB corpus (11 samples) against the ~125 s Foundation diagnostic
+trace that opened IND-07 — roughly 79× on p50 — with the exact-search step
+finishing in 24.4 s and 1.59 GiB peak process RSS (worst-bound ceiling,
+record-only; still not G2/G8 evidence, and the per-request 1.22 GiB corpus
+hydration remains until the G9 seam).
 
 All remaining findings and their explicit owners/triggers are tracked in
 `docs/V1-Verified/07-finding-dispositions.md`. The supported CI, performance,
