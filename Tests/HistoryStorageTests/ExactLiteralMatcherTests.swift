@@ -174,8 +174,8 @@ private static func asciiString(
     let excerpt = SearchWorker.bodyExcerpt(
         body: body,
         characterRanges: [
-            match.characterOffset
-                ..<(match.characterOffset + match.characterLength),
+            match.characterOffset ..<
+                (match.characterOffset + match.characterLength),
         ],
         snippetLimit: HistoryLimits.standard.maximumBodySearchSnippetCharacters
     )

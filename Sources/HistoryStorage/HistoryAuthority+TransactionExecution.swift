@@ -1,0 +1,253 @@
+/// §10 atomic transaction execution and its invariant guards.
+/// Split out of HistoryAuthority.swift (file-size hygiene); same target, unchanged semantics.
+import Foundation
+import HistoryCore
+import HistoryDomain
+import SwiftData
+
+extension HistoryAuthority {
+    // MARK: Transaction execution (docs/05-authority-kernel.md §10)
+
+    /// The one durable History Commit primitive (§10), shared by every
+    /// stamped plan: fetch the singleton inside the closure, guard the
+    /// expected previous position, apply every stamped mutation in order,
+    /// revalidate the final pin order, fire the armed test injection if any,
+    /// and write the singleton position last — all in one
+    /// `ModelContext.transaction`.
+    ///
+    /// Rules (§10): no `await` in the closure or between fact load and
+    /// closure completion; production lookups fetch rows by business ID
+    /// (never `registeredModel(for:)`); delete fetches the actual row; every
+    /// referenced row exists exactly once unless the stamped case is create;
+    /// trusted fixture creates may use the equivalent complete-index absence
+    /// proof validated by `executeStampedPlan` above;
+    /// closure failure commits nothing — there is no receipt, index delta,
+    /// or invalidation; closure success is the save boundary, with no
+    /// trailing `save()`/`processPendingChanges()`/`rollback()`.
+    ///
+    /// - Throws: `.persistence(.transaction)` for ANY closure failure —
+    ///   including the `StorageInvariant.positionChanged` guard, executor
+    ///   divergence, the armed `InjectedTransactionFailure` — or any
+    ///   framework-level failure to durably commit (§16).
+    internal func executeCommitTransaction(
+        _ plan: StampedCommitPlan,
+        expectedPreviousPosition: ChangePosition,
+        in context: ModelContext,
+        createExistenceProof: CreateExistenceProof
+    ) throws {
+        do {
+            try context.transaction {
+                let meta = try Self.fetchExactlyOnePositionRow(in: context)
+                let positionChangedInjected = self.consumeTransactionFailureInjection(
+                    .positionChanged
+                )
+                guard !positionChangedInjected,
+                      meta.rawValue == expectedPreviousPosition.rawValue
+                else {
+                    throw StorageInvariant.positionChanged
+                }
+                for mutation in plan.mutations {
+                    try self.apply(
+                        mutation,
+                        in: context,
+                        positionRow: meta,
+                        createExistenceProof: createExistenceProof
+                    )
+                }
+                if plan.requiresFinalPinOrderValidation {
+                    try self.validateFinalPinOrder(in: context)
+                }
+                // Roadmap-owned WS13 seam: one-shot injection after row
+                // mutation, before the singleton update. Disarmed (nil) in
+                // production.
+                if self.consumeTransactionFailureInjection(.beforeSingletonUpdate) {
+                    throw InjectedTransactionFailure.beforeSingletonUpdate
+                }
+                // The singleton position is written last, inside the same
+                // transaction (§10, D6).
+                meta.rawValue = plan.position.rawValue
+            }
+        } catch {
+            // §16: a `ModelContext.transaction` closure failure (including
+            // the `StorageInvariant.positionChanged` guard) or any
+            // framework-level failure to durably commit the transaction.
+            throw HistoryFailure.persistence(.transaction)
+        }
+    }
+
+    /// Applies one stamped mutation to the transaction context.
+    /// docs/05-authority-kernel.md §9 (rename table), §10 (executor rules)
+    ///
+    /// Every payload is already absolute — the Authority never infers hidden
+    /// behavior from a case (docs/02-domain.md D18). Production and
+    /// non-create fetches go through the bounded business-ID lookup (§5);
+    /// the trusted fixture create case arrives with the complete-index proof
+    /// checked by the shared commit tail. A missing referenced row, a
+    /// duplicate create ID, or a revision base-version mismatch is
+    /// `TransactionApplyRejection`, remapped to `.persistence(.transaction)`
+    /// with every other closure failure (§16). Revision IDs are unique by
+    /// construction (a freshly minted candidate ID appended to a validated
+    /// unique-ID list) and re-verified at every decode (§4); the OCC check
+    /// here is the interleaving guard (§9 `expectedCurrentVersion`).
+    internal func apply(
+        _ mutation: StampedMutation,
+        in context: ModelContext,
+        positionRow: LastChangePositionRow,
+        createExistenceProof: CreateExistenceProof
+    ) throws {
+        switch mutation {
+        case .create(let item):
+            let duplicateCreateInjected = consumeTransactionFailureInjection(
+                .duplicateCreateID
+            )
+            if case .durableLookup = createExistenceProof {
+                let existingRow = try HistoryItemRowHydration.fetchRow(
+                    businessID: item.id,
+                    in: context
+                )
+                guard existingRow == nil else {
+                    throw TransactionApplyRejection.duplicateCreateID(
+                        itemID: item.id
+                    )
+                }
+            }
+            guard !duplicateCreateInjected else {
+                throw TransactionApplyRejection.duplicateCreateID(itemID: item.id)
+            }
+            context.insert(Self.makeRow(for: item))
+
+        case .updateOccurrence(let itemID, let occurrence):
+            // Content Version and projections are preserved by absence from
+            // the stamped payload (§9; docs/02-domain.md §13).
+            let row = try requireRow(itemID, in: context)
+            row.firstCopiedAt = occurrence.firstCopiedAt
+            row.lastCopiedAt = occurrence.lastCopiedAt
+            row.copyCount = occurrence.count
+            row.firstSource = occurrence.firstSource
+            row.lastSource = occurrence.lastSource
+
+        case .setPinOrdinal(let itemID, let ordinal):
+            let row = try requireRow(itemID, in: context)
+            row.pinOrdinal = ordinal
+
+        case .appendRevision(let update):
+            let row = try requireRow(update.itemID, in: context)
+            let versionMismatchInjected = consumeTransactionFailureInjection(
+                .contentVersionMismatch
+            )
+            guard !versionMismatchInjected,
+                  row.contentVersionRaw == update.expectedCurrentVersion.rawValue
+            else {
+                throw TransactionApplyRejection.contentVersionMismatch(
+                    itemID: update.itemID
+                )
+            }
+            // Revision state, Content Version, and effective projections are
+            // written together (§10).
+            row.contentVersionRaw = update.nextVersion.rawValue
+            row.revisionStateBlob = update.revisionStateBlob
+            row.projectionSchemaVersion = update.projection.schemaVersion
+            row.title = update.projection.title
+            row.searchBody = update.projection.searchBody
+            row.effectiveTypeIdentifiersBlob = update.effectiveTypeIdentifiersBlob
+
+        case .delete(let itemID, _):
+            // §10: delete fetches the actual row — no predicate delete over
+            // pending state. v1 writes no tombstone (docs/02-domain.md D15).
+            let row = try requireRow(itemID, in: context)
+            context.delete(row)
+
+        case .setRetentionPolicy(let maximumUnpinnedItems):
+            // The singleton owns the current v1 retention policy (§3.2);
+            // the value was validated when the action entered (§2).
+            positionRow.maximumUnpinnedItems = maximumUnpinnedItems
+        }
+    }
+
+    /// The single mapping from an encoded create payload to the SwiftData
+    /// model. Both durable-lookup and trusted fixture creates use it, so the
+    /// performance seam cannot drift into a second row representation.
+    internal static func makeRow(for item: StoredNewItem) -> HistoryItemRow {
+        HistoryItemRow(
+            id: item.id.rawValue,
+            contentVersionRaw: item.contentVersion.rawValue,
+            canonicalBlob: item.canonicalBlob,
+            revisionStateBlob: item.revisionStateBlob,
+            canonicalSignatureBlob: item.canonicalSignatureBlob,
+            projectionSchemaVersion: item.projection.schemaVersion,
+            title: item.projection.title,
+            searchBody: item.projection.searchBody,
+            effectiveTypeIdentifiersBlob: item.effectiveTypeIdentifiersBlob,
+            firstCopiedAt: item.occurrence.firstCopiedAt,
+            lastCopiedAt: item.occurrence.lastCopiedAt,
+            copyCount: item.occurrence.count,
+            firstSource: item.occurrence.firstSource,
+            lastSource: item.occurrence.lastSource,
+            pinOrdinal: nil
+        )
+    }
+
+    /// Fetches the unique row a non-create stamped mutation references, or
+    /// throws `TransactionApplyRejection.missingRow` (§10). A duplicate
+    /// business ID or a framework fetch failure surfaces from the hydration
+    /// helper already typed and is remapped with every other closure failure
+    /// (§16).
+    internal func requireRow(
+        _ itemID: HistoryItemID,
+        in context: ModelContext
+    ) throws -> HistoryItemRow {
+        let row = try HistoryItemRowHydration.fetchRow(
+            businessID: itemID,
+            in: context
+        )
+        let missingRowInjected = consumeTransactionFailureInjection(.missingRow)
+        guard !missingRowInjected, let row else {
+            throw TransactionApplyRejection.missingRow(itemID: itemID)
+        }
+        return row
+    }
+
+    /// §10: revalidates the final pinned order inside the transaction
+    /// closure — ordinals non-negative, unique, and exactly `0 ..< p` (D12)
+    /// — before closure success. The fetch is scalar (`pinOrdinal` only) and
+    /// bounded by the hard retained-item maximum (§7.3). It runs only for a
+    /// plan that may affect the pinned lane, and uses the same verified
+    /// optional-ordinal predicate as the recent pinned-lane fetch (§14.1).
+    internal func validateFinalPinOrder(in context: ModelContext) throws {
+        var descriptor = FetchDescriptor<HistoryItemRow>(
+            predicate: #Predicate { $0.pinOrdinal != nil }
+        )
+        descriptor.propertiesToFetch = [\.pinOrdinal]
+        descriptor.fetchLimit = limits.hardMaximumRetainedItems + 1
+        let rows: [HistoryItemRow]
+        do {
+            rows = try context.fetch(descriptor)
+        } catch {
+            throw TransactionApplyRejection.finalPinOrderViolated
+        }
+        guard rows.count <= limits.hardMaximumRetainedItems else {
+            throw TransactionApplyRejection.finalPinOrderViolated
+        }
+        var ordinals: [Int] = []
+        ordinals.reserveCapacity(rows.count)
+        for row in rows {
+            guard let ordinal = row.pinOrdinal else { continue }
+            guard ordinal >= 0 else {
+                throw TransactionApplyRejection.finalPinOrderViolated
+            }
+            ordinals.append(ordinal)
+        }
+        if consumeTransactionFailureInjection(.finalPinOrderViolated) {
+            // The seam changes only this operation-local scalar proof value;
+            // it never manufactures or persists a corrupt `@Model` row.
+            ordinals.append(Int.max)
+        }
+        guard PinnedOrderValidator.sourceOffsetsByOrdinal(
+            in: ordinals,
+            ordinal: { $0 }
+        ) != nil else {
+            throw TransactionApplyRejection.finalPinOrderViolated
+        }
+    }
+
+}
