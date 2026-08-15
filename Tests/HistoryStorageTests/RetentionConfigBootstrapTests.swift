@@ -22,6 +22,7 @@
 /// absent-row test additionally re-fetches through a FRESH context to prove
 /// the create's `ModelContext.transaction` actually saved.
 import Foundation
+import HistoryCore
 import SwiftData
 import Testing
 @testable import HistoryStorage

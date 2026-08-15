@@ -286,24 +286,30 @@ struct HistoryMigrationTests {
         return (canonicalBytes, state.revisions.count, revisionBytes)
     }
 
-    // MARK: - (a) Fresh .memory store through the full open path
+    // MARK: - (a) Fresh store through the full open path
 
-    /// A fresh `.memory` store via `SwiftDataHistory.open(configuration:)`
-    /// succeeds and holds exactly one all-disabled config row after the total
-    /// open order step 5 (`V2-roadmap` §5; `V2-02` §3.3: created at open, all
-    /// policies disabled). A fresh store runs no migration stage and —
-    /// before projection stamping (slice R.3) — holds no retained-bytes
-    /// rows.
-    @Test("(a) fresh .memory open bootstraps exactly one all-disabled config row")
-    func freshMemoryOpenBootstrapsAllDisabledConfig() async throws {
-        let history = try await SwiftDataHistory.open(
+    /// A fresh store via `SwiftDataHistory.open(configuration:)` succeeds and
+    /// holds exactly one all-disabled config row after the total open order
+    /// step 5 (`V2-roadmap` §5; `V2-02` §3.3: created at open, all policies
+    /// disabled). A fresh store runs no migration stage and — before
+    /// projection stamping (slice R.3) — holds no retained-bytes rows. Row
+    /// assertions go through an INDEPENDENT container over the same URL
+    /// (`WSSupport.makeContainer`), never the Authority's actor-isolated
+    /// container; a fresh persistent store proves the fresh path (the
+    /// `.memory` medium is covered by the open-path WS suites).
+    @Test("(a) fresh open bootstraps exactly one all-disabled config row")
+    func freshOpenBootstrapsAllDisabledConfig() async throws {
+        let storeURL = WSSupport.tempStoreURL("v2-migration-fresh-open")
+        defer { WSSupport.removeStore(storeURL) }
+
+        _ = try await SwiftDataHistory.open(
             configuration: HistoryConfiguration(
-                persistence: .memory,
+                persistence: .persistent(storeURL: storeURL),
                 initialMaximumUnpinnedItems: 200
             )
         )
 
-        let context = ModelContext(history.authority.container)
+        let context = ModelContext(try WSSupport.makeContainer(storeURL: storeURL))
         let configs = try context.fetch(FetchDescriptor<RetentionExpansionConfigRow>())
         #expect(configs.count == 1)
         let config = try #require(configs.first)
@@ -422,13 +428,15 @@ struct HistoryMigrationTests {
         #expect(migratedBytes.count == seeded.count)
 
         // Full open path over the SAME url: construct + startup (steps 1–10).
-        let history = try await SwiftDataHistory.open(
+        _ = try await SwiftDataHistory.open(
             configuration: HistoryConfiguration(
                 persistence: .persistent(storeURL: storeURL),
                 initialMaximumUnpinnedItems: 200
             )
         )
-        let context = ModelContext(history.authority.container)
+        // Assertions go through the independent container (never the
+        // Authority's actor-isolated one).
+        let context = ModelContext(try WSSupport.makeContainer(storeURL: storeURL))
 
         // The config row now exists — all-disabled (open bootstrap).
         let configs = try context.fetch(FetchDescriptor<RetentionExpansionConfigRow>())
