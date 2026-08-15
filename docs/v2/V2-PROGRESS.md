@@ -39,7 +39,8 @@
 | 2026-08-15 | M1.1: `HistorySchemaV1: VersionedSchema` anchor + `HistorySchemaAnchorTests` (TDD; expected values from v1 `05` §3). `v1Schema` value/models/rows/behavior frozen; `open` untouched | M1.1 | done (CI pending) | `c1687e7` |
 | 2026-08-15 | Docs chain green on macOS CI (all gates, zero warnings) | process | done | run [31870142315](https://github.com/GuangDai/Clipy/actions/runs/31870142315) |
 | 2026-08-15 | M1.2 (schema half): `HistorySchemaV2` (2.0.0) + `RetentionExpansionConfigRow` + `RetainedBytesRow` + `HistorySchemaV2Tests` + the immutable schema-version ledger `docs/v2/V2-SCHEMAS.md`. Schema definition only — no open wiring yet | M1.2 | done (CI pending) | `8a15458` |
-| 2026-08-15 | Total-open-order step 7 sequencing annotation: runtime 1:1 `RetainedBytesRow` check activates at R.3 (projection stamping); M1 proves it for migrated stores via fixtures | V2-roadmap §5 | done | this commit |
+| 2026-08-15 | Total-open-order step 7 sequencing annotation: runtime 1:1 `RetainedBytesRow` check activates at R.3 (projection stamping); M1 proves it for migrated stores via fixtures | V2-roadmap §5 | done | `6278aed` |
+| 2026-08-15 | **CI red, honestly recorded:** runs 31870294903/31870409039 failed — M1.1/M1.2 test files lacked `import Foundation` (`UUID`/`Data`/`Date` out of scope; SwiftPM job). Root cause: written on the Linux host which cannot compile; the PR chain IS the compile gate. Fix `3e488d3` | M1.1/M1.2 | fixed | `3e488d3` |
 
 ## 1. V2-0 — v1 executable-specification closure
 
