@@ -78,10 +78,13 @@ the named performance/security gates are part of completion.
 
 ### Step V2-0 — finish and freeze the v1 executable specification
 
-**Status:** v1 steps 6–8 have landed and been audited (2026-08-15 re-baseline,
-`docs/V1-Verified/`, run 31449682036); the remaining V2-0 work is the recorded
-state-2 declaration, the D1–D19 evidence reconciliation, and (capability-local
-only) step 9.
+**Status:** closed 2026-08-15 (record: `V2-PROGRESS.md` §1). v1 steps 6–8
+landed and audited (`docs/V1-Verified/`, runs 31449682036 and 31815028830);
+the state-2 declaration is recorded for the current tree in v1
+`docs/PROGRESS.md` (audit-baseline section), and the D1–D19 by-number
+evidence reconciliation is recorded in `docs/v2/V2-PROGRESS.md` §1.1. Step 9
+remains a capability-local prerequisite for V2-05 App Intents and V2-07 UI,
+not a state-2 entry gate.
 
 Deliver:
 

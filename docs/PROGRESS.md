@@ -24,6 +24,16 @@ diagnostic self-scans. No unexcluded warning/error diagnostic remained; the
 narrow AppIntents-metadata and headless `com.apple.linkd.autoShortcut`
 exclusions remain documented in the workflow history below.
 
+**State-2 declaration, current tree (2026-08-15, `dfb08f2`):** the M2/state-2
+declaration above is re-affirmed for the post-closure complexity-pass head.
+At `dfb08f2` the package carries 384 `@Test` functions in 49 suite structs
+(HistoryDomain: 52 tests across 7 files, including `ComplexityBoundaryTests`);
+the supported full-scope run
+[31815028830](https://github.com/GuangDai/Clipy/actions/runs/31815028830)
+is green end to end including the evidence lane. The by-number D1–D19
+evidence reconciliation (the V2-0 deliverable named by
+`docs/v2/V2-roadmap.md` §2) is recorded in `docs/v2/V2-PROGRESS.md` §1.1.
+
 ## Step 0 — scaffold (cross-cutting)
 
 - **Status:** done. No green run on its own HEAD; the scaffold tree is first
@@ -91,8 +101,12 @@ exclusions remain documented in the workflow history below.
   seven pure planners (§8); and `canonicalContains` (§9.2). The remediation
   tree adds a 47-test direct Domain suite across all seven planners and records
   the D1–D19 ownership matrix, including Storage-owned stamping and structural
-  fact/Sendable proofs. The 47-test direct suite is green in run 31449682036,
-  closing the D1–D19 M2 acceptance item. No I/O, actor, clock, UUID/Date
+fact/Sendable proofs. The 47-test direct suite is green in run 31449682036,
+closing the D1–D19 M2 acceptance item. The post-closure complexity pass grew
+it to 52 tests across 7 files at the current head (adding
+`ComplexityBoundaryTests` and a fourth retention-selector ordering fixture,
+then splitting two files); the by-number evidence map is recorded in
+`docs/v2/V2-PROGRESS.md` §1.1. No I/O, actor, clock, UUID/Date
   generation, or async (02 §1).
 
 | Commit | Subject |
@@ -362,9 +376,11 @@ exclusions remain documented in the workflow history below.
   historical checksum; the current checksum is 111 fixed, 29 deferred, 31
   duplicate, 30 not-a-defect, 19 documented, 2 in-progress, and no pending
   rows.
-- **Domain:** 47 direct tests exercise all seven planners across commit/no-op,
-  rejection, capacity, deterministic ordering, and complete mutation payloads;
-  the suite records the exact D1–D19 ownership split.
+- **Domain:** 47 direct tests (52 across 7 files at the current head) exercise
+  all seven planners across commit/no-op, rejection, capacity, deterministic
+  ordering, and complete mutation payloads; the suite records the exact
+  D1–D19 ownership split, and the by-number map with its seam splits is
+  recorded in `docs/v2/V2-PROGRESS.md` §1.1.
 - **Authority/facts:** one-shot transaction injections now reach the position
   guard and all four concrete apply guards through normal APIs, proving typed
   failure plus row/position rollback. Capture reuses one duplicate-checked
