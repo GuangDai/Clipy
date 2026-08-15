@@ -49,6 +49,72 @@ internal enum RetentionPolicyBounds {
     /// threshold above the hard bound is meaningless because the hard bound
     /// already rejects. 256 × 1,048,576 = 268,435,456 bytes. (`V2-02` §8.3)
     internal static let revisionBytesPerItem: ClosedRange<Int> = 1 ... 256 * 1_048_576
+
+    /// Boundary validation of one public `HistoryRetentionPolicies` value
+    /// against the §8.3 bounds above — the seam the R.6
+    /// `.setRetentionPolicies` commit consumes when it lands
+    /// (`V2-roadmap` §6 R.6; `V2-02` §8.3 "An out-of-range / inconsistent
+    /// `HistoryRetentionPolicies` → `.invalidInput(.invalidRetentionPolicy)`
+    /// at the `HistoryStorage` boundary"). Every ADMITTED dimension is
+    /// checked (nil dimensions are disabled and skip their bound); `nil`
+    /// means the value is admittable.
+    ///
+    /// Returns (rather than throws) because this is a pure predicate over an
+    /// immutable value — no store access, so there is nothing to interrupt;
+    /// the throwing style in this file is reserved for the store-touching
+    /// bootstrap. The rejection reuses the v1 failure producer with no new
+    /// `InvalidInputReason` (`V2-02` §8.3).
+    ///
+    /// Whole-value consistency beyond the bounds is NOT re-checked here:
+    /// the both-nil `RevisionRetention` normalization is construction-time
+    /// on the public initializer (`V2-02` §3.1), so an "enabled but no-op"
+    /// R3 state cannot reach this boundary through that initializer — the
+    /// defensive re-check below exists only so a future construction path
+    /// cannot silently reintroduce the state.
+    internal static func validate(
+        _ policies: HistoryRetentionPolicies
+    ) -> HistoryFailure? {
+        if let age = policies.age {
+            // DC-21: `maxAge` is a `Double` — every comparison with NaN is
+            // false, so the range check alone cannot catch it; the boundary
+            // requires finiteness explicitly. ±.infinity also fails the
+            // range, but the explicit gate keeps the rejection structural
+            // rather than incidental. (`V2-02` §8.3)
+            guard age.maxAge.isFinite,
+                  ageSeconds.contains(age.maxAge)
+            else {
+                return .invalidInput(.invalidRetentionPolicy)
+            }
+        }
+        if let storage = policies.storage {
+            guard totalBytes.contains(storage.maxTotalBytes) else {
+                return .invalidInput(.invalidRetentionPolicy)
+            }
+        }
+        if let revisions = policies.revisions {
+            // Defensive (§3.1 normalization is construction-time): an
+            // all-nil `RevisionRetention` cannot arrive here through the
+            // public initializer, but this branch keeps such a value from
+            // ever being admitted as "enabled" should another construction
+            // path appear.
+            guard revisions.maxRevisionsPerItem != nil
+                || revisions.maxRevisionBytesPerItem != nil
+            else {
+                return .invalidInput(.invalidRetentionPolicy)
+            }
+            if let maxRevisions = revisions.maxRevisionsPerItem {
+                guard revisionsPerItem.contains(maxRevisions) else {
+                    return .invalidInput(.invalidRetentionPolicy)
+                }
+            }
+            if let maxRevisionBytes = revisions.maxRevisionBytesPerItem {
+                guard revisionBytesPerItem.contains(maxRevisionBytes) else {
+                    return .invalidInput(.invalidRetentionPolicy)
+                }
+            }
+        }
+        return nil
+    }
 }
 
 // MARK: - Config bootstrap (V2-roadmap §5 total open order step 5)

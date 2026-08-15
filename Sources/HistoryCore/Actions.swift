@@ -1,7 +1,9 @@
 /// Actions.swift — the closed History Action set and revision input values.
 /// Owning spec: docs/03a-instruction-set.md §5 (Part III — Caller Interface A).
 /// Foundation-only; value semantics; complete for v1 — adding an action is an
-/// owned source change across Core, Domain, Storage, and tests (03a §1).
+/// owned source change across Core, Domain, Storage, and tests (03a §1). The
+/// V2-02 `setRetentionPolicies` case below is the first such addition:
+/// sanctioned extension-by-addition (`V2-00` §8(h); `V2-02` §8.1).
 import Foundation
 
 /// The complete, closed set of mutations a caller can request via
@@ -34,8 +36,16 @@ public enum HistoryAction: Sendable {
     /// timestamp.
     case revise(RevisionRequest)
 
-    /// Sets the retention cap on unpinned items.
+    /// Sets the retention cap on unpinned items (v1, unchanged — the count
+    /// dimension stays here; `V2-02` §1 never redefines it).
     case setRetentionPolicy(maximumUnpinnedItems: Int)
+
+    /// Sets the V2 retention policies: the R1 age / R2 storage-byte / R3
+    /// revision-threshold dimensions of one `HistoryRetentionPolicies`
+    /// value, each independently disable-able via `nil` (DC-23). V2-02 new
+    /// case — sanctioned extension-by-addition (`V2-00` §8(h); `V2-02`
+    /// §8.1); no existing case is redefined and v1 callers are unaffected.
+    case setRetentionPolicies(HistoryRetentionPolicies)
 }
 
 /// A pinned-order placement for `HistoryAction.placePinned`.

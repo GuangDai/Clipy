@@ -192,8 +192,10 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     /// dispatch (§8).
     ///
     /// Actor-thrown failures propagate unchanged as typed `HistoryFailure`s
-    /// (§16); every action path is implemented as of roadmap step 6
-    /// (docs/roadmap/03-historystorage.md).
+    /// (§16); every v1 action path is implemented as of roadmap step 6
+    /// (docs/roadmap/03-historystorage.md). The V2-02
+    /// `.setRetentionPolicies` case defers to its owning slice below via the
+    /// internal `StepDeferredError` (`V2-02` §8.1/§8.2; `V2-roadmap` §6).
     public func perform(_ action: HistoryAction) async throws -> HistoryReceipt {
         switch action {
         case .capture(let raw):
@@ -219,6 +221,19 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
 
         case .setRetentionPolicy(let maximum):
             return try await authority.commitRetentionPolicy(maximum)
+
+        case .setRetentionPolicies:
+            // V2-02 §8.1 case; the full R1/R2/R3 policy-sweep commit (R3
+            // first, projected R1/R2, unsatisfiable-R3 veto — `V2-02` §4.4)
+            // is owned by roadmap slice R.6 (`V2-roadmap` §6), which will
+            // route to `HistoryAuthority.commitRetentionPolicies` and consume
+            // the `RetentionPolicyBounds.validate` boundary. Honest deferral
+            // until then: the internal not-yet-implemented error propagates
+            // unchanged (RET-COMPILE-2 keeps this switch compiler-exhaustive
+            // without inventing a public `HistoryFailure` for the slice).
+            throw StepDeferredError.notYetImplemented(
+                operation: "setRetentionPolicies"
+            )
         }
     }
 
