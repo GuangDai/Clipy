@@ -22,7 +22,13 @@ import HistoryDomain
 /// `.appendRevision` → `.appendRevision`, `.retire` → `.delete`,
 /// `.setRetentionPolicy` → `.setRetentionPolicy`. The Authority never decides
 /// after planning that a case "means" anything beyond its explicit payload
-/// (§9; docs/02-domain.md §14 D18).
+/// (§9; docs/02-domain.md §14 D18). The two V2-02 rows are additive
+/// (`V2-02` §5.3/§5.6/§6.3): `.pruneRevisions` → `.pruneRevisions` (the
+/// per-case row applies only when no `.appendRevision` shares the item — the
+/// compose-with-append rule folds the prune into the append's single blob
+/// write — and the composer drops it for items R2 retires,
+/// retire-subsumes-prune), and `.setRetentionPolicy`'s V2 analog writes the
+/// `RetentionExpansionConfigRow` singleton.
 internal enum StampedMutation: Sendable {
     /// Insert one new row with the complete stamped payload.
     /// docs/05-authority-kernel.md §9
@@ -65,6 +71,29 @@ internal enum StampedMutation: Sendable {
     /// (docs/02-domain.md §7, §13).
     /// docs/05-authority-kernel.md §9
     case setRetentionPolicy(maximumUnpinnedItems: Int)
+
+    /// Rewrite the row's `revisionStateBlob` with the pruned
+    /// `RevisionStateBlobV1` (`formatVersion == 1`, fewer revisions, same
+    /// `activeRevisionID`); the item's Content Version, projections, and
+    /// Signature Index postings are preserved (V2-02 §5.3/§5.2, D23). Carries
+    /// no per-item version field: the protection is the serialized Authority
+    /// interval plus the singleton position guard, exactly as
+    /// `.setRetentionPolicy` (V2-02 §5.3).
+    case pruneRevisions(
+        itemID: HistoryItemID,
+        revisionStateBlob: Data
+    )
+
+    /// Write the new V2 retention policies to the
+    /// `RetentionExpansionConfigRow` singleton (normalized per §3.1's
+    /// both-nil rule); every item's Content Version, rows, and projections
+    /// are preserved (V2-02 §5.6). Carries no position field, mirroring v1
+    /// `.setRetentionPolicy`: the plan-level singleton position guard
+    /// suffices, and an unchecked position-looking payload would be the D18
+    /// smell §5.6 rejects.
+    case setRetentionPolicies(
+        policies: HistoryRetentionPolicies
+    )
 }
 
 /// The complete stamped payload of a `.create` mutation.
@@ -140,7 +169,10 @@ internal struct StampedCommitPlan: Sendable {
     /// Whether §10 must re-prove D12 before transaction success. Revision,
     /// occurrence, create, retention-only deletion, and policy mutations
     /// cannot change the pinned lane. User removal and clear stay
-    /// conservative because their target/scope may include pinned rows.
+    /// conservative because their target/scope may include pinned rows. The
+    /// V2-02 rows are lane-neutral for the same reason: an R3 prune
+    /// rewrites only the revision-state blob of a surviving row (V2-02
+    /// §5.5/§5.6), and the policy write touches no item row (§5.6).
     internal var requiresFinalPinOrderValidation: Bool {
         mutations.contains { mutation in
             switch mutation {
@@ -154,6 +186,8 @@ internal struct StampedCommitPlan: Sendable {
                     return false
                 }
             case .create, .updateOccurrence, .appendRevision, .setRetentionPolicy:
+                return false
+            case .pruneRevisions, .setRetentionPolicies:
                 return false
             }
         }
@@ -266,7 +300,13 @@ internal enum CommitPlanStamper {
     /// - the receipt outcome is the mechanical Part III mapping of
     ///   `PlannedOutcome`, with references stamped `.initial` (insert), the
     ///   preserved winner version (coalesce), or the minted successor
-    ///   (revise).
+    ///   (revise);
+    /// - the two V2-02 rows (`.pruneRevisions`, `.setRetentionPolicies`,
+    ///   `V2-02` §5.3/§5.6/§6.3) defer to their owning roadmap slices
+    ///   (R.5/R.6, `V2-roadmap` §6) — their arms below throw the internal
+    ///   `StepDeferredError` exactly as R.1's `SwiftDataHistory.perform`
+    ///   arm does, so no half-composed V2-02 plan can be stamped before
+    ///   those slices land.
     ///
     /// No pasteboard access, fingerprinting, or projection happens here; all
     /// blob encoding starts from validated Domain values (§4). A `.unchanged`
@@ -365,6 +405,37 @@ internal enum CommitPlanStamper {
                 mutations.append(.setRetentionPolicy(
                     maximumUnpinnedItems: maximumUnpinnedItems
                 ))
+
+            case .pruneRevisions:
+                // V2-02 §5.3/§6.3 stamping: rewrite the shorter
+                // `RevisionStateBlobV1` from the loaded lineage (minus the
+                // removed IDs, same `activeRevisionID`), folding into the
+                // append's single blob write when the same plan revises the
+                // item (compose-with-append) and being dropped for items R2
+                // retires (retire-subsumes-prune). Those composition
+                // semantics — and the loaded-lineage stamping inputs they
+                // need — are owned by roadmap slices R.5 (revise
+                // composition, `RET-STAMP-1`) and R.6 (policy sweep,
+                // `RET-STAMP-2`) per `V2-roadmap` §6. Honest deferral until
+                // then, mirroring R.1's `.setRetentionPolicies` arm in
+                // `SwiftDataHistory.perform` (`RET-COMPILE-2` keeps this
+                // switch compiler-exhaustive without inventing stamping the
+                // owning slices have not specified inputs for).
+                throw StepDeferredError.notYetImplemented(
+                    operation: "pruneRevisions stamping"
+                )
+
+            case .setRetentionPolicies:
+                // V2-02 §5.6 stamping: append the
+                // `.setRetentionPolicies(policies:)` row writing the
+                // `RetentionExpansionConfigRow` singleton. Emitted only by
+                // the R.6 policy-sweep commit (`V2-roadmap` §6), which also
+                // owns the same-value/satisfied `.unchanged` decision that
+                // precedes any plan carrying this mutation; deferred with it
+                // so no half-composed policy plan can exist before R.6.
+                throw StepDeferredError.notYetImplemented(
+                    operation: "setRetentionPolicies stamping"
+                )
             }
         }
 
@@ -461,6 +532,16 @@ internal enum CommitPlanStamper {
             ))
         case .retentionPolicySet(let removedCount):
             return .retentionPolicySet(removedCount: removedCount)
+        case .retentionPoliciesSet(let retiredItems, let prunedRevisions):
+            // V2-02 §8.1: the mechanical mapping — `retiredItems` counts
+            // R1/R2 item retirements, `prunedRevisions` counts R3 revisions
+            // pruned for surviving (non-retired) items (§6.3
+            // retire-subsumes-prune; `RET-STAMP-2`). Metadata-only like its
+            // v1 analog: no reference state is minted.
+            return .retentionPoliciesSet(
+                retiredItems: retiredItems,
+                prunedRevisions: prunedRevisions
+            )
         }
     }
 

@@ -161,6 +161,33 @@ extension HistoryAuthority {
             // The singleton owns the current v1 retention policy (§3.2);
             // the value was validated when the action entered (§2).
             positionRow.maximumUnpinnedItems = maximumUnpinnedItems
+
+        case .pruneRevisions:
+            // V2-02 §5.3/§6.3 execution: rewrite the row's
+            // `revisionStateBlob` with the pruned blob (fewer revisions,
+            // same `activeRevisionID`, `formatVersion == 1`), preserving its
+            // `contentVersionRaw`/projections (R3 alone advances no
+            // ContentVersion, §5.5), and restamp the 1:1 `RetainedBytesRow`
+            // projection to the post-prune value in the same transaction
+            // (§3.3b/§6.3). The restamp step is owned by roadmap slice R.3
+            // (projection lifecycle) and the prune-emitting compositions by
+            // R.5/R.6 (`V2-roadmap` §6); deferred with them so the executor
+            // never performs a blob rewrite whose projection restamp does
+            // not exist yet (`RET-PLATFORM-3`, `RET-STAMP-1/2`).
+            throw StepDeferredError.notYetImplemented(
+                operation: "pruneRevisions execution"
+            )
+
+        case .setRetentionPolicies:
+            // V2-02 §5.6 execution: fetch the `RetentionExpansionConfigRow`
+            // singleton and write the normalized policy fields
+            // (`configSchemaVersion` left at 1), preserving every item row.
+            // Owned by roadmap slice R.6 (policy sweep) together with the
+            // config-row singleton bootstrap it stamps against
+            // (`V2-roadmap` §6); deferred until then.
+            throw StepDeferredError.notYetImplemented(
+                operation: "setRetentionPolicies execution"
+            )
         }
     }
 
