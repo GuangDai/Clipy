@@ -337,7 +337,13 @@ singleton" statements. Step numbers cite the v1 `05` §13 steps they extend.
    metadata) **and** the `RetainedBytesRow` 1:1 correspondence both
    directions with `bytesSchemaVersion == 1` (`RET-PLATFORM-1b(a)`); a
    fresh store holds this vacuously (zero items; rows arrive via the
-   capture-insert stamping); *(extends 05 §13 step 6)*
+   capture-insert stamping); *(extends 05 §13 step 6. Sequencing: the
+   runtime 1:1 existence check is enforced from slice R.3, when projection
+   stamping on create/append/prune/delete exists — before R.3, capture
+   creates items without rows, so an unconditional check would fail every
+   capture-created item. M1 proves the correspondence for migrated stores
+   through the migration fixtures of `RET-PLATFORM-1b(a)`; R.3 turns the
+   fixture invariant into the step-7 runtime check.)*
 8. require projection schema version 1 for the v1 projections;
    *(05 §13 step 7)*
 9. decode/validate signatures and build the complete index;
