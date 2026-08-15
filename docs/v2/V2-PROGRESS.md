@@ -41,6 +41,7 @@
 | 2026-08-15 | M1.2 (schema half): `HistorySchemaV2` (2.0.0) + `RetentionExpansionConfigRow` + `RetainedBytesRow` + `HistorySchemaV2Tests` + the immutable schema-version ledger `docs/v2/V2-SCHEMAS.md`. Schema definition only — no open wiring yet | M1.2 | done (CI pending) | `8a15458` |
 | 2026-08-15 | Total-open-order step 7 sequencing annotation: runtime 1:1 `RetainedBytesRow` check activates at R.3 (projection stamping); M1 proves it for migrated stores via fixtures | V2-roadmap §5 | done | `6278aed` |
 | 2026-08-15 | **CI red, honestly recorded:** runs 31870294903/31870409039 failed — M1.1/M1.2 test files lacked `import Foundation` (`UUID`/`Data`/`Date` out of scope; SwiftPM job). Root cause: written on the Linux host which cannot compile; the PR chain IS the compile gate. Fix `3e488d3` | M1.1/M1.2 | fixed | `3e488d3` |
+| 2026-08-15 | M1.3+M1.4+open wiring (implementation subagent; orchestrator diff-reviewed): `ensureRetentionExpansionConfig` fail-closed bootstrap (§8.3 bounds constants), `RetainedBytesBackfill` full-recompute upsert, `HistoryMigrationPlan` single custom hop, `open`/`performStartup` wired to the total order; `WalkingSkeletonSupport` assertion containers moved to the V2 schema (necessary: startup fetches the config row). V2-02 Record 5 wording aligned (Canonical decode is a required input of the revision codec's containment check) | M1.3/M1.4 | done (CI pending) | `474992f` |
 
 ## 1. V2-0 — v1 executable-specification closure
 
