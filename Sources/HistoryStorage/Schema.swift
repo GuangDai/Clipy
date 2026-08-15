@@ -21,6 +21,25 @@ import SwiftData
 /// migration plan.
 internal let v1Schema = Schema(HistoryItemRow.self, LastChangePositionRow.self)
 
+/// M1-owned `VersionedSchema` anchor naming the shipped v1 schema
+/// (`V2-roadmap` §5 M1.1; `V2-02` §3.3 "Stage topology"). Behavior-preserving
+/// by construction: the `v1Schema` value above, the V1 model set, rows, and
+/// behavior stay frozen — this type adds no model, column, or migration; it
+/// only gives the eventual `V1 → V2` custom migration hop a
+/// `VersionedSchema`-conforming `fromVersion` (`MigrationStage` stages take
+/// versioned-schema types, not `Schema` values; `V2-facts.md` cycle-2
+/// facts). `Schema(versionedSchema:)` resolving the same entities as
+/// `v1Schema` is proven by `HistorySchemaAnchorTests` on the macOS runner
+/// (M1.1 exit: a current v1 store opens with no row/blob/token drift, and
+/// the v1 tests are byte-for-byte unchanged).
+internal enum HistorySchemaV1: VersionedSchema {
+    static let versionIdentifier = Schema.Version(1, 0, 0)
+
+    static var models: [any PersistentModel.Type] {
+        [HistoryItemRow.self, LastChangePositionRow.self]
+    }
+}
+
 /// Durable row for one retained History Item (docs/05-authority-kernel.md §3.1).
 ///
 /// Semantic mapping (§3.1):
