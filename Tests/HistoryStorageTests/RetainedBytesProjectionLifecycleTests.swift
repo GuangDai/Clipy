@@ -137,7 +137,7 @@ struct RetainedBytesProjectionLifecycleTests {
 
         // 17 UTF-8 bytes (see the file header's hand-worked values).
         let text = "r3 canonical base"
-        let reference = try Self.capture(
+        let reference = try await Self.capture(
             text,
             at: 700_100_000,
             source: "com.example.r3.insert",
@@ -183,7 +183,7 @@ struct RetainedBytesProjectionLifecycleTests {
         let history = try await WSSupport.openHistory(storeURL: storeURL)
 
         let text = "r3 coalesce winner"
-        let reference = try Self.capture(
+        let reference = try await Self.capture(
             text,
             at: 700_101_000,
             source: "com.example.r3.coalesce",
@@ -230,7 +230,7 @@ struct RetainedBytesProjectionLifecycleTests {
         defer { WSSupport.removeStore(storeURL) }
         let history = try await WSSupport.openHistory(storeURL: storeURL)
 
-        let reference = try Self.capture(
+        let reference = try await Self.capture(
             "r3 canonical base",
             at: 700_102_000,
             source: "com.example.r3.revise",
@@ -295,13 +295,13 @@ struct RetainedBytesProjectionLifecycleTests {
         defer { WSSupport.removeStore(storeURL) }
         let history = try await WSSupport.openHistory(storeURL: storeURL)
 
-        let removed = try Self.capture(
+        let removed = try await Self.capture(
             "r3 remove target alpha",
             at: 700_103_000,
             source: "com.example.r3.remove",
             in: history
         )
-        let survivor = try Self.capture(
+        let survivor = try await Self.capture(
             "r3 remove survivor beta",
             at: 700_103_100,
             source: "com.example.r3.remove",
@@ -330,13 +330,13 @@ struct RetainedBytesProjectionLifecycleTests {
         defer { WSSupport.removeStore(storeURL) }
         let history = try await WSSupport.openHistory(storeURL: storeURL)
 
-        _ = try Self.capture(
+        _ = try await Self.capture(
             "r3 clear target gamma",
             at: 700_104_000,
             source: "com.example.r3.clear",
             in: history
         )
-        _ = try Self.capture(
+        _ = try await Self.capture(
             "r3 clear target delta",
             at: 700_104_100,
             source: "com.example.r3.clear",
@@ -366,13 +366,13 @@ struct RetainedBytesProjectionLifecycleTests {
         defer { WSSupport.removeStore(storeURL) }
         let history = try await WSSupport.openHistory(storeURL: storeURL)
 
-        let victim = try Self.capture(
+        let victim = try await Self.capture(
             "r3 retention victim",
             at: 700_105_000,
             source: "com.example.r3.retire",
             in: history
         )
-        let survivor = try Self.capture(
+        let survivor = try await Self.capture(
             "r3 retention survivor",
             at: 700_105_100,
             source: "com.example.r3.retire",
@@ -421,13 +421,13 @@ struct RetainedBytesProjectionLifecycleTests {
             ProjectionCorruption.unknownBytesSchemaVersion,
         ]
     )
-    func reOpenFailsClosedOnProjectionCorruption(
+    private func reOpenFailsClosedOnProjectionCorruption(
         corruption: ProjectionCorruption
     ) async throws {
         let storeURL = WSSupport.tempStoreURL("r3-reopen-\(corruption)")
         defer { WSSupport.removeStore(storeURL) }
         let history = try await WSSupport.openHistory(storeURL: storeURL)
-        _ = try Self.capture(
+        _ = try await Self.capture(
             "r3 corruption matrix item",
             at: 700_106_000,
             source: "com.example.r3.corruption",
@@ -489,7 +489,7 @@ struct RetainedBytesProjectionLifecycleTests {
         defer { WSSupport.removeStore(storeURL) }
         let history = try await WSSupport.openHistory(storeURL: storeURL)
 
-        let reference = try Self.capture(
+        let reference = try await Self.capture(
             "r3 disabled maintenance",
             at: 700_107_000,
             source: "com.example.r3.disabled",
@@ -538,7 +538,7 @@ struct RetainedBytesProjectionLifecycleTests {
         defer { WSSupport.removeStore(storeURL) }
         let history = try await WSSupport.openHistory(storeURL: storeURL)
 
-        let reference = try Self.capture(
+        let reference = try await Self.capture(
             "r3 canonical base",
             at: 700_108_000,
             source: "com.example.r3.prune",
@@ -609,7 +609,7 @@ struct RetainedBytesProjectionLifecycleTests {
         defer { WSSupport.removeStore(storeURL) }
         let history = try await WSSupport.openHistory(storeURL: storeURL)
 
-        let reference = try Self.capture(
+        let reference = try await Self.capture(
             "r3 canonical base",
             at: 700_109_000,
             source: "com.example.r3.prune-reject",
@@ -682,7 +682,7 @@ struct RetainedBytesProjectionLifecycleTests {
         let storeURL = WSSupport.tempStoreURL("r3-missing-row-closed")
         defer { WSSupport.removeStore(storeURL) }
         let history = try await WSSupport.openHistory(storeURL: storeURL)
-        let reference = try Self.capture(
+        let reference = try await Self.capture(
             "r3 missing row target",
             at: 700_110_000,
             source: "com.example.r3.missing",

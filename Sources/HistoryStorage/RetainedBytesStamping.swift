@@ -214,12 +214,66 @@ internal enum RetainedBytesStamping {
     /// to surface.
     internal static func deleteRow(
         itemID: HistoryItemID,
-        in context: ModelContext
+        in context: ModelContext,
+        prefetched: [UUID: RetainedBytesRow]? = nil
     ) throws {
-        guard let row = try fetchRow(itemID: itemID, in: context) else {
+        // The per-transaction prefetch (see `prefetchRowsForRetirements`)
+        // supplies the row without a store fetch; an ID absent from the map
+        // can only be a row inserted earlier in the SAME transaction (a
+        // create's insert stamp — no v1/V2-02 plan shape mixes create with
+        // retire, `02` §7/§12, but the fallback keeps the invariant total),
+        // and a fresh fetch sees such a pending insert.
+        let row: RetainedBytesRow?
+        if let prefetched {
+            row = prefetched[itemID.rawValue] ?? try fetchRow(
+                itemID: itemID, in: context
+            )
+        } else {
+            row = try fetchRow(itemID: itemID, in: context)
+        }
+        guard let row else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
         context.delete(row)
+    }
+
+    /// One bounded scalar fetch supplying every `.delete` of the plan with
+    /// its 1:1 projection row (`V2-02` §3.3 delete extension, roadmap R.3).
+    /// A per-item predicate fetch during a mass retirement (e.g. v1
+    /// `.setRetentionPolicy(1)` over a full store — §9 bullet 5's
+    /// `retentionMassEviction` envelope) degrades the commit to one scan
+    /// per delete; prefetching once keeps the projection deletion
+    /// O(retained) like every other commit-path step (`02` §12's
+    /// bounded-inventory discipline). Returns nil when the plan retires
+    /// nothing (the common single-action path fetches its one row
+    /// directly). A duplicate `itemID` — impossible through `.unique` plus
+    /// the single writer — is the invariant violation it represents
+    /// (mirroring the backfill's duplicate guard).
+    internal static func prefetchRowsForRetirements(
+        in mutations: [StampedMutation],
+        context: ModelContext
+    ) throws -> [UUID: RetainedBytesRow]? {
+        guard mutations.contains(where: {
+            if case .delete = $0 { return true }
+            return false
+        }) else {
+            return nil
+        }
+        let rows: [RetainedBytesRow]
+        do {
+            rows = try context.fetch(FetchDescriptor<RetainedBytesRow>())
+        } catch {
+            throw HistoryFailure.persistence(.transaction)
+        }
+        var byItem: [UUID: RetainedBytesRow] = [:]
+        byItem.reserveCapacity(rows.count)
+        for row in rows {
+            guard byItem[row.itemID] == nil else {
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
+            byItem[row.itemID] = row
+        }
+        return byItem
     }
 
     // MARK: Startup 1:1 check (V2-roadmap §5 total open order step 7)

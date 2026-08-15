@@ -46,12 +46,24 @@ extension HistoryAuthority {
                 else {
                     throw StorageInvariant.positionChanged
                 }
+                // V2-02 §3.3 (roadmap R.3, perf discipline): when the plan
+                // retires items, supply every `.delete` with its 1:1
+                // projection row from ONE bounded scalar fetch — a per-item
+                // predicate fetch during mass retirement degrades the
+                // commit to a scan per delete (§9 bullet 5's
+                // retentionMassEviction envelope). Nil when the plan
+                // retires nothing.
+                let bytesRowsByItem = try RetainedBytesStamping
+                    .prefetchRowsForRetirements(
+                        in: plan.mutations, context: context
+                    )
                 for mutation in plan.mutations {
                     try self.apply(
                         mutation,
                         in: context,
                         positionRow: meta,
-                        createExistenceProof: createExistenceProof
+                        createExistenceProof: createExistenceProof,
+                        bytesRowsByItem: bytesRowsByItem
                     )
                 }
                 if plan.requiresFinalPinOrderValidation {
@@ -93,7 +105,8 @@ extension HistoryAuthority {
         _ mutation: StampedMutation,
         in context: ModelContext,
         positionRow: LastChangePositionRow,
-        createExistenceProof: CreateExistenceProof
+        createExistenceProof: CreateExistenceProof,
+        bytesRowsByItem: [UUID: RetainedBytesRow]? = nil
     ) throws {
         switch mutation {
         case .create(let item):
@@ -182,8 +195,12 @@ extension HistoryAuthority {
             // stamping also removes the 1:1 `RetainedBytesRow` in the same
             // `ModelContext.transaction` — an explicit step, never a
             // `@Relationship` on the frozen v1 model. Applies to every
-            // retirement reason (user removal, clear, retention).
-            try RetainedBytesStamping.deleteRow(itemID: itemID, in: context)
+            // retirement reason (user removal, clear, retention). The row
+            // comes from the transaction's one bounded prefetch when the
+            // plan retires items (see `prefetchRowsForRetirements`).
+            try RetainedBytesStamping.deleteRow(
+                itemID: itemID, in: context, prefetched: bytesRowsByItem
+            )
 
         case .setRetentionPolicy(let maximumUnpinnedItems):
             // The singleton owns the current v1 retention policy (§3.2);
