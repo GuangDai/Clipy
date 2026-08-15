@@ -158,7 +158,16 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         }
 
         // §13 steps 3–9: the Authority owns every store-side startup check.
-        let authority = HistoryAuthority(container: container)
+        // The V2-02 §6.4 Storage clock is wired HERE, internally — the
+        // production `SystemRetentionClock` witness (the `{ Date.now }`
+        // default) — so the public `open(configuration:)` signature and the
+        // frozen `HistoryConfiguration` carry no clock parameter
+        // (`RET-COMPILE-1`); tests inject a fixed clock only through the
+        // `@testable` `HistoryAuthority` initializer.
+        let authority = HistoryAuthority(
+            container: container,
+            retentionClock: SystemRetentionClock()
+        )
         do {
             try await authority.performStartup(
                 initialMaximumUnpinnedItems: configuration.initialMaximumUnpinnedItems

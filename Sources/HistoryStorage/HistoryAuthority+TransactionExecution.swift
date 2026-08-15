@@ -115,6 +115,19 @@ extension HistoryAuthority {
                 throw TransactionApplyRejection.duplicateCreateID(itemID: item.id)
             }
             context.insert(Self.makeRow(for: item))
+            // V2-02 §3.3b (roadmap R.3): the capture-insert projection stamp
+            // — same `ModelContext.transaction` as the row insert above
+            // ("durable derived value stamped in the same
+            // `ModelContext.transaction` as the blob it summarizes").
+            // Mandatory maintenance regardless of policies (§4.1: the
+            // projection is maintained 1:1 even while every policy is
+            // disabled); the capture COMPOSITION (R1/R2 planning) is R.4 and
+            // is deliberately absent here.
+            try RetainedBytesStamping.stampForInsert(
+                for: item,
+                limits: limits,
+                in: context
+            )
 
         case .updateOccurrence(let itemID, let occurrence):
             // Content Version and projections are preserved by absence from
@@ -150,32 +163,54 @@ extension HistoryAuthority {
             row.title = update.projection.title
             row.searchBody = update.projection.searchBody
             row.effectiveTypeIdentifiersBlob = update.effectiveTypeIdentifiersBlob
+            // V2-02 §3.3b/§6.3 (roadmap R.3): the revise restamp — the
+            // revision scalars move to the post-append value stamped from
+            // the same list the blob was encoded from; `canonicalBytes` is
+            // untouched (Canonical Content never changes after insert, D2).
+            try RetainedBytesStamping.restamp(
+                itemID: update.itemID,
+                revisionScalars: update.retainedRevisionScalars,
+                in: context
+            )
 
         case .delete(let itemID, _):
             // §10: delete fetches the actual row — no predicate delete over
             // pending state. v1 writes no tombstone (docs/02-domain.md D15).
             let row = try requireRow(itemID, in: context)
             context.delete(row)
+            // V2-02 §3.3/§3.4 (roadmap R.3): the V2-extended `.delete`
+            // stamping also removes the 1:1 `RetainedBytesRow` in the same
+            // `ModelContext.transaction` — an explicit step, never a
+            // `@Relationship` on the frozen v1 model. Applies to every
+            // retirement reason (user removal, clear, retention).
+            try RetainedBytesStamping.deleteRow(itemID: itemID, in: context)
 
         case .setRetentionPolicy(let maximumUnpinnedItems):
             // The singleton owns the current v1 retention policy (§3.2);
             // the value was validated when the action entered (§2).
             positionRow.maximumUnpinnedItems = maximumUnpinnedItems
 
-        case .pruneRevisions:
-            // V2-02 §5.3/§6.3 execution: rewrite the row's
+        case .pruneRevisions(let itemID, let revisionStateBlob, let revisionScalars):
+            // V2-02 §5.3/§5.5 execution (roadmap R.3): rewrite the row's
             // `revisionStateBlob` with the pruned blob (fewer revisions,
             // same `activeRevisionID`, `formatVersion == 1`), preserving its
-            // `contentVersionRaw`/projections (R3 alone advances no
-            // ContentVersion, §5.5), and restamp the 1:1 `RetainedBytesRow`
+            // `contentVersionRaw` and projections (R3 alone advances no
+            // ContentVersion; neither Effective Content nor its projection
+            // changes, §5.2) — and restamp the 1:1 `RetainedBytesRow`
             // projection to the post-prune value in the same transaction
-            // (§3.3b/§6.3). The restamp step is owned by roadmap slice R.3
-            // (projection lifecycle) and the prune-emitting compositions by
-            // R.5/R.6 (`V2-roadmap` §6); deferred with them so the executor
-            // never performs a blob rewrite whose projection restamp does
-            // not exist yet (`RET-PLATFORM-3`, `RET-STAMP-1/2`).
-            throw StepDeferredError.notYetImplemented(
-                operation: "pruneRevisions execution"
+            // (§3.3b/§6.3). The stamped payload already carries the
+            // recomputed scalars and the re-encoded blob, so the executor
+            // performs no lineage decode. The plans that EMIT this mutation
+            // (revise+R3 fold, `.setRetentionPolicies` sweep) are owned by
+            // R.5/R.6; the per-case execution here is real so those slices
+            // land against working semantics (`RET-PLATFORM-3`,
+            // `RET-STAMP-1/2`).
+            let row = try requireRow(itemID, in: context)
+            row.revisionStateBlob = revisionStateBlob
+            try RetainedBytesStamping.restamp(
+                itemID: itemID,
+                revisionScalars: revisionScalars,
+                in: context
             )
 
         case .setRetentionPolicies:

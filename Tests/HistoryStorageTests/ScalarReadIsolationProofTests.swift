@@ -87,6 +87,24 @@ private static func makeRow(
     let seedContext = ModelContext(seedContainer)
     let row = try Self.makeRow(from: bundle, observedAt: observedAt, source: source)
     seedContext.insert(row)
+    // V2-02 §3.3b (roadmap R.3): the store this proof opens through
+    // `makeAuthority` must satisfy the step-7 1:1 law, so the hand-crafted
+    // row carries its hand-crafted `RetainedBytesRow` exactly as the
+    // capture-insert stamping would write it (the signature entries'
+    // byte-count sum; a v1 insert carries an empty revision list, so
+    // revisionCount 0 / revisionBytes 0; `bytesSchemaVersion == 1`). The
+    // corruption applied below stays confined to the two content blobs.
+    var canonicalBytes = 0
+    for entry in bundle.signatureEntries {
+        canonicalBytes += entry.byteCount
+    }
+    seedContext.insert(RetainedBytesRow(
+        itemID: bundle.domain.candidateID.rawValue,
+        canonicalBytes: canonicalBytes,
+        revisionCount: 0,
+        revisionBytes: 0,
+        bytesSchemaVersion: 1
+    ))
     try seedContext.save()
 
     // ── Corrupt ONLY the two content blobs in place, leaving all scalar,

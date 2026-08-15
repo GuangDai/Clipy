@@ -218,6 +218,20 @@ internal actor HistoryAuthority {
     /// production (see `InjectedTransactionFailure`).
     internal var injectedTransactionFailure: InjectedTransactionFailure?
 
+    /// The Storage-side clock (V2-02 §6.4), supplying the R1 reference
+    /// `now` for the `.setRetentionPolicies` sweep lane — the one lane with
+    /// no caller-supplied `observedAt`. Injected at this INTERNAL
+    /// initializer (production wires `SystemRetentionClock` inside
+    /// `SwiftDataHistory.open`; tests inject a fixed `Date` via
+    /// `@testable`) and never exposed on the public `open` /
+    /// `HistoryConfiguration` seam (§6.4 "Injection mechanism";
+    /// `RET-COMPILE-1`). The clock read happens inside the serialized
+    /// Authority interval before fact load, once per commit (§6.4). No call
+    /// site reads it until the R.6 sweep lands; the seam itself lands with
+    /// R.3 per that slice's roadmap row ("inject the Storage clock
+    /// internally").
+    internal let retentionClock: any RetentionClock
+
 #if DEBUG
     /// Opt-in aggregate search tracing. This field and every call site are
     /// absent from Release builds; tests may replace the environment-backed
@@ -241,9 +255,18 @@ internal actor HistoryAuthority {
     /// and container creation); this Authority then owns the store-side
     /// startup steps 3–9 via `performStartup(initialMaximumUnpinnedItems:)`.
     /// The Signature Index starts unready (§12) and the test seams disarmed.
-    internal init(container: ModelContainer, limits: HistoryLimits = .standard) {
+    /// The `retentionClock` parameter is the V2-02 §6.4 Storage-clock seam:
+    /// internal to `HistoryStorage`, defaulted to the production
+    /// `SystemRetentionClock` witness so no existing construction site
+    /// changes, and never carried on the public `open` signature.
+    internal init(
+        container: ModelContainer,
+        limits: HistoryLimits = .standard,
+        retentionClock: any RetentionClock = SystemRetentionClock()
+    ) {
         self.container = container
         self.limits = limits
+        self.retentionClock = retentionClock
         self.signatureIndex = SignatureIndex()
         self.invalidationPublisher = HistoryInvalidationPublisher()
         self.suspensionHandler = nil
@@ -280,9 +303,12 @@ internal actor HistoryAuthority {
     /// (`V2-roadmap` §5 total open order step 5, M1.3), validate the
     /// retained row count against the hard bound (step 5), fetch each
     /// row's scalar and signature metadata without decoding content blobs
-    /// (step 6), require projection schema version 1 (step 7), decode and
-    /// validate signatures and build the complete Signature Index (step 8),
-    /// and validate the full pinned ordinal set from scalar fields (step 9).
+    /// (step 6), require projection schema version 1 (step 7), enforce the
+    /// `RetainedBytesRow` 1:1 correspondence both directions with
+    /// `bytesSchemaVersion == 1` (the V2 half of `V2-roadmap` §5 step 7,
+    /// `RET-PLATFORM-1b(a)`; live from roadmap R.3), decode and validate
+    /// signatures and build the complete Signature Index (step 8), and
+    /// validate the full pinned ordinal set from scalar fields (step 9).
     ///
     /// The initial retention value is revalidated against the fixed Part VI
     /// user range (§2) so the singleton is never written from an invalid
@@ -301,9 +327,10 @@ internal actor HistoryAuthority {
     ///   non-finite `ageMaxSeconds`, `V2-02` §3.3 / DC-21);
     ///   `.persistence(.invariantViolation)` for a duplicate/absent
     ///   singleton, an out-of-range or contradictory retention-config
-    ///   combination (`V2-02` §8.3), over-bound or duplicate rows, or a
-    ///   malformed pinned order. Corrupt durable metadata fails open — v1
-    ///   has no silent repair path (§13).
+    ///   combination (`V2-02` §8.3), over-bound or duplicate rows, a
+    ///   malformed pinned order, or a violated `RetainedBytesRow` 1:1
+    ///   correspondence / `bytesSchemaVersion` fence (`V2-02` §3.3b). Corrupt
+    ///   durable metadata fails open — v1 has no silent repair path (§13).
     internal func performStartup(initialMaximumUnpinnedItems: Int) async throws {
         // §2, §13 step 1: the singleton must never carry an out-of-range
         // retention value (D19 requires the stored policy to permit at
@@ -332,15 +359,23 @@ internal actor HistoryAuthority {
             // v1 position singleton and before the retained-row scan —
             // absent → create all-disabled (a migrated store starts
             // v1-faithful); present → the fail-closed V2-02 §3.3 validation.
-            // No startup RetainedBytesRow 1:1 existence check runs here: the
-            // runtime check lands with projection stamping (slice R.3) —
-            // before that, capture creates items without rows, so an
-            // unconditional check would fail every capture-created item
-            // (roadmap §5 step-7 sequencing note).
             try Self.ensureRetentionExpansionConfig(in: context)
 
             // §13 steps 5–9: scalar scan, Signature Index build, pin-order proof.
             signatureIndex = try Self.buildSignatureIndexAtStartup(
+                in: context,
+                limits: limits
+            )
+
+            // V2-roadmap §5 total open order step 7 (roadmap R.3, live from
+            // this slice per the step-7 sequencing note): after the scalar
+            // scan, enforce the `RetainedBytesRow` 1:1 correspondence both
+            // directions with `bytesSchemaVersion == 1`
+            // (`RET-PLATFORM-1b(a)`). A fresh store holds vacuously (zero
+            // items; rows arrive via the capture-insert stamping, V2-02
+            // §3.3b); a missing row is corruption — never a zero read
+            // (V2-02 §3.2).
+            try RetainedBytesStamping.validateOneToOneCorrespondence(
                 in: context,
                 limits: limits
             )

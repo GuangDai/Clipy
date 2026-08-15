@@ -89,6 +89,24 @@ private static func seedRow(
     let container = try WSSupport.makeContainer(storeURL: storeURL)
     let context = ModelContext(container)
     context.insert(row)
+    // V2-02 §3.3b (roadmap R.3): every test this fixture feeds except the
+    // schemaVersion one expects startup to SUCCEED, so the crafted store
+    // must satisfy the step-7 `RetainedBytesRow` 1:1 law — the row's
+    // projection is exactly what the capture-insert stamping would write
+    // (signature byte-count sum; empty revision list ⇒ revisionCount 0 /
+    // revisionBytes 0; `bytesSchemaVersion == 1`), keeping the corruption
+    // under test confined to the one damaged scalar/projection field.
+    var canonicalBytes = 0
+    for entry in bundle.signatureEntries {
+        canonicalBytes += entry.byteCount
+    }
+    context.insert(RetainedBytesRow(
+        itemID: bundle.domain.candidateID.rawValue,
+        canonicalBytes: canonicalBytes,
+        revisionCount: 0,
+        revisionBytes: 0,
+        bytesSchemaVersion: 1
+    ))
     try context.save()
     return bundle.domain.candidateID
 }
