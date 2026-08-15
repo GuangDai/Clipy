@@ -33,6 +33,8 @@
 | 2026-08-15 | DC-03 closed: incremental shipping, ship-order version allocation; `HistorySchemaV2` = v1 + retention rows only | V2-1 | done | this commit |
 | 2026-08-15 | DC-04 remainder closed (byte-for-byte claims qualified at §4.1/§7/D24; insert/coalesce/first-revision wording fixed in §3.3b against v1's empty-lineage-at-insert, `02` §2); DC-21 closed (`maxAge.isFinite` boundary check + persisted non-finite fails closed, §8.3) | V2-1 | done | this commit |
 | 2026-08-15 | DC-27 closed (option (a): veto moved to PHASE C after PHASE-B retirement selection, scoped to survivors; §4.4 + §8.3); DC-28 closed (option (b): exposure accepted and recorded, §4.2 + §8.3) | V2-1 | done | this commit |
+| 2026-08-15 | B6: one total `SwiftDataHistory.open` bootstrap order recorded (11 executable steps, release-scoped M1 + V2-02, extending v1 `05` §13; roadmap §5 "M1 total open order") | V2-1 | done | this commit |
+| 2026-08-15 | B7: `V2-00` §8 self-review (a)–(j) all PASS + final cross-document review, verdict **RELEASE DESIGN READY**, zero blockers, 5 LOW (all applied: M1 status line, order-step-2 wording aligned to `RET-PLATFORM-1b(d)` runtime assertion, registry §14 pointers, work-log rows; schema-name supersessions already follow-ups). Review subagent record preserved in this row; DC-24 adjudicated NOT applicable to this release | V2-1 | done | this commit |
 
 ## 1. V2-0 — v1 executable-specification closure
 
@@ -94,12 +96,14 @@ declaration were then written into the docs cited below.
 
 ## 2. V2-1 — design-input stabilization (first release: M1 + V2-02)
 
-**Status:** in progress (opened 2026-08-15). Closed so far: DC-01 (sidecar
-promotion), DC-02, DC-03, DC-04, DC-08-retention-clause (OPEN-2 not
-admitted), DC-21, DC-23, DC-27, DC-28; release scope decided and V2-02
-admitted (Record 1). Remaining before M1 code: the one total
-`SwiftDataHistory.open` bootstrap order (§4 closing requirement) and the
-`V2-00` §8 self-review + cross-document final review.
+**Status:** done (2026-08-15). Closed: DC-01, DC-02, DC-03, DC-04,
+DC-08-retention-clause (OPEN-2 not admitted), DC-21, DC-23, DC-27, DC-28;
+release scope decided and V2-02 admitted (Record 1); the one total open
+order recorded (roadmap §5); `V2-00` §8 self-review (a)–(j) all PASS and the
+final cross-document review returned **RELEASE DESIGN READY** with zero
+blockers (DC-24 adjudicated not applicable to this release — it triggers at
+J1's admission). V2-1 is complete for the M1 + V2-02 release; M1 code may
+start.
 
 ### 2.1 Release-scope and admission decisions (product owner, 2026-08-15)
 
@@ -114,13 +118,8 @@ admitted (Record 1). Remaining before M1 code: the one total
 
 ## Open blockers and follow-ups
 
-- **V2-1 remainder for the M1 + V2-02 release:** (a) the one total
-  `SwiftDataHistory.open` bootstrap order (roadmap §4 closing paragraph — all
-  singletons, migrations, projection rebuilds, Signature Index
-  reconstruction, facade publication, now including the retention config
-  bootstrap and the `didMigrate` backfill position); (b) the `V2-00` §8
-  self-review and final cross-document review against the resolved documents.
-  Both are prerequisite to M1 code (todo B6/B7).
+- **None for the M1 + V2-02 release** — design is ready; M1 code slices
+  (M1.1–M1.4) may start. Their progress is recorded in §3 as it lands.
 - **Follow-up (each graft's own admission):** correct the consolidated-era
   schema-name statements superseded by DC-03 ship-order allocation —
   `V2-01` §3.2 (claims `HistorySchemaV2` includes

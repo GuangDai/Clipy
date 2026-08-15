@@ -265,8 +265,12 @@ substitute for one executable order.
 
 ## 5. M1 — release-specific migration foundation
 
-- **Status:** blocked on V2-0, DC-03, the migration blockers applicable to the
-  first admitted graft, and that graft's admission.
+- **Status:** admitted and in progress (2026-08-15): V2-0 closed, DC-01/02/03
+  and the applicable first-graft blockers (DC-04/08-retention/21/23/27/28)
+  resolved, V2-02 admitted on recorded product approval — the total open
+  order below is executable now. Design-ready verdict: `V2-PROGRESS.md` §2
+  (V2-00 §8 self-review (a)–(j) all PASS; final cross-document review zero
+  blockers).
 - **Spec references:** `V2-00` §2.1/§4/§5 decision 18; each module’s Record 5;
   v1 `05` §17.
 - **Dependencies:** completed v1 schema/codecs/open path.
@@ -297,6 +301,55 @@ Migration inventory:
 M1 is complete only when each admitted module’s migration proof gates pass,
 including `E1-PLATFORM-1/4`, `RET-PLATFORM-1/1b`, `J1-PLATFORM-2`,
 `X-PLATFORM-1`, `P1-PLATFORM-3`, and `P3-PLATFORM-3/5` as applicable.
+
+### M1 total `SwiftDataHistory.open` order (first release: M1 + V2-02)
+
+Recorded 2026-08-15 per the §4 closing requirement (one executable order, not
+per-module prose). This is the release-scoped total order; every later
+release that admits another singleton/migration-bearing graft must extend
+this list in place rather than append per-module "after the previous
+singleton" statements. Step numbers cite the v1 `05` §13 steps they extend.
+
+1. validate configuration and hard limits; *(05 §13 step 1)*
+2. construct the `ModelContainer` with the ordered `SchemaMigrationPlan`
+   (`schemas` = `HistorySchemaV1`, `HistorySchemaV2` in ship order;
+   `stages` = the single custom `V1 → V2` stage, DC-02). A fresh store runs
+   no stage (the V2 schema is created directly, zero items); a v1 store
+   migrates inside construction: the additive schema change plus the
+   `RetainedBytesRow` `didMigrate` backfill (idempotent by construction)
+   both complete before `open` returns — whether the backfill completes
+   before `ModelContainer.init` itself returns is runtime-asserted, not
+   assumed (`V2-facts.md` cycle 7 §7.1 OPEN 5; `RET-PLATFORM-1b(d)/(e)`) —
+   and this migration-owned context is the sole sanctioned pre-Authority
+   writer; *(extends 05 §13 step 2)*
+3. enter `HistoryAuthority` and create the v1 `LastChangePositionRow`
+   singleton at position 0 if this is a new store; *(05 §13 step 3)*
+4. validate exactly one singleton; *(05 §13 step 4)*
+5. bootstrap/validate the `RetentionExpansionConfigRow` singleton
+   (M1.3): absent → create all-disabled with `configSchemaVersion == 1`;
+   present → validate `configSchemaVersion == 1`, `ageMaxSeconds`
+   finiteness (DC-21), and non-contradictory combinations (V2-02 §3.3);
+   duplicates or violations fail closed before any write path opens;
+6. validate retained row count does not exceed the hard bound;
+   *(05 §13 step 5)*
+7. fetch each row's scalar projection metadata (business ID, nonzero
+   Content Version, projection schema version, pin ordinal, signature
+   metadata) **and** the `RetainedBytesRow` 1:1 correspondence both
+   directions with `bytesSchemaVersion == 1` (`RET-PLATFORM-1b(a)`); a
+   fresh store holds this vacuously (zero items; rows arrive via the
+   capture-insert stamping); *(extends 05 §13 step 6)*
+8. require projection schema version 1 for the v1 projections;
+   *(05 §13 step 7)*
+9. decode/validate signatures and build the complete index;
+   *(05 §13 step 8)*
+10. validate the full pinned ordinal set from scalar fields;
+    *(05 §13 step 9)*
+11. publish the constructed `SwiftDataHistory` facade. *(05 §13 step 10)*
+
+The v1 invariant "startup does not decode Canonical/revision bytes merely to
+build the index" (`05` §13) is unchanged: the only full-blob decodes at open
+are the migration backfill's one-per-item pass (step 2, migrated stores
+only), which is the projection rebuild, not the index build.
 
 ## 6. V2-02 — retention expansion (R1/R2/R3)
 
