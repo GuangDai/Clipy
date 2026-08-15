@@ -1419,3 +1419,302 @@ V2-04 C2 file, and V2-01 executor platform claims.
   `X-COMPILE-2` (V2-05).
 - `Locale.Language.LanguageCode` direct symbol URL — OPEN (404 via Sosumi);
   the V2-06 §4 code comment now cites this cycle; retained under `P2-COMPILE-1`.
+
+## Cycle 6 — V2-05 App Intents/audit promotion + loop-R3 verified facts (2026-08-15)
+
+Appended in loop R3 (the 审查→调查→批评 platform-claims loop). §6.1 promotes
+the `.tmp/v2-research/V2-05-facts.md` sidecar verbatim (DC-1 durable
+promotion): V2-05 cites these as "`V2-facts.md` cycle 6, fact/OPEN N".
+§6.2/§6.3 hold the loop-R3 sosumi/web verifications. Verdicts: VERIFIED,
+REFUTED, UNDOCUMENTED, LOCATED (external primary source found), OPEN.
+
+### 6.1 V2-05 App Intents / audit platform facts (promoted from .tmp sidecar)
+
+### fact 1 — AppIntent protocol
+- Claim: V2-05's intents conform to `AppIntent`; `perform()` is async.
+- Verdict: VERIFIED.
+- Correct statement: `protocol AppIntent : PersistentlyIdentifiable,
+  _SupportsAppDependencies, Sendable` — it IS `Sendable`. macOS 13.0+
+  (present on macOS 26). Entry point `func perform() async throws -> some
+  IntentResult` — async, composes with the actor-based `HistoryAuthority`.
+  Input via `@Parameter` ("the system resolves any parameters ... before
+  calling your `perform()` method"); app data via `@Dependency`.
+- sourceUrl: https://developer.apple.com/documentation/appintents/appintent
+
+### fact 2 — AppDependencyManager (the @Dependency resolution registry)
+- Claim: the `.shared` registration in ClipyApp is a real framework API.
+- Verdict: VERIFIED.
+- Correct statement: `final class AppDependencyManager` — "An object that
+  manages the registration and initialization of an app intent's
+  dependencies." macOS 13.0+. `static let shared: AppDependencyManager`.
+  Three `add` overloads, all `key: AnyHashable?`; the `add(key:dependency:)`
+  overload is declared `final func add<Dependency>(key: AnyHashable? = nil,
+  dependency dependencyProvider: @autoclosure @escaping () -> @Sendable ()
+  throws -> Dependency) where Dependency : Sendable` — the `= nil` default
+  is what makes V2-05 §6.6's keyless `add(dependency: facade)` call
+  well-formed. Resolution errors are `AppDependencyManager.Error`
+  (`failedToLoadDependency`, `failedToRetrieveDependency`,
+  `incorrectDependencyType`). The §6.5 carve-out stands: `@Dependency`
+  resolves through `.shared` — a framework-owned DI seam with no app-level
+  alternative (App Intents are system-constructed); the Authority itself is
+  never registered.
+- sourceUrl: https://developer.apple.com/documentation/appintents/appdependencymanager
+  , https://sosumi.ai/documentation/appintents/appdependencymanager/add(key:dependency:)-1hqkg
+
+### fact 3 — AppShortcutsProvider
+- Claim: `ClipboardShortcuts` surfaces intents to Shortcuts/Siri.
+- Verdict: VERIFIED.
+- Correct statement: `protocol AppShortcutsProvider : Sendable` — macOS
+  13.0+, `Sendable`. `static var appShortcuts: [AppShortcut] { get }`;
+  `AppShortcutsBuilder` is the result builder. Loop R3 confirmed not
+  deprecated on macOS 26 (only the `AppShortcutsProvider.Title` typealias
+  is).
+- sourceUrl: https://developer.apple.com/documentation/appintents/appshortcutsprovider
+
+### fact 4 — @Dependency is the established App Intents DI pattern
+- Claim: injecting app data via `@Dependency` is Apple-sanctioned.
+- Verdict: VERIFIED.
+- Correct statement: WWDC24 "Bring your app to Siri" transcript — an
+  `OpenAssetIntent` example declares `@Dependency` for app dependencies
+  ("such as my app's Navigation Manager"). Canonical pattern: app data
+  injected via `@Dependency`, not an app-invented locator.
+- sourceUrl: WWDC24 transcript (search_wwdc_content "App intents").
+
+### fact 5 — SecItemAdd(_:_:)
+- Claim: Keychain writes are available macOS 10.6+ and block the caller.
+- Verdict: VERIFIED.
+- Correct statement: `func SecItemAdd(_ attributes: CFDictionary, _ result:
+  UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus` — macOS 10.6+ (present on
+  macOS 26). Blocks the calling thread ("can cause your app's UI to hang if
+  called from the main thread") → V2-05 confines SecItem calls to the
+  `CredentialStore` actor (reserved, unbuilt — DC-22).
+- sourceUrl: https://developer.apple.com/documentation/security/secitemadd(_:_:)
+
+### fact 6 — SecItemCopyMatching(_:_:)
+- Claim: Keychain reads share the same platform profile.
+- Verdict: VERIFIED.
+- Correct statement: `func SecItemCopyMatching(_ query: CFDictionary, _
+  result: UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus` — macOS 10.6+,
+  blocks the calling thread; returns the first match by default
+  (`kSecMatchLimit` controls batch size).
+- sourceUrl: https://developer.apple.com/documentation/security/secitemcopymatching(_:_:)
+
+### fact 7 — SecItemDelete / SecItemUpdate exist in the same family
+- Claim: the full C-keychain CRUD surface exists.
+- Verdict: VERIFIED.
+- Correct statement: `SecItemDelete(_:)` and `SecItemUpdate(_:_:)` are in
+  the "Keychain items" API collection alongside Add/CopyMatching; macOS
+  10.6+ by family (modern `SecItem*`, not the legacy deprecated
+  `SecKeychainItem*`).
+- sourceUrl: https://developer.apple.com/documentation/security/keychain-items
+
+### OPEN 1 — App Intents in-process / entitlement / TCC behavior (X-SECURITY-1)
+- Question: does a main-app-target `AppIntent` invoked by Siri/Shortcuts/
+  Spotlight on macOS 26 run in the app's process, inheriting sandbox
+  entitlements and TCC grants? Not stated on the AppIntent/
+  AppShortcutsProvider pages; retrieved WWDC transcripts are silent.
+- Required OUTCOME (V2-05 §8/Record 6): in-process, inheriting the app's
+  entitlements/TCC; an App Intents extension target is post-V2. Gate
+  `X-SECURITY-1` confirms on macOS 26.
+
+### OPEN 2 — @Dependency registration timing + Swift 6 isolation (X-COMPILE-2)
+- Question: must `AppDependencyManager.shared.add(...)` complete before the
+  system first resolves an intent's `@Dependency`, and is the resolved
+  `Sendable` facade safe under Swift 6 complete strict concurrency?
+- Required OUTCOME (V2-05 §6.5): registration at launch before any intent
+  performs; unresolved dependency surfaces as
+  `ExternalFailure.temporarilyUnavailable(.storeLocked)`. Gate
+  `X-COMPILE-2` (cold/warm) — including the forums-73226 queue-assertion
+  crash class (cycle 5).
+
+### OPEN 3 — Capability-scoped subset expressibility
+- Resolved by design (V2-05 §3.2/§7): a closed, deliberately smaller
+  request set; no App Intent can spell capture/revise/clear/policy.
+
+### OPEN 4 — Audit hash-chain non-repudiation bound (X-SECURITY-2)
+- Resolved (V2-05 §4.4/Record 6): the forward SHA-256 chain detects
+  accidental corruption and naive tampering without claiming
+  non-repudiation; HMAC-with-Keychain-key hardening (facts 5–7) recorded as
+  a future option. Gate `X-SECURITY-2`.
+
+### 6.2 Loop-R3 verified facts (V2-05 / V2-06 / V2-07)
+
+### fact 8 — CryptoKit SHA256
+- Verdict: VERIFIED. `struct SHA256: HashFunction`, macOS 10.15+; one-shot
+  `hash(data:)` or incremental `update`+`finalize`. Same-input determinism
+  follows from the SHA-2 spec, not an Apple-doc sentence; V2-05's
+  `hasherVersion` field pins the algorithm.
+- sourceUrl: https://sosumi.ai/documentation/cryptokit/sha256
+
+### fact 9 — DispatchTime.uptimeNanoseconds monotonicity (OPEN)
+- Verdict: OPEN. `uptimeNanoseconds` is "nanoseconds since boot, excluding
+  any time the system spent asleep" (epoch defined; monotonicity NOT
+  documented by Apple). The V2-05 bucket's defense is the clamp
+  (elapsed = max(0, now − last), refill capped at capacity), not the
+  adjective.
+- sourceUrl: https://sosumi.ai/documentation/dispatch/dispatchtime/uptimenanoseconds
+
+### fact 10 — localizedStandard* search semantics
+- Verdict: VERIFIED. `localizedStandardContains(_:)` — "a case and
+  diacritic insensitive, locale-aware search", macOS 10.11+;
+  `localizedStandardRange(of:)` returns the first occurrence or
+  `{NSNotFound, 0}`. Neither page mentions width folding — confirming
+  V2-06's "folds case + diacritics only" reading.
+- sourceUrl: https://sosumi.ai/documentation/foundation/nsstring/localizedstandardcontains(_:)
+
+### fact 11 — FileHandle.bytes
+- Verdict: VERIFIED. `var bytes: FileHandle.AsyncBytes { get }`,
+  `AsyncSequence<UInt8>`, `.prefix/.characters/.lines`; macOS 12.0+.
+  `URL.resourceBytes` with a file:// URL is the documented equivalent.
+- sourceUrl: https://sosumi.ai/documentation/foundation/filehandle/bytes
+
+### fact 12 — FileHandle.read(upToCount:)
+- Verdict: VERIFIED. `func read(upToCount count: Int) throws -> Data?` —
+  reads up to count bytes, empty `Data` at EOF; macOS 10.15.4+.
+- sourceUrl: https://sosumi.ai/documentation/foundation/filehandle/read(uptocount:)
+
+### fact 13 — FileHandle.synchronize()
+- Verdict: VERIFIED. `func synchronize() throws` — flushes in-memory data
+  and attributes to permanent storage, blocking until flushed; macOS
+  10.15+.
+- sourceUrl: https://sosumi.ai/documentation/foundation/filehandle/synchronize()
+
+### fact 14 — Exclusive blob creation (O_CREAT|O_EXCL)
+- Verdict: VERIFIED (POSIX primary source; Foundation offers NO exclusive
+  create). `open(2)` with `O_CREAT|O_EXCL` fails with `EEXIST` on collision
+  — atomic check-and-create. `FileManager.createFile` OVERWRITES and even
+  returns true when the file exists (`O_CREAT|O_TRUNC`-shaped, never
+  exclusive); `FileHandle(forWritingTo:)` does not create.
+- sourceUrl: https://pubs.opengroup.org/onlinepubs/7908799/xsh/open.html
+  , https://sosumi.ai/documentation/foundation/filemanager/createfile(atpath:contents:attributes:)
+
+### fact 15 — unlink preserves an open descriptor's inode
+- Verdict: LOCATED (POSIX; no Apple reference page documents fd/inode
+  semantics). unlink removes a name; data is deallocated only when no
+  links remain AND no process holds it open. Does NOT prove
+  `FileHandle.AsyncBytes` never re-validates mid-stream — P3-PLATFORM-2/5
+  stay load-bearing for the Foundation iterator layer.
+- sourceUrl: https://pubs.opengroup.org/onlinepubs/9699919799/functions/unlink.html
+
+### fact 16 — Locale.Language.languageCode
+- Verdict: VERIFIED via the parent property page (the LanguageCode struct's
+  own page still 404s — non-load-bearing). `var languageCode:
+  Locale.LanguageCode? { get }` on `Locale.Language` — "The language code
+  that identifies this language"; macOS 13.0+.
+- sourceUrl: https://sosumi.ai/documentation/foundation/locale/language-swift.struct/languagecode
+
+### fact 17 — Locale.current snapshot vs autoupdatingCurrent
+- Verdict: VERIFIED. `Locale.current` — "the user's region settings at the
+  time the property is read" (snapshot; does not change when settings
+  change); `autoupdatingCurrent` reflects the latest configuration. A
+  once-per-query captured Locale value is stable for that query — supports
+  V2-06's determinism argument.
+- sourceUrl: https://sosumi.ai/documentation/foundation/locale/current
+
+### fact 18 — Observation @Observable
+- Verdict: VERIFIED. `protocol Observable`, macOS 14.0+; docs direct you to
+  always use the `Observable()` macro (bare conformance adds nothing).
+- sourceUrl: https://sosumi.ai/documentation/observation/observable
+
+### fact 19 — LocalizedStringResource
+- Verdict: VERIFIED. `struct LocalizedStringResource`, macOS 13.0+,
+  Sendable; defers resolution to `String(localized:)` — matches V2-07's
+  cross-process rationale.
+- sourceUrl: https://sosumi.ai/documentation/foundation/localizedstringresource
+
+### 6.3 Loop-R3 verified facts (V2-01 / V2-02 / V2-04)
+
+### fact 20 — VNRecognizedTextObservation.topCandidates(_:)
+- Verdict: REFUTED (throws) / VERIFIED (empty risk). `func
+  topCandidates(_ maxCandidateCount: Int) -> [VNRecognizedText]` does NOT
+  throw; it "returns no more than n candidates, but it may return fewer
+  than n" — possibly zero. `topCandidates(1)[0]` traps on an empty result;
+  use `.first` with a guard (no candidates → no text, confidence 0.0).
+- sourceUrl: https://sosumi.ai/documentation/vision/vnrecognizedtextobservation/topcandidates(_:)
+
+### fact 21 — AsyncThrowingStream .unbounded buffering
+- Verdict: VERIFIED. "By default, the buffer limit is `Int.max`, which
+  means it's unbounded"; dropping occurs only under
+  `.bufferingOldest`/`.bufferingNewest` on exhaustion. V2-01 §6.3's
+  `.unbounded` inbox cannot lose an itemID by buffering; the backlog scan
+  is defense-in-depth only.
+- sourceUrl: https://sosumi.ai/documentation/swift/asyncthrowingstream
+
+### fact 22 — SE-0192 cross-module enum exhaustiveness
+- Verdict: REFUTED as commonly stated. Imported enums are non-exhaustive
+  only when the defining library is built with library evolution (Apple
+  SDK modules); in ordinary builds every enum is frozen and cross-module
+  exhaustive switches compile — and break when a case is added. V2-02's
+  safety rests on `RET-COMPILE-2` compiling v1 callers, not on default
+  non-exhaustiveness.
+- sourceUrl: https://github.com/apple/swift-evolution/blob/main/proposals/0192-non-exhaustive-enums.md
+
+### fact 23 — FileManager replaceItem / ItemReplacementOptions
+- Verdict: SPLIT. `replaceItem(at:withItemAt:backupItemName:options:
+  resultingItemURL:) throws`, macOS 10.6+ (Swift variant `replaceItemAt`
+  → URL?, 10.10+) — VERIFIED, "in a manner that ensures no data loss
+  occurs", same-volume. `.ifExistingAtomicReplace` does NOT exist:
+  `ItemReplacementOptions` has exactly `.usingNewMetadataOnly` and
+  `.withoutDeletingBackupItem`. Absent-destination behavior is
+  UNDOCUMENTED (community: `NSFileNoSuchFileError`); documented
+  no-clobber first write: `moveItem(at:to:)` fails if the destination
+  exists.
+- sourceUrl: https://sosumi.ai/documentation/foundation/filemanager/replaceitem(at:withitemat:backupitemname:options:resultingitemurl:)
+  , https://sosumi.ai/documentation/foundation/filemanager/itemreplacementoptions
+
+### fact 24 — NSFileCoordinator coordinated accessors
+- Verdict: VERIFIED. `coordinate(readingItemAt:options:error:byAccessor:)`
+  / `coordinate(writingItemAt:options:error:byAccessor:)`, macOS 10.7+.
+  NOT Swift-throws: errors via `NSErrorPointer`; the accessor block is NOT
+  executed on failure (sentinel-in-block pattern). Both execute
+  synchronously. Do not nest coordinator calls inside the block (reading
+  inside a write block is the sole sanctioned exception).
+- sourceUrl: https://sosumi.ai/documentation/foundation/nsfilecoordinator/coordinate(readingItemAt:options:error:byaccessor:)
+
+### fact 25 — FileManager.url(for:in:appropriateFor:create:)
+- Verdict: VERIFIED. `func url(for:in:appropriateFor:create:) throws ->
+  URL` — explicitly "marked with the `throws` keyword"; macOS 10.6+.
+- sourceUrl: https://sosumi.ai/documentation/foundation/filemanager/url(for:in:appropriatefor:create:)
+
+### fact 26 — Cheap directory sizing
+- Verdict: VERIFIED. `contentsOfDirectory(at:includingPropertiesForKeys:
+  [.fileSizeKey, ...])` — "the specified properties are fetched and cached
+  in the NSURL object"; then `url.resourceValues(forKeys:)` returns the
+  cached values. `attributesOfItem(atPath:)` is one throwing call per
+  file; `contentsOfDirectory(atPath:)` returns bare names.
+- sourceUrl: https://sosumi.ai/documentation/foundation/filemanager/contentsofdirectory(at:includingpropertiesforkeys:options:)
+
+### fact 27 — File coordination is cooperative
+- Verdict: VERIFIED with caveat. The class "coordinates the reading and
+  writing of files and directories among multiple processes and objects in
+  the same process" — but via opt-in participation (registered presenters
+  + coordinating writers). A non-participating writer using raw
+  FileManager/POSIX calls is not blocked.
+- sourceUrl: https://sosumi.ai/documentation/foundation/nsfilecoordinator
+
+### fact 28 — Caches directory and backups
+- Verdict: VERIFIED (device backup) with platform hedge. "The system
+  doesn't back up either the temporary directory or the caches directory."
+  No Apple doc covers macOS Time Machine (its exclusion list is
+  undocumented); the system may purge Caches at any time.
+  `isExcludedFromBackupKey` (cycle 5) remains the load-bearing defense.
+- sourceUrl: https://developer.apple.com/documentation/foundation/using-the-file-system-effectively
+
+### fact 29 — CGImageDestination non-Sendable
+- Verdict: VERIFIED (no Sendable conformance documented; conformances are
+  Equatable/Hashable only). Treat as confined like `CGImageSource`.
+- sourceUrl: https://sosumi.ai/documentation/imageio/cgimagedestination
+
+### OPEN 5 — MigrationStage.custom willMigrate/didMigrate timing
+- Question: do the custom-stage closures run synchronously during
+  `ModelContainer` init, before `open` returns? No discussion on the API
+  page; WWDC2025/291 has no timing statements.
+- Owner: V2-02's RET-PLATFORM-1b item (d) must keep asserting
+  completion-before-open-returns at runtime, not cite Apple docs.
+- sourceUrl: https://sosumi.ai/documentation/swiftdata/migrationstage/custom(fromversion:toversion:willmigrate:didmigrate:)
+
+### OPEN 6 — VNRequest.results ordering
+- Question: Apple documents NO ordering for `VNRequest.results`. D9
+  determinism pins V2-01's concat order to observation-index order only;
+  any bounding-box sort is a fixture-gated tie-break under E1-PLATFORM-3.
+- sourceUrl: https://sosumi.ai/documentation/vision/vnrequest/results

@@ -70,7 +70,8 @@ and unaware that derivations exist.
 
 - **Scanned-PDF / image-only-PDF OCR.** When `PDFPage.string` is `nil`/empty
   (no text layer), V2-01 records empty enrichment text; it does not render PDF
-  pages and OCR them. That is a future graft (`V2-facts.md` OPEN 4).
+  pages and OCR them. That is a future graft (`V2-facts.md` OPEN questions
+  item 4).
 - **PDF text-layer quality is best-effort.** `PDFPage.string` can return non-empty
   mojibake for PDFs whose embedded fonts lack a ToUnicode CMap (common for
   scanned-then-OCR'd or poorly-generated PDFs). V2-01 does not validate text-layer
@@ -171,7 +172,11 @@ source pick, `05` §14.5):
    bounded and runs on the worker, never on the Authority.
 3. Else if one or more image candidates exist, select the first by ordering
    (multiple image format-variants of the same picture produce equivalent OCR,
-   so the first suffices). This bounds OCR to one image per item.
+   so the first suffices). (Variant-equivalence is not Apple-documented;
+   first-by-order selection bounds OCR work, and no correctness property
+   may depend on variants OCRing identically - any equivalence check is a
+   fixture property, not a platform fact.) This bounds OCR to one image per
+   item.
 4. Else if a PDF candidate exists (no text layer, or only reached when no
    image exists), select it; it yields empty enrichment text (§2.2 scanned-PDF
    scope).
@@ -215,6 +220,11 @@ internal final class EnrichmentRow {
 }
 ```
 
+Apple documents only that `.unique` "Ensures the property's value is
+unique across all models of the same type"; conflict behavior is
+undocumented, so V2 relies on the single-writer Authority (no concurrent
+inserts) rather than on defined conflict semantics.
+
 `recognizedText` is a scalar projection of the blob's `recognizedText`,
 mirroring v1's scalar-projection discipline: v1 stores `searchBody` as a scalar
 `String` column on `HistoryItemRow` (`05` §3.1) precisely so `SearchCorpusRow`
@@ -233,12 +243,12 @@ Semantic mapping:
 | Column | Meaning |
 |---|---|
 | `itemID` | Stable business ID of the enriched item. A row is absent for items never evaluated; a not-applicable item, once evaluated, has exactly one row with `statusRaw == notApplicable` (§6.5). Orphaned rows for retired items are swept lazily (§6.5); `itemID` is never reused (`02` §7 plan-invariant 9 + D1, `05` §17), so an orphan never self-heals and must be swept. |
-| `contentVersionRaw` | The `ContentVersion` of Effective Content from which enrichment was derived. The **read-time fence** (§5.3): search consults this row only when `contentVersionRaw` equals the item's current `ContentVersion` (a scalar compare, no blob decode, preserving Part VI §7.5). `persistEnrichment` refreshes `contentVersionRaw` to the item's current `ContentVersion` on every persist, including the no-re-OCR S1-win refresh path (§5.3). |
+| `contentVersionRaw` | The `ContentVersion` at which the stored enrichment text is current - the CV of the source bytes it was derived from, or a later CV whose source bytes fingerprint-match them (the S1-win refresh writes the current CV without re-OCR, §5.3). The **read-time fence** (§5.3): search consults this row only when `contentVersionRaw` equals the item's current `ContentVersion` (a scalar compare, no blob decode, preserving Part VI §7.5). `persistEnrichment` refreshes `contentVersionRaw` to the item's current `ContentVersion` on every persist, including the no-re-OCR S1-win refresh path (§5.3). |
 | `sourceFingerprintRaw` | S1 per-purpose fingerprint of the selected source bytes. The **write-time/drain fence** (§5.3): recomputed only on the background drain/persist path (blob decode permitted there, mirroring `05` §14.5 thumbnail source); independent of `ContentVersion`. Unchanged source bytes keep enrichment valid across revisions that touch only non-source representations. |
 | `statusRaw` | Internal encoding of `EnrichmentStatus` (`pending` / `ready` / `failed` / `notApplicable`). |
 | `enrichmentSchemaVersion` | The `EnrichmentBlob` codec version, mirroring v1's `projectionSchemaVersion` discipline (`05` §3.1). |
 | `derivationSchemaVersion` | The OCR/PDF-extraction materializer schema version (§5.2), **mirrored as a scalar column** from the blob exactly as v1 mirrors `projectionSchemaVersion` on `HistoryItemRow` (`05` §3.1). Makes staleness-by-materializer-version checkable on the read/drain path **without decoding the enrichment blob** (the blob still carries it redundantly for self-describing decode). |
-| `reDerivationAttempts` | Bounded re-derivation attempt counter (§6.5; the fixed `EnrichmentLimits` value 8, §3.4 - a fixed admission bound, not a runtime tuning knob, `06` §2). **Mirrored as a scalar column** so the drain increments it on a stale persist, resets it to 0 on a successful persist, and caps it at 8 (transitioning the row to `statusRaw == failed`) **without decoding the enrichment blob**. Durable across drains/restarts so a churning item cannot evade the 8-attempt cap across launches (an in-memory counter would be lost on restart). |
+| `reDerivationAttempts` | Bounded re-derivation attempt counter (§6.5; the fixed `EnrichmentLimits` value 8, §3.4 - a fixed admission bound, not a runtime tuning knob, `06` §2). **Mirrored as a scalar column** so the persist transaction increments it on a fence-fail discard (writing only the counter; the row is created if absent), resets it to 0 on a successful persist, and caps it at 8 (transitioning the row to `statusRaw == failed`) **without decoding the enrichment blob**. Durable across drains/restarts so a churning item cannot evade the 8-attempt cap across launches (an in-memory counter would be lost on restart). |
 | `recognizedText` | Scalar projection of the searchable enrichment text (the v1 `searchBody` analogue). The field the search path reads to attach enrichment text to the corpus (§4.2) without decoding the enrichment blob. Bounded to 256 KiB UTF-8 (§3.4). Inline-storage cost is up to 256 KiB per retained item (the same order as `searchBody`, `05` §3.1); additive via the M1 migration (Record 5). |
 | `enrichmentBlob` | Versioned, bounded derived text + metadata. `@Attribute(.externalStorage)` is a storage hint, not a correctness guarantee (`01` §10). |
 
@@ -288,7 +298,10 @@ conformance is derived without `@unchecked Sendable`, mirroring v1's explicit
 marking of crossing values (`PreparedCaptureBundle: Sendable`, `05` §6.1).
 `topCandidateConfidence` is a single `Float`. A single image typically yields
 multiple `VNRecognizedTextObservation` objects (one per text region/line), each
-with its own `topCandidates(1)[0].confidence`, so there are N confidences for N
+with its own `topCandidates(1).first?.confidence` (the method does
+not throw but "may return fewer than n" - including zero; an observation
+with no candidates contributes no text and a `0.0` confidence, mirroring
+the `EnrichmentDerivation.empty` encoding), so there are N confidences for N
 observations, not "exactly one." V2-01 stores the **minimum** across the
 per-observation top-candidate confidences as a conservative quality signal (the
 lowest-confidence region is the limiting quality of the recognized text). For
@@ -297,11 +310,13 @@ case (no text found), `topCandidateConfidence` is encoded as `0.0`. The
 `EnrichmentDerivation.empty` image case maps to
 `statusRaw == ready`, `kind == "image"`, `recognizedText == ""`,
 `topCandidateConfidence == 0.0` (a ready-but-empty result, not a failure).
-`recognizedText` concatenation order is Vision's `results` order (the order
-`VNImageRequestHandler.perform(_:)` populates `request.results`, which is
-top-to-bottom then left-to-right by bounding box, with observation-index order
-as the fallback), fixture-locked in the V2 parallel fixtures (D9 determinism;
-the order is a Vision-output property to verify in `E1-PLATFORM-3`).
+`recognizedText` concatenation order is Vision's `results` order (concat
+order is `request.results` index order - observation-index order;
+Apple documents no ordering for `VNRequest.results`, so D9 determinism
+pins concat order to observation-index order only. A bounding-box sort
+(top-to-bottom, then left-to-right) is permitted solely as a
+fixture-gated tie-break, verified in `E1-PLATFORM-3`.), fixture-locked in
+the V2 parallel fixtures (D9 determinism).
 
 Decode reconstructs through validators and checks, exactly as v1 codecs
 (`05` §4):
@@ -417,10 +432,23 @@ History Commit (capture / revise) completes
                    - collect eligible source candidates by typeIdentifier (§3.1; NO
                      PDFDocument probe on the Authority - PDFDocument is non-Sendable)
                    - compute each candidate's S1 source fingerprint (§5)
-                   - return EnrichmentSourceSelection (Sendable) carrying the fetch-time
-                     ContentVersion + all candidate bytes + fingerprints, OR notApplicable
+                   - return EnrichmentSourceOutcome (§6.4): .selection
+                     carrying the fetch-time ContentVersion + all candidate
+                     bytes + fingerprints, OR .notApplicable, OR .rowCurrent
+                     (the no-op skip below)
                    - release all @Model and the context before returning
+                   - row-current no-op skip: in the same Authority
+                     interval, read the stored row's scalar statusRaw /
+                     contentVersionRaw; if row.contentVersionRaw == the
+                     item's current ContentVersion and statusRaw is ready
+                     or notApplicable, return .rowCurrent - no
+                     Effective-Content derivation, no candidate collection
+                     or fingerprinting, no OCR, no persist; the drain
+                     drops the item (§6.5)
               2. EnrichmentWorker.derive(selection)           [off-Authority, on the worker actor]
+                   (row-current items never reach derive: step 1
+                    returned the .rowCurrent marker and the drain dropped
+                    the item before any OCR or persist (§6.5))
                    (SKIPPED on S1-win: if the fetched candidate fingerprint matches the
                    stored row's fingerprint and ContentVersion advanced, the drain bundles
                    .reuseStored and skips to step 3 - no re-OCR, §6.2)
@@ -450,6 +478,11 @@ History Commit (capture / revise) completes
                      recognizedText scalar, and blob (status ready/failed)
                    - on fence fail (source changed between fetch and persist): discard + requeue
                      the item (bounded retry, §6.5)
+                   - on missing item at persist (retired between the
+                     step-1 fetch and this persist): discard the
+                     derivation, write nothing, and let the orphan sweep
+                     remove any row (§6.5) - not surfaced as an error;
+                     the drain is internal
                    - transaction commits (no ChangePosition advance; not a History Commit;
                      no HistoryInvalidation yielded - enrichment is not a History Commit and
                      advances no ChangePosition, so it does not wake a live observe(.search);
@@ -508,6 +541,14 @@ History Commit (capture / revise) completes
   observation stream, §8). No public
   invalidation contract changes; durable correctness is intact (one-shot reads
   are always current).
+
+**V2-03 collection-cache composition:** persistEnrichment and
+setEnrichmentEnabled bump the Authority's enrichmentCorpusEpoch in the
+same serialization as their transaction. V2-03's collection-cache fence
+and key carry that epoch (V2-03 §7.1/§7.2), so the claim that a fresh
+browse(.search) always reflects current state holds only through this
+epoch - it is false against a position-only fence, because enrichment
+changes the corpus without advancing ChangePosition.
 
 ### 4.2 Read path (search consultation)
 
@@ -758,7 +799,7 @@ thumbnail version check, `04` §9 step 2, and the revision two-phase OCC,
   import (`01` §4, `05` §14.5); the source gate (`01` §9) is extended to permit
   `Vision`/`PDFKit` in `HistoryStorage` and to continue forbidding them in
   `HistoryCore`/`HistoryDomain`/adapters/UI (proof gate `E1-COMPILE-3`,
-  `V2-facts.md` OPEN 5).
+  `V2-facts.md` OPEN questions item 5).
 - `SwiftDataHistory` gains an `EnrichmentHistory` conformance; the
   `EnrichmentWorker` and `EnrichmentScheduler` are stored fields of
   `SwiftDataHistory` (extending its actor field set, `05` §2). Because they are
@@ -875,7 +916,10 @@ internal actor EnrichmentScheduler {
     // (oldest-first for victim selection, 02 §12); the direction is inverted
     // for drain priority.
     private var pending: [HistoryItemID] = []
-    private var seen: Set<HistoryItemID> = []   // dedupe, order from `pending`
+    private var seen: Set<HistoryItemID> = []   // dedupe while queued; an ID
+                                                // is removed when its drain
+                                                // cycle completes, so a later
+                                                // commit re-enqueues it (§7.2)
     private var drainTask: Task<Void, Never>?
 
     // The Authority yields affected itemIDs into this stream in post-commit
@@ -904,7 +948,9 @@ order is unchanged (proof `E1-PERF-4`). Delivery is explicitly **not** a direct
 `await scheduler.wake(at:)` call, which would be an actor-isolation suspension
 hop forbidden by `05` §11's "without suspension"; the scheduler reads its own
 `inbox` asynchronously on its own executor. Receiving a retired itemID (the
-item is gone) triggers orphan cleanup (§6.5).
+item is gone) enqueues it only; the drain skips it on the not-found fetch and
+its orphaned row is removed by the cadence sweep (§6.5) - no per-ID delete
+exists.
 
 **Inbox buffering policy.** Unlike the v1 invalidation stream (which carries
 only a position and may coalesce to the newest - `04` §4 - safe to drop), the
@@ -933,7 +979,12 @@ releasing it before return (`05` §5), none advancing `ChangePosition`:
 ```swift
 internal extension HistoryAuthority {
     // Read: source fetch (mirrors 05 §14.5 thumbnail source)
-    func enrichmentSource(for id: HistoryItemID) async throws -> EnrichmentSourceSelection?
+    internal enum EnrichmentSourceOutcome: Sendable {
+        case selection(EnrichmentSourceSelection)
+        case rowCurrent    // no-op skip: stored row already current (§6.5)
+        case notApplicable
+    }
+    func enrichmentSource(for id: HistoryItemID) async throws -> EnrichmentSourceOutcome
 
     // Write: persist a derivation (separate transaction; not a History Commit)
     func persistEnrichment(_ pending: PendingEnrichment) async throws
@@ -949,8 +1000,9 @@ internal extension HistoryAuthority {
 `enrichmentSource` fetches the item, verifies its current `ContentVersion`,
 derives Effective Content (`02` §2.6), collects eligible source candidates by
 `typeIdentifier` (§3.1; no `PDFDocument` probe - it constructs no non-`Sendable`
-framework object), computes each candidate's S1 fingerprint (§5), and returns a
-`Sendable` selection or `nil` (not-applicable). It performs no OCR and no PDF
+framework object), computes each candidate's S1 fingerprint (§5), and returns
+an `EnrichmentSourceOutcome` (§6.4): `.selection`, `.notApplicable`, or
+`.rowCurrent` (the no-op skip). It performs no OCR and no PDF
 text-layer probe. `persistEnrichment` re-checks the write-time fence inside the
 transaction (§5.3: recompute the current source fingerprint, fingerprint-compare
 to the fetch-time/stored fingerprint - evidence-not-identity, not byte-exact),
@@ -1007,13 +1059,16 @@ switch is unchanged.
   taken in V2-01.) This keeps every v1 History Commit transaction
   byte-for-byte unchanged; enrichment owns its own cleanup entirely.
 - **Bounded re-derivation.** A rapidly-revised item (source bytes changing on
-  each revision) is re-queued on each stale persist. To prevent an unbounded
-  re-derive loop across drains, the row carries a bounded re-derivation attempt
-  counter (`reDerivationAttempts`, §3.2; the fixed `EnrichmentLimits` value 8,
-  §3.4 - a fixed admission bound, not a runtime tuning knob, `06` §2) with
-  backoff. The counter is a durable scalar column: it is **incremented on each
-  stale persist** and **reset to 0 on a successful persist** (a later
-  `ContentVersion`-stable commit - the source stopped churning); once it reaches
+  each revision) is re-queued on each fence-fail discard. To prevent an
+  unbounded re-derive loop across drains, the row carries a bounded
+  re-derivation attempt counter (`reDerivationAttempts`, §3.2; the fixed
+  `EnrichmentLimits` value 8, §3.4 - a fixed admission bound, not a runtime
+  tuning knob, `06` §2) with backoff. The counter is a durable scalar column:
+  it is **incremented, inside the persist transaction, on each fence-fail
+  discard** (the transaction writes only the counter and creates the row if
+  absent, so churn before any successful persist still counts) and **reset to
+  0 on a successful persist** (a later `ContentVersion`-stable commit - the
+  source stopped churning); once it reaches
   the cap of 8 the row transitions terminally to `statusRaw == failed` (search
   degrades to no-match for that item, per D21 safety). Because the counter is
   durable (persisted on the row, not held in scheduler memory), the cap survives
@@ -1021,8 +1076,12 @@ switch is unchanged.
   a transiently-revised item that stops churning is not permanently failed (the
   next successful persist resets it to 0).
 - **Not invalidated** by Copy Coalescing, pin, unpin, or retention-policy
-  changes: those preserve the item ID and its source bytes. A retention that
-  retires an item orphans its row (swept as above), not a transaction change.
+  changes: those preserve the item ID and its source bytes. those commits
+  preserve ContentVersion (`05` §9 occurrence/pin), so the drain's
+  row-current no-op skip (§4 step 1) does no source fetch (the item-row
+  metadata fetch remains) and no OCR for them. A
+  retention that retires an item orphans its row (swept as above), not a
+  transaction change.
 
 ## 7. Trigger and drain
 
@@ -1057,9 +1116,10 @@ path:
    source-changing revision on an old, not-recently-copied item is re-derived
    promptly instead of waiting until restart. Debounced, the scheduler drains up
    to a per-cycle budget in deterministic order (§6.3); if more remain, it
-   reschedules. A received itemID whose item is now gone (retired) triggers
-   orphan cleanup (§6.5). This drain uses precise itemID targeting - no position
-   scan and no `lastDrainPosition` watermark (§3.5).
+   reschedules. A received itemID whose item is now gone (retired) is skipped
+   by the drain; its orphaned row is removed by the
+   Nth-drain/startup/on-enable sweep (§6.5). This drain uses precise itemID
+   targeting - no position scan and no `lastDrainPosition` watermark (§3.5).
 3. **On enable.** Toggling `enabled` to `true` triggers a startup-style backlog
    drain (and an orphan sweep).
 
@@ -1115,9 +1175,19 @@ public enum EnrichmentStatus: Sendable, Hashable {
   it yields **no** `HistoryInvalidation` and does not wake a live
   `observe(.search)` (§4.1 - enrichment/toggle changes are not live-observed);
   the UI re-browses or waits for the next real History Commit to reflect the
-  new enabled state. Disabling stops new derivation but retains existing rows
+  new enabled state. Like `persistEnrichment`, the toggle bumps the Authority's
+  `enrichmentCorpusEpoch` in the same serialization (§4.1), so a V2-03
+  collection-cached search page cannot survive the toggle stale (V2-03 §7.1/§7.2).
+  Disabling stops new derivation but retains existing rows
   (search simply stops consulting them until re-enabled); an orphan sweep runs
-  on re-enable (§6.5).
+  on re-enable (§6.5). Failure translation follows v1 (`05` §16): the method
+  takes a `Bool` and targets no item, so it defines no `.invalidInput` and no
+  `.notFound` case; a failed durable `EnrichmentConfigRow` write fails
+  `.persistence(.transaction)` (transaction closure or commit failure,
+  `05` §16), and a violated storage invariant - e.g. the exactly-one
+  singleton guarantee of §3.5 - fails `.persistence(.invariantViolation)`.
+  V2-07 §4.2's `try?` swallow therefore records no typed failure for
+  these two cases (UI feedback is limited to later status reads).
 - `EnrichmentHistory` reuses `HistoryItemID` verbatim and adds no name that
   collides with v1 vocabulary (`V2-00` §9).
 
@@ -1152,8 +1222,8 @@ public enum EnrichmentStatus: Sendable, Hashable {
 - **TCC / entitlement.** No additional TCC permission is expected, because OCR
   processes bytes already in-process (captured pasteboard content), and Vision
   is documented on-device. This is assigned proof gate `E1-SECURITY-1`
-  (`V2-facts.md` OPEN 6): confirm no privacy-usage string or entitlement is
-  required on macOS 26 for on-device `VNRecognizeTextRequest`.
+  (`V2-facts.md` OPEN questions item 6): confirm no privacy-usage string or
+  entitlement is required on macOS 26 for on-device `VNRecognizeTextRequest`.
 - **Content-sensitivity amplification (Record 6).** v1 stores image bytes but
   they are **not** full-text-searchable. V2 derives and durably persists
   recognized text, making the textual content of copied images/screenshots
@@ -1242,6 +1312,11 @@ V2-01 **extends** the invariant set with D20–D22 (§11). No D1–D19 is weaken
 
 The analog of Part VI §6 (compile), §7 (schema/platform), §9 (perf) on macOS 26:
 
+Gates follow spec-section order, not ID order: PERF-5 and BEHAVIOR-1 are
+adjacent status gates (BEHAVIOR-1 covers the mapping PERF-5's mechanism
+bound cannot), then PERF-6/3/4/7 run worker, capture isolation, drain,
+startup.
+
 - **E1-COMPILE-1 (compile/dependency).** Swift 6 complete strict-concurrency
   build succeeds with `Vision`/`PDFKit` imported only in `HistoryStorage`;
   `HistoryCore` enrichment types import only Foundation; no `@unchecked Sendable`
@@ -1311,10 +1386,17 @@ migration stance). `HistorySchemaV2` is the frozen v1
   "ImageIO-decodable" hedge in §2.1.
 - **E1-PLATFORM-4 (migration atomicity).** The V1->V2 additive migration leaves
   the Signature Index, singleton position, and v1 projections untouched
-  (`V2-facts.md` OPEN 8); enrichment rows are absent on a fresh v1 store.
-- **E1-PERF-1 (OCR p95).** OCR p95 is within the agreed budget on the minimum
-  supported hardware — this is the E1 evidence trigger itself; it must measure
-  the greenfield scaffold, not the current repo (`06` §9).
+  (`V2-facts.md` OPEN questions item 8); enrichment rows are absent on a
+  fresh v1 store.
+- **E1-PERF-1 (OCR p95 admission workload).** Per-OCR p95 on the minimum
+  supported hardware is within the agreed budget — the E1 evidence trigger
+  itself. OCR completion has no public signal (E.8 adds no push or polling
+  loop), so no public envelope can express it: this must be admitted as a
+  **named workload** in the `06` §9 runner table (approved scale, bound,
+  headroom policy, and hardware profile), driven package-internally on the
+  greenfield scaffold (seeder precedent, `06` §9) with per-OCR percentiles
+  in the versioned fixture; debug traces are never evidence, and the
+  current repo is never measured (`06` §9).
 - **E1-PERF-2 (search p95 / no decode).** Enrichment-inclusive search p95 ≤ v1
   search p95 + a bounded enrichment-text scan. The read-time fence is the scalar
   `contentVersionRaw == contentVersion.rawValue` plus scalar
@@ -1331,28 +1413,47 @@ migration stance). `HistorySchemaV2` is the frozen v1
   `effectiveTypeIdentifiersBlob` projection (not Canonical/revision) to resolve
   the eligible-type check - a bounded one-per-query projection decode, not a
   no-decode read (§8).
+- **E1-BEHAVIOR-1 (EnrichmentHistory public-contract mapping).**
+  Fixture tests of the public `EnrichmentStatus` mapping and toggle
+  semantics, none of which `E1-PERF-5` (a scalar-read mechanism
+  bound) covers: (a) an absent row for an item whose
+  `effectiveTypeIdentifiersBlob` carries an image/PDF identifier
+  reads `.pending`, and one without reads `.notApplicable` (§8;
+  §6.5); (b) a `.ready` row whose item's `ContentVersion` advanced
+  reads `.pending` (§8); (c) the durable `reDerivationAttempts`
+  cap of 8 transitions the row terminally to `.failed` (§3.2/§6.5);
+  (d) `setEnrichmentEnabled` retains rows on disable, yields no
+  `HistoryInvalidation`, and bumps `enrichmentCorpusEpoch` (§8);
+  (e) the drain's `.rowCurrent` no-op skip persists nothing when
+  the stored row is current and `ready`/`notApplicable` (§6.4/§6.5).
 - **E1-PERF-6 (OCR cooperative-pool isolation).** The blocking `perform(_:)` /
   PDF iteration runs on a custom non-cooperative executor overriding the
   `EnrichmentWorker` actor (§6.2 - not a detached `Task`, which would violate
   non-`Sendable` confinement); the executor API's existence is subsumed by
   `E1-COMPILE-1` (the Swift 6 strict-concurrency build compiles the
   `Actor.unownedExecutor` override) and cited in §13, closing the API-existence
-  gap. Prove OCR does not starve the cooperative pool or `HistoryAuthority`
-  under sustained backlog, and bound per-OCR input size.
+  gap. Prove, as the public envelope, that user-commit and search p95 under
+  a sustained enrichment backlog stay within the E1 budgets of their
+  no-enrichment baselines (same runner and hardware, `06` §9) - pool and
+  Authority starvation is observable only through that envelope - and bound
+  per-OCR input size.
 - **E1-PERF-3 (capture isolation + bounded persist blocking).** The
   capture/revision commit interval excludes OCR, PDF parsing, and enrichment
   writes. `persistEnrichment` serializes on `HistoryAuthority` (single-writer,
   `00` §3.3), so its transaction (including the source-blob re-fetch + fingerprint
   recompute the write-time fence requires) **does block** a concurrent user
-  commit for the persist transaction's duration. Prove that duration is bounded
-  and small relative to user-commit p95, and bound the drain rate (max K
-  persists/sec, yielding between) so a sustained backlog does not saturate the
-  Authority.
+  commit for the persist transaction's duration. Prove the public envelope
+  instead: user-commit p95 with a drain active under sustained backlog stays
+  within the E1 budget of the no-enrichment baseline - same runner, hardware,
+  and 101-public-call unit (`06` §9); the persist duration itself is recorded
+  only as a non-percentile fixture sum. Bound the drain rate (max K
+  persists/sec, yielding between) so a sustained backlog does not saturate
+  the Authority.
 - **E1-PERF-4 (drain non-blocking).** The debounced enrichment drain never
   blocks the `HistoryAuthority` commit path's post-commit phase (the inbox yield
   is non-blocking, `V2-facts.md` cycle-1 fact) and never starves user commits
-  (`V2-facts.md` OPEN 7); prove no itemID is permanently lost between commit and
-  enrichment under sustained load (§6.3 inbox buffering).
+  (`V2-facts.md` OPEN questions item 7); prove no itemID is permanently lost
+  between commit and enrichment under sustained load (§6.3 inbox buffering).
 - **E1-PERF-7 (startup-with-enrichment p95).** With enrichment enabled, startup
   decodes the `effectiveTypeIdentifiersBlob` projection over up to 5,000 retained
   items (a new non-metadata startup cost, §7.1). Prove enrichment-enabled startup
@@ -1435,7 +1536,8 @@ Enrichment is **not external-facing** (no X1 boundary). Its security record:
   (default false). There is no per-item grant; enrichment is an internal
   derivation, unlike X1's capability-scoped external writes.
 - **TCC/sandbox/entitlement:** no additional permission expected (bytes already
-  in-process); proof gate `E1-SECURITY-1` confirms (`V2-facts.md` OPEN 6).
+  in-process); proof gate `E1-SECURITY-1` confirms (`V2-facts.md`
+  OPEN questions item 6).
 - **Content-sensitivity amplification:** V2 durably persists and full-text-indexes
   the textual content of copied images/PDFs (a sensitivity escalation for image
   content, with backup/restore and search-leakage implications) - surfaced to UX
@@ -1571,11 +1673,10 @@ Implementation must verify against the macOS 26 SDK rather than copy pseudocode
 - [MigrationStage.lightweight(fromVersion:toVersion:)](https://developer.apple.com/documentation/swiftdata/migrationstage/lightweight(fromversion:toversion:)) / [VersionedSchema](https://developer.apple.com/documentation/swiftdata/versionedschema) - V1->V2 additive schema migration; both args must be `VersionedSchema`-conforming types (M1 retrofits `HistorySchemaV1: VersionedSchema`).
 - [AsyncStream.Continuation.yield(_:)](https://developer.apple.com/documentation/swift/asyncstream/continuation/yield(_:)) / [AsyncThrowingStream.Continuation.yield(_:)](https://developer.apple.com/documentation/swift/asyncthrowingstream/continuation/yield(_:)) - non-blocking yield; the primitive for non-suspending invalidation delivery and the scheduler inbox yield (§6.3; cycle 2 directly verified the `AsyncThrowingStream` variant).
 - [SchemaMigrationPlan](https://developer.apple.com/documentation/swiftdata/schemamigrationplan) / [ModelContainer](https://developer.apple.com/documentation/swiftdata/modelcontainer) - migration-plan protocol + automatic-migration behavioral prose (cycle 2; `E1-PLATFORM-4`).
-- [Actor.unownedExecutor](https://developer.apple.com/documentation/swift/actor/unownedexecutor) / [Executor](https://developer.apple.com/documentation/swift/executor) - the `Actor` protocol's `nonisolated var unownedExecutor: UnownedSerialExecutor { get }` (macOS 10.15+), the override `EnrichmentWorker` uses to route its blocking `derive` body onto a custom `SerialExecutor` off the cooperative pool (§6.2). MCP-verified via the Swift framework symbol search (the Apple-docs prose search returns no result); API-existence is also subsumed by `E1-COMPILE-1`'s Swift 6 build, and cooperative-pool isolation is proven by `E1-PERF-6` (cycle 3).
+- [Actor.unownedExecutor](https://developer.apple.com/documentation/swift/actor/unownedexecutor) / [Executor](https://developer.apple.com/documentation/swift/executor) - the `Actor` protocol's `nonisolated var unownedExecutor: UnownedSerialExecutor { get }` (macOS 10.15+), the override `EnrichmentWorker` uses to route its blocking `derive` body onto a custom `SerialExecutor` off the cooperative pool (§6.2). MCP-verified via the Swift framework symbol search (the Apple-docs prose search returns no result); API-existence is also subsumed by `E1-COMPILE-1`'s Swift 6 build, and cooperative-pool isolation is proven by `E1-PERF-6` (cycle 5).
 
-All facts above are recorded with verdicts in `docs/v2/V2-facts.md`, except the
-custom-actor-executor anchor added in cycle 3, which is MCP-verified inline
-below. Cycle 1
+All facts above are recorded with verdicts in `docs/v2/V2-facts.md`, including
+the custom-actor-executor anchor (recorded in cycle 5). Cycle 1
 appended the MCP-verified `usesLanguageCorrection` / `init(completionHandler:)` /
 Revision 3 / `supportedRecognitionLanguages` / PDFKit model-tier / lightweight
 migration / non-blocking yield facts, and corrected the completion-handler and

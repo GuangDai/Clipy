@@ -6,9 +6,11 @@
 > and their graft onto the v1 planner/facts/commit seam. It redefines no v1
 > public type, `HistoryAction` case, `HistoryMutation` case, `PlannedOutcome`
 > case, `CapacityKind` case, schema column, codec, or proof gate; no D1–D19
-> invariant is weakened or redefined — D19 alone is explicitly *extended*
-> (narrowed to the count dimension by D24, Record 2; sanctioned `V2-00`
-> §8(e)/(g)). New V2 cases are added to closed v1 enums only as the sanctioned
+> invariant is weakened or redefined — D4 and D19 alone are explicitly
+> *extended* (D4's append-only list property is extended by D23's pruning
+> of inactive revisions; D19 is narrowed to the count dimension by D24,
+> Record 2; sanctioned `V2-00` §8(e)/(g)). New V2 cases are added to
+> closed v1 enums only as the sanctioned
 > "owned exhaustive-switch change" (`V2-00` §6.5; `03a` §1). Like v1 and V2-01 at
 > consolidation time, V2-02 is "design-consolidated, scaffold proof pending."
 
@@ -117,8 +119,9 @@ requirement** (`06` §4 lists "Age-based or storage-byte user retention" and
 "Automatic revision retention" as product-deferred). No performance evidence
 trigger is required to *design* V2-02 (unlike J1/C1/G-grafts), because V2-02
 introduces no cache and no new durable derivation whose cost must be bounded
-before admission; its performance gates (Record 3) bound the *expansion pass*
-cost, not an admission trigger.
+before admission; its performance gates (Record 3) bound the expansion pass
+on its capture and policy-sweep paths; the revise-path expansion (§4.3)
+reuses the same O(retained) scalar sweep and is measured in RET-PERF-1.
 
 ## 3. Retention expansion data model
 
@@ -341,6 +344,11 @@ internal final class RetentionExpansionConfigRow {
 }
 ```
 
+Apple documents only that `.unique` "Ensures the property's value is
+unique across all models of the same type"; conflict behavior is
+undocumented, so V2-02 relies on the single-writer Authority (no
+concurrent inserts) rather than on defined conflict semantics.
+
 `HistorySchemaV2` (the V2 schema introduced by V2-01 = the frozen v1 models plus
 `EnrichmentRow` / `EnrichmentConfigRow`, `V2-01` §3.2) **gains two further
 additive models**: `RetentionExpansionConfigRow` (§3.3) and `RetainedBytesRow`
@@ -422,6 +430,11 @@ internal final class RetainedBytesRow {
     var bytesSchemaVersion: UInt16 // 1 for V2-02 (projection-coherence fence)
 }
 ```
+
+Apple documents only that `.unique` "Ensures the property's value is
+unique across all models of the same type"; conflict behavior is
+undocumented, so V2-02 relies on the single-writer Authority (no
+concurrent inserts) rather than on defined conflict semantics.
 
 **Projection-coherence (governed by `05` §15, not a new D-invariant).** `RetainedBytesRow` is a v1-style projection: its three scalar fields are recomputed and stamped in the **same `ModelContext.transaction`** as the blob write that changes them - at capture (new item: canonical + first revision), at revise (appended revision and/or R3 prune: `revisionCount`/`revisionBytes` updated to the post-prune post-append value), and at `.setRetentionPolicies` R3 prune (restamped to the post-prune value, §3.2/§6.3). It is therefore never silently stale relative to the durable blob: a transaction either commits both the blob and its projection or neither (`05` §10 atomicity). This restates the v1 projection discipline (`05` §15 - "Projection schema changes require an explicit schema version and migration/rebuild plan") for the byte projection; no new D20+ invariant is minted, because (a) the coherence law already exists in v1 (`05` §15) and (b) the V2 invariant registry allocates D25–D28 to V2-03 and D29–D31 to V2-04, so V2-02 (D23–D24) cannot mint a new byte-projection D-number without colliding. The `bytesSchemaVersion` field is the projection-coherence fence (analogous to a blob `formatVersion`): a row whose `bytesSchemaVersion` is unknown, or whose scalars are inconsistent with the item's actual blob, fails closed as `.persistence(.corruptStoredValue)` / `.persistence(.invariantViolation)` (`05` §4/§16) - it is never silently used as a stale byte fact. The inconsistency cross-check is a **bounded single-item decode piggybacked only when an item's blob is already being decoded** - i.e. on (a) the migration backfill (`RET-PLATFORM-1b`, Record 5) and (b) the R3-sweep decode for items whose `RetainedBytesRow` scalar exceeds a threshold (`RET-PERF-2`: "only for items exceeding the threshold, typically few"). It is **never a separate decode on the per-commit R2 planning path**: that path reads the scalar columns and decodes no `revisionStateBlob`/`SignatureBlobV1` envelope (`RET-PLATFORM-2`), so an R2-only-active commit (no R3 sweep to piggyback on) triggers **zero** blob decodes - the cross-check does not run there and the zero-decode `RET-PLATFORM-2`/`RET-PERF-3` guarantees are preserved. Migration backfills the row once (Record 5).
 
@@ -733,8 +746,8 @@ Given an item's ordered revision list `R = [r0, r1, …, r_{n−1}]` (append ord
   and `maxRevisionBytes` bound the **full retained revision set, active
   included** (the active revision is always within the budget); `count(R)` and
   `bytes(R)` count the active revision, not inactive-only.
-- The **prune set** is the smallest set of oldest inactive revisions whose
-  removal makes `count(R \ pruneSet) ≤ maxRevisions` and
+- The **prune set** is the shortest append-order prefix of inactive
+  revisions whose removal makes `count(R \ pruneSet) ≤ maxRevisions` and
   `bytes(R \ pruneSet) ≤ maxRevisionBytes`, selecting in **append order**
   (oldest inactive first). Append order over inactive revisions is a total order
   with no ties: revision IDs are unique within an item (`02` §2.5 rule 2) and the
@@ -1232,18 +1245,21 @@ blocking OPEN).** V2-02 adds new cases to three frozen v1 *public* enums
 (`HistoryAction`, `HistoryCommitOutcome`, `CapacityKind`) and three v1
 *package* enums (`HistoryMutation`, `PlannedOutcome`, `StampedMutation`). This
 is sanctioned extension-by-addition per `V2-00` §2.1 ("new public cases are
-added") and §6.5 ("an owned exhaustive-switch change"): Swift public enums
-from another module are non-exhaustive by default, so v1 callers in a separate
-module do not break (only same-module exhaustive switches must be updated,
-which `RET-COMPILE-2` enforces). No existing v1 case is redefined (meanings are
+added") and §6.5 ("an owned exhaustive-switch change"): SE-0192 makes imported
+enums non-exhaustive only under library evolution (Apple SDK modules); in
+ordinary builds every enum is frozen, so adding a case can break any
+exhaustive switch - v1's cross-module switches included. `RET-COMPILE-2` must
+therefore compile v1 callers over the extended enums, not just same-module
+switches. No existing v1 case is redefined (meanings are
 preserved); only additions are made. The ABSOLUTE RULE's enumeration of
 "`HistoryAction` case" alongside "v1 public type" as things V2 "never
 redefines" is read as forbidding *redefinition* of an existing case's
 meaning, not *addition* of a new case - consistent with `V2-00` §2.1's
 addition posture. A confirmatory ruling is **no longer pending**: `V2-00` §8(h) issues it
 (extension-by-addition is sanctioned, not a redefinition of an existing case's
-meaning, iff it does not break existing exhaustive switches in v1 callers - Swift
-non-frozen cross-module enums make v1 callers non-breaking; the contingency
+meaning, iff it does not break existing exhaustive switches — and since
+ordinary-build enums are frozen (fact 22), cross-module v1 switches are
+compiled by `RET-COMPILE-2`, not silently spared; the contingency
 fallback below applies if it is ever reversed). It does not block V2-02's
 scaffold proof, which discharges switch completeness via `RET-COMPILE-2`.
 
@@ -1374,7 +1390,17 @@ performance gates (Record 3) bound the expansion pass, not admission.
 
 ### Record 2 - Invariant impact
 
-D1–D18 are **preserved unchanged**; **D19 is EXTENDED** (not preserved), per `V2-00` §4 record 2 / §8(e) ("a D1–D19 invariant is either preserved-unchanged or explicitly extended with a stated new invariant"). D19's universal scope is narrowed to the count dimension by D24, with the count-dimension guarantee preserved unchanged (D19 bullet below; §4.5). The `RetainedBytesRow` projection (§3.3b) introduces **no new D-invariant**: its coherence is governed by the v1 projection discipline `05` §15 (restated in Record 4), and the V2 invariant registry allocates D25–D28 to V2-03 and D29–D31 to V2-04, so V2-02 (D23–D24) mints no byte-projection D-number. In particular:
+D1–D3 and D5–D18 are **preserved unchanged**; **D4 and D19 are EXTENDED**
+(not preserved), per `V2-00` §4 record 2 / §8(e) ("a D1–D19 invariant is
+either preserved-unchanged or explicitly extended with a stated new
+invariant"). D4's append-only revision list is extended by D23's pruning of
+inactive revisions (D23 bullet below); D19's universal scope is narrowed to
+the count dimension by D24, with the count-dimension guarantee preserved
+unchanged (D19 bullet below; §4.5). The `RetainedBytesRow` projection
+(§3.3b) introduces **no new D-invariant**: its coherence is governed by the
+v1 projection discipline `05` §15 (restated in Record 4), and the V2
+invariant registry allocates D25–D28 to V2-03 and D29–D31 to V2-04, so
+V2-02 (D23–D24) mints no byte-projection D-number. In particular:
 
 - **D1 (Stable identity):** preserved unchanged - V2-02 reuses v1
   `.retire(itemID:, .retention)` / `.delete(itemID:, reason:)` stamping (`02`
@@ -1497,7 +1523,11 @@ R1/R2/R3 capability IDs and the deleted "R0/R1/R2 as shipped tiers" token
   `canonicalSignatureBlob` and `revisionStateBlob` once and writes the
   `RetainedBytesRow` row (`canonicalBytes`/`revisionCount`/`revisionBytes`,
   `bytesSchemaVersion == 1`). The gate verifies: (a) every retained item has a
-  1:1 `RetainedBytesRow` after migration; (b) each scalar equals the
+  1:1 `RetainedBytesRow` after migration AND every `RetainedBytesRow`
+  names a retained item (checked both directions; an orphan cannot arise
+  through stamping - §3.3b deletes it in the same transaction as the
+  item - and is `.persistence(.invariantViolation)` corruption if found);
+  (b) each scalar equals the
   recomputed-from-blob value (no backfill skips/incorrect bytes); (c) no v1
   blob/`ContentVersion`/ID is mutated; (d) the backfill runs as a
   `MigrationStage.custom` `didMigrate` step inside `SwiftDataHistory.open` (Part
@@ -1577,8 +1607,10 @@ R1/R2/R3 capability IDs and the deleted "R0/R1/R2 as shipped tiers" token
   Fixture and property tests over `planRevisionRetentionExpansion` asserting, for
   both `target` cases (`.setRetentionPolicies(active:)` and `.revise(appended:)`)
   and for count-only / byte-only / both-threshold policies: (a) the prune set is
-  the **minimal** set of inactive revisions that satisfies both thresholds on the
-  effective list; (b) selection is **oldest-inactive-first** (append order, `02`
+  the **shortest append-order prefix** of inactive revisions that satisfies
+  both thresholds on the effective list (minimal under the
+  oldest-inactive-first selection of (b), not minimum-cardinality);
+  (b) selection is **oldest-inactive-first** (append order, `02`
   §2.5 rule 1); (c) the **active** revision is never in the prune set; (d) both
   thresholds are satisfied post-prune (count and bytes); (e) the post-prune list
   is **D3-valid** (a non-nil `activeRevisionID` names exactly one present
@@ -1594,6 +1626,24 @@ R1/R2/R3 capability IDs and the deleted "R0/R1/R2 as shipped tiers" token
   the reduced bytes, never the un-pruned bytes. Fixture: two unpinned items
   A(prunable to fit) + B(fits) under a budget both satisfy post-prune must yield
   zero R2 retirements. Discharges D14/D24 for the composition.
+- **RET-SELECT-1 (R1/R2 victim-selection correctness - Domain proof).**
+  Fixture and property tests over `planItemRetentionExpansion`,
+  for age-only / byte-only / both-active policies and the
+  `.setRetentionPolicies` sweep shape (`protected` = pinned only,
+  §4.4): (a) R1's boundary is strict (`lastCopiedAt < now -
+  maxAge`) and victims retire oldest-first in the v1 eviction order
+  (`lastCopiedAt` ascending, `id` ascending, §4.2); (b) R2 retires
+  oldest eligible unpinned items only until projected retained
+  bytes <= `maxTotalBytes`, never further, after the pre-plan
+  feasibility check (§4.2); (c) no protected item is ever selected
+  (pinned/primary/count-victims, §4.2); (d) `retirements` is the
+  deduplicated R1 ∪ R2 union - no duplicate `HistoryItemID`, R1
+  victims excluded from R2's byte total (§4.1/§6.5); (e) a
+  satisfying state yields no retirement and, with
+  `newPolicies == currentPolicies`, the `.unchanged` outcome
+  (§4.4/§5.6). Distinct from `RET-PRUNE-1/-2` (R3 planner and
+  composition) and `RET-CONCUR-1` (interleaving); discharges the
+  R1 selection prose that motivates the §6.4 clock seam.
 - **RET-CONCUR-1 (two-phase R3 speculative-vs-commit prune-set agreement).** A
   deterministic harness (mirroring v1 WS20 for revision OCC interleaving)
   driving the revise two-phase path (§4.3): (1) a coalescing / lineage-
@@ -1642,7 +1692,11 @@ R1/R2/R3 capability IDs and the deleted "R0/R1/R2 as shipped tiers" token
   already in memory at capture) plus the O(retained) scalar sweep, not a blob
   decode. Capture commit interval still excludes pasteboard access,
   fingerprinting, rich-text projection, and image decode (`06` §9); the
-  expansion pass is planning work, not decode of the primary's content.
+  expansion pass is planning work, not decode of the primary's content. The
+  same scalar-read bound and measurement cover the revise-path expansion
+  when R2 is active (§4.3): RetainedBytesRow fetch + O(retained) sweep + the
+  revised item's row restamp; revise p95 with R2 active and near-5,000 items
+  is measured alongside capture p95 in this gate.
 
 - **RET-PERF-2 (setRetentionPolicies sweep).** The R3 full-sweep on
   `.setRetentionPolicies` decodes revision blobs **only for items exceeding the
@@ -1774,9 +1828,10 @@ honest note: a store backup taken before a prune retains the pruned revisions
   invariant. Restates `V2-00` §5 decision 17 for R3.)*
 
 - **D24 Expanded-retention completeness, victim safety, single commit, and D19
-  rescoping (extends D6/D8/D13/D14/D19).** V2-02 keeps this as a single new
-  invariant (the V2 registry allocates D25–D28 to V2-03 and D29–D31 to
-  V2-04, so V2-02 mints only D23/D24); its four sub-claims are stated separately
+  rescoping (restates D6/D8/D13/D14; extends D19).** V2-02 keeps this as a
+  single new invariant (the V2 registry allocates D25–D28 to V2-03 and
+  D29–D31 to V2-04, so V2-02 mints only D23/D24); its four sub-claims are
+  stated separately
   for testability:
   - *(a) Completeness + single commit (extends D6/D8/D14).* When one or more
     V2-02 policies are active, the expansion planner receives a **complete**
@@ -1809,10 +1864,11 @@ honest note: a store backup taken before a prune retains the pruned revisions
   invariants; sub-claim (d) records the D19 rescoping decision 17 (amended) now
   states explicitly.)*
 
-These extend D1–D19: D1–D18 are preserved unchanged and **D19 is
-EXTENDED** (narrowed to count by D24 sub-claim (d), count guarantee preserved);
-none is weakened, and `RetainedBytesRow` adds no D-invariant (coherence via
-`05` §15). The v1 self-review gate (`06` §10) and the V2 self-review gate
+These extend D1–D19: D1–D3 and D5–D18 are preserved unchanged; **D4 is
+EXTENDED** (by D23, which permits retention pruning of inactive revisions)
+and **D19 is EXTENDED** (narrowed to count by D24 sub-claim (d), count
+guarantee preserved); none is weakened, and `RetainedBytesRow` adds no
+D-invariant (coherence via `05` §15). The v1 self-review gate (`06` §10) and the V2 self-review gate
 (`V2-00` §8) both apply: a mechanical scan confirms no v1 public type / schema
 column / codec / invariant is redefined, and that every V2-02 type introduced —
 `HistoryRetentionPolicies`, `AgeRetention`, `StorageRetention`,
@@ -1854,6 +1910,17 @@ V2-02 provides the data hooks V2-07 (UX) consumes; it owns no SwiftUI:
   count/byte fields (R3). Disabling a dimension sends `nil`. The count control
   remains bound to the v1 `.setRetentionPolicy` (separate action). All rendered
   on the main actor from `HistoryCore` DTOs only (`V2-00` §6.6).
+- **Read posture (write-only).** The V2-02 policy surface is write-only:
+  `HistoryConfiguration` is frozen v1 (`persistence` /
+  `initialMaximumUnpinnedItems` only, `05` §2; §6.4), and no public read
+  returns the persisted `HistoryRetentionPolicies`; the settings above
+  render caller-held defaults, not store state. This mirrors v1, where
+  the count policy is also write-only (`03a` §5 `perform` payload
+  only), but widens it from one Int to three dimensions plus UI
+  defaults. Candidate sibling read for DC-08 (`V2-roadmap` DC-08 row
+  currently lists `enrichmentEnabled()`, batch
+  `enrichmentStatuses(for:)`, retained bytes (OPEN-2), and
+  `JournalAdminHistory` only).
 - **Receipt feedback.** A `.retentionPoliciesSet(retiredItems:prunedRevisions:)`
   receipt can surface "N items retired, M older revisions pruned" to the user
   (transparent data-minimization feedback). A `.capacityExceeded(.storageBytes)`

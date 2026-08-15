@@ -238,3 +238,284 @@ annotations). Every hunk was re-read in the commit diff before commit.
   intended edit voided by refutation).
 - `git diff` of the full pass re-read before commit; portable source gates
   re-run (no `Sources/` or `Tests/` file was touched — docs-only).
+
+# Part II — Iterative 审查→调查→批评 loops (2026-08-15, restructured per directive)
+
+> Directive: one round = one full 审查 (review) → 调查 (investigate) → 批评
+> (critique/correct) loop; phases run strictly in sequence; **each phase uses
+> three concurrent subagents**; every modification is applied with the Edit
+> tool. Round 1 below is the first such loop; it re-reviews the documents as
+> amended by Part I, so its findings are all new relative to Part I and the
+> DC ledger.
+
+## Loop R1 — Invariant semantics under composition (D20–D39 vs D1–D19)
+
+- **审查 (3 concurrent reviewers: V2-01/02, V2-03/04, V2-05/06):** 21
+  candidate findings (5 + 7 + 8) + 14 checked-and-sound.
+- **调查 (3 concurrent investigators, skeptic-default):** 20 CONFIRMED, 1
+  REFUTED (B3 "generation bump on schema migration unwired" — Record 5
+  :2433-2436 already wires the codec-bump case, and no V2-03 migration exists
+  while `configSchemaVersion` fails closed). C6 split PARTIAL (the "never
+  reaches the Authority" contradiction confirmed; the alleged raw-0 fail-closed
+  hole is only under-specification — both derivable at step 0).
+- **批评 (3 concurrent correctors, disjoint file partitions, Edit tool only)
+  + coordinator sweep:** 32 planned edits, 30 applied by correctors, 2 skipped
+  with reasons (§16 has no field-level type list to extend; premise absent),
+  plus 8 coordinator residue fixes. Highlights:
+  - **HIGH (B1):** V2-01's non-commit corpus writes (persistEnrichment /
+    setEnrichmentEnabled) falsified D27 — a position-only collection-cache
+    fence serves stale search pages indefinitely. Fixed with an in-memory
+    Authority `enrichmentCorpusEpoch` carried in the §7.1 fence and the
+    §7.2 key (four-element match), bump-on-write specified in both owning
+    docs. Alternatives shown unsound during 调查: a runtime
+    materializerVersion bump would trip the open-time downgrade refusal
+    (§4.6 step 4 compares a compiled-in constant); a bare `flush()` cannot
+    close the fence race (lookup that passed step 1 still passes step 3).
+  - **MD (A1):** V2-02's invariant ledger said "D19 alone is extended" while
+    its own D23 extends D4 — reclassified (D4 and D19 extended; D24 title
+    corrected to "restates …; extends D19").
+  - **MD (A2):** RET-PRUNE-1(a) "minimal set" was jointly unsatisfiable with
+    (b) oldest-inactive-first for byte-only budgets (minimal {r1} vs prefix
+    {r0,r1}) — restated as "shortest append-order prefix".
+  - **MD (A3):** the enrichment drain had no row-current no-op skip, so every
+    coalesce/pin commit (CV unchanged) re-OCR'd, contradicting §6.5 — a
+    no-op skip added to §4 and cross-referenced from §6.5.
+  - **MD (B2):** no cursor reject above the journal head — same-store backup
+    restore loops `isCaughtUp == false` forever and silently misses reused
+    sequences; reject step 5b added, §4.6's backup-restore claim scoped.
+  - **MD (B4/B5):** the DC-12 insert signature had landed at only one of six
+    V2-04 sites (C1/C2 actors + all call sites + promote-path provenance via
+    provenance-returning `lookup`s now aligned); shared fence-table entries
+    vs per-call reap contradiction resolved by a sharer-count discipline.
+  - **MD (C1–C5, C7):** read-side `.noOp` was unreachable (v1 reads throw or
+    return; removed at three sites); P1's `.ready(generation:)` referenced a
+    v1 `State` payload that does not exist (05 §7.1 deliberately has no
+    counter — reverted to bare `.ready` with position freshness); §4.6 chain
+    validation scoped to `[compactionFloor, head]` so rebase-quarantined rows
+    don't brick every later open; failed-read catcher unified on
+    `performExternalRead`; the Storage-clock witness explicitly handed to the
+    gateway at construction; the §5.1 ASCII grant re-fetch relocated into the
+    transaction closure it claims to live in.
+  - **NEW-DC:** DC-26 (GatewayConfigRow.generation write-only; cross-ref
+    fixed, keep-vs-drop recorded for decision).
+  - **LOW:** A4 revise-path expansion gate coverage (RET-PERF-1 extended),
+    A5 `contentVersionRaw` semantics (current-at, not derived-at), B6
+    "expiring all live cursors" vs mandatory head survival, B7 cancelled
+    decode's bytes (inserts moved into the flight task body).
+- **Self-critique (loop-level):** the 调查 phase refuted one 审查 finding and
+  downgraded another — the loop's skeptic stage is load-bearing, not
+  ceremony. The B1 fix is a semantic design change made to repair a falsified
+  invariant rather than a ledger row; the alternatives-rejected rationale is
+  recorded above so a future reviewer can re-open it as a decision if the
+  epoch mechanism is contested. One corrector residue (unbound
+  `diskHitProvenance`) was introduced by the batch edit and caught in the
+  coordinator sweep — batch edits need an immediate binding check.
+
+## Loop R2 — Data flow & boundary conditions
+
+- **审查 (3 concurrent reviewers):** 21 candidates (8 + 5 + 7) + 14
+  checked-and-sound. Two candidates targeted defects in loop R1's own fixes
+  (the no-op skip; the corpusEpoch fence operand) — the loop structure
+  self-corrects earlier rounds.
+- **调查 (3 concurrent investigators):** 20 CONFIRMED, 1 PARTIAL (B5: the
+  disk-cap trigger's *input* is genuinely unspecified, but the eviction pass's
+  directory listing recomputes footprint and the open-armed sweep bounds
+  exposure — fixed as a definitional sentence). Two NEW-DC dispositions:
+  DC-27 (R3 unsatisfiability veto runs before R1/R2 selection, rejecting
+  combined threshold-lowerings R2 would satisfy) and DC-28 (R1 capture-lane
+  `now` is unvalidated caller `observedAt`; a finite future date mass-retires).
+- **批评 (3 concurrent correctors + coordinator sweep):** 29 corrector edits
+  applied, 7 coordinator residue fixes. Highlights:
+  - **HIGH (B1):** loop R1's corpusEpoch fence had no left-hand operand —
+    `lookup` returned no epoch and `insert` accepted none, so insert-time
+    capture re-opened the stale-serve race. Fixed by reading
+    `E_current` inside the step-2 Authority interval (with `P_current`) and
+    threading the epoch through both signatures (`builtAtEpoch` return,
+    `corpusEpoch:` parameter, both occurrences).
+  - **HIGH (C1):** the audit `recordHash` was computed at stamping over an
+    `auditSequence` minted only in-closure — every succeeded write would be
+    flagged as chain corruption at read. Fixed: stamping reads
+    `nextAuditSequence` as N, hashes over N, the closure consumes N and
+    writes the successor.
+  - **MD (A1):** loop R1's no-op skip sat after the fetch it claimed to avoid
+    and read row fields that never cross the actor boundary — moved into
+    step 1's Authority interval behind a new `EnrichmentSourceOutcome` enum
+    (`.selection`/`.rowCurrent`/`.notApplicable`), prose reconciled.
+  - **MD (A2/A3):** persist-path missing-item branch specified (discard,
+    sweep owns the row); retry counter now increments inside the persist
+    transaction on fence-fail discards (row created if absent), so
+    pre-first-persist churn is bounded.
+  - **MD (B2/B3):** journal primary-kind rule (b) no longer misfires on the
+    V2-02 revise+R2 plan (rule (a) precedence stated + a dedicated mapping
+    row); the affected-ID union cap got encode-side semantics
+    (deterministic smallest-ID truncation, best-effort disclosure,
+    5,001-union reachability recorded) and the §4.5 clear-payload
+    contradiction fixed.
+  - **MD (C2–C4):** rate-limit denial audits coalesce per refill window
+    (never debiting the bucket; X-SECURITY-3 reworded); the token bucket
+    refills on monotonic process uptime, never the Storage-clock witness;
+    P2 predicate changes now expire in-flight search cursors (mint-predicate
+    equality; `.snapshotExpired`), closing the mixed-predicate page-2 hole.
+  - **LOW (A5/A7/A8, B4/B5, C5–C7):** RetainedBytesRow 1:1 checked both
+    directions; retired-ID enqueue-only semantics; `seen` set drains on
+    cycle completion; C2 non-crash write failures degrade-to-miss (+ gate
+    sentence); disk-cap trigger input defined (directory listing);
+    readChunkSize reframed as a residency *target* with a chunked-adapter
+    fallback; blob nonce mechanized (injected ID source + exclusive create
+    + retry); P1 checkpoint write timing reconciled (rebuild-only, upsert).
+- **Self-critique (loop-level):** loop R1 introduced two of loop R2's three
+  HIGH/MD-most findings — fixes must be reviewed with the same rigor as
+  original text, and the investigators' mechanism-level analysis (where does
+  the fence operand come from? when is the hash input minted?) is what
+  catches them. Corrector-B noted it diffed mentally against the working
+  tree, not HEAD — uncommitted multi-loop state is a hazard the coordinator
+  must keep checking via git diff after every loop.
+
+## Loop R3 — Platform-claim verification & durable promotion
+
+- **审查 (3 concurrent reviewers):** claim inventories per partition —
+  9 + 14 + 20 concrete platform claims not covered by cycles 1–5, plus 4
+  intra-doc defects, notably the **systemic C1**: V2-05 cites
+  "`V2-facts.md` cycle 5, fact/OPEN N" at 27 sites using the
+  `.tmp/v2-research/V2-05-facts.md` numbering that was never promoted (the
+  durable cycle 5 contains different facts).
+- **调查 (3 concurrent investigators, sosumi + web):** every load-bearing
+  claim verified or classed; headline outcomes: `topCandidates(_:)` does
+  NOT throw but **may return an empty array** (the doc's `[0]` traps);
+  `VNRequest.results` ordering is **undocumented** (D9 pins index order
+  only); "cross-module enums are non-exhaustive by default" is **refuted**
+  (SE-0192: only library-evolution builds; ordinary builds are frozen —
+  V2-02's safety rests on RET-COMPILE-2); `.ifExistingAtomicReplace`
+  **does not exist** (ItemReplacementOptions has exactly two cases — this
+  also refuted an option name a loop-R2 investigator had suggested);
+  NSFileCoordinator accessors take NSErrorPointer, not Swift throws;
+  `Locale.Language.LanguageCode` verified via its parent property page
+  (the 404 mystery resolved); DispatchTime monotonicity undocumented (the
+  clamp is the defense); Caches-vs-Time-Machine undocumented (hedged);
+  POSIX `O_EXCL` and unlink semantics LOCATED with primary sources.
+- **批评 (3 concurrent correctors + coordinator):** 29 corrector edits
+  (V2-01 ordering/`.first`/`.unique`/variant-equivalence fixes; V2-02
+  SE-0192 rewrite + two `.unique` notes; V2-04 replaceItem spelling +
+  first-write `moveItem` split + verified accessor spellings + size-API
+  pair + cooperative-coordination caveats ×3 + Caches hedge; V2-05 27×
+  cycle-5→6 repoints + clamp reframe; V2-06 O_EXCL mechanism + §2 label
+  qualifications + import-list substrate fix + LanguageCode/unlink
+  citations; V2-07 two pointer swaps) + 4 coordinator residue fixes.
+  **`V2-facts.md` cycle 6 appended**: the V2-05 sidecar promoted verbatim
+  (facts 1–7, OPEN 1–4 — closing the DC-01 promotion gap for V2-05) plus
+  22 loop-R3 verified facts (8–29) and 2 new OPENs (MigrationStage
+  timing; results ordering).
+- **Self-critique (loop-level):** the loop's own investigators were
+  caught once (a suggested-but-nonexistent option name) — verification
+  cuts both ways and every proposed fix must itself be platform-checked
+  before landing. The Part I review record over-claimed "cycle 5 advances
+  DC-01"; loop R3 exposed that the V2-05 sidecar had never actually been
+  promoted — durable promotion now done, and the review record corrected
+  by this entry.
+
+## Loop R4 — Architecture & interface depth (deep-module lens)
+
+- **审查 (3 concurrent reviewers, codebase-design vocabulary):** 23
+  findings (7 + 8 + 7) + 14 checked-and-sound; dispositions 15 FIX-TEXT /
+  7 ADVISORY / 1 FIX-TEXT-with-NEW-DC-alternative.
+- **调查 (3 concurrent investigators):** 22/23 confirmed with final
+  texts (one advisory downgraded to note). Gate-ID collision checks clean
+  (`E1-BEHAVIOR-1`, `RET-SELECT-1` free); the v1 failure inventory
+  enumerated from Sources (10 `HistoryFailure` cases, `UnavailableReason`
+  — not "TemporarilyUnavailable" — with `.factProof`/`.dedupIndexRebuild`)
+  grounding the loop's largest deliverable.
+- **批评 (3 concurrent correctors + coordinator):** 16 corrector edits +
+  the roadmap P3.1 follow-on. Highlights:
+  - **Missing behavioral gates minted:** `E1-BEHAVIOR-1`
+    (EnrichmentHistory public-contract mapping — the only prior gate
+    asserted *mechanism*, never mapping) and `RET-SELECT-1` (R1/R2
+    victim selection — previously owned by no gate while §6.4's clock
+    seam was justified by tests no gate admitted).
+  - **§7.3.1 complete v1-failure → ExternalFailure mapping** added to
+    V2-05: three precedence rules (sibling-wins; transient-reason
+    mapping `.factProof`→`.storeLocked`; audit-only reclassification),
+    a producible-case table, a not-producible list verified against
+    Sources, and the deliberate WS16 absent-target asymmetry recorded.
+  - **Error/contract gaps closed:** `setEnrichmentEnabled` failure
+    translation (previously unspecified while V2-07 swallowed it with
+    `try?`); `clearDiskThumbnailCache` extent + throws-for-precondition-
+    only; retention policy surface's write-only posture recorded with
+    the DC-08 sibling-read candidate; `ReconnectFailure` mismatch
+    payloads labeled diagnostics-only with one uniform recovery;
+    `JournalEntryKind` raw values declared storage-encoding-not-contract
+    (first raw-typed public enum vs 17 raw-free v1 ones; raw-free
+    alternative noted); `currentReconnectAnchor()` derivability +
+    `isCaughtUp` exactly-full-batch boundary; `ThumbnailCacheStatus`
+    field comments (0-until-sweep; diagnostics-only materializerVersion);
+    V2-03 §13's unshippable advanced-settings controls now carry the
+    OPEN-5/DC-08 deferral; V2-07's composition shell now includes the
+    facade registration (admission-by-registration, not cast);
+    V2-06 §5.1/roadmap P3.1 aligned to C-M2's public decision.
+  - **Advisories recorded (no edits):** A3 `RevisionRetention` both-nil
+    normalization + one-scalar wrappers (deletion test), A4 the
+    `.setRetentionPolicy`/`.setRetentionPolicies` homograph pair, A7
+    `RetentionExpansion*` vs v1 `Retained*` naming drift, B3 one-way-door
+    refuse typed as `.persistence(.invariantViolation)` (version policy,
+    not corruption — frozen-v1 vocabulary), B7-drop the consumer-less
+    public `materializerVersion` field (DC-08 material), C3
+    `GatewayAdminHistory`'s three-concern bundle + Void returns, C4 the
+    singleton-kind `makeExternalHistoryFacade(for:)` parameter, C6
+    `BlobReadStream.bytes` pinning a gate-contingent platform type, C7
+    `.invalidSearchTerm` overload vs centralized error consumers.
+- **Self-critique (loop-level):** the strongest findings were
+  *absences* (gates that don't exist, mappings never written) rather
+  than wrong text — depth review needs to hunt for what ISN'T in the
+  doc, which is harder to verify than what is; investigators compensated
+  by enumerating ground-truth inventories (Sources' failure cases,
+  raw-free v1 enums) as completeness oracles.
+
+## Loop R5 — Implementability, testability & roadmap coherence (final loop)
+
+- **审查 (3 concurrent reviewers):** 21 findings (5 + 5 + 8) + 15
+  checked-and-sound — dominated by **integration drift introduced by the
+  loops themselves**: the roadmap's acceptance lists and slice rows did not
+  contain the R4-minted gates (`E1-BEHAVIOR-1`, `RET-SELECT-1`); D27 and
+  Record 4 still described the pre-R1 three-element cache key while §7.2
+  mandates four (the R1-HIGH fix had not propagated to the invariant text
+  an implementer builds to); reject step 5b, the epoch fence arms, the
+  revise+R2 mapping row, and the encode-cap semantics were owned by no
+  gate/fixture; §7.3.1's mapping had no owning gate; per-module "total
+  order" step lists each ended in their own "publish the facade" step
+  (unsatisfiable when composed); DC-19 contradicted R2's residency-target
+  reframing; V2-05's gate-family roll-up missed the new gate.
+- **调查 (3 concurrent investigators):** 21/21 confirmed with final texts
+  (one finding merged as a duplicate of A1's). Notable verdicts: V2-01's
+  E1-PERF-1/3/6 demanded internal measurements (OCR p95, persist duration,
+  pool starvation) that `06` §9's runner discipline cannot sanction from
+  the two-method public seam — reworded to public envelopes (baseline-delta
+  user-commit/search p95) with one explicitly named internal-workload
+  admission for OCR p95; V2-facts now has three numbered OPEN namespaces
+  (global 1–8, cycle-3 1–2, cycle-6 1–6), so V2-01's six bare "OPEN N"
+  citations were qualified to "OPEN questions item N"; Record-3 gate
+  ordering kept (PERF-5/BEHAVIOR-1 adjacency is deliberate) with a
+  placement note instead of churn.
+- **批评 (3 concurrent correctors — one hit a usage cap after applying all
+  its edits; verified 12/12 landed — + coordinator roadmap batch of 17):**
+  doc-side: E1-PERF gate rewordings ×3, six OPEN qualifications, D27 +
+  Record 4 + §7.4 four-element amendments, D26 (e)/J1-PLATFORM-4/J1-3 5b
+  arms, J1-4 epoch + insert-window arms, J1-7 revise+R2 arm, new fixture
+  `V2-WS-J1-1b` (encode-side cap truncation), both per-module publish steps
+  demoted to segments of the single `05` §13 step-10 open order,
+  `X-BEHAVIOR-1` gate minted (mapping end-to-end) + roll-up updated, P2
+  Record 3 list completed, P2-PLATFORM-2 cursor-expiry property, P3-PLATFORM-2
+  adapter branch; roadmap-side: RET-SELECT-1/E1-BEHAVIOR-1/X-BEHAVIOR-1 into
+  all lists + R.2/E.7/J.3/X.5 cells, R.2 prune wording, J.4 head-bound
+  cursors, J.6 corpus epoch, §13 item-5 enrichment×cache composition,
+  stable-fixture list + J1-1b, P2.3 + acceptance cursor expiry, P3.4 target
+  wording + O_EXCL collision proof, DC-19 annotation, UX.1 registration
+  sentence.
+- **Advisories recorded:** mint stable E/R fixture IDs before fixtures
+  freeze (A5); X-SECURITY-2 positive N-mint leg (C8).
+- **Self-critique (series-level):** R5's biggest finding class was damage
+  the four earlier loops left behind — every loop that mints a gate,
+  fixture, invariant clause, or mechanism owes the roadmap, the invariant
+  text, and the fixture inventory an integration edit in the same loop, or
+  the next loop pays for it. The one corrector that hit a usage cap had
+  silently completed all 12 edits before failing — verified, not assumed
+  (its report never returned), which is exactly why every loop ends with a
+  coordinator diff-verification against the intended edit list.

@@ -72,7 +72,10 @@ pure, Foundation-only, and unaware that caches exist.
   (`ThumbnailWorker`, ImageIO) runs identically on a miss.
 - **Not multi-process or external-facing.** The disk cache lives in the app's
   own container; `NSFileCoordinator` coordinates across in-process presenters
-  and any future extension sharing the container, but V2-04 does not admit a
+  and any future extension sharing the container (file coordination is
+  cooperative: it serializes access only among processes/objects that
+  themselves coordinate or register an NSFilePresenter; a non-participating
+  writer is not blocked), but V2-04 does not admit a
   second process opening its own `ModelContainer` (`V2-00` §3.1). No `X1`
   boundary, no `OperationRecord` (V2-05).
 - **Not a durable derivation.** Unlike `V2-01` enrichment (a durable derived
@@ -154,7 +157,10 @@ stamp, by design. V2-04 is the graft that supplies them, purpose-specifically.
 - **Multi-process / extension direct writers to the disk cache.** V2-04's disk
   cache is written only by this process's `DiskThumbnailCache` actor.
   `NSFileCoordinator` coordinates correctly if a future extension shares the
-  container (fact 1), but V2-04 does not admit a second writer; a multi-writer
+  container (fact 1; file coordination is cooperative — it serializes access
+  only among processes/objects that themselves coordinate or register an
+  NSFilePresenter, and a non-participating writer is not blocked), but V2-04
+  does not admit a second writer; a multi-writer
   cache needs its own architecture review (`V2-00` §3.1).
 - **Detail/paste/list/search caching.** V2-04 caches only completed thumbnail
   bytes. The collection (list/search) cache is J1/V2-03; detail/paste are
@@ -434,7 +440,8 @@ internal actor ThumbnailCache {
     // selected in the 04 §9 non-suspending interval); the lookup itself runs on
     // this actor (an `await` outside the Authority interval, mirroring V2-03
     // CollectionCache §7.1 M1).
-    func lookup(_ key: ThumbnailCacheKey) async -> Data?   // PNG bytes or nil
+    func lookup(_ key: ThumbnailCacheKey) async
+        -> (png: Data?, provenance: ThumbnailCacheEntry?)   // PNG bytes or nil
     func insert(_ key: ThumbnailCacheKey, png: Data,
                 contentVersion: ContentVersion, builtAt: Date) async
                 // DC-12: entry provenance + LRU anchor come from the
@@ -619,7 +626,10 @@ V2-04 does **not** register an `NSFilePresenter` for the cache directory: V2-04
 admits no second writer (`V2-00` §3.1), so there is no in-process presenter to
 coordinate against; `NSFileCoordinator` is used for its documented atomic-
 coordination semantics (coordinated read/write that reconciles with any future
-extension sharing the container) and for the coordinated-write -> atomic-rename
+extension sharing the container — file coordination is cooperative: it
+serializes access only among processes/objects that themselves coordinate or
+register an NSFilePresenter; a non-participating writer is not blocked) and
+for the coordinated-write -> atomic-rename
 crash-safety pattern (§6.3), not for inter-process presenter notification. (If a
 future graft admits an extension that writes the cache, that graft registers the
 presenter; V2-04 states this honestly rather than assuming it.)
@@ -627,9 +637,12 @@ presenter; V2-04 states this honestly rather than assuming it.)
 ### 6.2 On-disk layout and ThumbnailDiskBlobV1 codec
 
 **Location.** The disk cache lives under the app's per-user Caches directory in
-a fixed subdirectory (`ThumbnailCache/`), resolved via `FileManager.url(for:in:appropriateFor:create:)`
-against the user domain. This is the app's own container; no TCC permission or
-privacy-usage string is expected (§12, proof gate `C2-SECURITY-1`). The location
+a fixed subdirectory (`ThumbnailCache/`), resolved via
+`FileManager.url(for:in:appropriateFor:create:)` against the user domain (a
+throwing method; resolution failure fails C2 bootstrap with the
+Directory-unavailable path, not a crash). This is the app's own container; no
+TCC permission or privacy-usage string is expected (§12, proof gate
+`C2-SECURITY-1`). The location
 is **independent of the SwiftData store URL** — the disk cache is not a SwiftData
 artifact; deleting the store does not delete the cache and vice versa. The cache
 directory is created lazily on first write.
@@ -731,13 +744,26 @@ Disk writes are crash-safe by construction:
 
 - **Coordinated write + atomic rename.** A write proceeds as: (1) encode
   `ThumbnailDiskBlobV1`; (2) write to a temporary sibling file inside the cache
-  directory under a coordinated write accessor (`NSFileCoordinator`); (3) `FileManager.replaceItem(at:withItemAt:backupItemName:options:)`
-  (atomic replace) so the destination file is either the *previous* contents or
-  the *complete new* contents, never a torn partial write. A crash mid-write
-  leaves either the old file (if any) or no file — both are correct (a miss).
-  The exact `NSFileCoordinator` coordinated-write accessor signature on macOS 26
-  is assigned `C2-PLATFORM-1` (fact 1 verified the class; the specific Swift
-  method spelling is OPEN, `V2-04-facts.md` OPEN 1).
+  directory under a coordinated write accessor (`NSFileCoordinator`); (3) the
+  atomic swap `FileManager.replaceItem(at:withItemAt:backupItemName:options:
+  resultingItemURL:)` (throws; "in a manner that ensures no data loss occurs";
+  same-volume) - so the destination file is either the *previous* contents or
+  the *complete new* contents, never a torn partial write. Apple does not
+  document the absent-destination case (community: NSFileNoSuchFileError), so
+  the FIRST write of a key uses `FileManager.moveItem(at:to:)` (documented to
+  fail if the destination exists) and only an existing file is replaced. A
+  crash mid-write leaves either the old file (if any) or no file — both are
+  correct (a miss).
+  The `NSFileCoordinator` coordinated-write accessor spelling is verified
+  (`coordinate(writingItemAt:options:error:byAccessor:)`, errors via
+  NSErrorPointer — `V2-facts.md` cycle 6 fact 24); runtime behavior on
+  macOS 26 is assigned `C2-PLATFORM-1`.
+- **Non-crash write failure (disk full, coordinator accessor error,
+  `replaceItem` failure) degrades to a miss.** `insert` is non-throwing
+  (§9.3): a failed write leaves no file, does not disable C2, does not
+  fail the thumbnail request, and mints no caller-visible error - the
+  same fail-soft contract as decode-side corruption
+  (`C2-PLATFORM-2`); the bytes are re-decoded on next access.
 - **No partial-state durability claim.** The disk cache makes no atomicity
   claim across multiple files. A crash between two `insert`s leaves whichever
   files were fully written; each is independently valid or absent. The cache
@@ -837,7 +863,9 @@ published:
    product sign-off per release. This consequence is recorded in §11.
 5. **Disk cache directory bootstrap.** If `diskCacheEnabled`, ensure the cache
    directory exists (lazy-create); do **not** scan it at open (§6.3).
-6. publish the facade.
+6. end of the V2-04 module segment of the single open order (the facade
+   is published once, in `05` §13 step 10, after every admitted module's
+   segment; roadmap M1.3).
 
 This step applies to the `.memory` store path too — except the disk cache is
 **inert** in `.memory` (no on-disk directory is used; `diskCacheEnabled` is
@@ -855,8 +883,18 @@ The disk cache is bounded by `maxDiskBytes`. Two reclamation mechanisms:
   anchor, §6.2 — content-defined, so it survives copy/restore, unlike the file's
   `modificationDate` which a backup/restore can reset), and delete
   oldest-`builtAt` until **both** the byte cap and the entry-count cap are
-  satisfied (whichever binds first triggers the pass; both are checked). The
-  pass is bounded by the entry-count cap (`ThumbnailCacheLimits`); a single
+  satisfied (whichever binds first triggers the pass; both are checked). Sizes
+  come from the verified pair
+  `FileManager.contentsOfDirectory(at:includingPropertiesForKeys:
+  [.fileSizeKey, ...])` + `url.resourceValues(forKeys:)` (prefetched and
+  cached on the URL) - not per-file `attributesOfItem` and not
+  `contentsOfDirectory(atPath:)` (names only). The
+  trigger's footprint input is the pass's own directory listing, not
+  the §10 status counter (which reports 0 until the first post-restart
+  sweep): the insert pass evaluates current-bytes by listing before
+  evicting, so the cap is enforced even between restart and the first
+  sweep. The pass is bounded by the entry-count cap
+  (`ThumbnailCacheLimits`); a single
   pass's cost is budgeted by `C2-PERF-2`.
 - **Background sweep (runs independently of `diskCacheEnabled`).** A low-
   priority, cancelable periodic sweep (armed at `open`, on the
@@ -1016,8 +1054,9 @@ alone). It is **actor-confined state** (no `@unchecked Sendable`); it holds no
 
 **Fence-table terminal-state cleanup.** The lifecycle table entry for a call is
 **reaped when the request reaches a terminal state** (`.published` or
-`.discarded`): the entry is removed once that call's `thumbnail(for:pixels:)`
-returns, so the table holds only *in-flight* materializations. Because the table
+`.discarded`): the entry is removed when the LAST sharing caller's
+`thumbnail(for:pixels:)` returns (sharer-count discipline, §9.2), so the table
+holds only *in-flight* materializations. Because the table
 is keyed **per call** (concurrent same-key callers have independent outcomes,
 §9.2), its steady-state size is the in-flight **call** count (UI thumbnail-
 request concurrency) — ≥ the single-flight table size whenever callers join —
@@ -1046,9 +1085,12 @@ ThumbnailService.thumbnail(for ref: HistoryItemReference, pixels: PixelSize):
   [C1 lookup — outside the Authority interval, an `await`]
     cached = await thumbnailCache.lookup(cacheKey)
     if cached == nil && diskCacheEnabled:
-        diskHit = await diskThumbnailCache.lookup(cacheKey)   [NSFileCoordinator read]
+        (diskHit, diskHitProvenance) = await diskThumbnailCache.lookup(cacheKey)
+                                                            [NSFileCoordinator read]
         if diskHit:
-            await thumbnailCache.insert(cacheKey, diskHit)    [promote to C1]
+            await thumbnailCache.insert(cacheKey, diskHit,
+                contentVersion: diskHitProvenance.contentVersion,
+                builtAt: diskHitProvenance.builtAt)    [promote to C1]
             cached = diskHit
   if cached != nil:
     state = .ready
@@ -1069,11 +1111,18 @@ ThumbnailService.thumbnail(for ref: HistoryItemReference, pixels: PixelSize):
     [single-flight join/create on cacheKey — v1 04 §9 step 5, join key
      SUBSTITUTED (reference -> stamp), §9.2]
     state = .decoding
-    png = await thumbnailWorker.decode(B, pixels)   [off-Authority, ImageIO; 04 §9 step 6]
-    [insert into C1/C2 — stamp-keyed safe insertion, §7.3 below]
-    await thumbnailCache.insert(cacheKey, png)
-    if diskCacheEnabled:
-        await diskThumbnailCache.insert(cacheKey, png)   [coordinated atomic write]
+    png = await flight(cacheKey)          [decode + stamp-keyed insert,
+                                         §7.3 - the flight inserts into
+                                         C1/C2 itself before resolving, so
+                                         completed bytes are retained even
+                                         when every awaiting caller is
+                                         cancelled (§7.2)]
+    [the C1/C2 inserts (stamp-keyed safe insertion, §7.3) live in the
+     flight body, not here: the flight calls
+     thumbnailCache.insert(cacheKey, png, contentVersion: ref.contentVersion,
+     builtAt: decodeStartedAt) and, when diskCacheEnabled,
+     diskThumbnailCache.insert(cacheKey, png, contentVersion:
+     ref.contentVersion, builtAt: decodeStartedAt)]
     state = .ready
     [publish fence]
     if await publishIfCurrent(cacheKey, ref):
@@ -1176,9 +1225,11 @@ Caller ──> ThumbnailService.thumbnail(for: ref, pixels:)
     cached = await thumbnailCache.lookup(selection.cacheKey)
     if cached == nil && ThumbnailCacheConfigRow.diskCacheEnabled:
         [C2 lookup — `await` on the DiskThumbnailCache actor, NSFileCoordinator read]
-        diskHit = await diskThumbnailCache.lookup(selection.cacheKey)
+        (diskHit, diskHitProvenance) = await diskThumbnailCache.lookup(selection.cacheKey)
         if let diskHit:
-            await thumbnailCache.insert(selection.cacheKey, diskHit)   [promote]
+            await thumbnailCache.insert(selection.cacheKey, diskHit,
+                contentVersion: diskHitProvenance.contentVersion,
+                builtAt: diskHitProvenance.builtAt)   [promote]
             cached = diskHit
   if let cached:
     [C3: .ready]
@@ -1190,12 +1241,18 @@ Caller ──> ThumbnailService.thumbnail(for: ref, pixels:)
      to ThumbnailCacheKey, §9.2]
     join/create flight for selection.cacheKey
     [C3: .decoding]
-    png = await thumbnailWorker.decode(selection.sourceBytes, pixels)
-                          [off-Authority, ImageIO; 04 §9 step 6 — UNCHANGED]
-    [insert — stamp-keyed safe insertion (§7.3)]
-    await thumbnailCache.insert(selection.cacheKey, png)
-    if ThumbnailCacheConfigRow.diskCacheEnabled:
-        await diskThumbnailCache.insert(selection.cacheKey, png)
+    png = await flight(selection.cacheKey)
+                          [decode + stamp-keyed insert, §7.3 - the flight
+                           inserts into C1/C2 itself before resolving, so
+                           completed bytes are retained even when every
+                           awaiting caller is cancelled (§7.2)]
+    [insert — the C1/C2 inserts (stamp-keyed safe insertion, §7.3) live in the
+     flight body, not here: the flight calls
+     thumbnailCache.insert(selection.cacheKey, png, contentVersion:
+     ref.contentVersion, builtAt: decodeStartedAt) and, when
+     ThumbnailCacheConfigRow.diskCacheEnabled,
+     diskThumbnailCache.insert(selection.cacheKey, png, contentVersion:
+     ref.contentVersion, builtAt: decodeStartedAt)]
     [v1: remove the flight entry on success/failure/cancellation — 04 §9 step 7,
      EXTENDED: the bytes are RETAINED in C1/C2 (the G1/G3 lift, §1.2)]
     [C3: .ready]
@@ -1331,7 +1388,11 @@ internal struct ThumbnailFenceKey: Hashable, Sendable {
     // flight decode (same ThumbnailCacheKey) but with different references can
     // have different publish outcomes, so the fence table keys on the call, not
     // the cacheKey alone. Callers sharing both cacheKey and reference share an
-    // outcome, so one entry is correct for them.
+    // outcome, so one entry is correct for them. the entry carries a sharer
+    // count, incremented at registration, and is removed when the LAST
+    // sharer's thumbnail(for:pixels:) returns - the first sharer's return
+    // only decrements. The table then holds only in-flight materializations
+    // (§7.2 reap discipline) under shared keys too.
     let cacheKey: ThumbnailCacheKey
     let callRef: HistoryItemReference
 }
@@ -1369,8 +1430,10 @@ internal actor ThumbnailCache {        // C1
     private var lruSeq: UInt64 = 0
     private let limits: ThumbnailCacheLimits
 
-    func lookup(_ key: ThumbnailCacheKey) async -> Data?
-    func insert(_ key: ThumbnailCacheKey, png: Data) async
+    func lookup(_ key: ThumbnailCacheKey) async
+        -> (png: Data?, provenance: ThumbnailCacheEntry?)
+    func insert(_ key: ThumbnailCacheKey, png: Data,
+                contentVersion: ContentVersion, builtAt: Date) async
     func flush(materializerVersion: UInt16) async
     // No invalidate(itemID:) — retirement is LRU-lazy (§5.4); v1
     // HistoryInvalidation carries no itemID (05 §11 step 2).
@@ -1383,8 +1446,12 @@ internal actor DiskThumbnailCache {   // C2
     // this actor (non-Sendable class, V2-04-facts.md fact 1), and released when
     // the coordinated accessor closure returns. No coordinator is stored.
 
-    func lookup(_ key: ThumbnailCacheKey) async -> Data?          // coordinated read
-    func insert(_ key: ThumbnailCacheKey, png: Data) async        // coordinated atomic write
+    func lookup(_ key: ThumbnailCacheKey) async
+        -> (png: Data?, provenance: ThumbnailCacheEntry?)   // coordinated read
+    func insert(_ key: ThumbnailCacheKey, png: Data,
+                contentVersion: ContentVersion, builtAt: Date) async
+                // coordinated atomic write; populates
+                // ThumbnailDiskBlobV1.contentVersionRaw/builtAt (§6.2)
     func sweep() async                                            // background reclamation (§6.5)
     func deleteStale(materializerVersion: UInt16) async           // sweep-invoked stale reclaim
                                                                   // (NOT bump-eager; §4/§9.4)
@@ -1483,9 +1550,11 @@ public protocol ThumbnailCacheHistory: Sendable {
 
 public struct ThumbnailCacheStatus: Sendable, Hashable {
     public let diskCacheEnabled: Bool
-    public let diskBytesUsed: Int       // current disk footprint (best-effort)
+    public let diskBytesUsed: Int       // best-effort footprint; 0 until the
+                                        // first post-restart sweep (§10 prose)
     public let maxDiskBytes: Int        // the configured cap
-    public let materializerVersion: UInt16
+    public let materializerVersion: UInt16  // diagnostics-only; no consumer in
+                                            // V2 (V2-07 §12: not user-facing)
 }
 ```
 
@@ -1516,7 +1585,12 @@ public struct ThumbnailCacheStatus: Sendable, Hashable {
   durable gate — for an enabled user who wants the derived-preview exposure gone
   now (§11) without waiting for the sweep cadence. It is the promoted "clear
   disk cache now" control (previously a future option; now in the V2-04 surface,
-  §12).
+  §12). Extent: every file in the C2 cache directory (§6.2), deleted on the
+  actor; C1 (in-memory), `ThumbnailCacheConfigRow`, and `ChangePosition` are
+  untouched (§6.5). `throws` covers only precondition failures (the store
+  cannot be read at all); per-file deletion failure is best-effort exactly
+  like the sweep - the file lingers and is retried next pass (§6.5), never
+  thrown.
 - `setMaxDiskThumbnailCacheBytes(_:)` clamps to `ThumbnailCacheLimits.maxDiskBytes`
   at the boundary and triggers a disk eviction sweep if the new cap is below the
   current footprint.
@@ -1586,8 +1660,11 @@ write, X2, V2-05). Its security record:
   smaller), but it is a new durable artifact in a new location (the Caches
   directory, not the SwiftData store). It is surfaced to UX (V2-07) as a
   user-visible data practice (the disk cache is opt-in, default off — §6.4) and
-  recorded here honestly. The Caches directory is excluded from iCloud backup
-  by default (the standard `URLResourceKey.isExcludedFromBackupKey` semantics);
+  recorded here honestly. Apple documents that device backups skip the caches
+  and tmp directories ("The system doesn't back up either the temporary
+  directory or the caches directory"); no Apple doc covers macOS Time Machine,
+  and the system may purge Caches at any time - the explicit
+  `isExcludedFromBackupKey` assertion (§6.5) remains the load-bearing defense.
   V2-04 explicitly sets the exclusion flag as defense-in-depth (the flag is set
   regardless of the default, per Apple's guidance to set it for cache files);
   `C2-SECURITY-2` (§13) is a verification-only gate confirming the flag is set
@@ -1595,8 +1672,9 @@ write, X2, V2-05). Its security record:
 - **TCC/sandbox/entitlement:** **none expected.** The Caches directory is the
   app's own container; reading/writing it requires no privacy-usage string or
   entitlement on macOS. Proof gate `C2-SECURITY-1` confirms
-  (`V2-04-facts.md` OPEN 2). `NSFileCoordinator` is an in-process coordination
-  primitive (no TCC surface).
+  (`V2-04-facts.md` OPEN 2). `NSFileCoordinator` is a cooperative
+  coordination primitive (multi-process by design; participation is opt-in;
+  no TCC surface).
 - **Crash safety.** The caches are derivations. Their loss/corruption degrades
   to a miss + re-decode (C1 in-memory; C2 corrupt-file-as-miss, §6.3); they
   never produce wrong durable history state (decisions §15; D29, D30). The disk
@@ -1745,13 +1823,18 @@ macOS 26:
   all `Sendable` by synthesis (all-`let` `Sendable` members); no escape hatch.
 - **C2-PLATFORM-1 (NSFileCoordinator coordinated accessors).** Confirm the
   exact Swift signatures of the `NSFileCoordinator` coordinated-read and
-  coordinated-write accessors on the macOS 26 SDK (the class + `init(filePresenter:)`
-  are VERIFIED, facts 1–2; the specific `coordinate(readingItemAt:options:error:byaccessor:)`
-  / `coordinate(writingItemAt:options:error:byaccessor:)` spellings are OPEN,
-  `V2-04-facts.md` OPEN 1) and that they serialize correctly under Swift 6
-  strict concurrency when confined to the `DiskThumbnailCache` actor. Confirm
-  the coordinated-write + `FileManager.replaceItem` atomic-rename pattern is
-  crash-safe (no visible torn file) on macOS 26.
+  coordinated-write accessors on the macOS 26 SDK (the class +
+  `init(filePresenter:)` are VERIFIED, facts 1–2; the verified spellings are
+  `coordinate(readingItemAt:options:error:byAccessor:)` and
+  `coordinate(writingItemAt:options:error:byAccessor:)` — errors are
+  delivered via an NSErrorPointer out-param, not Swift throws, and both
+  accessors execute synchronously) and that they serialize correctly under
+  Swift 6 strict concurrency when confined to the `DiskThumbnailCache`
+  actor. Confirm the coordinated-write + `FileManager.replaceItem`
+  atomic-rename pattern is crash-safe (no visible torn file) on macOS 26.
+  The accessor error path (non-crash write failure, §6.3) is confirmed
+  alongside the crash paths; the first-write moveItem/replaceItem split
+  (§6.3) is part of this gate.
 - **C2-PLATFORM-2 (disk codec round trip).** `ThumbnailDiskBlobV1`
   encode/decode round-trips and that every corruption class (unknown version,
   oversize PNG, key/filename mismatch, checksum mismatch, materializer-version

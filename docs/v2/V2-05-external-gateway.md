@@ -47,7 +47,7 @@ X1 (`V2-00` §3) and X2 (`V2-00` §3) bundle onto one substrate:
 3. **App Intents exposure (X1).** A set of `AppIntent` conformances in `ClipyApp`
    (the composition root) that resolve a capability-scoped `ExternalHistory`
    facade via `@Dependency` and `await` it in `perform()` (pending verification under `X-COMPILE-2` / `X-SECURITY-1`; `V2-facts.md`
-   cycle 5, facts 1–4). The facade is **obtained by `ClipyApp` from `SwiftDataHistory` at
+   cycle 6, facts 1–4). The facade is **obtained by `ClipyApp` from `SwiftDataHistory` at
    launch** (`makeExternalHistoryFacade(for:)`, §6.5), registered into
    `AppDependencyManager.shared` once at launch, and delegates every write to
    `HistoryAuthority`. `@Dependency` is App Intents' mandated DI mechanism, NOT
@@ -102,7 +102,7 @@ justified against `03a` §1 closed-set discipline).
 - **Not multi-process.** App Intents live in the **main app target** and run
   in-process, inheriting the app's single in-process Authority. A separate App
   Intents **extension target** is a second process and is explicitly post-V2
-  (`V2-00` §3.1 multi-process exclusion; `V2-facts.md` cycle 5, OPEN 1).
+  (`V2-00` §3.1 multi-process exclusion; `V2-facts.md` cycle 6, OPEN 1).
 - **Not CloudKit / multi-device sync** (`V2-00` §3.1).
 - **Not a replacement for the HCR.** The History Change Record (V2-03) records
   *what changed in history* for reconnect/cache completeness; the
@@ -172,7 +172,7 @@ tables, no `OperationRecord`, no `AppIntent`, and no `@Dependency`, by design.
 - **Cryptographic non-repudiation.** The hash chain (D36) is tamper-*evident*,
   not tamper-*proof* against full-store access. An HMAC-with-Keychain-key
   hardening is a future option (Keychain API pending verification under `X-PLATFORM-3`; `V2-facts.md`
-  cycle 5, facts 5–7); not taken in V2-05.
+  cycle 6, facts 5–7); not taken in V2-05.
 - **A network / remote enrollment kind.** The credential-store seam (Keychain)
   is specified (§6.7) but exercised only by future non-App-Intents enrollment
   kinds (URL-scheme bearer token, XPC service label). V2 ships App Intents only.
@@ -206,7 +206,15 @@ External caller (App Intent perform() / Siri / Shortcuts / Spotlight)
           debit the process-wide App-Intents token bucket; if exhausted, audit-
           as-denied (appendDenialAuditRecord, at-most-one small transaction) and
           throw ExternalFailure.requestDenied(.rateLimited) BEFORE step 1. Runs
-          ahead of VALIDATE so a rate-exceeding caller never reaches the Authority.
+          ahead of VALIDATE so a rate-exceeding caller never reaches the
+          Authority's request-evaluation path; the denial record itself is
+          appended via `Authority.appendDenialAuditRecord`, carrying
+          operationKind/capability derived from the typed request case
+          (never raw 0 — §4.3 decode is fail-closed).
+          Consecutive .rateLimited denials within one refill window are
+          audited as ONE coalesced record (resultSummary carries the
+          denied-request count); the first denial of each window is always
+          audited; denial audits never debit the bucket.
        1. VALIDATE the request (D35): parameters within V2 bounds, requested
           HistoryItemIDs well-formed; reject malformed input as
           ExternalFailure.requestDenied before any history read.
@@ -386,8 +394,8 @@ public enum ConnectionStatus: Int16, Sendable, Hashable, Codable {
 For a future `urlScheme` / `xpc` enrollment that needs a bearer token or
 service-label secret, V2-05 specifies a Keychain-backed `CredentialStore` actor
 (`SecItemAdd` / `SecItemCopyMatching` / `SecItemDelete`, macOS 10.6+,
-pending verification under `X-PLATFORM-3`; `V2-facts.md` cycle 5, facts 5–7). All `SecItem*` calls are confined to the actor
-(they block the calling thread; pending verification under `X-PLATFORM-3`; `V2-facts.md` cycle 5, facts 5–6), mirroring v1's
+pending verification under `X-PLATFORM-3`; `V2-facts.md` cycle 6, facts 5–7). All `SecItem*` calls are confined to the actor
+(they block the calling thread; pending verification under `X-PLATFORM-3`; `V2-facts.md` cycle 6, facts 5–6), mirroring v1's
 Fuse confinement (`01` §6). The credential is keyed by `ExternalConnectionID`
 under the app's default keychain access group (`application-identifier`
 entitlement; no cross-app sharing in V2). **This path is not exercised in V2**
@@ -575,7 +583,7 @@ internal enum ResultSummaryV1: Codable, Sendable {
 internal struct AuditChainLinkV1: Codable, Sendable {
     let formatVersion: UInt16          // exactly 1
     let previousHash: Data             // SHA-256 of the prior record's canonical encoding
-                                       // (all-zeros for auditSequence == 1)
+                                       // (all-zeros for the minted sequence N == 1)
     let recordHash: Data               // SHA-256 over (previousHash || canonical(payload) ||
                                        //   auditSequence || connectionIDRaw || capabilityRaw ||
                                        //   operationKindRaw || outcomeRaw || failureKindRaw || denialReasonRaw || requestedAt)
@@ -605,13 +613,13 @@ Any violation is `.persistence(.corruptStoredValue)` /
 `.persistence(.invariantViolation)` (`05` §16). The decoder does not silently
 drop a record, reset an outcome, or "repair" a broken chain.
 
-**Tamper-evidence honesty (D36, `V2-facts.md` cycle 5, OPEN 4).** SHA-256 over
+**Tamper-evidence honesty (D36, `V2-facts.md` cycle 6, OPEN 4).** SHA-256 over
 in-record fields detects accidental corruption, single-row edits that forget to
 recompute the chain, gaps from partial commits, and reorders. It does **not**
 provide non-repudiation against an attacker with full store access (who can
 recompute the chain). For V2 (local, single-user) this is the right boundary:
 the chain raises the bar without claiming a property it cannot deliver. An
-HMAC-with-Keychain-key hardening (Keychain API pending verification under `X-PLATFORM-3`; `V2-facts.md` cycle 5, facts 5–7) is recorded
+HMAC-with-Keychain-key hardening (Keychain API pending verification under `X-PLATFORM-3`; `V2-facts.md` cycle 6, facts 5–7) is recorded
 as a future option (Record 6); not taken in V2-05.
 
 `OperationPayloadBlobV1` and `AuditChainLinkV1` are `Sendable` (all-`let`
@@ -689,7 +697,8 @@ internal final class GatewayConfigRow {
     var compactionFloor: UInt64        // min surviving auditSequence after the last compaction pass;
                                        // a read below the floor returns the documented
                                        // "compacted-before" result, not a silent gap.
-    var generation: UInt32             // bumps on schema migration or chain rebase (§4.4 / §5.6);
+    var generation: UInt32             // bumps on schema migration or chain rebase (Record 5 / §5.6 —
+                                       // schema migration owns no bump here; §4.4 defines codecs only);
                                        // checked arithmetic (02 §13).
     var configSchemaVersion: UInt16    // 1 for V2-05
 }
@@ -753,9 +762,12 @@ facade is published:
    appIntentsConnectionID` and `enrollKindRaw == appIntents` exists (create
    `status == active` if absent — the connection exists, but **no grant** is
    created; deny-by-default, §3.3);
-5. **chain validation (D36):** read the audit chain in order and verify every
-   `recordHash` / `previousHash` link; a break is `.persistence(.invariantViolation)`
-   (§5.6);
+5. **chain validation (D36):** read the audit chain in order over
+   [compactionFloor, head] and verify every `recordHash`/
+   `previousHash` link in that range (CRIT-M12; rows below the floor —
+   compacted, or quarantined by a §5.6 rebase, which sets
+   compactionFloor = newFloor — are out of scope); a break is
+   `.persistence(.invariantViolation)` (§5.6);
 6. publish the facade (the `ExternalGateway` actor and `ConnectionRegistry`
    see the validated, consistent config).
 
@@ -785,13 +797,6 @@ ExternalGateway.perform(.remove(itemID), as: connID)   [actor]
   3. Authority.commitExternal(request: .remove(itemID), connection: connID,
                               requestedAt:)   [single writer; authoritative gate]
        create operation-local context
-       -> RE-FETCH ConnectionRow.status + live GrantRow set INSIDE the same
-          non-suspending transaction closure that applies mutations (the
-          authoritative gate). If revoked/ungranted at the save boundary:
-          throw ExternalFailure.unauthorized/.connectionRevoked from inside the
-          closure (closure commits nothing); audit-as-denied in a separate
-          small follow-up transaction. This closes the TOCTOU window at the
-          save boundary (D33).
        -> load action-specific facts (05 §7.3 remove: target scalar summary)
        -> call the v1 pure planner planRemove (UNCHANGED; the Domain is unaware
           the request is external)
@@ -819,6 +824,10 @@ ExternalGateway.perform(.remove(itemID), as: connID)   [actor]
          the V2-05 auditAppend (OperationRecordPayload, §5.4)
        -> prevalidate index delta, receipt, hcrAppend, AND auditAppend
        -> execute ONE ModelContext.transaction (05 §10):
+            re-fetch ConnectionRow.status + live GrantRow set (the
+            authoritative gate, D33); if revoked/ungranted: throw from
+            inside the closure (commits nothing); audit-as-denied in a
+            separate small follow-up transaction
             for mutation in plan.mutations { try apply(mutation, in: context) }   // v1
             try validateFinalPinOrder(in: context)                                 // v1
             try appendHistoryChangeRow(plan.hcrAppend, in: context)                // V2-03 (always-on)
@@ -911,7 +920,7 @@ ExternalGateway.read(.search(text, mode, limit), as: connID)   [actor]
        For .recent/.details/.pastePayload reads (no off-actor SearchWorker
        evaluation) the grant-recheck, evaluation, and audit genuinely fit ONE
        non-suspending Authority interval.
-  4. Read audit outcome .succeeded / .noOp / .failed / .denied; resultSummary
+  4. Read audit outcome .succeeded / .failed / .denied; resultSummary
        pageCount(rows.count) on success; requestedAt / committedAt from the
        Storage clock (§5.5). (Reads advance nextAuditSequence but NOT
        ChangePosition.) The read audit is a SEPARATE transaction from any write
@@ -921,13 +930,16 @@ ExternalGateway.read(.search(text, mode, limit), as: connID)   [actor]
 
 **Failed-read audit path (D34).** If `performExternalRead` throws (e.g.,
 `HistoryFailure.notFound` for a `details`/`pastePayload` on a removed item, or
-`.invalidInput(.invalidSearchTerm)` from the SearchWorker), the gateway **does
-not** skip the audit: it catches the throw, audits a read `OperationRecord`
-with `outcome == .failed` and the matching `failureKind`/`denialReason`
-(§4.3/§4.4) **inside the same read-audit closure**, then rethrows the
-`ExternalFailure`. The no-op read case (e.g., a `details` read whose item was
-retired between validate and evaluate) audits `outcome == .noOp`. This failed/
-no-op read audit is still subject to the read at-most-one best-effort bound
+`.invalidInput(.invalidSearchTerm)` from the SearchWorker),
+`performExternalRead` **does not** skip the audit: it catches the throw,
+audits a read `OperationRecord` with `outcome == .failed` and the matching
+`failureKind`/`denialReason` (§4.3/§4.4) **inside its own read-audit
+closure**, then rethrows the `ExternalFailure`. There is no no-op read: v1
+reads either return a value (audited `.succeeded`, `pageCount(0)` for an
+empty page) or throw (`05` §14.3 — `details`/`pastePayload` throw
+`.notFound` for an absent target; `03b` §9 DTOs are non-optional),
+audited `.failed`. This failed-read
+audit is still subject to the read at-most-one best-effort bound
 (D34): a crash between the throw and the read-audit commit can drop it without
 affecting the read's correctness (the read itself returned, or threw, cleanly).
 
@@ -1036,13 +1048,13 @@ internal struct OperationRecordPayload: Sendable {
                                                        // captured at stamping under the Storage clock)
     let changePosition: ChangePosition                // == plan.position (D34 cross-ref)
     let previousHash: Data                            // SHA-256 of the prior record's recordHash
-                                                       // (all-zeros for auditSequence == 1). Read at
+                                                       // (all-zeros for the minted sequence N == 1). Read at
                                                        // STAMPING time — see below.
 }
 ```
 
 `previousHash` is read at the **derive/stamp** step (a bounded fetch of the
-prior record's `recordHash`, or all-zeros if this is `auditSequence == 1`), at
+prior record's `recordHash`, or all-zeros if the minted sequence N == 1), at
 the same point `StampedCommitPlan` — and therefore `auditAppend` — is
 constructed. This is safe and chain-continuous because the entire
 fact-load → plan → stamp → `ModelContext.transaction` span is ONE Authority-
@@ -1058,7 +1070,12 @@ field — read at stamping here, not in-closure, precisely so the payload is
 constructible at stamping time. `recordHash` over the canonical encoding — `04`
 codec discipline — and the `chainLinkBlob` encode also happen at stamping, on
 the same non-suspending span; the in-closure work is the row `insert` plus the
-`nextAuditSequence` mint.) The hash computation is O(payload) and bounded by
+`nextAuditSequence` mint.) At stamping the plan reads
+GatewayConfigRow.nextAuditSequence as N (the same non-suspending span);
+recordHash and chainLinkBlob are computed over N; the commit closure inserts
+the row with auditSequence == N and writes the successor (nextAuditSequence ==
+N + 1), so the hashed input equals the minted value by construction. The hash
+computation is O(payload) and bounded by
 `ExternalLimits`; it is recorded in `X-PERF-2` as a new per-external-op cost,
 not "free." For the noOp/denied/failed-write and read audit branches (which do
 NOT flow through `StampedCommitPlan`), the payload is constructed inside its
@@ -1105,7 +1122,11 @@ R1) and V2-03 reused (HCR `createdAt`): a `Sendable` clock witness (`() -> Date`
 closure or `RetentionClock` protocol) injected into `HistoryAuthority` at `open`,
 defaulting to `Date.now` in production and injectable in tests (`V2-03` §6.4).
 V2-05 adds **no** new injection point (`X-COMPILE-1` stays free of a new escape
-hatch). Wall-clock is not monotonic; a backwards move under-compresses audit
+hatch). The same witness is handed to the `ExternalGateway` actor at its
+construction inside `open` (one seam, one witness - no new injection
+point) so gateway-entry `requestedAt` capture and §3.1 step-0 denial
+audits read the Storage clock.
+Wall-clock is not monotonic; a backwards move under-compresses audit
 (safe direction, mirroring `V2-03` §6.4's C3-n4). The Domain mints no `Date()`
 (`02` §1).
 
@@ -1331,7 +1352,7 @@ internal extension HistoryAuthority {
     // (authoritative gate; throws/audit-as-denied if revoked/ungranted) and
     // captures the Sendable SearchCorpusSnapshot; SearchWorker evaluates off-
     // actor between intervals; interval 2 builds the page and audits outcome
-    // .succeeded/.noOp/.failed/.denied, reading previousHash fresh and minting
+    // .succeeded/.failed/.denied, reading previousHash fresh and minting
     // nextAuditSequence (Authority-serialized; D36 continuity via actor
     // serialization + the fresh previousHash read). For .recent/.details/
     // .pastePayload (no off-actor evaluation) the gate+evaluate+audit fit ONE
@@ -1389,18 +1410,18 @@ app-internal `commitRemove` etc. remain for `perform(.remove)` and set
 
 The v1 rule (`01` §8): "No `.shared`, `.current`, or other mutable authoritative
 service locator." App Intents resolve dependencies through
-`AppDependencyManager.shared` (pending verification under `X-COMPILE-2`; `V2-facts.md` cycle 5, fact 2) — a `.shared` spelling.
+`AppDependencyManager.shared` (pending verification under `X-COMPILE-2`; `V2-facts.md` cycle 6, fact 2) — a `.shared` spelling.
 This is the **only** DI mechanism App Intents provides: App Intents are
 constructed by the **system** (not by the app), so normal initializer injection
 is impossible, and `@Dependency` / `AppDependencyManager` is, to the doc's
 pending-verification understanding, Apple's intended seam (pending verification
-under `X-COMPILE-2` / `X-SECURITY-1`; `V2-facts.md` cycle 5, facts 1, 2, 4 —
+under `X-COMPILE-2` / `X-SECURITY-1`; `V2-facts.md` cycle 6, facts 1, 2, 4 —
 the pattern Apple's sample code demonstrates, e.g., WWDC24's `OpenAssetIntent`
 declares `@Dependency` for its "Navigation Manager"). **Swift 6 strict-
 concurrency risk:** a Swift Forums report documents a known crash against
 `AppDependencyManager` / `@Dependency` in Swift 6 mode (queue-assertion crash
 whenever any `@Dependency` is used in an `AppIntent`; verified and recorded in
-`V2-facts.md` cycle 5:
+`V2-facts.md` cycle 6:
 https://forums.swift.org/t/appdependencymanager-and-dependency-usage-crashes-in-swift-6-mode/73226);
 `X-COMPILE-2`
 must therefore confirm CRASH-FREE resolution under a Siri/Shortcuts-invoked
@@ -1491,7 +1512,7 @@ Shortcuts / Spotlight can invoke an intent while the app is **not running**,
 background-launching it to perform the intent. Whether
 `AppDependencyManager.shared.add(...)` has completed by the time the system
 first resolves an intent's `@Dependency` on that launch-to-perform path is the
-unverified platform assumption of `V2-facts.md` cycle 5, OPEN 2 — `X-COMPILE-2` as originally scoped
+unverified platform assumption of `V2-facts.md` cycle 6, OPEN 2 — `X-COMPILE-2` as originally scoped
 only confirmed the Swift 6 build, not this ordering. `X-COMPILE-2` is therefore
 **strengthened** to confirm on macOS 26 that a Siri/Shortcuts-triggered
 background launch resolves `@Dependency` AFTER `ClipyApp`'s launch-time
@@ -1533,26 +1554,26 @@ struct SearchHistoryIntent: AppIntent {
 }
 // PinItemIntent / UnpinItemIntent / RemoveItemIntent: .manage capability; @Dependency the same facade.
 // GetItemDetailsIntent / PasteItemIntent: .readContent capability (the full-content path, §3.2).
-// ClipboardShortcuts: AppShortcutsProvider surfaces them to Shortcuts/Siri (pending verification under X-COMPILE-2; V2-facts.md cycle 5, fact 3).
+// ClipboardShortcuts: AppShortcutsProvider surfaces them to Shortcuts/Siri (pending verification under X-COMPILE-2; V2-facts.md cycle 6, fact 3).
 ```
 
 Each intent maps to exactly one `ExternalRequest` / `ExternalRead` case. No
 intent can spell `capture`/`revise`/`clear`/`setRetentionPolicy` — those cases
 do not exist on `ExternalHistory`. `perform()` is `async throws -> some
-IntentResult` (pending verification under `X-COMPILE-2` / `X-SECURITY-1`; `V2-facts.md` cycle 5, fact 1); it `await`s the facade,
+IntentResult` (pending verification under `X-COMPILE-2` / `X-SECURITY-1`; `V2-facts.md` cycle 6, fact 1); it `await`s the facade,
 which `await`s the gateway, which `await`s the Authority. The intent itself
 carries no `HistoryAuthority`/`@Model` reference; only the `Sendable` facade.
-Intents run in the app's process (`V2-facts.md` cycle 5, OPEN 1 / `X-SECURITY-1`), inheriting the app's
+Intents run in the app's process (`V2-facts.md` cycle 6, OPEN 1 / `X-SECURITY-1`), inheriting the app's
 single in-process Authority. The intent's `@Parameter` values are untrusted
 (D35) and re-validated at the gateway (the system resolves parameters before
-`perform()`, pending verification under `X-COMPILE-2` (`V2-facts.md` cycle 5, fact 1), but V2-05 does not trust that resolution
+`perform()`, pending verification under `X-COMPILE-2` (`V2-facts.md` cycle 6, fact 1), but V2-05 does not trust that resolution
 for bounds — it re-checks at the boundary).
 
 ### 6.7 CredentialStore (Keychain, reserved — not exercised in V2)
 
 ```swift
 internal actor CredentialStore {
-    // Confines blocking SecItem* calls (pending verification under X-PLATFORM-3; V2-facts.md cycle 5, facts 5-6). Unused by
+    // Confines blocking SecItem* calls (pending verification under X-PLATFORM-3; V2-facts.md cycle 6, facts 5-6). Unused by
     // the V2 App Intents path; specified for a future urlScheme/xpc enrollment
     // kind. When built, X-PLATFORM-3 confirms Swift 6 strict-concurrency
     // compilation + round trip.
@@ -1562,7 +1583,7 @@ internal actor CredentialStore {
 }
 ```
 
-The `SecItem*` API is macOS 10.6+ (pending verification under `X-PLATFORM-3`; `V2-facts.md` cycle 5, facts 5–7) and blocks the
+The `SecItem*` API is macOS 10.6+ (pending verification under `X-PLATFORM-3`; `V2-facts.md` cycle 6, facts 5–7) and blocks the
 calling thread, so all calls are actor-confined. The credential is scoped to
 the app's default keychain access group (no cross-app sharing in V2). Until a
 future enrollment kind ships, this actor is unbuilt and `HistoryStorage` does
@@ -1804,6 +1825,61 @@ the v1 enum. `ExternalFailure.history(HistoryFailure)` and
 (standard scoped-error pattern, not a redefinition), exactly as `ReconnectFailure`
 does (`V2-03` §6.3).
 
+### 7.3.1 Complete v1-failure -> ExternalFailure mapping (frozen subset)
+
+`failureKindRaw` is persisted (§4.3), so every v1 failure the gateway can
+surface has exactly one row below. Three precedence rules close the
+ambiguities left open by §5.1/§5.2:
+
+- **P1 sibling wins.** A `HistoryFailure` case with a dedicated
+  `ExternalFailure` sibling is never wrapped in `.history`:
+  `.notFound` -> `.notFound` (raw 4); `.persistence` -> `.persistence`
+  (raw 7); `.temporarilyUnavailable` -> `.temporarilyUnavailable`
+  (raw 6). `.history` (raw 5) carries only cases with no sibling.
+- **P2 transient reasons.** v1 `.factProof` -> `.storeLocked`
+  (retry-later, not an index rebuild); v1 `.dedupIndexRebuild` ->
+  `.indexRebuild` (reserved - capture-path-only, not producible from
+  the frozen subset). `.storeLocked` is also gateway-minted for
+  facade-resolution failure (§6.5).
+- **P3 audit-only reclassification (§5.2 D35).** A SearchWorker-surfaced
+  `HistoryFailure.invalidInput` is THROWN as `.history` (raw 5) but
+  AUDITED as raw 3 + `denialReasonRaw == .invalidInput`. No other case
+  is reclassified.
+
+| v1 failure (producible case; source) | thrown as | raw |
+|---|---|---|
+| `.notFound(id)` — unpin/remove planner | `.notFound(id)` | 4 |
+| `.notFound(id)` — details/pastePayload read | `.notFound(id)` | 4 |
+| `.invalidPinnedPlacement(.targetMissing)` — pin | `.history(...)` | 5 |
+| `.invalidInput(.invalidSearchTerm)` — search | `.history` (audit 3) | 5 / 3 |
+| `.invalidInput(.invalidRegularExpression)` — search | `.history` (audit 3) | 5 / 3 |
+| `.invalidInput(.invalidPageLimit)` — recent/search | `.requestDenied` at the D35 gate; else `.history` (audit 3) | 3 (or 5 / 3) |
+| `.temporarilyUnavailable(.factProof)` — fact loads | `.temporarilyUnavailable(.storeLocked)` | 6 |
+| `.persistence(.corruptStoredValue)` — decode | `.persistence(...)` | 7 |
+| `.persistence(.invariantViolation)` — chain/prevalidation/corpus | `.persistence(...)` | 7 |
+| `.persistence(.transaction)` — commit closure | `.persistence(...)` | 7 |
+
+**Not producible** from the frozen subset (pin is `.first`-only,
+`ExternalRead` carries no cursor, no capture/revision/thumbnail/
+retention path): `.staleContent`, `.revisionNotFound`,
+`.snapshotExpired`, `.capacityExceeded` (all kinds),
+`.invalidPinnedPlacement(.targetEqualsAnchor/.anchorMissingOrUnpinned)`,
+`.temporarilyUnavailable(.dedupIndexRebuild)`,
+`.persistence(.openStore)` (open throws before the facade is
+published, §4.6), and the ten capture/revision/thumbnail/retention
+`.invalidInput` reasons.
+
+**Gateway-minted (no v1 source):** `.unauthorized`,
+`.connectionRevoked`, `.requestDenied(.invalidInput/.rateLimited)`,
+`.temporarilyUnavailable(.storeLocked)` (§6.5),
+`.auditCompactedBefore(floor:)` (§5.6).
+
+**Absent-target asymmetry (deliberate, v1 WS16):** remove/unpin and
+details/pastePayload report raw 4; pin reports raw 5 via
+`.history(.invalidPinnedPlacement(.targetMissing))` - placement keeps
+its dedicated v1 vocabulary (`02` §10), and `ExternalFailure` has no
+`invalidPinnedPlacement` sibling, so P1 does not apply to it.
+
 ### 7.4 Exhaustive-switch and code-interaction impact
 
 - **`HistoryAction` switch (`05` §8):** unchanged. External/admin operations add
@@ -1878,7 +1954,14 @@ does (`V2-03` §6.3).
   caller identity the surface may not provide (`X-SECURITY-4` surveys what
   caller identity, if any, is available). Whether the system itself
   coalesces/throttles App Intent invocations is undocumented — V2-05 does not
-  rely on it.
+  rely on it. The bucket refills from
+  `DispatchTime.now().uptimeNanoseconds` - "the number of nanoseconds since
+  boot, excluding any time the system spent asleep" (Apple docs define the
+  epoch; monotonicity itself is NOT documented - `V2-facts.md` cycle 6 fact
+  9). The defense is the clamp, not the adjective: elapsed = max(0, now -
+  last) and refill is capped at bucket capacity, so a backward or
+  non-monotonic reading can only delay a refill, never grant extra. The
+  Storage-clock witness stays audit-timestamp-only (§5.5).
 - **Single writer preserved (D32).** The gateway creates no `ModelContext`;
   every write delegates to `HistoryAuthority`. No external path bypasses the v1
   stamping/transaction stages or the planner.
@@ -1894,12 +1977,12 @@ does (`V2-03` §6.3).
   forward SHA-256 hash chain detects a gap/reorder/edit at read time over
   `[compactionFloor, head]` (§5.6). The chain is **not** non-repudiation
   against full-store access (§4.4,
-  `V2-facts.md` cycle 5, OPEN 4).
+  `V2-facts.md` cycle 6, OPEN 4).
 - **Privacy discipline.** The audit log records *request shape + result count*,
   never query text, never returned content (§4.4). Search audit carries byte
   counts. This prevents the audit from becoming a second, less-protected copy
   of sensitive clipboard content.
-- **In-process App Intents (`V2-facts.md` cycle 5, OPEN 1 / `X-SECURITY-1`).** App Intents live in the
+- **In-process App Intents (`V2-facts.md` cycle 6, OPEN 1 / `X-SECURITY-1`).** App Intents live in the
   main app target and run in the app's process, inheriting the app's
   entitlements/TCC. The required OUTCOME: an intent's `perform()` reaches the
   app's single in-process `HistoryAuthority` and the app's pasteboard TCC; no
@@ -1907,7 +1990,7 @@ does (`V2-03` §6.3).
   App Intents extension target is a second process and is post-V2.
 - **Keychain credentials (reserved).** Unused in V2 (App Intents need no
   credential); specified for future enrollment kinds, actor-confined (`01` §6 /
-  `V2-facts.md` cycle 5, facts 5–7).
+  `V2-facts.md` cycle 6, facts 5–7).
 - **Crash safety.** The audit log is durable state (not a derivation): its loss
   loses audit provenance (irreversible — Record 4 states it is NOT a cache).
   Its corruption is detected by the chain and surfaced as a typed failure /
@@ -2045,12 +2128,33 @@ on macOS 26:
 - **X-PLATFORM-3 (Keychain, reserved).** When a future enrollment kind ships,
   confirm `SecItemAdd`/`SecItemCopyMatching`/`SecItemDelete` compile under Swift
   6 strict concurrency in the actor-confined `CredentialStore` and round-trip a
-  credential (macOS 10.6+; `V2-facts.md` cycle 5, facts 5–7). Not exercised in V2.
-- **X-SECURITY-1 (App Intents in-process/entitlement).** `V2-facts.md` cycle 5, OPEN 1:
+  credential (macOS 10.6+; `V2-facts.md` cycle 6, facts 5–7). Not exercised in V2.
+- **X-BEHAVIOR-1 (v1-failure -> ExternalFailure mapping, §7.3.1).**
+  Fixture-prove the frozen mapping end to end, none of which
+  `X-PLATFORM-2` (codec corruption) or `X-PERF-*` (mechanism
+  bounds) covers: (a) P1 - every `HistoryFailure` case with a
+  dedicated sibling is thrown as that sibling (`.notFound`,
+  `.persistence`, `.temporarilyUnavailable`), and `.history`
+  carries only sibling-less cases; (b) P2 - `.factProof` throws
+  `.temporarilyUnavailable(.storeLocked)` and the reserved
+  `.dedupIndexRebuild` -> `.indexRebuild` row is never produced
+  from the frozen subset; (c) P3 - a SearchWorker
+  `.invalidInput` is thrown as `.history` (raw 5) but audited
+  as raw 3 + `denialReasonRaw == .invalidInput`, and no other
+  case is reclassified; (d) the absent-target asymmetry -
+  remove/unpin and details/pastePayload report raw 4, pin
+  reports raw 5 via `.history(.invalidPinnedPlacement(
+  .targetMissing))` (v1 WS16, deliberate); (e) the §7.3.1
+  not-producible list holds - no frozen-subset request can
+  surface `.staleContent`, `.revisionNotFound`,
+  `.snapshotExpired`, `.capacityExceeded`, or the capture/
+  revision/thumbnail/retention `.invalidInput` reasons, and any
+  fixture that surfaces a listed case fails the gate.
+- **X-SECURITY-1 (App Intents in-process/entitlement).** `V2-facts.md` cycle 6, OPEN 1:
   confirm a main-app-target `AppIntent.perform()` runs in the app process on
   macOS 26 and inherits the app's pasteboard/file TCC + entitlements; confirm
   no separate entitlement is required for the intent to call `ClipboardHistory`.
-- **X-SECURITY-2 (audit chain tamper-evidence).** `V2-facts.md` cycle 5, OPEN 4:
+- **X-SECURITY-2 (audit chain tamper-evidence).** `V2-facts.md` cycle 6, OPEN 4:
   fixture-prove a gap/reorder/edit in the chain is detected at read time as
   `.persistence(.invariantViolation)`; document the non-repudiation bound (the
   chain is tamper-evident, not tamper-proof against full-store access). **Plus
@@ -2063,8 +2167,9 @@ on macOS 26:
 - **X-SECURITY-3 (rate limit — coarse process-wide throttle).** Confirm the
   in-memory, process-wide App-Intents token-bucket quota compiles and is honored
   under sustained load: a rate-exceeding external caller is throttled
-  (`requestDenied(.rateLimited)`, audited), not allowed to exhaust the Authority
-  or balloon the audit log **within one process lifetime**. The honest bound
+  (`requestDenied(.rateLimited)`, audited under the coalesced denial-audit
+  rule, §3.1 step 0), not allowed to monopolize the Authority or balloon the
+  audit log **within one process lifetime**. The honest bound
   (§8): the quota is per single shared connection (no per-caller
   distinguishability) and resets on app relaunch, so it is a coarse process-wide
   throttle, NOT a per-caller cap. Record the DoS limitation (a malicious
@@ -2272,13 +2377,13 @@ audit log / grant list on demand (like V2-01 enrichment status, `V2-01` §8).
 > claim in V2-05 rests on an unrecorded fact; each is gated or design-resolved,
 > satisfying `V2-00` §8.
 
-- `V2-facts.md` cycle 5, OPEN 1 → `X-SECURITY-1` (App Intents in-process / entitlement
+- `V2-facts.md` cycle 6, OPEN 1 → `X-SECURITY-1` (App Intents in-process / entitlement
   inheritance).
-- `V2-facts.md` cycle 5, OPEN 2 → `X-COMPILE-2` (`@Dependency` timing + Swift 6
+- `V2-facts.md` cycle 6, OPEN 2 → `X-COMPILE-2` (`@Dependency` timing + Swift 6
   isolation of the facade).
-- `V2-facts.md` cycle 5, OPEN 3 → resolved by design (§3.2 / §7.1 — capability-scoped
+- `V2-facts.md` cycle 6, OPEN 3 → resolved by design (§3.2 / §7.1 — capability-scoped
   subset is a distinct protocol, not a `HistoryAction` subset).
-- `V2-facts.md` cycle 5, OPEN 4 → `X-SECURITY-2` (chain tamper-evidence bound).
+- `V2-facts.md` cycle 6, OPEN 4 → `X-SECURITY-2` (chain tamper-evidence bound).
 - Rate-limit quota values and exact audit-compaction cadence → admission bounds
   fixed at scaffold time (peer to `ExternalLimits`); `X-SECURITY-3` / `X-PERF-2`
   exercise them.
@@ -2289,6 +2394,7 @@ audit log / grant list on demand (like V2-01 enrichment status, `V2-01` §8).
 - `@Parameter` `controlStyle` spelling + `Int`-bounding mechanism → `X-COMPILE-4`
   (Lens B minor; not load-bearing — the gateway re-validates `limit` at D35).
 
-Until `X-COMPILE-1..4`, `X-PLATFORM-1..3`, `X-SECURITY-1..4`, and `X-PERF-1..4`
+Until `X-COMPILE-1..4`, `X-PLATFORM-1..3`, `X-BEHAVIOR-1`, `X-SECURITY-1..4`,
+and `X-PERF-1..4`
 pass on macOS 26, V2-05 is "design-consolidated, scaffold proof pending" and
 reserves no shipped surface.

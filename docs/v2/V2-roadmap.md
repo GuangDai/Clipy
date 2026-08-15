@@ -241,13 +241,16 @@ document and its proof gates before starting the affected slice.
 | DC-16 | V2-05 | Make audit payload/DTOs represent optional commit positions and rebase range/reason; include every integrity-bearing column in the hash or narrow D36; provide a reachable recovery mode when normal `open` rejects a broken chain. |
 | DC-17 | V2-06 P1 | Replace `readStartupCheckpoint() -> StartupCheckpointRow?` with an immutable `Sendable` snapshot so no `@Model` crosses a context/actor boundary. |
 | DC-18 | V2-06 P2 | Define deterministic behavior when the system locale is outside the five supported fixture locales. |
-| DC-19 | V2-06 P3 | Specify crash-resumable/idempotent eager migration, concrete commit/abort coordination for in-flight sidecars, and the actor-confined buffered stream that actually enforces the 256 KiB residency bound. |
+| DC-19 | V2-06 P3 | Specify crash-resumable/idempotent eager migration, concrete commit/abort coordination for in-flight sidecars, and the actor-confined buffered stream that actually enforces the 256 KiB residency bound. *(2026-08-15: the residency clause is reconciled to V2-06 §5.4 — `readChunkSize` is a residency TARGET, not an enforced bound, because `FileHandle.AsyncBytes` exposes no public chunk control; enforcement is the conditional chunked adapter (`read(upToCount:)`) vended when `P3-PLATFORM-2` measures buffering above target, so "actually enforces" resolves as target-plus-conditional-adapter, never a silently exceeded bound; P3.4 aligned.)* |
 | DC-20 | V2-06/V2-07 | Resolve OPEN-7: P3 is transparent in V2-07, or a separately designed post-V2 large-attachment consumer owns `BlobStreamingHistory`. Do not leave a dangling consumer claim. |
 | DC-21 | V2-02 | Specify finite-value validation for `TimeInterval`, retain the `RET-PLATFORM-4` fallback if R3 and the v1 revision-byte hard bound use different measures, and resolve the new-item/coalesce byte-projection wording before fixtures freeze. |
 | DC-22 | V2-05 | Reconcile “CredentialStore/Security is unbuilt and future-only” with §14’s statement that `X-PLATFORM-3` must pass for V2-05. Either remove the gate from X1/X2 completion or admit and specify the Keychain slice. |
 | DC-23 | V2-00/V2-02/V2-07 | Decide whether R1/R2/R3 are one atomic retention bundle or independently admitted dimensions. Align trigger recording, public enums and policy fields, schema/defaults, implementation slices, and visible controls with that decision. |
 | DC-24 | V2-02/V2-03 | Define ownership and release ordering for the shared Storage clock when J1 is admitted before or without retention. Do not make an independent J1 trigger silently reserve untriggered V2-02 public or schema surface. |
 | DC-25 | V2-00/V2-03/V2-05 | Resolve the X1/X2 dependency on the V2-03 HCR substrate: either require independently admitted J1 or specify the exact HCR-only substrate that X subsumes, including schema, migration, reconnect visibility, and proof-gate consequences. |
+| DC-26 | V2-05 | `GatewayConfigRow.generation` (§4.6) is a write-only column: the former "(§4.4 / §5.6)" cross-ref was half wrong (§4.4 defines codecs only; fixed to Record 5 / §5.6), and no reader is specified anywhere in V2-05. Decide: (a) drop the column (the rebase marker already records the discarded `[oldFloor, newFloor)` range + reason, CRIT-M2), or (b) keep it and specify its one reader (e.g. §4.6 open field-range validation + audit-viewer display). *(Found in iterative loop R1, 2026-08-15.)* |
+| DC-27 | V2-02 | `.setRetentionPolicies` PHASE A fails the whole action on any item whose active revision alone exceeds the new `maxRevisionBytesPerItem`, BEFORE PHASE B R1/R2 selection (§4.4; no post-retirement re-check exists). An unpinned heavy item therefore blocks a combined threshold-lowering that R2 would satisfy by retiring it. Decide: (a) run the veto after PHASE B and exempt R1/R2 retirements (consequence narrows to "among items that survive R1/R2 retirement"; consistent with §6.3 retire-subsumes-prune; default), or (b) keep the whole-action veto and record the over-breadth as intended; touches §4.4, §8.3, RET gates. *(Found in iterative loop R2.)* |
+| DC-28 | V2-02 | R1 capture-lane `now` = caller `observedAt`, finiteness-checked only (`IngestPreparation.swift`); sweep lane uses the injected Storage clock (§6.4). v1 clamps persisted `lastCopiedAt` with `max()` (`PlannersCapture.swift`) but V2-02's R1 comparison is unclamped: a finite future-dated `observedAt` retires every unpinned item in one commit. Decide: (a) reject/clamp skewed `observedAt` at the boundary, or (b) accept and record the exposure in §4.2/§8.3 (default; severity LOW). *(Found in iterative loop R2.)* |
 
 The closure pass must also establish one total `SwiftDataHistory.open` bootstrap
 order for all selected singletons, migrations, projection rebuilds, materializer
@@ -305,7 +308,7 @@ including `E1-PLATFORM-1/4`, `RET-PLATFORM-1/1b`, `J1-PLATFORM-2`,
 | Step | Deliverables | Exit proof |
 |---|---|---|
 | R.1 Core contract | Add only the retention policies, action/outcome surface, and capacity cases admitted under DC-23; validate their bounds and normalize a both-nil revision policy when R3 is included. Update all exhaustive switches and the public-symbol snapshot intentionally. | `RET-COMPILE-1/2`; policy-bound and failure-translation fixtures for every admitted dimension. |
-| R.2 Pure Domain | Add complete expansion facts/summaries, `RetentionExpansionPlan`, `RevisionExpansionTarget`, `planItemRetentionExpansion`, `planRevisionRetentionExpansion`, `HistoryMutation.pruneRevisions`, `HistoryMutation.setRetentionPolicies`, and `PlannedOutcome.retentionPoliciesSet`. Implement deterministic R1 strict-age ordering, R1-before-R2 union, protected victims, checked bytes, and minimal oldest-inactive R3 pruning. | `RET-PRUNE-1/2`; deterministic and overflow fixtures; D23/D24 proofs. |
+| R.2 Pure Domain | Add complete expansion facts/summaries, `RetentionExpansionPlan`, `RevisionExpansionTarget`, `planItemRetentionExpansion`, `planRevisionRetentionExpansion`, `HistoryMutation.pruneRevisions`, `HistoryMutation.setRetentionPolicies`, and `PlannedOutcome.retentionPoliciesSet`. Implement deterministic R1 strict-age ordering, R1-before-R2 union, protected victims, checked bytes, and shortest-append-order-prefix R3 pruning (oldest-inactive first, not minimum-cardinality). | `RET-PRUNE-1/2`, `RET-SELECT-1`; deterministic and overflow fixtures; D23/D24 proofs. |
 | R.3 Persistence/projection | Add and validate `RetentionExpansionConfigRow` and the business-ID-consistent `RetainedBytesRow` shape resolved under DC-04; backfill every item before open; maintain the 1:1 scalar projection on create, append, prune, and delete even while policies are disabled; inject the Storage clock internally. | `RET-PLATFORM-1/1b/2`; migration, missing-row-corruption, and projection-lifecycle fixtures. |
 | R.4 Capture composition | Run v1 count planning first; when R1/R2 is active, plan over projected post-primary/post-count state, protect primary/pinned/count victims, and commit one merged plan/position. Coalesce uses the winner’s stored bytes. | `RET-PERF-1/3`; count+age+byte composition, pinned-over-budget hard failure, one-position, and disabled-public-semantics proofs. |
 | R.5 Revise composition | Extend the two-phase revise preparation/recheck. Speculatively and authoritatively recompute R3, validate the hard bound on post-prune/post-append state, run R2 but never R1, and fuse append+prune into one blob write and one `ContentVersion` successor. | `RET-PLATFORM-3/3b/4`, `RET-CONCUR-1`, `RET-STAMP-1`. |
@@ -324,8 +327,9 @@ All acceptance gates:
 `RET-COMPILE-1`, `RET-COMPILE-2`, `RET-PLATFORM-1`,
 `RET-PLATFORM-1b`, `RET-PLATFORM-2`, `RET-PLATFORM-3`,
 `RET-PLATFORM-3b`, `RET-PLATFORM-4`, `RET-PRUNE-1`,
-`RET-PRUNE-2`, `RET-CONCUR-1`, `RET-STAMP-1`, `RET-STAMP-2`,
-`RET-PERF-1`, `RET-PERF-2`, `RET-PERF-3`, and `RET-SECURITY-1`.
+`RET-PRUNE-2`, `RET-SELECT-1`, `RET-CONCUR-1`, `RET-STAMP-1`,
+`RET-STAMP-2`, `RET-PERF-1`, `RET-PERF-2`, `RET-PERF-3`, and
+`RET-SECURITY-1`.
 
 ## 7. V2-01 — enrichment pipeline (E1 + enrichment S1)
 
@@ -345,7 +349,7 @@ All acceptance gates:
 | E.4 Worker | Add `EnrichmentWorker`, `PendingEnrichment`, and derivation results. Confine non-Sendable Vision/PDFKit values; use no completion handler; run blocking work on a custom non-cooperative executor; enforce one-image, 1,000-page, 256 KiB, top-candidate, deterministic-normalization, and retry bounds. | `E1-PERF-1/6`; ordering, confidence, empty-result, truncation, error, and pool-starvation fixtures. |
 | E.5 Authority persistence/lifecycle | Add source read, fenced persist, and orphan sweep methods. Persist in a separate Authority transaction without changing history items/tokens; refresh current `ContentVersion`; maintain retry state; disclose lazy OCR-text deletion. | `E1-PERF-3/5`; stale-persist, retry/recovery, corruption, orphan/startup-sweep, and no-token-change proofs. |
 | E.6 Scheduler/trigger drain | Add a non-awaiting post-commit item-ID channel and the resolved bounded/completeness policy; perform startup/on-enable backlog scans after facade publication; debounce, rate-limit, pause, cancel, and reschedule deterministically. | `E1-PERF-4/7`; sustained-load no-loss/completeness, user-commit fairness, startup, and cancellation proofs. |
-| E.7 Search/status/toggle | Add scalar `enrichmentText` to internal search corpus only; enforce title→body→enrichment precedence and per-mode scan bounds; decode no content/enrichment blobs on common search; implement status and default-disabled/readback behavior selected under DC-08. | `E1-PERF-2/5`; disabled WS17 equivalence, snippets/ranges/ranking, stale-row exclusion, status, and toggle fixtures. |
+| E.7 Search/status/toggle | Add scalar `enrichmentText` to internal search corpus only; enforce title→body→enrichment precedence and per-mode scan bounds; decode no content/enrichment blobs on common search; implement status and default-disabled/readback behavior selected under DC-08. | `E1-PERF-2/5`, `E1-BEHAVIOR-1`; disabled WS17 equivalence, snippets/ranges/ranking, stale-row exclusion, status, and toggle fixtures. |
 | E.8 UX handoff | Add last-refresh status badges, OCR match presentation, settings, data-practice/lazy-deletion disclosures, accessibility, and localization. Do not add an OCR completion push or polling loop. | `UX-COMPILE-1/2`, `UX-PERF-1`, accessibility/product tests. |
 
 All acceptance gates:
@@ -354,7 +358,7 @@ All acceptance gates:
 `E1-PLATFORM-1`, `E1-PLATFORM-2`, `E1-PLATFORM-3`,
 `E1-PLATFORM-UTI`, `E1-PLATFORM-4`, `E1-PERF-1`,
 `E1-PERF-2`, `E1-PERF-3`, `E1-PERF-4`, `E1-PERF-5`,
-`E1-PERF-6`, `E1-PERF-7`, and `E1-SECURITY-1`.
+`E1-PERF-6`, `E1-PERF-7`, `E1-BEHAVIOR-1`, and `E1-SECURITY-1`.
 
 ## 8. V2-03 — change journal, reconnect, and collection cache (J1)
 
@@ -370,14 +374,14 @@ All acceptance gates:
 |---|---|---|
 | J.1 Core contract | Add `JournalEntryKind`, versioned `ReconnectCursor`, `HistoryChangeRecord`, `ReconnectBatch`, `ReconnectFailure`, and `ReconnectHistory`; leave `ClipboardHistory`/`HistoryFailure` unchanged. Add `JournalAdminHistory` only if DC-08 admits it. | `J1-COMPILE-1`; symbol snapshot and cursor-codec proofs. |
 | J.2 Schema/codec/bootstrap | Add `HistoryChangeRecordRow`, `JournalConfigRow`, `AffectedItemsBlobV1`, limits, and the resolved empty-journal marker/counters. Bootstrap with an empty post-migration journal, immutable store identity, and validated generation/materializer fields. | `J1-PLATFORM-2`; migration, codec, downgrade, total-open-order, and migrated-N→N+1 proofs. |
-| J.3 Atomic append | Add `HistoryChangeRecordPayload` and `StampedCommitPlan.hcrAppend`; thread clear scope; derive a total primary kind and sorted/deduplicated affected IDs; append exactly once inside every non-empty commit before the final position write; append none for no-op. | `J1-PLATFORM-1`, `J1-PERF-1`, `V2-WS-J1-1`, `1a`, `5`, and `7`; extended WS13 injection points. |
-| J.4 Reconnect reader | Add `ChangeJournal` plus Authority reads. In one context/interval: validate store, generation, materializer, and compaction floor before a bounded ordered range fetch and head read. Preserve the retroactive-discard rule for a later-page rejection. | `J1-PLATFORM-3/4/5`, `V2-WS-J1-2/3`. |
+| J.3 Atomic append | Add `HistoryChangeRecordPayload` and `StampedCommitPlan.hcrAppend`; thread clear scope; derive a total primary kind and sorted/deduplicated affected IDs; append exactly once inside every non-empty commit before the final position write; append none for no-op. | `J1-PLATFORM-1`, `J1-PERF-1`, `V2-WS-J1-1`, `1a`, `1b`, `5`, and `7`; extended WS13 injection points. |
+| J.4 Reconnect reader | Add `ChangeJournal` plus Authority reads. In one context/interval: validate store, generation, materializer, compaction floor, and head-bound future cursors (§6.2 step 5b) before a bounded ordered range fetch and head read. Preserve the retroactive-discard rule for a later-page rejection. | `J1-PLATFORM-3/4/5`, `V2-WS-J1-2/3`. |
 | J.5 Compaction/recovery | Implement count/age/byte compaction, persisted floor/counter, startup and periodic triggers, head survival, materializer upgrade/downgrade handling, divergence rebase, generation bump, and cache flush in the resolved open order. | `J1-PLATFORM-2`, `J1-PERF-4/5`, `V2-WS-J1-6`. |
-| J.6 Conservative collection cache | After separate G2 evidence, add a bounded deterministic first-page-only cache. Keep awaits outside the Authority interval; fence hits against position/materializer; continuation pages bypass. If admission was reconnect-only, remain disabled. | `J1-COMPILE-2`, `J1-PERF-2`, `V2-WS-J1-4`; cache-law, fence-race, capacity, and page-2 proofs. |
+| J.6 Conservative collection cache | After separate G2 evidence, add a bounded deterministic first-page-only cache. Keep awaits outside the Authority interval; fence hits against position/materializer/corpus epoch (V2-01 enrichment writes advance no `ChangePosition`); continuation pages bypass. If admission was reconnect-only, remain disabled. | `J1-COMPILE-2`, `J1-PERF-2`, `V2-WS-J1-4`; cache-law, fence-race, capacity, and page-2 proofs. |
 | J.7 Optional fine invalidation | Only when measured read/write behavior requires hits across commits, replace—not chain after—the blanket handler with HCR-scoped invalidation; paginate journal reads and flush on a true gap/typed expiry. | `J1-PERF-3`; starvation, contiguity, and no-thrash proofs. |
 | J.8 Security/UX handoff | Surface metadata retention, resync, pull-only recently removed, and admitted admin controls. Preserve v1 live snapshot observation; add no TCC, entitlement, or OperationRecord. | `J1-SECURITY-1` plus corresponding `UX-*` gates. |
 
-Stable journal fixtures are `V2-WS-J1-1`, `V2-WS-J1-1a`,
+Stable journal fixtures are `V2-WS-J1-1`, `V2-WS-J1-1a`, `V2-WS-J1-1b`,
 `V2-WS-J1-2` through `V2-WS-J1-7`.
 
 All acceptance gates:
@@ -438,7 +442,7 @@ All acceptance gates:
 | X.2 Public contract | Add `ExternalHistory`, `GatewayAdminHistory`, identities/capabilities, requests/results, failures, connection/grant/audit DTOs, public `ExternalHistoryFacade`, and public `makeExternalHistoryFacade(for:)`. Leave every v1 closed enum/protocol unchanged. | `X-COMPILE-1/3`; public-symbol/import/escape-hatch gates. |
 | X.3 Schema/codecs/bootstrap | Add four models, resolved audit codecs, and fixed limits. Bootstrap one durable active App Intents connection with no grants; validate singleton/connection/chain before facade publication; audit is always on. | `X-PLATFORM-1/2`; migration, corruption, missing-config-with-data, identity-persistence, and chain proofs. |
 | X.4 Audit/admin substrate | Implement monotone sequence, checked bytes, append, full chain validation, resolved compaction/relink, explicit recovery-mode rebase, admin registry/grants, and atomic admin audit. Deny by default; manage implies browse, never readContent. | `X-SECURITY-2`, `X-PERF-1/2/4`; grant lifecycle, tamper matrix, compaction/rebase, and recovery reachability. |
-| X.5 Gateway execution | Add `ExternalGateway` and `ConnectionRegistry`; rate-limit, validate, fast-precheck, then authoritative grant recheck. Map the safe write subset to existing v1 actions. Successful writes atomically commit item mutation, HCR, audit, and final position; reads/no-op/denials use the documented best-effort audit bound. | `X-PERF-1/2/3`; TOCTOU revoke, write atomicity, read-capability split, search two-interval, audit privacy, and failure-mapping proofs. |
+| X.5 Gateway execution | Add `ExternalGateway` and `ConnectionRegistry`; rate-limit, validate, fast-precheck, then authoritative grant recheck. Map the safe write subset to existing v1 actions. Successful writes atomically commit item mutation, HCR, audit, and final position; reads/no-op/denials use the documented best-effort audit bound. | `X-PERF-1/2/3`, `X-BEHAVIOR-1`; TOCTOU revoke, write atomicity, read-capability split, search two-interval, audit privacy, and failure-mapping proofs. |
 | X.6 App Intents composition | In ClipyApp only, add the six intents/shortcuts provider; open history, obtain the baked-connection facade, register it once with the sole framework-owned `AppDependencyManager.shared` allowance, and resolve via `@Dependency`. | `X-COMPILE-2/3/4`; cold/warm Siri/Shortcuts integration and unresolved-dependency clean-denial tests. |
 | X.7 UX handoff | Add enable/revoke, separate browse/read-content/manage controls, paginated audit, denial/failure/rebase/compaction state, shared-caller/quota disclosure, and audit-persistence disclosure. Pull-refresh only. | Corresponding `UX-*`, privacy, accessibility, and product tests. |
 
@@ -446,7 +450,7 @@ All acceptance gates:
 
 `X-COMPILE-1`, `X-COMPILE-2`, `X-COMPILE-3`, `X-COMPILE-4`,
 `X-PLATFORM-1`, `X-PLATFORM-2`, `X-PLATFORM-3` according to the
-scope resolved under DC-22, `X-SECURITY-1`,
+scope resolved under DC-22, `X-BEHAVIOR-1`, `X-SECURITY-1`,
 `X-SECURITY-2`, `X-SECURITY-3`, `X-SECURITY-4`, `X-PERF-1`,
 `X-PERF-2`, `X-PERF-3`, and `X-PERF-4`.
 
@@ -483,11 +487,12 @@ reuse/rebuild/corruption/disabled/restart-equivalence fixture.
 |---|---|
 | P2.1 | Add `LocalizedSearchConfigRow`, fixed limits, public `LocalizedSearchHistory`/`LocalizedSearchStatus`, default-disabled bootstrap, and locale validation. |
 | P2.2 | Branch exact mode at query time through verified `NSString.range(of:options:range:locale:)`; preserve empty-term recent behavior, title-before-body, ordering, snippets, and UTF-16 ranges; add width-insensitive matching for Japanese by language code. |
-| P2.3 | Add the internal predicate-change signal so active search re-queries at the same `ChangePosition`; recent observers ignore it. Add settings UI. |
+| P2.3 | Add the internal predicate-change signal so active search re-queries at the same `ChangePosition`; recent observers ignore it, and a predicate change expires every in-flight search cursor (mint-predicate mismatch -> `.snapshotExpired`, V2-06 §4.5). Add settings UI. |
 
 Acceptance: `P2-COMPILE-1`, `P2-PLATFORM-1`, `P2-PLATFORM-2`,
 `P2-PLATFORM-3`, `P2-PERF-1`, byte-for-byte disabled WS17, and
-locale/region/empty-term/range/ordering/observer fixtures.
+locale/region/empty-term/range/ordering/observer plus
+predicate-change cursor-expiry fixtures.
 
 ### P3 — sidecar blob store and streaming
 
@@ -497,17 +502,19 @@ locale/region/empty-term/range/ordering/observer fixtures.
 
 | Step | Deliverable |
 |---|---|
-| P3.1 | Add actor-confined `BlobStore`, limits, V2 canonical/revision codecs and handle values; resolve the public/internal `BlobStreamingHistory` surface and consumer. |
+| P3.1 | Add actor-confined `BlobStore`, limits, V2 canonical/revision codecs and handle values; add the public `HistoryCore` `BlobStreamingHistory` surface (C-M2: public, resolved in loop R4) and resolve its consumer (DC-20). |
 | P3.2 | Write ≥1 MiB representations to unique nonce-bearing, path-confined, fsynced sidecars during preparation; force `.memory` inline; track explicit in-flight ownership and commit/abort outcomes. |
 | P3.3 | Commit only small handle codecs through Authority, mark handles durable after commit, and implement full materialization with length/path/fingerprint checks. |
-| P3.4 | Implement a real bounded/Sendable stream adapter: fence `ContentVersion` at open, cap residency at 256 KiB, validate length before vending, and verify the whole-file fingerprint at end. |
+| P3.4 | Implement a real bounded/Sendable stream adapter: fence `ContentVersion` at open, target residency at 256 KiB (enforced by the V2-06 §5.4 chunked adapter when `P3-PLATFORM-2` shows raw `AsyncBytes` buffering above target), validate length before vending, and verify the whole-file fingerprint at end. |
 | P3.5 | Implement crash-resumable eager V1→V2 migration and bounded orphan/in-flight cleanup. Treat `<storeURL>.blobs/` as inseparable from backup/restore; no inline or V1 fallback remains after migration. |
 
 Acceptance: `P3-COMPILE-1`, `P3-PLATFORM-1`, `P3-PLATFORM-2`,
 `P3-PLATFORM-3`, `P3-PLATFORM-4`, `P3-PLATFORM-5`, and
 `P3-PERF-1`, including worst-case first-launch migration, capture/sweep race,
 abort cleanup, path/symlink escape, missing-sidecar, stream integrity-window,
-memory-residency, and backup-boundary proofs.
+memory-residency, deterministic O_EXCL name-collision retry (forced EEXIST
+via the injected ID source, then success on a fresh nonce, V2-06 §5.3.2),
+and backup-boundary proofs.
 
 ## 12. V2-07 — incremental UX integration
 
@@ -523,7 +530,7 @@ memory-residency, and backup-boundary proofs.
 
 | Step | Deliverable | Admission |
 |---|---|---|
-| UX.1 Composition shell | Main-actor `@Observable` state and conditional casts to the admitted distinct-concern protocols. A nil cast omits the section. | First user-facing V2 backend. |
+| UX.1 Composition shell | Main-actor `@Observable` state and conditional casts to the admitted distinct-concern protocols. A nil cast omits the section. The App Intents facade is admitted by registration, not cast: `ClipyApp` builds it via `makeExternalHistoryFacade(for:)` and performs the single sanctioned `AppDependencyManager.shared.add` at the composition root (V2-05 §6.5 / V2-07 §8.2). | First user-facing V2 backend. |
 | UX.2 Refresh framework | Implement the not-live-observed re-read contract for derivation/config/admin state; no polling; honest last-refresh labels. P2 predicate change is the only self-healing same-position search exception. | Any V2 UI. |
 | UX.3 Enrichment | Status-at-last-refresh badges, OCR search presentation, enable setting/readback selected under DC-08, and data-retention disclosure. | E1. |
 | UX.4 Retention | Render only the dimensions admitted under DC-23, with matching receipts and validation/capacity guidance; omit current usage without the OPEN-2 API. | Retention surface admitted under DC-23. |
@@ -560,7 +567,11 @@ pairwise correctness:
    selected scalar fields without changing fuzzy/regexp, decode bounds, ranking,
    or UTF-16 range contracts.
 5. **Journal + collection cache + observation.** Durable reconnect/cache
-   completeness does not replace or duplicate v1 transient snapshot observation.
+   completeness does not replace or duplicate v1 transient snapshot
+   observation. The cache fence composes with V2-01: a ready enrichment
+   persist or enable toggle bumps `corpusEpoch` without advancing
+   `ChangePosition`, and both §7.1 windows (lookup->fence,
+   interval-exit->insert) treat the bump as a miss (`V2-WS-J1-4` epoch arms).
 6. **Thumbnail + revisions.** Fetch fence, approved stamp-key single-flight,
    cache insertion, publish fence, and caller-side reference check each retain
    their distinct role under joined callers and concurrent revisions.

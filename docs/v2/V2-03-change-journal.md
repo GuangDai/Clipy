@@ -348,6 +348,16 @@ discipline governs forward-incompatible enum raw values). An **unknown
 (`.persistence(.corruptStoredValue)`, §4.1) — it is never silently coerced to a
 default case.
 
+**The raw values are a storage encoding, not an API contract.** The `Int16`
+raw type exists so `changeKindRaw` (§4.1) is a plain stored column with a
+fail-closed, zero-reserved decode; it is not an interchange format. Every
+v1 public enum in `HistoryCore` is raw-free (`HistoryAction`,
+`HistoryCommitOutcome`, `HistoryFailure`, ...); `JournalEntryKind` is the
+first raw-typed public enum, so callers must not persist, hash, or branch
+on `rawValue` - the public contract is the case set, versioned by
+`configSchemaVersion` (§4.6). Its raw-value `Codable` synthesis encodes
+the wire value; treat those bytes as storage-owned, not app-owned.
+
 **Why `.clear` is split into `.clearAll` / `.clearUnpinned` rather than one
 `.clear` kind.** A single `.clear` collapses the clear scope (`.all` vs
 `.unpinned`) and forces `affectedItemIDs` to be empty (enumerating up to 5,000
@@ -481,7 +491,7 @@ and V2-01's `EnrichmentLimits`):
 
 | Bound | V2 value |
 |---|---:|
-| `maxAffectedItemsPerRecord` | 5,000 (the hard retained maximum, `06` §2; bounds `.clearAll`/`.clearUnpinned`/multi-retirement payloads) |
+| `maxAffectedItemsPerRecord` | 5,000 (the hard retained maximum, `06` §2; bounds multi-retirement ID unions — `.clearAll`/`.clearUnpinned` rows carry no IDs, §4.4) |
 | `maxJournalRecordCount` (compaction cap) | 10,000 |
 | `maxJournalAgeSeconds` (compaction cap) | 604,800 (7 days) |
 | `maxJournalBytes` (whole-journal **payload-bytes** cap; C3-n3) | 80 MiB (an APPROXIMATION of journal footprint, not the literal on-disk size: it bounds the sum of `affectedItemsBlob.count + fixedRowOverhead` over all rows — payload bytes only, tracked by the `JournalConfigRow.journalBytes` counter, §4.5/§4.6. The ACTUAL SQLite footprint is LARGER (per-row B-tree node headers, index pages for `@Attribute(.unique) sequence` + the `key` index, WAL frames); `fixedRowOverhead` is a fixed per-row byte allowance that approximates the row-header share but does NOT model index/WAL overhead. The cap is therefore a payload-bytes trigger that forces an earlier compaction when per-record payloads are large — a `.clearAll`/`.clearUnpinned` row carries no IDs, but a multi-retire row can approach `maxAffectedItemsPerRecord` × 16 B ≈ 80 KiB, so without the cap the payload-byte sum could reach 10,000 × 80 KiB ≈ 800 MiB; the actual SQLite footprint at that point would be higher still) |
@@ -572,9 +582,12 @@ internal final class JournalConfigRow {
                                           // differs is rejected .storeMismatch (D26,
                                           // M2): prevents a cursor minted against
                                           // store-A being replayed against store-B
-                                          // (store recreate, backup restore, multi-
-                                          // profile) — the durable analogue of
-                                          // v1's process-instance marker on
+                                          // (store recreate, cross-store
+                                          // backup restore, multi-profile); a
+                                          // same-store backup restore is caught
+                                          // by reject step 5b, §6.2 — the
+                                          // durable analogue of v1's
+                                          // process-instance marker on
                                           // `HistoryPageCursor` (`04` §6 —
                                           // process-scoped, explicitly not a
                                           // schema hash).
@@ -669,8 +682,11 @@ singletons, and before the facade is published:
    before the D25 check, and §8 lists this pass as a mandatory trigger;
 6. **D25 startup invariant check** (§9.1): `max(HCR.sequence) ==
    LastChangePositionRow.rawValue`, else journal rebase (§9.2);
-7. publish the facade (the `ChangeJournal` reader and `CollectionCache` see the
-   validated, consistent config).
+7. end of the V2-03 module segment of the single open order (`05` §13
+   steps 1-10, publication at step 10, composed per roadmap M1.3): the
+   `ChangeJournal` reader and `CollectionCache` see the validated,
+   consistent config - the facade itself is published once, after every
+   admitted module's segment.
 
 This total order makes the open-path dependencies explicit: the singleton exists
 before the step-5 startup compaction pass (which reads `compactionFloor`,
@@ -817,9 +833,13 @@ stage for the clear case (see "Clear-scope input" below):
   - **(b) Policy outcomes and multi-effect plans use the explicit
     membership-outranks-revision tie-break.** `.retentionPolicySet(removedCount:)`
     / `.retentionPoliciesSet(...)` carry a count or composite, not a mutation
-    reference, so the outcome does NOT designate a primary; and a plan whose
-    mutation set mixes membership-affecting and revision-only mutations has no
-    single outcome-designated primary. In both cases the primary is chosen by the
+    reference, so the outcome does NOT designate a primary; and a plan
+    rule (a) does not resolve (no item-designating outcome associated
+    value) falls to the tie-break. Rule (a) always governs when it
+    applies - including revise+R2 (the `.revised` reference designates
+    the primary `.appendRevision`; the retires fold into
+    `affectedItemIDs`, exactly as the capture-then-retire fold below). In
+    both cases the primary is chosen by the
     **membership-outranks-revision rule** over the mutation set, a three-tier
     ranking: a membership-affecting mutation (`.create` / `.delete(.retention)` /
     `.delete(.userRemoval)` / `.setPinOrdinal`) outranks a value-only-policy
@@ -852,6 +872,7 @@ stage for the clear case (see "Clear-scope input" below):
   | `.delete` with scope-less `.clear`, originating `HistoryAction.clear(.unpinned)` | `.clearUnpinned` | empty (self-describing scope) |
   | `.delete` with `.retention` (v1 count) | `.retire` | retired items |
   | `.appendRevision` (with or without V2-02 compose-with-prune) | `.revise` | revised item (+ prune-owning items) |
+  | `.appendRevision` + `.delete(.retention)` (V2-02 revise with R2 retire, with or without `.pruneRevisions`) | `.revise` | revised item (+ retired-item IDs, prune-owning items) — rule (a): the `.revised` reference designates the primary; retires fold, like the capture-then-retire fold |
   | `.pruneRevisions` alone (V2-02 `.setRetentionPolicies` R3-only) | `.retireRevision` | prune-owning items |
   | `.setRetentionPolicy` (v1), value change, **no** victim retired | `.policySet` | empty (self-describing; C2-M8 symmetry) |
   | `.setRetentionPolicy` (v1), **with** victims retired | `.retire` | retired-item IDs (C2-M8: retire is the membership-affecting primary; symmetric with V2-02 R1/R2) |
@@ -886,8 +907,15 @@ stage for the clear case (see "Clear-scope input" below):
   ascending (a deterministic total order chosen for stable encoding — NOT D9's
   dedup-winner tie-break and NOT `02` §12's eviction order; those govern
   different decisions; C3-n1). Bounded by
-  `JournalLimits.maxAffectedItemsPerRecord`. Empty only for the self-describing
-  kinds (`.clearAll` / `.clearUnpinned` / `.policySet`), per the §4.4 codec rule.
+  `JournalLimits.maxAffectedItemsPerRecord`: if the union exceeds the cap,
+  the encoder keeps the smallest `HistoryItemID`s (raw bytes ascending,
+  deterministic) and drops the rest - `affectedItemIDs` is best-effort
+  (the §4.3 consumer obligation), never a completeness claim; the
+  decoder's count-≤-cap check (§4.4) remains the invariant. The bound is
+  reachable: a capture at the 5,000-item hard cap under a count-1 policy
+  retires 5,000 and creates 1 (union 5,001). Empty only for the
+  self-describing kinds (`.clearAll` / `.clearUnpinned` / `.policySet`),
+  per the §4.4 codec rule.
 - `createdAt` ← the Storage clock seam (§6.4), read inside the serialized
   interval.
 
@@ -1097,7 +1125,16 @@ silent partial/empty replay — D26 / J1-PLATFORM-4 / J1-PLATFORM-5):
                                  the fetch — a range fetch here would silently
                                  return the contiguous post-floor tail = partial
                                  replay, exactly what D26 forbids)
-  only after all five pass:
+  5b. cursor.sequence > currentPosition
+                              -> .tokenExpired(currentAnchor:) (the cursor is
+                                 from a rolled-back future of this same store
+                                 instance - e.g. an older backup of the same
+                                 store file was restored; the position and HCR
+                                 rolled back while storeInstance persisted.
+                                 Replay cannot be complete: post-restore
+                                 commits reuse sequences the cursor exceeds,
+                                 so the cursor is expired, never looped on)
+  only after all six pass (steps 1–5 and 5b):
   6. fetch HistoryChangeRecordRow with
        #Predicate { $0.sequence > cursor.sequence }, sortBy [.sequence],
        fetchLimit == JournalLimits.maxReconnectBatchSize  (§4.5; bounds a single
@@ -1175,7 +1212,9 @@ public protocol ReconnectHistory: Sendable {
     func changes(since cursor: ReconnectCursor?) async throws -> ReconnectBatch
 
     // The caught-up cursor at the current ChangePosition (for initial
-    // subscription or resync anchor).
+    // subscription or resync anchor). Equivalent by construction to
+    // changes(since: nil).nextCursor (§6.2 reject-gate step 1); prefer
+    // this method - it avoids the empty-batch round trip.
     func currentReconnectAnchor() async throws -> ReconnectCursor
 }
 
@@ -1187,6 +1226,12 @@ public protocol ReconnectHistory: Sendable {
 /// `nextCursor` is a promise only until the next call confirms it - a reject on
 /// a later page retroactively voids every prior `nextCursor` accepted under
 /// that cursor (§6.2 m5).
+///
+/// Boundary: a batch that is exactly full (changes.count ==
+/// maxReconnectBatchSize, §4.5) and ends at the head still reports
+/// isCaughtUp == false - the caller makes one more changes(since:) call,
+/// which returns an empty batch with isCaughtUp == true (§6.2 step 7).
+/// "Full batch" means "possibly more", never "certainly more".
 public struct ReconnectBatch: Sendable, Equatable {
     public let changes: [HistoryChangeRecord]      // ordered by sequence ascending
     public let nextCursor: ReconnectCursor          // persist and present next call
@@ -1197,7 +1242,10 @@ public struct ReconnectBatch: Sendable, Equatable {
                                                     // pagination nextCursor.sequence
                                                     // is the resume point (max rows),
                                                     // which is below the head (C3-M1)
-    public let isCaughtUp: Bool                     // no further changes at fetch time
+    public let isCaughtUp: Bool                     // §6.2 step 7; an exactly-
+                                                    // full batch at the head
+                                                    // reports false (boundary
+                                                    // note above)
 }
 
 public struct HistoryChangeRecord: Sendable, Equatable {
@@ -1247,6 +1295,16 @@ public enum ReconnectFailure: Error, Sendable, Equatable {
                                            // this case.
 }
 ```
+
+**One recovery for all four deterministic rejects; mismatch payloads are
+diagnostics-only.** `.storeMismatch`, `.generationMismatch`, and
+`.materializerMismatch` carry `expected`/`current` scalars with no recovery
+information: recovery is identical to `.tokenExpired`'s (§6.2 m5 - discard
+every batch accepted under the cursor, resync from
+`currentReconnectAnchor()`), and only `.tokenExpired` carries the anchor
+inline. Consumers match the case for logging/diagnostics only; no recovery
+path branches on `expected`/`current` (the §6.1 opacity rule: consumers
+never inspect stored version fields to recover).
 
 **Why a sibling `ReconnectFailure`, not a new `HistoryFailure` case.** The brief
 asks: reuse `HistoryFailure.snapshotExpired` (`03b` §10) or add a new case?
@@ -1336,20 +1394,28 @@ reconciles §7.1/§7.5/§10.1/§10.2 (M1):
 ```text
 Authority browse read path (05 §14), cache-extended:
   1. (outside the non-suspending interval) await cache.lookup(queryShape,
-     materializerVersion) -> (page?, builtAtPosition P_build?)
+     materializerVersion) -> (page?, builtAtPosition P_build?,
+     builtAtEpoch E_build?)
        - crossing to the CollectionCache actor is an `await`; it happens BEFORE
          the 05 §11 non-suspending interval, so it adds no suspension inside the
          serialized interval
   2. enter the non-suspending read interval (05 §14):
-       read current ChangePosition P_current
+       read current ChangePosition P_current AND current corpus epoch
+       E_current = Authority.enrichmentCorpusEpoch (two scalar reads,
+       one interval; enrichment bumps cannot interleave inside it)
   3. FENCE: if a cached page was returned AND P_build == P_current AND
-     materializerVersion == JournalConfigRow.materializerVersion:
+     materializerVersion == JournalConfigRow.materializerVersion AND
+     E_build == E_current:
        serve the cached page (the G2 latency win; no v1 scan)
-     else (no page, position advanced between the await and the fence, or
-           materializer bumped):
+     else (no page, position advanced between the await and the fence,
+           materializer bumped, or a non-commit corpus write bumped the
+           epoch - V2-01 persistEnrichment/setEnrichmentEnabled, §14):
        run the v1 scalar scan (05 §14.1/§14.2), build the page at P_current
   4. (outside the interval) on a scan, await cache.insert(page, queryShape,
-     P_current, materializerVersion)
+     P_current, E_current, materializerVersion)   // E_current captured in
+     the step-2 interval: the page's corpus IS the E_current corpus.
+     Capturing at insert time (post-interval) would key a page built at
+     an older epoch under the newer epoch and re-open the stale race.
 ```
 
 The fence (step 3) is the correctness guarantee: the Authority is the single
@@ -1363,7 +1429,8 @@ path, because the fence re-checks position regardless. This means the cache
 never serves wrong bytes even if an invalidation is delayed or lost: the fence
 catches every staleness case. (`05` §11 "without suspension" is preserved: the
 two `await`s are outside the non-suspending interval; the interval itself
-contains only the position read, the fence compare, and the optional scan.)
+contains only the two scalar reads (position + corpus epoch), the fence
+compare, and the optional scan.)
 
 ```swift
 internal actor CollectionCache {
@@ -1373,12 +1440,14 @@ internal actor CollectionCache {
     private let journal: ChangeJournal               // for scoped invalidation (J1-PERF-3)
 
     // All three are async: the cache is a separate actor (M1). lookup returns the
-    // candidate page + its build position so the caller can fence; the fence itself
-    // runs in the Authority interval, not here.
+    // candidate page + its build position + its build corpus epoch so the caller
+    // can fence; the fence itself runs in the Authority interval, not here.
     func lookup(_ request: NormalizedBrowseRequest, materializerVersion: UInt16)
-        async -> (page: HistoryPage?, builtAt: ChangePosition?)
+        async -> (page: HistoryPage?, builtAt: ChangePosition?,
+                  builtAtEpoch: UInt64?)
     func insert(_ page: HistoryPage, for request: NormalizedBrowseRequest,
-                at position: ChangePosition, materializerVersion: UInt16) async
+                at position: ChangePosition, corpusEpoch: UInt64,
+                materializerVersion: UInt16) async
     func invalidateDelta(to newPosition: ChangePosition) async   // §7.3 wake-driven
     func flush() async   // conservative full eviction (generation bump, rebase)
 }
@@ -1387,6 +1456,7 @@ internal struct CollectionCacheKey: Hashable, Sendable {
     let queryShape: NormalizedQueryShape     // browse kind (recent vs search(text, mode)); page-limit; sort anchor
     let changePosition: ChangePosition       // the position the cached page was built at
     let materializerVersion: UInt16          // JournalConfigRow.materializerVersion
+    let corpusEpoch: UInt64                  // non-commit corpus-write discriminator (V2-01; §7.2)
 }
 
 internal struct CollectionCacheEntry: Sendable {
@@ -1473,10 +1543,22 @@ materializer schema version."* For a **collection** cache the analogue is:
   required verbatim by `04` §12): the scalar-projection + search-algorithm
   version. A bump (projection schema advance, `05` §15, or search-algorithm
   change) evicts every entry whose key carries the old version.
+- **corpusEpoch** (non-commit corpus-write discriminator): an in-memory
+  Authority counter bumped (checked arithmetic, 02 §13) in the same
+  Authority serialization as every persistEnrichment that writes a ready
+  EnrichmentRow and every setEnrichmentEnabled toggle (V2-01 §4.1/§8).
+  In-memory like the cache itself: restart empties both, so it is not
+  persisted. Without it a browse(.search) page cached before an
+  enrichment persist is served stale indefinitely - enrichment changes
+  the corpus without advancing ChangePosition (V2-01 §4.1), so
+  P_build == P_current still holds and D27's never-wrong-bytes claim and
+  04 §12's cache law are violated.
 
-A cache entry is served **only** on an exact three-tuple match **and** after the
+A cache entry is served **only** on an exact four-element match (page shape,
+`changePosition`, `materializerVersion`, `corpusEpoch`) **and** after the
 §7.1 fence confirms the build position is still current. A stale
-(`changePosition` behind current), mismatched (`materializerVersion` differs), or
+(`changePosition` behind current, or `corpusEpoch` behind a non-commit corpus
+write), mismatched (`materializerVersion` differs), or
 post-fence-miss entry is a miss (the cache degrades to refetch, never to wrong
 bytes — D27).
 
@@ -1614,8 +1696,9 @@ semantically identical values and failures; only latency and resource use may
 differ"* — holds for the collection cache:
 
 - **Hit:** the served page is the page that would have been produced by a miss
-  at the same `(queryShape, changePosition, materializerVersion)`; the cache
-  stores exactly that page (built by the v1 scan), and the §7.1 fence confirms
+  at the same `(queryShape, changePosition, materializerVersion,
+  corpusEpoch)`; the cache stores exactly that page (built by the v1 scan), and
+  the §7.1 fence confirms
   the build position is still current before serving. Byte-identical.
 - **Miss:** the v1 scan runs and populates the cache; the result is what v1
   would have returned.
@@ -1926,11 +2009,13 @@ internal actor CollectionCache {
     // non-suspending read interval; returns nil on miss.
     func lookup(_ request: NormalizedBrowseRequest,
                 materializerVersion: UInt16)
-        async -> (page: HistoryPage?, builtAt: ChangePosition?)
+        async -> (page: HistoryPage?, builtAt: ChangePosition?,
+                  builtAtEpoch: UInt64?)
 
     // Called by the read path (outside the interval) on miss to populate.
     func insert(_ page: HistoryPage, for request: NormalizedBrowseRequest,
-                at position: ChangePosition, materializerVersion: UInt16) async
+                at position: ChangePosition, corpusEpoch: UInt64,
+                materializerVersion: UInt16) async
 
     // Driven by the transient HistoryInvalidation wake (05 §11 step 2). Runs
     // exactly ONE of the two §7.3 floors (ALTERNATIVE wake handlers, not
@@ -2173,8 +2258,15 @@ V2-03 provides the data hooks V2-07 (UX) consumes; it owns no SwiftUI:
   to `JournalConfigRow` fields, clamped to `JournalLimits` (§4.5); a
   collection-cache enable/disable toggle bound to `cacheEnabled`; and a
   "flush change journal now" control (triggers `compactJournal()` with an
-  aggressive floor, expiring all live cursors). All rendered on the main actor
-  from `HistoryCore` DTOs only.
+  aggressive floor, expiring every cursor below the new compactionFloor; the
+  head row always survives §8, so a caught-up head cursor remains valid - and
+  needs no replay). All rendered on the main actor from `HistoryCore` DTOs
+  only. None of these three controls is shippable as written: their writer
+  path is internal (§10.3 `setJournalConfig` / `compactJournal`) and §10.1
+  adds no public admin protocol. A public `JournalAdminHistory` is pending
+  OPEN-5 / DC-08 (`V2-roadmap`: "Omit dependent UI if an API is not
+  admitted"); `V2-07` §12 already gates them on it. Until OPEN-5 resolves,
+  treat these hooks as deferred detail, not a shipped seam.
 - **Resync notice.** A journal rebase (§9.2) bumps `generation` and is surfaced
   as a one-time "history resynced" notice (consumers holding old cursors get
   `.generationMismatch` and resync).
@@ -2188,8 +2280,12 @@ V2-03 provides the data hooks V2-07 (UX) consumes; it owns no SwiftUI:
 - **V2-01 (enrichment):** enrichment writes (`persistEnrichment`,
   `setEnrichmentEnabled`) advance no `ChangePosition` and are not History
   Commits (`V2-01` §4.1), so they produce **no** HCR record. The HCR records
-  only History Commits. **Wake fan-out (C2-M4):** the collection cache is a new
-  consumer of the **existing** transient `HistoryInvalidation` yield (`05` §11
+  only History Commits. Because enrichment writes change the search corpus
+  without advancing ChangePosition, the collection cache carries the
+  Authority's enrichmentCorpusEpoch in its key and fence (§7.1/§7.2) instead
+  of relying on the position fence alone. **Wake fan-out (C2-M4):** the
+  collection cache is a new consumer of the **existing** transient
+  `HistoryInvalidation` yield (`05` §11
   step 2), wired like a v1 observer continuation (`04` §4) — it is **not** a
   separate post-commit yield. V2-01's `EnrichmentScheduler` inbox, by contrast,
   is a **separate** private inbox with its **own** yield (`V2-01` §6.3). The
@@ -2318,7 +2414,9 @@ Gates use the `J1-` prefix.
   `ReconnectCursor` whose `sequence < JournalConfigRow.compactionFloor` (C1:
   compacted past the **persisted** floor), whose `storeInstance` mismatches (M2:
   cross-store), whose `generation` mismatches, or whose `materializerVersion`
-  mismatches, is rejected with the typed `ReconnectFailure` (§6.3) — **before**
+  mismatches, or whose `sequence` exceeds the current position (a
+  rolled-back-future cursor, §6.2 step 5b - e.g. a same-store backup
+  restore), is rejected with the typed `ReconnectFailure` (§6.3) — **before**
   any range fetch, never a partial/empty replay. This is the custom-HCR-owned
   reject path that SwiftData native History does not document
   (`V2-03-facts.md` OPEN 1). Fixture-proved (V2-WS-J1-3, §17).
@@ -2402,8 +2500,10 @@ fence alone, m10). The HCR is the **canonical durable journal** `04` §12 names
 — required for reconnect (deliverable 2) and the only mechanism that can make
 the optional finer, hit-preserving floor (`J1-PERF-3`) provably complete — not
 the sole shipped-cache lawfulness dependency. The cache key contains the
-`04` §12-mandated elements (§7.2: query shape + `ChangePosition` +
-`materializerVersion`). A fixture proves hit/miss/eviction/disabled/restart
+`04` §12-mandated elements plus the corpus discriminator (§7.2: query
+shape + `ChangePosition` + `materializerVersion` + `corpusEpoch`); the
+fence is the §7.1 three-way compare (position + materializer + epoch). A
+fixture proves hit/miss/eviction/disabled/restart
 equivalence (§15).
 
 ### Record 5 — Migration impact (Part V §17 three layers)
@@ -2519,28 +2619,36 @@ to avoid colliding with future V2 docs' D25–D26 claims.)
   against store-A replayed against store-B), (c) the cursor's `generation`
   differs from `JournalConfigRow.generation` (schema migration, materializer
   bump, or rebase), or (d) the cursor's `materializerVersion` differs from the
-  current materializer version. The journal never serves a partial or incorrect
-  replay: a compacted/cross-store/version-mismatched cursor is rejected, never
-  silently truncated or replayed against the wrong store. *(The completeness
-  analogue of D7's evidence-vs-identity discipline and `04` §6's
-  `.snapshotExpired` browse-cursor reject, restated for a durable reconnect
-  cursor; `04` §12 requires exactly this completeness-or-reject for a collection
-  cache's journal.)*
+  current materializer version, or (e) the cursor's `sequence` exceeds the
+  current position (a cursor from a rolled-back future of the same store
+  instance - §6.2 step 5b). The journal never serves a partial or incorrect
+  replay: a compacted/cross-store/version-mismatched/future cursor is
+  rejected, never silently truncated or replayed against the wrong store.
+  *(The completeness analogue of D7's evidence-vs-identity discipline and
+  `04` §6's `.snapshotExpired` browse-cursor reject, restated for a durable
+  reconnect cursor; `04` §12 requires exactly this completeness-or-reject
+  for a collection cache's journal.)*
 
 - **D27 Collection-cache law (extends D6 / `04` §12).** The collection cache
   obeys the Part IV §12 law: for the same authoritative source state and
   request, cache hit, cache miss, eviction, disabled cache (`cacheEnabled ==
   false`), and process restart produce semantically identical values and
   failures; only latency and resource use may differ. The cache key contains
-  (normalized query shape, `ChangePosition`, `materializerVersion`) — the
-  `04` §12-mandated elements (the collection analogues of "History Item ID, the
-  relevant authoritative version, complete normalized parameters, and a
-  structural materializer schema version"). **Correctness rests on the
-  `ChangePosition` fence (§7.1) + the shipped position-fence invalidation floor,
-  not on HCR content** (m10): the shipped floor invalidates every entry whose
-  position is behind the current position, which is provably complete by
-  construction and is a "proved completeness mechanism" under `04` §12's escape
-  clause. The HCR journal is the **stronger substrate** that makes the optional
+  (normalized query shape, `ChangePosition`, `materializerVersion`,
+  `corpusEpoch`) - the `04` §12-mandated elements
+  (the collection analogues of "History Item ID, the relevant authoritative
+  version, complete normalized parameters, and a structural materializer
+  schema version") plus the non-commit corpus-write discriminator (§7.2).
+  **Correctness rests on the §7.1 three-way fence - position
+  (`P_build == P_current`) + materializer version + corpus epoch
+  (`E_build == E_current`) - and the shipped position-fence invalidation
+  floor, not on HCR content** (m10): the shipped floor invalidates every
+  entry whose position is behind the current position (complete for History
+  Commits), and the fence's epoch arm rejects every entry built before a
+  non-commit corpus write (V2-01 `persistEnrichment`/`setEnrichmentEnabled`
+  advance no `ChangePosition`, §14); together they are a "proved
+  completeness mechanism" under `04` §12's escape clause. The HCR journal is
+  the **stronger substrate** that makes the optional
   finer, hit-preserving floor (`J1-PERF-3`) provably complete and that provides
   reconnect; `04` §12's "transient stream is insufficient" applies to delta-
   application completeness (the finer floor), which the shipped floor avoids by
@@ -2614,6 +2722,13 @@ new contract:
   `.setRetentionPolicy` or V2-02 `.setRetentionPolicies` with R1/R2 — produces
   `.retire` with the victim IDs (C2-M8: the two paths are symmetric; `.policySet`
   is reserved for the no-victim value-only change).
+- **V2-WS-J1-1b (encode-side cap truncation).** A plan whose affected-ID
+  union exceeds `JournalLimits.maxAffectedItemsPerRecord` (capture at the
+  5,000-item hard cap under a count-1 policy: union 5,001) encodes exactly
+  the cap's smallest `HistoryItemID`s (raw bytes ascending), decodes under
+  the §4.4 count-<=-cap check, and is byte-identical across two runs
+  (deterministic truncation; best-effort per §4.3, never a completeness
+  claim).
 - **V2-WS-J1-2 (reconnect completeness).** Persist a `ReconnectCursor`, perform
   N commits, call `changes(since: cursor)`; assert the complete ordered stream
   of N records is returned, `nextCursor.sequence == currentPosition`, and
@@ -2628,7 +2743,11 @@ new contract:
   valid (requests only `sequence > F`, all survived). Bump `generation`
   (simulated rebase); assert `.generationMismatch`. Bump `materializerVersion`;
   assert `.materializerMismatch`. Present a cursor whose `storeInstance` differs
-  (simulated store recreate); assert `.storeMismatch` (M2). No partial replay in
+  (simulated store recreate); assert `.storeMismatch` (M2). Present a cursor
+  whose `sequence` exceeds the current position (simulated
+  same-store backup restore: position and HCR rolled back while
+  `storeInstance` persisted); assert `.tokenExpired` - never a loop over
+  reused sequences (§6.2 step 5b). No partial replay in
   any case (`J1-PLATFORM-4`).
 - **V2-WS-J1-4 (collection cache law + page non-collision, M8).** With
   `cacheEnabled == true` (explicitly enabled for the fixture; the bootstrap
@@ -2637,9 +2756,15 @@ default is off — DC-10), perform the same browse under hit/miss/eviction/
   (only latency differs) (`J1-PERF-2`, D27). **Page non-collision (M8):** assert
   a page-1 result is served from the cache on a repeated page-1 query, and a
   page-2 (continuation) query **bypasses** the cache (always scans), so a page-2
-  read never hits a page-1 entry (first-page-only scope). **Fence (M1):** inject
-  a commit between the cache `lookup` and the fence read; assert the cached page
-  is treated as a miss (position advanced → scan runs).
+  read never hits a page-1 entry (first-page-only scope). **Fence (M1):**
+  inject a commit between the cache `lookup` and the fence read; assert the
+  cached page is treated as a miss (position advanced -> scan runs). **Epoch
+  fence (§7.2 corpusEpoch):** in the same lookup->fence window, inject a V2-01
+  `persistEnrichment`/`setEnrichmentEnabled` that bumps `corpusEpoch` without
+  advancing `ChangePosition`; assert the entry misses (`E_build != E_current`)
+  even though `P_build == P_current`. **Insert window (§7.1 step 4):** bump the
+  epoch between interval exit and `cache.insert`; assert the next lookup
+  misses - the entry is keyed at the in-interval `E_current`, now behind.
 - **V2-WS-J1-5 (crash consistency, extends WS13).** Simulate a mid-closure
   failure at **both** injection points inside the transaction: (a) after item
   mutation but **before** HCR append, and (b) **after** HCR append but before the
@@ -2659,7 +2784,12 @@ default is off — DC-10), perform the same browse under hit/miss/eviction/
   produces a `.retire` primary whose `affectedItemIDs` is the union of retired-
   item IDs and prune-owning-item IDs, by the **membership-outranks-revision
   tie-break** of §5.2 rule (b) (a membership-affecting `.delete(.retention)`
-  outranks a revision-only `.pruneRevisions`; C3-n2).
+  outranks a revision-only `.pruneRevisions`; C3-n2). **Revise+R2 mapping
+  (§5.2 rule (a) row):** a V2-02 revise composed with R2 retire
+  (`.appendRevision` + `.delete(.retention)`, with or without
+  `.pruneRevisions`) produces `.revise` - the `.revised` reference
+  designates the primary; retired-item and prune-owning IDs fold into
+  `affectedItemIDs`, like the capture-then-retire fold.
 
 ## 18. Platform reference anchors
 

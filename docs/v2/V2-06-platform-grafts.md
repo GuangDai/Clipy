@@ -97,14 +97,16 @@ that sidecar's numbering, which DC-1 promotion must renumber in place):
   `synchronize()`, `close()`. Sources: DocC `.md` alternates for
   `foundation/filehandle`, `foundation/filehandle/bytes`,
   `foundation/filehandle/asyncbytes`.
-- **P3 — `.externalStorage` opacity (verified).** SwiftData
+- **P3 — `.externalStorage` opacity (verified at class level; the
+  load-bearing absence claims are gated — `P3-PLATFORM-1`).** SwiftData
   `Schema.Attribute.Option.externalStorage` = "Stores the property's value as
   binary data **adjacent to the model storage**" (macOS 14.0+); the
   documentation describes a storage-location *hint* only and exposes **no public
   API to obtain a file URL** for an externally-stored blob. This forces P3's
   design away from a pure read-stream over existing `.externalStorage` (§5.2).
   Source: Apple docs `swiftdata/schema/attribute/option/externalstorage`.
-- **P1 — store-change detection (verified).** CoreData's
+- **P1 — store-change detection (verified at class level; the
+  load-bearing absence claims are gated — `P1-PLATFORM-1`).** CoreData's
   `NSPersistentStoreCoordinator` can "query the metadata of a specific store"
   (macOS 10.4+), but SwiftData's `ModelContainer` does not document a public
   accessor for the coordinator or any store-generation token. P1 therefore uses
@@ -249,7 +251,9 @@ P1 FAST PATH (new, all inside one non-suspending Authority interval):
   else (all checks pass):
      decode checkpoint.indexBlob (SignatureIndexBlobV1; fail-closed, §3.2.1; on decode failure -> REBUILD)
      construct the in-memory SignatureIndex from the postings (no per-row signature-blob fetch/decode)
-     mark SignatureIndex state .ready(generation: currentPosition-based generation)
+     mark SignatureIndex state .ready (the v1 State type is
+     unchanged - 05 §7.1: no generation counter; freshness is
+     proved by positionRaw == currentPosition above)
      -> REUSE SUCCEEDED (skip v1 §13 steps 6–8 signature fetch/decode/posting-build)
 P1 REBUILD PATH (== v1 §13 steps 6–8, byte-for-byte, on any fast-path miss):
   fetch each row's business ID, nonzero ContentVersion, projection schema version, pin ordinal, signature metadata
@@ -261,8 +265,10 @@ P1 CHECKPOINT WRITE (new; only after a successful rebuild — a successful reuse
                      write occurs on the reuse path):
   serialize the in-memory SignatureIndex -> SignatureIndexBlobV1
   compute signatureSetHash (xxh3 over sorted postings; diagnostic)
-  write StartupCheckpointRow { positionRaw: currentPosition, retainedCount, signatureSetHash,
-                               indexCodecVersion, signatureSchemaVersion, indexBlob }
+  upsert StartupCheckpointRow - update the existing uniquely-keyed row,
+    insert only when absent - { positionRaw: currentPosition,
+    retainedCount, signatureSetHash, indexCodecVersion,
+    signatureSchemaVersion, indexBlob }
     in a separate ModelContext.transaction that writes only StartupCheckpointRow
     (during startup no History Commit is open; the write advances no ChangePosition
     and yields no HistoryInvalidation; §3.6)
@@ -360,7 +366,8 @@ recoverable from durable rows alone, and P1 never weakens that. Formally:
   xxh3-64 — evidence, not identity (D7) — so the diagnostic can false-negative by
   collision; it is a best-effort audit, not a guarantee.
 - **Crash safety.** The checkpoint is written in a separate transaction after a
-  successful rebuild/reuse and before `open` returns (§3.6). A crash before the
+  successful rebuild (never on the reuse path - the row is already current)
+  and before `open` returns (§3.6). A crash before the
   write leaves no checkpoint (or a stale one) → next open rebuilds. A crash
   during the write leaves either a fully committed row or none (SwiftData
   transaction atomicity, `05` §10) → next open rebuilds. No partial index is
@@ -631,8 +638,9 @@ internal func effectiveSearchOptions(_ locale: Locale) -> NSString.CompareOption
     // set for a region-tagged system locale, silently disabling width folding
     // for the default system-locale path - a stated G7 trigger use case (§4.1).
     // `locale.language.languageCode?.identifier` (Locale.Language.LanguageCode,
-    // macOS 13.0+; the direct symbol URL did not resolve — recorded OPEN in
-    // `V2-facts.md` cycle 5, pinned by `P2-COMPILE-1`) yields the bare
+    // macOS 13.0+; verified via the parent property page - `V2-facts.md`
+    // cycle 6, fact 16; the LanguageCode struct's own page remains 404
+    // (non-load-bearing), pinned by `P2-COMPILE-1`) yields the bare
     // language code ("ja") regardless of region/script tagging.
     if let lang = locale.language.languageCode?.identifier,
        LocalizedSearchLimits.cjkLocaleIdentifiers.contains(lang) {
@@ -762,7 +770,14 @@ public struct LocalizedSearchStatus: Sendable, Hashable {
   predicate-change signal — its result does not depend on the search predicate.
   No new public invalidation surface is added (`04` §4 stays internal); a
   one-shot `browse(.search)` always re-evaluates under the current predicate, so
-  it needs no signal.
+  it needs no signal. A predicate change also expires every in-flight search
+  cursor: browse's cursor validation (04 §6 rule 1) additionally requires the
+  cursor's mint predicate (enabled + locale identifier) to equal the current
+  one; a mismatch maps to `.snapshotExpired(current:)`, so page 2 restarts from
+  page one under the new predicate instead of resuming a page-1 anchor minted
+  under the old one. (The mint predicate travels in the cursor wire form - a
+  format-version bump per 04 §6 - or a process-local predicate generation is
+  consulted at decode.)
 - `SearchWorker`'s exact predicate is a capability-gated branch (an internal
   extension of a v1 *internal* type, `05` §14.2, per `V2-00` §2.1); the disabled
   branch is byte-for-byte v1.
@@ -785,14 +800,19 @@ public struct LocalizedSearchStatus: Sendable, Hashable {
   (case + diacritic via `.caseInsensitive`/`.diacriticInsensitive`; CJK width via
   `.widthInsensitive`) is fully verified through the `CompareOptions` members
   (§2, Fact 3).
-- **P2-PLATFORM-2.** Two fixture-proved stability properties across the
+- **P2-PLATFORM-2.** Three fixture-proved stability properties across the
   supported locales: (a) the locale range `NSRange` → `UTF16TextRange` →
   snippet-offset translation is stable (no locale-dependent index drift; `03b`
   §8 excerpt algorithm preserves UTF-16 semantics); and (b) **projection-input
   safety** — locale folding over the v1 *normalized and truncated* `title` /
   `searchBody` scalar projections (`05` §15; `06` §2: `searchBody` ≤ 256 KiB
   UTF-8) matches folding over the raw Effective Content for the supported
-  locales within the projection bounds. P2's locale equivalence is **defined
+  locales within the projection bounds; and (c) browse cursor expiry - a
+  search cursor minted under one predicate (enabled + locale identifier) and
+  validated under a changed one maps to `.snapshotExpired(current:)` so page 2
+  restarts from page one under the new predicate, while a cursor minted and
+  validated under the same predicate survives (§4.5). P2's locale equivalence
+  is **defined
   over the projection** (the value v1 search already operates on, `03b` §8); if
   a projection's normalization form (NFC/NFD) or grapheme-boundary truncation
   is shown to alter folding for any supported locale, that case is recorded as
@@ -839,7 +859,9 @@ whose byte count exceeds an inline threshold, storing their bytes as
 `PastePayload.representations: [HistoryRepresentation]` with `bytes: Data`
 (`03b` §9) is **preserved** (option a): callers that want `Data` get it on
 demand, with no memory regression versus v1; the memory win is delivered through
-a **new internal streaming protocol** for opt-in chunked consumption.
+a **new public `HistoryCore` streaming protocol** (`BlobStreamingHistory`,
+§5.4 / C-M2: public, not `internal` to `HistoryStorage` - V2-07 consumes
+it across the target-graph boundary) for opt-in chunked consumption.
 
 **Out of scope.**
 - **Remote / network blob storage.** P3 is **local** file-handle streaming only
@@ -897,7 +919,7 @@ A new V2 admission bound, `BlobStoreLimits` (a `HistoryLimits`-peer fixed value,
 | Bound | V2 value |
 |---|---:|
 | Inline threshold (rep byte count at/above which the rep is handle-backed) | 1 MiB |
-| Blob-file read chunk size (upper bound on streamed chunk residency) | 256 KiB |
+| Blob-file read chunk size (streaming residency target, not enforced) | 256 KiB |
 | Per-item blob-file count (== rep count; bounded by 06 §2's 32 reps/capture and 100 revisions/item) | derived, not a new knob |
 
 Rules (matching `06` §2): the inline threshold is a fixed admission boundary
@@ -980,9 +1002,16 @@ context boundary into the actor.
 Blob files live under a per-store blob directory derived from the store URL
 (e.g. `<storeURL>.blobs/`), outside the SwiftData store file. `relativePath` is
 an app-generated, non-user-facing unique filename — a flat or sharded name
-incorporating the xxh3 (as a sharding/diagnostic hint) plus a per-write nonce
-that guarantees uniqueness — confined to the root at decode. This is **not**
-content-addressing: two writes of identical bytes produce different filenames
+incorporating the xxh3 (as a sharding/diagnostic hint) plus a per-write
+random nonce drawn from the injected ID source (`01` §4); the blob file is
+created exclusively via POSIX `open(2)` with
+`O_CREAT|O_EXCL` (atomic check-and-create; `FileManager.createFile`
+overwrites and is NOT exclusive, `FileHandle(forWritingTo:)` does not
+create - `V2-facts.md` cycle 6 fact 14) and a name collision
+(`-1`/`EEXIST`) retries with a fresh nonce - uniqueness is mechanized,
+not asserted — confined to the root at decode.
+This is **not** content-addressing: two writes of identical bytes produce
+different filenames
 (different nonce), so the blob tier provides **no** blob-store-level dedup,
 deliberately — dedup lives at the Canonical-signature layer (D7), and
 collision-driven dedup at the blob tier would be unsound because xxh3 is
@@ -1088,7 +1117,12 @@ public struct BlobReadStream: Sendable {
 
 `BlobReadStream.bytes` is consumed with `for await byte in stream.bytes` or
 `.prefix(n)`/`reduce(into:)` patterns; peak residency is bounded by the chunk
-size, not the file size (`P3-PLATFORM-2`). The v1 public surface
+size, not the file size (`P3-PLATFORM-2`). readChunkSize is a residency
+TARGET, not an enforced bound: the vended FileHandle.AsyncBytes exposes no
+public chunk control. If P3-PLATFORM-2 shows its internal buffering exceeds
+the target, BlobStore.openStream vends a chunked adapter (repeated
+read(upToCount: readChunkSize)) instead of the raw AsyncBytes. The v1 public
+surface
 (`PastePayload.representations: [HistoryRepresentation]`, `bytes: Data`) is
 **unchanged** — a v1 caller that holds `any ClipboardHistory` and ignores
 `BlobStreamingHistory` behaves exactly as on v1. `SwiftDataHistory` conforms to
@@ -1132,8 +1166,11 @@ change beyond the protocol itself); §6 and the P3 Record note the one new publi
     underlying `FileHandle` (and its descriptor) open for the iteration;
     `unlink` preserves the inode until the last descriptor closes, so on the
     plain unlink-during-stream path the iterator **completes with the
-    pre-revision bytes** (no throw). The fail-closed-after-the-fact residual
-    above therefore applies to **length-preserving bit-flip corruption** and to
+    pre-revision bytes** (no throw). (POSIX-documented, not Apple-doc:
+    `V2-facts.md` cycle 6 fact 15; the P3-PLATFORM-2/5 gates remain
+    load-bearing for the Foundation iterator layer) The
+    fail-closed-after-the-fact residual above therefore applies to
+    **length-preserving bit-flip corruption** and to
     any platform path that re-validates the handle or re-opens the file
     mid-stream — **not** to the plain unlink-during-stream case. If
     `P3-PLATFORM-2`/`P3-PLATFORM-5` were to demonstrate a throw on the plain
@@ -1291,6 +1328,11 @@ unchanged.
   file gives bounded-memory streaming — peak residency bounded by
   `BlobStoreLimits.readChunkSize`, not by file size, for a near-64 MiB blob
   (§2, Fact 6; the async iterator does not internally buffer the whole file).
+  If the measured peak exceeds `readChunkSize` (internal buffering above
+  target), §5.4's chunked adapter (repeated `read(upToCount: readChunkSize)`)
+  is vended instead and residency is re-measured against the target - the
+  gate's outcome is bounded-by-chunk by construction (raw sequence or
+  adapter), not by the raw sequence alone.
 - **P3-PLATFORM-3.** `CanonicalBlobV2`/`RevisionStateBlobV2`/`StoredBlobHandleV1`
   encode/decode round-trip and reject every corruption class (unknown version,
   oversize byteCount, path-escape relativePath, missing/invalid fingerprint) as
@@ -1393,8 +1435,9 @@ unchanged.
   `SignatureIndexBlobV1`, `LocalizedSearchConfigRow`, `LocalizedSearchLimits`,
   V2 codecs, `StoredBlobHandleV1`, `BlobStore`) is `internal` to `HistoryStorage`.
 - **Imports.** P1/P2/P3 add **no framework import**: they use only Foundation
-  (`FileHandle`, `URL`, `Data`, `Locale`, `NSString.localizedStandard*`,
-  `String.CompareOptions`). The source gate (`01` §9) is unchanged; no
+  (`FileHandle`, `URL`, `Data`, `Locale`,
+  `NSString.range(of:options:range:locale:)`, `String.CompareOptions`).
+  The source gate (`01` §9) is unchanged; no
   `SwiftData` import appears outside `HistoryStorage`; `HistoryCore` still
   imports only Foundation.
 - **Isolation.** `BlobStore` is an `actor`; P1/P2 add no new actor (they live
@@ -1422,8 +1465,9 @@ unchanged.
   separate transactions; no path creates a writable `ModelContext` outside the
   Authority.
 - **No History Commit intrusion.** P1's checkpoint write and P3's blob-file
-  write occur outside any History Commit's transaction closure (P1 after
-  rebuild/reuse, before `open` returns; P3 in preparation, before the commit).
+  write occur outside any History Commit's transaction closure (P1 after a
+  rebuild, never on the reuse path, before `open` returns; P3 in
+  preparation, before the commit).
   No History Commit's transaction is altered; `ChangePosition` advances only on
   real History Commits (D5/D6).
 - **No `HistoryAction` / `HistoryMutation` / Domain change.** All three grafts
@@ -1505,7 +1549,7 @@ predicate-change signal so `observe(.search)` re-broadcasts under the new
 predicate without advancing `ChangePosition` (§4.5); no coherence deviation is
 taken.
 
-**Record 3 — V2 proof gates.** P2-COMPILE-1, P2-PLATFORM-1/2, P2-PERF-1 (§4.6).
+**Record 3 — V2 proof gates.** P2-COMPILE-1, P2-PLATFORM-1/2/3, P2-PERF-1 (§4.6).
 
 **Record 4 — Cache-law compliance.** P2 is **not a cache** (query-time
 evaluation, no stored result cache). N/A; the v1 "no search-result cache without
