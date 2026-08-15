@@ -349,28 +349,51 @@ unique across all models of the same type"; conflict behavior is
 undocumented, so V2-02 relies on the single-writer Authority (no
 concurrent inserts) rather than on defined conflict semantics.
 
-`HistorySchemaV2` (the V2 schema introduced by V2-01 = the frozen v1 models plus
-`EnrichmentRow` / `EnrichmentConfigRow`, `V2-01` §3.2) **gains two further
-additive models**: `RetentionExpansionConfigRow` (§3.3) and `RetainedBytesRow`
-(§3.3b). Because V2 is design-consolidated and unshipped, `HistorySchemaV2` is
-defined once to include V2-01's and V2-02's additive models. The migration has
-two parts (Record 5): (1) the schema ADD of both new models is a single
-`MigrationStage.lightweight(fromVersion: HistorySchemaV1.self, toVersion:
-HistorySchemaV2.self)` purely-additive stage (no v1 row/column rewritten); (2)
-`RetainedBytesRow` is a **projection** (§3.3b), so it additionally requires a
-one-time projection-REBUILD backfill - a `MigrationStage.custom` data-transform
-stage that computes `canonicalBytes`/`revisionCount`/`revisionBytes` for each
-existing `HistoryItemRow` by decoding its blobs once at migration time and
-writes the `RetainedBytesRow` rows (Part V §17 layer 3; `05` §15/§17). The
-`RetentionExpansionConfigRow` singleton is created at `open` (below), not by
-the migration. `RetainedBytesRow` is 1:1 with `HistoryItemRow` and shares its
-lifecycle (deleted by an explicit step in the V2-extended `.delete` stamping,
-not by a `@Relationship` on `HistoryItemRow` - §3.3b), so a migrated v1 store has no rows until the
-backfill; the backfill is what populates them. A migrated v1 store
-has no `RetentionExpansionConfigRow`; `SwiftDataHistory.open` creates it with all
-policies disabled (`agePolicyEnabled == false`, etc.), so a migrated store starts
-v1-faithful (no V2 retention active) — mirroring V2-01's disabled-by-default
-`EnrichmentConfigRow` (`V2-01` §3.5).
+The first shipped V2 schema is named by actual ship order (DC-03, decided
+2026-08-15: **incremental shipping** — each release's schema contains only the
+grafts admitted in that release, and immutable version numbers follow the
+shipping order, `V2-roadmap` §3). Under the first-release admission (M1 +
+V2-02 only), **`HistorySchemaV2` = the frozen v1 models plus
+`RetentionExpansionConfigRow` (§3.3) and `RetainedBytesRow` (§3.3b)** — it
+carries the V2-02 models only; every later admitted table-owning graft
+receives the next immutable version (`HistorySchemaV3`, ...), never an edit of
+an already-shipped schema. (V2-01's consolidated-era statement that
+`HistorySchemaV2` includes `EnrichmentRow`/`EnrichmentConfigRow` is superseded
+by this ship-order rule and is corrected in `V2-01` §3.2 when that graft is
+admitted.)
+
+**Stage topology (DC-02, closed 2026-08-15).** The `HistorySchemaV1 →
+HistorySchemaV2` hop both adds the two models and backfills the
+`RetainedBytesRow` projection, so the hop is **one `MigrationStage.custom(
+fromVersion: HistorySchemaV1.self, toVersion: HistorySchemaV2.self,
+willMigrate:, didMigrate:)` stage**: the schema ADD is expressed by the two
+versioned schemas themselves (purely additive; no v1 row or column is
+rewritten), and the projection backfill runs in the stage's `didMigrate`
+closure — after the hop's schema change, with the new models writable —
+completing inside `SwiftDataHistory.open` before it returns. The documented
+rule this follows: a hop needing code beyond schema description takes a single
+custom stage whose `willMigrate`/`didMigrate` closures bracket the hop's
+schema change (`MigrationStage.custom`, macOS 14.0+, present on macOS 26;
+`V2-facts.md` cycle-2 facts), while `MigrationStage.lightweight` is the tool
+for purely-additive hops that need no data transform (WWDC2025/291 uses custom
+stages for data hops and lightweight only for the additive-subclass hop).
+Splitting one hop into a lightweight schema-add stage **plus** a custom
+backfill stage over the same version pair is **not a documented pattern** — no
+Apple documentation or session shows or sanctions two stages on one from/to
+pair — and is rejected; the earlier two-stage wording of this paragraph and of
+Record 5 is retracted. Custom-stage failure semantics are undocumented, so the
+backfill is **idempotent by construction** (every row recomputed from the
+blobs; never a resumed partial write), and `RET-PLATFORM-1b` proves
+interruption/restart/retry behavior on the macOS runner rather than assuming
+it. The `RetentionExpansionConfigRow` singleton is created at `open` (below),
+not by the migration. `RetainedBytesRow` is 1:1 with `HistoryItemRow` and
+shares its lifecycle (deleted by an explicit step in the V2-extended `.delete`
+stamping, not by a `@Relationship` on `HistoryItemRow` - §3.3b), so a migrated
+v1 store has no rows until the backfill; the backfill is what populates them.
+A migrated v1 store has no `RetentionExpansionConfigRow`; `SwiftDataHistory.open`
+creates it with all policies disabled (`agePolicyEnabled == false`, etc.), so a
+migrated store starts v1-faithful (no V2 retention active) — mirroring
+V2-01's disabled-by-default `EnrichmentConfigRow` (`V2-01` §3.5).
 
 **`configSchemaVersion` contract (fail-closed).** The `configSchemaVersion`
 field follows the same codec discipline as a `RevisionStateBlobV1`/
@@ -387,23 +410,23 @@ migration stage per Record 5; it is not a runtime-resumable value. An absent row
 (the migrated-v1 case) is the only "create with defaults" path, not a version
 mismatch.
 
-**Incremental shipping.** Because V2 is design-consolidated before shipping,
-`HistorySchemaV2` is defined once to include both V2-01's and V2-02's additive
-models and ships as the single `V1 → V2` migration above: a
-`MigrationStage.lightweight` schema-add (both new models) followed by a
-`MigrationStage.custom` projection-rebuild backfill for `RetainedBytesRow`
-(Record 5; `RET-PLATFORM-1b`). If V2-01 ships before V2-02 (incremental shipping
-under their independent evidence triggers, `V2-00` §3), V2-02's
-`RetentionExpansionConfigRow` + `RetainedBytesRow` are a **second** migration
-(`HistorySchemaV2 → HistorySchemaV3`): a lightweight schema-add stage
-plus the custom projection-rebuild stage, added to an ordered
-`SchemaMigrationPlan` (`V2-facts.md` cycle-2 `SchemaMigrationPlan` fact), not a
-modification of an already-shipped `HistorySchemaV2`. The reverse case (V2-02
-ships before V2-01) is mechanically symmetric: the `HistorySchemaV1:
-VersionedSchema` retrofit both depend on is owned by **M1** (`V2-roadmap` §3, the
-migration-foundation prerequisite to every table-adding graft), not by either
-part graft, so neither ordering creates a dependency on the other having
-already shipped the retrofit. Record 5 records both shapes.
+**Incremental shipping (DC-03, decided 2026-08-15).** Shipping is
+incremental: each release's schema contains only the grafts admitted in that
+release, and immutable schema version numbers follow the actual shipping
+order (`V2-roadmap` §3). The first release (M1 + V2-02) therefore ships the
+single `V1 → V2` custom hop above — schema add plus projection backfill in one
+`MigrationStage.custom` stage (Record 5; `RET-PLATFORM-1/1b`). A later release
+admitting another table-owning graft (e.g. V2-01 enrichment once its triggers
+land) ships the **next** migration (`HistorySchemaV2 → HistorySchemaV3`),
+appended to the ordered `SchemaMigrationPlan` (`V2-facts.md` cycle-2
+`SchemaMigrationPlan` fact) as its own single stage for that hop — a
+lightweight stage if the hop is purely additive (enrichment adds no projection
+backfill), a custom stage if it needs a data transform — never a modification
+of the already-shipped `HistorySchemaV2`. The `HistorySchemaV1:
+VersionedSchema` retrofit that every table-adding graft depends on is owned by
+**M1** (`V2-roadmap` §3, the migration-foundation prerequisite), not by any
+part graft, so no shipping order creates a cross-graft dependency. Record 5
+records both shapes.
 
 ### 3.3b RetainedBytesRow (V2 byte projection, additive)
 
@@ -436,7 +459,7 @@ unique across all models of the same type"; conflict behavior is
 undocumented, so V2-02 relies on the single-writer Authority (no
 concurrent inserts) rather than on defined conflict semantics.
 
-**Projection-coherence (governed by `05` §15, not a new D-invariant).** `RetainedBytesRow` is a v1-style projection: its three scalar fields are recomputed and stamped in the **same `ModelContext.transaction`** as the blob write that changes them - at capture (new item: canonical + first revision), at revise (appended revision and/or R3 prune: `revisionCount`/`revisionBytes` updated to the post-prune post-append value), and at `.setRetentionPolicies` R3 prune (restamped to the post-prune value, §3.2/§6.3). It is therefore never silently stale relative to the durable blob: a transaction either commits both the blob and its projection or neither (`05` §10 atomicity). This restates the v1 projection discipline (`05` §15 - "Projection schema changes require an explicit schema version and migration/rebuild plan") for the byte projection; no new D20+ invariant is minted, because (a) the coherence law already exists in v1 (`05` §15) and (b) the V2 invariant registry allocates D25–D28 to V2-03 and D29–D31 to V2-04, so V2-02 (D23–D24) cannot mint a new byte-projection D-number without colliding. The `bytesSchemaVersion` field is the projection-coherence fence (analogous to a blob `formatVersion`): a row whose `bytesSchemaVersion` is unknown, or whose scalars are inconsistent with the item's actual blob, fails closed as `.persistence(.corruptStoredValue)` / `.persistence(.invariantViolation)` (`05` §4/§16) - it is never silently used as a stale byte fact. The inconsistency cross-check is a **bounded single-item decode piggybacked only when an item's blob is already being decoded** - i.e. on (a) the migration backfill (`RET-PLATFORM-1b`, Record 5) and (b) the R3-sweep decode for items whose `RetainedBytesRow` scalar exceeds a threshold (`RET-PERF-2`: "only for items exceeding the threshold, typically few"). It is **never a separate decode on the per-commit R2 planning path**: that path reads the scalar columns and decodes no `revisionStateBlob`/`SignatureBlobV1` envelope (`RET-PLATFORM-2`), so an R2-only-active commit (no R3 sweep to piggyback on) triggers **zero** blob decodes - the cross-check does not run there and the zero-decode `RET-PLATFORM-2`/`RET-PERF-3` guarantees are preserved. Migration backfills the row once (Record 5).
+**Projection-coherence (governed by `05` §15, not a new D-invariant).** `RetainedBytesRow` is a v1-style projection: its three scalar fields are recomputed and stamped in the **same `ModelContext.transaction`** as the blob write that changes them - at capture-**insert** (new item: `canonicalBytes` stamped from the signature postings; `revisionCount == 0` and `revisionBytes == 0` — a v1 insert carries an **empty revision list** with `activeRevisionID == nil`, `02` §2 / `05` §3.1, so there is no first revision until the first revise; DC-04 wording fix 2026-08-15), at coalesce (no blob changes → the row is present but **unchanged**; coalesce mutates only occurrence fields, `02` §2), at revise (appended revision and/or R3 prune: `revisionCount`/`revisionBytes` updated to the post-prune post-append value), and at `.setRetentionPolicies` R3 prune (restamped to the post-prune value, §3.2/§6.3). It is therefore never silently stale relative to the durable blob: a transaction either commits both the blob and its projection or neither (`05` §10 atomicity). This restates the v1 projection discipline (`05` §15 - "Projection schema changes require an explicit schema version and migration/rebuild plan") for the byte projection; no new D20+ invariant is minted, because (a) the coherence law already exists in v1 (`05` §15) and (b) the V2 invariant registry allocates D25–D28 to V2-03 and D29–D31 to V2-04, so V2-02 (D23–D24) cannot mint a new byte-projection D-number without colliding. The `bytesSchemaVersion` field is the projection-coherence fence (analogous to a blob `formatVersion`): a row whose `bytesSchemaVersion` is unknown, or whose scalars are inconsistent with the item's actual blob, fails closed as `.persistence(.corruptStoredValue)` / `.persistence(.invariantViolation)` (`05` §4/§16) - it is never silently used as a stale byte fact. The inconsistency cross-check is a **bounded single-item decode piggybacked only when an item's blob is already being decoded** - i.e. on (a) the migration backfill (`RET-PLATFORM-1b`, Record 5) and (b) the R3-sweep decode for items whose `RetainedBytesRow` scalar exceeds a threshold (`RET-PERF-2`: "only for items exceeding the threshold, typically few"). It is **never a separate decode on the per-commit R2 planning path**: that path reads the scalar columns and decodes no `revisionStateBlob`/`SignatureBlobV1` envelope (`RET-PLATFORM-2`), so an R2-only-active commit (no R3 sweep to piggyback on) triggers **zero** blob decodes - the cross-check does not run there and the zero-decode `RET-PLATFORM-2`/`RET-PERF-3` guarantees are preserved. Migration backfills the row once (Record 5).
 
 **Why this differs from `RetentionExpansionConfigRow`'s `configSchemaVersion`.** `RetentionExpansionConfigRow` is a *singleton config* row whose field combinations must be validated as a unit (e.g. `revisionPolicyEnabled` with both thresholds nil); `configSchemaVersion` fences that unit. `RetainedBytesRow`'s `bytesSchemaVersion` fences each *per-item projection* against its own blob. v1's `LastChangePositionRow` singleton (`05` §3.2) carries no version field because it has no hand-rolled decode and no contradictory-field-combination surface; both V2-02 singletons/projections add a version field precisely because they introduce a fail-closed decode/combination discipline v1's singletons did not need.
 
@@ -469,7 +492,9 @@ Domain-plans / Storage-stamps split (`05` §9).
 > **projected post-primary state**. The primary mutation and all
 > expansion retirements/prunes are **one `MutationPlan`** with **one
 > `ChangePosition`** (D6). If no V2-02 policy is active, the pass is a no-op and
-> the action is byte-for-byte v1.
+> the action's public behavior and v1 rows are exactly v1's (DC-04: not
+> byte-identical durable state — the `RetainedBytesRow` projection is
+> mandatorily maintained 1:1 even while every policy is disabled, §3.3b).
 
 The expansion pass never re-runs v1 victim selection; it consumes the v1 plan's
 already-decided victims (for capture, the count-based retirees) as input so it
@@ -532,6 +557,15 @@ Authority.commitCapture:
   count-victims) `protected` = pinned items only.
 - `now` is the capture's `observedAt` (already a Domain input, `02` §4
   `PreparedCapture.observedAt`) — R1 needs no new clock for capture.
+  *(DC-28, accepted 2026-08-15, severity LOW: `observedAt` is
+  finiteness-checked at preparation (`03a` §4: NaN/±∞ is
+  `.invalidInput(.invalidTimestamp)` before fingerprinting) but is **not**
+  clamped for the R1 comparison — a finite, far-future-dated `observedAt`
+  makes `now − maxAge` large and can retire every unpinned item in one
+  commit. The exposure is accepted and recorded rather than clamped: it is
+  symmetric to the user's clock simply being wrong, and v1's
+  persisted-`lastCopiedAt` `max()` clamp (`PlannersCapture`, `02` §4) governs
+  persisted recency, not R1's reference time. Recorded again in §8.3.)*
 
 ### 4.3 Revise (append revision) — R2 + R3
 
@@ -623,8 +657,6 @@ Authority.commitRetentionPolicies(newPolicies):
         load that item's revision lineage (bounded; only exceeding items)
         planRevisionRetentionExpansion(revisions, target: .setRetentionPolicies(activeRevisionID:),
           policies) -> pruneSet
-        if post-prune active alone exceeds maxRevisionBytesPerItem: fail
-          .invalidInput(.invalidRetentionPolicy)  (atomicity, below)
     project the inventory's revisionBytes/revisionCount to the post-R3-prune
       state (subtract each exceeding item's pruned-revision bytes/count)
   PHASE B - R1 + R2 over the PROJECTED POST-PRUNE inventory:
@@ -632,6 +664,11 @@ Authority.commitRetentionPolicies(newPolicies):
       protected = pinned items only, now) -> R1 + R2 retirements
       (R2 sees post-prune bytes; it never retires an item whose post-prune
        bytes satisfy the budget, RET-PRUNE-2)
+  PHASE C - unsatisfiable-R3 veto (DC-27, decided 2026-08-15 option (a); runs
+    AFTER PHASE-B selection):
+    if any item that SURVIVES the PHASE-B retirements has a post-prune active
+      revision alone exceeding maxRevisionBytesPerItem: fail
+      .invalidInput(.invalidRetentionPolicy)  (atomicity, below)
   if no retirement and no prune and newPolicies == currentPolicies: return .unchanged
   merge: mutations = retirements + per-item .pruneRevisions
                   + .setRetentionPolicies(newPolicies)   (declared §5.6; stamps the
@@ -666,13 +703,23 @@ Authority.commitRetentionPolicies(newPolicies):
   §13 stamping table) - never as an outcome-inferred side effect of
   `.retentionPoliciesSet` (D18, `02` §14).
 - **Atomicity.** The whole `.setRetentionPolicies` action is all-or-nothing,
-  mirroring v1 capacity-failure atomicity (`02` §12): if any one item's active
-  revision alone exceeds the new `maxRevisionBytesPerItem` (an unsatisfiable
-  per-item R3 threshold, §8.3), the **entire** action fails
+  mirroring v1 capacity-failure atomicity (`02` §12): if any item's post-prune
+  active revision **alone** exceeds the new `maxRevisionBytesPerItem` (an
+  unsatisfiable per-item R3 threshold, §8.3), the **entire** action fails
   `.invalidInput(.invalidRetentionPolicy)` - no policy is persisted and no
-  retirement/prune is applied. A user therefore cannot set
-  `maxRevisionBytesPerItem` below the largest active-revision byte count in the
-  store.
+  retirement/prune is applied. **Veto scope (DC-27, decided 2026-08-15,
+  option (a)):** the unsatisfiable-R3 veto runs **after** PHASE-B R1/R2
+  selection (PHASE C above) and applies only to items that **survive** that
+  retirement — an unpinned heavy item does not block a combined
+  threshold-lowering that R2 satisfies by retiring it, because retirement
+  deletes the item and its revisions in the same atomic commit
+  (retire-subsumes-prune, §6.3), so its active revision no longer constrains
+  the post-commit state. A user therefore cannot set
+  `maxRevisionBytesPerItem` below the largest post-prune active-revision byte
+  count **among items that survive the same commit's R1/R2 retirement**. (The
+  pre-DC-27 whole-store veto — failing PHASE A on any exceeding item before
+  R1/R2 selection — was over-broad: it rejected the action on items the same
+  commit was about to delete.)
 - `now` for R1 has no caller-supplied `observedAt` (`.setRetentionPolicies`
   carries none). The Authority supplies `now` from a Storage-side clock read
   with a test-injectable seam (§6.4); the Domain planner remains pure (receives
@@ -1138,10 +1185,13 @@ on the V2-extended preparation path and fails `.capacityExceeded(.revisionBytes)
 | `.placePinned` / `.unpin` / `.remove` / `.clear` | none | These do not add retained bytes/items; v1 semantics are unchanged. (`.remove`/`.clear` reduce exposure; no expansion needed.) |
 
 When no V2-02 policy is active (`age == nil && storage == nil && revisions ==
-nil`, or `RetentionExpansionConfigRow` all-disabled), every action is
-byte-for-byte v1: no expansion facts are loaded, no expansion planner runs, no
-`.pruneRevisions` is emitted. This is the V2 self-review property that a v1
-caller ignoring V2-02 sees v1 behavior (`V2-00` §2.1).
+nil`, or `RetentionExpansionConfigRow` all-disabled), every action's public
+behavior and v1 rows/columns are exactly v1's: no expansion facts are loaded,
+no expansion planner runs, no `.pruneRevisions` is emitted. (DC-04: the
+durable store is not byte-identical to a pre-V2-02 store — the
+`RetainedBytesRow` projection is maintained 1:1 even while disabled, §3.3b.)
+This is the V2 self-review property that a v1 caller ignoring V2-02 sees v1
+behavior (`V2-00` §2.1).
 
 **Intentional cross-dimension asymmetry (B11).** `.setRetentionPolicy` (v1
 count) does **not** re-evaluate R2/R3, even though lowering the count retires
@@ -1302,6 +1352,16 @@ fallback is a contingency only, not an open blocker.
   above-the-upper-bound value, as `.invalidInput(.invalidRetentionPolicy)`.
   R3 requires `maxRevisionsPerItem >= 1` because at least the active revision
   must survive.
+- **Finiteness (DC-21, closed 2026-08-15).** `maxAge` is a `TimeInterval`
+  (`Double`); out-of-range comparisons alone cannot catch `NaN` (every
+  comparison with `NaN` is false). The boundary therefore requires
+  `maxAge.isFinite` explicitly: `NaN`, `.infinity`, and `-.infinity` are
+  rejected as `.invalidInput(.invalidRetentionPolicy)`. Symmetrically, a
+  **persisted** non-finite `ageMaxSeconds` on the
+  `RetentionExpansionConfigRow` fails closed at config load as
+  `.persistence(.corruptStoredValue)` (the `05` §4 exhaustive-decode
+  discipline applied to the config singleton), never silently treated as a
+  disabled or infinite policy.
 - R2 budget unsatisfiable (`pinned + primary bytes > maxTotalBytes`) ->
   `.capacityExceeded(.storageBytes)` (new `CapacityKind`, §8.1). At
   `.setRetentionPolicies`, if the current pinned items' bytes alone exceed
@@ -1321,7 +1381,10 @@ fallback is a contingency only, not an open blocker.
   exceeds `maxRevisionBytesPerItem` (the active revision cannot be pruned, §5.2;
   D3) -> the policy is unsatisfiable for that item; this is rejected at the
   **policy-set** boundary as `.invalidInput(.invalidRetentionPolicy)`. It never
-  silently leaves the item over threshold. Every valid `maxRevisionsPerItem >= 1`
+  silently leaves the item over threshold. *(DC-27 scope: at
+  `.setRetentionPolicies` this veto applies only to items that survive the
+  same commit's R1/R2 retirement — retirement subsumes the prune and deletes
+  the item's revisions with it, §4.4 PHASE C.)* Every valid `maxRevisionsPerItem >= 1`
   is count-satisfiable (pruning to active-only yields count = 1 <= threshold), so
   R3 count thresholds never produce unsatisfiability; only the byte threshold
   can. The same unsatisfiable condition discovered at **revise time** (the
@@ -1336,6 +1399,12 @@ fallback is a contingency only, not an open blocker.
 - A `ModelContext.transaction` closure failure during the merged commit →
   `.persistence(.transaction)` (v1 producer, `05` §16). Closure failure commits
   nothing — no partial retirement/prune (atomicity, `05` §10).
+- **Recorded exposure (DC-28, accepted 2026-08-15, severity LOW).** A finite,
+  far-future-dated capture `observedAt` (finiteness-checked at preparation per
+  `03a` §4, but not clamped for R1) makes `now − maxAge` large enough to
+  retire every unpinned item in one commit. Accepted rather than clamped —
+  symmetric to the user's clock being wrong; v1's persisted-`lastCopiedAt`
+  `max()` clamp governs persisted recency, not R1's reference time (§4.2).
 
 ## 9. Security boundaries
 
@@ -1387,6 +1456,19 @@ write, X2, `V2-05`). Its security record:
 
 No performance evidence trigger is required to admit *design* (§2.3); the
 performance gates (Record 3) bound the expansion pass, not admission.
+
+**Admission record (2026-08-15).** The product owner approved the V2-02
+product requirement, admitting R1 + R2 + R3 into the first V2 release (M1 +
+V2-02) as **one three-dimensional policy value with independently
+disable-able dimensions** (DC-23 option A: the `HistoryRetentionPolicies`
+struct ships whole; each dimension is independently `nil`-disabled; the
+§7 trigger matrix, public surface, schema defaults, and UX switches follow
+this document as written, with no slice trimming). Recording per `V2-00` §3 /
+`V2-roadmap` §2 Step V2-2: this written approval is the durable trigger
+evidence for all three dimensions; no performance trigger applies. **OPEN-2
+(current retained bytes) is NOT admitted** in this release: no public
+retained-bytes read is added, and the R.7/UX.4 surfaces show policies and
+receipts only (`V2-roadmap` §4 DC-08 retention clause, decided 2026-08-15).
 
 ### Record 2 - Invariant impact
 
@@ -1502,40 +1584,47 @@ R1/R2/R3 capability IDs and the deleted "R0/R1/R2 as shipped tiers" token
   `StampedMutation`, `PlannedOutcome`, and `CapacityKind` handles the new cases
   (§8.2); compile-enforced.
 - **RET-PLATFORM-1 (schema migration).** `RetentionExpansionConfigRow` (§3.3)
-  and `RetainedBytesRow` (§3.3b) are additive to `HistorySchemaV2`; the schema
-  ADD is the single `MigrationStage.lightweight(fromVersion:
-  HistorySchemaV1.self, toVersion: HistorySchemaV2.self)` stage (`V2-facts.md`
-  cycle-1/2 facts; this cycle re-verified `lightweight` macOS 14.0+, present on
-  macOS 26). v1 rows, `LastChangePositionRow`, the Signature Index, and the
+  and `RetainedBytesRow` (§3.3b) are additive to `HistorySchemaV2`; the
+  `HistorySchemaV1 → HistorySchemaV2` hop is the **single
+  `MigrationStage.custom` stage** of §3.3 (DC-02: the hop both adds the models
+  and backfills the projection, so it takes one custom stage whose `didMigrate`
+  performs the backfill; a lightweight+custom stage pair over one version pair
+  is not a documented SwiftData pattern — `V2-facts.md` cycle-2 facts,
+  WWDC2025/291). v1 rows, `LastChangePositionRow`, the Signature Index, and the
   singleton position are untouched; a migrated v1 store starts with V2-02
   disabled (`RetentionExpansionConfigRow` created at `open`, §3.3). Reuses the
   **M1-owned** `HistorySchemaV1: VersionedSchema` retrofit (`V2-roadmap` §3
   [M1 is the migration-foundation prerequisite for every table-adding graft],
-  recorded in `V2-01` §10 `E1-PLATFORM-1`). Because M1 is a prerequisite to both
-  V2-01 and V2-02, the V2-02-ships-before-V2-01 ordering is mechanically
-  symmetric to the V2-01-before-V2-02 case discussed in §3.3: the retrofit is
-  owned by M1 in either ordering, so V2-02 never depends on V2-01 having already
-  shipped it.
+  recorded in `V2-01` §10 `E1-PLATFORM-1`). Because M1 is a prerequisite to
+  every table-adding graft, no shipping order creates a cross-graft dependency:
+  the retrofit is owned by M1 in every ordering, so V2-02 never depends on
+  V2-01 having already shipped it.
 - **RET-PLATFORM-1b (RetainedBytesRow projection-rebuild migration).**
-  `RetainedBytesRow` is a projection (§3.3b), so the migration additionally runs
-  a `MigrationStage.custom` data-transform stage (Part V §17 layer 3; `05`
-  §15/§17) that, for each existing `HistoryItemRow` (<= 5,000), decodes its
-  `canonicalSignatureBlob` and `revisionStateBlob` once and writes the
-  `RetainedBytesRow` row (`canonicalBytes`/`revisionCount`/`revisionBytes`,
-  `bytesSchemaVersion == 1`). The gate verifies: (a) every retained item has a
-  1:1 `RetainedBytesRow` after migration AND every `RetainedBytesRow`
-  names a retained item (checked both directions; an orphan cannot arise
-  through stamping - §3.3b deletes it in the same transaction as the
-  item - and is `.persistence(.invariantViolation)` corruption if found);
+  `RetainedBytesRow` is a projection (§3.3b), so the single custom hop's
+  `didMigrate` closure (DC-02, §3.3) is the projection-rebuild backfill
+  (Part V §17 layer 3; `05` §15/§17) that, for each existing `HistoryItemRow`
+  (<= 5,000), decodes its `canonicalSignatureBlob` and `revisionStateBlob` once
+  and writes the `RetainedBytesRow` row (`canonicalBytes`/`revisionCount`/
+  `revisionBytes`, `bytesSchemaVersion == 1`). The gate verifies: (a) every
+  retained item has a 1:1 `RetainedBytesRow` after migration AND every
+  `RetainedBytesRow` names a retained item (checked both directions; an orphan
+  cannot arise through stamping - §3.3b deletes it in the same transaction as
+  the item - and is `.persistence(.invariantViolation)` corruption if found);
   (b) each scalar equals the
   recomputed-from-blob value (no backfill skips/incorrect bytes); (c) no v1
-  blob/`ContentVersion`/ID is mutated; (d) the backfill runs as a
-  `MigrationStage.custom` `didMigrate` step inside `SwiftDataHistory.open` (Part
-  V §17 layer 3), so it completes before `open` returns and therefore before any
+  blob/`ContentVersion`/ID is mutated; (d) the backfill runs as the single
+  custom hop's `didMigrate` step inside `SwiftDataHistory.open` (Part V §17
+  layer 3), so it completes before `open` returns and therefore before any
   capture can be issued; the default-disabled `RetentionExpansionConfigRow`
   (§3.3) means R2/R3 do not fire on the first captures regardless, so V2-02
   gates nothing about the v1 capture action (a v1 caller ignoring V2-02 sees v1
-  capture behavior, `V2-00` §2.1). A `RetainedBytesRow` for an existing item
+  capture behavior, `V2-00` §2.1). (e) the backfill is **idempotent by
+  construction** — every row is recomputed from the blobs, never a resumed
+  partial write — and because SwiftData's custom-stage failure semantics are
+  undocumented, this gate must prove on the macOS runner that an interrupted
+  migration (process death mid-backfill) leaves the store openable and that the
+  re-run reproduces exactly the (a)/(b) invariants, rather than assuming
+  engine-level interruption atomicity. A `RetainedBytesRow` for an existing item
   absent **post-backfill** (i.e. after `open` has returned) is corruption - row
   existence is the migration invariant (a) - so it fails closed
   `.persistence(.invariantViolation)`; the `.temporarilyUnavailable(.factProof)`
@@ -1766,10 +1855,18 @@ D25–D28/D29–D31 to V2-03/V2-04, so V2-02 mints none).
   on `HistoryItemRow` (which would touch the frozen v1 model, `05` §3.1 - the
   mirror of V2-03 §4.1's no-`@Relationship` choice, for the opposite lifecycle
   goal: V2-03 keeps its row on item deletion; V2-02 deletes its row with the
-  item). The schema ADD is the single `MigrationStage.lightweight`
-  stage shared with V2-01 (`V2-facts.md` cycle-1/2 facts; `RET-PLATFORM-1`); it
-  is purely additive, no v1 row or column rewritten. **Data bootstrap (not
-  migration):** a lightweight migration adds schema, not data;
+  item). The `HistorySchemaV1 → HistorySchemaV2` hop is the **single
+  `MigrationStage.custom` stage** of §3.3 (DC-02, closed 2026-08-15;
+  `RET-PLATFORM-1`): the schema ADD is expressed by the two versioned schemas
+  (purely additive, no v1 row or column rewritten) and the hop's `didMigrate`
+  performs the projection backfill — a lightweight+custom stage pair over one
+  version pair is not a documented SwiftData pattern and is not used. The
+  custom-stage closures run on a context the SwiftData migration machinery
+  owns; this is the **sole sanctioned pre-Authority writer**, confined to the
+  migration hop during container construction inside `SwiftDataHistory.open`
+  (an explicit, recorded exception to the Authority-only writable-context rule,
+  `05` §2, owned by M1). **Data bootstrap (not
+  migration):** migration adds schema and backfills the projection, not config;
   `SwiftDataHistory.open` creates the `RetentionExpansionConfigRow` singleton
   (all policies disabled) if absent (§3.3), mirroring v1 `LastChangePositionRow`
   creation (`05` §13 step 3) and V2-01's `EnrichmentConfigRow` (`V2-01` §3.5),
@@ -1784,18 +1881,22 @@ D25–D28/D29–D31 to V2-03/V2-04, so V2-02 mints none).
   (`05` §15); V2-02 does not.
 - **Projection layer (rebuild):** `RetainedBytesRow` is a content-byte
   projection (§3.3b), so its adoption requires a one-time projection-REBUILD
-  backfill as a `MigrationStage.custom` data-transform stage (Part V §17 layer
-  3; `05` §15/§17; `RET-PLATFORM-1b`). For each existing `HistoryItemRow` (<=
+  backfill, executed as the single custom hop's `didMigrate` step (DC-02, §3.3;
+  Part V §17 layer 3; `05` §15/§17; `RET-PLATFORM-1b`). For each existing
+  `HistoryItemRow` (<=
   5,000, `06` §2), the stage decodes its `canonicalSignatureBlob` (envelope only,
   no Canonical content) and `revisionStateBlob` once and writes the 1:1
   `RetainedBytesRow` (`canonicalBytes`/`revisionCount`/`revisionBytes`,
-  `bytesSchemaVersion == 1`). Title/search projections are unaffected: R3
+  `bytesSchemaVersion == 1`). The backfill is idempotent by construction —
+  every row recomputed from the blobs, never a resumed partial write — because
+  custom-stage failure semantics are undocumented (§3.3). Title/search
+  projections are unaffected: R3
   pruning does not change Effective Content or its title/search projection
   (`05` §15); retirement removes rows (no projection change to survivors). The
   backfill does not invent missing active-revision bytes, reinterpret an old
   `ContentVersion`, reuse removed IDs, or enable capture before Signature Index
   / change-journal completeness is restored (`V2-00` §5 decision 18); the
-  backfill completes as a `didMigrate` step inside `SwiftDataHistory.open`
+  backfill completes as that `didMigrate` step inside `SwiftDataHistory.open`
   before `open` returns (so before any capture can be issued), and the
   default-disabled `RetentionExpansionConfigRow` means R2/R3 do not fire on the
   first captures regardless - V2-02 gates nothing about the v1 capture action.
@@ -1859,8 +1960,9 @@ honest note: a store backup taken before a prune retains the pruned revisions
     universal scope is narrowed. This is the explicit extension classified in
     Record 2 / §4.5 (§4.5 R-M1 resolved by `V2-00` §8(g)), not an
     undebated "preservation."
-  When no V2-02 policy is active, D24 is vacuous and behavior is byte-for-byte
-  v1. *(Restates `V2-00` §5 decision 17 and §6.5 single-commit composition as
+  When no V2-02 policy is active, D24 is vacuous and public behavior is
+  exactly v1's (the durable `RetainedBytesRow` projection is still maintained,
+  §3.3b; DC-04). *(Restates `V2-00` §5 decision 17 and §6.5 single-commit composition as
   invariants; sub-claim (d) records the D19 rescoping decision 17 (amended) now
   states explicitly.)*
 
@@ -1980,10 +2082,13 @@ Implementation must verify against the macOS 26 SDK rather than copy pseudocode
 
 - [MigrationStage.lightweight(fromVersion:toVersion:)](https://developer.apple.com/documentation/swiftdata/migrationstage/lightweight(fromversion:toversion:)) — additive schema migration (macOS 14.0+; present on macOS 26). Re-verified this cycle; both arguments are `VersionedSchema`-conforming types (`V2-facts.md` cycle-3).
 - [MigrationStage.custom(fromVersion:toVersion:willMigrate:didMigrate:)](https://developer.apple.com/documentation/swiftdata/migrationstage/custom(fromversion:toversion:willmigrate:didmigrate:))
-  — the data-transform sibling; V2-02's schema add is **lightweight** only,
-  and the `RetainedBytesRow` projection rebuild is exactly one
-  `MigrationStage.custom` backfill (§3.3b, `RET-PLATFORM-1b`, M1.4 — before
-  `open` returns, never inventing bytes). Referenced for completeness.
-- [ModelContainer](https://developer.apple.com/documentation/swiftdata/modelcontainer) — automatic (lightweight) migration of additive schema preserves existing persisted data (`V2-facts.md` cycle-2 fact; behavioral prose for `RET-PLATFORM-1`).
+  — the data-transform sibling; since DC-02 (2026-08-15) the entire
+  `HistorySchemaV1 → HistorySchemaV2` hop is **one custom stage** (schema add +
+  `RetainedBytesRow` projection rebuild in its `didMigrate`, §3.3,
+  `RET-PLATFORM-1/1b`, M1.4 — before
+  `open` returns, never inventing bytes); `lightweight` remains the tool for
+  purely-additive hops only (a later graft's hop, §3.3 incremental shipping).
+  Referenced for completeness.
+- [ModelContainer](https://developer.apple.com/documentation/swiftdata/modelcontainer) — automatic (lightweight) migration of additive schema preserves existing persisted data (`V2-facts.md` cycle-2 fact; behavioral prose confirming v1 rows survive the V2-02 hop).
 - [FetchDescriptor propertiesToFetch](https://developer.apple.com/documentation/swiftdata/fetchdescriptor/propertiestofetch) - attribute-subset fetch mechanism (fetches whole attribute *values* for specified key paths, lazily faults the rest on access); **cannot** project an `.externalStorage` blob's byte length without materializing its content (`V2-facts.md` cycle 4: REFUTED as a size-without-content mechanism). This REFUTED result is the justification for adopting the `RetainedBytesRow` scalar projection (§3.3b) rather than an on-demand size fetch: the planning path reads the scalar column and decodes no blob (`RET-PLATFORM-2` resolved).
 - Foundation `Date` / `TimeInterval` — R1 age arithmetic (`observedAt`, `now − maxAge`); v1 already uses `Date`/`TimeInterval` throughout (`02` §3.1). No macOS-26-specific API.

@@ -63,8 +63,10 @@ closure.
 
 V2-06 makes **no concrete platform claim without an MCP-verified citation or an
 assigned V2 proof gate** (`V2-00` §8). Verified facts (cited inline; full
-records in `.tmp/v2-research/V2-06-facts.md`; the "Fact N" references below are
-that sidecar's numbering, which DC-1 promotion must renumber in place):
+records in `docs/v2/V2-facts.md` cycle 7 §7.3 — promoted verbatim from the
+former `.tmp/v2-research/V2-06-facts.md` sidecar on 2026-08-15, closing DC-01;
+the "Fact N" references below are §7.3's numbering, which the verbatim
+promotion leaves unchanged):
 
 - **P2 — Foundation locale APIs (verified).** `NSString.localizedStandardContains(_:)`
   and `NSString.localizedStandardRange(of:)` perform a **case and diacritic

@@ -146,7 +146,7 @@ Until one trigger fires, V2-03 is design only and reserves no v1 surface.
 
 The brief's pivotal question: Core Data exposes `NSPersistentHistoryChangeRequest`;
 does SwiftData expose an equivalent usable as the journal? **Yes — SwiftData
-ships a native History API** (`V2-03-facts.md` facts 1–4): `HistoryDescriptor<T>`
+ships a native History API** (`V2-facts.md` cycle 7 §7.1, facts 1–4): `HistoryDescriptor<T>`
 (fetch criteria + sort), `protocol HistoryTransaction : Hashable, Identifiable,
 Sendable` (a chronological transaction grouping `HistoryInsert`/`HistoryUpdate`/
 `HistoryDelete` changes), and an opaque `HistoryToken: Comparable & Codable` (the
@@ -196,7 +196,7 @@ default-by-absence choice; the custom HCR is chosen because native History is
    History's behavior on `fetch(historyDescriptor)` against a token whose
    transactions were compacted (predicate-deleted) is **undocumented** — the
    article does not say whether it returns empty, throws, or silently advances
-   (`V2-03-facts.md` OPEN 1). v1 (`00` §5) requires: where a platform behavior is
+   (`V2-facts.md` cycle 7 §7.1, OPEN 1). v1 (`00` §5) requires: where a platform behavior is
    not guaranteed, state the required outcome and assign an implementation-time
    proof rather than assume. The custom HCR **owns** the reject path and emits a
    typed `ReconnectFailure.tokenExpired` deterministically (§7).
@@ -217,7 +217,7 @@ default-by-absence choice; the custom HCR is chosen because native History is
    History is a store-level capability whose enablement point and retroactive
    coverage are store-wide concerns.
 
-The SwiftData History API is recorded as VERIFIED (`V2-03-facts.md` facts 1–4)
+The SwiftData History API is recorded as VERIFIED (`V2-facts.md` cycle 7 §7.1, facts 1–4)
 and remains a candidate for **future** grafts whose scope matches it (e.g., a
 post-V2 multi-process writer, or V2-05 X1 if a Widget extension ever writes
 directly). V2-03 makes no concrete platform claim about native History beyond
@@ -228,7 +228,7 @@ gaps are the reason for the custom HCR, not an unsubstantiated assertion
 **Why not also avoid SwiftData for the HCR's atomicity?** The custom HCR's
 crash-consistency (D25) rests on `ModelContext.transaction(block:)` writing the
 HCR row and the item mutations in one atomic closure. That primitive is VERIFIED
-(`V2-03-facts.md` fact 5; cycles 3–4 of `V2-facts.md`): `func transaction(block:
+(`V2-facts.md` cycle 7 §7.1, fact 5; cycles 3–4 of `V2-facts.md`): `func transaction(block:
 () throws -> Void) throws` — "Runs the provided closure, and once it finishes,
 writes any pending inserts, changes, and deletes to the persistent storage"
 (macOS 14.0+). v1 already relies on this exact primitive as its sole commit
@@ -293,7 +293,7 @@ item retirement does not cascade-delete the HCR row, and `itemID` non-reuse
 stance — none of which is `02` §12, which is retention/capacity, not non-reuse)
 keeps historical references meaningful. Lookups use a bounded
 `FetchDescriptor` predicate on `sequence` (`05` §5 fetch-predicate discipline;
-`#Predicate { $0.sequence > cursor.sequence }`, `V2-03-facts.md` fact 7), never
+`#Predicate { $0.sequence > cursor.sequence }`, `V2-facts.md` cycle 7 §7.1, fact 7), never
 `registeredModel(for:)` (`05` §18).
 
 **Two decode paths, one policy: fail-closed.** The HCR is a derivation off the
@@ -1181,9 +1181,9 @@ snapshot consistency on a single operation-local read context is the platform
 behavior `J1-PLATFORM-5` confirms on macOS 26.
 
 The `#Predicate { $0.sequence > cursor.sequence }` ordered by `sequence`
-ascending is VERIFIED (`V2-03-facts.md` fact 7). The compaction-floor reject
+ascending is VERIFIED (`V2-facts.md` cycle 7 §7.1, fact 7). The compaction-floor reject
 (step 5) is the custom-HCR-owned path that SwiftData native History does not
-document (`V2-03-facts.md` OPEN 1): because `compactionFloor` is **persisted**
+document (`V2-facts.md` cycle 7 §7.1, OPEN 1): because `compactionFloor` is **persisted**
 (§4.6), the reject is deterministic and does not depend on contiguity (which the
 migrated-store initial gap and rebase break). The actor never creates a
 `ModelContext` (preserving the single-context-creator rule, `05` §5); like
@@ -1591,7 +1591,8 @@ whose `changePosition < P_new`:
 HistoryInvalidation yielded (05 §11 step 2, transient, content-free, position P_new)
   -> CollectionCache receives the wake (a new internal invalidation consumer,
      wired exactly like v1 observer continuations, 04 §4 / 05 §14.4; the
-     Authority's post-commit yield is non-blocking, V2-03-facts.md fact 8)
+     Authority's post-commit yield is non-blocking, V2-facts.md cycle 7 §7.1,
+     fact 8)
   -> for each entry where entry.key.changePosition < P_new:
        evict (over-invalidation; the cache law permits this, only latency suffers)
   -> lastSeenPosition = P_new
@@ -2387,12 +2388,12 @@ Gates use the `J1-` prefix.
   only `Sendable` scalar projections.
 - **J1-PLATFORM-1 (transaction atomicity for HCR + mutations).** `ModelContext.transaction(block:)`
   atomically writes the HCR row, the item mutations, and the singleton position
-  in one closure (`V2-03-facts.md` fact 5; `V2-facts.md` cycles 3-4). Confirm
+  in one closure (`V2-facts.md` cycle 7 §7.1, fact 5; `V2-facts.md` cycles 3-4). Confirm
   on macOS 26 that appending one extra `@Model` insert in the closure preserves
   the closure-success-is-save-boundary semantics (`05` §10) — D25.
 - **J1-PLATFORM-2 (custom-HCR decision + journal rebase + bootstrap total order).** The §3 decision
   (custom HCR over SwiftData native History) is design-justified; SwiftData
-  History is VERIFIED to exist (`V2-03-facts.md` facts 1-4) but insufficient for
+  History is VERIFIED to exist (`V2-facts.md` cycle 7 §7.1, facts 1-4) but insufficient for
   the closed/single-writer/semantic-kind contract. Confirm on macOS 26: (a) the
   HCR/position startup invariant check (`max(HCR.sequence) ==
   LastChangePositionRow.rawValue`) holds after normal commits and after a
@@ -2409,7 +2410,7 @@ Gates use the `J1-` prefix.
 - **J1-PLATFORM-3 (FetchDescriptor range predicate).** A `FetchDescriptor<HistoryChangeRecordRow>`
   with `#Predicate { $0.sequence > cursor.sequence }` and `sortBy: [.init(\.sequence)]`
   returns the contiguous ordered range, bounded by `fetchLimit`
-  (`V2-03-facts.md` fact 7; `V2-facts.md` cycle 4). Confirm on macOS 26.
+  (`V2-facts.md` cycle 7 §7.1, fact 7; `V2-facts.md` cycle 4). Confirm on macOS 26.
 - **J1-PLATFORM-4 (cursor expiry determinism, C1 compactionFloor + M2 store).** A
   `ReconnectCursor` whose `sequence < JournalConfigRow.compactionFloor` (C1:
   compacted past the **persisted** floor), whose `storeInstance` mismatches (M2:
@@ -2419,7 +2420,7 @@ Gates use the `J1-` prefix.
   restore), is rejected with the typed `ReconnectFailure` (§6.3) — **before**
   any range fetch, never a partial/empty replay. This is the custom-HCR-owned
   reject path that SwiftData native History does not document
-  (`V2-03-facts.md` OPEN 1). Fixture-proved (V2-WS-J1-3, §17).
+  (`V2-facts.md` cycle 7 §7.1, OPEN 1). Fixture-proved (V2-WS-J1-3, §17).
 - **J1-PLATFORM-5 (single-snapshot reject+fetch+head, C2-M7).** `journalChanges`
   performs the D26 reject-gate reads (the live `JournalConfigRow`: `compactionFloor`,
   `storeInstance`, `generation`, `materializerVersion`), the range `FetchDescriptor`
@@ -2467,7 +2468,7 @@ Gates use the `J1-` prefix.
   `changeKind` provably cannot affect a cached query shape. If shipped, prove the
   cache's `invalidateDelta` does not starve the `CollectionCache` actor or the
   Authority under sustained commit load (the post-commit wake is non-blocking,
-  `V2-03-facts.md` fact 8), and that the contiguity-break flush (§7.3) does not
+  `V2-facts.md` cycle 7 §7.1, fact 8), and that the contiguity-break flush (§7.3) does not
   fire spuriously under sustained commits (m3).
 - **J1-PERF-4 (startup-with-HCR p95).** The HCR startup invariant check (§9.1)
   plus **mandatory startup compaction** (§8, m5) are new non-metadata startup
@@ -2796,17 +2797,21 @@ default is off — DC-10), perform the same browse under hit/miss/eviction/
 Implementation must verify against the macOS 26 SDK rather than copy pseudocode
 (`05` §18, `00` §5):
 
-- [ModelContext.transaction(block:)](https://developer.apple.com/documentation/swiftdata/modelcontext/transaction(block:)) — the atomic save boundary; "Runs the provided closure, and once it finishes, writes any pending inserts, changes, and deletes to the persistent storage" (macOS 14.0+; `V2-03-facts.md` fact 5). The HCR row and the item mutations share this boundary (D25).
+- [ModelContext.transaction(block:)](https://developer.apple.com/documentation/swiftdata/modelcontext/transaction(block:)) — the atomic save boundary; "Runs the provided closure, and once it finishes, writes any pending inserts, changes, and deletes to the persistent storage" (macOS 14.0+; `V2-facts.md` cycle 7 §7.1, fact 5). The HCR row and the item mutations share this boundary (D25).
 - [ModelContext](https://developer.apple.com/documentation/swiftdata/modelcontext) — fetch/insert/delete lifecycle; `fetch(_:)`, `fetchCount(_:)`, `delete(model:where:)` (the compaction primitive, `V2-facts.md` cycle 4).
-- [FetchDescriptor](https://developer.apple.com/documentation/swiftdata/fetchdescriptor) — predicate + sort + fetchLimit; `#Predicate { $0.sequence > cursor.sequence }` range queries (macOS 14.0+; `V2-03-facts.md` fact 7; `V2-facts.md` cycle 4).
-- [HistoryDescriptor](https://developer.apple.com/documentation/swiftdata/historydescriptor) / [HistoryTransaction](https://developer.apple.com/documentation/swiftdata/historytransaction) / [HistoryToken](https://developer.apple.com/documentation/swiftdata/historytoken) — SwiftData native History (macOS 15.0+). VERIFIED to exist and meet the brief's minimum criteria (a)-(d), but **rejected** as the V2-03 journal substrate (§3): open heterogeneous multi-process-aware row-diff stream; undocumented token-expiry failure semantics. Recorded as a candidate for future post-V2 multi-process grafts (`V2-03-facts.md` facts 1-4, OPEN 1).
+- [FetchDescriptor](https://developer.apple.com/documentation/swiftdata/fetchdescriptor) — predicate + sort + fetchLimit; `#Predicate { $0.sequence > cursor.sequence }` range queries (macOS 14.0+; `V2-facts.md` cycle 7 §7.1, fact 7; `V2-facts.md` cycle 4).
+- [HistoryDescriptor](https://developer.apple.com/documentation/swiftdata/historydescriptor) / [HistoryTransaction](https://developer.apple.com/documentation/swiftdata/historytransaction) / [HistoryToken](https://developer.apple.com/documentation/swiftdata/historytoken) — SwiftData native History (macOS 15.0+). VERIFIED to exist and meet the brief's minimum criteria (a)-(d), but **rejected** as the V2-03 journal substrate (§3): open heterogeneous multi-process-aware row-diff stream; undocumented token-expiry failure semantics. Recorded as a candidate for future post-V2 multi-process grafts (`V2-facts.md` cycle 7 §7.1, facts 1-4, OPEN 1).
 - [Fetching and filtering time-based model changes](https://developer.apple.com/documentation/swiftdata/fetching-and-filtering-time-based-model-changes) — the SwiftData History article; confirms chronological transactions, atomicity at the save boundary, the `Comparable & Codable` token, and the open/heterogeneous/multi-process nature of the stream.
 - [MigrationStage.lightweight(fromVersion:toVersion:)](https://developer.apple.com/documentation/swiftdata/migrationstage/lightweight(fromversion:toversion:)) / [VersionedSchema](https://developer.apple.com/documentation/swiftdata/versionedschema) — additive schema migration (macOS 14.0+; `V2-facts.md` cycles 1-3). V2-03 reuses V2-01's `HistorySchemaV1: VersionedSchema` retrofit.
-- [AsyncThrowingStream.Continuation.yield(_:)](https://developer.apple.com/documentation/swift/asyncthrowingstream/continuation/yield(_:)) / [AsyncStream.Continuation.yield(_:)](https://developer.apple.com/documentation/swift/asyncstream/continuation/yield(_:)) — non-blocking yield (macOS 13.0+/iOS 13.0+; `V2-facts.md` cycles 1-2); the primitive for the collection-cache inbox wake (`V2-03-facts.md` fact 8). Adds no `await` to the Authority post-commit phase.
+- [AsyncThrowingStream.Continuation.yield(_:)](https://developer.apple.com/documentation/swift/asyncthrowingstream/continuation/yield(_:)) / [AsyncStream.Continuation.yield(_:)](https://developer.apple.com/documentation/swift/asyncstream/continuation/yield(_:)) — non-blocking yield (macOS 13.0+/iOS 13.0+; `V2-facts.md` cycles 1-2); the primitive for the collection-cache inbox wake (`V2-facts.md` cycle 7 §7.1, fact 8). Adds no `await` to the Authority post-commit phase.
 - [SchemaMigrationPlan](https://developer.apple.com/documentation/swiftdata/schemamigrationplan) / [ModelContainer](https://developer.apple.com/documentation/swiftdata/modelcontainer) — ordered migration plan + automatic-migration behavioral prose (`V2-facts.md` cycle 2; incremental shipping, Record 5).
 
-All facts above are recorded with verdicts in `.tmp/v2-research/V2-03-facts.md`
-and the shared `docs/v2/V2-facts.md`. This cycle verified the SwiftData History
+All facts above are recorded with verdicts in `docs/v2/V2-facts.md`: the
+V2-03-specific facts (facts 1-9, OPEN 1-5) as cycle 7 §7.1 — promoted verbatim
+2026-08-15 from the former `.tmp/v2-research/V2-03-facts.md` sidecar, closing
+DC-01 — and the cross-cycle transaction-atomicity, FetchDescriptor-predicate,
+non-blocking-yield, and migration primitives in cycles 1-4. This cycle verified
+the SwiftData History
 surface (`HistoryDescriptor`/`HistoryTransaction`/`HistoryToken`/article) and
 re-cited the transaction-atomicity, FetchDescriptor-predicate, and non-blocking-
 yield primitives. Where a behavior could not be MCP-fetched (SwiftData History

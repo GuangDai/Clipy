@@ -2367,14 +2367,15 @@ audit log / grant list on demand (like V2-01 enrichment status, `V2-01` §8).
 
 ## 14. Open questions carried into proof gates
 
-> **Pending platform-fact recording.** The `V2-facts.md` facts 1-7 and OPEN 1-4
-> referenced throughout this doc denote MCP-verified platform facts to be recorded
-> in a future `V2-facts.md` cycle-5 section (that section does not yet exist).
-> Until it is added, every such citation is a **pending-verification** item, not a
-> completed verification: App Intents facts 1-4 are carried by `X-COMPILE-2` /
-> `X-SECURITY-1`, Keychain facts 5-7 by `X-PLATFORM-3`, and OPEN 1-4 by the
-> `X-*` gates mapped below (OPEN 3 is resolved by design). No concrete platform
-> claim in V2-05 rests on an unrecorded fact; each is gated or design-resolved,
+> **Platform-fact recording (updated 2026-08-15).** The `V2-facts.md` facts 1-7
+> and OPEN 1-4 referenced throughout this doc are MCP-verified platform facts
+> recorded in `V2-facts.md` Cycle 6 §6.1 (promoted verbatim 2026-08-15 from the
+> sidecar; the former "a future `V2-facts.md` cycle-5 section does not yet
+> exist" caveat is obsolete). Recording is not runner confirmation: App Intents
+> facts 1-4 remain **pending verification** under `X-COMPILE-2` / `X-SECURITY-1`,
+> Keychain facts 5-7 under `X-PLATFORM-3`, and OPEN 1-4 under the `X-*` gates
+> mapped below (OPEN 3 is resolved by design). No concrete platform claim in
+> V2-05 rests on an unrecorded fact; each is gated or design-resolved,
 > satisfying `V2-00` §8.
 
 - `V2-facts.md` cycle 6, OPEN 1 → `X-SECURITY-1` (App Intents in-process / entitlement

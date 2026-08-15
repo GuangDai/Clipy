@@ -25,8 +25,14 @@
 | Date | Item | Slice | Result | Evidence |
 |---|---|---|---|---|
 | 2026-08-15 | Ledger created; V2 work starts | — | done | `dafade4` |
-| 2026-08-15 | D1–D19 evidence reconciliation mapped (read-only audit subagent; counts independently re-verified: 52 domain tests / 384 `@Test` / 49 suites at `dfb08f2`) | V2-0 §1.1 | done | this commit |
-| 2026-08-15 | State-2 declaration re-affirmed for current tree; stale counts corrected in v1 `docs/PROGRESS.md` | V2-0 §1.2 | done | this commit |
+| 2026-08-15 | D1–D19 evidence reconciliation mapped (read-only audit subagent; counts independently re-verified: 52 domain tests / 384 `@Test` / 49 suites at `dfb08f2`) | V2-0 §1.1 | done | `1acbb52` |
+| 2026-08-15 | State-2 declaration re-affirmed for current tree; stale counts corrected in v1 `docs/PROGRESS.md` | V2-0 §1.2 | done | `1acbb52` |
+| 2026-08-15 | DC-01: fact sidecars promoted verbatim as `V2-facts.md` Cycle 7 §7.1–§7.4 (implementation subagent; append-only verified 1521+/0−; 36 citation repoints across V2-03/04/06/07 plus the V2-05 Cycle-6 §6.1 blockquote fix + 3 roadmap edits; orchestrator re-verified diff and spot-checked repoints) | V2-1 | done | this commit |
+| 2026-08-15 | Product decisions recorded: first release = M1 + V2-02; DC-23 = one policy value, three independently disable-able dimensions; OPEN-2/DC-08-retention = not admitted, deferred. Admission record written into `V2-02` Record 1 | V2-1/V2-2 | done | this commit |
+| 2026-08-15 | DC-02 closed: single `MigrationStage.custom` hop topology (sosumi: API pages + WWDC2025/291; lightweight+custom on one version pair undocumented → two-stage wording retracted; idempotence-by-construction + runner-proved interruption added to `RET-PLATFORM-1b(e)`; pre-Authority migration-context exception recorded, owned by M1) | V2-1 | done | this commit |
+| 2026-08-15 | DC-03 closed: incremental shipping, ship-order version allocation; `HistorySchemaV2` = v1 + retention rows only | V2-1 | done | this commit |
+| 2026-08-15 | DC-04 remainder closed (byte-for-byte claims qualified at §4.1/§7/D24; insert/coalesce/first-revision wording fixed in §3.3b against v1's empty-lineage-at-insert, `02` §2); DC-21 closed (`maxAge.isFinite` boundary check + persisted non-finite fails closed, §8.3) | V2-1 | done | this commit |
+| 2026-08-15 | DC-27 closed (option (a): veto moved to PHASE C after PHASE-B retirement selection, scoped to survivors; §4.4 + §8.3); DC-28 closed (option (b): exposure accepted and recorded, §4.2 + §8.3) | V2-1 | done | this commit |
 
 ## 1. V2-0 — v1 executable-specification closure
 
@@ -86,6 +92,46 @@ declaration were then written into the docs cited below.
   the doc-only V2-0 closure commits that follow re-run nothing locally (Linux
   host); the next code-carrying PR re-establishes the green chain on CI.
 
+## 2. V2-1 — design-input stabilization (first release: M1 + V2-02)
+
+**Status:** in progress (opened 2026-08-15). Closed so far: DC-01 (sidecar
+promotion), DC-02, DC-03, DC-04, DC-08-retention-clause (OPEN-2 not
+admitted), DC-21, DC-23, DC-27, DC-28; release scope decided and V2-02
+admitted (Record 1). Remaining before M1 code: the one total
+`SwiftDataHistory.open` bootstrap order (§4 closing requirement) and the
+`V2-00` §8 self-review + cross-document final review.
+
+### 2.1 Release-scope and admission decisions (product owner, 2026-08-15)
+
+- First release admits **M1 + V2-02 (R1+R2+R3)** only; no other graft is
+  admitted, so none reserves schema, symbols, or placeholders.
+- **DC-23:** one `HistoryRetentionPolicies` value, three independently
+  disable-able dimensions; slices untrimmed.
+- **OPEN-2 (DC-08 retention clause):** no public retained-bytes read; UX
+  shows policies and receipts only.
+- DC-03 follows: incremental shipping; `HistorySchemaV2` = v1 + retention
+  rows; later grafts take later versions.
+
 ## Open blockers and follow-ups
 
-- None recorded yet beyond the `V2-roadmap` §4 ledger itself.
+- **V2-1 remainder for the M1 + V2-02 release:** (a) the one total
+  `SwiftDataHistory.open` bootstrap order (roadmap §4 closing paragraph — all
+  singletons, migrations, projection rebuilds, Signature Index
+  reconstruction, facade publication, now including the retention config
+  bootstrap and the `didMigrate` backfill position); (b) the `V2-00` §8
+  self-review and final cross-document review against the resolved documents.
+  Both are prerequisite to M1 code (todo B6/B7).
+- **Follow-up (each graft's own admission):** correct the consolidated-era
+  schema-name statements superseded by DC-03 ship-order allocation —
+  `V2-01` §3.2 (claims `HistorySchemaV2` includes
+  `EnrichmentRow`/`EnrichmentConfigRow`), `V2-03` §3 (~line 242, "the
+  consolidated V2 schema introduced by V2-01 and extended…") and its §14
+  migration record (~2513–2522), and `V2-04` §8/§15 (`ThumbnailCacheConfigRow`
+  added to `HistorySchemaV2`, ~2034–2043 and ~2210). Retention takes
+  `HistorySchemaV2`; each later admitted graft receives the next version.
+- **Follow-up (V2-02 Record 1):** the admission names OPEN-2 as not-admitted;
+  revisiting it requires a new admission record (it is not silently
+  reserved).
+- Beyond the release scope, `V2-roadmap` §4 retains its open DC rows for the
+  unselected grafts; this ledger does not track them until their grafts are
+  selected.

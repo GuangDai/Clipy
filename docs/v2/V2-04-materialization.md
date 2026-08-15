@@ -128,7 +128,7 @@ stamp, by design. V2-04 is the graft that supplies them, purpose-specifically.
   launches (the G3 cross-launch-reuse trigger). Keyed identically to C1 plus a
   `ThumbnailDiskBlobV1` file envelope (§6). File access via `NSFileCoordinator`
   (coordinated read/write, macOS 10.7+, non-`Sendable` → actor-confined,
-  `V2-04-facts.md` fact 1). Crash-safe: a corrupt/missing/expired disk entry
+  `V2-facts.md` cycle 7 §7.2, fact 1). Crash-safe: a corrupt/missing/expired disk entry
   degrades to a miss (re-decode), NEVER wrong bytes (§6.3).
 - **C3 (G6): publish-fence materialization lifecycle.** A six-state lifecycle
   (`pending → decoding → ready → published` | `superseded → discarded`, §7.2;
@@ -606,7 +606,7 @@ floor: correctness holds without per-item eager eviction).
 `DiskThumbnailCache` is an internal `actor` that persists completed thumbnails
 across launches (the G3 cross-launch-reuse trigger). It owns all file I/O for
 the disk cache. **`NSFileCoordinator` is actor-confined:** `NSFileCoordinator`
-is a non-`Sendable` `class` (`V2-04-facts.md` fact 1), so under Swift 6 complete
+is a non-`Sendable` `class` (`V2-facts.md` cycle 7 §7.2, fact 1), so under Swift 6 complete
 strict concurrency it must be created, used, and released entirely within the
 `DiskThumbnailCache` actor — exactly as v1 confines the non-`Sendable` Fuse
 matcher in `SearchWorker` (`01` §6) and `V2-01` confines `VNRecognizeTextRequest`
@@ -1317,7 +1317,7 @@ Caller ──> ThumbnailService.thumbnail(for: ref, pixels:)
   the ImageIO + SwiftData already imported in `HistoryStorage`, `01` §4/§8); the
   import gate (`01` §9) is **unchanged** (contrast `V2-01`, which added
   `Vision`/`PDFKit`). `NSFileCoordinator` and `FileHandle` are Foundation
-  (`V2-04-facts.md` facts 1, 3) — already permitted in `HistoryStorage`.
+  (`V2-facts.md` cycle 7 §7.2, facts 1, 3) — already permitted in `HistoryStorage`.
 - `SwiftDataHistory` gains a `ThumbnailCacheHistory` conformance;
   `ThumbnailCache` and `DiskThumbnailCache` are stored fields of
   `SwiftDataHistory` (extending its actor field set, `05` §2). Both are `actor`
@@ -1443,7 +1443,7 @@ internal actor DiskThumbnailCache {   // C2
     private let rootURL: URL                     // <Caches>/ThumbnailCache/
     private let limits: ThumbnailCacheLimits
     // NSFileCoordinator is created per-operation inside a method, confined to
-    // this actor (non-Sendable class, V2-04-facts.md fact 1), and released when
+    // this actor (non-Sendable class, V2-facts.md cycle 7 §7.2, fact 1), and released when
     // the coordinated accessor closure returns. No coordinator is stored.
 
     func lookup(_ key: ThumbnailCacheKey) async
@@ -1672,7 +1672,7 @@ write, X2, V2-05). Its security record:
 - **TCC/sandbox/entitlement:** **none expected.** The Caches directory is the
   app's own container; reading/writing it requires no privacy-usage string or
   entitlement on macOS. Proof gate `C2-SECURITY-1` confirms
-  (`V2-04-facts.md` OPEN 2). `NSFileCoordinator` is a cooperative
+  (`V2-facts.md` cycle 7 §7.2, OPEN 2). `NSFileCoordinator` is a cooperative
   coordination primitive (multi-process by design; participation is opt-in;
   no TCC surface).
 - **Crash safety.** The caches are derivations. Their loss/corruption degrades
@@ -1815,7 +1815,7 @@ macOS 26:
   the ImageIO/SwiftData already in `HistoryStorage`); `ThumbnailCache`,
   `DiskThumbnailCache` are `actor` types so `SwiftDataHistory: Sendable` is
   derived; no `@unchecked Sendable` / `nonisolated(unsafe)`; `NSFileCoordinator`
-  is actor-confined (non-`Sendable` class, `V2-04-facts.md` fact 1). The cache
+  is actor-confined (non-`Sendable` class, `V2-facts.md` cycle 7 §7.2, fact 1). The cache
   types are internal; no cache type leaks to `HistoryCore`/`HistoryDomain`.
 - **C1-COMPILE-2 (Sendable value types).** `ThumbnailCacheKey`,
   `ThumbnailCacheEntry`, `ThumbnailSourceFingerprint`, `ThumbnailSourceSelection`,
@@ -1859,7 +1859,7 @@ macOS 26:
   to a version.
 - **C2-SECURITY-1 (no TCC/entitlement).** Confirm no privacy-usage string or
   entitlement is required on macOS 26 to read/write the app's own Caches
-  subdirectory (`V2-04-facts.md` OPEN 2).
+  subdirectory (`V2-facts.md` cycle 7 §7.2, OPEN 2).
 - **C2-SECURITY-2 (backup exclusion, verification-only).** Verify the disk cache
   directory carries `URLResourceKey.isExcludedFromBackupKey` (set explicitly as
   defense-in-depth; the Caches directory is excluded by default, but the flag is
@@ -2173,7 +2173,7 @@ type; recorded as a substitution (semantically load-bearing: it changes which
 requests join a single flight) in this V2-04 §14 self-review (the `V2-00` §8
 self-review scan enumerates no clause for internal-type substitutions, so it
 would not catch this mechanically; explicit reviewer sign-off is recommended
-at consolidation, `V2-04-facts.md` C2-m2).
+at consolidation, `V2-facts.md` cycle 7 §7.2, cycle-8 C2-m2).
 
 **Deleted-vocabulary posture.** `04` §11 lists "Publish fences, reap state
 machines, or generic materialization stores" and "Generic … `SourceStamp`,
@@ -2201,16 +2201,20 @@ per-purpose fingerprint (aligning with `ContentFingerprint`, `02` §2.2, and
 Implementation must verify against the macOS 26 SDK rather than copy pseudocode
 (`05` §18, `00` §5):
 
-- [NSFileCoordinator](https://developer.apple.com/documentation/foundation/nsfilecoordinator) — coordinates read/write of files among file presenters; non-`Sendable` `class`; macOS 10.7+ (✓ macOS 26); per-file-operation, single-thread → actor-confined (`V2-04-facts.md` fact 1).
-- [NSFileCoordinator init(filePresenter:)](https://developer.apple.com/documentation/foundation/nsfilecoordinator/init(filepresenter:)) — `init(filePresenter filePresenterOrNil: (any NSFilePresenter)?)`; V2-04 passes `nil` (no presenter registered; fact 2).
+- [NSFileCoordinator](https://developer.apple.com/documentation/foundation/nsfilecoordinator) — coordinates read/write of files among file presenters; non-`Sendable` `class`; macOS 10.7+ (✓ macOS 26); per-file-operation, single-thread → actor-confined (`V2-facts.md` cycle 7 §7.2, fact 1).
+- [NSFileCoordinator init(filePresenter:)](https://developer.apple.com/documentation/foundation/nsfilecoordinator/init(filepresenter:)) — `init(filePresenter filePresenterOrNil: (any NSFilePresenter)?)`; V2-04 passes `nil` (no presenter registered; `V2-facts.md` cycle 7 §7.2, fact 2).
 - [NSFilePresenter](https://developer.apple.com/documentation/foundation/nsfilepresenter) — the presenter protocol V2-04 does **not** register (no second writer admitted; future-extension graft would register it).
-- [FileHandle](https://developer.apple.com/documentation/foundation/filehandle) — file-descriptor wrapper; non-`Sendable` `class`; macOS 10.0+ (fact 3); available for low-level disk I/O if needed, though `Data` + coordinated `FileManager` write is the primary path.
-- [CGImageSource](https://developer.apple.com/documentation/imageio/cgimagesource) — ImageIO read source; `class`; macOS 10.8+ (✓ macOS 26; fact 4); the v1 thumbnail decode primitive (`05` §14.5) reused unchanged.
-- [ModelContext transaction](https://developer.apple.com/documentation/swiftdata/modelcontext/transaction(block:)) — the atomic-commit primitive the cache-config writes share (verified `V2-03-facts.md` fact 5); V2-04 config writes are separate transactions, not History Commits.
+- [FileHandle](https://developer.apple.com/documentation/foundation/filehandle) — file-descriptor wrapper; non-`Sendable` `class`; macOS 10.0+ (`V2-facts.md` cycle 7 §7.2, fact 3); available for low-level disk I/O if needed, though `Data` + coordinated `FileManager` write is the primary path.
+- [CGImageSource](https://developer.apple.com/documentation/imageio/cgimagesource) — ImageIO read source; `class`; macOS 10.8+ (✓ macOS 26; `V2-facts.md` cycle 7 §7.2, fact 4); the v1 thumbnail decode primitive (`05` §14.5) reused unchanged.
+- [ModelContext transaction](https://developer.apple.com/documentation/swiftdata/modelcontext/transaction(block:)) — the atomic-commit primitive the cache-config writes share (verified `V2-facts.md` cycle 7 §7.1, fact 5); V2-04 config writes are separate transactions, not History Commits.
 - [MigrationStage.lightweight(fromVersion:toVersion:)](https://developer.apple.com/documentation/swiftdata/migrationstage/lightweight(fromversion:toversion:)) / [VersionedSchema](https://developer.apple.com/documentation/swiftdata/versionedschema) — V1→V2 additive schema migration (verified `V2-01`/`V2-03`); V2-04 adds `ThumbnailCacheConfigRow` to `HistorySchemaV2`.
-- [AsyncStream.Continuation.yield(_:)](https://developer.apple.com/documentation/swift/asyncstream/continuation/yield(_:)) — non-blocking yield; the v1 observer-continuation primitive (`04` §4, verified `V2-01-facts.md`/`V2-03-facts.md` fact 8). V2-04 **does not consume** the `HistoryInvalidation` yield for C1 (retirement is LRU-lazy, §5.4) — contrast `V2-03`'s `CollectionCache`, which does; documented here as the primitive V2-04 explicitly declines to consume.
+- [AsyncStream.Continuation.yield(_:)](https://developer.apple.com/documentation/swift/asyncstream/continuation/yield(_:)) — non-blocking yield; the v1 observer-continuation primitive (`04` §4, verified `V2-facts.md` cycles 1–2 and cycle 7 §7.1, fact 8). V2-04 **does not consume** the `HistoryInvalidation` yield for C1 (retirement is LRU-lazy, §5.4) — contrast `V2-03`'s `CollectionCache`, which does; documented here as the primitive V2-04 explicitly declines to consume.
 
-All facts above are recorded with verdicts in `.tmp/v2-research/V2-04-facts.md`.
+All facts above are recorded with verdicts in `docs/v2/V2-facts.md` cycle 7
+§7.2 (promoted verbatim 2026-08-15 from the former
+`.tmp/v2-research/V2-04-facts.md` sidecar, closing DC-01); the cross-cycle
+transaction/migration/yield primitives it cites by reference are recorded in
+`V2-facts.md` cycles 1–4 and cycle 7 §7.1.
 Verified this cycle: `NSFileCoordinator` (class, non-`Sendable`, macOS 10.7+,
 per-operation/single-thread), `NSFileCoordinator.init(filePresenter:)`,
 `FileHandle` (class, non-`Sendable`, macOS 10.0+), `CGImageSource` (class,
