@@ -1886,8 +1886,16 @@ D25–D28/D29–D31 to V2-03/V2-04, so V2-02 mints none).
   backfill, executed as the single custom hop's `didMigrate` step (DC-02, §3.3;
   Part V §17 layer 3; `05` §15/§17; `RET-PLATFORM-1b`). For each existing
   `HistoryItemRow` (<=
-  5,000, `06` §2), the stage decodes its `canonicalSignatureBlob` (envelope only,
-  no Canonical content) and `revisionStateBlob` once and writes the 1:1
+  5,000, `06` §2), the stage decodes its `canonicalSignatureBlob` (envelope
+  only, no Canonical content), its `revisionStateBlob` once, **and its
+  `canonicalBlob` once** — the revision codec's `05` §4 containment check
+  requires the item's Canonical type set, so the full Canonical decode is a
+  required input, not an optimization miss; it is a bounded one-time
+  migration cost (≤ 128 MiB per item, sequential, `06` §2) and is never
+  repeated on the per-commit planning path (`RET-PLATFORM-2`). *(Wording
+  aligned to the M1.4 implementation, 2026-08-15: the original
+  "envelope only, no Canonical content" phrase applies to the signature
+  decode alone.)* The stage then writes the 1:1
   `RetainedBytesRow` (`canonicalBytes`/`revisionCount`/`revisionBytes`,
   `bytesSchemaVersion == 1`). The backfill is idempotent by construction —
   every row recomputed from the blobs, never a resumed partial write — because

@@ -82,28 +82,39 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
 
     /// Opens (or creates) the store and returns the ready facade.
     ///
-    /// Performs the docs/05-authority-kernel.md §13 startup sequence:
+    /// Performs the docs/05-authority-kernel.md §13 startup sequence,
+    /// extended to the M1 total open order (`V2-roadmap` §5):
     ///
     /// 1. validates `configuration.initialMaximumUnpinnedItems` against the
     ///    fixed Part VI user range (`HistoryLimits.standard`, §2);
-    /// 2. opens/creates the v1 `ModelContainer` (`v1Schema`, §3) for the
-    ///    configured durability medium — `.memory` changes the medium only
-    ///    and uses the same Authority, planners, codecs, and transaction
-    ///    path (§2);
+    /// 2. opens/creates the `ModelContainer` over the first shipped V2
+    ///    schema (`Schema(versionedSchema: HistorySchemaV2.self)`) through
+    ///    the M1-owned `HistoryMigrationPlan` — the single custom
+    ///    `V1 → V2` stage (DC-02; `V2-02` §3.3 Stage topology / Record 5).
+    ///    A fresh store is created directly at V2 and runs no stage; a v1
+    ///    store migrates during construction — the additive schema change
+    ///    plus the `RetainedBytesRow` `didMigrate` backfill (idempotent by
+    ///    construction) — on the migration-owned context, the sole
+    ///    sanctioned pre-Authority writer. The configured durability medium
+    ///    is unchanged: `.memory` changes the medium only and uses the same
+    ///    Authority, planners, codecs, and transaction path (§2);
     /// 3. constructs `HistoryAuthority` over the container and asks it to
     ///    perform the store-side startup (create the position/retention
-    ///    singleton for a new store, validate it, bound the retained row
+    ///    singleton for a new store, validate it, bootstrap/validate the
+    ///    retention-expansion config singleton, bound the retained row
     ///    count, and rebuild the complete Signature Index from durable
-    ///    signature metadata without decoding content blobs, §13 steps 3–9);
+    ///    signature metadata without decoding content blobs —
+    ///    `V2-roadmap` §5 total open order steps 3–10 over §13 steps 3–9);
     /// 4. publishes the constructed facade with its five actors (§13 step 10).
     ///
     /// Failure translation at this boundary (§16, §2): an out-of-range
     /// initial retention value throws `.invalidInput(.invalidRetentionPolicy)`;
-    /// a store that cannot be opened throws `.persistence(.openStore)`;
-    /// startup corruption surfaced by the Authority propagates already typed
-    /// as `.persistence(.corruptStoredValue)` or
-    /// `.persistence(.invariantViolation)` — v1 has no silent repair or
-    /// migration path for corrupted data (§13).
+    /// a store that cannot be opened or migrated throws
+    /// `.persistence(.openStore)`; startup corruption surfaced by the
+    /// Authority propagates already typed as
+    /// `.persistence(.corruptStoredValue)` or
+    /// `.persistence(.invariantViolation)` — there is no silent repair path
+    /// for corrupted data (§13).
     public static func open(
         configuration: HistoryConfiguration
     ) async throws -> SwiftDataHistory {
@@ -117,22 +128,29 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
             throw HistoryFailure.invalidInput(.invalidRetentionPolicy)
         }
 
-        // §13 step 2: open/create the v1 ModelContainer for the configured
-        // durability medium.
+        // §13 step 2, extended by the M1 total open order (`V2-roadmap` §5
+        // step 2; DC-02): build the V2 schema ONCE and construct the
+        // container through the single-hop `HistoryMigrationPlan`. A fresh
+        // store runs no stage; a v1 store migrates inside construction
+        // (additive schema change + the RetainedBytesRow didMigrate
+        // backfill), so both complete before `open` returns
+        // (`RET-PLATFORM-1b(d)`). The durability medium is unchanged.
+        let schema = Schema(versionedSchema: HistorySchemaV2.self)
         let modelConfiguration: ModelConfiguration
         switch configuration.persistence {
         case .persistent(let storeURL):
-            modelConfiguration = ModelConfiguration(schema: v1Schema, url: storeURL)
+            modelConfiguration = ModelConfiguration(schema: schema, url: storeURL)
         case .memory:
             modelConfiguration = ModelConfiguration(
-                schema: v1Schema,
+                schema: schema,
                 isStoredInMemoryOnly: true
             )
         }
         let container: ModelContainer
         do {
             container = try ModelContainer(
-                for: v1Schema,
+                for: schema,
+                migrationPlan: HistoryMigrationPlan.self,
                 configurations: [modelConfiguration]
             )
         } catch {

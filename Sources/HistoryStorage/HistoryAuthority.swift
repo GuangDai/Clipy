@@ -275,8 +275,10 @@ internal actor HistoryAuthority {
 
     /// Performs the store-side §13 startup sequence inside one isolated
     /// interval: create the position/retention singleton at position 0 for a
-    /// new store (step 3), validate exactly one singleton (step 4), validate
-    /// the retained row count against the hard bound (step 5), fetch each
+    /// new store (step 3), validate exactly one singleton (step 4),
+    /// bootstrap/validate the retention-expansion config singleton
+    /// (`V2-roadmap` §5 total open order step 5, M1.3), validate the
+    /// retained row count against the hard bound (step 5), fetch each
     /// row's scalar and signature metadata without decoding content blobs
     /// (step 6), require projection schema version 1 (step 7), decode and
     /// validate signatures and build the complete Signature Index (step 8),
@@ -294,11 +296,14 @@ internal actor HistoryAuthority {
     ///   initial value; `.persistence(.openStore)` when the store cannot be
     ///   read or the singleton cannot be created (§2: store-open failures);
     ///   `.persistence(.corruptStoredValue)` for corrupt durable signature,
-    ///   projection-version, Content Version, or pin-ordinal values;
+    ///   projection-version, Content Version, pin-ordinal, or
+    ///   retention-config values (unknown `configSchemaVersion` or a
+    ///   non-finite `ageMaxSeconds`, `V2-02` §3.3 / DC-21);
     ///   `.persistence(.invariantViolation)` for a duplicate/absent
-    ///   singleton, over-bound or duplicate rows, or a malformed pinned
-    ///   order. Corrupt durable metadata fails open — v1 has no silent
-    ///   repair path (§13).
+    ///   singleton, an out-of-range or contradictory retention-config
+    ///   combination (`V2-02` §8.3), over-bound or duplicate rows, or a
+    ///   malformed pinned order. Corrupt durable metadata fails open — v1
+    ///   has no silent repair path (§13).
     internal func performStartup(initialMaximumUnpinnedItems: Int) async throws {
         // §2, §13 step 1: the singleton must never carry an out-of-range
         // retention value (D19 requires the stored policy to permit at
@@ -321,6 +326,18 @@ internal actor HistoryAuthority {
                 in: context,
                 initialMaximumUnpinnedItems: initialMaximumUnpinnedItems
             )
+
+            // V2-roadmap §5 total open order step 5 (M1.3): bootstrap/validate
+            // the retention-expansion config singleton immediately AFTER the
+            // v1 position singleton and before the retained-row scan —
+            // absent → create all-disabled (a migrated store starts
+            // v1-faithful); present → the fail-closed V2-02 §3.3 validation.
+            // No startup RetainedBytesRow 1:1 existence check runs here: the
+            // runtime check lands with projection stamping (slice R.3) —
+            // before that, capture creates items without rows, so an
+            // unconditional check would fail every capture-created item
+            // (roadmap §5 step-7 sequencing note).
+            try Self.ensureRetentionExpansionConfig(in: context)
 
             // §13 steps 5–9: scalar scan, Signature Index build, pin-order proof.
             signatureIndex = try Self.buildSignatureIndexAtStartup(
