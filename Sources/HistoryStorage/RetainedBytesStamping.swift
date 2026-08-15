@@ -224,10 +224,8 @@ internal enum RetainedBytesStamping {
         // retire, `02` §7/§12, but the fallback keeps the invariant total),
         // and a fresh fetch sees such a pending insert.
         let row: RetainedBytesRow?
-        if let prefetched {
-            row = prefetched[itemID.rawValue] ?? try fetchRow(
-                itemID: itemID, in: context
-            )
+        if let prefetched, let prefetchedRow = prefetched[itemID.rawValue] {
+            row = prefetchedRow
         } else {
             row = try fetchRow(itemID: itemID, in: context)
         }
