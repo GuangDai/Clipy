@@ -141,14 +141,23 @@ struct RetentionPolicySweepTests {
         expected: Int,
         bytes: Int
     ) -> RevisionRequest {
-        RevisionRequest(
+        // Unique payload per append: `expected` is the OCC version, which
+        // increments with every append in a lineage — so the last byte
+        // differs per revision. A byte-identical repeat would be `.unchanged`
+        // under D4 (only effective-content-changing revisions append), which
+        // the seeding of equal-length lineages ([10, 10, 10]) must avoid.
+        // Length stays exactly `bytes`.
+        let distinguishingScalar = UnicodeScalar(97 + min(expected, 25))!
+        let payload = String(repeating: "r", count: max(bytes - 1, 0))
+            + String(Character(distinguishingScalar))
+        return RevisionRequest(
             itemID: itemID,
             expected: ContentVersion(rawValue: UInt64(expected)),
             intent: .replace(RevisionDraft(decisions: [
                 RevisionDecision(
                     typeIdentifier: "public.utf8-plain-text",
                     action: .replace(
-                        bytes: Data(String(repeating: "r", count: bytes).utf8)
+                        bytes: Data(payload.utf8)
                     )
                 ),
             ]))
