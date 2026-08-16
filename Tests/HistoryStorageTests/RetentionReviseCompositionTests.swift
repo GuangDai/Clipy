@@ -111,7 +111,7 @@ struct RetentionReviseCompositionTests {
         let receipt = try await history.perform(.revise(
             Self.replaceRequest(
                 itemID: itemID,
-                expected: ContentVersion(rawValue: expected),
+                expected: ContentVersion(rawValue: UInt64(expected)),
                 bytes: bytes
             )
         ))
@@ -450,14 +450,20 @@ struct RetentionReviseCompositionTests {
             ),
         ])
         let revisionBytes = 8
-        let revisions = (0 ..< 3).map { index in
+        // Fixed UUIDs per revision (the HistoryMigrationTests fixture style;
+        // no String(format:) — its CVarArg overload drags `0 ..< 3`'s
+        // literal type inference ambiguous on the macOS compiler).
+        let revisionUUIDs = [
+            "00000000-0000-0000-0000-000000000021",
+            "00000000-0000-0000-0000-000000000022",
+            "00000000-0000-0000-0000-000000000023",
+        ]
+        let revisions = revisionUUIDs.enumerated().map { pair in
             ContentRevision(
-                id: RevisionID(
-                    rawValue: UUID(uuidString: String(
-                        format: "00000000-0000-0000-0000-00000000002%d", index
-                    ))!
+                id: RevisionID(rawValue: UUID(uuidString: pair.element)!),
+                createdAt: Date(
+                    timeIntervalSinceReferenceDate: 700_404_000 + pair.offset
                 ),
-                createdAt: Date(timeIntervalSinceReferenceDate: 700_404_000 + index),
                 content: EffectiveContent(representations: [
                     ContentRepresentation(
                         typeIdentifier: typeIdentifier,
@@ -947,7 +953,7 @@ struct RetentionReviseCompositionTests {
         for (version, bytes) in zip([1, 2], [8, 9]) {
             let request = Self.replaceRequest(
                 itemID: target.id,
-                expected: ContentVersion(rawValue: version),
+                expected: ContentVersion(rawValue: UInt64(version)),
                 bytes: bytes
             )
             let inputs = try await authority.revisionPreparationInputs(request)
