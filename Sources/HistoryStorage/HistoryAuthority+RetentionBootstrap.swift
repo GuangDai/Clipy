@@ -207,7 +207,15 @@ extension HistoryAuthority {
     /// version fence, then DC-21 finiteness, then the §8.3
     /// range/contradiction checks — so a row violating several contracts
     /// reports the first in this order.
-    private static func validateRetentionExpansionConfig(
+    ///
+    /// Internal (not private) because it is the single owner of the stored-row
+    /// validation vocabulary: the R.4 capture-lane config loader re-runs this
+    /// exact unit validation on every capture's freshly fetched singleton, so
+    /// a row corrupted between `open` and a later capture fails closed with
+    /// the SAME typed producers the open-time bootstrap uses
+    /// (`RetentionConfigLoading.loadCaptureLanePolicies`, `V2-roadmap` §6
+    /// R.4) — never a second, drifting copy of the checks.
+    internal static func validateRetentionExpansionConfig(
         _ row: RetentionExpansionConfigRow
     ) throws {
         // The version fence (05 §4 codec discipline): an unknown version is

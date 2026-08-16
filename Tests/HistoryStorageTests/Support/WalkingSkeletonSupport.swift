@@ -119,4 +119,42 @@ enum WSSupport {
         precondition(rows.count == 1, "position singleton must exist exactly once, got \(rows.count)")
         return rows[0]
     }
+
+    /// Seeds the retention-expansion config singleton's policy lanes for the
+    /// R.4 capture-composition fixtures: the row is written through an
+    /// INDEPENDENT container over the same store — behind the Authority's
+    /// back, the same stance the R.3 corruption fixtures take — because the
+    /// `.setRetentionPolicies` action that will write it in production is
+    /// roadmap slice R.6 (still `StepDeferredError`-deferred). The capture
+    /// lane re-reads and re-validates the singleton inside every capture
+    /// interval (`RetentionConfigLoading.loadCaptureLanePolicies`), so the
+    /// next capture enforces exactly these policies. The row must already
+    /// exist (`SwiftDataHistory.open` bootstraps it all-disabled); a `nil`
+    /// lane maps to the disabled shape with its dormant value zeroed, the
+    /// exact normalization the R.6 stamping will persist (`V2-02` §5.6).
+    static func seedRetentionConfig(
+        storeURL: URL,
+        age: AgeRetention? = nil,
+        storage: StorageRetention? = nil,
+        revisions: RevisionRetention? = nil
+    ) throws {
+        let container = try makeContainer(storeURL: storeURL)
+        let context = ModelContext(container)
+        let rows = try context.fetch(FetchDescriptor<RetentionExpansionConfigRow>())
+        precondition(
+            rows.count == 1,
+            "config singleton must exist exactly once, got \(rows.count)"
+        )
+        // A `@Model` is bound to the context that fetched it — mutate and
+        // save through the SAME context (the R.3 fixture discipline).
+        let row = rows[0]
+        row.agePolicyEnabled = age != nil
+        row.ageMaxSeconds = age?.maxAge ?? 0
+        row.storagePolicyEnabled = storage != nil
+        row.storageMaxBytes = storage?.maxTotalBytes ?? 0
+        row.revisionPolicyEnabled = revisions != nil
+        row.revisionMaxCount = revisions?.maxRevisionsPerItem
+        row.revisionMaxBytes = revisions?.maxRevisionBytesPerItem
+        try context.save()
+    }
 }

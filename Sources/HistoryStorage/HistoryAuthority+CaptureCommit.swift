@@ -105,12 +105,31 @@ extension HistoryAuthority {
             throw rejection.historyFailure
         }
 
-        guard case .commit(let mutationPlan) = planningResult else {
+        guard case .commit(let v1Plan) = planningResult else {
             // `planCapture` has no no-op outcome: equal content coalesces and
             // distinct content inserts (docs/02-domain.md §9). Fail closed if
             // that planner contract ever drifts behind the shared result type.
             throw HistoryFailure.persistence(.invariantViolation)
         }
+
+        // V2-02 §4.2 capture composition (roadmap R.4): when R1/R2 is
+        // active, plan the retention expansion over the projected
+        // post-primary post-count inventory and merge its retirements after
+        // the v1 mutations — one Domain plan below, so the existing tail
+        // still stamps ONE ChangePosition, builds ONE index delta (each
+        // retirement entering the removals exactly as v1 count-retirements
+        // do), and transacts ONE `ModelContext.transaction`, with the
+        // receipt outcome unchanged (§4.2 "outcome = v1Plan.outcome"). An
+        // R3-only or all-disabled config returns the v1 plan untouched with
+        // NO expansion fact load (§4.2/§7), and the §8.3 pre-plan R2
+        // infeasibility throws here — before any stamp or transaction — so
+        // the primary insert never lands.
+        let mutationPlan = try composeRetentionExpansionForCapture(
+            v1Plan,
+            prepared: prepared,
+            facts: load.facts,
+            in: context
+        )
 
         // Copy Coalescing preserves the winner's loaded Content Version
         // (docs/02-domain.md §13); the receipt reference names that exact
