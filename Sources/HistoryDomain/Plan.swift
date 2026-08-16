@@ -109,6 +109,17 @@ package struct MutationPlan: Sendable {
     package let outcome: PlannedOutcome
     /// Non-empty by invariant 1.
     package let mutations: [HistoryMutation]
+
+    /// Explicit package initializer: the implicit memberwise initializer is
+    /// `internal` to HistoryDomain, but Storage legitimately rebuilds a plan
+    /// when composing the primary plan with expansion retirements (V2-02
+    /// §4.2's merge: "final mutations = v1Plan.mutations +
+    /// expansion.retirements, outcome = v1Plan.outcome") — the same
+    /// package-seam posture as the planners' own `package` declarations.
+    package init(outcome: PlannedOutcome, mutations: [HistoryMutation]) {
+        self.outcome = outcome
+        self.mutations = mutations
+    }
 }
 
 /// Package outcome vocabulary, mapped mechanically to the public receipt
