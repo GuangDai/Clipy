@@ -24,9 +24,9 @@
 /// target load), RET-PRUNE-2 (R2 never credits soon-to-be-pruned revision
 /// bytes), RET-CONCUR-1 (the phase-2 recomputation over reloaded facts).
 ///
-/// Boundary (roadmap R.5): the `.setRetentionPolicies` sweep (§4.4, R.6)
-/// and the public policy writer stay deferred; this file composes the
-/// REVISE lane only. The RetentionClock (`V2-02` §6.4) is deliberately
+/// Boundary (roadmap R.5/R.6): this file composes the REVISE lane only; the
+/// `.setRetentionPolicies` sweep (§4.4) lives in RetentionPolicySweep.swift.
+/// The RetentionClock (`V2-02` §6.4) is deliberately
 /// unread here: §6.4 assigns the Storage-side clock to the
 /// `.setRetentionPolicies` sweep lane alone, and the revise lane's R1
 /// reference is structurally skipped (§4.3/§7 — a revision does not change

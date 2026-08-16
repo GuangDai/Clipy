@@ -225,11 +225,9 @@ internal actor HistoryAuthority {
     /// `SwiftDataHistory.open`; tests inject a fixed `Date` via
     /// `@testable`) and never exposed on the public `open` /
     /// `HistoryConfiguration` seam (§6.4 "Injection mechanism";
-    /// `RET-COMPILE-1`). The clock read happens inside the serialized
-    /// Authority interval before fact load, once per commit (§6.4). No call
-    /// site reads it until the R.6 sweep lands; the seam itself lands with
-    /// R.3 per that slice's roadmap row ("inject the Storage clock
-    /// internally").
+    /// `RET-COMPILE-1`). The sweep reads it once per commit inside the
+    /// serialized Authority interval before fact load (§6.4;
+    /// RetentionPolicySweep.swift is its only production consumer).
     internal let retentionClock: any RetentionClock
 
 #if DEBUG

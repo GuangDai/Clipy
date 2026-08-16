@@ -720,11 +720,11 @@ struct RetainedBytesProjectionLifecycleTests {
     /// A fixed-`Date` clock witness injected through the `@testable`
     /// `HistoryAuthority` initializer is stored and read back unchanged,
     /// and the public `open` path wires the production `SystemRetentionClock`
-    /// witness. Seam/compile proof only (the §6.4 posture: the public
+    /// witness. Seam/compile proof (the §6.4 posture: the public
     /// `open(configuration:)` signature and `HistoryConfiguration` carry no
-    /// clock, `RET-COMPILE-1`); the clock's behavioral consumer is the R.6
-    /// `.setRetentionPolicies` sweep lane, which no public action reaches
-    /// yet.
+    /// clock, `RET-COMPILE-1`); the clock's behavioral consumer — the R.6
+    /// `.setRetentionPolicies` sweep's R1 reference time — is covered by
+    /// the RetentionPolicySweepTests clock fixtures.
     @Test("RetentionClock seam: @testable injection compiles; open wires the system witness")
     func retentionClockSeamAcceptsInjectionWhileOpenWiresSystemClock() async throws {
         struct FixedRetentionClock: RetentionClock {

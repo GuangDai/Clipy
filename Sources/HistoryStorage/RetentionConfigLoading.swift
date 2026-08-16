@@ -26,11 +26,11 @@
 /// (`loadReviseLanePolicies`, R.5) plus the capture composition; the
 /// revise-path composition (R2+R3, §4.3) lives in
 /// RetentionReviseComposition.swift and the `.setRetentionPolicies` sweep
-/// (§4.4) is R.6. The RetentionClock seam (`V2-02` §6.4) is deliberately
-/// unread by the capture loader: capture's R1 reference `now` is the
-/// capture's own `observedAt`, already a Domain input (§4.2; the DC-28
-/// note — the clock exists for the R.6 sweep lane alone; the revise lane
-/// likewise supplies a Domain-minted `Date`, §4.3).
+/// (§4.4, R.6) in RetentionPolicySweep.swift. The RetentionClock seam
+/// (`V2-02` §6.4) is deliberately unread by the capture loader: capture's
+/// R1 reference `now` is the capture's own `observedAt`, already a Domain
+/// input (§4.2; the DC-28 note — the clock exists for the R.6 sweep lane
+/// alone; the revise lane likewise supplies a Domain-minted `Date`, §4.3).
 import Foundation
 import HistoryCore
 import HistoryDomain

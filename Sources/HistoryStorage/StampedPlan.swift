@@ -26,9 +26,10 @@ import HistoryDomain
 /// (`V2-02` §5.3/§5.6/§6.3): `.pruneRevisions` → `.pruneRevisions` (the
 /// per-case row applies only when no `.appendRevision` shares the item — the
 /// compose-with-append rule folds the prune into the append's single blob
-/// write — and the composer drops it for items R2 retires,
-/// retire-subsumes-prune), and `.setRetentionPolicy`'s V2 analog writes the
-/// `RetentionExpansionConfigRow` singleton.
+/// write — and the R.6 sweep composer drops it for items R1/R2 retire,
+/// retire-subsumes-prune), and `.setRetentionPolicy`'s V2 analog
+/// (`.setRetentionPolicies`) writes the `RetentionExpansionConfigRow`
+/// singleton.
 internal enum StampedMutation: Sendable {
     /// Insert one new row with the complete stamped payload.
     /// docs/05-authority-kernel.md §9
@@ -208,6 +209,18 @@ internal struct StampedCommitPlan: Sendable {
 
 // MARK: - Stamping inputs (docs/05-authority-kernel.md §9)
 
+/// One pruned item's loaded revision lineage, the stamping input the
+/// per-case `.pruneRevisions` row re-encodes from (`V2-02` §5.3/§6.3): the
+/// complete pre-prune list in append order and its active Revision ID. A
+/// value type because one `.setRetentionPolicies` sweep plan can carry
+/// prunes for SEVERAL items (roadmap R.6), each stamped from its own
+/// lineage — the inputs therefore hold a per-item map, never a single
+/// shared list.
+internal struct PruneLineage: Sendable {
+    internal let revisions: [ContentRevision]
+    internal let activeRevisionID: RevisionID?
+}
+
 /// The values stamping needs that the Domain plan intentionally does not
 /// carry (docs/02-domain.md §7 invariant 10): the prepared projections and
 /// the loaded Content Versions / revision lists tokens are stamped from.
@@ -232,20 +245,18 @@ internal enum StampingInputs: Sendable {
         projection: ContentProjection
     )
 
-    /// V2-02 §5.3/§6.3 prune-alone stamping inputs, taken from the pruned
-    /// item's loaded revision lineage: the complete pre-prune list and its
-    /// active Revision ID. The per-case `.pruneRevisions` stamped row
-    /// applies only when no `.appendRevision` in the plan shares the item —
-    /// the revise path folds its prune into the append's single blob write
-    /// through `.revision` inputs instead (§6.3 compose-with-append, landed
-    /// in roadmap R.5), so the production caller that supplies these inputs
-    /// is the R.6 `.setRetentionPolicies` sweep (`V2-roadmap` §6 R.6); no
-    /// production caller passes them until that slice lands — the arm
-    /// itself is real from R.3 and unit-proven at this seam.
-    case prune(
-        revisions: [ContentRevision],
-        activeRevisionID: RevisionID?
-    )
+    /// V2-02 §5.3/§6.3 prune-alone stamping inputs: the loaded revision
+    /// lineage of every item the plan prunes, keyed by item. The per-case
+    /// `.pruneRevisions` stamped row applies only when no `.appendRevision`
+    /// in the plan shares the item — the revise path folds its prune into
+    /// the append's single blob write through `.revision` inputs instead
+    /// (§6.3 compose-with-append, roadmap R.5) — so the production caller
+    /// supplying these inputs is the R.6 `.setRetentionPolicies` sweep
+    /// (`V2-roadmap` §6 R.6), whose PHASE A loads exactly the exceeding
+    /// items' lineages. WHICH revisions are removed is decided by
+    /// `planRevisionRetentionExpansion` (`V2-02` §5.1/§6.5) in the sweep
+    /// composer, never here.
+    case prune(lineagesByItem: [HistoryItemID: PruneLineage])
 
     /// Pin, unpin, remove, clear, and retention plans stamp from the Domain
     /// payloads alone.
@@ -337,16 +348,16 @@ internal enum CommitPlanStamper {
     ///   `.pruneRevisions` for an appended item into that append's SINGLE blob
     ///   write (the prune set applied first, §6.3) and consumes the Domain
     ///   prune without a separate stamped write; a plan whose unfolder
-    ///   `.pruneRevisions` shares an item with a `.retire` (the
-    ///   retire-subsumes-prune shape owned by R.6, `RET-STAMP-2`) is still
-    ///   rejected here, so the executor never applies two blob writes to one
-    ///   item in one transaction and never fetches a row the same transaction
-    ///   deleted;
+    ///   `.pruneRevisions` shares an item with a `.retire` is still rejected
+    ///   here — the retire-subsumes-prune DROP is the R.6 sweep composer's to
+    ///   emit BEFORE the plan exists (`RET-STAMP-2`), so the executor never
+    ///   applies two blob writes to one item in one transaction and never
+    ///   fetches a row the same transaction deleted;
     /// - the one remaining V2-02 row (`.setRetentionPolicies`, `V2-02` §5.6)
-    ///   defers to its owning roadmap slice R.6 (`V2-roadmap` §6) — its arm
-    ///   below throws the internal `StepDeferredError` exactly as R.1's
-    ///   `SwiftDataHistory.perform` arm does, so no half-composed policy plan
-    ///   can be stamped before that slice lands.
+    ///   stamps mechanically to `.setRetentionPolicies(policies:)`, the row
+    ///   whose execution writes the `RetentionExpansionConfigRow` singleton
+    ///   fields (§6.3) — the payload is the explicit Domain mutation's value,
+    ///   never an outcome-inferred side effect (D18).
     ///
     /// No pasteboard access, fingerprinting, or projection happens here; all
     /// blob encoding starts from validated Domain values (§4). A `.unchanged`
@@ -535,19 +546,18 @@ internal enum CommitPlanStamper {
                 // lineage — survivors keep append order, `formatVersion == 1`,
                 // same `activeRevisionID` — and stamp the post-prune revision
                 // scalars so the executor's restamp decodes nothing. The
-                // loaded lineage arrives through the `.prune` inputs; WHICH
-                // revisions are removed is decided by
-                // `planRevisionRetentionExpansion` (`V2-02` §5.1/§6.5),
-                // composed by the owning slices R.5/R.6 — never here.
-                guard case .prune(
-                    let loadedRevisions,
-                    let activeRevisionID
-                ) = inputs else {
+                // loaded lineage arrives through the `.prune` inputs keyed by
+                // item (a sweep plan can prune several items, each from its
+                // own lineage, roadmap R.6); WHICH revisions are removed is
+                // decided by `planRevisionRetentionExpansion` (`V2-02`
+                // §5.1/§6.5) in the owning composer — never here.
+                guard case .prune(let lineagesByItem) = inputs,
+                      let lineage = lineagesByItem[itemID] else {
                     throw StampingRejection.missingStampingInputs
                 }
                 let pruned = try RetainedBytesStamping.prunedRevisionState(
-                    loadedRevisions: loadedRevisions,
-                    activeRevisionID: activeRevisionID,
+                    loadedRevisions: lineage.revisions,
+                    activeRevisionID: lineage.activeRevisionID,
                     removedRevisionIDs: removedRevisionIDs
                 )
                 mutations.append(.pruneRevisions(
@@ -557,17 +567,17 @@ internal enum CommitPlanStamper {
                 ))
                 prunedItemIDs.insert(itemID)
 
-            case .setRetentionPolicies:
-                // V2-02 §5.6 stamping: append the
-                // `.setRetentionPolicies(policies:)` row writing the
-                // `RetentionExpansionConfigRow` singleton. Emitted only by
-                // the R.6 policy-sweep commit (`V2-roadmap` §6), which also
-                // owns the same-value/satisfied `.unchanged` decision that
-                // precedes any plan carrying this mutation; deferred with it
-                // so no half-composed policy plan can exist before R.6.
-                throw StepDeferredError.notYetImplemented(
-                    operation: "setRetentionPolicies stamping"
-                )
+            case .setRetentionPolicies(let policies):
+                // V2-02 §5.6 stamping (roadmap R.6): the mechanical row —
+                // the executor writes the normalized policy fields to the
+                // `RetentionExpansionConfigRow` singleton (`configSchemaVersion`
+                // left at 1), preserving every item row. Emitted only by the
+                // `.setRetentionPolicies` sweep commit, which owns the
+                // same-value/satisfied `.unchanged` decision that precedes
+                // any plan carrying this mutation (§5.6: the write advances
+                // `ChangePosition` exactly once when the value actually
+                // changes or victims retire).
+                mutations.append(.setRetentionPolicies(policies: policies))
             }
         }
 
@@ -578,21 +588,22 @@ internal enum CommitPlanStamper {
             throw StampingRejection.incoherentPlan
         }
 
-        // V2-02 §6.3 composition discipline (roadmap R.3 guards, R.5
-        // composition, R.6 pending): a per-case `.pruneRevisions` row (one
-        // that was NOT consumed by the compose-with-append fold above)
-        // applies only when the plan contains no other stamped write for the
-        // same item. A prune sharing an item with a `.retire` would fetch a
-        // row the same transaction deletes (§10 row-existence rule) and is
-        // still rejected here: the retire-subsumes-prune DROP is the R.6
-        // `.setRetentionPolicies` composer's to emit (`RET-STAMP-2`) — on the
-        // revise lane it can never arise, because R2 retires only OTHER
-        // items (the revised item is protected, plan invariant 7) and R3
-        // prunes only the revised item (`V2-02` §7: revise = R2 + R3 only).
-        // The append-side disjointness is retained as a belt-and-braces
-        // backstop: the fold consumes every prune whose item received an
-        // append, so an unfolder prune there is unreachable by construction.
-        // No stamped write exists at this point, so nothing half-applies.
+        // V2-02 §6.3 composition discipline (roadmap R.3 guards, R.5/R.6
+        // compositions): a per-case `.pruneRevisions` row (one that was NOT
+        // consumed by the compose-with-append fold above) applies only when
+        // the plan contains no other stamped write for the same item. A prune
+        // sharing an item with a `.retire` would fetch a row the same
+        // transaction deletes (§10 row-existence rule) and is still rejected
+        // here: the retire-subsumes-prune DROP is the R.6
+        // `.setRetentionPolicies` composer's to emit BEFORE the plan exists
+        // (`RET-STAMP-2`) — on the revise lane it can never arise, because
+        // R2 retires only OTHER items (the revised item is protected, plan
+        // invariant 7) and R3 prunes only the revised item (`V2-02` §7:
+        // revise = R2 + R3 only). The append-side disjointness is retained
+        // as a belt-and-braces backstop: the fold consumes every prune whose
+        // item received an append, so an unfolder prune there is unreachable
+        // by construction. No stamped write exists at this point, so nothing
+        // half-applies.
         guard prunedItemIDs.isDisjoint(with: appendedRevisionItemIDs),
               prunedItemIDs.isDisjoint(with: retiredItemIDs)
         else {

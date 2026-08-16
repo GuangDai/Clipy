@@ -202,9 +202,9 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     ///
     /// Actor-thrown failures propagate unchanged as typed `HistoryFailure`s
     /// (§16); every v1 action path is implemented as of roadmap step 6
-    /// (docs/roadmap/03-historystorage.md). The V2-02
-    /// `.setRetentionPolicies` case defers to its owning slice below via the
-    /// internal `StepDeferredError` (`V2-02` §8.1/§8.2; `V2-roadmap` §6).
+    /// (docs/roadmap/03-historystorage.md), and the V2-02
+    /// `.setRetentionPolicies` case is implemented by the R.6 policy sweep
+    /// (`V2-02` §4.4; `V2-roadmap` §6).
     public func perform(_ action: HistoryAction) async throws -> HistoryReceipt {
         switch action {
         case .capture(let raw):
@@ -241,18 +241,13 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         case .setRetentionPolicy(let maximum):
             return try await authority.commitRetentionPolicy(maximum)
 
-        case .setRetentionPolicies:
-            // V2-02 §8.1 case; the full R1/R2/R3 policy-sweep commit (R3
-            // first, projected R1/R2, unsatisfiable-R3 veto — `V2-02` §4.4)
-            // is owned by roadmap slice R.6 (`V2-roadmap` §6), which will
-            // route to `HistoryAuthority.commitRetentionPolicies` and consume
-            // the `RetentionPolicyBounds.validate` boundary. Honest deferral
-            // until then: the internal not-yet-implemented error propagates
-            // unchanged (RET-COMPILE-2 keeps this switch compiler-exhaustive
-            // without inventing a public `HistoryFailure` for the slice).
-            throw StepDeferredError.notYetImplemented(
-                operation: "setRetentionPolicies"
-            )
+        case .setRetentionPolicies(let policies):
+            // V2-02 §8.1 case (roadmap R.6, policy sweep): the full R1/R2/R3
+            // sweep — boundary validation, R3 prunes per exceeding item, the
+            // projected R1/R2 pass, the survivor-scoped unsatisfiable-R3 veto,
+            // and the same-value/satisfied `.unchanged` no-op — all inside
+            // the Authority's one serialized commit interval (`V2-02` §4.4).
+            return try await authority.commitRetentionPolicies(policies)
         }
     }
 

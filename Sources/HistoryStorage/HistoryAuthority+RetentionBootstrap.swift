@@ -52,7 +52,7 @@ internal enum RetentionPolicyBounds {
 
     /// Boundary validation of one public `HistoryRetentionPolicies` value
     /// against the §8.3 bounds above — the seam the R.6
-    /// `.setRetentionPolicies` commit consumes when it lands
+    /// `.setRetentionPolicies` commit consumes
     /// (`V2-roadmap` §6 R.6; `V2-02` §8.3 "An out-of-range / inconsistent
     /// `HistoryRetentionPolicies` → `.invalidInput(.invalidRetentionPolicy)`
     /// at the `HistoryStorage` boundary"). Every ADMITTED dimension is

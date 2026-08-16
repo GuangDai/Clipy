@@ -18,11 +18,11 @@
 /// signature and the frozen `HistoryConfiguration` are untouched — the
 /// clock never rides on the public seam.
 ///
-/// Slice boundary (`V2-roadmap` §6): the seam and its init plumbing land
+/// Slice boundary (`V2-roadmap` §6): the seam and its init plumbing landed
 /// with R.3 per that slice's row ("inject the Storage clock internally");
-/// its behavioral consumer is the R.6 policy sweep (the clock read occurs
+/// its behavioral consumer is the R.6 policy sweep — the clock read occurs
 /// inside the serialized Authority interval before fact load, captured once
-/// per commit — §6.4), so no call site reads the clock until R.6 lands.
+/// per commit (§6.4) — in RetentionPolicySweep.swift.
 import Foundation
 
 // MARK: - Storage-side clock (V2-02 §6.4)

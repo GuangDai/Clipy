@@ -221,9 +221,9 @@ extension HistoryAuthority {
             // never reaches this arm — its prune is folded into the
             // `.appendRevision` blob write at stamp-emission time (§6.3
             // compose-with-append, `RET-STAMP-1`) — so the producer of this
-            // row is the R.6 `.setRetentionPolicies` sweep (`RET-STAMP-2`);
-            // the per-case execution here is real so that slice lands
-            // against working semantics (`RET-PLATFORM-3`).
+            // row is the R.6 `.setRetentionPolicies` sweep (`RET-STAMP-2`),
+            // whose composer drops prunes for items the same commit retires
+            // before the plan exists.
             let row = try requireRow(itemID, in: context)
             row.revisionStateBlob = revisionStateBlob
             try RetainedBytesStamping.restamp(
@@ -232,16 +232,27 @@ extension HistoryAuthority {
                 in: context
             )
 
-        case .setRetentionPolicies:
-            // V2-02 §5.6 execution: fetch the `RetentionExpansionConfigRow`
-            // singleton and write the normalized policy fields
-            // (`configSchemaVersion` left at 1), preserving every item row.
-            // Owned by roadmap slice R.6 (policy sweep) together with the
-            // config-row singleton bootstrap it stamps against
-            // (`V2-roadmap` §6); deferred until then.
-            throw StepDeferredError.notYetImplemented(
-                operation: "setRetentionPolicies execution"
-            )
+        case .setRetentionPolicies(let policies):
+            // V2-02 §5.6 execution (roadmap R.6, policy sweep): fetch the
+            // `RetentionExpansionConfigRow` singleton and write the normalized
+            // policy fields — an enabled flag plus in-range value per lane, a
+            // `nil` lane mapping to the disabled shape with its dormant value
+            // zeroed and its R3 thresholds nil (the exact §3.1/§5.6
+            // normalization the boundary already validated) — leaving
+            // `configSchemaVersion` at 1 and preserving every item row,
+            // `ContentVersion`, and projection (§5.6: "no item row is
+            // touched"). The plan-level singleton position guard checked at
+            // the top of this closure is the concurrency protection, exactly
+            // as v1 `.setRetentionPolicy` (which likewise carries no position
+            // field, §5.6).
+            let configRow = try Self.fetchRetentionConfigRow(in: context)
+            configRow.agePolicyEnabled = policies.age != nil
+            configRow.ageMaxSeconds = policies.age?.maxAge ?? 0
+            configRow.storagePolicyEnabled = policies.storage != nil
+            configRow.storageMaxBytes = policies.storage?.maxTotalBytes ?? 0
+            configRow.revisionPolicyEnabled = policies.revisions != nil
+            configRow.revisionMaxCount = policies.revisions?.maxRevisionsPerItem
+            configRow.revisionMaxBytes = policies.revisions?.maxRevisionBytesPerItem
         }
     }
 
