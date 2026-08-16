@@ -462,7 +462,7 @@ struct RetentionReviseCompositionTests {
             ContentRevision(
                 id: RevisionID(rawValue: UUID(uuidString: pair.element)!),
                 createdAt: Date(
-                    timeIntervalSinceReferenceDate: 700_404_000 + pair.offset
+                    timeIntervalSinceReferenceDate: 700_404_000 + Double(pair.offset)
                 ),
                 content: EffectiveContent(representations: [
                     ContentRepresentation(
