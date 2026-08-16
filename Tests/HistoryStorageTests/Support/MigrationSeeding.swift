@@ -1,4 +1,5 @@
 import Foundation
+import HistoryCore
 import HistoryDomain
 import SwiftData
 @testable import HistoryStorage

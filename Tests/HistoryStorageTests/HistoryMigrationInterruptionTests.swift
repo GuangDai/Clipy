@@ -106,7 +106,11 @@ struct HistoryMigrationInterruptionTests {
         executableURL: URL,
         storeURL: URL,
         abortAfterRows: Int
-    ) throws -> (terminationStatus: Int32, output: Data) {
+    ) throws -> (
+        terminationStatus: Int32,
+        terminationReason: Process.TerminationReason,
+        output: Data
+    ) {
         let process = Process()
         let combinedOutput = Pipe()
         process.executableURL = executableURL
@@ -131,7 +135,7 @@ struct HistoryMigrationInterruptionTests {
         // only after termination and never surfaced verbatim.
         let output = try combinedOutput.fileHandleForReading.readToEnd() ?? Data()
         process.waitUntilExit()
-        return (process.terminationStatus, output)
+        return (process.terminationStatus, process.terminationReason, output)
     }
 
     // MARK: - RET-PLATFORM-1b(e): process death mid-backfill
