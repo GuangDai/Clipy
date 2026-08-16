@@ -6,9 +6,32 @@ import HistoryDomain
 import SwiftData
 
 extension HistoryAuthority {
-    internal func revisionPreparationSnapshot(
+    /// The phase-1 inputs of the V2-extended two-phase revise (`V2-02` §4.3
+    /// PHASE 1; `V2-roadmap` §6 R.5): the v1 OCC snapshot plus the current
+    /// retention policies, both captured inside ONE serialized Authority
+    /// interval over one operation-local context — Record 2's
+    /// policy-sourcing mechanism ("the `HistoryAuthority` reads the current
+    /// `RetentionExpansionConfigRow` R3 policies in the same serialized
+    /// Authority interval that captures the snapshot ... and threads them as
+    /// a sibling V2 input to the V2-extended preparation call"). The
+    /// off-Authority preparation actor performs no durable-state read of its
+    /// own.
+    ///
+    /// The policy read uses the revise-lane gate (`loadReviseLanePolicies`):
+    /// `nil` for an R1-only or all-disabled config means phase 1 runs the
+    /// v1 preparation unchanged. Phase 2 re-reads the policies
+    /// independently (`commitRevision`'s composition), never this copy
+    /// (§4.3 "Phase-2 policy re-read").
+    ///
+    /// - Throws: exactly `revisionPreparationSnapshot`'s failures plus the
+    ///   config loader's typed failures (`.temporarilyUnavailable(
+    ///   .factProof)` / `.persistence(...)`).
+    internal func revisionPreparationInputs(
         _ request: RevisionRequest
-    ) async throws -> RevisionPreparationSnapshot {
+    ) async throws -> (
+        snapshot: RevisionPreparationSnapshot,
+        retentionPolicies: HistoryRetentionPolicies?
+    ) {
         let context = ModelContext(container)
         context.autosaveEnabled = false
 
@@ -34,12 +57,27 @@ extension HistoryAuthority {
             )
         }
 
-        return RevisionPreparationSnapshot(
-            canonical: item.canonical,
-            revisions: item.revisions,
-            activeRevisionID: item.activeRevisionID,
-            contentVersion: item.contentVersion
+        return (
+            snapshot: RevisionPreparationSnapshot(
+                canonical: item.canonical,
+                revisions: item.revisions,
+                activeRevisionID: item.activeRevisionID,
+                contentVersion: item.contentVersion
+            ),
+            retentionPolicies: try RetentionConfigLoading.loadReviseLanePolicies(
+                in: context
+            )
         )
+    }
+
+    /// The v1 phase-1 snapshot entry (docs/05-authority-kernel.md §6.2),
+    /// retained as the v1 seam the WS20 harness drives; it is the snapshot
+    /// half of `revisionPreparationInputs` (the V2 sibling-input read is
+    /// simply skipped for callers that do not thread policies).
+    internal func revisionPreparationSnapshot(
+        _ request: RevisionRequest
+    ) async throws -> RevisionPreparationSnapshot {
+        try await revisionPreparationInputs(request).snapshot
     }
 
     /// Phase two of the OCC-safe revision commit (§6.2): reload the
@@ -54,6 +92,9 @@ extension HistoryAuthority {
     /// the target item, fully decoded (§7.3); a missing target fails the
     /// load as `.notFound` → `planRevision` (OCC, base-version, and
     /// normalization rechecks; a byte-identical proposal is `.unchanged`)
+    /// → the V2-02 §4.3 revise composition when R2/R3 is active (roadmap
+    /// R.5; prune recomputed over the reloaded lineage, R2 planned over the
+    /// projected post-prune post-append inventory, one merged plan)
     /// → stamp with `.revision` inputs taken from the reloaded facts →
     /// `executeStampedPlan` (the transaction executor re-verifies
     /// `expectedCurrentVersion`, §10).
@@ -113,16 +154,37 @@ extension HistoryAuthority {
             throw rejection.historyFailure
         }
 
-        guard case .commit(let mutationPlan) = planningResult else {
+        guard case .commit(let v1Plan) = planningResult else {
             // §9: release the context and return — nothing is retained
             // across the operation (§5), and a no-op yields no receipt,
             // index delta, or invalidation (docs/04-coherence.md §4).
             return .unchanged
         }
 
+        // V2-02 §4.3 revise composition (roadmap R.5): when R2 or R3 is
+        // active, recompute the prune set over the RELOADED lineage, project
+        // the R2 inventory to the post-prune post-append state, and merge
+        // the prune + R2 retirements after the v1 mutations — one Domain
+        // plan below, so the existing tail still stamps ONE ChangePosition
+        // and the stamper's compose-with-append fold (§6.3, RET-STAMP-1)
+        // emits ONE `.appendRevision` blob write for the revised item. An
+        // R1-only or all-disabled config returns the v1 plan untouched (§7);
+        // the §8.3 revise-time failures (`.capacityExceeded(.revisionBytes)`
+        // unsatisfiable prune, `.capacityExceeded(.storageBytes)`
+        // irreducible budget) throw here — before any stamp or transaction,
+        // so nothing durable exists.
+        let mutationPlan = try composeRetentionExpansionForRevision(
+            v1Plan,
+            bundle: bundle,
+            facts: facts,
+            in: context
+        )
+
         // §9: mechanical stamping from the reloaded facts — the item's
         // current Content Version, its complete existing revision list,
-        // and the prepared revision projection (§6.2).
+        // and the prepared revision projection (§6.2). The §6.3
+        // compose-with-append fold reads the prune set from the Domain plan
+        // itself, so these inputs are exactly the v1 shape.
         let stamped: StampedCommitPlan
         do {
             stamped = try CommitPlanStamper.stamp(

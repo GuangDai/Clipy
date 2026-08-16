@@ -158,6 +158,10 @@ internal actor RevisionPreparationActor {
     /// 4. Project the durable title/search/type summary from the prepared
     ///    proposed Effective Content (docs/05-authority-kernel.md §15).
     ///
+    /// The v1 entry point (`retentionPolicies` absent): R3 is disabled for
+    /// this preparation, so the path is byte-for-byte v1 (`V2-02` Record 2:
+    /// "when R3 is disabled, the preparation path is byte-for-byte v1").
+    ///
     /// - Throws: `HistoryFailure.invalidInput(.incoherentRevisionDraft)` for
     ///   a draft that misses a Canonical decision, duplicates one, names a
     ///   foreign type, supplies empty replacement bytes, or hides every type
@@ -170,6 +174,45 @@ internal actor RevisionPreparationActor {
     internal func prepare(
         _ request: RevisionRequest,
         from source: RevisionPreparationSnapshot
+    ) throws -> PreparedRevisionBundle {
+        try prepare(request, from: source, retentionPolicies: nil)
+    }
+
+    /// The V2-extended preparation entry (`V2-02` §4.3 PHASE 1; `V2-roadmap`
+    /// §6 R.5). Identical to the v1 flow except for one conditionally-armed
+    /// block: when `retentionPolicies` carries an active R3 lane, the
+    /// speculative prune set is computed BEFORE the per-item hard-bound
+    /// check, so the check sees the POST-PRUNE POST-APPEND state — §5.4's
+    /// ordering rule ("R3 never relaxes the hard bound; it only prunes below
+    /// the user threshold first"). The hard-bound values and their rejection
+    /// semantics are unchanged (docs/06-cross-cutting.md §2: 100 revisions /
+    /// 256 MiB); with the R3 lane disabled no prune occurs and both checks
+    /// degenerate to exactly v1's.
+    ///
+    /// `retentionPolicies` is the sibling V2 input of Record 2's
+    /// policy-sourcing mechanism: the Authority reads the current
+    /// `RetentionExpansionConfigRow` in the same serialized interval that
+    /// captures `source` and threads the R3 lane here — the off-Authority
+    /// preparation actor performs no durable-state read of its own (the v1
+    /// `RevisionPreparationSnapshot` value is unchanged and carries no
+    /// policies).
+    ///
+    /// The speculative prune set produces no mutation and performs no
+    /// pruning itself (`V2-02` §4.3: preparation "only *speculatively*
+    /// recomputes the same prune set ... to validate the post-prune
+    /// post-append hard bound and reject early"); the commit path recomputes
+    /// the prune over the reloaded lineage (§4.3 PHASE 2).
+    ///
+    /// - Throws: the v1 entry's failures above, plus `.capacityExceeded(
+    ///   .revisionBytes)` for the §8.3 revise-time unsatisfiable prune (the
+    ///   post-prune state — the appended now-active revision alone — still
+    ///   over `maxRevisionBytesPerItem`; the active revision cannot be
+    ///   pruned, D3, so the threshold is unsatisfiable at revise time and
+    ///   the revise fails atomically before any Authority entry).
+    internal func prepare(
+        _ request: RevisionRequest,
+        from source: RevisionPreparationSnapshot,
+        retentionPolicies: HistoryRetentionPolicies?
     ) throws -> PreparedRevisionBundle {
         // Step 1 — resolve the intent into the complete proposed Effective
         // Content (§6.2; decision resolution: 03a §5).
@@ -281,13 +324,91 @@ internal actor RevisionPreparationActor {
             }
             proposedTotalBytes = newTotal
         }
+        // Step 3 — mint the candidate Revision ID and creation timestamp;
+        // entropy lives in Storage, never in the Domain (docs/02-domain.md
+        // §4). `basedOn` is the snapshot's Content Version: the Authority
+        // already rejected a stale `request.expected` when capturing the
+        // snapshot, and Domain planning rechecks both tokens against the
+        // reloaded facts (§6.2; docs/02-domain.md §11 steps 1–2). The mint
+        // is hoisted above the R3 block below so the speculative prune
+        // target (`.revise(appended:)`) carries the exact revision this
+        // preparation will propose; the mint is one opaque call with no
+        // side effects, so hoisting it changes nothing observable on the
+        // R3-disabled (byte-for-byte v1) path.
+        let candidateRevisionID = makeRevisionID()
+        let createdAt = now()
+
+        // ── V2-02 §4.3 PHASE 1 R3 block (Record 2's conditionally-EXTENDED
+        //    preparation path; §5.4's ordering rule) ──
+        // When R3 is active for this item's thresholds, compute the prune
+        // set BEFORE the per-item hard-bound check so the check below sees
+        // the POST-PRUNE POST-APPEND state. The prune relation is pure
+        // (D16): `planRevisionRetentionExpansion` over the pre-append loaded
+        // lineage with the revise-path target (§6.5) — the effective list is
+        // `revisions + [appended]` and the active is the appended ID. With
+        // the R3 lane disabled this block is skipped and the hard-bound
+        // checks below run over the full loaded lineage, exactly as v1.
+        var prunedInactiveRevisionIDs = Set<RevisionID>()
+        if let revisionPolicy = retentionPolicies?.revisions {
+            let appendedRevision = ContentRevision(
+                id: candidateRevisionID,
+                createdAt: createdAt,
+                content: proposed
+            )
+            let speculativePruneSet = planRevisionRetentionExpansion(
+                revisions: source.revisions,
+                target: .revise(appended: appendedRevision),
+                policies: HistoryRetentionPolicies(
+                    age: nil,
+                    storage: nil,
+                    revisions: revisionPolicy
+                )
+            )
+            let prunedIDs = Set(speculativePruneSet)
+            // §8.3 revise-time unsatisfiable: if the POST-PRUNE state — the
+            // pruned survivors plus the appended (now-active) revision — is
+            // still over `maxRevisionBytesPerItem`, the active revision
+            // alone exceeds the threshold (the planner already returned the
+            // full inactive prefix; the active is never prunable, D3/D23).
+            // The threshold was satisfiable when set and is unsatisfiable
+            // after this large append, so the revise fails atomically here
+            // — before any Authority entry, committing nothing (§2.2). The
+            // count dimension is always satisfiable on revise (pruning to
+            // the new active alone yields count 1 ≤ `maxRevisionsPerItem`
+            // for any admitted `maxRevisionsPerItem >= 1`, §4.3), so only
+            // the byte dimension is checked.
+            if let maxRevisionBytes = revisionPolicy.maxRevisionBytesPerItem {
+                var postPruneRevisions: [ContentRevision] = []
+                postPruneRevisions.reserveCapacity(source.revisions.count + 1)
+                for revision in source.revisions
+                where !prunedIDs.contains(revision.id) {
+                    postPruneRevisions.append(revision)
+                }
+                postPruneRevisions.append(appendedRevision)
+                if RetainedBytesStamping.revisionScalars(of: postPruneRevisions).bytes
+                    > maxRevisionBytes {
+                    throw HistoryFailure.capacityExceeded(.revisionBytes)
+                }
+            }
+            prunedInactiveRevisionIDs = prunedIDs
+        }
+
         // `count == limit` already means the append would exceed the bound —
-        // the comparison itself needs no arithmetic that could wrap.
-        guard source.revisions.count < limits.maximumRevisionsPerItem else {
+        // the comparison itself needs no arithmetic that could wrap. The
+        // counts are the POST-PRUNE POST-APPEND state (§5.4): pruned
+        // inactives are removed first, so the hard bound still rejects an
+        // append whose post-prune post-append state exceeds it, and with R3
+        // disabled the pruned set is empty and the check is exactly v1's.
+        // The pruned IDs are a subset of the loaded IDs (the planner only
+        // returns IDs from the list), so the subtraction cannot underflow.
+        let postPruneRevisionCount =
+            source.revisions.count - prunedInactiveRevisionIDs.count
+        guard postPruneRevisionCount < limits.maximumRevisionsPerItem else {
             throw HistoryFailure.capacityExceeded(.revisionCount)
         }
         var itemRevisionBytes = proposedTotalBytes
-        for revision in source.revisions {
+        for revision in source.revisions
+        where !prunedInactiveRevisionIDs.contains(revision.id) {
             for representation in revision.content.representations {
                 let (newTotal, overflow) = itemRevisionBytes.addingReportingOverflow(
                     representation.bytes.count
@@ -298,15 +419,6 @@ internal actor RevisionPreparationActor {
                 itemRevisionBytes = newTotal
             }
         }
-
-        // Step 3 — mint the candidate Revision ID and creation timestamp;
-        // entropy lives in Storage, never in the Domain (docs/02-domain.md
-        // §4). `basedOn` is the snapshot's Content Version: the Authority
-        // already rejected a stale `request.expected` when capturing the
-        // snapshot, and Domain planning rechecks both tokens against the
-        // reloaded facts (§6.2; docs/02-domain.md §11 steps 1–2).
-        let candidateRevisionID = makeRevisionID()
-        let createdAt = now()
 
         // Step 4 — revision projection uses the prepared proposed Effective
         // Content (§15).

@@ -224,8 +224,18 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
             return try await authority.commitClear(scope)
 
         case .revise(let request):
-            let source = try await authority.revisionPreparationSnapshot(request)
-            let bundle = try await revisionPreparation.prepare(request, from: source)
+            // V2-02 §4.3 PHASE 1 (roadmap R.5): the Authority captures the
+            // OCC snapshot AND the current revise-lane policies in one
+            // serialized interval (Record 2's policy-sourcing mechanism),
+            // then threads the policies as the sibling R3 input to the
+            // V2-extended preparation call. A nil policy value (R1-only or
+            // all-disabled config) leaves the preparation byte-for-byte v1.
+            let inputs = try await authority.revisionPreparationInputs(request)
+            let bundle = try await revisionPreparation.prepare(
+                request,
+                from: inputs.snapshot,
+                retentionPolicies: inputs.retentionPolicies
+            )
             return try await authority.commitRevision(request, bundle)
 
         case .setRetentionPolicy(let maximum):

@@ -21,12 +21,16 @@
 /// fixtures: count+age+byte composition, pinned-over-budget hard failure,
 /// one-position, disabled-public-semantics).
 ///
-/// Boundary (roadmap R.4): the revise-path composition (R2+R3, §4.3) and
-/// the `.setRetentionPolicies` sweep (§4.4) are owned by R.5/R.6 — this file
-/// composes the CAPTURE lane only, and the RetentionClock seam (`V2-02`
-/// §6.4) is deliberately unread here: capture's R1 reference `now` is the
+/// Boundary (roadmap R.4/R.5): this file owns the config→policy loaders for
+/// BOTH the capture lane (`loadCaptureLanePolicies`) and the revise lane
+/// (`loadReviseLanePolicies`, R.5) plus the capture composition; the
+/// revise-path composition (R2+R3, §4.3) lives in
+/// RetentionReviseComposition.swift and the `.setRetentionPolicies` sweep
+/// (§4.4) is R.6. The RetentionClock seam (`V2-02` §6.4) is deliberately
+/// unread by the capture loader: capture's R1 reference `now` is the
 /// capture's own `observedAt`, already a Domain input (§4.2; the DC-28
-/// note — the clock exists for the R.6 sweep lane alone).
+/// note — the clock exists for the R.6 sweep lane alone; the revise lane
+/// likewise supplies a Domain-minted `Date`, §4.3).
 import Foundation
 import HistoryCore
 import HistoryDomain
@@ -49,17 +53,12 @@ internal enum RetentionConfigLoading {
         internal let revisionBytes: Int
     }
 
-    /// Fetches the config singleton inside the Authority's capture interval
-    /// and maps it to `HistoryRetentionPolicies`: enabled flag + in-range
-    /// value per lane, a disabled lane → `nil`.
-    ///
-    /// Capture-lane gate (`V2-02` §4.2/§7): R3 participates ONLY on the
-    /// revise/sweep paths (capture does not grow any item's revisions), so
-    /// this loader returns `nil` — "take the exact v1 route with NO
-    /// expansion fact load and NO `planItemRetentionExpansion` call" —
-    /// unless R1 or R2 is active. An R3-only config (R1 nil, R2 nil, R3
-    /// enabled) and the all-disabled default therefore both return `nil`,
-    /// preserving the `RET-PERF-1/3` budget for the R1/R2-active case only.
+    /// Fetches the config singleton inside an Authority interval and maps it
+    /// to `HistoryRetentionPolicies`: enabled flag + in-range value per lane,
+    /// a disabled lane → `nil`. The shared fetch/validate/map core of the
+    /// capture (`V2-02` §4.2) and revise (`V2-02` §4.3) lanes; each lane then
+    /// applies its own §7 trigger gate (see `loadCaptureLanePolicies` /
+    /// `loadReviseLanePolicies`).
     ///
     /// Validation reuses the open-time bootstrap's unit validation exactly
     /// (`HistoryAuthority.validateRetentionExpansionConfig`): a corrupted row
@@ -76,9 +75,9 @@ internal enum RetentionConfigLoading {
     ///   mid-run (`open` bootstrapped it — absence proves divergence, the
     ///   same exactly-one stance as the position singleton); plus the unit
     ///   validation's typed failures above.
-    internal static func loadCaptureLanePolicies(
+    internal static func loadValidatedPolicies(
         in context: ModelContext
-    ) throws -> HistoryRetentionPolicies? {
+    ) throws -> HistoryRetentionPolicies {
         let key = HistoryAuthority.retentionExpansionConfigKey
         var descriptor = FetchDescriptor<RetentionExpansionConfigRow>(
             predicate: #Predicate { row in row.key == key }
@@ -93,7 +92,7 @@ internal enum RetentionConfigLoading {
         guard rows.count == 1, let row = rows.first else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
-        // The stored-row contract is the bootstrap's, re-run per capture so a
+        // The stored-row contract is the bootstrap's, re-run per commit so a
         // row corrupted after `open` fails closed identically (V2-02 §3.3).
         try HistoryAuthority.validateRetentionExpansionConfig(row)
 
@@ -119,13 +118,59 @@ internal enum RetentionConfigLoading {
         // unit validation rejects `revisionPolicyEnabled` with both
         // thresholds nil), so the public value never carries an
         // enabled-but-no-op R3 lane.
-        let policies = HistoryRetentionPolicies(
+        return HistoryRetentionPolicies(
             age: age,
             storage: storage,
             revisions: revisions
         )
+    }
+
+    /// The capture-lane policy read: `loadValidatedPolicies` plus the §4.2/§7
+    /// capture gate.
+    ///
+    /// Capture-lane gate (`V2-02` §4.2/§7): R3 participates ONLY on the
+    /// revise/sweep paths (capture does not grow any item's revisions), so
+    /// this loader returns `nil` — "take the exact v1 route with NO
+    /// expansion fact load and NO `planItemRetentionExpansion` call" —
+    /// unless R1 or R2 is active. An R3-only config (R1 nil, R2 nil, R3
+    /// enabled) and the all-disabled default therefore both return `nil`,
+    /// preserving the `RET-PERF-1/3` budget for the R1/R2-active case only.
+    internal static func loadCaptureLanePolicies(
+        in context: ModelContext
+    ) throws -> HistoryRetentionPolicies? {
+        let policies = try loadValidatedPolicies(in: context)
         // §4.2's v1-route gate: only R1/R2 activate the capture expansion.
         guard policies.age != nil || policies.storage != nil else {
+            return nil
+        }
+        return policies
+    }
+
+    /// The revise-lane policy read (`V2-roadmap` §6 R.5):
+    /// `loadValidatedPolicies` plus the §4.3/§7 revise gate.
+    ///
+    /// Revise-lane gate (`V2-02` §4.3/§7): a revision append fires R2 + R3
+    /// ONLY — it grows that item's revision count/bytes (R3) and total
+    /// retained bytes (R2), while R1 is structurally skipped ("a revision
+    /// does not change `lastCopiedAt`"). This loader therefore returns `nil`
+    /// — "take the exact v1 revise route" with no prune planning and no
+    /// expansion fact load — unless R2 or R3 is active. An R1-only config
+    /// (§7: an action that fires no V2-02 lane) and the all-disabled default
+    /// both return `nil`, so their revise is the v1 path with only this
+    /// bounded config fetch added.
+    ///
+    /// Both phases of the two-phase revise read it independently (§4.3
+    /// "Phase-2 policy re-read"): phase 1 threads the result into
+    /// `RevisionPreparationActor.prepare` as the sibling R3 input (Record 2's
+    /// policy-sourcing mechanism), and phase 2 (`commitRevision`) re-fetches
+    /// it so an interleaving policy change between the phases is respected —
+    /// never a phase-1-cached copy.
+    internal static func loadReviseLanePolicies(
+        in context: ModelContext
+    ) throws -> HistoryRetentionPolicies? {
+        let policies = try loadValidatedPolicies(in: context)
+        // §4.3's v1-route gate: only R2/R3 activate the revise expansion.
+        guard policies.storage != nil || policies.revisions != nil else {
             return nil
         }
         return policies

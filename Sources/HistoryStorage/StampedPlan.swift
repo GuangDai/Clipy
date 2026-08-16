@@ -144,10 +144,11 @@ internal struct StoredRevisionUpdate: Sendable {
     internal let projection: ContentProjection
     internal let effectiveTypeIdentifiersBlob: Data
     /// The post-append revision summary (`V2-02` §3.3b/§6.3), stamped from
-    /// the same loaded-plus-appended revision list the blob was encoded
-    /// from; the executor restamps the 1:1 `RetainedBytesRow` from it in the
-    /// same transaction (roadmap R.3; R.5's compose-with-append will compute
-    /// it over the post-prune post-append list, §6.3).
+    /// the same list the blob was encoded from — the post-prune post-append
+    /// survivors plus the appended revision under the compose-with-append
+    /// fold (roadmap R.5, §6.3), the plain loaded-plus-appended list
+    /// otherwise; the executor restamps the 1:1 `RetainedBytesRow` from it in
+    /// the same transaction (roadmap R.3).
     internal let retainedRevisionScalars: RetainedRevisionScalars
 }
 
@@ -234,13 +235,13 @@ internal enum StampingInputs: Sendable {
     /// V2-02 §5.3/§6.3 prune-alone stamping inputs, taken from the pruned
     /// item's loaded revision lineage: the complete pre-prune list and its
     /// active Revision ID. The per-case `.pruneRevisions` stamped row
-    /// applies only when no `.appendRevision` in the plan shares the item
-    /// (§6.3 compose-with-append — the revise path folds its prune into the
-    /// append's single blob write through `.revision` inputs, R.5); the
-    /// production loader that supplies these inputs is the R.6
-    /// `.setRetentionPolicies` sweep (`V2-roadmap` §6 R.6), so no production
-    /// caller passes them until that slice lands — the arm itself is real
-    /// from R.3 and unit-proven at this seam.
+    /// applies only when no `.appendRevision` in the plan shares the item —
+    /// the revise path folds its prune into the append's single blob write
+    /// through `.revision` inputs instead (§6.3 compose-with-append, landed
+    /// in roadmap R.5), so the production caller that supplies these inputs
+    /// is the R.6 `.setRetentionPolicies` sweep (`V2-roadmap` §6 R.6); no
+    /// production caller passes them until that slice lands — the arm
+    /// itself is real from R.3 and unit-proven at this seam.
     case prune(
         revisions: [ContentRevision],
         activeRevisionID: RevisionID?
@@ -331,14 +332,16 @@ internal enum CommitPlanStamper {
     ///   and `.pruneRevisions` (the per-case prune row) re-encodes the shorter
     ///   `RevisionStateBlobV1` from the loaded lineage plus its post-prune
     ///   scalars, so the executor restamps the 1:1 `RetainedBytesRow` in the
-    ///   same transaction (`V2-02` §3.3b/§6.3; roadmap R.3). A plan whose
-    ///   `.pruneRevisions` shares an item with an `.appendRevision` (the
-    ///   compose-with-append shape) or with a `.retire` (the
-    ///   retire-subsumes-prune shape) is rejected here: those compositions are
-    ///   specified stamping-stage rules owned by R.5/R.6 (`V2-02` §6.3;
-    ///   `RET-STAMP-1/2`), and rejecting the undecomposed plan guarantees the
-    ///   executor never applies two blob writes to one item in one
-    ///   transaction;
+    ///   same transaction (`V2-02` §3.3b/§6.3; roadmap R.3). The
+    ///   compose-with-append rule (roadmap R.5, `RET-STAMP-1`) folds a plan's
+    ///   `.pruneRevisions` for an appended item into that append's SINGLE blob
+    ///   write (the prune set applied first, §6.3) and consumes the Domain
+    ///   prune without a separate stamped write; a plan whose unfolder
+    ///   `.pruneRevisions` shares an item with a `.retire` (the
+    ///   retire-subsumes-prune shape owned by R.6, `RET-STAMP-2`) is still
+    ///   rejected here, so the executor never applies two blob writes to one
+    ///   item in one transaction and never fetches a row the same transaction
+    ///   deleted;
     /// - the one remaining V2-02 row (`.setRetentionPolicies`, `V2-02` §5.6)
     ///   defers to its owning roadmap slice R.6 (`V2-roadmap` §6) — its arm
     ///   below throws the internal `StepDeferredError` exactly as R.1's
@@ -381,6 +384,25 @@ internal enum CommitPlanStamper {
         var appendedRevisionItemIDs = Set<HistoryItemID>()
         var retiredItemIDs = Set<HistoryItemID>()
         var prunedItemIDs = Set<HistoryItemID>()
+        // V2-02 §6.3 compose-with-append (roadmap R.5, `RET-STAMP-1`): the
+        // prune IDs of every `.pruneRevisions` in this plan, keyed by item,
+        // collected BEFORE the loop so the `.appendRevision` arm can fold
+        // the prune set into its single blob write. A plan carrying two
+        // prunes for one item is incoherent (a well-formed plan holds at
+        // most one per item — the revise composer emits at most one,
+        // §4.3); rejecting the duplicate here keeps the fold total.
+        var pruneIDsByItem: [HistoryItemID: [RevisionID]] = [:]
+        for mutation in plan.mutations {
+            if case .pruneRevisions(let itemID, let removedRevisionIDs) = mutation {
+                guard pruneIDsByItem[itemID] == nil else {
+                    throw StampingRejection.incoherentPlan
+                }
+                pruneIDsByItem[itemID] = removedRevisionIDs
+            }
+        }
+        // Items whose `.pruneRevisions` was consumed by the compose-with-
+        // append fold (no separate stamped write is emitted for them).
+        var foldedPruneItemIDs = Set<HistoryItemID>()
 
         for mutation in plan.mutations {
             switch mutation {
@@ -425,8 +447,45 @@ internal enum CommitPlanStamper {
                 guard let nextVersion = currentVersion.successor() else {
                     throw StampingRejection.contentVersionExhausted(itemID: itemID)
                 }
+                // V2-02 §6.3 compose-with-append (roadmap R.5, `RET-STAMP-1`):
+                // when the plan also carries a `.pruneRevisions` for THIS
+                // item (the revise + R3 shape, §4.3), the loaded revision
+                // list is built from has the pruned IDs removed first — one
+                // blob write, one ContentVersion successor (the append), and
+                // the `.pruneRevisions` Domain mutation is consumed below
+                // without a separate stamped write. The §5.1/§5.2 safety laws
+                // are re-guarded here exactly as the per-case prune row's
+                // `RetainedBytesStamping.prunedRevisionState` re-guards them:
+                // the removal set is non-empty (§5.3), carries no duplicate
+                // and no unknown ID, and never names the appended revision —
+                // the effective active (D3/D23) — whose ID is by construction
+                // absent from the loaded list it is appended to.
+                let composedRevisions: [ContentRevision]
+                if let removedRevisionIDs = pruneIDsByItem[itemID] {
+                    guard !removedRevisionIDs.isEmpty else {
+                        throw StampingRejection.incoherentPlan
+                    }
+                    guard !removedRevisionIDs.contains(activeRevisionID) else {
+                        throw StampingRejection.incoherentPlan
+                    }
+                    let removedIDs = Set(removedRevisionIDs)
+                    guard removedIDs.count == removedRevisionIDs.count else {
+                        throw StampingRejection.incoherentPlan
+                    }
+                    let survivors = existingRevisions.filter {
+                        !removedIDs.contains($0.id)
+                    }
+                    guard survivors.count
+                        == existingRevisions.count - removedIDs.count else {
+                        throw StampingRejection.incoherentPlan
+                    }
+                    composedRevisions = survivors
+                    foldedPruneItemIDs.insert(itemID)
+                } else {
+                    composedRevisions = existingRevisions
+                }
                 let revisionStateBlob = try RevisionStateBlobCodec.encode(
-                    revisions: existingRevisions,
+                    revisions: composedRevisions,
                     appending: revision,
                     activeRevisionID: activeRevisionID
                 )
@@ -440,12 +499,15 @@ internal enum CommitPlanStamper {
                     projection: projection,
                     effectiveTypeIdentifiersBlob: try EffectiveTypeIdentifiersBlobCodec
                         .encode(projection.effectiveTypeIdentifiers),
-                    // V2-02 §3.3b/§6.3 (roadmap R.3): the post-append
-                    // revision summary over the exact list the blob was
-                    // encoded from — existing plus appended — so the
-                    // executor's same-transaction restamp decodes nothing.
+                    // V2-02 §3.3b/§6.3 (roadmap R.3/R.5): the post-append
+                    // revision summary over the EXACT list the blob was
+                    // encoded from — the post-prune post-append survivors
+                    // plus the appended revision under the compose-with-
+                    // append fold, the plain loaded-plus-appended list
+                    // otherwise — so the executor's same-transaction restamp
+                    // decodes nothing.
                     retainedRevisionScalars: RetainedBytesStamping.revisionScalars(
-                        of: existingRevisions + [revision]
+                        of: composedRevisions + [revision]
                     )
                 )))
 
@@ -460,10 +522,18 @@ internal enum CommitPlanStamper {
                 ))
 
             case .pruneRevisions(let itemID, let removedRevisionIDs):
-                // V2-02 §5.3/§6.3 stamping (roadmap R.3): re-encode the
-                // shorter `RevisionStateBlobV1` from the loaded lineage —
-                // survivors keep append order, `formatVersion == 1`, same
-                // `activeRevisionID` — and stamp the post-prune revision
+                // V2-02 §6.3 compose-with-append (roadmap R.5, `RET-STAMP-1`):
+                // a `.pruneRevisions` whose item received an
+                // `.appendRevision` in this plan was already folded into the
+                // append's single blob write above — it is consumed here,
+                // producing NO separate `StampedMutation`, so the executor
+                // never applies two `revisionStateBlob` writes to one item
+                // in one transaction.
+                guard !foldedPruneItemIDs.contains(itemID) else { continue }
+                // V2-02 §5.3/§6.3 stamping (roadmap R.3): the per-case row —
+                // re-encode the shorter `RevisionStateBlobV1` from the loaded
+                // lineage — survivors keep append order, `formatVersion == 1`,
+                // same `activeRevisionID` — and stamp the post-prune revision
                 // scalars so the executor's restamp decodes nothing. The
                 // loaded lineage arrives through the `.prune` inputs; WHICH
                 // revisions are removed is decided by
@@ -508,18 +578,21 @@ internal enum CommitPlanStamper {
             throw StampingRejection.incoherentPlan
         }
 
-        // V2-02 §6.3 composition discipline (roadmap R.3 guard, R.5/R.6
-        // composition): the per-case `.pruneRevisions` row applies only when
-        // the plan contains no other stamped write for the same item. A plan
-        // that revises AND prunes one item must arrive pre-composed as the
-        // append's single folded blob write (compose-with-append,
-        // `RET-STAMP-1`, R.5), and a plan that retires AND prunes one item
-        // must have had the prune dropped by the composer
-        // (retire-subsumes-prune, `RET-STAMP-2`, R.6) — otherwise the
-        // executor would apply two `revisionStateBlob` writes to one item or
-        // fetch a row the same transaction deleted (§10 row-existence rule).
-        // Both shapes are rejected here until their owning slices land the
-        // composition; no stamped write exists yet, so nothing half-applies.
+        // V2-02 §6.3 composition discipline (roadmap R.3 guards, R.5
+        // composition, R.6 pending): a per-case `.pruneRevisions` row (one
+        // that was NOT consumed by the compose-with-append fold above)
+        // applies only when the plan contains no other stamped write for the
+        // same item. A prune sharing an item with a `.retire` would fetch a
+        // row the same transaction deletes (§10 row-existence rule) and is
+        // still rejected here: the retire-subsumes-prune DROP is the R.6
+        // `.setRetentionPolicies` composer's to emit (`RET-STAMP-2`) — on the
+        // revise lane it can never arise, because R2 retires only OTHER
+        // items (the revised item is protected, plan invariant 7) and R3
+        // prunes only the revised item (`V2-02` §7: revise = R2 + R3 only).
+        // The append-side disjointness is retained as a belt-and-braces
+        // backstop: the fold consumes every prune whose item received an
+        // append, so an unfolder prune there is unreachable by construction.
+        // No stamped write exists at this point, so nothing half-applies.
         guard prunedItemIDs.isDisjoint(with: appendedRevisionItemIDs),
               prunedItemIDs.isDisjoint(with: retiredItemIDs)
         else {

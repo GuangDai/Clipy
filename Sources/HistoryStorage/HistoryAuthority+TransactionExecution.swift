@@ -217,11 +217,13 @@ extension HistoryAuthority {
             // projection to the post-prune value in the same transaction
             // (§3.3b/§6.3). The stamped payload already carries the
             // recomputed scalars and the re-encoded blob, so the executor
-            // performs no lineage decode. The plans that EMIT this mutation
-            // (revise+R3 fold, `.setRetentionPolicies` sweep) are owned by
-            // R.5/R.6; the per-case execution here is real so those slices
-            // land against working semantics (`RET-PLATFORM-3`,
-            // `RET-STAMP-1/2`).
+            // performs no lineage decode. The revise+R3 plan (roadmap R.5)
+            // never reaches this arm — its prune is folded into the
+            // `.appendRevision` blob write at stamp-emission time (§6.3
+            // compose-with-append, `RET-STAMP-1`) — so the producer of this
+            // row is the R.6 `.setRetentionPolicies` sweep (`RET-STAMP-2`);
+            // the per-case execution here is real so that slice lands
+            // against working semantics (`RET-PLATFORM-3`).
             let row = try requireRow(itemID, in: context)
             row.revisionStateBlob = revisionStateBlob
             try RetainedBytesStamping.restamp(
