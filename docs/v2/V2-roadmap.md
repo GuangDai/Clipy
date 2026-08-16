@@ -359,11 +359,12 @@ only), which is the projection rebuild, not the index build.
 
 ## 6. V2-02 — retention expansion (R1/R2/R3)
 
-- **Status:** admitted 2026-08-15 (product approval recorded in `V2-02`
-  Record 1; DC-02/DC-03/DC-04/DC-08-retention/DC-21/DC-23/DC-27/DC-28 closed,
-  DC-01 closed) — in progress via M1 (its only remaining prerequisite). The
-  R.1–R.7 slices follow `V2-02` as written (DC-23: three dimensions, one
-  policy value, independently disable-able; OPEN-2 not admitted).
+- **Status:** R.1–R.6 landed and CI-green (2026-08-16; evidence per slice in
+  `V2-PROGRESS.md` §0 — latest full-scope run 31950153864, 491 tests /
+  58 suites, all four jobs, zero warnings). **R.7 (UX handoff) remains and
+  is gated on v1 step 9** (`PasteboardAdapter`/`PresentationUI` scaffolds),
+  per this roadmap's §2 baseline and `V2-07`'s dependency notes; it opens
+  when step 9 lands. OPEN-2 stays not-admitted (Record 1).
 - **Spec references:** `V2-02` §2–§12b; D23–D24.
 - **Dependencies:** completed v1 mutations/revision preparation; Foundation +
   HistoryCore-only Domain; existing `HistoryAuthority`.
