@@ -1625,8 +1625,13 @@ R1/R2/R3 capability IDs and the deleted "R0/R1/R2 as shipped tiers" token
   undocumented, this gate must prove on the macOS runner that an interrupted
   migration (process death mid-backfill) leaves the store openable and that the
   re-run reproduces exactly the (a)/(b) invariants, rather than assuming
-  engine-level interruption atomicity. A `RetainedBytesRow` for an existing item
-  absent **post-backfill** (i.e. after `open` has returned) is corruption - row
+  engine-level interruption atomicity. *(Measured 2026-08-16, run
+  31955551834's fixture: the engine provides NO interruption atomicity —
+  the schema version is stamped before the `didMigrate` data commits, so
+  the "re-run" is owned by `open`'s step-7 missing-rows recovery, per
+  Record 5's Interruption-recovery clause; the fixture proves the
+  recovered outcome on the runner.)* A `RetainedBytesRow` for an existing item
+  absent **post-open** (i.e. after `open` has returned) is corruption - row
   existence is the migration invariant (a) - so it fails closed
   `.persistence(.invariantViolation)`; the `.temporarilyUnavailable(.factProof)`
   mapping in §3.2 is reserved for the **fetch mechanism itself** failing, never
@@ -1896,6 +1901,24 @@ D25–D28/D29–D31 to V2-03/V2-04, so V2-02 mints none).
   aligned to the M1.4 implementation, 2026-08-15: the original
   "envelope only, no Canonical content" phrase applies to the signature
   decode alone.)* The stage then writes the 1:1
+  **Interruption recovery (added 2026-08-16 from the measured platform
+  fact, CI run 31955551834):** SwiftData stamps the store's schema
+  version before (or independently of) the custom stage's data work
+  committing — a process death mid-backfill leaves a version-V2 store
+  with missing `RetainedBytesRow` rows, and the stage never re-runs on
+  re-open. The engine provides no interruption atomicity, so `open`
+  owns the recovery: the total open order's step-7 validation first
+  detects the missing-rows direction (orphans, duplicates, and version
+  mismatches still fail closed immediately — they are not a producible
+  interruption shape) and re-runs the idempotent full-recompute backfill
+  ONCE on the Authority-owned startup context, then validates strictly.
+  Recovery is exactly the "re-run reproduces (a)/(b)" outcome
+  `RET-PLATFORM-1b(e)` requires; it never invents bytes
+  (`V2-00` §5 decision 18) and adds no writer. A missing row discovered
+  at `open` is therefore the recoverable interruption shape **by
+  design**; a missing row observed through any post-open path remains
+  corruption (the projection lifecycle maintains 1:1 after `open`
+  returns).
   `RetainedBytesRow` (`canonicalBytes`/`revisionCount`/`revisionBytes`,
   `bytesSchemaVersion == 1`). The backfill is idempotent by construction —
   every row recomputed from the blobs, never a resumed partial write — because

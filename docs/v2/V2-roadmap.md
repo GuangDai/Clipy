@@ -343,7 +343,12 @@ singleton" statements. Step numbers cite the v1 `05` §13 steps they extend.
    creates items without rows, so an unconditional check would fail every
    capture-created item. M1 proves the correspondence for migrated stores
    through the migration fixtures of `RET-PLATFORM-1b(a)`; R.3 turns the
-   fixture invariant into the step-7 runtime check.)*
+   fixture invariant into the step-7 runtime check. Amended 2026-08-16
+   from the measured platform fact of run 31955551834: the check runs in
+   two phases — a missing-rows-only RECOVERY that re-runs the idempotent
+   backfill once (`V2-02` Record 5 "Interruption recovery"), then the
+   strict both-directions validation; orphans/duplicates/version
+   mismatches never recover.)*
 8. require projection schema version 1 for the v1 projections;
    *(05 §13 step 7)*
 9. decode/validate signatures and build the complete index;

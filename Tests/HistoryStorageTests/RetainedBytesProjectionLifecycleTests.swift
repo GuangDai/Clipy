@@ -20,12 +20,15 @@
 /// INDEPENDENT second `ModelContainer` (see `WSSupport`); the corruption
 /// matrix writes its damage behind the Authority's back through that same
 /// independent container, then re-opens through the real `open`
-/// (`V2-02` §13 fail-open stance: no silent repair). The prune and
-/// missing-row clauses additionally drive the storage-internal
-/// `RetainedBytesStamping` seam directly — the same stance
-/// `RetentionConfigBootstrapTests` takes for bootstrap internals — because
-/// the plans that EMIT `.pruneRevisions` (revise+R3 fold, R.6 sweep) are
-/// owned by later slices.
+/// (`V2-02` §13 fail-open stance: no silent repair — except the one
+/// SANCTIONED repair, the amended Record 5 missing-rows recovery: a
+/// missing row at open is the producible interrupted-migration shape and
+/// is recreated by the idempotent backfill re-run; every other shape
+/// still fails closed). The prune and missing-row clauses additionally
+/// drive the storage-internal `RetainedBytesStamping` seam directly — the
+/// same stance `RetentionConfigBootstrapTests` takes for bootstrap
+/// internals — because the plans that EMIT `.pruneRevisions` (revise+R3
+/// fold, R.6 sweep) are owned by later slices.
 ///
 /// Hand-worked fixture values (single-representation ASCII text captures:
 /// one `public.utf8-plain-text` representation whose `byteCount` is the
@@ -34,9 +37,12 @@
 /// - "r3 revised effective bytes" — 26 bytes (2 + 1 + 7 + 1 + 9 + 1 + 5);
 /// - "r3 second revision" — 18 bytes (2 + 1 + 6 + 1 + 8);
 /// - "r3 disabled maintenance" — 23 bytes (2 + 1 + 8 + 1 + 11);
+/// - "r3 corruption matrix item" — 26 bytes (2 + 1 + 11 + 1 + 6 + 1 + 4),
+///   the recreated-row literal of the recovery case;
+/// - "r3 orphan discrimination" — 24 bytes (2 + 1 + 6 + 1 + 14), the
+///   orphan-discrimination fixture;
 /// - "r3 remove target alpha" / "r3 remove survivor beta" /
-///   "r3 clear target gamma" / "r3 corruption matrix item" — only identity
-///   matters (existence per ID).
+///   "r3 clear target gamma" — only identity matters (existence per ID).
 import Foundation
 import HistoryCore
 import HistoryDomain
@@ -407,21 +413,34 @@ struct RetainedBytesProjectionLifecycleTests {
     }
 
     /// Re-open enforces the step-7 runtime 1:1 check
-    /// (`RET-PLATFORM-1b(a)`, live from R.3): every retained item has
-    /// exactly one row, every row names a retained item, and every
-    /// `bytesSchemaVersion == 1` — each violation fails `open` closed as
-    /// `.persistence(.invariantViolation)`, never a zero read and never a
-    /// silent repair (`V2-02` §3.2/§3.3b). Damage is written behind the
-    /// Authority's back through an independent container.
+    /// (`RET-PLATFORM-1b(a)`, live from R.3) — TWO phases since the amended
+    /// `V2-02` Record 5 (interruption recovery, the RET-PLATFORM-1b(e)
+    /// measured-platform-fact response):
+    ///
+    /// - `.missingRow` — the recoverable shape BY DESIGN: a missing row at
+    ///   open is exactly what an interrupted migration leaves (SwiftData
+    ///   stamps the store's schema version before the `didMigrate` data
+    ///   work commits — measured, CI run 31955551834), so open now
+    ///   SUCCEEDS with the row recreated by the one idempotent backfill
+    ///   re-run, its scalars equal to an independent codec recomputation
+    ///   (V2-00 §5 decision 18: recompute never invents bytes).
+    /// - `.orphanRow` / `.unknownBytesSchemaVersion` — true corruption:
+    ///   neither is a producible interruption shape (the backfill writes
+    ///   only complete rows), so each still fails `open` closed as
+    ///   `.persistence(.invariantViolation)` — never a zero read and never
+    ///   a silent repair (`V2-02` §3.2/§3.3b).
+    ///
+    /// Damage is written behind the Authority's back through an independent
+    /// container.
     @Test(
-        "re-open fails closed on every 1:1 / version-fence corruption",
+        "re-open recovers the missing-row shape and fails closed on orphan/version corruption",
         arguments: [
             ProjectionCorruption.missingRow,
             ProjectionCorruption.orphanRow,
             ProjectionCorruption.unknownBytesSchemaVersion,
         ]
     )
-    private func reOpenFailsClosedOnProjectionCorruption(
+    private func reOpenRecoversMissingRowAndFailsClosedOnCorruption(
         corruption: ProjectionCorruption
     ) async throws {
         let storeURL = WSSupport.tempStoreURL("r3-reopen-\(corruption)")
@@ -458,9 +477,108 @@ struct RetainedBytesProjectionLifecycleTests {
         }
         try context.save()
 
+        switch corruption {
+        case .missingRow:
+            // Amended Record 5 (interruption recovery): the missing-row
+            // shape RECOVERS — open succeeds and phase (i) recreates the
+            // row from the durable blobs (full recompute, delete-then-
+            // insert; never invented bytes).
+            _ = try await WSSupport.openHistory(storeURL: storeURL)
+
+            // The recreated row equals an independent codec recomputation
+            // from the item's durable blobs — the exact RET-PLATFORM-1b(b)
+            // proof — and the hand-worked literal: "r3 corruption matrix
+            // item" is 26 UTF-8 bytes (2 + 1 + 11 + 1 + 6 + 1 + 4), with
+            // revisionCount 0 / revisionBytes 0 (a v1 insert carries no
+            // revisions, DC-04). The 1:1 law still holds exactly — one row
+            // for the one item, no duplicate from the re-run.
+            let items = try WSSupport.fetchRows(container)
+            #expect(items.count == 1)
+            let itemRow = try #require(items.first)
+            let recreatedRow = try Self.fetchBytesRow(
+                for: HistoryItemID(rawValue: itemRow.id),
+                in: container
+            )
+            let recreated = try #require(recreatedRow)
+            let recomputed = try MigrationSeeding.recomputedScalars(for: itemRow)
+            #expect(recomputed.canonicalBytes == 26)
+            #expect(recomputed.revisionCount == 0)
+            #expect(recomputed.revisionBytes == 0)
+            #expect(recreated.canonicalBytes == recomputed.canonicalBytes)
+            #expect(recreated.revisionCount == recomputed.revisionCount)
+            #expect(recreated.revisionBytes == recomputed.revisionBytes)
+            #expect(recreated.bytesSchemaVersion == 1)
+            #expect(try Self.fetchBytesRows(container).count == 1)
+        case .orphanRow, .unknownBytesSchemaVersion:
+            await #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
+                _ = try await WSSupport.openHistory(storeURL: storeURL)
+            }
+        }
+    }
+
+    /// Recovery discrimination (amended `V2-02` Record 5, interruption
+    /// recovery): the phase-(i) repair triggers ONLY on the missing-rows
+    /// direction. A store whose rows are complete for every item PLUS one
+    /// orphan (naming no retained item, carrying the VALID version fence —
+    /// so the fence is not the trigger) fails `open` closed as
+    /// `.persistence(.invariantViolation)`, and the failed open leaves the
+    /// damage untouched: recovery must NOT silently delete the orphan
+    /// (delete-as-repair) nor restamp anything.
+    ///
+    /// Fixture arithmetic: one capture — "r3 orphan discrimination" is 24
+    /// UTF-8 bytes (2 + 1 + 6 + 1 + 14) of signature byte count — plus one
+    /// planted orphan row (canonicalBytes 1, revisionCount 0,
+    /// revisionBytes 0, bytesSchemaVersion 1): 2 rows total, before and
+    /// after the failed open.
+    @Test("orphan row never recovers and is never delete-as-repaired")
+    func orphanRowNeverRecoversAndIsNeverDeleteAsRepaired() async throws {
+        let storeURL = WSSupport.tempStoreURL("r3-orphan-no-repair")
+        defer { WSSupport.removeStore(storeURL) }
+        let history = try await WSSupport.openHistory(storeURL: storeURL)
+        let reference = try await Self.capture(
+            "r3 orphan discrimination",
+            at: 700_111_000,
+            source: "com.example.r3.orphan",
+            in: history
+        )
+
+        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let itemRowBefore = try Self.fetchBytesRow(for: reference.id, in: container)
+        let scalarsBefore = Self.scalars(of: try #require(itemRowBefore))
+
+        // Plant the orphan behind the Authority's back: a fresh UUID naming
+        // no retained item, valid fence, planted scalars.
+        let orphanID = UUID()
+        let damageContext = ModelContext(container)
+        damageContext.insert(RetainedBytesRow(
+            itemID: orphanID,
+            canonicalBytes: 1,
+            revisionCount: 0,
+            revisionBytes: 0,
+            bytesSchemaVersion: 1
+        ))
+        try damageContext.save()
+        #expect(try Self.fetchBytesRows(container).count == 2)
+
         await #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
             _ = try await WSSupport.openHistory(storeURL: storeURL)
         }
+
+        // No delete-as-repair: the orphan SURVIVES the failed open with its
+        // planted scalars, and the item's row is byte-for-byte unchanged —
+        // recovery never ran (every item has its row; the missing-rows
+        // direction holds vacuously).
+        let rowsAfter = try Self.fetchBytesRows(container)
+        #expect(rowsAfter.count == 2)
+        let orphanAfter = try #require(
+            rowsAfter.first(where: { $0.itemID == orphanID })
+        )
+        #expect(orphanAfter.canonicalBytes == 1)
+        #expect(orphanAfter.revisionCount == 0)
+        #expect(orphanAfter.revisionBytes == 0)
+        #expect(orphanAfter.bytesSchemaVersion == 1)
+        let itemRowAfter = try Self.fetchBytesRow(for: reference.id, in: container)
+        #expect(Self.scalars(of: try #require(itemRowAfter)) == scalarsBefore)
     }
 
     /// The step-7 check holds vacuously on a fresh store (zero items; rows

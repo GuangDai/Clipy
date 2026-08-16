@@ -304,9 +304,11 @@ internal actor HistoryAuthority {
     /// (step 6), require projection schema version 1 (step 7), enforce the
     /// `RetainedBytesRow` 1:1 correspondence both directions with
     /// `bytesSchemaVersion == 1` (the V2 half of `V2-roadmap` §5 step 7,
-    /// `RET-PLATFORM-1b(a)`; live from roadmap R.3), decode and validate
-    /// signatures and build the complete Signature Index (step 8), and
-    /// validate the full pinned ordinal set from scalar fields (step 9).
+    /// `RET-PLATFORM-1b(a)`; live from roadmap R.3 — with the amended
+    /// Record 5 missing-rows recovery re-run first, see
+    /// `RetainedBytesStamping.validateOneToOneCorrespondence`), decode and
+    /// validate signatures and build the complete Signature Index (step 8),
+    /// and validate the full pinned ordinal set from scalar fields (step 9).
     ///
     /// The initial retention value is revalidated against the fixed Part VI
     /// user range (§2) so the singleton is never written from an invalid
@@ -327,8 +329,9 @@ internal actor HistoryAuthority {
     ///   singleton, an out-of-range or contradictory retention-config
     ///   combination (`V2-02` §8.3), over-bound or duplicate rows, a
     ///   malformed pinned order, or a violated `RetainedBytesRow` 1:1
-    ///   correspondence / `bytesSchemaVersion` fence (`V2-02` §3.3b). Corrupt
-    ///   durable metadata fails open — v1 has no silent repair path (§13).
+    ///   correspondence / `bytesSchemaVersion` fence after the Record 5
+    ///   missing-rows recovery re-run (`V2-02` §3.3b). Corrupt durable
+    ///   metadata fails open — v1 has no silent repair path (§13).
     internal func performStartup(initialMaximumUnpinnedItems: Int) async throws {
         // §2, §13 step 1: the singleton must never carry an out-of-range
         // retention value (D19 requires the stored policy to permit at
@@ -371,8 +374,12 @@ internal actor HistoryAuthority {
             // directions with `bytesSchemaVersion == 1`
             // (`RET-PLATFORM-1b(a)`). A fresh store holds vacuously (zero
             // items; rows arrive via the capture-insert stamping, V2-02
-            // §3.3b); a missing row is corruption — never a zero read
-            // (V2-02 §3.2).
+            // §3.3b). Amended Record 5 (interruption recovery): a
+            // missing-rows-only divergence — the producible
+            // interrupted-migration shape — first re-runs the idempotent
+            // backfill once on this Authority-owned startup context (no new
+            // writer); every remaining violation fails closed — never a
+            // zero read (V2-02 §3.2).
             try RetainedBytesStamping.validateOneToOneCorrespondence(
                 in: context,
                 limits: limits
