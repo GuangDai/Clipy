@@ -38,6 +38,16 @@
 /// RET-CONCUR-1 interleave fixtures drive directly constructed Authorities
 /// with the WS20 `SuspensionGate` harness.
 ///
+/// Record 3 also gates `RET-PLATFORM-2` (zero blob decodes on the planning
+/// path) — proven BEHAVIORALLY by
+/// `revisePlanningNeverDecodesNonRevisedRevisionBlob`: with R2 active, a
+/// corrupted NON-revised item's `revisionStateBlob` that any planning-path
+/// decode would surface as `.persistence(.corruptStoredValue)` instead
+/// emerges byte-identical from a successful revise commit, while the
+/// retirement arithmetic proves that item's stored scalars were planned
+/// over (the mirror of the R.6 sweep's corrupted-blob survivor fixture and
+/// the R.4 capture twin).
+///
 /// Hand-worked fixture values (single-representation ASCII text: one
 /// `public.utf8-plain-text` representation, so a revision's representation
 /// bytes equal its UTF-8 length, and an item's `canonicalBytes` equals the
@@ -55,7 +65,12 @@
 /// - `RET-CONCUR-1`(3): target 15 canonical bytes, lineage [8, 9, 10] +
 ///   append 11; phase-1 threshold 3 (speculative [rev1]), the interleaving
 ///   sweep's threshold 2 prunes [rev1], phase 2 re-reads 2 and prunes
-///   [rev2] over the reload → final [rev3, rev4] at 2 / 21.
+///   [rev2] over the reload → final [rev3, rev4] at 2 / 21;
+/// - zero-decode fixture — B = 10 + 0 (t=…000, oldest), A = 10 + [5] = 15
+///   (t=…100, the corrupted NON-revised item), T = 5 + 0 (t=…150) + a
+///   20-byte append under `maxTotalBytes = 40`: post-append 10 + 15 + 25 =
+///   50 > 40 retires B to exactly 40; without A's scalars the projected
+///   total would be 35 ≤ 40 and B would survive.
 import Foundation
 import HistoryCore
 import HistoryDomain
@@ -1777,5 +1792,122 @@ struct RetentionReviseCompositionTests {
         let config = try #require(configRows.first)
         #expect(config.revisionPolicyEnabled == true)
         #expect(config.revisionMaxCount == 2)
+    }
+
+    // MARK: - Zero blob decodes on the planning path (RET-PLATFORM-2, RET-PERF-3)
+
+    /// The behavioral zero-decode proof for the REVISE planning lane
+    /// (`V2-02` §3.2/Record 3 `RET-PLATFORM-2`/`RET-PERF-3` — the mirror of
+    /// the R.6 sweep fixture
+    /// `r3SweepPrunesExceedingItemsOnlyWithoutDecodingNonExceeding` and the
+    /// R.4 capture twin): with R2 active, a NON-revised item's
+    /// `revisionStateBlob` is corrupted behind the Authority's back
+    /// (independent container, the R.3 fixture stance) BEFORE a public
+    /// revise on a DIFFERENT item. The revise's expansion planning must read
+    /// ONLY the corrupt item's `RetainedBytesRow` scalar columns
+    /// (`RetentionConfigLoading.fetchProjectedScalars` — the
+    /// `.externalStorage` blob columns are never touched); any
+    /// `revisionStateBlob` decode on the planning path would fail the whole
+    /// commit `.persistence(.corruptStoredValue)` (the 05 §4 codec
+    /// discipline). The REVISED item's own lineage IS legitimately loaded
+    /// (the two-phase revise needs it); the corrupt victim is not that
+    /// item. The commit SUCCEEDS, the corrupt blob emerges byte-identical,
+    /// and the corrupt item's stored scalars are provably planned over.
+    ///
+    /// Arithmetic (single-representation ASCII: a revision's representation
+    /// bytes equal its UTF-8 length; footprint = canonicalBytes +
+    /// revisionBytes): B = 10 + 0 (t=…000, oldest), A = 10 + [5] = 15
+    /// (t=…100, the corrupt NON-revised victim), T = 5 + 0 (t=…150, the
+    /// revised item, expected version 1) appending 20 revision bytes under
+    /// `maxTotalBytes = 40`. Post-append store: 10 + 15 + (5 + 20) = 50 >
+    /// 40 → retire the oldest eligible OTHER B → A(15) + T(25) = 40 ≤ 40 →
+    /// stop (never further; T is the protected primary, plan invariant 7).
+    /// If A's stored scalars were NOT planned over (the discriminator), the
+    /// projected total would be 10 + 25 = 35 ≤ 40 and B would SURVIVE — B's
+    /// retirement is exactly the evidence that the corrupt item's SCALARS
+    /// entered the projected inventory while its blob was never decoded.
+    @Test("revise planning never decodes a non-revised item's revision blob (RET-PLATFORM-2)")
+    func revisePlanningNeverDecodesNonRevisedRevisionBlob() async throws {
+        let storeURL = WSSupport.tempStoreURL("r5-zero-decode-revise")
+        defer { WSSupport.removeStore(storeURL) }
+        let history = try await WSSupport.openHistory(storeURL: storeURL)
+        let source = "com.example.r5.zerodecode"
+
+        // Seed under the all-disabled default: B (oldest), A, A's one
+        // 5-byte revision, then T (positions 1–4).
+        let b = try await Self.capture(
+            String(repeating: "b", count: 10), at: 700_450_000,
+            source: source, in: history
+        )
+        let a = try await Self.capture(
+            String(repeating: "a", count: 10), at: 700_450_100,
+            source: source, in: history
+        )
+        try await Self.seedRevisions(a.id, byteCounts: [5], in: history)
+        let target = try await Self.capture(
+            String(repeating: "t", count: 5), at: 700_450_150,
+            source: source, in: history
+        )
+
+        // R2 lands now (revise fires R2+R3 only; both phases re-read the
+        // singleton independently, §4.3).
+        try WSSupport.seedRetentionConfig(
+            storeURL: storeURL,
+            storage: StorageRetention(maxTotalBytes: 40)
+        )
+
+        // Corrupt A's revision blob through an INDEPENDENT container (the
+        // R.3/R.6 fixture stance): a 1-byte blob fails every decode shape.
+        // A is NOT the revised item — T is.
+        let corruptBlob = Data([0x00])
+        let damageContainer = try WSSupport.makeContainer(storeURL: storeURL)
+        let damageContext = ModelContext(damageContainer)
+        let damageRow = try #require(
+            try damageContext.fetch(FetchDescriptor<HistoryItemRow>())
+                .first { $0.id == a.id.rawValue }
+        )
+        damageRow.revisionStateBlob = corruptBlob
+        try damageContext.save()
+
+        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let positionBefore = try WSSupport.fetchPosition(container).rawValue
+        #expect(positionBefore == 4)
+
+        // The public revise on the DIFFERENT item T must succeed — any
+        // planning-path decode of A's corrupt blob would fail the commit
+        // `.corruptStoredValue`.
+        let reference = try await Self.revise(
+            target.id, expected: 1, bytes: 20, in: history
+        )
+        #expect(reference.id == target.id)
+        #expect(reference.contentVersion.rawValue == 2)
+
+        // ONE merged commit (D6/D24(a)); B retired exactly as the
+        // arithmetic pins; A and the revised T survive.
+        #expect(try WSSupport.fetchPosition(container).rawValue == positionBefore + 1)
+        let survivors = Set(
+            try WSSupport.fetchRows(container).map { HistoryItemID(rawValue: $0.id) }
+        )
+        #expect(survivors == Set([a.id, target.id]))
+        #expect(!survivors.contains(b.id))
+        #expect(try Self.fetchBytesRows(container).count == 2)
+
+        // The corrupt blob is byte-identical — zero decodes AND zero writes
+        // for the non-revised item — and its projection row keeps the stored
+        // scalars the plan consumed (10 / 1 / 5); T's row carries the
+        // post-append scalars (5 / 1 / 20).
+        let untouchedRow = try #require(
+            try WSSupport.fetchRows(container)
+                .first { $0.id == a.id.rawValue }
+        )
+        #expect(untouchedRow.revisionStateBlob == corruptBlob)
+        let aRow = try #require(try Self.fetchBytesRow(for: a.id, in: container))
+        #expect(aRow.canonicalBytes == 10)
+        #expect(aRow.revisionCount == 1)
+        #expect(aRow.revisionBytes == 5)
+        let tRow = try #require(try Self.fetchBytesRow(for: target.id, in: container))
+        #expect(tRow.canonicalBytes == 5)
+        #expect(tRow.revisionCount == 1)
+        #expect(tRow.revisionBytes == 20)
     }
 }

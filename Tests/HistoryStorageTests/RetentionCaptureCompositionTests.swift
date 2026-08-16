@@ -38,17 +38,27 @@
 /// - "r4 age-only keeper bbb" — 22 bytes (2+1+8+1+6+1+3);
 /// - 30/10/20/25-char single-letter strings — 30/10/20/25 bytes;
 /// - "r4 coalesce winner base" — 23 bytes plain; + a 16-byte `public.html`
-///   extra representation → 39 canonical bytes for the rich winner.
+///   extra representation → 39 canonical bytes for the rich winner;
+/// - zero-decode fixture — B = 10, A = 10 + [5] = 15 (the corrupted
+///   non-primary), P = 20, under `maxTotalBytes = 35`: 10 + 15 + 20 = 45 >
+///   35 retires B (the oldest) to exactly 35; without A's scalars the
+///   projected total would be 30 ≤ 35 and nothing would retire.
 ///
 /// RET-PLATFORM-2 note (zero blob decodes on the planning path): the repo's
 /// probe seams (`SearchDebugProbe`, `StorageLifecycleDebugProbe`) trace
 /// search/lifecycle phases, not codec invocations — the codecs carry no
 /// decode counter — so the zero-decode property is NOT asserted by
-/// instrumentation here. It is guaranteed structurally: the R.4 planning
-/// path fetches `RetainedBytesRow` scalar columns only
+/// instrumentation here. It is proven BEHAVIORALLY by
+/// `capturePlanningNeverDecodesNonPrimaryRevisionBlob` (the mirror of the
+/// R.6 sweep's corrupted-blob survivor fixture): with R2 active, a
+/// NON-primary item's corrupted `revisionStateBlob` that any planning-path
+/// decode would surface as `.persistence(.corruptStoredValue)` instead
+/// emerges byte-identical from a successful commit, while the retirement
+/// arithmetic proves that item's stored scalars were planned over. That
+/// fixture plus the structural guarantee — the planning path fetches
+/// `RetainedBytesRow` scalar columns only
 /// (`RetentionConfigLoading.fetchProjectedScalars`) and never touches the
-/// `.externalStorage` blob columns; that scalar-fetch implementation plus
-/// this code-review citation carry the `V2-02` §3.2/Record 3
+/// `.externalStorage` blob columns — carry the `V2-02` §3.2/Record 3
 /// `RET-PLATFORM-2`/`RET-PERF-3` claim.
 import Foundation
 import HistoryCore
@@ -93,6 +103,40 @@ struct RetentionCaptureCompositionTests {
     ) throws -> [HistoryItemID] {
         try WSSupport.fetchRows(container)
             .map { HistoryItemID(rawValue: $0.id) }
+    }
+
+    /// Performs one public byte-changing `.replace` revision for the single
+    /// `public.utf8-plain-text` representation, OCC-tokened at `expected`
+    /// (the zero-decode fixture's lineage-growing seed; payloads are fixed
+    /// `"r"`-runs, which never equal the seeded canonicals, so D4's
+    /// `.unchanged` trap cannot fire).
+    @discardableResult
+    private static func revise(
+        _ itemID: HistoryItemID,
+        expected: Int,
+        bytes: Int,
+        in history: SwiftDataHistory
+    ) async throws -> HistoryItemReference {
+        let receipt = try await history.perform(.revise(
+            RevisionRequest(
+                itemID: itemID,
+                expected: ContentVersion(rawValue: UInt64(expected)),
+                intent: .replace(RevisionDraft(decisions: [
+                    RevisionDecision(
+                        typeIdentifier: "public.utf8-plain-text",
+                        action: .replace(
+                            bytes: Data(String(repeating: "r", count: bytes).utf8)
+                        )
+                    ),
+                ]))
+            )
+        ))
+        guard case let .committed(commit) = receipt,
+              case let .revised(reference) = commit.outcome else {
+            Issue.record("R.4 setup: expected .committed with .revised, got \(receipt)")
+            throw HistoryFailure.notFound(itemID)
+        }
+        return reference
     }
 
     /// Every `RetainedBytesRow`, deterministically ordered by item ID.
@@ -553,6 +597,124 @@ struct RetentionCaptureCompositionTests {
         // Pre-stamp failure: nothing landed.
         #expect(try WSSupport.fetchPosition(container).rawValue == positionBefore)
         #expect(try Self.fetchBytesRows(container).count == 1)
+    }
+
+    // MARK: - Zero blob decodes on the planning path (RET-PLATFORM-2, RET-PERF-3)
+
+    /// The behavioral zero-decode proof for the CAPTURE planning lane
+    /// (`V2-02` §3.2/Record 3 `RET-PLATFORM-2`/`RET-PERF-3` — the mirror of
+    /// the R.6 sweep fixture
+    /// `r3SweepPrunesExceedingItemsOnlyWithoutDecodingNonExceeding`): with
+    /// R2 active, a NON-primary item's `revisionStateBlob` is corrupted
+    /// behind the Authority's back (independent container, the R.3 fixture
+    /// stance) BEFORE the capture. The capture's expansion planning must
+    /// read ONLY that item's `RetainedBytesRow` scalar columns
+    /// (`RetentionConfigLoading.fetchProjectedScalars` — the
+    /// `.externalStorage` blob columns are never touched); any
+    /// `revisionStateBlob` decode on the planning path would fail the whole
+    /// commit `.persistence(.corruptStoredValue)` (the 05 §4 codec
+    /// discipline: never skip, never invent). The commit SUCCEEDS, the
+    /// corrupt blob emerges byte-identical, and the corrupt item's stored
+    /// scalars are provably planned over.
+    ///
+    /// Arithmetic (single-representation ASCII: canonicalBytes = UTF-8
+    /// length; footprint = canonicalBytes + revisionBytes): B = 10 + 0
+    /// (t=…000, oldest), A = 10 + [5] = 15 (t=…100, the corrupt victim,
+    /// NON-primary), the inserted primary P = 20 + 0 (t=…400), under
+    /// `maxTotalBytes = 35`. Crediting A's stored scalars: 10 + 15 + 20 =
+    /// 45 > 35 → retire the oldest eligible B → 35 ≤ 35 → stop (never
+    /// further). If A's scalars were NOT planned over (the discriminator),
+    /// the projected total would be 10 + 20 = 30 ≤ 35 and NOTHING would
+    /// retire — B's retirement is exactly the evidence that the corrupt
+    /// item's SCALARS entered the projected inventory while its blob was
+    /// never decoded.
+    @Test("capture planning never decodes a non-primary item's revision blob (RET-PLATFORM-2)")
+    func capturePlanningNeverDecodesNonPrimaryRevisionBlob() async throws {
+        let storeURL = WSSupport.tempStoreURL("r4-zero-decode-capture")
+        defer { WSSupport.removeStore(storeURL) }
+        let history = try await WSSupport.openHistory(storeURL: storeURL)
+        let source = "com.example.r4.zerodecode"
+
+        // Seed under the all-disabled default: B (oldest), then A, then A's
+        // one 5-byte revision (positions 1, 2, 3).
+        let b = try await Self.capture(
+            String(repeating: "b", count: 10), at: 700_950_000,
+            source: source, in: history
+        )
+        let a = try await Self.capture(
+            String(repeating: "a", count: 10), at: 700_950_100,
+            source: source, in: history
+        )
+        try await Self.revise(a.id, expected: 1, bytes: 5, in: history)
+
+        // R2 lands now (capture fires R1+R2 only; the lane re-reads the
+        // singleton inside every capture).
+        try WSSupport.seedRetentionConfig(
+            storeURL: storeURL,
+            storage: StorageRetention(maxTotalBytes: 35)
+        )
+
+        // Corrupt A's revision blob through an INDEPENDENT container (the
+        // R.3/R.6 fixture stance): a 1-byte blob fails every decode shape.
+        // A is NOT the capture's primary — the incoming P is.
+        let corruptBlob = Data([0x00])
+        let damageContainer = try WSSupport.makeContainer(storeURL: storeURL)
+        let damageContext = ModelContext(damageContainer)
+        let damageRow = try #require(
+            try damageContext.fetch(FetchDescriptor<HistoryItemRow>())
+                .first { $0.id == a.id.rawValue }
+        )
+        damageRow.revisionStateBlob = corruptBlob
+        try damageContext.save()
+
+        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let positionBefore = try WSSupport.fetchPosition(container).rawValue
+        #expect(positionBefore == 3)
+
+        // The public capture MUST succeed — a planning-path decode of A's
+        // corrupt blob would fail the commit `.corruptStoredValue`.
+        let receipt = try await history.perform(.capture(
+            WSSupport.textCapture(
+                String(repeating: "p", count: 20),
+                observedAt: Date(timeIntervalSinceReferenceDate: 700_950_400),
+                source: source
+            )
+        ))
+        guard case let .committed(commit) = receipt,
+              case let .inserted(primary) = commit.outcome else {
+            Issue.record("R.4: expected .committed with .inserted, got \(receipt)")
+            return
+        }
+
+        // A's stored scalars were planned over: B (the oldest eligible)
+        // retired exactly as the arithmetic pins; ONE position advance for
+        // the merged insert+retirement commit (D6/D24(a)).
+        #expect(commit.position.rawValue == positionBefore + 1)
+        let survivors = Set(try Self.retainedIDs(container))
+        #expect(survivors == Set([a.id, primary.id]))
+        #expect(!survivors.contains(b.id))
+        #expect(try Self.fetchBytesRows(container).count == 2)
+        #expect(try WSSupport.fetchPosition(container).rawValue == positionBefore + 1)
+
+        // The corrupt blob is byte-identical — zero decodes AND zero writes
+        // for the non-primary item — and its projection row still carries
+        // the stored scalars the plan consumed (10 / 1 / 5).
+        let untouchedRow = try #require(
+            try WSSupport.fetchRows(container)
+                .first { $0.id == a.id.rawValue }
+        )
+        #expect(untouchedRow.revisionStateBlob == corruptBlob)
+        let aRow = try #require(try Self.fetchBytesRow(for: a.id, in: container))
+        #expect(aRow.canonicalBytes == 10)
+        #expect(aRow.revisionCount == 1)
+        #expect(aRow.revisionBytes == 5)
+        // The primary's row was stamped at 20 / 0 / 0 (R.3 insert stamping).
+        let primaryRow = try #require(
+            try Self.fetchBytesRow(for: primary.id, in: container)
+        )
+        #expect(primaryRow.canonicalBytes == 20)
+        #expect(primaryRow.revisionCount == 0)
+        #expect(primaryRow.revisionBytes == 0)
     }
 
     // MARK: - Coalesce lane (V2-02 §3.2 coalesce lane, §6.3, D14)

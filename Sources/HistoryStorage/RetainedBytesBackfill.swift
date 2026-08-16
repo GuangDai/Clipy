@@ -24,6 +24,56 @@ import HistoryCore
 import HistoryDomain
 import SwiftData
 
+#if DEBUG
+/// RET-PLATFORM-1b(e) engine-level interruption seam — TEST-ONLY,
+/// DEBUG-only, and inert unless the `CLIPY_MIGRATION_BACKFILL_ABORT_AFTER`
+/// environment variable holds a positive row count (`V2-02` Record 3:
+/// "prove on the macOS runner that an interrupted migration (process death
+/// mid-backfill) leaves the store openable and that the re-run reproduces
+/// exactly the (a)/(b) invariants"). When armed,
+/// `abortIfArmed(afterComputedRows:)` kills the process with
+/// `exit(EXIT_FAILURE)` exactly when the backfill's compute loop has
+/// produced that many rows — a TRUE mid-backfill process death: no error
+/// is thrown, no rollback or cleanup code runs, and the migration
+/// machinery never regains control. The macOS-runner fixture that arms
+/// it is `HistoryMigrationInterruptionTests`, which spawns the DEBUG
+/// `HistoryPerfRunner` child mode (`--migration-abort-child`) with this
+/// variable set in the CHILD's environment alone.
+///
+/// The gating mirrors the repo's probe-seam discipline
+/// (`StorageLifecycleDebugProbe.environmentConfigured`: `#if DEBUG` plus
+/// one environment read, nothing else): release builds compile out the
+/// read, the marker, and the exit, so production migration behavior is
+/// byte-for-byte unchanged.
+internal enum MigrationBackfillAbortProbe {
+
+    /// The environment key that arms the seam (a positive computed-row
+    /// count).
+    internal static let environmentKey = "CLIPY_MIGRATION_BACKFILL_ABORT_AFTER"
+
+    /// The fixed stderr marker emitted immediately before the injected
+    /// death, so the parent fixture can prove the child died AT the seam
+    /// rather than anywhere else in the open path. A fixed string: no
+    /// store path, item identifier, or clipboard value can enter it.
+    internal static let markerLine = "[CLIPY_MIGRATION_ABORT] backfill interrupted mid-loop"
+
+    /// Kills the process when `computedRows` reaches the armed count.
+    /// Every call with the seam disarmed (the environment unset, or not a
+    /// positive integer) returns immediately.
+    internal static func abortIfArmed(afterComputedRows computedRows: Int) {
+        guard let raw = ProcessInfo.processInfo.environment[environmentKey],
+              let armed = Int(raw),
+              armed > 0,
+              computedRows == armed
+        else { return }
+        try? FileHandle.standardError.write(
+            contentsOf: Data("\(markerLine) after \(computedRows) rows\n".utf8)
+        )
+        exit(EXIT_FAILURE)
+    }
+}
+#endif
+
 // MARK: - RetainedBytesRow backfill (V2-02 Record 5 / RET-PLATFORM-1b)
 
 internal enum RetainedBytesBackfill {
@@ -165,6 +215,14 @@ internal enum RetainedBytesBackfill {
                 revisionCount: revisionState.revisions.count,
                 revisionBytes: revisionBytes
             ))
+#if DEBUG
+            // RET-PLATFORM-1b(e) seam call: a no-op unless the environment
+            // armed it (see `MigrationBackfillAbortProbe` above); compiled
+            // out of release builds entirely.
+            MigrationBackfillAbortProbe.abortIfArmed(
+                afterComputedRows: computed.count
+            )
+#endif
         }
 
         // The rewrite: one ModelContext.transaction owns every delete+insert

@@ -166,6 +166,12 @@ struct PerfRunner {
                 mode: childMode,
                 arguments: Array(arguments.dropFirst())
             )
+        } else if arguments.first == migrationInterruptionChildFlag {
+            // RET-PLATFORM-1b(e) engine-level interruption child (DEBUG-only
+            // seam; see MigrationInterruptionChild.swift).
+            exitCode = await runMigrationInterruptionChild(
+                arguments: Array(arguments.dropFirst())
+            )
         } else if arguments.first == "--admission" {
             exitCode = await runAdmission(
                 arguments: Array(arguments.dropFirst())
