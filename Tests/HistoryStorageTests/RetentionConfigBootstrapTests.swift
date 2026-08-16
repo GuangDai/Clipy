@@ -175,6 +175,25 @@ struct RetentionConfigBootstrapTests {
         #expect(try fetchConfigs(context).count == 1)
     }
 
+    /// The `== 1` fence is direction-symmetric: a row stamped
+    /// `configSchemaVersion == 0` — the DOWNGRADE direction (a row left at
+    /// the zero default by a non-V2 writer, or a hand-crafted store) —
+    /// fails closed through the SAME `.persistence(.corruptStoredValue)`
+    /// path as the forward direction above. The fence admits exactly one
+    /// schema shape; "older" is never silently treated as disabled
+    /// (`V2-02` §3.3's exhaustive-decode discipline, `05` §4).
+    @Test("configSchemaVersion 0 (downgrade direction) fails closed as corruptStoredValue")
+    func downgradeConfigSchemaVersionZeroFailsClosed() throws {
+        let (_, context) = try makeContext()
+        context.insert(makeConfigRow(configSchemaVersion: 0))
+
+        #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+            try HistoryAuthority.ensureRetentionExpansionConfig(in: context)
+        }
+        // Fail closed means fail before any write: no repair row appeared.
+        #expect(try fetchConfigs(context).count == 1)
+    }
+
     // MARK: - DC-21 finiteness
 
     /// `V2-02` §3.3/§8.3 (DC-21): "a persisted non-finite `ageMaxSeconds` on

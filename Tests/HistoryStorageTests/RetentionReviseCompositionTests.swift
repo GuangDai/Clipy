@@ -18,7 +18,10 @@
 /// irreducible → `.capacityExceeded(.storageBytes)`), §11 D24; Record 3
 /// gates `RET-STAMP-1` (one stamped write for the revised item),
 /// `RET-PLATFORM-3b` (the composed blob round-trips through the unchanged
-/// v1 codec), `RET-CONCUR-1` (the R3-flavored stale interleaving).
+/// v1 codec), `RET-CONCUR-1` (all three Record 3 cases: the R3-flavored
+/// stale interleaving, the coalescing interleave with R3 active, and the
+/// same-item `.setRetentionPolicies` interleave), `RET-PRUNE-2` (the
+/// revise-lane half: R2 plans over the projected post-prune state).
 ///
 /// Every public-path fixture crosses `SwiftDataHistory.perform(.revise)`
 /// (the real two-phase flow: `revisionPreparationInputs` → the V2-extended
@@ -31,8 +34,9 @@
 /// hard-bound ordering fixture (§5.4) drives the directly constructed
 /// `RevisionPreparationActor` with injected limits — the
 /// `RevisionPreparationCapacityTests` seam — because the public path pins
-/// `HistoryLimits.standard`; the stale-interleaving fixture drives a
-/// directly constructed Authority with the WS20 `SuspensionGate` harness.
+/// `HistoryLimits.standard`; the stale-interleaving and the other two
+/// RET-CONCUR-1 interleave fixtures drive directly constructed Authorities
+/// with the WS20 `SuspensionGate` harness.
 ///
 /// Hand-worked fixture values (single-representation ASCII text: one
 /// `public.utf8-plain-text` representation, so a revision's representation
@@ -43,7 +47,15 @@
 /// - fixed-length revision payloads (e.g. `String(repeating: "a", count:
 ///   17)`) — 17/18/19/20/26/15/30/8/10/5 representation bytes each;
 /// - R2 footprints (canonicalBytes + revisionBytes): A = 30 + 0, B = 10 + 0,
-///   T = 5 + 20 projected, P = 30 + 0 pinned.
+///   T = 5 + 20 projected, P = 30 + 0 pinned; `RET-PRUNE-2` revise half:
+///   P0 = 30 + 0 pinned, B = 10 + 0, T = 5 + 26 unpruned / 5 + 10 projected
+///   under budget 55 (the unpruned 81 > 55 would retire B and still fail);
+/// - `RET-CONCUR-1`(1): target 18 canonical bytes, lineage [8, 9] + append
+///   10 under count 2 / bytes 26 → prune [rev1] → 2 / 19 post-commit;
+/// - `RET-CONCUR-1`(3): target 15 canonical bytes, lineage [8, 9, 10] +
+///   append 11; phase-1 threshold 3 (speculative [rev1]), the interleaving
+///   sweep's threshold 2 prunes [rev1], phase 2 re-reads 2 and prunes
+///   [rev2] over the reload → final [rev3, rev4] at 2 / 21.
 import Foundation
 import HistoryCore
 import HistoryDomain
@@ -774,6 +786,107 @@ struct RetentionReviseCompositionTests {
         #expect(bRow.revisionBytes == 0)
     }
 
+    /// RET-PRUNE-2's revise-lane half (`V2-02` §3.2 post-R3-prune
+    /// projection / §4.3, Record 3: "on revise ... R2 never retires an item
+    /// whose post-R3-prune bytes already satisfy `maxTotalBytes`"): the R2
+    /// inventory credits the revised item its POST-PRUNE POST-APPEND
+    /// revision bytes, so a store that is over budget ONLY because of the
+    /// primary's prunable revisions commits with ZERO retirements instead of
+    /// failing or over-retiring.
+    ///
+    /// Arithmetic (footprints = canonicalBytes + revisionBytes): P0 = 30 + 0
+    /// PINNED (t=…000), B = 10 + 0 (t=…050, the oldest eligible unpinned
+    /// victim), T = 5 + [rev1(26)] seeded (t=…100) revised by a 10-byte
+    /// append under `maxRevisionBytesPerItem = 12` → the prune relation
+    /// removes rev1 (36 > 12 → 10 ≤ 12), projecting T to 5 + 10 = 15.
+    /// Post-prune store total: 30 + 10 + 15 = 55 ≤ budget 55 → ZERO
+    /// retirements; the pre-plan irreducible union (pinned P0 ∪ revised T) =
+    /// 30 + 15 = 45 ≤ 55 passes. Discriminator — the UNPRUNED credit would
+    /// total 30 + 10 + (5 + 36) = 81 > 55, retire B (the oldest eligible),
+    /// still sit at 71 > 55 with no eligible victim left (P0 pinned, D13; T
+    /// the protected primary, plan invariant 7), and fail the whole revise
+    /// `.capacityExceeded(.storageBytes)` (§8.3) — B's survival in a
+    /// COMMITTED store is exactly the "never retires [for] an item whose
+    /// post-prune bytes satisfy the budget" clause.
+    @Test("R3 prune at revise rescues the over-budget store from R2 retirement (RET-PRUNE-2 revise half)")
+    func r3PruneAtReviseRescuesTheStoreFromR2Retirement() async throws {
+        let storeURL = WSSupport.tempStoreURL("r5-prune2-rescue")
+        defer { WSSupport.removeStore(storeURL) }
+        let history = try await WSSupport.openHistory(storeURL: storeURL)
+
+        let pinned = try await Self.capture(
+            String(repeating: "p", count: 30), at: 700_413_000,
+            source: "com.example.r5.prune2", in: history
+        )
+        let b = try await Self.capture(
+            String(repeating: "b", count: 10), at: 700_413_050,
+            source: "com.example.r5.prune2", in: history
+        )
+        let target = try await Self.capture(
+            String(repeating: "t", count: 5), at: 700_413_100,
+            source: "com.example.r5.prune2", in: history
+        )
+        try await Self.seedRevisions(target.id, byteCounts: [26], in: history)
+        // Pin mutations do not trigger V2 expansion (V2-02 §7).
+        let pinReceipt = try await history.perform(.placePinned(pinned.id, at: .last))
+        guard case .committed = pinReceipt else {
+            Issue.record("R.5 setup: expected the pin to commit, got \(pinReceipt)")
+            return
+        }
+        try WSSupport.seedRetentionConfig(
+            storeURL: storeURL,
+            storage: StorageRetention(maxTotalBytes: 55),
+            revisions: RevisionRetention(
+                maxRevisionsPerItem: nil,
+                maxRevisionBytesPerItem: 12
+            )
+        )
+
+        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let positionBefore = try WSSupport.fetchPosition(container).rawValue
+        #expect(positionBefore == 5)
+        let before = try Self.lineage(of: target.id, in: container)
+        let rev1ID = try #require(before.item.activeRevisionID)
+
+        let reference = try await Self.revise(
+            target.id, expected: 2, bytes: 10, in: history
+        )
+        #expect(reference.id == target.id)
+        #expect(reference.contentVersion.rawValue == 3)
+
+        // ONE merged commit (D6/D24(a)); the outcome stays `.revised` (§4.3).
+        #expect(try WSSupport.fetchPosition(container).rawValue == 6)
+
+        // RET-PRUNE-2: ZERO R2 retirements — every item survives, B included
+        // (the unpruned credit would have retired it, then failed closed).
+        let survivors = Set(
+            try WSSupport.fetchRows(container).map { HistoryItemID(rawValue: $0.id) }
+        )
+        #expect(survivors == Set([pinned.id, b.id, target.id]))
+        #expect(try Self.fetchBytesRows(container).count == 3)
+
+        // The composed prune+append lineage: rev1 pruned, the appended
+        // revision alone and active (§6.3 / RET-PLATFORM-3b shape); the
+        // projection row restamped to the post-prune post-append scalars.
+        let after = try Self.lineage(of: target.id, in: container)
+        #expect(after.item.revisions.count == 1)
+        #expect(!after.item.revisions.map(\.id).contains(rev1ID))
+        #expect(after.item.activeRevisionID == after.item.revisions.first?.id)
+        let row = try #require(try Self.fetchBytesRow(for: target.id, in: container))
+        #expect(row.canonicalBytes == 5)
+        #expect(row.revisionCount == 1)
+        #expect(row.revisionBytes == 10)
+        // P0's and B's rows are untouched by the revision (their own stored
+        // scalars).
+        let pinnedRow = try #require(try Self.fetchBytesRow(for: pinned.id, in: container))
+        #expect(pinnedRow.canonicalBytes == 30)
+        #expect(pinnedRow.revisionBytes == 0)
+        let bRow = try #require(try Self.fetchBytesRow(for: b.id, in: container))
+        #expect(bRow.canonicalBytes == 10)
+        #expect(bRow.revisionCount == 0)
+        #expect(bRow.revisionBytes == 0)
+    }
+
     /// Pinned bytes ∪ revised-item bytes are irreducible (D13 for pinned;
     /// plan invariant 7 for the primary): the pinned P(30) plus the revised
     /// T(5 canonical + 20 revision = 25 projected) total 55 > 50 under
@@ -906,6 +1019,96 @@ struct RetentionReviseCompositionTests {
         }
     }
 
+    /// Appends revisions of the given byte counts through the storage-side
+    /// two-phase flow (the concurrency-fixture seeding stance: the facade is
+    /// not constructed for harness-driven stores, and the config stays
+    /// all-disabled so the lineage grows untouched). Payloads differ in
+    /// LENGTH per append, so no proposal is byte-identical to the current
+    /// Effective Content (D4: an identical append is `.unchanged`).
+    private static func seedStorageRevisions(
+        _ itemID: HistoryItemID,
+        byteCounts: [Int],
+        authority: HistoryAuthority,
+        preparation: RevisionPreparationActor
+    ) async throws {
+        for (index, count) in byteCounts.enumerated() {
+            let request = Self.replaceRequest(
+                itemID: itemID,
+                expected: ContentVersion(rawValue: UInt64(index + 1)),
+                bytes: count
+            )
+            let inputs = try await authority.revisionPreparationInputs(request)
+            let bundle = try await preparation.prepare(
+                request,
+                from: inputs.snapshot,
+                retentionPolicies: inputs.retentionPolicies
+            )
+            let receipt = try await authority.commitRevision(request, bundle)
+            guard case .committed = receipt else {
+                Issue.record("R.5 setup: expected a committed seed revise, got \(receipt)")
+                throw HistoryFailure.notFound(itemID)
+            }
+        }
+    }
+
+    /// Total representation bytes of one content value — the §3.2/§5.4
+    /// content-byte measure (`RET-PLATFORM-4`'s representation-byte sum,
+    /// mirrored from `RetainedBytesStamping.revisionScalars` for the test's
+    /// independent recomputation).
+    private static func representationBytes(
+        of content: EffectiveContent
+    ) -> Int {
+        content.representations.reduce(0) { $0 + $1.bytes.count }
+    }
+
+    /// The §5.1 prune relation recomputed INDEPENDENTLY in the test (never
+    /// through the production planner — that is the point): the shortest
+    /// append-order prefix of INACTIVE revisions whose removal makes the
+    /// effective list satisfy BOTH thresholds, selecting oldest-inactive-first;
+    /// `inactive: false` marks the never-prunable active revision (D3).
+    /// RET-CONCUR-1's discriminator — the committed prune must equal this
+    /// walk over the RELOADED (phase-2) facts, never a phase-1-cached set.
+    private static func expectedPrunePrefix(
+        effective: [(id: RevisionID, bytes: Int, inactive: Bool)],
+        maxRevisions: Int?,
+        maxRevisionBytes: Int?
+    ) -> [RevisionID] {
+        var count = effective.count
+        var bytes = effective.reduce(0) { $0 + $1.bytes }
+        var pruned: [RevisionID] = []
+        for revision in effective where revision.inactive {
+            let countOver = maxRevisions.map { count > $0 } ?? false
+            let bytesOver = maxRevisionBytes.map { bytes > $0 } ?? false
+            guard countOver || bytesOver else { break }
+            pruned.append(revision.id)
+            count -= 1
+            bytes -= revision.bytes
+        }
+        return pruned
+    }
+
+    /// The interference-lane capture of one coalescing interleave
+    /// (RET-CONCUR-1(1)): the coalesce receipt plus the §5.1 walk over the
+    /// lineage reloaded between park and resume — the exact fact set the
+    /// parked revise's phase 2 will load.
+    private struct InterleavedCoalesce: Sendable {
+        let receipt: HistoryReceipt
+        let reloadedRevisionIDs: [RevisionID]
+        let reloadedPrune: [RevisionID]
+    }
+
+    /// The interference-lane capture of one same-item policy-sweep
+    /// interleave (RET-CONCUR-1(3)): the sweep receipt, the §5.1 walk over
+    /// the PRE-sweep lineage (the sweep's own expected prune), and the walk
+    /// under the RE-READ threshold over the post-sweep reload — the exact
+    /// fact set and policy the parked revise's phase 2 must use.
+    private struct InterleavedSweep: Sendable {
+        let receipt: HistoryReceipt
+        let sweepPrune: [RevisionID]
+        let reloadedRevisionIDs: [RevisionID]
+        let reloadedPrune: [RevisionID]
+    }
+
     /// The R3-flavored RET-CONCUR-1 case (2) over the WS20 harness: with R3
     /// active and the lineage over threshold, a content-changing revision
     /// interleaved between the two phases of a first revision makes the
@@ -920,10 +1123,10 @@ struct RetentionReviseCompositionTests {
     ///
     /// RET-CONCUR-1 cases (1) (coalescing interleave, speculative ==
     /// committed) and (3) (interleaving same-item R3 prune) are covered by
-    /// WS20's coalescing fixture and the phase-2 policy re-read's structure
-    /// respectively — case (3)'s interleaving producer (`.setRetentionPolicies`)
-    /// is the deferred R.6 slice, so its interleaving is not publicly
-    /// constructible yet.
+    /// `coalescingInterleaveWithR3CommitsTheReloadedPrune` and
+    /// `sameItemPolicySweepInterleaveIsRespectedByPhase2` below — the R.6
+    /// `.setRetentionPolicies` sweep is now public, so case (3)'s
+    /// interleaving producer is constructible.
     @Test("stale interleaving with R3 active rejects at OCC with no prune applied")
     func staleInterleavingWithR3RejectsAtOCCWithoutApplyingPrune() async throws {
         let storeURL = WSSupport.tempStoreURL("r5-concur-stale")
@@ -1080,5 +1283,499 @@ struct RetentionReviseCompositionTests {
         let row = try #require(try Self.fetchBytesRow(for: target.id, in: container))
         #expect(row.revisionCount == 2)
         #expect(row.revisionBytes == 23)
+    }
+
+    // MARK: - Coalescing interleave with R3 active (RET-CONCUR-1 case 1)
+
+    /// The R3-flavored RET-CONCUR-1 case (1) over the WS20 harness
+    /// (Record 3: "a coalescing / lineage-preserving interleave between
+    /// phase 1 and phase 2 asserts `speculativePruneSet == committed
+    /// pruneSet` and the fused compose-with-append blob is built from
+    /// phase-2 (reloaded) facts"): a Copy Coalescing commit on the SAME item
+    /// interleaved between the two phases of a revise folds one occurrence
+    /// and preserves ContentVersion (02 §13), leaving the revision list
+    /// untouched — so the revise still commits and the committed prune set
+    /// is the pure §5.1 relation over the RELOADED lineage, which equals the
+    /// phase-1 speculative set (D16: both computations run over identical
+    /// inputs). The discriminator is computed INDEPENDENTLY in the test: the
+    /// §5.1 walk (`expectedPrunePrefix`) runs over (a) the phase-1 snapshot
+    /// lineage and (b) the lineage reloaded between park and resume — the
+    /// exact fact set phase 2 will load — and the durable final blob is
+    /// asserted to be exactly (reloaded survivors − committed prune) +
+    /// [appended], i.e. a function of phase-2 facts.
+    ///
+    /// Arithmetic: target canonical 18 bytes ("r5 coalesce target"); seeded
+    /// lineage [rev1(8), rev2(9)] at version 3 / position 3; R3 count 2 +
+    /// bytes 26; the parked revise appends rev3(10) → effective [8, 9, 10]:
+    /// count 3 > 2 → prune [rev1] → [rev2, rev3] at count 2 ≤ 2 and
+    /// 19 ≤ 26 → stop. The interleaved coalesce (t=…500) folds occurrence 2
+    /// without touching the lineage, so phase 2 reloads [rev1, rev2] and
+    /// commits the same prune; the projection row lands at 2 / 19 (9 + 10).
+    @Test("coalescing interleave with R3 active: revise commits the reloaded prune with the folded occurrence")
+    func coalescingInterleaveWithR3CommitsTheReloadedPrune() async throws {
+        let storeURL = WSSupport.tempStoreURL("r5-concur-coalesce")
+        defer { WSSupport.removeStore(storeURL) }
+        let authority = try await WSSupport.makeAuthority(storeURL: storeURL)
+        let ingest = IngestPreparationActor()
+        let revisionPreparation = RevisionPreparationActor()
+
+        // Arrange: one item — canonical 18 bytes — version 1, position 1.
+        let targetText = "r5 coalesce target"
+        let insertObservedAt = Date(timeIntervalSinceReferenceDate: 700_411_000)
+        let insertSource = "com.example.r5.concur1.first"
+        let insert = try await ingest.prepare(
+            WSSupport.textCapture(
+                targetText,
+                observedAt: insertObservedAt,
+                source: insertSource
+            )
+        )
+        let insertReceipt = try await authority.commitCapture(insert)
+        guard case let .committed(insertCommit) = insertReceipt,
+              case let .inserted(target) = insertCommit.outcome else {
+            Issue.record("R.5 arrange: expected a committed insert, got \(insertReceipt)")
+            return
+        }
+        #expect(insertCommit.position.rawValue == 1)
+
+        // Two storage-side revises build the lineage [rev1(8), rev2(9)] —
+        // version 3, position 3 — with the config still all-disabled.
+        try await Self.seedStorageRevisions(
+            target.id,
+            byteCounts: [8, 9],
+            authority: authority,
+            preparation: revisionPreparation
+        )
+        // R3 lands only now (behind the Authority's back; every revise
+        // commit re-reads the singleton inside its interval).
+        try WSSupport.seedRetentionConfig(
+            storeURL: storeURL,
+            revisions: RevisionRetention(
+                maxRevisionsPerItem: 2,
+                maxRevisionBytesPerItem: 26
+            )
+        )
+
+        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let seeded = try Self.lineage(of: target.id, in: container)
+        #expect(seeded.item.revisions.count == 2)
+        #expect(seeded.item.contentVersion.rawValue == 3)
+        let rev1ID = seeded.item.revisions[0].id
+        let rev2ID = seeded.item.revisions[1].id
+
+        // Phase one of the parked revise (append rev3, 10 bytes): the
+        // snapshot carries the SAME lineage the coalesce is about to
+        // preserve, so the independent §5.1 walk over the PHASE-1 facts is
+        // the speculative set the gate compares the committed set against.
+        let parkedRequest = Self.replaceRequest(
+            itemID: target.id, expected: ContentVersion(rawValue: 3), bytes: 10
+        )
+        let parkedInputs = try await authority.revisionPreparationInputs(parkedRequest)
+        let parkedBundle = try await revisionPreparation.prepare(
+            parkedRequest,
+            from: parkedInputs.snapshot,
+            retentionPolicies: parkedInputs.retentionPolicies
+        )
+        let appendedID = parkedBundle.domain.candidateRevisionID
+        let appendedBytes = Self.representationBytes(
+            of: parkedBundle.domain.proposedContent
+        )
+        // The §5.1 walk's effective list (§6.5 `.revise(appended:)` flavor):
+        // the phase-1 lineage plus the appended revision, which is the
+        // never-prunable active once it lands.
+        let phase1Effective: [(id: RevisionID, bytes: Int, inactive: Bool)] =
+            parkedInputs.snapshot.revisions.map {
+                (id: $0.id, bytes: Self.representationBytes(of: $0.content), inactive: true)
+            } + [(id: appendedID, bytes: appendedBytes, inactive: false)]
+        let speculativePrune = Self.expectedPrunePrefix(
+            effective: phase1Effective,
+            maxRevisions: 2,
+            maxRevisionBytes: 26
+        )
+        #expect(speculativePrune == [rev1ID])
+
+        // The interference bundle: the SAME canonical text re-captured while
+        // the revise is between phases (the WS20 producer) — Copy
+        // Coalescing folds the occurrence into the same item and preserves
+        // its Content Version (02 §13, D2).
+        let coalesceObservedAt = Date(timeIntervalSinceReferenceDate: 700_411_500)
+        let coalesceSource = "com.example.r5.concur1.second"
+        let coalesce = try await ingest.prepare(
+            WSSupport.textCapture(
+                targetText,
+                observedAt: coalesceObservedAt,
+                source: coalesceSource
+            )
+        )
+
+        // Park the revise at its commit-entry seam; the coalesce commits in
+        // between; the RELOADED lineage is captured before the resume — the
+        // exact fact set the revise's phase 2 will load — and the committed
+        // prune is computed independently over it.
+        let gate = SuspensionGate()
+        let latch = FirstParkLatch()
+        await authority.setSuspensionHandler { point in
+            guard point == .revisionCommitEntry else { return }
+            let first = await latch.consume()
+            guard first else { return }
+            await gate.park(at: point.rawValue)
+        }
+        let results = try await gate.runParked(
+            at: AuthoritySuspensionPoint.revisionCommitEntry.rawValue,
+            operation: {
+                try await authority.commitRevision(parkedRequest, parkedBundle)
+            },
+            whileCommitting: { () async throws -> InterleavedCoalesce in
+                let receipt = try await authority.commitCapture(coalesce)
+                // The phase-2 fact set, observed between park and resume
+                // through an independent container: lineage untouched,
+                // version preserved by the coalesce.
+                let reloaded = try Self.lineage(
+                    of: target.id,
+                    in: WSSupport.makeContainer(storeURL: storeURL)
+                )
+                let reloadedEffective: [(id: RevisionID, bytes: Int, inactive: Bool)] =
+                    reloaded.item.revisions.map {
+                        (id: $0.id, bytes: Self.representationBytes(of: $0.content), inactive: true)
+                    } + [(id: appendedID, bytes: appendedBytes, inactive: false)]
+                return InterleavedCoalesce(
+                    receipt: receipt,
+                    reloadedRevisionIDs: reloaded.item.revisions.map(\.id),
+                    reloadedPrune: Self.expectedPrunePrefix(
+                        effective: reloadedEffective,
+                        maxRevisions: 2,
+                        maxRevisionBytes: 26
+                    )
+                )
+            }
+        )
+
+        // The parked revise still commits — the coalesce preserved the OCC
+        // token (02 §13; 05 §6.2) — at the next version.
+        guard case let .committed(revisionCommit) = results.paused,
+              case let .revised(revisedReference) = revisionCommit.outcome else {
+            Issue.record("R.5: expected a committed .revised for the parked revise, got \(results.paused)")
+            return
+        }
+        #expect(revisedReference.id == target.id)
+        #expect(revisedReference.contentVersion.rawValue == 4)
+
+        // The interference: `.coalesced` naming the same item at the
+        // PRESERVED Content Version (02 §13: the receipt reference names the
+        // winner's loaded version).
+        guard case let .committed(coalesceCommit) = results.interfering.receipt,
+              case let .coalesced(coalescedReference) = coalesceCommit.outcome else {
+            Issue.record(
+                "R.5: expected a committed .coalesced for the interference, got \(results.interfering.receipt)"
+            )
+            return
+        }
+        #expect(coalescedReference.id == target.id)
+        #expect(coalescedReference.contentVersion.rawValue == 3)
+
+        // RET-CONCUR-1(1): speculative == committed — the coalesce left the
+        // lineage untouched, so the independent §5.1 walk over the reloaded
+        // (phase-2) facts equals the walk over the phase-1 snapshot.
+        #expect(results.interfering.reloadedRevisionIDs == [rev1ID, rev2ID])
+        #expect(results.interfering.reloadedPrune == speculativePrune)
+        #expect(results.interfering.reloadedPrune == [rev1ID])
+
+        // Five History Commits total — insert, two seeds, coalesce, revise —
+        // so the two interleaved receipts carry positions 4 and 5 between
+        // them (the harness fixes the order; the clause is the total).
+        #expect(
+            [coalesceCommit.position.rawValue, revisionCommit.position.rawValue].sorted()
+                == [4, 5]
+        )
+
+        // Storage side, through the INDEPENDENT container: ONE row carrying
+        // BOTH the folded occurrence and the composed prune+append lineage
+        // built from phase-2 facts — (reloaded − committed prune) +
+        // [appended].
+        let verification = try WSSupport.makeContainer(storeURL: storeURL)
+        let rows = try WSSupport.fetchRows(verification)
+        #expect(rows.count == 1)
+        let row = try #require(rows.first)
+        #expect(row.id == target.id.rawValue)
+        #expect(row.contentVersionRaw == 4)
+        #expect(row.copyCount == 2)
+        #expect(row.firstCopiedAt == insertObservedAt)
+        #expect(row.lastCopiedAt == coalesceObservedAt)
+        #expect(row.firstSource == insertSource)
+        #expect(row.lastSource == coalesceSource)
+
+        // Canonical Content is preserved byte-exactly by every commit (02
+        // D2); the durable final blob is EXACTLY the phase-2 function —
+        // reloaded survivors [rev2] + [appended], the appended active (05
+        // §4; the RET-PLATFORM-3b composed shape through the unchanged v1
+        // codec).
+        let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
+        #expect(canonical.representations.map(\.content.bytes) == [Data(targetText.utf8)])
+        let decoded = try RevisionStateBlobCodec.decode(
+            row.revisionStateBlob,
+            canonical: canonical
+        )
+        let expectedSurvivorIDs = [rev1ID, rev2ID]
+            .filter { !results.interfering.reloadedPrune.contains($0) } + [appendedID]
+        #expect(decoded.revisions.map(\.id) == expectedSurvivorIDs)
+        #expect(decoded.activeRevisionID == appendedID)
+        #expect(!decoded.revisions.map(\.id).contains(rev1ID))
+        // One position per commit (D6): the durable singleton names all five.
+        #expect(try WSSupport.fetchPosition(verification).rawValue == 5)
+
+        // The projection row restamped in the same transaction (§3.3b/§6.3):
+        // post-prune post-append scalars 2 revisions / 19 bytes (9 + 10),
+        // canonical bytes untouched (18).
+        let bytesRow = try #require(
+            try Self.fetchBytesRow(for: target.id, in: verification)
+        )
+        #expect(bytesRow.canonicalBytes == 18)
+        #expect(bytesRow.revisionCount == 2)
+        #expect(bytesRow.revisionBytes == 19)
+    }
+
+    // MARK: - Same-item policy-sweep interleave (RET-CONCUR-1 case 3)
+
+    /// The R3-flavored RET-CONCUR-1 case (3) over the WS20 harness
+    /// (Record 3: "an interleaving `.setRetentionPolicies` R3-prune on the
+    /// same item ... asserts the committed prune set is correct for the
+    /// reloaded post-interleave-prune lineage (not necessarily equal to
+    /// `speculativePruneSet`), no stale prune is applied, phase 2 uses the
+    /// re-read current `RetentionExpansionConfigRow` policies (not
+    /// phase-1-cached) so an interleaving threshold change is respected, and
+    /// the active revision survives (D3)"; §4.3's phase-2 policy re-read;
+    /// §5.2: R3 never changes ContentVersion): a same-item sweep commits
+    /// between the two phases of a revise. The sweep's prune preserves the
+    /// item's ContentVersion, so the `02` §11 step-1 OCC check still passes
+    /// and the revise COMMITS; phase 2 then recomputes the prune over the
+    /// RELOADED post-sweep lineage under the RE-READ threshold — never the
+    /// stale speculative set, never the phase-1-cached policies.
+    ///
+    /// Arithmetic: target canonical 15 bytes ("r5 sweep target"); seeded
+    /// lineage [rev1(8), rev2(9), rev3(10)] at version 4 / position 4. The
+    /// phase-1 config seeds `maxRevisionsPerItem = 3`, so the parked
+    /// revise's (internal, §5.4) speculative prune over
+    /// [rev1, rev2, rev3] + rev4(11) is [rev1]. The interleaving sweep sets
+    /// `maxRevisionsPerItem = 2`: PHASE A prunes [rev1] itself
+    /// (count 3 > 2 → 2 ≤ 2) at the PRESERVED version 4 — position 5,
+    /// `retentionPoliciesSet(retiredItems: 0, prunedRevisions: 1)`. The
+    /// resumed phase 2 re-reads threshold 2, reloads [rev2, rev3], and
+    /// prunes [rev2] (count 3 > 2 → [rev3, rev4] at 2 ≤ 2) — the committed
+    /// set ≠ the speculative [rev1], exactly as Record 3 (3) allows. The
+    /// two wrong alternatives both land at [rev2, rev3, rev4]: a
+    /// phase-1-cached threshold (3) would prune NOTHING over the reload
+    /// (3 ≤ 3), and the stale speculative set would name rev1 — a revision
+    /// the sweep already removed. The durable final lineage [rev3, rev4]
+    /// rules both out; the sweep receipt and the §5.1 walks are computed
+    /// independently in the test on both sides of the interleave.
+    @Test("same-item setRetentionPolicies interleave: revise survives OCC and prunes over the reload")
+    func sameItemPolicySweepInterleaveIsRespectedByPhase2() async throws {
+        let storeURL = WSSupport.tempStoreURL("r5-concur-sweep")
+        defer { WSSupport.removeStore(storeURL) }
+        let authority = try await WSSupport.makeAuthority(storeURL: storeURL)
+        let revisionPreparation = RevisionPreparationActor()
+
+        // Arrange: one item — canonical 15 bytes — version 1, position 1;
+        // seeded lineage [rev1(8), rev2(9), rev3(10)] — version 4, position 4.
+        let targetText = "r5 sweep target"
+        let insert = try await IngestPreparationActor().prepare(
+            WSSupport.textCapture(
+                targetText,
+                observedAt: Date(timeIntervalSinceReferenceDate: 700_412_000),
+                source: "com.example.r5.concur3"
+            )
+        )
+        let insertReceipt = try await authority.commitCapture(insert)
+        guard case let .committed(insertCommit) = insertReceipt,
+              case let .inserted(target) = insertCommit.outcome else {
+            Issue.record("R.5 arrange: expected a committed insert, got \(insertReceipt)")
+            return
+        }
+        #expect(insertCommit.position.rawValue == 1)
+        try await Self.seedStorageRevisions(
+            target.id,
+            byteCounts: [8, 9, 10],
+            authority: authority,
+            preparation: revisionPreparation
+        )
+        // The PHASE-1 policy view: threshold 3 (the parked revise's
+        // speculative prune over the full lineage is [rev1]).
+        try WSSupport.seedRetentionConfig(
+            storeURL: storeURL,
+            revisions: RevisionRetention(
+                maxRevisionsPerItem: 3,
+                maxRevisionBytesPerItem: nil
+            )
+        )
+
+        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let seeded = try Self.lineage(of: target.id, in: container)
+        #expect(seeded.item.revisions.count == 3)
+        #expect(seeded.item.contentVersion.rawValue == 4)
+        let rev1ID = seeded.item.revisions[0].id
+        let rev2ID = seeded.item.revisions[1].id
+        let rev3ID = seeded.item.revisions[2].id
+
+        // Phase one of the parked revise (append rev4, 11 bytes) at the
+        // threshold-3 view.
+        let parkedRequest = Self.replaceRequest(
+            itemID: target.id, expected: ContentVersion(rawValue: 4), bytes: 11
+        )
+        let parkedInputs = try await authority.revisionPreparationInputs(parkedRequest)
+        let parkedBundle = try await revisionPreparation.prepare(
+            parkedRequest,
+            from: parkedInputs.snapshot,
+            retentionPolicies: parkedInputs.retentionPolicies
+        )
+        let appendedID = parkedBundle.domain.candidateRevisionID
+
+        // Park the revise; the SAME-ITEM sweep commits in between; the
+        // sweep's expected prune (§5.1 walk over the PRE-sweep lineage, the
+        // stored active never prunable) and the phase-2 inputs (the
+        // post-sweep reload under the re-read threshold) are captured
+        // before the resume.
+        let gate = SuspensionGate()
+        let latch = FirstParkLatch()
+        await authority.setSuspensionHandler { point in
+            guard point == .revisionCommitEntry else { return }
+            let first = await latch.consume()
+            guard first else { return }
+            await gate.park(at: point.rawValue)
+        }
+        let tightened = HistoryRetentionPolicies(
+            age: nil,
+            storage: nil,
+            revisions: RevisionRetention(
+                maxRevisionsPerItem: 2,
+                maxRevisionBytesPerItem: nil
+            )
+        )
+        let results = try await gate.runParked(
+            at: AuthoritySuspensionPoint.revisionCommitEntry.rawValue,
+            operation: {
+                try await authority.commitRevision(parkedRequest, parkedBundle)
+            },
+            whileCommitting: { () async throws -> InterleavedSweep in
+                let preSweep = try Self.lineage(
+                    of: target.id,
+                    in: WSSupport.makeContainer(storeURL: storeURL)
+                )
+                // The sweep's own §5.1 walk (§5.5
+                // `.setRetentionPolicies(activeRevisionID:)` flavor): the
+                // stored active is the never-prunable element.
+                let sweepEffective: [(id: RevisionID, bytes: Int, inactive: Bool)] =
+                    preSweep.item.revisions.map {
+                        (
+                            id: $0.id,
+                            bytes: Self.representationBytes(of: $0.content),
+                            inactive: $0.id != preSweep.item.activeRevisionID
+                        )
+                    }
+                let sweepPrune = Self.expectedPrunePrefix(
+                    effective: sweepEffective,
+                    maxRevisions: 2,
+                    maxRevisionBytes: nil
+                )
+                let receipt = try await authority.commitRetentionPolicies(tightened)
+                // The phase-2 fact set, observed between park and resume:
+                // the PRUNED lineage and the §5.1 walk under the RE-READ
+                // threshold 2 (`.revise(appended:)` flavor — every reloaded
+                // revision is inactive once the append lands, §6.5).
+                let reloaded = try Self.lineage(
+                    of: target.id,
+                    in: WSSupport.makeContainer(storeURL: storeURL)
+                )
+                let reloadedEffective: [(id: RevisionID, bytes: Int, inactive: Bool)] =
+                    reloaded.item.revisions.map {
+                        (id: $0.id, bytes: Self.representationBytes(of: $0.content), inactive: true)
+                    } + [(id: appendedID, bytes: 11, inactive: false)]
+                return InterleavedSweep(
+                    receipt: receipt,
+                    sweepPrune: sweepPrune,
+                    reloadedRevisionIDs: reloaded.item.revisions.map(\.id),
+                    reloadedPrune: Self.expectedPrunePrefix(
+                        effective: reloadedEffective,
+                        maxRevisions: 2,
+                        maxRevisionBytes: nil
+                    )
+                )
+            }
+        )
+
+        // The sweep committed its prune — `prunedRevisions` counts the
+        // independently computed [rev1] — at position 5, one commit.
+        guard case let .committed(sweepCommit) = results.interfering.receipt,
+              case let .retentionPoliciesSet(sweepRetired, sweepPruned) =
+                  sweepCommit.outcome else {
+            Issue.record(
+                "R.5: expected a committed .retentionPoliciesSet sweep, got \(results.interfering.receipt)"
+            )
+            return
+        }
+        #expect(sweepRetired == 0)
+        #expect(results.interfering.sweepPrune == [rev1ID])
+        #expect(sweepPruned == results.interfering.sweepPrune.count)
+        #expect(sweepCommit.position.rawValue == 5)
+
+        // (a) The OCC behavior (§4.3/§5.2): the sweep's R3 prune did NOT
+        // change ContentVersion, so the parked revise's OCC token survives
+        // and the revise STILL COMMITS — `.revised` at version 5.
+        guard case let .committed(revisionCommit) = results.paused,
+              case let .revised(revisedReference) = revisionCommit.outcome else {
+            Issue.record("R.5: expected a committed .revised for the parked revise, got \(results.paused)")
+            return
+        }
+        #expect(revisedReference.id == target.id)
+        #expect(revisedReference.contentVersion.rawValue == 5)
+        #expect(revisionCommit.position.rawValue == 6)
+
+        // Phase 2 saw the PRUNED lineage [rev2, rev3] and the RE-READ
+        // threshold: the committed prune is [rev2], computed over the
+        // reload — not the speculative [rev1] the sweep already spent.
+        #expect(results.interfering.reloadedRevisionIDs == [rev2ID, rev3ID])
+        #expect(results.interfering.reloadedPrune == [rev2ID])
+
+        // (b) The final durable lineage is coherent: the blob decodes
+        // through the unchanged v1 codec, the appended revision is active
+        // (D3), the pruned IDs never resurrect, one position per commit.
+        let verification = try WSSupport.makeContainer(storeURL: storeURL)
+        let rows = try WSSupport.fetchRows(verification)
+        #expect(rows.count == 1)
+        let row = try #require(rows.first)
+        #expect(row.id == target.id.rawValue)
+        #expect(row.contentVersionRaw == 5)
+        #expect(row.copyCount == 1)
+        let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
+        #expect(canonical.representations.map(\.content.bytes) == [Data(targetText.utf8)])
+        let decoded = try RevisionStateBlobCodec.decode(
+            row.revisionStateBlob,
+            canonical: canonical
+        )
+        #expect(decoded.revisions.map(\.id) == [rev3ID, appendedID])
+        #expect(decoded.activeRevisionID == appendedID)
+        #expect(!decoded.revisions.map(\.id).contains(rev1ID))
+        #expect(!decoded.revisions.map(\.id).contains(rev2ID))
+        #expect(try WSSupport.fetchPosition(verification).rawValue == 6)
+
+        // The projection row restamped in the same transaction: post-prune
+        // post-append scalars 2 revisions / 21 bytes (10 + 11), canonical
+        // bytes untouched (15).
+        let bytesRow = try #require(
+            try Self.fetchBytesRow(for: target.id, in: verification)
+        )
+        #expect(bytesRow.canonicalBytes == 15)
+        #expect(bytesRow.revisionCount == 2)
+        #expect(bytesRow.revisionBytes == 21)
+
+        // §5.6: the tightened threshold is what phase 2 re-read — the
+        // durable singleton carries it.
+        let configContext = ModelContext(verification)
+        let configRows = try configContext.fetch(
+            FetchDescriptor<RetentionExpansionConfigRow>()
+        )
+        #expect(configRows.count == 1)
+        let config = try #require(configRows.first)
+        #expect(config.revisionPolicyEnabled == true)
+        #expect(config.revisionMaxCount == 2)
     }
 }

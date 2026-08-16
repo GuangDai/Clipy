@@ -349,6 +349,21 @@ struct HistoryMigrationTests {
         v1Context.autosaveEnabled = false
         let seeded = try await Self.seedV1Store(into: v1Context)
 
+        // RET-PLATFORM-1 (`V2-02` Record 3: "v1 rows, `LastChangePositionRow`,
+        // the Signature Index, and the singleton position are untouched"):
+        // capture the seeded position singleton's values BEFORE the
+        // migration container opens, so the survival assertion below
+        // compares against the pre-hop values (scalar copies — a `@Model`
+        // stays bound to the context that fetched it).
+        let seededPositionRows = try v1Context.fetch(
+            FetchDescriptor<LastChangePositionRow>()
+        )
+        #expect(seededPositionRows.count == 1)
+        let seededPosition = try #require(seededPositionRows.first)
+        let seededPositionKey = seededPosition.key
+        let seededPositionValue = seededPosition.rawValue
+        let seededPositionMaximumUnpinned = seededPosition.maximumUnpinnedItems
+
         // Open a NEW container for the SAME url WITH the migration plan —
         // the exact construction of SwiftDataHistory.open step 2.
         let migratedContainer = try Self.makeMigrationContainer(storeURL: storeURL)
@@ -376,6 +391,20 @@ struct HistoryMigrationTests {
                 FetchDescriptor<RetentionExpansionConfigRow>()
             ) == 0
         )
+
+        // RET-PLATFORM-1: the singleton position survived the hop
+        // byte-identically — still exactly ONE row, its key, rawValue, and
+        // maximumUnpinnedItems equal to the captured pre-migration values
+        // (the v1 count policy stays on `LastChangePositionRow`, §1; the
+        // hop rewrites no v1 row).
+        let migratedPositionRows = try migratedContext.fetch(
+            FetchDescriptor<LastChangePositionRow>()
+        )
+        #expect(migratedPositionRows.count == 1)
+        let migratedPosition = try #require(migratedPositionRows.first)
+        #expect(migratedPosition.key == seededPositionKey)
+        #expect(migratedPosition.rawValue == seededPositionValue)
+        #expect(migratedPosition.maximumUnpinnedItems == seededPositionMaximumUnpinned)
 
         // RET-PLATFORM-1b(a): every item has exactly one RetainedBytesRow
         // AND every RetainedBytesRow names a retained item (both directions).
