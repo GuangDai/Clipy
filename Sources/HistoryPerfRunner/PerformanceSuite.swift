@@ -32,6 +32,12 @@
 /// least 1.5× headroom over its declared linear/constant theoretical ratio
 /// except WL1a's documented asymptotic-inventory exception above, so each proof
 /// keeps its intended sensitivity while the suite fits the CI wall-clock budget.
+/// The V2-02 R-active retention lanes (docs/v2/V2-02-retention.md Record 3
+/// RET-PERF-1/2/3) reuse the same discipline: capture composition with R1+R2
+/// active, the revise-path expansion with R2+R3 active, and the
+/// `.setRetentionPolicies` scalar sweep each gate a 3× span at 6× (2× linear
+/// headroom) so a super-linear regression in the expansion pass fails exactly
+/// as it would on the projection-maintenance-only lanes.
 ///
 /// Import confinement (Part I §8): the runner imports Foundation, HistoryCore,
 /// and HistoryStorage — HistoryStorage was added to the HistoryPerfRunner
@@ -90,6 +96,7 @@ func runAll() async -> Int {
         allFixtures.append(contentsOf: await workloadPersistentStoreOpenScaling())
         allFixtures.append(contentsOf: await workloadPinReorder())
         allFixtures.append(contentsOf: await workloadRetentionAndClear())
+        allFixtures.append(contentsOf: await workloadActiveRetentionExpansion())
         allFixtures.append(contentsOf: await workloadRecentBrowse())
         allFixtures.append(contentsOf: await workloadSearchModesScaling())
         allFixtures.append(contentsOf: await workloadDetailAndPaste())

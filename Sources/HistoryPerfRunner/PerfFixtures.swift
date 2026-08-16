@@ -155,6 +155,24 @@ let section9WorkloadCoverage: [String: WorkloadCoverageExpectation] = [
         bulletLabel: "5",
         bulletNumbers: [5]
     ),
+    // V2-02 R-active lanes (docs/v2/V2-02-retention.md Record 3): the
+    // capture-composition and revise-path expansion halves of RET-PERF-1
+    // (with RET-PERF-3's zero-decode capture planning) ride the §9
+    // bullets 1-2 capture-commit family, exactly as the spec measures them
+    // "alongside capture p95"; the .setRetentionPolicies scalar sweep
+    // (RET-PERF-2) is the bullet 5 retention-sweep family.
+    "retentionExpansionCapture": WorkloadCoverageExpectation(
+        bulletLabel: "1-2",
+        bulletNumbers: [1, 2]
+    ),
+    "retentionExpansionRevise": WorkloadCoverageExpectation(
+        bulletLabel: "1-2",
+        bulletNumbers: [1, 2]
+    ),
+    "retentionPolicySweep": WorkloadCoverageExpectation(
+        bulletLabel: "5",
+        bulletNumbers: [5]
+    ),
     "recentBrowseIndependentOfRetainedCount": WorkloadCoverageExpectation(
         bulletLabel: "6",
         bulletNumbers: [6]
@@ -221,6 +239,29 @@ let section9WorkloadEnvelopes: [String: WorkloadComplexityEnvelope] = [
         headroomPolicy: .standard
     ),
     "clearUnpinned": WorkloadComplexityEnvelope(
+        measurementScales: [100, 300],
+        growth: .linear,
+        bound: 6,
+        headroomPolicy: .standard
+    ),
+    // V2-02 R-active lanes (docs/v2/V2-02-retention.md Record 3
+    // RET-PERF-1/2/3): the same 3× span / 6× bound / standard 2× linear
+    // headroom as the retentionMassEviction/clearUnpinned siblings — the
+    // expansion pass's O(retained) scalar sweep must reject quadratic
+    // scaling exactly like the projection-maintenance-only lanes.
+    "retentionExpansionCapture": WorkloadComplexityEnvelope(
+        measurementScales: [100, 300],
+        growth: .linear,
+        bound: 6,
+        headroomPolicy: .standard
+    ),
+    "retentionExpansionRevise": WorkloadComplexityEnvelope(
+        measurementScales: [100, 300],
+        growth: .linear,
+        bound: 6,
+        headroomPolicy: .standard
+    ),
+    "retentionPolicySweep": WorkloadComplexityEnvelope(
         measurementScales: [100, 300],
         growth: .linear,
         bound: 6,

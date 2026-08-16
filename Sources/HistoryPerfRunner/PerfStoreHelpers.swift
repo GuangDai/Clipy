@@ -80,13 +80,27 @@ func deterministicTextCapture(
 }
 
 /// Captures one distinct item and returns its reference.
+///
+/// `baseTime` threads `deterministicTextCapture`'s stamp origin through so an
+/// R1-active workload (V2-02 §4.2) can seed `observedAt` values a fixed
+/// distance behind the wall clock — the capture lane's R1 reference `now` is
+/// the capture's own `observedAt` (§4.2/DC-28: the Storage clock belongs to
+/// the `.setRetentionPolicies` sweep lane alone), but the one-time policy-set
+/// sweep DOES read the real clock, so fixed 2001-epoch stamps would turn R1
+/// into an accidental mass retirement once wall-clock time drifts far enough
+/// past them.
 func captureItem(
     _ history: SwiftDataHistory,
     index: Int,
-    bodyBytes: Int = 64
+    bodyBytes: Int = 64,
+    baseTime: Double = 600_000_000
 ) async throws -> HistoryItemReference {
     let receipt = try await history.perform(
-        .capture(deterministicTextCapture(index: index, bodyBytes: bodyBytes))
+        .capture(deterministicTextCapture(
+            index: index,
+            bodyBytes: bodyBytes,
+            baseTime: baseTime
+        ))
     )
     guard case .committed(let commit) = receipt,
           case .inserted(let ref) = commit.outcome else {
@@ -109,14 +123,58 @@ func capturePreparedItem(
     return reference
 }
 
+/// Performs one byte-changing `.replace` revise on the item named by
+/// `reference`, OCC-tokened at the reference's ContentVersion (03a §5: the
+/// caller bases its edit on the version it holds and never mints the
+/// successor), and returns the post-append reference the receipt carries.
+///
+/// The payload is index/append-derived and exactly `bodyBytes` long: within
+/// one item's lineage every append differs from the current Effective bytes
+/// (a byte-identical repeat would be `.unchanged` under D4 — only
+/// effective-content-changing revisions append), and the fixed length keeps
+/// the item's `RetainedBytesRow` revision scalars (V2-02 §3.3b) deterministic
+/// for R2/R3 budget arithmetic.
+func reviseItem(
+    _ history: SwiftDataHistory,
+    reference: HistoryItemReference,
+    itemIndex: Int,
+    appendSequence: Int,
+    bodyBytes: Int = 32
+) async throws -> HistoryItemReference {
+    let prefix = "perf-rev-\(itemIndex)-\(appendSequence)-"
+    let padding = String(repeating: "r", count: max(0, bodyBytes - prefix.utf8.count))
+    let request = RevisionRequest(
+        itemID: reference.id,
+        expected: reference.contentVersion,
+        intent: .replace(RevisionDraft(decisions: [
+            RevisionDecision(
+                typeIdentifier: "public.utf8-plain-text",
+                action: .replace(bytes: Data((prefix + padding).utf8))
+            )
+        ]))
+    )
+    let receipt = try await history.perform(.revise(request))
+    guard case .committed(let commit) = receipt,
+          case .revised(let revised) = commit.outcome else {
+        throw PerfError.reviseUnexpectedOutcome
+    }
+    return revised
+}
+
 /// Populates a store with `count` distinct unpinned items (untimed).
 func populateItems(
     _ history: SwiftDataHistory,
     count: Int,
-    bodyBytes: Int = 64
+    bodyBytes: Int = 64,
+    baseTime: Double = 600_000_000
 ) async throws {
     for i in 0..<count {
-        _ = try await captureItem(history, index: i, bodyBytes: bodyBytes)
+        _ = try await captureItem(
+            history,
+            index: i,
+            bodyBytes: bodyBytes,
+            baseTime: baseTime
+        )
     }
 }
 

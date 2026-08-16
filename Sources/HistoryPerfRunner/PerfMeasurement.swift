@@ -9,6 +9,7 @@ import HistoryStorage
 /// Internal runner errors (not HistoryFailure; never crosses the History seam).
 enum PerfError: Error, Sendable {
     case captureUnexpectedOutcome
+    case reviseUnexpectedOutcome
 }
 
 // MARK: - Measurement helpers
