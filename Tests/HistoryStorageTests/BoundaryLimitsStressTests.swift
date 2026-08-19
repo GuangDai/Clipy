@@ -61,7 +61,7 @@ private static func makeRepresentations(count: Int) -> [CapturedRepresentation] 
     (0..<count).map { index in
         CapturedRepresentation(
             typeIdentifier: "com.example.boundary.rep-\(index)",
-            bytes: Data([UInt8(index % 256]))
+            bytes: Data([UInt8(index % 256)])
         )
     }
 }

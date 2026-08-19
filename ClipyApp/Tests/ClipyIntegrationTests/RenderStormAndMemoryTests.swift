@@ -231,9 +231,9 @@ struct RenderStormAndMemoryTests {
         // mixed intermediate state at any poll inside the window (04 §5).
         let settledIDs = viewState.rows.map(\.item.id)
         viewState.refresh()
-        let windowEnd = Date().addingTimeInterval(0.8)
+        let refreshWindowEnd = Date().addingTimeInterval(0.8)
         var stayedConsistent = true
-        while Date() < windowEnd {
+        while Date() < refreshWindowEnd {
             if viewState.rows.map(\.item.id) != settledIDs {
                 stayedConsistent = false
                 break
@@ -349,7 +349,7 @@ struct RenderStormAndMemoryTests {
                 thumbnails.prefetch(row.item)
             }
             let decoded = await ComposedSupport.waitFor(timeout: 30) {
-                imageRows.allSatisfy { thumbnails.image(for: $0) != nil }
+                imageRows.allSatisfy { thumbnails.image(for: $0.item) != nil }
             }
             #expect(
                 decoded,
