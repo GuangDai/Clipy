@@ -704,3 +704,45 @@ test.
   passed; the fixture is now a complete, CRC-checked encode). Final green:
   32260455839.
 
+
+## Post-step-9: real-scale fixture harness + stress/smoke suites
+
+- **Status:** done. Green at run
+  [32269792986](https://github.com/GuangDai/Clipy/actions/runs/32269792986)
+  (tests-only dispatch on `codex/v2-implementation`: gates, SwiftPM build +
+  test, XcodeGen app build/test — perf lanes deliberately out of scope).
+- **Fixtures:** `scripts/generate_fixtures.py` (deterministic `--seed
+  20260819`, byte-identical reruns; Pillow in `.tmp/fixture-venv/`) produces
+  `clipy-fixtures-v1`: 19 images (4K masters PNG/JPEG/TIFF, 1080p BMP, 720p
+  animated GIF, 12 random crops, 7680×4320, 512 icon), 9 texts
+  (100 KB–5 MB: real repo Swift sources, JSON, Markdown, CJK, emoji,
+  long-lines, lorem, plus the 256 KiB search-body and 1 KiB title boundary
+  straddlers), 300 KB RTF/HTML, a minimal valid PDF, and 50 file URLs;
+  per-file sha256 in `manifest.json`. Hosted on GitHub release
+  [`fixtures-v1`](https://github.com/GuangDai/Clipy/releases/tag/fixtures-v1)
+  (tarball sha256 `ca1a5e11…`); `scripts/fetch_fixtures.sh` verifies the
+  checksum and unpacks; both CI test jobs fetch it and export
+  `CLIPY_FIXTURES_DIR`; suites gate with `.enabled(if:
+  FixtureCatalog.available)` so a fresh clone's `swift test` stays green
+  (swift-testing has no runtime skip API — the trait is the mechanism).
+- **Suites:** `RealScaleStressTests` + `BoundaryLimitsStressTests`
+  (bulk capture/coalescing, search-body + title truncation, 4K/8K thumbnail
+  bounds, inclusive 64 MiB / 32-representation / 128 MiB edges, retention
+  D13 at scale), `UISmokeJourneyTests` (browse/paginate/search/details/
+  revise/settings over the real corpus), `PasteboardAdapterStressTests`
+  (4K image and 5 MB text round trips, rapid-write boundedness, concealed
+  5 MB whole-capture freeze), `RenderStormAndMemoryTests` (no page
+  amplification + convergence under a 100-commit burst, debounce-storm
+  settling, RSS leak tripwire, activate/deactivate hygiene).
+- **Convergence (4 runs):** 32265918298 — three new-suite compile errors
+  (bracket typo, redeclared local, thumbnail key type); 32267167679 —
+  load-exposed flake: `pollUntil`'s 2 s wall-clock budget starved
+  MainActor task slots under the now-parallel heavy suites (identical code
+  green at 91d04dd), budget raised to 10 s, and the render-storm tripwire
+  corrected to no-amplification + convergence (the strict `<` coalescing
+  claim is owned deterministically by the storage WS12 suspension suites);
+  32268871305 — tests all green, SPM log self-scan caught the known-benign
+  CoreData `.interim` external-storage clone race from the real-scale
+  suites' on-disk temp stores; the admission lane's existing awk prefilter
+  now also covers the SPM and app self-scans (runs 31808691118/31809994808
+  documented the same noise).
