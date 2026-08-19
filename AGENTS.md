@@ -30,14 +30,18 @@ thumbnails.
   run on any platform; everything else (including
   `scripts/public_symbol_snapshot.sh`) needs macOS + `xcrun`.
 
-**Current state (2026-07-22, HEAD `7994844` on `master`):** implementation is
-mid-roadmap. Steps 0–5 are done and CI-green: scaffold + gates, `HistoryCore`
-public surface, `HistoryDomain` pure core, dependency pins (xxh3 v0.8.3, Fuse
-1.4.0), SwiftData schema v1 + versioned codecs, and `HistoryAuthority` + the
-capture path. Steps 6–8 (mutations, reads + observation, thumbnail) and step 9
-(product wiring: PasteboardAdapter, PresentationUI, ClipyApp composition) are
-**not started**. Not-yet-implemented paths deliberately throw the internal
-`StepDeferredError.notYetImplemented` (never a public `HistoryFailure`).
+**Current state (2026-08-19, branch `codex/v2-implementation`):** steps 0–8
+are done and CI-green (scaffold + gates, `HistoryCore` public surface,
+`HistoryDomain` pure core, dependency pins, schema v1 + codecs,
+`HistoryAuthority` capture/mutations/reads/observation/thumbnail), and the V2
+M1 schema migration plus V2-02 retention slices R.1–R.6 are landed
+(`docs/v2/V2-PROGRESS.md`). Step 9 (product wiring: PasteboardAdapter,
+PresentationUI, ClipyApp composition) is **implemented locally and awaiting
+its first commit + macOS CI run** — the menu-bar panel (search/pin/reorder/
+remove/clear), details + revise editor, unified retention settings (v1 count +
+V2-02 age/storage/revision dimensions), pasteboard capture/paste round-trip,
+and the WS1–WS21 composed re-verification in `ClipyIntegrationTests` are
+written and pass the Python source gates, but have not yet compiled on a Mac.
 Always check `docs/PROGRESS.md` for the exact landed state before assuming a
 feature exists.
 

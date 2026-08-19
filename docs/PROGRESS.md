@@ -605,3 +605,69 @@ is green end to end, including the evidence lane under the prefilter;
 the recent-equivalent window fix it required (anchor row must stay in the
 evaluated array for `page` to drop) is locked by the new continuation
 test.
+
+## Step 9 — product wiring: PasteboardAdapter + PresentationUI + ClipyApp
+
+- **Status:** implemented, **awaiting first commit and macOS CI evidence**.
+  This entry was authored off-runner (Linux authoring environment: no
+  `swift`/`xcodebuild`/`xcodegen` available); the Python source gates
+  (`scripts/run_gates.sh` gates 1–4) pass over the new tree, while
+  compilation, `swift test`, the symbol snapshot, and the generated-app
+  build/test remain unverified until the first macOS run. Treat every
+  deliverable below as pending CI confirmation.
+- **Roadmap:** `roadmap/README.md` §3 step 9 — module docs
+  `roadmap/04-pasteboardadapter.md` (9a), `roadmap/05-presentationui.md` (9a),
+  `roadmap/06-clipyapp.md` (9b); UX bounds from `01` §5–§6/§8, `03a` §4/§5/§7,
+  `03b` §8–§12, `04` §5–§9, `05` §6.1, `06` §2/§8, plus the admitted V2-02
+  retention settings surface (`docs/v2/V2-07-ux.md` §5/§6; first release =
+  M1 + V2-02). Working design contract: `.tmp/step9/design.md` (scratch, not
+  spec).
+- **Delivered:**
+  - `PasteboardAdapter` — `@MainActor` adapter (NSPasteboard is non-Sendable;
+    MainActor isolation provides the Sendability) with `capture(observedAt:)`
+    (freezes the first item's retainable representations, frontmost bundle ID
+    as `sourceApplication`, lineage-hint decode, six-marker whole-capture
+    concealment per `05` §6.1 — markers never stripped while siblings
+    retained), `write(_:)` (Effective Content + `com.clipy.lineageHint` round
+    trip, `03b` §9/§12), and `PasteboardObserver` (changeCount polling —
+    NSPasteboard exposes no change notification; `01` §5.1). Unit tests cover
+    the roadmap-04 acceptance list over private named pasteboards.
+  - `PresentationUI` — `@MainActor @Observable HistoryViewState` (snapshot-
+    replacement observation per `04` §5, one-shot cursor pagination with
+    `.snapshotExpired` recovery per `04` §6, 250 ms-debounced search restart,
+    typed-failure surface), `ThumbnailStore` (reference-exact keying per
+    `01` §5.7/`04` §9, ImageIO decode — AppKit stays out of this target),
+    `MatchHighlighting` (UTF-16 ranges per `03b` §8), `FailurePresentation`,
+    and the scripted `PreviewClipboardHistory` (`01` §4). Views:
+    `HistoryPanelView` (menu-bar panel: search header with Exact/Fuzzy/Regexp
+    mode picker + 64-Character fuzzy clamp, Pinned/Recent sections, context
+    menus, keyboard shortcuts, pagination, failure banner, footer with
+    clear/settings/quit), `HistoryDetailsView` (info grid, Effective/Canonical
+    content, revisions + revert, OCC-aware), `ReviseEditorView`
+    (keep/hide/replace per representation, incoherent-draft guard), and
+    `ClipySettingsView` (General: v1 count policy + clear actions; Retention:
+    the unified V2-02 age/storage/revision group with receipt feedback).
+  - `ClipyApp` — the sole composition root: `AppComposition.open` (persistent
+    store under Application Support, second-open rejection per `01` §8),
+    capture wiring, the only History→pasteboard paste hand-off
+    (`01` §5.6/`04` §8), `MenuBarExtra` window-style panel + `Settings`
+    scene, SMAppService launch-at-login.
+  - `ClipyIntegrationTests` — the WS1–WS21 walking-skeleton paths re-run
+    through the composed stack (real `SwiftDataHistory` + `PasteboardAdapter`
+    + `HistoryViewState`), plus `AppCompositionTests` (second-open guard) and
+    `AppPasteOrchestrationTests` (lineage-hint paste round trip);
+    `ClipyIntegrationTests` gained package-product dependencies in
+    `project.yml` so the hosted bundle can import the libraries. Fault-
+    injection/suspension-seam clauses deliberately remain in the storage-side
+    suites (each such clause is named in its composed suite's header).
+
+| Commit | Subject |
+|---|---|
+| — | pending first commit (this entry precedes it) |
+
+- **CI:** none yet — the first push of this tree is the first macOS
+  build/test of step 9 (all three jobs of `macos26-arm-ci.yml`). Known
+  residual risks recorded by the authoring pass: SDK-level API typing of
+  `Timer` blocks, timing-budget sensitivity of debounce/polling tests, and
+  XcodeGen acceptance of the test target's new product dependencies.
+
