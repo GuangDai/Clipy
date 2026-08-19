@@ -151,6 +151,15 @@ jobs:
           [[ "$(sw_vers -productVersion)" == 26.* ]]
           [[ "$(uname -m)" == arm64 ]]
 
+      - name: Fetch test fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          FIXTURE_ROOT="$RUNNER_TEMP/clipy-fixtures"
+          mkdir -p "$FIXTURE_ROOT"
+          bash scripts/fetch_fixtures.sh "$FIXTURE_ROOT"
+          echo "CLIPY_FIXTURES_DIR=$FIXTURE_ROOT/clipy-fixtures-v1" >> "$GITHUB_ENV"
+
       - name: Build package graph (Swift 6 strict concurrency)
         shell: bash
         run: |
@@ -231,6 +240,15 @@ jobs:
           bash scripts/generate-xcodeproj.sh 2>&1 | tee "$LOG_DIR/xcodegen-second.log"
           diff -ru "$RUNNER_TEMP/first-generated.xcodeproj" "$PROJECT" \
             | tee "$LOG_DIR/xcodegen-repeatability.diff"
+
+      - name: Fetch test fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          FIXTURE_ROOT="$RUNNER_TEMP/clipy-fixtures"
+          mkdir -p "$FIXTURE_ROOT"
+          bash scripts/fetch_fixtures.sh "$FIXTURE_ROOT"
+          echo "CLIPY_FIXTURES_DIR=$FIXTURE_ROOT/clipy-fixtures-v1" >> "$GITHUB_ENV"
 
       - name: List generated project
         shell: bash
