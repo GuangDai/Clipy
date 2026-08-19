@@ -176,8 +176,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          matches=$(grep -Ein '(^|[^[:alpha:]])(warning:|error:)([^[:alpha:]]|$)' \
-            "$LOG_DIR/spm-build.log" "$LOG_DIR/spm-test.log" || true)
+          # Known-benign CoreData external-storage clone race (the same one
+          # the admission lane prefilters, runs 31808691118/31809994808): a
+          # transaction may attempt to clone an earlier batch's external
+          # record from its already-consumed `.interim` staging name; CoreData
+          # logs the failure and its copy fallback completes the save. The
+          # real-scale stress suites' on-disk temp stores exercise this path
+          # (run 32268871305). Strip those multi-line error blocks (opening
+          # `CoreData: error: Failed to clone…` through the terminating `}}`);
+          # every other warning/error line stays fatal.
+          matches=$(
+            for log in "$LOG_DIR/spm-build.log" "$LOG_DIR/spm-test.log"; do
+              awk '
+                /^CoreData: error: Failed to clone external data reference/ { block = 1 }
+                block && /\}\}$/ { block = 0; next }
+                block { next }
+                { print }
+              ' "$log"
+            done | grep -Ein '(^|[^[:alpha:]])(warning:|error:)([^[:alpha:]]|$)' || true
+          )
           if [[ -n "$matches" ]]; then
             echo "$matches"
             echo "Warnings or errors found in SPM logs"
@@ -278,8 +295,19 @@ jobs:
           # Also excluded: any line naming the Apple-internal LaunchServices
           # service "com.apple.linkd.autoShortcut" (NSCocoaErrorDomain 4097) —
           # intermittent headless-runner noise whose long log lines may wrap,
-          # so the match must not anchor on a line prefix.
-          matches=$(grep -Ein '(^|[^[:alpha:]])(warning:|error:|\*\* TEST FAILED \*\*|\*\* BUILD FAILED \*\*)([^[:alpha:]]|$)' "$LOG_DIR/app-build-test.log" \
+          # so the match must not anchor on a line prefix. The awk prefilter
+          # first strips the known-benign CoreData external-storage clone-race
+          # blocks (multi-line `CoreData: error: Failed to clone…` through the
+          # terminating `}}`; copy fallback completes the save — the same
+          # prefilter the admission lane and the SPM scan carry, runs
+          # 31808691118/31809994808/32268871305).
+          matches=$(awk '
+                /^CoreData: error: Failed to clone external data reference/ { block = 1 }
+                block && /\}\}$/ { block = 0; next }
+                block { next }
+                { print }
+              ' "$LOG_DIR/app-build-test.log" \
+                    | grep -Ein '(^|[^[:alpha:]])(warning:|error:|\*\* TEST FAILED \*\*|\*\* BUILD FAILED \*\*)([^[:alpha:]]|$)' \
                     | grep -vE 'appintentsmetadataprocessor.*Metadata extraction skipped' \
                     | grep -vE 'com\.apple\.linkd\.autoShortcut' || true)
           if [[ -n "$matches" ]]; then
