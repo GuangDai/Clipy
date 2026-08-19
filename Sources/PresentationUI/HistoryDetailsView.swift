@@ -58,7 +58,7 @@ public struct HistoryDetailsView: View {
                 ContentUnavailableView(
                     "Item Removed",
                     systemImage: "trash",
-                    description: "This item is no longer in your clipboard history."
+                    description: Text("This item is no longer in your clipboard history.")
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .failed(let message):
@@ -136,7 +136,7 @@ public struct HistoryDetailsView: View {
                 onRevise: { intent in
                     Task {
                         await revise(
-                            intent,
+                            intent: intent,
                             expected: details.item.contentVersion
                         )
                     }
@@ -335,7 +335,7 @@ private struct DetailsBody: View {
     @ViewBuilder
     private var thumbnail: some View {
         if let image = thumbnails.image(for: details.item) {
-            Image(decoding: image)
+            Image(image, scale: 2, label: Text("Item thumbnail"))
                 .resizable()
                 .scaledToFill()
                 .frame(width: 64, height: 64)
@@ -557,7 +557,7 @@ private struct RepresentationRow: View {
             if isImageType(representation.typeIdentifier),
                 let image = thumbnails.image(for: item)
             {
-                Image(decoding: image)
+                Image(image, scale: 2, label: Text("Item thumbnail"))
                     .resizable()
                     .scaledToFit()
                     .frame(maxWidth: 120, maxHeight: 90)

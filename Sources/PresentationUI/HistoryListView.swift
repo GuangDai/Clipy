@@ -122,7 +122,7 @@ public struct HistoryListView: View {
             ContentUnavailableView(
                 "No Results",
                 systemImage: "magnifyingglass",
-                description: "No items match “\(viewState.searchText)”."
+                description: Text("No items match “\(viewState.searchText)”.")
             )
         } else {
             ContentUnavailableView(

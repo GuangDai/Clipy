@@ -77,7 +77,7 @@ public struct HistoryRowView: View {
     private var thumbnail: some View {
         Group {
             if let image = thumbnails.image(for: row.item) {
-                Image(cgImage: image, scale: 1)
+                Image(image, scale: 2, label: Text("Item thumbnail"))
                     .resizable()
                     .aspectRatio(contentMode: .fill)
             } else {
@@ -223,12 +223,12 @@ public struct HistoryRowView: View {
 
         if row.pinnedPosition != nil {
             Button {
-                onPin(row.item.id, at: .first)
+                onPin(row.item.id, .first)
             } label: {
                 Label("Move to Top", systemImage: "arrow.up.to.line")
             }
             Button {
-                onPin(row.item.id, at: .last)
+                onPin(row.item.id, .last)
             } label: {
                 Label("Move to Bottom", systemImage: "arrow.down.to.line")
             }
@@ -239,12 +239,12 @@ public struct HistoryRowView: View {
             }
         } else {
             Button {
-                onPin(row.item.id, at: .first)
+                onPin(row.item.id, .first)
             } label: {
                 Label("Pin to Top", systemImage: "pin")
             }
             Button {
-                onPin(row.item.id, at: .last)
+                onPin(row.item.id, .last)
             } label: {
                 Label("Pin to Bottom", systemImage: "pin")
             }

@@ -106,7 +106,10 @@ public final class ThumbnailStore {
                 // completion either way — an in-flight entry must never be
                 // stranded.
                 guard let self else { return }
-                self.store(item: item, image: payload.flatMap(Self.decodePNG))
+                self.store(
+                    item: item,
+                    image: payload.flatMap { Self.decodePNG($0.encodedBytes) }
+                )
             } catch {
                 // Not negative-cached: see `prefetch(_:).
                 guard let self else { return }

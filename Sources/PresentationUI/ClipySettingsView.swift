@@ -164,7 +164,7 @@ private struct GeneralSettingsTab: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .formStyle(.group)
+        .formStyle(.grouped)
     }
 
     /// The parsed count, or `nil` when the text is not a whole number
@@ -187,7 +187,8 @@ private struct GeneralSettingsTab: View {
                 ) else {
                     return HistoryLimits.standard.defaultMaximumUnpinnedItems
                 }
-                return HistoryLimits.standard.userMaximumUnpinnedRange.clamping(typed)
+                let range = HistoryLimits.standard.userMaximumUnpinnedRange
+                return min(max(typed, range.lowerBound), range.upperBound)
             },
             set: { maximumUnpinnedText = String($0) }
         )
@@ -385,7 +386,7 @@ private struct RetentionSettingsTab: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .formStyle(.group)
+            .formStyle(.grouped)
             .padding([.horizontal, .bottom])
         }
     }
