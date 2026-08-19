@@ -46,9 +46,9 @@ private func makePasteboard() -> NSPasteboard {
 }
 
 /// Spins the main run loop in short slices until `condition` holds or
-/// `timeout` elapses, servicing the observer's main-RunLoop `Timer` (and
-/// its main-actor task hops) while the synchronous test body waits.
-/// Returns whether the condition was met.
+/// `timeout` elapses, servicing the observer's main-RunLoop `Timer` (whose
+/// block polls synchronously on the main actor) while the synchronous test
+/// body waits. Returns whether the condition was met.
 @MainActor
 private func spinMainRunLoop(until condition: () -> Bool, timeout: TimeInterval = 2) -> Bool {
     let deadline = Date().addingTimeInterval(timeout)

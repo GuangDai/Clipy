@@ -114,6 +114,18 @@ struct MatchHighlightingTests {
         #expect(result == AttributedString(text))
     }
 
+    /// The symmetric case: a range whose END splits a surrogate pair (stops
+    /// after the high surrogate) is likewise dropped, never clamped.
+    @Test func rangeEndingInsideASurrogatePairIsDropped() {
+        let text = "🎉x"
+        let result = MatchHighlighting.highlighted(
+            text,
+            ranges: [UTF16TextRange(location: 0, length: 1)]
+        )
+
+        #expect(result == AttributedString(text))
+    }
+
     // MARK: - Combining marks
 
     /// A range over "e" + U+0301 covers both UTF-16 units of one Character;

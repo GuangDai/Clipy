@@ -119,23 +119,30 @@ struct WS18ComposedPaginationTests {
         viewState.searchMode = .exact
         viewState.searchText = "needle"
 
-        // First observed search page: 2 rows, recency-descending.
+        // First observed search page: 2 rows, recency-descending. A bare
+        // `count == 2 && hasNextPage` check would ALSO be satisfied by the
+        // pre-debounce RECENT page (newest two rows with a cursor, 04 §6),
+        // and paginating from that recent-minted cursor under the search
+        // kind would (correctly) fail `.snapshotExpired` — so wait for the
+        // exact search page ids before touching the cursor.
         let firstPage = await ComposedSupport.waitFor(timeout: 3) {
-            viewState.rows.count == 2 && viewState.hasNextPage
+            viewState.rows.map(\.item.id) == [matchIDs[4], matchIDs[3]]
+                && viewState.hasNextPage
         }
         #expect(firstPage, "WS18 search: the observed search page has a cursor")
-        #expect(
-            viewState.rows.map(\.item.id) == [matchIDs[4], matchIDs[3]],
-            "WS18 search: first page is the two newest matches"
-        )
         #expect(
             viewState.rows.allSatisfy { $0.search != nil },
             "WS18 search: search rows carry their presentation"
         )
 
-        // Continuation pages: no overlap, no gap, until exhaustion.
+        // Continuation pages: no overlap, no gap, until exhaustion. Each
+        // step waits for its append to land before triggering the next —
+        // `loadNextPage` is single-flight and ignores re-entrant calls.
         viewState.loadNextPage()
-        _ = await ComposedSupport.waitFor { viewState.rows.count == 4 }
+        let secondPage = await ComposedSupport.waitFor {
+            viewState.rows.count == 4 && viewState.hasNextPage
+        }
+        #expect(secondPage, "WS18 search: the first continuation appended")
         viewState.loadNextPage()
         let exhausted = await ComposedSupport.waitFor {
             viewState.rows.count == 5 && !viewState.hasNextPage

@@ -48,16 +48,23 @@ public final class PasteboardObserver {
             handler(capture)
         }
 
-        // The timer closure is a @Sendable context, so the main-actor
-        // `poll()` hop goes through a task rather than a direct call —
-        // the sanctioned pattern for RunLoop-delivered callbacks under
-        // strict concurrency.
-        timer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) {
-            [weak self] _ in
-            Task { @MainActor [weak self] in
+        // The timer is added to the main run loop's common modes explicitly
+        // rather than via `Timer.scheduledTimer` (which would silently bind
+        // to whatever run loop and mode happen to be current). Its block
+        // therefore always executes on the main thread, and
+        // `MainActor.assumeIsolated` — runtime-checked, not an unchecked
+        // escape hatch — turns that guarantee into a synchronous main-actor
+        // `poll()`. A `Task { @MainActor … }` hop would instead sit on the
+        // main dispatch queue, which a caller spinning the run loop manually
+        // (`RunLoop.main.run(mode:before:)` — PasteboardAdapterTests'
+        // spinMainRunLoop) does not drain, so the poll would never land.
+        let timer = Timer(timeInterval: pollInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
                 self?.poll()
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
     }
 
     /// Stops polling and drops the handler. Safe to call when stopped; safe

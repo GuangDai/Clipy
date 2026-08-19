@@ -121,9 +121,13 @@ struct WS17ComposedSearchModesTests {
     }
 
     /// WS17 fuzzy shape (03b §8; Fuse 1.4.0): a typo'd query still matches
-    /// the pinned title row FIRST regardless of score, and any further
-    /// match is the beta-alpha title. Asserted with the storage suite's
-    /// calibration (scores stay internal; the corpus is not over-pinned).
+    /// the pinned title row FIRST regardless of score, and the next row is
+    /// the beta-alpha title. Asserted with the storage suite's calibration
+    /// (scores stay internal). Unlike the storage fixture's gamma body, the
+    /// composed corpus's multi-line body row DOES fuzzy-match "alpa"
+    /// (score 0.51, inside the frozen 0.7 threshold) — it ranks AFTER
+    /// beta-alpha by ascending score (03b §8), so only rows[0]/rows[1] are
+    /// pinned here.
     @Test @MainActor
     func fuzzySearchThroughViewStateMatchesTypoQueriesPinnedFirst() async throws {
         let history = try await ComposedSupport.openMemoryHistory()
@@ -134,8 +138,14 @@ struct WS17ComposedSearchModesTests {
         viewState.activate()
         viewState.searchText = "alpa" // typo'd "alpha" — the fuzzy shape
 
+        // The pinned alpha row leads the RECENT default order too (05
+        // §14.1), so a bare first-row check would be satisfied by the
+        // pre-debounce recent page (whose rows carry `search == nil`).
+        // Wait for the SEARCH-shaped page: every row of a non-empty-term
+        // search page carries its SearchPresentation (03b §8).
         let settled = await ComposedSupport.waitFor(timeout: 3) {
             viewState.rows.first?.item.id == ids.alpha
+                && viewState.rows.allSatisfy { $0.search != nil }
         }
         #expect(
             settled,

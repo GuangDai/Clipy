@@ -68,6 +68,13 @@ struct WS12ComposedObservationTests {
     /// 250 ms debounce — the loop restarts (kind `.search`) and its first
     /// replacement page contains the matching row, then a NEW commit while
     /// still searching reaches the same loop (one query shape, one stream).
+    ///
+    /// The search runs in EXACT mode: this gate pins the observation
+    /// restart, not matcher calibration, and under the default fuzzy mode
+    /// the filler row "ws12 composed unrelated filler" scores 0.65 against
+    /// "needle" — inside Fuse 1.4.0's frozen 0.7 threshold (03b §8) — so a
+    /// fuzzy page would legitimately carry BOTH rows. Fuzzy calibration is
+    /// fixture-locked in WS17, not here.
     @Test @MainActor
     func searchRestartObservesTheSearchQueryShapeAfterDebounce() async throws {
         let history = try await ComposedSupport.openMemoryHistory()
@@ -99,7 +106,11 @@ struct WS12ComposedObservationTests {
         )
 
         // One edit, then the debounce window passes; the restarted loop's
-        // page contains ONLY the matching row (kind .search, default mode).
+        // page contains ONLY the matching row (kind .search, exact mode —
+        // see the test doc comment for why the default fuzzy mode would
+        // also admit the filler row). The mode change itself restarts
+        // observation immediately; the text edit's restart is debounced.
+        viewState.searchMode = .exact
         viewState.searchText = "needle"
         #expect(viewState.isSearchActive)
         let searched = await ComposedSupport.waitFor(timeout: 3) {

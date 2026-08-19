@@ -98,10 +98,12 @@ struct WS9ComposedRetentionPrimaryCommitTests {
         #expect(!viewState.rows.map(\.item.id).contains(alphaID))
     }
 
-    /// WS9 pinned-exemption clause (02 §12 D13; 06 §2 "Pinned items are
-    /// exempt from the user maximum-unpinned policy"): with the oldest item
-    /// PINNED and the cap at 2, the third insert retires the NEWER unpinned
-    /// item — never the pin.
+    /// WS9 pinned-exemption clause (02 §12 D13; 02 §5/06 §2 "Pinned items
+    /// are exempt from the user maximum-unpinned policy"): the cap counts
+    /// UNPINNED items only, so with the oldest item PINNED and the cap at 2,
+    /// the FOURTH insert pushes the unpinned count to 3 and retires the
+    /// oldest UNPINNED item — the newer unpinned item retires, never the pin,
+    /// even though the pin is older overall.
     @Test
     func pinnedOldestItemIsExemptAndNewerUnpinnedRetires() async throws {
         let history = try await ComposedSupport.openMemoryHistory(maximumUnpinned: 2)
@@ -121,16 +123,28 @@ struct WS9ComposedRetentionPrimaryCommitTests {
         }
 
         let oldestID = try await capture("ws9 composed pinned oldest", 0)
-        _ = try await capture("ws9 composed middle", 100)
-        // Pin the oldest item: the exemption now protects it (D13).
+        let middleID = try await capture("ws9 composed middle", 100)
+        // Pin the oldest item: the exemption now protects it (D13), and it
+        // leaves the unpinned count at 1 against the cap of 2.
         let pinReceipt = try await history.perform(.placePinned(oldestID, at: .last))
         #expect(ComposedSupport.commit(of: pinReceipt, "WS9 pin") != nil)
 
-        _ = try await capture("ws9 composed newest", 200)
+        _ = try await capture("ws9 composed newer", 200)
+        // Insert four pushes the UNPINNED count to 3 > 2: the victim is the
+        // oldest UNPINNED item (middle) by lastCopiedAt ascending (02 §12),
+        // never the pinned oldest — without D13 the older pin would retire
+        // instead.
+        _ = try await capture("ws9 composed newest", 300)
 
-        // The pin survives; one unpinned item remains.
+        // The pin survives; the middle unpinned item retired in its place.
         let details = try await history.details(for: oldestID)
         #expect(details.pinnedPosition == 0, "WS9 (D13): the pinned item was not retired")
+        do {
+            _ = try await history.details(for: middleID)
+            Issue.record("WS9 (D13): expected .notFound for the retired unpinned item")
+        } catch let failure as HistoryFailure {
+            #expect(failure == .notFound(middleID))
+        }
         let page = try await history.browse(
             HistoryBrowseRequest(kind: .recent, limit: 50)
         )
@@ -138,6 +152,9 @@ struct WS9ComposedRetentionPrimaryCommitTests {
             page.rows.contains { $0.item.id == oldestID },
             "WS9: the pinned row is still browsable"
         )
-        #expect(page.rows.count == 2, "WS9: pin (1) + one surviving unpinned item")
+        #expect(
+            page.rows.count == 3,
+            "WS9: pin (1) + two surviving unpinned items — the cap excludes pins"
+        )
     }
 }

@@ -68,12 +68,24 @@ struct WS19ComposedOutOfOrderCaptureTests {
             details.occurrence.lastCopiedAt == firstObservedAt,
             "WS19: lastCopiedAt does not move backward"
         )
-        #expect(details.occurrence.firstCopiedAt == earlierObservedAt)
+        // The §3.1 fold keeps the FIRST-observation fields verbatim
+        // (`firstCopiedAt = existing.firstCopiedAt`,
+        // `firstSource = existing.firstSource`): the out-of-order copy does
+        // not adopt the earlier clock into `firstCopiedAt`, and `firstSource`
+        // stays at the source observed with the insert — never the repeat's
+        // nil.
+        #expect(
+            details.occurrence.firstCopiedAt == firstObservedAt,
+            "WS19 (02 §3.1): firstCopiedAt is the insert's observation, never folded"
+        )
         #expect(
             details.occurrence.lastSource == source,
             "WS19 (05 §9): lastSource does not regress to nil"
         )
-        #expect(details.occurrence.firstSource == nil)
+        #expect(
+            details.occurrence.firstSource == source,
+            "WS19 (02 §3.1): firstSource survives the fold untouched"
+        )
 
         // The composed rows reflect the fold exactly once.
         let page = try await history.browse(

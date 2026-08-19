@@ -37,7 +37,7 @@
 /// - "r3 revised effective bytes" — 26 bytes (2 + 1 + 7 + 1 + 9 + 1 + 5);
 /// - "r3 second revision" — 18 bytes (2 + 1 + 6 + 1 + 8);
 /// - "r3 disabled maintenance" — 23 bytes (2 + 1 + 8 + 1 + 11);
-/// - "r3 corruption matrix item" — 26 bytes (2 + 1 + 11 + 1 + 6 + 1 + 4),
+/// - "r3 corruption matrix item" — 25 bytes (2 + 1 + 10 + 1 + 6 + 1 + 4),
 ///   the recreated-row literal of the recovery case;
 /// - "r3 orphan discrimination" — 24 bytes (2 + 1 + 6 + 1 + 14), the
 ///   orphan-discrimination fixture;
@@ -488,7 +488,7 @@ struct RetainedBytesProjectionLifecycleTests {
             // The recreated row equals an independent codec recomputation
             // from the item's durable blobs — the exact RET-PLATFORM-1b(b)
             // proof — and the hand-worked literal: "r3 corruption matrix
-            // item" is 26 UTF-8 bytes (2 + 1 + 11 + 1 + 6 + 1 + 4), with
+            // item" is 25 UTF-8 bytes (2 + 1 + 10 + 1 + 6 + 1 + 4), with
             // revisionCount 0 / revisionBytes 0 (a v1 insert carries no
             // revisions, DC-04). The 1:1 law still holds exactly — one row
             // for the one item, no duplicate from the re-run.
@@ -501,7 +501,7 @@ struct RetainedBytesProjectionLifecycleTests {
             )
             let recreated = try #require(recreatedRow)
             let recomputed = try MigrationSeeding.recomputedScalars(for: itemRow)
-            #expect(recomputed.canonicalBytes == 26)
+            #expect(recomputed.canonicalBytes == 25)
             #expect(recomputed.revisionCount == 0)
             #expect(recomputed.revisionBytes == 0)
             #expect(recreated.canonicalBytes == recomputed.canonicalBytes)
