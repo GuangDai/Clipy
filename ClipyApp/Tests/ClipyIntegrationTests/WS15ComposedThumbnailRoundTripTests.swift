@@ -103,8 +103,12 @@ struct WS15ComposedThumbnailRoundTripTests {
         // minimal PNG (1×1 white). The fence: the OLD cached entry stays
         // under the OLD key, never serving the new pixels; the NEW
         // reference is not yet cached (no stale pixels under the new key).
+        // The fixture is a complete 1×1 RGBA scanline (filter byte + 4 pixel
+        // bytes) — a truncated IDAT still decodes via libpng's partial-data
+        // recovery but writes "Not enough image data" ERROR lines to stderr,
+        // which the workflow's app-log self-scan treats as fatal.
         let whiteBase64 =
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII="
         let pngWhite = try #require(Data(base64Encoded: whiteBase64))
         #expect(pngWhite != Self.png1x1())
         let reviseReceipt = try await history.perform(.revise(
