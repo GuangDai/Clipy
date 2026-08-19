@@ -125,7 +125,7 @@ actor ScriptedHistory: ClipboardHistory {
     ) async -> AsyncThrowingStream<HistoryPage, Error> {
         observeRequests.append(request)
         let (stream, continuation) =
-            AsyncThrowingStream<HistoryPage, Error>.makeStream { _ in }
+            AsyncThrowingStream<HistoryPage, Error>.makeStream()
         liveContinuation = continuation
         if let observedFirstPage {
             continuation.yield(observedFirstPage)

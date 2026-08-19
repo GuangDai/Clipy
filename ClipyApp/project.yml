@@ -23,6 +23,10 @@ targets:
       - Sources
     settings:
       PRODUCT_NAME: Clipy
+      # Deterministic Swift module name for `@testable import ClipyApp` from
+      # the hosted integration tests — without it the module name derives
+      # from PRODUCT_NAME (Clipy), not the target name.
+      PRODUCT_MODULE_NAME: ClipyApp
       INFOPLIST_KEY_LSUIElement: YES
     dependencies:
       - package: Clipy
