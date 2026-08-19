@@ -73,8 +73,8 @@ struct WS14ComposedRestartTests {
         // Commits 6–7 — two byte-changing revisions of A.
         var currentVersion = referenceA.contentVersion
         for (ordinal, replacement) in [
-            ("ws14 composed replacement one", 6),
-            ("ws14 composed replacement two", 7),
+            (6, "ws14 composed replacement one"),
+            (7, "ws14 composed replacement two"),
         ] {
             let reviseReceipt = try await history.perform(.revise(
                 RevisionRequest(

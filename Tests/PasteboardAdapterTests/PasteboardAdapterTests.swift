@@ -287,7 +287,7 @@ func observerStopHaltsDelivery() {
     observer.stop()
 
     pasteboard.clearContents()
-    pasteboard.setString("after-stop".utf8, forType: .string)
+    pasteboard.setString("after-stop", forType: .string)
     let deliveredAfterStop = spinMainRunLoop(until: { received.count >= 2 }, timeout: 0.4)
     #expect(!deliveredAfterStop)
     #expect(received.count == 1)

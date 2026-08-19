@@ -139,10 +139,17 @@ enum ComposedSupport {
         }
     }
 
-    /// Probes private-pasteboard usability and SKIPS the calling test when
-    /// `NSPasteboard` cannot round-trip in this hosted environment — the
-    /// storage-only suites still run, so the WS mapping degrades
-    /// pasteboard-composition coverage only, never the storage paths
+    /// The pasteboard-environment probe failure. swift-testing has no
+    /// runtime-skip API, so an unusable `NSPasteboard` in the hosted
+    /// environment is a hard, descriptive error: on the macOS runner this
+    /// probe always passes, and a regression there must not hide (the
+    /// storage-only suites would still run and fail independently).
+    enum ProbeFailure: Error {
+        case unusablePasteboard
+    }
+
+    /// Probes private-pasteboard usability and FAILS the calling test when
+    /// `NSPasteboard` cannot round-trip in this hosted environment
     /// (docs/roadmap/06-clipyapp.md acceptance runs on a macOS host where
     /// this probe always passes).
     @MainActor
@@ -152,7 +159,7 @@ enum ComposedSupport {
         probe.setData(Data("clipy-probe".utf8), forType: .string)
         guard probe.pasteboardItems?.first?.data(forType: .string)
             == Data("clipy-probe".utf8) else {
-            try skip("NSPasteboard is not usable in this hosted test environment")
+            throw ProbeFailure.unusablePasteboard
         }
     }
 
@@ -219,8 +226,8 @@ enum ComposedSupport {
     /// `Tests/PasteboardAdapterTests`).
     @MainActor
     static func waitFor(
-        _ condition: () -> Bool,
-        timeout: TimeInterval = 2
+        timeout: TimeInterval = 2,
+        _ condition: () -> Bool
     ) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
