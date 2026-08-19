@@ -10,13 +10,14 @@ on:
   workflow_dispatch:
     inputs:
       admission_scope:
-        description: "Dispatch-only performance lane"
+        description: "Dispatch-only performance lane; tests-only runs gates + SwiftPM + app tests without any perf lane"
         required: true
         default: full
         type: choice
         options:
           - full
           - exact-matcher-ab
+          - tests-only
 
 concurrency:
   group: macos26-arm-ci-${{ github.ref }}
@@ -187,6 +188,7 @@ jobs:
     if: >-
       github.event_name != 'workflow_dispatch'
       || inputs.admission_scope == 'full'
+      || inputs.admission_scope == 'tests-only'
     name: XcodeGen generate + app build/test
     needs: [gates]
     runs-on: macos-26
