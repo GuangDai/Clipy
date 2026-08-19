@@ -128,7 +128,7 @@ public struct HistoryListView: View {
             ContentUnavailableView(
                 "No Clipboard History",
                 systemImage: "doc.on.clipboard",
-                description: "Copy something and it will appear here."
+                description: Text("Copy something and it will appear here.")
             )
         }
     }
