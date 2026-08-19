@@ -33,15 +33,15 @@ thumbnails.
 **Current state (2026-08-19, branch `codex/v2-implementation`):** steps 0–8
 are done and CI-green (scaffold + gates, `HistoryCore` public surface,
 `HistoryDomain` pure core, dependency pins, schema v1 + codecs,
-`HistoryAuthority` capture/mutations/reads/observation/thumbnail), and the V2
+`HistoryAuthority` capture/mutations/reads/observation/thumbnail), the V2
 M1 schema migration plus V2-02 retention slices R.1–R.6 are landed
-(`docs/v2/V2-PROGRESS.md`). Step 9 (product wiring: PasteboardAdapter,
-PresentationUI, ClipyApp composition) is **implemented locally and awaiting
-its first commit + macOS CI run** — the menu-bar panel (search/pin/reorder/
-remove/clear), details + revise editor, unified retention settings (v1 count +
-V2-02 age/storage/revision dimensions), pasteboard capture/paste round-trip,
-and the WS1–WS21 composed re-verification in `ClipyIntegrationTests` are
-written and pass the Python source gates, but have not yet compiled on a Mac.
+(`docs/v2/V2-PROGRESS.md`), and step 9 (product wiring: PasteboardAdapter,
+PresentationUI, ClipyApp composition) is **done and CI-green** at run
+32260455839 (tests-only scope) — menu-bar panel (search/pin/reorder/
+remove/clear), details + revise editor, unified retention settings (v1
+count + V2-02 age/storage/revision dimensions), pasteboard capture/paste
+round-trip, and the WS1–WS21 composed re-verification in
+`ClipyIntegrationTests` all pass on macOS CI.
 Always check `docs/PROGRESS.md` for the exact landed state before assuming a
 feature exists.
 

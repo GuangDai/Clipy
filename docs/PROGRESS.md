@@ -608,13 +608,17 @@ test.
 
 ## Step 9 — product wiring: PasteboardAdapter + PresentationUI + ClipyApp
 
-- **Status:** implemented, **awaiting first commit and macOS CI evidence**.
-  This entry was authored off-runner (Linux authoring environment: no
-  `swift`/`xcodebuild`/`xcodegen` available); the Python source gates
-  (`scripts/run_gates.sh` gates 1–4) pass over the new tree, while
-  compilation, `swift test`, the symbol snapshot, and the generated-app
-  build/test remain unverified until the first macOS run. Treat every
-  deliverable below as pending CI confirmation.
+- **Status:** done. Green at run
+  [32260455839](https://github.com/GuangDai/Clipy/actions/runs/32260455839)
+  — Lint + source gates, SwiftPM build + test (the full package suite,
+  539 tests in 64 suites at this head), and XcodeGen generate + app
+  build/test (the generated project compiles and the hosted
+  `ClipyIntegrationTests` pass), all with zero unexcluded warning/error
+  log lines. The run was dispatched on the branch with the new
+  `admission_scope: tests-only` input (workflow change `1826cee`: gates +
+  SwiftPM + app jobs only), so the Perf-proofs, 5,000-row admission, and
+  A/B lanes were deliberately not run — they remain required for their own
+  evidence goals, not for step 9.
 - **Roadmap:** `roadmap/README.md` §3 step 9 — module docs
   `roadmap/04-pasteboardadapter.md` (9a), `roadmap/05-presentationui.md` (9a),
   `roadmap/06-clipyapp.md` (9b); UX bounds from `01` §5–§6/§8, `03a` §4/§5/§7,
@@ -663,11 +667,40 @@ test.
 
 | Commit | Subject |
 |---|---|
-| — | pending first commit (this entry precedes it) |
+| `c037a71` | Step 9: product wiring — PasteboardAdapter + PresentationUI + ClipyApp |
+| `4c39499` | Docs: record step 9 implementation state |
+| `1826cee` | CI: add tests-only dispatch scope (gates + SwiftPM + app tests, no perf lanes) |
+| `e61b650` | Fix step-9 compile errors from CI run 32252737582 |
+| `f4afa09` | Fix missed String→Text description in HistoryListView empty state |
+| `3d4f388` | Fix test compile from run 32254796602 (PRODUCT_MODULE_NAME; makeStream) |
+| `2a9f79f` | Fix integration/adapter test compile from run 32255661896 |
+| `06c580c` | Fix test failures from CI run 32256916252 (see below) |
+| `91d04dd` | WS15 composed: replace truncated white-PNG fixture |
 
-- **CI:** none yet — the first push of this tree is the first macOS
-  build/test of step 9 (all three jobs of `macos26-arm-ci.yml`). Known
-  residual risks recorded by the authoring pass: SDK-level API typing of
-  `Timer` blocks, timing-budget sensitivity of debounce/polling tests, and
-  XcodeGen acceptance of the test target's new product dependencies.
+- **CI:** seven dispatched runs on `codex/v2-implementation` (all
+  `tests-only` scope): 32252737582 and 32254241169 failed on first-compile
+  errors in the new PresentationUI/test code (SwiftUI API shapes; all
+  fixed); 32254796602/32255661896 reached the test-compile stage
+  (`@testable import` needed an explicit `PRODUCT_MODULE_NAME`; a
+  swift-testing runtime-`skip` call does not exist — the pasteboard probe
+  now throws; `waitFor` argument order); 32256916252 compiled everything
+  and surfaced fifteen test failures — two real code defects
+  (`PasteboardObserver`'s `Task`-hopped poll is never serviced under a
+  manual runloop spin, now pinned to `RunLoop.main` `.common` with a
+  `MainActor.assumeIsolated` synchronous poll; `MatchHighlighting` relied
+  on `Range(NSRange,in:)` which CLAMPS mid-surrogate-pair bounds into the
+  enclosing Character instead of returning nil — ranges splitting a
+  surrogate pair are now explicitly dropped, 03b §8), five composed-suite
+  expectation errors (asserting stronger than the storage contract: fuzzy
+  calibration, pre-debounce page races, unpinned-only retention counting
+  D13, insert-time `firstCopiedAt`/`firstSource` non-folding 02 §3.1), and
+  one latent pre-step-9 fixture error
+  (`RetainedBytesProjectionLifecycleTests`: "corruption" is 10 letters, so
+  `canonicalBytes` is 25 not 26 — introduced by `04234c3`, which never had
+  a recorded CI run; red since authored). 32259544566 then had both build
+  + test legs green but failed the app-log self-scan on libpng
+  `Not enough image data` ERROR lines from a truncated WS15 white-PNG
+  fixture (3-byte IDAT for a 5-byte scanline — libpng recovers, so tests
+  passed; the fixture is now a complete, CRC-checked encode). Final green:
+  32260455839.
 
