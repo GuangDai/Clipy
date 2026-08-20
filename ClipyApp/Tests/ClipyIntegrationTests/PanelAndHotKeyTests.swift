@@ -48,8 +48,12 @@ struct PopupPositionGeometryTests {
 
     @Test func cursorModeClampsIntoTheVisibleFrame() {
         // Pointer near the right/bottom edges: the panel must not spill.
+        // (Explicitly typed expectations: a bare integer ARITHMETIC
+        // expression on the RHS of #expect infers Int and never equals a
+        // CGFloat; plain literals infer CGFloat fine.)
         let origin = panelOrigin(.cursor, mouse: NSPoint(x: 1_430, y: 100))
-        #expect(origin.x == 1_440 - 400)
+        let expectedX: CGFloat = (1_440 - 400)
+        #expect(origin.x == expectedX)
         #expect(origin.y == 0)
     }
 
@@ -61,18 +65,24 @@ struct PopupPositionGeometryTests {
 
     @Test func centerModeCentersInThePointerScreen() {
         let origin = panelOrigin(.center, mouse: NSPoint(x: 100, y: 100))
-        #expect(origin.x == (1_440 - 400) / 2)
-        #expect(origin.y == (875 - 560) / 2)
+        let expectedX: CGFloat = (1_440 - 400) / 2
+        let expectedY: CGFloat = (875 - 560) / 2
+        #expect(origin.x == expectedX)
+        #expect(origin.y == expectedY)
 
         let rightOrigin = panelOrigin(.center, mouse: NSPoint(x: 2_000, y: 500))
-        #expect(rightOrigin.x == 1_440 + (1_920 - 400) / 2)
-        #expect(rightOrigin.y == (1_080 - 560) / 2)
+        let expectedRightX: CGFloat = 1_440 + (1_920 - 400) / 2
+        let expectedRightY: CGFloat = (1_080 - 560) / 2
+        #expect(rightOrigin.x == expectedRightX)
+        #expect(rightOrigin.y == expectedRightY)
     }
 
     @Test func statusItemModeHangsBelowTheButton() {
-        let buttonFrame = NSRect(x: 1_100, y: 855, width: 24, height: 22)
+        // Button x 900: the 400-wide panel fits (900 + 400 ≤ 1440), so no
+        // edge clamp engages.
+        let buttonFrame = NSRect(x: 900, y: 855, width: 24, height: 22)
         let origin = panelOrigin(.statusItem, mouse: NSPoint(x: 0, y: 0), buttonFrame: buttonFrame)
-        #expect(origin == NSPoint(x: 1_100, y: 295))  // 855 - 560, inside the frame
+        #expect(origin == NSPoint(x: 900, y: 295))  // 855 - 560, inside the frame
     }
 
     @Test func statusItemModeClampsTheRightEdge() {
@@ -80,7 +90,8 @@ struct PopupPositionGeometryTests {
         // spill onto the neighboring screen (Maccy's right-edge clamp).
         let buttonFrame = NSRect(x: 1_300, y: 855, width: 24, height: 22)
         let origin = panelOrigin(.statusItem, mouse: NSPoint(x: 0, y: 0), buttonFrame: buttonFrame)
-        #expect(origin.x == 1_440 - 400)
+        let expectedX: CGFloat = 1_440 - 400
+        #expect(origin.x == expectedX)
         #expect(origin.y == 295)
     }
 

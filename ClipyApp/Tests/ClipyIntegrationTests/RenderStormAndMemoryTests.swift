@@ -35,11 +35,12 @@ struct RenderStormAndMemoryTests {
     /// stress twin of WS12 in docs/06-cross-cutting.md §8): an ACTIVATED
     /// view state and a second, independent page-counting `observe` stream
     /// face 100 back-to-back capture commits. The counting stream must
-    /// deliver strictly FEWER pages than commits — superseded positions are
-    /// dropped by the `.bufferingNewest(1)` wake-up buffer and the §5
-    /// discard-and-requery recheck — while still converging on the newest
-    /// position, and the view state's replacement pages (§5: snapshots,
-    /// never deltas) reach the complete 100-row page.
+    /// never deliver MORE pages than commits plus the stream's one initial
+    /// snapshot — superseded positions are dropped by the
+    /// `.bufferingNewest(1)` wake-up buffer and the §5 discard-and-requery
+    /// recheck — while still converging on the newest position, and the
+    /// view state's replacement pages (§5: snapshots, never deltas) reach
+    /// the complete 100-row page.
     @Test @MainActor
     func renderStormCoalescesToFewerPagesThanCommits() async throws {
         let commitTotal = 100
@@ -118,14 +119,18 @@ struct RenderStormAndMemoryTests {
 
         // The counting stream converges on the newest position too
         // (03b §11 item 5 guarantee), then the anti-storm tripwire:
-        // delivered pages never EXCEED commits — no amplification, no
-        // duplicate-per-commit storm. Equality is legal here: the captures
-        // above are awaited sequentially, so the pipeline may publish one
-        // page per commit on a fast runner. The deterministic
-        // newest-wins coalescing proof itself lives in the storage-side
-        // WS12 suspension-point suites (04 §4–§5), which control the
-        // interleaving exactly; this composed check is the no-runaway
-        // tripwire plus the convergence guarantee.
+        // delivered pages never EXCEED commits + the stream's initial
+        // snapshot — the initial page may land before the storm's first
+        // commit is consumed, adding exactly one delivery beyond the
+        // per-commit upper bound (observed as 101 pages for 100 commits on
+        // a saturated runner). No amplification, no duplicate-per-commit
+        // storm. Equality is legal here: the captures above are awaited
+        // sequentially, so the pipeline may publish one page per commit on
+        // a fast runner. The deterministic newest-wins coalescing proof
+        // itself lives in the storage-side WS12 suspension-point suites
+        // (04 §4–§5), which control the interleaving exactly; this
+        // composed check is the no-runaway tripwire plus the convergence
+        // guarantee.
         let deliveredFinal = await ComposedSupport.waitFor(timeout: 5) {
             log.positions.last == finalPosition
         }
@@ -136,8 +141,8 @@ struct RenderStormAndMemoryTests {
             "render storm: the counting observation reaches the newest position"
         )
         #expect(
-            log.positions.count <= commitCount,
-            "render storm (04 §4–§5): \(log.positions.count) pages for \(commitCount) commits — pages must never exceed commits"
+            log.positions.count <= commitCount + 1,
+            "render storm (04 §4–§5): \(log.positions.count) pages for \(commitCount) commits — pages must never exceed commits + the initial snapshot"
         )
     }
 
