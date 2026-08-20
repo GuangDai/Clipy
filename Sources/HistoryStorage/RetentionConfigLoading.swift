@@ -188,8 +188,10 @@ internal enum RetentionConfigLoading {
     ///
     /// - Throws: `.temporarilyUnavailable(.factProof)` when the fetch cannot
     ///   complete; `.persistence(.invariantViolation)` for an over-bound row
-    ///   set, a duplicate `itemID`, an unknown `bytesSchemaVersion`, or the
-    ///   both-directions mismatch.
+    ///   set, a duplicate `itemID`, an unknown `bytesSchemaVersion`, a
+    ///   negative or over-hard-bound scalar (`V2-02` §3.3b
+    ///   projection-coherence: an impossible scalar is corruption, never a
+    ///   stale byte fact to plan with), or the both-directions mismatch.
     internal static func fetchProjectedScalars(
         in context: ModelContext,
         limits: HistoryLimits
@@ -226,6 +228,32 @@ internal enum RetentionConfigLoading {
             }
             let itemID = HistoryItemID(rawValue: row.itemID)
             guard scalarsByItem[itemID] == nil else {
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
+            // Scalar-plausibility fence (`V2-02` §3.3b; `06` §2 no-wrap
+            // byte arithmetic): the version fence above proves only the
+            // FORMAT — a version-1 row can still carry impossible VALUES
+            // (negative or over-hard-bound counts/sums), and R2/R3 planning
+            // treats each scalar as authoritative (a negative
+            // `canonicalBytes` would make a positive byte budget look
+            // satisfied; an impossible huge value would retire valid
+            // items). Fail closed through the same typed failure as every
+            // other coherence violation here — never clamp, never plan over
+            // the value. The bounds are the `06` §2 hard limits the
+            // stamping lanes already enforce: `canonicalBytes` is the sum of
+            // one capture's Canonical representation bytes (a subset of an
+            // admitted capture, ≤ `maximumCaptureBytes`); `revisionCount` ≤
+            // `maximumRevisionsPerItem`; `revisionBytes` ≤
+            // `maximumTotalRevisionBytesPerItem`; and an empty revision
+            // list sums to zero bytes (DC-04 — `revisionCount == 0` with
+            // nonzero `revisionBytes` is contradictory).
+            guard row.canonicalBytes >= 0,
+                  row.canonicalBytes <= limits.maximumCaptureBytes,
+                  row.revisionCount >= 0,
+                  row.revisionCount <= limits.maximumRevisionsPerItem,
+                  row.revisionBytes >= 0,
+                  row.revisionBytes <= limits.maximumTotalRevisionBytesPerItem,
+                  row.revisionCount > 0 || row.revisionBytes == 0 else {
                 throw HistoryFailure.persistence(.invariantViolation)
             }
             scalarsByItem[itemID] = ProjectedItemScalars(
