@@ -14,6 +14,16 @@
 ///   the hint is proven by WS4 through History, not here.
 /// - The observer captures the current contents immediately on start, then
 ///   fires the handler once per distinct `changeCount` bump.
+/// - Failure is explicit, never silent (audit SPEC-IMPL-005,
+///   docs/reviews/2026-08-20-clipy-maccy-audit/02-spec-implementation.md):
+///   a declared-but-unavailable type (Apple: contents changed / provider
+///   timed out) is recorded on `CaptureOutcome.unavailableTypeIdentifiers`
+///   instead of being silently dropped, and `write(_:)` throws
+///   `PasteboardWriteFailure` naming every refused type identifier instead
+///   of ignoring the `setData` Booleans. The deterministic seam
+///   (`simulatedUnavailableTypeIdentifiers` /
+///   `simulatedRejectedWriteTypeIdentifiers`) injects each documented
+///   AppKit failure.
 ///
 /// Every test uses a private `NSPasteboard(name:)` with a unique name, so
 /// the suite never reads or mutates the user's clipboard.
@@ -159,7 +169,7 @@ func lineageHintCodecRoundTripsAndRejectsMalformedData() {
 // MARK: - Paste write + hint round-trip (03b §9; 04 §8; roadmap 04 acceptance 3)
 
 @Test @MainActor
-func writeRoundTripsLineageHintIntoCaptureOrigin() {
+func writeRoundTripsLineageHintIntoCaptureOrigin() throws {
     let pasteboard = makePasteboard()
     pasteboard.clearContents()
     let adapter = PasteboardAdapter(pasteboard: pasteboard)
@@ -174,7 +184,7 @@ func writeRoundTripsLineageHintIntoCaptureOrigin() {
         lineageHint: id
     )
 
-    adapter.write(payload)
+    try adapter.write(payload)
 
     let capture = adapter.capture()
     #expect(capture != nil)
@@ -191,14 +201,14 @@ func writeRoundTripsLineageHintIntoCaptureOrigin() {
 }
 
 @Test @MainActor
-func writeClearsPriorContentAndWritesAllRepresentations() {
+func writeClearsPriorContentAndWritesAllRepresentations() throws {
     let pasteboard = makePasteboard()
     pasteboard.clearContents()
     pasteboard.setData(Data("stale".utf8), forType: NSPasteboard.PasteboardType("com.clipy.tests.stale"))
     let adapter = PasteboardAdapter(pasteboard: pasteboard)
 
     let id = HistoryItemID(rawValue: UUID())
-    adapter.write(
+    try adapter.write(
         PastePayload(
             item: HistoryItemReference(id: id, contentVersion: ContentVersion(rawValue: 1)),
             representations: [
@@ -223,6 +233,176 @@ func writeClearsPriorContentAndWritesAllRepresentations() {
     )
 }
 
+// MARK: - Partial-freeze record + typed write failure (audit SPEC-IMPL-005)
+
+@Test @MainActor
+func captureRecordsADeclaredButUnavailableTypeAsAPartialFreeze() {
+    let pasteboard = makePasteboard()
+    pasteboard.clearContents()
+    pasteboard.setData(Data("plain".utf8), forType: .string)
+    pasteboard.setData(Data("<b>rich</b>".utf8), forType: NSPasteboard.PasteboardType("public.html"))
+    var adapter = PasteboardAdapter(pasteboard: pasteboard)
+    adapter.simulatedUnavailableTypeIdentifiers = ["public.html"]
+
+    let outcome = adapter.captureOutcome()
+
+    // The nil-data type is RECORDED, never silently dropped (Apple:
+    // contents changed / provider timed out); the available representation
+    // is still frozen, and the record is what marks the freeze partial.
+    #expect(outcome != nil)
+    #expect(outcome?.isComplete == false)
+    #expect(outcome?.unavailableTypeIdentifiers == ["public.html"])
+    #expect(outcome?.capture.representations.count == 1)
+    #expect(
+        outcome?.capture.representations.first?.typeIdentifier
+            == NSPasteboard.PasteboardType.string.rawValue
+    )
+    #expect(
+        outcome?.capture.representations.first?.bytes == Data("plain".utf8)
+    )
+}
+
+@Test @MainActor
+func captureOfAFullyObservedItemIsACompleteOutcome() {
+    let pasteboard = makePasteboard()
+    pasteboard.clearContents()
+    pasteboard.setData(Data("plain".utf8), forType: .string)
+
+    let outcome = PasteboardAdapter(pasteboard: pasteboard).captureOutcome()
+
+    #expect(outcome != nil)
+    #expect(outcome?.isComplete == true)
+    #expect(outcome?.unavailableTypeIdentifiers == [])
+    // The convenience half drops the record but freezes the same bytes.
+    #expect(
+        PasteboardAdapter(pasteboard: pasteboard).capture()
+            == outcome?.capture
+    )
+}
+
+@Test @MainActor
+func captureOfAnItemWhoseEveryRepresentationIsUnavailableReturnsNil() {
+    let pasteboard = makePasteboard()
+    pasteboard.clearContents()
+    pasteboard.setData(Data("plain".utf8), forType: .string)
+    var adapter = PasteboardAdapter(pasteboard: pasteboard)
+    adapter.simulatedUnavailableTypeIdentifiers = [
+        NSPasteboard.PasteboardType.string.rawValue
+    ]
+
+    // Nothing retainable exists to freeze, so the outcome is nil — the
+    // same signal as a cleared pasteboard (the observer has consumed the
+    // changeCount; the next copy re-freezes).
+    #expect(adapter.captureOutcome() == nil)
+    #expect(adapter.capture() == nil)
+}
+
+@Test @MainActor
+func writeAttemptsEveryRepresentationThenThrowsTheRefusedSet() throws {
+    let pasteboard = makePasteboard()
+    pasteboard.clearContents()
+    var adapter = PasteboardAdapter(pasteboard: pasteboard)
+    adapter.simulatedRejectedWriteTypeIdentifiers = ["public.html"]
+
+    let id = HistoryItemID(rawValue: UUID())
+    let payload = PastePayload(
+        item: HistoryItemReference(id: id, contentVersion: ContentVersion(rawValue: 1)),
+        representations: [
+            HistoryRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data("Clipy".utf8)),
+            HistoryRepresentation(typeIdentifier: "public.html", bytes: Data("<b>Clipy</b>".utf8)),
+        ],
+        lineageHint: id
+    )
+
+    // The typed failure names every refused type identifier (Apple: a
+    // false `setData` return is an ownership change).
+    do {
+        try adapter.write(payload)
+        Issue.record("SPEC-IMPL-005: expected PasteboardWriteFailure")
+    } catch let failure as PasteboardWriteFailure {
+        #expect(
+            failure == .representationsRejected(typeIdentifiers: ["public.html"]),
+            "SPEC-IMPL-005: the failure names the refused representation"
+        )
+    }
+
+    // Collect-then-throw: the write still attempted everything, so the
+    // accepted representation AND the lineage hint landed on the board.
+    let item = pasteboard.pasteboardItems?.first
+    #expect(item?.data(forType: .string) == Data("Clipy".utf8))
+    #expect(item?.data(forType: NSPasteboard.PasteboardType("public.html")) == nil)
+    #expect(
+        item?.data(forType: NSPasteboard.PasteboardType(PasteboardLineageHint.typeIdentifier))
+            == PasteboardLineageHint.encode(id)
+    )
+}
+
+@Test @MainActor
+func writeReportsALineageHintRefusalInTheRefusedSet() throws {
+    let pasteboard = makePasteboard()
+    pasteboard.clearContents()
+    var adapter = PasteboardAdapter(pasteboard: pasteboard)
+    adapter.simulatedRejectedWriteTypeIdentifiers = [
+        PasteboardLineageHint.typeIdentifier
+    ]
+
+    let id = HistoryItemID(rawValue: UUID())
+    let payload = PastePayload(
+        item: HistoryItemReference(id: id, contentVersion: ContentVersion(rawValue: 1)),
+        representations: [
+            HistoryRepresentation(
+                typeIdentifier: "public.utf8-plain-text",
+                bytes: Data("Clipy".utf8)
+            )
+        ],
+        lineageHint: id
+    )
+
+    do {
+        try adapter.write(payload)
+        Issue.record("SPEC-IMPL-005: expected PasteboardWriteFailure")
+    } catch let failure as PasteboardWriteFailure {
+        #expect(
+            failure == .representationsRejected(
+                typeIdentifiers: [PasteboardLineageHint.typeIdentifier]
+            ),
+            "SPEC-IMPL-005: a hint refusal is named like any other type"
+        )
+    }
+
+    // The content representation itself was accepted; only the hint was
+    // refused.
+    #expect(
+        pasteboard.pasteboardItems?.first?.data(forType: .string)
+            == Data("Clipy".utf8)
+    )
+}
+
+@Test @MainActor
+func observerDeliversAPartialOutcomeForTheCompositionToJudge() {
+    let pasteboard = makePasteboard()
+    pasteboard.clearContents()
+    pasteboard.setData(Data("plain".utf8), forType: .string)
+    pasteboard.setData(Data("<b>rich</b>".utf8), forType: NSPasteboard.PasteboardType("public.html"))
+    var adapter = PasteboardAdapter(pasteboard: pasteboard)
+    adapter.simulatedUnavailableTypeIdentifiers = ["public.html"]
+    let observer = PasteboardObserver(adapter: adapter, pollInterval: 0.05)
+
+    var received: [CaptureOutcome] = []
+    observer.start { outcome in
+        received.append(outcome)
+    }
+    defer { observer.stop() }
+
+    // start delivers the CURRENT contents synchronously: the partial
+    // freeze reaches the handler owner (the composition root drops it
+    // rather than admitting partial Canonical Content, 01 §5.1).
+    #expect(received.count == 1)
+    #expect(received.first?.isComplete == false)
+    #expect(received.first?.unavailableTypeIdentifiers == ["public.html"])
+    #expect(received.first?.capture.representations.count == 1)
+}
+
 // MARK: - Observation (01 §5.1; roadmap 04 deliverable 3, acceptance 4)
 
 @Test @MainActor
@@ -236,8 +416,8 @@ func observerCapturesImmediatelyThenFiresOncePerChangeCountBump() {
     )
 
     var received: [ClipboardCapture] = []
-    observer.start { capture in
-        received.append(capture)
+    observer.start { outcome in
+        received.append(outcome.capture)
     }
 
     // start delivers the CURRENT contents synchronously before returning.
@@ -281,8 +461,8 @@ func observerStopHaltsDelivery() {
     )
 
     var received: [ClipboardCapture] = []
-    observer.start { capture in
-        received.append(capture)
+    observer.start { outcome in
+        received.append(outcome.capture)
     }
     observer.stop()
 

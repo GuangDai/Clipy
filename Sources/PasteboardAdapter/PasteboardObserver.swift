@@ -5,23 +5,26 @@
 /// NSPasteboard exposes no change notification, so polling `changeCount` is
 /// the v1 mechanism. The observer is main-actor confined with the adapter
 /// and its `Timer` on the main `RunLoop`; the registered handler receives
-/// only immutable `Sendable` `ClipboardCapture` values (docs/01-architecture.md
-/// §6 boundary rule). Paste orchestration stays owned by the composition
-/// root, never by this observer (docs/01-architecture.md §5.6).
+/// only immutable `Sendable` `CaptureOutcome` values — the frozen capture
+/// plus the partial-freeze record (audit SPEC-IMPL-005), so the
+/// composition root, not the adapter, judges a partial freeze
+/// (docs/01-architecture.md §6 boundary rule). Paste orchestration stays
+/// owned by the composition root, never by this observer
+/// (docs/01-architecture.md §5.6).
 import AppKit
 import Foundation
 import HistoryCore
 
 /// changeCount-polled observation (01 §5.1; roadmap 04). Main-actor
 /// confined; polls the pasteboard's `changeCount` on a main-`RunLoop`
-/// `Timer` and delivers one frozen capture per distinct change count.
+/// `Timer` and delivers one capture outcome per distinct change count.
 @MainActor
 public final class PasteboardObserver {
     private let adapter: PasteboardAdapter
     private let pollInterval: TimeInterval
     private var timer: Timer?
     private var lastChangeCount: Int
-    private var handler: (@MainActor (ClipboardCapture) -> Void)?
+    private var handler: (@MainActor (CaptureOutcome) -> Void)?
 
     /// Creates an observer over `adapter`'s pasteboard. `pollInterval` is
     /// the polling cadence in seconds (0.5 s in production; tests tighten
@@ -35,17 +38,20 @@ public final class PasteboardObserver {
     }
 
     /// Captures the CURRENT pasteboard immediately, then polls: the handler
-    /// runs on the main actor once per distinct `changeCount` whose capture
+    /// runs on the main actor once per distinct `changeCount` whose outcome
     /// is non-nil (a change that clears the pasteboard or yields nothing
-    /// retainable is recorded but not delivered). Calling `start` again
-    /// while running replaces the handler without re-capturing.
-    public func start(handler: @escaping @MainActor (ClipboardCapture) -> Void) {
+    /// retainable is recorded but not delivered; a PARTIAL freeze — a
+    /// declared representation's bytes unavailable — IS delivered, marked
+    /// by `CaptureOutcome.unavailableTypeIdentifiers`, for the handler
+    /// owner to judge). Calling `start` again while running replaces the
+    /// handler without re-capturing.
+    public func start(handler: @escaping @MainActor (CaptureOutcome) -> Void) {
         self.handler = handler
         guard timer == nil else { return }
 
         lastChangeCount = adapter.pasteboard.changeCount
-        if let capture = adapter.capture() {
-            handler(capture)
+        if let outcome = adapter.captureOutcome() {
+            handler(outcome)
         }
 
         // The timer is added to the main run loop's common modes explicitly
@@ -75,14 +81,14 @@ public final class PasteboardObserver {
         handler = nil
     }
 
-    /// One poll tick: delivers a capture only when `changeCount` moved.
+    /// One poll tick: delivers an outcome only when `changeCount` moved.
     private func poll() {
         let changeCount = adapter.pasteboard.changeCount
         guard changeCount != lastChangeCount else { return }
         lastChangeCount = changeCount
         guard let handler else { return }
-        if let capture = adapter.capture() {
-            handler(capture)
+        if let outcome = adapter.captureOutcome() {
+            handler(outcome)
         }
     }
 }

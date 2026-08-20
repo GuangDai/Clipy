@@ -100,7 +100,7 @@ struct PasteboardAdapterStressTests {
         let adapter = PasteboardAdapter(pasteboard: pasteboard)
         let payload = makePayload(typeIdentifier: "public.png", bytes: pngBytes)
 
-        adapter.write(payload)
+        try adapter.write(payload)
 
         let capture = adapter.capture()
         #expect(capture != nil)
@@ -130,7 +130,7 @@ struct PasteboardAdapterStressTests {
             bytes: textBytes
         )
 
-        adapter.write(payload)
+        try adapter.write(payload)
 
         // Write direction: content bytes and hint wire bytes on the board.
         let item = pasteboard.pasteboardItems?.first
@@ -179,8 +179,8 @@ struct PasteboardAdapterStressTests {
         )
 
         var received: [ClipboardCapture] = []
-        observer.start { capture in
-            received.append(capture)
+        observer.start { outcome in
+            received.append(outcome.capture)
         }
 
         // The burst: 30 distinct writes, no run-loop yields between them.

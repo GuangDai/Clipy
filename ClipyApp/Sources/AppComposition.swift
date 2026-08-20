@@ -55,10 +55,13 @@ final class AppComposition {
     /// The panel's state holder over HistoryCore DTOs (01 §6).
     let viewState: HistoryViewState
 
-    /// Invoked on the main actor after every successful paste write —
+    /// Invoked on the main actor after every SUCCESSFUL paste write —
     /// the composition root's panel-close hook (Maccy's paste-dismiss;
     /// the floating panel never activates the app, so the paste target
     /// keeps focus and the only dismissal needed is the panel's own).
+    /// A refused write (`PasteboardWriteFailure`) never reaches this hook:
+    /// the panel stays open so a partial paste is never presented as
+    /// success (audit SPEC-IMPL-005; 01 §5.6).
     /// `nil` in hosted tests, where no panel exists.
     var onPasteCompleted: (() -> Void)?
 
@@ -186,18 +189,27 @@ final class AppComposition {
             }
         }
 
-        // Capture loop (01 §5.1; 03a §4): one capture per distinct
+        // Capture loop (01 §5.1; 03a §4): one COMPLETE capture per distinct
         // pasteboard changeCount becomes one `.capture` action; each runs
         // in its own task so a large capture never stalls the poll handler.
-        // Typed rejections are EXPECTED and swallowed silently — concealed
-        // content fails `.invalidInput(.excludedFromHistory)` by design
-        // (05 §6.1, whole-capture semantics; defense in depth) — with no
-        // logging and no error surface. The app's own paste writes
-        // round-trip through this loop and coalesce via the lineage hint
-        // (WS4; 03b §9); they must not be suppressed. The local Sendable
-        // binding keeps the escaping handler free of any self capture.
+        // A PARTIAL freeze — the item declared a representation whose bytes
+        // were unavailable at freeze time (contents changed or provider
+        // timed out, per Apple's `data(forType:)` documentation) — is
+        // dropped HERE, at the seam: partial Canonical Content would poison
+        // dedup/coalescing identity (audit SPEC-IMPL-005; 03a §4). The
+        // observer has already consumed the changeCount, so the next copy
+        // re-freezes whole. Typed History rejections are EXPECTED and
+        // swallowed silently — concealed content fails
+        // `.invalidInput(.excludedFromHistory)` by design (05 §6.1,
+        // whole-capture semantics; defense in depth) — with no logging and
+        // no error surface. The app's own paste writes round-trip through
+        // this loop and coalesce via the lineage hint (WS4; 03b §9); they
+        // must not be suppressed. The local Sendable binding keeps the
+        // escaping handler free of any self capture.
         let history = self.history
-        observer.start { capture in
+        observer.start { outcome in
+            guard outcome.isComplete else { return }
+            let capture = outcome.capture
             Task { try? await history.perform(.capture(capture)) }
         }
     }
@@ -212,17 +224,29 @@ final class AppComposition {
     /// History transaction — a paste is a clipboard side effect, never
     /// durable History state (04 §8).
     ///
-    /// Typed failures are swallowed deliberately: an item removed between
-    /// selection and paste fails `.notFound` and leaves the pasteboard
-    /// untouched — observation refreshes the rows — and no error surface
-    /// owns this path (03b §10 vocabulary stays with the views that render
-    /// it).
+    /// `onPasteCompleted` runs only after a VERIFIED full write (01 §5.6;
+    /// audit SPEC-IMPL-005): `PasteboardAdapter.write` throws
+    /// `PasteboardWriteFailure` when the pasteboard refuses any
+    /// representation or the hint (Apple documents a false `setData`
+    /// return as an ownership change), and a refused write may leave a
+    /// PREFIX of the payload on the pasteboard — so on failure the hook
+    /// is skipped and the panel stays OPEN rather than presenting the
+    /// paste as completed. A payload-resolution failure (the item removed
+    /// between selection and paste fails `.notFound`, 03b §10) still
+    /// leaves the pasteboard untouched and the panel open; observation
+    /// refreshes the rows. Auto-paste (Command-V) and plain-text paste
+    /// remain out of scope (05-recommended-target-design.md product
+    /// decisions).
     func paste(_ item: HistoryItemReference) {
         Task {
             guard let payload = try? await history.pastePayload(for: item.id) else {
                 return
             }
-            adapter.write(payload)
+            do {
+                try adapter.write(payload)
+            } catch {
+                return
+            }
             onPasteCompleted?()
         }
     }

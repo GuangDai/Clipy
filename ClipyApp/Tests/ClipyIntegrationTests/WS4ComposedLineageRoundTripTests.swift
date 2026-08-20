@@ -96,7 +96,7 @@ struct WS4ComposedLineageRoundTripTests {
         #expect(
             payload.representations.first?.bytes == Data(revisedText.utf8)
         )
-        adapter.write(payload)
+        try adapter.write(payload)
 
         // (4) The capture loop's next poll freezes the pasted content: the
         // hint decodes into the origin and is NOT retained as content

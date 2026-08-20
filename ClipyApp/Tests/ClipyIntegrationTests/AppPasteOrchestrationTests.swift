@@ -17,6 +17,11 @@
 /// over a PRIVATE pasteboard — the identical orchestration sequence the
 /// composition runs (AppComposition.start/paste), with the pasteboard
 /// substituted, exactly the adapter's own test stance.
+///
+/// SPEC-IMPL-005 coverage: the second test drives the same wiring through
+/// the adapter's deterministic write-failure seam and proves the
+/// panel-close hook runs only after a VERIFIED full write — a refused
+/// write surfaces `PasteboardWriteFailure` and leaves the panel open.
 import AppKit
 import Foundation
 import HistoryCore
@@ -61,7 +66,15 @@ struct AppPasteOrchestrationTests {
                 guard let payload = try? await history.pastePayload(for: item.id) else {
                     continue
                 }
-                adapter.write(payload)
+                // The write half of the composition's wiring (01 §5.6;
+                // audit SPEC-IMPL-005): the panel-close hook runs only
+                // after a verified full write — a refused write throws
+                // and skips it. This suite's write succeeds.
+                do {
+                    try adapter.write(payload)
+                } catch {
+                    continue
+                }
             }
         }
 
@@ -152,6 +165,117 @@ struct AppPasteOrchestrationTests {
         #expect(
             coalesced.id == revised.id,
             "01 §5.6/WS4: the app's own paste coalesces back via the hint"
+        )
+    }
+
+    /// SPEC-IMPL-005 + 01 §5.6: a paste whose write is REFUSED (the
+    /// adapter's deterministic seam injects the `setData`-false outcome
+    /// Apple documents as an ownership change) surfaces the typed
+    /// `PasteboardWriteFailure` and does NOT run the completion hook — the
+    /// panel stays open rather than closing over a partial paste. A retry
+    /// with the refusal cleared writes fully and runs the hook: the gating
+    /// distinguishes failure from success.
+    @Test @MainActor
+    func pasteWriteFailureSkipsTheCompletionHookUntilAVerifiedFullWrite() async throws {
+        try ComposedSupport.requireUsablePasteboard()
+        let history = try await ComposedSupport.openMemoryHistory()
+
+        // The same composed wiring as the success-path test above — the
+        // composition's own sequence (AppComposition.paste) with the
+        // pasteboard substituted and the panel-close hook modeled by a
+        // flag — plus the adapter's failure-injection seam.
+        let pasteboard = ComposedSupport.makePasteboard()
+        var adapter = PasteboardAdapter(pasteboard: pasteboard)
+        adapter.simulatedRejectedWriteTypeIdentifiers = [
+            ComposedSupport.plainTextTypeIdentifier
+        ]
+        let viewState = HistoryViewState(history: history)
+        let (pasteStream, pasteContinuation) =
+            AsyncStream<HistoryItemReference>.makeStream()
+        defer {
+            viewState.deactivate()
+            pasteContinuation.finish()
+        }
+
+        var writeFailures: [PasteboardWriteFailure] = []
+        var pasteCompleted = false
+        viewState.onPaste = { item in
+            pasteContinuation.yield(item)
+        }
+        Task { @MainActor in
+            for await item in pasteStream {
+                guard let payload = try? await history.pastePayload(for: item.id) else {
+                    continue
+                }
+                do {
+                    try adapter.write(payload)
+                } catch let failure as PasteboardWriteFailure {
+                    writeFailures.append(failure)
+                    continue
+                } catch {
+                    continue
+                }
+                pasteCompleted = true
+            }
+        }
+
+        // Arrange one plain-text item through the real capture seam.
+        let sourcePasteboard = ComposedSupport.makePasteboard()
+        ComposedSupport.setPasteboardContents(
+            "orchestration refused write",
+            on: sourcePasteboard
+        )
+        let capture = try #require(
+            PasteboardAdapter(pasteboard: sourcePasteboard)
+                .capture(observedAt: Date(timeIntervalSinceReferenceDate: 700_204_000))
+        )
+        let insertReceipt = try await history.perform(.capture(capture))
+        let inserted = try #require(
+            ComposedSupport.insertedReference(
+                from: insertReceipt,
+                "paste failure arrange"
+            )
+        )
+
+        // Phase 1 — refused write: the typed failure surfaces and the
+        // completion hook does NOT run (the panel stays open).
+        viewState.requestPaste(inserted)
+        let failureSurfaced = await ComposedSupport.waitFor {
+            !writeFailures.isEmpty
+        }
+        #expect(failureSurfaced, "SPEC-IMPL-005: the refused write surfaces")
+        #expect(
+            writeFailures.first
+                == .representationsRejected(
+                    typeIdentifiers: [ComposedSupport.plainTextTypeIdentifier]
+                ),
+            "SPEC-IMPL-005: the failure names the refused representation"
+        )
+        #expect(
+            !pasteCompleted,
+            "01 §5.6/SPEC-IMPL-005: no panel close over a partial paste"
+        )
+        // The refused representation never landed; the board holds only
+        // what the system accepted (here: the lineage hint alone).
+        #expect(
+            pasteboard.pasteboardItems?.first?.data(forType: .string) == nil,
+            "SPEC-IMPL-005: a refused write leaves no content bytes behind"
+        )
+
+        // Phase 2 — refusal cleared: the retry writes fully and runs the
+        // hook, proving the gating keys on the write outcome.
+        adapter.simulatedRejectedWriteTypeIdentifiers = []
+        viewState.requestPaste(inserted)
+        let completedAfterRetry = await ComposedSupport.waitFor {
+            pasteCompleted
+        }
+        #expect(
+            completedAfterRetry,
+            "01 §5.6: a verified full write runs the completion hook"
+        )
+        #expect(
+            pasteboard.pasteboardItems?.first?.data(forType: .string)
+                == Data("orchestration refused write".utf8)
         )
     }
 }
