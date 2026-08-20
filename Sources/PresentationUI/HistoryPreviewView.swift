@@ -29,7 +29,8 @@ public enum PreviewContent: Equatable, Sendable {
     /// Long-body cap for the preview column: SwiftUI `Text` lays out its
     /// whole string, so the body is cut here (Maccy solves this with an
     /// NSTextView, which PresentationUI's no-AppKit rule forbids — 01 §8).
-    static let textCharacterCap = 50_000
+    /// `package` so the in-package resolver tests can size fixtures to it.
+    package static let textCharacterCap = 50_000
 
     /// Resolves the preview content for one item's Effective Content.
     /// Image representations win; otherwise the first textual
