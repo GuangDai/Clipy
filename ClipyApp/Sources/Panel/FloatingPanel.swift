@@ -128,7 +128,9 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     }
 
     /// Closes the panel when it loses key status — an outside click
-    /// dismisses (Maccy's `resignKey`); a modal alert on top keeps it open.
+    /// dismisses (Maccy's `resignKey`); a modal alert on top keeps it open
+    /// (`NSApplication.alertWindow`, Maccy's `NSApplication+Windows.swift`
+    /// helper replicated below).
     override func resignKey() {
         super.resignKey()
         if NSApp.alertWindow == nil {
@@ -210,5 +212,14 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         isProgrammaticMove = true
         setFrame(frame, display: display)
         isProgrammaticMove = false
+    }
+}
+
+/// Maccy's `NSApplication+Windows.swift` replicated: the alert panel
+/// currently on top, if any (matched by its AppKit-private class name —
+/// there is no public "is an alert showing" property).
+private extension NSApplication {
+    var alertWindow: NSWindow? {
+        windows.first { $0.className == "_NSAlertPanel" }
     }
 }

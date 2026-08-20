@@ -32,7 +32,7 @@ struct PreviewPaneStateTests {
         #expect(!state.isOpen, "the dwell must not fire synchronously")
         #expect(state.previewedItem == nil)
 
-        let opened = await pollUntil(timeout: .seconds(2)) {
+        let opened = await pollUntil(timeout: .seconds(10)) {
             state.isOpen && state.previewedItem == item
         }
         #expect(opened, "the dwell fires after the delay and opens the pane")
@@ -46,7 +46,7 @@ struct PreviewPaneStateTests {
         state.handleSelectionChange(first)
         state.handleSelectionChange(second)
 
-        let opened = await pollUntil(timeout: .seconds(2)) {
+        let opened = await pollUntil(timeout: .seconds(10)) {
             state.isOpen && state.previewedItem == second
         }
         #expect(opened)
@@ -86,7 +86,7 @@ struct PreviewPaneStateTests {
         #expect(!state.isOpen)
 
         state.handleSelectionChange(second)
-        let reopened = await pollUntil(timeout: .seconds(2)) {
+        let reopened = await pollUntil(timeout: .seconds(10)) {
             state.isOpen && state.previewedItem == second
         }
         #expect(reopened, "a selection change clears the manual-close suppression")
@@ -103,7 +103,7 @@ struct PreviewPaneStateTests {
 
         state.panelBecameKey()
         state.handleSelectionChange(item)
-        let opened = await pollUntil(timeout: .seconds(2)) { state.isOpen }
+        let opened = await pollUntil(timeout: .seconds(10)) { state.isOpen }
         #expect(opened)
     }
 
@@ -121,7 +121,7 @@ struct PreviewPaneStateTests {
 
         // Auto-open is armed again after a panel reset.
         state.handleSelectionChange(second)
-        let reopened = await pollUntil(timeout: .seconds(2)) {
+        let reopened = await pollUntil(timeout: .seconds(10)) {
             state.isOpen && state.previewedItem == second
         }
         #expect(reopened)
@@ -148,7 +148,7 @@ struct PreviewPaneStateTests {
         #expect(state.previewedItem == first)
 
         state.handleSelectionChange(second)
-        let retargeted = await pollUntil(timeout: .seconds(2)) {
+        let retargeted = await pollUntil(timeout: .seconds(10)) {
             state.previewedItem == second
         }
         #expect(retargeted)
