@@ -3,7 +3,8 @@
 /// docs/03b-instruction-set.md §9): capture a REAL PNG (a minimal valid
 /// 1×1 image) through the composed stack, fetch its encoded thumbnail
 /// through the public `ClipboardHistory.thumbnail`, decode it through the
-/// REAL `ThumbnailStore` (ImageIO on the MainActor), and prove the
+/// REAL `ThumbnailStore` (ImageIO off the MainActor, via
+/// `DisplayImageDecoder`), and prove the
 /// reference-exact fence: after a revision the OLD reference's pixels are
 /// not served under the new one, and a stale-reference request fails typed
 /// (`.staleContent`) rather than returning current bytes under the old key.
@@ -33,7 +34,8 @@ struct WS15ComposedThumbnailRoundTripTests {
     /// WS15 (docs/06-cross-cutting.md §8): the composed round trip — a
     /// `public.png` capture frozen from a private pasteboard, its
     /// thumbnail fetched through the public seam, the encoded PNG decoded
-    /// by the real `ThumbnailStore` on the MainActor, and the fence: after
+    /// by the real `ThumbnailStore` (decode off the MainActor via
+    /// `DisplayImageDecoder`), and the fence: after
     /// a byte-changing revision the store's OLD key never serves the NEW
     /// pixels and the stale direct request fails `.staleContent`.
     @Test @MainActor

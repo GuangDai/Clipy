@@ -404,6 +404,17 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         try await authority.pastePayload(for: id)
     }
 
+    /// The authoritative configured retention state (docs/v2/V2-07-ux.md
+    /// §5.2/§6.3 — the settings panel-open read; audit SPEC-IMPL-003): the
+    /// Authority reads both durable singletons inside one serialized,
+    /// non-suspending interval — the v1 count from the position singleton
+    /// (§3.2) and the V2-02 dimensions through the shared config→policy
+    /// loader (`V2-02` §3.3). Configured policy only; no retained-byte usage
+    /// rides this value (V2-07 §2.2 OPEN-2).
+    public func retentionConfiguration() async throws -> HistoryRetentionConfiguration {
+        try await authority.retentionConfiguration()
+    }
+
     /// An encoded thumbnail for one item at one Effective Content state,
     /// sized to `pixels`; `nil` when the item has no thumbnailable content
     /// (docs/05-authority-kernel.md §14.5; docs/04-coherence.md §9).

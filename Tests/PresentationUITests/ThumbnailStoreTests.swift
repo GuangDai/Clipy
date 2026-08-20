@@ -5,12 +5,15 @@
 ///
 /// Pinned semantics: `image(for:)` is a pure read that never fetches;
 /// `prefetch(_:)` is idempotent per reference and decodes the encoded bytes
-/// on the MainActor into a `CGImage` cached under the EXACT requesting
-/// reference (id + Content Version — a revised item never sees stale
-/// pixels); a `nil` payload is negative-cached while a thrown failure is
-/// NOT (transient unavailability may recover); `reset()` clears everything.
-/// `likelyThumbnailable` mirrors the frozen v1 ImageIO-decodable UTI set
-/// that gates prefetch.
+/// OFF the MainActor (through the internal `DisplayImageDecoder` actor —
+/// audit 2026-08-20 §S-2/§SPEC-IMPL-002) into a `CGImage` retained under the
+/// EXACT requesting reference (id + Content Version — a revised item never
+/// sees stale pixels); a `nil` payload is negative-retained while a thrown
+/// failure is NOT (transient unavailability may recover); `reset()` clears
+/// everything. Retention is bounded by entry count AND decoded bytes
+/// (audit 2026-08-20 §S-3/§SPEC-IMPL-001 — the admission record lives in
+/// ThumbnailStore.swift's header). `likelyThumbnailable` mirrors the frozen
+/// v1 ImageIO-decodable UTI set that gates prefetch.
 import CoreGraphics
 import Foundation
 import HistoryCore
@@ -35,11 +38,11 @@ struct ThumbnailStoreTests {
 
     // MARK: - Prefetch round-trip (04 §9)
 
-    /// `prefetch` decodes the scripted PNG into a `CGImage` cached under the
-    /// exact reference, and is idempotent: two prefetches start one fetch.
-    /// Before any prefetch, `image(for:)` is `nil` — the pure read never
-    /// fetches.
-    @Test func prefetchRoundTripsDecodedImageAndIsIdempotent() async {
+    /// `prefetch` decodes the scripted PNG into a `CGImage` retained under
+    /// the exact reference, and is idempotent: two prefetches start one
+    /// fetch. Before any prefetch, `image(for:)` is `nil` — the pure read
+    /// never fetches.
+    @Test func prefetchRoundTripsDecodedImageAndIsIdempotent() async throws {
         let item = reference(
             "00000000-0000-0000-0000-0000000000A1",
             version: 3
@@ -48,6 +51,7 @@ struct ThumbnailStoreTests {
         let store = ThumbnailStore(history: history)
 
         #expect(store.image(for: item) == nil)
+        #expect(store.cachedDecodedBytes == 0)
         #expect(await history.requestCount(for: item) == 0)
 
         store.prefetch(item)
@@ -58,6 +62,11 @@ struct ThumbnailStoreTests {
         #expect(image?.width == 1)
         #expect(image?.height == 1)
         #expect(await history.requestCount(for: item) == 1)
+
+        // The byte half of the admission bound accounts the backing bitmap
+        // exactly (bytesPerRow × height, padding included).
+        let cost = try #require(image.map { $0.bytesPerRow * $0.height })
+        #expect(store.cachedDecodedBytes == cost)
     }
 
     // MARK: - Reference-keyed exactness (04 §9)
@@ -149,11 +158,12 @@ struct ThumbnailStoreTests {
 
     // MARK: - Cache ceiling (04 §9 step 7)
 
-    /// The whole-cache ceiling is a hard bound: with `maximumEntries: 3`,
-    /// four completed fetches leave at most 3 cached entries. The eviction
-    /// check runs AFTER insertion (insert-then-evict); the pre-insertion
-    /// `>` check it replaced let the cache reach `maximumEntries + 1`
-    /// (audit 2026-08-20: a 500-entry cache could hold 501).
+    /// The whole-store entry ceiling is a hard bound: with
+    /// `maximumEntries: 3`, four completed fetches leave at most 3 retained
+    /// entries. The eviction check runs AFTER insertion
+    /// (insert-then-evict); the pre-insertion `>` check it replaced let the
+    /// store reach `maximumEntries + 1` (audit 2026-08-20: a 500-entry
+    /// store could hold 501).
     @Test func cacheNeverExceedsItsConfiguredMaximum() async {
         let items = [
             reference("00000000-0000-0000-0000-0000000000E1", version: 1),
@@ -181,6 +191,39 @@ struct ThumbnailStoreTests {
             return store.inFlightCount == 0
         })
         #expect(store.cachedEntryCount <= 3)
+    }
+
+    // MARK: - Decoded-byte bound (audit 2026-08-20 §S-3/§SPEC-IMPL-001)
+
+    /// The decoded-byte ceiling is a hard second bound: with
+    /// `maximumDecodedBytes: 1`, one decoded hit already exceeds it, so the
+    /// whole store resets to zero entries AND zero retained bytes. (The
+    /// reset is the same order-independent whole-store discipline as the
+    /// entry ceiling.)
+    @Test func byteBudgetResetsTheWholeStore() async {
+        let item = reference("00000000-0000-0000-0000-0000000000F1", version: 1)
+        let history = ThumbnailScriptHistory(pngByReference: [item: fixturePNGData])
+        let store = ThumbnailStore(history: history, maximumDecodedBytes: 1)
+
+        store.prefetch(item)
+        #expect(await pollUntil { store.inFlightCount == 0 && (await history.requestCount(for: item)) == 1 })
+        #expect(store.image(for: item) == nil)
+        #expect(store.cachedEntryCount == 0)
+        #expect(store.cachedDecodedBytes == 0)
+    }
+
+    /// A recorded miss costs zero decoded bytes, so a tight byte budget
+    /// still retains it — the negative result keeps the row's fallback icon
+    /// from re-asking without spending the byte bound.
+    @Test func missesCarryNoDecodedBytes() async {
+        let item = reference("00000000-0000-0000-0000-0000000000F2", version: 1)
+        let history = ThumbnailScriptHistory()  // unscripted: nil payload → miss
+        let store = ThumbnailStore(history: history, maximumDecodedBytes: 1)
+
+        store.prefetch(item)
+        #expect(await pollUntil { store.inFlightCount == 0 && (await history.requestCount(for: item)) == 1 })
+        #expect(store.cachedEntryCount == 1)
+        #expect(store.cachedDecodedBytes == 0)
     }
 
     // MARK: - Prefetch gate (04 §9)

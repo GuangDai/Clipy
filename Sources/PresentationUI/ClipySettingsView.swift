@@ -22,8 +22,10 @@ import SwiftUI
 /// The Settings window content: a fixed 480×320 `TabView` with a General
 /// and a Retention tab (step-9 design contract §4.4).
 ///
-/// Both tabs mutate History through `HistoryViewState` and report the
-/// outcome inline — success text derived from the action's
+/// Both tabs open from the authoritative configured-policy read
+/// (`V2-07` §6.3 — Apply is gated on it, audit SPEC-IMPL-003) and mutate
+/// History through `HistoryViewState`, reporting the outcome inline —
+/// success text derived from the action's
 /// `HistoryCommitOutcome` (03a §6), failures mapped by
 /// `FailurePresentation.message(for:)` (03b §10) or by the retention
 /// recovery guidance (V2-07 §5.2). Nothing here reads SwiftData, Domain
@@ -85,9 +87,12 @@ public struct ClipySettingsView: View {
 /// The count control stays on the v1 `.setRetentionPolicy` action — the
 /// count dimension deliberately did not move to V2-02 (`V2-02` §1;
 /// `V2-07` §5.2) — bounded by `HistoryLimits.standard
-/// .userMaximumUnpinnedRange` (06 §2). Field text opens at the §2 default
-/// (200) because the public History surface exposes no read of the
-/// persisted policy; Apply always sends the complete value.
+/// .userMaximumUnpinnedRange` (06 §2). The field opens at the persisted
+/// configured count loaded on appear (`V2-07` §6.3's panel-open read;
+/// audit SPEC-IMPL-003) — the §2 default (200) is only the pre-read
+/// placeholder — and Apply stays disabled until that read lands, so a
+/// failed load can never overwrite a real persisted policy with the
+/// placeholder. Apply always sends the complete value.
 private struct GeneralSettingsTab: View {
 
     private let viewState: HistoryViewState
@@ -96,9 +101,14 @@ private struct GeneralSettingsTab: View {
 
     /// Text backing the count field; parsed and range-checked on every use
     /// (Apply is disabled while invalid — contract §4.4 "numeric
-    /// TextField + Stepper").
+    /// TextField + Stepper"). Opens at the §2 default as a placeholder;
+    /// `loadConfiguredCount()` replaces it with the persisted value.
     @State private var maximumUnpinnedText: String =
         String(HistoryLimits.standard.defaultMaximumUnpinnedItems)
+
+    /// False until the authoritative configured-policy read has landed on
+    /// this tab; gates Apply (SPEC-IMPL-003).
+    @State private var hasLoadedConfiguration = false
 
     @State private var status: SettingStatus?
     @State private var isWorking = false
@@ -143,7 +153,10 @@ private struct GeneralSettingsTab: View {
                     Button("Apply") {
                         Task { await applyMaximumUnpinned() }
                     }
-                    .disabled(maximumUnpinnedValue == nil || isWorking)
+                    .disabled(
+                        maximumUnpinnedValue == nil || isWorking
+                            || !hasLoadedConfiguration
+                    )
                     if let status {
                         SettingStatusView(status: status)
                     }
@@ -194,6 +207,7 @@ private struct GeneralSettingsTab: View {
             }
         }
         .formStyle(.grouped)
+        .task { await loadConfiguredCount() }
     }
 
     /// The parsed count, or `nil` when the text is not a whole number
@@ -226,6 +240,24 @@ private struct GeneralSettingsTab: View {
     private var unpinnedRangeHint: String {
         let range = HistoryLimits.standard.userMaximumUnpinnedRange
         return "Enter a whole number from \(range.lowerBound) to \(range.upperBound)."
+    }
+
+    /// Loads the persisted configured count so the field opens at the
+    /// authoritative value (`V2-07` §6.3's panel-open one-shot read; audit
+    /// SPEC-IMPL-003). Until the read lands, Apply stays disabled: a failed
+    /// read leaves the placeholder visible but can never be applied over a
+    /// real persisted policy. The V2-02 dimensions ride the same read but
+    /// belong to the Retention tab (`V2-02` §1's count/expansion split).
+    private func loadConfiguredCount() async {
+        do {
+            let configuration = try await viewState.retentionConfiguration()
+            maximumUnpinnedText = String(configuration.maximumUnpinnedItems)
+            hasLoadedConfiguration = true
+        } catch let failure as HistoryFailure {
+            status = .failure(FailurePresentation.message(for: failure))
+        } catch {
+            status = .failure("The current setting could not be read.")
+        }
     }
 
     /// Applies the count policy and reports the receipt inline
@@ -310,10 +342,13 @@ private struct GeneralSettingsTab: View {
 ///
 /// Field bounds mirror the HistoryStorage admission ranges (`V2-02` §8.3)
 /// one-for-one so Apply never sends a value storage will reject; disabling
-/// a dimension sends `nil` for it (DC-23). The tab opens with every
-/// dimension disabled and neutral prefill values because the public
-/// surface exposes no read of the persisted policies (the OPEN-2 family —
-/// V2-07 §5.2 "live storage indicator not available").
+/// a dimension sends `nil` for it (DC-23). Every control opens at the
+/// persisted configured policy loaded on appear (`V2-07` §6.3's panel-open
+/// read; audit SPEC-IMPL-003), and Apply stays disabled until that read
+/// lands — an unexamined Apply against the neutral prefill could otherwise
+/// silently wipe a real persisted policy. The read is the configured
+/// policy only: no live usage readout exists on the public surface (the
+/// OPEN-2 exclusion — V2-07 §5.2 "live storage indicator not available").
 private struct RetentionSettingsTab: View {
 
     private let viewState: HistoryViewState
@@ -334,6 +369,9 @@ private struct RetentionSettingsTab: View {
     /// R3 revision MiB: `1 ... 256 MiB` (`V2-02` §8.3).
     private static let revisionMiBRange: ClosedRange<Int> = 1...256
 
+    /// The toggle/field values below are neutral prefills until
+    /// `loadConfiguredPolicies()` reflects the persisted configured policy
+    /// into them on appear; Apply is gated on that read having landed.
     @State private var ageEnabled = false
     @State private var ageDaysText = "30"
     @State private var storageEnabled = false
@@ -342,6 +380,7 @@ private struct RetentionSettingsTab: View {
     @State private var revisionCountText = "20"
     @State private var revisionBytesEnabled = false
     @State private var revisionMiBText = "64"
+    @State private var hasLoadedConfiguration = false
     @State private var status: SettingStatus?
     @State private var isWorking = false
 
@@ -403,7 +442,10 @@ private struct RetentionSettingsTab: View {
                         Button("Apply") {
                             Task { await applyRetention() }
                         }
-                        .disabled(!retentionInputIsValid || isWorking)
+                        .disabled(
+                            !retentionInputIsValid || isWorking
+                                || !hasLoadedConfiguration
+                        )
                         if let status {
                             SettingStatusView(status: status)
                         }
@@ -418,6 +460,7 @@ private struct RetentionSettingsTab: View {
             .formStyle(.grouped)
             .padding([.horizontal, .bottom])
         }
+        .task { await loadConfiguredPolicies() }
     }
 
     private var ageDays: Int? {
@@ -460,6 +503,82 @@ private struct RetentionSettingsTab: View {
             maxRevisionsPerItem: maxRevisions,
             maxRevisionBytesPerItem: maxRevisionBytes
         )
+    }
+
+    /// Loads the persisted configured policies so every control opens at
+    /// its authoritative value (`V2-07` §6.3's panel-open one-shot read;
+    /// audit SPEC-IMPL-003). Until the read lands, Apply stays disabled: a
+    /// set replaces the WHOLE policy value (`V2-02` §8.1), so applying the
+    /// neutral prefill would silently disable every persisted dimension.
+    private func loadConfiguredPolicies() async {
+        do {
+            let configuration = try await viewState.retentionConfiguration()
+            reflect(configuration.policies)
+            hasLoadedConfiguration = true
+        } catch let failure as HistoryFailure {
+            status = .failure(Self.retentionFailureMessage(failure))
+        } catch {
+            status = .failure("The current policies could not be read.")
+        }
+    }
+
+    /// Reflects one persisted policy value in the toggles/fields. A
+    /// disabled dimension keeps its neutral prefill text — its dormant
+    /// stored value is never read as a policy (`V2-02` §3.3), so nothing
+    /// is reflected for it. Unit conversions CEILING-round and then clamp
+    /// into the field range: the day/MiB fields cannot express every
+    /// persisted value exactly, and rounding up guarantees an unexamined
+    /// Apply loosens — never tightens — retention relative to the
+    /// configured state (SPEC-IMPL-003's failure mode is silent data loss
+    /// through an under-stated budget, not silent slack).
+    private func reflect(_ policies: HistoryRetentionPolicies) {
+        ageEnabled = policies.age != nil
+        if let age = policies.age {
+            ageDaysText = String(Self.ceilingDays(
+                forSeconds: age.maxAge,
+                clampedTo: Self.ageDaysRange
+            ))
+        }
+        storageEnabled = policies.storage != nil
+        if let storage = policies.storage {
+            storageMiBText = String(Self.ceilingMiB(
+                forBytes: storage.maxTotalBytes,
+                clampedTo: Self.storageMiBRange
+            ))
+        }
+        revisionCountEnabled = policies.revisions?.maxRevisionsPerItem != nil
+        if let maxRevisions = policies.revisions?.maxRevisionsPerItem {
+            // Already an in-range whole count (`V2-02` §8.3 validation
+            // admits nothing else) — no unit conversion.
+            revisionCountText = String(maxRevisions)
+        }
+        revisionBytesEnabled = policies.revisions?.maxRevisionBytesPerItem != nil
+        if let maxRevisionBytes = policies.revisions?.maxRevisionBytesPerItem {
+            revisionMiBText = String(Self.ceilingMiB(
+                forBytes: maxRevisionBytes,
+                clampedTo: Self.revisionMiBRange
+            ))
+        }
+    }
+
+    /// Seconds → whole days, ceiling-rounded and clamped (see `reflect`).
+    private static func ceilingDays(
+        forSeconds seconds: TimeInterval,
+        clampedTo range: ClosedRange<Int>
+    ) -> Int {
+        let days = Int((seconds / 86_400).rounded(.up))
+        return min(max(days, range.lowerBound), range.upperBound)
+    }
+
+    /// Bytes → whole MiB, ceiling-rounded and clamped (see `reflect`). The
+    /// plain addition cannot overflow: admitted values stay under the
+    /// `V2-02` §8.3 bound (5,000 × 384 MiB).
+    private static func ceilingMiB(
+        forBytes bytes: Int,
+        clampedTo range: ClosedRange<Int>
+    ) -> Int {
+        let mib = (bytes + 1_048_575) / 1_048_576
+        return min(max(mib, range.lowerBound), range.upperBound)
     }
 
     /// Applies all dimensions as one policy value and reports the receipt

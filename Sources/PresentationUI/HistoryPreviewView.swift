@@ -1,18 +1,22 @@
 /// HistoryPreviewView.swift — the preview column shown beside the history
 /// list (Maccy's `PreviewItemView` replicated onto HistoryCore DTOs): the
 /// selected item's Effective Content rendered large — image representations
-/// downsampled through ImageIO, textual representations decoded per the
-/// frozen encoding rule — plus a compact metadata bar.
+/// downsampled OFF the MainActor through `DisplayImageDecoder`, textual
+/// representations decoded per the frozen encoding rule — plus a compact
+/// metadata bar.
 ///
 /// Owning spec: docs/01-architecture.md §5.2/§6 (main-actor UI over
-/// HistoryCore DTOs only — no AppKit, no SwiftData), §5.7 (image handling);
-/// docs/03b-instruction-set.md §9 (Effective Content representations);
-/// docs/05-authority-kernel.md §15 (the frozen textual UTI set and the
-/// never-guess-an-encoding rule, mirrored here as in HistoryDetailsView).
+/// HistoryCore DTOs only — no AppKit, no SwiftData, no MainActor image
+/// decode), §5.7 (image handling); docs/03b-instruction-set.md §9
+/// (Effective Content representations); docs/05-authority-kernel.md §15
+/// (the frozen textual UTI set and the never-guess-an-encoding rule,
+/// mirrored here as in HistoryDetailsView). Async load law: audit
+/// docs/reviews/2026-08-20-clipy-maccy-audit/02-spec-implementation.md
+/// §SPEC-IMPL-007 and 05-recommended-target-design.md §4.1 PREVIEW-FENCE-1
+/// (exact-reference fence; late results never publish).
 import CoreGraphics
 import Foundation
 import HistoryCore
-import ImageIO
 import SwiftUI
 
 /// What the preview column renders for one item, resolved from its
@@ -96,7 +100,143 @@ private let previewImageTypeIdentifiers: Set<String> = [
     "com.microsoft.bmp",
 ]
 
-/// The preview column: a loading indicator while the item's details load,
+/// The preview column's content loader (audit 02 §SPEC-IMPL-007; 05 §4.1
+/// PREVIEW-FENCE-1): owns the async details read, the off-MainActor bounded
+/// image decode, and the exact-reference fence.
+///
+/// Fence law: a load captures its `HistoryItemReference` at start; after
+/// EVERY await it re-checks cancellation AND that its reference is still
+/// the requested one. The details answer itself must also carry that same
+/// reference: `details(for:)` reads by ID, so a concurrent revision that
+/// advanced the Content Version is invisible to the request — the
+/// `details.item == item` half pins the version (04 §9's caller-side fence
+/// convention). A late or superseded result is DISCARDED without touching
+/// any published state (the newer load owns `isLoading` and the content).
+///
+/// Retention: only the REQUESTED item's applied content lives here — a
+/// bounded decoded image or a capped text body. The full Effective Content
+/// bytes are a transient local of `load(item:)`, never stored (closing
+/// SPEC-IMPL-007's "retains the full selected image bytes in view state").
+/// Bounding those bytes BEFORE they reach the MainActor needs the 05 §3.1
+/// `preview(for:pixels:)` storage seam — an owned follow-up outside this
+/// file set.
+@MainActor @Observable
+package final class PreviewContentLoader {
+
+    /// What the preview column renders for the requested item. Carries no
+    /// image pixels: the decoded `CGImage` stays on the internal `image`
+    /// property, so no `CGImage` appears on a package/public signature
+    /// (05 §4.1 rule 3).
+    package enum AppliedContent: Equatable {
+        /// Nothing previewable, or a typed failure — the preview is a
+        /// convenience surface, not an error owner (03b §10's failure
+        /// surface stays with the panel's banner).
+        case unavailable
+        /// Body text, capped at `PreviewContent.textCharacterCap`.
+        case text(String)
+        /// A bounded decoded image is published on `image`.
+        case image
+        /// The representation looked decodable but ImageIO produced nothing.
+        case imageDecodeFailed
+    }
+
+    /// The applied content — always fenced to `requestedItem`.
+    package private(set) var content: AppliedContent = .unavailable
+
+    /// The metadata-bar facts for the applied item (03b §9).
+    package private(set) var occurrence: CopyOccurrenceSummary?
+
+    /// Whether the requested item's load is in flight.
+    package private(set) var isLoading = false
+
+    /// The exact reference the loader is serving — set synchronously at the
+    /// head of every `load(item:)`; late completions compare against it.
+    package private(set) var requestedItem: HistoryItemReference?
+
+    /// The decoded, bounded preview pixels — valid while `content` is
+    /// `.image`. Internal: a `CGImage` never appears on a package/public
+    /// signature (05 §4.1 rule 3).
+    private(set) var image: CGImage?
+
+    /// The applied image's pixel dimensions — the package-observable proof
+    /// of a decode without exposing the image itself.
+    package var appliedImageSize: CGSize? {
+        image.map { CGSize(width: $0.width, height: $0.height) }
+    }
+
+    private let history: any ClipboardHistory
+
+    /// The off-MainActor decode hop (S-2/SPEC-IMPL-002); stateless.
+    private let decoder = DisplayImageDecoder()
+
+    /// The ImageIO thumbnail bound for the preview column — generous versus
+    /// the 320 pt column so retina renders stay crisp.
+    private static let previewMaxPixelSize = 640
+
+    package init(history: any ClipboardHistory) {
+        self.history = history
+    }
+
+    /// Loads the preview content for `item` (`nil` clears the pane's
+    /// content state). Driven by the view's `.task(id: previewedItem)`: a
+    /// retarget cancels the previous load's task, and the fence covers the
+    /// case where cancellation arrives late or the awaited work does not
+    /// throw on cancellation.
+    package func load(item: HistoryItemReference?) async {
+        requestedItem = item
+        guard let item else {
+            image = nil
+            content = .unavailable
+            occurrence = nil
+            isLoading = false
+            return
+        }
+        isLoading = true
+        do {
+            let details = try await history.details(for: item.id)
+            try Task.checkCancellation()
+            guard requestedItem == item, details.item == item else { return }
+            switch PreviewContent.resolve(effective: details.effective) {
+            case .image(let bytes):
+                // Bounded decode OFF the MainActor (S-2/SPEC-IMPL-002): only
+                // the downsampled image is published; the full encoded bytes
+                // drop with this scope.
+                let decoded = await decoder.previewImage(
+                    from: bytes,
+                    maxPixelSize: Self.previewMaxPixelSize
+                )
+                try Task.checkCancellation()
+                guard requestedItem == item else { return }
+                image = decoded
+                content = decoded == nil ? .imageDecodeFailed : .image
+                occurrence = details.occurrence
+            case .text(let text):
+                image = nil
+                content = .text(text)
+                occurrence = details.occurrence
+            case .unavailable:
+                image = nil
+                content = .unavailable
+                occurrence = details.occurrence
+            }
+            isLoading = false
+        } catch is CancellationError {
+            // Discarded: a cancelled load publishes nothing — the retargeting
+            // load (or the nil reset) owns every value from here.
+        } catch {
+            // A typed failure renders as unavailable — but only under the
+            // still-current reference; a superseded/cancelled load's failure
+            // must not clear the newer load's spinner.
+            guard !Task.isCancelled, requestedItem == item else { return }
+            image = nil
+            content = .unavailable
+            occurrence = nil
+            isLoading = false
+        }
+    }
+}
+
+/// The preview column: a loading indicator while the item's content loads,
 /// the resolved content, and a metadata bar (source, copy count, last
 /// copied time — Maccy's preview footer replicated without AppKit app
 /// icons, which PresentationUI's confinement forbids).
@@ -104,13 +244,14 @@ public struct HistoryPreviewView: View {
     private let viewState: HistoryViewState
     private let previewState: PreviewPaneState
 
-    @State private var content: PreviewContent = .unavailable
-    @State private var occurrence: CopyOccurrenceSummary?
-    @State private var isLoading = false
+    @State private var loader: PreviewContentLoader
 
     public init(viewState: HistoryViewState, previewState: PreviewPaneState) {
         self.viewState = viewState
         self.previewState = previewState
+        _loader = State(
+            initialValue: PreviewContentLoader(history: viewState.history)
+        )
     }
 
     public var body: some View {
@@ -122,20 +263,34 @@ public struct HistoryPreviewView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
         }
-        .task(id: previewState.previewedItem) { await loadContent() }
+        // One load per exact previewed reference; the loader's fence
+        // discards a late result, so a superseded selection never renders
+        // another item's content (SPEC-IMPL-007 / PREVIEW-FENCE-1).
+        .task(id: previewState.previewedItem) {
+            await loader.load(item: previewState.previewedItem)
+        }
     }
 
     // MARK: - Content
 
     @ViewBuilder
     private var previewBody: some View {
-        if isLoading {
+        if loader.isLoading {
             ProgressView()
                 .accessibilityLabel("Loading preview")
         } else {
-            switch content {
-            case .image(let bytes):
-                imageContent(bytes)
+            switch loader.content {
+            case .image:
+                if let image = loader.image {
+                    Image(decorative: image, scale: 1)
+                        .resizable()
+                        .scaledToFit()
+                        .padding(8)
+                } else {
+                    imageDecodeFailedBody
+                }
+            case .imageDecodeFailed:
+                imageDecodeFailedBody
             case .text(let text):
                 ScrollView(.vertical) {
                     Text(text)
@@ -158,55 +313,18 @@ public struct HistoryPreviewView: View {
         }
     }
 
-    /// ImageIO-downsamples the encoded bytes into the preview box — the
-    /// full bitmap never materializes (Maccy's `previewImageSize`
-    /// downsampling replicated; CGImage keeps PresentationUI AppKit-free —
-    /// 01 §6, the same seam `ThumbnailStore` uses).
-    @ViewBuilder
-    private func imageContent(_ bytes: Data) -> some View {
-        if let image = Self.downsampledImage(from: bytes) {
-            Image(decorative: image, scale: 1)
-                .resizable()
-                .scaledToFit()
-                .padding(8)
-        } else {
-            VStack(spacing: 8) {
-                Image(systemName: "photo.badge.exclamationmark")
-                    .font(.title2)
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
-                Text("Preview Unavailable")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
+    /// The decode-failure placeholder: the representation looked decodable
+    /// but ImageIO produced no image.
+    private var imageDecodeFailedBody: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "photo.badge.exclamationmark")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            Text("Preview Unavailable")
+                .font(.callout)
+                .foregroundStyle(.secondary)
         }
-    }
-
-    /// The ImageIO thumbnail bound for the preview column — generous versus
-    /// the 320 pt column so retina renders stay crisp.
-    private static let previewMaxPixelSize = 640
-
-    private static func downsampledImage(from bytes: Data) -> CGImage? {
-        guard let source = CGImageSourceCreateWithData(bytes as CFData, nil) else {
-            return nil
-        }
-        let options: [CFString: Any] = [
-            kCGImageSourceThumbnailMaxPixelSize: previewMaxPixelSize,
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-        ]
-        // Primary-image index (audit
-        // docs/reviews/2026-08-20-clipy-maccy-audit/03-apple-platform.md
-        // §7 APL-C-06): CGImageSourceGetPrimaryImageIndex returns the
-        // HEIF/HEIC container's designated primary image and 0 for every
-        // non-HEIF source, so GIF/TIFF stay first-frame — a deliberate
-        // product simplification (the audit's "GIF/TIFF first-frame may
-        // be deliberate").
-        return CGImageSourceCreateThumbnailAtIndex(
-            source,
-            CGImageSourceGetPrimaryImageIndex(source),
-            options as CFDictionary
-        )
     }
 
     // MARK: - Metadata bar
@@ -214,7 +332,7 @@ public struct HistoryPreviewView: View {
     @ViewBuilder
     private var metadataBar: some View {
         HStack(spacing: 6) {
-            if let occurrence {
+            if let occurrence = loader.occurrence {
                 if let source = occurrence.lastSource {
                     Text(source)
                         .lineLimit(1)
@@ -229,29 +347,5 @@ public struct HistoryPreviewView: View {
         }
         .font(.caption)
         .foregroundStyle(.secondary)
-    }
-
-    // MARK: - Loading
-
-    /// Loads the previewed item's Effective Content through the view-state
-    /// seam (a typed failure renders as unavailable — the preview is a
-    /// convenience surface, not an error owner; 03b §10 stays with the
-    /// panel's failure banner).
-    private func loadContent() async {
-        guard let item = previewState.previewedItem else {
-            content = .unavailable
-            occurrence = nil
-            return
-        }
-        isLoading = true
-        do {
-            let details = try await viewState.details(for: item.id)
-            content = PreviewContent.resolve(effective: details.effective)
-            occurrence = details.occurrence
-        } catch {
-            content = .unavailable
-            occurrence = nil
-        }
-        isLoading = false
     }
 }

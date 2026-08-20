@@ -226,9 +226,12 @@ struct SmokeMeasurementTests {
 
     /// Preview smoke: the dwell-driven pane over the REAL facade — a text
     /// item resolves to its Effective-Content text, an image item resolves
-    /// to bytes that ImageIO downsamples into a CGImage (the exact decode
-    /// `HistoryPreviewView` performs), and the manual toggle suppresses
-    /// auto-open until the selection changes.
+    /// to bytes that downsample into a CGImage through the same bounded
+    /// decode the view's `PreviewContentLoader` performs off the MainActor
+    /// (inside PresentationUI's internal `DisplayImageDecoder` — audit
+    /// 2026-08-20 §S-2/§SPEC-IMPL-002; mirrored here by the file-local
+    /// `SmokeImageDecode` twin), and the manual toggle suppresses auto-open
+    /// until the selection changes.
     @Test(
         .enabled(
             if: FixtureCatalog.available,
@@ -286,8 +289,9 @@ struct SmokeMeasurementTests {
         #expect(textDetails.occurrence.lastSource == "com.example.previewsmoke")
 
         // Image: retargeting dwell swaps the pane to the image item; the
-        // resolved bytes downsample through ImageIO exactly as the view
-        // does.
+        // resolved bytes downsample through the same ImageIO option set the
+        // view's loader applies via `DisplayImageDecoder` (off the MainActor
+        // in the real view).
         previewState.handleSelectionChange(imageReference)
         let imageOpened = await ComposedSupport.waitFor(timeout: 5) {
             previewState.previewedItem == imageReference
@@ -373,9 +377,11 @@ private enum SmokeMemoryProbe {
     }
 }
 
-/// The file-local ImageIO downsample twin of
-/// `HistoryPreviewView.downsampledImage` (the view's helper is private;
-/// the smoke proves the same decode path over the same option set).
+/// The file-local ImageIO downsample twin of PresentationUI's internal
+/// `DisplayImageDecoder.previewImage` — the bounded decode the preview
+/// loader performs off the MainActor (audit 2026-08-20 §S-2). The decoder
+/// type is module-internal, so the smoke proves the same decode over the
+/// same option set here, including the primary-image index (03 §7 APL-C-06).
 private enum SmokeImageDecode {
     static func downsampled(_ bytes: Data) -> CGImage? {
         guard let source = CGImageSourceCreateWithData(bytes as CFData, nil) else {
@@ -386,6 +392,10 @@ private enum SmokeImageDecode {
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
         ]
-        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+        return CGImageSourceCreateThumbnailAtIndex(
+            source,
+            CGImageSourceGetPrimaryImageIndex(source),
+            options as CFDictionary
+        )
     }
 }

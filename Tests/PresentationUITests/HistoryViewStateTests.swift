@@ -470,4 +470,33 @@ struct HistoryViewStateTests {
         state.deactivate()
         await history.finishObservation()
     }
+
+    // MARK: - Configured-policy read (V2-07 §5.2/§6.3; SPEC-IMPL-003)
+
+    /// `retentionConfiguration()` is a thin passthrough to the public seam —
+    /// the settings tabs' panel-open read (docs/v2/V2-07-ux.md §6.3, a
+    /// one-shot read per §4.2.2; audit SPEC-IMPL-003): the scripted
+    /// configured-policy value comes back unchanged and the read reaches the
+    /// seam exactly once. Configured policy only — no live usage value
+    /// exists on the surface (V2-07 §2.2 OPEN-2).
+    @Test func retentionConfigurationReturnsTheScriptedConfiguredPolicy() async throws {
+        let scripted = HistoryRetentionConfiguration(
+            maximumUnpinnedItems: 42,
+            policies: HistoryRetentionPolicies(
+                age: AgeRetention(maxAge: 30 * 86_400),
+                storage: StorageRetention(maxTotalBytes: 500 * 1_048_576),
+                revisions: RevisionRetention(
+                    maxRevisionsPerItem: 20,
+                    maxRevisionBytesPerItem: 64 * 1_048_576
+                )
+            )
+        )
+        let history = ScriptedHistory(scriptedRetentionConfiguration: scripted)
+        let state = HistoryViewState(history: history)
+
+        let configuration = try await state.retentionConfiguration()
+
+        #expect(configuration == scripted)
+        #expect(await history.retentionConfigurationRequestCount == 1)
+    }
 }

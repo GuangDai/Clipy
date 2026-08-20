@@ -262,6 +262,15 @@ public final class HistoryViewState {
         try await history.perform(.setRetentionPolicies(policies))
     }
 
+    /// The authoritative configured retention state (docs/v2/V2-07-ux.md
+    /// §5.2/§6.3) — the settings tabs' panel-open read, so every control
+    /// opens at its persisted value instead of a neutral prefill (audit
+    /// SPEC-IMPL-003). Configured policy only; no usage readout exists on
+    /// the public surface (V2-07 §2.2 OPEN-2).
+    public func retentionConfiguration() async throws -> HistoryRetentionConfiguration {
+        try await history.retentionConfiguration()
+    }
+
     // MARK: - Observation plumbing (private)
 
     /// Cancels any current loop and debounce, then observes the current query.

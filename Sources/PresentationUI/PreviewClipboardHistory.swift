@@ -16,7 +16,8 @@ import HistoryCore
 ///
 /// Behavior: `browse` returns the scripted page (`next: nil`); `observe`
 /// yields that page once and finishes; `perform` is always `.unchanged`;
-/// `details` and `pastePayload` throw `.notFound`; `thumbnail` returns `nil`.
+/// `details` and `pastePayload` throw `.notFound`; `thumbnail` returns
+/// `nil`; `retentionConfiguration` returns the new-store defaults.
 public struct PreviewClipboardHistory: ClipboardHistory, Sendable {
 
     /// 2 pinned + 8 recent rows — realistic titles, types, timestamps,
@@ -78,6 +79,15 @@ public struct PreviewClipboardHistory: ClipboardHistory, Sendable {
         pixels: PixelSize
     ) async throws -> ThumbnailPayload? {
         nil
+    }
+
+    public func retentionConfiguration() async throws -> HistoryRetentionConfiguration {
+        // Previews show the new-store defaults: the Part VI default count
+        // (06 §2) and every V2-02 dimension disabled (`V2-02` §3.3).
+        HistoryRetentionConfiguration(
+            maximumUnpinnedItems: HistoryLimits.standard.defaultMaximumUnpinnedItems,
+            policies: HistoryRetentionPolicies(age: nil, storage: nil, revisions: nil)
+        )
     }
 
     // MARK: - Canned dataset (fixed literals; no clock or ID source)

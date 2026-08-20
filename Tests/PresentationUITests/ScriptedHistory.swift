@@ -30,6 +30,8 @@ import HistoryCore
 /// - `perform` records every action and either throws `performFailure` or
 ///   returns `.unchanged`.
 /// - `details`/`pastePayload` throw `.notFound`; `thumbnail` returns `nil`.
+/// - `retentionConfiguration` returns the scripted configured-policy value
+///   and records the request count (V2-07 §6.3's panel-open read).
 actor ScriptedHistory: ClipboardHistory {
 
     /// One scripted browse outcome (docs/03a-instruction-set.md §7).
@@ -49,6 +51,9 @@ actor ScriptedHistory: ClipboardHistory {
     /// Thrown by every `perform`; `nil` answers `.unchanged`.
     private let performFailure: HistoryFailure?
 
+    /// The configured-policy value `retentionConfiguration` returns.
+    private let scriptedRetentionConfiguration: HistoryRetentionConfiguration
+
     /// Recorded `observe` requests, in order.
     private(set) var observeRequests: [HistoryObservationRequest] = []
 
@@ -57,6 +62,9 @@ actor ScriptedHistory: ClipboardHistory {
 
     /// Recorded `perform` actions, in order.
     private(set) var performActions: [HistoryAction] = []
+
+    /// How many `retentionConfiguration` reads have arrived.
+    private(set) var retentionConfigurationRequestCount = 0
 
     /// The continuation of the most recently started observation stream.
     /// Registration happens synchronously inside `observe` (via
@@ -70,11 +78,13 @@ actor ScriptedHistory: ClipboardHistory {
     init(
         observedFirstPage: HistoryPage? = nil,
         browseScript: [HistoryPageCursor: BrowseOutcome] = [:],
-        performFailure: HistoryFailure? = nil
+        performFailure: HistoryFailure? = nil,
+        scriptedRetentionConfiguration: HistoryRetentionConfiguration = .newStoreDefaults
     ) {
         self.observedFirstPage = observedFirstPage
         self.browseScript = browseScript
         self.performFailure = performFailure
+        self.scriptedRetentionConfiguration = scriptedRetentionConfiguration
     }
 
     // MARK: Test control
@@ -146,6 +156,11 @@ actor ScriptedHistory: ClipboardHistory {
         pixels: PixelSize
     ) async throws -> ThumbnailPayload? {
         nil
+    }
+
+    func retentionConfiguration() async throws -> HistoryRetentionConfiguration {
+        retentionConfigurationRequestCount += 1
+        return scriptedRetentionConfiguration
     }
 }
 
@@ -223,6 +238,99 @@ actor ThumbnailScriptHistory: ClipboardHistory {
             format: .png,
             encodedBytes: encodedBytes
         )
+    }
+
+    /// Thumbnail suites never drive the configured-policy read; the double
+    /// answers the new-store defaults (06 §2; `V2-02` §3.3 all-disabled).
+    func retentionConfiguration() async throws -> HistoryRetentionConfiguration {
+        .newStoreDefaults
+    }
+}
+
+// MARK: - PausableDetailsHistory (preview fence double)
+
+/// A scripted `ClipboardHistory` for `PreviewContentLoader` fence tests
+/// (audit docs/reviews/2026-08-20-clipy-maccy-audit/
+/// 02-spec-implementation.md §SPEC-IMPL-007;
+/// 05-recommended-target-design.md §4.1 PREVIEW-FENCE-1): `details(for:)`
+/// records the request, then SUSPENDS until the test resumes it with the
+/// scripted `HistoryDetails` (or a typed failure) — so two in-flight detail
+/// reads can be completed in REVERSE order deterministically, with no sleeps
+/// on the deciding path. One in-flight read per item ID: the pane never
+/// loads the same item twice concurrently, and a second read for an ID
+/// already suspended would replace the first continuation (leaking it), so
+/// tests keep one selection per ID.
+actor PausableDetailsHistory: ClipboardHistory {
+
+    /// Scripted detail answers by item ID.
+    private var detailsByID: [HistoryItemID: HistoryDetails] = [:]
+
+    /// Suspended detail reads by item ID.
+    private var continuations: [HistoryItemID: CheckedContinuation<HistoryDetails, Error>] = [:]
+
+    /// Recorded `details` request IDs, in order.
+    private(set) var detailRequests: [HistoryItemID] = []
+
+    /// Scripts the answer `details(for:)` completes with once resumed.
+    func scriptDetails(_ details: HistoryDetails) {
+        detailsByID[details.item.id] = details
+    }
+
+    /// Resumes the suspended read for `id` with the scripted answer, or with
+    /// `failure` when one is given. No-op when no read is suspended — tests
+    /// poll `detailRequests` before resuming, so a missing continuation
+    /// surfaces as the poll's timeout failure, never as a silent pass.
+    func resumeDetails(for id: HistoryItemID, throwing failure: HistoryFailure? = nil) {
+        guard let continuation = continuations.removeValue(forKey: id) else { return }
+        if let failure {
+            continuation.resume(throwing: failure)
+        } else if let details = detailsByID[id] {
+            continuation.resume(returning: details)
+        } else {
+            continuation.resume(throwing: HistoryFailure.notFound(id))
+        }
+    }
+
+    // MARK: ClipboardHistory
+
+    func perform(_ action: HistoryAction) async throws -> HistoryReceipt {
+        .unchanged
+    }
+
+    func browse(_ request: HistoryBrowseRequest) async throws -> HistoryPage {
+        HistoryPage(position: ChangePosition(rawValue: 0), rows: [], next: nil)
+    }
+
+    func observe(
+        _ request: HistoryObservationRequest
+    ) async -> AsyncThrowingStream<HistoryPage, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.finish()
+        }
+    }
+
+    func details(for id: HistoryItemID) async throws -> HistoryDetails {
+        detailRequests.append(id)
+        return try await withCheckedThrowingContinuation { continuation in
+            continuations[id] = continuation
+        }
+    }
+
+    func pastePayload(for id: HistoryItemID) async throws -> PastePayload {
+        throw HistoryFailure.notFound(id)
+    }
+
+    func thumbnail(
+        for item: HistoryItemReference,
+        pixels: PixelSize
+    ) async throws -> ThumbnailPayload? {
+        nil
+    }
+
+    /// Preview suites never drive the configured-policy read; the double
+    /// answers the new-store defaults (06 §2; `V2-02` §3.3 all-disabled).
+    func retentionConfiguration() async throws -> HistoryRetentionConfiguration {
+        .newStoreDefaults
     }
 }
 
@@ -330,4 +438,18 @@ func pollUntil(
         try? await Task.sleep(for: interval)
     }
     return await condition()
+}
+
+// MARK: - Configured-policy fixture
+
+extension HistoryRetentionConfiguration {
+    /// The new-store defaults: the Part VI default count (06 §2) and every
+    /// V2-02 dimension disabled (`V2-02` §3.3) — the value a fresh store's
+    /// `retentionConfiguration()` read returns.
+    static var newStoreDefaults: HistoryRetentionConfiguration {
+        HistoryRetentionConfiguration(
+            maximumUnpinnedItems: HistoryLimits.standard.defaultMaximumUnpinnedItems,
+            policies: HistoryRetentionPolicies(age: nil, storage: nil, revisions: nil)
+        )
+    }
 }

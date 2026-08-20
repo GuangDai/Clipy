@@ -349,9 +349,12 @@ struct RenderStormAndMemoryTests {
             _ = try await viewState.details(for: imageIDs[3])
             _ = try await viewState.details(for: imageIDs[4])
 
-            // Thumbnail prefetch → ImageIO decode on the MainActor →
-            // whole-cache reset (04 §9); the reset releases the round's
-            // decoded images so the cache itself cannot mask a leak.
+            // Thumbnail prefetch → ImageIO decode OFF the MainActor
+            // (PresentationUI's internal `DisplayImageDecoder` actor —
+            // audit 2026-08-20 §S-2/§SPEC-IMPL-002) → bounded-store reset
+            // (04 §9; the byte/entry admission bound of audit §S-3); the
+            // reset releases the round's retained decoded images so the
+            // store itself cannot mask a leak.
             let imageRows = page.rows.filter {
                 ThumbnailStore.likelyThumbnailable($0.typeIdentifiers)
             }
