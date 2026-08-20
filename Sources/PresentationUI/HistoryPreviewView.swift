@@ -93,7 +93,7 @@ private let previewImageTypeIdentifiers: Set<String> = [
     "public.heic",
     "public.heif",
     "com.compuserve.gif",
-    "public.bmp",
+    "com.microsoft.bmp",
 ]
 
 /// The preview column: a loading indicator while the item's details load,

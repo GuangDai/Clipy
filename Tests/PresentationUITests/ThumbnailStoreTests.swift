@@ -147,6 +147,42 @@ struct ThumbnailStoreTests {
         #expect(await history.requestCount(for: item) == 2)
     }
 
+    // MARK: - Cache ceiling (04 §9 step 7)
+
+    /// The whole-cache ceiling is a hard bound: with `maximumEntries: 3`,
+    /// four completed fetches leave at most 3 cached entries. The eviction
+    /// check runs AFTER insertion (insert-then-evict); the pre-insertion
+    /// `>` check it replaced let the cache reach `maximumEntries + 1`
+    /// (audit 2026-08-20: a 500-entry cache could hold 501).
+    @Test func cacheNeverExceedsItsConfiguredMaximum() async {
+        let items = [
+            reference("00000000-0000-0000-0000-0000000000E1", version: 1),
+            reference("00000000-0000-0000-0000-0000000000E2", version: 1),
+            reference("00000000-0000-0000-0000-0000000000E3", version: 1),
+            reference("00000000-0000-0000-0000-0000000000E4", version: 1),
+        ]
+        let history = ThumbnailScriptHistory(
+            pngByReference: Dictionary(
+                uniqueKeysWithValues: items.map { ($0, fixturePNGData) }
+            )
+        )
+        let store = ThumbnailStore(history: history, maximumEntries: 3)
+
+        for item in items {
+            store.prefetch(item)
+        }
+
+        // Quiescence: every scripted fetch answered and every completion
+        // landed (the in-flight set empties only in `store`/failure paths).
+        #expect(await pollUntil {
+            for item in items where await history.requestCount(for: item) != 1 {
+                return false
+            }
+            return store.inFlightCount == 0
+        })
+        #expect(store.cachedEntryCount <= 3)
+    }
+
     // MARK: - Prefetch gate (04 §9)
 
     /// The cheap UTI heuristic answers true exactly when some type is in
@@ -161,7 +197,7 @@ struct ThumbnailStoreTests {
         )
         #expect(
             ThumbnailStore.likelyThumbnailable(
-                ["com.compuserve.gif", "public.jpeg", "public.heic", "public.heif", "public.bmp"]
+                ["com.compuserve.gif", "public.jpeg", "public.heic", "public.heif", "com.microsoft.bmp"]
             )
         )
         #expect(!ThumbnailStore.likelyThumbnailable(["public.utf8-plain-text"]))

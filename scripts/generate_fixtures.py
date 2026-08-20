@@ -652,7 +652,7 @@ def generate(seed: int, outdir: Path, tarball: Path) -> list[dict]:
     buf = io.BytesIO()
     bmp.save(buf, format="BMP")
     record("images/photo-1080.bmp", buf.getvalue(), "image",
-           "public.bmp coverage; BMP kept at 1080p to bound uncompressed size")
+           "com.microsoft.bmp coverage; BMP kept at 1080p to bound uncompressed size")
 
     base_frame = masters["b"].resize((1280, 720), Image.BICUBIC)
     frames = []

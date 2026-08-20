@@ -149,7 +149,9 @@ extension HistoryAuthority {
     /// set; v1 freezes the concrete decodable UTIs (not the abstract
     /// `public.image`, even though CGImageSource sniffs bytes) so the source
     /// representation is a pure, deterministic function of the content with no
-    /// framework conformance lookup.
+    /// framework conformance lookup. Identifiers are Apple's declared UTType
+    /// identifiers verbatim (BMP is `com.microsoft.bmp`; the nonstandard
+    /// `public.bmp` matches nothing a real pasteboard declares).
     internal static let thumbnailImageTypeIdentifiers: Set<String> = [
         "public.png",
         "public.jpeg",
@@ -157,7 +159,7 @@ extension HistoryAuthority {
         "public.heic",
         "public.heif",
         "com.compuserve.gif",
-        "public.bmp",
+        "com.microsoft.bmp",
     ]
 
     /// Existing-flight admission performs only the per-caller checks whose

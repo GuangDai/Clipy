@@ -198,7 +198,7 @@ public struct HistoryRowView: View {
         }
         if matches([
             "public.image", "public.png", "public.jpeg",
-            "public.tiff", "public.heic", "public.gif"
+            "public.tiff", "public.heic", "com.compuserve.gif"
         ]) {
             return "photo"
         }

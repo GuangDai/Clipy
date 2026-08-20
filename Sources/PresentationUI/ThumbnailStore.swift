@@ -70,7 +70,7 @@ public final class ThumbnailStore {
         "public.heic",
         "public.heif",
         "com.compuserve.gif",
-        "public.bmp",
+        "com.microsoft.bmp",
     ]
 
     // MARK: - Init
@@ -148,13 +148,17 @@ public final class ThumbnailStore {
     // MARK: - Decode (private, MainActor-only)
 
     /// Records a completed fetch under its exact requesting key, resetting
-    /// the whole cache first when the entry ceiling is exceeded.
+    /// the whole cache when the entry ceiling is exceeded. Insert-then-evict:
+    /// checking BEFORE insertion would let the cache reach
+    /// `maximumEntries + 1` (audit 2026-08-20 cache-ceiling off-by-one);
+    /// evicting after the insert keeps `cachedEntryCount <= maximumEntries`
+    /// an observable invariant at every quiescent point.
     private func store(item: HistoryItemReference, image: CGImage?) {
         inFlight.remove(item)
+        entries[item] = image.map(Entry.hit) ?? .miss
         if entries.count > maximumEntries {
             entries.removeAll()
         }
-        entries[item] = image.map(Entry.hit) ?? .miss
     }
 
     /// Decodes encoded PNG thumbnail bytes (docs/03b-instruction-set.md §9)

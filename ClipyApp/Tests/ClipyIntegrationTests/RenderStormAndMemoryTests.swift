@@ -302,7 +302,7 @@ struct RenderStormAndMemoryTests {
             ("images/photo4k-a.png", "public.png"),
             ("images/photo4k-b.jpg", "public.jpeg"),
             ("images/photo4k-c.tiff", "public.tiff"),
-            ("images/photo-1080.bmp", "public.bmp"),
+            ("images/photo-1080.bmp", "com.microsoft.bmp"),
             ("images/huge-8k.png", "public.png"),
             ("images/icon-512.png", "public.png"),
         ]

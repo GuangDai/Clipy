@@ -350,7 +350,7 @@ internal enum ContentProjector {
         "com.compuserve.gif",
         "public.heic",
         "public.heif",
-        "public.bmp",
+        "com.microsoft.bmp",
     ]
 
     /// The stable type-based fallback title used when no textual

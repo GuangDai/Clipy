@@ -677,7 +677,7 @@ private let imageTypeIdentifiers: Set<String> = [
     "public.heic",
     "public.heif",
     "com.compuserve.gif",
-    "public.bmp",
+    "com.microsoft.bmp",
 ]
 
 /// `true` when the representation's type is one of the frozen textual UTIs
