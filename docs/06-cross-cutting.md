@@ -115,16 +115,19 @@ Test targets mirror the owner target:
 HistoryCoreTests
 HistoryDomainTests
 HistoryStorageTests
-HistoryPerfRunnerTests
+HistoryPerfTests
 PasteboardAdapterTests
 PresentationUITests
 ClipyIntegrationTests
 ```
 
 The scaffold must not add an implementation target for a deferred feature.
-`HistoryPerfRunnerTests` imports the executable target only to prove its pure
+`HistoryPerfTests` imports the executable target only to prove its pure
 §9 helpers and declarative coverage/envelope tables; workload acceptance still
-runs the release executable itself. `HistoryStorageTests` uses both persistent
+runs the release executable itself. It runs in its own CI lane
+(`swift test --filter 'HistoryPerfTests\.'`): the default `swift test` lane
+skips it (`--skip 'HistoryPerfTests\.'`) so the standard targets carry
+functional tests only. `HistoryStorageTests` uses both persistent
 temporary stores and the same implementation's in-memory configuration.
 
 Recommended implementation order:

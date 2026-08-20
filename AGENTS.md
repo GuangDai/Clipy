@@ -42,6 +42,11 @@ remove/clear), details + revise editor, unified retention settings (v1
 count + V2-02 age/storage/revision dimensions), pasteboard capture/paste
 round-trip, and the WS1–WS21 composed re-verification in
 `ClipyIntegrationTests` all pass on macOS CI.
+Post-step-9 additions: the perf/AB helper proofs live in the separate
+`HistoryPerfTests` target/lane (the default `swift test` skips them), and the
+panel is a Maccy-style AppDelegate-owned floating `NSPanel` (Carbon ⇧⌘C
+summon, cursor/status-item/center/last-position placement, dwell-driven
+preview pane) — no longer a SwiftUI `MenuBarExtra` window.
 Always check `docs/PROGRESS.md` for the exact landed state before assuming a
 feature exists.
 
@@ -126,7 +131,8 @@ swiftlint lint --strict --no-cache
 
 # SwiftPM build + test (Swift 6 strict concurrency)
 swift build
-swift test
+swift test                                    # default lane: functional tests only (skips HistoryPerfTests)
+swift test --filter 'HistoryPerfTests\.'      # the perf/AB helper proofs lane (CI job: perf-tests)
 
 # HistoryCore public symbol snapshot (macOS only)
 bash scripts/public_symbol_snapshot.sh            # check
@@ -187,7 +193,11 @@ warnings.
   `HistoryCoreTests`, `HistoryDomainTests`, `HistoryStorageTests`,
   `PasteboardAdapterTests`, `PresentationUITests` (SwiftPM), plus
   `ClipyIntegrationTests` hosted by the app (XcodeGen-only, not in
-  `Package.swift`).
+  `Package.swift`). `HistoryPerfTests` (SwiftPM) holds the perf/AB
+  measurement-helper proofs for the `HistoryPerfRunner` executable; the
+  default `swift test` skips it (`--skip 'HistoryPerfTests\.'`) and CI runs
+  it in the dedicated `perf-tests` job, so the standard targets carry
+  functional tests only.
 - Persistence tests use the real `SwiftDataHistory` with an **in-memory**
   `ModelContainer` — there is no second fake writer implementation. A scripted
   `ClipboardHistory` double is allowed only for SwiftUI previews, never as a

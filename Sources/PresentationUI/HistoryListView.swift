@@ -12,8 +12,9 @@ import Foundation
 import HistoryCore
 import SwiftUI
 
-/// The browsing list. Rows are keyed by `HistoryItemID`; the selection drives
-/// the panel shortcuts (⏎ copy, ⌫ remove, ⌘P pin toggle, ⌘I details push).
+/// The browsing list. Rows are keyed by `HistoryItemID`; the selection
+/// (hoisted to the panel so the preview pane can dwell on it) drives the
+/// panel shortcuts (⏎ copy, ⌫ remove, ⌘P pin toggle, ⌘I details push).
 /// Additional pages are requested when the last row appears and shown with a
 /// trailing spinner row while `isLoadingPage` (04 §6: observation covers only
 /// the first page; continuations are one-shot browses owned by the view state).
@@ -21,18 +22,20 @@ public struct HistoryListView: View {
     private let viewState: HistoryViewState
     private let thumbnails: ThumbnailStore
     private let isSearchFieldFocused: Bool
+    private let selection: Binding<HistoryItemID?>
     private let onShowDetails: (HistoryItemReference) -> Void
-    @State private var selection: HistoryItemID?
 
     public init(
         viewState: HistoryViewState,
         thumbnails: ThumbnailStore,
         isSearchFieldFocused: Bool,
+        selection: Binding<HistoryItemID?>,
         onShowDetails: @escaping (HistoryItemReference) -> Void
     ) {
         self.viewState = viewState
         self.thumbnails = thumbnails
         self.isSearchFieldFocused = isSearchFieldFocused
+        self.selection = selection
         self.onShowDetails = onShowDetails
     }
 
@@ -53,7 +56,7 @@ public struct HistoryListView: View {
     // MARK: List
 
     private var list: some View {
-        List(selection: $selection) {
+        List(selection: selection) {
             if !viewState.pinnedRows.isEmpty {
                 Section("Pinned") {
                     ForEach(viewState.pinnedRows, id: \.item.id) { row in
@@ -136,8 +139,8 @@ public struct HistoryListView: View {
     // MARK: Selection + keyboard surface
 
     private var selectedRow: HistoryRow? {
-        guard let selection else { return nil }
-        return viewState.rows.first { $0.item.id == selection }
+        guard let id = selection.wrappedValue else { return nil }
+        return viewState.rows.first { $0.item.id == id }
     }
 
     /// Invisible buttons carrying the selection-keyed shortcuts. The ⌫
@@ -198,12 +201,14 @@ private struct HistoryListViewPreview: View {
     @State private var thumbnails = ThumbnailStore(
         history: PreviewClipboardHistory.populated
     )
+    @State private var selection: HistoryItemID?
 
     var body: some View {
         HistoryListView(
             viewState: viewState,
             thumbnails: thumbnails,
             isSearchFieldFocused: false,
+            selection: $selection,
             onShowDetails: { _ in }
         )
         .task { viewState.activate() }

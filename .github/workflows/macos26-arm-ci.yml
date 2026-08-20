@@ -168,9 +168,12 @@ jobs:
 
       - name: Run package tests
         shell: bash
+        # The perf/AB measurement-helper proofs (HistoryPerfTests target) are
+        # split out of this lane into the dedicated perf-tests job: the
+        # default `swift test` run carries functional tests only.
         run: |
           set -o pipefail
-          swift test 2>&1 | tee "$LOG_DIR/spm-test.log"
+          swift test --skip 'HistoryPerfTests\.' 2>&1 | tee "$LOG_DIR/spm-test.log"
 
       - name: Self-scan SPM logs
         shell: bash
@@ -206,6 +209,64 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: spm-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-logs
+          if-no-files-found: warn
+          retention-days: 14
+
+  perf-tests:
+    # The perf/AB measurement-helper proofs (HistoryPerfTests target:
+    # median/ratio/duration helpers, §9 coverage/envelope tables, the
+    # exact-matcher A/B fixture math with the 5,000-row admission profiles).
+    # Split out of the default `swift test` lane so that lane carries
+    # functional tests only; this job keeps the same per-push coverage in its
+    # own lane.
+    name: SwiftPM perf/AB helper tests
+    needs: [gates]
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      NSUnbufferedIO: YES
+      OS_ACTIVITY_MODE: disable
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      LOG_DIR: ${{ github.workspace }}/ci-logs
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Prepare log directories
+        shell: bash
+        run: mkdir -p "$LOG_DIR"
+
+      - name: Enforce macOS 26 ARM runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(sw_vers -productVersion)" == 26.* ]]
+          [[ "$(uname -m)" == arm64 ]]
+
+      - name: Run perf/AB helper tests
+        shell: bash
+        run: |
+          set -o pipefail
+          swift test --filter 'HistoryPerfTests\.' 2>&1 | tee "$LOG_DIR/perf-test.log"
+
+      - name: Self-scan perf test log
+        shell: bash
+        run: |
+          set -euo pipefail
+          matches=$(grep -Ein '(^|[^[:alpha:]])(warning:|error:)([^[:alpha:]]|$)' \
+            "$LOG_DIR/perf-test.log" || true)
+          if [[ -n "$matches" ]]; then
+            echo "$matches"
+            echo "Warnings or errors found in perf test log"
+            exit 1
+          fi
+
+      - name: Upload perf test logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: perf-tests-${{ github.run_id }}-${{ github.run_attempt }}
           path: ci-logs
           if-no-files-found: warn
           retention-days: 14

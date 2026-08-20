@@ -746,3 +746,60 @@ test.
   suites' on-disk temp stores; the admission lane's existing awk prefilter
   now also covers the SPM and app self-scans (runs 31808691118/31809994808
   documented the same noise).
+
+
+## Post-step-9: perf/AB test-lane split + Maccy-style panel (hotkey, position, preview)
+
+- **Status:** landed on `codex/v2-implementation`; CI evidence recorded at
+  merge (the commit message carries the run id).
+- **Test-lane split:** the perf/AB measurement-helper proofs moved from
+  `HistoryPerfRunnerTests` to the renamed SwiftPM target `HistoryPerfTests`
+  (`Tests/HistoryPerfTests/`). The default `swift test` lane now skips it
+  (`--skip 'HistoryPerfTests\.'`) so the standard targets carry functional
+  tests only; a dedicated per-push `perf-tests` CI job runs
+  `--filter 'HistoryPerfTests\.'` with the same zero-warning self-scan. The
+  dispatch-only admission lanes (5,000-row p50/p95/p99 + RSS, exact-matcher
+  A/B) are unchanged.
+- **Panel (Maccy replication):** the browsing surface moved off the SwiftUI
+  `MenuBarExtra` (a menu-bar-extra window can be neither summoned nor
+  positioned programmatically) onto Maccy's model: an AppDelegate-owned
+  AppKit `NSStatusItem` + a fixed-size floating `NSPanel` (non-activating,
+  key-capable, closes on focus loss, `.statusBar` level, every-space
+  collection behavior) + a Carbon `RegisterEventHotKey` ⇧⌘C global summon —
+  replicated WITHOUT adding the KeyboardShortcuts dependency
+  (docs/roadmap/07-external-deps.md's no-new-deps rule stands). Placement
+  (`PopupPositionMode`: cursor / status-item / screen-center / last-position,
+  pointer-screen aware, visible-frame clamped, drag-persisted normalized
+  anchor) is pure geometry in ClipyApp (`PopupPositionGeometry`); the mode is
+  user-configurable in Settings → General. The store now opens at launch
+  instead of at first panel appearance — a clipboard manager must capture
+  while closed. Paste closes the panel via `AppComposition.onPasteCompleted`
+  (the panel never activates the app, so the paste target keeps focus).
+- **Preview pane (Maccy's slideout, replicated):** PresentationUI gains
+  `PreviewPaneState` (200 ms dwell-to-peek auto-open on selection change with
+  cancel-and-reschedule debounce, ⌃Space manual toggle, manual-close
+  suppression until the next selection change, panel key-status arming),
+  `HistoryPreviewView` (image-first `PreviewContent.resolve` over Effective
+  Content, ImageIO downsampling to CGImage — PresentationUI stays
+  AppKit-free — UTF-16/UTF-8 frozen-encoding text decode, 50,000-character
+  cap, source/count/timestamp metadata bar), and `PanelGeometry` (the shared
+  400 + 1 + 320 × 560 window-width vocabulary both the SwiftUI frame and the
+  AppKit `setFrame` read). The window widens for the preview with a single
+  no-animation `setFrame` that pins the anchor edge (Maccy's layout-storm
+  lesson); Esc clears an active search, else closes the panel.
+- **Smoke/measurement hooks (ClipyIntegrationTests,
+  `SmokeMeasurementTests`):** thumbnail-cache memory eviction (deterministic
+  entry-count proof at an injected ceiling of 3: six inserts leave exactly
+  two entries), corpus memory loading (RSS bounded across a full 150-item
+  page-through), render-speed first-page/page-turn timing capture, and the
+  preview pane end-to-end over the real facade. Measurements print as
+  grep-able `clipy.smoke.measurement` JSON lines — recorded, never asserted.
+  `PanelAndHotKeyTests` proves the origin geometry over synthetic screen
+  frames and headless Carbon registration; `PreviewPaneStateTests` and
+  `PreviewContentTests` (PresentationUITests) cover the state machine and the
+  resolver. `ThumbnailStore` gained an injectable entry ceiling plus
+  `cachedEntryCount`/`inFlightCount` observability for the eviction smoke.
+- **Hosted-test isolation:** `AppDelegate.isRunningTests` (XCTest linkage or
+  `XCTestConfigurationFilePath`) skips the status item, hotkey, and
+  production-store open under the test host — Maccy's `enable-testing`
+  pattern; the composed suites keep composing their own stacks.

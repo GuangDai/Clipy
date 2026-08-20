@@ -40,19 +40,35 @@ public struct ClipySettingsView: View {
     /// (PresentationUI never imports ServiceManagement — contract §4.4).
     private let launchAtLogin: Binding<Bool>?
 
+    /// Non-`nil` only when the composition root owns a floating panel whose
+    /// placement the user can configure (the geometry lives in ClipyApp —
+    /// PresentationUI carries the mode value only).
+    private let popupPosition: Binding<PopupPositionMode>?
+
     /// - Parameters:
     ///   - viewState: the shared interaction-state object (contract §3).
     ///   - launchAtLogin: when non-`nil`, the General tab shows the
     ///     "Launch at Login" toggle bound to it; `nil` (previews, hosted
     ///     tests) omits the toggle entirely.
-    public init(viewState: HistoryViewState, launchAtLogin: Binding<Bool>? = nil) {
+    ///   - popupPosition: when non-`nil`, the General tab shows the panel
+    ///     position picker bound to it; `nil` omits the picker entirely.
+    public init(
+        viewState: HistoryViewState,
+        launchAtLogin: Binding<Bool>? = nil,
+        popupPosition: Binding<PopupPositionMode>? = nil
+    ) {
         self.viewState = viewState
         self.launchAtLogin = launchAtLogin
+        self.popupPosition = popupPosition
     }
 
     public var body: some View {
         TabView {
-            GeneralSettingsTab(viewState: viewState, launchAtLogin: launchAtLogin)
+            GeneralSettingsTab(
+                viewState: viewState,
+                launchAtLogin: launchAtLogin,
+                popupPosition: popupPosition
+            )
                 .tabItem { Label("General", systemImage: "gear") }
             RetentionSettingsTab(viewState: viewState)
                 .tabItem { Label("Retention", systemImage: "clock.arrow.circlepath") }
@@ -76,6 +92,7 @@ private struct GeneralSettingsTab: View {
 
     private let viewState: HistoryViewState
     private let launchAtLogin: Binding<Bool>?
+    private let popupPosition: Binding<PopupPositionMode>?
 
     /// Text backing the count field; parsed and range-checked on every use
     /// (Apply is disabled while invalid — contract §4.4 "numeric
@@ -88,9 +105,14 @@ private struct GeneralSettingsTab: View {
     @State private var isConfirmingClearUnpinned = false
     @State private var isConfirmingClearAll = false
 
-    init(viewState: HistoryViewState, launchAtLogin: Binding<Bool>?) {
+    init(
+        viewState: HistoryViewState,
+        launchAtLogin: Binding<Bool>?,
+        popupPosition: Binding<PopupPositionMode>?
+    ) {
         self.viewState = viewState
         self.launchAtLogin = launchAtLogin
+        self.popupPosition = popupPosition
     }
 
     var body: some View {
@@ -128,6 +150,13 @@ private struct GeneralSettingsTab: View {
                 }
                 if let launchAtLogin {
                     Toggle("Launch at Login", isOn: launchAtLogin)
+                }
+                if let popupPosition {
+                    Picker("Panel position", selection: popupPosition) {
+                        ForEach(PopupPositionMode.allCases, id: \.self) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
                 }
             }
             GroupBox("Danger Zone") {

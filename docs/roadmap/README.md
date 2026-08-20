@@ -46,10 +46,12 @@ HistoryStorage}; the direct ClipyApp→HistoryCore edge (for `any ClipboardHisto
 is not drawn in the structural graph.
 
 Test targets mirror each owner (`HistoryCoreTests`, `HistoryDomainTests`,
-`HistoryStorageTests`, `HistoryPerfRunnerTests`, `PasteboardAdapterTests`,
+`HistoryStorageTests`, `HistoryPerfTests`, `PasteboardAdapterTests`,
 `PresentationUITests`, `ClipyIntegrationTests`), per Part VI §5. The runner
 test target is cross-cutting proof infrastructure rather than an eighth design
-module.
+module, and runs in its own CI lane outside the default `swift test`
+(invoked there as `HistoryPerfTests`, renamed from `HistoryPerfRunnerTests`
+when the perf/AB helper proofs were split out of the default test lane).
 
 ## 3. Implementation order (Part VI §5), grouped into phases
 

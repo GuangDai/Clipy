@@ -1,6 +1,7 @@
-/// HistoryPanelView.swift — the menu-bar browsing surface (400×560): search
-/// header, history list inside the panel NavigationStack, failure banner, and
-/// footer bar.
+/// HistoryPanelView.swift — the floating-panel browsing surface: search
+/// header, history list inside the panel NavigationStack, failure banner,
+/// footer bar, and the optional preview column (Maccy's two-pane slideout
+/// replicated with `PanelGeometry`-shared fixed widths).
 /// Owning spec: docs/01-architecture.md §5.2/§5.4/§5.6/§5.7 (gesture →
 /// action, browse, paste hand-off via `requestPaste`, thumbnail), §6
 /// (main-actor UI built only from HistoryCore DTOs);
@@ -12,18 +13,28 @@ import Foundation
 import HistoryCore
 import SwiftUI
 
-/// The composition point ClipyApp hosts inside its `MenuBarExtra` window.
+/// The composition point ClipyApp hosts inside its floating panel window.
 /// Owns the reference-exact `ThumbnailStore` (created from
-/// `viewState.history`; 01 §5.7) and the panel's details navigation: the
-/// stack root is the list and `HistoryItemReference` values push
-/// `HistoryDetailsView`.
+/// `viewState.history`; 01 §5.7), the hoisted list selection, and the
+/// panel's details navigation: the stack root is the list and
+/// `HistoryItemReference` values push `HistoryDetailsView`.
+///
+/// The preview pane (`PreviewPaneState`) is INJECTED by the composition
+/// root so the AppKit panel can drive its lifecycle hooks
+/// (`panelBecameKey`/`panelResignedKey`/`panelClosed`) and observe
+/// `isOpen` through `onPreviewVisibilityChange` to resize the window —
+/// PresentationUI itself never touches AppKit (01 §8).
 public struct HistoryPanelView: View {
     private let viewState: HistoryViewState
+    private let previewState: PreviewPaneState
     private let onOpenSettings: () -> Void
     private let onQuit: () -> Void
+    private let onRequestClose: () -> Void
+    private let onPreviewVisibilityChange: ((Bool) -> Void)?
 
     @State private var thumbnails: ThumbnailStore
     @State private var detailsPath: [HistoryItemReference] = []
+    @State private var selection: HistoryItemID?
     @State private var dismissedFailure: HistoryFailure?
     @State private var pendingClear: ClearScope?
     @FocusState private var isSearchFieldFocused: Bool
@@ -33,16 +44,64 @@ public struct HistoryPanelView: View {
     /// `ThumbnailStore` for `viewState.history` (01 §5.7).
     public init(
         viewState: HistoryViewState,
+        previewState: PreviewPaneState,
         onOpenSettings: @escaping () -> Void = {},
-        onQuit: @escaping () -> Void = {}
+        onQuit: @escaping () -> Void = {},
+        onRequestClose: @escaping () -> Void = {},
+        onPreviewVisibilityChange: ((Bool) -> Void)? = nil
     ) {
         self.viewState = viewState
+        self.previewState = previewState
         self.onOpenSettings = onOpenSettings
         self.onQuit = onQuit
+        self.onRequestClose = onRequestClose
+        self.onPreviewVisibilityChange = onPreviewVisibilityChange
         _thumbnails = State(initialValue: ThumbnailStore(history: viewState.history))
     }
 
     public var body: some View {
+        HStack(spacing: 0) {
+            mainColumn
+                .frame(width: PanelGeometry.contentWidth)
+            if previewState.isOpen {
+                Divider()
+                HistoryPreviewView(viewState: viewState, previewState: previewState)
+                    .frame(width: PanelGeometry.previewWidth)
+                    // Opacity-only fade (Maccy's lesson: animating the WIDTH
+                    // forces an NSHostingView re-layout per frame — a layout
+                    // storm; compositing a fade does not).
+                    .transition(.opacity)
+            }
+        }
+        .frame(
+            width: PanelGeometry.totalWidth(previewOpen: previewState.isOpen),
+            height: PanelGeometry.height
+        )
+        .background { hiddenShortcuts }
+        .task { viewState.activate() }
+        .onDisappear { viewState.deactivate() }
+        .onChange(of: selection) { _, newSelection in
+            previewState.handleSelectionChange(reference(for: newSelection))
+        }
+        .onChange(of: previewState.isOpen) { _, isOpen in
+            onPreviewVisibilityChange?(isOpen)
+        }
+        .confirmationDialog(
+            clearConfirmationTitle,
+            isPresented: clearConfirmationPresented,
+            titleVisibility: .visible
+        ) {
+            clearConfirmationActions
+        } message: {
+            Text(clearConfirmationMessage)
+        }
+    }
+
+    // MARK: Main column
+
+    /// The pre-preview 400pt column, unchanged: search header, the list in
+    /// its details NavigationStack, failure banner, footer.
+    private var mainColumn: some View {
         VStack(spacing: 0) {
             SearchHeaderView(
                 viewState: viewState,
@@ -57,6 +116,7 @@ public struct HistoryPanelView: View {
                     viewState: viewState,
                     thumbnails: thumbnails,
                     isSearchFieldFocused: isSearchFieldFocused,
+                    selection: $selection,
                     onShowDetails: { item in detailsPath.append(item) }
                 )
                 .navigationDestination(for: HistoryItemReference.self) { item in
@@ -69,19 +129,14 @@ public struct HistoryPanelView: View {
             footer
                 .overlay(alignment: .top) { Divider() }
         }
-        .frame(width: 400, height: 560)
-        .background { escapeShortcut }
-        .task { viewState.activate() }
-        .onDisappear { viewState.deactivate() }
-        .confirmationDialog(
-            clearConfirmationTitle,
-            isPresented: clearConfirmationPresented,
-            titleVisibility: .visible
-        ) {
-            clearConfirmationActions
-        } message: {
-            Text(clearConfirmationMessage)
-        }
+    }
+
+    /// The selected row's exact reference (item ID + Content Version) — the
+    /// preview pane's dwell target; `nil` when the selection no longer
+    /// resolves (e.g. the row was removed).
+    private func reference(for selection: HistoryItemID?) -> HistoryItemReference? {
+        guard let selection else { return nil }
+        return viewState.rows.first { $0.item.id == selection }?.item
     }
 
     // MARK: Failure banner
@@ -220,15 +275,27 @@ public struct HistoryPanelView: View {
 
     // MARK: Hidden shortcuts
 
-    /// Esc clears the search term first; with no search text the key falls
-    /// through to the menu-bar window's own dismissal.
-    private var escapeShortcut: some View {
-        Button("Clear Search") {
-            if viewState.isSearchActive {
-                viewState.searchText = ""
+    /// Esc clears the search term first; with no search text it asks the
+    /// hosting panel to close (Maccy's KeyChord `.escape` → `close`,
+    /// adapted: a non-empty query keeps its clear-first behavior).
+    /// ⌃Space toggles the preview pane for the current selection (Maccy's
+    /// `togglePreview` default chord).
+    private var hiddenShortcuts: some View {
+        Group {
+            Button("Clear Search or Close") {
+                if viewState.isSearchActive {
+                    viewState.searchText = ""
+                } else {
+                    onRequestClose()
+                }
             }
+            .keyboardShortcut(.cancelAction)
+
+            Button("Toggle Preview") {
+                previewState.togglePreview(for: reference(for: selection))
+            }
+            .keyboardShortcut(.space, modifiers: .control)
         }
-        .keyboardShortcut(.cancelAction)
         .opacity(0)
         .frame(width: 0, height: 0)
         .accessibilityHidden(true)
@@ -236,7 +303,16 @@ public struct HistoryPanelView: View {
 }
 
 #Preview {
-    HistoryPanelView(
-        viewState: HistoryViewState(history: PreviewClipboardHistory.populated)
-    )
+    HistoryPanelPreview()
+}
+
+private struct HistoryPanelPreview: View {
+    @State private var previewState = PreviewPaneState()
+
+    var body: some View {
+        HistoryPanelView(
+            viewState: HistoryViewState(history: PreviewClipboardHistory.populated),
+            previewState: previewState
+        )
+    }
 }

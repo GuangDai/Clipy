@@ -89,7 +89,12 @@ let package = Package(
             ]
         ),
         .testTarget(
-            name: "HistoryPerfRunnerTests",
+            // Perf/AB measurement-helper proofs live OUTSIDE the default
+            // `swift test` lane: the main CI job runs with
+            // `--skip 'HistoryPerfTests\.'` and the dedicated `perf-tests`
+            // job runs `--filter 'HistoryPerfTests\.'`, so the standard test
+            // targets carry functional tests only.
+            name: "HistoryPerfTests",
             dependencies: [.target(name: "HistoryPerfRunner")]
         ),
         .testTarget(

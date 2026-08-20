@@ -7,7 +7,6 @@
 /// caller example docs/03b-instruction-set.md §12; store startup
 /// docs/05-authority-kernel.md §2/§13; roadmap docs/roadmap/06-clipyapp.md
 /// (step 9b).
-import AppKit
 import Foundation
 import HistoryCore
 import HistoryStorage
@@ -55,6 +54,13 @@ final class AppComposition {
 
     /// The panel's state holder over HistoryCore DTOs (01 §6).
     let viewState: HistoryViewState
+
+    /// Invoked on the main actor after every successful paste write —
+    /// the composition root's panel-close hook (Maccy's paste-dismiss;
+    /// the floating panel never activates the app, so the paste target
+    /// keeps focus and the only dismissal needed is the panel's own).
+    /// `nil` in hosted tests, where no panel exists.
+    var onPasteCompleted: (() -> Void)?
 
     /// Store URLs this process has opened. The process-side half of the
     /// no-second-writer rule (01 §8): `open(storeURL:)` consults and
@@ -200,9 +206,11 @@ final class AppComposition {
     /// (01 §5.6; 03b §12; 04 §8): resolve the item's current Effective
     /// Content payload, write it to the general pasteboard (with the
     /// lineage hint that lets the next capture coalesce the round-trip,
-    /// 03b §9), then hide the app so the user's target receives the paste.
-    /// Everything happens outside any History transaction — a paste is a
-    /// clipboard side effect, never durable History state (04 §8).
+    /// 03b §9), then run `onPasteCompleted` (which closes the floating
+    /// panel — it never activated the app, so the user's target kept focus
+    /// throughout and receives the paste). Everything happens outside any
+    /// History transaction — a paste is a clipboard side effect, never
+    /// durable History state (04 §8).
     ///
     /// Typed failures are swallowed deliberately: an item removed between
     /// selection and paste fails `.notFound` and leaves the pasteboard
@@ -215,7 +223,7 @@ final class AppComposition {
                 return
             }
             adapter.write(payload)
-            NSApp.hide(nil)
+            onPasteCompleted?()
         }
     }
 }

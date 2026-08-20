@@ -42,11 +42,21 @@ public final class ThumbnailStore {
     /// idempotent per reference without caching its outcome.
     private var inFlight: Set<HistoryItemReference> = []
 
-    /// Whole-cache ceiling (500): exceeded → the entire cache resets. A
-    /// per-key eviction policy is deliberately out of scope for v1; the
-    /// completed-thumbnail cache is deferred G1 work (docs/
-    /// 04-coherence.md §9 step 7; docs/06-cross-cutting.md §3).
-    private static let maximumEntryCount = 500
+    /// Whole-cache ceiling (default 500): exceeded → the entire cache
+    /// resets. A per-key eviction policy is deliberately out of scope for
+    /// v1; the completed-thumbnail cache is deferred G1 work (docs/
+    /// 04-coherence.md §9 step 7; docs/06-cross-cutting.md §3). Injectable
+    /// so the memory-eviction smoke suites can drive the reset at a small
+    /// scale instead of seeding 500+ thumbnails.
+    private let maximumEntries: Int
+
+    /// The number of cached entries (hits AND recorded misses) — the
+    /// memory-eviction observability hook for the smoke/measurement suites.
+    public var cachedEntryCount: Int { entries.count }
+
+    /// The number of fetches currently in flight — the quiescence signal
+    /// the smoke suites wait on before asserting cache state.
+    public var inFlightCount: Int { inFlight.count }
 
     /// The frozen v1 ImageIO-decodable image type set, mirroring
     /// `HistoryAuthority.thumbnailImageTypeIdentifiers` in
@@ -67,10 +77,12 @@ public final class ThumbnailStore {
 
     public init(
         history: any ClipboardHistory,
-        pixels: PixelSize = PixelSize(width: 72, height: 72)
+        pixels: PixelSize = PixelSize(width: 72, height: 72),
+        maximumEntries: Int = 500
     ) {
         self.history = history
         self.pixels = pixels
+        self.maximumEntries = maximumEntries
     }
 
     // MARK: - Public surface
@@ -139,7 +151,7 @@ public final class ThumbnailStore {
     /// the whole cache first when the entry ceiling is exceeded.
     private func store(item: HistoryItemReference, image: CGImage?) {
         inFlight.remove(item)
-        if entries.count > Self.maximumEntryCount {
+        if entries.count > maximumEntries {
             entries.removeAll()
         }
         entries[item] = image.map(Entry.hit) ?? .miss
