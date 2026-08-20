@@ -46,7 +46,7 @@ struct RetainedBytesScalarValidationTests {
     /// and over-hard-bound (`06` §2 table values via `HistoryLimits
     /// .standard`), plus the one structural contradiction (an empty revision
     /// list sums to zero bytes, DC-04).
-    private enum ScalarCorruption: Equatable, CaseIterable {
+    enum ScalarCorruption: Equatable, CaseIterable {
         case negativeCanonicalBytes
         case overBoundCanonicalBytes
         case negativeRevisionCount
