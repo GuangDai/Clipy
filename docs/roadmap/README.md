@@ -1,9 +1,14 @@
 # Implementation Roadmap
 
-> **Status:** design-consolidated; M1 (steps 1–2) and **M2 (steps 3–8) are
-> complete**. Public-symbol workflow 31448087991 and supported macOS run
-> 31449682036 prove the symbol surface, 314 tests in 41 suites, app build/test,
-> and all 13 release workloads green. M3 (step 9 product wiring) is pending
+> **Status:** design-consolidated; M1 (steps 1–2), **M2 (steps 3–8), and
+> M3 (step 9 product wiring) are complete**. Public-symbol workflow
+> 31448087991 and supported macOS run 31449682036 prove the symbol surface,
+> 314 tests in 41 suites, app build/test, and all 13 release workloads green
+> at the state-2 head; step 9 (modules 4–6: `04-pasteboardadapter.md`,
+> `05-presentationui.md`, `06-clipyapp.md`) landed in `c037a71`/`4c39499`
+> plus the post-step-9 commits `a028c8c`..`cc59aa8` and is CI-green at run
+> [32319164667](https://github.com/GuangDai/Clipy/actions/runs/32319164667)
+> on landed head `cc59aa8` (2026-08-20)
 > (current state per step:
 > `../PROGRESS.md`; status boundary: `../06-cross-cutting.md` §1).
 > This roadmap is a traceable map from the **design modules**
@@ -136,8 +141,11 @@ spec edit traces forward to its module(s).
     workloads are green in run 31449682036. Historical runs
     30731659350/30734778016 exposed the invalid WL8 construction; the corrected
     production-service measurement is now proven. **State 2 is complete.**
-- **Product implementation complete** ⛔ pending — UI, pasteboard, packaging,
-  accessibility, localization, product tests.
+- **Product implementation complete** ⛔ pending — the UI/pasteboard product
+  wiring (step 9) is done and CI-green at run
+  [32319164667](https://github.com/GuangDai/Clipy/actions/runs/32319164667)
+  on landed head `cc59aa8`; packaging, accessibility, localization, and
+  product tests remain open state-3 scope.
 
 Per Part VI §11, final **state-3 acceptance** (packaging/accessibility/
 localization/product tests) requires separate acceptance tests outside this

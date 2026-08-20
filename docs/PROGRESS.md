@@ -11,12 +11,33 @@
 > criteria live in the design modules (`00`–`06`) and the roadmap module docs;
 > they are cited here, never restated as new semantics.
 
-**Audit baseline:** `8f316c9` (2026-08-02). **Verified remediation code
-head:** `2fb7845` (2026-08-11). Steps 0–8 are implemented and M2/state 2 is
-complete; step 9 (product wiring), M3, and state 3 are not started.
-Public-symbol workflow
+**Audit baseline:** `8f316c9` (2026-08-02). **Current landed head:**
+`cc59aa8` (2026-08-20). Steps 0–9 are implemented and CI-green; M2/state 2
+is complete. Step 9 (product wiring: PasteboardAdapter + PresentationUI +
+ClipyApp composition) is done, including its post-step-9 revisions: the
+perf/AB measurement-helper proofs now run in the split `HistoryPerfTests`
+lane, and the browsing surface is a Maccy-style AppDelegate-owned floating
+`NSPanel` (Carbon ⇧⌘C summon, cursor/status-item/center/last-position
+placement, dwell-driven preview pane) rather than a SwiftUI `MenuBarExtra`.
+M3/state 3 (packaging, accessibility, localization, product acceptance per
+Part VI §11) remains open.
+
+**CI provenance of the landed head (2026-08-20):** the post-step-9
+convergence ran `a028c8c` (run 32316689047, cancelled —
+`PreviewContent.textCharacterCap` access level), `9c6e3b4` (run 32317009871,
+cancelled — `NSApplication.alertWindow` compile failure plus five
+dwell-test failures), `9a637a6c` (run 32317628976, FAILED — XcodeGen app
+build/test leg), and `d35f3b9` (run 32318520597, FAILED — app test
+failures), closing at `cc59aa8` with green run
+[32319164667](https://github.com/GuangDai/Clipy/actions/runs/32319164667)
+(Lint + source gates, SwiftPM build + test, XcodeGen generate + app
+build/test, SwiftPM perf/AB helper tests, Perf proofs §9 all green; the two
+dispatch-only admission lanes are out of the per-push scope).
+
+**Historical state-2 evidence (2026-08-11, `2fb7845`):** public-symbol
+workflow
 [31448087991](https://github.com/GuangDai/Clipy/actions/runs/31448087991)
-is green. Final code-head run
+is green. The state-2 code-head run
 [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036)
 passed all source/lint gates, Swift 6 strict-concurrency builds, 314 tests in 41
 suites, generated-app build/test, all 13 release workloads, and the workflow's
@@ -750,8 +771,12 @@ test.
 
 ## Post-step-9: perf/AB test-lane split + Maccy-style panel (hotkey, position, preview)
 
-- **Status:** landed on `codex/v2-implementation`; CI evidence recorded at
-  merge (the commit message carries the run id).
+- **Status:** done. Landed on `codex/v2-implementation` at `a028c8c`;
+  CI-green at the closing head `cc59aa8`, run
+  [32319164667](https://github.com/GuangDai/Clipy/actions/runs/32319164667)
+  (intermediate runs 32316689047/32317009871 cancelled and
+  32317628976/32318520597 failed — the full convergence narrative is in the
+  header's CI-provenance block).
 - **Test-lane split:** the perf/AB measurement-helper proofs moved from
   `HistoryPerfRunnerTests` to the renamed SwiftPM target `HistoryPerfTests`
   (`Tests/HistoryPerfTests/`). The default `swift test` lane now skips it
