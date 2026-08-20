@@ -151,4 +151,29 @@ struct GlobalHotKeyTests {
         hotKey.unregister()
         hotKey.unregister()  // idempotent teardown
     }
+
+    /// S-6 (docs/reviews/2026-08-20-clipy-maccy-audit/01-standards.md): the
+    /// Carbon handler no longer assumes main-thread delivery — it checks
+    /// `Thread.isMainThread` and block-hops through `DispatchQueue.main.sync`
+    /// otherwise. The C callback is file-private and only Carbon can invoke
+    /// it with a real `EventRef`, so neither branch of that check is
+    /// deterministically exercisable from a hosted test; what is provable
+    /// here is the mechanism the off-main fallback relies on — a block
+    /// enqueued on the main queue runs on the main thread, where
+    /// `MainActor.assumeIsolated` holds and `fire()` runs the action.
+    @Test @MainActor
+    func fireRunsTheActionFromAMainQueueHop() async {
+        var fired = 0
+        let hotKey = GlobalHotKey.summonPanelHotKey { fired += 1 }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    hotKey.fire()
+                    continuation.resume()
+                }
+            }
+        }
+        #expect(fired == 1)
+        hotKey.unregister()  // never registered; proves teardown is a safe no-op
+    }
 }

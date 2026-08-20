@@ -6,9 +6,15 @@
 /// Carbon hotkeys are the one global-shortcut API that needs no
 /// accessibility grant (`NSEvent.addGlobalMonitorForEvents` cannot deliver
 /// key events to an untrusted agent process), which is why every clipboard
-/// panel lands here. The handler runs on the app's main runloop (Carbon
-/// dispatches event-dispatcher-target handlers on the main thread), so the
-/// action is invoked under `MainActor.assumeIsolated`.
+/// panel lands here. The action is invoked under MainActor isolation; the
+/// MainActor's executor is the main thread, but Apple publishes no
+/// symbol-level guarantee that Carbon invokes an event-dispatcher-target
+/// handler on that thread (audit S-6,
+/// docs/reviews/2026-08-20-clipy-maccy-audit/01-standards.md), so the C
+/// callback below checks `Thread.isMainThread` at runtime and block-hops
+/// through the main queue when the expectation ever fails — per
+/// docs/00-overview.md §5 the required outcome (MainActor-isolated firing)
+/// is enforced, not assumed.
 ///
 /// Registration is process-lifetime (Maccy's `Popup.swift` design note:
 /// repeatedly enabling/disabling a Carbon hotkey leaks handler slots), and
@@ -131,10 +137,20 @@ final class GlobalHotKey {
 }
 
 /// The Carbon hotkey-pressed handler shared by every `GlobalHotKey`.
-/// Carbon dispatches event-dispatcher-target handlers on the main runloop
-/// thread, so the main-actor hop is a compile-time assertion of an
-/// established runtime fact (`MainActor.assumeIsolated`), not a context
-/// switch. Foreign hotkey IDs (another app's chord, or a sibling
+/// No symbol-level Apple documentation fixes the dispatch thread of a
+/// handler installed on `GetEventDispatcherTarget()` (audit S-6), so the
+/// MainActor entry is chosen at runtime instead of assumed:
+///
+/// - Main thread (the expected case — the event dispatcher is driven by
+///   the main runloop): `MainActor.assumeIsolated` is a no-cost assertion
+///   of the documented MainActor-runs-on-the-main-thread executor
+///   contract, not a context switch.
+/// - Any other thread (unproven-premise fallback): the match-and-fire
+///   block-hops through `DispatchQueue.main.sync`, so it still runs under
+///   MainActor isolation and the handled/not-handled `OSStatus` answer
+///   stays synchronous for Carbon.
+///
+/// Foreign hotkey IDs (another app's chord, or a sibling
 /// registration) are passed on as `eventNotHandledErr`.
 private func globalHotKeyEventHandler(
     _ nextHandler: EventHandlerCallRef?,
@@ -154,12 +170,22 @@ private func globalHotKeyEventHandler(
     )
     guard parameterStatus == noErr else { return OSStatus(eventNotHandledErr) }
     let hotKey = Unmanaged<GlobalHotKey>.fromOpaque(userData).takeUnretainedValue()
-    let handled = MainActor.assumeIsolated { () -> Bool in
+    // `GlobalHotKey` is a `@MainActor` class (implicitly Sendable), so the
+    // reference crosses into the main-queue block without an escape hatch.
+    let matchAndFire = { @MainActor () -> Bool in
         guard pressedID.id == hotKey.matchingID,
               pressedID.signature == hotKey.matchingSignature
         else { return false }
         hotKey.fire()
         return true
+    }
+    let handled: Bool
+    if Thread.isMainThread {
+        handled = MainActor.assumeIsolated(matchAndFire)
+    } else {
+        handled = DispatchQueue.main.sync {
+            MainActor.assumeIsolated(matchAndFire)
+        }
     }
     return handled ? noErr : OSStatus(eventNotHandledErr)
 }
