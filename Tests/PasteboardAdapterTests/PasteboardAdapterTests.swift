@@ -268,15 +268,19 @@ func captureOfAFullyObservedItemIsACompleteOutcome() {
     pasteboard.clearContents()
     pasteboard.setData(Data("plain".utf8), forType: .string)
 
-    let outcome = PasteboardAdapter(pasteboard: pasteboard).captureOutcome()
+    let observedAt = Date(timeIntervalSince1970: 1_760_000_000)
+    let outcome = PasteboardAdapter(pasteboard: pasteboard)
+        .captureOutcome(observedAt: observedAt)
 
     #expect(outcome != nil)
     #expect(outcome?.isComplete == true)
     #expect(outcome?.unavailableTypeIdentifiers == [])
-    // The convenience half drops the record but freezes the same bytes.
+    // The convenience half drops the record but freezes the same bytes;
+    // both calls share one injected observedAt so the comparison is
+    // deterministic (the default Date() stamps would differ sub-second).
     #expect(
-        PasteboardAdapter(pasteboard: pasteboard).capture()
-            == outcome?.capture
+        PasteboardAdapter(pasteboard: pasteboard)
+            .capture(observedAt: observedAt) == outcome?.capture
     )
 }
 
