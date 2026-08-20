@@ -129,11 +129,12 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
 
     /// Closes the panel when it loses key status — an outside click
     /// dismisses (Maccy's `resignKey`); a modal alert on top keeps it open
-    /// (`NSApplication.alertWindow`, Maccy's `NSApplication+Windows.swift`
-    /// helper replicated below).
+    /// (`NSApplication.isModalAlertPresented` below — public modal/sheet
+    /// API replacing Maccy's private `_NSAlertPanel` class-name scan;
+    /// audit S-5 / APL-C-11).
     override func resignKey() {
         super.resignKey()
-        if NSApp.alertWindow == nil {
+        if !NSApp.isModalAlertPresented {
             close()
         }
     }
@@ -215,11 +216,21 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     }
 }
 
-/// Maccy's `NSApplication+Windows.swift` replicated: the alert panel
-/// currently on top, if any (matched by its AppKit-private class name —
-/// there is no public "is an alert showing" property).
+/// Whether the app is currently presenting an alert on top — public-API
+/// replacement for Maccy's `NSApplication+Windows.swift` alert scan, which
+/// matched the AppKit-private class name `_NSAlertPanel` (audit S-5 /
+/// APL-C-11: Apple publishes no such class-name contract, and
+/// docs/00-overview.md:65-69 requires documented platform behavior, not an
+/// invented API surface). Both documented alert presentations are covered:
+/// `NSApplication.modalWindow` is non-nil while an alert runs as an
+/// app-modal session (`NSAlert.runModal`), and `NSWindow.attachedSheet` is
+/// non-nil while an alert/sheet is attached to any app window
+/// (`NSAlert.beginSheetModal`). This is also tighter than the old scan: it
+/// cannot false-positive on an ordered-out alert window lingering in
+/// `NSApplication.windows` (whose contents and order Apple leaves
+/// unspecified).
 private extension NSApplication {
-    var alertWindow: NSWindow? {
-        windows.first { $0.className == "_NSAlertPanel" }
+    var isModalAlertPresented: Bool {
+        modalWindow != nil || windows.contains { $0.attachedSheet != nil }
     }
 }

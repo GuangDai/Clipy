@@ -192,15 +192,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Settings / position configuration
 
-    /// Opens the app's Settings window (the selector is not public API,
-    /// hence the literal — the standard way to focus the SwiftUI Settings
-    /// scene), activating the app first so the window is not stranded
-    /// behind the current app (an LSUIElement agent never activates for its
-    /// own panel, so a plain sendAction would keep the window behind).
-    func openSettingsWindow() {
-        NSApp.activate()
-        _ = NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-    }
+    // Settings presentation moved to PanelRootView's
+    // `@Environment(\.openSettings)` (audit S-5 / SPEC-IMPL-010): the
+    // private `showSettingsWindow:` responder selector formerly sent here
+    // is not public API, while `OpenSettingsAction` is documented since
+    // macOS 14 and the panel's NSHostingView content is a live SwiftUI
+    // render tree that carries the app's Settings-scene action.
 
     /// The configured summon position, read fresh from defaults so a
     /// Settings change applies to the next hotkey press.

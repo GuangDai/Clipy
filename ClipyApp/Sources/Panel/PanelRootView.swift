@@ -16,13 +16,30 @@ import SwiftUI
 struct PanelRootView: View {
     let appDelegate: AppDelegate
 
+    /// The public Settings-scene presentation action (audit S-5 /
+    /// SPEC-IMPL-010, replacing `AppDelegate.openSettingsWindow`'s private
+    /// `showSettingsWindow:` selector): `OpenSettingsAction` is documented
+    /// public API since macOS 14 (Apple:
+    /// `EnvironmentValues.openSettings`). The panel's NSHostingView content
+    /// is a live SwiftUI render tree of this app — whose `App` declares a
+    /// `Settings` scene (ClipyAppMain.swift) — so the environment resolves
+    /// the action here.
+    @Environment(\.openSettings) private var openSettings
+
     var body: some View {
         Group {
             if let composition = appDelegate.composition {
                 HistoryPanelView(
                     viewState: composition.viewState,
                     previewState: appDelegate.previewState,
-                    onOpenSettings: { appDelegate.openSettingsWindow() },
+                    onOpenSettings: {
+                        // Activate first (the old `openSettingsWindow`
+                        // behavior): an LSUIElement agent never activates
+                        // on its own, so without this the Settings window
+                        // can strand behind the current app.
+                        NSApp.activate()
+                        openSettings()
+                    },
                     onQuit: { NSApp.terminate(nil) },
                     onRequestClose: { appDelegate.closePanel() },
                     onPreviewVisibilityChange: { isOpen in
