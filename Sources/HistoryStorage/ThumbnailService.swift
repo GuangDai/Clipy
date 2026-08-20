@@ -278,9 +278,20 @@ internal actor ThumbnailWorker {
             kCGImageSourceCreateThumbnailWithTransform: kCFBooleanTrue!
         ] as CFDictionary
 
+        // Primary-image index (audit
+        // docs/reviews/2026-08-20-clipy-maccy-audit/03-apple-platform.md
+        // §7 APL-C-06): a HEIF/HEIC container may carry auxiliary images
+        // and designate a primary image other than index 0, so forcing 0
+        // can decode the wrong image. CGImageSourceGetPrimaryImageIndex
+        // honors the container's designation and returns 0 for non-HEIF
+        // sources, so GIF/TIFF decoding stays first-frame — a deliberate
+        // product simplification (the audit's "GIF/TIFF first-frame may
+        // be deliberate"), not an oversight.
+        let imageIndex = CGImageSourceGetPrimaryImageIndex(source)
+
         guard let cgImage = CGImageSourceCreateThumbnailAtIndex(
             source,
-            0,
+            imageIndex,
             thumbnailOptions
         ) else {
             // The source was recognized but the thumbnail could not be created

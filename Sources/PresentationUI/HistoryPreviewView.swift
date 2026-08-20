@@ -195,7 +195,18 @@ public struct HistoryPreviewView: View {
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
         ]
-        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+        // Primary-image index (audit
+        // docs/reviews/2026-08-20-clipy-maccy-audit/03-apple-platform.md
+        // §7 APL-C-06): CGImageSourceGetPrimaryImageIndex returns the
+        // HEIF/HEIC container's designated primary image and 0 for every
+        // non-HEIF source, so GIF/TIFF stay first-frame — a deliberate
+        // product simplification (the audit's "GIF/TIFF first-frame may
+        // be deliberate").
+        return CGImageSourceCreateThumbnailAtIndex(
+            source,
+            CGImageSourceGetPrimaryImageIndex(source),
+            options as CFDictionary
+        )
     }
 
     // MARK: - Metadata bar
