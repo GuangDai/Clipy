@@ -44,20 +44,21 @@ public struct PasteboardAdapter {
     /// user's clipboard.
     public let pasteboard: NSPasteboard
 
-    /// Deterministic AppKit-failure injection seam for `@testable` tests —
-    /// the audit's recommended direction (SPEC-IMPL-005: "a seam that
-    /// deterministically injects each documented AppKit failure"). A type
-    /// identifier listed here freezes as declared-but-unavailable: the
-    /// `data(forType:)` == nil outcome Apple documents as the contents
-    /// having changed or the provider having timed out. Empty in
-    /// production; never set outside tests.
-    var simulatedUnavailableTypeIdentifiers: Set<String> = []
+    /// Deterministic AppKit-failure injection seam for tests — the audit's
+    /// recommended direction (SPEC-IMPL-005: "a seam that deterministically
+    /// injects each documented AppKit failure"). A type identifier listed
+    /// here freezes as declared-but-unavailable: the `data(forType:)` == nil
+    /// outcome Apple documents as the contents having changed or the
+    /// provider having timed out. Empty in production; never set outside
+    /// tests. `public` (not `internal`) because the hosted integration
+    /// target imports the adapter as a regular module, without `@testable`.
+    public var simulatedUnavailableTypeIdentifiers: Set<String> = []
 
     /// The write half of the same seam: a type identifier listed here is
     /// treated as refused by `setData(_:forType:)` — the false return
     /// Apple documents as the pasteboard's ownership having changed.
     /// Empty in production; never set outside tests.
-    var simulatedRejectedWriteTypeIdentifiers: Set<String> = []
+    public var simulatedRejectedWriteTypeIdentifiers: Set<String> = []
 
     /// Creates an adapter over `pasteboard` (`.general` in production).
     public init(pasteboard: NSPasteboard = .general) {
