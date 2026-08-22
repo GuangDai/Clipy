@@ -76,6 +76,19 @@ import Testing
         denialReason: .rateLimited,
         affectedItemIDs: [itemID]
     )
+    let globalAdmin = OperationRecordDTO(
+        auditSequence: 42,
+        connectionID: nil,
+        capability: nil,
+        operationKind: .adminCompact,
+        outcome: .succeeded,
+        requestedAt: enrolledAt,
+        committedAt: revokedAt,
+        changePosition: nil,
+        failureKind: nil,
+        denialReason: nil,
+        affectedItemIDs: nil
+    )
 
     #expect(connection.id == connectionID)
     #expect(connection.displayName == "Shortcuts")
@@ -91,8 +104,8 @@ import Testing
     #expect(grant.revokedAt == revokedAt)
 
     #expect(operation.auditSequence == 41)
-    #expect(operation.connectionID == connectionID)
-    #expect(operation.capability == .manage)
+    #expect(operation.connectionID == Optional(connectionID))
+    #expect(operation.capability == Optional(ExternalCapability.manage))
     #expect(operation.operationKind == .manageRemove)
     #expect(operation.outcome == .denied)
     #expect(operation.requestedAt == enrolledAt)
@@ -101,6 +114,10 @@ import Testing
     #expect(operation.failureKind == .requestDenied)
     #expect(operation.denialReason == .rateLimited)
     #expect(operation.affectedItemIDs == [itemID])
+    #expect(globalAdmin.connectionID == nil)
+    #expect(globalAdmin.capability == nil)
+    #expect(globalAdmin.operationKind == .adminCompact)
+    #expect(globalAdmin.changePosition == nil)
 }
 
 @Test func externalRequestValuesPreserveTheFrozenAppIntentsArguments() {

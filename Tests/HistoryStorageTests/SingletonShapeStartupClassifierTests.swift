@@ -1,24 +1,21 @@
 /// DATA-1 startup-shape proofs (`05` §13; deep review Card 1A-1).
 ///
 /// The production seam is a persistent `SwiftDataHistory.open`: each fixture
-/// first creates a real V2 store and captures one item through the public
+/// first creates a real current V3 store and captures one item through the public
 /// boundary, then an independent container damages only one singleton shape.
 /// A second public open must reject the shape. A fresh independent inspector
-/// compares durable singleton, item/blob, and retained-byte values before and
-/// after that rejection; this is a durable-value oracle, not instrumentation
-/// claiming that no framework transaction was attempted.
+/// compares durable singleton, item/blob, retained-byte, and Gateway values
+/// before and after that rejection; this is a durable-value oracle, not
+/// instrumentation claiming that no framework transaction was attempted.
 /// This is a same-process reopen proof; coordinator teardown in a true child
 /// process remains Card 1C evidence rather than an implied claim here.
 ///
-/// The absent-config shape is deliberately not claimed here. After migration
-/// has completed, a genuine V1 -> V2 store awaiting its documented config
-/// bootstrap and an existing V2 store whose config was deleted have the same
-/// persisted rows. Without migration provenance, startup cannot distinguish
-/// those causes while preserving the real V1 migration path; wrong-key and
-/// extra-row shapes remain unambiguous and are closed below. The same ceiling
-/// applies to an existing, user-cleared V2 store after both singleton rows are
-/// deleted: its four-table empty shape is indistinguishable from a fresh
-/// store. DATA-1 therefore remains partial until provenance is approved.
+/// Retention-config absence is now distinguishable after X.3 bootstrap:
+/// surviving Gateway rows prove current durable state and prohibit repair.
+/// A migrated V1/V2 store awaiting bootstrap still has empty Gateway tables,
+/// so its documented create-with-defaults path remains available. The causal
+/// ceiling still applies to a store stripped of every V3 row: its all-empty
+/// shape is indistinguishable from fresh state without provenance.
 import Foundation
 import HistoryCore
 import SwiftData
@@ -29,6 +26,7 @@ import Testing
 struct SingletonShapeStartupClassifierTests {
     private enum Damage: CaseIterable {
         case deletePosition
+        case deleteConfig
         case wrongKeyPosition
         case extraWrongKeyPosition
         case wrongKeyConfig
@@ -37,6 +35,7 @@ struct SingletonShapeStartupClassifierTests {
         var label: String {
             switch self {
             case .deletePosition: "missing-position"
+            case .deleteConfig: "missing-config"
             case .wrongKeyPosition: "wrong-key-position"
             case .extraWrongKeyPosition: "extra-wrong-key-position"
             case .wrongKeyConfig: "wrong-key-config"
@@ -118,12 +117,14 @@ struct SingletonShapeStartupClassifierTests {
         let configs: [ConfigSnapshot]
         let items: [ItemSnapshot]
         let retainedBytes: [RetainedBytesSnapshot]
+        let gateway: GatewayStoreSnapshot
     }
 
     private static func makeContainer(at storeURL: URL) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: HistorySchemaV2.self)
+        let schema = Schema(versionedSchema: HistorySchemaV3.self)
         return try ModelContainer(
             for: schema,
+            migrationPlan: HistoryMigrationPlan.self,
             configurations: [ModelConfiguration(
                 schema: schema,
                 url: storeURL,
@@ -132,7 +133,7 @@ struct SingletonShapeStartupClassifierTests {
         )
     }
 
-    private static func seedExistingV2(at storeURL: URL) async throws {
+    private static func seedExistingV3(at storeURL: URL) async throws {
         let history = try await SwiftDataHistory.open(
             configuration: HistoryConfiguration(
                 persistence: .persistent(storeURL: storeURL),
@@ -143,6 +144,31 @@ struct SingletonShapeStartupClassifierTests {
             "singleton-shape",
             observedAt: Date(timeIntervalSince1970: 1_700_000_000)
         )))
+    }
+
+    private static func seedFreshCurrentV3(at storeURL: URL) async throws {
+        _ = try await SwiftDataHistory.open(
+            configuration: HistoryConfiguration(
+                persistence: .persistent(storeURL: storeURL),
+                initialMaximumUnpinnedItems: 321
+            )
+        )
+    }
+
+    private static func deletePositionAndRetentionConfig(
+        at storeURL: URL
+    ) throws {
+        let context = ModelContext(try makeContainer(at: storeURL))
+        context.autosaveEnabled = false
+        let position = try #require(
+            context.fetch(FetchDescriptor<LastChangePositionRow>()).first
+        )
+        let config = try #require(
+            context.fetch(FetchDescriptor<RetentionExpansionConfigRow>()).first
+        )
+        context.delete(position)
+        context.delete(config)
+        try context.save()
     }
 
     private static func damage(_ damage: Damage, at storeURL: URL) throws {
@@ -156,6 +182,8 @@ struct SingletonShapeStartupClassifierTests {
         switch damage {
         case .deletePosition:
             context.delete(position)
+        case .deleteConfig:
+            context.delete(config)
         case .wrongKeyPosition:
             position.key = "wrong-position"
         case .extraWrongKeyPosition:
@@ -200,7 +228,8 @@ struct SingletonShapeStartupClassifierTests {
             positions: positions,
             configs: configs,
             items: items,
-            retainedBytes: retainedBytes
+            retainedBytes: retainedBytes,
+            gateway: try GatewayStoreSnapshot.read(in: context)
         )
     }
 
@@ -211,9 +240,11 @@ struct SingletonShapeStartupClassifierTests {
                 "singleton-shape-\(damage.label)"
             )
             defer { WSSupport.removeStore(storeURL) }
-            try await Self.seedExistingV2(at: storeURL)
+            try await Self.seedExistingV3(at: storeURL)
             try Self.damage(damage, at: storeURL)
             let before = try Self.snapshot(at: storeURL)
+            #expect(before.gateway.configs.count == 1)
+            #expect(before.gateway.connections.count == 1)
 
             do {
                 _ = try await SwiftDataHistory.open(
@@ -238,5 +269,41 @@ struct SingletonShapeStartupClassifierTests {
                 "\(damage.label): rejected startup must not repair or mutate durable state"
             )
         }
+    }
+
+    @Test("Gateway-only facts prevent missing-position repair")
+    func gatewayOnlyFactsPreventMissingPositionRepair() async throws {
+        let storeURL = WSSupport.tempStoreURL(
+            "singleton-shape-gateway-only-missing-position"
+        )
+        defer { WSSupport.removeStore(storeURL) }
+        try await Self.seedFreshCurrentV3(at: storeURL)
+        try Self.deletePositionAndRetentionConfig(at: storeURL)
+        let before = try Self.snapshot(at: storeURL)
+        #expect(before.positions.isEmpty)
+        #expect(before.configs.isEmpty)
+        #expect(before.items.isEmpty)
+        #expect(before.retainedBytes.isEmpty)
+        #expect(before.gateway.configs.count == 1)
+        #expect(before.gateway.connections.count == 1)
+
+        do {
+            _ = try await SwiftDataHistory.open(
+                configuration: HistoryConfiguration(
+                    persistence: .persistent(storeURL: storeURL),
+                    initialMaximumUnpinnedItems: 200
+                )
+            )
+            Issue.record("expected Gateway-only position shape to reject")
+        } catch let failure as HistoryFailure {
+            #expect(failure == .persistence(.invariantViolation))
+        } catch {
+            Issue.record("unexpected Gateway-only position error: \(error)")
+        }
+
+        #expect(
+            try Self.snapshot(at: storeURL) == before,
+            "rejected startup must not recreate either missing singleton"
+        )
     }
 }

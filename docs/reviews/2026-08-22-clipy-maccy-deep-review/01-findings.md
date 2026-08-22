@@ -1063,7 +1063,7 @@ Local Automation的正确实现，不能把长设计稿直接交给Agent照抄�
 4. **fail-closed open后没有可达recovery seam。** singleton缺失且已有gateway rows时`open`拒绝publish，
    却说由chain-rebase admin path恢复
    ([`V2-05:725–755`](../../v2/V2-05-external-gateway.md#L725-L755))；chain corruption也先拒绝facade，再要求
-   `GatewayAdminHistory.rebaseAuditChain`
+   `GatewayAdminHistory.rebaseAuditLog`
    ([`V2-05:1142–1158`](../../v2/V2-05-external-gateway.md#L1142-L1158))。如果普通`SwiftDataHistory.open`没有返回
    对象，UI就拿不到该admin method。需要独立、能力更窄、只在用户确认后开放的recovery-only open/
    tool：不能发布External facade、不能读content/执行history writes，只能诊断、导出证据和执行已批准

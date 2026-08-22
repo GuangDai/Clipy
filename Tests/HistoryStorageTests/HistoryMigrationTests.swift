@@ -186,13 +186,14 @@ struct HistoryMigrationTests {
 
     // MARK: - (c) Re-open idempotence through the full open path
 
-    /// After migration, re-opening the SAME url through the full
-    /// `SwiftDataHistory.open` path succeeds: an already-V2 store runs no
-    /// stage (DC-02 / roadmap §5 step 2), the config row now exists
-    /// all-disabled (created by open, not by migration), and the item /
-    /// `RetainedBytesRow` counts and scalars are unchanged.
-    @Test("(c) re-opened V2 store runs no stage and bootstraps the all-disabled config")
-    func reopenedV2StoreRunsNoStageAndBootstrapsConfig() async throws {
+    /// After the current migration plan has taken the SAME URL through its
+    /// ordered V1 → V2 custom hop and additive V2 → V3 hop, full
+    /// `SwiftDataHistory.open` succeeds on that already-V3 store and runs no
+    /// stage. The retention config now exists all-disabled (created by
+    /// Authority bootstrap, not migration), while item/RetainedBytes scalars
+    /// remain unchanged.
+    @Test("(c) re-opened V3 store runs no stage and bootstraps the all-disabled config")
+    func reopenedV3StoreRunsNoStageAndBootstrapsConfig() async throws {
         let storeURL = WSSupport.tempStoreURL("v2-migration-reopen")
         defer { WSSupport.removeStore(storeURL) }
 
@@ -209,7 +210,7 @@ struct HistoryMigrationTests {
         #expect(migratedItems.count == seeded.count)
         #expect(migratedBytes.count == seeded.count)
 
-        // Full open path over the SAME url: construct + startup (steps 1–12).
+        // Full open path over the SAME url: construct + startup (steps 1–13).
         _ = try await SwiftDataHistory.open(
             configuration: HistoryConfiguration(
                 persistence: .persistent(storeURL: storeURL),
@@ -234,12 +235,14 @@ struct HistoryMigrationTests {
         #expect(config.revisionMaxBytes == nil)
         #expect(config.configSchemaVersion == 1)
 
-        // Counts and scalars unchanged: the stage does not re-run on an
-        // already-V2 store (idempotent by construction either way).
+        // Counts and scalars unchanged: no stage re-runs on an already-V3
+        // store (the earlier hops are idempotent by construction either way).
         #expect(try context.fetchCount(FetchDescriptor<HistoryItemRow>()) == seeded.count)
         let reopenedBytes = try MigrationSeeding.bytesSnapshots(context)
         #expect(reopenedBytes.count == seeded.count)
         #expect(reopenedBytes == migratedBytes)
+        try GatewayStoreSnapshot.read(in: context)
+            .expectX3DenyByDefaultBootstrap()
     }
 
     // MARK: - (d) Direct backfill idempotence (RET-PLATFORM-1b(e) model)

@@ -191,7 +191,7 @@ framing 保持 private，不能成为 Python 需要重写的第二 public interf
 - `clear`：bulk destruction；
 - `setRetentionPolicy` / `setRetentionPolicies`：产品配置，不是单项内容操作；
 - generic `HistoryAction` / arbitrary command name：会让未来新增 app-only action 自动变成外部能力；
-- raw audit-admin/grant-admin：external caller不能给自己授权、清审计或 rebase chain；
+- raw audit-admin/grant-admin：external caller不能给自己授权、清审计或执行recovery-only audit rebase；
 - direct SwiftData query、predicate、transaction或 raw row access。
 
 如果当前 V2-05 capability 先于本建议落地，迁移不能把既有 `.manage` 自动升级为
@@ -208,9 +208,11 @@ owning V2-05 §0.2 现已冻结 closed allow-matrix，而不是只增加 shared 
 Gateway以durable connection kind与typed operation权威检查；adapter/request不能自报kind绕过。新增enum case
 必须让closed switch/source gate失败，不能因“类型可构造”自动对所有connection开放。
 
-而且“复用 V2-05”不等于它已可直接实施：当前设计中的 audit compact 后缀链接、admin record
-encoding、grant/re-grant唯一键以及 audit-corruption recovery-only open 仍有内部矛盾。Local Automation
-不得在这些基础不变量关闭前把 Gateway 当成已完成 trust boundary；本轮只提出规格修正，不修改V2实现。
+而且“复用 V2-05”不等于Gateway已可调用。2026-08-22 owning决策已关闭内部形状矛盾：不实现audit
+hash/chain或tamper-evidence claim；用typed codec、transaction内sequence mint、contiguous retained suffix与
+`compactionFloor`诚实表达边界；GrantRow是一对connection/capability一条current-state row，re-grant更新该行，
+event history进audit；global rebase/compact没有connection/capability attribution；audit无off-switch。当前代码叶
+仍只是X.3 V3 schema/limits/bootstrap，actor/facade/admin均未实现，所以Local Automation仍不能依赖“未来Gateway”。
 
 ## 4. Wire identity：外部只看 opaque locator/token
 
@@ -486,7 +488,7 @@ production Gateway positive path与App Intents tracer闭合后才从pure codec�
 non-behavior interface gate，不是Red。`browsePreview` audit选择在首次成功browse前批准；binary
 `DEC-PY-READ-AUDIT`在PY-7前批准A/B之一；mutation retry/idempotency在PY-9前批准。编译错误不是Red。
 
-### 当前 Batch 6 code leaf — `PLAY-PY-GW0`
+### 已完成的 Batch 6 code leaf — `PLAY-PY-GW0`
 
 `DEC-PY-CONNECTION-ALLOW-MATRIX` 已由 V2-05 §0.2 关闭；Batch 6的第一张Gateway代码卡固定为pure
 closed-matrix behavior，不碰schema、audit、Gateway actor、App Intents、CLI或transport：
@@ -499,13 +501,27 @@ closed-matrix behavior，不碰schema、audit、Gateway actor、App Intents、CL
   App Intents现有`manage -> browse` implication、local-only pair对App Intents的拒绝、App-Intents-only
   pair对Local Automation的拒绝、revise与unknown pair拒绝；
 
-GW0合并后不得重复领取。下一实现层是owning roadmap X.2 public Gateway contract；GW1…GW4
-仍在其后，不能跳过X.2去写schema、actor或transport。
+GW0合并后不得重复领取；X.2 public Gateway contract也排在当前叶之前。
 - 由macOS runner更新
   `Tests/HistoryCoreTests/SymbolSurface/HistoryCore.symbols.txt`，并运行source gates与默认functional tests。
 
 验收上限仅是“closed policy可编译且matrix total”；它不证明真实Gateway在History read前拒绝，也不关闭
 `PLAY-PY-B1/B2/B0G`。该leaf不得新增credential、hash/request digest、socket、JSON parser或CLI target。
+
+### 当前 code leaf — roadmap `X.3`
+
+X.3只新增immutable `HistorySchemaV3`（不修改已shipping V2）、四个Gateway/Audit models、fixed
+`ExternalLimits`与bootstrap/validation。exact startup shape是一个config、一个active且display name固定为
+`Siri / Shortcuts / Spotlight`的App Intents connection、zero grants、zero audit；既有config缺connection或
+identity/display/status不匹配均fail closed，不silent repair。只有config absent且三类dependent rows全空时可在同一
+bootstrap transaction创建config+connection；该shape与未来V3四类Gateway rows被全部删除同形，无法区分，故只
+claim可拒绝“config absent + surviving dependent row”，不加marker/hash。
+
+X.3不实现`OperationPayloadBlobV1`或operation literal cases：V2-05 §4.4现有片段是non-executable historical
+skeleton；X.4必须先冻结完整closed request/result cases（含每个admitted admin operation），再同一leaf落codec+
+atomic audit。X.3也不实现registry/admin、Gateway actor、facade/factory、App Intents、CLI或transport。
+GrantRow冻结为每pair一条current state；re-grant未来更新该行，event history归audit；global rebase/compact的
+connection/capability为nil；config不保留write-only generation。任何“Python/Gateway已可用”claim仍不成立。
 
 ### PY-1 — 当前安全负对照
 
@@ -644,8 +660,9 @@ socket test最多证明protocol实现。
 ## 12. 建议实施顺序
 
 1. **先改规格，不先写transport。** V2-05已加入 `localAutomation`、closed connection allow matrix与
-   opaque wire values方向；wire contract可以先冻结。AUTO-2其余Gateway内部矛盾仍逐项关闭，App Intents
-   既有capability/operation不因Local Automation而改变。
+   opaque wire values方向；wire contract可以先冻结。schema/grant/audit integrity形状已由X.3/X.4 owning
+   决策关闭；当前先完成X.3 persistence-only leaf，再由X.4 spec-first冻结完整audit cases并同批落atomic behavior。
+   App Intents既有capability/operation不因Local Automation而改变。
 2. **先完成唯一Gateway的in-process trust substrate。** enrollment/grant/revoke/quota/audit/opaque
    locator与Authority recheck先以真实History闭环；按既有V2路线让App Intents成为第一个adapter，不另写
    mutation语义。
@@ -683,7 +700,7 @@ socket test最多证明protocol实现。
 
 | Claim | Reason / source | 当前最多支持 | 不能建立 | 下一判别证据 |
 |---|---|---|---|---|
-| 当前Python不能访问Clipy history | tracked source/manifest无CLI/transport/gateway implementation；V2-05仍pending | 当前source snapshot事实 | future feasibility | PY-1/PY-4 vertical tracer |
+| 当前Python不能访问Clipy history | tracked source/manifest无CLI/transport/gateway implementation；当前X.3仅schema/limits/bootstrap | 当前source snapshot事实 | future feasibility | PY-1/PY-4 vertical tracer |
 | 任意Python可经CLI调用 | Python可启动first-party executable；public contract不依赖Swift bridge | 设计上可行 | signed/sandbox/TCC/cold-start可靠性 | PY-15 matrix |
 | UDS适合private CLI→app binary | POSIX byte stream + `getpeereid`；详见Apple memo §5 | non-sandbox私有transport首选spike | arbitrary sandbox caller一定能执行CLI或CLI一定可连接 | signed三类caller matrix |
 | XPC不是stdlib Python interface | Apple XPC encoding opaque；需native client | signed CLI可隐藏它 | Python直接实现受支持XPC client | 仅在批准signed bridge后跑X-PY-XPC |

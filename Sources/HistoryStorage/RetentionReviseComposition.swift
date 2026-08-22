@@ -26,9 +26,9 @@
 ///
 /// Boundary (roadmap R.5/R.6): this file composes the REVISE lane only; the
 /// `.setRetentionPolicies` sweep (§4.4) lives in RetentionPolicySweep.swift.
-/// The RetentionClock (`V2-02` §6.4) is deliberately
-/// unread here: §6.4 assigns the Storage-side clock to the
-/// `.setRetentionPolicies` sweep lane alone, and the revise lane's R1
+/// The StorageClock (`V2-02` §6.4) is deliberately unread here: §6.4 assigns
+/// the Storage-side clock's retention use to the `.setRetentionPolicies`
+/// sweep lane, and the revise lane's R1
 /// reference is structurally skipped (§4.3/§7 — a revision does not change
 /// `lastCopiedAt`), so `now` is the revision's own authoritative Storage
 /// input (`PreparedRevision.createdAt`, minted in preparation exactly like
@@ -293,7 +293,7 @@ extension HistoryAuthority {
             // §4.3 — R1 structurally skipped on revise, §7), so this call is
             // R2-only; `now` is the revision's authoritative Storage-minted
             // input and is selection-inert with the age lane nil (§6.4
-            // assigns the Storage clock to the R.6 sweep lane alone).
+            // assigns the clock's retention use to the R.6 sweep lane).
             let expansion = planItemRetentionExpansion(
                 inventory: CompleteRetentionExpansionInventory(items: items),
                 policies: HistoryRetentionPolicies(

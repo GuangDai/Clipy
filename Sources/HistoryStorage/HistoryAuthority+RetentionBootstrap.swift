@@ -157,13 +157,14 @@ extension HistoryAuthority {
     /// `.persistence(.openStore)` — §2's startup failure vocabulary, which
     /// does not include `.transaction`.
     ///
-    /// DATA-1 evidence ceiling: after migration completes, the persisted
-    /// shape of a genuine V1 store awaiting this bootstrap is identical to
-    /// an existing V2 store whose config row was deleted. With no durable
-    /// migration provenance in the approved schema, absence alone cannot be
-    /// rejected without also rejecting the required V1 migration path. This
-    /// method therefore permits only that absent shape; it never treats a
-    /// present wrong-key row as absence.
+    /// DATA-1 evidence ceiling: a genuine V1/V2 store migrated to the V3
+    /// schema but awaiting this bootstrap has empty Gateway tables. That
+    /// shape remains indistinguishable from an earlier store whose config was
+    /// deleted before X.3 bootstrap, so it remains migration-compatible. Any
+    /// Gateway fact proves post-X3 durable state and makes absence an
+    /// invariant violation. No provenance marker is introduced; the fully
+    /// empty causal ambiguity remains. A present wrong-key row is never
+    /// treated as absence.
     internal static func ensureRetentionExpansionConfig(
         in context: ModelContext
     ) throws {
@@ -178,6 +179,9 @@ extension HistoryAuthority {
         }
         switch rows.count {
         case 0:
+            guard try gatewayTablesAreEmpty(in: context) else {
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
             // `V2-02` §3.3 / `V2-roadmap` §5 step 5: created at open, all
             // policies disabled (`configSchemaVersion == 1`), so a migrated
             // store starts v1-faithful. One `ModelContext.transaction`,

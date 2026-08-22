@@ -26,7 +26,7 @@
 /// (`loadReviseLanePolicies`, R.5) plus the capture composition; the
 /// revise-path composition (R2+R3, §4.3) lives in
 /// RetentionReviseComposition.swift and the `.setRetentionPolicies` sweep
-/// (§4.4, R.6) in RetentionPolicySweep.swift. The RetentionClock seam
+/// (§4.4, R.6) in RetentionPolicySweep.swift. The StorageClock seam
 /// (`V2-02` §6.4) is deliberately unread by the capture loader: capture's
 /// R1 reference `now` is the capture's own `observedAt`, already a Domain
 /// input (§4.2; the DC-28 note — the clock exists for the R.6 sweep lane
@@ -348,8 +348,8 @@ extension HistoryAuthority {
     /// 4. `planItemRetentionExpansion(inventory:policies:protected:now:)`
     ///    with `protected` = pinned ∪ {primary} ∪ count-plan victims
     ///    (D13/D14/plan invariant 7, `02` §7/§12) and `now` = the capture's
-    ///    `observedAt` (NOT the Storage clock — §6.4/DC-28: the seam exists
-    ///    for the R.6 sweep lane alone).
+    ///    `observedAt` (NOT the Storage clock — §6.4/DC-28 assigns retention
+    ///    time to the R.6 sweep lane).
     /// 5. Merge: `mutations = v1Plan.mutations + expansion.retirements` (v1
     ///    mutations first, retirements after — deterministic), `outcome =
     ///    v1Plan.outcome` (retirements never change the capture receipt,
@@ -531,7 +531,7 @@ extension HistoryAuthority {
 
         // ── Pure expansion planning (§4.2) ──
         // `now` is the capture's `observedAt` — already a Domain input; the
-        // RetentionClock is NOT read on the capture lane (§6.4/DC-28).
+        // StorageClock is NOT read on the capture lane (§6.4/DC-28).
         let expansion = planItemRetentionExpansion(
             inventory: CompleteRetentionExpansionInventory(items: items),
             policies: policies,

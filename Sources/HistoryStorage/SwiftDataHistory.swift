@@ -98,11 +98,12 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     ///
     /// 1. validates `configuration.initialMaximumUnpinnedItems` against the
     ///    fixed Part VI user range (`HistoryLimits.standard`, §2);
-    /// 2. opens/creates the `ModelContainer` over the first shipped V2
-    ///    schema (`Schema(versionedSchema: HistorySchemaV2.self)`) through
-    ///    the M1-owned `HistoryMigrationPlan` — the single custom
-    ///    `V1 → V2` stage (DC-02; `V2-02` §3.3 Stage topology / Record 5).
-    ///    A fresh store is created directly at V2 and runs no stage; a v1
+    /// 2. opens/creates the `ModelContainer` over the current immutable V3
+    ///    schema (`Schema(versionedSchema: HistorySchemaV3.self)`) through
+    ///    `HistoryMigrationPlan`: the custom `V1 → V2` stage (DC-02;
+    ///    `V2-02` §3.3 / Record 5), then the additive lightweight `V2 → V3`
+    ///    Gateway-table stage (DC-03; `V2-roadmap` §10 X.3). A fresh store is
+    ///    created directly at V3 and runs no stage; a v1
     ///    store migrates during construction — the additive schema change
     ///    plus the `RetainedBytesRow` `didMigrate` backfill (idempotent by
     ///    construction) — on the migration-owned context, the sole
@@ -112,12 +113,15 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     /// 3. constructs `HistoryAuthority` over the container and asks it to
     ///    perform the store-side startup (create the position/retention
     ///    singleton for a new store, validate it, bootstrap/validate the
-    ///    retention-expansion config singleton, bound the retained row
-    ///    count, rebuild legacy projection rows from their content lineage,
-    ///    then rebuild the complete Signature Index from authoritative
+    ///    retention-expansion config singleton, bootstrap/validate the X.3
+    ///    Gateway config plus deny-by-default App Intents connection, bound
+    ///    the retained row count, rebuild legacy projection rows from their
+    ///    content lineage, then rebuild the complete Signature Index from authoritative
     ///    Canonical/signature coverage without decoding revision state —
-    ///    `V2-roadmap` §5 total open order steps 3–11 over §13 steps 3–11);
-    /// 4. publishes the constructed facade with its five actors (§13 step 12).
+    ///    `V2-roadmap` §5 current total-order steps 3–12 over the v1 `05`
+    ///    §13 store-side steps 3–11);
+    /// 4. publishes the constructed facade with its five actors (current
+    ///    roadmap step 13; v1 `05` §13 step 12).
     ///
     /// Failure translation at this boundary (§16, §2): an out-of-range
     /// initial retention value throws `.invalidInput(.invalidRetentionPolicy)`;
@@ -142,15 +146,15 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         }
 
         // §13 step 2, extended by the M1 total open order (`V2-roadmap` §5
-        // step 2; DC-02): build the V2 schema ONCE and construct the
-        // container through the single-hop `HistoryMigrationPlan`. A fresh
-        // store runs no stage; a v1 store migrates inside construction
+        // step 2; DC-02 / DC-03): build the current V3 schema ONCE and
+        // construct the container through the ordered `HistoryMigrationPlan`.
+        // A fresh store runs no stage; a v1 store migrates inside construction
         // (additive schema change + the RetainedBytesRow didMigrate
         // backfill), so both complete before `open` returns
         // (`RET-PLATFORM-1b(d)`). The durability medium is unchanged. Both
         // branches explicitly disable managed CloudKit discovery: clipboard
         // history is local-only, independent of future app entitlements.
-        let schema = Schema(versionedSchema: HistorySchemaV2.self)
+        let schema = Schema(versionedSchema: HistorySchemaV3.self)
         let modelConfiguration: ModelConfiguration
         switch configuration.persistence {
         case .persistent(let storeURL):
@@ -177,20 +181,22 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
             throw HistoryFailure.persistence(.openStore)
         }
 
-        // §13 steps 3–11: the Authority owns every store-side startup check,
-        // including the bounded recipe-v2 rebuild of legacy projection rows.
+        // Current roadmap steps 3–12 (v1 §13 steps 3–11): the Authority owns
+        // every store-side startup check,
+        // including the X.3 Gateway bootstrap and bounded recipe-v2 rebuild
+        // of legacy projection rows.
         // The current hard-capped Signature Index build additionally decodes
         // Canonical and recomputes xxh3 coverage; revision bytes remain
         // untouched unless the legacy recipe rebuild requires them (§13, §15).
         // The V2-02 §6.4 Storage clock is wired HERE, internally — the
-        // production `SystemRetentionClock` witness (the `{ Date.now }`
+        // production `SystemStorageClock` witness (the `{ Date.now }`
         // default) — so the public `open(configuration:)` signature and the
         // frozen `HistoryConfiguration` carry no clock parameter
         // (`RET-COMPILE-1`); tests inject a fixed clock only through the
         // `@testable` `HistoryAuthority` initializer.
         let authority = HistoryAuthority(
             container: container,
-            retentionClock: SystemRetentionClock()
+            storageClock: SystemStorageClock()
         )
         do {
             try await authority.performStartup(
@@ -205,7 +211,8 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
             throw HistoryFailure.persistence(.openStore)
         }
 
-        // §13 step 12: publish the constructed facade with its five actors.
+        // Current roadmap step 13 (v1 §13 step 12): publish the constructed
+        // facade with its five actors.
         return SwiftDataHistory(
             authority: authority,
             ingestPreparation: IngestPreparationActor(),

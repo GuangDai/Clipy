@@ -1065,12 +1065,30 @@ content-free stderr、**PLAY-PY-A2H** stable exit mapping、**PLAY-PY-A2I** unkn
 已批准surface；`deleteItem/reviseContent`等local-only operation即使共享enum可构造也必须denied，unknown pair
 deny且不触发History/audit side effect。只有独立App Intents amendment才能扩它。
 
-AUTO-2不是一张browse可关闭的标签。V2-05 owning spec分别修订后，再完成四张Gateway substrate Red：
-**PLAY-PY-GW1** 三条survivor+marker compaction后的sequence/record-ID连续性仍成立；**PLAY-PY-GW2** 每个admin kind的closed、
-bounded、privacy-safe request/result/capability encoding可golden round-trip；**PLAY-PY-GW3** revoke后re-grant在
-批准的event/state模型下不撞unique key且最多一个live grant；**PLAY-PY-GW4** ordinary open面对corrupt/missing
-audit singleton仍fail closed，而用户确认的recovery-only seam只能诊断/rebase/quarantine，不能读content或
-执行History mutation。每张均`BLOCKED-SPEC`直到AUTO-2对应owning amendment批准。
+AUTO-2不是一张browse可关闭的标签。当前X.3 schema/bootstrap完成后，再逐张领取四张X.4 Gateway substrate Red：
+**PLAY-PY-GW1** compaction/recovery marker、prefix trim与floor advance同transaction，survivor恰好覆盖
+`[compactionFloor, nextAuditSequence)`，below-floor typed返回；这只证明sequence/floor一致性，不证明tamper evidence。
+**PLAY-PY-GW2** 完整codec一次覆盖所有已准入external/admin literal，每个kind的closed、bounded、privacy-safe
+request/result encoding可golden round-trip；global rebase/compact的connection/capability为nil，不伪造admin capability。
+**PLAY-PY-GW3** revoke后re-grant更新唯一current-state row、不撞unique key且最多一个live grant，grant/revoke/
+re-grant event history由audit records承载；**PLAY-PY-GW4** ordinary open面对可区分的corrupt/missing audit
+state仍fail closed，而用户确认的recovery-only seam只能诊断/rebase/quarantine，不能读content或执行History
+mutation。无audit off-switch；不新增hash/chain或`GatewayConfigRow.generation`。
+
+### 当前 Gateway code leaf — roadmap `X.3`
+
+X.3只实现新immutable `HistorySchemaV3`、四个Gateway/Audit models、fixed `ExternalLimits`与bootstrap/
+validation；绝不编辑已shipping `HistorySchemaV2`。Red按最小边界拆开：V2→V3 migration、raw/config范围、
+missing config + surviving dependent row fail-closed、bootstrap identity reopen稳定、以及config + active
+`Siri / Shortcuts / Spotlight` connection + zero grants/audit的exact shape。config与三类dependent tables
+全部为空时允许fresh/migration-compatible重建；它与未来V3 complete deletion同形，不能宣称可检测，也不加
+marker/hash。
+
+最低Green不实现`OperationPayloadBlobV1`或任何operation literal case；codec随X.4 atomic audit同批。
+同样不实现registry/admin、`ExternalGateway` actor、facade/factory、App Intents、CLI或transport。
+`GrantRow` schema冻结为每个connection/capability一条current-state row；`OperationRecordRow`与public DTO的
+connection/capability允许nil以诚实表达global rebase/compact/admin；`GatewayConfigRow`没有write-only
+`generation`。X.3只保证bootstrap/validation先于任何未来facade publication，本叶本身不publish facade。
 
 ### PLAY-PY-B family（不可直接标记完成）— deny tracer，再做read-only tracer
 

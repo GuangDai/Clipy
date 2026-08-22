@@ -23,7 +23,7 @@
 ///
 /// Every fixture crosses the public `perform(.setRetentionPolicies(...))`
 /// seam; the two clock-dependent R1 fixtures instead drive a directly
-/// constructed Authority with a fixed `RetentionClock` (§6.4's only
+/// constructed Authority with a fixed `StorageClock` (§6.4's only
 /// injection point — the public `open` wires the system witness), and
 /// assert rows/position/config through an INDEPENDENT container.
 ///
@@ -66,14 +66,14 @@ struct RetentionPolicySweepTests {
     /// The §6.4 fixed-date clock witness (the R.3 seam-test stance): the
     /// sweep lane's R1 reference time, injected through the `@testable`
     /// `HistoryAuthority` initializer only.
-    private struct FixedSweepClock: RetentionClock {
+    private struct FixedSweepClock: StorageClock {
         let fixed: Date
         func now() -> Date { fixed }
     }
 
     /// A directly constructed, started Authority over the store with the
     /// fixed clock wired — the one deterministic way to drive an R1 sweep
-    /// (the public facade's `SystemRetentionClock` reads real `Date.now`).
+    /// (the public facade's `SystemStorageClock` reads real `Date.now`).
     private static func makeSweepAuthority(
         storeURL: URL,
         now: Date
@@ -81,7 +81,7 @@ struct RetentionPolicySweepTests {
         let container = try WSSupport.makeContainer(storeURL: storeURL)
         let authority = HistoryAuthority(
             container: container,
-            retentionClock: FixedSweepClock(fixed: now)
+            storageClock: FixedSweepClock(fixed: now)
         )
         try await authority.performStartup(initialMaximumUnpinnedItems: 200)
         return authority
@@ -462,8 +462,8 @@ struct RetentionPolicySweepTests {
 
     // MARK: - Clock seam (V2-02 §6.4)
 
-    /// The sweep's R1 reference time is `retentionClock.now()` (§6.4 — the
-    /// seam's only production consumer), never `Date.now`: fixed now
+    /// The sweep's R1 reference time is `storageClock.now()` (§6.4 — the
+    /// clock's only retention-policy consumer), never `Date.now`: fixed now
     /// 800,000,000 with maxAge 100 retires the item at …850 (150 s old) and
     /// spares the item at …950 (50 s old). Under the real system clock
     /// (August 2026 ≈ timeIntervalSinceReferenceDate 808,000,000 ≫ the

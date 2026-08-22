@@ -97,7 +97,7 @@ public protocol GatewayAdminHistory: Sendable {
     func connections() async throws -> [ConnectionDTO]
     func grants(for id: ExternalConnectionID) async throws -> [GrantDTO]
     func auditLog(since auditSequence: UInt64) async throws -> [OperationRecordDTO]
-    func rebaseAuditChain(reason: AuditRebaseReason) async throws
+    func rebaseAuditLog(reason: AuditRebaseReason) async throws
 }
 
 public extension GatewayAdminHistory {
@@ -168,8 +168,12 @@ public struct GrantDTO: Sendable, Equatable {
 /// public boundary.
 public struct OperationRecordDTO: Sendable, Equatable {
     public let auditSequence: UInt64
-    public let connectionID: ExternalConnectionID
-    public let capability: ExternalCapability
+    /// External caller or targeted admin connection when the operation has
+    /// one; nil for global admin maintenance such as audit compaction/rebase.
+    public let connectionID: ExternalConnectionID?
+    /// Capability required by an external request; nil for in-app admin
+    /// operations, which are never authorized through an external grant.
+    public let capability: ExternalCapability?
     public let operationKind: ExternalOperationKind
     public let outcome: ExternalOutcome
     public let requestedAt: Date
@@ -181,8 +185,8 @@ public struct OperationRecordDTO: Sendable, Equatable {
 
     package init(
         auditSequence: UInt64,
-        connectionID: ExternalConnectionID,
-        capability: ExternalCapability,
+        connectionID: ExternalConnectionID?,
+        capability: ExternalCapability?,
         operationKind: ExternalOperationKind,
         outcome: ExternalOutcome,
         requestedAt: Date,
@@ -247,7 +251,7 @@ public enum ExternalFailureKindRaw: Int16, Sendable, Hashable, Codable {
     case auditCompactedBefore = 8
 }
 
-/// Explicit reason for discarding an old audit-chain range during rebase.
+/// Explicit reason for discarding an old audit-log range during rebase.
 public enum AuditRebaseReason: Int16, Sendable, Hashable, Codable {
     case corruptionDetected = 1
     case adminForced = 2
