@@ -114,7 +114,8 @@ ClipyApp/                     XcodeGen spec, app sources, hosted integration tes
 docs/                         the design specification (00–06), AUDIT.md, PROGRESS.md
 docs/roadmap/                 implementation roadmap, one doc per module
 scripts/                      gate scripts (see below)
-.github/workflows/            macos26-arm-ci.yml, symbol-snapshot.yml
+.github/workflows/            correctness, dormant reusable performance
+                              evidence, symbol-snapshot workflows
 ```
 
 ## 4. Build, gate, and test commands
@@ -124,7 +125,8 @@ runner image; enforced in every workflow job).
 
 ```sh
 # Source gates (import confinement, escape hatches, symbol snapshot)
-bash scripts/run_gates.sh          # gates 1–2 run anywhere; gate 3 needs macOS+xcrun
+bash scripts/run_gates.sh               # full local gate set
+bash scripts/run_gates.sh --source-only # CI source lane; avoids a duplicate build
 
 # SwiftLint (macOS, same rules as the gates)
 swiftlint lint --strict --no-cache
@@ -132,7 +134,7 @@ swiftlint lint --strict --no-cache
 # SwiftPM build + test (Swift 6 strict concurrency)
 swift build
 swift test                                    # default lane: functional tests only (skips HistoryPerfTests)
-swift test --filter 'HistoryPerfTests\.'      # the perf/AB helper proofs lane (CI job: perf-tests)
+swift test --filter 'HistoryPerfTests\.'      # local performance helper suite
 
 # HistoryCore public symbol snapshot (macOS only)
 bash scripts/public_symbol_snapshot.sh            # check
@@ -142,7 +144,7 @@ bash scripts/public_symbol_snapshot.sh --update   # regenerate after intentional
 xcodegen generate --spec ClipyApp/project.yml     # or bash scripts/generate-xcodeproj.sh
 xcodebuild -project ClipyApp/ClipyApp.xcodeproj -scheme ClipyApp \
   -configuration Debug -destination 'platform=macOS,arch=arm64' \
-  CODE_SIGNING_ALLOWED=NO clean build test
+  CODE_SIGNING_ALLOWED=NO test
 ```
 
 **Gate semantics:**
@@ -163,10 +165,27 @@ xcodebuild -project ClipyApp/ClipyApp.xcodeproj -scheme ClipyApp \
   unintentionally on CI, regeneration happens via the dispatch-only
   `.github/workflows/symbol-snapshot.yml` (bot commit), not a local edit.
 
-**SwiftPM warnings are CI failures.** CI self-scans build/test logs for any
-`warning:`/`error:` line (with a narrow AppIntents-metadata exclusion on the app
-job). Write warning-free code; `swift build` and `swift test` must produce zero
-warnings.
+**Do not add useless hashes.** CI orchestration, generated-project
+repeatability, change detection, cache coordination, artifact naming, test
+selection, and agent handoff must not introduce SHA/checksum/content-hash
+steps or hash-derived state. Compare the actual files or directories directly
+(`diff`, `cmp`, or the owning tool's native validation), and use explicit
+versions and typed state. A new integrity hash is allowed only when an
+authoritative design document requires that exact security property and the
+user explicitly approves the new boundary. The existing package-internal xxh3
+fingerprint is a product-domain dedup candidate filter only; it is never
+identity and must not be reused as CI or infrastructure machinery.
+
+**Do not over-design defensively.** Add a guard only for a repository rule, an
+observed failure, or a concrete failing fixture. Do not build speculative
+scanners, protocol layers, state machines, fallback paths, or duplicated gates
+for hypothetical future risks. Prefer the smallest direct check at the owning
+boundary, and delete a guard when the underlying failure mode no longer exists.
+
+**Compiler warnings are CI failures.** SwiftPM logs are scanned for diagnostics;
+the two XcodeGen-owned app/test targets set Swift and Clang warnings as errors
+without forcing those settings onto external package targets. Runtime framework
+logs are not parsed as compiler output. Write warning-free code.
 
 ## 5. Code style guidelines
 
@@ -196,8 +215,8 @@ warnings.
   `Package.swift`). `HistoryPerfTests` (SwiftPM) holds the perf/AB
   measurement-helper proofs for the `HistoryPerfRunner` executable; the
   PR/push correctness lane skips it (`--skip 'HistoryPerfTests\.'`). Its
-  explicit filter runs only in the dispatch-only `perf-tests` job after
-  correctness is green.
+  reusable workflow is dormant until a future correctness-gated caller is
+  deliberately added.
 - Persistence tests use the real `SwiftDataHistory` with an **in-memory**
   `ModelContainer` — there is no second fake writer implementation. A scripted
   `ClipboardHistory` double is allowed only for SwiftUI previews, never as a
@@ -218,14 +237,21 @@ warnings.
 
 ## 7. CI and deployment
 
-- `.github/workflows/macos26-arm-ci.yml` (push/PR to `master`, macos-26 arm64
-  runners) has three jobs: **Lint + source gates** (gates + SwiftLint strict),
-  **SwiftPM build + test**, **XcodeGen generate + app build/test** (generation
-  is run twice and diffed for repeatability). Every job enforces the macOS
-  26.x / arm64 runner and fails on any warning/error line in logs.
+- `.github/workflows/correctness.yml` is the only push/PR workflow. It has
+  three jobs: **Lint + source gates**, **SwiftPM build + test**, and
+  **XcodeGen generate + app build/test**. Job steps delegate to `scripts/ci/`
+  so the same commands are reproducible without copying shell across YAML.
+- The performance helper/proof, exact-matcher, and scale-admission workflows
+  are reusable `workflow_call` modules with no caller in this repository.
+  Therefore they cannot run on push, pull request, or manual dispatch while
+  correctness remediation is active. A future caller is a deliberate CI policy
+  change after correctness is green; add it only when performance work resumes.
+- `scripts/diagnostic_scan.py` owns the narrow log profiles. Every macOS job
+  invokes the shared macOS 26/arm64 runner contract.
 - `.github/workflows/symbol-snapshot.yml` is `workflow_dispatch`-only and
   bot-commits a regenerated HistoryCore symbol snapshot. Bot pushes do not
-  re-trigger CI; the snapshot is enforced by the gates job on subsequent pushes.
+  re-trigger CI; the snapshot is enforced by the SwiftPM correctness job on
+  subsequent pushes.
 - There is no release/deployment pipeline yet: the app is a step-0 scaffold
   (`LSUIElement` agent stub, placeholder window). Packaging, accessibility,
   and localization are Part VI §11 "state 3" acceptance, outside the current
