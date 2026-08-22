@@ -1,0 +1,46 @@
+name: Reusable performance helper and proof evidence
+
+on:
+  workflow_call:
+    inputs:
+      suite:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  NSUnbufferedIO: YES
+  OS_ACTIVITY_MODE: disable
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  selected-suite:
+    name: Selected performance helper/proof suite
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      LOG_DIR: ${{ github.workspace }}/ci-logs
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Verify runner contract
+        shell: bash
+        run: bash scripts/ci/verify_macos_runner.sh "$LOG_DIR/diagnostics.log"
+
+      - name: Run selected evidence suite
+        shell: bash
+        run: >-
+          bash scripts/ci/run_performance_proofs.sh
+          "${{ inputs.suite }}" "$LOG_DIR"
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: performance-${{ inputs.suite }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-logs
+          if-no-files-found: warn
+          retention-days: 30

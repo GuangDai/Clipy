@@ -1,0 +1,40 @@
+name: Reusable exact matcher evidence
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  exact-matcher-ab:
+    name: Exact matcher Release A/B
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      NSUnbufferedIO: YES
+      OS_ACTIVITY_MODE: disable
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      LOG_DIR: ${{ github.workspace }}/matcher-ab-logs
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Verify runner contract
+        shell: bash
+        run: bash scripts/ci/verify_macos_runner.sh "$LOG_DIR/diagnostics.log"
+
+      - name: Run exact matcher evidence
+        shell: bash
+        run: >-
+          bash scripts/ci/run_exact_matcher.sh
+          "$LOG_DIR" "$RUNNER_TEMP/clipy-matcher-ab"
+
+      - name: Upload matcher evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: exact-matcher-ab-${{ github.run_id }}-${{ github.run_attempt }}
+          path: matcher-ab-logs
+          if-no-files-found: error
+          retention-days: 30

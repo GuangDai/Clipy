@@ -20,10 +20,6 @@ DIAGNOSTIC_PATTERN = re.compile(
     r"(^|[^A-Za-z])(warning:|error:)([^A-Za-z]|$)",
     re.IGNORECASE,
 )
-BUILD_FAILURE_PATTERN = re.compile(
-    r"\*\* (?:TEST|BUILD) FAILED \*\*",
-    re.IGNORECASE,
-)
 MISSING_FILE_PATTERN = re.compile(r"No such file or directory", re.IGNORECASE)
 COREDATA_CLONE_START = re.compile(
     r"^CoreData: error: Failed to clone external data reference "
@@ -31,32 +27,15 @@ COREDATA_CLONE_START = re.compile(
     r"Error Domain=NSCocoaErrorDomain Code=4 .*?UserInfo=\{"
 )
 COREDATA_CLONE_END = re.compile(r"\}\}")
-APPINTENTS_METADATA_NOISE = re.compile(
-    r"appintentsmetadataprocessor.*Metadata extraction skipped",
-    re.IGNORECASE,
-)
-AUTOSHORTCUT_NOISE = re.compile(
-    r"(?:NSCocoaErrorDomain Code=4097.*com\.apple\.linkd\.autoShortcut"
-    r"|com\.apple\.linkd\.autoShortcut.*NSCocoaErrorDomain Code=4097)"
-)
-
-
 @dataclass(frozen=True)
 class ScanProfile:
     permits_coredata_clone_block: bool = False
-    permits_app_runner_noise: bool = False
-    detects_build_failure_markers: bool = False
     detects_missing_file: bool = False
 
 
 PROFILES = {
     "strict": ScanProfile(),
     "swiftdata": ScanProfile(permits_coredata_clone_block=True),
-    "xcode": ScanProfile(
-        permits_coredata_clone_block=True,
-        permits_app_runner_noise=True,
-        detects_build_failure_markers=True,
-    ),
     "swiftdata-missing": ScanProfile(
         permits_coredata_clone_block=True,
         detects_missing_file=True,
@@ -76,17 +55,6 @@ class Finding:
         return f"{self.path}:{self.line_number}: {self.message}{suffix}"
 
 
-def _is_permitted_app_runner_noise(line: str) -> bool:
-    if BUILD_FAILURE_PATTERN.search(line):
-        return False
-    diagnostic_count = sum(1 for _ in DIAGNOSTIC_PATTERN.finditer(line))
-    if APPINTENTS_METADATA_NOISE.search(line):
-        return diagnostic_count == 1
-    if AUTOSHORTCUT_NOISE.search(line):
-        return diagnostic_count == 1
-    return False
-
-
 def scan_lines(
     lines: Iterable[str],
     *,
@@ -102,10 +70,7 @@ def scan_lines(
         if clone_block_start_line is not None:
             end_match = COREDATA_CLONE_END.search(line)
             block_fragment = line if end_match is None else line[: end_match.start()]
-            if (
-                DIAGNOSTIC_PATTERN.search(block_fragment)
-                or BUILD_FAILURE_PATTERN.search(block_fragment)
-            ):
+            if DIAGNOSTIC_PATTERN.search(block_fragment):
                 findings.append(
                     Finding(
                         path,
@@ -134,10 +99,7 @@ def scan_lines(
             block_fragment = (
                 remainder if end_match is None else remainder[: end_match.start()]
             )
-            if (
-                DIAGNOSTIC_PATTERN.search(block_fragment)
-                or BUILD_FAILURE_PATTERN.search(block_fragment)
-            ):
+            if DIAGNOSTIC_PATTERN.search(block_fragment):
                 findings.append(
                     Finding(
                         path,
@@ -154,15 +116,8 @@ def scan_lines(
             if not line:
                 continue
 
-        if profile.permits_app_runner_noise and _is_permitted_app_runner_noise(line):
-            continue
-
         if DIAGNOSTIC_PATTERN.search(line):
             findings.append(Finding(path, line_number, "warning/error diagnostic", line))
-            continue
-
-        if profile.detects_build_failure_markers and BUILD_FAILURE_PATTERN.search(line):
-            findings.append(Finding(path, line_number, "build/test failure marker", line))
             continue
 
         if profile.detects_missing_file and MISSING_FILE_PATTERN.search(line):

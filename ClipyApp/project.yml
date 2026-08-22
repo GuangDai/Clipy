@@ -23,6 +23,8 @@ targets:
       - Sources
     settings:
       PRODUCT_NAME: Clipy
+      SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+      GCC_TREAT_WARNINGS_AS_ERRORS: YES
       # Deterministic Swift module name for `@testable import ClipyApp` from
       # the hosted integration tests — without it the module name derives
       # from PRODUCT_NAME (Clipy), not the target name.
@@ -43,6 +45,8 @@ targets:
     sources:
       - Tests/ClipyIntegrationTests
     settings:
+      SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+      GCC_TREAT_WARNINGS_AS_ERRORS: YES
       # Explicit host path: the app target's PRODUCT_NAME (Clipy) differs from
       # the target name (ClipyApp), and XcodeGen's inferred TEST_HOST uses the
       # target name, which does not exist on disk.

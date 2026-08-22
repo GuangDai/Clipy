@@ -8,7 +8,7 @@ permissions:
 
 concurrency:
   group: symbol-snapshot-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   update-snapshot:
@@ -21,22 +21,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Enforce macOS 26 ARM runner
+      - name: Verify runner contract
         shell: bash
-        run: |
-          set -euo pipefail
-          PRODUCT_VERSION="$(sw_vers -productVersion)"
-          MACHINE_ARCH="$(uname -m)"
-          echo "Detected macOS version: $PRODUCT_VERSION"
-          echo "Detected architecture: $MACHINE_ARCH"
-          if [[ "$PRODUCT_VERSION" != 26.* ]]; then
-            echo "Expected macOS 26.x, got $PRODUCT_VERSION"
-            exit 1
-          fi
-          if [[ "$MACHINE_ARCH" != arm64 ]]; then
-            echo "Expected arm64 runner, got $MACHINE_ARCH"
-            exit 1
-          fi
+        run: bash scripts/ci/verify_macos_runner.sh
 
       - name: Regenerate HistoryCore public symbol snapshot
         shell: bash

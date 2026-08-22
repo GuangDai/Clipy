@@ -845,10 +845,11 @@ Maccy 则合成 Command-V：
 - XcodeGen spec 只有 Debug/test graph、LSUIElement 与 module settings；没有 team、Developer
   ID、Hardened Runtime、entitlements、marketing/build version 或 archive/export config：
   [`project.yml:6-40`](../../../ClipyApp/project.yml#L6-L40)。
-- CI app job 明确 `CONFIGURATION=Debug`、`CODE_SIGNING_ALLOWED=NO`：
-  [`macos26-arm-ci.yml:286-359`](../../../.github/workflows/macos26-arm-ci.yml#L286-L359)。
-- workflows 只有 `macos26-arm-ci.yml` 与 `symbol-snapshot.yml`；production sources/config
-  中无 updater、appcast、notary/staple/Developer ID/Hardened Runtime。
+- 审查基线CI app job 明确 `CONFIGURATION=Debug`、`CODE_SIGNING_ALLOWED=NO`；
+  该单体workflow随后已被模块化CI替代。
+- 当前 workflows 是 correctness、三个无 caller 的 reusable performance evidence
+  模块与 `symbol-snapshot.yml`；production sources/config 中无 updater、appcast、
+  notary/staple/Developer ID/Hardened Runtime。
 - 所以当前证据只支持“代码与 tests 可在 CI 构建”，不支持“用户可安全安装/更新”。
 
 ### Maccy 对照映射（CODE）

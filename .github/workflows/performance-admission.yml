@@ -1,0 +1,40 @@
+name: Reusable scale admission evidence
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  performance-admission:
+    name: 5,000-row p50/p95/p99 + RSS evidence
+    runs-on: macos-26
+    timeout-minutes: 300
+    env:
+      NSUnbufferedIO: YES
+      OS_ACTIVITY_MODE: disable
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      LOG_DIR: ${{ github.workspace }}/admission-logs
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Verify runner contract
+        shell: bash
+        run: bash scripts/ci/verify_macos_runner.sh "$LOG_DIR/diagnostics.log"
+
+      - name: Run scale admission evidence
+        shell: bash
+        run: >-
+          bash scripts/ci/run_performance_admission.sh
+          "$LOG_DIR" "$RUNNER_TEMP/clipy-performance-admission"
+
+      - name: Upload admission evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: performance-admission-${{ github.run_id }}-${{ github.run_attempt }}
+          path: admission-logs
+          if-no-files-found: warn
+          retention-days: 30

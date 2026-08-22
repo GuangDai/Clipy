@@ -107,53 +107,6 @@ class DiagnosticScanTests(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertIn("warning/error", findings[0].message)
 
-    def test_xcode_profile_only_permits_documented_runner_noise(self) -> None:
-        findings = scan(
-            "appintentsmetadataprocessor warning: Metadata extraction skipped\n"
-            "runner error: Error Domain=NSCocoaErrorDomain Code=4097 connection to "
-            "com.apple.linkd.autoShortcut\n",
-            "xcode",
-        )
-
-        self.assertEqual(findings, [])
-
-    def test_xcode_profile_rejects_failure_marker(self) -> None:
-        findings = scan("** TEST FAILED **\n", "xcode")
-
-        self.assertEqual(len(findings), 1)
-        self.assertIn("failure marker", findings[0].message)
-
-    def test_xcode_noise_line_cannot_hide_second_diagnostic(self) -> None:
-        findings = scan(
-            "appintentsmetadataprocessor warning: Metadata extraction skipped "
-            "worker: error: compilation failed\n",
-            "xcode",
-        )
-
-        self.assertEqual(len(findings), 1)
-        self.assertIn("warning/error", findings[0].message)
-
-    def test_autoshortcut_noise_cannot_hide_second_diagnostic(self) -> None:
-        findings = scan(
-            "runner error: Error Domain=NSCocoaErrorDomain Code=4097 "
-            "connection to com.apple.linkd.autoShortcut "
-            "worker: error: compilation failed\n",
-            "xcode",
-        )
-
-        self.assertEqual(len(findings), 1)
-        self.assertIn("warning/error", findings[0].message)
-
-    def test_xcode_noise_line_cannot_hide_failure_marker(self) -> None:
-        findings = scan(
-            "appintentsmetadataprocessor warning: Metadata extraction skipped "
-            "** TEST FAILED **\n",
-            "xcode",
-        )
-
-        self.assertEqual(len(findings), 1)
-        self.assertIn("warning/error", findings[0].message)
-
     def test_swiftdata_missing_profile_rejects_missing_file_outside_block(self) -> None:
         findings = scan("open failed: No such file or directory\n", "swiftdata-missing")
 
