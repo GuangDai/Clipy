@@ -1,15 +1,16 @@
 # V2-05 - External Gateway & Audit (X1 ExternalGateway + X2 Operation Record auditing)
 
-> **Status (2026-08-22):** X.1 closed vocabulary, X.2 public contract, and X.3
-> schema/bootstrap are landed. **X.4 audit/admin is the current implementation
-> leaf; its spec-first codec gate is resolved by the closed tables in §4.4.** X.3 is
-> persistence-only: it adds immutable `HistorySchemaV3`, the four Gateway/Audit
-> models, fixed `ExternalLimits`, and startup bootstrap/validation. It does
-> **not** implement `OperationPayloadBlobV1`, any operation-literal codec case,
-> `ExternalGateway`, a facade/factory, registry/admin behavior, App Intents,
-> CLI, or transport. X.4 now has a complete audit-codec contract; its codec,
-> public operation-kind additions, and matching audit/admin behavior must land
-> together. This
+> **Status (2026-08-23):** X.1 closed vocabulary, X.2 public contract, X.3
+> schema/bootstrap, and **X.4 audit/admin are landed**. **X.5 internal in-process
+> Gateway denial is the current implementation leaf.** X.4 owns the complete
+> `OperationPayloadBlobV1` codec, public operation-kind additions, central audit
+> store, current-state connection/grant administration, public in-app admin
+> conformance, and startup validation; it does **not** publish an
+> `ExternalGateway`, external facade/factory, App Intents, CLI, or transport.
+> X.5 adds only the real internal denial substrate. The first public
+> `ExternalHistoryFacade` and factory wait for X.6, where the same production
+> actor also has its granted positive paths; an authorized connection must never
+> receive a permanently-denying placeholder. This
 > doc extends the v1 specification (`00`–`06`) by **addition only**.
 > v1 owns v1 behavior (single in-app writer, no external access, no audit); V2-05
 > owns the single external trust boundary (`ExternalGateway`), the
@@ -150,7 +151,7 @@ X1 (`V2-00` §3) and X2 (`V2-00` §3) bundle onto one substrate:
    (the composition root) that resolve a capability-scoped `ExternalHistory`
    facade via `@Dependency` and `await` it in `perform()` (pending verification under `X-COMPILE-2` / `X-SECURITY-1`; `V2-facts.md`
    cycle 6, facts 1–4). The facade is **obtained by `ClipyApp` from `SwiftDataHistory` at
-   launch** (`makeExternalHistoryFacade(for:)`, §6.5), registered into
+   launch** (`makeAppIntentsHistoryFacade()`, §6.5), registered into
    `AppDependencyManager.shared` once at launch, and delegates every write to
    `HistoryAuthority`. `@Dependency` is App Intents' mandated DI mechanism, NOT
    a banned `.shared`/`.current` service locator — justification and carve-out
@@ -182,8 +183,9 @@ V2-05 owns:
   the models/limits/bootstrap, while X.4 owns the complete codec and audit/admin
   behavior);
 - the `ExternalGateway` actor (validation, capability gate, audit coordination,
-  delegating every durable op to `HistoryAuthority`);
-- the `ConnectionRegistry` / `GrantStore` (internal, Authority-delegating);
+  delegating every durable lookup and operation directly to
+  `HistoryAuthority` through targeted methods; there is no extra intermediary
+  actor);
 - the `AppIntent` conformances and `ClipboardShortcuts: AppShortcutsProvider` in
   `ClipyApp`;
 - the credential-store seam (Keychain `SecItem*`, reserved for non-App-Intents
@@ -267,8 +269,8 @@ not a permanent prohibition on the ordered `clipyctl` continuation.
 - Admin operations (in-app UX only, `GatewayAdminHistory`): enroll/revoke a
   connection, grant/revoke a capability, read the audit log. Admin operations
   are themselves audited.
-- A durable, append-only-by-API `OperationRecord` audit log; a
-  `ConnectionRow` / `GrantRow` registry; a `GatewayConfigRow` singleton.
+- A durable, append-only-by-API `OperationRecord` audit log; `ConnectionRow` /
+  `GrantRow` current-state tables; a `GatewayConfigRow` singleton.
 
 ### 2.2 Out of scope (remains post-V2)
 
@@ -298,7 +300,9 @@ not a permanent prohibition on the ordered `clipyctl` continuation.
 - **X2** lifts `00` §2 and `06` §4. Trigger: X1 approved (audit is X1's
   consequence) (`V2-00` §3).
 
-Until both triggers fire, V2-05 is design only and reserves no v1 surface.
+Both triggers have fired: V2-00 approved the graft, and X.1–X.4 are landed.
+This subsection records the admission history; it does not waive the separate
+proof gates for current X.5 or later slices.
 
 ## 3. Trust boundary and capability model
 
@@ -314,14 +318,30 @@ External caller (App Intent perform() / Siri / Shortcuts / Spotlight)
         baked in at construction — the caller CANNOT forge a different
         connectionID)
   -> ExternalGateway.perform(_:as:) / read(_:as:)
+       PRE-ADMISSION — CONNECTION, THEN DESCRIPTOR + KIND (§0.2): first compare
+          the supplied ID with the actor's startup-validated App Intents ID; a
+          mismatch is an unknown connection and returns immediately. For that
+          known connection only, derive the operation descriptor and required
+          capability purely from the closed typed request, then apply the pure
+          `(kind, capability, operation)` allow matrix with the actor's baked-in
+          `.appIntents` kind. A kind-forbidden pair returns independently of the
+          unknown-connection check. Both failures precede token debit, History
+          evaluation, and audit append and are not admitted Gateway operations.
+          The same pure admission step validates the bounded scalar fields
+          required to form the closed, truthful `RequestSummaryV1`; malformed
+          limits/search lengths neither consume a token nor fabricate an audit
+          summary.
+          No durable lookup occurs here. A future authenticated ingress must
+          resolve its durable Local Automation connection and kind before
+          entering step 0.
        0. RATE-LIMIT (§8, X-SECURITY-3): on the ExternalGateway ACTOR (NOT inside
           the Authority interval — the bucket is process-wide in-memory state),
           debit the process-wide App-Intents token bucket; if exhausted, audit-
           as-denied and throw ExternalFailure.requestDenied(.rateLimited)
-          BEFORE step 1. The denial is thrown only after its audit commit;
+          BEFORE the Authority gate. The denial is thrown only after its audit commit;
           append failure becomes persistence failure. Runs
-          ahead of VALIDATE so a rate-exceeding caller never reaches the
-          Authority's request-evaluation path; the denial record itself is
+          ahead of the live Authority gate so a rate-exceeding caller never
+          reaches History evaluation; the denial record itself is
           appended via `Authority.appendDenialAuditRecord`, carrying
           operationKind/capability derived from the typed request case
           (never raw 0 — §4.3 decode is fail-closed).
@@ -332,26 +352,19 @@ External caller (App Intent perform() / Siri / Shortcuts / Spotlight)
        1. VALIDATE the request (D35): parameters within V2 bounds, requested
           HistoryItemIDs well-formed; reject malformed input as
           ExternalFailure.requestDenied before any history read.
-       2. CAPABILITY PRE-CHECK (D33; NON-authoritative fast-fail filter):
-          load the connection's grant set via the Authority to reject clearly-
-          denied requests before the heavier dispatch path. This pre-check is
-          NOT the authoritative gate: admin revoke bypasses the ExternalGateway
-          actor (GatewayAdminHistory -> Authority directly, §5.3) and CAN land
-          on the Authority between this pre-check and the dispatch closure
-          (Authority serialization is within one interval, not across two —
-          05 §2 / §5). The authoritative gate is the in-closure recheck at step 3.
-       3. DISPATCH (authoritative gate re-run INSIDE the dispatch closure, at
-          the save boundary — closes the TOCTOU window):
-          - read  -> Authority.performExternalRead re-fetches ConnectionRow.status
-                     and the live GrantRow set INSIDE its non-suspending audit
+       2. DISPATCH + AUTHORITATIVE TARGETED ACCESS GATE (D33): call the
+          Authority directly; there is no separate grant-lookup interval.
+          - read  -> Authority.performExternalRead fetches ConnectionRow.status
+                     and only the required live GrantRow(s) INSIDE its
+                     non-suspending audit
                      interval(s); if revoked/ungranted there it audits-as-denied
                      and throws ExternalFailure.unauthorized/.connectionRevoked.
                      Else evaluates the v1 read projection (05 §14) and audits.
                      (.recent/.details/.pastePayload fit one non-suspending
                      interval; .search splits into two bracketing the off-actor
-                     SearchWorker await — §5.2 step 3.)
-          - manage-> Authority.commitExternal re-fetches ConnectionRow.status and
-                     the live GrantRow set INSIDE the same ModelContext.transaction
+                     SearchWorker await — §5.2 step 2.)
+          - manage-> Authority.commitExternal fetches ConnectionRow.status and
+                     the required live GrantRow INSIDE the same ModelContext.transaction
                      closure that applies mutations; if revoked/ungranted there it
                      throws and the closure commits nothing (the audit-as-denied
                      record is appended in a separate small follow-up transaction).
@@ -365,7 +378,7 @@ External caller (App Intent perform() / Siri / Shortcuts / Spotlight)
           result/failure is released; an audit-append failure replaces the read
           outcome with a persistence failure and releases no DTO/content.
           noOp/denied/failed writes also await a separate append before their
-          response/failure is released. The pre-check denial at step 2 is
+          response/failure is released. A targeted-gate denial at step 2 is
           audited before its typed denial is thrown. Outcome
           succeeded/failed/noOp/denied.
   -> ExternalResponse / ExternalReadResult (Sendable HistoryCore DTOs only)
@@ -412,11 +425,11 @@ public enum ExternalCapability: Int16, Sendable, Hashable, Codable {
 ```
 
 **Implication rules.** `.browse` is granted explicitly OR via `.manage` (the
-gate accepts a `.browse` request when the grant set contains `.browse` or
-`.manage`). `.readContent` is granted **only** explicitly — `.manage` does NOT
+targeted gate accepts a `.browse` request when either the `.browse` or
+`.manage` row is live). `.readContent` is granted **only** explicitly — `.manage` does NOT
 imply `.readContent` (a manage caller can find items to pin/unpin/remove but
 cannot read their content). `.manage` is granted only explicitly. The capability
-check is O(1) against the loaded grant set (D33; proof `X-PERF-1`).
+check is O(1) over at most two targeted rows (D33; proof `X-PERF-1`).
 
 **Why browse and readContent are SPLIT (content-exfiltration justification).**
 v1 `HistoryDetails` carries the canonical and effective `[HistoryRepresentation]`
@@ -496,16 +509,16 @@ public enum ConnectionStatus: Int16, Sendable, Hashable, Codable {
 - **Revocation** flips `ConnectionRow.status` to `.revoked` and sets
   `revokedAt` on every live `GrantRow` for that connection (a per-capability
   revoke sets `revokedAt` on the matching `GrantRow` only, §5.3). The
-  authoritative capability gate is the **in-closure recheck** inside the
-  dispatch transaction (§5.1 step 3 / §5.2 step 3): a request whose connection
+  authoritative capability gate is the **in-closure check** inside the
+  dispatch transaction (§5.1 step 2 / §5.2 step 2): a request whose connection
   is revoked or whose capability grant is revoked at the save boundary is
-  rejected there and audited as denied (`D33`). The earlier pre-check
-  (§3.1 step 2) is a non-authoritative fast-fail filter only. Revocation takes
-  effect on the very next in-closure recheck — there is no window in which a
-  revoked connection can commit a write, because the recheck runs inside the
+  rejected there and audited as denied (`D33`). There is no earlier grant
+  check or cached decision. Revocation takes effect on the very next
+  in-closure check — there is no window in which a
+  revoked connection can commit a write, because the check runs inside the
   same non-suspending closure that applies mutations. (Admin revoke bypasses
   the `ExternalGateway` actor — `GatewayAdminHistory` → `HistoryAuthority`
-  directly, §5.3 — so the recheck, not the actor, is what closes the TOCTOU
+  directly, §5.3 — so the check, not the actor, is what closes the TOCTOU
   window.)
 - **Revocation does NOT unregister the facade.** The connection-scoped facade
   registered in `AppDependencyManager.shared` (§6.5) remains resolved for the
@@ -599,13 +612,14 @@ re-granting updates the existing pair row with a fresh `grantedAt` and
 append-only `OperationRecordRow`s.
 `grantKey` is the composite-unique anchor (SwiftData `@Attribute(.unique)` is
 single-attribute; the derived key string encodes the pair deterministically).
-The **live grant set** for a connection is computed at gate time as `{ c |
-∃ GrantRow(connectionID == id, capabilityRaw == c, revokedAt == nil) ∧
-ConnectionRow(id).status == active }` — loaded in one bounded fetch inside the
-request's serialized Authority interval (§5.2). An unknown `capabilityRaw`
-fails closed at decode. `manage` implies `browse` at the gate (§3.2), so a
-connection granted only `.manage` still passes `.browse` requests; `.readContent`
-is never implied and must be granted explicitly.
+The **live access decision** is computed at gate time from the connection row
+and only the request's required live grant row. A browse request additionally
+checks the `.manage` row to implement the frozen implication. These targeted
+rows are fetched inside the request's serialized Authority interval (§5.2); no
+complete grant set is built or cached. An unknown `capabilityRaw` fails closed
+at decode. `manage` implies `browse` at the gate (§3.2), so a connection granted
+only `.manage` still passes `.browse` requests; `.readContent` is never implied
+and must be granted explicitly.
 
 ### 4.3 OperationRecordRow (V3 schema, X2 audit)
 
@@ -698,7 +712,8 @@ rewriting rows and counters, so V2-05 makes no tamper-evidence claim.
 
 ### 4.4 Versioned audit codec (X.4 frozen contract)
 
-X.4's spec-first gate is now **resolved**. `OperationPayloadBlobV1` is an
+X.4's spec-first gate is **resolved and its implementation is landed**.
+`OperationPayloadBlobV1` is an
 explicit versioned value with closed request and result enums; it is not
 synthesized `Codable`, a generic map, or an extensible string envelope. This
 decision is based on the callable `ExternalHistory` and `GatewayAdminHistory`
@@ -879,9 +894,9 @@ The implementation DAG is deliberately shallow:
 
 **Recovery reachability ceiling.** Ordinary `SwiftDataHistory.open` remains
 fail-closed when retained audit validation fails, so a facade obtained only
-after ordinary open cannot recover that store. X.4 may implement and unit-test
-the internal rebase transaction and may execute `.adminForced` against an
-otherwise healthy open store. Raw `AuditRebaseReason.corruptionDetected` and
+after ordinary open cannot recover that store. Landed X.4 unit-tests the
+internal rebase transaction and permits `.adminForced` against an otherwise
+healthy open store. Raw `AuditRebaseReason.corruptionDetected` and
 its request/result codec are frozen now so a later recovery entry does not
 rewrite V1 audit bytes, but X.4 adds no public recovery opener and therefore
 does not claim that a store rejected during ordinary open is runtime-recoverable.
@@ -909,6 +924,8 @@ user knob, mirroring `06` §2, V2-01's `EnrichmentLimits`, V2-03's
 | `compactionCadenceOps` (trim every N-th external op) | 100 |
 | `maxAuditReadBatchSize` (per-call audit-log fetch limit) | 500 |
 | External read `browse` limit (mirrors v1 page limit) | 1–500 (`06` §2) |
+| `appIntentsRateLimitCapacity` | 30 tokens; initialized full for each process lifetime |
+| `appIntentsRateLimitRefillNanosecondsPerToken` | `1_000_000_000`; refill capped at `appIntentsRateLimitCapacity` |
 
 Rules (matching `06` §2 / V2-03 §4.5):
 
@@ -944,11 +961,26 @@ Rules (matching `06` §2 / V2-03 §4.5):
   before the trim subtracts the deleted rows' contributions, and a compaction
   pass suppresses re-trigger evaluation until its trim completes (no immediate
   re-compaction loop). Recorded in `X-PERF-2`.
-- `compactionCadenceOps` is a future X.5 process-local dispatch cadence, not a
+- `compactionCadenceOps` is an X.5 process-local dispatch cadence, not a
   durable counter and never `nextAuditSequence % 100` (that sequence also
   includes admin/read/maintenance records). X.4 owns the synchronous
   `compactIfNeeded` mechanism and its transaction proofs; the later Gateway
   actor decides when every hundred admitted external operations has elapsed.
+- The two App Intents rate scalars are X.5 additions to the internal
+  `ExternalLimits`; their presence in this aggregate table does not claim they
+  landed with X.4. The X.5 bucket itself is process-local actor state, not
+  durable configuration and not a user knob. Gateway construction samples the
+  injected uptime witness as `lastRefillUptimeNanoseconds` and starts with 30
+  tokens. At each admitted typed request the actor samples its injected uptime
+  witness, treats a sample earlier than the prior refill sample as elapsed `0`
+  without moving the prior
+  sample backward, adds one whole token per `1_000_000_000` elapsed nanoseconds,
+  preserves any sub-second remainder by advancing the prior sample only by the
+  credited whole-token interval, and caps the result at 30 before debiting one
+  token. With zero tokens the call follows the audited rate-denial path. These
+  constants and arithmetic are a deterministic correctness/admission contract;
+  they are **not** a throughput, latency, energy, or abuse-resistance
+  performance claim.
 - Search audit carries byte counts, never query text (§4.4).
 - These are admission bounds, not user runtime knobs; the UX (V2-07) reads audit
   via `GatewayAdminHistory` but cannot lower them below the v1/v2 floors.
@@ -1069,8 +1101,13 @@ facade may be published:
    decode every retained audit row in sequence-keyed batches, and require exact
    logical-byte accounting. For a first X.3 bootstrap this reduces to one
    active App Intents connection with zero grants/audit. X.3 publishes no
-   facade. A future X.5 facade may be published only after the applicable
-   validated state and the real `ExternalGateway` actor both exist.
+   facade. After this validation succeeds, `open` carries that exact durable
+   `appIntentsConnectionID` forward as an immutable `ExternalConnectionID` and
+   constructs the X.5 `ExternalGateway` actor; it never calls the ID source
+   again, re-mints an identity, or asks a later factory to choose a connection.
+   X.5 publishes no facade. X.6 may publish the App Intents facade only after
+   the same actor's granted positive paths are real, baking that startup-
+   validated ID into the facade.
 
 This step applies to the `.memory` store path too.
 
@@ -1085,17 +1122,7 @@ derived rows (HCR by V2-03, OperationRecord by V2-05) in the same closure:
 ```text
 ExternalGateway.perform(.remove(itemID), as: connID)   [actor]
   1. VALIDATE (D35): itemID well-formed; bounds ok.
-  2. Authority.loadGrantSet(for: connID) — NON-authoritative pre-check
-       (one non-suspending interval): fetch ConnectionRow + GrantRows; compute
-       the live grant set; if the connection is revoked or .manage (and the
-       .manage-implies-.browse read) is not granted, audit-as-denied in a small
-       follow-up transaction and throw ExternalFailure.unauthorized /
-       .connectionRevoked. This is a fast-fail filter ONLY — admin revoke
-       bypasses the ExternalGateway actor and CAN land on the Authority between
-       this pre-check and step 3 (Authority serialization is within one
-       interval, not across two — 05 §2 / §5). The authoritative gate is step 3's
-       in-closure recheck.
-  3. Authority.commitExternal(request: .remove(itemID), connection: connID,
+  2. Authority.commitExternal(request: .remove(itemID), connection: connID,
                               requestedAt:)   [single writer; authoritative gate]
        create operation-local context
        -> load action-specific facts (05 §7.3 remove: target scalar summary)
@@ -1125,7 +1152,7 @@ ExternalGateway.perform(.remove(itemID), as: connID)   [actor]
          the V2-05 auditAppend (OperationRecordPayload, §5.4)
        -> prevalidate index delta, receipt, hcrAppend, AND auditAppend
        -> execute ONE ModelContext.transaction (05 §10):
-            re-fetch ConnectionRow.status + live GrantRow set (the
+            fetch ConnectionRow.status + the required live GrantRow (the
             authoritative gate, D33); if revoked/ungranted: throw from
             inside the closure (commits nothing); audit-as-denied in a
             separate small follow-up transaction
@@ -1180,14 +1207,11 @@ projection (`05` §14). It mutates no history state and produces no HCR row:
 ExternalGateway.read(.search(text, mode, limit), as: connID)   [actor]
   1. VALIDATE (D35): text/limit within v1 HistoryLimits bounds; reject as
        requestDenied(.invalidInput) before any read.
-  2. Authority.loadGrantSet(for: connID) — NON-authoritative pre-check
-       (one non-suspending interval): verify the request's required capability
-       (.browse for recent/search; .readContent for details/pastePayload;
-       .manage implies .browse) is granted and the connection is active; else
-       audit-as-denied in a small follow-up transaction and throw
-       ExternalFailure.unauthorized/.connectionRevoked. Fast-fail filter only.
-  3. Authority.performExternalRead(.search(...), connection: connID,
+  2. Authority.performExternalRead(.search(...), connection: connID,
        requestedAt:)   [single writer, read context; authoritative gate]
+       Fetch ConnectionRow and only the required live GrantRow, plus the
+       `.manage` row when a browse request applies manage-implies-browse. If
+       inactive/ungranted, audit-as-denied before throwing.
        The .search read path runs as TWO non-suspending Authority intervals
        bracketing the off-actor SearchWorker await (SearchWorker is a separate
        actor — 01 §6 / 04 §7 / 05 §14.2 — so it CANNOT be invoked inside a
@@ -1196,8 +1220,8 @@ ExternalGateway.read(.search(text, mode, limit), as: connID)   [actor]
        deliberately SPLITS snapshot-capture from off-actor evaluation, exactly as
        v1 browse does — the request is a v1 HistoryBrowseRequest, no new read
        path:
-       (a) interval 1 (authoritative gate + snapshot capture): RE-FETCH
-           ConnectionRow.status + live GrantRow set; if revoked/ungranted there,
+       (a) interval 1 (authoritative gate + snapshot capture): fetch
+           ConnectionRow.status + required live GrantRow row(s); if revoked/ungranted there,
            append the denial audit first and throw only after it commits. If
            that append fails, throw persistence failure. Else
            capture SearchCorpusSnapshot (05 §14.2, a Sendable value snapshot).
@@ -1213,13 +1237,13 @@ ExternalGateway.read(.search(text, mode, limit), as: connID)   [actor]
            continuity for reads follows from the same transaction updating the
            singleton counter and inserting the row; no concurrent append can
            mint the same sequence inside the serialized Authority interval.
-       Accept the read-side grant-recheck-vs-evaluation TOCTOU: a revocation
+       Accept the read-side grant-check-vs-evaluation TOCTOU: a revocation
        landing between interval 1 and interval 2 takes effect on the NEXT
-       request, not this one (the authoritative recheck already passed in
+       request, not this one (the authoritative check already passed in
        interval 1). This is the acceptable read TOCTOU, distinct from the write
-       save-boundary recheck that closes the write TOCTOU inside one closure.
+       save-boundary check that closes the write TOCTOU inside one closure.
        For .recent/.details/.pastePayload reads (no off-actor SearchWorker
-       evaluation) the grant-recheck, evaluation, and audit genuinely fit ONE
+       evaluation) the grant check, evaluation, and audit genuinely fit ONE
        non-suspending Authority interval.
   4. Read audit outcome .succeeded / .failed / .denied; resultSummary
        pageCount(rows.count) on success; requestedAt / committedAt from the
@@ -1433,13 +1457,15 @@ Wall-clock is not monotonic; a backwards move under-compresses audit
   explicitly unavailable; a request below it returns
   `.auditCompactedBefore`. A gap, duplicate, or out-of-range retained row is
   `.persistence(.invariantViolation)` and normal `open` refuses to publish a
-  facade. X.4 may add a separately gated recovery-only
-  `rebaseAuditLog(reason:)` that quarantines/discards an explicitly identified
-  prefix, advances (never decreases) `compactionFloor`, and appends a global
-  rebase marker whose optional `connectionID`/`capability` are nil. It does not
-  reset `nextAuditSequence`, does not use a `generation` scalar, cannot read
-  clipboard content or execute History mutations, and does not claim to prove
-  what happened before the new floor.
+  facade. Landed X.4 owns the rebase transaction and the healthy-store
+  `.adminForced` path, but adds no opener capable of reaching a store that
+  normal `open` rejected. A separately reviewed future recovery-only opener may
+  invoke that transaction to quarantine/discard an explicitly identified
+  prefix, advance (never decrease) `compactionFloor`, and append a global
+  rebase marker whose optional `connectionID`/`capability` are nil. It must not
+  reset `nextAuditSequence`, use a `generation` scalar, read clipboard content,
+  execute History mutations, or claim to prove what happened before the new
+  floor.
 - **Compaction.** §4.5. Compaction is the single explicit exception to
   append-only: it appends a global content-free compaction marker, trims exactly
   one oldest prefix, advances `compactionFloor`, and preserves a contiguous
@@ -1495,18 +1521,23 @@ is `01` §8 / `06` §6: "`import SwiftData` appears only in `HistoryStorage`"):
   "distinct concern protocol" pattern V2-01 (`EnrichmentHistory`) and V2-03
   (`ReconnectHistory`) established. One additional public type —
   `ExternalHistoryFacade` — plus one public accessor —
-  `SwiftDataHistory.makeExternalHistoryFacade(for:)` — are exposed on
+  `SwiftDataHistory.makeAppIntentsHistoryFacade()` — are exposed on
   `HistoryStorage` (CRIT-M3) because the facade is the single `@Dependency`
   seam resolved by `ClipyApp`'s `AppIntent`s, and `ClipyApp` is the separate
   Xcode app target **outside** the History Swift package (`01` §2); `package`
   access is invisible there, so both the type and the accessor must be `public`.
   This mirrors how v1 exposes `SwiftDataHistory.open(...)` to `ClipyApp`
   (`01` §2: `public` is reserved for the concrete `HistoryStorage` constructor
-  needed by `ClipyApp`). The facade is added to the §9 public-surface snapshot
-  test (`01` §9 gate 4) and to `X-COMPILE-2` (Record 3).
-- **Implementation** (`ExternalGateway`, `ConnectionRegistry`, `GrantStore`,
-  `CredentialStore`, the `@Model`s, codecs, and the `commitExternal` /
-  `performExternalRead` / grant-load / audit-append methods on
+  needed by `ClipyApp`). The existing §9 symbol snapshot remains a
+  `HistoryCore`-only gate and is unchanged: it already covers the X.2 protocol
+  and DTO contract, but cannot represent a type declared by `HistoryStorage`.
+  X.6 proves the facade and accessor with an out-of-package
+  `ClipyIntegrationTests` compile/behavior test that imports `HistoryStorage`
+  normally; package-level tests alone cannot prove `public` rather than
+  `package` access. This proof belongs to `X-COMPILE-2` (Record 3).
+- **Implementation** (`ExternalGateway`, `CredentialStore`, the `@Model`s,
+  codecs, and the `commitExternal` / `performExternalRead` / targeted access
+  check / audit-append methods on
   `HistoryAuthority`) is added to `HistoryStorage`. `HistoryStorage` does
   **not** import `AppIntents` — the gateway exposes a Foundation-only
   `ExternalHistory` protocol, and the `AppIntent` conformances that consume it
@@ -1527,20 +1558,26 @@ is `01` §8 / `06` §6: "`import SwiftData` appears only in `HistoryStorage`"):
   connection-scoped `ExternalHistory` facade from `SwiftDataHistory` at launch
   and registers it into `AppDependencyManager.shared` (§6.5). `ClipyApp` imports
   `HistoryCore` (for the DTOs) `HistoryStorage` (for `SwiftDataHistory` and
-  `makeExternalHistoryFacade`); it does **not** touch `@Model` types (they are
+  `makeAppIntentsHistoryFacade`); it does **not** touch `@Model` types (they are
   `internal` to `HistoryStorage`).
-- `SwiftDataHistory` gains `ExternalHistory` and `GatewayAdminHistory`
-  conformances; the `ExternalGateway` actor is a stored field of
+- X.4 gives `SwiftDataHistory` its landed `GatewayAdminHistory` conformance.
+  `SwiftDataHistory` deliberately does **not** conform to `ExternalHistory`:
+  that protocol has no connection argument, so direct conformance would create
+  an unbound second external entry. X.6 exposes only the connection-bound
+  `ExternalHistoryFacade`. The `ExternalGateway` actor is a stored field of
   `SwiftDataHistory` (extending its actor field set, `05` §2). Because it is an
   `actor` type, `SwiftDataHistory: Sendable` remains derived without
   `@unchecked Sendable` (`01` §6) — a private stored-field addition under the V2
   self-review gate (`V2-00` §8).
 
-Incremental order is explicit: X.4 may publish only the thin
+Incremental order is explicit: X.4 publishes only the thin
 `GatewayAdminHistory` conformance after bootstrap/audit/admin behavior is real;
-it adds no actor field. `ExternalHistory`, its connection-bound facade/factory,
-and the stored `ExternalGateway` actor land together at X.5, never as an
-unavailable placeholder.
+it adds no actor field. X.5 constructs the real stored `ExternalGateway` actor
+and proves authoritative denial internally, but publishes no external facade or
+factory. X.6 first completes the same actor's granted positive paths, then lands
+the connection-bound `ExternalHistoryFacade` and
+`makeAppIntentsHistoryFacade()` together; an authorized grant can therefore
+never reach an unavailable or denial-only public placeholder.
 
 A new SwiftPM target would either have to import SwiftData (creating a second
 SwiftData-owning target, violating `00` §3.4 / `01` §4) or be a pure facade
@@ -1579,24 +1616,17 @@ durable read to the Authority, `V2-03` §6.2). The `@Dependency`-resolved facade
 the App Intents consume is a thin `Sendable` struct holding the gateway ref +
 the baked-in `connectionID` (§6.5).
 
-### 6.3 ConnectionRegistry / GrantStore
+### 6.3 Direct authoritative targeted access (no forwarding actor)
 
-```swift
-internal actor ConnectionRegistry {
-    private let authority: HistoryAuthority   // all reads/writes via the Authority
-
-    // Live grant set is computed by the Authority inside the request interval
-    // (not cached across requests — a cached grant could go stale vs. a revoke;
-    // D33 requires the live grant). The registry is a coordination point for
-    // admin UX (list connections/grants) and is itself Authority-delegating.
-    func liveGrants(for connection: ExternalConnectionID) async throws -> Set<ExternalCapability>
-}
-```
-
-The registry does not cache grants (a cached grant going stale vs. a concurrent
-revoke would violate D33). The live grant set is loaded fresh inside each
-request's serialized Authority interval (§5.1 step 2 / §5.2 step 2). It never
-creates a `ModelContext`.
+After pure descriptor/kind admission, token debit, and scalar input validation,
+`ExternalGateway` calls `HistoryAuthority.commitExternal` or
+`HistoryAuthority.performExternalRead` directly. There is no separate
+forwarding actor, grant-lookup interval, or cached grant decision. The
+Authority fetches exactly one `ConnectionRow` and the single required live
+`GrantRow`; a browse request may additionally target the `.manage` row to
+implement the frozen manage-implies-browse rule. The targeted decision is made
+inside the dispatch interval that owns evaluation/audit and, for writes, the
+save-boundary transaction. `ExternalGateway` creates no `ModelContext`.
 
 ### 6.4 Authority methods (single-writer preservation)
 
@@ -1606,17 +1636,11 @@ dispatch (`05` §8); the closed `HistoryAction` switch is unchanged.
 
 ```swift
 internal extension HistoryAuthority {
-    // Grant load (NON-authoritative pre-check; one non-suspending interval).
-    // Used by the ExternalGateway as a fast-fail filter before the heavier
-    // dispatch path. The authoritative gate is the in-closure recheck inside
-    // commitExternal / performExternalRead.
-    func loadGrantSet(for connection: ExternalConnectionID) async throws -> GrantDecision
-
     // External write: INVOKES the single v1 commit kernel (no duplicated fact-
     // load/plan/transaction logic), parameterized by the manage-subset
     // ExternalRequest mapped to its v1 HistoryAction, with auditAppend threaded
-    // via StampedCommitPlan. The ModelContext.transaction closure RE-FETCHES
-    // ConnectionRow.status + the live GrantRow set and throws/audit-as-denied
+    // via StampedCommitPlan. The ModelContext.transaction closure fetches
+    // ConnectionRow.status + the required live GrantRow and throws/audit-as-denied
     // if revoked/ungranted at the save boundary (TOCTOU close, D33). request is
     // one of .pin/.unpin/.remove (§7.1); the v1 HistoryAction enum is NOT
     // modified. .unchanged from the planner -> audit outcome .noOp, no commit.
@@ -1636,7 +1660,7 @@ internal extension HistoryAuthority {
     // External read: delegates to the v1 read projection (05 §14). For .search
     // the path is TWO non-suspending Authority intervals bracketing the off-
     // actor SearchWorker await (it cannot live in one non-suspending closure):
-    // interval 1 RE-FETCHES ConnectionRow.status + live GrantRow set
+    // interval 1 fetches ConnectionRow.status + required live GrantRow row(s)
     // (authoritative gate; throws/audit-as-denied if revoked/ungranted) and
     // captures the Sendable SearchCorpusSnapshot; SearchWorker evaluates off-
     // actor between intervals; interval 2 builds the page and audits outcome
@@ -1647,7 +1671,7 @@ internal extension HistoryAuthority {
     // non-suspending interval. A throw from the read projection is caught,
     // audited as .failed with the matching failureKind, and rethrown only after
     // that append commits. Audit failure publishes no DTO/content and throws a
-    // persistence failure. The read-side grant-recheck-vs-
+    // persistence failure. The read-side grant-check-vs-
     // evaluation TOCTOU is accepted (revocation takes effect on the next
     // request).
     func performExternalRead(
@@ -1780,22 +1804,31 @@ let history = try await SwiftDataHistory.open(configuration: cfg)   // v1 path, 
 // Authority directly. A PUBLIC accessor returns the connection-scoped facade
 // for the bootstrapped App Intents connection (public because ClipyApp is the
 // separate Xcode app target outside the History Swift package, 01 §2):
-let facade = history.makeExternalHistoryFacade(for: .appIntents)    // Sendable; connectionID baked in
+let facade = history.makeAppIntentsHistoryFacade()                  // Sendable; validated connectionID baked in
 AppDependencyManager.shared.add(dependency: facade)                 // the ONE permitted .shared use
 // App Intents resolve `@Dependency var history: ExternalHistoryFacade` via this registry.
 ```
 
-`makeExternalHistoryFacade(for:)` is a **`public`** accessor on
-`SwiftDataHistory` (CRIT-M3; constructed in `open` alongside the gateway; it
-wraps the gateway actor ref + the bootstrapped `ExternalConnectionID` for the
-requested enrollment kind). `ClipyApp` never receives a `HistoryAuthority`
-reference; the Authority stays internal to `HistoryStorage` exactly as v1
-requires (`05` §2). (`ExternalHistoryFacade` is itself a **`public` `Sendable`
-struct** — a `let` gateway (`actor`, hence `Sendable`) + a `let connectionID`
-(`Sendable`). The conformance is derived without `@unchecked Sendable`. It
-conforms to `ExternalHistory` by delegating to the gateway with the baked-in
-`connectionID`, which is why `@Dependency` is typed `ExternalHistoryFacade` in
-`ClipyApp`.)
+`makeAppIntentsHistoryFacade()` is a **`public`, synchronous, no-argument**
+accessor on `SwiftDataHistory` (CRIT-M3). It is published only in X.6, after the
+positive actor paths exist. `open` constructs the gateway after startup has
+created-or-validated the durable App Intents connection and carries that exact
+`ExternalConnectionID` into the actor/facade; neither the factory nor any later
+open phase re-mints it. The dedicated no-argument spelling is intentional:
+`ConnectionEnrollKind.localAutomation` can have multiple enrolled connections,
+so a kind-taking factory would have no authoritative single connection to bake
+in. Future Local Automation enters through its separately approved
+authenticated ingress, not this App Intents factory.
+
+`ClipyApp` never receives a `HistoryAuthority` reference; the Authority stays
+internal to `HistoryStorage` exactly as v1 requires (`05` §2).
+`ExternalHistoryFacade` is itself a **`public` `Sendable` struct** — a `let`
+gateway (`actor`, hence `Sendable`) + a `let connectionID` (`Sendable`). The
+conformance is derived without `@unchecked Sendable`. It conforms to
+`ExternalHistory` by delegating to the gateway with the baked-in connection ID,
+which is why `@Dependency` is typed `ExternalHistoryFacade` in `ClipyApp`.
+`SwiftDataHistory` itself does not conform to `ExternalHistory`; callers must
+obtain this explicitly bound facade.
 
 **Registration-before-resolution on background launch (CRIT-M4).** Siri /
 Shortcuts / Spotlight can invoke an intent while the app is **not running**,
@@ -1922,12 +1955,14 @@ public enum ExternalReadResult: Sendable {
 }
 ```
 
-`ExternalHistory` is conformed to by `SwiftDataHistory` (delegating to its
-`ExternalGateway` field). The connection-scoped facade consumed by App Intents
-(`ExternalHistoryFacade`, §6.5) wraps a gateway + a baked-in connectionID and
-also conforms to a `Sendable` callable form; it is what `@Dependency` resolves.
-A v1 caller that holds `any ClipboardHistory` and ignores `ExternalHistory`
-behaves exactly as on v1.
+`SwiftDataHistory` does **not** conform to `ExternalHistory`: the protocol has
+no connection argument, so such a conformance would be an unbound second entry.
+The connection-scoped facade consumed by App Intents
+(`ExternalHistoryFacade`, §6.5) is the sole conformance. It wraps a gateway plus
+the startup-validated, baked-in App Intents connection ID and is the `Sendable`
+callable value that `@Dependency` resolves. A v1 caller that holds
+`any ClipboardHistory` behaves exactly as on v1; external access requires the
+explicit public facade from the concrete `SwiftDataHistory` composition root.
 
 `ExternalRequest` / `ExternalRead` are **closed** for V2 (frozen safe subset,
 §3.2). Adding a case is an owned exhaustive-switch change across the gateway,
@@ -2237,28 +2272,38 @@ its dedicated v1 vocabulary (`02` §10), and `ExternalFailure` has no
   revoking the whole surface. Per-Shortcut isolation is post-V2. This is
   surfaced to UX (V2-07) as the scope of the App Intents grant.
 - **Rate limiting / quota — honest bound (`X-SECURITY-3`).** A process-wide
-  App-Intents token-bucket quota bounds external request rate (deny
-  `requestDenied(.rateLimited)`), so a runaway Shortcut loop cannot hammer
-  history or balloon the audit log unboundedly. The quota is **in-memory**
+  App-Intents token-bucket quota bounds entry into the live Authority gate and
+  History evaluation (deny `requestDenied(.rateLimited)`). Pure bounded scalar
+  and descriptor admission occurs first so malformed requests consume no token
+  and never require a fabricated audit summary. The quota is **in-memory**
   (resets on app relaunch — and App Intents can background-launch the app,
   resetting the bucket) and **per single shared connection** (callers are not
   individually distinguishable on the App Intents surface), so it is a **coarse
   process-wide throttle, not a per-caller cap**: a malicious Shortcut can
   EXHAUST it (denying legitimate Siri use — DoS) OR, if sized for aggregate
   use, under-mitigate a single caller. The honest OUTCOME is therefore "a
-  rate-exceeding external caller is throttled, not allowed to exhaust the
-  Authority or balloon the audit unboundedly within one process lifetime";
-  per-caller attribution is recorded as a known limitation requiring per-intent
+  rate-exceeding well-formed caller does not enter the live Authority gate or
+  History evaluation." Every over-limit call still awaits its mandatory denial-audit
+  append through the Authority, so this bucket does **not** bound incoming call
+  rate, denial-audit write rate, or Authority load. Retained audit bytes are
+  bounded separately by §4.5 compaction. Per-caller attribution is recorded as
+  a known limitation requiring per-intent
   caller identity the surface may not provide (`X-SECURITY-4` surveys what
   caller identity, if any, is available). Whether the system itself
   coalesces/throttles App Intent invocations is undocumented — V2-05 does not
-  rely on it. The bucket refills from
+  rely on it. The bucket has capacity 30, starts full for each process lifetime,
+  and refills exactly one token per `1_000_000_000` uptime nanoseconds, capped
+  at 30. The bucket refills from
   `DispatchTime.now().uptimeNanoseconds` - "the number of nanoseconds since
   boot, excluding any time the system spent asleep" (Apple docs define the
   epoch; monotonicity itself is NOT documented - `V2-facts.md` cycle 6 fact
   9). The defense is the clamp, not the adjective: elapsed = max(0, now -
-  last) and refill is capped at bucket capacity, so a backward or
-  non-monotonic reading can only delay a refill, never grant extra. The
+  last); a backward sample contributes elapsed `0` and does not move the saved
+  sample backward. Whole-token refill advances that saved sample only by the
+  credited whole-second interval, preserving the sub-second remainder, and the
+  refill is capped at 30. A backward or non-monotonic reading can therefore
+  only delay a refill, never grant extra. This is a correctness admission bound,
+  not a claim about requests per second achieved by the product. The
   Storage-clock witness stays audit-timestamp-only (§5.5).
 - **Single writer preserved (D32).** The gateway creates no `ModelContext`;
   every write delegates to `HistoryAuthority`. No external path bypasses the v1
@@ -2302,10 +2347,10 @@ its dedicated v1 vocabulary (`02` §10), and `ExternalFailure` has no
 Correctness gates run first. Performance claims for V2-05 (proof gates
 `X-PERF-*`):
 
-- **Capability gate is O(1) per request** (`X-PERF-1`): the live grant set is a
-  bounded fetch (one `ConnectionRow` + its `GrantRow`s; grant count ≤
-  `ExternalCapability` cases = 3) loaded in one non-suspending Authority
-  interval. The gate decision is a set-contains check.
+- **Capability gate is O(1) per request** (`X-PERF-1`): the targeted check
+  fetches one `ConnectionRow` plus one required `GrantRow`, or two grant rows
+  for manage-implies-browse, in one non-suspending Authority interval. It does
+  not build a complete grant set.
 - **Audit append is O(payload) per external op** (`X-PERF-2`): codec encode +
   one `context.insert` + the singleton counter update. Bounded by `ExternalLimits`
   (`maxAffectedItemsPerRecord` = 32; payload never carries query text or
@@ -2313,11 +2358,10 @@ Correctness gates run first. Performance claims for V2-05 (proof gates
   transaction); for reads it is a separate small transaction.
 - **External read perf is consistent with v1** (`X-PERF-3`): the read path is
   the unchanged v1 `browse`/`details`/`pastePayload` projection (`05` §14); the
-  gateway adds only validation + grant-load + a read-audit transaction. The
-  grant-load interval and the read interval are separate non-suspending
-  Authority intervals; for `.search` the read path itself is two non-suspending
-  Authority intervals bracketing the off-actor SearchWorker await (§5.2 step 3),
-  while `.recent`/`.details`/`.pastePayload` fit one.
+  gateway adds only validation; the Authority's read interval owns the targeted
+  access gate and read audit. For `.search`, two non-suspending Authority
+  intervals bracket the off-actor SearchWorker await (§5.2 step 2), while
+  `.recent`/`.details`/`.pastePayload` fit one.
 - **Audit log read is O(batch)** (`X-PERF-4`): bounded by
   `ExternalLimits.maxAuditReadBatchSize` (500); typed decode and contiguous
   sequence validation are O(batch).
@@ -2349,7 +2393,7 @@ D1–D19 are **preserved unchanged**. In particular:
   `.remove` deletes rows per the v1 retirement path.
 - **D5/D6 (precise tokens):** the external manage path advances `ContentVersion`
   / `ChangePosition` exactly as the corresponding v1 action; the audit append
-  and the grant-load advance **neither** (they are not History Commits).
+  and the targeted access check advance **neither** (they are not History Commits).
 - **D7 (fingerprint-is-evidence):** unaffected (no dedup path is external).
 - **D8 (complete facts):** the external write loads the **same** complete v1
   facts as the app-internal action; the Domain planner is unaware the request is
@@ -2377,14 +2421,20 @@ on macOS 26:
   is added only when `X-PLATFORM-3` fires, Lens B minor); `AppIntents` imported
   only in `ClipyApp`; `HistoryCore` external-gateway types import only
   Foundation; no `@unchecked Sendable` or `nonisolated(unsafe)`;
-  `ExternalGateway`/`ConnectionRegistry` are `actor` types so
+  `ExternalGateway` is an `actor` type so
   `SwiftDataHistory: Sendable` is derived.
 - **X-COMPILE-2 (`@Dependency` facade + `01` §8 carve-out + CRIT-M3/M4).** The
   `ExternalHistoryFacade` is **`public`** and `Sendable` (derived);
-  `makeExternalHistoryFacade(for:)` is **`public`** on `SwiftDataHistory`
+  `makeAppIntentsHistoryFacade()` is a **`public`, synchronous, no-argument**
+  accessor on `SwiftDataHistory`
   (CRIT-M3 — `ClipyApp` is the separate Xcode app target outside the package,
-  `01` §2; `package` access would not compile); `ClipyApp` resolves the facade
-  via `@Dependency` and registers it once into `AppDependencyManager.shared`;
+  `01` §2; `package` access would not compile). An out-of-package
+  `ClipyIntegrationTests` compile/behavior test imports `HistoryStorage`
+  normally and calls the accessor; the HistoryCore-only symbol snapshot remains
+  unchanged and is not evidence for this HistoryStorage surface.
+  `SwiftDataHistory` does not itself conform to `ExternalHistory`. `ClipyApp`
+  resolves the facade via `@Dependency` and registers it once into
+  `AppDependencyManager.shared`;
   the facade delegates every write to `HistoryAuthority` (single writer; no
   bypass). The §9 source gate is amended to permit this single `.shared`
   registration in `ClipyApp` and reject every other `.shared`/`.current`
@@ -2463,15 +2513,21 @@ on macOS 26:
   nil connection/capability. State explicitly that these checks are not
   cryptographic tamper evidence and cannot detect a coherent privileged rewrite.
 - **X-SECURITY-3 (rate limit — coarse process-wide throttle).** Confirm the
-  in-memory, process-wide App-Intents token-bucket quota compiles and is honored
-  under sustained load: a rate-exceeding external caller is throttled
-  (`requestDenied(.rateLimited)`, one immutable denied record per admitted call
-  before the denial is returned, §3.1 step 0), not allowed to monopolize the Authority or balloon the
-  audit log **within one process lifetime**. The honest bound
+  in-memory, process-wide App-Intents token-bucket quota compiles and follows
+  its deterministic admission state machine: a rate-exceeding external caller is throttled
+  (`requestDenied(.rateLimited)`, one immutable denied record per well-formed
+  call before the denial is returned, §3.1 step 0) before the live
+  authorization gate or History evaluation. It does not bound denial-audit append rate or Authority
+  load. The honest bound
   (§8): the quota is per single shared connection (no per-caller
   distinguishability) and resets on app relaunch, so it is a coarse process-wide
   throttle, NOT a per-caller cap. Record the DoS limitation (a malicious
-  Shortcut can exhaust the bucket, denying legitimate Siri use) honestly.
+  Shortcut can exhaust the bucket, denying legitimate Siri use) honestly. A
+  deterministic fixed-uptime witness (no sleep) proves: the initial 30 debits,
+  same-time 31st denial, no refill at `999_999_999` ns, exactly one refill at
+  `1_000_000_000` ns, a large-forward jump capped at 30, and a backward sample
+  producing zero elapsed without rewinding refill state. This is correctness
+  admission evidence, not a performance measurement.
 - **X-SECURITY-4 (per-caller identity survey — OPEN).** The §8 honest-bound
   bullet records that V2's rate limit cannot attribute operations to a specific
   caller (Siri vs a given Shortcut) because the App Intents surface provides a
@@ -2529,7 +2585,7 @@ X.3 touches the **schema** layer and post-migration bootstrap (`05` §17):
 - **No writes before completeness.** The V2-05 bootstrap (§4.6) runs at `open`,
   and the exact config/active-connection/zero-grant/zero-audit state is
   validated before any future facade could be published. X.3 itself constructs
-  no actor, facade, registry, or admin service. No capture/write is enabled before Signature Index /
+   no actor, facade, external dispatch, or admin service. No capture/write is enabled before Signature Index /
   change-journal completeness is restored (the v1/V2-03 open sequence is
   unchanged; V2-05 appends its bootstrap after it).
 - **No `ContentVersion` change, no ID reuse, no invented bytes** (`05` §17).
@@ -2568,26 +2624,25 @@ extends the set:
   itself decodes no Canonical/revision blob (external `readContent` decodes
   lineage only inside the Authority via `05` §14.3). (The V2-05 analogue of
   V2-01 D22 / V2-03 D28; preserves `00` §3.3.)
-- **D33 Capability-gated execution (authoritative gate at the save boundary).**
-  An external request executes only if its connection is active and its grant
-  set covers the requested capability at the **save-boundary in-closure
-  recheck**. The external capability vocabulary is `.browse` (read metadata —
+- **D33 Capability-gated execution (authoritative dispatch gate).**
+  An external request executes only if its connection is active and the
+  targeted live grant row(s) authorize its capability inside the authoritative
+  dispatch interval; writes perform that check at the save boundary. The
+  external capability vocabulary is `.browse` (read metadata —
   recent/search), `.readContent` (read full content — details/pastePayload), and
   `.manage` (write pin/unpin/remove); `.manage` **implies `.browse`** but **not**
   `.readContent` (a manage caller can find items to manage but cannot read their
-  content). The
-  ExternalGateway's pre-check (`loadGrantSet`, §3.1 step 2) is a
-  **non-authoritative fast-fail filter**; the authoritative gate is the
-  re-fetch of `ConnectionRow.status` + the live `GrantRow` set **inside**
+  content). The authoritative gate is the targeted fetch of
+  `ConnectionRow.status` + the required live `GrantRow` row(s) **inside**
   `commitExternal`'s transaction closure (writes) / `performExternalRead`'s
   read-audit closure (reads). A request whose connection is revoked or whose
-  capability is ungranted at the recheck throws
+  capability is ungranted at the check throws
   `ExternalFailure.unauthorized` / `.connectionRevoked`, is audited as `denied`,
   and — for writes — commits nothing (closure failure commits neither the
-  mutation nor any row). Admin revoke bypasses the `ExternalGateway` actor and
-  CAN land on the Authority between the pre-check and the dispatch closure, so
-  only the in-closure recheck closes the TOCTOU window (D33). No cached grant is
-  trusted across the pre-check/dispatch boundary. No external request reaches
+  mutation nor any row). Admin revoke bypasses the `ExternalGateway` actor, but
+  Authority serialization places it before or after the same dispatch interval;
+  there is no separate lookup/dispatch window and no cached grant decision.
+  No external request reaches
   Domain/Storage without a valid grant at the save boundary.
 - **D34 Audit-completeness, by op class (crash bound stated per class).**
   Each committed audit append carries one unique monotone `auditSequence`; the

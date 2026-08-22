@@ -21,13 +21,14 @@ It does not duplicate dedup winner selection, Copy Occurrence folding, pin-order
 
 ```swift
 public struct SwiftDataHistory: ClipboardHistory, Sendable {
-    // All five stored fields are `actor` types, so each is Sendable and the
+    // All six stored fields are `actor` types, so each is Sendable and the
     // Sendable conformance is derived without @unchecked Sendable.
     private let authority: HistoryAuthority
     private let ingestPreparation: IngestPreparationActor
     private let revisionPreparation: RevisionPreparationActor
     private let searchWorker: SearchWorker
     private let thumbnailService: ThumbnailService
+    private let externalGateway: ExternalGateway
 
     public static func open(
         configuration: HistoryConfiguration
@@ -63,6 +64,7 @@ SwiftDataHistory facade
 ├── RevisionPreparationActor
 ├── SearchWorker
 ├── ThumbnailService / ThumbnailWorker
+├── ExternalGateway
 └── HistoryAuthority
     ├── ModelContainer
     ├── SignatureIndex value
@@ -71,6 +73,10 @@ SwiftDataHistory facade
 ```
 
 `HistoryAuthority` is the sole writer. It is also the serialization point for source snapshot capture and observer registration. It stores no `@Model` instance or `ModelContext` across operations.
+`ExternalGateway` owns only process-local admission state and delegates every
+durable check/audit to `HistoryAuthority`; it never creates a `ModelContext`.
+X.5 stores this internal denial module only after startup succeeds. The public
+connection-bound facade remains absent until X.6 completes granted dispatch.
 
 ### 3. SwiftData schema v1
 

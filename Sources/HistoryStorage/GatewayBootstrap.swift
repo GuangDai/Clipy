@@ -31,7 +31,9 @@ extension HistoryAuthority {
     /// wrong cardinality are invariant violations. Fetch/create failures use
     /// the startup `.openStore` producer, matching the other startup
     /// singletons. (`V2-05` §4.1/§4.6; `05` §13/§16.)
-    internal func ensureGatewayBootstrap(in context: ModelContext) throws {
+    internal func ensureGatewayBootstrap(
+        in context: ModelContext
+    ) throws -> ExternalConnectionID {
         var configDescriptor = FetchDescriptor<GatewayConfigRow>()
         configDescriptor.fetchLimit = 2
         let configs: [GatewayConfigRow]
@@ -71,11 +73,15 @@ extension HistoryAuthority {
             } catch {
                 throw HistoryFailure.persistence(.openStore)
             }
+            return ExternalConnectionID(rawValue: connectionID)
 
         case 1:
             try Self.validateExistingGatewayBootstrap(
                 configs[0],
                 in: context
+            )
+            return ExternalConnectionID(
+                rawValue: configs[0].appIntentsConnectionID
             )
 
         default:

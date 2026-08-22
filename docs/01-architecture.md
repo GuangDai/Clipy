@@ -215,7 +215,7 @@ The UI requests a thumbnail using `HistoryItemReference(id, contentVersion)` and
 
 #### Background isolation
 
-All of the following are `actor` types; each is therefore `Sendable`, which is what makes `SwiftDataHistory: Sendable` derivable without `@unchecked Sendable`. `SwiftDataHistory` stores five of them as fields (Part V §2); `ThumbnailWorker` is owned and invoked by `ThumbnailService`, not stored directly.
+All of the following are `actor` types; each is therefore `Sendable`, which is what makes `SwiftDataHistory: Sendable` derivable without `@unchecked Sendable`. `SwiftDataHistory` stores six of them as fields (Part V §2); `ThumbnailWorker` is owned and invoked by `ThumbnailService`, not stored directly.
 
 - `HistoryAuthority`: sole mutation serializer, sole creator/user of writable `ModelContext`s, and the serialization point for snapshot capture and observer registration.
 - `IngestPreparationActor`: raw representation validation, normalization, xxh3, and projection preparation.
@@ -223,6 +223,9 @@ All of the following are `actor` types; each is therefore `Sendable`, which is w
 - `SearchWorker`: pure search evaluation over a captured `Sendable` value snapshot. The Fuse matcher is a non-`Sendable` Swift 5 class, so it is created and held inside this actor and never crosses an isolation boundary.
 - `ThumbnailService`: the thumbnail single-flight coordinator; owns the actor-confined flight table keyed by `(HistoryItemReference, PixelSize)`.
 - `ThumbnailWorker`: bounded ImageIO decode/downsample invoked by `ThumbnailService`.
+- `ExternalGateway`: the internal X.5 admission/rate coordinator; it owns no
+  SwiftData value and delegates each durable authorization/audit to the sole
+  `HistoryAuthority`. Its public connection-bound facade waits for X.6.
 
 The `ModelContext(container)` used by `HistoryAuthority` is created manually — it is **not** the SwiftUI-environment context (which Apple documents as main-actor-bound). Off-main use of a manually created context is the documented SwiftData pattern (`@ModelActor` / `ConcurrencySupport`); v1 uses a plain `actor` with a fresh context per operation, and Swift 6 compilability of that choice is a Part VI §6 compile-and-dependency proof gate. Adopting SwiftData's `@ModelActor`/`ModelExecutor` model instead is an open implementation option the current design does not require; if adopted it would replace the manual-context rule in Part V §5 without changing the public surface.
 

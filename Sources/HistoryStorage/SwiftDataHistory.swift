@@ -1,5 +1,5 @@
 /// SwiftDataHistory — the production `ClipboardHistory` adapter: the public
-/// facade over the five internal actors, owning closed action dispatch
+/// facade over the six internal actors, owning closed action dispatch
 /// (Part V §8), read forwarding and the subscribe-before-query observation
 /// loop (Part V §14; Part IV §5), `open` startup (Part V §13), and public
 /// failure translation (Part V §16).
@@ -17,7 +17,7 @@ import SwiftData
 #if DEBUG
 /// Operation-local observation hook for deterministic outer-buffer tests.
 /// Task-local inheritance reaches the producer `Task` without adding stored
-/// state to the five-actor facade; Release builds contain no hook or branch.
+/// state to the six-actor facade; Release builds contain no hook or branch.
 internal enum ObservationDebugInstrumentation {
     @TaskLocal internal static var pageDidYield: (
         @Sendable (HistoryPage) async -> Void
@@ -31,11 +31,12 @@ internal enum ObservationDebugInstrumentation {
 ///
 /// Owning spec: docs/05-authority-kernel.md §2.
 ///
-/// The facade holds exactly the five internal actors of the Part V §2
+/// The facade holds exactly the six internal actors of the Part V §2
 /// isolation tree — `HistoryAuthority` (sole writer and the serialization
 /// point for snapshot capture and observer registration),
 /// `IngestPreparationActor`, `RevisionPreparationActor`, `SearchWorker`, and
-/// `ThumbnailService` — and every stored field is an `actor` type, so the
+/// `ThumbnailService`, and the internal X.5 `ExternalGateway` denial module —
+/// and every stored field is an `actor` type, so the
 /// `Sendable` conformance is derived without any escape hatch. The facade
 /// translates no semantics of its own: it validates nothing the actors own,
 /// dispatches actions through one closed switch (§8), forwards reads to the
@@ -45,7 +46,7 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     /// Sole writer; also serializes source snapshot capture and observer
     /// registration (docs/05-authority-kernel.md §2).
     ///
-    /// The five actor fields are `internal`, not the Part V §2 snippet's
+    /// The six actor fields are `internal`, not the Part V §2 snippet's
     /// `private`: the deterministic concurrency harness (WS12/WS15,
     /// docs/roadmap/03-historystorage.md step-5 note) installs suspension
     /// handlers on the facade's own Authority from `@testable` tests, which
@@ -72,7 +73,12 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     /// (docs/05-authority-kernel.md §14.5; docs/04-coherence.md §9).
     internal let thumbnailService: ThumbnailService
 
-    /// Assembles the facade from its five actors. Construction is internal to
+    /// Owns process-local external admission/rate state and delegates every
+    /// durable authorization decision to `HistoryAuthority`. X.5 exposes no
+    /// public facade; X.6 completes positive dispatch before publication.
+    internal let externalGateway: ExternalGateway
+
+    /// Assembles the facade from its six actors. Construction is internal to
     /// `open(configuration:)` — there is no other way to obtain a
     /// `SwiftDataHistory` (docs/05-authority-kernel.md §2).
     private init(
@@ -80,13 +86,15 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         ingestPreparation: IngestPreparationActor,
         revisionPreparation: RevisionPreparationActor,
         searchWorker: SearchWorker,
-        thumbnailService: ThumbnailService
+        thumbnailService: ThumbnailService,
+        externalGateway: ExternalGateway
     ) {
         self.authority = authority
         self.ingestPreparation = ingestPreparation
         self.revisionPreparation = revisionPreparation
         self.searchWorker = searchWorker
         self.thumbnailService = thumbnailService
+        self.externalGateway = externalGateway
     }
 
     // MARK: Open (docs/05-authority-kernel.md §2, §13)
@@ -120,7 +128,9 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     ///    Canonical/signature coverage without decoding revision state —
     ///    `V2-roadmap` §5 current total-order steps 3–12 over the v1 `05`
     ///    §13 store-side steps 3–11);
-    /// 4. publishes the constructed facade with its five actors (current
+    /// 4. constructs the internal X.5 Gateway denial actor only after every
+    ///    startup validation succeeds, then publishes the facade with its six
+    ///    actors (current
     ///    roadmap step 13; v1 `05` §13 step 12).
     ///
     /// Failure translation at this boundary (§16, §2): an out-of-range
@@ -198,8 +208,9 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
             container: container,
             storageClock: SystemStorageClock()
         )
+        let appIntentsConnectionID: ExternalConnectionID
         do {
-            try await authority.performStartup(
+            appIntentsConnectionID = try await authority.performStartup(
                 initialMaximumUnpinnedItems: configuration.initialMaximumUnpinnedItems
             )
         } catch let failure as HistoryFailure {
@@ -211,14 +222,21 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
             throw HistoryFailure.persistence(.openStore)
         }
 
-        // Current roadmap step 13 (v1 §13 step 12): publish the constructed
-        // facade with its five actors.
+        // Current roadmap step 13 (v1 §13 step 12): startup has accepted the
+        // complete V3 Gateway state, so construct the internal X.5 denial
+        // actor and publish the six-actor facade. No ExternalHistory facade is
+        // public until X.6 completes every granted positive path.
+        let externalGateway = ExternalGateway(
+            authority: authority,
+            appIntentsConnectionID: appIntentsConnectionID
+        )
         return SwiftDataHistory(
             authority: authority,
             ingestPreparation: IngestPreparationActor(),
             revisionPreparation: RevisionPreparationActor(),
             searchWorker: SearchWorker(),
-            thumbnailService: ThumbnailService()
+            thumbnailService: ThumbnailService(),
+            externalGateway: externalGateway
         )
     }
 
