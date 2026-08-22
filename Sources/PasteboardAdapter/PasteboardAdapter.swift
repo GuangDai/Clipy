@@ -29,7 +29,9 @@
 /// provider having timed out), and the write throws
 /// `PasteboardWriteFailure` when an item refuses a staged representation or
 /// the pasteboard refuses the completed item, so neither a partial freeze
-/// nor a known incomplete write can masquerade as a complete success.
+/// nor a known incomplete write can masquerade as a complete success. A
+/// multi-item clipboard is reported as an unsupported capture shape instead
+/// of silently truncating it to the first item.
 import AppKit
 import Foundation
 import HistoryCore
@@ -62,6 +64,13 @@ public struct PasteboardAdapter {
     /// Simulates the pasteboard rejecting the completed item after the old
     /// contents have been cleared. Absent from Release.
     public var simulatedItemWriteRejected = false
+
+    /// Records each real payload accessor immediately before the adapter
+    /// calls `NSPasteboardItem.data(forType:)`. Tests use this hook to prove
+    /// privacy short-circuits without replacing AppKit or adding a second
+    /// provider abstraction. Simulated-unavailable reads do not call the
+    /// framework accessor and therefore do not notify this observer.
+    package var payloadReadObserver: (@MainActor (String) -> Void)?
     #endif
 
     /// Creates an adapter over `pasteboard` (`.general` in production).
@@ -71,23 +80,31 @@ public struct PasteboardAdapter {
 
     /// Freezes the current pasteboard contents into a raw capture
     /// (docs/03a-instruction-set.md §4; docs/01-architecture.md §5.1) —
-    /// the convenience half of `captureOutcome(observedAt:)` that drops
-    /// the partial-freeze record. Production capture flows through
+    /// the convenience half of `captureOutcome(observedAt:)` that returns
+    /// only a complete freeze. Production capture flows through
     /// `PasteboardObserver`, which delivers the full outcome; direct
-    /// callers that need only the frozen value keep this one.
+    /// callers that need only the frozen value keep this one. Partial,
+    /// concealed, and multi-item outcomes return nil here; callers needing
+    /// the reason use `captureOutcome(observedAt:)`.
     public func capture(observedAt: Date = Date()) -> ClipboardCapture? {
-        captureOutcome(observedAt: observedAt)?.capture
+        guard let outcome = captureOutcome(observedAt: observedAt),
+              outcome.isComplete else {
+            return nil
+        }
+        return outcome.capture
     }
 
     /// Freezes the current pasteboard contents into a raw capture PLUS the
     /// record of what could not be frozen (docs/03a-instruction-set.md §4;
     /// docs/01-architecture.md §5.1; audit SPEC-IMPL-005).
     ///
-    /// - Every retainable typed representation of the first pasteboard item
+    /// - Exactly one pasteboard item is supported by the current flat capture
+    ///   model. A pasteboard containing multiple items returns an explicit
+    ///   unsupported outcome before any payload accessor runs, with the
+    ///   observed item count and zero representations. It is never flattened
+    ///   and its first item is never presented as a complete observation.
+    /// - Every retainable typed representation of the supported single item
     ///   becomes one `CapturedRepresentation` (type identifier + bytes).
-    ///   v1 freezes the first item — the general pasteboard's standard
-    ///   shape; merging multiple items would synthesize duplicate type
-    ///   identifiers, which HistoryStorage rejects.
     /// - A type the item DECLARES but whose `data(forType:)` comes back
     ///   nil is never silently dropped: Apple documents that outcome as
     ///   the contents having changed or the provider having timed out, so
@@ -102,23 +119,61 @@ public struct PasteboardAdapter {
     ///   is decoded into `origin.lineageHint` and excluded from the frozen
     ///   representations; an absent hint payload is an absent hint, never
     ///   an unavailability record.
-    /// - The six exclusion markers (docs/05-authority-kernel.md §6.1) mark
-    ///   the WHOLE capture `isConcealed` — the adapter never strips a
-    ///   marker and submits its sibling plaintext as an ordinary capture;
-    ///   storage then rejects the capture with
-    ///   `.invalidInput(.excludedFromHistory)` before fingerprinting
-    ///   (defense in depth).
+    /// - If the item's DECLARED types contain one of the six exclusion
+    ///   markers (docs/05-authority-kernel.md §6.1), the adapter returns an
+    ///   explicit concealed outcome before calling `data(forType:)` for any
+    ///   type. Its capture has no representations and `isConcealed == true`;
+    ///   storage still rejects that capture with
+    ///   `.invalidInput(.excludedFromHistory)` before fingerprinting if a
+    ///   direct caller submits it (defense in depth).
     /// - `origin.sourceApplication` is the frontmost application's bundle
     ///   identifier (`NSWorkspace`); nil when unknown.
-    /// - Returns nil when nothing retainable was observed (cleared
-    ///   pasteboard, metadata-only item — including an item whose EVERY
-    ///   declared representation is unavailable: no retainable bytes exist
-    ///   to freeze, and the observer has already consumed the changeCount,
-    ///   so the next copy re-freezes) so the caller never hands History an
-    ///   empty capture it must reject as `.emptyCapture`.
+    /// - Returns nil only when the item declared no unavailable content and
+    ///   nothing retainable was observed (cleared or metadata-only). If every
+    ///   content representation is unavailable, an explicit empty partial
+    ///   outcome reaches the owner so the consumed change is not silent.
+    ///   Concealed and unsupported-shape outcomes are likewise intentionally
+    ///   empty and cannot masquerade as admissible content.
     public func captureOutcome(observedAt: Date = Date()) -> CaptureOutcome? {
-        guard let item = pasteboard.pasteboardItems?.first else { return nil }
+        guard let items = pasteboard.pasteboardItems,
+              let item = items.first else {
+            return nil
+        }
+        guard items.count == 1 else {
+            return CaptureOutcome(
+                capture: ClipboardCapture(
+                    representations: [],
+                    origin: CopyOriginObservation(
+                        sourceApplication: NSWorkspace.shared.frontmostApplication?
+                            .bundleIdentifier,
+                        lineageHint: nil
+                    ),
+                    observedAt: observedAt,
+                    isConcealed: false
+                ),
+                unavailableTypeIdentifiers: [],
+                unsupportedPasteboardItemCount: items.count
+            )
+        }
         let typeIdentifiers = item.types.map { $0.rawValue }
+        if let marker = typeIdentifiers.first(where: {
+            PasteboardMarkers.concealedTypeIdentifiers.contains($0)
+        }) {
+            return CaptureOutcome(
+                capture: ClipboardCapture(
+                    representations: [],
+                    origin: CopyOriginObservation(
+                        sourceApplication: NSWorkspace.shared.frontmostApplication?
+                            .bundleIdentifier,
+                        lineageHint: nil
+                    ),
+                    observedAt: observedAt,
+                    isConcealed: true
+                ),
+                unavailableTypeIdentifiers: [],
+                concealmentMarkerTypeIdentifier: marker
+            )
+        }
 
         var representations: [CapturedRepresentation] = []
         representations.reserveCapacity(typeIdentifiers.count)
@@ -128,9 +183,15 @@ public struct PasteboardAdapter {
             #if DEBUG
             // The Debug seam forces the documented declared-but-unavailable
             // outcome (SPEC-IMPL-005).
-            let data = simulatedUnavailableTypeIdentifiers.contains(typeIdentifier)
-                ? nil
-                : item.data(forType: NSPasteboard.PasteboardType(typeIdentifier))
+            let data: Data?
+            if simulatedUnavailableTypeIdentifiers.contains(typeIdentifier) {
+                data = nil
+            } else {
+                payloadReadObserver?(typeIdentifier)
+                data = item.data(
+                    forType: NSPasteboard.PasteboardType(typeIdentifier)
+                )
+            }
             #else
             let data = item.data(
                 forType: NSPasteboard.PasteboardType(typeIdentifier)
@@ -149,7 +210,22 @@ public struct PasteboardAdapter {
                 CapturedRepresentation(typeIdentifier: typeIdentifier, bytes: data)
             )
         }
-        guard !representations.isEmpty else { return nil }
+        guard !representations.isEmpty else {
+            guard !unavailableTypeIdentifiers.isEmpty else { return nil }
+            return CaptureOutcome(
+                capture: ClipboardCapture(
+                    representations: [],
+                    origin: CopyOriginObservation(
+                        sourceApplication: NSWorkspace.shared.frontmostApplication?
+                            .bundleIdentifier,
+                        lineageHint: lineageHint
+                    ),
+                    observedAt: observedAt,
+                    isConcealed: false
+                ),
+                unavailableTypeIdentifiers: unavailableTypeIdentifiers
+            )
+        }
 
         return CaptureOutcome(
             capture: ClipboardCapture(
@@ -160,9 +236,10 @@ public struct PasteboardAdapter {
                     lineageHint: lineageHint
                 ),
                 observedAt: observedAt,
-                isConcealed: PasteboardMarkers.marksConcealed(typeIdentifiers)
+                isConcealed: false
             ),
-            unavailableTypeIdentifiers: unavailableTypeIdentifiers
+            unavailableTypeIdentifiers: unavailableTypeIdentifiers,
+            concealmentMarkerTypeIdentifier: nil
         )
     }
 
@@ -244,13 +321,12 @@ public struct PasteboardAdapter {
 
 // MARK: - Capture outcome + write failure (audit SPEC-IMPL-005)
 
-/// The outcome of a capture freeze (03a §4): the frozen capture plus the
-/// record of every type the pasteboard item DECLARED but whose bytes were
-/// unavailable at freeze time — Apple documents a nil `data(forType:)` as
-/// the contents having changed or the provider having timed out. The
-/// record is what keeps a partial freeze distinguishable from a complete
-/// one (SPEC-IMPL-005: partial Canonical Content must never enter History
-/// posing as a complete observation).
+/// The outcome of a capture freeze (03a §4): the frozen capture plus an
+/// unavailable-type record, an explicit early-concealment record, or an
+/// unsupported multi-item shape. These records keep partial, intentionally
+/// unread, and structurally unsupported content distinguishable from a
+/// complete freeze (SPEC-IMPL-005: incomplete Canonical Content must never
+/// enter History posing as complete).
 public struct CaptureOutcome: Sendable, Equatable {
     /// The frozen capture (03a §4). Holds only the representations whose
     /// bytes were actually observed.
@@ -260,14 +336,39 @@ public struct CaptureOutcome: Sendable, Equatable {
     /// freeze time, in declaration order. Empty on a complete freeze.
     public let unavailableTypeIdentifiers: [String]
 
+    /// The declared marker that caused an early privacy short-circuit, in
+    /// pasteboard declaration order. A non-nil value means the adapter read
+    /// no payload bytes and the enclosed capture intentionally contains no
+    /// representations. This is distinct from an empty pasteboard or an
+    /// unavailable payload, while remaining compatible with the composition
+    /// root's existing `isComplete` admission check.
+    public let concealmentMarkerTypeIdentifier: String?
+
+    /// The observed pasteboard item count when the current flat capture model
+    /// cannot preserve the clipboard shape. Non-nil means no item payload was
+    /// read and `capture.representations` is empty. Item boundaries and
+    /// duplicate type identifiers are never flattened or merged.
+    public let unsupportedPasteboardItemCount: Int?
+
     /// Whether the freeze observed every declared representation — the
     /// only freeze a caller may treat as the complete observation.
-    public var isComplete: Bool { unavailableTypeIdentifiers.isEmpty }
+    public var isComplete: Bool {
+        unavailableTypeIdentifiers.isEmpty
+            && concealmentMarkerTypeIdentifier == nil
+            && unsupportedPasteboardItemCount == nil
+    }
 
     /// Creates the outcome; the adapter is the only producer.
-    public init(capture: ClipboardCapture, unavailableTypeIdentifiers: [String]) {
+    fileprivate init(
+        capture: ClipboardCapture,
+        unavailableTypeIdentifiers: [String],
+        concealmentMarkerTypeIdentifier: String? = nil,
+        unsupportedPasteboardItemCount: Int? = nil
+    ) {
         self.capture = capture
         self.unavailableTypeIdentifiers = unavailableTypeIdentifiers
+        self.concealmentMarkerTypeIdentifier = concealmentMarkerTypeIdentifier
+        self.unsupportedPasteboardItemCount = unsupportedPasteboardItemCount
     }
 }
 

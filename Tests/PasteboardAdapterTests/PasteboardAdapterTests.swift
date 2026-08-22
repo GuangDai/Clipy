@@ -3,10 +3,13 @@
 ///
 /// - Capture freezes all retainable typed representations of the pasteboard
 ///   item (03a §4; 01 §5.1).
+/// - Multiple pasteboard items produce an explicit unsupported shape before
+///   payload access; the adapter never flattens duplicate types or silently
+///   presents the first item as the complete clipboard gesture (CLIP-7).
 /// - A sibling `org.nspasteboard.ConcealedType` — and every other marker in
-///   the configured private/transient set — marks the WHOLE
-///   `ClipboardCapture` concealed; sibling plaintext is frozen alongside
-///   the marker, never submitted as an ordinary stripped capture.
+///   the configured private/transient set — short-circuits the WHOLE item
+///   before any payload accessor runs; the explicit concealed outcome has
+///   no retainable bytes for a caller to submit.
 /// - `write(_:)` stages the payload's Effective Content representations and
 ///   lineage hint on one new item before touching the pasteboard, then makes
 ///   one framework write attempt; the hint decodes back into
@@ -109,7 +112,111 @@ func captureOfEmptyPasteboardReturnsNil() {
     #expect(PasteboardAdapter(pasteboard: pasteboard).capture() == nil)
 }
 
+#if DEBUG
+@Test @MainActor
+func multipleItemsAreExplicitlyUnsupportedBeforeAnyPayloadRead() throws {
+    let pasteboard = makePasteboard()
+    pasteboard.clearContents()
+
+    let first = NSPasteboardItem()
+    #expect(first.setData(Data("first".utf8), forType: .string))
+    #expect(
+        first.setData(
+            Data("first-custom".utf8),
+            forType: NSPasteboard.PasteboardType("com.clipy.tests.first")
+        )
+    )
+    let second = NSPasteboardItem()
+    #expect(second.setData(Data("second".utf8), forType: .string))
+    #expect(
+        second.setData(
+            Data("second-custom".utf8),
+            forType: NSPasteboard.PasteboardType("com.clipy.tests.second")
+        )
+    )
+    #expect(pasteboard.writeObjects([first, second]))
+
+    var payloadAccessorCalls: [String] = []
+    var adapter = PasteboardAdapter(pasteboard: pasteboard)
+    adapter.payloadReadObserver = { typeIdentifier in
+        payloadAccessorCalls.append(typeIdentifier)
+    }
+
+    let outcome = try #require(adapter.captureOutcome())
+
+    #expect(payloadAccessorCalls.isEmpty)
+    #expect(outcome.unsupportedPasteboardItemCount == 2)
+    #expect(!outcome.isComplete)
+    #expect(outcome.capture.representations.isEmpty)
+    #expect(!outcome.capture.isConcealed)
+    #expect(outcome.unavailableTypeIdentifiers.isEmpty)
+    #expect(outcome.concealmentMarkerTypeIdentifier == nil)
+    // The convenience API must not disguise the first item as the complete
+    // clipboard gesture when the public capture model cannot preserve the
+    // two item boundaries or their duplicate string representations.
+    #expect(adapter.capture() == nil)
+    #expect(payloadAccessorCalls.isEmpty)
+}
+#endif
+
 // MARK: - Concealment markers (roadmap 04 acceptance 2)
+
+#if DEBUG
+@Test @MainActor
+func declaredConcealmentMarkerShortCircuitsBeforeReadingLargeSiblingPayload() throws {
+    let marker = "org.nspasteboard.ConcealedType"
+    let pasteboard = makePasteboard()
+    pasteboard.clearContents()
+    pasteboard.setData(
+        Data(repeating: 0x73, count: 5 * 1_024 * 1_024),
+        forType: .string
+    )
+    pasteboard.setData(
+        Data("marker".utf8),
+        forType: NSPasteboard.PasteboardType(marker)
+    )
+    var payloadAccessorCalls: [String] = []
+    var adapter = PasteboardAdapter(pasteboard: pasteboard)
+    adapter.payloadReadObserver = { typeIdentifier in
+        payloadAccessorCalls.append(typeIdentifier)
+    }
+
+    let outcome = try #require(adapter.captureOutcome())
+
+    #expect(payloadAccessorCalls.isEmpty)
+    #expect(outcome.concealmentMarkerTypeIdentifier == marker)
+    #expect(!outcome.isComplete)
+    #expect(outcome.capture.isConcealed)
+    #expect(outcome.capture.representations.isEmpty)
+    #expect(adapter.capture() == nil)
+    #expect(payloadAccessorCalls.isEmpty)
+}
+
+@Test @MainActor
+func payloadReadInstrumentationObservesUnmarkedCaptureWithoutChangingIt() throws {
+    let pasteboard = makePasteboard()
+    pasteboard.clearContents()
+    pasteboard.setData(Data("ordinary".utf8), forType: .string)
+    var payloadAccessorCalls: [String] = []
+    var adapter = PasteboardAdapter(pasteboard: pasteboard)
+    adapter.payloadReadObserver = { typeIdentifier in
+        payloadAccessorCalls.append(typeIdentifier)
+    }
+
+    let outcome = try #require(adapter.captureOutcome())
+
+    #expect(payloadAccessorCalls == [NSPasteboard.PasteboardType.string.rawValue])
+    #expect(outcome.isComplete)
+    #expect(outcome.concealmentMarkerTypeIdentifier == nil)
+    #expect(outcome.capture.isConcealed == false)
+    #expect(outcome.capture.representations == [
+        CapturedRepresentation(
+            typeIdentifier: NSPasteboard.PasteboardType.string.rawValue,
+            bytes: Data("ordinary".utf8)
+        )
+    ])
+}
+#endif
 
 @Test @MainActor
 func everyConcealmentMarkerMarksTheWholeCaptureConcealed() {
@@ -119,20 +226,16 @@ func everyConcealmentMarkerMarksTheWholeCaptureConcealed() {
         pasteboard.setData(Data("sensitive".utf8), forType: .string)
         pasteboard.setData(Data("marker".utf8), forType: NSPasteboard.PasteboardType(marker))
 
-        let capture = PasteboardAdapter(pasteboard: pasteboard).capture()
+        let outcome = PasteboardAdapter(pasteboard: pasteboard).captureOutcome()
 
-        #expect(capture?.isConcealed == true, "\(marker)")
-        // Whole-capture semantics: the sibling plaintext stays frozen next
-        // to its marker so storage rejects the entire observation as
-        // `.excludedFromHistory` before fingerprinting — the adapter never
-        // strips the marker and submits the plaintext as ordinary content.
-        #expect(
-            capture?.representations.contains {
-                $0.typeIdentifier == NSPasteboard.PasteboardType.string.rawValue
-                    && $0.bytes == Data("sensitive".utf8)
-            } == true,
-            "\(marker)"
-        )
+        #expect(outcome?.capture.isConcealed == true, "\(marker)")
+        #expect(outcome?.concealmentMarkerTypeIdentifier == marker, "\(marker)")
+        #expect(outcome?.isComplete == false, "\(marker)")
+        // Whole-item privacy semantics: declared types are enough to reject
+        // this observation. No sibling payload is retained by the adapter;
+        // `HistoryStorage` still rejects the concealed empty capture if a
+        // direct caller deliberately submits it as a defense-in-depth check.
+        #expect(outcome?.capture.representations.isEmpty == true, "\(marker)")
     }
 }
 
@@ -273,6 +376,7 @@ func captureRecordsADeclaredButUnavailableTypeAsAPartialFreeze() {
     #expect(
         outcome?.capture.representations.first?.bytes == Data("plain".utf8)
     )
+    #expect(adapter.capture() == nil)
 }
 #endif
 
@@ -300,7 +404,7 @@ func captureOfAFullyObservedItemIsACompleteOutcome() {
 
 #if DEBUG
 @Test @MainActor
-func captureOfAnItemWhoseEveryRepresentationIsUnavailableReturnsNil() {
+func everyUnavailableRepresentationProducesAnExplicitPartialOutcome() {
     let pasteboard = makePasteboard()
     pasteboard.clearContents()
     pasteboard.setData(Data("plain".utf8), forType: .string)
@@ -309,10 +413,16 @@ func captureOfAnItemWhoseEveryRepresentationIsUnavailableReturnsNil() {
         NSPasteboard.PasteboardType.string.rawValue
     ]
 
-    // Nothing retainable exists to freeze, so the outcome is nil — the
-    // same signal as a cleared pasteboard (the observer has consumed the
-    // changeCount; the next copy re-freezes).
-    #expect(adapter.captureOutcome() == nil)
+    let outcome = adapter.captureOutcome()
+
+    // The observer has consumed this changeCount, so an all-unavailable
+    // gesture must remain distinguishable from a cleared pasteboard.
+    #expect(outcome?.isComplete == false)
+    #expect(
+        outcome?.unavailableTypeIdentifiers
+            == [NSPasteboard.PasteboardType.string.rawValue]
+    )
+    #expect(outcome?.capture.representations.isEmpty == true)
     #expect(adapter.capture() == nil)
 }
 

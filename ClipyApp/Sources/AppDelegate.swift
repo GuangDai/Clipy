@@ -20,6 +20,14 @@ import PresentationUI
 import ServiceManagement
 import SwiftUI
 
+/// The only two capture-health episodes that need panel presentation. Both
+/// are content-free: replacement exposes a cumulative count, and failure
+/// exposes History's typed rejection rather than the clipboard value.
+enum ClipyCaptureNotice: Sendable, Equatable {
+    case replacedCapture(totalReplaced: Int)
+    case failed(ClipyCaptureFailure)
+}
+
 @MainActor @Observable
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
@@ -35,6 +43,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Content-free copy failure surfaced over the panel until dismissed or
     /// a later verified copy succeeds.
     private(set) var pasteFailure: ClipyPasteFailure?
+
+    /// Latest content-free snapshot pushed by the production capture owner.
+    /// Keeping this on the app shell makes SwiftUI observation direct without
+    /// turning the composition root into an observable service object.
+    private(set) var captureHealth = ClipyCaptureHealth.inactive
+
+    /// The currently visible capture-health episode. Dismissal clears only
+    /// this presentation value; a later replacement or failed-capture count
+    /// publishes a new episode even when its typed failure equals the old one.
+    private(set) var captureNotice: ClipyCaptureNotice?
 
     /// Guards the open attempt against re-entrancy while its `await`s are
     /// in flight.
@@ -139,6 +157,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pasteFailure = nil
     }
 
+    func dismissCaptureNotice() {
+        captureNotice = nil
+    }
+
     /// The preview column's visibility changed inside the SwiftUI content;
     /// resize the window to match (single no-animation `setFrame`).
     func previewVisibilityDidChange(_ isOpen: Bool) {
@@ -165,16 +187,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             do {
                 let opened = try await AppComposition.open()
-                // Paste ⇒ close the panel (Maccy's paste-dismiss); the panel
-                // never activates the app, so the paste target keeps focus.
-                opened.onPasteCompleted = { [weak self] in
-                    self?.pasteFailure = nil
-                    self?.closePanel()
-                }
-                opened.onPasteFailed = { [weak self] failure in
-                    self?.pasteFailure = failure
-                }
-                composition = opened
+                installComposition(opened)
             } catch is CancellationError {
                 // Stay idle; a later summon retries the open.
             } catch {
@@ -183,6 +196,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             isOpening = false
         }
     }
+
+    /// Installs the three one-way production callbacks. Capture health stays
+    /// a direct owner-to-shell push; there is no timer, toast bus, or generic
+    /// health registry between the lane and its only UI consumer.
+    private func installComposition(_ opened: AppComposition) {
+        // Paste ⇒ close the panel (Maccy's paste-dismiss); the panel never
+        // activates the app, so the paste target keeps focus.
+        opened.onPasteCompleted = { [weak self] in
+            self?.pasteFailure = nil
+            self?.closePanel()
+        }
+        opened.onPasteFailed = { [weak self] failure in
+            self?.pasteFailure = failure
+        }
+        opened.onCaptureHealthChanged = { [weak self] health in
+            self?.receiveCaptureHealth(health)
+        }
+        composition = opened
+    }
+
+    private func receiveCaptureHealth(_ health: ClipyCaptureHealth) {
+        let previous = captureHealth
+        captureHealth = health
+
+        if health.failedCaptureCount > previous.failedCaptureCount,
+           let failure = health.lastFailure {
+            captureNotice = .failed(failure)
+        } else if health.replacedCaptureCount > previous.replacedCaptureCount {
+            captureNotice = .replacedCapture(
+                totalReplaced: health.replacedCaptureCount
+            )
+        } else if health.lastFailure == nil,
+                  case .failed? = captureNotice {
+            // A later successful capture is authoritative recovery for the
+            // failed episode. Replacement notices remain until dismissed.
+            captureNotice = nil
+        }
+    }
+
+#if DEBUG
+    /// Hosted tests substitute only the real composition's system boundaries,
+    /// then install it through the same callback wiring as production.
+    func installCompositionForTesting(_ composition: AppComposition) {
+        installComposition(composition)
+    }
+#endif
 
     // MARK: - Status item
 

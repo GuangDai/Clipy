@@ -78,7 +78,8 @@ internal enum SignatureBlobCodec {
     /// - type identifiers are non-empty, within the Part VI UTF-8 bound,
     ///   unique, and strictly increasing in stable Unicode scalar order;
     /// - every `byteCount` lies in `1...maximumRepresentationBytes`
-    ///   (Canonical bytes are non-empty and per-representation bounded).
+    ///   (Canonical bytes are non-empty and per-representation bounded), and
+    ///   their checked aggregate does not exceed `maximumCaptureBytes`.
     ///
     /// Startup (Part V §13) decodes signature metadata without decoding
     /// Canonical bytes; the §4 bidirectional fingerprint/signature coverage
@@ -111,6 +112,7 @@ internal enum SignatureBlobCodec {
                 bound: limits.maximumRepresentationsPerCaptureOrRevision
             )
         }
+        var totalBytes = 0
         for entry in wire.entries {
             try CodecValidation.validateTypeIdentifier(entry.typeIdentifier, limits: limits)
             guard entry.byteCount >= 1 else {
@@ -122,6 +124,20 @@ internal enum SignatureBlobCodec {
                     bound: limits.maximumRepresentationBytes
                 )
             }
+            let (newTotal, overflow) = totalBytes.addingReportingOverflow(entry.byteCount)
+            guard !overflow else {
+                throw CodecRejection.totalBytesExceedBound(
+                    found: Int.max,
+                    bound: limits.maximumCaptureBytes
+                )
+            }
+            totalBytes = newTotal
+        }
+        guard totalBytes <= limits.maximumCaptureBytes else {
+            throw CodecRejection.totalBytesExceedBound(
+                found: totalBytes,
+                bound: limits.maximumCaptureBytes
+            )
         }
         try CodecValidation.requireNormalizedTypeIdentifierOrder(
             wire.entries.map(\.typeIdentifier)

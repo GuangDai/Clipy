@@ -47,8 +47,12 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// only USER drag positions as the `.lastPosition` anchor.
     private var isProgrammaticMove = false
 
-    init(
-        rootView: PanelRootView,
+    /// Accepts the concrete SwiftUI root owned by the caller. Production
+    /// passes `PanelRootView`; hosted integration passes the production
+    /// `HistoryPanelView` directly so the test observes real column frames
+    /// without manufacturing an AppDelegate or a second window type.
+    init<Root: View>(
+        rootView: Root,
         previewState: PreviewPaneState,
         onPreviewPlacementChange: @escaping (PreviewPlacement) -> Void,
         onClosed: @escaping () -> Void

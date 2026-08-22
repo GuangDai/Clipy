@@ -52,6 +52,7 @@ public struct SearchHeaderView: View {
                 .textFieldStyle(.plain)
                 .focused(searchFieldFocused)
                 .autocorrectionDisabled(true)
+                .accessibilityIdentifier("clipy.search.field")
                 .accessibilityLabel("Search clipboard history")
             if !viewState.searchText.isEmpty {
                 Button {
@@ -62,6 +63,7 @@ public struct SearchHeaderView: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier("clipy.search.clear")
                 .accessibilityLabel("Clear search")
                 .accessibilityHint(
                     "Clears the query and keeps focus in search."

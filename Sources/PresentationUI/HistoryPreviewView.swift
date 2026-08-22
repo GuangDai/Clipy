@@ -1,16 +1,16 @@
 /// HistoryPreviewView.swift — the preview column shown beside the history
 /// list (Maccy's `PreviewItemView` replicated onto HistoryCore DTOs): the
 /// selected item's Effective Content rendered large — image representations
-/// downsampled OFF the MainActor through `DisplayImageDecoder`, textual
-/// representations decoded per the frozen encoding rule — plus a compact
-/// metadata bar.
+/// downsampled OFF the MainActor through `DisplayImageDecoder`, exact
+/// plain-text representations decoded only through their declared codec —
+/// plus a compact metadata bar.
 ///
 /// Owning spec: docs/01-architecture.md §5.2/§6 (main-actor UI over
 /// HistoryCore DTOs only — no AppKit, no SwiftData, no MainActor image
 /// decode), §5.7 (image handling); docs/03b-instruction-set.md §9
-/// (Effective Content representations); docs/05-authority-kernel.md §15
-/// (the frozen textual UTI set and the never-guess-an-encoding rule,
-/// mirrored here as in HistoryDetailsView). Async load law: audit
+/// (Effective Content representations); review TYPE-2 / 08 §7 (structured
+/// and encoding-unspecified text stays opaque; exact plain siblings win).
+/// Async load law: audit
 /// docs/reviews/2026-08-20-clipy-maccy-audit/02-spec-implementation.md
 /// §SPEC-IMPL-007 and 05-recommended-target-design.md §4.1 PREVIEW-FENCE-1
 /// (exact-reference fence; late results never publish).
@@ -21,13 +21,14 @@ import SwiftUI
 
 /// What the preview column renders for one item, resolved from its
 /// Effective Content representations. Image representations win over text
-/// (Maccy's image-first preview); anything else renders as unavailable.
+/// (Maccy's image-first preview); the loader deepens its coarse unavailable
+/// result into unsupported versus failed without widening this public DTO.
 public enum PreviewContent: Equatable, Sendable {
     /// Decoded body text, capped at `textCharacterCap` characters.
     case text(String)
     /// Encoded image bytes (the frozen v1 ImageIO-decodable UTIs).
     case image(Data)
-    /// No previewable representation.
+    /// No preview body resolved at this public presentation seam.
     case unavailable
 
     /// Long-body cap for the preview column: SwiftUI `Text` lays out its
@@ -37,12 +38,12 @@ public enum PreviewContent: Equatable, Sendable {
     package static let textCharacterCap = 50_000
 
     /// Resolves the preview content for one item's Effective Content.
-    /// Image representations win; otherwise the first textual
-    /// representation decodes per the frozen encoding rule (UTF-16 for
-    /// `public.utf16-plain-text`, UTF-8 otherwise — 05 §15), truncated to
-    /// `textCharacterCap` with a marker. Public so the app-hosted smoke
-    /// suites (outside the SwiftPM package) can drive the same resolution
-    /// the view renders.
+    /// Image representations win; otherwise the first exact plain-text
+    /// representation with a declared codec is decoded and truncated to
+    /// `textCharacterCap` with a marker. Structured (`public.rtf` /
+    /// `public.html`) and abstract or encoding-unspecified text is never
+    /// presented as UTF-8 source. Public so app-hosted smoke suites (outside
+    /// the SwiftPM package) can drive the same resolution the view renders.
     public static func resolve(
         effective representations: [HistoryRepresentation]
     ) -> PreviewContent {
@@ -51,9 +52,12 @@ public enum PreviewContent: Equatable, Sendable {
         }) {
             return .image(image.bytes)
         }
-        if let text = representations.first(where: {
-            previewTextualTypeIdentifiers.contains($0.typeIdentifier)
-        }), let decoded = decodedPreviewText(of: text), !decoded.isEmpty {
+        for text in representations where PreviewTextCodec(
+            typeIdentifier: text.typeIdentifier
+        ) != nil {
+            guard let decoded = decodedPreviewText(of: text), !decoded.isEmpty else {
+                continue
+            }
             if decoded.count > textCharacterCap {
                 return .text(String(decoded.prefix(textCharacterCap)) + "\n\n…")
             }
@@ -62,30 +66,56 @@ public enum PreviewContent: Equatable, Sendable {
         return .unavailable
     }
 
-    /// Decodes one textual representation per its frozen encoding — mirrors
-    /// storage's projector rule (05 §15): never guess a fallback encoding.
+    /// Decodes only an exact type with an explicit codec. There is no
+    /// conformance-based or fallback encoding guess (review TYPE-2).
     private static func decodedPreviewText(
         of representation: HistoryRepresentation
     ) -> String? {
-        if representation.typeIdentifier == "public.utf16-plain-text" {
-            return String(data: representation.bytes, encoding: .utf16)
+        guard let codec = PreviewTextCodec(
+            typeIdentifier: representation.typeIdentifier
+        ) else {
+            return nil
         }
-        return String(data: representation.bytes, encoding: .utf8)
+        return codec.decode(representation.bytes)
     }
 }
 
-/// Mirror of storage's frozen v1 textual UTI set (05 §15), duplicated for
-/// display-only heuristics (PresentationUI cannot import HistoryStorage —
-/// the same convention HistoryDetailsView documents).
-private let previewTextualTypeIdentifiers: Set<String> = [
-    "public.plain-text",
-    "public.utf8-plain-text",
-    "public.utf16-plain-text",
-    "public.utf8-external-plain-text",
-    "public.text",
-    "public.rtf",
-    "public.html",
-]
+/// Exact plain-text types admitted by this preview owner and the codec each
+/// declares. External UTF-16 is intentionally not admitted until its distinct
+/// big-endian rule has an owned fixture (review TYPE-2 / PLAY-FORMAT-B).
+private enum PreviewTextCodec: Sendable {
+    case utf8
+    case nativeUTF16
+
+    init?(typeIdentifier: String) {
+        switch typeIdentifier {
+        case "public.utf8-plain-text":
+            self = .utf8
+        case "public.utf16-plain-text":
+            self = .nativeUTF16
+        default:
+            return nil
+        }
+    }
+
+    func decode(_ bytes: Data) -> String? {
+        switch self {
+        case .utf8:
+            return String(data: bytes, encoding: .utf8)
+        case .nativeUTF16:
+            // UTType.utf16PlainText is native byte order with an optional
+            // BOM. Clipy's only platform is arm64 macOS, so BOM-less input is
+            // UTF-16LE; an explicit BOM overrides that default.
+            if bytes.starts(with: [0xFE, 0xFF]) {
+                return String(data: bytes.dropFirst(2), encoding: .utf16BigEndian)
+            }
+            if bytes.starts(with: [0xFF, 0xFE]) {
+                return String(data: bytes.dropFirst(2), encoding: .utf16LittleEndian)
+            }
+            return String(data: bytes, encoding: .utf16LittleEndian)
+        }
+    }
+}
 
 /// Mirror of storage's frozen v1 ImageIO-decodable set (04 §9), duplicated
 /// for display-only heuristics (same convention as HistoryDetailsView and
@@ -111,7 +141,7 @@ private let previewImageTypeIdentifiers: Set<String> = [
 /// advanced the Content Version is invisible to the request — the
 /// `details.item == item` half pins the version (04 §9's caller-side fence
 /// convention). A late or superseded result is DISCARDED without touching
-/// any published state (the newer load owns `isLoading` and the content).
+/// any published state (the newer load owns the phase and applied content).
 /// Starting a new exact reference invalidates the previous publication
 /// before the first suspension, so old sensitive content is not retained as
 /// a loading placeholder.
@@ -131,26 +161,28 @@ package final class PreviewContentLoader {
     /// property, so no `CGImage` appears on a package/public signature
     /// (05 §4.1 rule 3).
     package enum AppliedContent: Equatable {
-        /// Nothing previewable, or a typed failure — the preview is a
-        /// convenience surface, not an error owner (03b §10's failure
-        /// surface stays with the panel's banner).
-        case unavailable
         /// Body text, capped at `PreviewContent.textCharacterCap`.
         case text(String)
         /// A bounded decoded image is published on `image`.
         case image
-        /// The representation looked decodable but ImageIO produced nothing.
-        case imageDecodeFailed
     }
 
-    /// The applied content — always fenced to `requestedItem`.
-    package private(set) var content: AppliedContent = .unavailable
+    /// The loader's closed presentation phase (review Card 9D). A valid type
+    /// without a renderer is stable `.unsupported`; History and decoder
+    /// failures are retryable `.failed` episodes and never masquerade as
+    /// unsupported content.
+    package enum Phase: Equatable {
+        case loading
+        case content(AppliedContent)
+        case failed
+        case unsupported
+    }
+
+    /// The current phase — always fenced to `requestedItem`.
+    package private(set) var phase: Phase = .unsupported
 
     /// The metadata-bar facts for the applied item (03b §9).
     package private(set) var occurrence: CopyOccurrenceSummary?
-
-    /// Whether the requested item's load is in flight.
-    package private(set) var isLoading = false
 
     /// The exact reference the loader is serving — set synchronously at the
     /// head of every `load(item:)`; late completions compare against it.
@@ -185,6 +217,14 @@ package final class PreviewContentLoader {
         self.history = history
     }
 
+    /// Starts a fresh episode for the same exact reference. The loader owns
+    /// the generation/reference transition, so the view never reconstructs
+    /// a request from an ID after a retryable failure (review Card 9D).
+    package func retry() async {
+        guard phase == .failed, let requestedItem else { return }
+        await load(item: requestedItem)
+    }
+
     /// Loads the preview content for `item` (`nil` clears the pane's
     /// content state). Driven by the view's `.task(id: targetItem)`: a
     /// retarget cancels the previous load's task, and the fence covers the
@@ -195,9 +235,8 @@ package final class PreviewContentLoader {
         let generation = requestGeneration
         requestedItem = item
         image = nil
-        content = .unavailable
         occurrence = nil
-        isLoading = item != nil
+        phase = item == nil ? .unsupported : .loading
         guard let item else {
             return
         }
@@ -211,7 +250,7 @@ package final class PreviewContentLoader {
                 // The ID-based detail read raced a revision. Observation
                 // retargets the current exact reference; this stale episode
                 // must settle instead of retaining a permanent spinner.
-                isLoading = false
+                phase = .failed
                 return
             }
             switch PreviewContent.resolve(effective: details.effective) {
@@ -228,37 +267,45 @@ package final class PreviewContentLoader {
                       requestedItem == item
                 else { return }
                 image = decoded
-                content = decoded == nil ? .imageDecodeFailed : .image
-                occurrence = details.occurrence
+                if decoded == nil {
+                    phase = .failed
+                    occurrence = nil
+                } else {
+                    phase = .content(.image)
+                    occurrence = details.occurrence
+                }
             case .text(let text):
                 image = nil
-                content = .text(text)
+                phase = .content(.text(text))
                 occurrence = details.occurrence
             case .unavailable:
                 image = nil
-                content = .unavailable
-                occurrence = details.occurrence
+                if details.effective.contains(where: {
+                    PreviewTextCodec(typeIdentifier: $0.typeIdentifier) != nil
+                }) {
+                    phase = .failed
+                    occurrence = nil
+                } else {
+                    phase = .unsupported
+                    occurrence = details.occurrence
+                }
             }
-            isLoading = false
         } catch is CancellationError {
-            // A superseding request owns its own spinner. If this request is
-            // still current, settle the cancelled episode explicitly.
-            guard requestGeneration == generation,
-                  requestedItem == item
-            else { return }
-            isLoading = false
+            // Cancellation is only a publication fence. It does not publish
+            // a phase transition or claim that underlying History/native
+            // work stopped; a superseding request owns the next phase.
+            return
         } catch {
-            // A typed failure renders as unavailable — but only under the
-            // still-current reference; a superseded/cancelled load's failure
-            // must not clear the newer load's spinner.
+            // History keeps its own typed taxonomy. Presentation records only
+            // a retryable failed episode, and only under the still-current
+            // exact reference; no Storage failure is reclassified here.
             guard !Task.isCancelled,
                   requestGeneration == generation,
                   requestedItem == item
             else { return }
             image = nil
-            content = .unavailable
             occurrence = nil
-            isLoading = false
+            phase = .failed
         }
     }
 }
@@ -337,23 +384,24 @@ public struct HistoryPreviewView: View {
     private var previewBody: some View {
         if targetItem == nil {
             unavailableBody
-        } else if loader.requestedItem != targetItem || loader.isLoading {
+        } else if loader.requestedItem != targetItem {
             ProgressView()
                 .accessibilityLabel("Loading preview")
         } else {
-            switch loader.content {
-            case .image:
+            switch loader.phase {
+            case .loading:
+                ProgressView()
+                    .accessibilityLabel("Loading preview")
+            case .content(.image):
                 if let image = loader.image {
                     Image(decorative: image, scale: 1)
                         .resizable()
                         .scaledToFit()
                         .padding(8)
                 } else {
-                    imageDecodeFailedBody
+                    failedBody
                 }
-            case .imageDecodeFailed:
-                imageDecodeFailedBody
-            case .text(let text):
+            case .content(.text(let text)):
                 ScrollView(.vertical) {
                     Text(text)
                         .font(.body)
@@ -361,7 +409,9 @@ public struct HistoryPreviewView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(10)
                 }
-            case .unavailable:
+            case .failed:
+                failedBody
+            case .unsupported:
                 unavailableBody
             }
         }
@@ -379,17 +429,23 @@ public struct HistoryPreviewView: View {
         }
     }
 
-    /// The decode-failure placeholder: the representation looked decodable
-    /// but ImageIO produced no image.
-    private var imageDecodeFailedBody: some View {
+    /// Retry is offered only for a supported preview whose History read or
+    /// decoder failed. Stable unsupported content uses `unavailableBody` and
+    /// therefore never presents this control (review Card 9D).
+    private var failedBody: some View {
         VStack(spacing: 8) {
-            Image(systemName: "photo.badge.exclamationmark")
+            Image(systemName: "exclamationmark.triangle")
                 .font(.title2)
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
             Text("Preview Unavailable")
                 .font(.callout)
                 .foregroundStyle(.secondary)
+            Button("Retry") {
+                Task {
+                    await loader.retry()
+                }
+            }
         }
     }
 

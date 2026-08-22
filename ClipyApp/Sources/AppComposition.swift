@@ -45,6 +45,68 @@ enum ClipyPasteFailure: Error, Sendable, Equatable {
     case write(PasteboardWriteFailure)
 }
 
+/// App-owned capture failure categories. The exhaustive History mapping and
+/// opaque unexpected fallback strip every identifier, version, UTI, and
+/// other associated input before failure becomes long-lived UI state
+/// (REVIEW Card 6).
+enum ClipyCaptureFailure: Sendable, Equatable {
+    case unsupportedClipboardShape
+    case declaredContentUnavailable
+    case invalidInput
+    case stateConflict
+    case capacityExceeded(CapacityKind)
+    case temporarilyUnavailable(UnavailableReason)
+    case persistence(PersistenceFailure)
+    case unexpected
+
+    init(historyFailure: HistoryFailure) {
+        switch historyFailure {
+        case .invalidInput:
+            self = .invalidInput
+        case .capacityExceeded(let kind):
+            self = .capacityExceeded(kind)
+        case .temporarilyUnavailable(let reason):
+            self = .temporarilyUnavailable(reason)
+        case .persistence(let failure):
+            self = .persistence(failure)
+        case .notFound,
+             .staleContent,
+             .invalidPinnedPlacement,
+             .revisionNotFound,
+             .snapshotExpired:
+            self = .stateConflict
+        }
+    }
+}
+
+/// Content-free instrumentation for REVIEW Card 6's capture owner. Counts
+/// describe the fixed capacity (zero-or-one active History commit plus
+/// zero-or-one replaceable latest pending capture); no UTI or clipboard bytes
+/// escape through this app-internal seam. Byte counts expose capacity only,
+/// never payload. `lastFailure` retains the unresolved
+/// sanitized rejection category that was not the expected privacy exclusion;
+/// `failedCaptureCount` distinguishes later failures of the same typed value
+/// without retaining the rejected capture.
+struct ClipyCaptureHealth: Sendable, Equatable {
+    let activeCommitCount: Int
+    let activeCaptureBytes: Int
+    let pendingCaptureCount: Int
+    let pendingCaptureBytes: Int
+    let replacedCaptureCount: Int
+    let failedCaptureCount: Int
+    let lastFailure: ClipyCaptureFailure?
+
+    static let inactive = ClipyCaptureHealth(
+        activeCommitCount: 0,
+        activeCaptureBytes: 0,
+        pendingCaptureCount: 0,
+        pendingCaptureBytes: 0,
+        replacedCaptureCount: 0,
+        failedCaptureCount: 0,
+        lastFailure: nil
+    )
+}
+
 // MARK: - AppComposition (docs/01-architecture.md §2, §5.6, §8)
 
 /// The assembled application object: the opened store, the pasteboard
@@ -90,11 +152,61 @@ final class AppComposition {
     /// this hook to the panel's content-free failure banner.
     var onPasteFailed: ((ClipyPasteFailure) -> Void)?
 
+    /// Main-actor push seam for Card 6 capture health. The app shell receives
+    /// an immutable, content-free snapshot only when its actual capacity or
+    /// failure state changes; it never polls the composition or observes the
+    /// clipboard value that caused the transition.
+    var onCaptureHealthChanged: (@MainActor (ClipyCaptureHealth) -> Void)? {
+        didSet {
+            let health = captureHealth
+            lastPublishedCaptureHealth = health
+            onCaptureHealthChanged?(health)
+        }
+    }
+
     /// The entire v1 copy lane: one owned task means one active request and
     /// zero pending requests. The slot is installed synchronously before the
     /// task can reach its first `await`, so a second UI gesture is rejected as
     /// `.busy` instead of entering FIFO/latest-wins machinery (CLIP-5).
     private var pasteTask: Task<Void, Never>?
+
+    /// REVIEW Card 6 capture ownership. The active task is the sole caller of
+    /// `history.perform(.capture)`; while it is suspended, one immutable
+    /// latest capture may wait. A third observation replaces that pending
+    /// value rather than allocating another task or retaining an unbounded
+    /// byte queue.
+    private var captureTask: Task<Void, Never>?
+    private var activeCaptureBytes = 0
+    private var pendingCapture: AdmittedCapture?
+    private var replacedCaptureCount = 0
+    private var failedCaptureCount = 0
+    private var lastCaptureFailure: ClipyCaptureFailure?
+    private var acceptsCaptures = false
+    private var lastPublishedCaptureHealth = ClipyCaptureHealth.inactive
+    private let captureByteLimit: Int
+
+    /// One value admitted through the composition owner's memory boundary.
+    /// The stored byte count was computed with checked arithmetic before the
+    /// value could occupy either lane slot.
+    private struct AdmittedCapture: Sendable {
+        let capture: ClipboardCapture
+        let byteCount: Int
+        let failureCountAtAdmission: Int
+    }
+
+    /// App-internal, content-free trace of capture capacity and failure state.
+    /// The computed shape cannot drift from the two owned slots.
+    var captureHealth: ClipyCaptureHealth {
+        ClipyCaptureHealth(
+            activeCommitCount: captureTask == nil ? 0 : 1,
+            activeCaptureBytes: activeCaptureBytes,
+            pendingCaptureCount: pendingCapture == nil ? 0 : 1,
+            pendingCaptureBytes: pendingCapture?.byteCount ?? 0,
+            replacedCaptureCount: replacedCaptureCount,
+            failedCaptureCount: failedCaptureCount,
+            lastFailure: lastCaptureFailure
+        )
+    }
 
     /// Store URLs this process has opened. The process-side half of the
     /// no-second-writer rule (01 §8): `open(storeURL:)` consults and
@@ -123,7 +235,8 @@ final class AppComposition {
     private init(
         history: any ClipboardHistory,
         adapter: PasteboardAdapter,
-        observerPollInterval: TimeInterval = 0.5
+        observerPollInterval: TimeInterval = 0.5,
+        captureByteLimit: Int = HistoryLimits.standard.maximumCaptureBytes
     ) {
         self.history = history
         self.adapter = adapter
@@ -132,6 +245,7 @@ final class AppComposition {
             pollInterval: observerPollInterval
         )
         viewState = HistoryViewState(history: history)
+        self.captureByteLimit = captureByteLimit
     }
 
     /// Opens the persistent store (creating the store's parent directory
@@ -208,39 +322,48 @@ final class AppComposition {
             self?.requestPaste(item)
         }
 
-        // Capture loop (01 §5.1; 03a §4): one COMPLETE capture per distinct
-        // pasteboard changeCount becomes one `.capture` action; each runs
-        // in its own task so a large capture never stalls the poll handler.
+        // Capture loop (01 §5.1; 03a §4; REVIEW Card 6): one COMPLETE capture
+        // per distinct pasteboard changeCount is admitted to this owner's
+        // fixed active+latest lane. Only the active slot owns a task; while
+        // History is suspended, newer observations replace the one pending
+        // value instead of growing an unbounded task/byte backlog.
         // A PARTIAL freeze — the item declared a representation whose bytes
         // were unavailable at freeze time (contents changed or provider
         // timed out, per Apple's `data(forType:)` documentation) — is
-        // dropped HERE, at the seam: partial Canonical Content would poison
-        // dedup/coalescing identity (audit SPEC-IMPL-005; 03a §4). The
+        // rejected HERE with a content-free health episode: partial Canonical
+        // Content would poison dedup/coalescing identity (audit SPEC-IMPL-005;
+        // 03a §4). The
         // observer has already consumed the changeCount, so the next copy
         // re-freezes whole. Typed History rejections are EXPECTED and
-        // swallowed silently — concealed content fails
-        // `.invalidInput(.excludedFromHistory)` by design (05 §6.1,
-        // whole-capture semantics; defense in depth) — with no logging and
-        // no error surface. The app's own paste writes round-trip through
+        // surfaced in the content-free `captureHealth`; only concealed
+        // content's `.invalidInput(.excludedFromHistory)` is ignored by
+        // design (05 §6.1, whole-capture semantics; defense in depth). The
+        // app's own paste writes round-trip through
         // this loop and coalesce via the lineage hint (WS4; 03b §9); they
-        // must not be suppressed. The local Sendable binding keeps the
-        // escaping handler free of any self capture.
-        let history = self.history
-        observer.start { outcome in
-            guard outcome.isComplete else { return }
-            let capture = outcome.capture
-            Task { try? await history.perform(.capture(capture)) }
+        // must not be suppressed. The observer callback stays synchronous
+        // and MainActor-owned, so slot
+        // replacement is atomic with respect to later poll deliveries.
+        acceptsCaptures = true
+        observer.start { [weak self] outcome in
+            self?.receiveCaptureOutcome(outcome)
         }
     }
 
-    /// Stops app-owned side effects. Cancellation is advisory for History,
-    /// so the copy task checks it again after payload resolution and before
-    /// touching the pasteboard; a late non-cooperative read cannot write or
-    /// publish callbacks after shutdown.
+    /// Stops app-owned side effects. Cancellation is advisory for History:
+    /// capture drops its pending value and fences a non-cooperative active
+    /// return from launching another commit; copy checks again after payload
+    /// resolution and before touching the pasteboard. Neither lane may
+    /// publish a late side effect after shutdown.
     func stop() {
+        acceptsCaptures = false
         observer.stop()
         viewState.deactivate()
         viewState.onPaste = { _ in }
+        pendingCapture = nil
+        captureTask?.cancel()
+        captureTask = nil
+        activeCaptureBytes = 0
+        publishCaptureHealthIfChanged()
         pasteTask?.cancel()
         pasteTask = nil
     }
@@ -251,17 +374,181 @@ final class AppComposition {
     static func makeForTesting(
         history: any ClipboardHistory,
         adapter: PasteboardAdapter,
-        observerPollInterval: TimeInterval = 60
+        observerPollInterval: TimeInterval = 60,
+        captureByteLimit: Int = HistoryLimits.standard.maximumCaptureBytes
     ) -> AppComposition {
         let composition = AppComposition(
             history: history,
             adapter: adapter,
-            observerPollInterval: observerPollInterval
+            observerPollInterval: observerPollInterval,
+            captureByteLimit: captureByteLimit
         )
         composition.start()
         return composition
     }
+
+    /// Deterministic Debug entry for the same admission path used by the
+    /// observer. Tests supply already-frozen values so active/latest ordering
+    /// needs no timer or pasteboard-content race.
+    func submitCaptureForTesting(_ capture: ClipboardCapture) {
+        admitCapture(capture)
+    }
 #endif
+
+    /// Synchronously admits an already-frozen value. There is exactly one
+    /// active operation and one replaceable pending capture; no observation
+    /// creates an independent task (REVIEW Card 6).
+    private func admitCapture(_ capture: ClipboardCapture) {
+        guard acceptsCaptures else { return }
+        guard let admitted = admittedCapture(capture) else {
+            recordCaptureFailure(.invalidInput)
+            return
+        }
+        guard captureTask == nil else {
+            if pendingCapture != nil {
+                replacedCaptureCount += 1
+            }
+            pendingCapture = admitted
+            publishCaptureHealthIfChanged()
+            return
+        }
+        startCapture(admitted)
+    }
+
+    private func startCapture(_ admitted: AdmittedCapture) {
+        precondition(captureTask == nil)
+        let history = self.history
+        activeCaptureBytes = admitted.byteCount
+        captureTask = Task { [weak self] in
+            let outcome = await Self.executeCapture(
+                admitted.capture,
+                history: history
+            )
+            guard !Task.isCancelled, let self else { return }
+            self.captureDidFinish(
+                outcome,
+                failureCountAtAdmission: admitted.failureCountAtAdmission
+            )
+        }
+        publishCaptureHealthIfChanged()
+    }
+
+    private enum CaptureExecutionOutcome: Sendable {
+        case completed
+        case cancelled
+        case excluded
+        case failed(ClipyCaptureFailure)
+    }
+
+    /// The one active History operation. Every typed failure is returned to
+    /// the owner; there is deliberately no `try?` failure erasure.
+    private nonisolated static func executeCapture(
+        _ capture: ClipboardCapture,
+        history: any ClipboardHistory
+    ) async -> CaptureExecutionOutcome {
+        do {
+            _ = try await history.perform(.capture(capture))
+            return .completed
+        } catch is CancellationError {
+            return .cancelled
+        } catch let failure as HistoryFailure {
+            if failure == .invalidInput(.excludedFromHistory) {
+                return .excluded
+            }
+            return .failed(ClipyCaptureFailure(historyFailure: failure))
+        } catch {
+            return .failed(.unexpected)
+        }
+    }
+
+    /// Completes the active slot before starting the pending value. Since
+    /// `perform` has returned, this is the lane's strict serialization point.
+    private func captureDidFinish(
+        _ outcome: CaptureExecutionOutcome,
+        failureCountAtAdmission: Int
+    ) {
+        captureTask = nil
+        activeCaptureBytes = 0
+        switch outcome {
+        case .completed:
+            if failureCountAtAdmission == failedCaptureCount {
+                lastCaptureFailure = nil
+            }
+        case .cancelled:
+            break
+        case .excluded:
+            // Privacy markers are an expected do-not-retain decision (05
+            // §6.1), not degraded capture health.
+            break
+        case .failed(let failure):
+            failedCaptureCount += 1
+            lastCaptureFailure = failure
+        }
+        publishCaptureHealthIfChanged()
+
+        guard acceptsCaptures, let next = pendingCapture else {
+            pendingCapture = nil
+            publishCaptureHealthIfChanged()
+            return
+        }
+        pendingCapture = nil
+        publishCaptureHealthIfChanged()
+        startCapture(next)
+    }
+
+    /// Interprets the adapter's exhaustive freeze record at the app boundary.
+    /// Structural and unavailable outcomes become content-free episodes, while
+    /// concealed content stays the one intentional quiet decision. Only a
+    /// complete freeze may enter the active/latest lane.
+    private func receiveCaptureOutcome(_ outcome: CaptureOutcome) {
+        if outcome.concealmentMarkerTypeIdentifier != nil
+            || outcome.capture.isConcealed {
+            return
+        }
+        if outcome.unsupportedPasteboardItemCount != nil {
+            recordCaptureFailure(.unsupportedClipboardShape)
+            return
+        }
+        if !outcome.unavailableTypeIdentifiers.isEmpty {
+            recordCaptureFailure(.declaredContentUnavailable)
+            return
+        }
+        admitCapture(outcome.capture)
+    }
+
+    /// Checked aggregate-byte admission for the two owner-held slots. Storage
+    /// remains the authoritative full input validator; this direct check owns
+    /// only the composition lane's memory bound (Part VI §2 / Card 6).
+    private func admittedCapture(_ capture: ClipboardCapture) -> AdmittedCapture? {
+        var byteCount = 0
+        for representation in capture.representations {
+            let (next, overflow) = byteCount.addingReportingOverflow(
+                representation.bytes.count
+            )
+            guard !overflow, next <= captureByteLimit else { return nil }
+            byteCount = next
+        }
+        return AdmittedCapture(
+            capture: capture,
+            byteCount: byteCount,
+            failureCountAtAdmission: failedCaptureCount
+        )
+    }
+
+    private func recordCaptureFailure(_ failure: ClipyCaptureFailure) {
+        failedCaptureCount += 1
+        lastCaptureFailure = failure
+        publishCaptureHealthIfChanged()
+    }
+
+    /// Coalesces assignments that do not change the immutable snapshot while
+    /// preserving every real active/pending/replacement/failure transition.
+    private func publishCaptureHealthIfChanged() {
+        let health = captureHealth
+        guard health != lastPublishedCaptureHealth else { return }
+        lastPublishedCaptureHealth = health
+        onCaptureHealthChanged?(health)
+    }
 
     /// Paste orchestration — the ONLY History → pasteboard hand-off
     /// (01 §5.6; 03b §12; 04 §8): resolve the item's current Effective

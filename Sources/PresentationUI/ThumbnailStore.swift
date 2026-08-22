@@ -67,9 +67,23 @@ public final class ThumbnailStore {
     /// admission bound (misses contribute zero).
     private var retainedDecodedBytes = 0
 
-    /// References with a fetch currently in flight — makes `prefetch`
-    /// idempotent per reference without retaining its outcome.
-    private var inFlight: Set<HistoryItemReference> = []
+    /// References with a fetch currently in flight, stamped by the surface
+    /// purge generation. The stamp makes reset release the key immediately
+    /// without letting a late old completion remove or fill a new flight for
+    /// the same exact reference (deep review Card 9B).
+    private var inFlight: [HistoryItemReference: Int] = [:]
+
+    /// Monotone surface-owned purge generation. It is deliberately local to
+    /// this cache rather than a global cache bus: every completion must match
+    /// both this generation and the exact reference's current flight.
+    private var generation = 0
+
+    #if DEBUG
+    /// Deterministic completion-boundary instrumentation for parked-history
+    /// tests. Counts contain no clipboard content and compile out of Release.
+    package private(set) var debugFetchCompletionCount = 0
+    package private(set) var debugDiscardedFetchCompletionCount = 0
+    #endif
 
     /// Entry-count half of the admission bound (default 500). Injectable so
     /// the memory-eviction smoke suites can drive the reset at a small
@@ -144,8 +158,9 @@ public final class ThumbnailStore {
     /// - a thrown failure is NOT retained — transient unavailability may
     ///   recover, so the reference stays eligible for a later prefetch.
     public func prefetch(_ item: HistoryItemReference) {
-        guard entries[item] == nil, !inFlight.contains(item) else { return }
-        inFlight.insert(item)
+        guard entries[item] == nil, inFlight[item] == nil else { return }
+        let requestGeneration = generation
+        inFlight[item] = requestGeneration
 
         let history = self.history
         let pixels = self.pixels
@@ -157,9 +172,9 @@ public final class ThumbnailStore {
                 // The decode hop leaves the MainActor; the decoded CGImage
                 // crosses back as an immutable Sendable value (audit 02
                 // §SPEC-IMPL-002's Apple-docs check). Nothing cancels these
-                // unstructured tasks, but even if one were, recording (or
-                // dropping) the exact key is the correct completion either
-                // way — an in-flight entry must never be stranded.
+                // unstructured tasks. A reset does not rely on cooperative
+                // cancellation: it releases visible bookkeeping immediately,
+                // and the captured generation rejects any late result.
                 let image: CGImage?
                 if let payload {
                     image = await decoder.thumbnailImage(fromPNG: payload.encodedBytes)
@@ -167,21 +182,32 @@ public final class ThumbnailStore {
                     image = nil
                 }
                 guard let self else { return }
-                self.store(item: item, image: image)
+                self.store(
+                    item: item,
+                    image: image,
+                    requestGeneration: requestGeneration
+                )
             } catch {
                 // Not retained: see `prefetch(_:)`.
                 guard let self else { return }
-                self.inFlight.remove(item)
+                self.finishWithoutEntry(
+                    item: item,
+                    requestGeneration: requestGeneration
+                )
             }
         }
     }
 
-    /// Clears all retained entries. In-flight fetches still land afterwards
-    /// under their exact reference; the in-flight set itself is not cleared,
-    /// so resetting mid-fetch cannot start duplicate flights.
+    /// Privacy purge for this browsing surface. Retained pixels and negative
+    /// entries disappear synchronously; advancing the generation invalidates
+    /// every old flight, while clearing its visible bookkeeping permits a new
+    /// request for the same exact reference immediately. A non-cooperative old
+    /// history call may still return, but its completion cannot publish.
     public func reset() {
+        generation += 1
         entries.removeAll()
         retainedDecodedBytes = 0
+        inFlight.removeAll()
     }
 
     /// Cheap UTI heuristic gating prefetch: true when any of the row's type
@@ -209,8 +235,14 @@ public final class ThumbnailStore {
     /// `cachedEntryCount <= maximumEntries` AND
     /// `cachedDecodedBytes <= maximumDecodedBytes` an observable invariant
     /// at every quiescent point.
-    private func store(item: HistoryItemReference, image: CGImage?) {
-        inFlight.remove(item)
+    private func store(
+        item: HistoryItemReference,
+        image: CGImage?,
+        requestGeneration: Int
+    ) {
+        guard acceptCompletion(item: item, requestGeneration: requestGeneration) else {
+            return
+        }
         // A same-key overwrite cannot happen (`prefetch` refuses to start
         // when an entry exists), but keep the byte total exact even so.
         if case .hit(_, let replacedCost) = entries[item] {
@@ -224,8 +256,47 @@ public final class ThumbnailStore {
             entries[item] = .miss
         }
         if entries.count > maximumEntries || retainedDecodedBytes > maximumDecodedBytes {
-            entries.removeAll()
-            retainedDecodedBytes = 0
+            evictRetainedEntries()
         }
+    }
+
+    /// Capacity eviction only drops rebuildable completed entries. It must
+    /// not advance the privacy-purge generation or invalidate unrelated
+    /// visible-row flights: those rows have already issued their `.task`
+    /// request and would otherwise remain permanent fallbacks.
+    private func evictRetainedEntries() {
+        entries.removeAll()
+        retainedDecodedBytes = 0
+    }
+
+    /// Finishes a thrown/cancelled request without negative-retaining it.
+    /// An old generation must not remove a newer same-reference flight.
+    private func finishWithoutEntry(
+        item: HistoryItemReference,
+        requestGeneration: Int
+    ) {
+        _ = acceptCompletion(item: item, requestGeneration: requestGeneration)
+    }
+
+    /// The single completion fence shared by success, failure and
+    /// cancellation paths. Returning true also consumes the current flight.
+    private func acceptCompletion(
+        item: HistoryItemReference,
+        requestGeneration: Int
+    ) -> Bool {
+        #if DEBUG
+        debugFetchCompletionCount += 1
+        #endif
+        guard
+            generation == requestGeneration,
+            inFlight[item] == requestGeneration
+        else {
+            #if DEBUG
+            debugDiscardedFetchCompletionCount += 1
+            #endif
+            return false
+        }
+        inFlight.removeValue(forKey: item)
+        return true
     }
 }

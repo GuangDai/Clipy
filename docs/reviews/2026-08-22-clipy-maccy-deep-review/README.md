@@ -57,6 +57,9 @@
 - [`09-tiered-storage-and-unbounded-history.md`](09-tiered-storage-and-unbounded-history.md) —
   当前驻留真相、四类资源账本、淘汰/按需读取、conditional content depot，以及解除固定条数
   上限前的 O(N)、崩溃、GC、ENOSPC、迁移和 soak 门槛。
+- [`10-implementation-status.md`](10-implementation-status.md) — REVIEW 的唯一活实现账本：逐 leaf
+  记录 Done/Partial/In progress/Open、production path、测试与 CI 证据及支持上限，后续 agent 先查此表，
+  避免重复领取已关闭行为。
 - [`apple-platform-source-memo.md`](apple-platform-source-memo.md) — Apple 官方文档
   逐项备忘录。
 - [`apple-swiftdata-durability-memo.md`](apple-swiftdata-durability-memo.md) — SwiftData

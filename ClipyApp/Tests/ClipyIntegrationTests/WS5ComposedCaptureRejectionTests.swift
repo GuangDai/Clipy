@@ -5,8 +5,9 @@
 /// freezes into `isConcealed == true`, storage rejects the WHOLE capture
 /// with `.invalidInput(.excludedFromHistory)` before fingerprinting
 /// (defense in depth), and NOTHING durable happens — no row, no position
-/// advance, no observation disturbance; the app's capture loop swallows the
-/// typed rejection silently (roadmap 06, AppComposition.start).
+/// advance, no observation disturbance. Production short-circuits the
+/// explicit concealed outcome before History; this test separately retains
+/// the Storage rejection as defense-in-depth evidence.
 ///
 /// The gate's Signature-Index-rebuild clause — forcing
 /// `.temporarilyUnavailable(.dedupIndexRebuild)` — requires the storage-side
@@ -41,16 +42,19 @@ struct WS5ComposedCaptureRejectionTests {
         )
         let adapter = PasteboardAdapter(pasteboard: pasteboard)
 
-        // Whole-capture semantics (05 §6.1): the marker marks the ENTIRE
-        // capture; the sibling plaintext is frozen alongside it and is
-        // never submitted as an ordinary stripped capture.
-        let capture = try #require(
-            adapter.capture(observedAt: Date(timeIntervalSinceReferenceDate: 700_200_900))
+        // Early whole-item privacy semantics (05 §6.1): the marker is enough
+        // to construct a concealed rejection value; sibling bytes remain
+        // unread and therefore cannot be retained by the adapter.
+        let outcome = try #require(
+            adapter.captureOutcome(
+                observedAt: Date(timeIntervalSinceReferenceDate: 700_200_900)
+            )
         )
+        let capture = outcome.capture
+        #expect(!outcome.isComplete)
         #expect(capture.isConcealed == true)
-        #expect(capture.representations.contains {
-            $0.typeIdentifier == ComposedSupport.plainTextTypeIdentifier
-        })
+        #expect(capture.representations.isEmpty)
+        #expect(adapter.capture() == nil)
 
         do {
             _ = try await history.perform(.capture(capture))
