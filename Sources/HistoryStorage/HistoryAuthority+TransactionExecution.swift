@@ -68,6 +68,11 @@ extension HistoryAuthority {
                 if plan.requiresFinalPinOrderValidation {
                     try self.validateFinalPinOrder(in: context)
                 }
+                // X-HCR.2 WS-J1-5 window (a): one-shot test failure after
+                // item mutation/final-pin proof but before HCR staging.
+                if self.consumeTransactionFailureInjection(.beforeHCRAppend) {
+                    throw InjectedTransactionFailure.beforeHCRAppend
+                }
                 // DC-25/J.3: every non-empty stamped plan carries exactly one
                 // HCR derived from the same explicit mutations. Stage it (and
                 // any fixed-limit oldest-prefix trim) before the existing
@@ -79,9 +84,9 @@ extension HistoryAuthority {
                     expectedPreviousPosition: expectedPreviousPosition,
                     in: context
                 )
-                // Roadmap-owned WS13 seam: one-shot injection after row
-                // mutation, before the singleton update. Disarmed (nil) in
-                // production.
+                // X-HCR.2 WS-J1-5 window (b): the existing WS13 one-shot
+                // failure now sits after HCR staging and before the singleton
+                // update. Disarmed (nil) in production.
                 if self.consumeTransactionFailureInjection(.beforeSingletonUpdate) {
                     throw InjectedTransactionFailure.beforeSingletonUpdate
                 }

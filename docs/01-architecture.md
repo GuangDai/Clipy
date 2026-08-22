@@ -41,7 +41,7 @@ There is no `DomainCore` target. The few values that must appear in both the cal
 | `xxh3` | Package-internal C/ObjC++ sibling | 64-bit representation fingerprints | Item identity or final dedup decisions |
 | `Fuse` | External Swift library used internally | Threshold-based fuzzy matching inside `SearchWorker` | Public search score or cross-actor matcher state |
 | `HistoryPerfRunner` | Package executable, no product surface | Part VI §9 release-like workloads, machine metadata, and versioned fixtures | Caller APIs, alternate writers, production state, absolute-latency claims |
-| `HistoryRestartProbe` | Package executable target, no declared product | Evidence Card 1C-1 short-lived public-API restart phases | App lifecycle, alternate writers, production state, migration/kill claims |
+| `HistoryRestartProbe` | Package executable target, no declared product | Evidence Card 1C-1 short-lived public-API restart phases plus the X-HCR post-committed-receipt fatal-signal phase | App lifecycle, alternate writers, production state, migration, mid-transaction kill, power-loss, or physical-durability claims |
 
 #### Access rules
 

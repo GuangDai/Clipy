@@ -131,15 +131,20 @@ internal enum AuthoritySuspensionPoint: String, Sendable {
 ///
 /// Test seam, compiled in always and harmless in production: disarmed unless
 /// a test arms it via @testable (no `#if DEBUG`). Each case is one-shot. The
-/// WS13 and out-of-space cases preserve the exact interleaving — row mutation
-/// applied, singleton position not yet written — while the guard-specific
-/// cases alter only a local decision value, never durable fixture state.
+/// The two HCR boundary cases preserve the exact pre-/post-append
+/// interleavings after row mutation while the singleton position is still
+/// unchanged. The guard-specific cases alter only a local decision value,
+/// never durable fixture state.
 /// Every injected failure traverses the real transaction catch and commits nothing
 /// (§10: "Closure failure commits nothing. There is no receipt, index delta,
 /// or invalidation").
 internal enum InjectedTransactionFailure: Error, Sendable, Equatable {
-    /// Throw after all row mutations and the final pin-order revalidation,
-    /// immediately before the singleton position update (WS13).
+    /// Throw after all row mutations and final pin-order revalidation but
+    /// before the plan's HCR append (X-HCR.2 / WS-J1-5 window a).
+    case beforeHCRAppend
+
+    /// Throw after the plan's HCR append, immediately before the singleton
+    /// position update (WS13 / WS-J1-5 window b).
     case beforeSingletonUpdate
 
     /// Make the real §10 singleton-position guard observe a mismatch.
