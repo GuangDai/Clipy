@@ -23,6 +23,13 @@ import HistoryCore
 ///   revised result of the same plan (invariant 7); retention never retires a
 ///   pinned item (invariant 8).
 /// - No case redirects, merges, or reuses History Item IDs (invariant 9).
+///
+/// The two V2-02 cases below are additive (`V2-00` §8(h) extension-by-
+/// addition; `V2-02` §5.3/§5.6): `pruneRevisions` carries the removed
+/// inactive revision IDs oldest-first and no `ContentVersion` field (R3 alone
+/// advances none — no unchecked gate-looking payload, D18); the
+/// `.setRetentionPolicies` policy write is an explicit mutation, never an
+/// outcome-inferred side effect (D18).
 package enum HistoryMutation: Sendable {
     case create(NewHistoryItem)
     case recordCopy(itemID: HistoryItemID, occurrence: CopyOccurrence)
@@ -34,6 +41,24 @@ package enum HistoryMutation: Sendable {
     )
     case retire(itemID: HistoryItemID, reason: RetirementReason)
     case setRetentionPolicy(maximumUnpinnedItems: Int)
+    /// R3 revision pruning (V2-02 §5.3): `removedRevisionIDs` is non-empty
+    /// (a no-op prune returns `.unchanged` before planning), lists inactive
+    /// revision IDs oldest-first in append order, never contains the active
+    /// revision (D3/D23), and never reorders or rewrites a surviving revision
+    /// — Storage re-encodes the shorter `RevisionStateBlobV1` (same
+    /// `activeRevisionID`, `formatVersion == 1`, §5.3/§6.3).
+    case pruneRevisions(
+        itemID: HistoryItemID,
+        removedRevisionIDs: [RevisionID]
+    )
+    /// Persists the V2 retention policies (V2-02 §5.6), mirroring how v1
+    /// persists `maximumUnpinnedItems` via `.setRetentionPolicy`: the stamping
+    /// writes the `RetentionExpansionConfigRow` singleton, preserves every
+    /// item's `ContentVersion` and projections, and the commit advances
+    /// `ChangePosition` exactly once when the value changes or victims
+    /// retire. Carrying the write explicitly (not inferring it from the
+    /// `.retentionPoliciesSet` outcome) preserves D18.
+    case setRetentionPolicies(HistoryRetentionPolicies)
 }
 
 /// Payload of `HistoryMutation.create`: a new item's identity, canonical
@@ -84,6 +109,17 @@ package struct MutationPlan: Sendable {
     package let outcome: PlannedOutcome
     /// Non-empty by invariant 1.
     package let mutations: [HistoryMutation]
+
+    /// Explicit package initializer: the implicit memberwise initializer is
+    /// `internal` to HistoryDomain, but Storage legitimately rebuilds a plan
+    /// when composing the primary plan with expansion retirements (V2-02
+    /// §4.2's merge: "final mutations = v1Plan.mutations +
+    /// expansion.retirements, outcome = v1Plan.outcome") — the same
+    /// package-seam posture as the planners' own `package` declarations.
+    package init(outcome: PlannedOutcome, mutations: [HistoryMutation]) {
+        self.outcome = outcome
+        self.mutations = mutations
+    }
 }
 
 /// Package outcome vocabulary, mapped mechanically to the public receipt
@@ -98,6 +134,14 @@ package enum PlannedOutcome: Sendable {
     case cleared(count: Int)
     case revised(HistoryItemID)
     case retentionPolicySet(removedCount: Int)
+    /// The `.setRetentionPolicies` commit (V2-02 §8.1, additive): the
+    /// mechanical source of the public
+    /// `HistoryCommitOutcome.retentionPoliciesSet(retiredItems:prunedRevisions:)`.
+    /// `retiredItems` counts R1/R2 item retirements; `prunedRevisions`
+    /// counts R3 revisions pruned for surviving (non-retired) items —
+    /// revisions of an item the same commit retires are deleted by
+    /// retirement, not pruned (§6.3 retire-subsumes-prune).
+    case retentionPoliciesSet(retiredItems: Int, prunedRevisions: Int)
 }
 
 /// The planner verdict for one action: either nothing changes, or one

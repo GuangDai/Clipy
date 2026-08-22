@@ -82,28 +82,39 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
 
     /// Opens (or creates) the store and returns the ready facade.
     ///
-    /// Performs the docs/05-authority-kernel.md §13 startup sequence:
+    /// Performs the docs/05-authority-kernel.md §13 startup sequence,
+    /// extended to the M1 total open order (`V2-roadmap` §5):
     ///
     /// 1. validates `configuration.initialMaximumUnpinnedItems` against the
     ///    fixed Part VI user range (`HistoryLimits.standard`, §2);
-    /// 2. opens/creates the v1 `ModelContainer` (`v1Schema`, §3) for the
-    ///    configured durability medium — `.memory` changes the medium only
-    ///    and uses the same Authority, planners, codecs, and transaction
-    ///    path (§2);
+    /// 2. opens/creates the `ModelContainer` over the first shipped V2
+    ///    schema (`Schema(versionedSchema: HistorySchemaV2.self)`) through
+    ///    the M1-owned `HistoryMigrationPlan` — the single custom
+    ///    `V1 → V2` stage (DC-02; `V2-02` §3.3 Stage topology / Record 5).
+    ///    A fresh store is created directly at V2 and runs no stage; a v1
+    ///    store migrates during construction — the additive schema change
+    ///    plus the `RetainedBytesRow` `didMigrate` backfill (idempotent by
+    ///    construction) — on the migration-owned context, the sole
+    ///    sanctioned pre-Authority writer. The configured durability medium
+    ///    is unchanged: `.memory` changes the medium only and uses the same
+    ///    Authority, planners, codecs, and transaction path (§2);
     /// 3. constructs `HistoryAuthority` over the container and asks it to
     ///    perform the store-side startup (create the position/retention
-    ///    singleton for a new store, validate it, bound the retained row
+    ///    singleton for a new store, validate it, bootstrap/validate the
+    ///    retention-expansion config singleton, bound the retained row
     ///    count, and rebuild the complete Signature Index from durable
-    ///    signature metadata without decoding content blobs, §13 steps 3–9);
+    ///    signature metadata without decoding content blobs —
+    ///    `V2-roadmap` §5 total open order steps 3–10 over §13 steps 3–9);
     /// 4. publishes the constructed facade with its five actors (§13 step 10).
     ///
     /// Failure translation at this boundary (§16, §2): an out-of-range
     /// initial retention value throws `.invalidInput(.invalidRetentionPolicy)`;
-    /// a store that cannot be opened throws `.persistence(.openStore)`;
-    /// startup corruption surfaced by the Authority propagates already typed
-    /// as `.persistence(.corruptStoredValue)` or
-    /// `.persistence(.invariantViolation)` — v1 has no silent repair or
-    /// migration path for corrupted data (§13).
+    /// a store that cannot be opened or migrated throws
+    /// `.persistence(.openStore)`; startup corruption surfaced by the
+    /// Authority propagates already typed as
+    /// `.persistence(.corruptStoredValue)` or
+    /// `.persistence(.invariantViolation)` — there is no silent repair path
+    /// for corrupted data (§13).
     public static func open(
         configuration: HistoryConfiguration
     ) async throws -> SwiftDataHistory {
@@ -117,22 +128,29 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
             throw HistoryFailure.invalidInput(.invalidRetentionPolicy)
         }
 
-        // §13 step 2: open/create the v1 ModelContainer for the configured
-        // durability medium.
+        // §13 step 2, extended by the M1 total open order (`V2-roadmap` §5
+        // step 2; DC-02): build the V2 schema ONCE and construct the
+        // container through the single-hop `HistoryMigrationPlan`. A fresh
+        // store runs no stage; a v1 store migrates inside construction
+        // (additive schema change + the RetainedBytesRow didMigrate
+        // backfill), so both complete before `open` returns
+        // (`RET-PLATFORM-1b(d)`). The durability medium is unchanged.
+        let schema = Schema(versionedSchema: HistorySchemaV2.self)
         let modelConfiguration: ModelConfiguration
         switch configuration.persistence {
         case .persistent(let storeURL):
-            modelConfiguration = ModelConfiguration(schema: v1Schema, url: storeURL)
+            modelConfiguration = ModelConfiguration(schema: schema, url: storeURL)
         case .memory:
             modelConfiguration = ModelConfiguration(
-                schema: v1Schema,
+                schema: schema,
                 isStoredInMemoryOnly: true
             )
         }
         let container: ModelContainer
         do {
             container = try ModelContainer(
-                for: v1Schema,
+                for: schema,
+                migrationPlan: HistoryMigrationPlan.self,
                 configurations: [modelConfiguration]
             )
         } catch {
@@ -140,7 +158,16 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         }
 
         // §13 steps 3–9: the Authority owns every store-side startup check.
-        let authority = HistoryAuthority(container: container)
+        // The V2-02 §6.4 Storage clock is wired HERE, internally — the
+        // production `SystemRetentionClock` witness (the `{ Date.now }`
+        // default) — so the public `open(configuration:)` signature and the
+        // frozen `HistoryConfiguration` carry no clock parameter
+        // (`RET-COMPILE-1`); tests inject a fixed clock only through the
+        // `@testable` `HistoryAuthority` initializer.
+        let authority = HistoryAuthority(
+            container: container,
+            retentionClock: SystemRetentionClock()
+        )
         do {
             try await authority.performStartup(
                 initialMaximumUnpinnedItems: configuration.initialMaximumUnpinnedItems
@@ -174,8 +201,10 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     /// dispatch (§8).
     ///
     /// Actor-thrown failures propagate unchanged as typed `HistoryFailure`s
-    /// (§16); every action path is implemented as of roadmap step 6
-    /// (docs/roadmap/03-historystorage.md).
+    /// (§16); every v1 action path is implemented as of roadmap step 6
+    /// (docs/roadmap/03-historystorage.md), and the V2-02
+    /// `.setRetentionPolicies` case is implemented by the R.6 policy sweep
+    /// (`V2-02` §4.4; `V2-roadmap` §6).
     public func perform(_ action: HistoryAction) async throws -> HistoryReceipt {
         switch action {
         case .capture(let raw):
@@ -195,12 +224,30 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
             return try await authority.commitClear(scope)
 
         case .revise(let request):
-            let source = try await authority.revisionPreparationSnapshot(request)
-            let bundle = try await revisionPreparation.prepare(request, from: source)
+            // V2-02 §4.3 PHASE 1 (roadmap R.5): the Authority captures the
+            // OCC snapshot AND the current revise-lane policies in one
+            // serialized interval (Record 2's policy-sourcing mechanism),
+            // then threads the policies as the sibling R3 input to the
+            // V2-extended preparation call. A nil policy value (R1-only or
+            // all-disabled config) leaves the preparation byte-for-byte v1.
+            let inputs = try await authority.revisionPreparationInputs(request)
+            let bundle = try await revisionPreparation.prepare(
+                request,
+                from: inputs.snapshot,
+                retentionPolicies: inputs.retentionPolicies
+            )
             return try await authority.commitRevision(request, bundle)
 
         case .setRetentionPolicy(let maximum):
             return try await authority.commitRetentionPolicy(maximum)
+
+        case .setRetentionPolicies(let policies):
+            // V2-02 §8.1 case (roadmap R.6, policy sweep): the full R1/R2/R3
+            // sweep — boundary validation, R3 prunes per exceeding item, the
+            // projected R1/R2 pass, the survivor-scoped unsatisfiable-R3 veto,
+            // and the same-value/satisfied `.unchanged` no-op — all inside
+            // the Authority's one serialized commit interval (`V2-02` §4.4).
+            return try await authority.commitRetentionPolicies(policies)
         }
     }
 
@@ -357,32 +404,46 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         try await authority.pastePayload(for: id)
     }
 
+    /// The authoritative configured retention state (docs/v2/V2-07-ux.md
+    /// §5.2/§6.3 — the settings panel-open read; audit SPEC-IMPL-003): the
+    /// Authority reads both durable singletons inside one serialized,
+    /// non-suspending interval — the v1 count from the position singleton
+    /// (§3.2) and the V2-02 dimensions through the shared config→policy
+    /// loader (`V2-02` §3.3). Configured policy only; no retained-byte usage
+    /// rides this value (V2-07 §2.2 OPEN-2).
+    public func retentionConfiguration() async throws -> HistoryRetentionConfiguration {
+        try await authority.retentionConfiguration()
+    }
+
     /// An encoded thumbnail for one item at one Effective Content state,
     /// sized to `pixels`; `nil` when the item has no thumbnailable content
     /// (docs/05-authority-kernel.md §14.5; docs/04-coherence.md §9).
     ///
-    /// The facade wires the §9 pipeline: the Authority validates the
-    /// dimensions, fetches exactly one item, verifies the requested Content
-    /// Version, and derives immutable source image bytes — answering `nil`
-    /// itself when the item has no supported image representation — inside
-    /// one non-suspending interval; `ThumbnailService` then joins/creates the
-    /// single-flight for the exact key and decodes off the Authority, after
-    /// all SwiftData objects and context have been released. Completed bytes
-    /// are not retained (docs/04-coherence.md §9).
+    /// The facade supplies production Authority operations to the §9 deep
+    /// module. `ThumbnailService` first joins or installs an exact-key
+    /// source-to-decode task. Its creator performs the complete source/version
+    /// fence and then decodes off the Authority; an existing-flight caller
+    /// performs only a scalar dimension/existence/version fence before sharing
+    /// that task. Thus concurrent identical requests hydrate one bounded image
+    /// source, no SwiftData value crosses an actor boundary, and completed
+    /// bytes are not retained (docs/04-coherence.md §9).
     public func thumbnail(
         for item: HistoryItemReference,
         pixels: PixelSize
     ) async throws -> ThumbnailPayload? {
-        guard let sourceBytes = try await authority.thumbnailSource(
-            for: item,
-            pixels: pixels
-        ) else {
-            return nil
-        }
+        let authority = authority
         return try await thumbnailService.thumbnail(
-            sourceBytes,
             for: item,
-            pixels: pixels
+            pixels: pixels,
+            loadSource: {
+                try await authority.thumbnailSource(for: item, pixels: pixels)
+            },
+            validateJoin: {
+                try await authority.validateThumbnailFlightJoin(
+                    for: item,
+                    pixels: pixels
+                )
+            }
         )
     }
 

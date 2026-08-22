@@ -94,6 +94,11 @@ public enum CapacityKind: Sendable, Equatable {
     case thumbnailBytes
     /// The coherence token budget.
     case coherenceToken
+    /// The R2 total-storage-byte budget is unsatisfiable (pinned + primary
+    /// bytes irreducible; D13/D14). V2-02 new case (`V2-02` §8.1,
+    /// extension-by-addition per `V2-00` §8(h)); the v1 cases above are
+    /// unchanged.
+    case storageBytes
 }
 
 /// Why an action is temporarily unavailable.

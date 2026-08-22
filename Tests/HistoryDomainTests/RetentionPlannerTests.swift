@@ -202,3 +202,30 @@ private func retentionVictims(
         ) == [smallerID.id]
     )
 }
+
+@Test func oneVictimFromALargerInventoryPreservesStableOrdering() throws {
+    let oldestDate = Date(timeIntervalSinceReferenceDate: 100)
+    let expected = RetainedItemSummary(
+        id: retentionID(1),
+        lastCopiedAt: oldestDate,
+        pinOrdinal: nil
+    )
+    let sameAgeLargerID = RetainedItemSummary(
+        id: retentionID(2),
+        lastCopiedAt: oldestDate,
+        pinOrdinal: nil
+    )
+    let newer = (3...5).map { suffix in
+        RetainedItemSummary(
+            id: retentionID(UInt8(suffix)),
+            lastCopiedAt: Date(timeIntervalSinceReferenceDate: Double(suffix * 100)),
+            pinOrdinal: nil
+        )
+    }
+    let inventory = [newer[1], sameAgeLargerID, newer[0], expected, newer[2]]
+
+    #expect(try retentionVictims(
+        inventory: inventory,
+        policy: RetentionPolicy(maximumUnpinnedItems: 4)
+    ) == [expected.id])
+}

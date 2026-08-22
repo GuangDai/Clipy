@@ -253,7 +253,26 @@ There is no context crossing an actor boundary and no `await` while a commit con
 
 This replaces the earlier permanent-context plus manual-refresh design. It does not use nonexistent `refresh(_:mergeChanges:)`/`refreshAllObjects()` APIs and does not misuse `registeredModel(for:)` with a business ID.
 
-All business-ID lookup uses a bounded fetch predicate on `HistoryItemRow.id`. Exactly zero or one row is valid; duplicates are persistence corruption even though the schema also declares uniqueness.
+All production business-ID lookup uses a bounded fetch predicate on
+`HistoryItemRow.id`. Exactly zero or one row is valid; duplicates are
+persistence corruption even though the schema also declares uniqueness.
+
+The package-only manual-performance fixture seam is constrained by the same
+boundary. It is not reachable through `ClipboardHistory`, and it does not add
+a fake or second writer. `IngestPreparationActor` prepares each raw capture;
+`HistoryAuthority` encodes and commits at most 64 prepared items in one fresh
+context and one `ModelContext.transaction`, applies the real Signature Index
+delta, publishes invalidation, and advances `ChangePosition` once for that
+non-empty batch. The disposable store is proved empty first. Within each batch,
+a `Set` proves candidate IDs unique; between batches, expected position and the
+complete ready Signature Index prove both non-interleaving and ID absence. That
+fixture-only proof avoids a full count and one business-ID query per row while
+the schema uniqueness constraint remains a transaction backstop. Inputs are
+trusted to have nil lineage hints and pairwise distinct,
+containment-disjoint Canonical values; an incomplete setup is discarded rather
+than resumed. This setup-only path trades bounded transient space for fewer
+queries and transactions; production actions continue to use the one-action
+planner, durable ID lookup, and stamped commit path described below.
 
 ### 6. Preparation outside the commit interval
 
@@ -654,7 +673,7 @@ Both fetch exactly one row and decode/validate its full lineage. Detail maps it 
 
 #### 14.5 Thumbnail source
 
-The Authority fetches exactly one item, verifies the requested Content Version, derives Effective Content, and returns immutable source image bytes. ImageIO decode occurs only after all SwiftData objects and context have been released.
+`ThumbnailService` installs an exact-key source-to-decode task before its first suspension. The creator asks the Authority to fetch and fully hydrate exactly one item, verify the requested Content Version, derive Effective Content, and return immutable source image bytes. An existing-flight caller instead asks the Authority for a scalar-only dimension/existence/version fence before awaiting that task. ImageIO decode occurs only after all SwiftData objects and context have been released; no joiner rehydrates the content blob.
 
 ### 15. Projection rules
 

@@ -61,6 +61,44 @@ private func effectiveTextContent(
     )
 }
 
+@Test func projectionSkipsLaterDecodesOnceTitleAndBodyBudgetsComplete() {
+    let bound = HistoryLimits.standard.maximumStoredSearchBodyUTF8Bytes
+    let exactFill = String(repeating: "b", count: bound)
+    // The budget filler's first line IS the whole text, so the durable
+    // title is that line truncated to the stored-title bound.
+    let truncatedTitle = String(
+        repeating: "b",
+        count: HistoryLimits.standard.maximumStoredTitleUTF8Bytes
+    )
+
+    // The first representation fills the body budget exactly and yields
+    // the title; the second textual representation can contribute neither
+    // (its decode is skipped entirely) and the projection is unchanged.
+    let content = effectiveTextContent([
+        ("public.plain-text", exactFill),
+        ("public.utf8-plain-text", "decoded but contributes nothing"),
+    ])
+    let projection = ContentProjector.project(content)
+    #expect(projection.searchBody == exactFill)
+    #expect(projection.title == truncatedTitle)
+    #expect(
+        projection.effectiveTypeIdentifiers
+            == ["public.plain-text", "public.utf8-plain-text"]
+    )
+
+    // Boundary lock for the skip itself: a whitespace-only leading
+    // representation contributes neither title nor body, so the budget
+    // filler still owns the title and the trailing text still adds nothing.
+    let trailing = effectiveTextContent([
+        ("public.plain-text", " \n "),
+        ("public.rtf", exactFill),
+        ("public.utf8-plain-text", "late tail text"),
+    ])
+    let trailingProjection = ContentProjector.project(trailing)
+    #expect(trailingProjection.searchBody == exactFill)
+    #expect(trailingProjection.title == truncatedTitle)
+}
+
 @Test func projectionNormalizesCRLFAndLoneCRInOnePass() {
     let content = effectiveTextContent([
         ("public.plain-text", "\r\n  First\rSecond\r\nThird"),
@@ -95,4 +133,19 @@ private func effectiveTextContent(
 
     #expect(projection.title == text)
     #expect(projection.searchBody == text)
+}
+
+@Test func storedProjectionValidationReturnsItsExistingUTF8Counts() throws {
+    let title = "Title 🙂"
+    let body = "Body with e\u{301} and 🇺🇳"
+
+    let size = try ContentProjector.validateStoredProjection(
+        schemaVersion: ContentProjector.schemaVersion,
+        title: title,
+        searchBody: body,
+        limits: .standard
+    )
+
+    #expect(size.titleUTF8Bytes == title.utf8.count)
+    #expect(size.searchBodyUTF8Bytes == body.utf8.count)
 }

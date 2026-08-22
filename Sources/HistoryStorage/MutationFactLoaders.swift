@@ -53,15 +53,14 @@ internal enum MutationFactLoaders {
     /// bounded by the hard retained-item maximum, duplicate-ID checked, and
     /// scalar-only (§7.3: "All collection-wide loads are bounded by the
     /// hard retained-item maximum") — filters to summaries with a non-nil
-    /// pin ordinal, and sorts ascending by ordinal. Per-row non-negativity
-    /// was already proven by the scalar decode (`decodePinOrdinal`, §4);
-    /// this loader adds the collection-wide D12 proof that ordinals are
-    /// unique and exactly `0 ..< count`: the sorted ordinals equal the
-    /// index range iff the set is contiguous and duplicate-free (the same
-    /// check shape as the §13 step-9 startup proof and the §10 final-order
-    /// revalidation). A malformed stored order is a persistence invariant
-    /// failure — the loader never repairs (§7.2, docs/02 §5.2: "the
-    /// planner does not guess a repair").
+    /// pin ordinal, and places IDs directly into ordinal slots. Per-row
+    /// non-negativity was already proven by the scalar decode
+    /// (`decodePinOrdinal`, §4); this loader adds the collection-wide D12
+    /// proof that ordinals are unique and exactly `0 ..< count`, using the
+    /// same linear permutation validator as the §13 step-9 startup proof and
+    /// the §10 final-order revalidation. A malformed stored order is a
+    /// persistence invariant failure — the loader never repairs (§7.2,
+    /// docs/02 §5.2: "the planner does not guess a repair").
     ///
     /// - Parameters:
     ///   - context: the operation-local `ModelContext` created by
@@ -89,15 +88,16 @@ internal enum MutationFactLoaders {
             pinned.append((ordinal: pinOrdinal.rawValue, id: summary.id))
         }
         // D12 (docs/02-domain.md §3.2, §5.2): unique and exactly
-        // 0 ..< count — a sorted ordinal list equals the index range iff
-        // the set is contiguous and duplicate-free.
-        pinned.sort { $0.ordinal < $1.ordinal }
-        guard pinned.enumerated().allSatisfy({ offset, item in
-            item.ordinal == offset
-        }) else {
+        // 0 ..< count. The same linear slot proof is shared with startup and
+        // final transaction validation, while this caller keeps its existing
+        // persistence-invariant failure mapping.
+        guard let sourceOffsets = PinnedOrderValidator.sourceOffsetsByOrdinal(
+            in: pinned,
+            ordinal: { $0.ordinal }
+        ) else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
-        return CompletePinnedOrder(itemIDs: pinned.map(\.id))
+        return CompletePinnedOrder(itemIDs: sourceOffsets.map { pinned[$0].id })
     }
 
     /// Loads the complete facts pin placement and unpin planning require:

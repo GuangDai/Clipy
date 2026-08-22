@@ -107,6 +107,106 @@ struct SearchWorkerExcerptTests {
         #expect(excerpt.ranges == [UTF16TextRange(location: 160, length: 3)])
     }
 
+    /// The fused-window walk's whole-body probe boundary: a body of exactly
+    /// `windowCapacity` (320) Characters keeps everything with no ellipses.
+    @Test func exactCapacityBodyKeepsWholeBodyWithoutEllipses() {
+        let body = String(repeating: "a", count: 320)
+
+        let excerpt = SearchWorker.bodyExcerpt(
+            body: body,
+            characterRanges: [10..<15],
+            snippetLimit: snippetLimit
+        )
+
+        #expect(excerpt.snippet == body)
+        #expect(excerpt.ranges == [UTF16TextRange(location: 10, length: 5)])
+    }
+
+    /// One Character past the capacity flips to the centered window, and
+    /// the end clamp redistributes the whole two-Character overshoot
+    /// before the match.
+    @Test func capacityPlusOneBodyWindowsAroundTheMatchWithEndClamp() {
+        let body = String(repeating: "a", count: 321)
+
+        let excerpt = SearchWorker.bodyExcerpt(
+            body: body,
+            characterRanges: [160..<165],
+            snippetLimit: snippetLimit
+        )
+
+        // lower = 160 − 157 = 3, upper = 165 + 158 = 323 → clamped to 321
+        // with lower 3 − 2 = 1.
+        #expect(
+            excerpt.snippet == "…" + String(repeating: "a", count: 320)
+        )
+        #expect(excerpt.ranges == [UTF16TextRange(location: 160, length: 5)])
+    }
+
+    /// A window-length match ending exactly at the body end reaches the
+    /// end boundary with zero overshoot: leading ellipsis, no trailing one.
+    @Test func longMatchEndingExactlyAtBodyEndOmitsTrailingEllipsis() {
+        let body = String(repeating: "p", count: 51)
+            + String(repeating: "m", count: 320)
+
+        let excerpt = SearchWorker.bodyExcerpt(
+            body: body,
+            characterRanges: [51..<371],
+            snippetLimit: snippetLimit
+        )
+
+        #expect(
+            excerpt.snippet == "…" + String(repeating: "m", count: 320)
+        )
+        #expect(excerpt.ranges == [UTF16TextRange(location: 1, length: 320)])
+    }
+
+    /// A zero-length match (regexp `()` style) still centers the window but
+    /// clips away to no reported range.
+    @Test func zeroLengthMatchCentersWindowAndClipsAway() {
+        let body = String(repeating: "a", count: 400)
+
+        let excerpt = SearchWorker.bodyExcerpt(
+            body: body,
+            characterRanges: [200..<200],
+            snippetLimit: snippetLimit
+        )
+
+        // context 320 splits 160/160 around offset 200: window 40..<360.
+        #expect(
+            excerpt.snippet
+                == "…" + String(repeating: "a", count: 320) + "…"
+        )
+        #expect(excerpt.ranges.isEmpty)
+    }
+
+    /// Multi-scalar graphemes ahead of an end-clamped match exercise the
+    /// backward Character walk and the per-Character UTF-16 prefix sums in
+    /// one window: 65 supplementary-plane Characters contribute two UTF-16
+    /// code units each inside the snippet.
+    @Test func multibyteGraphemesAcrossTheBackwardClampKeepUTF16Offsets() {
+        let body = String(repeating: "😀", count: 100)
+            + String(repeating: "a", count: 250)
+            + "MATCH"
+
+        let excerpt = SearchWorker.bodyExcerpt(
+            body: body,
+            characterRanges: [350..<355],
+            snippetLimit: snippetLimit
+        )
+
+        // lower = 350 − 157 = 193, upper = 355 + 158 = 513 → clamped to
+        // 355 with lower 193 − 158 = 35: 65 😀 + 250 a + MATCH.
+        #expect(
+            excerpt.snippet
+                == "…"
+                    + String(repeating: "😀", count: 65)
+                    + String(repeating: "a", count: 250)
+                    + "MATCH"
+        )
+        // 1 ellipsis + (65 × 2) + 250 UTF-16 code units precede the match.
+        #expect(excerpt.ranges == [UTF16TextRange(location: 381, length: 5)])
+    }
+
     @Test func scannedPrefixReportsOmittedStoredBodyWithTrailingEllipsis() {
         let scannedPrefix = String(repeating: "a", count: 315) + "MATCH"
 

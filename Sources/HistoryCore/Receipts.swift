@@ -33,9 +33,9 @@ public struct HistoryCommit: Sendable {
 /// docs/03a-instruction-set.md §6.
 ///
 /// A committed capture returns the stable winner/new item reference.
-/// Metadata-only outcomes (`placedPinned`, `unpinned`, `retentionPolicySet`)
-/// keep the existing Content Version, so the outcome does not pretend to mint
-/// a new reference state.
+/// Metadata-only outcomes (`placedPinned`, `unpinned`, `retentionPolicySet`,
+/// `retentionPoliciesSet`) keep the existing Content Version, so the outcome
+/// does not pretend to mint a new reference state.
 public enum HistoryCommitOutcome: Sendable {
     case inserted(HistoryItemReference)
     case coalesced(HistoryItemReference)
@@ -44,5 +44,12 @@ public enum HistoryCommitOutcome: Sendable {
     case removed(count: Int)
     case cleared(count: Int)
     case revised(HistoryItemReference)
+    /// v1 count-policy commit (unchanged — `03a` §6; `V2-02` §8.1).
     case retentionPolicySet(removedCount: Int)
+    /// The `.setRetentionPolicies` commit (V2-02 new case, §8.1 —
+    /// extension-by-addition per `V2-00` §8(h)): `retiredItems` counts R1/R2
+    /// item retirements; `prunedRevisions` counts R3 revisions pruned for
+    /// surviving (non-retired) items. The two are reported separately so a
+    /// caller can distinguish item retirement from revision pruning.
+    case retentionPoliciesSet(retiredItems: Int, prunedRevisions: Int)
 }

@@ -1,5 +1,7 @@
 /// HistoryDomain value-construction tests and the index for the direct
-/// D1–D19 planner suite (docs/02-domain.md §14; docs/06-cross-cutting.md §8).
+/// D1–D19 planner suite (docs/02-domain.md §14; docs/06-cross-cutting.md §8)
+/// plus the V2-02 expansion invariants D23–D24 (docs/v2/V2-02-retention.md
+/// §11).
 ///
 /// The runtime matrix is split by owning seam:
 ///
@@ -9,13 +11,23 @@
 ///   `planPinnedPlacement`, `planUnpin`, `planRemove`, `planClear`, and
 ///   `planRevision`;
 /// - `RetentionPlannerTests`: D13, D16, D18–D19 through `planRetention`;
+/// - `RetentionExpansionPlannerTests` (V2-02): D13–D14, D16, D19-as-extended
+///   by D24, D24(a)/(b) victim-safety and deduplicated-union shape through
+///   `planItemRetentionExpansion` (docs/v2/V2-02-retention.md §4.1/§4.2/
+///   §6.5; `RET-SELECT-1` Domain half);
+/// - `RevisionPrunePlannerTests` (V2-02): D3, D16, D23 through
+///   `planRevisionRetentionExpansion` (docs/v2/V2-02-retention.md §5/§6.5;
+///   `RET-PRUNE-1` Domain half);
 /// - this file: Canonical value validation/fingerprint-independent equality
 ///   (D7), immutable value construction (D17), PinOrdinal ordering (D12), and
 ///   the admitted retention floor value (D19).
 ///
 /// D5/D6 token stamping belongs to HistoryStorage rather than a Domain
 /// planner; D8 fact completeness and D17 Sendable/import purity are structural
-/// proofs enforced by fact types and portable gates. Package-only members are
+/// proofs enforced by fact types and portable gates. The single-commit half
+/// of D24(a) (one `MutationPlan`, one `ChangePosition`) and the R3-then-R2
+/// composition (`RET-PRUNE-2`) are Storage composition proofs owned by
+/// roadmap slices R.4–R.6. Package-only members are
 /// reachable from this same-package test target via `@testable import`.
 import Foundation
 import Testing

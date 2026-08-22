@@ -76,10 +76,24 @@ let package = Package(
         ),
         .testTarget(
             name: "HistoryStorageTests",
-            dependencies: ["HistoryStorage", "HistoryDomain", "HistoryCore"]
+            dependencies: [
+                "HistoryStorage",
+                "HistoryDomain",
+                "HistoryCore",
+                // RET-PLATFORM-1b(e) engine-level interruption fixture
+                // (HistoryMigrationInterruptionTests) spawns the DEBUG
+                // HistoryPerfRunner child mode; this edge guarantees
+                // `swift test` builds that executable even without a prior
+                // `swift build`.
+                .target(name: "HistoryPerfRunner"),
+            ]
         ),
         .testTarget(
-            name: "HistoryPerfRunnerTests",
+            // Perf/AB measurement-helper proofs live OUTSIDE the default
+            // correctness lane: PR/push CI skips this target and the
+            // dispatch-only `perf-tests` job runs its explicit filter only
+            // after correctness is green.
+            name: "HistoryPerfTests",
             dependencies: [.target(name: "HistoryPerfRunner")]
         ),
         .testTarget(

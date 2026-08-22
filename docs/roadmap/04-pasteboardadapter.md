@@ -1,6 +1,9 @@
 # Module 4 — PasteboardAdapter
 
-- **Status:** not-started
+- **Status:** done (step 9a; landed in `c037a71` and recorded by `4c39499`,
+  revised by the post-step-9 commits `a028c8c`..`cc59aa8`, CI-green at run
+  [32319164667](https://github.com/GuangDai/Clipy/actions/runs/32319164667);
+  see `../PROGRESS.md` step 9)
 - **Spec references:** ownership `../01-architecture.md` §2 row + §4 (Framework dependency, NSPasteboard/AppKit) + §8 (forbidden imports); capture seam `../03a-instruction-set.md` §4; paste payload `../03b-instruction-set.md` §9 (`PastePayload`); paste coherence `../04-coherence.md` §8; flows `../01-architecture.md` §5.1 (capture) + §5.6 (paste).
 - **Dependencies:** `HistoryCore` (raw values + `PastePayload`); `AppKit` (`NSPasteboard`). Never imports `HistoryDomain`, `HistoryStorage`, SwiftData, or another adapter; never constructs `CanonicalContent` or calls xxh3.
 - **Test target:** `PasteboardAdapterTests`.

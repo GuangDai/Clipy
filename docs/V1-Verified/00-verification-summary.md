@@ -16,6 +16,13 @@
 > workloads. Final dispositions are 110 `fixed`, 32 `deferred`, 31 `duplicate`,
 > 30 `not-a-defect`, 19 `documented`, and no active or pending rows. Historical
 > defect descriptions and recommendations below remain as audit provenance.
+>
+> **Post-closure overlay (2026-08-11):** source-inclusive thumbnail hydration
+> is fixed by supported run 31494740863, and a dispatch-only absolute
+> performance-evidence lane and the WL2 independent-process rerun are in
+> pre-proof. The current checksum is 111 `fixed`, 29 `deferred`, 31
+> `duplicate`, 30 `not-a-defect`, 19 `documented`, 2 `in-progress`, and 0
+> `pending`.
 
 ## Reports in this directory
 

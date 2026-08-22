@@ -43,10 +43,20 @@ enum WSSupport {
 
     /// An INDEPENDENT container over the same store file, used only for
     /// row-level assertions (never for mutations in these tests).
+    ///
+    /// Built at the first shipped V2 schema (`HistorySchemaV2`, M1.2) since
+    /// `SwiftDataHistory.open` constructs V2 stores through the M1 migration
+    /// plan (`V2-roadmap` §5 step 2) and `HistoryAuthority.performStartup`
+    /// bootstraps the retention-expansion config singleton (step 5, M1.3) —
+    /// a v1-schema container carries no `RetentionExpansionConfigRow`
+    /// entity. No migration plan is passed: an assertion container never
+    /// writes, and every store it opens here is created at V2 (freshly by
+    /// itself, or by `SwiftDataHistory.open`), so no stage could run.
     static func makeContainer(storeURL: URL) throws -> ModelContainer {
-        try ModelContainer(
-            for: v1Schema,
-            configurations: ModelConfiguration(schema: v1Schema, url: storeURL)
+        let schema = Schema(versionedSchema: HistorySchemaV2.self)
+        return try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, url: storeURL)]
         )
     }
 
@@ -108,5 +118,45 @@ enum WSSupport {
         let rows = try context.fetch(FetchDescriptor<LastChangePositionRow>())
         precondition(rows.count == 1, "position singleton must exist exactly once, got \(rows.count)")
         return rows[0]
+    }
+
+    /// Seeds the retention-expansion config singleton's policy lanes for the
+    /// R.4 capture-composition fixtures: the row is written through an
+    /// INDEPENDENT container over the same store — behind the Authority's
+    /// back, the same stance the R.3 corruption fixtures take — so a fixture
+    /// enables policies WITHOUT the `.setRetentionPolicies` sweep commit the
+    /// production path would run (which would advance `ChangePosition` and
+    /// potentially retire/prune fixture state). The capture lane re-reads
+    /// and re-validates the singleton inside every capture interval
+    /// (`RetentionConfigLoading.loadCaptureLanePolicies`), so the next
+    /// capture enforces exactly these policies. The row must already exist
+    /// (`SwiftDataHistory.open` bootstraps it all-disabled); a `nil` lane
+    /// maps to the disabled shape with its dormant value zeroed, the exact
+    /// normalization the `.setRetentionPolicies` stamping persists
+    /// (`V2-02` §5.6).
+    static func seedRetentionConfig(
+        storeURL: URL,
+        age: AgeRetention? = nil,
+        storage: StorageRetention? = nil,
+        revisions: RevisionRetention? = nil
+    ) throws {
+        let container = try makeContainer(storeURL: storeURL)
+        let context = ModelContext(container)
+        let rows = try context.fetch(FetchDescriptor<RetentionExpansionConfigRow>())
+        precondition(
+            rows.count == 1,
+            "config singleton must exist exactly once, got \(rows.count)"
+        )
+        // A `@Model` is bound to the context that fetched it — mutate and
+        // save through the SAME context (the R.3 fixture discipline).
+        let row = rows[0]
+        row.agePolicyEnabled = age != nil
+        row.ageMaxSeconds = age?.maxAge ?? 0
+        row.storagePolicyEnabled = storage != nil
+        row.storageMaxBytes = storage?.maxTotalBytes ?? 0
+        row.revisionPolicyEnabled = revisions != nil
+        row.revisionMaxCount = revisions?.maxRevisionsPerItem
+        row.revisionMaxBytes = revisions?.maxRevisionBytesPerItem
+        try context.save()
     }
 }

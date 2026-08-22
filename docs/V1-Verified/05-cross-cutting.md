@@ -4,10 +4,12 @@
 > **Aggregate counts (final):** **222 findings — 3 critical, 14 major, 112 minor, 93 nit**. `07-finding-dispositions.md` is the canonical completeness/status ledger.
 > **Headline:** the architecture is sound and the code is unusually disciplined, but **three critical findings** (a process crash, a password-content leak, and a structurally invalid red performance-acceptance proof), **one systemic testability gap** (pure safety-critical algorithms are `private`, so the facade-only WS suite missed both product criticals), and **a small set of root causes** (a `§16 CapacityKind` gap, comment-overclaims treated as contracts, syntactic-proxy safety stories, per-`Character` `String` allocations) account for the majority of the severity.
 >
-> **Current remediation status (2026-08-11):** all supported-proof-dependent
-> findings are fixed by public-symbol workflow 31448087991 and code-head run
-> 31449682036. The canonical ledger has 110 fixed rows and no active or pending
-> rows; explicit deferred/duplicate/documented/not-a-defect decisions remain.
+> **Historical remediation closure (2026-08-11):** all then-active
+> supported-proof-dependent findings were fixed by public-symbol workflow
+> 31448087991 and code-head run 31449682036. A later complexity pass reopened
+> the performance-evidence lane; the canonical ledger now has 111 fixed,
+> 29 deferred, 2 in-progress, and no pending rows. Source-inclusive thumbnail
+> hydration is fixed by supported run 31494740863.
 > Present-tense defect and test-gap descriptions below describe the audited
 > `8f316c9` baseline, not the remediated tree.
 
@@ -94,6 +96,15 @@ The dominant theme: **work proportional to the whole retained set (N≤5000) or 
 - **Strength:** three layered gates — `import_gate.py` (per-target import confinement), `escape_hatch_scan.py` (`@unchecked Sendable`/`nonisolated(unsafe)`/service-locator ban), `public_symbol_snapshot.sh` (HistoryCore public-surface drift). All have fixture self-tests; CI self-scans logs and fails on any `warning:`/`error:` line. Strict and well-maintained.
 - **Gap (minor): the gates are line-based regex, not AST-based** — explicitly acknowledged in-script ("occurrences inside comments or string literals are also flagged / would also be seen"). A banned import/construct placed inside a comment or via formatting tricks could evade. Mitigated by `AGENTS §9` ("do not work around a gate by reformatting code to evade a regex") + CI, but it's convention-backed, not structural. A SwiftSyntax-based gate would close it.
 - **Gap: the perf runner cannot close the spec's own evidence gates** (`03b`, `03c`, `02`) — G2 (collection cache) and G5 (startup scan) need p95 at the bounds (5000 rows, 256 KiB body, on-disk external storage, durable fsync), but the runner uses in-memory stores, ≤400-1000 items, ~20-byte payloads, and skips per-commit fsync. So every "minor, deferred behind measured evidence" perf finding is currently **unfalsifiable**. **Extending the runner (on-disk, ≥1000-item, ≥64 KiB-body, p95 + RSS + fsync) is a force-multiplier for the whole review** and would resolve the three unverified platform assumptions (`propertiesToFetch` faulting, `ModelContext.transaction` durability mechanism, nil-coalescing optional-Int `#Predicate` translatability) that gate ~12-18 severity ratings (`03b`).
+
+  **Post-closure remediation:** a dispatch-only 5,000 × 256 KiB persistent
+  lane is now in pre-proof. It samples the tie fallback per public browse page,
+  records worst-bound exact-search process RSS, and uses independent processes
+  for warm-open tails. It deliberately does not claim fsync/crash durability,
+  SwiftData no-fault behavior, an approved-minimum-hardware G5 result, or
+  representative concurrent-call G8 residency/copy cost; those parts of the
+  historical gap remain falsifiable only after their exact workloads are
+  approved and measured.
 
 ## 8. Spec conformance / documentation drift
 

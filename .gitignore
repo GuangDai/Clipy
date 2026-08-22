@@ -3,3 +3,5 @@ DerivedData/
 *.xcodeproj
 perf-fixtures/
 .tmp/
+__pycache__/
+*.pyc

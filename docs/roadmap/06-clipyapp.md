@@ -1,6 +1,11 @@
 # Module 6 — ClipyApp
 
-- **Status:** not-started
+- **Status:** done (step 9b; landed in `c037a71` and recorded by `4c39499`,
+  revised by the post-step-9 commits `a028c8c`..`cc59aa8` — the panel is now
+  a Maccy-style AppDelegate-owned floating `NSPanel` with a Carbon ⇧⌘C
+  summon instead of a SwiftUI `MenuBarExtra` — CI-green at run
+  [32319164667](https://github.com/GuangDai/Clipy/actions/runs/32319164667);
+  see `../PROGRESS.md` step 9)
 - **Spec references:** composition-root ownership `../01-architecture.md` §2 row + §5.6 (paste orchestration) + §8 (forbidden service-locator/second-writer) + §9 item 6 (XcodeGen app-target gate) + §4 (scripted-preview adapter); paste coherence `../04-coherence.md` §8; caller example `../03b-instruction-set.md` §12; adapter open `../05-authority-kernel.md` §2.
 - **Dependencies:** `HistoryCore`, `HistoryStorage` (`SwiftDataHistory`), `PasteboardAdapter`, `PresentationUI`. It is the **sole composition root** and the only place that coordinates History with outbound pasteboard writes.
 - **Test target:** `ClipyIntegrationTests`.

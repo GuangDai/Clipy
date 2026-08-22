@@ -1,18 +1,17 @@
 /// Thumbnail single-flight service + its owned decode worker
 /// (docs/04-coherence.md §9; docs/05-authority-kernel.md §14.5).
 ///
-/// The `SwiftDataHistory` facade's `thumbnail(for:pixels:)` pipeline
-/// (SwiftDataHistory.swift): the `HistoryAuthority.thumbnailSource` method
-/// validates the dimensions, fetches exactly one item, verifies the requested
-/// Content Version equals the durable one, derives Effective Content, selects
-/// the supported image representation, and returns immutable source image
-/// bytes (answering `nil` itself when no supported representation exists) —
-/// all inside one non-suspending Authority interval (§9 steps 1–4). This
-/// service then owns §9 steps 5–7: join/create the single-flight for the exact
-/// `(ID, ContentVersion, dimensions)` key, decode/downsample off the Authority,
-/// enforce output bounds, encode PNG, and return a payload carrying the same
-/// key values; the flight entry is removed on success, failure, or
-/// cancellation, and completed bytes are NOT retained by HistoryStorage.
+/// The `SwiftDataHistory` facade's `thumbnail(for:pixels:)` pipeline enters
+/// this service before source hydration. The service atomically joins or
+/// installs one exact-key source-to-decode task. The creator task asks
+/// `HistoryAuthority.thumbnailSource` to validate dimensions, fetch and fully
+/// hydrate exactly one item, verify its Content Version, derive Effective
+/// Content, and select immutable source bytes in one non-suspending Authority
+/// interval. It then decodes/downsamples off the Authority, enforces output
+/// bounds, and encodes PNG. An existing-flight caller first asks the Authority
+/// for a scalar dimension/existence/version fence, then awaits that same task.
+/// The flight entry is removed when its task completes, and completed bytes
+/// are NOT retained by HistoryStorage.
 ///
 /// The version fence (WS15, docs/06-cross-cutting.md §8): ImageIO decode
 /// occurs only after all SwiftData objects and context have been released —
@@ -22,7 +21,8 @@
 /// the result remains tagged with the old reference (the payload's `item` IS
 /// the request's reference); the caller applies it only if its row still
 /// carries that reference. A request whose reference was already stale before
-/// `thumbnailSource` fails there with `.staleContent`; current bytes are never
+/// the creator's complete source fence, or before an existing-flight caller's
+/// scalar join fence, fails with `.staleContent`; current bytes are never
 /// returned under an old key (§9).
 ///
 /// Only immutable `Sendable` values cross actor boundaries: `Data` in,
@@ -53,14 +53,14 @@ internal struct ThumbnailFlightKey: Sendable, Hashable {
 ///
 /// Test seam, compiled in always and harmless in production: the handler is
 /// `nil` unless a test installs one via @testable, so the point is a no-op
-/// outside the harness (no `#if DEBUG`). The point is placed where an
-/// `await` is legal — after the Authority's version fence returned immutable
-/// source bytes, before the flight is joined/created.
+/// outside the harness (no `#if DEBUG`). The point is placed where an `await`
+/// is legal — after the creator's Authority version fence returned immutable
+/// source bytes and after the flight was installed, but before ImageIO decode.
 internal enum ThumbnailServiceSuspensionPoint: String, Sendable {
-    /// On `thumbnail` entry, before the flight is joined/created — the WS15
-    /// fence-to-decode window: a revision committing here changes the item
-    /// "during decode", and the result must stay tagged with the verified old
-    /// reference (docs/04-coherence.md §9).
+    /// At decode entry, after the source-inclusive flight is installed — the
+    /// WS15 fence-to-decode window: a revision committing here changes the
+    /// item "during decode", and the result must stay tagged with the verified
+    /// old reference (docs/04-coherence.md §9).
     case decodeEntry = "ThumbnailService.thumbnail.entry"
 }
 
@@ -69,20 +69,23 @@ internal enum ThumbnailServiceSuspensionPoint: String, Sendable {
 /// Owns the thumbnail flight table and its decode worker
 /// (docs/05-authority-kernel.md §14.5; docs/04-coherence.md §9).
 ///
-/// Single-flight, not a completed-result cache: an existing in-flight `Task`
-/// for the exact key is shared — the second caller awaits the same `Task` —
-/// and on completion (success, failure, OR cancellation) the entry is removed.
-/// Completed bytes are NOT retained (§9 step 7; the G1 completed-thumbnail
-/// cache is deferred, docs/06-cross-cutting.md §3).
+/// Single-flight, not a completed-result cache: an existing in-flight
+/// source-to-decode `Task` for the exact key is shared, and on completion
+/// (success, failure, OR cancellation) the entry is removed. Completed bytes
+/// are NOT retained (§9 step 7; the G1 completed-thumbnail cache is deferred,
+/// docs/06-cross-cutting.md §3).
 ///
 /// The actor holds the flight dictionary and the owned `ThumbnailWorker`; the
 /// worker owns no state, so every decode is independent and only immutable
 /// `Sendable` values cross the actor boundary (§14.5; Part VI §6).
 package actor ThumbnailService {
 
-    /// One in-flight decode per exact key; the value is shared so concurrent
-    /// callers for the same key await the same `Task` (§9 step 5).
-    private var flights: [ThumbnailFlightKey: Task<ThumbnailPayload, Error>] = [:]
+    /// One source-to-decode task per exact key. Source hydration lives inside
+    /// the shared task, so concurrent callers retain one bounded source value
+    /// rather than one value per caller.
+    private var flights: [
+        ThumbnailFlightKey: Task<ThumbnailPayload?, Error>
+    ] = [:]
 
     /// The owned off-Authority decode worker (§9 step 6; §14.5).
     private let worker = ThumbnailWorker()
@@ -107,57 +110,51 @@ package actor ThumbnailService {
         suspensionHandler = handler
     }
 
-    /// Suspends at `point` when the harness has installed a handler; a no-op
-    /// otherwise and always in production.
-    private func suspendIfRequested(_ point: ThumbnailServiceSuspensionPoint) async {
-        await suspensionHandler?(point)
-    }
-
-    /// Joins or creates the single-flight for the exact key, then decodes
-    /// `sourceBytes` into an encoded PNG thumbnail (§9 steps 5–7).
+    /// Joins or creates the source-inclusive single-flight for one exact key.
+    /// The creator installs the task before the first suspension; that task
+    /// performs the complete Authority source load and off-Authority decode.
+    /// A caller finding an existing task first runs its own lightweight
+    /// dimension/existence/version fence, then awaits the shared result. This
+    /// preserves the rule that a request already stale when it joins cannot
+    /// receive old bytes, without re-materializing the content blob.
     ///
-    /// The facade already validated dimensions, verified the Content Version,
-    /// and returned immutable source bytes inside one Authority interval
-    /// (§9 steps 1–4); this method owns the off-Authority decode. The returned
-    /// payload carries the SAME key values it was requested with — the
-    /// payload's `item` IS the request's reference — so a decode that completes
-    /// after the item changed is still correctly tagged with the verified old
-    /// reference (§9; WS15).
-    ///
-    /// - Parameters:
-    ///   - sourceBytes: Immutable source image bytes derived from the item's
-    ///     Effective Content by the Authority (§9 step 3); never a SwiftData
-    ///     object.
-    ///   - item: The reference the decode result is tagged with.
-    ///   - pixels: The requested thumbnail extent.
-    /// - Returns: A PNG-encoded `ThumbnailPayload` tagged with `item`.
-    /// - Throws: `HistoryFailure.persistence(.corruptStoredValue)` when the
-    ///   source bytes are not a decodable image (§16: decode failure →
-    ///   corrupt stored value); `.capacityExceeded(.thumbnailBytes)` when a
-    ///   valid encoded PNG exceeds `maximumEncodedThumbnailBytes`; or
-    ///   `.persistence(.invariantViolation)` when PNG encoding itself fails.
-    package func thumbnail(
-        _ sourceBytes: Data,
+    /// `loadSource` and `validateJoin` are production dependency operations
+    /// supplied by `SwiftDataHistory`, not a second storage implementation.
+    /// The former returns only immutable `Data`, and the latter returns no
+    /// model value; focused tests substitute these operations at this seam.
+    internal func thumbnail(
         for item: HistoryItemReference,
-        pixels: PixelSize
-    ) async throws -> ThumbnailPayload {
-        // Roadmap-owned WS15 test seam: the legal suspension point of this
-        // path — source bytes verified, flight not yet joined/created, so a
-        // revision can commit in the fence-to-decode window (§9).
-        await suspendIfRequested(.decodeEntry)
-
+        pixels: PixelSize,
+        loadSource: @escaping @Sendable () async throws -> Data?,
+        validateJoin: @Sendable () async throws -> Void
+    ) async throws -> ThumbnailPayload? {
         let key = ThumbnailFlightKey(item: item, pixels: pixels)
 
-        // §9 step 5: join an existing in-flight decode for the exact key, or
-        // create a new one. The second caller awaits the same Task.
+        // Existing-key callers cross their own scalar version fence before
+        // sharing the creator's source/decode result. A failed join never
+        // cancels or removes the creator-owned flight.
         if let existing = flights[key] {
+            try await validateJoin()
             return try await existing.value
         }
 
-        // Create the flight. The Task hops onto the worker actor for the
-        // off-Authority ImageIO decode (§14.5); only immutable values cross.
-        let task = Task<ThumbnailPayload, Error> {
-            try await self.worker.decodeThumbnail(
+        // Snapshot actor-owned immutable dependencies, then install the task
+        // without suspension. Its source phase runs the Authority's complete
+        // non-suspending fence/derivation; no source Data exists outside this
+        // one shared task.
+        let worker = worker
+        let handler = suspensionHandler
+        let task = Task<ThumbnailPayload?, Error> {
+            guard let sourceBytes = try await loadSource() else {
+                return nil
+            }
+
+            // WS15 parks after the source/version fence and before ImageIO.
+            // The flight is already visible, so a concurrent stale caller
+            // takes the validated join path instead of creating another load.
+            await handler?(.decodeEntry)
+
+            return try await worker.decodeThumbnail(
                 sourceBytes: sourceBytes,
                 item: item,
                 pixels: pixels
@@ -172,6 +169,27 @@ package actor ThumbnailService {
             flights.removeValue(forKey: key)
         }
         return try await task.value
+    }
+
+    /// Package-only direct-source convenience used by the Part VI §9 runner
+    /// to isolate decode sharing. Production facade calls use the
+    /// source-inclusive overload above. A non-optional source cannot produce
+    /// the overload's `nil` result.
+    package func thumbnail(
+        _ sourceBytes: Data,
+        for item: HistoryItemReference,
+        pixels: PixelSize
+    ) async throws -> ThumbnailPayload {
+        let payload = try await thumbnail(
+            for: item,
+            pixels: pixels,
+            loadSource: { sourceBytes },
+            validateJoin: {}
+        )
+        guard let payload else {
+            throw HistoryFailure.persistence(.invariantViolation)
+        }
+        return payload
     }
 }
 
@@ -260,9 +278,20 @@ internal actor ThumbnailWorker {
             kCGImageSourceCreateThumbnailWithTransform: kCFBooleanTrue!
         ] as CFDictionary
 
+        // Primary-image index (audit
+        // docs/reviews/2026-08-20-clipy-maccy-audit/03-apple-platform.md
+        // §7 APL-C-06): a HEIF/HEIC container may carry auxiliary images
+        // and designate a primary image other than index 0, so forcing 0
+        // can decode the wrong image. CGImageSourceGetPrimaryImageIndex
+        // honors the container's designation and returns 0 for non-HEIF
+        // sources, so GIF/TIFF decoding stays first-frame — a deliberate
+        // product simplification (the audit's "GIF/TIFF first-frame may
+        // be deliberate"), not an oversight.
+        let imageIndex = CGImageSourceGetPrimaryImageIndex(source)
+
         guard let cgImage = CGImageSourceCreateThumbnailAtIndex(
             source,
-            0,
+            imageIndex,
             thumbnailOptions
         ) else {
             // The source was recognized but the thumbnail could not be created

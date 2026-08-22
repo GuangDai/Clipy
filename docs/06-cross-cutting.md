@@ -115,16 +115,19 @@ Test targets mirror the owner target:
 HistoryCoreTests
 HistoryDomainTests
 HistoryStorageTests
-HistoryPerfRunnerTests
+HistoryPerfTests
 PasteboardAdapterTests
 PresentationUITests
 ClipyIntegrationTests
 ```
 
 The scaffold must not add an implementation target for a deferred feature.
-`HistoryPerfRunnerTests` imports the executable target only to prove its pure
+`HistoryPerfTests` imports the executable target only to prove its pure
 §9 helpers and declarative coverage/envelope tables; workload acceptance still
-runs the release executable itself. `HistoryStorageTests` uses both persistent
+runs the release executable itself. It runs in its own CI lane
+(`swift test --filter 'HistoryPerfTests\.'`): the default `swift test` lane
+skips it (`--skip 'HistoryPerfTests\.'`) so the standard targets carry
+functional tests only. `HistoryStorageTests` uses both persistent
 temporary stores and the same implementation's in-memory configuration.
 
 Recommended implementation order:
@@ -264,8 +267,10 @@ Correctness gates run first. Performance claims are accepted only from a release
   rows within the 5,000-item hard bound. The timed public
   `SwiftDataHistory.open` construct includes `ModelContainer`/SQLite open,
   singleton and startup validation, scalar-metadata reads, and Signature Index
-  rebuild; it is not an isolated index-rebuild timer, cold-start proof,
-  deterministic-teardown proof, or G5 absolute-latency fixture.
+  rebuild. Population, warmup, and each of the five samples run in fresh child
+  processes; a child clocks only the public open, excluding process launch and
+  teardown. This is not an isolated index-rebuild timer, cold-start proof,
+  external-storage teardown proof, or G5 absolute-latency fixture.
 - Pin reorder is O(pinned count), bounded by retained count.
 - User retention and clear are O(retained scalar metadata), bounded by retained count.
 - Recent browse normally materializes at most `limit + 1` scalar rows across
@@ -274,11 +279,10 @@ Correctness gates run first. Performance claims are accepted only from a release
   the latter receives its anchor through the inclusive date bound.
   Ambiguous UUID ties use the Part V §14.1 correctness fallback, bounded by the
   5,000-item hard limit. WS18 proves that path's complete, non-overlapping
-  traversal. Supported 5,000-row tie-heavy incidence/cost measurement is
-  explicitly deferred under V1-Verified
-  `unpinned-exactness-guard-full-lane-refetch`; the current normal-case runner
-  envelope neither includes nor proves the fallback cost and must not be cited
-  to close that deferred item.
+  traversal. A separate manual admission workload uses 5,000 same-timestamp
+  rows, validates one complete traversal, and records 101 individual public
+  page calls so its p95 unit matches G2's browse-page budget. The normal-case
+  per-PR runner envelope still neither includes nor proves fallback cost.
 - v1 exact, fuzzy, and regexp search may each scan all bounded scalar search
   projections; no cache is added without G2 evidence. At each 100/400-row
   measurement point the release runner reuses one populated corpus for all
@@ -291,7 +295,86 @@ Correctness gates run first. Performance claims are accepted only from a release
 - Projection retains at most the bounded search-body accumulator rather than a
   full joined corpus; revision summaries project only their bounded title.
 - Detail/paste decode one item's bounded lineage.
-- Thumbnail performs one bounded Authority source fetch and, after that fetch has produced immutable bytes, one shared concurrent decode for an identical key. WS15 and the facade smoke prove the complete source/version-fence path; the release runner prefetches the source once and times `ThumbnailService` steps 5–7 directly. It must not count eight intentionally actor-serialized Authority fetches as part of the single-flight decode ratio.
+- Thumbnail installs one exact-key source-to-decode task, so concurrent identical callers perform one bounded full Authority source fetch and one shared decode; joiners perform scalar dimension/existence/version fences and cannot receive stale bytes. Source-inclusive service tests cover shared success, `nil`, failure, and removal; WS15 proves version semantics and that a failed stale join does not cancel the creator. The release runner's direct-source convenience still prefetches once to isolate decode-sharing timing; it is not an RSS/copy measurement.
+
+The manual performance-admission lane is dispatch-only and never runs on a
+push or pull request. It waits for source gates and SwiftPM correctness tests,
+then runs a fixed 1,000 × 256 KiB preparation smoke before preparing one
+persistent 5,000-row corpus with the same per-row bound. The smoke crosses the
+750-to-1,000-row interval in which supported diagnostic run 31498144173 began
+emitting missing `.externalStorage` interim-file errors; a
+five-minute timeout is a liveness guard, not a product latency budget. Both
+preparations fail on any such CoreData diagnostic.
+
+Preparation uses a package-only, Authority-owned bounded seeder rather than
+replaying 5,000 public captures. Raw values still traverse the production
+ingest preparation, fingerprint, projection, and codecs. The Authority commits
+at most 64 new rows per transaction through the real encoded-row mapping,
+create mutations, Signature Index delta, invalidation, and position tail. An
+empty-store proof, batch-local ID set, expected position, and complete ready
+index replace per-batch full counts and per-row ID queries on this trusted
+disposable-fixture path; ordinary capture retains both checks. Thus setup performs 79
+seed transactions for 4,999 rows instead of 5,000 transactions plus a complete
+retained-inventory load per row; transient setup space is bounded by one batch.
+It then performs two ordinary public captures: row zero must coalesce (forcing
+startup reconstruction plus seeded-index candidate hydration of external
+Canonical bytes), and the final distinct row must insert, leaving exactly
+5,000 rows. Seeding and public validation are separate executable invocations:
+the seed process writes a primitive handoff fixture and exits before the
+validation process reopens the store. Process termination is the deterministic
+boundary proving that separate live CoreData coordinators do not overlap; it
+does not claim an undocumented external-storage finalization barrier. Within
+validation, startup, each public capture commit, and recent browse drain an
+operation-local autorelease pool before the next operation can create another
+context, so fetched `@Model` backing references cannot accumulate across those
+serialized intervals. `ModelContext.transaction` remains the sole commit
+primitive. `ChangePosition` advances once per physical non-empty batch or
+public commit; readers capture its authoritative value and require it to
+remain stable instead of equating it with row count.
+
+The versioned fixtures record setup phase wall times/transaction counts,
+machine/toolchain metadata, all 101 raw measurement samples, and nearest-rank
+p50/p95/p99; macOS `/usr/bin/time -l` records process peak RSS. Corpus
+preparation records the sum of the seed- and validation-process phase
+durations, excluding their process-launch gap, and is never labeled as a
+percentile. Separate `/usr/bin/time -l` records preserve each setup process's
+peak RSS.
+
+That lane has three deliberately different evidence units:
+
+- tie-heavy recent browse records one public page call per sample after an
+  untimed complete/unique traversal;
+- absent-term exact search records a worst-bound 5,000 × 256 KiB process
+  high-water ceiling, not representative transient-hydration, concurrent DTO,
+  or copy-cost G8 evidence; and
+- warm persistent open records 101 timed opens in independent child processes
+  after one independently terminated validation/warmup process. OS caches stay
+  warm, and the recorded GitHub host is not yet an approved minimum-hardware
+  profile, so this fixture cannot alone admit G5.
+
+Before the canonical absent-term exact-search measurement, the same manual job
+preparation emits immediate open/coalesce/insert/recent begin/completion
+checkpoints. If preparation completed but the clean-log gate caught a
+non-throwing framework diagnostic, the same manual job still runs one
+explicitly Debug-only diagnostic request over that corpus, then uploads its
+artifacts while skipping every long canonical measurement.
+`CLIPY_SEARCH_TRACE=1` enables privacy-safe search checkpoints for
+context/position access, corpus fetch, projection validation, sorting, exact
+title/body scanning, and page materialization; `CLIPY_STORAGE_TRACE=1` adds
+startup/context-lifecycle timings and aggregate row counts. Progress is
+reported every 250 rows without recording the query, clipboard text, item IDs,
+source applications, or store path. Its fixture is labeled
+`debug-diagnostic`, contains no sample array or percentiles, and is never G2,
+G5, or G8 evidence. Failure or timeout skips the 90-minute canonical exact
+step and the later warm-open step, so the job preserves the partial trace and
+fails promptly. A successful probe after clean preparation proceeds directly
+to the unchanged Release measurement with 101 independent public calls.
+
+The manual job is record-only until an authoritative workload, hardware
+profile, and budget are approved. Completion is gated; observed latency or RSS
+does not pass or fail a graft by itself. These artifacts also do not prove
+crash-to-stable-storage/fsync behavior, SwiftData external-storage no-fault
+behavior, cold launch, or complete G8 concurrent-call residency.
 
 The runner owns a declarative workload-to-bullet map covering every bullet
 `1...9`. Each run fails if a named workload is missing, duplicated, unknown, or

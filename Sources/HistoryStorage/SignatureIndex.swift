@@ -230,19 +230,46 @@ internal struct SignatureIndex: Sendable, Equatable {
     /// docs/02-domain.md §2.3) and treated as unprovable rather than a
     /// vacuously complete candidate set. A missing posting
     /// set intersects as empty — no retained item can byte-confirm an entry
-    /// it does not post. Completeness, not correctness of any single match,
-    /// is what this proves: every returned ID still requires full content
-    /// confirmation (docs/02-domain.md §9.2) and the §7.1 step-6 agreement
-    /// check against retained IDs.
+    /// it does not post. The smallest posting is copied first, then intersected
+    /// with every other posting. Input order therefore cannot make the scratch
+    /// set larger than the narrowest posting (`O(min posting)` space instead of
+    /// `O(first posting)`); the complete intersection is unchanged. Completeness,
+    /// not correctness of any single match, is what this proves: every returned
+    /// ID still requires full content confirmation (docs/02-domain.md §9.2) and
+    /// the §7.1 step-6 agreement check against retained IDs.
     internal func candidateIDs(
         matching entries: [ContentSignatureEntry]
     ) -> Set<HistoryItemID>? {
         guard case .ready = state else { return nil }
-        guard let first = entries.first else { return nil }
-        var candidates = postings[first] ?? []
-        for entry in entries.dropFirst() {
+        guard !entries.isEmpty else { return nil }
+
+        // A missing posting proves the whole intersection empty without
+        // allocating a candidate set. Otherwise select the narrowest posting
+        // in one bounded representation pass (A <= 32, Part VI §2). Copy-on-
+        // write then materializes at most that posting when the first
+        // intersection mutates it.
+        var smallestIndex = entries.startIndex
+        var smallestPosting: Set<HistoryItemID>?
+        for index in entries.indices {
+            guard let posting = postings[entries[index]] else { return [] }
+            guard let currentSmallest = smallestPosting else {
+                smallestIndex = index
+                smallestPosting = posting
+                continue
+            }
+            if posting.count < currentSmallest.count {
+                smallestIndex = index
+                smallestPosting = posting
+            }
+        }
+        guard var candidates = smallestPosting else { return [] }
+
+        for index in entries.indices where index != smallestIndex {
             guard !candidates.isEmpty else { break }
-            candidates.formIntersection(postings[entry] ?? [])
+            // Every posting was proved present in the selection pass above.
+            // The defensive fallback remains an empty intersection if the
+            // implementation ever drifts despite value isolation.
+            candidates.formIntersection(postings[entries[index]] ?? [])
         }
         return candidates
     }

@@ -23,6 +23,10 @@ targets:
       - Sources
     settings:
       PRODUCT_NAME: Clipy
+      # Deterministic Swift module name for `@testable import ClipyApp` from
+      # the hosted integration tests — without it the module name derives
+      # from PRODUCT_NAME (Clipy), not the target name.
+      PRODUCT_MODULE_NAME: ClipyApp
       INFOPLIST_KEY_LSUIElement: YES
     dependencies:
       - package: Clipy
@@ -45,6 +49,17 @@ targets:
       TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Clipy.app/Contents/MacOS/Clipy"
     dependencies:
       - target: ClipyApp
+      # Package products the composed suites import directly (real
+      # SwiftDataHistory + PasteboardAdapter + PresentationUI); ClipyApp
+      # itself already links all four (docs/roadmap/06-clipyapp.md step 9c).
+      - package: Clipy
+        product: HistoryCore
+      - package: Clipy
+        product: HistoryStorage
+      - package: Clipy
+        product: PasteboardAdapter
+      - package: Clipy
+        product: PresentationUI
 schemes:
   ClipyApp:
     build:

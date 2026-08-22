@@ -99,4 +99,26 @@ public protocol ClipboardHistory: Sendable {
         for item: HistoryItemReference,
         pixels: PixelSize
     ) async throws -> ThumbnailPayload?
+
+    /// The authoritative configured retention state: the v1 maximum-unpinned
+    /// count plus the V2-02 age/storage/revision dimensions, exactly as
+    /// persisted.
+    ///
+    /// This is the settings surface's panel-open read (docs/v2/V2-07-ux.md
+    /// §6.3 — a one-shot read per §4.2.2): it returns the CONFIGURED policy,
+    /// never a live current-retained-bytes usage value, which the public
+    /// surface deliberately does not expose (V2-07 §2.2 OPEN-2; `V2-02`
+    /// §8.1). It reads the same durable singletons the mutation paths write
+    /// (docs/05-authority-kernel.md §3.2; `V2-02` §3.3), so the value read
+    /// here is the value a later `.setRetentionPolicy` /
+    /// `.setRetentionPolicies` compares against, and the §11 read-after-
+    /// commit guarantee applies unchanged. Extension-by-addition to the read
+    /// surface — the same posture as the `V2-00` §8(h) enum-case additions;
+    /// no existing method or v1 caller is affected. Failures are typed
+    /// `HistoryFailure`s exactly as the other reads (a corrupted singleton
+    /// fails closed as `.persistence(...)`, never as a default value).
+    ///
+    /// docs/v2/V2-07-ux.md §5.2; audit: docs/reviews/
+    /// 2026-08-20-clipy-maccy-audit/02-spec-implementation.md SPEC-IMPL-003.
+    func retentionConfiguration() async throws -> HistoryRetentionConfiguration
 }

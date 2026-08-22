@@ -38,6 +38,8 @@ Verdict: `CONFIRMED` (real defect, fix) · `REFUTED` (looks wrong, is correct) �
 | IND-03 | major | 03 §8, 06 §2, 01 §4 | Fuse `maxPatternLength` default 32 vs 256-char fuzzy bound → long queries silently nil | CONFIRMED | fixed |
 | IND-04 | minor | 03 §8, 01 §4 | Fuse `location`/`distance` (relevance-affecting) undiscussed | CONFIRMED | fixed |
 | IND-05 | nit | 01 §4 | "Fuse 1.4.x" version unverified; dep not named precisely; Sendable-by-confinement implicit | REFUTED | fixed (repo named `krisk/fuse-swift`, 1.4.0 confirmed latest stable; non-Sendable confinement documented in Module 7) |
+| IND-06 | minor | 06 §9 | 90-minute exact admission emitted no phase/sample progress; Debug-only source trace was not distinguished from canonical Release evidence | CONFIRMED | fixed |
+| IND-07 | major | 03b §8; 04 §7/§12; 05 §14.2; 06 §3/§9 | Exact search invokes a general Unicode substring operation for each title/body after materializing up to 5,000 × 256 KiB bodies; the existing G2 result-cache graft does not define a conservative candidate-index seam | CONFIRMED | in-progress |
 | WF-* | — | — | Historical workflow register; findings were merged into §4 and the design change log. | merged | historical |
 
 ### Design-correct confirmations (REFUTED-as-fine, kept for provenance)
@@ -80,6 +82,7 @@ Pass 1 (2026-07-19) — all 15 MAJORS + ~20 minors/nits; re-audit follows.
 | S1-05/S1-30/S1-31 | 06 | added WS16 (remove+notFound/placement), WS17 (search+ranges+failures), WS18 (pagination+snapshotExpired), WS19 (out-of-order monotonicity), WS20 (concurrent revision+coalesce) |
 | S1-15 | 00 §1, 06 §10 | `docs/greenfield/`→`docs/` |
 | S1-16 | 00 §5, 01 §5.5, 04 §4 | CONTEXT.md references → inline (no external-file dependency) |
+| IND-06 | 06 §9 | added one-request Debug diagnostic trace, privacy boundary, fail-fast relationship to the unchanged 101-call Release evidence, and explicit non-evidence status |
 
 Outstanding after Pass 1 → addressed in Pass 2 (same date):
 
@@ -183,14 +186,192 @@ V1V-03B-004 remains deliberately deferred under its recorded G2 trigger.
 | V1V-03C-009 | 05 §7.1/§14; fact loaders; WS5 | **Completed 2026-08-11:** public-symbol workflow 31448087991 and supported code-head run 31449682036 are green. **Pre-proof implementation record:** Capture now derives retained-ID coverage and retention facts from one duplicate-checked scalar inventory on the healthy path; explicit proof-purpose mapping preserves ordinary durable-state failure versus capture's `.dedupIndexRebuild`. New over-bound, D12 gap/duplicate, and stale-ready regressions await macOS SwiftData proof. |
 | V1V-03D-003 | 05 §6.1; ingest preparation tests | **Completed 2026-08-11:** public-symbol workflow 31448087991 and supported code-head run 31449682036 are green. **Pre-proof implementation record:** Direct admission, normalization, privacy, marker, and timestamp tests cover the preparation branch matrix, including no-fingerprint/no-commit proof for concealed captures. macOS actor/facade proof remains. |
 | V1V-04-005 | 06 §9; `HistoryPerfRunner`; helper tests | **Completed 2026-08-11:** public-symbol workflow 31448087991 and supported code-head run 31449682036 are green. **Pre-proof implementation record:** Every gated fixture consumes one declarative scales/growth/bound/headroom table; preflight derives theoretical ratios, enforces finite bounds and the 1.5× floor, and allows only WL1a's named 1.2× exception. Extracted production CRC-32/xorshift32 helpers have independent KATs; macOS executable import/tests and release perf remain. |
-| V1V-03B-004 | 06 §9; V1V disposition ledger | Removed an unimplemented claim that the current runner records unpinned exactness-fallback incidence. WS18 owns correctness; a supported 5,000-row tie-heavy incidence/cost workload remains explicitly deferred to its recorded G2 owner/trigger/residual risk, and the normal-case browse envelope cannot close it. |
+| V1V-03B-004 | 06 §9; V1V disposition ledger | Removed an unimplemented claim that the normal-case runner records unpinned exactness-fallback incidence. WS18 owns correctness. A separate 5,000-row same-timestamp, per-public-page admission workload is now in pre-proof; until supported artifacts exist and its p95 is evaluated against the exact G2 trigger, the canonical optimization remains deferred. The normal-case browse envelope still cannot close it. |
 | V1V-01-002 | 06 §2; `Limits.swift`; HistoryCore tests | **Completed 2026-08-11:** public-symbol workflow 31448087991 and supported code-head run 31449682036 are green. **Pre-proof implementation record:** Run 31449140919 disproved the audit's assumption that inverted `ClosedRange(uncheckedBounds:)` survives on Xcode 26.6. The package initializer now accepts scalar endpoints, rejects invalid ordering, and constructs all three ranges only after validation; the source report records the supported-runtime correction and keeps the finding in progress pending rerun. |
+| V1V-03B-005 | 04 §9; 05 §14.5; 06 §9; `ThumbnailService.swift`; WS15 | **Completed 2026-08-11:** supported run [31494740863](https://github.com/GuangDai/Clipy/actions/runs/31494740863) passed source/lint gates, strict SwiftPM build/tests, app build/test, and all 13 release workloads. **Pre-proof implementation record:** The exact-key flight now owns source hydration through ImageIO decode. Concurrent joiners run scalar dimension/existence/version fences, reducing C overlapping identical requests from C full lineage/source hydrations to one full hydration plus at most C−1 scalar reads. A failed stale join does not cancel the creator. The creator still owns complete fail-closed lineage/projection/codec validation; when an already-corrupt store and a stale reference coexist, the public contract intentionally does not freeze which typed failure wins, but no path returns current bytes under an old key. |
+| V1V-04-006 | 06 §3/§9; `HistoryPerfRunner/Admission.swift`; `macos26-arm-ci.yml` | **Pre-proof implementation record:** Added a dispatch-only persistent 5,000 × 256 KiB admission lane after source and SwiftPM correctness gates. Versioned fixtures separate setup phase duration from 101-sample nearest-rank p50/p95/p99. Tie-heavy latency is sampled per public page, exact-search RSS is labeled a worst-bound process ceiling rather than complete G8 evidence, and warm opens run in independently terminated child processes after a full-corpus validation warmup. Diagnostic run 31498144173 exposed two setup defects: only 1,500/5,000 rows completed and 599 CoreData external-data clone attempts referenced missing `.interim` files. The replacement keeps the Authority as sole writer and changes fixture construction from 5,000 public captures/cumulative O(N²) inventory work to 79 bounded create transactions. Runs 31527425658 and 31597596383 proved that lexical release and then process separation still allowed an intermittent external clone during full validation. The follow-up bounds startup/capture/recent context-backed objects with operation-local autorelease pools, emits fixed prepare-phase and opt-in Debug storage-lifecycle checkpoints, preserves short diagnostics after a clean-log failure while skipping long measurements, and isolates every WL2 population/open in a child process whose sample excludes launch/teardown. A fixed 1,000-row same-size smoke and exact CoreData log rejection remain unchanged. Results remain record-only; approved-minimum-hardware G5, representative concurrent-call G8, fsync/crash, and general external-storage no-fault evidence remain outside its claims. Supported rerun evidence is pending. |
+
+### Deferred exact-search complexity review (2026-08-12)
+
+IND-07 was opened after the manual admission trace reported approximately 125
+seconds for each absent-term exact request. That trace is diagnostic rather
+than canonical G2/G8 evidence, but the source path independently proves the
+structural amplification: one validation, one warmup, and 101 samples can each
+materialize the complete 5,000 × 256 KiB body envelope, or about 125.7 GiB of
+logical body values across the process lifetime.
+
+A throwaway, deterministic candidate-filter prototype was run and removed
+after recording these results:
+
+- the artificial admission corpus is eliminated entirely by a case-folded
+  128-bit ASCII byte-presence proof (0/5,000 candidates; about 80 KiB total
+  row metadata), so that corpus alone must not choose the production shape;
+- 3,201 planted-substring/case differential checks produced zero false
+  negatives under the prototype's ASCII-only coverage rule;
+- a one-hash trigram bitset over a high-entropy 256 KiB row is approximately
+  98.2%, 86.5%, 63.2%, and 39.3% occupied at 8, 16, 32, and 64 KiB per row.
+  Thus 8 KiB is effectively saturated, while 32 KiB is the first tested size
+  near a 65% occupancy target (156.25 MiB for 5,000 rows).
+
+The implementation order under review is deliberately layered:
+
+1. compile one matcher per public request; use linear KMP for the eligible
+   ASCII subset (excluding CRLF-coordinate ambiguity) and preserve Foundation
+   as the complete fallback semantic oracle;
+2. propose a separate G9 conservative exact-candidate-index graft rather than
+   misclassifying it as G2's result/collection cache; Part VI must admit it
+   before implementation;
+3. test a byte-presence front filter plus one-hash trigrams against
+   representative text, source, high-entropy, repeated-prefix, Unicode, and
+   forced-collision corpora before choosing fixed or adaptive storage;
+4. permit exclusion only for complete, current, proven-ASCII coverage. Short,
+   Unicode, missing, stale, corrupt, or unready evidence fails open to full
+   candidate hydration; Foundation decides every fallback comparison, while
+   the eligible-ASCII matcher is differential-tested against that oracle.
+
+The first matcher step establishes a linear ASCII baseline and reusable needle
+preprocessing. Whether it improves Release latency or allocation over
+Foundation remains a measurement question; it does **not** close
+`search-corpus-materializes-full-inline-searchbody`. Avoiding the 1.22 GiB
+per-request hydration requires the separately reviewed, provisionally named G9
+seam.
+
+The dispatch-only matcher screen fixes that decision rule before observing its
+result. It compares equal four-coordinate outputs over a 32 MiB corpus in two
+warmups plus 11 adjacent AB/BA pairs. The primary admission-absent case must be
+at least 20% faster (`paired median <= 0.80`), every representative/adversarial
+case may regress by at most 10%, and each Foundation fallback may regress by at
+most 25%. The 13 cases include early/middle/late hits, source-shaped and
+high-entropy ASCII, short/long absent needles, a repeated-prefix adversary, and
+Unicode/CR fallbacks. Even a complete pass only admits a subsequent one-to-three
+call same-store Release comparison; it cannot establish G2/G8 or candidate-index
+evidence and does not justify the 101-sample lane by itself.
+
+**2026-08-14 matcher step 2 (word-prefilter scan + measurement budget):** the
+eligible-ASCII matcher's scan now follows the scalar shape glibc/musl `memmem`
+and Rust `memchr::memmem` use (verified against their sources plus simdjson and
+Arm NEON movemask literature): one 8-byte SWAR sweep per word answers
+all-ASCII eligibility, no-CR eligibility, and case-folded needle-head presence;
+candidate offsets pay a folded verification that re-checks every needle byte;
+and a 256-failed-verification budget switches adversary-shaped corpora to the
+linear KMP automaton, preserving the O(n + m) worst case. Case comparison
+accepts exactly each letter's two ASCII cases (never a blanket `| 0x20` fold,
+which collides distinct bytes); Foundation remains the complete semantic
+oracle. Eligibility is prefix-scoped: a `.caseInsensitive + .literal` match
+has exactly the needle's length, so proving `[0, s + m)` all-ASCII and CR-free
+suffices for an accelerated result at `s` — an earlier Foundation-visible
+match (including one relying on non-ASCII folds such as U+212A) would lie
+wholly inside that prefix, and both coordinates are prefix-determined. Hit
+rows therefore stop at the match end like Foundation instead of proving the
+whole body; absent rows still prove every byte before the accelerated nil
+verdict. New differential tests lock word-boundary/decoy layouts and
+non-ASCII/CR fallback layouts against that oracle. A NEON
+`SIMD16` port was evaluated against the researched pure-Swift idioms and
+deferred: the published `((a^b) &- 1) &>> 7` equality idiom has false
+positives (e.g. `a^b = 0x81`), so the UInt64 SWAR form ships first and the
+same A/B lane quantifies any later vector port. The exact-search admission
+budget is reduced from 101 to 11 samples (frozen by test; fixture note and
+workflow jq updated): at roughly 125 s per absent-term request, the 101-sample
+budget needed about 3.6 hours against the lane's 90-minute step ceiling, while
+thirteen total requests land near half an hour; at n = 11 the nearest-rank
+p95/p99 both select the sample maximum. Supported admission run
+[31795729218](https://github.com/GuangDai/Clipy/actions/runs/31795729218)
+then completed the whole 5,000-row dispatch lane for the first time: the
+absent-term worst-bound request measured p50 1.59 s / p95 2.39 s over the
+5,000 × 256 KiB corpus (11 samples) against the ~125 s Foundation diagnostic
+trace that opened IND-07 — roughly 79× on p50 — with the exact-search step
+finishing in 24.4 s and 1.59 GiB peak process RSS (worst-bound ceiling,
+record-only; still not G2/G8 evidence, and the per-request 1.22 GiB corpus
+hydration remains until the G9 seam). Follow-ups the same day: a Debug-only
+route-instrumentation suite pins the matcher's compiled/Foundation routing
+(word alignments, prefix-scoped finish mode, adversary switch, randomized
+sweep), the worker probe's title/body route accounting and 250-row progress
+cadence are locked by tests, and admission percentiles are now per-rank
+support-gated — p50 needs n ≥ 3, p95 n ≥ 20, p99 n ≥ 100 (ceil(p·n) < n),
+otherwise the rank encodes as JSON null instead of a disguised sample
+maximum — with the matcher A/B lane carrying per-case corpus sizes (the
+repeated-prefix adversary runs 2 bodies — instrumented runs measured its
+Foundation side near 12 s per 256 KiB body, an O(n·m) NSString pathology, so
+the case proves the compiled side's linearity at a size its fallback can
+finish) plus one unbuffered stderr progress line per case so a
+stalled dispatch shows exactly where its budget went. The completed screen
+([31806199483](https://github.com/GuangDai/Clipy/actions/runs/31806199483))
+passed all 13 cases: every eligible-ASCII case's paired median came in at
+0.000x–0.036x of Foundation, and the three Foundation-fallback cases at
+0.98x–1.02x (gate overhead is free), so `productionIntegrationEligible` is
+true — which admits the subsequent one-to-three-call same-store Release
+comparison, not G2/G8 evidence.
+
+**2026-08-14 complexity pass (search-worker scan budget, deferred
+presentations, fused excerpt walk, capture-path byte-hashing):** a
+three-lane algorithm audit (HistoryDomain pure planners, HistoryStorage
+search/read paths, authority/codec/runner) found no remaining quadratic
+planner — pin compaction is dictionary-indexed O(m), dedup candidates pay
+byte confirmation once, `effectiveContent` is a single O(k) walk, and
+eviction already uses a bounded heap below the quarter threshold — so the
+pass targeted the search evaluator and the capture path's constant factors:
+(1) order-preserving lanes now carry the page's scan directive — after the
+continuation anchor, at most `limit + 1` matched rows can still influence
+the page or its `next` cursor, so exact/regexp scans stop there and the
+recent-equivalent lane materializes only the bounded window (a deep
+continuation still scans fully until its anchor; a missing anchor still
+expires the cursor); (2) matched-row presentations defer to page
+materialization — excerpt text, UTF-16 translation, and the scan-prefix
+re-derivation are paid only for returned rows, never for the rows a bounded
+page drops and never rebuilt per continuation page; (3) the frozen 03b §8
+excerpt window is computed by a fused walk — at most `windowCapacity + 1`
+Characters decide the whole-body branch, one forward walk to the pre-clamp
+upper bound records the window indices, and the rare end-clamp pays a
+bounded ≤ windowCapacity backward step, replacing the full-body `count`
+walk plus up to two `index(offsetBy:)` walks per excerpt (semantics proven
+identical against the existing worked examples plus new capacity-edge,
+zero-length-match, and multi-scalar-grapheme cases); (4) the fuzzy lane
+slices its 5,000-Character body prefix as a `Substring` with the Character
+count derived from the same pass (one bounded copy for Fuse, no per-row
+title prefix copy — titles are ≤ 1,024 UTF-8 bytes and the whole title is
+provably the scanned prefix), and (5) capture lane-1 byte-set equality now
+builds `typeIdentifier → bytes` dictionaries instead of hashing every
+clipboard byte into a `Set` — the exact shape `canonicalContains` already
+documented as correct one lane below — while `ContentProjector.project`
+stops decoding further representations once the title and the 256-KiB body
+budget are both complete (a later representation can contribute neither).
+The runner's PNG checksum is table-driven and incremental (no ~3 MiB
+concatenation per chunk) and its scanlines build one reserved `[UInt8]`
+converted in a single `Data` init. Debug instrumentation now covers every
+search lane — fuzzy and regexp gained begin/progress/complete events with
+separate title/body accounting, locked by tests alongside the exact lane's
+— and new boundary tests pin the eviction heap/sort quarter-threshold
+agreement, 100-revision lineage resolution/rejection, multi-representation
+lane-1 equality (positive and one-byte-different negative), the projector's
+budget-complete skip, and the prefix-slice Character bound. HistoryDomain
+itself stays probe-free by design: its purity rules (no I/O, actors,
+clocks, or mutable statics) ban hook-style instrumentation, so its
+observability remains its fully self-describing plan values plus these
+boundary tests. The dispatch-only admission workflow's strict log scans now
+prefilter the known-benign CoreData external-storage clone race (runs
+[31808691118](https://github.com/GuangDai/Clipy/actions/runs/31808691118),
+[31809994808](https://github.com/GuangDai/Clipy/actions/runs/31809994808);
+same runner image as the green run) — a later transaction in the same
+process attempts to clone an earlier batch's external record from its
+already-consumed `.interim` staging name, logs the failure, and CoreData's
+copy fallback completes the save — stripping only those multi-line error
+blocks while every other warning/error or missing-file line stays fatal and
+the per-phase jq row/position/transaction assertions remain the
+data-integrity gate. Supported full-scope run
+[31815028830](https://github.com/GuangDai/Clipy/actions/runs/31815028830)
+is green end to end — gates, SwiftPM (384 tests), app build/test, §9
+proofs, and the 5,000-row evidence lane completing cleanly under the
+prefilter for the first time since the race began reproducing; the
+matcher A/B lane remains separately scoped (green at 31806199483).
 
 All remaining findings and their explicit owners/triggers are tracked in
 `docs/V1-Verified/07-finding-dispositions.md`. The supported CI, performance,
 symbol-surface, and independent completion-review prerequisites are complete.
-The canonical ledger has 110 fixed rows and no active or pending rows; its 32
-deferred items retain their explicit owners, triggers, and residual risks.
+The post-closure complexity pass has reopened three evidence/complexity rows:
+the canonical
+ledger currently has 111 fixed, 28 deferred, and 3 in-progress rows with no pending
+rows. Every remaining deferred item retains an explicit owner, trigger, and
+residual risk.
 
 ### Roadmap (2026-07-20)
 

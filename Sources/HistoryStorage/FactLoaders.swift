@@ -105,7 +105,7 @@ internal enum HistoryItemRowHydration {
         _ row: HistoryItemRow,
         limits: HistoryLimits = .standard
     ) throws -> HistoryItemState {
-        try mapCodecFailure {
+        _ = try mapCodecFailure {
             try ContentProjector.validateStoredProjection(
                 schemaVersion: row.projectionSchemaVersion,
                 title: row.title,

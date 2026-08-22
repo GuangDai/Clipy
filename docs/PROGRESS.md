@@ -11,18 +11,49 @@
 > criteria live in the design modules (`00`–`06`) and the roadmap module docs;
 > they are cited here, never restated as new semantics.
 
-**Audit baseline:** `8f316c9` (2026-08-02). **Verified remediation code
-head:** `2fb7845` (2026-08-11). Steps 0–8 are implemented and M2/state 2 is
-complete; step 9 (product wiring), M3, and state 3 are not started.
-Public-symbol workflow
+**Audit baseline:** `8f316c9` (2026-08-02). **Current landed head:**
+`cc59aa8` (2026-08-20). Steps 0–9 are implemented and CI-green; M2/state 2
+is complete. Step 9 (product wiring: PasteboardAdapter + PresentationUI +
+ClipyApp composition) is done, including its post-step-9 revisions: the
+perf/AB measurement-helper proofs now run in the split `HistoryPerfTests`
+lane, and the browsing surface is a Maccy-style AppDelegate-owned floating
+`NSPanel` (Carbon ⇧⌘C summon, cursor/status-item/center/last-position
+placement, dwell-driven preview pane) rather than a SwiftUI `MenuBarExtra`.
+M3/state 3 (packaging, accessibility, localization, product acceptance per
+Part VI §11) remains open.
+
+**CI provenance of the landed head (2026-08-20):** the post-step-9
+convergence ran `a028c8c` (run 32316689047, cancelled —
+`PreviewContent.textCharacterCap` access level), `9c6e3b4` (run 32317009871,
+cancelled — `NSApplication.alertWindow` compile failure plus five
+dwell-test failures), `9a637a6c` (run 32317628976, FAILED — XcodeGen app
+build/test leg), and `d35f3b9` (run 32318520597, FAILED — app test
+failures), closing at `cc59aa8` with green run
+[32319164667](https://github.com/GuangDai/Clipy/actions/runs/32319164667)
+(Lint + source gates, SwiftPM build + test, XcodeGen generate + app
+build/test, SwiftPM perf/AB helper tests, Perf proofs §9 all green; the two
+dispatch-only admission lanes are out of the per-push scope).
+
+**Historical state-2 evidence (2026-08-11, `2fb7845`):** public-symbol
+workflow
 [31448087991](https://github.com/GuangDai/Clipy/actions/runs/31448087991)
-is green. Final code-head run
+is green. The state-2 code-head run
 [31449682036](https://github.com/GuangDai/Clipy/actions/runs/31449682036)
 passed all source/lint gates, Swift 6 strict-concurrency builds, 314 tests in 41
 suites, generated-app build/test, all 13 release workloads, and the workflow's
 diagnostic self-scans. No unexcluded warning/error diagnostic remained; the
 narrow AppIntents-metadata and headless `com.apple.linkd.autoShortcut`
 exclusions remain documented in the workflow history below.
+
+**State-2 declaration, current tree (2026-08-15, `dfb08f2`):** the M2/state-2
+declaration above is re-affirmed for the post-closure complexity-pass head.
+At `dfb08f2` the package carries 384 `@Test` functions in 49 suite structs
+(HistoryDomain: 52 tests across 7 files, including `ComplexityBoundaryTests`);
+the supported full-scope run
+[31815028830](https://github.com/GuangDai/Clipy/actions/runs/31815028830)
+is green end to end including the evidence lane. The by-number D1–D19
+evidence reconciliation (the V2-0 deliverable named by
+`docs/v2/V2-roadmap.md` §2) is recorded in `docs/v2/V2-PROGRESS.md` §1.1.
 
 ## Step 0 — scaffold (cross-cutting)
 
@@ -91,8 +122,12 @@ exclusions remain documented in the workflow history below.
   seven pure planners (§8); and `canonicalContains` (§9.2). The remediation
   tree adds a 47-test direct Domain suite across all seven planners and records
   the D1–D19 ownership matrix, including Storage-owned stamping and structural
-  fact/Sendable proofs. The 47-test direct suite is green in run 31449682036,
-  closing the D1–D19 M2 acceptance item. No I/O, actor, clock, UUID/Date
+fact/Sendable proofs. The 47-test direct suite is green in run 31449682036,
+closing the D1–D19 M2 acceptance item. The post-closure complexity pass grew
+it to 52 tests across 7 files at the current head (adding
+`ComplexityBoundaryTests` and a fourth retention-selector ordering fixture,
+then splitting two files); the by-number evidence map is recorded in
+`docs/v2/V2-PROGRESS.md` §1.1. No I/O, actor, clock, UUID/Date
   generation, or async (02 §1).
 
 | Commit | Subject |
@@ -358,11 +393,15 @@ exclusions remain documented in the workflow history below.
   range rejections genuine failable-initializer paths instead of pre-init
   runtime traps.
   `docs/V1-Verified/07-finding-dispositions.md` remains the authoritative
-  222-ID status ledger: 110 fixed, 32 deferred, 31 duplicate, 30 not-a-defect,
-  19 documented, and no active or pending rows.
-- **Domain:** 47 direct tests exercise all seven planners across commit/no-op,
-  rejection, capacity, deterministic ordering, and complete mutation payloads;
-  the suite records the exact D1–D19 ownership split.
+  222-ID status ledger. The post-closure overlay below supersedes that run's
+  historical checksum; the current checksum is 111 fixed, 29 deferred, 31
+  duplicate, 30 not-a-defect, 19 documented, 2 in-progress, and no pending
+  rows.
+- **Domain:** 47 direct tests (52 across 7 files at the current head) exercise
+  all seven planners across commit/no-op, rejection, capacity, deterministic
+  ordering, and complete mutation payloads; the suite records the exact
+  D1–D19 ownership split, and the by-number map with its seam splits is
+  recorded in `docs/v2/V2-PROGRESS.md` §1.1.
 - **Authority/facts:** one-shot transaction injections now reach the position
   guard and all four concrete apply guards through normal APIs, proving typed
   failure plus row/position rollback. Capture reuses one duplicate-checked
@@ -461,3 +500,331 @@ exclusions remain documented in the workflow history below.
   pinned-order load (05 §7.3). Clear needs no such fact (`.unpinned` keeps all
   pins, `.all` removes all rows — both trivially contiguous); retention never
   retires pinned items (D13).
+
+## Post-closure complexity pass (2026-08-11)
+
+- **Status:** in progress. The canonical 222-row ledger currently has two
+  `in-progress` performance-evidence items: 111 `fixed`, 29 `deferred`, and no
+  `pending` rows. Broader measurement-gated changes remain deferred until the
+  new supported artifacts can answer their exact trigger units.
+- **Pure bounded algorithms:** [`1168d1d`](https://github.com/GuangDai/Clipy/commit/1168d1d)
+  starts signature intersection from the smallest posting, validates D12 pin
+  permutations in O(P), removes payload hashing from Canonical containment,
+  uses a bounded O(N log K) retention selector for small victim counts, and
+  bounds the unpinned exactness fallback's retained scalar state to O(L).
+  Supported run
+  [31483423935](https://github.com/GuangDai/Clipy/actions/runs/31483423935)
+  passed all gates, 319 tests in 42 suites, app build/test, and all 13 release
+  workloads.
+- **Thumbnail source single-flight:** red-test commit
+  [`7be8d02`](https://github.com/GuangDai/Clipy/commit/7be8d02) and run
+  [31484363706](https://github.com/GuangDai/Clipy/actions/runs/31484363706)
+  prove the missing source-inclusive interface (the expected SwiftPM compile
+  failure; every independent job passed). The implementation now places full
+  source hydration inside the exact-key task and gives joiners scalar fences;
+  success/`nil`/failure/removal and the WS15 stale-join race are present.
+  Supported run
+  [31494740863](https://github.com/GuangDai/Clipy/actions/runs/31494740863)
+  passed source/lint gates, SwiftPM build/tests, app build/test, and all 13
+  release workloads; `thumbnail-source-full-image-copy` is now `fixed`.
+- **Manual performance admission:** `HistoryPerfRunner` now has pre-proof code
+  for a dispatch-only persistent 5,000 × 256 KiB corpus. It records 101 raw
+  samples plus nearest-rank p50/p95/p99 for individual tie-heavy browse pages
+  and worst-bound absent-term exact searches, with process peak RSS from
+  `/usr/bin/time -l`. Warm-open samples use independently terminated child
+  processes after one full-corpus validation warmup. Setup records the sum of
+  seed- and validation-process phase durations, never a percentile. The job is
+  record-only; the exact-search RSS is a
+  structural ceiling rather than complete G8 evidence, and the GitHub runner
+  is not an approved minimum-hardware profile for G5. Supported compile/run
+  artifacts remain before the canonical evidence finding can leave
+  `in-progress`. Diagnostic run
+  [31498144173](https://github.com/GuangDai/Clipy/actions/runs/31498144173)
+  passed every ordinary job but exposed the setup defect: the public-capture
+  loop reached only 1,500/5,000 rows and logged 599 CoreData failures cloning
+  missing `.externalStorage` `.interim` files (the first failures appeared
+  after the 750-row marker and before the 1,000-row marker). The pre-proof
+  replacement seeds 4,999 rows through Authority-owned fixed 64-row create
+  batches (79 transactions), then
+  requires one public coalesce and one public insert before measurement. A
+  fixed 1,000 × 256 KiB smoke crosses the reproduced failure boundary and
+  scans for the exact diagnostic before the full corpus runs. This changes
+  disposable setup from cumulative O(N²) retained-inventory work and 5,000
+  transactions to O(total bounded bytes + indexed creates) and O(N/64)
+  transactions, with O(64 × bounded-row-bytes) transient setup space. Run
+  [31505519746](https://github.com/GuangDai/Clipy/actions/runs/31505519746)
+  measured 1,000-row setup at 21.74 seconds and 5,000-row setup at 116.90
+  seconds with no missing-external-data diagnostic, but also exposed that the
+  45-minute exact-search timeout was incorrectly masked by the completion
+  shell gate. The gate now explicitly requires successful mode outcomes,
+  complete 101-sample JSON, and non-empty timing records. Run
+  [31527425658](https://github.com/GuangDai/Clipy/actions/runs/31527425658)
+  then reproduced one intermittent `.interim` clone failure after all 4,999
+  seeded rows, proving lexical facade release was not a deterministic CoreData
+  teardown boundary. Seed and public validation now run as separate executable
+  invocations with a fail-closed primitive JSON handoff; supported rerun
+  [31529727208](https://github.com/GuangDai/Clipy/actions/runs/31529727208)
+  completed the 5,000-row setup in 124.5 seconds with no missing-external-data
+  diagnostic, and completed browse/warm-open evidence, but the absent-term
+  exact step was killed at 90 minutes. Its log contained only the mode-start
+  line, its timing file was empty, and no JSON existed: the runner performed
+  one validation, one warmup, and 101 measured public searches before writing
+  any result, repeatedly materializing and scanning roughly 1.22 GiB per
+  request (at least 125 GiB across the mode) with no progress checkpoint.
+  The follow-up adds opt-in `#if DEBUG` JSON checkpoints inside the real
+  Authority/SearchWorker path for fetch, projection/validation, sort, exact
+  title/body scan, and page construction, with progress every 250 rows and no
+  clipboard/query/source/path fields. A separate one-request Debug probe runs
+  first on the same full corpus; failure preserves its partial trace and skips
+  the 90-minute Release and later warm-open steps. A successful probe proceeds
+  directly to the canonical Release path, which still records all 101
+  independent calls with immediate validation, warmup, and per-sample
+  begin/completion checkpoints. Run
+  [31597596383](https://github.com/GuangDai/Clipy/actions/runs/31597596383)
+  then completed the 4,999-row seed cleanly but emitted one missing `.interim`
+  clone 31 seconds into the separate 5,000-row validation process; validation
+  still returned position 81 and 50 recent rows, so the clean-log gate failed
+  before the Debug search probe could run. That run also exposed an independent
+  WL2 harness flaw: same-process best-effort teardown produced an 8.137× warm
+  open ratio against the 8× envelope. The next iteration puts startup,
+  capture, and recent-read model lifetimes inside operation-local autorelease
+  pools, adds immediate prepare phases plus opt-in Debug storage-lifecycle
+  checkpoints, and lets the short probe run after a non-throwing preparation
+  diagnostic while still skipping all long canonical measurements. WL2 now
+  populates, warms, and internally times each open in a fresh child process;
+  launch/teardown time is excluded and the 8× bound is unchanged. Supported
+  diagnostic evidence is pending.
+
+## Codebase complexity pass — scan budgets, deferred presentations, fused excerpts (2026-08-14)
+
+A full algorithm audit (Domain planners, Storage search/read paths,
+authority/codec/runner) confirmed no quadratic planner remains; the pass
+landed constant-factor and allocation reductions with frozen 03b §8
+semantics: exact/regexp/recent-equivalent scans stop at the page's
+`limit + 1` post-anchor survivor bound (deep continuations and expired
+anchors still scan fully), matched-row excerpts and UTF-16 translations
+defer to page materialization, the excerpt window fuses its walks (bounded
+probe + one forward walk + ≤ windowCapacity backward steps instead of a
+full-body count plus two offset walks), the fuzzy lane slices its body
+prefix as a Substring with the count from the same pass and drops the
+per-row title prefix copy, capture lane-1 equality compares
+`typeIdentifier → bytes` dictionaries instead of hashing clipboard bytes
+into Sets, and `ContentProjector.project` skips decoding further
+representations once title and body budgets are complete. Fuzzy and regexp
+lanes gained Debug begin/progress/complete probe events with separate
+title/body accounting; new boundary tests pin the eviction heap/sort
+quarter-threshold agreement, 100-revision lineage resolution/rejection,
+multi-representation lane-1 equality, the projector budget skip, the
+prefix-slice Character bound, and the fused excerpt's capacity-edge,
+zero-length, and multi-scalar-grapheme windows. The admission workflow's
+strict log scans now prefilter the recovered CoreData external-storage
+clone race (`.interim` clone failures with successful copy fallbacks, runs
+31808691118/31809994808) while keeping every other warning/error line
+fatal and the jq row/position assertions as the integrity gate. Supported full-scope run
+[31815028830](https://github.com/GuangDai/Clipy/actions/runs/31815028830)
+is green end to end, including the evidence lane under the prefilter;
+the recent-equivalent window fix it required (anchor row must stay in the
+evaluated array for `page` to drop) is locked by the new continuation
+test.
+
+## Step 9 — product wiring: PasteboardAdapter + PresentationUI + ClipyApp
+
+- **Status:** done. Green at run
+  [32260455839](https://github.com/GuangDai/Clipy/actions/runs/32260455839)
+  — Lint + source gates, SwiftPM build + test (the full package suite,
+  539 tests in 64 suites at this head), and XcodeGen generate + app
+  build/test (the generated project compiles and the hosted
+  `ClipyIntegrationTests` pass), all with zero unexcluded warning/error
+  log lines. The run was dispatched on the branch with the new
+  `admission_scope: tests-only` input (workflow change `1826cee`: gates +
+  SwiftPM + app jobs only), so the Perf-proofs, 5,000-row admission, and
+  A/B lanes were deliberately not run — they remain required for their own
+  evidence goals, not for step 9.
+- **Roadmap:** `roadmap/README.md` §3 step 9 — module docs
+  `roadmap/04-pasteboardadapter.md` (9a), `roadmap/05-presentationui.md` (9a),
+  `roadmap/06-clipyapp.md` (9b); UX bounds from `01` §5–§6/§8, `03a` §4/§5/§7,
+  `03b` §8–§12, `04` §5–§9, `05` §6.1, `06` §2/§8, plus the admitted V2-02
+  retention settings surface (`docs/v2/V2-07-ux.md` §5/§6; first release =
+  M1 + V2-02). Working design contract: `.tmp/step9/design.md` (scratch, not
+  spec).
+- **Delivered:**
+  - `PasteboardAdapter` — `@MainActor` adapter (NSPasteboard is non-Sendable;
+    MainActor isolation provides the Sendability) with `capture(observedAt:)`
+    (freezes the first item's retainable representations, frontmost bundle ID
+    as `sourceApplication`, lineage-hint decode, six-marker whole-capture
+    concealment per `05` §6.1 — markers never stripped while siblings
+    retained), `write(_:)` (Effective Content + `com.clipy.lineageHint` round
+    trip, `03b` §9/§12), and `PasteboardObserver` (changeCount polling —
+    NSPasteboard exposes no change notification; `01` §5.1). Unit tests cover
+    the roadmap-04 acceptance list over private named pasteboards.
+  - `PresentationUI` — `@MainActor @Observable HistoryViewState` (snapshot-
+    replacement observation per `04` §5, one-shot cursor pagination with
+    `.snapshotExpired` recovery per `04` §6, 250 ms-debounced search restart,
+    typed-failure surface), `ThumbnailStore` (reference-exact keying per
+    `01` §5.7/`04` §9, ImageIO decode — AppKit stays out of this target),
+    `MatchHighlighting` (UTF-16 ranges per `03b` §8), `FailurePresentation`,
+    and the scripted `PreviewClipboardHistory` (`01` §4). Views:
+    `HistoryPanelView` (menu-bar panel: search header with Exact/Fuzzy/Regexp
+    mode picker + 64-Character fuzzy clamp, Pinned/Recent sections, context
+    menus, keyboard shortcuts, pagination, failure banner, footer with
+    clear/settings/quit), `HistoryDetailsView` (info grid, Effective/Canonical
+    content, revisions + revert, OCC-aware), `ReviseEditorView`
+    (keep/hide/replace per representation, incoherent-draft guard), and
+    `ClipySettingsView` (General: v1 count policy + clear actions; Retention:
+    the unified V2-02 age/storage/revision group with receipt feedback).
+  - `ClipyApp` — the sole composition root: `AppComposition.open` (persistent
+    store under Application Support, second-open rejection per `01` §8),
+    capture wiring, the only History→pasteboard paste hand-off
+    (`01` §5.6/`04` §8), `MenuBarExtra` window-style panel + `Settings`
+    scene, SMAppService launch-at-login.
+  - `ClipyIntegrationTests` — the WS1–WS21 walking-skeleton paths re-run
+    through the composed stack (real `SwiftDataHistory` + `PasteboardAdapter`
+    + `HistoryViewState`), plus `AppCompositionTests` (second-open guard) and
+    `AppPasteOrchestrationTests` (lineage-hint paste round trip);
+    `ClipyIntegrationTests` gained package-product dependencies in
+    `project.yml` so the hosted bundle can import the libraries. Fault-
+    injection/suspension-seam clauses deliberately remain in the storage-side
+    suites (each such clause is named in its composed suite's header).
+
+| Commit | Subject |
+|---|---|
+| `c037a71` | Step 9: product wiring — PasteboardAdapter + PresentationUI + ClipyApp |
+| `4c39499` | Docs: record step 9 implementation state |
+| `1826cee` | CI: add tests-only dispatch scope (gates + SwiftPM + app tests, no perf lanes) |
+| `e61b650` | Fix step-9 compile errors from CI run 32252737582 |
+| `f4afa09` | Fix missed String→Text description in HistoryListView empty state |
+| `3d4f388` | Fix test compile from run 32254796602 (PRODUCT_MODULE_NAME; makeStream) |
+| `2a9f79f` | Fix integration/adapter test compile from run 32255661896 |
+| `06c580c` | Fix test failures from CI run 32256916252 (see below) |
+| `91d04dd` | WS15 composed: replace truncated white-PNG fixture |
+
+- **CI:** seven dispatched runs on `codex/v2-implementation` (all
+  `tests-only` scope): 32252737582 and 32254241169 failed on first-compile
+  errors in the new PresentationUI/test code (SwiftUI API shapes; all
+  fixed); 32254796602/32255661896 reached the test-compile stage
+  (`@testable import` needed an explicit `PRODUCT_MODULE_NAME`; a
+  swift-testing runtime-`skip` call does not exist — the pasteboard probe
+  now throws; `waitFor` argument order); 32256916252 compiled everything
+  and surfaced fifteen test failures — two real code defects
+  (`PasteboardObserver`'s `Task`-hopped poll is never serviced under a
+  manual runloop spin, now pinned to `RunLoop.main` `.common` with a
+  `MainActor.assumeIsolated` synchronous poll; `MatchHighlighting` relied
+  on `Range(NSRange,in:)` which CLAMPS mid-surrogate-pair bounds into the
+  enclosing Character instead of returning nil — ranges splitting a
+  surrogate pair are now explicitly dropped, 03b §8), five composed-suite
+  expectation errors (asserting stronger than the storage contract: fuzzy
+  calibration, pre-debounce page races, unpinned-only retention counting
+  D13, insert-time `firstCopiedAt`/`firstSource` non-folding 02 §3.1), and
+  one latent pre-step-9 fixture error
+  (`RetainedBytesProjectionLifecycleTests`: "corruption" is 10 letters, so
+  `canonicalBytes` is 25 not 26 — introduced by `04234c3`, which never had
+  a recorded CI run; red since authored). 32259544566 then had both build
+  + test legs green but failed the app-log self-scan on libpng
+  `Not enough image data` ERROR lines from a truncated WS15 white-PNG
+  fixture (3-byte IDAT for a 5-byte scanline — libpng recovers, so tests
+  passed; the fixture is now a complete, CRC-checked encode). Final green:
+  32260455839.
+
+
+## Post-step-9: real-scale fixture harness + stress/smoke suites
+
+- **Status:** done. Green at run
+  [32269792986](https://github.com/GuangDai/Clipy/actions/runs/32269792986)
+  (tests-only dispatch on `codex/v2-implementation`: gates, SwiftPM build +
+  test, XcodeGen app build/test — perf lanes deliberately out of scope).
+- **Fixtures:** `scripts/generate_fixtures.py` (deterministic `--seed
+  20260819`, byte-identical reruns; Pillow in `.tmp/fixture-venv/`) produces
+  `clipy-fixtures-v1`: 19 images (4K masters PNG/JPEG/TIFF, 1080p BMP, 720p
+  animated GIF, 12 random crops, 7680×4320, 512 icon), 9 texts
+  (100 KB–5 MB: real repo Swift sources, JSON, Markdown, CJK, emoji,
+  long-lines, lorem, plus the 256 KiB search-body and 1 KiB title boundary
+  straddlers), 300 KB RTF/HTML, a minimal valid PDF, and 50 file URLs;
+  per-file sha256 in `manifest.json`. Hosted on GitHub release
+  [`fixtures-v1`](https://github.com/GuangDai/Clipy/releases/tag/fixtures-v1)
+  (tarball sha256 `ca1a5e11…`); `scripts/fetch_fixtures.sh` verifies the
+  checksum and unpacks; both CI test jobs fetch it and export
+  `CLIPY_FIXTURES_DIR`; suites gate with `.enabled(if:
+  FixtureCatalog.available)` so a fresh clone's `swift test` stays green
+  (swift-testing has no runtime skip API — the trait is the mechanism).
+- **Suites:** `RealScaleStressTests` + `BoundaryLimitsStressTests`
+  (bulk capture/coalescing, search-body + title truncation, 4K/8K thumbnail
+  bounds, inclusive 64 MiB / 32-representation / 128 MiB edges, retention
+  D13 at scale), `UISmokeJourneyTests` (browse/paginate/search/details/
+  revise/settings over the real corpus), `PasteboardAdapterStressTests`
+  (4K image and 5 MB text round trips, rapid-write boundedness, concealed
+  5 MB whole-capture freeze), `RenderStormAndMemoryTests` (no page
+  amplification + convergence under a 100-commit burst, debounce-storm
+  settling, RSS leak tripwire, activate/deactivate hygiene).
+- **Convergence (4 runs):** 32265918298 — three new-suite compile errors
+  (bracket typo, redeclared local, thumbnail key type); 32267167679 —
+  load-exposed flake: `pollUntil`'s 2 s wall-clock budget starved
+  MainActor task slots under the now-parallel heavy suites (identical code
+  green at 91d04dd), budget raised to 10 s, and the render-storm tripwire
+  corrected to no-amplification + convergence (the strict `<` coalescing
+  claim is owned deterministically by the storage WS12 suspension suites);
+  32268871305 — tests all green, SPM log self-scan caught the known-benign
+  CoreData `.interim` external-storage clone race from the real-scale
+  suites' on-disk temp stores; the admission lane's existing awk prefilter
+  now also covers the SPM and app self-scans (runs 31808691118/31809994808
+  documented the same noise).
+
+
+## Post-step-9: perf/AB test-lane split + Maccy-style panel (hotkey, position, preview)
+
+- **Status:** done. Landed on `codex/v2-implementation` at `a028c8c`;
+  CI-green at the closing head `cc59aa8`, run
+  [32319164667](https://github.com/GuangDai/Clipy/actions/runs/32319164667)
+  (intermediate runs 32316689047/32317009871 cancelled and
+  32317628976/32318520597 failed — the full convergence narrative is in the
+  header's CI-provenance block).
+- **Test-lane split:** the perf/AB measurement-helper proofs moved from
+  `HistoryPerfRunnerTests` to the renamed SwiftPM target `HistoryPerfTests`
+  (`Tests/HistoryPerfTests/`). The default `swift test` lane now skips it
+  (`--skip 'HistoryPerfTests\.'`) so the standard targets carry functional
+  tests only; a dedicated per-push `perf-tests` CI job runs
+  `--filter 'HistoryPerfTests\.'` with the same zero-warning self-scan. The
+  dispatch-only admission lanes (5,000-row p50/p95/p99 + RSS, exact-matcher
+  A/B) are unchanged.
+- **Panel (Maccy replication):** the browsing surface moved off the SwiftUI
+  `MenuBarExtra` (a menu-bar-extra window can be neither summoned nor
+  positioned programmatically) onto Maccy's model: an AppDelegate-owned
+  AppKit `NSStatusItem` + a fixed-size floating `NSPanel` (non-activating,
+  key-capable, closes on focus loss, `.statusBar` level, every-space
+  collection behavior) + a Carbon `RegisterEventHotKey` ⇧⌘C global summon —
+  replicated WITHOUT adding the KeyboardShortcuts dependency
+  (docs/roadmap/07-external-deps.md's no-new-deps rule stands). Placement
+  (`PopupPositionMode`: cursor / status-item / screen-center / last-position,
+  pointer-screen aware, visible-frame clamped, drag-persisted normalized
+  anchor) is pure geometry in ClipyApp (`PopupPositionGeometry`); the mode is
+  user-configurable in Settings → General. The store now opens at launch
+  instead of at first panel appearance — a clipboard manager must capture
+  while closed. Paste closes the panel via `AppComposition.onPasteCompleted`
+  (the panel never activates the app, so the paste target keeps focus).
+- **Preview pane (Maccy's slideout, replicated):** PresentationUI gains
+  `PreviewPaneState` (200 ms dwell-to-peek auto-open on selection change with
+  cancel-and-reschedule debounce, ⌃Space manual toggle, manual-close
+  suppression until the next selection change, panel key-status arming),
+  `HistoryPreviewView` (image-first `PreviewContent.resolve` over Effective
+  Content, ImageIO downsampling to CGImage — PresentationUI stays
+  AppKit-free — UTF-16/UTF-8 frozen-encoding text decode, 50,000-character
+  cap, source/count/timestamp metadata bar), and `PanelGeometry` (the shared
+  400 + 1 + 320 × 560 window-width vocabulary both the SwiftUI frame and the
+  AppKit `setFrame` read). The window widens for the preview with a single
+  no-animation `setFrame` that pins the anchor edge (Maccy's layout-storm
+  lesson); Esc clears an active search, else closes the panel.
+- **Smoke/measurement hooks (ClipyIntegrationTests,
+  `SmokeMeasurementTests`):** thumbnail-cache memory eviction (deterministic
+  entry-count proof at an injected ceiling of 3: six inserts leave exactly
+  two entries), corpus memory loading (RSS bounded across a full 150-item
+  page-through), render-speed first-page/page-turn timing capture, and the
+  preview pane end-to-end over the real facade. Measurements print as
+  grep-able `clipy.smoke.measurement` JSON lines — recorded, never asserted.
+  `PanelAndHotKeyTests` proves the origin geometry over synthetic screen
+  frames and headless Carbon registration; `PreviewPaneStateTests` and
+  `PreviewContentTests` (PresentationUITests) cover the state machine and the
+  resolver. `ThumbnailStore` gained an injectable entry ceiling plus
+  `cachedEntryCount`/`inFlightCount` observability for the eviction smoke.
+- **Hosted-test isolation:** `AppDelegate.isRunningTests` (XCTest linkage or
+  `XCTestConfigurationFilePath`) skips the status item, hotkey, and
+  production-store open under the test host — Maccy's `enable-testing`
+  pattern; the composed suites keep composing their own stacks.

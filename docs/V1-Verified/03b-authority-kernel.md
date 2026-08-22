@@ -179,6 +179,14 @@ None. The single-writer + OCC + in-transaction revalidation design holds; no dat
 >   into O(N × blob bytes). This is the kernel-report alias of
 >   `scalar-reads-rely-on-unverified-externalstorage-faulting-suppression` in
 >   V1V-03C.
+> - `perf-runner-lacks-resident-set-p99-gates` is **in progress**. Owner:
+>   Performance evidence. A dispatch-only, persistent 5,000 × 256 KiB lane now
+>   separates setup wall time from 101-sample nearest-rank percentiles, samples
+>   the same-timestamp fallback per public page, records worst-bound exact-search
+>   process RSS, and runs warm opens in independently terminated processes.
+>   Supported artifacts remain. Even after they exist, the search fixture is a
+>   structural high-water ceiling rather than complete representative G8
+>   evidence, and an unapproved GitHub host cannot alone trigger G5.
 > - `modelcontext-transaction-durability-cluster` is **deferred**. Owner:
 >   R8/macOS persistence-performance evidence. Trigger: a macOS 26 arm64
 >   persistent-store run measures commit p99 and Authority queue wait and
@@ -218,11 +226,13 @@ None. The single-writer + OCC + in-transaction revalidation design holds; no dat
 >   value unready, one capture can pay O(retained signature metadata) while
 >   isolated. Healthy startup publishes only after constructing a ready index,
 >   so ordinary capture does not take this path.
-> - `thumbnail-source-full-image-copy` is **deferred** to G8. Owner: thumbnail
->   source/materialization. Trigger: representative concurrent thumbnail reads
->   exceed the G8 transient-RSS budget or source-copy p95. Residual risk: each
->   request may materialize the full Effective image `Data` before the existing
->   decode-only single-flight joins callers.
+> - `thumbnail-source-full-image-copy` is **fixed** by supported run
+>   [31494740863](https://github.com/GuangDai/Clipy/actions/runs/31494740863).
+>   The exact-key task owns full source hydration through decode; overlapping
+>   joiners run scalar dimension/existence/version fences. Direct
+>   success/`nil`/failure/removal tests and WS15's stale-join race pass. This is
+>   a structural concurrency-amplification repair, not an absolute G8 RSS
+>   claim.
 > - `validate-final-pin-order-conflates-count-bound` is **not-a-defect** in the
 >   current tree. Owner: none while the frozen §10/§16 contract stands. Trigger:
 >   reconsider only if transaction failures gain action-specific public
