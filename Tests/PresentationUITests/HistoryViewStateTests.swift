@@ -55,6 +55,7 @@ struct HistoryViewStateTests {
         let history = ScriptedHistory(observedFirstPage: firstPage)
         let state = HistoryViewState(history: history, pageLimit: 25)
         state.activate()
+        #expect(state.isLoadingFirstPage)
 
         #expect(await pollUntil { state.rows.count == 4 })
         #expect(state.rows.map(\.title) == firstPage.rows.map(\.title))
@@ -62,6 +63,7 @@ struct HistoryViewStateTests {
         #expect(state.unpinnedRows.map(\.title) == ["recent-gamma", "recent-delta"])
         #expect(state.hasNextPage)
         #expect(!state.isLoadingPage)
+        #expect(!state.isLoadingFirstPage)
         #expect(state.failure == nil)
         #expect(state.pageLimit == 25)
 
@@ -71,6 +73,30 @@ struct HistoryViewStateTests {
         #expect(requests.count == 1)
         #expect(requests.first?.kind == .recent)
         #expect(requests.first?.limit == 25)
+
+        state.deactivate()
+        await history.finishObservation()
+    }
+
+    /// AppDelegate and SwiftUI may both announce the same panel-open episode.
+    /// Activation is idempotent while one observe loop is already owned;
+    /// only a real deactivate/reactivate transition starts another stream.
+    @Test func repeatedActivateKeepsOneObservationUntilDeactivated() async {
+        let history = ScriptedHistory()
+        let state = HistoryViewState(history: history)
+
+        state.activate()
+        #expect(await pollUntil { await history.observeRequests.count == 1 })
+        #expect(state.isLoadingFirstPage)
+
+        state.activate()
+        await Task.yield()
+        #expect(await history.observeRequests.count == 1)
+
+        state.deactivate()
+        #expect(!state.isLoadingFirstPage)
+        state.activate()
+        #expect(await pollUntil { await history.observeRequests.count == 2 })
 
         state.deactivate()
         await history.finishObservation()
@@ -259,10 +285,13 @@ struct HistoryViewStateTests {
         #expect(await pollUntil { state.rows.count == 2 && state.hasNextPage })
         #expect(state.rows.map(\.title) == ["observed-one", "observed-two"])
         #expect(state.failure == .snapshotExpired(current: ChangePosition(rawValue: 9)))
+        #expect(state.failureEpisode == 1)
 
         // The retry browses from the OBSERVED cursor again and re-appends.
         state.loadNextPage()
         #expect(await pollUntil { state.rows.count == 4 })
+        #expect(state.failure == nil)
+        #expect(state.failureEpisode == 1)
         #expect(
             state.rows.map(\.title)
                 == ["observed-one", "observed-two", "appended-one", "appended-two"]
@@ -281,11 +310,280 @@ struct HistoryViewStateTests {
         await history.finishObservation()
     }
 
+    /// Pagination belongs to the active browsing lifecycle. Deactivation
+    /// clears its loading state immediately, and a non-cooperative completion
+    /// released afterwards cannot append rows or restore its cursor.
+    @Test func deactivateInvalidatesNonCooperativePagination() async {
+        let cursor = fixtureCursor("parked-on-close")
+        let firstPage = fixturePage(
+            rows: [fixtureRow(
+                id: "00000000-0000-0000-0000-000000000045",
+                title: "visible"
+            )],
+            next: "parked-on-close"
+        )
+        let stalePage = fixturePage(
+            rows: [fixtureRow(
+                id: "00000000-0000-0000-0000-000000000046",
+                title: "must-not-append"
+            )],
+            next: "stale-next"
+        )
+        let history = ScriptedHistory(
+            observedFirstPage: firstPage,
+            browseScript: [cursor: .paused(stalePage)]
+        )
+        let state = HistoryViewState(history: history)
+        state.activate()
+        #expect(await pollUntil { state.rows.map(\.title) == ["visible"] })
+
+        state.loadNextPage()
+        #expect(await pollUntil { await history.isBrowsePaused(after: cursor) })
+        #expect(state.isLoadingPage)
+
+        state.deactivate()
+        #expect(!state.isLoadingPage)
+
+        await history.resumeBrowse(after: cursor)
+        #expect(
+            await pollUntil {
+                let completed = await history.completedPausedBrowseCursors
+                return completed.contains(cursor)
+            }
+        )
+        await Task.yield()
+        #expect(state.rows.map(\.title) == ["visible"])
+        #expect(state.hasNextPage)
+        #expect(!state.isLoadingPage)
+
+        await history.finishObservation()
+    }
+
+    /// A raw query edit invalidates the old cursor generation immediately;
+    /// debounce delays only the replacement observe request, never ownership
+    /// of an already-running page.
+    @Test func queryEditImmediatelyInvalidatesNonCooperativePagination() async {
+        let cursor = fixtureCursor("parked-before-query-edit")
+        let firstPage = fixturePage(
+            rows: [fixtureRow(
+                id: "00000000-0000-0000-0000-00000000004A",
+                title: "old-query-row"
+            )],
+            next: "parked-before-query-edit"
+        )
+        let stalePage = fixturePage(
+            rows: [fixtureRow(
+                id: "00000000-0000-0000-0000-00000000004B",
+                title: "stale-page"
+            )],
+            next: nil
+        )
+        let history = ScriptedHistory(
+            observedFirstPage: firstPage,
+            browseScript: [cursor: .paused(stalePage)]
+        )
+        let state = HistoryViewState(history: history)
+        state.activate()
+        #expect(await pollUntil { state.rows.map(\.title) == ["old-query-row"] })
+
+        state.loadNextPage()
+        #expect(await pollUntil { await history.isBrowsePaused(after: cursor) })
+        #expect(state.isLoadingPage)
+
+        state.searchText = "new query"
+        #expect(!state.isLoadingPage)
+
+        await history.resumeBrowse(after: cursor)
+        #expect(
+            await pollUntil {
+                let completed = await history.completedPausedBrowseCursors
+                return completed.contains(cursor)
+            }
+        )
+        await Task.yield()
+        #expect(!state.rows.map(\.title).contains("stale-page"))
+
+        state.deactivate()
+        await history.finishObservation()
+    }
+
+    /// A superseded non-cooperative page cannot mutate the replacement
+    /// query's rows and cannot clear the spinner owned by its newer page.
+    @Test func stalePaginationCannotAppendOrClearNewerRequestSpinner() async {
+        let fuzzyCursor = fixtureCursor("fuzzy-page")
+        let exactCursor = fixtureCursor("exact-page")
+        let fuzzyFirst = fixturePage(
+            rows: [fixtureRow(
+                id: "00000000-0000-0000-0000-000000000047",
+                title: "fuzzy-first"
+            )],
+            next: "fuzzy-page"
+        )
+        let exactFirst = fixturePage(
+            rows: [fixtureRow(
+                id: "00000000-0000-0000-0000-000000000048",
+                title: "exact-first"
+            )],
+            next: "exact-page"
+        )
+        let staleFuzzyPage = fixturePage(
+            rows: [fixtureRow(
+                id: "00000000-0000-0000-0000-000000000049",
+                title: "stale-fuzzy"
+            )],
+            next: nil
+        )
+        let exactSecond = fixturePage(
+            rows: [fixtureRow(
+                id: "00000000-0000-0000-0000-000000000050",
+                title: "exact-second"
+            )],
+            next: nil
+        )
+        let history = ScriptedHistory(
+            observedFirstPage: fuzzyFirst,
+            browseScript: [
+                fuzzyCursor: .paused(staleFuzzyPage),
+                exactCursor: .paused(exactSecond),
+            ]
+        )
+        let state = HistoryViewState(history: history)
+        state.activate()
+        #expect(await pollUntil { state.rows.map(\.title) == ["fuzzy-first"] })
+
+        state.loadNextPage()
+        #expect(await pollUntil { await history.isBrowsePaused(after: fuzzyCursor) })
+
+        state.searchMode = .exact
+        #expect(!state.isLoadingPage)
+        #expect(await pollUntil { await history.observeRequests.count == 2 })
+        await history.emitObservedPage(exactFirst)
+        #expect(await pollUntil { state.rows.map(\.title) == ["exact-first"] })
+        state.loadNextPage()
+        #expect(await pollUntil { await history.isBrowsePaused(after: exactCursor) })
+        #expect(state.isLoadingPage)
+
+        await history.resumeBrowse(after: fuzzyCursor)
+        #expect(
+            await pollUntil {
+                let completed = await history.completedPausedBrowseCursors
+                return completed.contains(fuzzyCursor)
+            }
+        )
+        await Task.yield()
+        #expect(state.rows.map(\.title) == ["exact-first"])
+        #expect(state.isLoadingPage)
+
+        await history.resumeBrowse(after: exactCursor)
+        #expect(
+            await pollUntil {
+                state.rows.map(\.title) == ["exact-first", "exact-second"]
+                    && !state.isLoadingPage
+            }
+        )
+
+        state.deactivate()
+        await history.finishObservation()
+    }
+
     // MARK: - Search restarts (V2-07 §4 feel)
 
+    /// A query intent invalidates executable results synchronously. The
+    /// replacement observation may take arbitrarily long to produce its first
+    /// authoritative page; while it is pending, old rows/cursors cannot be
+    /// rendered or copied. The emitted replacement page settles that narrow
+    /// first-page loading phase.
+    @Test func queryEditImmediatelyHidesOldRowsUntilReplacementPage() async {
+        let oldRow = fixtureRow(
+            id: "00000000-0000-0000-0000-00000000004C",
+            title: "old-query-row"
+        )
+        let newRow = fixtureRow(
+            id: "00000000-0000-0000-0000-00000000004D",
+            title: "new-query-row"
+        )
+        let history = ScriptedHistory(
+            observedFirstPage: fixturePage(rows: [oldRow], next: "old-next"),
+            repeatsObservedFirstPage: false
+        )
+        let state = HistoryViewState(history: history)
+        let recorder = PasteCallRecorder()
+        state.onPaste = { item in
+            Task { await recorder.record(item) }
+        }
+        state.activate()
+        #expect(await pollUntil { state.rows == [oldRow] })
+        #expect(!state.isLoadingFirstPage)
+
+        state.searchText = "replacement"
+
+        #expect(state.rows.isEmpty)
+        #expect(state.isLoadingFirstPage)
+        #expect(!state.hasNextPage)
+        state.requestPasteFromDisplayedRow(oldRow.item)
+        let receivedAfterOldRequest = await recorder.received
+        #expect(receivedAfterOldRequest.isEmpty)
+
+        #expect(await pollUntil { await history.observeRequests.count == 2 })
+        await history.emitObservedPage(fixturePage(rows: [newRow], next: nil))
+
+        #expect(
+            await pollUntil {
+                state.rows == [newRow] && !state.isLoadingFirstPage
+            }
+        )
+        state.requestPasteFromDisplayedRow(newRow.item)
+        #expect(await pollUntil { await recorder.received == [newRow.item] })
+
+        state.deactivate()
+        await history.finishObservation()
+    }
+
+    /// A malformed regexp is an authoritative typed outcome, not an empty
+    /// history snapshot. It ends first-page loading and remains available to
+    /// the panel's failure banner while the raw search intent stays active.
+    @Test func invalidRegexpFailureSettlesFirstPageLoading() async {
+        let history = ScriptedHistory()
+        let state = HistoryViewState(history: history)
+
+        state.searchText = "("
+        state.searchMode = .regexp
+        #expect(state.rows.isEmpty)
+        #expect(state.isLoadingFirstPage)
+        #expect(state.isSearchActive)
+        #expect(
+            await pollUntil {
+                let requests = await history.observeRequests
+                return requests.last?.kind == .search(text: "(", mode: .regexp)
+            }
+        )
+
+        await history.failObservation(
+            .invalidInput(.invalidRegularExpression)
+        )
+
+        #expect(
+            await pollUntil {
+                !state.isLoadingFirstPage
+                    && state.failure
+                        == .invalidInput(.invalidRegularExpression)
+            }
+        )
+        #expect(state.rows.isEmpty)
+        #expect(state.isSearchActive)
+        #expect(state.failureEpisode == 1)
+        #expect(state.canRetryFailureByRefreshing)
+
+        state.refresh()
+        #expect(state.failure == nil)
+        #expect(state.failureEpisode == 1)
+
+        state.deactivate()
+    }
+
     /// Search-field edits debounce into ONE restarted observation carrying
-    /// the trimmed text in the current mode; the rapid intermediate edit is
-    /// folded away, and whitespace-only text is not a search.
+    /// the final text in the current mode; the rapid intermediate edit is
+    /// folded away.
     @Test func searchTextEditsDebounceIntoOneRestartedObservation() async {
         let firstPage = fixturePage(
             rows: [fixtureRow(id: "00000000-0000-0000-0000-000000000051", title: "stable-row")],
@@ -311,10 +609,119 @@ struct HistoryViewStateTests {
         try? await Task.sleep(for: .milliseconds(400))
         #expect(await history.observeRequests.count == 2)
 
-        // Whitespace-only text is not a query (docs/03a-instruction-set.md
-        // §7 — it never reaches storage as an empty search term).
+        state.deactivate()
+        await history.finishObservation()
+    }
+
+    /// Exact and regexp are syntax-bearing modes: leading, trailing, and
+    /// whitespace-only drafts cross the History seam byte-for-byte. Only an
+    /// actually empty draft becomes `.recent`.
+    @Test(arguments: [SearchMode.exact, .regexp])
+    func syntaxBearingQueriesPreserveRawWhitespace(mode: SearchMode) async {
+        let history = ScriptedHistory()
+        let state = HistoryViewState(history: history)
+
+        state.searchText = "  needle  "
+        state.searchMode = mode
+        #expect(
+            await pollUntil {
+                let requests = await history.observeRequests
+                return requests.last?.kind
+                    == .search(text: "  needle  ", mode: mode)
+            }
+        )
+        #expect(state.searchText == "  needle  ")
+        #expect(state.isSearchActive)
+
         state.searchText = "   "
+        #expect(
+            await pollUntil {
+                let requests = await history.observeRequests
+                return requests.last?.kind == .search(text: "   ", mode: mode)
+            }
+        )
+        #expect(state.isSearchActive)
+
+        state.searchText = ""
+        #expect(
+            await pollUntil {
+                let requests = await history.observeRequests
+                return requests.last?.kind == .recent
+            }
+        )
         #expect(!state.isSearchActive)
+
+        state.deactivate()
+        await history.finishObservation()
+    }
+
+    /// Switching a long exact draft to fuzzy admits one bounded query intent
+    /// without first publishing an invalid fuzzy request. The raw draft stays
+    /// untouched so switching back to a syntax-bearing mode is lossless.
+    @Test func longExactToFuzzyIsOneAtomicAdmittedIntent() async {
+        let history = ScriptedHistory()
+        let state = HistoryViewState(history: history)
+        let rawDraft = String(repeating: "x", count: 65)
+        let admittedDraft = String(repeating: "x", count: 64)
+
+        state.searchText = rawDraft
+        state.searchMode = .exact
+        #expect(
+            await pollUntil {
+                let requests = await history.observeRequests
+                return requests.last?.kind == .search(text: rawDraft, mode: .exact)
+            }
+        )
+        let requestCountBeforeSwitch = await history.observeRequests.count
+
+        state.searchMode = .fuzzy
+        #expect(
+            await pollUntil {
+                await history.observeRequests.count == requestCountBeforeSwitch + 1
+            }
+        )
+
+        let allRequests = await history.observeRequests
+        let switchedRequests = allRequests.dropFirst(requestCountBeforeSwitch)
+        #expect(switchedRequests.count == 1)
+        #expect(
+            switchedRequests.first?.kind
+                == .search(text: admittedDraft, mode: .fuzzy)
+        )
+        #expect(state.searchText == rawDraft)
+
+        state.deactivate()
+        await history.finishObservation()
+    }
+
+    /// The visible Clear control uses this immediate intent instead of
+    /// waiting through the ordinary typing debounce.
+    @Test func clearSearchImmediatelyStartsOneRecentObservation() async {
+        let history = ScriptedHistory()
+        let state = HistoryViewState(history: history)
+        state.activate()
+        #expect(await pollUntil { await history.observeRequests.count == 1 })
+
+        state.searchText = "needle"
+        #expect(
+            await pollUntil {
+                let requests = await history.observeRequests
+                return requests.last?.kind
+                    == .search(text: "needle", mode: .fuzzy)
+            }
+        )
+        let countBeforeClear = await history.observeRequests.count
+
+        state.clearSearch()
+        #expect(state.searchText.isEmpty)
+        #expect(!state.isSearchActive)
+        #expect(
+            await pollUntil {
+                let requests = await history.observeRequests
+                return requests.count == countBeforeClear + 1
+                    && requests.last?.kind == .recent
+            }
+        )
 
         state.deactivate()
         await history.finishObservation()
@@ -437,6 +844,72 @@ struct HistoryViewStateTests {
                 return false
             }
         )
+
+        state.deactivate()
+        await history.finishObservation()
+    }
+
+    /// Banner dismissal belongs to one failure publication, not to the
+    /// equatable failure value. An ordinary observed snapshot cannot erase a
+    /// mutation failure; a later successful mutation does, and publishing the
+    /// same typed failure again creates a new episode that is visible again
+    /// (review Card 8H).
+    @Test func repeatedMutationFailurePublishesANewEpisodeAfterRecovery() async {
+        let failure = HistoryFailure.temporarilyUnavailable(.dedupIndexRebuild)
+        let firstPage = fixturePage(
+            rows: [fixtureRow(
+                id: "00000000-0000-0000-0000-000000000082",
+                title: "before-mutation"
+            )],
+            next: nil
+        )
+        let healthyPage = fixturePage(
+            rows: [fixtureRow(
+                id: "00000000-0000-0000-0000-000000000083",
+                title: "healthy-observation"
+            )],
+            next: nil
+        )
+        let history = ScriptedHistory(
+            observedFirstPage: firstPage,
+            performFailure: failure
+        )
+        let state = HistoryViewState(history: history)
+        let target = HistoryItemID(
+            rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000084")!
+        )
+        state.activate()
+        #expect(await pollUntil { state.rows == firstPage.rows })
+
+        state.unpin(target)
+        #expect(
+            await pollUntil {
+                state.failure == failure && state.failureEpisode == 1
+            }
+        )
+        let dismissedEpisode = state.failureEpisode
+
+        await history.emitObservedPage(healthyPage)
+        #expect(await pollUntil { state.rows == healthyPage.rows })
+        #expect(state.failure == failure)
+        #expect(state.failureEpisode == dismissedEpisode)
+        #expect(!state.canRetryFailureByRefreshing)
+
+        await history.setPerformFailure(nil)
+        state.unpin(target)
+        #expect(await pollUntil { state.failure == nil })
+        #expect(state.failureEpisode == dismissedEpisode)
+
+        await history.setPerformFailure(failure)
+        state.unpin(target)
+        #expect(
+            await pollUntil {
+                state.failure == failure
+                    && state.failureEpisode == dismissedEpisode + 1
+            }
+        )
+        #expect(state.failureEpisode != dismissedEpisode)
+        #expect(!state.canRetryFailureByRefreshing)
 
         state.deactivate()
         await history.finishObservation()

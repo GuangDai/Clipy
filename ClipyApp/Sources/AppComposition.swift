@@ -26,6 +26,25 @@ enum ClipyCompositionError: Error, Equatable {
     case storeAlreadyOpen(URL)
 }
 
+/// Content-free outcome for a copy request that did not complete. The app
+/// owner can surface this without retaining clipboard bytes or exposing
+/// AppKit values (REVIEW Card 7 / CLIP-5). AppDelegate presents it in the
+/// panel while keeping every failed request from closing the panel.
+enum ClipyPasteFailure: Error, Sendable, Equatable {
+    /// Another request already owns the exclusive copy slot. v1 deliberately
+    /// has no pending queue: repeated Return/double-click gestures must not
+    /// schedule later pasteboard overwrites.
+    case busy
+
+    /// The current-by-ID History read failed before any pasteboard write.
+    case history(HistoryFailure)
+
+    /// The pasteboard refused a representation while staging, or refused the
+    /// completed item after the board was cleared. The adapter does not
+    /// promise a cross-process atomic transaction.
+    case write(PasteboardWriteFailure)
+}
+
 // MARK: - AppComposition (docs/01-architecture.md §2, §5.6, §8)
 
 /// The assembled application object: the opened store, the pasteboard
@@ -43,7 +62,7 @@ final class AppComposition {
     /// The sole `ClipboardHistory` of the process — the concrete production
     /// facade (Part V §2). Injected into `viewState` and used by the paste
     /// path; never duplicated (01 §8).
-    let history: SwiftDataHistory
+    let history: any ClipboardHistory
 
     /// The NSPasteboard ↔ HistoryCore translator (01 §5.1/§5.6).
     let adapter: PasteboardAdapter
@@ -60,10 +79,22 @@ final class AppComposition {
     /// the floating panel never activates the app, so the paste target
     /// keeps focus and the only dismissal needed is the panel's own).
     /// A refused write (`PasteboardWriteFailure`) never reaches this hook:
-    /// the panel stays open so a partial paste is never presented as
-    /// success (audit SPEC-IMPL-005; 01 §5.6).
-    /// `nil` in hosted tests, where no panel exists.
+    /// the panel stays open so a failed system side effect is never presented
+    /// as success (audit SPEC-IMPL-005; 01 §5.6).
+    /// `nil` when no panel-close consumer is installed.
     var onPasteCompleted: (() -> Void)?
+
+    /// Invoked for every copy request that does not complete. Success and
+    /// failure hooks are mutually exclusive; a busy, History, staging/write,
+    /// or unexpected failure always leaves the panel open. AppDelegate maps
+    /// this hook to the panel's content-free failure banner.
+    var onPasteFailed: ((ClipyPasteFailure) -> Void)?
+
+    /// The entire v1 copy lane: one owned task means one active request and
+    /// zero pending requests. The slot is installed synchronously before the
+    /// task can reach its first `await`, so a second UI gesture is rejected as
+    /// `.busy` instead of entering FIFO/latest-wins machinery (CLIP-5).
+    private var pasteTask: Task<Void, Never>?
 
     /// Store URLs this process has opened. The process-side half of the
     /// no-second-writer rule (01 §8): `open(storeURL:)` consults and
@@ -86,18 +117,21 @@ final class AppComposition {
         .appendingPathComponent("Clipy", isDirectory: true)
         .appendingPathComponent("history.store")
 
-    /// Assembles the object; construction happens only inside
-    /// `open(storeURL:)`, which also performs the wiring in `start()`.
+    /// Assembles one coherent app graph from the two true boundary values.
+    /// View state and observer are always derived here, so tests cannot pair
+    /// a History or pasteboard adapter with mismatched collaborators.
     private init(
-        history: SwiftDataHistory,
+        history: any ClipboardHistory,
         adapter: PasteboardAdapter,
-        observer: PasteboardObserver,
-        viewState: HistoryViewState
+        observerPollInterval: TimeInterval = 0.5
     ) {
         self.history = history
         self.adapter = adapter
-        self.observer = observer
-        self.viewState = viewState
+        observer = PasteboardObserver(
+            adapter: adapter,
+            pollInterval: observerPollInterval
+        )
+        viewState = HistoryViewState(history: history)
     }
 
     /// Opens the persistent store (creating the store's parent directory
@@ -155,13 +189,9 @@ final class AppComposition {
             )
         )
         let adapter = PasteboardAdapter()
-        let viewState = HistoryViewState(history: history)
-        let observer = PasteboardObserver(adapter: adapter)
         return AppComposition(
             history: history,
-            adapter: adapter,
-            observer: observer,
-            viewState: viewState
+            adapter: adapter
         )
     }
 
@@ -169,24 +199,13 @@ final class AppComposition {
     /// exactly once by `open(storeURL:)`; the composition is not ready for
     /// UI use until it returns.
     private func start() {
-        // Paste hand-off (01 §5.6; 03b §12): `onPaste` is a synchronous
-        // `@Sendable` closure, so it cannot synchronously call the
-        // MainActor-isolated `paste(_:)`; selections cross through a Sendable
-        // `AsyncStream` mailbox instead. The MainActor pump below — an
-        // unstructured task retained by the runtime for its lifetime — is
-        // the only consumer and the only caller of `paste(_:)`. When this
-        // composition is released, the continuation (owned by the closure,
-        // transitively by `viewState`) is released too and the stream
-        // finishes, ending the pump.
-        let (pasteStream, pasteContinuation) =
-            AsyncStream<HistoryItemReference>.makeStream()
-        viewState.onPaste = { item in
-            pasteContinuation.yield(item)
-        }
-        Task { [weak self] in
-            for await item in pasteStream {
-                self?.paste(item)
-            }
+        // Paste hand-off (01 §5.6; 03b §12): `requestPaste(_:)` is
+        // MainActor-isolated, matching PresentationUI's stored
+        // `@MainActor @Sendable` callback. Admit directly into the one owned
+        // slot at this module boundary.
+        // There is no mailbox, pending queue, or nested task.
+        viewState.onPaste = { [weak self] item in
+            self?.requestPaste(item)
         }
 
         // Capture loop (01 §5.1; 03a §4): one COMPLETE capture per distinct
@@ -214,40 +233,132 @@ final class AppComposition {
         }
     }
 
+    /// Stops app-owned side effects. Cancellation is advisory for History,
+    /// so the copy task checks it again after payload resolution and before
+    /// touching the pasteboard; a late non-cooperative read cannot write or
+    /// publish callbacks after shutdown.
+    func stop() {
+        observer.stop()
+        viewState.deactivate()
+        viewState.onPaste = { _ in }
+        pasteTask?.cancel()
+        pasteTask = nil
+    }
+
+#if DEBUG
+    /// Hosted tests use the production graph builder with only the two system
+    /// boundaries substituted, then drive the same started copy lane.
+    static func makeForTesting(
+        history: any ClipboardHistory,
+        adapter: PasteboardAdapter,
+        observerPollInterval: TimeInterval = 60
+    ) -> AppComposition {
+        let composition = AppComposition(
+            history: history,
+            adapter: adapter,
+            observerPollInterval: observerPollInterval
+        )
+        composition.start()
+        return composition
+    }
+#endif
+
     /// Paste orchestration — the ONLY History → pasteboard hand-off
     /// (01 §5.6; 03b §12; 04 §8): resolve the item's current Effective
     /// Content payload, write it to the general pasteboard (with the
     /// lineage hint that lets the next capture coalesce the round-trip,
     /// 03b §9), then run `onPasteCompleted` (which closes the floating
     /// panel — it never activated the app, so the user's target kept focus
-    /// throughout and receives the paste). Everything happens outside any
+    /// and remains ready for the user's manual Paste command). Everything
+    /// happens outside any
     /// History transaction — a paste is a clipboard side effect, never
     /// durable History state (04 §8).
     ///
     /// `onPasteCompleted` runs only after a VERIFIED full write (01 §5.6;
     /// audit SPEC-IMPL-005): `PasteboardAdapter.write` throws
-    /// `PasteboardWriteFailure` when the pasteboard refuses any
-    /// representation or the hint (Apple documents a false `setData`
-    /// return as an ownership change), and a refused write may leave a
-    /// PREFIX of the payload on the pasteboard — so on failure the hook
-    /// is skipped and the panel stays OPEN rather than presenting the
-    /// paste as completed. A payload-resolution failure (the item removed
+    /// `PasteboardWriteFailure` when staging rejects any representation/hint
+    /// before clear, or when the system refuses the one completed item.
+    /// Staging failure preserves the old pasteboard; a post-clear framework
+    /// refusal has no rollback guarantee. In either case the hook is skipped
+    /// and the panel stays OPEN. A payload-resolution failure (the item removed
     /// between selection and paste fails `.notFound`, 03b §10) still
     /// leaves the pasteboard untouched and the panel open; observation
     /// refreshes the rows. Auto-paste (Command-V) and plain-text paste
     /// remain out of scope (05-recommended-target-design.md product
     /// decisions).
-    func paste(_ item: HistoryItemReference) {
-        Task {
-            guard let payload = try? await history.pastePayload(for: item.id) else {
-                return
+    private func requestPaste(_ item: HistoryItemReference) {
+        // Exclusive first-accepted policy (REVIEW CLIP-5/Card 7): the first
+        // request reserves the slot before any suspension. There is no
+        // pending request because a later pasteboard overwrite is not a
+        // reversible operation and repeated UI activation should be busy.
+        guard pasteTask == nil else {
+            onPasteFailed?(.busy)
+            return
+        }
+
+        let history = self.history
+        let adapter = self.adapter
+        pasteTask = Task { [weak self] in
+            let outcome = await Self.executePaste(
+                item,
+                history: history,
+                adapter: adapter
+            )
+            guard !Task.isCancelled, let self else { return }
+
+            // Release admission before publishing either hook so a user's
+            // explicit retry from failure UI is immediately admissible.
+            pasteTask = nil
+            switch outcome {
+            case .completed:
+                onPasteCompleted?()
+            case .failed(let failure):
+                onPasteFailed?(failure)
+            case .cancelled:
+                break
             }
-            do {
-                try adapter.write(payload)
-            } catch {
-                return
-            }
-            onPasteCompleted?()
+        }
+    }
+
+    private enum PasteExecutionOutcome {
+        case completed
+        case failed(ClipyPasteFailure)
+        case cancelled
+    }
+
+    /// Runs one accepted request as one structured sequence: resolve the
+    /// item's CURRENT Effective Content by ID, then perform the synchronous
+    /// AppKit write. It never spawns work and never invokes UI hooks itself.
+    /// `.completed` is the sole verified-success outcome.
+    private static func executePaste(
+        _ item: HistoryItemReference,
+        history: any ClipboardHistory,
+        adapter: PasteboardAdapter
+    ) async -> PasteExecutionOutcome {
+        let payload: PastePayload
+        do {
+            payload = try await history.pastePayload(for: item.id)
+        } catch is CancellationError {
+            return .cancelled
+        } catch let failure as HistoryFailure {
+            return .failed(.history(failure))
+        } catch {
+            preconditionFailure(
+                "ClipboardHistory.pastePayload violated its HistoryFailure contract"
+            )
+        }
+
+        guard !Task.isCancelled else { return .cancelled }
+
+        do {
+            try adapter.write(payload)
+            return .completed
+        } catch let failure as PasteboardWriteFailure {
+            return .failed(.write(failure))
+        } catch {
+            preconditionFailure(
+                "PasteboardAdapter.write violated its PasteboardWriteFailure contract"
+            )
         }
     }
 }

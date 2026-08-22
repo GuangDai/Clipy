@@ -7,11 +7,12 @@
 ///   the configured private/transient set — marks the WHOLE
 ///   `ClipboardCapture` concealed; sibling plaintext is frozen alongside
 ///   the marker, never submitted as an ordinary stripped capture.
-/// - `write(_:)` clears the pasteboard, writes the payload's Effective
-///   Content representations, and writes the lineage hint equal to the item
-///   ID; the hint decodes back into `CopyOriginObservation.lineageHint` on
-///   the next capture (03b §9; 04 §8; 01 §5.6). End-to-end coalescing via
-///   the hint is proven by WS4 through History, not here.
+/// - `write(_:)` stages the payload's Effective Content representations and
+///   lineage hint on one new item before touching the pasteboard, then makes
+///   one framework write attempt; the hint decodes back into
+///   `CopyOriginObservation.lineageHint` on the next capture (03b §9; 04
+///   §8; 01 §5.6). End-to-end coalescing via the hint is proven by WS4
+///   through History, not here.
 /// - The observer captures the current contents immediately on start, then
 ///   fires the handler once per distinct `changeCount` bump.
 /// - Failure is explicit, never silent (audit SPEC-IMPL-005,
@@ -19,11 +20,12 @@
 ///   a declared-but-unavailable type (Apple: contents changed / provider
 ///   timed out) is recorded on `CaptureOutcome.unavailableTypeIdentifiers`
 ///   instead of being silently dropped, and `write(_:)` throws
-///   `PasteboardWriteFailure` naming every refused type identifier instead
-///   of ignoring the `setData` Booleans. The Debug-only deterministic seam
-///   (`simulatedUnavailableTypeIdentifiers` /
-///   `simulatedRejectedWriteTypeIdentifiers`) injects each documented
-///   AppKit failure; those declarations and branches do not compile in Release.
+///   `PasteboardWriteFailure` for refused item staging or a refused whole-item
+///   write instead of ignoring framework Booleans. The Debug-only
+///   deterministic seam (`simulatedUnavailableTypeIdentifiers` /
+///   `simulatedRejectedWriteTypeIdentifiers` / `simulatedItemWriteRejected`)
+///   injects unavailable reads, staging rejection, and completed-item
+///   rejection; those declarations and branches do not compile in Release.
 ///
 /// Every test uses a private `NSPasteboard(name:)` with a unique name, so
 /// the suite never reads or mutates the user's clipboard.
@@ -201,7 +203,7 @@ func writeRoundTripsLineageHintIntoCaptureOrigin() throws {
 }
 
 @Test @MainActor
-func writeClearsPriorContentAndWritesAllRepresentations() throws {
+func writeReplacesPriorContentWithOneCompleteItem() throws {
     let pasteboard = makePasteboard()
     pasteboard.clearContents()
     pasteboard.setData(Data("stale".utf8), forType: NSPasteboard.PasteboardType("com.clipy.tests.stale"))
@@ -215,18 +217,28 @@ func writeClearsPriorContentAndWritesAllRepresentations() throws {
                 HistoryRepresentation(
                     typeIdentifier: "public.utf8-plain-text",
                     bytes: Data("fresh".utf8)
+                ),
+                HistoryRepresentation(
+                    typeIdentifier: "public.html",
+                    bytes: Data("<b>fresh</b>".utf8)
                 )
             ],
             lineageHint: id
         )
     )
 
+    #expect(pasteboard.pasteboardItems?.count == 1)
     let item = pasteboard.pasteboardItems?.first
     let typeIdentifiers = item?.types.map { $0.rawValue } ?? []
     #expect(typeIdentifiers.contains("public.utf8-plain-text"))
+    #expect(typeIdentifiers.contains("public.html"))
     #expect(typeIdentifiers.contains(PasteboardLineageHint.typeIdentifier))
     #expect(!typeIdentifiers.contains("com.clipy.tests.stale"))
     #expect(item?.data(forType: .string) == Data("fresh".utf8))
+    #expect(
+        item?.data(forType: NSPasteboard.PasteboardType("public.html"))
+            == Data("<b>fresh</b>".utf8)
+    )
     #expect(
         item?.data(forType: NSPasteboard.PasteboardType(PasteboardLineageHint.typeIdentifier))
             == PasteboardLineageHint.encode(id)
@@ -305,9 +317,13 @@ func captureOfAnItemWhoseEveryRepresentationIsUnavailableReturnsNil() {
 }
 
 @Test @MainActor
-func writeAttemptsEveryRepresentationThenThrowsTheRefusedSet() throws {
+func rejectedRepresentationStagingLeavesExistingPasteboardUntouched() throws {
     let pasteboard = makePasteboard()
     pasteboard.clearContents()
+    let sentinelType = NSPasteboard.PasteboardType("com.clipy.tests.sentinel")
+    let sentinelBytes = Data("keep me".utf8)
+    pasteboard.setData(sentinelBytes, forType: sentinelType)
+    let sentinelChangeCount = pasteboard.changeCount
     var adapter = PasteboardAdapter(pasteboard: pasteboard)
     adapter.simulatedRejectedWriteTypeIdentifiers = ["public.html"]
 
@@ -321,8 +337,7 @@ func writeAttemptsEveryRepresentationThenThrowsTheRefusedSet() throws {
         lineageHint: id
     )
 
-    // The typed failure names every refused type identifier (Apple: a
-    // false `setData` return is an ownership change).
+    // The typed failure names every refused staged type identifier.
     do {
         try adapter.write(payload)
         Issue.record("SPEC-IMPL-005: expected PasteboardWriteFailure")
@@ -333,21 +348,29 @@ func writeAttemptsEveryRepresentationThenThrowsTheRefusedSet() throws {
         )
     }
 
-    // Collect-then-throw: the write still attempted everything, so the
-    // accepted representation AND the lineage hint landed on the board.
+    // All setters target an unbound in-memory item. A staging failure is
+    // reported before clear/writeObjects, so even changeCount is unchanged.
+    #expect(pasteboard.changeCount == sentinelChangeCount)
+    #expect(pasteboard.pasteboardItems?.count == 1)
     let item = pasteboard.pasteboardItems?.first
-    #expect(item?.data(forType: .string) == Data("Clipy".utf8))
+    #expect(item?.types.map(\.rawValue) == [sentinelType.rawValue])
+    #expect(item?.data(forType: sentinelType) == sentinelBytes)
+    #expect(item?.data(forType: .string) == nil)
     #expect(item?.data(forType: NSPasteboard.PasteboardType("public.html")) == nil)
     #expect(
         item?.data(forType: NSPasteboard.PasteboardType(PasteboardLineageHint.typeIdentifier))
-            == PasteboardLineageHint.encode(id)
+            == nil
     )
 }
 
 @Test @MainActor
-func writeReportsALineageHintRefusalInTheRefusedSet() throws {
+func rejectedLineageHintStagingLeavesExistingPasteboardUntouched() throws {
     let pasteboard = makePasteboard()
     pasteboard.clearContents()
+    let sentinelType = NSPasteboard.PasteboardType("com.clipy.tests.sentinel")
+    let sentinelBytes = Data("keep me too".utf8)
+    pasteboard.setData(sentinelBytes, forType: sentinelType)
+    let sentinelChangeCount = pasteboard.changeCount
     var adapter = PasteboardAdapter(pasteboard: pasteboard)
     adapter.simulatedRejectedWriteTypeIdentifiers = [
         PasteboardLineageHint.typeIdentifier
@@ -377,12 +400,51 @@ func writeReportsALineageHintRefusalInTheRefusedSet() throws {
         )
     }
 
-    // The content representation itself was accepted; only the hint was
-    // refused.
+    #expect(pasteboard.changeCount == sentinelChangeCount)
+    #expect(pasteboard.pasteboardItems?.count == 1)
+    let item = pasteboard.pasteboardItems?.first
+    #expect(item?.types.map(\.rawValue) == [sentinelType.rawValue])
+    #expect(item?.data(forType: sentinelType) == sentinelBytes)
+    #expect(item?.data(forType: .string) == nil)
     #expect(
-        pasteboard.pasteboardItems?.first?.data(forType: .string)
-            == Data("Clipy".utf8)
+        item?.data(forType: NSPasteboard.PasteboardType(PasteboardLineageHint.typeIdentifier))
+            == nil
     )
+}
+
+@Test @MainActor
+func rejectedWholeItemIsReportedAfterClearingThePasteboard() throws {
+    let pasteboard = makePasteboard()
+    pasteboard.clearContents()
+    let sentinelType = NSPasteboard.PasteboardType("com.clipy.tests.sentinel")
+    pasteboard.setData(Data("not retained".utf8), forType: sentinelType)
+    let sentinelChangeCount = pasteboard.changeCount
+    var adapter = PasteboardAdapter(pasteboard: pasteboard)
+    adapter.simulatedItemWriteRejected = true
+
+    let id = HistoryItemID(rawValue: UUID())
+    let payload = PastePayload(
+        item: HistoryItemReference(id: id, contentVersion: ContentVersion(rawValue: 1)),
+        representations: [
+            HistoryRepresentation(
+                typeIdentifier: "public.utf8-plain-text",
+                bytes: Data("Clipy".utf8)
+            )
+        ],
+        lineageHint: id
+    )
+
+    do {
+        try adapter.write(payload)
+        Issue.record("SPEC-IMPL-005: expected whole-item write rejection")
+    } catch let failure as PasteboardWriteFailure {
+        #expect(failure == .itemRejected)
+    }
+
+    // Whole-item refusal happens after clearContents(). There is no rollback
+    // contract: this deterministic fixture has advanced and is now empty.
+    #expect(pasteboard.changeCount > sentinelChangeCount)
+    #expect((pasteboard.pasteboardItems ?? []).isEmpty)
 }
 #endif
 

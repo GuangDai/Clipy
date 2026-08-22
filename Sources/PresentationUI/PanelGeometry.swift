@@ -3,13 +3,14 @@
 /// root (the AppKit panel's `setFrame` calls) so the two sides can never
 /// disagree about how wide the window is (Maccy's `Defaults[.windowSize]` /
 /// `SlideoutController.computeSizeWithPreview` pair, simplified: Clipy's
-/// panel is fixed-size, and the preview column extends it by a constant).
+/// panel is fixed-size, and the preview column extends it by a constant on
+/// the side selected by `PreviewPlacement`).
 import CoreGraphics
 import Foundation
 
 /// The panel's fixed dimensions (the pre-preview contract was a hard-coded
 /// 400×560 frame on `HistoryPanelView`; the preview column adds
-/// `dividerWidth + previewWidth` to the right when open).
+/// `dividerWidth + previewWidth` on the selected side when open).
 public enum PanelGeometry {
     /// The browsing column (search header + list + footer) width.
     public static let contentWidth: CGFloat = 400

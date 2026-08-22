@@ -46,12 +46,37 @@ public final class HistoryViewState {
     /// True while a one-shot `browse` pagination request is in flight.
     public private(set) var isLoadingPage = false
 
+    /// True after a browse intent has invalidated its prior rows and before
+    /// the replacement observation produces its first authoritative page (or
+    /// typed failure). This is intentionally separate from pagination: no
+    /// prior-query row remains executable during this phase.
+    public private(set) var isLoadingFirstPage = false
+
     /// The latest typed failure to surface in the panel banner; `nil` when
-    /// healthy. Cleared when an observed page arrives.
+    /// its owning operation has recovered.
     public private(set) var failure: HistoryFailure?
 
-    /// The live search field text. Edits restart observation after a 250 ms
-    /// debounce; empty/whitespace text means kind `.recent`.
+    /// Monotonic identity of a published failure. Unlike `HistoryFailure`
+    /// equality, this distinguishes two occurrences of the same typed value
+    /// so dismissing one banner cannot suppress a later recurrence (Card 8H).
+    package private(set) var failureEpisode = 0
+
+    /// Whether the visible failure belongs to query activity that
+    /// `refresh()` can actually retry. Mutation failures require repeating
+    /// their original user action; presenting Refresh as mutation Retry would
+    /// be a no-op with misleading copy (Card 8H).
+    package var canRetryFailureByRefreshing: Bool {
+        switch failureSource {
+        case .observation, .pagination:
+            return true
+        case .mutation, nil:
+            return false
+        }
+    }
+
+    /// The raw search-field draft. Edits restart observation after a 250 ms
+    /// debounce; only the empty string means `.recent`. Exact and regexp
+    /// whitespace is syntax and is never rewritten by presentation state.
     public var searchText: String = "" {
         didSet { scheduleSearchRestart() }
     }
@@ -59,14 +84,14 @@ public final class HistoryViewState {
     /// The search evaluation mode (docs/03a-instruction-set.md §7). A change
     /// restarts observation immediately.
     public var searchMode: SearchMode = .fuzzy {
-        didSet { restartObservation() }
+        didSet { replaceObservationImmediately() }
     }
 
     /// Composition-root paste hand-off (docs/01-architecture.md §5.6): the
     /// view state never touches the pasteboard; it hands the reference to the
     /// app, which resolves the payload and writes it. Default no-op so
     /// previews need no wiring.
-    public var onPaste: @Sendable (HistoryItemReference) -> Void = { _ in }
+    public var onPaste: @MainActor @Sendable (HistoryItemReference) -> Void = { _ in }
 
     // MARK: - Pagination/observation bookkeeping (private)
 
@@ -75,6 +100,14 @@ public final class HistoryViewState {
 
     /// The pending 250 ms search-debounce task.
     private var debounceTask: Task<Void, Never>?
+
+    /// The one-shot page request owned by the current browsing lifecycle.
+    private var paginationTask: Task<Void, Never>?
+
+    /// Monotonic ownership token for pagination completion. Cancellation is
+    /// advisory; the token prevents a non-cooperative stale request from
+    /// mutating rows or a newer request's loading state.
+    private var paginationRequestToken = 0
 
     /// Cursor to the page after the last displayed page; `nil` when the
     /// display holds the final page.
@@ -93,6 +126,17 @@ public final class HistoryViewState {
     /// applied observed page, so a one-shot pagination result captured against
     /// superseded rows is discarded instead of appending to replaced rows.
     private var observationGeneration = 0
+
+    /// The operation family that owns the visible failure. Observation and
+    /// pagination recover through query activity; mutation failures remain
+    /// visible until a later mutation succeeds.
+    private enum FailureSource: Equatable {
+        case mutation
+        case observation
+        case pagination
+    }
+
+    private var failureSource: FailureSource?
 
     /// Search-edit debounce (V2-07 §4 feel: no per-keystroke re-observe).
     private static let searchDebounceInterval: Duration = .milliseconds(250)
@@ -122,28 +166,36 @@ public final class HistoryViewState {
         nextPageCursor != nil
     }
 
-    /// Whether the search field holds a query (non-empty after whitespace
-    /// trimming) — drives the "N results" caption and empty-state choice.
+    /// Whether the search field holds a query. Only a truly empty raw draft
+    /// is `.recent`; whitespace can be meaningful exact/regexp syntax.
     public var isSearchActive: Bool {
-        !searchText.trimmingCharacters(in: .whitespaces).isEmpty
+        !searchText.isEmpty
     }
 
-    /// The current query shape: `.recent` when the trimmed text is empty,
-    /// else a search in the current mode. The trimmed text is passed so a
-    /// whitespace-only field never reaches storage as an empty search term.
-    private var currentKind: HistoryBrowseKind {
-        let trimmed = searchText.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return .recent }
-        return .search(text: trimmed, mode: searchMode)
+    /// The admitted query shape derived atomically from raw draft + mode.
+    /// Exact/regexp preserve the draft byte-for-byte. Fuzzy admission is a
+    /// bounded view of that draft, leaving the raw value intact for a later
+    /// mode switch (03b §8; 06 §2).
+    private var admittedKind: HistoryBrowseKind {
+        guard !searchText.isEmpty else { return .recent }
+        switch searchMode {
+        case .exact, .regexp:
+            return .search(text: searchText, mode: searchMode)
+        case .fuzzy:
+            let limit = HistoryLimits.standard.maximumFuzzyQueryCharacters
+            return .search(text: String(searchText.prefix(limit)), mode: .fuzzy)
+        }
     }
 
     // MARK: - Lifecycle
 
     /// Starts the observe loop for the current query. Idempotent: an existing
-    /// loop is cancelled first, so re-activation after `deactivate()` (or a
-    /// redundant `.task` restart) is safe.
+    /// loop already owns the active panel episode, so duplicate AppKit and
+    /// SwiftUI lifecycle notifications do not register a second observer.
+    /// Re-activation after `deactivate()` starts a fresh loop.
     public func activate() {
-        restartObservation()
+        guard observationTask == nil else { return }
+        replaceObservationImmediately()
     }
 
     /// Cancels the observe loop and any pending debounce; safe to call again
@@ -153,12 +205,25 @@ public final class HistoryViewState {
         debounceTask = nil
         observationTask?.cancel()
         observationTask = nil
+        invalidatePagination()
+        isLoadingFirstPage = false
     }
 
     /// Explicit re-observe on user action (V2-07 §4: re-browse after retry) —
     /// immediate, no debounce.
     public func refresh() {
-        restartObservation()
+        replaceObservationImmediately()
+    }
+
+    /// Clears the raw query as one immediate intent. The TextField's ordinary
+    /// edits remain debounced, while its explicit Clear control invalidates
+    /// the old generation and starts `.recent` without a stale-results window.
+    public func clearSearch() {
+        guard !searchText.isEmpty else { return }
+        searchText = ""
+        debounceTask?.cancel()
+        debounceTask = nil
+        startObservation()
     }
 
     /// Appends one one-shot browse page after the last displayed row
@@ -168,30 +233,34 @@ public final class HistoryViewState {
     /// cursor (docs/04-coherence.md §6).
     public func loadNextPage() {
         guard !isLoadingPage, let cursor = nextPageCursor else { return }
+        paginationRequestToken += 1
+        let requestToken = paginationRequestToken
         isLoadingPage = true
 
         // Snapshot the request shape at call time: MainActor is free during
         // the await, and the cursor must travel with the kind it was minted
         // under or storage will (correctly) fail it as `.snapshotExpired`.
-        let kind = currentKind
+        let kind = admittedKind
         let limit = pageLimit
         let generation = observationGeneration
         let history = self.history
 
-        Task { [weak self] in
-            guard let self else { return }
-            defer { self.isLoadingPage = false }
+        paginationTask = Task { [weak self] in
             do {
                 let page = try await history.browse(
                     HistoryBrowseRequest(kind: kind, limit: limit, after: cursor)
                 )
-                guard !Task.isCancelled,
+                guard let self,
+                      self.paginationRequestToken == requestToken,
                       self.observationGeneration == generation
                 else { return }
                 self.rows.append(contentsOf: page.rows)
                 self.nextPageCursor = page.next
+                self.clearFailure(from: .pagination)
+                self.finishPagination(requestToken)
             } catch let failure as HistoryFailure {
-                guard !Task.isCancelled,
+                guard let self,
+                      self.paginationRequestToken == requestToken,
                       self.observationGeneration == generation
                 else { return }
                 if case .snapshotExpired = failure {
@@ -200,11 +269,13 @@ public final class HistoryViewState {
                     self.rows = self.observedRows
                     self.nextPageCursor = self.observedCursor
                 }
-                self.failure = failure
+                self.publishFailure(failure, from: .pagination)
+                self.finishPagination(requestToken)
             } catch {
                 // browse throws typed HistoryFailure at the storage boundary
                 // (docs/03a-instruction-set.md §3); an untyped error has no
                 // panel vocabulary and is swallowed.
+                self?.finishPagination(requestToken)
             }
         }
     }
@@ -214,6 +285,15 @@ public final class HistoryViewState {
     /// Hands a paste request to the composition root (docs/
     /// 01-architecture.md §5.6); the view state never touches NSPasteboard.
     public func requestPaste(_ item: HistoryItemReference) {
+        onPaste(item)
+    }
+
+    /// List-owned paste requests are accepted only while the exact row is
+    /// still in the authoritative display. This closes the short render gap
+    /// in which a stale row closure could otherwise fire after query intent
+    /// has synchronously cleared `rows`.
+    package func requestPasteFromDisplayedRow(_ item: HistoryItemReference) {
+        guard rows.contains(where: { $0.item == item }) else { return }
         onPaste(item)
     }
 
@@ -273,20 +353,35 @@ public final class HistoryViewState {
 
     // MARK: - Observation plumbing (private)
 
-    /// Cancels any current loop and debounce, then observes the current query.
-    /// Pagination state is reset because its cursor belongs to the superseded
-    /// query shape; the displayed rows are kept as the recovery baseline
-    /// until the new stream's first page replaces them.
-    private func restartObservation() {
+    /// Invalidates one browse intent and immediately starts its replacement
+    /// observation. The invalidation itself is shared with debounced edits so
+    /// one intent bumps ownership exactly once.
+    private func replaceObservationImmediately() {
+        beginFirstPageLoad()
+        startObservation()
+    }
+
+    /// Synchronously retires all state owned by the previous browse intent.
+    /// This is the single invalidation path for immediate and debounced
+    /// replacement, not a general loading-state reducer.
+    private func beginFirstPageLoad() {
         debounceTask?.cancel()
         debounceTask = nil
         observationTask?.cancel()
+        observationTask = nil
+        invalidatePagination()
         observationGeneration += 1
+        rows = []
         nextPageCursor = nil
         observedCursor = nil
-        observedRows = rows
+        observedRows = []
+        clearQueryFailure()
+        isLoadingFirstPage = true
+    }
 
-        let kind = currentKind
+    /// Starts observation for the already-invalidated current intent.
+    private func startObservation() {
+        let kind = admittedKind
         let limit = pageLimit
         let history = self.history
 
@@ -310,7 +405,8 @@ public final class HistoryViewState {
                 guard !Task.isCancelled,
                       let failure = error as? HistoryFailure
                 else { return }
-                self?.failure = failure
+                self?.publishFailure(failure, from: .observation)
+                self?.isLoadingFirstPage = false
             }
         }
     }
@@ -320,17 +416,35 @@ public final class HistoryViewState {
     /// the recovery resume point. The generation bump discards any in-flight
     /// one-shot append whose rows were captured before this replacement.
     private func applyObservedPage(_ page: HistoryPage) {
+        invalidatePagination()
         observationGeneration += 1
         rows = page.rows
         observedRows = page.rows
         nextPageCursor = page.next
         observedCursor = page.next
-        failure = nil
+        clearQueryFailure()
+        isLoadingFirstPage = false
+    }
+
+    /// Cancels and invalidates pagination synchronously. The request may
+    /// still return, but only the current token may publish or finish loading.
+    private func invalidatePagination() {
+        paginationTask?.cancel()
+        paginationTask = nil
+        paginationRequestToken += 1
+        isLoadingPage = false
+    }
+
+    /// Clears loading only when `token` still owns the current request.
+    private func finishPagination(_ token: Int) {
+        guard paginationRequestToken == token else { return }
+        paginationTask = nil
+        isLoadingPage = false
     }
 
     /// Debounces search-field edits into one observation restart.
     private func scheduleSearchRestart() {
-        debounceTask?.cancel()
+        beginFirstPageLoad()
         debounceTask = Task { [weak self] in
             do {
                 try await Task.sleep(for: Self.searchDebounceInterval)
@@ -338,7 +452,8 @@ public final class HistoryViewState {
                 // Cancelled: a newer edit owns the restart.
                 return
             }
-            self?.restartObservation()
+            self?.debounceTask = nil
+            self?.startObservation()
         }
     }
 
@@ -351,12 +466,45 @@ public final class HistoryViewState {
             guard let self else { return }
             do {
                 _ = try await history.perform(action)
+                self.clearFailure(from: .mutation)
             } catch let failure as HistoryFailure {
-                self.failure = failure
+                self.publishFailure(failure, from: .mutation)
             } catch {
                 // perform throws typed HistoryFailure at the storage
                 // boundary (docs/03a-instruction-set.md §3).
             }
+        }
+    }
+
+    /// Publishes one concrete failure occurrence. Equality is deliberately
+    /// irrelevant: a repeated typed value after recovery is a new episode.
+    private func publishFailure(
+        _ failure: HistoryFailure,
+        from source: FailureSource
+    ) {
+        self.failure = failure
+        failureSource = source
+        failureEpisode += 1
+    }
+
+    /// Clears a failure only when the successful operation belongs to the
+    /// same family; unrelated healthy activity must not hide it.
+    private func clearFailure(from source: FailureSource) {
+        guard failureSource == source else { return }
+        failure = nil
+        failureSource = nil
+    }
+
+    /// A fresh query intent or authoritative page retires query-owned
+    /// observation/pagination failures, while leaving mutation feedback
+    /// visible until the next explicit mutation succeeds.
+    private func clearQueryFailure() {
+        switch failureSource {
+        case .observation, .pagination:
+            failure = nil
+            failureSource = nil
+        case .mutation, nil:
+            break
         }
     }
 }

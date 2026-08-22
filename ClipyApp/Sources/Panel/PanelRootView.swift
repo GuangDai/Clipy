@@ -32,6 +32,7 @@ struct PanelRootView: View {
                 HistoryPanelView(
                     viewState: composition.viewState,
                     previewState: appDelegate.previewState,
+                    previewPlacement: appDelegate.previewPlacement,
                     onOpenSettings: {
                         // Activate first (the old `openSettingsWindow`
                         // behavior): an LSUIElement agent never activates
@@ -54,6 +55,12 @@ struct PanelRootView: View {
                         width: PanelGeometry.contentWidth,
                         height: PanelGeometry.height
                     )
+            }
+        }
+        .overlay(alignment: .top) {
+            if let pasteFailure = appDelegate.pasteFailure {
+                pasteFailureBanner(pasteFailure)
+                    .padding(8)
             }
         }
         // The panel window is transparent; the content carries the
@@ -98,5 +105,39 @@ struct PanelRootView: View {
             return "Clipy's history store is already open in this app. Quit Clipy and try again."
         }
         return "Clipy couldn't open its history store."
+    }
+
+    private func pasteFailureBanner(_ failure: ClipyPasteFailure) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.yellow)
+                .accessibilityHidden(true)
+            Text(pasteFailureMessage(failure))
+                .font(.callout)
+                .lineLimit(2)
+            Spacer(minLength: 8)
+            Button {
+                appDelegate.dismissPasteFailure()
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss copy failure")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .shadow(radius: 4)
+    }
+
+    private func pasteFailureMessage(_ failure: ClipyPasteFailure) -> String {
+        switch failure {
+        case .busy:
+            return "A copy is already in progress. Try again when it finishes."
+        case .history(let historyFailure):
+            return FailurePresentation.message(for: historyFailure)
+        case .write:
+            return "The pasteboard refused this copy. Try again."
+        }
     }
 }

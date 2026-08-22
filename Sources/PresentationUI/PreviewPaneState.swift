@@ -13,7 +13,8 @@
 ///   (`isAutoOpenSuppressed`), so the pane does not bounce back open under
 ///   the user's cursor;
 /// - the panel's key status arms/disarms auto-open
-///   (`panelBecameKey`/`panelResignedKey`); panel close resets everything.
+///   (`panelBecameKey`/`panelResignedKey`); panel close leaves auto-open
+///   disarmed until the next key-window activation.
 ///
 /// Pure Foundation + HistoryCore: no AppKit, no SwiftData (01 §8); the view
 /// layer renders `previewedItem` and ClipyApp's panel observes `isOpen`.
@@ -71,6 +72,16 @@ public final class PreviewPaneState {
         scheduleAutoOpen(for: item)
     }
 
+    /// Advances the exact reference of the item already visible in preview.
+    /// Observation can revise an item without changing the list's ID-only
+    /// selection; that is content coherence, not a new cross-item dwell.
+    /// Closed/manual-suppressed panes stay closed.
+    package func refreshOpenPreview(_ item: HistoryItemReference) {
+        guard isOpen, previewedItem?.id == item.id else { return }
+        cancelPendingAutoOpen()
+        previewedItem = item
+    }
+
     // MARK: - Manual toggle (Maccy `togglePreview()`)
 
     /// The ⌃Space surface: opens the preview for the current selection
@@ -101,14 +112,16 @@ public final class PreviewPaneState {
         cancelPendingAutoOpen()
     }
 
-    /// The panel closed: reset the whole pane state (Maccy's
-    /// `FloatingPanel.close` → `preview.state = .closed; previewedItem = nil`).
+    /// The panel closed: clear the pane and keep automatic opening disarmed
+    /// until AppKit reports that the panel became key again. Selection
+    /// changes published while the panel is hidden therefore cannot leak
+    /// into the next visible session (review Card 9E).
     public func panelClosed() {
         cancelPendingAutoOpen()
         isOpen = false
         previewedItem = nil
         isAutoOpenSuppressed = false
-        isAutoOpenEnabled = true
+        isAutoOpenEnabled = false
     }
 
     // MARK: - Private

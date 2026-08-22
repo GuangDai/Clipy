@@ -24,8 +24,9 @@ import HistoryCore
 ///   live one, and yields `observedFirstPage` immediately; later pages are
 ///   pushed by the test via `emitObservedPage(_:)` (observation is snapshot
 ///   replacement, docs/04-coherence.md §5 — the double never sends deltas).
-/// - `browse` answers from a cursor-keyed script: a page, or a typed failure
-///   such as `.snapshotExpired` (docs/03a-instruction-set.md §7; docs/
+/// - `browse` answers from a cursor-keyed script: a page, a typed failure such
+///   as `.snapshotExpired`, or a deterministic non-cooperative suspension
+///   released by the test (docs/03a-instruction-set.md §7; docs/
 ///   04-coherence.md §6).
 /// - `perform` records every action and either throws `performFailure` or
 ///   returns `.unchanged`.
@@ -38,18 +39,28 @@ actor ScriptedHistory: ClipboardHistory {
     enum BrowseOutcome {
         case page(HistoryPage)
         case failure(HistoryFailure)
+        /// Returns only after the test calls `resumeBrowse(after:)`. The
+        /// suspension deliberately ignores task cancellation, matching an
+        /// adapter whose underlying operation cannot be cancelled.
+        case paused(HistoryPage)
     }
 
     /// The page every new observation yields immediately; `nil` yields
     /// nothing (the stream stays live for `emitObservedPage`).
     private let observedFirstPage: HistoryPage?
 
+    /// When false, only the first observation receives
+    /// `observedFirstPage`; replacement observations stay live without a
+    /// page until the test emits or fails them. This is the deterministic
+    /// query-loading seam — no timing delay stands in for a missing page.
+    private let repeatsObservedFirstPage: Bool
+
     /// Cursor-keyed one-shot browse script; a cursor without an entry answers
     /// an empty page.
     private let browseScript: [HistoryPageCursor: BrowseOutcome]
 
     /// Thrown by every `perform`; `nil` answers `.unchanged`.
-    private let performFailure: HistoryFailure?
+    private var performFailure: HistoryFailure?
 
     /// The configured-policy value `retentionConfiguration` returns.
     private let scriptedRetentionConfiguration: HistoryRetentionConfiguration
@@ -59,6 +70,10 @@ actor ScriptedHistory: ClipboardHistory {
 
     /// Recorded `browse` requests, in order.
     private(set) var browseRequests: [HistoryBrowseRequest] = []
+
+    /// Browse calls which returned from a pausable outcome. Tests use this
+    /// acknowledgement before asserting on the consuming view-state task.
+    private(set) var completedPausedBrowseCursors: [HistoryPageCursor] = []
 
     /// Recorded `perform` actions, in order.
     private(set) var performActions: [HistoryAction] = []
@@ -75,13 +90,23 @@ actor ScriptedHistory: ClipboardHistory {
     private var liveContinuation:
         AsyncThrowingStream<HistoryPage, Error>.Continuation?
 
+    /// Parked non-cooperative browse calls keyed by the requested cursor.
+    private var pausedBrowses: [
+        HistoryPageCursor: (
+            continuation: CheckedContinuation<HistoryPage, Never>,
+            page: HistoryPage
+        )
+    ] = [:]
+
     init(
         observedFirstPage: HistoryPage? = nil,
+        repeatsObservedFirstPage: Bool = true,
         browseScript: [HistoryPageCursor: BrowseOutcome] = [:],
         performFailure: HistoryFailure? = nil,
         scriptedRetentionConfiguration: HistoryRetentionConfiguration = .newStoreDefaults
     ) {
         self.observedFirstPage = observedFirstPage
+        self.repeatsObservedFirstPage = repeatsObservedFirstPage
         self.browseScript = browseScript
         self.performFailure = performFailure
         self.scriptedRetentionConfiguration = scriptedRetentionConfiguration
@@ -95,10 +120,37 @@ actor ScriptedHistory: ClipboardHistory {
         liveContinuation?.yield(page)
     }
 
+    /// Fails the current observation deterministically.
+    func failObservation(_ failure: HistoryFailure) {
+        liveContinuation?.finish(throwing: failure)
+        liveContinuation = nil
+    }
+
     /// Finishes the live stream and clears it.
     func finishObservation() {
         liveContinuation?.finish()
         liveContinuation = nil
+    }
+
+    /// Changes the next mutation outcome without replacing the history
+    /// boundary, allowing one test to drive failure → success → same failure.
+    func setPerformFailure(_ failure: HistoryFailure?) {
+        performFailure = failure
+    }
+
+    /// Whether the scripted browse for `cursor` has reached its deterministic
+    /// suspension point.
+    func isBrowsePaused(after cursor: HistoryPageCursor) -> Bool {
+        pausedBrowses[cursor] != nil
+    }
+
+    /// Releases a parked browse with the page carried by its `.paused`
+    /// outcome. Cancellation is intentionally not consulted.
+    func resumeBrowse(after cursor: HistoryPageCursor) {
+        guard let paused = pausedBrowses.removeValue(forKey: cursor) else {
+            return
+        }
+        paused.continuation.resume(returning: paused.page)
     }
 
     // MARK: ClipboardHistory
@@ -127,6 +179,12 @@ actor ScriptedHistory: ClipboardHistory {
             return page
         case .failure(let failure):
             throw failure
+        case .paused(let scriptedPage):
+            let page = await withCheckedContinuation { continuation in
+                pausedBrowses[cursor] = (continuation, scriptedPage)
+            }
+            completedPausedBrowseCursors.append(cursor)
+            return page
         }
     }
 
@@ -137,7 +195,8 @@ actor ScriptedHistory: ClipboardHistory {
         let (stream, continuation) =
             AsyncThrowingStream<HistoryPage, Error>.makeStream()
         liveContinuation = continuation
-        if let observedFirstPage {
+        if let observedFirstPage,
+           repeatsObservedFirstPage || observeRequests.count == 1 {
             continuation.yield(observedFirstPage)
         }
         return stream

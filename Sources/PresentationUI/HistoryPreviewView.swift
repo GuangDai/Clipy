@@ -112,6 +112,9 @@ private let previewImageTypeIdentifiers: Set<String> = [
 /// `details.item == item` half pins the version (04 §9's caller-side fence
 /// convention). A late or superseded result is DISCARDED without touching
 /// any published state (the newer load owns `isLoading` and the content).
+/// Starting a new exact reference invalidates the previous publication
+/// before the first suspension, so old sensitive content is not retained as
+/// a loading placeholder.
 ///
 /// Retention: only the REQUESTED item's applied content lives here — a
 /// bounded decoded image or a capped text body. The full Effective Content
@@ -153,6 +156,11 @@ package final class PreviewContentLoader {
     /// head of every `load(item:)`; late completions compare against it.
     package private(set) var requestedItem: HistoryItemReference?
 
+    /// Distinguishes overlapping load episodes even when they request the
+    /// same exact reference. Reference equality alone cannot tell an older
+    /// retry from the current request (review Card 9A).
+    private var requestGeneration = 0
+
     /// The decoded, bounded preview pixels — valid while `content` is
     /// `.image`. Internal: a `CGImage` never appears on a package/public
     /// signature (05 §4.1 rule 3).
@@ -178,24 +186,34 @@ package final class PreviewContentLoader {
     }
 
     /// Loads the preview content for `item` (`nil` clears the pane's
-    /// content state). Driven by the view's `.task(id: previewedItem)`: a
+    /// content state). Driven by the view's `.task(id: targetItem)`: a
     /// retarget cancels the previous load's task, and the fence covers the
     /// case where cancellation arrives late or the awaited work does not
     /// throw on cancellation.
     package func load(item: HistoryItemReference?) async {
+        requestGeneration += 1
+        let generation = requestGeneration
         requestedItem = item
+        image = nil
+        content = .unavailable
+        occurrence = nil
+        isLoading = item != nil
         guard let item else {
-            image = nil
-            content = .unavailable
-            occurrence = nil
-            isLoading = false
             return
         }
-        isLoading = true
         do {
             let details = try await history.details(for: item.id)
             try Task.checkCancellation()
-            guard requestedItem == item, details.item == item else { return }
+            guard requestGeneration == generation,
+                  requestedItem == item
+            else { return }
+            guard details.item == item else {
+                // The ID-based detail read raced a revision. Observation
+                // retargets the current exact reference; this stale episode
+                // must settle instead of retaining a permanent spinner.
+                isLoading = false
+                return
+            }
             switch PreviewContent.resolve(effective: details.effective) {
             case .image(let bytes):
                 // Bounded decode OFF the MainActor (S-2/SPEC-IMPL-002): only
@@ -206,7 +224,9 @@ package final class PreviewContentLoader {
                     maxPixelSize: Self.previewMaxPixelSize
                 )
                 try Task.checkCancellation()
-                guard requestedItem == item else { return }
+                guard requestGeneration == generation,
+                      requestedItem == item
+                else { return }
                 image = decoded
                 content = decoded == nil ? .imageDecodeFailed : .image
                 occurrence = details.occurrence
@@ -221,13 +241,20 @@ package final class PreviewContentLoader {
             }
             isLoading = false
         } catch is CancellationError {
-            // Discarded: a cancelled load publishes nothing — the retargeting
-            // load (or the nil reset) owns every value from here.
+            // A superseding request owns its own spinner. If this request is
+            // still current, settle the cancelled episode explicitly.
+            guard requestGeneration == generation,
+                  requestedItem == item
+            else { return }
+            isLoading = false
         } catch {
             // A typed failure renders as unavailable — but only under the
             // still-current reference; a superseded/cancelled load's failure
             // must not clear the newer load's spinner.
-            guard !Task.isCancelled, requestedItem == item else { return }
+            guard !Task.isCancelled,
+                  requestGeneration == generation,
+                  requestedItem == item
+            else { return }
             image = nil
             content = .unavailable
             occurrence = nil
@@ -243,15 +270,48 @@ package final class PreviewContentLoader {
 public struct HistoryPreviewView: View {
     private let viewState: HistoryViewState
     private let previewState: PreviewPaneState
+    private let selectionSource: SelectionSource
 
     @State private var loader: PreviewContentLoader
 
+    /// Standalone entry point: PreviewPaneState owns the exact target.
     public init(viewState: HistoryViewState, previewState: PreviewPaneState) {
         self.viewState = viewState
         self.previewState = previewState
+        selectionSource = .paneState
         _loader = State(
             initialValue: PreviewContentLoader(history: viewState.history)
         )
+    }
+
+    /// The composed panel supplies the reference derived directly from its
+    /// latest rows, closing the observation→preview gap before dwell state
+    /// finishes retargeting the visible pane (review Card 9A).
+    package init(
+        viewState: HistoryViewState,
+        previewState: PreviewPaneState,
+        selection: PreviewSelectionResolution
+    ) {
+        self.viewState = viewState
+        self.previewState = previewState
+        selectionSource = .observedRows(selection)
+        _loader = State(
+            initialValue: PreviewContentLoader(history: viewState.history)
+        )
+    }
+
+    private enum SelectionSource {
+        case paneState
+        case observedRows(PreviewSelectionResolution)
+    }
+
+    private var targetItem: HistoryItemReference? {
+        switch selectionSource {
+        case .paneState:
+            previewState.previewedItem
+        case .observedRows(let selection):
+            selection.previewTarget(previewedItem: previewState.previewedItem)
+        }
     }
 
     public var body: some View {
@@ -263,11 +323,11 @@ public struct HistoryPreviewView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
         }
-        // One load per exact previewed reference; the loader's fence
+        // One load per exact observed reference; the loader's fence
         // discards a late result, so a superseded selection never renders
         // another item's content (SPEC-IMPL-007 / PREVIEW-FENCE-1).
-        .task(id: previewState.previewedItem) {
-            await loader.load(item: previewState.previewedItem)
+        .task(id: targetItem) {
+            await loader.load(item: targetItem)
         }
     }
 
@@ -275,7 +335,9 @@ public struct HistoryPreviewView: View {
 
     @ViewBuilder
     private var previewBody: some View {
-        if loader.isLoading {
+        if targetItem == nil {
+            unavailableBody
+        } else if loader.requestedItem != targetItem || loader.isLoading {
             ProgressView()
                 .accessibilityLabel("Loading preview")
         } else {
@@ -300,16 +362,20 @@ public struct HistoryPreviewView: View {
                         .padding(10)
                 }
             case .unavailable:
-                VStack(spacing: 8) {
-                    Image(systemName: "eye.slash")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
-                    Text("No Preview")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
+                unavailableBody
             }
+        }
+    }
+
+    private var unavailableBody: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "eye.slash")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            Text("No Preview")
+                .font(.callout)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -332,7 +398,8 @@ public struct HistoryPreviewView: View {
     @ViewBuilder
     private var metadataBar: some View {
         HStack(spacing: 6) {
-            if let occurrence = loader.occurrence {
+            if loader.requestedItem == targetItem,
+               let occurrence = loader.occurrence {
                 if let source = occurrence.lastSource {
                     Text(source)
                         .lineLimit(1)

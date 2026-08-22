@@ -107,7 +107,7 @@ struct PreviewPaneStateTests {
         #expect(opened)
     }
 
-    @Test func panelClosedResetsTheWholePaneState() async {
+    @Test func panelClosedDisarmsAutoOpenUntilThePanelBecomesKeyAgain() {
         let state = makeState()
         let first = reference()
         let second = reference()
@@ -118,13 +118,21 @@ struct PreviewPaneStateTests {
         state.panelClosed()
         #expect(!state.isOpen)
         #expect(state.previewedItem == nil)
+        #expect(!state.isAutoOpenEnabled)
 
-        // Auto-open is armed again after a panel reset.
+        // A selection published by the hidden panel must not reopen or queue
+        // a preview for the next session.
         state.handleSelectionChange(second)
-        let reopened = await pollUntil(timeout: .seconds(10)) {
-            state.isOpen && state.previewedItem == second
-        }
-        #expect(reopened)
+        #expect(!state.isOpen)
+        #expect(state.previewedItem == nil)
+
+        // AppKit's windowDidBecomeKey callback is the sole lifecycle input
+        // that re-arms selection-driven preview opening. Reactivation alone
+        // does not synthesize a selection change or reopen the pane.
+        state.panelBecameKey()
+        #expect(state.isAutoOpenEnabled)
+        #expect(!state.isOpen)
+        #expect(state.previewedItem == nil)
     }
 
     @Test func clearingTheSelectionClosesAnOpenPreviewImmediately() {
@@ -135,6 +143,25 @@ struct PreviewPaneStateTests {
         #expect(state.isOpen)
 
         state.handleSelectionChange(nil)
+        #expect(!state.isOpen)
+        #expect(state.previewedItem == nil)
+    }
+
+    @Test func sameItemRevisionRefreshesOnlyAnAlreadyOpenPreview() {
+        let state = makeState()
+        let version1 = reference(1)
+        let version2 = HistoryItemReference(
+            id: version1.id,
+            contentVersion: ContentVersion(rawValue: 2)
+        )
+
+        state.togglePreview(for: version1)
+        state.refreshOpenPreview(version2)
+        #expect(state.isOpen)
+        #expect(state.previewedItem == version2)
+
+        state.togglePreview(for: version2)
+        state.refreshOpenPreview(version1)
         #expect(!state.isOpen)
         #expect(state.previewedItem == nil)
     }

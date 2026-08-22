@@ -102,6 +102,30 @@ struct PreviewContentLoaderTests {
         #expect(loader.requestedItem == refB)
     }
 
+    /// Reference equality is not enough when two retries overlap for the
+    /// same exact item. The older episode may finish last, but its generation
+    /// cannot overwrite the newer episode or mutate its loading state.
+    @Test func olderSameReferenceEpisodeCannotPublishOverNewerEpisode() async throws {
+        let ref = reference("00000000-0000-0000-0000-0000000001B2", version: 1)
+        let history = OverlappingDetailsHistory()
+        let loader = PreviewContentLoader(history: history)
+
+        let olderLoad = Task { await loader.load(item: ref) }
+        try #require(await pollUntil { await history.requestCount == 1 })
+        let newerLoad = Task { await loader.load(item: ref) }
+        try #require(await pollUntil { await history.requestCount == 2 })
+
+        await history.resumeRequest(1, with: details(for: ref, text: "newer"))
+        _ = await newerLoad.value
+        #expect(loader.content == .text("newer"))
+        #expect(!loader.isLoading)
+
+        await history.resumeRequest(0, with: details(for: ref, text: "older"))
+        _ = await olderLoad.value
+        #expect(loader.content == .text("newer"))
+        #expect(!loader.isLoading)
+    }
+
     /// A cancelled load publishes nothing: the details read still completes
     /// (the double is not cancellation-aware), but the cancellation check
     /// after the await discards the result.
@@ -139,6 +163,43 @@ struct PreviewContentLoaderTests {
         _ = await task.value
         #expect(loader.content == .unavailable)
         #expect(loader.occurrence == nil)
+        #expect(
+            !loader.isLoading,
+            "a current-generation reference mismatch must settle instead of spinning forever"
+        )
+    }
+
+    /// When observation advances the selected row from v1 to v2, beginning
+    /// the exact v2 load immediately invalidates v1's content and metadata.
+    /// The old sensitive value is never retained as the new request's
+    /// placeholder, and only v2 may publish when its read completes.
+    @Test func sameIDVersionRetargetInvalidatesOldContentBeforePublishingNew() async throws {
+        let refV1 = reference("00000000-0000-0000-0000-0000000001D2", version: 1)
+        let refV2 = reference("00000000-0000-0000-0000-0000000001D2", version: 2)
+        let history = PausableDetailsHistory()
+        let loader = PreviewContentLoader(history: history)
+
+        await history.scriptDetails(details(for: refV1, text: "sensitive v1"))
+        let firstLoad = Task { await loader.load(item: refV1) }
+        try #require(await pollUntil { await history.detailRequests.count == 1 })
+        await history.resumeDetails(for: refV1.id)
+        _ = await firstLoad.value
+        #expect(loader.content == .text("sensitive v1"))
+        #expect(loader.occurrence != nil)
+
+        await history.scriptDetails(details(for: refV2, text: "current v2"))
+        let secondLoad = Task { await loader.load(item: refV2) }
+        try #require(await pollUntil { await history.detailRequests.count == 2 })
+        #expect(loader.requestedItem == refV2)
+        #expect(loader.isLoading)
+        #expect(loader.content == .unavailable)
+        #expect(loader.occurrence == nil)
+        #expect(loader.appliedImageSize == nil)
+
+        await history.resumeDetails(for: refV2.id)
+        _ = await secondLoad.value
+        #expect(loader.content == .text("current v2"))
+        #expect(!loader.isLoading)
     }
 
     /// A typed failure renders as unavailable (the preview is a convenience
@@ -219,5 +280,57 @@ struct PreviewContentLoaderTests {
         #expect(loader.occurrence == nil)
         #expect(loader.requestedItem == nil)
         #expect(!loader.isLoading)
+    }
+}
+
+/// Allows multiple same-ID detail reads to overlap. Each continuation is
+/// resumed explicitly by request order, making generation ordering observable
+/// without sleeps or a second storage implementation.
+private actor OverlappingDetailsHistory: ClipboardHistory {
+    private var continuations: [CheckedContinuation<HistoryDetails, Error>?] = []
+
+    var requestCount: Int { continuations.count }
+
+    func resumeRequest(_ index: Int, with details: HistoryDetails) {
+        guard continuations.indices.contains(index),
+              let continuation = continuations[index]
+        else { return }
+        continuations[index] = nil
+        continuation.resume(returning: details)
+    }
+
+    func perform(_ action: HistoryAction) async throws -> HistoryReceipt {
+        .unchanged
+    }
+
+    func browse(_ request: HistoryBrowseRequest) async throws -> HistoryPage {
+        HistoryPage(position: ChangePosition(rawValue: 0), rows: [], next: nil)
+    }
+
+    func observe(
+        _ request: HistoryObservationRequest
+    ) async -> AsyncThrowingStream<HistoryPage, Error> {
+        AsyncThrowingStream { continuation in continuation.finish() }
+    }
+
+    func details(for id: HistoryItemID) async throws -> HistoryDetails {
+        try await withCheckedThrowingContinuation { continuation in
+            continuations.append(continuation)
+        }
+    }
+
+    func pastePayload(for id: HistoryItemID) async throws -> PastePayload {
+        throw HistoryFailure.notFound(id)
+    }
+
+    func thumbnail(
+        for item: HistoryItemReference,
+        pixels: PixelSize
+    ) async throws -> ThumbnailPayload? {
+        nil
+    }
+
+    func retentionConfiguration() async throws -> HistoryRetentionConfiguration {
+        .newStoreDefaults
     }
 }

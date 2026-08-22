@@ -105,6 +105,9 @@ struct PopupPositionGeometryTests {
         let original = NSRect(x: 520, y: 315, width: 400, height: 560)
         let anchor = PopupPositionGeometry.normalizedAnchor(
             forPanelFrame: original,
+            previewPlacement: .trailing,
+            previewVisible: false,
+            mainSurfaceWidth: 400,
             in: mainFrame
         )
         #expect(abs(anchor.x - 0.5) < 0.000_001)
@@ -113,6 +116,95 @@ struct PopupPositionGeometryTests {
         let origin = panelOrigin(.lastPosition, mouse: NSPoint(x: 0, y: 0), anchor: anchor)
         #expect(abs(origin.x - original.minX) < 0.000_001)
         #expect(abs(origin.y - original.minY) < 0.000_001)
+    }
+
+    @Test func lastPositionUsesTheMainSurfaceWhenPreviewOpenedRight() {
+        // Main surface: x 520...920. Preview occupies x 921...1,241.
+        let previewPanel = NSRect(x: 520, y: 315, width: 721, height: 560)
+        let anchor = PopupPositionGeometry.normalizedAnchor(
+            forPanelFrame: previewPanel,
+            previewPlacement: .trailing,
+            previewVisible: true,
+            mainSurfaceWidth: 400,
+            in: mainFrame
+        )
+
+        #expect(anchor == NSPoint(x: 0.5, y: 1))
+        let reopened = panelOrigin(
+            .lastPosition,
+            mouse: .zero,
+            anchor: anchor
+        )
+        #expect(reopened == NSPoint(x: 520, y: 315))
+    }
+
+    @Test func previewAtRightEdgeOpensLeadingWithoutMovingTheMainSurface() {
+        let mainSurface = NSRect(x: 1_000, y: 200, width: 400, height: 560)
+
+        let expansion = PopupPositionGeometry.expandedPreviewFrame(
+            preservingMainSurface: mainSurface,
+            in: mainFrame
+        )
+
+        #expect(expansion.placement == .leading)
+        #expect(expansion.panelFrame == NSRect(x: 679, y: 200, width: 721, height: 560))
+        let collapsedFrame = PopupPositionGeometry.mainSurfaceFrame(
+            in: expansion.panelFrame,
+            previewPlacement: expansion.placement,
+            previewVisible: true
+        )
+        #expect(collapsedFrame == mainSurface)
+    }
+
+    @Test func previewUsesTrailingWhenTheRightSideHasSpace() {
+        let mainSurface = NSRect(x: 100, y: 200, width: 400, height: 560)
+
+        let expansion = PopupPositionGeometry.expandedPreviewFrame(
+            preservingMainSurface: mainSurface,
+            in: mainFrame
+        )
+
+        #expect(expansion.placement == .trailing)
+        #expect(expansion.panelFrame == NSRect(x: 100, y: 200, width: 721, height: 560))
+        #expect(
+            PopupPositionGeometry.mainSurfaceFrame(
+                in: expansion.panelFrame,
+                previewPlacement: expansion.placement,
+                previewVisible: true
+            ) == mainSurface
+        )
+    }
+
+    @Test func previewConservativelyUsesTrailingWithoutAScreen() {
+        let mainSurface = NSRect(x: 1_000, y: 200, width: 400, height: 560)
+
+        let expansion = PopupPositionGeometry.expandedPreviewFrame(
+            preservingMainSurface: mainSurface,
+            in: nil
+        )
+
+        #expect(expansion.placement == .trailing)
+        #expect(expansion.panelFrame.origin == mainSurface.origin)
+    }
+
+    @Test func lastPositionUsesActualMainSurfaceWhenExpandedWindowShiftedLeft() {
+        // Leading preview: preview x 199...519, main x 520...920. The
+        // persisted anchor follows the actual main surface, not panel.minX.
+        let previewPanel = NSRect(x: 199, y: 315, width: 721, height: 560)
+        let anchor = PopupPositionGeometry.normalizedAnchor(
+            forPanelFrame: previewPanel,
+            previewPlacement: .leading,
+            previewVisible: true,
+            mainSurfaceWidth: 400,
+            in: mainFrame
+        )
+
+        let reopened = panelOrigin(
+            .lastPosition,
+            mouse: .zero,
+            anchor: anchor
+        )
+        #expect(reopened == NSPoint(x: 520, y: 315))
     }
 
     @Test func lastPositionFallsBackToCursorWithoutAnAnchor() {

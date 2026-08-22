@@ -82,6 +82,100 @@ struct ReviseEditorDraftTests {
         )
     }
 
+    @Test func openingDraftIsCleanAndCanDismissDirectly() {
+        let draft = ReviseEditorDraft(
+            details: details(
+                canonicalText: Data("original capture".utf8),
+                effectiveText: Data("current revision".utf8)
+            )
+        )
+
+        #expect(!draft.isDirty)
+        #expect(draft.dismissalDecision == .dismiss)
+    }
+
+    @Test func changedChoiceRequiresConfirmationUntilRestoredExactly() {
+        var draft = ReviseEditorDraft(
+            details: details(
+                canonicalText: Data("original capture".utf8),
+                effectiveText: Data("current revision".utf8)
+            )
+        )
+
+        draft.setChoice(.useOriginal, for: textType)
+
+        #expect(draft.isDirty)
+        #expect(draft.dismissalDecision == .confirmDiscard)
+
+        draft.setChoice(.keepCurrent, for: textType)
+
+        #expect(!draft.isDirty)
+        #expect(draft.dismissalDecision == .dismiss)
+    }
+
+    @Test func replacementTextDirtyStateComparesExactUTF8Bytes() {
+        var draft = ReviseEditorDraft(
+            details: details(
+                canonicalText: Data("original capture".utf8),
+                effectiveText: Data([0xC3, 0xA9])
+            )
+        )
+
+        draft.setReplacementText("e\u{301}", for: textType)
+
+        #expect(draft.isDirty)
+        #expect(
+            Data(draft.replacementText(for: textType).utf8)
+                == Data([0x65, 0xCC, 0x81])
+        )
+
+        draft.setReplacementText("\u{E9}", for: textType)
+
+        #expect(!draft.isDirty)
+        #expect(
+            Data(draft.replacementText(for: textType).utf8)
+                == Data([0xC3, 0xA9])
+        )
+    }
+
+    @Test func dirtyDraftKeepsOpeningReferenceAndLiteralReplacementBytes() {
+        var draft = ReviseEditorDraft(
+            details: details(
+                canonicalText: Data("original capture".utf8),
+                effectiveText: Data("current revision".utf8)
+            )
+        )
+        draft.setChoice(.replace, for: textType)
+        draft.setReplacementText("draft-A", for: textType)
+
+        let request = draft.revisionRequest()
+        let revisionDecisions = decisions(from: request)
+        #expect(request.expected == ContentVersion(rawValue: 2))
+        #expect(
+            revisionDecisions[textType]
+                == .replace(bytes: Data("draft-A".utf8))
+        )
+        #expect(draft.isDirty)
+        #expect(draft.dismissalDecision == .confirmDiscard)
+    }
+
+    @Test func emptyReplacementIsInvalidUntilLiteralBytesExist() {
+        var draft = ReviseEditorDraft(
+            details: details(
+                canonicalText: Data("original capture".utf8),
+                effectiveText: Data("current revision".utf8)
+            )
+        )
+        draft.setChoice(.replace, for: textType)
+        draft.setReplacementText("", for: textType)
+
+        #expect(draft.hasEmptyReplacement)
+
+        draft.setReplacementText("replacement", for: textType)
+
+        #expect(!draft.hasEmptyReplacement)
+    }
+
     private func details(
         canonicalText: Data,
         effectiveText: Data

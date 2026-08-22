@@ -13,6 +13,48 @@ import PresentationUI
 /// no mode can spill the panel off the active screen).
 enum PopupPositionGeometry {
 
+    /// Expands around the stable main surface. Prefer the trailing side;
+    /// when that would cross the current screen's right edge, put the preview
+    /// on the leading side. Without a screen, trailing is the conservative
+    /// layout because it does not move the window origin.
+    static func expandedPreviewFrame(
+        preservingMainSurface mainSurfaceFrame: NSRect,
+        in screenVisibleFrame: NSRect?
+    ) -> (panelFrame: NSRect, placement: PreviewPlacement) {
+        let expandedWidth = PanelGeometry.totalWidth(previewOpen: true)
+        let leadingWidth = expandedWidth - PanelGeometry.contentWidth
+        var expandedFrame = mainSurfaceFrame
+        expandedFrame.size.width = expandedWidth
+
+        guard let screenVisibleFrame,
+              expandedFrame.maxX > screenVisibleFrame.maxX
+        else {
+            return (expandedFrame, .trailing)
+        }
+
+        expandedFrame.origin.x -= leadingWidth
+        return (expandedFrame, .leading)
+    }
+
+    /// Resolves the stable history column's real screen frame from the panel
+    /// frame and the same placement value used by HistoryPanelView.
+    static func mainSurfaceFrame(
+        in panelFrame: NSRect,
+        previewPlacement: PreviewPlacement,
+        previewVisible: Bool,
+        mainSurfaceWidth: CGFloat = PanelGeometry.contentWidth
+    ) -> NSRect {
+        let leadingWidth = previewVisible && previewPlacement == .leading
+            ? panelFrame.width - mainSurfaceWidth
+            : 0
+        return NSRect(
+            x: panelFrame.minX + leadingWidth,
+            y: panelFrame.minY,
+            width: mainSurfaceWidth,
+            height: panelFrame.height
+        )
+    }
+
     /// Computes the panel's top-left screen-space origin (AppKit window
     /// origins are bottom-left of the window; every mode below returns the
     /// BOTTOM-left origin ready for `setFrameOrigin`).
@@ -30,7 +72,7 @@ enum PopupPositionGeometry {
     ///     "active" screen is the one containing the mouse — Maccy's
     ///     user-selectable `popupScreen` simplified to follow the pointer).
     ///   - lastPositionAnchor: the persisted normalized anchor (top-middle
-    ///     of the panel within its screen's visible frame) for
+    ///     of the stable main surface within its screen's visible frame) for
     ///     `.lastPosition`; `nil` falls back to `.cursor`.
     static func origin(
         for mode: PopupPositionMode,
@@ -70,8 +112,8 @@ enum PopupPositionGeometry {
             guard let anchor = lastPositionAnchor else {
                 return cursorOrigin(panelSize: panelSize, mouseLocation: mouseLocation, frame: mouseScreen)
             }
-            // The anchor is the panel's TOP-MIDDLE point (Maccy's
-            // `saveWindowPosition` convention).
+            // The anchor is the stable main surface's TOP-MIDDLE point. A
+            // main-only reopen makes that surface identical to the panel.
             let raw = NSPoint(
                 x: mouseScreen.minX + mouseScreen.width * anchor.x - panelSize.width / 2,
                 y: mouseScreen.minY + mouseScreen.height * anchor.y - panelSize.height
@@ -95,17 +137,27 @@ enum PopupPositionGeometry {
     }
 
     /// The normalized (0…1) anchor persisted for `.lastPosition` — the
-    /// panel's top-middle point within its screen's visible frame (Maccy's
-    /// `saveWindowPosition`).
+    /// main 400-point surface's top-middle point within its screen's visible
+    /// frame. The expanded window may shift at a screen edge, but transient
+    /// preview width must not move a later main-only reopen (review Card 9F).
     static func normalizedAnchor(
         forPanelFrame panelFrame: NSRect,
+        previewPlacement: PreviewPlacement,
+        previewVisible: Bool,
+        mainSurfaceWidth: CGFloat,
         in screenVisibleFrame: NSRect
     ) -> NSPoint {
         guard screenVisibleFrame.width > 0, screenVisibleFrame.height > 0 else {
             return NSPoint(x: 0.5, y: 1)
         }
+        let mainSurface = mainSurfaceFrame(
+            in: panelFrame,
+            previewPlacement: previewPlacement,
+            previewVisible: previewVisible,
+            mainSurfaceWidth: mainSurfaceWidth
+        )
         return NSPoint(
-            x: (panelFrame.minX + panelFrame.width / 2 - screenVisibleFrame.minX)
+            x: (mainSurface.midX - screenVisibleFrame.minX)
                 / screenVisibleFrame.width,
             y: (panelFrame.maxY - screenVisibleFrame.minY) / screenVisibleFrame.height
         )
