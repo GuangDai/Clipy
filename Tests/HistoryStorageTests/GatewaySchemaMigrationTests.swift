@@ -17,7 +17,7 @@ struct GatewaySchemaMigrationTests {
         let storeURL = WSSupport.tempStoreURL("gateway-v2-to-v3")
         defer { WSSupport.removeStore(storeURL) }
 
-        let expected = try await seedLiteralV2Store(at: storeURL)
+        let expected = try await Self.seedLiteralV2Store(at: storeURL)
 
         // Construction through the production migration plan performs the
         // additive hop without running any startup/bootstrap writer.
@@ -27,7 +27,7 @@ struct GatewaySchemaMigrationTests {
             )
             let migratedContext = ModelContext(migratedContainer)
             #expect(try ExistingV2RowsSnapshot.read(migratedContext) == expected)
-            try expectGatewayTablesEmpty(migratedContext)
+            try Self.expectGatewayTablesEmpty(migratedContext)
         }
 
         // Reopen the same migrated URL through the public production seam.
@@ -43,7 +43,10 @@ struct GatewaySchemaMigrationTests {
             kind: .recent,
             limit: 10
         ))
-        #expect(Set(page.rows.map(\.item.id.rawValue)) == Set(expected.items.map(\.id)))
+        #expect(
+            Set(page.rows.map { $0.item.id.rawValue })
+                == Set(expected.items.map { $0.id })
+        )
 
         // A second public reopen proves an already-V3 store runs no stage.
         let reopened = try await WSSupport.openHistory(storeURL: storeURL)
@@ -51,7 +54,10 @@ struct GatewaySchemaMigrationTests {
             kind: .recent,
             limit: 10
         ))
-        #expect(Set(reopenedPage.rows.map(\.item.id.rawValue)) == Set(expected.items.map(\.id)))
+        #expect(
+            Set(reopenedPage.rows.map { $0.item.id.rawValue })
+                == Set(expected.items.map { $0.id })
+        )
 
         // Independent row-level verification: neither migration nor either
         // public startup/reopen rewrote any pre-existing V2 field. Exact
