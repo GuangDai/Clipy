@@ -195,9 +195,9 @@ warnings.
   `ClipyIntegrationTests` hosted by the app (XcodeGen-only, not in
   `Package.swift`). `HistoryPerfTests` (SwiftPM) holds the perf/AB
   measurement-helper proofs for the `HistoryPerfRunner` executable; the
-  default `swift test` skips it (`--skip 'HistoryPerfTests\.'`) and CI runs
-  it in the dedicated `perf-tests` job, so the standard targets carry
-  functional tests only.
+  PR/push correctness lane skips it (`--skip 'HistoryPerfTests\.'`). Its
+  explicit filter runs only in the dispatch-only `perf-tests` job after
+  correctness is green.
 - Persistence tests use the real `SwiftDataHistory` with an **in-memory**
   `ModelContainer` — there is no second fake writer implementation. A scripted
   `ClipboardHistory` double is allowed only for SwiftUI previews, never as a

@@ -20,10 +20,10 @@
 ///   timed out) is recorded on `CaptureOutcome.unavailableTypeIdentifiers`
 ///   instead of being silently dropped, and `write(_:)` throws
 ///   `PasteboardWriteFailure` naming every refused type identifier instead
-///   of ignoring the `setData` Booleans. The deterministic seam
+///   of ignoring the `setData` Booleans. The Debug-only deterministic seam
 ///   (`simulatedUnavailableTypeIdentifiers` /
 ///   `simulatedRejectedWriteTypeIdentifiers`) injects each documented
-///   AppKit failure.
+///   AppKit failure; those declarations and branches do not compile in Release.
 ///
 /// Every test uses a private `NSPasteboard(name:)` with a unique name, so
 /// the suite never reads or mutates the user's clipboard.
@@ -235,6 +235,7 @@ func writeClearsPriorContentAndWritesAllRepresentations() throws {
 
 // MARK: - Partial-freeze record + typed write failure (audit SPEC-IMPL-005)
 
+#if DEBUG
 @Test @MainActor
 func captureRecordsADeclaredButUnavailableTypeAsAPartialFreeze() {
     let pasteboard = makePasteboard()
@@ -261,6 +262,7 @@ func captureRecordsADeclaredButUnavailableTypeAsAPartialFreeze() {
         outcome?.capture.representations.first?.bytes == Data("plain".utf8)
     )
 }
+#endif
 
 @Test @MainActor
 func captureOfAFullyObservedItemIsACompleteOutcome() {
@@ -284,6 +286,7 @@ func captureOfAFullyObservedItemIsACompleteOutcome() {
     )
 }
 
+#if DEBUG
 @Test @MainActor
 func captureOfAnItemWhoseEveryRepresentationIsUnavailableReturnsNil() {
     let pasteboard = makePasteboard()
@@ -381,7 +384,9 @@ func writeReportsALineageHintRefusalInTheRefusedSet() throws {
             == Data("Clipy".utf8)
     )
 }
+#endif
 
+#if DEBUG
 @Test @MainActor
 func observerDeliversAPartialOutcomeForTheCompositionToJudge() {
     let pasteboard = makePasteboard()
@@ -406,6 +411,7 @@ func observerDeliversAPartialOutcomeForTheCompositionToJudge() {
     #expect(received.first?.unavailableTypeIdentifiers == ["public.html"])
     #expect(received.first?.capture.representations.count == 1)
 }
+#endif
 
 // MARK: - Observation (01 §5.1; roadmap 04 deliverable 3, acceptance 4)
 

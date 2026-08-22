@@ -168,6 +168,7 @@ struct AppPasteOrchestrationTests {
         )
     }
 
+    #if DEBUG
     /// SPEC-IMPL-005 + 01 §5.6: a paste whose write is REFUSED (the
     /// adapter's deterministic seam injects the `setData`-false outcome
     /// Apple documents as an ownership change) surfaces the typed
@@ -185,10 +186,6 @@ struct AppPasteOrchestrationTests {
         // pasteboard substituted and the panel-close hook modeled by a
         // flag — plus the adapter's failure-injection seam.
         let pasteboard = ComposedSupport.makePasteboard()
-        var adapter = PasteboardAdapter(pasteboard: pasteboard)
-        adapter.simulatedRejectedWriteTypeIdentifiers = [
-            ComposedSupport.plainTextTypeIdentifier
-        ]
         let viewState = HistoryViewState(history: history)
         let (pasteStream, pasteContinuation) =
             AsyncStream<HistoryItemReference>.makeStream()
@@ -203,6 +200,12 @@ struct AppPasteOrchestrationTests {
             pasteContinuation.yield(item)
         }
         Task { @MainActor in
+            // Keep the mutable adapter owned by the MainActor pump so it is
+            // never mutated after capture by Task's sending closure.
+            var adapter = PasteboardAdapter(pasteboard: pasteboard)
+            adapter.simulatedRejectedWriteTypeIdentifiers = [
+                ComposedSupport.plainTextTypeIdentifier
+            ]
             for await item in pasteStream {
                 guard let payload = try? await history.pastePayload(for: item.id) else {
                     continue
@@ -211,6 +214,8 @@ struct AppPasteOrchestrationTests {
                     try adapter.write(payload)
                 } catch let failure as PasteboardWriteFailure {
                     writeFailures.append(failure)
+                    // The next explicit user request is the retry phase.
+                    adapter.simulatedRejectedWriteTypeIdentifiers = []
                     continue
                 } catch {
                     continue
@@ -264,7 +269,6 @@ struct AppPasteOrchestrationTests {
 
         // Phase 2 — refusal cleared: the retry writes fully and runs the
         // hook, proving the gating keys on the write outcome.
-        adapter.simulatedRejectedWriteTypeIdentifiers = []
         viewState.requestPaste(inserted)
         let completedAfterRetry = await ComposedSupport.waitFor {
             pasteCompleted
@@ -278,4 +282,5 @@ struct AppPasteOrchestrationTests {
                 == Data("orchestration refused write".utf8)
         )
     }
+    #endif
 }

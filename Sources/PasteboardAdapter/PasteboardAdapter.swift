@@ -44,21 +44,23 @@ public struct PasteboardAdapter {
     /// user's clipboard.
     public let pasteboard: NSPasteboard
 
-    /// Deterministic AppKit-failure injection seam for tests — the audit's
+    #if DEBUG
+    /// Deterministic AppKit-failure injection seam for Debug tests — the audit's
     /// recommended direction (SPEC-IMPL-005: "a seam that deterministically
     /// injects each documented AppKit failure"). A type identifier listed
     /// here freezes as declared-but-unavailable: the `data(forType:)` == nil
     /// outcome Apple documents as the contents having changed or the
-    /// provider having timed out. Empty in production; never set outside
-    /// tests. `public` (not `internal`) because the hosted integration
+    /// provider having timed out. The declaration and every simulated branch
+    /// are absent from Release. `public` only because the hosted Debug test
     /// target imports the adapter as a regular module, without `@testable`.
     public var simulatedUnavailableTypeIdentifiers: Set<String> = []
 
     /// The write half of the same seam: a type identifier listed here is
     /// treated as refused by `setData(_:forType:)` — the false return
     /// Apple documents as the pasteboard's ownership having changed.
-    /// Empty in production; never set outside tests.
+    /// Absent from Release; never set outside Debug tests.
     public var simulatedRejectedWriteTypeIdentifiers: Set<String> = []
+    #endif
 
     /// Creates an adapter over `pasteboard` (`.general` in production).
     public init(pasteboard: NSPasteboard = .general) {
@@ -121,11 +123,17 @@ public struct PasteboardAdapter {
         var unavailableTypeIdentifiers: [String] = []
         var lineageHint: HistoryItemID?
         for typeIdentifier in typeIdentifiers {
-            // The test seam forces the documented declared-but-unavailable
-            // outcome (SPEC-IMPL-005); production reads the real payload.
+            #if DEBUG
+            // The Debug seam forces the documented declared-but-unavailable
+            // outcome (SPEC-IMPL-005).
             let data = simulatedUnavailableTypeIdentifiers.contains(typeIdentifier)
                 ? nil
                 : item.data(forType: NSPasteboard.PasteboardType(typeIdentifier))
+            #else
+            let data = item.data(
+                forType: NSPasteboard.PasteboardType(typeIdentifier)
+            )
+            #endif
             if typeIdentifier == PasteboardLineageHint.typeIdentifier {
                 lineageHint = data.flatMap(PasteboardLineageHint.decode)
                 continue
@@ -185,12 +193,17 @@ public struct PasteboardAdapter {
         pasteboard.clearContents()
         var rejectedTypeIdentifiers: [String] = []
         for representation in payload.representations {
-            // The test seam models the refusal faithfully: an injected
+            #if DEBUG
+            // The Debug seam models the refusal faithfully: an injected
             // rejection skips the write entirely, exactly as a false
             // `setData` return leaves the type unwritten.
-            let accepted = !simulatedRejectedWriteTypeIdentifiers.contains(
+            let isSimulatedRejection = simulatedRejectedWriteTypeIdentifiers.contains(
                 representation.typeIdentifier
-            ) && pasteboard.setData(
+            )
+            #else
+            let isSimulatedRejection = false
+            #endif
+            let accepted = !isSimulatedRejection && pasteboard.setData(
                 representation.bytes,
                 forType: NSPasteboard.PasteboardType(representation.typeIdentifier)
             )
@@ -198,9 +211,14 @@ public struct PasteboardAdapter {
                 rejectedTypeIdentifiers.append(representation.typeIdentifier)
             }
         }
-        let hintAccepted = !simulatedRejectedWriteTypeIdentifiers.contains(
+        #if DEBUG
+        let isSimulatedHintRejection = simulatedRejectedWriteTypeIdentifiers.contains(
             PasteboardLineageHint.typeIdentifier
-        ) && pasteboard.setData(
+        )
+        #else
+        let isSimulatedHintRejection = false
+        #endif
+        let hintAccepted = !isSimulatedHintRejection && pasteboard.setData(
             PasteboardLineageHint.encode(payload.lineageHint),
             forType: NSPasteboard.PasteboardType(PasteboardLineageHint.typeIdentifier)
         )

@@ -10,9 +10,9 @@ on:
   workflow_dispatch:
     inputs:
       admission_scope:
-        description: "Dispatch-only performance lane; tests-only runs gates + SwiftPM + app tests without any perf lane"
+        description: "Correctness is the default; performance evidence runs only when explicitly requested"
         required: true
-        default: full
+        default: tests-only
         type: choice
         options:
           - full
@@ -21,7 +21,9 @@ on:
 
 concurrency:
   group: macos26-arm-ci-${{ github.ref }}
-  cancel-in-progress: false
+  # A newer push to the same PR supersedes its predecessor.  Keeping both
+  # macOS builds alive only repeats the package and Xcode compilation.
+  cancel-in-progress: true
 
 jobs:
   gates:
@@ -110,12 +112,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          matches=$(grep -Ein '(^|[^[:alpha:]])(warning:|error:)([^[:alpha:]]|$)' "$LOG_DIR/swiftlint.log" || true)
-          if [[ -n "$matches" ]]; then
-            echo "$matches"
-            echo "SwiftLint warnings/errors found"
-            exit 1
-          fi
+          python3 scripts/diagnostic_scan.py --profile strict \
+            "$LOG_DIR/swiftlint.log"
 
       - name: Upload gate logs
         if: always()
@@ -127,6 +125,12 @@ jobs:
           retention-days: 14
 
   spm-build-test:
+    if: >-
+      github.event_name != 'workflow_dispatch'
+      || inputs.admission_scope == 'full'
+      || inputs.admission_scope == 'tests-only'
+    # The default PR/push lane is correctness-only. Performance helper tests
+    # are dispatch-only in the separate perf-tests job.
     name: SwiftPM build + test
     needs: [gates]
     runs-on: macos-26
@@ -168,14 +172,13 @@ jobs:
 
       - name: Run package tests
         shell: bash
-        # The perf/AB measurement-helper proofs (HistoryPerfTests target) are
-        # split out of this lane into the dedicated perf-tests job: the
-        # default `swift test` run carries functional tests only.
+        # The measurement-helper target is intentionally excluded from the
+        # default correctness lane.
         run: |
           set -o pipefail
           swift test --skip 'HistoryPerfTests\.' 2>&1 | tee "$LOG_DIR/spm-test.log"
 
-      - name: Self-scan SPM logs
+      - name: Reject diagnostics in functional build/test logs
         shell: bash
         run: |
           set -euo pipefail
@@ -185,36 +188,12 @@ jobs:
           # record from its already-consumed `.interim` staging name; CoreData
           # logs the failure and its copy fallback completes the save. The
           # real-scale stress suites' on-disk temp stores exercise this path
-          # (run 32268871305). Strip those multi-line error blocks (opening
-          # `CoreData: error: Failed to clone…` through the terminating `}}`);
-          # every other warning/error line stays fatal. The filter fails
-          # closed (S-4): an exclusion block left open at EOF would otherwise
-          # swallow every following line, so the awk END check turns that into
-          # a non-zero exit (and stderr diagnostic) that fails this step
-          # before the warning/error grep ever runs.
-          filtered=$(
-            for log in "$LOG_DIR/spm-build.log" "$LOG_DIR/spm-test.log"; do
-              awk '
-                /^CoreData: error: Failed to clone external data reference/ { block = 1 }
-                block && /\}\}$/ { block = 0; next }
-                block { next }
-                { print }
-                END {
-                  if (block) {
-                    printf "CoreData exclusion filter failed: unterminated block at EOF in %s\n", FILENAME > "/dev/stderr"
-                    exit 1
-                  }
-                }
-              ' "$log" || exit 1
-            done
-          )
-          matches=$(printf '%s\n' "$filtered" \
-            | grep -Ein '(^|[^[:alpha:]])(warning:|error:)([^[:alpha:]]|$)' || true)
-          if [[ -n "$matches" ]]; then
-            echo "$matches"
-            echo "Warnings or errors found in SPM logs"
-            exit 1
-          fi
+          # (run 32268871305). The shared scanner permits only that complete
+          # block; every other diagnostic stays fatal. Its source-gate fixtures
+          # prove an embedded diagnostic, a lookalike opener, and EOF truncation
+          # all fail closed (04 Card 17 tracer #2).
+          python3 scripts/diagnostic_scan.py --profile swiftdata \
+            "$LOG_DIR/spm-build.log" "$LOG_DIR/spm-test.log"
 
       - name: Upload SPM logs
         if: always()
@@ -226,14 +205,12 @@ jobs:
           retention-days: 14
 
   perf-tests:
-    # The perf/AB measurement-helper proofs (HistoryPerfTests target:
-    # median/ratio/duration helpers, §9 coverage/envelope tables, the
-    # exact-matcher A/B fixture math with the 5,000-row admission profiles).
-    # Split out of the default `swift test` lane so that lane carries
-    # functional tests only; this job keeps the same per-push coverage in its
-    # own lane.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      && inputs.admission_scope == 'full'
+    # Measurement-helper proofs are never part of PR/push correctness CI.
     name: SwiftPM perf/AB helper tests
-    needs: [gates]
+    needs: [spm-build-test]
     runs-on: macos-26
     timeout-minutes: 30
     env:
@@ -260,21 +237,17 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          swift test --filter 'HistoryPerfTests\.' 2>&1 | tee "$LOG_DIR/perf-test.log"
+          swift test --filter 'HistoryPerfTests\.' \
+            2>&1 | tee "$LOG_DIR/perf-test.log"
 
-      - name: Self-scan perf test log
+      - name: Reject diagnostics in HistoryPerfTests log
         shell: bash
         run: |
           set -euo pipefail
-          matches=$(grep -Ein '(^|[^[:alpha:]])(warning:|error:)([^[:alpha:]]|$)' \
-            "$LOG_DIR/perf-test.log" || true)
-          if [[ -n "$matches" ]]; then
-            echo "$matches"
-            echo "Warnings or errors found in perf test log"
-            exit 1
-          fi
+          python3 scripts/diagnostic_scan.py --profile strict \
+            "$LOG_DIR/perf-test.log"
 
-      - name: Upload perf test logs
+      - name: Upload perf-helper logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
@@ -359,6 +332,7 @@ jobs:
             clean build test 2>&1 | tee "$LOG_DIR/app-build-test.log"
 
       - name: Self-scan app build/test log
+        if: ${{ !cancelled() }}
         shell: bash
         run: |
           set -euo pipefail
@@ -367,37 +341,12 @@ jobs:
           # not a code warning (same class as Maccy's Metal/XPC exclusions).
           # Also excluded: any line naming the Apple-internal LaunchServices
           # service "com.apple.linkd.autoShortcut" (NSCocoaErrorDomain 4097) —
-          # intermittent headless-runner noise whose long log lines may wrap,
-          # so the match must not anchor on a line prefix. The awk prefilter
-          # first strips the known-benign CoreData external-storage clone-race
-          # blocks (multi-line `CoreData: error: Failed to clone…` through the
-          # terminating `}}`; copy fallback completes the save — the same
-          # prefilter the admission lane and the SPM scan carry, runs
-          # 31808691118/31809994808/32268871305). The prefilter fails closed
-          # (S-4): its END check exits non-zero on an exclusion block left
-          # open at EOF, so a truncated block can never hide later
-          # warning:/error:/FAILED lines from the scan.
-          filtered=$(awk '
-                /^CoreData: error: Failed to clone external data reference/ { block = 1 }
-                block && /\}\}$/ { block = 0; next }
-                block { next }
-                { print }
-                END {
-                  if (block) {
-                    printf "CoreData exclusion filter failed: unterminated block at EOF in %s\n", FILENAME > "/dev/stderr"
-                    exit 1
-                  }
-                }
-              ' "$LOG_DIR/app-build-test.log")
-          matches=$(printf '%s\n' "$filtered" \
-                    | grep -Ein '(^|[^[:alpha:]])(warning:|error:|\*\* TEST FAILED \*\*|\*\* BUILD FAILED \*\*)([^[:alpha:]]|$)' \
-                    | grep -vE 'appintentsmetadataprocessor.*Metadata extraction skipped' \
-                    | grep -vE 'com\.apple\.linkd\.autoShortcut' || true)
-          if [[ -n "$matches" ]]; then
-            echo "$matches"
-            echo "Warnings, errors, or failures found in app build/test log"
-            exit 1
-          fi
+          # intermittent headless-runner noise whose long log lines may wrap.
+          # The xcode profile also owns the same fail-closed CoreData block
+          # policy as the SwiftPM/admission lanes and detects BUILD/TEST FAILED
+          # markers in addition to ordinary warning/error diagnostics.
+          python3 scripts/diagnostic_scan.py --profile xcode \
+            "$LOG_DIR/app-build-test.log"
 
       - name: Upload xcodeproj evidence
         if: always()
@@ -416,8 +365,8 @@ jobs:
     # so a compile failure in any target fails this job independently. Running
     # in parallel with spm-build-test and xcodeproj saves wall-clock time.
     if: >-
-      github.event_name != 'workflow_dispatch'
-      || inputs.admission_scope == 'full'
+      github.event_name == 'workflow_dispatch'
+      && inputs.admission_scope == 'full'
     name: Perf proofs (§9)
     needs: [gates]
     runs-on: macos-26
@@ -442,42 +391,36 @@ jobs:
           [[ "$(sw_vers -productVersion)" == 26.* ]]
           [[ "$(uname -m)" == arm64 ]]
 
-      - name: Build HistoryPerfRunner (release)
+      - name: Build all package products (Release)
         shell: bash
         run: |
           set -o pipefail
-          swift build -c release --product HistoryPerfRunner 2>&1 | tee "$LOG_DIR/perf-build.log"
+          # This is also the selective-compilation proof for DEBUG-only test
+          # seams: every shipping library plus HistoryPerfRunner must compile
+          # without those declarations or branches.
+          swift build -c release 2>&1 | tee "$LOG_DIR/perf-build.log"
 
       - name: Self-scan perf build log
         shell: bash
         run: |
           set -euo pipefail
-          matches=$(grep -Ein '(^|[^[:alpha:]])(warning:|error:)([^[:alpha:]]|$)' \
-            "$LOG_DIR/perf-build.log" || true)
-          if [[ -n "$matches" ]]; then
-            echo "$matches"
-            echo "Warnings or errors found in perf build log"
-            exit 1
-          fi
+          python3 scripts/diagnostic_scan.py --profile strict \
+            "$LOG_DIR/perf-build.log"
 
       - name: Run HistoryPerfRunner (§9 proofs)
         shell: bash
         run: |
           set -o pipefail
-          swift run -c release HistoryPerfRunner "$LOG_DIR/perf-fixtures.json" 2>&1 | tee "$LOG_DIR/perf-run.log"
+          swift run -c release --skip-build HistoryPerfRunner \
+            "$LOG_DIR/perf-fixtures.json" 2>&1 | tee "$LOG_DIR/perf-run.log"
 
       - name: Self-scan perf run log
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          matches=$(grep -Ein '(^|[^[:alpha:]])(warning:|error:)([^[:alpha:]]|$)' \
-            "$LOG_DIR/perf-run.log" || true)
-          if [[ -n "$matches" ]]; then
-            echo "$matches"
-            echo "Warnings or errors found in perf run log"
-            exit 1
-          fi
+          python3 scripts/diagnostic_scan.py --profile strict \
+            "$LOG_DIR/perf-run.log"
 
       - name: Upload perf fixtures and logs
         if: always()
@@ -498,7 +441,7 @@ jobs:
       github.event_name == 'workflow_dispatch'
       && inputs.admission_scope == 'exact-matcher-ab'
     name: Exact matcher Release A/B
-    needs: [gates, spm-build-test]
+    needs: [gates]
     runs-on: macos-26
     timeout-minutes: 30
     env:
@@ -610,14 +553,7 @@ jobs:
             and (.productionIntegrationEligible
               == all(.cases[]; .passesDecisionThreshold))
           ' "$LOG_DIR/exact-matcher-ab.json" >/dev/null
-          matches=$(grep -Ein \
-            '(^|[^[:alpha:]])(warning:|error:)([^[:alpha:]]|$)' \
-            "$LOG_DIR"/*.log || true)
-          if [[ -n "$matches" ]]; then
-            echo "$matches"
-            echo "Warnings or errors found in matcher A/B logs"
-            exit 1
-          fi
+          python3 scripts/diagnostic_scan.py --profile strict "$LOG_DIR"/*.log
 
       - name: Summarize matcher A/B
         shell: bash
@@ -725,14 +661,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          matches=$(grep -Ein '(^|[^[:alpha:]])(warning:|error:)([^[:alpha:]]|$)' \
+          python3 scripts/diagnostic_scan.py --profile strict \
             "$LOG_DIR/build.log" "$LOG_DIR/bin-path.log" \
-            "$LOG_DIR/debug-build.log" "$LOG_DIR/debug-bin-path.log" || true)
-          if [[ -n "$matches" ]]; then
-            echo "$matches"
-            echo "Warnings or errors found in admission build log"
-            exit 1
-          fi
+            "$LOG_DIR/debug-build.log" "$LOG_DIR/debug-bin-path.log"
 
       - name: Prepare 1,000 × 256 KiB persistent smoke corpus
         id: prepare_smoke
@@ -768,34 +699,10 @@ jobs:
           # data-integrity gate. Strip those multi-line error blocks (opening
           # `CoreData: error: Failed to clone…` through the terminating `}}`)
           # before the strict scan; every other warning/error line — including
-          # any other "No such file or directory" — stays fatal. The filter
-          # fails closed (S-4): the awk END check exits non-zero on an
-          # exclusion block left open at EOF, so a truncated block cannot hide
-          # later diagnostics.
-          filtered=$(
-            for log in "$LOG_DIR/seed-smoke.log" "$LOG_DIR/prepare-smoke.log"; do
-              awk '
-                /^CoreData: error: Failed to clone external data reference/ { block = 1 }
-                block && /\}\}$/ { block = 0; next }
-                block { next }
-                { print }
-                END {
-                  if (block) {
-                    printf "CoreData exclusion filter failed: unterminated block at EOF in %s\n", FILENAME > "/dev/stderr"
-                    exit 1
-                  }
-                }
-              ' "$log" || exit 1
-            done
-          )
-          matches=$(printf '%s\n' "$filtered" | grep -Ein \
-              'No such file or directory|(^|[^[:alpha:]])(warning:|error:)([^[:alpha:]]|$)' || true
-          )
-          if [[ -n "$matches" ]]; then
-            echo "$matches"
-            echo "Warnings, errors, or missing external data found in prepare smoke"
-            exit 1
-          fi
+          # any other "No such file or directory" — stays fatal. The shared
+          # scanner's negative fixtures cover embedded errors and truncation.
+          python3 scripts/diagnostic_scan.py --profile swiftdata-missing \
+            "$LOG_DIR/seed-smoke.log" "$LOG_DIR/prepare-smoke.log"
           jq -e '
             .mode == "prepare-smoke"
             and .corpusRows == 1000
@@ -838,33 +745,10 @@ jobs:
           # Same recovered CoreData external-storage clone race as the smoke
           # scan above: strip only those multi-line error blocks; the jq
           # assertions in this step stay the data-integrity gate and every
-          # other warning/error (or missing-file) line remains fatal. Fail
-          # closed (S-4): the awk END check exits non-zero on an exclusion
-          # block left open at EOF.
-          filtered=$(
-            for log in "$LOG_DIR/seed.log" "$LOG_DIR/prepare.log"; do
-              awk '
-                /^CoreData: error: Failed to clone external data reference/ { block = 1 }
-                block && /\}\}$/ { block = 0; next }
-                block { next }
-                { print }
-                END {
-                  if (block) {
-                    printf "CoreData exclusion filter failed: unterminated block at EOF in %s\n", FILENAME > "/dev/stderr"
-                    exit 1
-                  }
-                }
-              ' "$log" || exit 1
-            done
-          )
-          matches=$(printf '%s\n' "$filtered" | grep -Ein \
-              'No such file or directory|(^|[^[:alpha:]])(warning:|error:)([^[:alpha:]]|$)' || true
-          )
-          if [[ -n "$matches" ]]; then
-            echo "$matches"
-            echo "Warnings, errors, or missing external data found in full preparation"
-            exit 1
-          fi
+          # other warning/error (or missing-file) line remains fatal. The same
+          # tested scanner profile is used by smoke and full preparation.
+          python3 scripts/diagnostic_scan.py --profile swiftdata-missing \
+            "$LOG_DIR/seed.log" "$LOG_DIR/prepare.log"
           jq -e '
             .mode == "prepare"
             and .corpusRows == 5000
@@ -1033,34 +917,9 @@ jobs:
           set -euo pipefail
           # Same recovered CoreData external-storage clone race documented at
           # the smoke scan: strip only those multi-line error blocks; every
-          # other warning/error line in any admission log stays fatal. Fail
-          # closed (S-4): the awk END check exits non-zero on an exclusion
-          # block left open at EOF, so a truncated block cannot hide later
-          # diagnostics from this scan.
-          filtered=$(
-            for log in "$LOG_DIR"/*.log; do
-              awk '
-                /^CoreData: error: Failed to clone external data reference/ { block = 1 }
-                block && /\}\}$/ { block = 0; next }
-                block { next }
-                { print }
-                END {
-                  if (block) {
-                    printf "CoreData exclusion filter failed: unterminated block at EOF in %s\n", FILENAME > "/dev/stderr"
-                    exit 1
-                  }
-                }
-              ' "$log" || exit 1
-            done
-          )
-          matches=$(printf '%s\n' "$filtered" \
-            | grep -Ein '(^|[^[:alpha:]])(warning:|error:)([^[:alpha:]]|$)' || true
-          )
-          if [[ -n "$matches" ]]; then
-            echo "$matches"
-            echo "Warnings or errors found in admission logs"
-            exit 1
-          fi
+          # other warning/error line in any admission log stays fatal. The
+          # shared parser fails closed on EOF truncation or nested diagnostics.
+          python3 scripts/diagnostic_scan.py --profile swiftdata "$LOG_DIR"/*.log
 
       - name: Upload admission evidence
         if: always()

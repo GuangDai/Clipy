@@ -1,6 +1,7 @@
 /// ReviseEditorView — the revision-authoring sheet for one item: one
-/// decision (Keep / Hide / Replace) per Canonical representation, then one
-/// `HistoryAction.revise` through the view state. The draft is built against
+/// decision (Keep Current / Use Original / Hide / Replace) per Canonical
+/// representation, then one `HistoryAction.revise` through the view state.
+/// The draft is built against
 /// the Content Version the editor was opened on; storage enforces optimistic
 /// concurrency (03a §5 `RevisionRequest.expected`), so an edit based on a
 /// superseded state fails typed as `.staleContent` (03b §10), which this
@@ -19,14 +20,6 @@ import SwiftUI
 /// submits a single `.replace(RevisionDraft(decisions:))` intent.
 public struct ReviseEditorView: View {
 
-    /// One row's editing decision, mapped 1:1 onto
-    /// `RevisionDecisionAction` (03a §5) when the draft is saved.
-    private enum Choice: Hashable {
-        case keep
-        case hide
-        case replace
-    }
-
     /// The single alert this sheet can raise: a stale base version or a
     /// typed failure message (03b §10).
     private enum EditorAlert {
@@ -39,12 +32,9 @@ public struct ReviseEditorView: View {
     private let viewState: HistoryViewState
     private let details: HistoryDetails
 
-    /// Per-representation decision, keyed by canonical type identifier.
-    @State private var choices: [String: Choice]
-
-    /// Replacement text per type, prefilled with the current effective text
-    /// (canonical text when the type is currently hidden).
-    @State private var replacementTexts: [String: String]
+    /// Pure current-vs-canonical draft owner.  The view never translates
+    /// "Keep Current" into HistoryCore actions itself.
+    @State private var draft: ReviseEditorDraft
 
     @State private var isSaving = false
     @State private var activeAlert: EditorAlert?
@@ -53,35 +43,7 @@ public struct ReviseEditorView: View {
         self.viewState = viewState
         self.details = details
 
-        let effectiveTexts: [String: String] = Dictionary(
-            details.effective.compactMap { representation in
-                decodedText(of: representation).map {
-                    (representation.typeIdentifier, $0)
-                }
-            },
-            uniquingKeysWith: { first, _ in first }
-        )
-        let effectiveTypeIdentifiers = Set(
-            details.effective.map(\.typeIdentifier)
-        )
-        var initialChoices: [String: Choice] = [:]
-        var initialTexts: [String: String] = [:]
-        for representation in details.canonical {
-            // Current truth is the default: a type flowing into Effective
-            // starts as Keep, a hidden type starts as Hide (03b §9 detail).
-            initialChoices[representation.typeIdentifier] =
-                effectiveTypeIdentifiers.contains(representation.typeIdentifier)
-                ? .keep
-                : .hide
-            if isUTF8TextRepresentation(representation) {
-                initialTexts[representation.typeIdentifier] =
-                    effectiveTexts[representation.typeIdentifier]
-                    ?? decodedText(of: representation)
-                    ?? ""
-            }
-        }
-        _choices = State(initialValue: initialChoices)
-        _replacementTexts = State(initialValue: initialTexts)
+        _draft = State(initialValue: ReviseEditorDraft(details: details))
     }
 
     public var body: some View {
@@ -189,7 +151,7 @@ public struct ReviseEditorView: View {
     /// (03a §5), so Save is disabled and the hint shows in exactly that
     /// state.
     private var allRepresentationsHidden: Bool {
-        !details.canonical.isEmpty && choices.values.allSatisfy { $0 == .hide }
+        draft.allRepresentationsHidden
     }
 
     private var canSave: Bool {
@@ -223,12 +185,13 @@ public struct ReviseEditorView: View {
                     "Decision",
                     selection: choiceBinding(for: typeIdentifier)
                 ) {
-                    Text("Keep").tag(Choice.keep)
-                    Text("Hide").tag(Choice.hide)
-                    if isUTF8TextRepresentation(representation) {
+                    Text("Keep Current").tag(ReviseEditorDraft.Choice.keepCurrent)
+                    Text("Use Original").tag(ReviseEditorDraft.Choice.useOriginal)
+                    Text("Hide").tag(ReviseEditorDraft.Choice.hide)
+                    if draft.canReplace(representation) {
                         // Replace is text-only: the editor's payload is one
                         // UTF-8 string per type (03a §5 `.replace(bytes:)`).
-                        Text("Replace").tag(Choice.replace)
+                        Text("Replace").tag(ReviseEditorDraft.Choice.replace)
                     }
                 }
                 .pickerStyle(.menu)
@@ -236,12 +199,13 @@ public struct ReviseEditorView: View {
                 .fixedSize()
                 .accessibilityLabel("Editing decision for \(typeIdentifier)")
                 .accessibilityHint(
-                    "Keep carries the canonical bytes into the effective"
-                        + " content. Hide omits this type from pasting."
+                    "Keep Current preserves the bytes currently used for"
+                        + " pasting. Use Original restores the captured bytes."
+                        + " Hide omits this type from pasting."
                         + " Replace substitutes edited text."
                 )
             }
-            if choices[typeIdentifier] == .replace {
+            if draft.choice(for: typeIdentifier) == .replace {
                 TextEditor(text: textBinding(for: typeIdentifier))
                     .font(.system(.body, design: .monospaced))
                     .frame(minHeight: 96)
@@ -262,41 +226,23 @@ public struct ReviseEditorView: View {
         )
     }
 
-    private func choiceBinding(for typeIdentifier: String) -> Binding<Choice> {
+    private func choiceBinding(
+        for typeIdentifier: String
+    ) -> Binding<ReviseEditorDraft.Choice> {
         Binding(
-            get: { choices[typeIdentifier] ?? .keep },
-            set: { choices[typeIdentifier] = $0 }
+            get: { draft.choice(for: typeIdentifier) },
+            set: { draft.setChoice($0, for: typeIdentifier) }
         )
     }
 
     private func textBinding(for typeIdentifier: String) -> Binding<String> {
         Binding(
-            get: { replacementTexts[typeIdentifier] ?? "" },
-            set: { replacementTexts[typeIdentifier] = $0 }
+            get: { draft.replacementText(for: typeIdentifier) },
+            set: { draft.setReplacementText($0, for: typeIdentifier) }
         )
     }
 
     // MARK: Save
-
-    private func decision(
-        for representation: HistoryRepresentation
-    ) -> RevisionDecision {
-        let choice = choices[representation.typeIdentifier] ?? .keep
-        let action: RevisionDecisionAction
-        switch choice {
-        case .keep:
-            action = .inheritCanonical
-        case .hide:
-            action = .hide
-        case .replace:
-            let text = replacementTexts[representation.typeIdentifier] ?? ""
-            action = .replace(bytes: Data(text.utf8))
-        }
-        return RevisionDecision(
-            typeIdentifier: representation.typeIdentifier,
-            action: action
-        )
-    }
 
     /// Saves the draft as one `.replace` revision. `.staleContent` alerts
     /// and dismisses (the base version is gone); any other typed failure
@@ -306,15 +252,8 @@ public struct ReviseEditorView: View {
     private func save() async {
         isSaving = true
         defer { isSaving = false }
-        let decisions = details.canonical.map(decision(for:))
         do {
-            _ = try await viewState.revise(
-                RevisionRequest(
-                    itemID: details.item.id,
-                    expected: details.item.contentVersion,
-                    intent: .replace(RevisionDraft(decisions: decisions))
-                )
-            )
+            _ = try await viewState.revise(draft.revisionRequest())
             dismiss()
         } catch let failure as HistoryFailure {
             if case .staleContent = failure {
@@ -344,44 +283,6 @@ private enum EditorFormat {
         formatter.countStyle = .file
         return formatter
     }()
-}
-
-/// Mirror of storage's frozen v1 textual UTI set (docs/05-authority-kernel.md
-/// §15) — PresentationUI cannot import HistoryStorage, so the well-known set
-/// is duplicated here for editor eligibility.
-private let textualTypeIdentifiers: Set<String> = [
-    "public.plain-text",
-    "public.utf8-plain-text",
-    "public.utf16-plain-text",
-    "public.utf8-external-plain-text",
-    "public.text",
-    "public.rtf",
-    "public.html",
-]
-
-/// `true` when the representation's type is one of the frozen textual UTIs
-/// and its bytes decode as UTF-8 — the Replace eligibility rule. The UTF-16
-/// type is in the frozen set but naturally fails the UTF-8 decode.
-private func isUTF8TextRepresentation(
-    _ representation: HistoryRepresentation
-) -> Bool {
-    guard textualTypeIdentifiers.contains(representation.typeIdentifier) else {
-        return false
-    }
-    return String(data: representation.bytes, encoding: .utf8) != nil
-}
-
-/// Decodes one textual representation per its frozen encoding (UTF-16 for
-/// `public.utf16-plain-text`, UTF-8 otherwise) — mirrors storage's
-/// projector rule (05 §15): never guess a fallback encoding.
-private func decodedText(of representation: HistoryRepresentation) -> String? {
-    guard textualTypeIdentifiers.contains(representation.typeIdentifier) else {
-        return nil
-    }
-    if representation.typeIdentifier == "public.utf16-plain-text" {
-        return String(data: representation.bytes, encoding: .utf16)
-    }
-    return String(data: representation.bytes, encoding: .utf8)
 }
 
 #if DEBUG

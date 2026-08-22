@@ -206,7 +206,11 @@ struct ThumbnailStoreTests {
         let store = ThumbnailStore(history: history, maximumDecodedBytes: 1)
 
         store.prefetch(item)
-        #expect(await pollUntil { store.inFlightCount == 0 && (await history.requestCount(for: item)) == 1 })
+        let settled = await pollUntil {
+            guard store.inFlightCount == 0 else { return false }
+            return await history.requestCount(for: item) == 1
+        }
+        #expect(settled)
         #expect(store.image(for: item) == nil)
         #expect(store.cachedEntryCount == 0)
         #expect(store.cachedDecodedBytes == 0)
@@ -221,7 +225,11 @@ struct ThumbnailStoreTests {
         let store = ThumbnailStore(history: history, maximumDecodedBytes: 1)
 
         store.prefetch(item)
-        #expect(await pollUntil { store.inFlightCount == 0 && (await history.requestCount(for: item)) == 1 })
+        let settled = await pollUntil {
+            guard store.inFlightCount == 0 else { return false }
+            return await history.requestCount(for: item) == 1
+        }
+        #expect(settled)
         #expect(store.cachedEntryCount == 1)
         #expect(store.cachedDecodedBytes == 0)
     }
