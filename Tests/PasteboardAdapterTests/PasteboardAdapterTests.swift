@@ -24,11 +24,10 @@
 ///   timed out) is recorded on `CaptureOutcome.unavailableTypeIdentifiers`
 ///   instead of being silently dropped, and `write(_:)` throws
 ///   `PasteboardWriteFailure` for refused item staging or a refused whole-item
-///   write instead of ignoring framework Booleans. The Debug-only
-///   deterministic seam (`simulatedUnavailableTypeIdentifiers` /
-///   `simulatedRejectedWriteTypeIdentifiers` / `simulatedItemWriteRejected`)
-///   injects unavailable reads, staging rejection, and completed-item
-///   rejection; those declarations and branches do not compile in Release.
+///   write instead of ignoring framework Booleans. A Debug-only package,
+///   immutable failure configuration injects unavailable reads, staging
+///   rejection, and completed-item rejection; it is absent from Release and
+///   unavailable to ordinary adapter clients (REVIEW Card 5D).
 ///
 /// Every test uses a private `NSPasteboard(name:)` with a unique name, so
 /// the suite never reads or mutates the user's clipboard.
@@ -357,8 +356,12 @@ func captureRecordsADeclaredButUnavailableTypeAsAPartialFreeze() {
     pasteboard.clearContents()
     pasteboard.setData(Data("plain".utf8), forType: .string)
     pasteboard.setData(Data("<b>rich</b>".utf8), forType: NSPasteboard.PasteboardType("public.html"))
-    var adapter = PasteboardAdapter(pasteboard: pasteboard)
-    adapter.simulatedUnavailableTypeIdentifiers = ["public.html"]
+    let adapter = PasteboardAdapter(
+        pasteboard: pasteboard,
+        failureSimulation: PasteboardFailureSimulation(
+            unavailableTypeIdentifiers: ["public.html"]
+        )
+    )
 
     let outcome = adapter.captureOutcome()
 
@@ -408,10 +411,14 @@ func everyUnavailableRepresentationProducesAnExplicitPartialOutcome() {
     let pasteboard = makePasteboard()
     pasteboard.clearContents()
     pasteboard.setData(Data("plain".utf8), forType: .string)
-    var adapter = PasteboardAdapter(pasteboard: pasteboard)
-    adapter.simulatedUnavailableTypeIdentifiers = [
-        NSPasteboard.PasteboardType.string.rawValue
-    ]
+    let adapter = PasteboardAdapter(
+        pasteboard: pasteboard,
+        failureSimulation: PasteboardFailureSimulation(
+            unavailableTypeIdentifiers: [
+                NSPasteboard.PasteboardType.string.rawValue
+            ]
+        )
+    )
 
     let outcome = adapter.captureOutcome()
 
@@ -434,8 +441,12 @@ func rejectedRepresentationStagingLeavesExistingPasteboardUntouched() throws {
     let sentinelBytes = Data("keep me".utf8)
     pasteboard.setData(sentinelBytes, forType: sentinelType)
     let sentinelChangeCount = pasteboard.changeCount
-    var adapter = PasteboardAdapter(pasteboard: pasteboard)
-    adapter.simulatedRejectedWriteTypeIdentifiers = ["public.html"]
+    let adapter = PasteboardAdapter(
+        pasteboard: pasteboard,
+        failureSimulation: PasteboardFailureSimulation(
+            rejectedWriteTypeIdentifiers: ["public.html"]
+        )
+    )
 
     let id = HistoryItemID(rawValue: UUID())
     let payload = PastePayload(
@@ -481,10 +492,14 @@ func rejectedLineageHintStagingLeavesExistingPasteboardUntouched() throws {
     let sentinelBytes = Data("keep me too".utf8)
     pasteboard.setData(sentinelBytes, forType: sentinelType)
     let sentinelChangeCount = pasteboard.changeCount
-    var adapter = PasteboardAdapter(pasteboard: pasteboard)
-    adapter.simulatedRejectedWriteTypeIdentifiers = [
-        PasteboardLineageHint.typeIdentifier
-    ]
+    let adapter = PasteboardAdapter(
+        pasteboard: pasteboard,
+        failureSimulation: PasteboardFailureSimulation(
+            rejectedWriteTypeIdentifiers: [
+                PasteboardLineageHint.typeIdentifier
+            ]
+        )
+    )
 
     let id = HistoryItemID(rawValue: UUID())
     let payload = PastePayload(
@@ -529,8 +544,12 @@ func rejectedWholeItemIsReportedAfterClearingThePasteboard() throws {
     let sentinelType = NSPasteboard.PasteboardType("com.clipy.tests.sentinel")
     pasteboard.setData(Data("not retained".utf8), forType: sentinelType)
     let sentinelChangeCount = pasteboard.changeCount
-    var adapter = PasteboardAdapter(pasteboard: pasteboard)
-    adapter.simulatedItemWriteRejected = true
+    let adapter = PasteboardAdapter(
+        pasteboard: pasteboard,
+        failureSimulation: PasteboardFailureSimulation(
+            rejectCompletedItem: true
+        )
+    )
 
     let id = HistoryItemID(rawValue: UUID())
     let payload = PastePayload(
@@ -565,8 +584,12 @@ func observerDeliversAPartialOutcomeForTheCompositionToJudge() {
     pasteboard.clearContents()
     pasteboard.setData(Data("plain".utf8), forType: .string)
     pasteboard.setData(Data("<b>rich</b>".utf8), forType: NSPasteboard.PasteboardType("public.html"))
-    var adapter = PasteboardAdapter(pasteboard: pasteboard)
-    adapter.simulatedUnavailableTypeIdentifiers = ["public.html"]
+    let adapter = PasteboardAdapter(
+        pasteboard: pasteboard,
+        failureSimulation: PasteboardFailureSimulation(
+            unavailableTypeIdentifiers: ["public.html"]
+        )
+    )
     let observer = PasteboardObserver(adapter: adapter, pollInterval: 0.05)
 
     var received: [CaptureOutcome] = []

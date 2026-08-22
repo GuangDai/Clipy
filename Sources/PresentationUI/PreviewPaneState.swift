@@ -47,6 +47,15 @@ public final class PreviewPaneState {
     /// toggle, or panel transition.
     private var autoOpenTask: Task<Void, Never>?
 
+    /// Exact target captured by the pending dwell. Purges can therefore
+    /// invalidate only work owned by the removed/revised item.
+    private var pendingAutoOpenItem: HistoryItemReference?
+
+    /// Monotonic local invalidation fence. Cancellation remains an efficiency
+    /// hint; a completion must also belong to the current generation before
+    /// it can reopen or retarget the pane (review Card 9B).
+    package private(set) var purgeGeneration = 0
+
     /// Set by a manual close; cleared by the next selection change. While
     /// set, dwell auto-open does not fire (Maccy's `autoOpenSuppressed`).
     private var isAutoOpenSuppressed = false
@@ -124,10 +133,57 @@ public final class PreviewPaneState {
         isAutoOpenEnabled = false
     }
 
+    /// Applies one receipt-confirmed panel purge. Clear All drops every
+    /// target; Clear Unpinned also drops rebuildable preview state because
+    /// pre-receipt pin state is not authoritative; Remove drops that item;
+    /// Revise retargets only the old exact reference.
+    package func purge(_ scope: HistorySurfacePurge.Scope) {
+        let invalidatesPending: Bool
+        let invalidatesVisible: Bool
+        switch scope {
+        case .all:
+            invalidatesPending = pendingAutoOpenItem != nil
+            invalidatesVisible = previewedItem != nil
+        case .unpinned:
+            invalidatesPending = pendingAutoOpenItem != nil
+            invalidatesVisible = previewedItem != nil
+        case .item(let id):
+            invalidatesPending = pendingAutoOpenItem?.id == id
+            invalidatesVisible = previewedItem?.id == id
+        case .revision(let old, let new):
+            invalidatesPending = pendingAutoOpenItem == old
+            invalidatesVisible = previewedItem == old
+
+            guard invalidatesPending || invalidatesVisible else { return }
+            purgeGeneration += 1
+            if invalidatesPending {
+                cancelPendingAutoOpen()
+                scheduleAutoOpen(for: new)
+            }
+            if invalidatesVisible {
+                previewedItem = new
+            }
+            return
+        }
+
+        guard invalidatesPending || invalidatesVisible || scope == .all else {
+            return
+        }
+        purgeGeneration += 1
+        if invalidatesPending {
+            cancelPendingAutoOpen()
+        }
+        if invalidatesVisible {
+            closePreview()
+        }
+    }
+
     // MARK: - Private
 
     private func scheduleAutoOpen(for item: HistoryItemReference) {
         let delay = autoOpenDelay
+        let generation = purgeGeneration
+        pendingAutoOpenItem = item
         // Inherits the MainActor from this isolated context; `weak self`
         // keeps a released pane from being pinned by its own dwell task.
         autoOpenTask = Task { [weak self] in
@@ -135,9 +191,16 @@ public final class PreviewPaneState {
                 try? await Task.sleep(for: delay)
             }
             guard !Task.isCancelled else { return }
-            guard let self, self.isAutoOpenEnabled, !self.isAutoOpenSuppressed else {
+            guard let self,
+                  self.purgeGeneration == generation,
+                  self.pendingAutoOpenItem == item,
+                  self.isAutoOpenEnabled,
+                  !self.isAutoOpenSuppressed
+            else {
                 return
             }
+            self.pendingAutoOpenItem = nil
+            self.autoOpenTask = nil
             self.previewedItem = item
             self.isOpen = true
         }
@@ -151,5 +214,6 @@ public final class PreviewPaneState {
     private func cancelPendingAutoOpen() {
         autoOpenTask?.cancel()
         autoOpenTask = nil
+        pendingAutoOpenItem = nil
     }
 }

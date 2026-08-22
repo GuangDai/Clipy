@@ -13,6 +13,88 @@ import Foundation
 import HistoryCore
 import SwiftUI
 
+/// Monotonic ownership for one details view's async read. A destructive or
+/// old-content purge invalidates the token synchronously, so a non-cooperative
+/// read completion cannot republish sensitive `HistoryDetails` afterward
+/// (review Card 9B).
+package struct HistoryDetailsLoadFence {
+    package private(set) var generation = 0
+    package private(set) var isPurged = false
+    package private(set) var observedSurfacePurgeGeneration: Int
+
+    /// A newly constructed details surface starts after the purge currently
+    /// retained by its owner. That historical value is a baseline, not an
+    /// event to replay against an item created or navigated to later.
+    package init(baselinePurgeGeneration: Int = 0) {
+        observedSurfacePurgeGeneration = baselinePurgeGeneration
+    }
+
+    package mutating func begin() -> Int? {
+        guard !isPurged else { return nil }
+        generation += 1
+        return generation
+    }
+
+    package mutating func purge(
+        _ scope: HistorySurfacePurge.Scope,
+        item: HistoryItemReference
+    ) -> Bool {
+        let affectsItem: Bool
+        switch scope {
+        case .all:
+            affectsItem = true
+        case .unpinned:
+            // Pin state is authoritative only after the restarted observation.
+            // This owner fails closed; a retained pinned row can reopen it.
+            affectsItem = true
+        case .item(let id):
+            affectsItem = id == item.id
+        case .revision(let old, _):
+            affectsItem = old == item
+        }
+        guard affectsItem else { return false }
+        isPurged = true
+        generation += 1
+        return true
+    }
+
+    /// Reconciles directly with the panel owner's latest purge rather than
+    /// relying on SwiftUI child callback delivery. One missed generation can
+    /// be evaluated precisely; a larger gap has lost an intermediate scope,
+    /// so this details surface must retire as a whole.
+    package mutating func reconcile(
+        _ purge: HistorySurfacePurge?,
+        item: HistoryItemReference
+    ) -> HistorySurfacePurge.Scope? {
+        guard !isPurged, let purge else { return nil }
+        guard purge.generation > observedSurfacePurgeGeneration else {
+            return nil
+        }
+        let previousGeneration = observedSurfacePurgeGeneration
+        observedSurfacePurgeGeneration = purge.generation
+        if purge.generation > previousGeneration + 1 {
+            _ = self.purge(.all, item: item)
+            return .all
+        }
+
+        guard self.purge(purge.scope, item: item) else { return nil }
+        return purge.scope
+    }
+
+    package func owns(_ token: Int) -> Bool {
+        token == generation
+    }
+
+    package func accepts(
+        _ token: Int,
+        returned: HistoryItemReference,
+        expected: HistoryItemReference,
+        isCancelled: Bool
+    ) -> Bool {
+        !isCancelled && owns(token) && returned == expected
+    }
+}
+
 /// Detail screen for one retained item (roadmap 05). Loads `HistoryDetails`
 /// via the view state, renders the Effective/Canonical content with
 /// per-representation previews, offers revision revert, and the per-item
@@ -36,10 +118,17 @@ public struct HistoryDetailsView: View {
     @State private var failureNotice: String?
     @State private var showsEditor = false
     @State private var showsRemoveConfirmation = false
+    @State private var isRemoving = false
+    @State private var loadFence = HistoryDetailsLoadFence()
 
     public init(viewState: HistoryViewState, item: HistoryItemReference) {
         self.viewState = viewState
         self.item = item
+        self._loadFence = State(
+            initialValue: HistoryDetailsLoadFence(
+                baselinePurgeGeneration: viewState.surfacePurge?.generation ?? 0
+            )
+        )
         self._thumbnails = State(
             initialValue: ThumbnailStore(
                 history: viewState.history,
@@ -100,10 +189,12 @@ public struct HistoryDetailsView: View {
             titleVisibility: .visible
         ) {
             Button("Remove", role: .destructive) {
-                viewState.remove(item.id)
-                Task { await load(presentingTransition: false) }
+                Task { await remove() }
             }
             Button("Cancel", role: .cancel) {}
+        }
+        .onChange(of: viewState.surfacePurge, initial: true) { _, _ in
+            _ = reconcileSurfacePurge(viewState.surfacePurge)
         }
     }
 
@@ -162,12 +253,7 @@ public struct HistoryDetailsView: View {
             .buttonStyle(.borderedProminent)
             Spacer(minLength: 8)
             Button {
-                if isPinned {
-                    viewState.unpin(item.id)
-                } else {
-                    viewState.pin(item.id)
-                }
-                Task { await load(presentingTransition: false) }
+                Task { await togglePin(isPinned: isPinned) }
             } label: {
                 Image(systemName: isPinned ? "pin.slash" : "pin")
             }
@@ -198,6 +284,7 @@ public struct HistoryDetailsView: View {
             .accessibilityHint(
                 "Removes this item from your clipboard history."
             )
+            .disabled(isRemoving)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -236,12 +323,34 @@ public struct HistoryDetailsView: View {
     /// user-facing `FailurePresentation` message (03b §10).
     @MainActor
     private func load(presentingTransition: Bool = true) async {
+        guard reconcileSurfacePurge(viewState.surfacePurge) else { return }
+        guard let generation = loadFence.begin() else {
+            phase = .removed
+            return
+        }
         if presentingTransition {
             phase = .loading
         }
         do {
-            phase = .loaded(try await viewState.details(for: item.id))
+            let details = try await viewState.details(for: item.id)
+            guard reconcileSurfacePurge(viewState.surfacePurge) else { return }
+            guard loadFence.accepts(
+                generation,
+                returned: details.item,
+                expected: item,
+                isCancelled: Task.isCancelled
+            ) else {
+                if !Task.isCancelled,
+                   loadFence.owns(generation),
+                   details.item != item {
+                    phase = .removed
+                }
+                return
+            }
+            phase = .loaded(details)
         } catch let failure as HistoryFailure {
+            guard reconcileSurfacePurge(viewState.surfacePurge) else { return }
+            guard !Task.isCancelled, loadFence.owns(generation) else { return }
             switch failure {
             case .notFound:
                 phase = .removed
@@ -251,8 +360,47 @@ public struct HistoryDetailsView: View {
                 )
             }
         } catch {
+            guard reconcileSurfacePurge(viewState.surfacePurge) else { return }
+            guard !Task.isCancelled, loadFence.owns(generation) else { return }
             guard error is CancellationError else {
                 phase = .failed(message: "Clipy couldn't load this item.")
+                return
+            }
+        }
+    }
+
+    /// Applies the panel owner's current purge synchronously. This is called
+    /// both by SwiftUI observation and by the load's begin/completion path,
+    /// so navigation teardown ordering cannot admit a late details payload.
+    @MainActor @discardableResult
+    private func reconcileSurfacePurge(
+        _ purge: HistorySurfacePurge?
+    ) -> Bool {
+        if let scope = loadFence.reconcile(purge, item: item) {
+            thumbnails.purge(scope)
+            showsEditor = false
+            phase = .removed
+        }
+        return !loadFence.isPurged
+    }
+
+    /// Pin state is re-read only after the write receipt. A typed write
+    /// failure leaves the currently loaded details in place and uses the
+    /// existing inline failure presentation.
+    @MainActor
+    private func togglePin(isPinned: Bool) async {
+        do {
+            if isPinned {
+                _ = try await viewState.unpinAwaitingReceipt(item.id)
+            } else {
+                _ = try await viewState.pinAwaitingReceipt(item.id)
+            }
+            await load(presentingTransition: false)
+        } catch let failure as HistoryFailure {
+            failureNotice = FailurePresentation.message(for: failure)
+        } catch {
+            guard error is CancellationError else {
+                failureNotice = "Clipy couldn't update this item."
                 return
             }
         }
@@ -278,6 +426,29 @@ public struct HistoryDetailsView: View {
         } catch {
             guard error is CancellationError else {
                 failureNotice = "Clipy couldn't update this item."
+                return
+            }
+        }
+    }
+
+    /// Sequences the destructive mutation before its readback (review UI-2 /
+    /// Card 9B). A typed failure leaves the loaded details in place and is
+    /// presented inline. The panel owner consumes the receipt-confirmed purge
+    /// and removes this navigation path for a committed Remove.
+    @MainActor
+    private func remove() async {
+        guard !isRemoving else { return }
+        isRemoving = true
+        defer { isRemoving = false }
+        do {
+            _ = try await viewState.removeAwaitingReceipt(item.id)
+            // The receipt-confirmed surface purge owns dismissal. Do not
+            // issue a guaranteed-notFound read after a successful Remove.
+        } catch let failure as HistoryFailure {
+            failureNotice = FailurePresentation.message(for: failure)
+        } catch {
+            guard error is CancellationError else {
+                failureNotice = "Clipy couldn't remove this item."
                 return
             }
         }

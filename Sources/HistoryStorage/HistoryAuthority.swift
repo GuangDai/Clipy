@@ -399,27 +399,29 @@ internal actor HistoryAuthority {
 #endif
     }
 
-    /// §13 steps 3–4: create the singleton at position 0 for a new store,
-    /// then require exactly one. docs/05-authority-kernel.md §13, §3.2
+    /// §13 steps 3–4: create the singleton at position 0 only for the
+    /// fresh-compatible empty V2 row shape, then require exactly one row
+    /// carrying the well-known key. docs/05-authority-kernel.md §13, §3.2;
+    /// deep review DATA-1 / Card 1A-1.
     ///
     /// The create is one `ModelContext.transaction` — closure success is the
     /// durable boundary, exactly as for a History Commit (§10), and no
     /// `save()` follows it. A store that cannot be read or written at this
     /// point fails open as `.persistence(.openStore)` (§2's startup failure
-    /// vocabulary, which does not include `.transaction`); zero or
-    /// duplicate singletons are `.persistence(.invariantViolation)`. An
-    /// existing row is decoded with the same §3.2 scalar validation used by
-    /// reads and commits; startup never repairs or replaces its durable
-    /// policy from the caller's initial value.
+    /// vocabulary, which does not include `.transaction`). A missing row in
+    /// any non-fresh shape, a wrong/extra key, or duplicate rows are
+    /// `.persistence(.invariantViolation)`. The fetch is over the complete
+    /// singleton table, not just the expected key, so a wrong-key row cannot
+    /// be mistaken for absence and repaired. An existing row is decoded with
+    /// the same §3.2 scalar validation used by reads and commits; startup
+    /// never replaces its durable policy from the caller's initial value.
     internal static func ensurePositionSingleton(
         in context: ModelContext,
         initialMaximumUnpinnedItems: Int,
         limits: HistoryLimits
     ) throws {
         let key = positionSingletonKey
-        var descriptor = FetchDescriptor<LastChangePositionRow>(
-            predicate: #Predicate { row in row.key == key }
-        )
+        var descriptor = FetchDescriptor<LastChangePositionRow>()
         descriptor.fetchLimit = 2
         let rows: [LastChangePositionRow]
         do {
@@ -429,9 +431,16 @@ internal actor HistoryAuthority {
         }
         switch rows.count {
         case 0:
-            // New store: the singleton starts at position 0 so empty stores
-            // still support an authoritative `HistoryPage(position: 0)`
-            // (§3.2), carrying the validated initial retention value (§2).
+            // Absence authorizes a write only when every other V2 durable
+            // table is empty. Existing items, a retained-byte projection, or
+            // a config row prove this is damaged state, not a new store.
+            guard try isFreshCompatiblePositionBootstrapShape(in: context) else {
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
+            // A fresh-compatible empty store starts at position 0 so empty
+            // stores still support an authoritative
+            // `HistoryPage(position: 0)` (§3.2), carrying the validated
+            // initial retention value (§2).
             do {
                 try context.transaction {
                     context.insert(LastChangePositionRow(
@@ -444,12 +453,42 @@ internal actor HistoryAuthority {
                 throw HistoryFailure.persistence(.openStore)
             }
         case 1:
+            guard rows[0].key == key else {
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
             // Existing store: its durable singleton value rules; the
             // configuration's initial value is ignored (§2), but startup
             // must validate the stored scalars before publishing the facade.
             _ = try Self.decodePositionRow(rows[0], limits: limits)
         default:
             throw HistoryFailure.persistence(.invariantViolation)
+        }
+    }
+
+    /// The only currently distinguishable write authorization for an absent
+    /// position singleton.
+    /// `HistorySchemaV2` contains exactly the four tables queried here; zero
+    /// rows in all three sibling tables is the fresh-compatible shape. It is
+    /// not causal proof: an existing V2 store cleared of every item and then
+    /// stripped of both singletons is identical without durable provenance.
+    /// This is intentionally not a generic repair classifier; any surviving
+    /// durable fact makes missing authoritative position state unrecoverable.
+    private static func isFreshCompatiblePositionBootstrapShape(
+        in context: ModelContext
+    ) throws -> Bool {
+        do {
+            let itemCount = try context.fetchCount(
+                FetchDescriptor<HistoryItemRow>()
+            )
+            let configCount = try context.fetchCount(
+                FetchDescriptor<RetentionExpansionConfigRow>()
+            )
+            let retainedBytesCount = try context.fetchCount(
+                FetchDescriptor<RetainedBytesRow>()
+            )
+            return itemCount == 0 && configCount == 0 && retainedBytesCount == 0
+        } catch {
+            throw HistoryFailure.persistence(.openStore)
         }
     }
 

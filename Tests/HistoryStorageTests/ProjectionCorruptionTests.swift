@@ -88,6 +88,14 @@ private static func seedRow(
     )
     let container = try WSSupport.makeContainer(storeURL: storeURL)
     let context = ModelContext(container)
+    // This is a raw V2 store fixture, not a fresh-store bootstrap. Keep its
+    // authoritative singleton shape valid so only `corruption` selects the
+    // startup/read failure under test (05 §13; DATA-1).
+    context.insert(LastChangePositionRow(
+        key: HistoryAuthority.positionSingletonKey,
+        rawValue: 1,
+        maximumUnpinnedItems: 200
+    ))
     context.insert(row)
     // V2-02 §3.3b (roadmap R.3): every test this fixture feeds except the
     // schemaVersion one expects startup to SUCCEED, so the crafted store

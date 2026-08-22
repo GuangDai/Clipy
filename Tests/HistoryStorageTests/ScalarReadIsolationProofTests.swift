@@ -86,6 +86,15 @@ private static func makeRow(
     let seedContainer = try WSSupport.makeContainer(storeURL: storeURL)
     let seedContext = ModelContext(seedContainer)
     let row = try Self.makeRow(from: bundle, observedAt: observedAt, source: source)
+    // The hand-crafted row belongs to a raw V2 store, so supply its valid
+    // authoritative singleton rather than relying on fresh-store repair. The
+    // two content blobs below remain the fixture's only corruption (05 §13;
+    // DATA-1).
+    seedContext.insert(LastChangePositionRow(
+        key: HistoryAuthority.positionSingletonKey,
+        rawValue: 1,
+        maximumUnpinnedItems: 200
+    ))
     seedContext.insert(row)
     // V2-02 §3.3b (roadmap R.3): the store this proof opens through
     // `makeAuthority` must satisfy the step-7 1:1 law, so the hand-crafted

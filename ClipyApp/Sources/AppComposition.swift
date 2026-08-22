@@ -170,6 +170,16 @@ final class AppComposition {
     /// `.busy` instead of entering FIFO/latest-wins machinery (CLIP-5).
     private var pasteTask: Task<Void, Never>?
 
+#if DEBUG
+    /// App-internal deterministic results used by hosted composition tests
+    /// (REVIEW Card 5D). They are sanitized typed outcomes, not adapter state,
+    /// clipboard payloads, step closures, or a second pasteboard abstraction.
+    /// Production construction cannot set either value, and both declarations
+    /// are absent from Release.
+    private var pasteWriteFailureForTesting: PasteboardWriteFailure?
+    private var nextCaptureFailureForTesting: ClipyCaptureFailure?
+#endif
+
     /// REVIEW Card 6 capture ownership. The active task is the sole caller of
     /// `history.perform(.capture)`; while it is suspended, one immutable
     /// latest capture may wait. A third observation replaces that pending
@@ -375,7 +385,9 @@ final class AppComposition {
         history: any ClipboardHistory,
         adapter: PasteboardAdapter,
         observerPollInterval: TimeInterval = 60,
-        captureByteLimit: Int = HistoryLimits.standard.maximumCaptureBytes
+        captureByteLimit: Int = HistoryLimits.standard.maximumCaptureBytes,
+        pasteWriteFailure: PasteboardWriteFailure? = nil,
+        initialCaptureFailure: ClipyCaptureFailure? = nil
     ) -> AppComposition {
         let composition = AppComposition(
             history: history,
@@ -383,6 +395,8 @@ final class AppComposition {
             observerPollInterval: observerPollInterval,
             captureByteLimit: captureByteLimit
         )
+        composition.pasteWriteFailureForTesting = pasteWriteFailure
+        composition.nextCaptureFailureForTesting = initialCaptureFailure
         composition.start()
         return composition
     }
@@ -501,6 +515,13 @@ final class AppComposition {
     /// concealed content stays the one intentional quiet decision. Only a
     /// complete freeze may enter the active/latest lane.
     private func receiveCaptureOutcome(_ outcome: CaptureOutcome) {
+#if DEBUG
+        if let failure = nextCaptureFailureForTesting {
+            nextCaptureFailureForTesting = nil
+            recordCaptureFailure(failure)
+            return
+        }
+#endif
         if outcome.concealmentMarkerTypeIdentifier != nil
             || outcome.capture.isConcealed {
             return
@@ -585,11 +606,17 @@ final class AppComposition {
 
         let history = self.history
         let adapter = self.adapter
+#if DEBUG
+        let pasteWriteFailureForTesting = self.pasteWriteFailureForTesting
+#else
+        let pasteWriteFailureForTesting: PasteboardWriteFailure? = nil
+#endif
         pasteTask = Task { [weak self] in
             let outcome = await Self.executePaste(
                 item,
                 history: history,
-                adapter: adapter
+                adapter: adapter,
+                pasteWriteFailureForTesting: pasteWriteFailureForTesting
             )
             guard !Task.isCancelled, let self else { return }
 
@@ -620,7 +647,8 @@ final class AppComposition {
     private static func executePaste(
         _ item: HistoryItemReference,
         history: any ClipboardHistory,
-        adapter: PasteboardAdapter
+        adapter: PasteboardAdapter,
+        pasteWriteFailureForTesting: PasteboardWriteFailure?
     ) async -> PasteExecutionOutcome {
         let payload: PastePayload
         do {
@@ -636,6 +664,10 @@ final class AppComposition {
         }
 
         guard !Task.isCancelled else { return .cancelled }
+
+        if let pasteWriteFailureForTesting {
+            return .failed(.write(pasteWriteFailureForTesting))
+        }
 
         do {
             try adapter.write(payload)
