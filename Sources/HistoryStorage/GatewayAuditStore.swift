@@ -347,6 +347,48 @@ extension HistoryAuthority {
         committedAt: Date,
         limits: ExternalLimits = .standard
     ) throws -> UInt64 {
+        let transactionInjection: InjectedTransactionFailure?
+        switch injectedTransactionFailure {
+        case .beforeSingletonUpdate, .insufficientDiskSpace:
+            transactionInjection = injectedTransactionFailure
+        default:
+            transactionInjection = nil
+        }
+
+        do {
+            return try Self.executeGatewayRebase(
+                in: container,
+                reason: reason,
+                requestedFloor: requestedFloor,
+                requestedAt: requestedAt,
+                committedAt: committedAt,
+                limits: limits,
+                transactionInjection: transactionInjection
+            )
+        } catch let injection as InjectedTransactionFailure {
+            _ = consumeTransactionFailureInjection(injection)
+            if injection == .insufficientDiskSpace {
+                throw NSError(
+                    domain: NSCocoaErrorDomain,
+                    code: CocoaError.Code.fileWriteOutOfSpace.rawValue
+                )
+            }
+            throw injection
+        }
+    }
+
+    /// The nonisolated executor creates every SwiftData value locally. The
+    /// actor calls it synchronously with Sendable inputs, so the transaction
+    /// closure never captures actor-isolated rows, contexts, or `self`.
+    private static func executeGatewayRebase(
+        in container: ModelContainer,
+        reason: AuditRebaseReason,
+        requestedFloor: UInt64?,
+        requestedAt: Date,
+        committedAt: Date,
+        limits: ExternalLimits,
+        transactionInjection: InjectedTransactionFailure?
+    ) throws -> UInt64 {
         let context = ModelContext(container)
         context.autosaveEnabled = false
         let config = try Self.loadGatewayConfig(in: context)
@@ -475,18 +517,11 @@ extension HistoryAuthority {
                 config.auditBytes = finalAuditBytes
                 config.compactionFloor = newFloor
 
-                if consumeTransactionFailureInjection(
-                    .beforeSingletonUpdate
-                ) {
+                if transactionInjection == .beforeSingletonUpdate {
                     throw InjectedTransactionFailure.beforeSingletonUpdate
                 }
-                if consumeTransactionFailureInjection(
-                    .insufficientDiskSpace
-                ) {
-                    throw NSError(
-                        domain: NSCocoaErrorDomain,
-                        code: CocoaError.Code.fileWriteOutOfSpace.rawValue
-                    )
+                if transactionInjection == .insufficientDiskSpace {
+                    throw InjectedTransactionFailure.insufficientDiskSpace
                 }
             }
             return markerSequence
@@ -494,11 +529,6 @@ extension HistoryAuthority {
             throw rejection.externalFailure
         } catch let failure as ExternalFailure {
             throw failure
-        } catch {
-            // The public composition layer distinguishes a typed validation
-            // failure (which is itself audited) from a transaction/save
-            // failure (which must not attempt a second write).
-            throw error
         }
     }
 }
