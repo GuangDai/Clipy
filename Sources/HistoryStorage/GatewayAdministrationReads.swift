@@ -248,12 +248,12 @@ extension HistoryAuthority {
         reason: AuditRebaseReason
     ) async throws {
         let now = storageClock.now()
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
-        let config = try Self.loadGatewayConfig(in: context)
 
         switch reason {
         case .corruptionDetected:
+            let context = ModelContext(container)
+            context.autosaveEnabled = false
+            let config = try Self.loadGatewayConfig(in: context)
             let failure = ExternalFailure.requestDenied(.invalidInput)
             try commitGatewayAudit(
                 Self.failedAdminReadPayload(
@@ -271,10 +271,14 @@ extension HistoryAuthority {
         case .adminForced:
             let committedAt = storageClock.now()
             do {
+                let context = ModelContext(container)
+                context.autosaveEnabled = false
+                let config = try Self.loadGatewayConfig(in: context)
+                let newFloor = config.nextAuditSequence
                 try context.transaction {
                     _ = try GatewayAuditStore.rebase(
                         reason: reason,
-                        newFloor: config.nextAuditSequence,
+                        newFloor: newFloor,
                         requestedAt: now,
                         committedAt: committedAt,
                         config: config,
@@ -295,6 +299,11 @@ extension HistoryAuthority {
                     }
                 }
             } catch let failure as ExternalFailure {
+                let auditContext = ModelContext(container)
+                auditContext.autosaveEnabled = false
+                let auditConfig = try Self.loadGatewayConfig(
+                    in: auditContext
+                )
                 try commitGatewayAudit(
                     Self.failedAdminReadPayload(
                         connectionID: nil,
@@ -303,8 +312,8 @@ extension HistoryAuthority {
                         failure: failure,
                         at: now
                     ),
-                    config: config,
-                    in: context
+                    config: auditConfig,
+                    in: auditContext
                 )
                 throw failure
             } catch {
