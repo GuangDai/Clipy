@@ -270,62 +270,72 @@ extension HistoryAuthority {
 
         case .adminForced:
             let committedAt = storageClock.now()
-            do {
-                let context = ModelContext(container)
-                context.autosaveEnabled = false
-                let config = try Self.loadGatewayConfig(in: context)
-                let newFloor = config.nextAuditSequence
-                try context.transaction {
-                    _ = try GatewayAuditStore.rebase(
-                        reason: reason,
-                        newFloor: newFloor,
-                        requestedAt: now,
-                        committedAt: committedAt,
-                        config: config,
-                        in: context
-                    )
-                    if consumeTransactionFailureInjection(
-                        .beforeSingletonUpdate
-                    ) {
-                        throw InjectedTransactionFailure.beforeSingletonUpdate
-                    }
-                    if consumeTransactionFailureInjection(
-                        .insufficientDiskSpace
-                    ) {
-                        throw NSError(
-                            domain: NSCocoaErrorDomain,
-                            code: CocoaError.Code.fileWriteOutOfSpace.rawValue
-                        )
-                    }
-                }
-            } catch let failure as ExternalFailure {
-                let auditContext = ModelContext(container)
-                auditContext.autosaveEnabled = false
-                let auditConfig = try Self.loadGatewayConfig(
-                    in: auditContext
-                )
-                try commitGatewayAudit(
-                    Self.failedAdminReadPayload(
-                        connectionID: nil,
-                        operationKind: .adminRebase,
-                        request: .rebase(reason: reason),
-                        failure: failure,
-                        at: now
-                    ),
-                    config: auditConfig,
-                    in: auditContext
-                )
-                throw failure
-            } catch {
-                // A transaction/audit save failure is itself the publication
-                // failure. It must not trigger a second append attempt.
-                throw ExternalFailure.persistence(.transaction)
-            }
+            try commitAdminForcedRebase(
+                requestedAt: now,
+                committedAt: committedAt
+            )
         }
     }
 }
 
 private extension HistoryAuthority {
+    /// Keeps every context-bound value inside one synchronous actor interval.
+    /// The async public witness owns no ModelContext or model row.
+    func commitAdminForcedRebase(
+        requestedAt: Date,
+        committedAt: Date
+    ) throws {
+        do {
+            let context = ModelContext(container)
+            context.autosaveEnabled = false
+            let config = try Self.loadGatewayConfig(in: context)
+            let newFloor = config.nextAuditSequence
+            try context.transaction {
+                _ = try GatewayAuditStore.rebase(
+                    reason: .adminForced,
+                    newFloor: newFloor,
+                    requestedAt: requestedAt,
+                    committedAt: committedAt,
+                    config: config,
+                    in: context
+                )
+                if consumeTransactionFailureInjection(
+                    .beforeSingletonUpdate
+                ) {
+                    throw InjectedTransactionFailure.beforeSingletonUpdate
+                }
+                if consumeTransactionFailureInjection(
+                    .insufficientDiskSpace
+                ) {
+                    throw NSError(
+                        domain: NSCocoaErrorDomain,
+                        code: CocoaError.Code.fileWriteOutOfSpace.rawValue
+                    )
+                }
+            }
+        } catch let failure as ExternalFailure {
+            let auditContext = ModelContext(container)
+            auditContext.autosaveEnabled = false
+            let auditConfig = try Self.loadGatewayConfig(in: auditContext)
+            try commitGatewayAudit(
+                Self.failedAdminReadPayload(
+                    connectionID: nil,
+                    operationKind: .adminRebase,
+                    request: .rebase(reason: .adminForced),
+                    failure: failure,
+                    at: requestedAt
+                ),
+                config: auditConfig,
+                in: auditContext
+            )
+            throw failure
+        } catch {
+            // A transaction/audit save failure is itself the publication
+            // failure. It must not trigger a second append attempt.
+            throw ExternalFailure.persistence(.transaction)
+        }
+    }
+
     static func succeededAdminReadPayload(
         connectionID: ExternalConnectionID?,
         operationKind: ExternalOperationKind,
