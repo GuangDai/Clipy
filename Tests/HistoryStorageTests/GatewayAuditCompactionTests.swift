@@ -120,7 +120,10 @@ struct GatewayAuditCompactionTests {
             maxAuditLogSize: 450,
             compactionCadenceOps: 1
         )
-        let (context, config) = try GatewayAuditTestSupport.makeContext()
+        let container = try GatewayAuditTestSupport.makeContainer()
+        let (context, config) = try GatewayAuditTestSupport.makeContext(
+            in: container
+        )
         try GatewayAuditTestSupport.appendRecent(
             count: 4,
             config: config,
@@ -146,11 +149,14 @@ struct GatewayAuditCompactionTests {
             }
         }
 
+        // SwiftData may retain the mutated registered objects in the failed
+        // context. A fresh assertion context observes the durable rollback.
+        let assertionContext = ModelContext(container)
         let durableConfig = try #require(
-            context.fetch(FetchDescriptor<GatewayConfigRow>()).first
+            assertionContext.fetch(FetchDescriptor<GatewayConfigRow>()).first
         )
-        #expect(try GatewayAuditTestSupport.rows(in: context).map(\.auditSequence)
-            == originalSequences)
+        #expect(try GatewayAuditTestSupport.rows(in: assertionContext)
+            .map(\.auditSequence) == originalSequences)
         #expect(durableConfig.nextAuditSequence == originalHead)
         #expect(durableConfig.compactionFloor == originalFloor)
         #expect(durableConfig.auditBytes == originalBytes)
