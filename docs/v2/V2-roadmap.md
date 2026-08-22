@@ -60,7 +60,7 @@ the named performance/security gates are part of completion.
 | [V2-02 retention](V2-02-retention.md) | §6, R.1–R.7 |
 | [V2-03 change journal](V2-03-change-journal.md) | §8, J.1–J.8 |
 | [V2-04 materialization](V2-04-materialization.md) | §9, C.1–C.7 |
-| [V2-05 external gateway](V2-05-external-gateway.md) | §10, X.1–X.7 |
+| [V2-05 external gateway](V2-05-external-gateway.md) | §10, X.0–X.11 |
 | [V2-06 platform grafts](V2-06-platform-grafts.md) | §11, P1/P2/P3 |
 | [V2-07 UX](V2-07-ux.md) | §12, UX.1–UX.9 |
 | [V2 facts](V2-facts.md) | Durable platform evidence; temporary per-module sidecars must be promoted under V2-1 |
@@ -148,8 +148,8 @@ not waive the proof gates that must pass after implementation.
 ### Gate maintenance for every admitted slice
 
 - Extend `scripts/import_gate.py` and `.swiftlint.yml` together. E1 permits
-  Vision/PDFKit only in HistoryStorage; X1 permits CryptoKit only in
-  HistoryStorage and AppIntents only in ClipyApp. No other import boundary
+  Vision/PDFKit only in HistoryStorage; X1 permits AppIntents only in ClipyApp.
+  Audit adds no hashing/cryptography import exception. No other import boundary
   changes.
 - Keep `scripts/escape_hatch_scan.py` strict. X1 may add only the exact
   framework-owned `AppDependencyManager.shared` registration in ClipyApp; the
@@ -245,9 +245,9 @@ document and its proof gates before starting the affected slice.
 | DC-11 | V2-04 | Obtain explicit recorded review/product sign-off for the stamp-collision residual, the load-bearing single-flight join-key substitution, and materializer-version downgrade refusal, or redesign the keying. |
 | DC-12 | V2-04 | Make cache insert APIs carry `contentVersion`/`builtAt`, specify C3 metrics collection, choose a concrete bounded disk wire format/decoder, and resolve whether C1 requires both G1 and G4 or G1 admits the internal S1 substrate. *(2026-08-15: the C1 `insert` signature now carries `contentVersion`/`builtAt`; the other three items remain open.)* |
 | DC-13 | V2-03/V2-04 | Reconcile the cross-doc thumbnail-key description (`ContentVersion` versus source fingerprint) and map every V2-04 cache-law, collision, restart, joined-caller, corruption, sweep, and version-door obligation to the roadmap-owned stable fixtures. *(2026-08-15: the stable fixture IDs `V2-WS-C1-1/2`, `V2-WS-C2-1/2/3`, `V2-WS-C3-1` are now defined in V2-04 Record 4, so the roadmap's C.2–C.6 citations resolve; the thumbnail-key reconciliation remains open.)* |
-| DC-14 | V2-05 | Reconcile deterministic unique `GrantRow.grantKey` with re-grant creating a new row. |
-| DC-15 | V2-05 | Define audit compaction so the surviving suffix validates; the current first-survivor-only rehash leaves later links stale unless the boundary representation changes. |
-| DC-16 | V2-05 | Make audit payload/DTOs represent optional commit positions and rebase range/reason; include every integrity-bearing column in the hash or narrow D36; provide a reachable recovery mode when normal `open` rejects a broken chain. |
+| DC-14 | V2-05 | **Resolved (2026-08-22):** `GrantRow` is one current-state row per `(connectionID, capability)`; re-grant updates that row, while `OperationRecordRow` preserves grant/revoke/re-grant event history. |
+| DC-15 | V2-05 | **Resolved (2026-08-22):** the audit hash-chain design is withdrawn under the repository no-hash rule. Compaction atomically appends its marker, deletes one prefix, advances `compactionFloor`, and preserves a contiguous retained suffix; no tamper-evidence claim. |
+| DC-16 | V2-05 | **Resolved (2026-08-22):** audit payload/DTO connection and capability are optional for global/admin truth, commit position stays optional, typed codec + monotone contiguous `auditSequence` + explicit floor replace the former chain. Recovery is a separately gated diagnostic/rebase path with no content/History access and no tamper-evidence claim. |
 | DC-17 | V2-06 P1 | Replace `readStartupCheckpoint() -> StartupCheckpointRow?` with an immutable `Sendable` snapshot so no `@Model` crosses a context/actor boundary. |
 | DC-18 | V2-06 P2 | Define deterministic behavior when the system locale is outside the five supported fixture locales. |
 | DC-19 | V2-06 P3 | **Superseded as executable closure by `DEC-P3-ADMISSION`, `DEC-P3-MIGRATION-WRITES`, and the required V2-06 §5 replacement amendment.** The historical eager-migration/raw-`AsyncBytes` direction must not be implemented. The replacement must specify bounded cursor migration, concurrent-write linearization, staging ownership, and one bounded internal reader before G8 can admit P3. |
@@ -257,7 +257,7 @@ document and its proof gates before starting the affected slice.
 | DC-23 | V2-00/V2-02/V2-07 | Decide whether R1/R2/R3 are one atomic retention bundle or independently admitted dimensions. Align trigger recording, public enums and policy fields, schema/defaults, implementation slices, and visible controls with that decision. *(2026-08-15: resolved — **one three-dimensional policy value, independently disable-able** (product decision, recorded as the admission record in V2-02 Record 1): the `HistoryRetentionPolicies` struct ships whole with per-dimension `nil` disabling; trigger matrix, public surface, schema defaults, and UX switches follow V2-02 as written; R.1–R.7 slices are not trimmed.)* |
 | DC-24 | V2-02/V2-03 | Define ownership and release ordering for the shared Storage clock when J1 is admitted before or without retention. Do not make an independent J1 trigger silently reserve untriggered V2-02 public or schema surface. |
 | DC-25 | V2-00/V2-03/V2-05 | Resolve the X1/X2 dependency on the V2-03 HCR substrate: either require independently admitted J1 or specify the exact HCR-only substrate that X subsumes, including schema, migration, reconnect visibility, and proof-gate consequences. |
-| DC-26 | V2-05 | `GatewayConfigRow.generation` (§4.6) is a write-only column: the former "(§4.4 / §5.6)" cross-ref was half wrong (§4.4 defines codecs only; fixed to Record 5 / §5.6), and no reader is specified anywhere in V2-05. Decide: (a) drop the column (the rebase marker already records the discarded `[oldFloor, newFloor)` range + reason, CRIT-M2), or (b) keep it and specify its one reader (e.g. §4.6 open field-range validation + audit-viewer display). *(Found in iterative loop R1, 2026-08-15.)* |
+| DC-26 | V2-05 | **Resolved (2026-08-22):** delete the write-only `GatewayConfigRow.generation`; `configSchemaVersion`, `nextAuditSequence`, and `compactionFloor` own the executable state. Recovery never resets the audit head, so no future-rebase placeholder is retained. |
 | DC-27 | V2-02 | `.setRetentionPolicies` PHASE A fails the whole action on any item whose active revision alone exceeds the new `maxRevisionBytesPerItem`, BEFORE PHASE B R1/R2 selection (§4.4; no post-retirement re-check exists). An unpinned heavy item therefore blocks a combined threshold-lowering that R2 would satisfy by retiring it. Decide: (a) run the veto after PHASE B and exempt R1/R2 retirements (consequence narrows to "among items that survive R1/R2 retirement"; consistent with §6.3 retire-subsumes-prune; default), or (b) keep the whole-action veto and record the over-breadth as intended; touches §4.4, §8.3, RET gates. *(Found in iterative loop R2.)* *(2026-08-15: resolved, option (a) applied — the veto is now PHASE C, running after PHASE-B selection and scoped to survivors; §4.4 code block + Atomicity paragraph and §8.3 updated in V2-02.)* |
 | DC-28 | V2-02 | R1 capture-lane `now` = caller `observedAt`, finiteness-checked only (`IngestPreparation.swift`); sweep lane uses the injected Storage clock (§6.4). v1 clamps persisted `lastCopiedAt` with `max()` (`PlannersCapture.swift`) but V2-02's R1 comparison is unclamped: a finite future-dated `observedAt` retires every unpinned item in one commit. Decide: (a) reject/clamp skewed `observedAt` at the boundary, or (b) accept and record the exposure in §4.2/§8.3 (default; severity LOW). *(Found in iterative loop R2.)* *(2026-08-15: resolved, option (b) applied — exposure accepted and recorded in V2-02 §4.2 (`now` bullet) and §8.3 ("Recorded exposure"); severity LOW.)* |
 
@@ -297,7 +297,7 @@ Migration inventory:
 | V2-01 | `EnrichmentRow`, `EnrichmentConfigRow` | new `EnrichmentBlobV1` only | no backfill; disabled and empty |
 | V2-03 | `HistoryChangeRecordRow`, `JournalConfigRow` | new `AffectedItemsBlobV1` only | no historical backfill; HCR starts at the next commit |
 | V2-04 C2 | `ThumbnailCacheConfigRow` | new disk-file codec only | empty cache directory; lazy population |
-| V2-05 | `ConnectionRow`, `GrantRow`, `OperationRecordRow`, `GatewayConfigRow` | new audit codecs only | bootstrap one ungranted App Intents connection |
+| V2-05 X.3/X.4 | V3: `ConnectionRow`, `GrantRow`, `OperationRecordRow`, `GatewayConfigRow` | audit codec deferred to the X.4 spec-first atomic-audit leaf | X.3 bootstraps config + one active ungranted App Intents connection + zero audit |
 | P1 | `StartupCheckpointRow` | new checkpoint codec | rebuild on miss/corruption |
 | P2 | `LocalizedSearchConfigRow` | none | query-time only; no search projection rebuild |
 | P3 | blocked until replacement amendment selects metadata/cursor rows | bounded representation migration; exact codec shape is amendment-owned | staged depot write/readback plus bounded orphan/in-flight recovery; no eager whole-store cutover |
@@ -308,20 +308,23 @@ including `E1-PLATFORM-1/4`, `RET-PLATFORM-1/1b`, `J1-PLATFORM-2`,
 P3 migration/recovery gates as applicable. The old eager P3 gate wording is
 not executable.
 
-### M1 total `SwiftDataHistory.open` order (first release: M1 + V2-02)
+### M1 total `SwiftDataHistory.open` order (current: V2 retention + V3 X.3)
 
-Recorded 2026-08-15 per the §4 closing requirement (one executable order, not
-per-module prose). This is the release-scoped total order; every later
+Originally recorded 2026-08-15 for the first V2 retention release and extended
+in place 2026-08-22 for X.3, per the §4 closing requirement (one executable
+order, not per-module prose). This is the release-scoped total order; every later
 release that admits another singleton/migration-bearing graft must extend
 this list in place rather than append per-module "after the previous
 singleton" statements. Step numbers cite the v1 `05` §13 steps they extend.
 
 1. validate configuration and hard limits; *(05 §13 step 1)*
 2. construct the `ModelContainer` with the ordered `SchemaMigrationPlan`
-   (`schemas` = `HistorySchemaV1`, `HistorySchemaV2` in ship order;
-   `stages` = the single custom `V1 → V2` stage, DC-02). A fresh store runs
-   no stage (the V2 schema is created directly, zero items); a v1 store
-   migrates inside construction: the additive schema change plus the
+   (`schemas` = `HistorySchemaV1`, immutable `HistorySchemaV2`, immutable
+   `HistorySchemaV3` in ship order; `stages` = the custom `V1 → V2` stage from
+   DC-02 followed by the additive lightweight `V2 → V3` stage). A fresh store
+   runs no stage (the V3 schema is created directly, zero items); a V2 store
+   runs only the lightweight V2 → V3 hop; a V1 store runs both ordered hops.
+   In the V1 → V2 hop, the additive schema change plus the
    `RetainedBytesRow` `didMigrate` backfill (idempotent by construction)
    both complete before `open` returns — whether the backfill completes
    before `ModelContainer.init` itself returns is runtime-asserted, not
@@ -336,21 +339,34 @@ singleton" statements. Step numbers cite the v1 `05` §13 steps they extend.
    present → validate `configSchemaVersion == 1`, `ageMaxSeconds`
    finiteness (DC-21), and non-contradictory combinations (V2-02 §3.3);
    duplicates or violations fail closed before any write path opens;
-6. rebuild every projection-schema-v1 row to recipe v2 from validated
+6. run the X.3 Gateway bootstrap/validation inside `HistoryAuthority`, before
+   any projection/index/facade publication: absent config + all dependent tables
+   empty creates one config and one active
+   `Siri / Shortcuts / Spotlight` App Intents connection in the same
+   transaction, with zero grants/audit; an existing config requires the exact
+   matching connection and is never silently repaired. Config absent + any
+   surviving dependent row fails closed. Config absent + all dependent rows
+   empty is accepted as fresh/migration-compatible even though it is
+   indistinguishable from complete future V3 Gateway-row deletion; no
+   marker/hash is added and no stronger corruption-detection claim is made.
+   Validate `nextAuditSequence == compactionFloor == 1`, `auditBytes == 0`,
+   supported raw/config versions, and the fixed display name. X.3 constructs no
+   codec, registry/admin service, Gateway actor, or facade;
+7. rebuild every projection-schema-v1 row to recipe v2 from validated
    Canonical/revision Effective Content in one bounded transaction; accept
    only tags 1 and 2, and publish no partial replacement on failure;
    *(05 §13 step 6; this is a derived-projection rebuild, not a SwiftData
    schema stage)*
-7. validate retained row count does not exceed the hard bound, then fetch
+8. validate retained row count does not exceed the hard bound, then fetch
    each row's business ID, nonzero Content Version, projection schema version,
    pin ordinal, Canonical bytes, and signature metadata; *(05 §13 step 7)*
-8. require projection schema version 2; *(05 §13 step 8)*
-9. decode Canonical/signatures, recompute xxh3, require authoritative
+9. require projection schema version 2; *(05 §13 step 8)*
+10. decode Canonical/signatures, recompute xxh3, require authoritative
    bidirectional coverage, and build the complete index;
    *(05 §13 step 9)*
-10. validate the full pinned ordinal set from scalar fields;
+11. validate the full pinned ordinal set from scalar fields;
     *(05 §13 step 10)*
-11. enforce the `RetainedBytesRow` 1:1 correspondence both directions with
+12. enforce the `RetainedBytesRow` 1:1 correspondence both directions with
    `bytesSchemaVersion == 1` and valid scalar relations
    (`RET-PLATFORM-1b(a)`); a fresh store holds this vacuously (zero items;
    rows arrive via capture-insert stamping). *(05 §13 step 11. Sequencing: the
@@ -359,13 +375,16 @@ singleton" statements. Step numbers cite the v1 `05` §13 steps they extend.
    creates items without rows, so an unconditional check would fail every
    capture-created item. M1 proves the correspondence for migrated stores
    through the migration fixtures of `RET-PLATFORM-1b(a)`; R.3 turns the
-   fixture invariant into the step-7 runtime check. Amended 2026-08-16
+   fixture invariant into this runtime check.
+   Amended 2026-08-16
    from the measured platform fact of run 31955551834: the check runs in
    two phases — a missing-rows-only RECOVERY that re-runs the idempotent
    backfill once (`V2-02` Record 5 "Interruption recovery"), then the
    strict both-directions validation; orphans/duplicates/version
    mismatches and invalid scalar relations never recover.)*
-12. publish the constructed `SwiftDataHistory` facade. *(05 §13 step 12)*
+13. publish the constructed `SwiftDataHistory` facade. This is the v1
+    `ClipboardHistory` facade only; X.3 publishes no external Gateway facade.
+    *(05 §13 step 12)*
 
 The current hard-capped index build decodes Canonical to prove authoritative
 negative evidence, but never decodes revision bytes merely to build the index.
@@ -507,14 +526,16 @@ All acceptance gates:
 
 ## 10. V2-05 — external gateway and audit (X1/X2)
 
-- **Status:** blocked on V2-0, M1, the HCR prerequisite resolved under DC-25,
-  DC-01, DC-14 through DC-16, DC-22, and DC-25; otherwise gated on an approved
-  X1 product spec and recorded fresh architecture review, whose review record
-  includes the security analysis. X2 is mandatory with X1.
+- **Status:** X.1/X.2 contract layers precede **X.3, the current implementation
+  leaf**. DC-14 through DC-16 and DC-26 are resolved by the 2026-08-22
+  schema/grant/no-hash decisions. Later Gateway behavior remains gated by the
+  HCR substrate and applicable product/security evidence. X2 is mandatory with
+  X1.
 - **Spec references:** `V2-05` §0–§14; D32–D36.
-- **Dependencies:** completed app composition; the HCR and Storage-clock
-  substrate resolved under DC-24/DC-25; CryptoKit in HistoryStorage and
-  AppIntents in ClipyApp only.
+- **Dependencies:** X.3 depends on shipped immutable `HistorySchemaV2` and the
+  established open/bootstrap order. Later behavior depends on completed app
+  composition and the HCR/Storage-clock substrate resolved under DC-24/DC-25.
+  AppIntents remains confined to ClipyApp; audit adds no cryptography import.
 - **Security posture:** main app process only; one gateway/Authority; no App
   Intents extension, network enrollment, second writer, or audit off-switch.
   Local Automation is a later same-EUID-account continuation through
@@ -532,9 +553,9 @@ private transport. No later row may fabricate evidence for an earlier row.
 |---|---|---|
 | X.0 Spec/evidence closure (no product code) | Freeze V2-05 §0, the `clipyctl` public wire shape, and platform evidence questions. Signed/TCC experiments may run here, but cannot choose or ship a transport. | Owning docs agree; unresolved authenticated ingress and format-inventory injection remain explicit blockers rather than inferred answers. |
 | X.1 Closed vocabulary and allow matrix — **Batch 6 implementation leaf** | Add only `Sources/HistoryCore/ExternalGatewayTypes.swift`, `Sources/HistoryStorage/ExternalAccessPolicy.swift`, and `Tests/HistoryStorageTests/ExternalAccessPolicyTests.swift`; update the HistoryCore symbol snapshot. Preserve App Intents browse/readContent/manage exactly; deny cross-kind, unknown, and not-yet-admitted revise pairs. | `PLAY-PY-GW0`; table-driven total-matrix proof plus public-symbol/import/escape-hatch gates. No schema, actor, CLI, transport, credential, hash, or request digest. |
-| X.2 Public Gateway contract — **next implementation layer after GW0** | Add the remaining Foundation-only `ExternalHistory`, `GatewayAdminHistory`, identities, requests/results, failures, and connection/grant/audit DTOs. Leave every v1 closed enum/protocol unchanged. Do not fabricate a dispatcher or publish a facade before durable bootstrap and the real Gateway exist. | Run the public-symbol/import/escape-hatch checks for this contract-only leaf. It closes only the Foundation/public-surface clauses; aggregate `X-COMPILE-1/3` remain open until the real X.5 Gateway and its approved imports exist. No synthetic Gateway response. |
-| X.3 Schema/codecs/bootstrap | Add the four Gateway/Audit models, resolved audit codecs, and fixed limits. Bootstrap one durable active App Intents connection with no grants; validate all required state before facade publication. | `X-PLATFORM-1/2`; migration, corruption, missing-config-with-data, identity-persistence, and startup proofs. |
-| X.4 Audit/admin substrate | Implement the resolved audit/admin persistence behavior, registry/grants, recovery-only handling, and atomic admin audit. Deny by default; the §0.2 matrix is authoritative. | `PLAY-PY-GW1`, `PLAY-PY-GW2`, `PLAY-PY-GW3`, `PLAY-PY-GW4`; grant lifecycle, encoding, compaction/recovery, and corruption proofs. |
+| X.2 Public Gateway contract | Add the remaining Foundation-only `ExternalHistory`, `GatewayAdminHistory`, identities, requests/results, failures, and connection/grant/audit DTOs. `OperationRecordDTO.connectionID`/`capability` are optional because global rebase/compact has no target connection and admin has no external grant capability. Leave every v1 closed enum/protocol unchanged. Do not fabricate a dispatcher or publish a facade before durable bootstrap and the real Gateway exist. | Run the public-symbol/import/escape-hatch checks for this contract-only leaf. It closes only the Foundation/public-surface clauses; aggregate `X-COMPILE-1/3` remain open until the real X.5 Gateway and its approved imports exist. No synthetic Gateway response. |
+| X.3 Schema/limits/bootstrap — **current implementation leaf** | Add a new immutable `HistorySchemaV3` containing the four Gateway/Audit models; never edit shipped `HistorySchemaV2`. Add fixed `ExternalLimits`. Bootstrap and validate exactly one config plus one active `Siri / Shortcuts / Spotlight` App Intents connection, zero grants, and zero audit rows. `GrantRow` is one current-state row per connection/capability; `GatewayConfigRow` has no `generation`. Do not implement `OperationPayloadBlobV1`, operation literal cases, registry/admin, actor, facade/factory, App Intents, CLI, or transport. | `X-PLATFORM-1/2`; V2→V3 migration, supported-prior migration, model/raw/config validation, missing-config-with-surviving-data rejection, identity/reopen persistence, exact zero-grant/zero-audit startup, and proof that no facade/admin/actor ships. Record the causal ceiling: config absent + all dependent tables empty is fresh/migration-compatible but indistinguishable from complete future V3 bootstrap deletion, so reconstruction is allowed and no marker/hash is added. Bootstrap must finish before any future facade publication. |
+| X.4 Audit/admin substrate | **Spec-first gate:** before encoder code, freeze the complete closed request/result case set with every admitted external/admin literal; V2-05 §4.4's skeleton is non-executable. Then land `OperationPayloadBlobV1` and matching atomic audit/admin behavior in the same leaf. Implement registry/grants, recovery-only handling, typed decode, monotone contiguous `auditSequence`, and compaction-floor honesty. Re-grant updates the one current-state row; audit records event history. No audit off-switch, audit hash, or tamper-evidence claim. | First prove the closed case table is complete, then `PLAY-PY-GW1`, `PLAY-PY-GW2`, `PLAY-PY-GW3`, `PLAY-PY-GW4`; sequence/floor, complete encoding, current-state grant lifecycle, compaction/recovery, privacy, optional global-admin attribution, and corruption proofs. |
 | X.5 In-process Gateway denial | Add `ExternalGateway`/registry dispatch through the real Authority. Only after X.3 bootstrap and this real actor exist, add the public `ExternalHistoryFacade` concrete type and `SwiftDataHistory.makeExternalHistoryFacade(for:)` accessor that bake the authoritative connection into the facade; never ship a placeholder/unavailable dispatcher. Prove unknown connection, no grant, revoked grant, invalid pair, and rate denial stop before History access. | `PLAY-PY-B1`, `PLAY-PY-B2`; authoritative denial and no-content/no-mutation proofs plus public facade/factory construction through the real Gateway. |
 | X.6 In-process Gateway positive | Through the same production actor and real Authority, complete one granted bounded browse plus the approved App-Intents write/read subset, including save-boundary recheck and audit behavior. | `PLAY-PY-B0G`, `X-BEHAVIOR-1`; positive browse, TOCTOU revoke, write atomicity, privacy, and failure mapping. |
 | X.7 App Intents composition | In `ClipyApp` only, add the six intents/shortcuts provider, obtain the baked App Intents facade, register it once with the framework-owned allowance, and resolve via `@Dependency`. It must use X.5/X.6, not duplicate policy. | `PLAY-PY-B0I`, `X-COMPILE-2/3/4`; cold/warm integration and unresolved-dependency clean-denial tests. |

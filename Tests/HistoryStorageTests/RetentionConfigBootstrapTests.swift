@@ -3,8 +3,9 @@
 /// absent → the all-disabled v1-faithful defaults; present → the
 /// fail-closed `configSchemaVersion == 1` / finiteness (DC-21) /
 /// non-contradictory-combination validation (`V2-02` §3.3). Containers are
-/// built directly over `Schema(versionedSchema: HistorySchemaV2.self)` (the
-/// open-path wiring lands with M1.4's migration plan), and
+/// built directly over the current `HistorySchemaV3` so the config's
+/// pre-bootstrap Gateway-table absence classifier runs against its real
+/// model set, and
 /// `HistoryAuthority.ensureRetentionExpansionConfig(in:)` is driven via
 /// @testable.
 ///
@@ -32,9 +33,9 @@ struct RetentionConfigBootstrapTests {
 
     // MARK: - Fixtures
 
-    /// A fresh in-memory container over the V2 schema with a ready context.
+    /// A fresh in-memory container over the current V3 schema with a ready context.
     private func makeContext() throws -> (ModelContainer, ModelContext) {
-        let schema = Schema(versionedSchema: HistorySchemaV2.self)
+        let schema = Schema(versionedSchema: HistorySchemaV3.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]

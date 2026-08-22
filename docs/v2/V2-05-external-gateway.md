@@ -1,6 +1,13 @@
 # V2-05 - External Gateway & Audit (X1 ExternalGateway + X2 Operation Record auditing)
 
-> **Status (2026-07-26):** V2 design-consolidated, scaffold proof pending. This
+> **Status (2026-08-22):** X.1 closed vocabulary and X.2 public contract are
+> followed by **X.3 schema/bootstrap, the current implementation leaf**. X.3 is
+> persistence-only: it adds immutable `HistorySchemaV3`, the four Gateway/Audit
+> models, fixed `ExternalLimits`, and startup bootstrap/validation. It does
+> **not** implement `OperationPayloadBlobV1`, any operation-literal codec case,
+> `ExternalGateway`, a facade/factory, registry/admin behavior, App Intents,
+> CLI, or transport. The complete audit codec moves to X.4 so its admin cases
+> land atomically with the behavior they encode. This
 > doc extends the v1 specification (`00`–`06`) by **addition only**.
 > v1 owns v1 behavior (single in-app writer, no external access, no audit); V2-05
 > owns the single external trust boundary (`ExternalGateway`), the
@@ -12,8 +19,9 @@
 > `HistoryFailure` enum is **untouched** (V2-05 introduces a sibling
 > `ExternalFailure`, §7.3, exactly as V2-03 introduced `ReconnectFailure`).
 > `HistoryAction` is **untouched** (admin and external operations live on distinct
-> "concern" protocols, §7.2/§7.1). Like v1 and V2-01..V2-04 at consolidation time,
-> V2-05 is "design-consolidated, scaffold proof pending."
+> "concern" protocols, §7.2/§7.1). The X.1/X.2 contract leaves are landed with
+> their recorded contract-only ceilings; X.3 remains current unmerged work.
+> The aggregate Gateway/product behavior is not shipped by those leaves.
 
 ## 0. 2026-08-22 Local Automation controlling amendment
 
@@ -157,15 +165,19 @@ X1 (`V2-00` §3) and X2 (`V2-00` §3) bundle onto one substrate:
    in a separate best-effort small transaction (D34 at-most-one: a crash between
    the decision/read returning and that audit transaction committing can drop
    the one record without affecting correctness; there is no mutation to share a
-   save boundary with). The audit log is append-only (D36 sole exception:
-   compaction) and tamper-evident (forward hash chain, D36).
+   save boundary with). The audit log is append-only by API (D36 sole exception:
+   compaction). Its executable integrity checks are typed payload decoding, a
+   monotone contiguous `auditSequence`, and an explicit compaction floor. These
+   detect malformed payloads and incoherent sequence state; they do not provide
+   or claim cryptographic tamper evidence.
 
 V2-05 owns:
 
 - the connection/grant/audit data model (new V2 `ConnectionRow`, `GrantRow`,
   `OperationRecordRow` tables, a `GatewayConfigRow` singleton, and versioned
-  `OperationPayloadBlobV1` / `AuditChainLinkV1` codecs, all internal to
-  `HistoryStorage`);
+  `OperationPayloadBlobV1` codec, all internal to `HistoryStorage`; X.3 adds
+  the models/limits/bootstrap, while X.4 owns the complete codec and audit/admin
+  behavior);
 - the `ExternalGateway` actor (validation, capability gate, audit coordination,
   delegating every durable op to `HistoryAuthority`);
 - the `ConnectionRegistry` / `GrantStore` (internal, Authority-delegating);
@@ -208,9 +220,10 @@ justified against `03a` §1 closed-set discipline).
   `clear`, and `setRetentionPolicy` are **app-only** and have no external
   request case (§3.2). External callers get a deliberately smaller, safe
   request set.
-- **Not non-repudiation.** The audit hash chain (D36) detects accidental
-  corruption and naive tampering; it does not provide cryptographic
-  non-repudiation against an attacker with full store access (§4.4, Record 6).
+- **Not tamper evidence or non-repudiation.** V2-05 deliberately adds no audit
+  hash, checksum, signature, HMAC, or chain. Typed decoding and contiguous
+  sequence validation are corruption/invariant checks, not evidence against an
+  attacker who can coherently rewrite the store (§4.4, Record 6).
 
 ### 1.2 What V2-05 explicitly lifts
 
@@ -251,7 +264,7 @@ not a permanent prohibition on the ordered `clipyctl` continuation.
 - Admin operations (in-app UX only, `GatewayAdminHistory`): enroll/revoke a
   connection, grant/revoke a capability, read the audit log. Admin operations
   are themselves audited.
-- A durable, append-only, tamper-evident `OperationRecord` audit log; a
+- A durable, append-only-by-API `OperationRecord` audit log; a
   `ConnectionRow` / `GrantRow` registry; a `GatewayConfigRow` singleton.
 
 ### 2.2 Out of scope (remains post-V2)
@@ -267,10 +280,9 @@ not a permanent prohibition on the ordered `clipyctl` continuation.
   `revise` mutates Canonical lineage; `setRetentionPolicy` is admin config, not
   history content). App-only.
 - **CloudKit / multi-device audit sync** (`V2-00` §3.1).
-- **Cryptographic non-repudiation.** The hash chain (D36) is tamper-*evident*,
-  not tamper-*proof* against full-store access. An HMAC-with-Keychain-key
-  hardening is a future option (Keychain API pending verification under `X-PLATFORM-3`; `V2-facts.md`
-  cycle 6, facts 5–7); not taken in V2-05.
+- **Cryptographic integrity, tamper evidence, or non-repudiation.** None is
+  claimed or implemented. A future security graft would require explicit user
+  approval of that new boundary; it is not predesigned here.
 - **A network / remote enrollment kind.** The credential-store seam (Keychain)
   is specified (§6.7) but exercised only by future non-App-Intents enrollment
   kinds (URL-scheme bearer token, XPC service label). V2 ships App Intents only.
@@ -471,9 +483,10 @@ public enum ConnectionStatus: Int16, Sendable, Hashable, Codable {
   `.manage` implicitly satisfies `.browse` requests (no separate `.browse` row
   required, though the UX may record both for clarity); `.manage` does **not**
   satisfy `.readContent` (§3.2). `.readContent` and `.browse` are granted
-  independently. A grant row's presence with `revokedAt == nil` is the grant;
-  `revokedAt != nil` is its revocation (append-only audit: a re-grant creates a
-  new row).
+  independently. There is exactly one current-state row per pair. A row with
+  `revokedAt == nil` is live; revocation sets `revokedAt`; re-grant updates that
+  same row with a fresh `grantedAt` and clears `revokedAt`. The separate audit
+  record stream preserves grant/revoke/re-grant event history.
 - **Revocation** flips `ConnectionRow.status` to `.revoked` and sets
   `revokedAt` on every live `GrantRow` for that connection (a per-capability
   revoke sets `revokedAt` on the matching `GrantRow` only, §5.3). The
@@ -520,12 +533,13 @@ Swift 6 strict concurrency when that future kind ships; until then the
 ## 4. Data model
 
 All declarations in this section are `internal` to `HistoryStorage` unless
-explicitly noted as a public `HistoryCore` type. Gateway/Audit/Connections
-types are part of `HistorySchemaV2` (the consolidated V2 schema introduced by
-V2-01 and extended by V2-02/V2-03/V2-04); they never appear in `HistorySchemaV1`
-(`05` §3, frozen).
+explicitly noted as a public `HistoryCore` type. Under the incremental-shipping
+decision (`V2-roadmap` DC-03), `HistorySchemaV2` is already shipped and
+immutable. Gateway/Audit/Connections types therefore first appear in a new
+immutable `HistorySchemaV3`; neither `HistorySchemaV1` nor `HistorySchemaV2` is
+edited.
 
-### 4.1 ConnectionRow (V2 schema)
+### 4.1 ConnectionRow (V3 schema)
 
 ```swift
 @Model
@@ -542,7 +556,7 @@ internal final class ConnectionRow {
 }
 ```
 
-`ConnectionRow` is a new V2 model. It references capabilities **by value** in
+`ConnectionRow` is a new V3 model for the V2-05 feature. It references capabilities **by value** in
 `GrantRow` (no SwiftData `@Relationship`), mirroring `EnrichmentRow.itemID`
 (`V2-01` §3.2) and `HistoryChangeRecordRow` (`V2-03` §4.1). Lookups use a
 bounded `FetchDescriptor` predicate on `id` (`05` §5 fetch-predicate discipline),
@@ -552,14 +566,14 @@ never `registeredModel(for:)` (`05` §18). Decode is fail-closed: an unknown
 `configSchemaVersion` is `.persistence(.corruptStoredValue)` /
 `.persistence(.invariantViolation)` (`05` §16); 0 raw values fail closed.
 
-### 4.2 GrantRow (V2 schema)
+### 4.2 GrantRow (V3 schema)
 
 ```swift
 @Model
 internal final class GrantRow {
     @Attribute(.unique)
     var grantKey: String               // "<connectionID>:<capabilityRaw>"; composite-unique
-                                       // anchor (one row per (connection, capability) grant event)
+                                       // anchor (one current-state row per pair)
 
     var connectionIDRaw: UUID          // ExternalConnectionID.rawValue
     var capabilityRaw: Int16           // ExternalCapability raw; 0 reserved unset/invalid
@@ -571,9 +585,12 @@ internal final class GrantRow {
 
 A separate `GrantRow` table (rather than a capability-set blob on
 `ConnectionRow`) gives the grant a lifecycle independent of the connection: a
-revoked connection keeps its history (the rows remain for audit); a single
+revoked connection keeps its audit history; a single
 capability can be revoked while the connection stays enrolled for others;
-re-granting creates a new row (append-only audit of the grant history itself).
+re-granting updates the existing pair row with a fresh `grantedAt` and
+`revokedAt == nil`. Exactly one current-state row exists per
+`(connectionID, capability)`; grant/revoke/re-grant event history lives only in
+append-only `OperationRecordRow`s.
 `grantKey` is the composite-unique anchor (SwiftData `@Attribute(.unique)` is
 single-attribute; the derived key string encodes the pair deterministically).
 The **live grant set** for a connection is computed at gate time as `{ c |
@@ -584,19 +601,21 @@ fails closed at decode. `manage` implies `browse` at the gate (§3.2), so a
 connection granted only `.manage` still passes `.browse` requests; `.readContent`
 is never implied and must be granted explicitly.
 
-### 4.3 OperationRecordRow (V2 schema, X2 audit)
+### 4.3 OperationRecordRow (V3 schema, X2 audit)
 
 ```swift
 @Model
 internal final class OperationRecordRow {
     @Attribute(.unique)
-    var auditSequence: UInt64          // audit-log monotone; one per external op (read or write).
+    var auditSequence: UInt64          // audit-log monotone; one per committed audit record.
                                        // Independent of ChangePosition (reads advance it; a write's
                                        // auditSequence is minted in the same closure as its
                                        // ChangePosition but is a separate counter).
 
-    var connectionIDRaw: UUID          // the connection that made the request
-    var capabilityRaw: Int16           // the capability the request required (read/manage)
+    var connectionIDRaw: UUID?         // external/request or connection-targeted admin record;
+                                       // nil for global audit maintenance (rebase/compact)
+    var capabilityRaw: Int16?          // required external capability or capability-targeted admin;
+                                       // nil when no external grant capability applies
     var operationKindRaw: Int16        // ExternalOperationKind raw (§7.3); 0 reserved unset/invalid
     var outcomeRaw: Int16              // ExternalOutcome raw (succeeded/failed/denied); 0 reserved
     var failureKindRaw: Int16?         // nil on success; a typed discriminator on failure/denial
@@ -609,8 +628,7 @@ internal final class OperationRecordRow {
                                        // transparency guarantee rests on.
 
     var payloadBlob: Data              // OperationPayloadBlobV1 (§4.4): request summary + result
-                                       // summary (affected IDs / query / counts); bounded
-    var chainLinkBlob: Data            // AuditChainLinkV1 (§4.4): tamper-evident forward hash link
+                                       // summary (affected IDs / query byte count / counts); bounded
 
     var requestedAt: Date              // Storage clock captured at gateway entry
     var committedAt: Date              // non-optional: the Storage-clock timestamp this OperationRecord
@@ -623,9 +641,13 @@ internal final class OperationRecordRow {
 }
 ```
 
-`OperationRecordRow` is a new V2 model. It references the connection **by value**
-(`connectionIDRaw`), not a SwiftData `@Relationship`, so connection revocation
-does not cascade-delete audit history. `auditSequence` is the audit log's own
+`OperationRecordRow` is a new V3 model. When present, it references the
+connection **by value** (`connectionIDRaw`), not a SwiftData `@Relationship`,
+so connection revocation does not cascade-delete audit history. Global audit
+maintenance records (`rebase`/`compact`) have no target connection, and admin
+operations have no external grant capability; the optional columns represent
+that truth instead of inventing an `.admin` capability or attributing the event
+to `.manage`. `auditSequence` is the audit log's own
 monotone fetch key (independent of `ChangePosition`, because reads and denied
 requests advance audit but not history). Lookups use a bounded
 `FetchDescriptor` predicate on `auditSequence` (`#Predicate { $0.auditSequence
@@ -645,26 +667,37 @@ unless `failureKindRaw == requestDenied`; on read it decodes to
 not lost. (The discriminator is a column, not part of `OperationPayloadBlobV1`;
 the payload blob carries the request/result summary only, §4.4.)
 
+Optional attribution is also decoded exhaustively against `operationKindRaw`:
+external requests require both connection and capability; connection-targeted
+admin has a connection but no external grant capability; grant/capability-
+revoke carries the target pair; global audit rebase/compact has neither. Any
+other nil/non-nil combination is corrupt stored state. In particular, decoding
+never invents an `.admin` capability or substitutes `.manage`.
+
 **Append-only is enforced by construction (D36).** The Authority exposes **no
 arbitrary** `delete`/`update` path for `OperationRecordRow`. The only general
 writer method is `appendOperationRecord` (inside a transaction); there is no
 `removeOperationRecord`/`updateOperationRecord` reachable from any external,
 admin, or read path. The **sole named, audited exception** is `compactAuditIf
-Needed` (§4.5 / §5.6), which trims oldest records, recomputes the first
-survivor's `recordHash` over its rewritten `previousHash`, and appends a
-compaction marker — all in one transaction, itself recorded as a final
-`OperationRecord` before the trim. SwiftData does not prevent a future coder
-from adding another mutation path, so D36's tamper-evidence layer (the forward
-hash chain, §4.4) makes a row edit/deletion/reorder **detectable at read time**
-even if a path were ever added — the chain breaks. The audit reader validates
-the chain on read and surfaces a typed `ExternalFailure.persistence(.invariantViolation)`
-on a break, never silently serving a corrupted log.
+Needed` (§4.5 / §5.6), which trims one oldest prefix, advances
+`compactionFloor`, and appends a content-free compaction marker in the same
+transaction. Readers validate that the surviving rows form the contiguous
+interval declared by `compactionFloor` and `nextAuditSequence`; a missing or
+duplicate sequence fails closed. This is an internal consistency check only:
+SwiftData cannot prevent a sufficiently privileged actor from coherently
+rewriting rows and counters, so V2-05 makes no tamper-evidence claim.
 
-### 4.4 Versioned codecs
+### 4.4 Versioned audit codec (X.4, not X.3)
 
-The audit payload and the tamper-evidence link are explicit versioned wire
-values, not synthesized `Codable`, mirroring the v1 codec discipline (`05` §4)
-and V2-01/V2-03's codecs:
+`OperationPayloadBlobV1` is an explicit versioned wire value, not synthesized
+`Codable`, mirroring the v1 codec discipline (`05` §4) and V2-01/V2-03's
+codecs. The shape below is a **non-executable historical skeleton**, not a
+codec contract and not implementation-ready. X.3 must not implement it. Before
+X.4 writes an encoder, X.4 must first freeze the complete closed
+`RequestSummaryV1`/`ResultSummaryV1` case set, including every admitted admin
+operation; the codec and matching atomic behavior then land in that same leaf.
+X.3 creates zero `OperationRecordRow`s, so freezing an incomplete blob there
+would create needless compatibility debt.
 
 ```swift
 internal struct OperationPayloadBlobV1: Codable, Sendable {
@@ -672,36 +705,20 @@ internal struct OperationPayloadBlobV1: Codable, Sendable {
     let requestSummary: RequestSummaryV1
     let resultSummary: ResultSummaryV1
 }
-
-internal enum RequestSummaryV1: Codable, Sendable {
-    case recent(limit: Int)
-    case search(textByteCount: Int, modeRaw: Int16, limit: Int)  // text NOT echoed; byte count only
-    case details(itemID: UUID)
-    case pastePayload(itemID: UUID)
-    case pin(itemID: UUID)
-    case unpin(itemID: UUID)
-    case remove(itemID: UUID)
-    case admin(enrollKindRaw: Int16)   // admin operation audit
-}
-
-internal enum ResultSummaryV1: Codable, Sendable {
-    case pageCount(Int)                // browse: number of rows returned (NOT the IDs — privacy/size)
-    case detailsReturned(Bool)         // details/pastePayload: whether a payload was returned
-    case affectedItemIDs([UUID])       // pin/unpin/remove: the affected ID(s); bounded
-    case adminConnectionID(UUID)       // admin: the connection affected
-    case empty                         // denied/failed before any result
-}
-
-internal struct AuditChainLinkV1: Codable, Sendable {
-    let formatVersion: UInt16          // exactly 1
-    let previousHash: Data             // SHA-256 of the prior record's canonical encoding
-                                       // (all-zeros for the minted sequence N == 1)
-    let recordHash: Data               // SHA-256 over (previousHash || canonical(payload) ||
-                                       //   auditSequence || connectionIDRaw || capabilityRaw ||
-                                       //   operationKindRaw || outcomeRaw || failureKindRaw || denialReasonRaw || requestedAt)
-    let hasherVersion: UInt16          // 1 = SHA-256 (CryptoKit)
-}
 ```
+
+X.4 defines `RequestSummaryV1`/`ResultSummaryV1` as closed exhaustive enums in
+the same leaf as atomic audit/admin behavior. Every admitted
+`ExternalOperationKind` has one literal case and the mapping is a
+compiler-exhaustive switch—never a generic string/raw dictionary. Admin cases
+must separately represent enroll, grant, connection revoke, capability revoke,
+audit rebase, and compaction. Connection/capability targets are optional:
+global rebase/compact has neither, while grant/revoke carries only the target
+facts it actually has. Rebase/compaction summaries include bounded
+`[oldFloor, newFloor)` facts and the typed reason where applicable. External
+read/write summaries preserve the existing recent/search/details/paste/pin/
+unpin/remove shapes; subsequently admitted Local Automation operations add
+owned exhaustive cases rather than falling through a generic envelope.
 
 Decode reconstructs through validators and checks, exactly as v1 codecs (`05`
 §4) and V2-03's `AffectedItemsBlobV1`:
@@ -713,33 +730,25 @@ Decode reconstructs through validators and checks, exactly as v1 codecs (`05`
   query text** (a query echo would amplify sensitive content into the audit log;
   only the byte count + mode + limit are recorded, so the audit proves *a search
   of N bytes happened* without retaining the query);
-- `AuditChainLinkV1.recordHash` is **recomputed and compared** on read; a
-  mismatch (edited payload, edited sequence, edited outcome) is
-  `.persistence(.invariantViolation)`;
-- `previousHash` is compared to the prior record's `recordHash` on read; a gap
-  or reorder is `.persistence(.invariantViolation)` (D36);
-- `hasherVersion == 1` (SHA-256, CryptoKit); an unknown `hasherVersion` fails
-  closed.
+- the surrounding row discriminators and decoded summary agree; invalid
+  combinations fail closed;
+- ordered reads require every `auditSequence` in the retained interval exactly
+  once; duplicate, missing, or out-of-range values are
+  `.persistence(.invariantViolation)` (D36).
 
 Any violation is `.persistence(.corruptStoredValue)` /
 `.persistence(.invariantViolation)` (`05` §16). The decoder does not silently
-drop a record, reset an outcome, or "repair" a broken chain.
+drop a record, reset an outcome, or "repair" an invalid retained interval.
 
-**Tamper-evidence honesty (D36, `V2-facts.md` cycle 6, OPEN 4).** SHA-256 over
-in-record fields detects accidental corruption, single-row edits that forget to
-recompute the chain, gaps from partial commits, and reorders. It does **not**
-provide non-repudiation against an attacker with full store access (who can
-recompute the chain). For V2 (local, single-user) this is the right boundary:
-the chain raises the bar without claiming a property it cannot deliver. An
-HMAC-with-Keychain-key hardening (Keychain API pending verification under `X-PLATFORM-3`; `V2-facts.md` cycle 6, facts 5–7) is recorded
-as a future option (Record 6); not taken in V2-05.
+**Integrity-claim honesty (D36).** The typed codec detects malformed or
+unsupported payload encodings, and the sequence/config checks detect an
+incoherent retained interval. Neither proves who changed the store nor detects
+a coherent rewrite. No per-record chain, digest, cryptography import, or hidden
+checksum exists in this plan.
 
-`OperationPayloadBlobV1` and `AuditChainLinkV1` are `Sendable` (all-`let`
-`Sendable` members) because the canonical encoding is computed off-Authority
-inside the `ExternalGateway` actor and the resulting `Data` is passed into the
-Authority's append method — the structs themselves do not cross isolation
-(they are encoded to `Data` first), but the `Sendable` marking mirrors
-V2-01's `EnrichmentBlobV1` (`V2-01` §3.3) harmlessly.
+`OperationPayloadBlobV1` is `Sendable` (all-`let` `Sendable` members). Its
+privacy boundary is load-bearing: search records only the UTF-8 byte count,
+mode, and limit; it never stores query text or returned clipboard bytes.
 
 ### 4.5 ExternalLimits (admission bounds)
 
@@ -752,7 +761,7 @@ user knob, mirroring `06` §2, V2-01's `EnrichmentLimits`, V2-03's
 |---|---:|
 | `displayName` UTF-8 bytes per connection | 256 |
 | `maxAffectedItemsPerRecord` (audit `affectedItemIDs`) | 32 (external writes touch individual items; a `clear` is not exposed externally, so the bound is small) |
-| `maxAuditLogSize` (audit payload-bytes cap; trim trigger) | 64 MiB (payload bytes only: `payloadBlob.count + chainLinkBlob.count + fixedRowOverhead`, tracked by a `GatewayConfigRow.auditBytes` running counter, mirroring `V2-03` §4.5's byte counter) |
+| `maxAuditLogSize` (audit payload-bytes cap; trim trigger) | 64 MiB (`payloadBlob.count + fixedRowOverhead`, tracked by a `GatewayConfigRow.auditBytes` running counter, mirroring `V2-03` §4.5's byte counter) |
 | `maxAuditAgeSeconds` (trim trigger) | 31,536,000 (365 days) |
 | `compactionCadenceOps` (trim every N-th external op) | 100 |
 | `maxAuditReadBatchSize` (per-call audit-log fetch limit) | 500 |
@@ -765,18 +774,13 @@ Rules (matching `06` §2 / V2-03 §4.5):
 - `maxAuditLogSize` / `maxAuditAgeSeconds` are alternative compaction triggers;
   the audit log is **compacted** (oldest records trimmed) only when a trigger
   fires, and **compaction is itself an audited admin operation** recorded as a
-  final OperationRecord before the trim. Compaction never breaks the chain: the
-  new first surviving record's `previousHash` is rewritten to all-zeros, **its
-  `recordHash` is recomputed over the new all-zeros `previousHash` and its
-  `chainLinkBlob` re-encoded and re-stored in the SAME single transaction**
-  (CRIT-M1 — without this recompute, the stored `recordHash` would still cover
-  the original non-zero `previousHash` and the read-time validation of §4.4
-  would flag the first surviving record as corruption after every compaction),
-  and a compaction marker is appended, so a read of the post-compaction log
-  validates cleanly (D36 with a documented compaction boundary). (This is the
-  only Authority operation that rewrites audit rows; it is named, audited, and
-  bounded — the single, explicit exception to "append-only" that D36
-  acknowledges.) `maxAuditLogSize` is a **trigger, not a hard invariant**: the
+  final OperationRecord before the trim. In the same transaction, it deletes
+  exactly one oldest prefix, advances `compactionFloor` to the first retained
+  sequence (or `nextAuditSequence` if none remain), and leaves the retained
+  rows contiguous. This is the only Authority operation that deletes audit
+  rows; it is named, audited, bounded, and exposes the discarded boundary
+  honestly rather than claiming a complete pre-floor log. `maxAuditLogSize` is
+  a **trigger, not a hard invariant**: the
   compaction-marker append transiently increases `auditBytes` past the cap
   before the trim subtracts the deleted rows' contributions, and a compaction
   pass suppresses re-trigger evaluation until its trim completes (no immediate
@@ -804,14 +808,11 @@ internal final class GatewayConfigRow {
                                        // overflow fails closed). Minted-in-the-closure to close the
                                        // read/write/audit atomicity gap (§5.4).
     var auditBytes: UInt64             // running audit payload-byte counter (§4.5 trim input);
-                                       // += (blob.count + chainLinkBlob.count + fixedRowOverhead)
+                                       // += (blob.count + fixedRowOverhead)
                                        // per append; -= deleted rows' contributions on compaction.
     var compactionFloor: UInt64        // min surviving auditSequence after the last compaction pass;
                                        // a read below the floor returns the documented
                                        // "compacted-before" result, not a silent gap.
-    var generation: UInt32             // bumps on schema migration or chain rebase (Record 5 / §5.6 —
-                                       // schema migration owns no bump here; §4.4 defines codecs only);
-                                       // checked arithmetic (02 §13).
     var configSchemaVersion: UInt16    // 1 for V2-05
 }
 ```
@@ -835,20 +836,24 @@ after, an explicit admin method, and a proof gate); V2-05 takes none of that
 and ships audit-unconditionally-on.
 
 **Singleton + connection bootstrap at open (total order).** `SwiftDataHistory.open`
-performs the V2-05 steps in a fixed total order, after the v1 position singleton
-(`05` §13 step 3) and the V2-01/V2-02/V2-03/V2-04 singletons, and before the
-facade is published:
+performs the V2-05 steps in a fixed total order after the v1 position singleton
+(`05` §13 step 3) and every singleton/projection owned by the actual prior
+shipped schema (currently immutable V2 retention state), and before any future
+facade may be published:
 
 1. fetch the `GatewayConfigRow` singleton (`key == "external-gateway"`); validate
    exactly-one or zero;
 2. **if absent — distinguish migration from corruption (CRIT-M10):**
-   - **Legitimate migration (the only re-mint path):** the singleton is absent
+   - **Fresh/migration-compatible shape (the only allowed re-mint path):** the singleton is absent
      AND a bounded probe finds zero `ConnectionRow` / `GrantRow` /
-     `OperationRecordRow` rows (a v1 store that has never hosted a gateway).
-     Create exactly one row with defaults (`nextAuditSequence == 1`,
-     `auditBytes == 0`, `compactionFloor == 0`, `generation == 1`,
+     `OperationRecordRow` rows. This is the expected shape for a prior-version
+     store that has never hosted a gateway, and X.3 permits reconstruction.
+     In one bootstrap transaction, create exactly one config row with defaults (`nextAuditSequence == 1`,
+     `auditBytes == 0`, `compactionFloor == 1`,
      `configSchemaVersion == 1`, `appIntentsConnectionID == UUID()` minted
-     here). The minted `UUID()` is a **one-time durable identity** for the App
+     here) plus exactly one matching active App Intents `ConnectionRow` whose
+     `displayNameRaw == "Siri / Shortcuts / Spotlight"`; create no grant or
+     audit row. The minted `UUID()` is a **one-time durable identity** for the App
      Intents surface connection, not a per-operation ID — it is generated once
      at first `open` and then never changes for the store's lifetime, so it is
      not routed through the per-operation injected ID source (`01` §4); this
@@ -857,31 +862,44 @@ facade is published:
      connectionID must inject the value via a test seam (a `HistoryStorage`-
      internal connectionID injector wired at `open`), not rely on `UUID()`
      determinism (`X-COMPILE-1` covers the seam).
+     **Causal ceiling:** without a durable provenance fact, this shape is
+     observationally identical to a future V3 store from which the config and
+     all dependent Gateway rows were deleted. X.3 therefore claims only that it
+     rejects the distinguishable shape “config absent while any dependent row
+     survives”; it cannot detect complete bootstrap deletion. Do not add a
+     marker, checksum, hash, or speculative recovery state to overclaim that
+     distinction.
    - **Corruption (fail-closed, do NOT re-mint):** the singleton is absent AND
      the probe finds ANY `ConnectionRow` / `GrantRow` / `OperationRecordRow`
      row. Re-minting would orphan those rows (a `GrantRow` /
      `OperationRecordRow` carries the OLD `appIntentsConnectionID`), silently
      breaking grant continuity and audit provenance. `open` throws
      `.persistence(.invariantViolation)` (`05` §16) and refuses to publish the
-     facade; recovery is the documented chain-rebase admin path (§5.6) after an
+     facade; recovery requires a separately approved recovery-only path after
      explicit investigation, never a silent re-mint. The detection predicate is
      "singleton absent ∧ ∃ row in {ConnectionRow, GrantRow,
      OperationRecordRow}".
 3. **if present:** validate `configSchemaVersion == 1` and field ranges (fail-
    closed, mirroring `V2-03` §4.6); read `appIntentsConnectionID` (never
    re-minted on an existing row);
-4. ensure exactly one `ConnectionRow` with `id ==
-   appIntentsConnectionID` and `enrollKindRaw == appIntents` exists (create
-   `status == active` if absent — the connection exists, but **no grant** is
-   created; deny-by-default, §3.3);
-5. **chain validation (D36):** read the audit chain in order over
-   [compactionFloor, head] and verify every `recordHash`/
-   `previousHash` link in that range (CRIT-M12; rows below the floor —
-   compacted, or quarantined by a §5.6 rebase, which sets
-   compactionFloor = newFloor — are out of scope); a break is
-   `.persistence(.invariantViolation)` (§5.6);
-6. publish the facade (the `ExternalGateway` actor and `ConnectionRegistry`
-   see the validated, consistent config).
+4. **for an existing config**, require exactly one `ConnectionRow` with `id ==
+   appIntentsConnectionID`, `enrollKindRaw == appIntents`, `status == active`,
+   and `displayNameRaw == "Siri / Shortcuts / Spotlight"`. Missing, duplicate,
+   or mismatched connection state is `.persistence(.invariantViolation)`; open
+   does not silently recreate or rewrite it. Only step 2's absent-config
+   bootstrap transaction may create config+connection. Require zero bootstrap
+   grants/audit before X.4 behavior exists;
+5. validate `compactionFloor <= nextAuditSequence`, checked counters, and the
+   retained audit interval: ordered rows must occupy every sequence in
+   `[compactionFloor, nextAuditSequence)` exactly once. X.3 bootstraps zero
+   audit rows, so both values are `1`; later X.4 startup validation applies the
+   same rule after appends/compaction. A gap, duplicate, or out-of-range row is
+   `.persistence(.invariantViolation)` (§5.6). This is sequence/coherence
+   validation, not tamper evidence;
+6. finish X.3 with exactly one active App Intents `ConnectionRow`, zero
+   `GrantRow`s, and zero `OperationRecordRow`s. X.3 publishes no facade. A
+   future X.5 facade may be published only after this validated state and the
+   real `ExternalGateway` actor both exist.
 
 This step applies to the `.memory` store path too.
 
@@ -1019,11 +1037,10 @@ ExternalGateway.read(.search(text, mode, limit), as: connID)   [actor]
            Authority closure cannot host it).
        (c) interval 2 (closing audit closure): build HistoryPage from the
            SearchWorker result; AUDIT a read OperationRecord here — reading
-           previousHash fresh and minting nextAuditSequence inside this closure.
-           D36 continuity for reads holds via Authority actor serialization
-           (single writer — the closure takes its turn on the singleton
-           nextAuditSequence) PLUS the fresh previousHash read: no concurrent
-           append can interleave within the interval, exactly as for writes.
+           and incrementing `nextAuditSequence` inside this closure. D36
+           continuity for reads follows from the same transaction updating the
+           singleton counter and inserting the row; no concurrent append can
+           mint the same sequence inside the serialized Authority interval.
        Accept the read-side grant-recheck-vs-evaluation TOCTOU: a revocation
        landing between interval 1 and interval 2 takes effect on the NEXT
        request, not this one (the authoritative recheck already passed in
@@ -1090,8 +1107,10 @@ GatewayAdminHistory.enrollConnection(kind: .appIntents, displayName: "Siri")
        no capability by default; append an admin OperationRecord (operationKind
        .adminEnroll, outcome succeeded). Return ExternalConnectionID.
 GatewayAdminHistory.grantCapability(connectionID:, .manage)
-  -> Authority.grantCapability(...): create GrantRow (revokedAt nil); append
-       admin OperationRecord (.adminGrant). (The App Intents surface's
+  -> Authority.grantCapability(...): insert the pair row if absent, otherwise
+       update that same current-state GrantRow (`grantedAt` fresh,
+       `revokedAt = nil`); append admin OperationRecord (.adminGrant) so event
+       history is not inferred from the current-state row. (The App Intents surface's
        connectionID is the bootstrapped one; granting it .manage enables external
        writes.)
 GatewayAdminHistory.revokeConnection(connectionID:)
@@ -1099,7 +1118,8 @@ GatewayAdminHistory.revokeConnection(connectionID:)
        revokedAt on all live GrantRows; append admin OperationRecord
        (.adminRevoke). The next external request's grant load sees the revocation.
 GatewayAdminHistory.auditLog(since auditSequence:) -> [OperationRecordDTO]
-  -> Authority read: bounded fetch + chain validation (D36); Sendable DTOs only.
+  -> Authority read: bounded fetch + typed decode + contiguous retained-interval
+       validation (D36); Sendable DTOs only.
 ```
 
 Admin operations are available **only** via `GatewayAdminHistory` (in-app UX on
@@ -1145,8 +1165,8 @@ V2-03 ships the HCR always-on, `V2-03` §4.6; V2-05 does not alter that.)
 
 ```swift
 internal struct OperationRecordPayload: Sendable {
-    let connectionID: ExternalConnectionID
-    let capability: ExternalCapability
+    let connectionID: ExternalConnectionID?           // nil for global rebase/compact
+    let capability: ExternalCapability?               // nil for admin without a grant capability
     let operationKind: ExternalOperationKind
     let outcome: ExternalOutcome
     let failureKind: ExternalFailureKind?             // nil on success
@@ -1158,41 +1178,19 @@ internal struct OperationRecordPayload: Sendable {
     let requestedAt: Date
     let committedAt: Date                             // the commit timestamp (== hcrAppend.createdAt,
                                                        // captured at stamping under the Storage clock)
-    let changePosition: ChangePosition                // == plan.position (D34 cross-ref)
-    let previousHash: Data                            // SHA-256 of the prior record's recordHash
-                                                       // (all-zeros for the minted sequence N == 1). Read at
-                                                       // STAMPING time — see below.
+    let changePosition: ChangePosition?               // succeeded writes only; nil otherwise
 }
 ```
 
-`previousHash` is read at the **derive/stamp** step (a bounded fetch of the
-prior record's `recordHash`, or all-zeros if the minted sequence N == 1), at
-the same point `StampedCommitPlan` — and therefore `auditAppend` — is
-constructed. This is safe and chain-continuous because the entire
-fact-load → plan → stamp → `ModelContext.transaction` span is ONE Authority-
-serialized non-suspending span (no `await`, `05` §5/§10): no concurrent append
-can interleave between the stamping-time `previousHash` read and the in-closure
-row insert, so the value read at stamping is still the immediately-prior
-record's `recordHash` at insert time (D36). This is how `auditAppend` can be a
-fully-formed `OperationRecordPayload` field of `StampedCommitPlan` (built at
-stamping) while still participating in a continuous chain. (The additive-
-optional-field technique is the same one V2-03 §5.2 established for `hcrAppend`;
-`hcrAppend` carries no chain field, whereas `auditAppend.previousHash` is a chain
-field — read at stamping here, not in-closure, precisely so the payload is
-constructible at stamping time. `recordHash` over the canonical encoding — `04`
-codec discipline — and the `chainLinkBlob` encode also happen at stamping, on
-the same non-suspending span; the in-closure work is the row `insert` plus the
-`nextAuditSequence` mint.) At stamping the plan reads
-GatewayConfigRow.nextAuditSequence as N (the same non-suspending span);
-recordHash and chainLinkBlob are computed over N; the commit closure inserts
-the row with auditSequence == N and writes the successor (nextAuditSequence ==
-N + 1), so the hashed input equals the minted value by construction. The hash
-computation is O(payload) and bounded by
-`ExternalLimits`; it is recorded in `X-PERF-2` as a new per-external-op cost,
-not "free." For the noOp/denied/failed-write and read audit branches (which do
-NOT flow through `StampedCommitPlan`), the payload is constructed inside its
-own small non-suspending Authority transaction with `previousHash` read there —
-same D36 continuity argument under Authority serialization.
+The payload is constructed during the same Authority-serialized
+fact-load → plan → stamp span as `StampedCommitPlan`. The transaction then
+reads `GatewayConfigRow.nextAuditSequence` as N, inserts the row with sequence
+N, and writes N+1 using checked arithmetic. Counter advance and row insertion
+share one save boundary, so a successful transaction cannot expose a consumed
+sequence without its row. noOp/denied/failed-write and read branches perform the
+same mint+insert pair in their own small Authority transaction. This establishes
+monotone contiguous sequence state for committed audit rows without hashing the
+payload or deriving identity from its bytes.
 
 **Why same-transaction (not a separate audit path).** Decision (A) in the brief:
 the OperationRecord is committed atomically with the history mutation in the
@@ -1209,9 +1207,9 @@ For **reads** (§5.2) there is no history mutation to be atomic with, so the rea
 audit runs in a **separate small transaction** that is nonetheless
 Authority-serialized (single writer — it takes its turn and cannot interleave
 with writes or other read-audits on the singleton `nextAuditSequence`);
-`previousHash` is read and `nextAuditSequence` minted inside the same
-non-suspending read-audit closure, so the chain is continuous for reads exactly
-as for writes. The read audit is **best-effort / at-most-one** (D34): a crash
+`nextAuditSequence` is minted with the row insert inside the same
+non-suspending read-audit closure, so committed reads preserve sequence
+continuity exactly as writes do. The read audit is **best-effort / at-most-one** (D34): a crash
 between the read returning and the read-audit transaction committing may lose
 that one record without affecting the read's correctness. The write/admin path
 is the load-bearing audit-completeness guarantee; the read path is best-effort
@@ -1222,16 +1220,15 @@ by necessity (there is no mutation to share a save boundary with).
 "the Storage-clock timestamp at which this OperationRecord became durable." For
 writes it equals the commit timestamp (== `hcrAppend.createdAt`); for reads,
 admin ops, denied, noOp, and failed records it is the read-audit / admin /
-denial transaction's Storage-clock timestamp. The `recordHash` canonical
-encoding (§4.4) **excludes** `committedAt` (it is not a chain field), so this
-unified semantics leaves the chain unaffected.
+denial transaction's Storage-clock timestamp. No timestamp participates in an
+audit hash because this design has no audit hash.
 
 ### 5.5 Storage clock seam (reused, not added)
 
 `requestedAt` / `committedAt` / `enrolledAt` / `grantedAt` / `revokedAt` reuse
 the **same** Storage-side clock seam V2-02 introduced (`.setRetentionPolicies`
 R1) and V2-03 reused (HCR `createdAt`): a `Sendable` clock witness (`() -> Date`
-closure or `RetentionClock` protocol) injected into `HistoryAuthority` at `open`,
+closure or `StorageClock` protocol) injected into `HistoryAuthority` at `open`,
 defaulting to `Date.now` in production and injectable in tests (`V2-03` §6.4).
 V2-05 adds **no** new injection point (`X-COMPILE-1` stays free of a new escape
 hatch). The same witness is handed to the `ExternalGateway` actor at its
@@ -1242,39 +1239,33 @@ Wall-clock is not monotonic; a backwards move under-compresses audit
 (safe direction, mirroring `V2-03` §6.4's C3-n4). The Domain mints no `Date()`
 (`02` §1).
 
-### 5.6 Crash consistency, chain rebase, compaction
+### 5.6 Crash consistency, audit rebase, and compaction
 
 - **Append-only + atomic append (D34/D36).** The OperationRecord is appended in
   the commit closure (writes) or the read-audit transaction (reads). A crash
   mid-closure commits nothing (the write, the HCR, and the OperationRecord share
   the save boundary). A crash mid-read-audit loses only the read's audit record
-  (the read already returned); the chain resumes cleanly on the next append
-  because `previousHash` is recomputed from the actual prior record at append
-  time, not from an in-memory cursor.
-- **Chain validation on open + rebase.** Step 5 of the open sequence (§4.6)
-  validates the chain over the precise range **`[compactionFloor, head]`**
-  (CRIT-M12). Records below `compactionFloor` are **out of scope by D36's
-  documented compaction exception** — the chain was deliberately re-linked at
-  the floor (§4.5), so a "break" in the compacted-away region is neither
-  detected nor accepted; it is simply outside the validated range. A break in
-  `[compactionFloor, head]` (a divergent `recordHash` or `previousHash`) is
-  `.persistence(.invariantViolation)`: `open` refuses to publish the facade —
-  the audit is load-bearing for the security boundary; a documented **chain
-  rebase** admin operation (`GatewayAdminHistory.rebaseAuditChain(reason:)`)
-  resets `generation`, sets a new chain floor, appends a rebase marker carrying
-  the discarded `auditSequence` range `[oldFloor, newFloor)` and the
-  `AuditRebaseReason` (CRIT-M2, §6.4 / §7.3), and (optionally) quarantines the
-  corrupted rows rather than deleting them. This expires any external consumer's
-  assumption of a complete pre-rebase audit (the rebase is itself audited as the
-  first post-rebase record). This mirrors V2-03's journal rebase posture
-  (`V2-03` §9.2) for the same reason: a corrupted derivation log is rebuilt,
-  never silently accepted.
+  (the read already returned). A committed append advances
+  `nextAuditSequence` only in the transaction that inserts that sequence, so
+  the next committed append remains contiguous.
+- **Sequence validation on open + recovery rebase.** Step 5 of the open
+  sequence (§4.6) validates that retained rows occupy exactly
+  `[compactionFloor, nextAuditSequence)`. Rows below `compactionFloor` are
+  explicitly unavailable; a request below it returns
+  `.auditCompactedBefore`. A gap, duplicate, or out-of-range retained row is
+  `.persistence(.invariantViolation)` and normal `open` refuses to publish a
+  facade. X.4 may add a separately gated recovery-only
+  `rebaseAuditLog(reason:)` that quarantines/discards an explicitly identified
+  prefix, advances (never decreases) `compactionFloor`, and appends a global
+  rebase marker whose optional `connectionID`/`capability` are nil. It does not
+  reset `nextAuditSequence`, does not use a `generation` scalar, cannot read
+  clipboard content or execute History mutations, and does not claim to prove
+  what happened before the new floor.
 - **Compaction.** §4.5. Compaction is the single explicit exception to
-  append-only: it trims the oldest records when a bound fires, rewrites the new
-  first surviving record's `previousHash` to all-zeros, **recomputes that
-  record's `recordHash` over the new `previousHash` and re-encodes its
-  `chainLinkBlob`** (CRIT-M1), and appends a compaction marker — all in one
-  Authority transaction, itself audited. A read below `compactionFloor` returns
+  append-only: it appends a global content-free compaction marker, trims exactly
+  one oldest prefix, advances `compactionFloor`, and preserves a contiguous
+  retained suffix — all in one Authority transaction. A read below
+  `compactionFloor` returns
   a typed `ExternalFailure` (`.auditCompactedBefore(floor: compactionFloor)`,
   §7.3), never a silent gap (mirroring V2-03's `compactionFloor` discipline,
   `V2-03` §4.6).
@@ -1341,14 +1332,14 @@ is `01` §8 / `06` §6: "`import SwiftData` appears only in `HistoryStorage`"):
   **not** import `AppIntents` — the gateway exposes a Foundation-only
   `ExternalHistory` protocol, and the `AppIntent` conformances that consume it
   live in `ClipyApp` (R-m2 / Lens B nit). For the V2 build `HistoryStorage` adds
-  **only** `import CryptoKit` (SHA-256 for the audit chain, exercised by every
-  audit append). `import Security` (Keychain `SecItem*`) is **not** in the V2
+  no new hashing or cryptography import. `import Security` (Keychain `SecItem*`) is **not** in the V2
   build — the `CredentialStore` actor is unbuilt and `HistoryStorage` does not
   link `Security` until a future enrollment kind ships (§3.4 / §6.7; Lens B
   minor). When that kind ships, `X-PLATFORM-3` adds `Security` and confirms the
   actor-confined round trip. The v1 source gate (`01` §9) is extended to permit
-  **`CryptoKit` only** in `HistoryStorage` for V2 (proof `X-COMPILE-3`);
-  `Security` is added to the gate only when `X-PLATFORM-3` fires.
+  no additional import in `HistoryStorage` for X.3/X.4 (proof
+  `X-COMPILE-3`); `Security` is added to the gate only when
+  `X-PLATFORM-3` fires.
 - **App Intents surface** (the `AppIntent` conformances — e.g.,
   `SearchHistoryIntent`, `GetItemDetailsIntent`, `PasteItemIntent`,
   `PinItemIntent`, `UnpinItemIntent`, `RemoveItemIntent` — and
@@ -1464,9 +1455,9 @@ internal extension HistoryAuthority {
     // (authoritative gate; throws/audit-as-denied if revoked/ungranted) and
     // captures the Sendable SearchCorpusSnapshot; SearchWorker evaluates off-
     // actor between intervals; interval 2 builds the page and audits outcome
-    // .succeeded/.failed/.denied, reading previousHash fresh and minting
-    // nextAuditSequence (Authority-serialized; D36 continuity via actor
-    // serialization + the fresh previousHash read). For .recent/.details/
+    // .succeeded/.failed/.denied, atomically inserting nextAuditSequence and
+    // advancing the singleton counter (Authority-serialized D36 continuity).
+    // For .recent/.details/
     // .pastePayload (no off-actor evaluation) the gate+evaluate+audit fit ONE
     // non-suspending interval. A throw from the read projection is caught,
     // audited as .failed with the matching failureKind, and rethrown (D34
@@ -1497,13 +1488,14 @@ internal extension HistoryAuthority {
     func grantCapability(_ capability: ExternalCapability, to connection: ExternalConnectionID) async throws
     func revokeConnection(_ connection: ExternalConnectionID) async throws
     func revokeCapability(_ capability: ExternalCapability, of connection: ExternalConnectionID) async throws
-    // rebaseAuditChain records the discarded auditSequence range [oldFloor, newFloor)
-    // in the rebase marker OperationRecord (CRIT-M2) so the loss boundary is
-    // itself auditable; optionally quarantines corrupted rows rather than deleting.
-    func rebaseAuditChain(reason: AuditRebaseReason) async throws
+    // rebaseAuditLog is recovery-only: record the discarded auditSequence range
+    // [oldFloor, newFloor), advance the floor without resetting the head, and
+    // optionally quarantine the discarded rows. It carries no connection or
+    // capability attribution and claims no tamper evidence.
+    func rebaseAuditLog(reason: AuditRebaseReason) async throws
     func compactAuditIfNeeded() async throws
 
-    // Audit read (bounded fetch + chain validation over [compactionFloor, head]).
+    // Audit read (bounded fetch + typed decode + contiguous retained interval).
     func auditLog(since auditSequence: UInt64) async throws -> [OperationRecordPayload]
 }
 ```
@@ -1776,9 +1768,10 @@ public protocol GatewayAdminHistory: Sendable {
     func connections() async throws -> [ConnectionDTO]
     func grants(for id: ExternalConnectionID) async throws -> [GrantDTO]
     func auditLog(since auditSequence: UInt64) async throws -> [OperationRecordDTO]
-    // rebaseAuditChain records the discarded [oldFloor, newFloor) range in the
-    // rebase marker (CRIT-M2); requires explicit reason (corruption vs forced).
-    func rebaseAuditChain(reason: AuditRebaseReason) async throws
+    // Recovery-only audit rebase records the discarded [oldFloor, newFloor)
+    // range, advances the floor without resetting the sequence head, and
+    // requires an explicit reason. X.4 owns this admin behavior.
+    func rebaseAuditLog(reason: AuditRebaseReason) async throws
 }
 
 public struct ConnectionDTO: Sendable, Equatable {
@@ -1799,8 +1792,8 @@ public struct GrantDTO: Sendable, Equatable {
 
 public struct OperationRecordDTO: Sendable, Equatable {
     public let auditSequence: UInt64
-    public let connectionID: ExternalConnectionID
-    public let capability: ExternalCapability
+    public let connectionID: ExternalConnectionID? // nil for global rebase/compact
+    public let capability: ExternalCapability?     // nil when no external grant applies
     public let operationKind: ExternalOperationKind
     public let outcome: ExternalOutcome
     public let requestedAt: Date
@@ -1893,7 +1886,7 @@ public enum ExternalFailureKindRaw: Int16, Sendable, Hashable, Codable {
 // Reason recorded in the rebase marker OperationRecord (§5.6 / §6.4) so the
 // discarded auditSequence range [oldFloor, newFloor) is auditable (CRIT-M2).
 public enum AuditRebaseReason: Int16, Sendable, Hashable, Codable {
-    case corruptionDetected = 1   // open-time chain validation broke in [floor, head]
+    case corruptionDetected = 1   // retained sequence/payload validation failed
     case adminForced = 2          // user-initiated rebase via GatewayAdminHistory
 }
 
@@ -1971,7 +1964,7 @@ ambiguities left open by §5.1/§5.2:
 | `.invalidInput(.invalidPageLimit)` — recent/search | `.requestDenied` at the D35 gate; else `.history` (audit 3) | 3 (or 5 / 3) |
 | `.temporarilyUnavailable(.factProof)` — fact loads | `.temporarilyUnavailable(.storeLocked)` | 6 |
 | `.persistence(.corruptStoredValue)` — decode | `.persistence(...)` | 7 |
-| `.persistence(.invariantViolation)` — chain/prevalidation/corpus | `.persistence(...)` | 7 |
+| `.persistence(.invariantViolation)` — sequence/floor/prevalidation/corpus | `.persistence(...)` | 7 |
 | `.persistence(.transaction)` — commit closure | `.persistence(...)` | 7 |
 
 **Not producible** from the frozen subset (pin is `.first`-only,
@@ -2080,7 +2073,7 @@ its dedicated v1 vocabulary (`02` §10), and `ExternalFailure` has no
 - **Single writer preserved (D32).** The gateway creates no `ModelContext`;
   every write delegates to `HistoryAuthority`. No external path bypasses the v1
   stamping/transaction stages or the planner.
-- **Audit completeness (D34) + tamper-evidence (D36).** Succeeded writes and
+- **Audit completeness (D34) + retained-sequence honesty (D36).** Succeeded writes and
   admin ops produce **exactly one** `OperationRecord`, committed atomically with
   their mutation (the history mutation for writes, the admin-state mutation for
   admin ops; crash-consistent: closure failure commits neither). noOp/denied/
@@ -2088,11 +2081,11 @@ its dedicated v1 vocabulary (`02` §10), and `ExternalFailure` has no
   effort transaction (D34 at-most-one: a crash between the decision/read
   returning and the audit commit can drop it without affecting correctness).
   Append-only is enforced by construction (no arbitrary delete/update writer;
-  the sole named exception is the audited `compactAuditIfNeeded`, §4.5); the
-  forward SHA-256 hash chain detects a gap/reorder/edit at read time over
-  `[compactionFloor, head]` (§5.6). The chain is **not** non-repudiation
-  against full-store access (§4.4,
-  `V2-facts.md` cycle 6, OPEN 4).
+  named exceptions are bounded compact/recovery operations, §4.5/§5.6).
+  Typed decode plus the contiguous interval
+  `[compactionFloor, nextAuditSequence)` detects malformed payloads, missing
+  committed rows, duplicate sequences, and dishonest floor/head state. It does
+  not detect a coherent privileged rewrite and is not tamper evidence (§4.4).
 - **Privacy discipline.** The audit log records *request shape + result count*,
   never query text, never returned content (§4.4). Search audit carries byte
   counts. This prevents the audit from becoming a second, less-protected copy
@@ -2108,8 +2101,8 @@ its dedicated v1 vocabulary (`02` §10), and `ExternalFailure` has no
   `V2-facts.md` cycle 6, facts 5–7).
 - **Crash safety.** The audit log is durable state (not a derivation): its loss
   loses audit provenance (irreversible — Record 4 states it is NOT a cache).
-  Its corruption is detected by the chain and surfaced as a typed failure /
-  rebase (§5.6), never silently accepted. A failed external write commits
+  Typed payload or retained-sequence corruption is surfaced as a typed failure;
+  normal open never silently repairs it (§5.6). A failed external write commits
   neither the mutation nor its audit record (D34).
 
 ## 9. Performance analog (Part VI §9)
@@ -2121,12 +2114,11 @@ Correctness gates run first. Performance claims for V2-05 (proof gates
   bounded fetch (one `ConnectionRow` + its `GrantRow`s; grant count ≤
   `ExternalCapability` cases = 3) loaded in one non-suspending Authority
   interval. The gate decision is a set-contains check.
-- **Audit append is O(payload) per external op** (`X-PERF-2`): the SHA-256 chain
-  link + codec encode + one `context.insert`. Bounded by `ExternalLimits`
+- **Audit append is O(payload) per external op** (`X-PERF-2`): codec encode +
+  one `context.insert` + the singleton counter update. Bounded by `ExternalLimits`
   (`maxAffectedItemsPerRecord` = 32; payload never carries query text or
   content). For writes this shares the v1/V2-03 commit closure (no second
-  transaction); for reads it is a separate small transaction. The hash is the
-  new per-op cost, recorded honestly, not "free."
+  transaction); for reads it is a separate small transaction.
 - **External read perf is consistent with v1** (`X-PERF-3`): the read path is
   the unchanged v1 `browse`/`details`/`pastePayload` projection (`05` §14); the
   gateway adds only validation + grant-load + a read-audit transaction. The
@@ -2135,8 +2127,8 @@ Correctness gates run first. Performance claims for V2-05 (proof gates
   Authority intervals bracketing the off-actor SearchWorker await (§5.2 step 3),
   while `.recent`/`.details`/`.pastePayload` fit one.
 - **Audit log read is O(batch)** (`X-PERF-4`): bounded by
-  `ExternalLimits.maxAuditReadBatchSize` (500); chain validation is O(batch)
-  SHA-256 recomputes.
+  `ExternalLimits.maxAuditReadBatchSize` (500); typed decode and contiguous
+  sequence validation are O(batch).
 
 No numeric latency target may be declared satisfied by the current repository;
 `X-PERF-*` measure the greenfield scaffold on the macOS 26 runner.
@@ -2188,7 +2180,7 @@ The analog of Part VI §6 (compile/dependency), §7 (schema/platform), §9 (perf
 on macOS 26:
 
 - **X-COMPILE-1 (compile/dependency).** Swift 6 complete strict-concurrency
-  build succeeds; **`CryptoKit`** imported only in `HistoryStorage` for V2
+  build succeeds; no hashing/cryptography import is added for audit
   (`Security` is **not** imported in V2 — the `CredentialStore` is unbuilt; it
   is added only when `X-PLATFORM-3` fires, Lens B minor); `AppIntents` imported
   only in `ClipyApp`; `HistoryCore` external-gateway types import only
@@ -2216,10 +2208,8 @@ on macOS 26:
   mode, so this gate must confirm CRASH-FREE resolution under a
   Siri/Shortcuts-invoked `perform()` (not just that it compiles).
 - **X-COMPILE-3 (import gate).** The v1 source gate (`01` §9) is extended to
-  permit **`CryptoKit` only** in `HistoryStorage` for V2 and `AppIntents` in
-  `ClipyApp` only; forbidden everywhere else (esp. `HistoryCore`/
-  `HistoryDomain`). `Security` is **not** on the V2 gate; it is added only when
-  `X-PLATFORM-3` fires.
+  permit `AppIntents` in `ClipyApp` only. Audit adds no `CryptoKit`, Security,
+  or hashing exception. `Security` is added only when `X-PLATFORM-3` fires.
 - **X-COMPILE-4 (`@Parameter` controlStyle spelling + Int bounding — Lens B
   minor, OPEN).** The `@Parameter(title: "Limit", ...)` example in §6.6 omits
   the `controlStyle` spelling because the exact case (`IntentParameterControlStyle`
@@ -2231,22 +2221,26 @@ on macOS 26:
   the verified spelling and the bounding mechanism on macOS 26 at scaffold time,
   and the example is updated then; until then the parameter is declared without
   `controlStyle` and the bounds are enforced at the gateway.
-- **X-PLATFORM-1 (schema migration).** `HistorySchemaV2` adds
+- **X-PLATFORM-1 (schema migration).** A new immutable `HistorySchemaV3` adds
   `ConnectionRow`/`GrantRow`/`OperationRecordRow`/`GatewayConfigRow` via the
-  same lightweight stage V2-01..V2-04 use (purely additive; no v1 row/column
-  rewritten). Folded into the consolidated V2 migration proof.
-- **X-PLATFORM-2 (codec round trip).** `OperationPayloadBlobV1` /
-  `AuditChainLinkV1` encode/decode round trips and reject every corruption class
-  (unknown version, oversize payload, invalid enum raw, unknown hasher, broken
-  chain link) as `.persistence(.corruptStoredValue)` / `.invariantViolation`
-  (`05` §16), mirroring v1 codec proofs (Part VI §7.4) and V2-03's codec proof.
+  additive `V2 -> V3` stage; already-shipped `HistorySchemaV2` is byte-for-byte
+  unchanged. Prove migration from every supported prior store, then bootstrap
+  config + one active `Siri / Shortcuts / Spotlight` connection + zero grants
+  + zero audit rows before any future facade publication. X.3 publishes none.
+- **X-PLATFORM-2 (startup/schema validation; X.3).** Round-trip the four V3
+  models; reject unknown raw/config versions, duplicate singletons/identities,
+  missing config with dependent rows, invalid counters/floors, and any nonzero
+  grant/audit bootstrap. Identity persists across reopen. The complete
+  `OperationPayloadBlobV1` round-trip/corruption matrix belongs to X.4, where
+  every admitted admin literal lands with atomic audit behavior; X.3 must not
+  freeze the incomplete §4.4 illustration.
 - **X-PLATFORM-3 (Keychain, reserved).** When a future enrollment kind ships,
   confirm `SecItemAdd`/`SecItemCopyMatching`/`SecItemDelete` compile under Swift
   6 strict concurrency in the actor-confined `CredentialStore` and round-trip a
   credential (macOS 10.6+; `V2-facts.md` cycle 6, facts 5–7). Not exercised in V2.
 - **X-BEHAVIOR-1 (v1-failure -> ExternalFailure mapping, §7.3.1).**
   Fixture-prove the frozen mapping end to end, none of which
-  `X-PLATFORM-2` (codec corruption) or `X-PERF-*` (mechanism
+  X.4's codec-corruption proof or `X-PERF-*` (mechanism
   bounds) covers: (a) P1 - every `HistoryFailure` case with a
   dedicated sibling is thrown as that sibling (`.notFound`,
   `.persistence`, `.temporarilyUnavailable`), and `.history`
@@ -2269,16 +2263,13 @@ on macOS 26:
   confirm a main-app-target `AppIntent.perform()` runs in the app process on
   macOS 26 and inherits the app's pasteboard/file TCC + entitlements; confirm
   no separate entitlement is required for the intent to call `ClipboardHistory`.
-- **X-SECURITY-2 (audit chain tamper-evidence).** `V2-facts.md` cycle 6, OPEN 4:
-  fixture-prove a gap/reorder/edit in the chain is detected at read time as
-  `.persistence(.invariantViolation)`; document the non-repudiation bound (the
-  chain is tamper-evident, not tamper-proof against full-store access). **Plus
-  the CRIT-M1 compaction fixture:** after a compaction pass, every surviving
-  record's `recordHash` recomputes cleanly from the new all-zeros-floor
-  `previousHash` (the first survivor's `recordHash` was recomputed and its
-  `chainLinkBlob` re-encoded in the compaction transaction), so a read of the
-  post-compaction log over `[compactionFloor, head]` validates with zero false
-  corruption signals.
+- **X-SECURITY-2 (audit sequence/compaction honesty; X.4).** Fixture-prove
+  atomic mint+insert, monotone contiguous retained sequences, duplicate/gap
+  rejection, and a compaction/recovery transaction that records its marker and
+  advances `compactionFloor` without resetting `nextAuditSequence`. Reads below
+  the floor return `.auditCompactedBefore`; global rebase/compact records have
+  nil connection/capability. State explicitly that these checks are not
+  cryptographic tamper evidence and cannot detect a coherent privileged rewrite.
 - **X-SECURITY-3 (rate limit — coarse process-wide throttle).** Confirm the
   in-memory, process-wide App-Intents token-bucket quota compiles and is honored
   under sustained load: a rate-exceeding external caller is throttled
@@ -2314,31 +2305,39 @@ semantically identical values") therefore does not apply — there is no
 authoritative source the audit "derives from." The connection/grant tables are
 likewise authoritative (the user's consent is the source of truth, not a
 derivation). This record restates the law to confirm the negative: V2-05 adds
-no cache and so cannot violate the law. (The audit hash chain is a tamper-
-evidence mechanism, not a cache key/eviction structure.)
+no cache and so cannot violate the law. Audit sequence numbers are durable log
+positions, not cache keys or content-derived identity.
 
 ### Record 5 — Migration impact (M1, Part V §17)
 
-V2-05 touches the **schema** layer only (layer 1 of the three-layer migration,
-`05` §17):
+X.3 touches the **schema** layer and post-migration bootstrap (`05` §17):
 
 - New tables `ConnectionRow`, `GrantRow`, `OperationRecordRow`,
-  `GatewayConfigRow` are added to `HistorySchemaV2` via the same lightweight
-  migration stage V2-01..V2-04 use. `HistorySchemaV1` (`v1Schema`, `05` §3) is
-  frozen; no v1 row or column is rewritten.
+  `GatewayConfigRow` are added by new immutable `HistorySchemaV3` via an
+  additive `V2 -> V3` migration. Shipped `HistorySchemaV1` and
+  `HistorySchemaV2` remain frozen; no prior row or column is rewritten.
 - **No blob migration** (layer 2): no v1 `CanonicalBlobV1`/`RevisionStateBlobV1`/
-  `SignatureBlobV1` is reinterpreted; V2-05's blobs (`OperationPayloadBlobV1`,
-  `AuditChainLinkV1`) are new, carried only by the new tables.
+  `SignatureBlobV1` is reinterpreted. X.3 creates no audit payload and freezes
+  no audit codec; complete `OperationPayloadBlobV1` encoding begins in X.4.
 - **No projection rebuild** (layer 3): no v1 `title`/`searchBody`/projection
   is touched.
-- **Empty post-migration.** A migrated v1 store gains exactly: one
+- **Empty post-migration bootstrap.** Every supported prior store reaching V3
+  gains exactly: one
   `GatewayConfigRow` singleton (defaults), one `ConnectionRow` (the bootstrapped
-  App Intents surface, `status == active`, **no grants**), zero `GrantRow`s,
+  App Intents surface, `displayNameRaw == "Siri / Shortcuts / Spotlight"`,
+  `status == active`, **no grants**), zero `GrantRow`s,
   zero `OperationRecordRow`s. No backfill of past external operations (there
-  were none in v1). No `auditSequence` reuse; the counter starts at 1.
+  were none). `nextAuditSequence == compactionFloor == 1`.
+- **Bootstrap provenance ceiling.** Config absent + all three dependent tables
+  empty is accepted as fresh/migration-compatible and rebuilt, even though it
+  is observationally identical to complete deletion of all four Gateway model
+  classes from a future V3 store. Only config absent + at least one surviving
+  dependent row is distinguishable corruption and rejected. Record 5 claims no
+  stronger detection and adds no marker/hash to manufacture one.
 - **No writes before completeness.** The V2-05 bootstrap (§4.6) runs at `open`,
-  before the facade is published; the chain is validated before any external
-  request is accepted. No capture/write is enabled before Signature Index /
+  and the exact config/active-connection/zero-grant/zero-audit state is
+  validated before any future facade could be published. X.3 itself constructs
+  no actor, facade, registry, or admin service. No capture/write is enabled before Signature Index /
   change-journal completeness is restored (the v1/V2-03 open sequence is
   unchanged; V2-05 appends its bootstrap after it).
 - **No `ContentVersion` change, no ID reuse, no invented bytes** (`05` §17).
@@ -2348,7 +2347,8 @@ V2-05 touches the **schema** layer only (layer 1 of the three-layer migration,
 (§8 states the boundary in full.) Summary: `ExternalGateway` is the single trust
 boundary; external input is untrusted (D35); deny-by-default capability grants
 (§3.3); single writer preserved (D32); every external op audited (D34) with a
-tamper-evident chain (D36) that is honestly bounded (not non-repudiation);
+typed payload and monotone contiguous retained sequence (D36), with explicit
+compaction/recovery floors and **no tamper-evidence claim**;
 privacy discipline (audit carries shape+count, never content/query text);
 in-process App Intents (X-SECURITY-1); coarse process-wide rate throttle with
 per-caller attribution deferred to X-SECURITY-4 (X-SECURITY-3); Keychain
@@ -2362,6 +2362,8 @@ surfaced to UX (V2-07) as user-visible data practices. **Deletion latency:**
 revoking a connection does not delete its historical `OperationRecord`s (they
 are append-only audit); the user clears audit only via compaction (§4.5) or
 rebase (§5.6), both admin operations.
+There is no audit off-switch. Global rebase/compact records truthfully carry
+nil connection/capability rather than fabricating an actor or grant.
 
 ## 11. New invariants (D32–D36)
 
@@ -2396,8 +2398,8 @@ extends the set:
   trusted across the pre-check/dispatch boundary. No external request reaches
   Domain/Storage without a valid grant at the save boundary.
 - **D34 Audit-completeness, by op class (crash bound stated per class).**
-  Each external op produces one `OperationRecord` with a unique monotone
-  `auditSequence`; the crash-consistency bound is stated per class because only
+  Each committed audit append carries one unique monotone `auditSequence`; the
+  crash-consistency bound is stated per operation class because only
   some classes share a save boundary with a mutation:
   - **Succeeded writes** produce **exactly one** record committed **atomically
     with the history mutation** in the same `ModelContext.transaction`
@@ -2405,8 +2407,8 @@ extends the set:
     row, nor the record). This is the only class with a history mutation.
   - **Admin operations** produce **exactly one** record committed **atomically
     with the admin-state mutation** in the same transaction (e.g., `enrollConnection`'s
-    `ConnectionRow` insert, `grantCapability`'s `GrantRow` insert,
-    `revokeConnection`'s status/`revokedAt` flip, `rebaseAuditChain` /
+    `ConnectionRow` insert, `grantCapability`'s current-state `GrantRow`
+    insert/update, `revokeConnection`'s status/`revokedAt` flip, `rebaseAuditLog` /
     `compactAuditIfNeeded`'s marker + trim). Admin ops advance **no**
     `ChangePosition` and yield **no** `HistoryInvalidation` (they are not
     History Commits), but they DO mutate gateway state, and their audit record
@@ -2433,26 +2435,26 @@ extends the set:
   `HistoryLimits.standard` bounds at the gateway **before** it reaches a
   planning fact, a blob decode, or the Authority. Untrusted input never drives a
   Domain decision or a content decode beyond the v1 boundary discipline.
-- **D36 Audit tamper-evidence.** The `OperationRecord` chain is append-only by
-  construction (the Authority exposes **no arbitrary** delete/update writer; the
-  sole named, audited exception is `compactAuditIfNeeded`, §4.5) and tamper-
-  evident by a forward SHA-256 hash chain (`previousHash` / `recordHash` per
-  record). A gap, reorder, or in-place edit is detectable at read time as
-  `.persistence(.invariantViolation)`. Compaction is the single explicit,
-  audited exception and re-links the chain at the new floor — **recomputing the
-  first survivor's `recordHash` over its rewritten all-zeros `previousHash` and
-  re-encoding its `chainLinkBlob` in the same transaction** (CRIT-M1), so a read
-  of the post-compaction log over `[compactionFloor, head]` validates cleanly.
-  The chain is tamper-**evident**, not tamper-**proof** against full-store access
-  (non-repudiation is explicitly not claimed; an HMAC-with-Keychain-key
-  hardening is a recorded future option, not taken in V2-05).
+- **D36 Audit retained-sequence honesty.** `OperationRecord` is append-only by
+  ordinary APIs; bounded compaction and recovery rebase are the only named
+  exceptions. Each committed append inserts sequence N and advances
+  `nextAuditSequence` to N+1 in the same transaction. Retained rows occupy every
+  sequence in `[compactionFloor, nextAuditSequence)` exactly once. Compaction
+  or recovery appends its global marker and advances the floor in the same
+  transaction; a read below the floor returns `.auditCompactedBefore`, never a
+  silent complete-log claim. Typed payload decoding and range/duplicate/gap
+  checks fail closed. This detects incoherent persisted state, not a coherent
+  privileged rewrite: V2-05 provides no hash chain, tamper evidence,
+  non-repudiation, or content-derived audit identity.
 
 ## 12. Migration (M1) — summary
 
-See Record 5. Schema-layer only; four new tables + one new singleton; empty
+See Record 5. New V3 schema plus post-migration bootstrap; four new tables,
+including one singleton; empty
 post-migration; no blob/projection migration; no v1 surface rewritten; no
 backfill; no ID/`ContentVersion` reuse; bootstrap at `open` before the facade is
-published, with chain validation gating acceptance.
+eligible for publication, with typed config and retained-sequence validation
+gating acceptance. X.3 publishes none.
 
 ## 13. UX hooks (full in V2-07; state contract here)
 
@@ -2474,7 +2476,8 @@ Domain leakage, `V2-00` §6.6):
   `[oldFloor, newFloor)` range is present.
 - **Privacy/transparency indicators:** "Siri searched your history N times since
   …"; data-practice disclosure for `browse`/`readContent`/`manage` exposure and
-  for the audit log's tamper-evidence bound.
+  for the audit log's persistence, compaction-floor, and best-effort read bounds;
+  no tamper-evidence claim.
 
 Observation remains snapshot-replacement (Part IV §5); admin operations advance
 no `ChangePosition` and yield no `HistoryInvalidation`, so the UX re-reads the
@@ -2499,7 +2502,9 @@ audit log / grant list on demand (like V2-01 enrichment status, `V2-01` §8).
   isolation of the facade).
 - `V2-facts.md` cycle 6, OPEN 3 → resolved by design (§3.2 / §7.1 — capability-scoped
   subset is a distinct protocol, not a `HistoryAction` subset).
-- `V2-facts.md` cycle 6, OPEN 4 → `X-SECURITY-2` (chain tamper-evidence bound).
+- `V2-facts.md` cycle 6, OPEN 4 is superseded for this graft by the user-approved
+  no-hash decision; `X-SECURITY-2` proves typed decode, contiguous retained
+  sequences, atomic counter+row updates, and compaction-floor honesty only.
 - Rate-limit quota values and exact audit-compaction cadence → admission bounds
   fixed at scaffold time (peer to `ExternalLimits`); `X-SECURITY-3` / `X-PERF-2`
   exercise them.
@@ -2510,7 +2515,10 @@ audit log / grant list on demand (like V2-01 enrichment status, `V2-01` §8).
 - `@Parameter` `controlStyle` spelling + `Int`-bounding mechanism → `X-COMPILE-4`
   (Lens B minor; not load-bearing — the gateway re-validates `limit` at D35).
 
-Until `X-COMPILE-1..4`, `X-PLATFORM-1..3`, `X-BEHAVIOR-1`, `X-SECURITY-1..4`,
-and `X-PERF-1..4`
-pass on macOS 26, V2-05 is "design-consolidated, scaffold proof pending" and
-reserves no shipped surface.
+Individual leaves may land only with their own recorded proof ceilings: X.1/X.2
+already reserve the public contract vocabulary, while X.3 is the current
+schema/bootstrap leaf. Until the remaining applicable `X-COMPILE-*`,
+`X-PLATFORM-*`, `X-BEHAVIOR-*`, and `X-SECURITY-*` gates pass on macOS 26, the
+aggregate Gateway actor, administration, App Intents behavior, and external
+product surface remain unshipped. Deferred `X-PERF-*` gates support later
+performance claims and do not upgrade a correctness leaf's status.

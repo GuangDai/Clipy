@@ -222,17 +222,23 @@ internal actor HistoryAuthority {
     /// production (see `InjectedTransactionFailure`).
     internal var injectedTransactionFailure: InjectedTransactionFailure?
 
-    /// The Storage-side clock (V2-02 §6.4), supplying the R1 reference
-    /// `now` for the `.setRetentionPolicies` sweep lane — the one lane with
-    /// no caller-supplied `observedAt`. Injected at this INTERNAL
-    /// initializer (production wires `SystemRetentionClock` inside
+    /// The Storage-side clock (V2-02 §6.4 / V2-05 §4.6), supplying the R1
+    /// reference `now` for the `.setRetentionPolicies` sweep lane and the
+    /// one-time App Intents connection enrollment timestamp. Injected at this
+    /// INTERNAL initializer (production wires `SystemStorageClock` inside
     /// `SwiftDataHistory.open`; tests inject a fixed `Date` via
     /// `@testable`) and never exposed on the public `open` /
     /// `HistoryConfiguration` seam (§6.4 "Injection mechanism";
     /// `RET-COMPILE-1`). The sweep reads it once per commit inside the
-    /// serialized Authority interval before fact load (§6.4;
-    /// RetentionPolicySweep.swift is its only production consumer).
-    internal let retentionClock: any RetentionClock
+    /// serialized Authority interval before fact load (§6.4); X.3 reads it
+    /// only on the absent-config bootstrap path before the create transaction.
+    internal let storageClock: any StorageClock
+
+    /// One-time durable App Intents connection identity source (`V2-05`
+    /// §4.6). It is internal initializer injection for deterministic X.3
+    /// tests only: production uses an explicit `{ UUID() }` closure, and neither public
+    /// `HistoryConfiguration` nor a global locator can override it.
+    internal let gatewayConnectionIDSource: @Sendable () -> UUID
 
 #if DEBUG
     /// Opt-in aggregate search tracing. This field and every call site are
@@ -255,20 +261,26 @@ internal actor HistoryAuthority {
     ///
     /// `SwiftDataHistory.open` owns §13 steps 1–2 (configuration validation
     /// and container creation); this Authority then owns the store-side
-    /// startup steps 3–11 via `performStartup(initialMaximumUnpinnedItems:)`.
+    /// current total-order startup steps 3–12 via
+    /// `performStartup(initialMaximumUnpinnedItems:)` (extending the v1
+    /// `05` §13 store-side steps 3–11).
     /// The Signature Index starts unready (§12) and the test seams disarmed.
-    /// The `retentionClock` parameter is the V2-02 §6.4 Storage-clock seam:
+    /// The `storageClock` parameter is the Storage-clock seam:
     /// internal to `HistoryStorage`, defaulted to the production
-    /// `SystemRetentionClock` witness so no existing construction site
-    /// changes, and never carried on the public `open` signature.
+    /// `SystemStorageClock` witness so no existing construction site
+    /// changes, and never carried on the public `open` signature. The
+    /// `gatewayConnectionIDSource` is the parallel X.3 one-time value seam;
+    /// production defaults to an explicit `{ UUID() }` Sendable closure.
     internal init(
         container: ModelContainer,
         limits: HistoryLimits = .standard,
-        retentionClock: any RetentionClock = SystemRetentionClock()
+        storageClock: any StorageClock = SystemStorageClock(),
+        gatewayConnectionIDSource: @escaping @Sendable () -> UUID = { UUID() }
     ) {
         self.container = container
         self.limits = limits
-        self.retentionClock = retentionClock
+        self.storageClock = storageClock
+        self.gatewayConnectionIDSource = gatewayConnectionIDSource
         self.signatureIndex = SignatureIndex()
         self.invalidationPublisher = HistoryInvalidationPublisher()
         self.suspensionHandler = nil
@@ -301,7 +313,8 @@ internal actor HistoryAuthority {
     /// Performs the store-side §13 startup sequence inside one isolated
     /// interval: create the position/retention singleton at position 0 for a
     /// new store (step 3), validate exactly one singleton (step 4),
-    /// bootstrap/validate the retention-expansion config singleton
+    /// bootstrap/validate the retention-expansion config singleton and the
+    /// X.3 deny-by-default Gateway config/App Intents connection pair
     /// (`V2-roadmap` §5 total open order step 5, M1.3), validate the
     /// retained row count against the hard bound, first rebuild legacy
     /// projection rows from their validated content lineage, then require
@@ -320,7 +333,8 @@ internal actor HistoryAuthority {
     /// value even when a test constructs the Authority directly.
     ///
     /// No suspension point is needed here: startup completes before the
-    /// facade is published (§13 step 12), and the whole sequence is one
+    /// facade is published (current roadmap step 13; v1 `05` §13 step 12),
+    /// and the whole sequence is one
     /// non-suspending interval on an operation-local context (§5).
     ///
     /// - Throws: `.invalidInput(.invalidRetentionPolicy)` for an out-of-range
@@ -372,6 +386,14 @@ internal actor HistoryAuthority {
             // v1-faithful); present → the fail-closed V2-02 §3.3 validation.
             try Self.ensureRetentionExpansionConfig(in: context)
 
+            // V2-roadmap §10 X.3 / V2-05 §4.6: after the pre-existing
+            // position/retention singletons, atomically bootstrap or
+            // fail-closed validate the Gateway config + App Intents
+            // connection before any facade can be published. X.3 admits no
+            // grant or audit row; X.4 replaces that exact-zero audit rule
+            // together with the first writer and complete validation.
+            try ensureGatewayBootstrap(in: context)
+
             // §13 step 6 / §15: projection recipe v1 → v2 rebuild is an
             // Authority-owned, bounded, atomic startup operation. It finishes
             // before the Signature Index is declared ready or capture exists.
@@ -416,7 +438,7 @@ internal actor HistoryAuthority {
     }
 
     /// §13 steps 3–4: create the singleton at position 0 only for the
-    /// fresh-compatible empty V2 row shape, then require exactly one row
+    /// fresh-compatible empty V3 row shape, then require exactly one row
     /// carrying the well-known key. docs/05-authority-kernel.md §13, §3.2;
     /// deep review DATA-1 / Card 1A-1.
     ///
@@ -447,9 +469,9 @@ internal actor HistoryAuthority {
         }
         switch rows.count {
         case 0:
-            // Absence authorizes a write only when every other V2 durable
-            // table is empty. Existing items, a retained-byte projection, or
-            // a config row prove this is damaged state, not a new store.
+            // Absence authorizes a write only when every other V3 durable
+            // table is empty. Any surviving history, retention, projection,
+            // or Gateway fact proves damaged state, not a new store.
             guard try isFreshCompatiblePositionBootstrapShape(in: context) else {
                 throw HistoryFailure.persistence(.invariantViolation)
             }
@@ -483,12 +505,13 @@ internal actor HistoryAuthority {
 
     /// The only currently distinguishable write authorization for an absent
     /// position singleton.
-    /// `HistorySchemaV2` contains exactly the four tables queried here; zero
-    /// rows in all three sibling tables is the fresh-compatible shape. It is
-    /// not causal proof: an existing V2 store cleared of every item and then
-    /// stripped of both singletons is identical without durable provenance.
-    /// This is intentionally not a generic repair classifier; any surviving
-    /// durable fact makes missing authoritative position state unrecoverable.
+    /// `HistorySchemaV3` contains the three history/retention siblings queried
+    /// here plus the four Gateway tables queried by
+    /// `gatewayTablesAreEmpty(in:)`; zero rows in every sibling table is the
+    /// fresh-compatible shape. It is not causal proof: an existing V3 store
+    /// stripped of every durable row is identical without provenance. This is
+    /// intentionally not a generic repair classifier; any surviving durable
+    /// fact makes missing authoritative position state unrecoverable.
     private static func isFreshCompatiblePositionBootstrapShape(
         in context: ModelContext
     ) throws -> Bool {
@@ -502,7 +525,14 @@ internal actor HistoryAuthority {
             let retainedBytesCount = try context.fetchCount(
                 FetchDescriptor<RetainedBytesRow>()
             )
-            return itemCount == 0 && configCount == 0 && retainedBytesCount == 0
+            guard itemCount == 0,
+                  configCount == 0,
+                  retainedBytesCount == 0 else {
+                return false
+            }
+            return try gatewayTablesAreEmpty(in: context)
+        } catch let failure as HistoryFailure {
+            throw failure
         } catch {
             throw HistoryFailure.persistence(.openStore)
         }

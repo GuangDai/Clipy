@@ -19,9 +19,9 @@
 /// never an outcome side-effect), §6.3 (retire-subsumes-prune: the composer
 /// drops `.pruneRevisions` for items the same commit retires BEFORE stamping,
 /// `RET-STAMP-2`), §6.4 (the Storage clock is THIS lane's seam — `now` for
-/// the sweep comes from `retentionClock.now()`, the only production clock
-/// read; captured once per commit inside the serialized Authority interval
-/// before fact load), §7 (sweep = R1+R2+R3), §8.3 (boundary validation via
+/// the sweep comes from `storageClock.now()`, captured once per commit inside
+/// the serialized Authority interval before fact load), §7 (sweep =
+/// R1+R2+R3), §8.3 (boundary validation via
 /// `RetentionPolicyBounds.validate` → `.invalidInput(.invalidRetentionPolicy)`
 /// before any store work; the PHASE-C veto and the pinned-byte/budget
 /// boundary equivalent share that producer; a same-value satisfied state is
@@ -49,11 +49,11 @@ extension HistoryAuthority {
     ///    `RetentionPolicyBounds.validate` rejects an out-of-range / NaN /
     ///    inconsistent value as `.invalidInput(.invalidRetentionPolicy)` —
     ///    the analog of `commitRetentionPolicy`'s Part VI range check.
-    /// 2. **Clock read** (§6.4): `now = retentionClock.now()`, captured once
+    /// 2. **Clock read** (§6.4): `now = storageClock.now()`, captured once
     ///    per commit inside the serialized Authority interval before fact
-    ///    load. This is the seam's only production consumer (§6.4 assigns
-    ///    the Storage clock to THIS lane alone); the Domain planner stays
-    ///    pure and receives `now: Date`.
+    ///    load. This is the clock's only retention-policy consumer (§6.4
+    ///    assigns it to THIS retention lane); the Domain planner stays pure
+    ///    and receives `now: Date`.
     /// 3. **Fact load**: the singleton position, the persisted
     ///    `currentPolicies` (the config loader's shared fetch/validate/map
     ///    core), and the full inventory scalars — the v1 retained summaries
@@ -133,9 +133,9 @@ extension HistoryAuthority {
 
         // §6.4: the clock read occurs inside the serialized Authority
         // interval before fact load and is captured once per commit; every
-        // R1 comparison below reuses this value. This is the seam's only
-        // production consumer.
-        let now = retentionClock.now()
+        // R1 comparison below reuses this value. This is the clock's only
+        // retention-policy consumer.
+        let now = storageClock.now()
 
         let context = ModelContext(container)
         context.autosaveEnabled = false

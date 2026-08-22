@@ -1104,7 +1104,7 @@ The seam reuses the existing Storage-side time source that mints revision
 `createdAt` (`02` §4 `PreparedRevision.createdAt`; the persisted
 `ContentRevision.createdAt` is `02` §2.5; the Domain also
 receives as a value and never mints): a `Sendable` clock witness (a
-`() -> Date` closure or equivalent `RetentionClock` protocol) injected into
+`() -> Date` closure or equivalent `StorageClock` protocol) injected into
 `HistoryAuthority` at `open` - not a `@Model`/`@unchecked` field, not a stored
 mutable on `SwiftDataHistory`, not a `.shared`/`.current` service locator -
 defaulting to `Date.now` in production and injectable in tests, so
@@ -1114,7 +1114,7 @@ Authority interval before fact load; it does not suspend
 (`05` §11 "without suspension"). `now` is captured once per commit and reused
 for all R1 comparisons in that commit.
 
-**Injection mechanism (public-surface preservation).** The clock is an `internal` `RetentionClock` protocol parameter on `HistoryAuthority`'s `internal` initializer (internal to `HistoryStorage`); production wires `{ Date.now }` and tests inject a fixed `Date` via the `@testable` `HistoryAuthority` initializer. It is **not** a parameter on the v1 public `SwiftDataHistory.open` / `ClipboardHistory` seam: `SwiftDataHistory.open` internally constructs the `HistoryAuthority` with `{ Date.now }`, so no composition-root carrier is needed and the v1 public open/init signature is unchanged (no v1 public type is redefined - the same extension-by-addition posture as the new enum cases, §8.2; no `.shared`/`.current` locator). The v1 `open(configuration: HistoryConfiguration)` public signature, where `HistoryConfiguration` is the public v1 struct with fields `persistence` and `initialMaximumUnpinnedItems` (`05` §2), takes no clock parameter and gains none; the clock never rides on `HistoryConfiguration` (which is frozen v1). Tests inject via the `@testable` `HistoryAuthority` init only. Confirmation that the v1 `open`/`HistoryConfiguration` public signature is byte-for-byte unchanged is assigned to `RET-COMPILE-1` (Record 3).
+**Injection mechanism (public-surface preservation).** The clock is an `internal` `StorageClock` protocol parameter on `HistoryAuthority`'s `internal` initializer (internal to `HistoryStorage`); production wires `{ Date.now }` and tests inject a fixed `Date` via the `@testable` `HistoryAuthority` initializer. It is **not** a parameter on the v1 public `SwiftDataHistory.open` / `ClipboardHistory` seam: `SwiftDataHistory.open` internally constructs the `HistoryAuthority` with `{ Date.now }`, so no composition-root carrier is needed and the v1 public open/init signature is unchanged (no v1 public type is redefined - the same extension-by-addition posture as the new enum cases, §8.2; no `.shared`/`.current` locator). The v1 `open(configuration: HistoryConfiguration)` public signature, where `HistoryConfiguration` is the public v1 struct with fields `persistence` and `initialMaximumUnpinnedItems` (`05` §2), takes no clock parameter and gains none; the clock never rides on `HistoryConfiguration` (which is frozen v1). Tests inject via the `@testable` `HistoryAuthority` init only. Confirmation that the v1 `open`/`HistoryConfiguration` public signature is byte-for-byte unchanged is assigned to `RET-COMPILE-1` (Record 3).
 
 ### 6.5 Domain planner signatures
 

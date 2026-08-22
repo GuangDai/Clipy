@@ -635,9 +635,12 @@ Local Automation不再是笼统non-goal，而是用户明确要求的**strategic
 顺序必须是“现在设计，signed gateway后shipping”：先按§11关闭baseline、normal-path correctness、
 data recovery、accessibility和Developer ID发行路径；再用最终签名的app + CLI证明cold/warm launch、credential、
 sandbox/TCC、grant/revoke、audit与failure contract。unsigned hosted test、开发机socket成功或
-V2-05设计文档本身都不能支撑“任意Python可用”的产品声明。当前V2-05仍是
-design-consolidated、scaffold proof pending；应在scaffold前调整owning spec，避免把旧粗能力固化后
-再兼容迁移。
+V2-05设计文档本身都不能支撑“任意Python可用”的产品声明。当前Gateway实现叶是roadmap
+**X.3 schema/limits/bootstrap**：新建immutable `HistorySchemaV3`，保持已shipping
+`HistorySchemaV2`不变；bootstrap恰好一个config与active
+`Siri / Shortcuts / Spotlight` connection，且grant/audit均为零。X.3不实现audit codec、actor、facade、
+admin、App Intents、CLI或transport；完整codec与atomic admin audit同属X.4。该叶的证据不能外推为
+Gateway或Python可用。
 
 ### 10.2 唯一稳定外部interface与私有transport
 
@@ -807,6 +810,9 @@ settled RSS、CPU/energy、failure rate，不生成综合分数。
 | `DEC-PY-TRANSPORT` | V2-05 amendment | OPEN | Python production adapter | public surface已固定为first-party`clipyctl`；signed/sandbox/TCC后只选择其背后的单一private transport。 |
 | `DEC-PY-AUTHENTICATED-INGRESS` | V2-05 + 01 target graph | **BLOCKED-SPEC** | `PLAY-PY-F1`、`PLAY-PY-B3`、`PLAY-PY-B3A`、`PLAY-PY-B3B`、`PLAY-PY-B3C`、`PLAY-PY-B4`、`PLAY-PY-B5` | ClipyApp不能访问internal Gateway，unknown credential也不能使用App Intent预绑定facade；必须批准一个只携带bounded peer evidence、opaque credential与typed request的受限app-facing ingress及其target/access placement。不得用公开Gateway、公开CredentialStore或transport-side policy绕过。 |
 | `DEC-PY-CONNECTION-ALLOW-MATRIX` | V2-05 §0.2 | **RESOLVED (2026-08-22)** | PLAY-PY-GW0由Batch 6实现；下一层为roadmap X.2 public contract | closed total matrix保持`.appIntents`既有browse/readContent/manage与operation/implication不变；`.localAutomation`只准browsePreview/readEffectiveContent/organize/deleteItem，revise后置；所有cross-kind/unknown pair在History/audit前deny。 |
+| `DEC-PY-X3-SCHEMA-BOOTSTRAP` | V2-05 §4/Record 5 + V2 roadmap DC-03 | **RESOLVED (2026-08-22；当前implementation leaf)** | roadmap X.3 | incremental shipping：新增immutable `HistorySchemaV3`，绝不修改已shipping V2；只落四models、fixed limits、config + active `Siri / Shortcuts / Spotlight` connection、zero grants/audit bootstrap与validation。X.3不落codec/actor/facade/admin。config absent + dependent tables全空允许重建，但诚实记录它与未来V3全删同形；只拒绝仍有dependent row的可区分腐败，不加marker/hash。 |
+| `DEC-PY-GRANT-AUDIT-STATE` | V2-05 §4.2/§4.4/§5.6 | **RESOLVED (2026-08-22)** | roadmap X.4 / PLAY-PY-GW1…GW4 | 每个connection/capability只有一条current-state GrantRow；re-grant更新同一行，event history只进audit。完整`OperationPayloadBlobV1`与所有literal cases随X.4 atomic audit落地；global rebase/compact的connection/capability为nil，不伪造admin capability。 |
+| `DEC-PY-AUDIT-INTEGRITY` | V2-05 D36 + repository no-hash rule | **RESOLVED (2026-08-22)** | roadmap X.4 / `X-SECURITY-2` | 不实现audit hash/chain/CryptoKit，也不声称tamper evidence；typed codec、transaction内counter+row、monotone contiguous `auditSequence`与`compactionFloor`只证明可检出的内部一致性边界。audit无off-switch。`GatewayConfigRow.generation`删除。 |
 | `DEC-PY-READ-AUDIT` | V2-05 audit | OPEN | 首次真实content release：PLAY-PY-D1A/B/C、D3/D5/D9及future stream | best-effort at-most-one还是first-byte前durable authorization record；pure framing/length可先做但不能先释放History bytes。 |
 | `DEC-PY-IDEMPOTENCY` | V2-05 mutation/audit | OPEN | PLAY-PY-E7及future revise retry | request ID如何与mutation/audit同transaction及保留窗口；E6A/E6B的default no-blind-retry可先测。 |
 | `DEC-PY-REORDER` | V2-05 organize + pin ordering | OPEN | future organize-reorder leaf | reorder locator/OCC/position/audit语义；首版organize仅pin/unpin。 |

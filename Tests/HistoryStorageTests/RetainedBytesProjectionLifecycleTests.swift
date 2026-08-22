@@ -837,15 +837,15 @@ struct RetainedBytesProjectionLifecycleTests {
 
     /// A fixed-`Date` clock witness injected through the `@testable`
     /// `HistoryAuthority` initializer is stored and read back unchanged,
-    /// and the public `open` path wires the production `SystemRetentionClock`
+    /// and the public `open` path wires the production `SystemStorageClock`
     /// witness. Seam/compile proof (the §6.4 posture: the public
     /// `open(configuration:)` signature and `HistoryConfiguration` carry no
-    /// clock, `RET-COMPILE-1`); the clock's behavioral consumer — the R.6
-    /// `.setRetentionPolicies` sweep's R1 reference time — is covered by
+    /// clock, `RET-COMPILE-1`); the clock's retention-policy consumer — the
+    /// R.6 `.setRetentionPolicies` sweep's R1 reference time — is covered by
     /// the RetentionPolicySweepTests clock fixtures.
-    @Test("RetentionClock seam: @testable injection compiles; open wires the system witness")
-    func retentionClockSeamAcceptsInjectionWhileOpenWiresSystemClock() async throws {
-        struct FixedRetentionClock: RetentionClock {
+    @Test("StorageClock seam: @testable injection compiles; open wires the system witness")
+    func storageClockSeamAcceptsInjectionWhileOpenWiresSystemClock() async throws {
+        struct FixedStorageClock: StorageClock {
             let fixed: Date
             func now() -> Date { fixed }
         }
@@ -858,15 +858,15 @@ struct RetainedBytesProjectionLifecycleTests {
         let container = try WSSupport.makeContainer(storeURL: storeURL)
         let authority = HistoryAuthority(
             container: container,
-            retentionClock: FixedRetentionClock(fixed: epoch)
+            storageClock: FixedStorageClock(fixed: epoch)
         )
-        let injected = await authority.retentionClock
+        let injected = await authority.storageClock
         #expect(injected.now() == epoch)
 
         // Production default: `open` wires the system witness internally —
         // no clock parameter on the public seam (V2-02 §6.4).
         let history = try await WSSupport.openHistory(storeURL: storeURL)
-        let productionClock = await history.authority.retentionClock
-        #expect(productionClock is SystemRetentionClock)
+        let productionClock = await history.authority.storageClock
+        #expect(productionClock is SystemStorageClock)
     }
 }

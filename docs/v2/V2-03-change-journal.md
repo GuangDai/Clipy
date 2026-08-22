@@ -1346,7 +1346,7 @@ The HCR `createdAt` is the first durable **per-commit** timestamp in the
 architecture (v1 stores only per-item `firstCopiedAt`/`lastCopiedAt` and
 per-revision `createdAt`, `05` §3.1). Its source is the **same** Storage-side
 clock seam V2-02 introduced for `.setRetentionPolicies` R1 (`V2-02` §6.4): a
-`Sendable` clock witness (`() -> Date` closure or `RetentionClock` protocol)
+`Sendable` clock witness (`() -> Date` closure or `StorageClock` protocol)
 injected into `HistoryAuthority` at `open`, defaulting to `Date.now` in
 production and injectable in tests. **V2-03 reuses this seam; it adds no new
 service-locator or injection point** (`J1-COMPILE-1` stays free of a new escape
