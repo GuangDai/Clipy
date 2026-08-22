@@ -94,22 +94,25 @@ struct WS16ComposedRemoveAndNotFoundTests {
             "WS16 (03b §10): the second remove surfaces .notFound in the banner"
         )
 
-        viewState.unpin(inserted.id)
-        #expect(
-            await ComposedSupport.waitFor {
-                viewState.failure == .notFound(inserted.id)
-            },
-            "WS16: unpin on the absent ID surfaces .notFound"
-        )
-
         // placePinned uses its own anchor-missing vocabulary by design
         // (03b §10 PinnedPlacementFailure): `.targetMissing`, not `.notFound`.
+        // Exercise it between the two equal `.notFound` producers so every
+        // wait observes a changed value and therefore the preceding
+        // fire-and-forget task's actual completion.
         viewState.pin(inserted.id, at: .first)
         #expect(
             await ComposedSupport.waitFor {
                 viewState.failure == .invalidPinnedPlacement(.targetMissing)
             },
             "WS16 (03b §10): placePinned on the absent ID reports targetMissing"
+        )
+
+        viewState.unpin(inserted.id)
+        #expect(
+            await ComposedSupport.waitFor {
+                viewState.failure == .notFound(inserted.id)
+            },
+            "WS16: unpin on the absent ID surfaces .notFound"
         )
 
         // The user-facing message for the banner (03b §10 →

@@ -40,19 +40,30 @@ import Testing
 @Test func sameEffectiveRevisionIsUnchangedButChangedBytesAppendOneFullRevision() throws {
     let itemID = pinRevisionItemID(1)
     let canonical = try pinRevisionCanonical()
-    let item = pinRevisionState(id: itemID, canonical: canonical)
-    let request = RevisionRequest(
-        itemID: itemID,
-        expected: .initial,
-        intent: .revert(to: .canonical)
-    )
     let sameContent = EffectiveContent(
         representations: canonical.representations.map(\.content)
     )
+    let existingRevisionID = pinRevisionRevisionID(1)
+    let item = pinRevisionState(
+        id: itemID,
+        canonical: canonical,
+        contentVersion: ContentVersion(rawValue: 2),
+        revisions: [ContentRevision(
+            id: existingRevisionID,
+            createdAt: Date(timeIntervalSinceReferenceDate: 100),
+            content: sameContent
+        )],
+        activeRevisionID: existingRevisionID
+    )
+    let request = RevisionRequest(
+        itemID: itemID,
+        expected: item.contentVersion,
+        intent: .revert(to: .canonical)
+    )
     let samePrepared = PreparedRevision(
-        candidateRevisionID: pinRevisionRevisionID(1),
+        candidateRevisionID: pinRevisionRevisionID(2),
         createdAt: Date(timeIntervalSinceReferenceDate: 200),
-        basedOn: .initial,
+        basedOn: item.contentVersion,
         proposedContent: sameContent
     )
 
@@ -73,11 +84,11 @@ import Testing
             bytes: Data("changed".utf8)
         ),
     ])
-    let revisionID = pinRevisionRevisionID(2)
+    let revisionID = pinRevisionRevisionID(3)
     let changedPrepared = PreparedRevision(
         candidateRevisionID: revisionID,
         createdAt: Date(timeIntervalSinceReferenceDate: 300),
-        basedOn: .initial,
+        basedOn: item.contentVersion,
         proposedContent: changedContent
     )
     let changedResult = try planRevision(
@@ -102,6 +113,73 @@ import Testing
     #expect(appended.content == changedContent)
     #expect(activeRevisionID == revisionID)
     #expect(item.canonical == canonical)
+    let oldRevisionIDs = item.revisions.map(\.id)
+    #expect(!oldRevisionIDs.contains(appended.id))
+    let resultingRevisionIDs = oldRevisionIDs + [appended.id]
+    #expect(resultingRevisionIDs.count == oldRevisionIDs.count + 1)
+    let containsDuplicate = resultingRevisionIDs.indices.contains { index in
+        resultingRevisionIDs.dropFirst(index + 1).contains(resultingRevisionIDs[index])
+    }
+    #expect(!containsDuplicate)
+}
+
+@Test func revisionPlannerRejectsCandidateIDAlreadyInTheItemLineage() throws {
+    let itemID = pinRevisionItemID(1)
+    let canonical = try pinRevisionCanonical()
+    let duplicateCandidateID = pinRevisionRevisionID(1)
+    let inactiveRevision = ContentRevision(
+        id: duplicateCandidateID,
+        createdAt: Date(timeIntervalSinceReferenceDate: 200),
+        content: EffectiveContent(representations: [
+            ContentRepresentation(
+                typeIdentifier: "public.utf8-plain-text",
+                bytes: Data("first revision".utf8)
+            ),
+        ])
+    )
+    let activeRevisionID = pinRevisionRevisionID(2)
+    let activeRevision = ContentRevision(
+        id: activeRevisionID,
+        createdAt: Date(timeIntervalSinceReferenceDate: 300),
+        content: EffectiveContent(representations: [
+            ContentRepresentation(
+                typeIdentifier: "public.utf8-plain-text",
+                bytes: Data("second revision".utf8)
+            ),
+        ])
+    )
+    let currentVersion = ContentVersion(rawValue: 3)
+    let item = pinRevisionState(
+        id: itemID,
+        canonical: canonical,
+        contentVersion: currentVersion,
+        revisions: [inactiveRevision, activeRevision],
+        activeRevisionID: activeRevisionID
+    )
+    let request = RevisionRequest(
+        itemID: itemID,
+        expected: currentVersion,
+        intent: .revert(to: .canonical)
+    )
+    let prepared = PreparedRevision(
+        candidateRevisionID: duplicateCandidateID,
+        createdAt: Date(timeIntervalSinceReferenceDate: 400),
+        basedOn: currentVersion,
+        proposedContent: EffectiveContent(representations: [
+            ContentRepresentation(
+                typeIdentifier: "public.utf8-plain-text",
+                bytes: Data("third revision".utf8)
+            ),
+        ])
+    )
+
+    #expect(throws: DomainRejection.invalidRevisionDraft) {
+        try planRevision(
+            request: request,
+            prepared: prepared,
+            facts: RevisionFacts(item: item)
+        )
+    }
 }
 
 @Test func revisionPlannerRejectsWrongPreparationBaseAndForeignType() throws {

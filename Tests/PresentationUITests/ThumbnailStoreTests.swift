@@ -234,6 +234,108 @@ struct ThumbnailStoreTests {
         #expect(store.cachedEntryCount == 1)
         #expect(store.inFlightCount == 0)
     }
+
+    /// Exact revision eviction releases only the old reference's flight. Its
+    /// non-cooperative late completion cannot refill or consume a newer
+    /// same-reference flight, while an unrelated request still publishes.
+    @Test func exactPurgeFencesLateTargetWithoutInvalidatingUnrelatedFlight() async throws {
+        let old = reference(
+            "00000000-0000-0000-0000-0000000000D5",
+            version: 1
+        )
+        let unrelated = reference(
+            "00000000-0000-0000-0000-0000000000D6",
+            version: 1
+        )
+        let history = PausableThumbnailHistory()
+        let store = ThumbnailStore(history: history)
+
+        store.prefetch(old)
+        store.prefetch(unrelated)
+        try #require(await pollUntil { await history.requestCount == 2 })
+
+        let new = HistoryItemReference(
+            id: old.id,
+            contentVersion: ContentVersion(rawValue: 2)
+        )
+        store.purge(.revision(old: old, new: new))
+        #expect(store.purgeGeneration == 1)
+        #expect(store.inFlightCount == 1)
+        store.prefetch(old)
+        try #require(await pollUntil { await history.requestCount == 3 })
+
+        #expect(
+            await history.completeRequest(
+                for: old,
+                with: .success(fixturePNGData)
+            )
+        )
+        #expect(
+            await history.completeRequest(
+                for: unrelated,
+                with: .success(fixturePNGData)
+            )
+        )
+        try #require(await pollUntil {
+            store.debugFetchCompletionCount == 2
+                && store.image(for: unrelated) != nil
+        })
+        #expect(store.image(for: old) == nil)
+        #expect(store.debugDiscardedFetchCompletionCount == 1)
+        #expect(store.inFlightCount == 1)
+
+        #expect(
+            await history.completeRequest(
+                for: old,
+                occurrence: 1,
+                with: .success(fixturePNGData)
+            )
+        )
+        #expect(await pollUntil { store.image(for: old) != nil })
+        #expect(store.inFlightCount == 0)
+    }
+
+    /// Thumbnail entries intentionally carry no pin metadata. Clear
+    /// Unpinned therefore performs an owner-local rebuildable reset: every
+    /// flight is fenced instead of guessing which exact references are pinned.
+    @Test func clearUnpinnedResetsTheOwnerLocalThumbnailCache() async throws {
+        let unpinned = reference(
+            "00000000-0000-0000-0000-0000000000D7",
+            version: 1
+        )
+        let metadataUnknown = reference(
+            "00000000-0000-0000-0000-0000000000D8",
+            version: 1
+        )
+        let history = PausableThumbnailHistory()
+        let store = ThumbnailStore(history: history)
+
+        store.prefetch(unpinned)
+        store.prefetch(metadataUnknown)
+        try #require(await pollUntil { await history.requestCount == 2 })
+
+        store.purge(.unpinned)
+        #expect(store.purgeGeneration == 1)
+        #expect(store.inFlightCount == 0)
+        #expect(store.cachedEntryCount == 0)
+
+        #expect(
+            await history.completeRequest(
+                for: unpinned,
+                with: .success(fixturePNGData)
+            )
+        )
+        #expect(
+            await history.completeRequest(
+                for: metadataUnknown,
+                with: .success(fixturePNGData)
+            )
+        )
+        try #require(await pollUntil {
+            store.debugDiscardedFetchCompletionCount == 2
+        })
+        #expect(store.cachedEntryCount == 0)
+    }
     #endif
 
     // MARK: - Cache ceiling (04 §9 step 7)

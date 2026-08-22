@@ -188,4 +188,39 @@ struct PreviewPaneStateTests {
         #expect(!state.isOpen)
         #expect(state.previewedItem == nil)
     }
+
+    /// Purge generation, not cooperative task cancellation, is the final
+    /// fence: a zero-delay dwell scheduled before Clear cannot reopen the
+    /// pane after the destructive receipt is applied.
+    @Test func clearPurgeFencesQueuedDwellCompletion() async {
+        let state = PreviewPaneState(autoOpenDelay: .zero)
+        let item = reference()
+
+        state.handleSelectionChange(item)
+        state.purge(.all)
+        await Task.yield()
+        await Task.yield()
+
+        #expect(state.purgeGeneration == 1)
+        #expect(!state.isOpen)
+        #expect(state.previewedItem == nil)
+    }
+
+    /// Exact revision eviction does not close an unrelated visible preview.
+    @Test func exactPurgePreservesUnrelatedPreview() {
+        let state = makeState()
+        let visible = reference()
+        let revisedElsewhere = reference()
+        state.togglePreview(for: visible)
+
+        let replacement = HistoryItemReference(
+            id: revisedElsewhere.id,
+            contentVersion: ContentVersion(rawValue: 2)
+        )
+        state.purge(.revision(old: revisedElsewhere, new: replacement))
+
+        #expect(state.purgeGeneration == 0)
+        #expect(state.isOpen)
+        #expect(state.previewedItem == visible)
+    }
 }

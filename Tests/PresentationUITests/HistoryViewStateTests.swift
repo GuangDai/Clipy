@@ -759,8 +759,9 @@ struct HistoryViewStateTests {
     // MARK: - Interactions (03a §5; 03b §10)
 
     /// On a healthy history, pin/unpin/remove/clear forward their
-    /// `HistoryAction`s to `perform` and leave `failure` clear — row refresh
-    /// comes from the observation loop, not from row surgery here.
+    /// `HistoryAction`s to `perform` and leave `failure` clear. Observation
+    /// owns ordinary row refresh; effective destructive receipts additionally
+    /// retire executable rows during the delivery gap.
     @Test func mutatingInteractionsForwardActionsAndKeepFailureClear() async {
         let firstPage = fixturePage(
             rows: [fixtureRow(id: "00000000-0000-0000-0000-000000000071", title: "row")],
@@ -847,6 +848,355 @@ struct HistoryViewStateTests {
 
         state.deactivate()
         await history.finishObservation()
+    }
+
+    /// Card 9B's purge signal is receipt-driven: merely issuing Clear cannot
+    /// erase surface state, and neither `.unchanged` nor a typed failure is a
+    /// destructive commit. A literal committed Clear is the first point at
+    /// which the surface owner receives a whole-surface purge generation.
+    @Test func clearPublishesWholeSurfacePurgeOnlyAfterCommittedReceipt() async throws {
+        let page = fixturePage(
+            rows: [
+                fixtureRow(
+                    id: "00000000-0000-0000-0000-000000009B10",
+                    title: "must-retire"
+                ),
+            ],
+            next: "pre-clear-cursor"
+        )
+        let history = PausableMutationHistory(observedFirstPage: page)
+        let state = HistoryViewState(history: history)
+        state.activate()
+        try #require(await pollUntil { state.rows == page.rows })
+        #expect(state.hasNextPage)
+
+        let unchangedClear = Task {
+            try await state.clearAwaitingReceipt(.all)
+        }
+        try #require(await pollUntil { await history.requestCount == 1 })
+        #expect(state.surfacePurge == nil)
+        await history.complete(with: .success(.unchanged))
+        _ = try await unchangedClear.value
+        #expect(state.surfacePurge == nil)
+        #expect(state.rows == page.rows)
+        #expect(state.hasNextPage)
+
+        let failedClear = Task {
+            try await state.clearAwaitingReceipt(.all)
+        }
+        try #require(await pollUntil { await history.requestCount == 2 })
+        await history.complete(
+            with: .failure(.temporarilyUnavailable(.dedupIndexRebuild))
+        )
+        do {
+            _ = try await failedClear.value
+            Issue.record("typed Clear failure unexpectedly returned a receipt")
+        } catch let failure as HistoryFailure {
+            #expect(failure == .temporarilyUnavailable(.dedupIndexRebuild))
+        }
+        #expect(state.failure == .temporarilyUnavailable(.dedupIndexRebuild))
+        #expect(state.surfacePurge == nil)
+        #expect(state.rows == page.rows)
+        #expect(state.hasNextPage)
+
+        let committedClear = Task {
+            try await state.clearAwaitingReceipt(.all)
+        }
+        try #require(await pollUntil { await history.requestCount == 3 })
+        await history.complete(
+            with: .success(
+                .committed(
+                    HistoryCommit(
+                        position: ChangePosition(rawValue: 17),
+                        outcome: .cleared(count: 4)
+                    )
+                )
+            )
+        )
+        _ = try await committedClear.value
+        #expect(state.surfacePurge?.generation == 1)
+        #expect(state.surfacePurge?.scope == .all)
+        #expect(state.rows.isEmpty)
+        #expect(!state.hasNextPage)
+        #expect(!state.isLoadingPage)
+        #expect(state.failure == nil)
+
+        state.deactivate()
+    }
+
+    /// Remove is precise to its item rather than resetting unrelated surface
+    /// state. The event is still withheld until the literal remove commit is
+    /// returned by the public History boundary.
+    @Test func removePublishesItemPurgeAfterCommittedReceipt() async throws {
+        let itemID = HistoryItemID(
+            rawValue: UUID(uuidString: "00000000-0000-0000-0000-00000000009B")!
+        )
+        let removed = fixtureRow(
+            id: "00000000-0000-0000-0000-00000000009B",
+            title: "removed"
+        )
+        let survivor = fixtureRow(
+            id: "00000000-0000-0000-0000-000000009B11",
+            title: "survivor"
+        )
+        let history = PausableMutationHistory(
+            observedFirstPage: fixturePage(
+                rows: [removed, survivor],
+                next: "pre-remove-cursor"
+            )
+        )
+        let state = HistoryViewState(history: history)
+        state.activate()
+        try #require(await pollUntil { state.rows.count == 2 })
+
+        let removal = Task {
+            try await state.removeAwaitingReceipt(itemID)
+        }
+        try #require(await pollUntil { await history.requestCount == 1 })
+        #expect(state.surfacePurge == nil)
+        await history.complete(
+            with: .success(
+                .committed(
+                    HistoryCommit(
+                        position: ChangePosition(rawValue: 18),
+                        outcome: .removed(count: 1)
+                    )
+                )
+            )
+        )
+
+        _ = try await removal.value
+        #expect(state.surfacePurge?.scope == .item(itemID))
+        #expect(state.rows == [survivor])
+        #expect(!state.hasNextPage)
+        #expect(!state.isLoadingPage)
+
+        state.deactivate()
+    }
+
+    /// Held pin metadata may trail a committed Unpin. Clear Unpinned therefore
+    /// empties every executable row at receipt time and restarts observation;
+    /// only its post-receipt page restores the true survivors.
+    @Test func clearUnpinnedReceiptEmptiesRowsUntilRestartedObservation() async throws {
+        let formerlyPinned = fixtureRow(
+            id: "00000000-0000-0000-0000-000000009B14",
+            title: "committed-unpin-not-observed",
+            pinned: 0
+        )
+        let pinnedSurvivor = fixtureRow(
+            id: "00000000-0000-0000-0000-000000009B15",
+            title: "pinned-survivor",
+            pinned: 1
+        )
+        let newUnpinned = fixtureRow(
+            id: "00000000-0000-0000-0000-000000009B16",
+            title: "post-request-capture"
+        )
+        let history = PausableMutationHistory(
+            observedFirstPage: fixturePage(
+                rows: [formerlyPinned, pinnedSurvivor],
+                next: "pre-clear-unpinned"
+            )
+        )
+        let state = HistoryViewState(history: history)
+        let pasteRecorder = PasteCallRecorder()
+        state.onPaste = { item in
+            Task { await pasteRecorder.record(item) }
+        }
+        state.activate()
+        try #require(
+            await pollUntil { state.rows == [formerlyPinned, pinnedSurvivor] }
+        )
+
+        // The write is committed, but no observation carrying the new
+        // unpinned metadata has arrived. The held row still looks pinned.
+        let unpin = Task {
+            try await state.unpinAwaitingReceipt(formerlyPinned.item.id)
+        }
+        try #require(await pollUntil { await history.requestCount == 1 })
+        await history.complete(
+            with: .success(
+                .committed(
+                    HistoryCommit(
+                        position: ChangePosition(rawValue: 19),
+                        outcome: .unpinned(formerlyPinned.item.id)
+                    )
+                )
+            )
+        )
+        _ = try await unpin.value
+        #expect(state.rows == [formerlyPinned, pinnedSurvivor])
+
+        let clear = Task { try await state.clearAwaitingReceipt(.unpinned) }
+        try #require(await pollUntil { await history.requestCount == 2 })
+
+        // Even an observation delivered before the receipt is retired at the
+        // receipt boundary; its pin classification cannot authorize copying.
+        await history.emitObservedPage(
+            fixturePage(
+                rows: [pinnedSurvivor, newUnpinned],
+                next: "survivor-continuation"
+            )
+        )
+        try #require(
+            await pollUntil { state.rows == [pinnedSurvivor, newUnpinned] }
+        )
+
+        await history.complete(
+            with: .success(
+                .committed(
+                    HistoryCommit(
+                        position: ChangePosition(rawValue: 20),
+                        outcome: .cleared(count: 1)
+                    )
+                )
+            )
+        )
+        _ = try await clear.value
+
+        #expect(state.surfacePurge?.scope == .unpinned)
+        #expect(state.rows.isEmpty)
+        #expect(!state.hasNextPage)
+        #expect(!state.isLoadingPage)
+        #expect(state.isLoadingFirstPage)
+        try #require(
+            await pollUntil { await history.observationRequestCount == 2 }
+        )
+
+        state.requestPasteFromDisplayedRow(pinnedSurvivor.item)
+        state.requestPasteFromDisplayedRow(newUnpinned.item)
+        await Task.yield()
+        #expect(await pasteRecorder.received.isEmpty)
+
+        await history.emitObservedPage(
+            fixturePage(rows: [pinnedSurvivor, newUnpinned], next: nil)
+        )
+        try #require(
+            await pollUntil {
+                state.rows == [pinnedSurvivor, newUnpinned]
+                    && !state.isLoadingFirstPage
+            }
+        )
+
+        state.deactivate()
+    }
+
+    /// Revise already exposes an awaiting call. Its old exact reference is
+    /// the eviction target; the newly committed reference must remain
+    /// eligible for observation, preview, and thumbnail loading.
+    @Test func revisePublishesExactTransitionOnlyAfterCommittedReceipt() async throws {
+        let itemID = HistoryItemID(
+            rawValue: UUID(uuidString: "00000000-0000-0000-0000-00000000009C")!
+        )
+        let oldReference = HistoryItemReference(
+            id: itemID,
+            contentVersion: ContentVersion(rawValue: 1)
+        )
+        let newReference = HistoryItemReference(
+            id: itemID,
+            contentVersion: ContentVersion(rawValue: 2)
+        )
+        let oldRow = fixtureRow(
+            id: "00000000-0000-0000-0000-00000000009C",
+            title: "old-version"
+        )
+        let survivor = fixtureRow(
+            id: "00000000-0000-0000-0000-000000009B12",
+            title: "survivor"
+        )
+        let history = PausableMutationHistory(
+            observedFirstPage: fixturePage(
+                rows: [oldRow, survivor],
+                next: "pre-revise-cursor"
+            )
+        )
+        let state = HistoryViewState(history: history)
+        state.activate()
+        try #require(await pollUntil { state.rows.count == 2 })
+        let request = RevisionRequest(
+            itemID: itemID,
+            expected: oldReference.contentVersion,
+            intent: .replace(
+                RevisionDraft(
+                    decisions: [
+                        RevisionDecision(
+                            typeIdentifier: "public.utf8-plain-text",
+                            action: .replace(bytes: Data("new".utf8))
+                        )
+                    ]
+                )
+            )
+        )
+
+        let revision = Task { try await state.revise(request) }
+        try #require(await pollUntil { await history.requestCount == 1 })
+        #expect(state.surfacePurge == nil)
+        await history.complete(
+            with: .success(
+                .committed(
+                    HistoryCommit(
+                        position: ChangePosition(rawValue: 19),
+                        outcome: .revised(newReference)
+                    )
+                )
+            )
+        )
+
+        _ = try await revision.value
+        #expect(state.surfacePurge?.generation == 1)
+        #expect(
+            state.surfacePurge?.scope == .revision(
+                old: oldReference,
+                new: newReference
+            )
+        )
+        #expect(state.rows == [survivor])
+        #expect(!state.hasNextPage)
+        #expect(!state.isLoadingPage)
+
+        state.deactivate()
+    }
+
+    /// Details-owned pin toggles expose an awaiting receipt seam. The readback
+    /// can start only after success; a typed failure is still published by the
+    /// shared mutation boundary for the existing inline/banner presentation.
+    @Test func awaitingPinAndUnpinCompleteAtTheReceiptBoundary() async throws {
+        let history = PausableMutationHistory()
+        let state = HistoryViewState(history: history)
+        let itemID = HistoryItemID(
+            rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000009B13")!
+        )
+
+        let pin = Task { try await state.pinAwaitingReceipt(itemID) }
+        try #require(await pollUntil { await history.requestCount == 1 })
+        let pinActions = await history.recordedActions
+        #expect(pinActions.count == 1)
+        if let action = pinActions.first,
+           case .placePinned(let recordedID, at: .first) = action {
+            #expect(recordedID == itemID)
+        } else {
+            Issue.record("awaiting Pin forwarded the wrong action")
+        }
+        await history.complete(with: .success(.unchanged))
+        let pinReceipt = try await pin.value
+        if case .unchanged = pinReceipt {
+            // Expected: the awaiting seam returns the literal receipt.
+        } else {
+            Issue.record("awaiting Pin returned the wrong receipt")
+        }
+        #expect(state.failure == nil)
+
+        let failure = HistoryFailure.temporarilyUnavailable(.dedupIndexRebuild)
+        let unpin = Task { try await state.unpinAwaitingReceipt(itemID) }
+        try #require(await pollUntil { await history.requestCount == 2 })
+        await history.complete(with: .failure(failure))
+        do {
+            _ = try await unpin.value
+            Issue.record("typed Unpin failure unexpectedly returned a receipt")
+        } catch let returned as HistoryFailure {
+            #expect(returned == failure)
+        }
+        #expect(state.failure == failure)
     }
 
     /// Banner dismissal belongs to one failure publication, not to the
@@ -971,5 +1321,87 @@ struct HistoryViewStateTests {
 
         #expect(configuration == scripted)
         #expect(await history.retentionConfigurationRequestCount == 1)
+    }
+}
+
+/// One-operation-at-a-time public History boundary used to place the Card 9B
+/// assertion exactly before or after the real receipt, without timing sleeps.
+private actor PausableMutationHistory: ClipboardHistory {
+    enum Completion: Sendable {
+        case success(HistoryReceipt)
+        case failure(HistoryFailure)
+    }
+
+    private var requests: [HistoryAction] = []
+    private var continuation: CheckedContinuation<HistoryReceipt, Error>?
+    private let observedFirstPage: HistoryPage?
+    private var observationContinuation:
+        AsyncThrowingStream<HistoryPage, Error>.Continuation?
+    private var observationRequests = 0
+
+    init(observedFirstPage: HistoryPage? = nil) {
+        self.observedFirstPage = observedFirstPage
+    }
+
+    var requestCount: Int { requests.count }
+    var recordedActions: [HistoryAction] { requests }
+    var observationRequestCount: Int { observationRequests }
+
+    func emitObservedPage(_ page: HistoryPage) {
+        observationContinuation?.yield(page)
+    }
+
+    func complete(with completion: Completion) {
+        guard let continuation else { return }
+        self.continuation = nil
+        switch completion {
+        case .success(let receipt):
+            continuation.resume(returning: receipt)
+        case .failure(let failure):
+            continuation.resume(throwing: failure)
+        }
+    }
+
+    func perform(_ action: HistoryAction) async throws -> HistoryReceipt {
+        requests.append(action)
+        return try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func browse(_ request: HistoryBrowseRequest) async throws -> HistoryPage {
+        HistoryPage(position: ChangePosition(rawValue: 0), rows: [], next: nil)
+    }
+
+    func observe(
+        _ request: HistoryObservationRequest
+    ) async -> AsyncThrowingStream<HistoryPage, Error> {
+        observationRequests += 1
+        let (stream, continuation) =
+            AsyncThrowingStream<HistoryPage, Error>.makeStream()
+        observationContinuation = continuation
+        if observationRequests == 1, let observedFirstPage {
+            continuation.yield(observedFirstPage)
+        }
+        return stream
+    }
+
+    func details(for id: HistoryItemID) async throws -> HistoryDetails {
+        throw HistoryFailure.notFound(id)
+    }
+
+    func pastePayload(for id: HistoryItemID) async throws -> PastePayload {
+        throw HistoryFailure.notFound(id)
+    }
+
+    func thumbnail(
+        for item: HistoryItemReference,
+        pixels: PixelSize
+    ) async throws -> ThumbnailPayload? {
+        nil
+    }
+
+    func retentionConfiguration() async throws -> HistoryRetentionConfiguration {
+        .newStoreDefaults
     }
 }

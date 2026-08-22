@@ -46,24 +46,12 @@ public struct PasteboardAdapter {
     public let pasteboard: NSPasteboard
 
     #if DEBUG
-    /// Deterministic AppKit-failure injection seam for Debug tests — the audit's
-    /// recommended direction (SPEC-IMPL-005: "a seam that deterministically
-    /// injects each documented AppKit failure"). A type identifier listed
-    /// here freezes as declared-but-unavailable: the `data(forType:)` == nil
-    /// outcome Apple documents as the contents having changed or the
-    /// provider having timed out. The declaration and every simulated branch
-    /// are absent from Release. `public` only because the hosted Debug test
-    /// target imports the adapter as a regular module, without `@testable`.
-    public var simulatedUnavailableTypeIdentifiers: Set<String> = []
-
-    /// The write half of the same seam: a type identifier listed here is
-    /// treated as refused while staging the new `NSPasteboardItem`.
-    /// Absent from Release; never set outside Debug tests.
-    public var simulatedRejectedWriteTypeIdentifiers: Set<String> = []
-
-    /// Simulates the pasteboard rejecting the completed item after the old
-    /// contents have been cleared. Absent from Release.
-    public var simulatedItemWriteRejected = false
+    /// Immutable, package-only AppKit-failure injection. None of this state is
+    /// part of the shipped public adapter surface (REVIEW Card 5D). Keeping
+    /// the three observed framework outcomes together also makes a configured
+    /// adapter stable after construction instead of exposing mutable switches
+    /// to callers.
+    private let failureSimulation: PasteboardFailureSimulation
 
     /// Records each real payload accessor immediately before the adapter
     /// calls `NSPasteboardItem.data(forType:)`. Tests use this hook to prove
@@ -76,7 +64,23 @@ public struct PasteboardAdapter {
     /// Creates an adapter over `pasteboard` (`.general` in production).
     public init(pasteboard: NSPasteboard = .general) {
         self.pasteboard = pasteboard
+        #if DEBUG
+        self.failureSimulation = PasteboardFailureSimulation()
+        #endif
     }
+
+    #if DEBUG
+    /// Creates a Debug test adapter with fixed framework outcomes. Package
+    /// rather than `public`: its owning SwiftPM tests can arrange the AppKit
+    /// boundary while external clients cannot discover or configure it.
+    package init(
+        pasteboard: NSPasteboard,
+        failureSimulation: PasteboardFailureSimulation
+    ) {
+        self.pasteboard = pasteboard
+        self.failureSimulation = failureSimulation
+    }
+    #endif
 
     /// Freezes the current pasteboard contents into a raw capture
     /// (docs/03a-instruction-set.md §4; docs/01-architecture.md §5.1) —
@@ -184,7 +188,7 @@ public struct PasteboardAdapter {
             // The Debug seam forces the documented declared-but-unavailable
             // outcome (SPEC-IMPL-005).
             let data: Data?
-            if simulatedUnavailableTypeIdentifiers.contains(typeIdentifier) {
+            if failureSimulation.unavailableTypeIdentifiers.contains(typeIdentifier) {
                 data = nil
             } else {
                 payloadReadObserver?(typeIdentifier)
@@ -272,7 +276,7 @@ public struct PasteboardAdapter {
             #if DEBUG
             // The Debug seam rejects staging without touching the observed
             // pasteboard, matching a false item-setter result.
-            let isSimulatedRejection = simulatedRejectedWriteTypeIdentifiers.contains(
+            let isSimulatedRejection = failureSimulation.rejectedWriteTypeIdentifiers.contains(
                 representation.typeIdentifier
             )
             #else
@@ -287,7 +291,7 @@ public struct PasteboardAdapter {
             }
         }
         #if DEBUG
-        let isSimulatedHintRejection = simulatedRejectedWriteTypeIdentifiers.contains(
+        let isSimulatedHintRejection = failureSimulation.rejectedWriteTypeIdentifiers.contains(
             PasteboardLineageHint.typeIdentifier
         )
         #else
@@ -308,7 +312,7 @@ public struct PasteboardAdapter {
 
         pasteboard.clearContents()
         #if DEBUG
-        let itemAccepted = !simulatedItemWriteRejected
+        let itemAccepted = !failureSimulation.rejectCompletedItem
             && pasteboard.writeObjects([item])
         #else
         let itemAccepted = pasteboard.writeObjects([item])
@@ -318,6 +322,27 @@ public struct PasteboardAdapter {
         }
     }
 }
+
+#if DEBUG
+/// Exact AppKit outcomes required by deterministic adapter tests. This type
+/// and its initializer are package-only and absent from Release; they are not
+/// a product capability or a general provider abstraction (REVIEW Card 5D).
+package struct PasteboardFailureSimulation: Sendable {
+    package let unavailableTypeIdentifiers: Set<String>
+    package let rejectedWriteTypeIdentifiers: Set<String>
+    package let rejectCompletedItem: Bool
+
+    package init(
+        unavailableTypeIdentifiers: Set<String> = [],
+        rejectedWriteTypeIdentifiers: Set<String> = [],
+        rejectCompletedItem: Bool = false
+    ) {
+        self.unavailableTypeIdentifiers = unavailableTypeIdentifiers
+        self.rejectedWriteTypeIdentifiers = rejectedWriteTypeIdentifiers
+        self.rejectCompletedItem = rejectCompletedItem
+    }
+}
+#endif
 
 // MARK: - Capture outcome + write failure (audit SPEC-IMPL-005)
 

@@ -347,7 +347,7 @@ package enum DomainRejection: Error, Sendable, Equatable {
 }
 ```
 
-Planners throw only this package vocabulary. `HistoryStorage` maps it exhaustively to the public `HistoryFailure` cases in Part III: `notFound`→`.notFound`, `staleContent`→`.staleContent`, `invalidPinnedPlacement`→`.invalidPinnedPlacement`, `invalidRevisionDraft`→`.invalidInput(.incoherentRevisionDraft)`, `capacityExceeded`→`.capacityExceeded`, and the defensive `corruptLineage`→`.persistence(.invariantViolation)`. A missing revert target is discovered while Storage resolves the caller's Revision ID into prepared content and therefore throws public `.revisionNotFound` directly; no Domain planner accepts an unresolved Revision ID. Persistence corruption and fact-proof availability are normally caught at the Storage fact-loading boundary before planning; `corruptLineage` exists only as the planner's defensive backstop if a validated fact is internally inconsistent (e.g. an active revision ID that names no stored revision). A planner is never invoked with a known-incomplete fact.
+Planners throw only this package vocabulary. `HistoryStorage` maps it exhaustively to the public `HistoryFailure` cases in Part III: `notFound`→`.notFound`, `staleContent`→`.staleContent`, `invalidPinnedPlacement`→`.invalidPinnedPlacement`, `invalidRevisionDraft`→`.invalidInput(.incoherentRevisionDraft)`, `capacityExceeded`→`.capacityExceeded`, and the defensive `corruptLineage`→`.persistence(.invariantViolation)`. A missing revert target is discovered while Storage resolves the caller's Revision ID into prepared content and therefore throws public `.revisionNotFound` directly; no Domain planner accepts an unresolved Revision ID. `invalidRevisionDraft` also covers an injected candidate Revision ID already present in the item's immutable lineage: a planner must never create a duplicate durable ID. Persistence corruption and fact-proof availability are normally caught at the Storage fact-loading boundary before planning; `corruptLineage` exists only as the planner's defensive backstop if a validated fact is internally inconsistent (e.g. an active revision ID that names no stored revision). A planner is never invoked with a known-incomplete fact.
 
 ### 7. Strong semantic mutation plan
 
@@ -551,7 +551,8 @@ Planning order is fixed:
 3. Derive current Effective Content. Storage validates lineage at fact load; if a defensive check here still finds it inconsistent (a missing or duplicated active revision, or a non-empty revision list with a nil active ID per D3), throw `.corruptLineage`.
 4. Revalidate Domain-level invariants on `prepared.proposedContent`: it is normalized, non-empty, and contains only Canonical representation types; otherwise throw `.invalidRevisionDraft`. Storage has already enforced byte, per-representation-count, and per-item revision-count/byte hard limits during preparation (Part V §6.2); the Domain does not re-assert numeric bounds it does not receive.
 5. If proposed and current bytes are equal, return `.unchanged`.
-6. Otherwise append `ContentRevision(candidateRevisionID, createdAt, proposed)` and make it active.
+6. Require `candidateRevisionID` to be absent from the complete existing revision list; otherwise throw `.invalidRevisionDraft`.
+7. Append `ContentRevision(candidateRevisionID, createdAt, proposed)` and make it active.
 
 Before this planner runs, Part V intent preparation has already applied every replace draft decision, resolved Canonical/revision revert targets, rejected missing/duplicated/foreign types, and copied the complete target Effective Content.
 

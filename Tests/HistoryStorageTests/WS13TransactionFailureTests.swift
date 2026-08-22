@@ -3,9 +3,10 @@
 /// but BEFORE either singleton can advance. The failed attempt is inspected
 /// immediately, before any successful write can repair or obscure residue:
 /// every History row, retained-byte projection, position singleton, and
-/// retention-config singleton remains byte/scalar exact; the rejected ID is
-/// absent from both 1:1 tables; and the registered invalidation stream is
-/// empty (docs/05-authority-kernel.md §10–§11).
+/// retention-config singleton remains byte/scalar exact; the public browse
+/// and details reads still return the literal pre-attempt state; the rejected
+/// ID is absent from both 1:1 tables; and the registered invalidation stream
+/// is empty (docs/05-authority-kernel.md §10–§11, §14).
 ///
 /// The package-internal value-typed Signature Index is compared directly
 /// across the failure while the existing forced-collision capture seam also
@@ -26,7 +27,11 @@ struct WS13TransactionFailureTests {
         let storeURL = WSSupport.tempStoreURL("ws13-transaction-failure")
         defer { WSSupport.removeStore(storeURL) }
 
-        let authority = try await WSSupport.makeAuthority(storeURL: storeURL)
+        // Open the production facade once. `@testable` access is used only to
+        // install WS13's one-shot injection on the facade's own Authority;
+        // post-failure user-visible reads cross public `ClipboardHistory`.
+        let history = try await WSSupport.openHistory(storeURL: storeURL)
+        let authority = history.authority
         let preparation = IngestPreparationActor(
             fingerprint: ForcedCollisionFingerprint.digest(of:)
         )
@@ -166,6 +171,69 @@ struct WS13TransactionFailureTests {
         )
         await #expect(throws: HistoryFailure.persistence(.transaction)) {
             try await authority.commitCapture(rejectedBundle)
+        }
+
+        // Public read oracle, before any successful mutation: failure cannot
+        // be hidden merely because the raw rows rolled back. The newest-first
+        // page and both full detail values must still expose exactly the two
+        // literal seeds at position 2, with no rejected candidate visible.
+        let publicPage = try await history.browse(HistoryBrowseRequest(
+            kind: .recent,
+            limit: 10
+        ))
+        #expect(publicPage.position.rawValue == 2)
+        #expect(publicPage.next == nil)
+        #expect(publicPage.rows.count == 2)
+        #expect(publicPage.rows.map(\.item) == [secondReference, firstReference])
+
+        let newestRow = try #require(publicPage.rows.first)
+        #expect(newestRow.title == secondText)
+        #expect(newestRow.typeIdentifiers == ["public.utf8-plain-text"])
+        #expect(newestRow.lastCopiedAt == secondObservedAt)
+        #expect(newestRow.copyCount == 1)
+        #expect(newestRow.lastSource == secondSource)
+        #expect(newestRow.pinnedPosition == nil)
+        #expect(newestRow.search == nil)
+
+        let oldestRow = try #require(publicPage.rows.last)
+        #expect(oldestRow.title == firstText)
+        #expect(oldestRow.typeIdentifiers == ["public.utf8-plain-text"])
+        #expect(oldestRow.lastCopiedAt == firstObservedAt)
+        #expect(oldestRow.copyCount == 1)
+        #expect(oldestRow.lastSource == firstSource)
+        #expect(oldestRow.pinnedPosition == nil)
+        #expect(oldestRow.search == nil)
+
+        let firstDetails = try await history.details(for: firstReference.id)
+        #expect(firstDetails.item == firstReference)
+        #expect(firstDetails.canonical.map(\.typeIdentifier) == ["public.utf8-plain-text"])
+        #expect(firstDetails.canonical.map(\.bytes) == [Data(firstText.utf8)])
+        #expect(firstDetails.effective.map(\.typeIdentifier) == ["public.utf8-plain-text"])
+        #expect(firstDetails.effective.map(\.bytes) == [Data(firstText.utf8)])
+        #expect(firstDetails.revisions.isEmpty)
+        #expect(firstDetails.occurrence.firstCopiedAt == firstObservedAt)
+        #expect(firstDetails.occurrence.lastCopiedAt == firstObservedAt)
+        #expect(firstDetails.occurrence.count == 1)
+        #expect(firstDetails.occurrence.firstSource == firstSource)
+        #expect(firstDetails.occurrence.lastSource == firstSource)
+        #expect(firstDetails.pinnedPosition == nil)
+
+        let secondDetails = try await history.details(for: secondReference.id)
+        #expect(secondDetails.item == secondReference)
+        #expect(secondDetails.canonical.map(\.typeIdentifier) == ["public.utf8-plain-text"])
+        #expect(secondDetails.canonical.map(\.bytes) == [Data(secondText.utf8)])
+        #expect(secondDetails.effective.map(\.typeIdentifier) == ["public.utf8-plain-text"])
+        #expect(secondDetails.effective.map(\.bytes) == [Data(secondText.utf8)])
+        #expect(secondDetails.revisions.isEmpty)
+        #expect(secondDetails.occurrence.firstCopiedAt == secondObservedAt)
+        #expect(secondDetails.occurrence.lastCopiedAt == secondObservedAt)
+        #expect(secondDetails.occurrence.count == 1)
+        #expect(secondDetails.occurrence.firstSource == secondSource)
+        #expect(secondDetails.occurrence.lastSource == secondSource)
+        #expect(secondDetails.pinnedPosition == nil)
+
+        await #expect(throws: HistoryFailure.notFound(rejectedBundle.domain.candidateID)) {
+            try await history.details(for: rejectedBundle.domain.candidateID)
         }
 
         // Immediate rollback oracle: compare every field of all four durable

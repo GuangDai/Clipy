@@ -7,14 +7,14 @@
 /// (persisted non-finite `ageMaxSeconds` never silently reads as
 /// disabled/infinite).
 ///
-/// The shape mirrors `ensurePositionSingleton` (v1 `05` §13 steps 3–4):
-/// the create is one `ModelContext.transaction` whose success is the durable
-/// boundary, a store that cannot be read or written fails as
-/// `.persistence(.openStore)` (§2's startup vocabulary), and zero-duplicate
-/// cardinality violations are `.persistence(.invariantViolation)`. Migration
-/// never creates this row (`V2-02` §3.3 Stage topology / Record 5: data
-/// bootstrap is `open`, not migration) — an absent row is the only
-/// create-with-defaults path.
+/// The create is one `ModelContext.transaction` whose success is the durable
+/// boundary, and a store that cannot be read or written fails as
+/// `.persistence(.openStore)` (§2's startup vocabulary). Startup fetches the
+/// complete singleton table: a wrong/extra key or duplicate row is
+/// `.persistence(.invariantViolation)`, never absence followed by repair.
+/// Migration never creates this row (`V2-02` §3.3 Stage topology / Record 5:
+/// data bootstrap is `open`, not migration), so a genuinely absent row stays
+/// the migration-compatible create-with-defaults path.
 import Foundation
 import HistoryCore
 import SwiftData
@@ -151,17 +151,24 @@ extension HistoryAuthority {
     ///   `revisionPolicyEnabled` with BOTH thresholds nil (the named
     ///   contradiction); any non-nil threshold outside its range.
     ///
-    /// Cardinality mirrors the v1 singleton (`05` §13 step 4): duplicate
-    /// rows are `.persistence(.invariantViolation)`. A store that cannot be
-    /// read or written fails as `.persistence(.openStore)` — §2's startup
-    /// failure vocabulary, which does not include `.transaction`.
+    /// Cardinality mirrors the v1 singleton (`05` §13 step 4): a wrong key,
+    /// extra row, or duplicate rows are `.persistence(.invariantViolation)`.
+    /// A store that cannot be read or written fails as
+    /// `.persistence(.openStore)` — §2's startup failure vocabulary, which
+    /// does not include `.transaction`.
+    ///
+    /// DATA-1 evidence ceiling: after migration completes, the persisted
+    /// shape of a genuine V1 store awaiting this bootstrap is identical to
+    /// an existing V2 store whose config row was deleted. With no durable
+    /// migration provenance in the approved schema, absence alone cannot be
+    /// rejected without also rejecting the required V1 migration path. This
+    /// method therefore permits only that absent shape; it never treats a
+    /// present wrong-key row as absence.
     internal static func ensureRetentionExpansionConfig(
         in context: ModelContext
     ) throws {
         let key = retentionExpansionConfigKey
-        var descriptor = FetchDescriptor<RetentionExpansionConfigRow>(
-            predicate: #Predicate { row in row.key == key }
-        )
+        var descriptor = FetchDescriptor<RetentionExpansionConfigRow>()
         descriptor.fetchLimit = 2
         let rows: [RetentionExpansionConfigRow]
         do {
@@ -194,6 +201,9 @@ extension HistoryAuthority {
                 throw HistoryFailure.persistence(.openStore)
             }
         case 1:
+            guard rows[0].key == key else {
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
             try validateRetentionExpansionConfig(rows[0])
         default:
             // Duplicate singletons (05 §13 step 4 vocabulary): corruption,

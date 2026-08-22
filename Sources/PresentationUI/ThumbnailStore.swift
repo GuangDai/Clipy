@@ -67,16 +67,19 @@ public final class ThumbnailStore {
     /// admission bound (misses contribute zero).
     private var retainedDecodedBytes = 0
 
-    /// References with a fetch currently in flight, stamped by the surface
-    /// purge generation. The stamp makes reset release the key immediately
-    /// without letting a late old completion remove or fill a new flight for
-    /// the same exact reference (deep review Card 9B).
+    /// References with a fetch currently in flight, stamped by a unique
+    /// monotonic request token. Removing a target releases that key
+    /// immediately without letting a late old completion remove or fill a
+    /// newer flight for the same exact reference (deep review Card 9B).
     private var inFlight: [HistoryItemReference: Int] = [:]
 
-    /// Monotone surface-owned purge generation. It is deliberately local to
-    /// this cache rather than a global cache bus: every completion must match
-    /// both this generation and the exact reference's current flight.
-    private var generation = 0
+    /// Monotone surface-owned purge generation. It is local observability for
+    /// destructive invalidation, not a process-wide cache epoch.
+    package private(set) var purgeGeneration = 0
+
+    /// Monotone identity for individual flights. Unlike one global request
+    /// epoch, exact eviction does not invalidate unrelated in-flight rows.
+    private var nextRequestToken = 0
 
     #if DEBUG
     /// Deterministic completion-boundary instrumentation for parked-history
@@ -159,8 +162,9 @@ public final class ThumbnailStore {
     ///   recover, so the reference stays eligible for a later prefetch.
     public func prefetch(_ item: HistoryItemReference) {
         guard entries[item] == nil, inFlight[item] == nil else { return }
-        let requestGeneration = generation
-        inFlight[item] = requestGeneration
+        nextRequestToken += 1
+        let requestToken = nextRequestToken
+        inFlight[item] = requestToken
 
         let history = self.history
         let pixels = self.pixels
@@ -174,7 +178,7 @@ public final class ThumbnailStore {
                 // §SPEC-IMPL-002's Apple-docs check). Nothing cancels these
                 // unstructured tasks. A reset does not rely on cooperative
                 // cancellation: it releases visible bookkeeping immediately,
-                // and the captured generation rejects any late result.
+                // and the request token rejects any late result.
                 let image: CGImage?
                 if let payload {
                     image = await decoder.thumbnailImage(fromPNG: payload.encodedBytes)
@@ -185,14 +189,14 @@ public final class ThumbnailStore {
                 self.store(
                     item: item,
                     image: image,
-                    requestGeneration: requestGeneration
+                    requestToken: requestToken
                 )
             } catch {
                 // Not retained: see `prefetch(_:)`.
                 guard let self else { return }
                 self.finishWithoutEntry(
                     item: item,
-                    requestGeneration: requestGeneration
+                    requestToken: requestToken
                 )
             }
         }
@@ -204,10 +208,34 @@ public final class ThumbnailStore {
     /// request for the same exact reference immediately. A non-cooperative old
     /// history call may still return, but its completion cannot publish.
     public func reset() {
-        generation += 1
+        purgeGeneration += 1
         entries.removeAll()
         retainedDecodedBytes = 0
         inFlight.removeAll()
+    }
+
+    /// Receipt-confirmed precise invalidation used by the owning panel.
+    /// Remove clears all retained/in-flight references for that item; Revise
+    /// clears only the old exact reference; either Clear scope delegates to
+    /// `reset()` because entries intentionally omit pin metadata.
+    package func purge(_ scope: HistorySurfacePurge.Scope) {
+        switch scope {
+        case .all:
+            reset()
+        case .unpinned:
+            // This cache deliberately stores only exact references, not pin
+            // metadata. It is rebuildable derived state, so Clear Unpinned
+            // resets it owner-locally rather than guessing membership.
+            reset()
+        case .item(let id):
+            purgeGeneration += 1
+            removeEntries { $0.id == id }
+            inFlight = inFlight.filter { $0.key.id != id }
+        case .revision(let item, _):
+            purgeGeneration += 1
+            removeEntries { $0 == item }
+            inFlight.removeValue(forKey: item)
+        }
     }
 
     /// Cheap UTI heuristic gating prefetch: true when any of the row's type
@@ -238,9 +266,9 @@ public final class ThumbnailStore {
     private func store(
         item: HistoryItemReference,
         image: CGImage?,
-        requestGeneration: Int
+        requestToken: Int
     ) {
-        guard acceptCompletion(item: item, requestGeneration: requestGeneration) else {
+        guard acceptCompletion(item: item, requestToken: requestToken) else {
             return
         }
         // A same-key overwrite cannot happen (`prefetch` refuses to start
@@ -270,26 +298,25 @@ public final class ThumbnailStore {
     }
 
     /// Finishes a thrown/cancelled request without negative-retaining it.
-    /// An old generation must not remove a newer same-reference flight.
+    /// An old request token must not remove a newer same-reference flight.
     private func finishWithoutEntry(
         item: HistoryItemReference,
-        requestGeneration: Int
+        requestToken: Int
     ) {
-        _ = acceptCompletion(item: item, requestGeneration: requestGeneration)
+        _ = acceptCompletion(item: item, requestToken: requestToken)
     }
 
     /// The single completion fence shared by success, failure and
     /// cancellation paths. Returning true also consumes the current flight.
     private func acceptCompletion(
         item: HistoryItemReference,
-        requestGeneration: Int
+        requestToken: Int
     ) -> Bool {
         #if DEBUG
         debugFetchCompletionCount += 1
         #endif
         guard
-            generation == requestGeneration,
-            inFlight[item] == requestGeneration
+            inFlight[item] == requestToken
         else {
             #if DEBUG
             debugDiscardedFetchCompletionCount += 1
@@ -298,5 +325,19 @@ public final class ThumbnailStore {
         }
         inFlight.removeValue(forKey: item)
         return true
+    }
+
+    /// Removes matching retained entries while keeping the decoded-byte
+    /// ledger exact. Flights are handled separately because they retain no
+    /// decoded pixels.
+    private func removeEntries(
+        where shouldRemove: (HistoryItemReference) -> Bool
+    ) {
+        let removedKeys = entries.keys.filter(shouldRemove)
+        for key in removedKeys {
+            if case .hit(_, let cost) = entries.removeValue(forKey: key) {
+                retainedDecodedBytes -= cost
+            }
+        }
     }
 }

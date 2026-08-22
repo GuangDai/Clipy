@@ -18,10 +18,12 @@
 /// GENERAL pasteboard; the suite substitutes a PRIVATE pasteboard while
 /// retaining the real composition owner and orchestration sequence.
 ///
-/// SPEC-IMPL-005 coverage: the write-failure test drives the same wiring
-/// through the adapter's deterministic Debug seam and proves the
-/// panel-close hook runs only after a VERIFIED full write — a refused
-/// write surfaces `PasteboardWriteFailure` and leaves the panel open.
+/// SPEC-IMPL-005 coverage: the write-failure tests drive the same wiring
+/// through the app owner's Debug-only typed writer-result seam and prove the
+/// panel-close hook runs only after a VERIFIED full write. The adapter suite
+/// separately proves its concrete staging/post-clear sequence under the
+/// package-only AppKit-result fixture; no adapter failure switch is exposed
+/// to this external package client.
 import AppKit
 import Foundation
 import HistoryCore
@@ -304,8 +306,9 @@ struct AppPasteOrchestrationTests {
     /// REVIEW Card 7 / SPEC-IMPL-005: refusal of the staged item at the
     /// pasteboard ownership boundary is a visible write failure, never a
     /// successful copy. The real composition must keep the panel open and
-    /// must not leave the requested bytes on the board after the rejected
-    /// whole-item commit.
+    /// must not report the typed writer result as success. The adapter-owner
+    /// suite separately proves that a real post-clear rejection leaves an
+    /// empty board; this composition seam does not simulate AppKit effects.
     @Test @MainActor
     func wholeItemWriteRefusalSurfacesFailureWithoutClosing() async throws {
         try ComposedSupport.requireUsablePasteboard()
@@ -322,11 +325,11 @@ struct AppPasteOrchestrationTests {
 
         let pasteboard = ComposedSupport.makePasteboard()
         ComposedSupport.setPasteboardContents("previous owner", on: pasteboard)
-        var adapter = PasteboardAdapter(pasteboard: pasteboard)
-        adapter.simulatedItemWriteRejected = true
+        let adapter = PasteboardAdapter(pasteboard: pasteboard)
         let composition = AppComposition.makeForTesting(
             history: history,
-            adapter: adapter
+            adapter: adapter,
+            pasteWriteFailure: .itemRejected
         )
         var completionCount = 0
         var failures: [ClipyPasteFailure] = []
@@ -341,33 +344,32 @@ struct AppPasteOrchestrationTests {
         #expect(failures == [.write(.itemRejected)])
         #expect(completionCount == 0, "a rejected item must not close the panel")
         #expect(
-            pasteboard.pasteboardItems?.isEmpty ?? true,
-            "the rejected item must not be reported by pasteboard contents as copied"
+            pasteboard.string(forType: .string) == "previous owner",
+            "the typed result seam itself does not counterfeit an AppKit side effect"
         )
     }
 
-    /// SPEC-IMPL-005 + 01 §5.6: a paste whose write is REFUSED (the
-    /// adapter's deterministic seam injects the `setData`-false outcome
-    /// Apple documents as an ownership change) surfaces the typed
-    /// `PasteboardWriteFailure` and does NOT run the completion hook — the
-    /// panel stays open rather than closing over a partial paste. A second
-    /// explicit request is admitted after failure, proving the lane releases
-    /// its exclusive slot for retry instead of wedging.
+    /// SPEC-IMPL-005 + 01 §5.6: when the app-owned writer-result boundary
+    /// returns the same typed staging refusal proven by the adapter suite,
+    /// the composition does NOT run the completion hook — the panel stays
+    /// open rather than closing over a partial paste. A second explicit
+    /// request is admitted after failure, proving the lane releases its
+    /// exclusive slot for retry instead of wedging.
     @Test @MainActor
     func pasteWriteFailureSkipsTheCompletionHookUntilAVerifiedFullWrite() async throws {
         try ComposedSupport.requireUsablePasteboard()
         let history = try await ComposedSupport.openMemoryHistory()
 
-        // Production composition with the pasteboard substituted and the
-        // adapter's Debug-only refusal seam configured before construction.
+        // Production composition with the pasteboard substituted and one
+        // sanitized app-owned writer result fixed before construction.
         let pasteboard = ComposedSupport.makePasteboard()
-        var adapter = PasteboardAdapter(pasteboard: pasteboard)
-        adapter.simulatedRejectedWriteTypeIdentifiers = [
-            ComposedSupport.plainTextTypeIdentifier
-        ]
+        let adapter = PasteboardAdapter(pasteboard: pasteboard)
         let composition = AppComposition.makeForTesting(
             history: history,
-            adapter: adapter
+            adapter: adapter,
+            pasteWriteFailure: .representationsRejected(
+                typeIdentifiers: [ComposedSupport.plainTextTypeIdentifier]
+            )
         )
         let viewState = composition.viewState
         defer { composition.stop() }
@@ -414,7 +416,9 @@ struct AppPasteOrchestrationTests {
             completionCount == 0,
             "01 §5.6/SPEC-IMPL-005: no panel close over a failed copy"
         )
-        // Staging happened on an unbound item, before clear/writeObjects.
+        // The app seam reports the adapter's typed staging outcome without
+        // performing a counterfeit AppKit write. The adapter suite owns the
+        // concrete unbound-item/changeCount proof.
         #expect(pasteboard.changeCount == changeCountBeforeFailure)
         #expect(
             pasteboard.pasteboardItems?.isEmpty ?? true,
@@ -423,7 +427,8 @@ struct AppPasteOrchestrationTests {
 
         // Phase 2 — failure released the exclusive slot, so an explicit
         // retry is admitted. This immutable adapter is still configured to
-        // refuse; a second visible failure proves the lane did not wedge.
+        // return the same fixed result; a second visible failure proves the
+        // lane did not wedge.
         viewState.requestPaste(inserted)
         let retryFailed = await ComposedSupport.waitFor {
             failures.count == 2

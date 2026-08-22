@@ -64,6 +64,76 @@ package struct PreviewSelectionResolution: Equatable {
     }
 }
 
+/// State owned by one hosted panel surface and purged only after
+/// `HistoryViewState` publishes a receipt-confirmed destructive/effective
+/// commit (review Card 9B). Keeping the coordination beside the panel avoids
+/// a global cache bus: navigation, selection, preview, and thumbnail storage
+/// all have the same lifetime and one monotonic applied generation.
+@MainActor @Observable
+package final class HistoryPanelSurfaceState {
+    package var detailsPath: [HistoryItemReference] = []
+    package var selection: HistoryItemID?
+    package let thumbnails: ThumbnailStore
+    package private(set) var appliedPurgeGeneration = 0
+    package private(set) var detailsPurgeGeneration = 0
+
+    private let previewState: PreviewPaneState
+
+    package init(
+        history: any ClipboardHistory,
+        previewState: PreviewPaneState,
+        baselinePurgeGeneration: Int = 0
+    ) {
+        self.previewState = previewState
+        thumbnails = ThumbnailStore(history: history)
+        appliedPurgeGeneration = baselinePurgeGeneration
+    }
+
+    /// Applies each monotonic purge at most once. Clear All removes all local
+    /// state; Clear Unpinned also retires rebuildable derived navigation state
+    /// because pre-receipt pin state is not authoritative. Remove scopes to
+    /// one item; Revise scopes to the old exact reference.
+    package func apply(_ purge: HistorySurfacePurge) {
+        guard purge.generation > appliedPurgeGeneration else { return }
+        let expectedGeneration = appliedPurgeGeneration + 1
+        appliedPurgeGeneration = purge.generation
+
+        // SwiftUI observation is latest-value delivery, not an event queue.
+        // If two receipts coalesce before one render, an exact purge was
+        // skipped; reset this one surface so sensitive state from that commit
+        // cannot survive (review Card 9B). The common consecutive path stays
+        // precise.
+        let scope: HistorySurfacePurge.Scope =
+            purge.generation == expectedGeneration ? purge.scope : .all
+
+        switch scope {
+        case .all:
+            detailsPurgeGeneration += 1
+            detailsPath.removeAll()
+            selection = nil
+        case .unpinned:
+            detailsPurgeGeneration += 1
+            detailsPath.removeAll()
+            selection = nil
+        case .item(let id):
+            if detailsPath.contains(where: { $0.id == id }) {
+                detailsPurgeGeneration += 1
+            }
+            detailsPath.removeAll { $0.id == id }
+            if selection == id {
+                selection = nil
+            }
+        case .revision(let old, _):
+            if detailsPath.contains(old) {
+                detailsPurgeGeneration += 1
+            }
+            detailsPath.removeAll { $0 == old }
+        }
+        previewState.purge(scope)
+        thumbnails.purge(scope)
+    }
+}
+
 /// The composition point ClipyApp hosts inside its floating panel window.
 /// Owns the reference-exact `ThumbnailStore` (created from
 /// `viewState.history`; 01 §5.7), the hoisted list selection, and the
@@ -84,9 +154,7 @@ public struct HistoryPanelView: View {
     private let onRequestClose: () -> Void
     private let onPreviewVisibilityChange: ((Bool) -> Void)?
 
-    @State private var thumbnails: ThumbnailStore
-    @State private var detailsPath: [HistoryItemReference] = []
-    @State private var selection: HistoryItemID?
+    @State private var surfaceState: HistoryPanelSurfaceState
     @State private var dismissedFailureEpisode: Int?
     @State private var pendingClear: ClearScope?
     @FocusState private var isSearchFieldFocused: Bool
@@ -110,7 +178,13 @@ public struct HistoryPanelView: View {
         self.onQuit = onQuit
         self.onRequestClose = onRequestClose
         self.onPreviewVisibilityChange = onPreviewVisibilityChange
-        _thumbnails = State(initialValue: ThumbnailStore(history: viewState.history))
+        _surfaceState = State(
+            initialValue: HistoryPanelSurfaceState(
+                history: viewState.history,
+                previewState: previewState,
+                baselinePurgeGeneration: viewState.surfacePurge?.generation ?? 0
+            )
+        )
     }
 
     public var body: some View {
@@ -133,7 +207,7 @@ public struct HistoryPanelView: View {
         .background { hiddenShortcuts }
         .task { viewState.activate() }
         .onDisappear { viewState.deactivate() }
-        .onChange(of: selection) { _, newSelection in
+        .onChange(of: surfaceState.selection) { _, newSelection in
             previewState.handleSelectionChange(
                 PreviewSelectionResolution.resolve(
                     selectedID: newSelection,
@@ -145,7 +219,7 @@ public struct HistoryPanelView: View {
         // while the ID-only list selection stays fixed (Card 9A).
         .onChange(of: previewSelection.reference) { _, reference in
             guard let reference else {
-                selection = nil
+                surfaceState.selection = nil
                 previewState.handleSelectionChange(nil)
                 return
             }
@@ -167,6 +241,10 @@ public struct HistoryPanelView: View {
         .onChange(of: previewState.isOpen) { _, isOpen in
             onPreviewVisibilityChange?(isOpen)
         }
+        .onChange(of: viewState.surfacePurge, initial: true) { _, purge in
+            guard let purge else { return }
+            surfaceState.apply(purge)
+        }
         .confirmationDialog(
             clearConfirmationTitle,
             isPresented: clearConfirmationPresented,
@@ -186,6 +264,7 @@ public struct HistoryPanelView: View {
             previewState: previewState,
             selection: previewSelection
         )
+        .id(previewState.purgeGeneration)
         .frame(width: PanelGeometry.previewWidth)
         // Opacity-only fade (Maccy's lesson: animating the WIDTH forces an
         // NSHostingView re-layout per frame; compositing a fade does not).
@@ -204,18 +283,19 @@ public struct HistoryPanelView: View {
             .padding(.top, 10)
             .padding(.bottom, 6)
 
-            NavigationStack(path: $detailsPath) {
+            NavigationStack(path: $surfaceState.detailsPath) {
                 HistoryListView(
                     viewState: viewState,
-                    thumbnails: thumbnails,
+                    thumbnails: surfaceState.thumbnails,
                     isSearchFieldFocused: isSearchFieldFocused,
-                    selection: $selection,
-                    onShowDetails: { item in detailsPath.append(item) }
+                    selection: $surfaceState.selection,
+                    onShowDetails: { item in surfaceState.detailsPath.append(item) }
                 )
                 .navigationDestination(for: HistoryItemReference.self) { item in
                     HistoryDetailsView(viewState: viewState, item: item)
                 }
             }
+            .id(surfaceState.detailsPurgeGeneration)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             failureBanner
@@ -228,7 +308,7 @@ public struct HistoryPanelView: View {
     /// reference, making authoritative row replacement part of the change key.
     private var previewSelection: PreviewSelectionResolution {
         PreviewSelectionResolution.resolve(
-            selectedID: selection,
+            selectedID: surfaceState.selection,
             rows: viewState.rows
         )
     }
@@ -355,8 +435,10 @@ public struct HistoryPanelView: View {
     private var clearConfirmationActions: some View {
         if let scope = pendingClear {
             Button("Clear", role: .destructive) {
-                viewState.clear(scope)
                 pendingClear = nil
+                Task {
+                    _ = try? await viewState.clearAwaitingReceipt(scope)
+                }
             }
         }
         Button("Cancel", role: .cancel) {

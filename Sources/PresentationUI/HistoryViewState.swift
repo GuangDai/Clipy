@@ -13,6 +13,31 @@ import Foundation
 import HistoryCore
 import SwiftUI
 
+/// One receipt-confirmed invalidation for state owned by a single panel
+/// surface (deep review Card 9B). This is package-only UI vocabulary, not a
+/// second History event stream: authoritative rows still arrive exclusively
+/// through `observe`; the signal only drops derived presentation state which
+/// must not survive a destructive/effective-content commit.
+package struct HistorySurfacePurge: Equatable {
+    package enum Scope: Equatable {
+        case all
+        case unpinned
+        case item(HistoryItemID)
+        case revision(
+            old: HistoryItemReference,
+            new: HistoryItemReference
+        )
+    }
+
+    package let generation: Int
+    package let scope: Scope
+
+    package init(generation: Int, scope: Scope) {
+        self.generation = generation
+        self.scope = scope
+    }
+}
+
 /// View state over HistoryCore DTOs — the ONLY state holder for the browsing
 /// panel (docs/01-architecture.md §6; roadmap 05).
 ///
@@ -55,6 +80,11 @@ public final class HistoryViewState {
     /// The latest typed failure to surface in the panel banner; `nil` when
     /// its owning operation has recovered.
     public private(set) var failure: HistoryFailure?
+
+    /// Latest receipt-confirmed presentation purge. The generation makes two
+    /// identical mutations separately observable by SwiftUI and fences late
+    /// local completions without introducing a process-wide cache bus.
+    package private(set) var surfacePurge: HistorySurfacePurge?
 
     /// Monotonic identity of a published failure. Unlike `HistoryFailure`
     /// equality, this distinguishes two occurrences of the same typed value
@@ -302,9 +332,25 @@ public final class HistoryViewState {
         perform(.placePinned(id, at: placement))
     }
 
+    /// Awaitable Pin seam for a details action whose readback must follow the
+    /// mutation receipt rather than race the fire-and-forget task.
+    package func pinAwaitingReceipt(
+        _ id: HistoryItemID,
+        at placement: PinnedPlacement = .first
+    ) async throws -> HistoryReceipt {
+        try await performAwaitingReceipt(.placePinned(id, at: placement))
+    }
+
     /// Unpins; typed failures land in `failure`.
     public func unpin(_ id: HistoryItemID) {
         perform(.unpin(id))
+    }
+
+    /// Awaitable Unpin seam paired with `pinAwaitingReceipt` for details.
+    package func unpinAwaitingReceipt(
+        _ id: HistoryItemID
+    ) async throws -> HistoryReceipt {
+        try await performAwaitingReceipt(.unpin(id))
     }
 
     /// Removes one item; typed failures land in `failure`.
@@ -312,9 +358,25 @@ public final class HistoryViewState {
         perform(.remove(id))
     }
 
+    /// Awaitable Remove seam for a user intent that must sequence its next
+    /// read/transition after the real receipt (review UI-2/Card 9B).
+    package func removeAwaitingReceipt(
+        _ id: HistoryItemID
+    ) async throws -> HistoryReceipt {
+        try await performAwaitingReceipt(.remove(id))
+    }
+
     /// Removes a whole class of items; typed failures land in `failure`.
     public func clear(_ scope: ClearScope) {
         perform(.clear(scope))
+    }
+
+    /// Awaitable Clear seam used by the panel confirmation. Receipt-driven
+    /// purge publication remains inside this view state.
+    package func clearAwaitingReceipt(
+        _ scope: ClearScope
+    ) async throws -> HistoryReceipt {
+        try await performAwaitingReceipt(.clear(scope))
     }
 
     // MARK: - Thin async passthroughs (callers own presentation)
@@ -326,7 +388,10 @@ public final class HistoryViewState {
 
     /// Appends an immutable content revision (docs/03a-instruction-set.md §5).
     public func revise(_ request: RevisionRequest) async throws -> HistoryReceipt {
-        try await history.perform(.revise(request))
+        let action = HistoryAction.revise(request)
+        let receipt = try await history.perform(action)
+        publishSurfacePurge(for: action, receipt: receipt)
+        return receipt
     }
 
     /// Applies the v1 count-dimension retention cap.
@@ -458,22 +523,107 @@ public final class HistoryViewState {
     }
 
     /// Forwards one mutating History Action; a typed failure is stored into
-    /// `failure` rather than thrown — the observation loop refreshes rows
-    /// after every commit, so no manual row surgery follows a mutation.
+    /// `failure` rather than thrown. Receipt-confirmed destructive mutations
+    /// retire affected rows synchronously; observation remains the only path
+    /// which can repopulate authoritative rows.
     private func perform(_ action: HistoryAction) {
-        let history = self.history
         Task { [weak self] in
             guard let self else { return }
             do {
-                _ = try await history.perform(action)
-                self.clearFailure(from: .mutation)
-            } catch let failure as HistoryFailure {
-                self.publishFailure(failure, from: .mutation)
+                _ = try await self.performAwaitingReceipt(action)
             } catch {
-                // perform throws typed HistoryFailure at the storage
-                // boundary (docs/03a-instruction-set.md §3).
+                // The awaitable helper already published a typed failure.
+                // Untyped failures have no panel vocabulary (03a §3).
             }
         }
+    }
+
+    /// The shared receipt boundary for fire-and-forget list actions and
+    /// explicitly sequenced details/panel actions.
+    private func performAwaitingReceipt(
+        _ action: HistoryAction
+    ) async throws -> HistoryReceipt {
+        do {
+            let receipt = try await history.perform(action)
+            publishSurfacePurge(for: action, receipt: receipt)
+            clearFailure(from: .mutation)
+            return receipt
+        } catch let failure as HistoryFailure {
+            publishFailure(failure, from: .mutation)
+            throw failure
+        }
+    }
+
+    /// Converts only a matching, effective commit into local purge work.
+    /// `.unchanged`, zero-count outcomes, metadata mutations, and failures do
+    /// not discard presentation state (03a §6; review Card 9B).
+    private func publishSurfacePurge(
+        for action: HistoryAction,
+        receipt: HistoryReceipt
+    ) {
+        guard case .committed(let commit) = receipt else { return }
+
+        let scope: HistorySurfacePurge.Scope?
+        switch (action, commit.outcome) {
+        case (.clear(.all), .cleared(let count)) where count > 0:
+            scope = .all
+        case (.clear(.unpinned), .cleared(let count)) where count > 0:
+            scope = .unpinned
+        case (.remove(let id), .removed(let count)) where count > 0:
+            scope = .item(id)
+        case (.revise(let request), .revised(let newReference)):
+            scope = .revision(
+                old: HistoryItemReference(
+                    id: request.itemID,
+                    contentVersion: request.expected
+                ),
+                new: newReference
+            )
+        default:
+            scope = nil
+        }
+
+        guard let scope else { return }
+        if scope != .unpinned {
+            applyReceiptConfirmedRowPurge(scope)
+        }
+        let generation = (surfacePurge?.generation ?? 0) + 1
+        surfacePurge = HistorySurfacePurge(
+            generation: generation,
+            scope: scope
+        )
+        if scope == .unpinned {
+            // Pin state in the held page may trail a just-committed Unpin.
+            // Clear every executable row and restart this exact query; only
+            // the post-receipt authoritative snapshot may repopulate it.
+            replaceObservationImmediately()
+        }
+    }
+
+    /// Retires executable list state for precise destructive scopes. Clear
+    /// Unpinned instead uses the full observation restart above because held
+    /// pin metadata cannot classify its members authoritatively.
+    private func applyReceiptConfirmedRowPurge(
+        _ scope: HistorySurfacePurge.Scope
+    ) {
+        invalidatePagination()
+        observationGeneration += 1
+        nextPageCursor = nil
+        observedCursor = nil
+
+        switch scope {
+        case .all:
+            rows = []
+        case .unpinned:
+            // Handled by the full observation restart in
+            // `publishSurfacePurge`.
+            break
+        case .item(let id):
+            rows.removeAll { $0.item.id == id }
+        case .revision(let old, _):
+            rows.removeAll { $0.item == old }
+        }
+        observedRows = rows
     }
 
     /// Publishes one concrete failure occurrence. Equality is deliberately

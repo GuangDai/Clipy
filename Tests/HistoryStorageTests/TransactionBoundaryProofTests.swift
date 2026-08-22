@@ -7,13 +7,13 @@
 /// failure maps to `.persistence(.transaction)`); WS13 durable half:
 /// docs/06-cross-cutting.md §8.
 ///
-/// Storage-side proof, not a public-facade path: the one-shot
-/// transaction-failure seam (`setTransactionFailureInjection` /
+/// The one-shot transaction-failure seam
+/// (`setTransactionFailureInjection` /
 /// `InjectedTransactionFailure.beforeSingletonUpdate`) is an @testable-only
-/// knob on `HistoryAuthority`, so these tests drive a direct Authority plus
-/// the real `IngestPreparationActor` (see `WSSupport.makeAuthority`). All
-/// durable-state assertions run on an INDEPENDENT fresh `ModelContainer`
-/// over the same on-disk store: the Authority's operation-local contexts
+/// knob on `HistoryAuthority`. The failure test opens the production facade
+/// and arms its own Authority, then proves rollback both through public
+/// `browse` / `details` and through an INDEPENDENT fresh `ModelContainer`
+/// over the same on-disk store. The Authority's operation-local contexts
 /// have autosave disabled and the kernel calls no
 /// `save()`/`processPendingChanges()`/`rollback()` (§10), so anything a
 /// fresh container sees was committed by the transaction closure itself.
@@ -88,7 +88,11 @@ struct TransactionBoundaryProofTests {
         let url = WSSupport.tempStoreURL("tx-boundary-failure")
         defer { WSSupport.removeStore(url) }
 
-        let authority = try await WSSupport.makeAuthority(storeURL: url)
+        // The real facade owns the injected Authority. Only injection/setup
+        // crosses @testable; the post-failure behavior proof uses its public
+        // ClipboardHistory read methods.
+        let history = try await WSSupport.openHistory(storeURL: url)
+        let authority = history.authority
         let preparation = IngestPreparationActor()
 
         // Pre-attempt durable state: one committed item, position 1.
@@ -165,6 +169,50 @@ struct TransactionBoundaryProofTests {
         // `.persistence(.transaction)` (WS13).
         await #expect(throws: HistoryFailure.persistence(.transaction)) {
             try await authority.commitCapture(rejectedBundle)
+        }
+
+        // Public boundary proof immediately after the throw and before any
+        // successful mutation: the rejected row is absent, the position is
+        // still 1, and the seed's literal projections and content are intact.
+        let publicPage = try await history.browse(HistoryBrowseRequest(
+            kind: .recent,
+            limit: 10
+        ))
+        #expect(publicPage.position.rawValue == 1)
+        #expect(publicPage.next == nil)
+        #expect(publicPage.rows.count == 1)
+        let publicRow = try #require(publicPage.rows.first)
+        #expect(publicRow.item == firstReference)
+        #expect(publicRow.title == firstText)
+        #expect(publicRow.typeIdentifiers == ["public.utf8-plain-text"])
+        #expect(publicRow.lastCopiedAt == Date(timeIntervalSinceReferenceDate: 2_000))
+        #expect(publicRow.copyCount == 1)
+        #expect(publicRow.lastSource == nil)
+        #expect(publicRow.pinnedPosition == nil)
+        #expect(publicRow.search == nil)
+
+        let publicDetails = try await history.details(for: firstReference.id)
+        #expect(publicDetails.item == firstReference)
+        #expect(publicDetails.canonical.map(\.typeIdentifier) == ["public.utf8-plain-text"])
+        #expect(publicDetails.canonical.map(\.bytes) == [Data(firstText.utf8)])
+        #expect(publicDetails.effective.map(\.typeIdentifier) == ["public.utf8-plain-text"])
+        #expect(publicDetails.effective.map(\.bytes) == [Data(firstText.utf8)])
+        #expect(publicDetails.revisions.isEmpty)
+        #expect(
+            publicDetails.occurrence.firstCopiedAt
+                == Date(timeIntervalSinceReferenceDate: 2_000)
+        )
+        #expect(
+            publicDetails.occurrence.lastCopiedAt
+                == Date(timeIntervalSinceReferenceDate: 2_000)
+        )
+        #expect(publicDetails.occurrence.count == 1)
+        #expect(publicDetails.occurrence.firstSource == nil)
+        #expect(publicDetails.occurrence.lastSource == nil)
+        #expect(publicDetails.pinnedPosition == nil)
+
+        await #expect(throws: HistoryFailure.notFound(rejectedBundle.domain.candidateID)) {
+            try await history.details(for: rejectedBundle.domain.candidateID)
         }
 
         // §7 item 1 immediate proof: every column of HistoryItemRow and its

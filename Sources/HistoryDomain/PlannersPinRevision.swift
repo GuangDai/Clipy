@@ -199,12 +199,12 @@ package func planClear(
 /// 3. Current Effective Content is derived; inconsistent lineage is corrupt.
 /// 4. The proposed content is revalidated against Domain-level invariants.
 /// 5. Byte-identical proposed content is a no-op.
-/// 6. Otherwise the new revision is appended and made active.
+/// 6. Otherwise require a new candidate Revision ID, append, and make it active.
 ///
 /// - Throws: `DomainRejection.staleContent(expected:current:)` on an OCC
 ///   mismatch, `.invalidRevisionDraft` on a base-version mismatch or
-///   un-normalized/foreign-typed proposed content, and `.corruptLineage` as
-///   the defensive backstop for inconsistent lineage (§6).
+///   invalid prepared content/duplicate candidate ID, and `.corruptLineage`
+///   as the defensive backstop for inconsistent lineage (§6).
 package func planRevision(
     request: RevisionRequest,
     prepared: PreparedRevision,
@@ -251,6 +251,12 @@ package func planRevision(
     // equality.
     guard prepared.proposedContent != current else {
         return .unchanged
+    }
+
+    // §2.5 rule 2: a successful append must add one new lineage identity.
+    // A duplicate candidate is invalid preparation, not corrupt stored state.
+    guard !item.revisions.contains(where: { $0.id == prepared.candidateRevisionID }) else {
+        throw DomainRejection.invalidRevisionDraft
     }
 
     // §11 step 6 (§2.5 rule 6, D4): append the complete immutable revision

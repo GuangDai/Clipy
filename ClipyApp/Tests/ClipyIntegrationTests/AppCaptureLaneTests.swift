@@ -294,23 +294,24 @@ struct AppCaptureLaneTests {
     }
 
 #if DEBUG
-    /// Even when every provider payload is unavailable, the adapter delivers
-    /// an explicit empty partial rather than nil. The raw UTI remains at that
-    /// boundary; app health receives one content-free category and never
-    /// submits an empty or incomplete capture.
+    /// The composition maps the adapter owner's declared-content-unavailable
+    /// result to one content-free category and never submits the triggering
+    /// observation. The adapter suite separately proves that an actual
+    /// all-unavailable provider yields the explicit empty partial; this hosted
+    /// test does not need access to that package-only AppKit fixture.
     @Test @MainActor
-    func allUnavailableRepresentationsPublishContentFreeFailure() async throws {
+    func declaredContentUnavailableDispositionPublishesContentFreeFailure() async throws {
         let history = try await ComposedSupport.openMemoryHistory()
         let pasteboard = ComposedSupport.makePasteboard()
         pasteboard.clearContents()
         let unavailableType = NSPasteboard.PasteboardType("private.fixture.html")
         pasteboard.setData(Data("<b>rich</b>".utf8), forType: unavailableType)
-        var adapter = PasteboardAdapter(pasteboard: pasteboard)
-        adapter.simulatedUnavailableTypeIdentifiers = [unavailableType.rawValue]
+        let adapter = PasteboardAdapter(pasteboard: pasteboard)
 
         let composition = AppComposition.makeForTesting(
             history: history,
-            adapter: adapter
+            adapter: adapter,
+            initialCaptureFailure: .declaredContentUnavailable
         )
         let appDelegate = AppDelegate()
         appDelegate.installCompositionForTesting(composition)
