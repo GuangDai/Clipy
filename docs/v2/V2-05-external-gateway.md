@@ -1,13 +1,15 @@
 # V2-05 - External Gateway & Audit (X1 ExternalGateway + X2 Operation Record auditing)
 
-> **Status (2026-08-22):** X.1 closed vocabulary and X.2 public contract are
-> followed by **X.3 schema/bootstrap, the current implementation leaf**. X.3 is
+> **Status (2026-08-22):** X.1 closed vocabulary, X.2 public contract, and X.3
+> schema/bootstrap are landed. **X.4 audit/admin is the current implementation
+> leaf; its spec-first codec gate is resolved by the closed tables in §4.4.** X.3 is
 > persistence-only: it adds immutable `HistorySchemaV3`, the four Gateway/Audit
 > models, fixed `ExternalLimits`, and startup bootstrap/validation. It does
 > **not** implement `OperationPayloadBlobV1`, any operation-literal codec case,
 > `ExternalGateway`, a facade/factory, registry/admin behavior, App Intents,
-> CLI, or transport. The complete audit codec moves to X.4 so its admin cases
-> land atomically with the behavior they encode. This
+> CLI, or transport. X.4 now has a complete audit-codec contract; its codec,
+> public operation-kind additions, and matching audit/admin behavior must land
+> together. This
 > doc extends the v1 specification (`00`–`06`) by **addition only**.
 > v1 owns v1 behavior (single in-app writer, no external access, no audit); V2-05
 > owns the single external trust boundary (`ExternalGateway`), the
@@ -19,9 +21,8 @@
 > `HistoryFailure` enum is **untouched** (V2-05 introduces a sibling
 > `ExternalFailure`, §7.3, exactly as V2-03 introduced `ReconnectFailure`).
 > `HistoryAction` is **untouched** (admin and external operations live on distinct
-> "concern" protocols, §7.2/§7.1). The X.1/X.2 contract leaves are landed with
-> their recorded contract-only ceilings; X.3 remains current unmerged work.
-> The aggregate Gateway/product behavior is not shipped by those leaves.
+> "concern" protocols, §7.2/§7.1). The aggregate Gateway/product behavior is
+> not shipped by X.1–X.3 or by the X.4 spec decision alone.
 
 ## 0. 2026-08-22 Local Automation controlling amendment
 
@@ -161,11 +162,13 @@ X1 (`V2-00` §3) and X2 (`V2-00` §3) bundle onto one substrate:
    `ModelContext.transaction` closure — the history mutation for writes, the
    admin-state mutation (ConnectionRow/GrantRow insert or status flip) for admin
    ops (like V2-03's HCR append — crash-consistent: closure failure commits
-   neither). noOp/denied/failed writes and reads produce **at most one** record
-   in a separate best-effort small transaction (D34 at-most-one: a crash between
-   the decision/read returning and that audit transaction committing can drop
-   the one record without affecting correctness; there is no mutation to share a
-   save boundary with). The audit log is append-only by API (D36 sole exception:
+   neither). Reads first compute an immutable result/failure, then must commit
+   exactly one audit record in a separate Authority transaction **before** the
+   DTO/content or typed read failure is released to the caller; audit failure
+   fails the read closed and publishes no payload. Every admitted noOp, denied,
+   or failed write/admin attempt likewise awaits its separate audit append
+   before returning or throwing. Thus every completed admitted API attempt has
+   exactly one durable record; only its transaction placement differs. The audit log is append-only by API (D36 sole exception:
    compaction). Its executable integrity checks are typed payload decoding, a
    monotone contiguous `auditSequence`, and an explicit compaction floor. These
    detect malformed payloads and incoherent sequence state; they do not provide
@@ -314,17 +317,18 @@ External caller (App Intent perform() / Siri / Shortcuts / Spotlight)
        0. RATE-LIMIT (§8, X-SECURITY-3): on the ExternalGateway ACTOR (NOT inside
           the Authority interval — the bucket is process-wide in-memory state),
           debit the process-wide App-Intents token bucket; if exhausted, audit-
-          as-denied (appendDenialAuditRecord, at-most-one small transaction) and
-          throw ExternalFailure.requestDenied(.rateLimited) BEFORE step 1. Runs
+          as-denied and throw ExternalFailure.requestDenied(.rateLimited)
+          BEFORE step 1. The denial is thrown only after its audit commit;
+          append failure becomes persistence failure. Runs
           ahead of VALIDATE so a rate-exceeding caller never reaches the
           Authority's request-evaluation path; the denial record itself is
           appended via `Authority.appendDenialAuditRecord`, carrying
           operationKind/capability derived from the typed request case
           (never raw 0 — §4.3 decode is fail-closed).
-          Consecutive .rateLimited denials within one refill window are
-          audited as ONE coalesced record (resultSummary carries the
-          denied-request count); the first denial of each window is always
-          audited; denial audits never debit the bucket.
+          Every admitted rate-limited call appends its own immutable denied
+          record before returning the denial; denial audits never debit the
+          bucket. Unauthenticated framing garbage is not an admitted Gateway
+          call and produces no durable audit record.
        1. VALIDATE the request (D35): parameters within V2 bounds, requested
           HistoryItemIDs well-formed; reject malformed input as
           ExternalFailure.requestDenied before any history read.
@@ -357,11 +361,13 @@ External caller (App Intent perform() / Siri / Shortcuts / Spotlight)
           succeeded writes exactly-one, in-commit, atomic with the history
           mutation; admin ops exactly-one, atomic with the admin-state mutation
           (ConnectionRow/GrantRow insert or status flip) in the same transaction;
-          noOp/denied/failed writes and all reads at-most-one, in a separate
-          best-effort small transaction (a crash can drop these — no mutation to
-          be atomic with). The pre-check denial at step 2 is itself audited as
-          denied in one such small transaction. Outcome succeeded/failed/noOp/
-          denied.
+          all reads commit exactly-one in a separate transaction before their
+          result/failure is released; an audit-append failure replaces the read
+          outcome with a persistence failure and releases no DTO/content.
+          noOp/denied/failed writes also await a separate append before their
+          response/failure is released. The pre-check denial at step 2 is
+          audited before its typed denial is thrown. Outcome
+          succeeded/failed/noOp/denied.
   -> ExternalResponse / ExternalReadResult (Sendable HistoryCore DTOs only)
 ```
 
@@ -667,12 +673,15 @@ unless `failureKindRaw == requestDenied`; on read it decodes to
 not lost. (The discriminator is a column, not part of `OperationPayloadBlobV1`;
 the payload blob carries the request/result summary only, §4.4.)
 
-Optional attribution is also decoded exhaustively against `operationKindRaw`:
-external requests require both connection and capability; connection-targeted
-admin has a connection but no external grant capability; grant/capability-
-revoke carries the target pair; global audit rebase/compact has neither. Any
-other nil/non-nil combination is corrupt stored state. In particular, decoding
-never invents an `.admin` capability or substitutes `.manage`.
+Optional attribution is also decoded exhaustively against `operationKindRaw`
+and outcome: external requests require both connection and capability;
+connection-targeted admin has a connection but no external grant capability;
+grant/capability-revoke carries the target pair; global/admin-list/audit
+maintenance has neither. Enrollment is the one creation-time exception: a
+successful enroll record carries the newly minted connection, while a denied
+or failed pre-create enroll has `connectionIDRaw == nil` because no identity
+exists. Any other nil/non-nil combination is corrupt stored state. Decoding
+never invents an ID, an `.admin` capability, or a `.manage` attribution.
 
 **Append-only is enforced by construction (D36).** The Authority exposes **no
 arbitrary** `delete`/`update` path for `OperationRecordRow`. The only general
@@ -687,68 +696,198 @@ duplicate sequence fails closed. This is an internal consistency check only:
 SwiftData cannot prevent a sufficiently privileged actor from coherently
 rewriting rows and counters, so V2-05 makes no tamper-evidence claim.
 
-### 4.4 Versioned audit codec (X.4, not X.3)
+### 4.4 Versioned audit codec (X.4 frozen contract)
 
-`OperationPayloadBlobV1` is an explicit versioned wire value, not synthesized
-`Codable`, mirroring the v1 codec discipline (`05` §4) and V2-01/V2-03's
-codecs. The shape below is a **non-executable historical skeleton**, not a
-codec contract and not implementation-ready. X.3 must not implement it. Before
-X.4 writes an encoder, X.4 must first freeze the complete closed
-`RequestSummaryV1`/`ResultSummaryV1` case set, including every admitted admin
-operation; the codec and matching atomic behavior then land in that same leaf.
-X.3 creates zero `OperationRecordRow`s, so freezing an incomplete blob there
-would create needless compatibility debt.
+X.4's spec-first gate is now **resolved**. `OperationPayloadBlobV1` is an
+explicit versioned value with closed request and result enums; it is not
+synthesized `Codable`, a generic map, or an extensible string envelope. This
+decision is based on the callable `ExternalHistory` and `GatewayAdminHistory`
+protocols plus the already-admitted Local Automation Effective-content read.
+It therefore covers all seven App Intents operations, the Effective-content
+read, all eight public admin requirements (four state mutations, three reads,
+and rebase), and the two distinct revoke semantics. It also covers automatic
+internal compaction as the ninth admin-class operation.
+`reviseContent` and `describeFormatCapabilities` remain unadmitted and have no
+V1 payload case; adding either later requires a new exhaustive codec version or
+an explicitly compatible owned case before its first writer.
+
+#### 4.4.1 Stable operation discriminators
+
+Raw values 1...15 already exist in `HistoryCore` and are not renumbered.
+`adminRevoke` raw 10 is frozen to mean **connection revoke only**. X.4 adds four
+public cases so capability revoke and each callable admin read cannot hide
+behind `adminRevoke`, `adminGrant`, or a generic admin payload:
 
 ```swift
-internal struct OperationPayloadBlobV1: Codable, Sendable {
-    let formatVersion: UInt16          // exactly 1
-    let requestSummary: RequestSummaryV1
-    let resultSummary: ResultSummaryV1
+public enum ExternalOperationKind: Int16, Sendable, Hashable, Codable {
+    case readRecent = 1
+    case readSearch = 2
+    case readDetails = 3
+    case readPastePayload = 4
+    case managePin = 5
+    case manageUnpin = 6
+    case manageRemove = 7
+    case adminEnroll = 8
+    case adminGrant = 9
+    case adminRevoke = 10             // revokeConnection only
+    case adminRebase = 11
+    case adminCompact = 12
+    case readEffectiveContent = 13
+    case reviseContent = 14           // unadmitted; no V1 payload case
+    case describeFormatCapabilities = 15 // unadmitted; no V1 payload case
+    case adminRevokeCapability = 16
+    case adminReadConnections = 17
+    case adminReadGrants = 18
+    case adminReadAudit = 19
 }
 ```
 
-X.4 defines `RequestSummaryV1`/`ResultSummaryV1` as closed exhaustive enums in
-the same leaf as atomic audit/admin behavior. Every admitted
-`ExternalOperationKind` has one literal case and the mapping is a
-compiler-exhaustive switch—never a generic string/raw dictionary. Admin cases
-must separately represent enroll, grant, connection revoke, capability revoke,
-audit rebase, and compaction. Connection/capability targets are optional:
-global rebase/compact has neither, while grant/revoke carries only the target
-facts it actually has. Rebase/compaction summaries include bounded
-`[oldFloor, newFloor)` facts and the typed reason where applicable. External
-read/write summaries preserve the existing recent/search/details/paste/pin/
-unpin/remove shapes; subsequently admitted Local Automation operations add
-owned exhaustive cases rather than falling through a generic envelope.
+All three public admin reads are audited. `connections()` uses raw 17,
+`grants(for:)` raw 18, and `auditLog(since:)` raw 19. This is the smallest
+interpretation consistent with the existing rule that in-app Gateway
+administration is auditable; silently exempting the most sensitive read would
+make that rule false. An audit-log read takes a snapshot with an exclusive
+high-water mark before appending its own raw-19 record, so the returned page
+does not recursively include the record that describes that same read. The
+Authority then atomically appends that raw-19 record (and performs any triggered
+compaction) before it returns the already-built immutable page. Append failure
+throws and returns no page. Like every read audit, it advances no
+`ChangePosition`.
 
-Decode reconstructs through validators and checks, exactly as v1 codecs (`05`
-§4) and V2-03's `AffectedItemsBlobV1`:
+#### 4.4.2 Closed request cases
 
-- known `formatVersion` (exactly 1 for each blob);
-- bounded `resultSummary` ID count (≤ `ExternalLimits.maxAffectedItemsPerRecord`,
-  §4.5) before any large allocation;
-- each `UUID` element valid; `search` summary carries a byte count, **never the
-  query text** (a query echo would amplify sensitive content into the audit log;
-  only the byte count + mode + limit are recorded, so the audit proves *a search
-  of N bytes happened* without retaining the query);
-- the surrounding row discriminators and decoded summary agree; invalid
-  combinations fail closed;
-- ordered reads require every `auditSequence` in the retained interval exactly
-  once; duplicate, missing, or out-of-range values are
-  `.persistence(.invariantViolation)` (D36).
+The blob header is `formatVersion == 1`. Each request case has the stable
+`UInt16` tag shown below. Integers decode through checked conversion to the
+owning bound; UUIDs are encoded as 16 bytes. `SearchModeRawV1` is codec-local
+and frozen as `exact = 1`, `fuzzy = 2`, `regexp = 3` because public
+`SearchMode` deliberately has no persistence raw value.
 
-Any violation is `.persistence(.corruptStoredValue)` /
-`.persistence(.invariantViolation)` (`05` §16). The decoder does not silently
-drop a record, reset an outcome, or "repair" an invalid retained interval.
+| Request tag | `RequestSummaryV1` case | Required row kind / attribution | Bounds and privacy |
+|---:|---|---|---|
+| 1 | `recent(limit: UInt16)` | `readRecent`; connection + `.browse` or Local Automation `.browsePreview` | `1...500` |
+| 2 | `search(queryUTF8ByteCount: UInt16, mode: SearchModeRawV1, limit: UInt16)` | `readSearch`; connection + browse capability selected by connection kind | byte count `0...4096`; query text is never stored |
+| 3 | `details(itemID: UUID)` | `readDetails`; connection + `.readContent` | target ID only; no returned bytes |
+| 4 | `pastePayload(itemID: UUID)` | `readPastePayload`; connection + `.readContent` | target ID only; no returned bytes |
+| 5 | `pin(itemID: UUID)` | `managePin`; connection + `.manage` or `.organize` | one ID |
+| 6 | `unpin(itemID: UUID)` | `manageUnpin`; connection + `.manage` or `.organize` | one ID |
+| 7 | `remove(itemID: UUID)` | `manageRemove`; connection + `.manage` or `.deleteItem` | one ID |
+| 8 | `enroll(kind: ConnectionEnrollKind, displayNameUTF8ByteCount: UInt16, credentialWasProvided: Bool)` | `adminEnroll`; nil capability. Succeeded row carries the newly minted connection; denied/failed pre-create row has nil connection | display name `0...256` bytes; neither display-name text nor credential bytes are stored. X.4 rejects non-nil credentials until the separate ingress/credential decision is admitted, but can truthfully audit that redacted request shape without minting a fake ID |
+| 9 | `grant(connectionID: UUID, capability: ExternalCapability)` | `adminGrant`; target connection + target capability | exact pair; current-state row is inserted/re-activated |
+| 10 | `revokeConnection(connectionID: UUID)` | `adminRevoke`; target connection + nil capability | distinct from capability revoke |
+| 11 | `rebase(reason: AuditRebaseReason)` | `adminRebase`; nil connection + nil capability | typed reason only; no free-form recovery text |
+| 12 | `compact` | `adminCompact`; nil connection + nil capability | no caller-controlled fields |
+| 13 | `readEffectiveContent(itemID: UUID)` | `readEffectiveContent`; Local Automation connection + `.readEffectiveContent` | one ID; no content bytes in audit |
+| 14 | `revokeCapability(connectionID: UUID, capability: ExternalCapability)` | `adminRevokeCapability`; target connection + target capability | exact pair; distinct stable operation raw 16 |
+| 15 | `readConnections` | `adminReadConnections`; nil connection + nil capability | no filter text |
+| 16 | `readGrants(connectionID: UUID)` | `adminReadGrants`; target connection + nil capability | one target connection; returned grant set absent |
+| 17 | `readAudit(since: UInt64, limit: UInt16)` | `adminReadAudit`; nil connection + nil capability | limit `1...500`; carries positions only, never prior payload bytes |
 
-**Integrity-claim honesty (D36).** The typed codec detects malformed or
-unsupported payload encodings, and the sequence/config checks detect an
-incoherent retained interval. Neither proves who changed the store nor detects
-a coherent rewrite. No per-record chain, digest, cryptography import, or hidden
-checksum exists in this plan.
+Request tag and row `operationKindRaw` are a total one-to-one mapping except
+that tags 1, 2, 5, 6, and 7 can be admitted under different capability names
+for the two connection kinds. In those cases `capabilityRaw` must equal the
+actual capability checked for that request; the codec never infers it. The
+surrounding attribution table is exact: external cases require both
+connection/capability; connection-targeted admin has a connection and only
+grant/revoke-capability has a capability; global/admin-list/audit maintenance
+has neither; and enroll gains a connection only after successful creation.
 
-`OperationPayloadBlobV1` is `Sendable` (all-`let` `Sendable` members). Its
-privacy boundary is load-bearing: search records only the UTF-8 byte count,
-mode, and limit; it never stores query text or returned clipboard bytes.
+#### 4.4.3 Closed result cases and outcome compatibility
+
+Result tags 1...15 are also stable `UInt16` values. Counts are metadata only; no row
+title, query, type identifier, clipboard representation, display name,
+credential, error text, or prior audit payload is copied into the blob.
+
+| Result tag | `ResultSummaryV1` case | Compatible request / outcome |
+|---:|---|---|
+| 1 | `none` | every `.failed` or `.denied` record |
+| 2 | `page(returnedCount: UInt16, hasMore: Bool)` | recent/search `.succeeded`; count `0...500` |
+| 3 | `details(effectiveRepresentationCount: UInt16, revisionCount: UInt16)` | details `.succeeded`; counts only |
+| 4 | `pastePayload(representationCount: UInt16)` | paste `.succeeded`; count only |
+| 5 | `affectedItemIDs([UUID])` | pin/unpin/remove `.succeeded` or `.noOp`; at most 32, normally zero or one |
+| 6 | `enrolled(connectionID: UUID)` | enroll `.succeeded` |
+| 7 | `grantChanged(Bool)` | grant `.succeeded` (`true`) or `.noOp` (`false`) |
+| 8 | `connectionRevoked(revokedGrantCount: UInt16)` | connection revoke `.succeeded` or `.noOp`; count `0...8` |
+| 9 | `capabilityRevoked(Bool)` | capability revoke `.succeeded` (`true`) or `.noOp` (`false`) |
+| 10 | `connections(returnedCount: UInt16)` | connections read `.succeeded`; count `0...500` |
+| 11 | `grants(returnedCount: UInt16)` | grants read `.succeeded`; count `0...8` |
+| 12 | `auditPage(returnedCount: UInt16, snapshotHead: UInt64)` | audit read `.succeeded`; count `0...500`; `snapshotHead` is exclusive and precedes this read's own audit append |
+| 13 | `rebased(oldFloor: UInt64, newFloor: UInt64, discardedCount: UInt32)` | rebase `.succeeded`; `oldFloor <= newFloor <= nextAuditSequence` |
+| 14 | `compacted(oldFloor: UInt64, newFloor: UInt64, discardedCount: UInt32, discardedPayloadBytes: UInt64)` | compact `.succeeded` or `.noOp`; checked counts, no discarded payload |
+| 15 | `effectiveContent(representationCount: UInt16, totalBytes: UInt64)` | Effective-content read `.succeeded`; checked counts only |
+
+`ExternalOutcome` compatibility is closed rather than repaired on decode:
+
+- `.succeeded` requires the operation-specific success result, nil
+  `failureKindRaw`, nil `denialReasonRaw`, and a non-nil `changePositionRaw`
+  only for successful pin/unpin/remove commits;
+- `.noOp` is allowed only for pin/unpin/remove, grant, connection revoke,
+  capability revoke, and compact; it has nil failure/denial and nil
+  `changePositionRaw` because no History Commit occurred;
+- `.denied` requires `unauthorized`, `connectionRevoked`, or `requestDenied`.
+  Only `requestDenied` carries a denial reason. Its result is always `none`;
+- `.failed` requires a non-denial `ExternalFailureKindRaw`, result `none`, and
+  nil `changePositionRaw`. `auditCompactedBefore` is valid only for an audit
+  read whose `since < compactionFloor`;
+- admin reads, ordinary external reads, enroll, rebase, and Effective-content
+  read have no `.noOp` form. Empty successful reads use their typed zero-count
+  success result, not `.noOp`.
+
+The cross-field validator also requires a returned page count not to exceed
+its request limit; successful pin/unpin/remove records name exactly their
+requested item while their `.noOp` form names none; an audit-read
+`snapshotHead` equals that read's own `auditSequence` (the head frozen before
+its append); and rebase/compact `discardedCount` equals the checked
+`newFloor - oldFloor` contiguous width. These relations are decoded from
+literal fields, not inferred from a hash or repaired after read.
+
+The decoder validates `formatVersion`, request/result tags, every enum raw,
+checked bounds, UUID widths, row attribution, operation/request/result/outcome
+compatibility, and the `affectedItemIDs` cap before allocation. A malformed
+payload is `.persistence(.corruptStoredValue)`; a duplicate/missing/out-of-range
+retained audit sequence is `.persistence(.invariantViolation)`. It never drops,
+repairs, or reclassifies a row.
+
+#### 4.4.4 Evidence ceiling and X.4 code ownership
+
+This frozen table establishes that an X.4 encoder cannot omit or generically
+collapse a callable operation, and that an audit reader can reject incompatible
+stored combinations. It does **not** establish that the Gateway facade,
+transport, App Intent adapter, or Local Automation credential path exists; X.5
+and later leaves own those behaviors. Typed decoding and the contiguous
+`[compactionFloor, nextAuditSequence)` check detect malformed payloads and
+incoherent counter state only. There is no hash, chain, checksum, signature,
+request digest, tamper-evidence, or non-repudiation claim.
+
+The implementation DAG is deliberately shallow:
+
+1. `OperationPayloadBlobV1.swift` owns the wire enums, encoder/decoder, and
+   compatibility validator; no writer duplicates these switches.
+2. `GatewayAuditStore.swift` owns mint+insert, bounded read, counter/byte
+   accounting, retained-interval validation, compaction, and recovery rebase.
+   Deleting it must leave no other code capable of inserting/deleting an
+   `OperationRecordRow` or advancing audit counters.
+3. `GatewayAdministration.swift` owns connection/grant current-state
+   mutations and calls the audit store inside the same Authority transaction.
+   Re-grant updates the existing `GrantRow`; it never inserts an event row.
+4. `GatewayBootstrap.swift` replaces X.3's exact-zero audit rule with the audit
+   store's full startup validation in the same change that enables the first
+   writer.
+5. `HistoryAuthority.swift` only composes these owners and supplies transaction,
+   clock, and ID seams. Public enum/protocol changes and their symbol tests live
+   in `HistoryCore`; no facade, transport, CLI, or credential module belongs to
+   X.4.
+
+**Recovery reachability ceiling.** Ordinary `SwiftDataHistory.open` remains
+fail-closed when retained audit validation fails, so a facade obtained only
+after ordinary open cannot recover that store. X.4 may implement and unit-test
+the internal rebase transaction and may execute `.adminForced` against an
+otherwise healthy open store. Raw `AuditRebaseReason.corruptionDetected` and
+its request/result codec are frozen now so a later recovery entry does not
+rewrite V1 audit bytes, but X.4 adds no public recovery opener and therefore
+does not claim that a store rejected during ordinary open is runtime-recoverable.
+Making that case reachable requires a separately reviewed recovery-only opener
+that can construct the sole Authority without publishing History/Gateway
+facades; it must not be smuggled through the normal admin facade.
 
 ### 4.5 ExternalLimits (admission bounds)
 
@@ -760,8 +899,12 @@ user knob, mirroring `06` §2, V2-01's `EnrichmentLimits`, V2-03's
 | Bound | V2 value |
 |---|---:|
 | `displayName` UTF-8 bytes per connection | 256 |
+| `maximumConnections` | 500; enrollment rejects the 501st before insert so the unpaginated public `connections()` result stays bounded |
+| `maximumGrantRowsPerConnection` | 8; one row for each currently declared capability raw, while the connection-kind policy admits only its smaller subset |
 | `maxAffectedItemsPerRecord` (audit `affectedItemIDs`) | 32 (external writes touch individual items; a `clear` is not exposed externally, so the bound is small) |
-| `maxAuditLogSize` (audit payload-bytes cap; trim trigger) | 64 MiB (`payloadBlob.count + fixedRowOverhead`, tracked by a `GatewayConfigRow.auditBytes` running counter, mirroring `V2-03` §4.5's byte counter) |
+| `maximumAuditPayloadBlobBytes` | 16 KiB; a per-record codec envelope, checked before decode allocation and after encode |
+| `maxAuditLogSize` (logical audit-byte trim trigger) | 64 MiB, tracked by `GatewayConfigRow.auditBytes` |
+| `auditRecordAccountingOverheadBytes` | 128 bytes per retained row |
 | `maxAuditAgeSeconds` (trim trigger) | 31,536,000 (365 days) |
 | `compactionCadenceOps` (trim every N-th external op) | 100 |
 | `maxAuditReadBatchSize` (per-call audit-log fetch limit) | 500 |
@@ -771,6 +914,22 @@ Rules (matching `06` §2 / V2-03 §4.5):
 
 - All byte/count arithmetic is checked; overflow fails closed and never wraps
   (`06` §2, `02` §13).
+- `maximumAuditPayloadBlobBytes` is independent of the 64 MiB whole-log
+  trigger. The closed V1 cases contain at most 32 UUIDs plus fixed scalars and
+  no clipboard content, so 16 KiB is a deliberate generous envelope rather
+  than a content budget. Decode rejects a larger `Data` value before invoking
+  the parser; encode checks the produced bytes before insert. The aggregate
+  audit cap is never used as a substitute for this per-record admission check.
+- `auditBytes` is a deterministic **logical admission counter**, not a claim
+  about SQLite/SwiftData physical disk allocation. One retained row contributes
+  exactly `UInt64(payloadBlob.count) + 128`; 128 is the frozen
+  `ExternalLimits.auditRecordAccountingOverheadBytes` value and ensures an
+  empty-content marker still consumes budget. Append checked-adds that exact
+  amount; compaction/rebase checked-subtract the same amount for each deleted
+  row. Startup recomputes the sum from retained rows and requires exact equality
+  with `GatewayConfigRow.auditBytes`. This makes the 64 MiB trigger reproducible
+  without guessing a platform-dependent database overhead, while explicitly
+  not measuring WAL pages, indexes, allocator slack, or filesystem blocks.
 - `maxAuditLogSize` / `maxAuditAgeSeconds` are alternative compaction triggers;
   the audit log is **compacted** (oldest records trimmed) only when a trigger
   fires, and **compaction is itself an audited admin operation** recorded as a
@@ -785,6 +944,11 @@ Rules (matching `06` §2 / V2-03 §4.5):
   before the trim subtracts the deleted rows' contributions, and a compaction
   pass suppresses re-trigger evaluation until its trim completes (no immediate
   re-compaction loop). Recorded in `X-PERF-2`.
+- `compactionCadenceOps` is a future X.5 process-local dispatch cadence, not a
+  durable counter and never `nextAuditSequence % 100` (that sequence also
+  includes admin/read/maintenance records). X.4 owns the synchronous
+  `compactIfNeeded` mechanism and its transaction proofs; the later Gateway
+  actor decides when every hundred admitted external operations has elapsed.
 - Search audit carries byte counts, never query text (§4.4).
 - These are admission bounds, not user runtime knobs; the UX (V2-07) reads audit
   via `GatewayAdminHistory` but cannot lower them below the v1/v2 floors.
@@ -808,7 +972,8 @@ internal final class GatewayConfigRow {
                                        // overflow fails closed). Minted-in-the-closure to close the
                                        // read/write/audit atomicity gap (§5.4).
     var auditBytes: UInt64             // running audit payload-byte counter (§4.5 trim input);
-                                       // += (blob.count + fixedRowOverhead)
+                                       // logical += (blob.count + 128) per row;
+                                       // not physical database allocation
                                        // per append; -= deleted rows' contributions on compaction.
     var compactionFloor: UInt64        // min surviving auditSequence after the last compaction pass;
                                        // a read below the floor returns the documented
@@ -883,12 +1048,16 @@ facade may be published:
    closed, mirroring `V2-03` §4.6); read `appIntentsConnectionID` (never
    re-minted on an existing row);
 4. **for an existing config**, require exactly one `ConnectionRow` with `id ==
-   appIntentsConnectionID`, `enrollKindRaw == appIntents`, `status == active`,
-   and `displayNameRaw == "Siri / Shortcuts / Spotlight"`. Missing, duplicate,
-   or mismatched connection state is `.persistence(.invariantViolation)`; open
-   does not silently recreate or rewrite it. Only step 2's absent-config
-   bootstrap transaction may create config+connection. Require zero bootstrap
-   grants/audit before X.4 behavior exists;
+   appIntentsConnectionID`, `enrollKindRaw == appIntents`, and
+   `displayNameRaw == "Siri / Shortcuts / Spotlight"`. Its lifecycle must be
+   coherent: active means `revokedAt == nil`; revoked means a finite,
+   non-nil `revokedAt >= enrolledAt`. Both timestamps must be finite. Missing,
+   duplicate, or mismatched state is `.persistence(.invariantViolation)`;
+   open does not silently reactivate, recreate, or rewrite it. Only step 2's
+   absent-config bootstrap transaction may create config+connection. The
+   zero-grant/zero-audit requirement applies only to that first X.3 bootstrap;
+   after X.4, existing stores instead run bounded current-state and retained-
+   audit validation;
 5. validate `compactionFloor <= nextAuditSequence`, checked counters, and the
    retained audit interval: ordered rows must occupy every sequence in
    `[compactionFloor, nextAuditSequence)` exactly once. X.3 bootstraps zero
@@ -896,10 +1065,12 @@ facade may be published:
    same rule after appends/compaction. A gap, duplicate, or out-of-range row is
    `.persistence(.invariantViolation)` (§5.6). This is sequence/coherence
    validation, not tamper evidence;
-6. finish X.3 with exactly one active App Intents `ConnectionRow`, zero
-   `GrantRow`s, and zero `OperationRecordRow`s. X.3 publishes no facade. A
-   future X.5 facade may be published only after this validated state and the
-   real `ExternalGateway` actor both exist.
+6. for an existing X.4 store, validate bounded connection/grant current state,
+   decode every retained audit row in sequence-keyed batches, and require exact
+   logical-byte accounting. For a first X.3 bootstrap this reduces to one
+   active App Intents connection with zero grants/audit. X.3 publishes no
+   facade. A future X.5 facade may be published only after the applicable
+   validated state and the real `ExternalGateway` actor both exist.
 
 This step applies to the `.memory` store path too.
 
@@ -936,20 +1107,20 @@ ExternalGateway.perform(.remove(itemID), as: connID)   [actor]
           .invalidPinnedPlacement(.targetMissing) for a .pin/.unpin on an absent
           target (v1 WS16). Catch inside the same non-suspending span; append a
           failed-write OperationRecord (outcome .failed) with the matching
-          failureKind in a separate small transaction (best-effort at-most-one,
-          D34 — no history mutation to be atomic with); then rethrow. A planner
+          failureKind in a separate small transaction; only after that append
+          commits, rethrow. If append fails, throw persistence failure. A planner
           .notFound maps to ExternalFailure.notFound(HistoryItemID) / failureKind
           .notFound (ExternalFailureKindRaw.notFound = 4) — NOT .history —
           because the failure originates at planning (absent target), not inside
           a v1 history projection; the planner's other HistoryFailures wrap as
           ExternalFailure.history(...) / failureKind .history as usual. The
           write commits NO history mutation. (This is the write-side analogue of
-          §5.2's failed-read audit path; D34 classifies failed writes as
-          at-most-one in their separate small transaction — only succeeded writes
-          are exactly-one/in-commit.)
+          §5.2's failed-read publication barrier; succeeded writes keep audit
+          in-commit, while this no-mutation branch awaits its separate append.)
        -> if .unchanged: commit NO history mutation; audit an OperationRecord
           with outcome .noOp (CRIT-M7) in a separate small transaction; return
-          ExternalResponse.unchanged (no commit, no ChangePosition advance).
+          `ExternalResponse.unchanged` only after that append succeeds (no
+          History Commit, no ChangePosition advance).
        -> derive/stamp a StampedCommitPlan (05 §9) + the V2-03 hcrAppend +
          the V2-05 auditAppend (OperationRecordPayload, §5.4)
        -> prevalidate index delta, receipt, hcrAppend, AND auditAppend
@@ -1027,7 +1198,8 @@ ExternalGateway.read(.search(text, mode, limit), as: connID)   [actor]
        path:
        (a) interval 1 (authoritative gate + snapshot capture): RE-FETCH
            ConnectionRow.status + live GrantRow set; if revoked/ungranted there,
-           audit-as-denied (at-most-one small transaction) and throw. Else
+           append the denial audit first and throw only after it commits. If
+           that append fails, throw persistence failure. Else
            capture SearchCorpusSnapshot (05 §14.2, a Sendable value snapshot).
            Interval ends; the snapshot is a Sendable value carried across the
            suspension.
@@ -1053,8 +1225,11 @@ ExternalGateway.read(.search(text, mode, limit), as: connID)   [actor]
        pageCount(rows.count) on success; requestedAt / committedAt from the
        Storage clock (§5.5). (Reads advance nextAuditSequence but NOT
        ChangePosition.) The read audit is a SEPARATE transaction from any write
-       — there is no history mutation to be atomic with.
-  5. Return the HistoryPage (Sendable HistoryCore DTO).
+       — there is no history mutation to be atomic with. It is nevertheless a
+       fail-closed publication barrier: append must commit before step 5.
+  5. Only after the audit commit succeeds, return the already-built immutable
+       HistoryPage. If audit append fails, throw persistence failure and do not
+       return the page or any content-bearing DTO.
 ```
 
 **Failed-read audit path (D34).** If `performExternalRead` throws (e.g.,
@@ -1067,10 +1242,11 @@ closure**, then rethrows the `ExternalFailure`. There is no no-op read: v1
 reads either return a value (audited `.succeeded`, `pageCount(0)` for an
 empty page) or throw (`05` §14.3 — `details`/`pastePayload` throw
 `.notFound` for an absent target; `03b` §9 DTOs are non-optional),
-audited `.failed`. This failed-read
-audit is still subject to the read at-most-one best-effort bound
-(D34): a crash between the throw and the read-audit commit can drop it without
-affecting the read's correctness (the read itself returned, or threw, cleanly).
+audited `.failed`. The original failure is released only after that audit
+append commits. If audit append fails, the caller receives the persistence
+failure instead; the underlying DTO/content or failure is not published. A
+process crash before the append commits likewise cannot follow a successful
+method return, because return is sequenced after the commit.
 
 **Input-validation failureKind consistency (D35).** The conceptual class
 "invalid input" is caught at two layers: bounds/shape at the gateway (D35) and
@@ -1132,8 +1308,9 @@ the same transaction (the `ConnectionRow`/`GrantRow` insert or the status/
 `revokedAt` flip, or the rebase/compaction marker + trim) — closure failure
 commits neither. Admin ops advance no `ChangePosition` and yield no
 `HistoryInvalidation` (they are not History Commits), but they DO mutate gateway
-state, and their audit record shares that mutation's save boundary (exactly-one,
-not the read/noOp at-most-one bound).
+state, and their audit record shares that mutation's save boundary. Admin reads
+and no-op admin attempts use the separate mandatory append barrier and return or
+throw only after it commits.
 
 ### 5.4 Audit append atomicity and `StampedCommitPlan`
 
@@ -1203,17 +1380,18 @@ transaction-atomicity evidence (`V2-facts.md` cycle-3 addendum — `ModelContext
 a new platform dependency. A separate audit path (decision B) would either
 weaken crash-consistency (a crash between the write and the audit loses the
 audit) or require a compensating mechanism the v1 architecture does not have.
-For **reads** (§5.2) there is no history mutation to be atomic with, so the read
-audit runs in a **separate small transaction** that is nonetheless
-Authority-serialized (single writer — it takes its turn and cannot interleave
-with writes or other read-audits on the singleton `nextAuditSequence`);
-`nextAuditSequence` is minted with the row insert inside the same
-non-suspending read-audit closure, so committed reads preserve sequence
-continuity exactly as writes do. The read audit is **best-effort / at-most-one** (D34): a crash
-between the read returning and the read-audit transaction committing may lose
-that one record without affecting the read's correctness. The write/admin path
-is the load-bearing audit-completeness guarantee; the read path is best-effort
-by necessity (there is no mutation to share a save boundary with).
+For **reads** (§5.2) there is no history mutation to share a transaction with,
+so the Authority first builds an immutable result/failure, then runs a
+**separate small audit transaction**. That transaction is still serialized by
+the sole Authority; `nextAuditSequence` is minted with the row insert inside
+one non-suspending closure. It is also a mandatory publication barrier: no DTO,
+clipboard bytes, or typed underlying read failure crosses the method boundary
+until the audit commit succeeds. If it fails, the call fails closed with the
+audit persistence failure and releases no result. A crash may therefore leave
+a committed audit record whose result was never observed (crash after audit,
+before return), but cannot produce a successfully returned sensitive read with
+no committed record. This is the exact support ceiling; it does not make the
+read snapshot and later audit one database snapshot.
 
 **`committedAt` semantics (unified).** `committedAt` is non-optional on both
 `OperationRecordRow` (§4.3) and `OperationRecordPayload`, and means uniformly
@@ -1244,8 +1422,9 @@ Wall-clock is not monotonic; a backwards move under-compresses audit
 - **Append-only + atomic append (D34/D36).** The OperationRecord is appended in
   the commit closure (writes) or the read-audit transaction (reads). A crash
   mid-closure commits nothing (the write, the HCR, and the OperationRecord share
-  the save boundary). A crash mid-read-audit loses only the read's audit record
-  (the read already returned). A committed append advances
+  the save boundary). A read result is held until its separate audit commit;
+  a crash before that commit cannot follow a successful return, while a crash
+  after it may leave a record for a result the caller never observed. A committed append advances
   `nextAuditSequence` only in the transaction that inserts that sequence, so
   the next committed append remains contiguous.
 - **Sequence validation on open + recovery rebase.** Step 5 of the open
@@ -1357,6 +1536,12 @@ is `01` §8 / `06` §6: "`import SwiftData` appears only in `HistoryStorage`"):
   `@unchecked Sendable` (`01` §6) — a private stored-field addition under the V2
   self-review gate (`V2-00` §8).
 
+Incremental order is explicit: X.4 may publish only the thin
+`GatewayAdminHistory` conformance after bootstrap/audit/admin behavior is real;
+it adds no actor field. `ExternalHistory`, its connection-bound facade/factory,
+and the stored `ExternalGateway` actor land together at X.5, never as an
+unavailable placeholder.
+
 A new SwiftPM target would either have to import SwiftData (creating a second
 SwiftData-owning target, violating `00` §3.4 / `01` §4) or be a pure facade
 delegating to `HistoryStorage` (in which case it is logically part of
@@ -1439,9 +1624,9 @@ internal extension HistoryAuthority {
     // -> failed-WRITE audit path mirroring §5.2's failed-READ path: append a
     // .failed OperationRecord (failureKind .notFound for a planner .notFound,
     // NOT .history; other planner HistoryFailures wrap as .history) in a
-    // separate small at-most-one transaction, then rethrow; no commit. The
-    // noOp/denied/failed write audits are best-effort at-most-one (D34), like
-    // reads — only succeeded writes are in-commit/atomic.
+    // separate small transaction, await its commit, then rethrow; no History
+    // Commit. noOp/denied/failed writes use the same mandatory publication
+    // barrier, so a completed admitted call always has one durable record.
     func commitExternal(
         request: ExternalRequest,
         connection: ExternalConnectionID,
@@ -1460,8 +1645,9 @@ internal extension HistoryAuthority {
     // For .recent/.details/
     // .pastePayload (no off-actor evaluation) the gate+evaluate+audit fit ONE
     // non-suspending interval. A throw from the read projection is caught,
-    // audited as .failed with the matching failureKind, and rethrown (D34
-    // failed-read path; at-most-one bound). The read-side grant-recheck-vs-
+    // audited as .failed with the matching failureKind, and rethrown only after
+    // that append commits. Audit failure publishes no DTO/content and throws a
+    // persistence failure. The read-side grant-recheck-vs-
     // evaluation TOCTOU is accepted (revocation takes effect on the next
     // request).
     func performExternalRead(
@@ -1906,6 +2092,10 @@ public enum ExternalOperationKind: Int16, Sendable, Hashable, Codable {
     case readEffectiveContent = 13 // Local Automation only (§0.2)
     case reviseContent = 14        // declared; denied until separately admitted
     case describeFormatCapabilities = 15 // declared shape; runtime blocked by §0.3
+    case adminRevokeCapability = 16 // revokeCapability only; raw 10 remains connection revoke
+    case adminReadConnections = 17  // GatewayAdminHistory.connections()
+    case adminReadGrants = 18       // GatewayAdminHistory.grants(for:)
+    case adminReadAudit = 19        // GatewayAdminHistory.auditLog(since:)
 }
 
 public enum ExternalOutcome: Int16, Sendable, Hashable, Codable {
@@ -2076,10 +2266,12 @@ its dedicated v1 vocabulary (`02` §10), and `ExternalFailure` has no
 - **Audit completeness (D34) + retained-sequence honesty (D36).** Succeeded writes and
   admin ops produce **exactly one** `OperationRecord`, committed atomically with
   their mutation (the history mutation for writes, the admin-state mutation for
-  admin ops; crash-consistent: closure failure commits neither). noOp/denied/
-  failed writes and reads produce **at most one** record in a separate best-
-  effort transaction (D34 at-most-one: a crash between the decision/read
-  returning and the audit commit can drop it without affecting correctness).
+  admin ops; crash-consistent: closure failure commits neither). Reads hold
+  their immutable result/failure until a separate audit transaction commits;
+  append failure publishes no DTO/content. Thus a successful read return has
+  exactly one durable record, although a crash after audit and before return can
+  leave a record the caller never observed. noOp/denied/failed write/admin
+  attempts also await their separate audit commit before returning or throwing.
   Append-only is enforced by construction (no arbitrary delete/update writer;
   named exceptions are bounded compact/recovery operations, §4.5/§5.6).
   Typed decode plus the contiguous interval
@@ -2273,8 +2465,8 @@ on macOS 26:
 - **X-SECURITY-3 (rate limit — coarse process-wide throttle).** Confirm the
   in-memory, process-wide App-Intents token-bucket quota compiles and is honored
   under sustained load: a rate-exceeding external caller is throttled
-  (`requestDenied(.rateLimited)`, audited under the coalesced denial-audit
-  rule, §3.1 step 0), not allowed to monopolize the Authority or balloon the
+  (`requestDenied(.rateLimited)`, one immutable denied record per admitted call
+  before the denial is returned, §3.1 step 0), not allowed to monopolize the Authority or balloon the
   audit log **within one process lifetime**. The honest bound
   (§8): the quota is per single shared connection (no per-caller
   distinguishability) and resets on app relaunch, so it is a coarse process-wide
@@ -2413,23 +2605,24 @@ extends the set:
     `ChangePosition` and yield **no** `HistoryInvalidation` (they are not
     History Commits), but they DO mutate gateway state, and their audit record
     shares that mutation's save boundary (closure failure commits neither).
-  - **noOp / denied / failed writes** produce **at most one** record via a
-    separate Authority-serialized best-effort small transaction (no history
-    mutation to be atomic with — the planner returned `.unchanged`, the
-    in-closure recheck denied, or the planner threw); a crash between the
-    decision and that small transaction committing may drop the record without
-    affecting correctness. Bound identical to reads, by the same necessity.
-  - **Reads** produce **at most one** record via a separate Authority-serialized
-    best-effort transaction (no mutation to be atomic with); a crash between the
-    read returning and the read-audit transaction committing may drop that one
-    record without affecting the read's correctness.
+  - **noOp / denied / failed writes or admin attempts** produce **exactly one
+    committed record before their response/failure is released** via a separate
+    Authority-serialized small transaction (there is no mutation to share a
+    boundary with). Append failure replaces the intended response/failure with
+    persistence failure. A crash after append but before return may leave a
+    record the caller never observed; a completed call without a record is
+    forbidden.
+  - **Reads** build an immutable result/failure, then produce **exactly one
+    committed record before publication** via a separate Authority-serialized
+    transaction. Append failure throws and publishes neither DTO/content nor
+    the underlying read failure. A crash after audit commit but before return
+    may leave a record without caller observation; the reverse (successful
+    return without a committed record) is forbidden.
   `changePositionRaw` is scoped: for **succeeded writes** it equals the commit's
   `ChangePosition` (and the HCR's `sequence` when V2-03 is active); for reads,
   admin ops, noOp, and denied/failed records it is `nil` (no commit). The
-  succeeded-write + admin atomicity (exactly-one, in-transaction) is the
-  load-bearing audit-completeness guarantee; the noOp/denied/failed-write and
-  read at-most-one bounds are honest by necessity (no mutation to share a save
-  boundary with).
+  succeeded-write/admin atomicity and the mandatory append-before-publication
+  barrier for every no-mutation branch are the audit-completeness guarantee.
 - **D35 External-input validation.** All external input (intent parameters,
   requested `HistoryItemID`s, search text, limits) is validated against the v1
   `HistoryLimits.standard` bounds at the gateway **before** it reaches a
@@ -2476,7 +2669,8 @@ Domain leakage, `V2-00` §6.6):
   `[oldFloor, newFloor)` range is present.
 - **Privacy/transparency indicators:** "Siri searched your history N times since
   …"; data-practice disclosure for `browse`/`readContent`/`manage` exposure and
-  for the audit log's persistence, compaction-floor, and best-effort read bounds;
+  for the audit log's persistence, compaction floor, and durable-before-release
+  read bound;
   no tamper-evidence claim.
 
 Observation remains snapshot-replacement (Part IV §5); admin operations advance

@@ -80,6 +80,10 @@ internal enum ExternalAccessPolicy {
              .adminRevoke,
              .adminRebase,
              .adminCompact,
+             .adminRevokeCapability,
+             .adminReadConnections,
+             .adminReadGrants,
+             .adminReadAudit,
              .reviseContent,
              .describeFormatCapabilities:
             .forbidden

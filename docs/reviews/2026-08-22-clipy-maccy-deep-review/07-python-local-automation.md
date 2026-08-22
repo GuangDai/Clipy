@@ -211,8 +211,11 @@ Gateway以durable connection kind与typed operation权威检查；adapter/reques
 而且“复用 V2-05”不等于Gateway已可调用。2026-08-22 owning决策已关闭内部形状矛盾：不实现audit
 hash/chain或tamper-evidence claim；用typed codec、transaction内sequence mint、contiguous retained suffix与
 `compactionFloor`诚实表达边界；GrantRow是一对connection/capability一条current-state row，re-grant更新该行，
-event history进audit；global rebase/compact没有connection/capability attribution；audit无off-switch。当前代码叶
-仍只是X.3 V3 schema/limits/bootstrap，actor/facade/admin均未实现，所以Local Automation仍不能依赖“未来Gateway”。
+event history进audit；global rebase/compact没有connection/capability attribution；audit无off-switch。已合并
+基线仍止于X.3；当前未合并Batch 9工作树已实现X.4 codec、central audit store、current-state/admin
+mutations、audited admin reads及`SwiftDataHistory: GatewayAdminHistory`。macOS correctness CI与合并尚未
+发生，`ExternalGateway` actor、connection-bound external facade、App Intents、credential、CLI/transport仍
+不存在，所以Local Automation仍不能依赖“未来Gateway”。
 
 ## 4. Wire identity：外部只看 opaque locator/token
 
@@ -340,24 +343,15 @@ connect private endpoint
 - 第一版不做subscription/watch。长连接事件需要overflow、snapshot replacement、reconnect cursor、
   revoke-mid-stream与audit语义；在request/reply主路径稳定前加入只会扩大状态空间。
 
-## 8. Audit、revocation 与 retry 的未决项
+## 8. Audit、revocation 与 retry
 
-### 8.1 content read 的 audit contract 必须单独裁决
+### 8.1 content read 的 audit contract 已冻结
 
-当前 V2-05 对read采用“结果与audit分离、best-effort at-most-one”；crash可能让一次已返回content的
-read没有durable audit。对 Siri/Shortcuts 这已经被规格诚实接受；对任意同用户process读取clipboard
-bytes，是否仍足够必须重新批准。
-
-两个可选 contract：
-
-- **A — 保留 at-most-one。** latency/实现最小，但audit viewer不能保证每次content release都有record；
-- **B — durable authorization record before first content byte。** audit transaction失败则不发送bytes；
-  record只能声称“Clipy authorized/released a response”，不能证明client完整接收。不要为了宣称
-  “read succeeded”引入两阶段分布式事务。
-
-Review推荐在 `readEffectiveContent` release gate 前选择 B 或明确接受 A；不能用现在的“all external
-operations audited”一句话掩盖 at-most-one crash gap。`browsePreview` 同样 content-bearing，但可先用
-read-only tracer测成本，再决定它与full bytes是否采用相同强度。
+Owning V2-05 已冻结mandatory publication barrier：每个已admit read先构建immutable
+result/failure，再成功append一条durable audit，然后才return/throw。append失败则只返回
+persistence failure，不释放DTO/content。crash-after-audit-before-return可留一条caller未观察的
+record，但不允许successful/typed return时没有record。该record只证明Clipy已批准并准备
+发布response，不证明client完整接收；不引入两阶段分布式事务。
 
 ### 8.2 revocation 的线性化点
 
@@ -508,20 +502,20 @@ GW0合并后不得重复领取；X.2 public Gateway contract也排在当前叶�
 验收上限仅是“closed policy可编译且matrix total”；它不证明真实Gateway在History read前拒绝，也不关闭
 `PLAY-PY-B1/B2/B0G`。该leaf不得新增credential、hash/request digest、socket、JSON parser或CLI target。
 
-### 当前 code leaf — roadmap `X.3`
+### 当前 code leaf — roadmap `X.4`
 
-X.3只新增immutable `HistorySchemaV3`（不修改已shipping V2）、四个Gateway/Audit models、fixed
+X.3已只新增immutable `HistorySchemaV3`（不修改已shipping V2）、四个Gateway/Audit models、fixed
 `ExternalLimits`与bootstrap/validation。exact startup shape是一个config、一个active且display name固定为
 `Siri / Shortcuts / Spotlight`的App Intents connection、zero grants、zero audit；既有config缺connection或
 identity/display/status不匹配均fail closed，不silent repair。只有config absent且三类dependent rows全空时可在同一
 bootstrap transaction创建config+connection；该shape与未来V3四类Gateway rows被全部删除同形，无法区分，故只
 claim可拒绝“config absent + surviving dependent row”，不加marker/hash。
 
-X.3不实现`OperationPayloadBlobV1`或operation literal cases：V2-05 §4.4现有片段是non-executable historical
-skeleton；X.4必须先冻结完整closed request/result cases（含每个admitted admin operation），再同一leaf落codec+
-atomic audit。X.3也不实现registry/admin、Gateway actor、facade/factory、App Intents、CLI或transport。
-GrantRow冻结为每pair一条current state；re-grant未来更新该行，event history归audit；global rebase/compact的
-connection/capability为nil；config不保留write-only generation。任何“Python/Gateway已可用”claim仍不成立。
+当前未合并工作树已按V2-05 §4.4的closed 17 request / 15 result table完成codec→central audit
+store→current-state/admin/startup及public in-app admin conformance；re-grant更新同一current row，event
+history归audit，global rebase/compact的connection/capability为nil，config不保留write-only generation。
+这些仍须一次macOS correctness CI与合并；而且X.4明确没有`ExternalGateway` actor、external
+facade/factory、App Intents、credential、CLI或transport，故任何“Python/Gateway已可用”claim仍不成立。
 
 ### PY-1 — 当前安全负对照
 
@@ -661,7 +655,7 @@ socket test最多证明protocol实现。
 
 1. **先改规格，不先写transport。** V2-05已加入 `localAutomation`、closed connection allow matrix与
    opaque wire values方向；wire contract可以先冻结。schema/grant/audit integrity形状已由X.3/X.4 owning
-   决策关闭；当前先完成X.3 persistence-only leaf，再由X.4 spec-first冻结完整audit cases并同批落atomic behavior。
+   决策关闭；X.3 persistence-only leaf已完成，X.4 spec-first完整audit cases也已冻结，当前只能按该表同批落atomic behavior。
    App Intents既有capability/operation不因Local Automation而改变。
 2. **先完成唯一Gateway的in-process trust substrate。** enrollment/grant/revoke/quota/audit/opaque
    locator与Authority recheck先以真实History闭环；按既有V2路线让App Intents成为第一个adapter，不另写
@@ -673,7 +667,7 @@ socket test最多证明protocol实现。
    UDS + LaunchServices ready只是首个候选，
    必须连接步骤2同一Gateway，先闭环
    enroll/deny/grant/revoke/browse；没有write，没有subscription。
-5. **再做Effective-only binary read。** 先批准`DEC-PY-READ-AUDIT`所选合同与binary output，绝不复用full details
+5. **再做Effective-only binary read。** 使用已冻结的durable-before-publication audit contract与binary output，绝不复用full details
    暴露lineage。
 6. **按风险逐项开放write。** organize → deleteItem；每项独立grant与transaction/audit proof。
 7. **最后才考虑reviseContent。** OCC、wire basis/draft、idempotency与stale UX都明确后再准入。
@@ -700,14 +694,14 @@ socket test最多证明protocol实现。
 
 | Claim | Reason / source | 当前最多支持 | 不能建立 | 下一判别证据 |
 |---|---|---|---|---|
-| 当前Python不能访问Clipy history | tracked source/manifest无CLI/transport/gateway implementation；当前X.3仅schema/limits/bootstrap | 当前source snapshot事实 | future feasibility | PY-1/PY-4 vertical tracer |
+| 当前Python不能访问Clipy history | tracked source/manifest无CLI/transport/ExternalGateway implementation；当前未合并X.4只有in-app admin substrate/conformance | 当前source snapshot事实 | future feasibility | PY-1/PY-4 vertical tracer |
 | 任意Python可经CLI调用 | Python可启动first-party executable；public contract不依赖Swift bridge | 设计上可行 | signed/sandbox/TCC/cold-start可靠性 | PY-15 matrix |
 | UDS适合private CLI→app binary | POSIX byte stream + `getpeereid`；详见Apple memo §5 | non-sandbox私有transport首选spike | arbitrary sandbox caller一定能执行CLI或CLI一定可连接 | signed三类caller matrix |
 | XPC不是stdlib Python interface | Apple XPC encoding opaque；需native client | signed CLI可隐藏它 | Python直接实现受支持XPC client | 仅在批准signed bridge后跑X-PY-XPC |
 | browse仍可能泄密 | current `HistoryRow.title/search.snippet`直接来自内容presentation | capability必须按content-bearing披露 | 每条title实际都敏感 | synthetic-secret grant test + user UX review |
 | details对首版过宽 | current `HistoryDetails`含canonical/effective/revisions/occurrence | Effective-only应是目的型read | 新projection性能/实现必然更好 | PY-7 + G8/resource measure |
 | same UID不是per-script identity | UDS/CLI看到OS peer，不看到稳定`.py`身份 | shared localAutomation connection是诚实模型 | 对恶意同用户进程隔离 | 若需求变化，signed per-client design |
-| content-read audit当前不完整 | 当前V2-05 reads明确at-most-one | 只支持best-effort audit | crash后每次bytes release必有record | `DEC-PY-READ-AUDIT` A/B decision + corresponding proof |
+| content-read audit实现尚未落地 | V2-05已冻结audit-commit-before-publication | spec支持“successful return必有record” | client完整接收或消费了bytes | mandatory-barrier failure/crash proof |
 
 最终推荐不是“让Python直连一个socket”，而是：**让Python只依赖稳定的第一方 `clipyctl`；让
 transport保持private、可替换；让所有外部能力经过一个更细粒度的 `ExternalGateway`；让用户明确

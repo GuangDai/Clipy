@@ -63,6 +63,10 @@ import Testing
         .readEffectiveContent,
         .reviseContent,
         .describeFormatCapabilities,
+        .adminRevokeCapability,
+        .adminReadConnections,
+        .adminReadGrants,
+        .adminReadAudit,
     ]
 
     for connectionKind in connectionKinds {
@@ -89,5 +93,6 @@ import Testing
 @Test func externalAccessVocabularyRejectsUnknownRawValues() {
     #expect(ConnectionEnrollKind(rawValue: 999) == nil)
     #expect(ExternalCapability(rawValue: 999) == nil)
+    #expect(ExternalOperationKind(rawValue: 20) == nil)
     #expect(ExternalOperationKind(rawValue: 999) == nil)
 }

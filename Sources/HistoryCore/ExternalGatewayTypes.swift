@@ -46,7 +46,7 @@ public enum ExternalOperationKind: Int16, Sendable, Hashable, Codable {
     // is never admitted by the external connection-kind policy.
     case adminEnroll = 8
     case adminGrant = 9
-    case adminRevoke = 10
+    case adminRevoke = 10 // Connection revoke; capability revoke is raw 16.
     case adminRebase = 11
     case adminCompact = 12
 
@@ -55,4 +55,11 @@ public enum ExternalOperationKind: Int16, Sendable, Hashable, Codable {
     case readEffectiveContent = 13
     case reviseContent = 14
     case describeFormatCapabilities = 15
+
+    // Further in-app administration vocabulary remains forbidden to every
+    // external connection kind and capability.
+    case adminRevokeCapability = 16
+    case adminReadConnections = 17
+    case adminReadGrants = 18
+    case adminReadAudit = 19
 }
