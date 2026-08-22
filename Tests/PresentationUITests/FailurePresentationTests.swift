@@ -67,7 +67,7 @@ struct FailurePresentationTests {
 
     /// Every `UnavailableReason` case.
     private var unavailableReasons: [UnavailableReason] {
-        [.factProof, .dedupIndexRebuild]
+        [.factProof, .dedupIndexRebuild, .insufficientDiskSpace]
     }
 
     /// Every `PersistenceFailure` case.
@@ -152,6 +152,15 @@ struct FailurePresentationTests {
         #expect(
             FailurePresentation.message(for: .capacityExceeded(.storageBytes))
                 == "This budget can't be satisfied with the current history."
+        )
+    }
+
+    @Test func insufficientDiskSpaceMessageExplainsTheRetryableAction() {
+        #expect(
+            FailurePresentation.message(
+                for: .temporarilyUnavailable(.insufficientDiskSpace)
+            )
+                == "Not enough disk space. Free some space and try again."
         )
     }
 }

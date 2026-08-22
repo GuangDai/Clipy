@@ -167,7 +167,8 @@ internal struct SignatureIndexDelta: Sendable {
 
 /// One plan ready for the atomic transaction: the single minted Change
 /// Position, the ordered stamped mutations, the caller-visible receipt
-/// outcome, and the precomputed Signature Index delta.
+/// outcome and retention-effect fact, and the precomputed Signature Index
+/// delta.
 /// docs/05-authority-kernel.md §9
 ///
 /// `ChangePosition` advances exactly once for the whole plan, never once per
@@ -178,6 +179,25 @@ internal struct StampedCommitPlan: Sendable {
     internal let mutations: [StampedMutation]
     internal let receiptOutcome: HistoryCommitOutcome
     internal let indexDelta: SignatureIndexDelta
+    /// Receipt-facing summary derived from the Domain plan's explicit
+    /// retire/prune facts before a compose-with-append prune is folded away.
+    /// It is presentation invalidation only: identity and transaction
+    /// execution continue to use the complete typed mutations.
+    internal let hasDestructiveRetentionEffects: Bool
+
+    internal init(
+        position: ChangePosition,
+        mutations: [StampedMutation],
+        receiptOutcome: HistoryCommitOutcome,
+        indexDelta: SignatureIndexDelta,
+        hasDestructiveRetentionEffects: Bool = false
+    ) {
+        self.position = position
+        self.mutations = mutations
+        self.receiptOutcome = receiptOutcome
+        self.indexDelta = indexDelta
+        self.hasDestructiveRetentionEffects = hasDestructiveRetentionEffects
+    }
 
     /// Whether §10 must re-prove D12 before transaction success. Revision,
     /// occurrence, create, retention-only deletion, and policy mutations
@@ -618,7 +638,21 @@ internal enum CommitPlanStamper {
                 inputs: inputs,
                 revisedNextVersion: revisedNextVersion
             ),
-            indexDelta: SignatureIndexDelta(additions: additions, removals: removals)
+            indexDelta: SignatureIndexDelta(additions: additions, removals: removals),
+            hasDestructiveRetentionEffects: plan.mutations.contains { mutation in
+                switch mutation {
+                case .retire(_, .retention), .pruneRevisions:
+                    return true
+                case .create,
+                     .recordCopy,
+                     .assignPin,
+                     .appendRevision,
+                     .retire,
+                     .setRetentionPolicy,
+                     .setRetentionPolicies:
+                    return false
+                }
+            }
         )
     }
 

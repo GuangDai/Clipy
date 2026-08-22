@@ -256,9 +256,17 @@ struct RetentionReviseCompositionTests {
         let positionBefore = try WSSupport.fetchPosition(container).rawValue
         #expect(positionBefore == 4)
 
-        let reference = try await Self.revise(
-            target.id, expected: 4, bytes: 20, in: history
-        )
+        let receipt = try await history.perform(.revise(Self.replaceRequest(
+            itemID: target.id,
+            expected: ContentVersion(rawValue: 4),
+            bytes: 20
+        )))
+        guard case let .committed(commit) = receipt,
+              case let .revised(reference) = commit.outcome else {
+            Issue.record("R.5: expected composed Revise commit, got \(receipt)")
+            return
+        }
+        #expect(commit.hasDestructiveRetentionEffects)
         // ONE ContentVersion successor for the whole composed plan.
         #expect(reference.contentVersion.rawValue == 5)
 
@@ -774,9 +782,17 @@ struct RetentionReviseCompositionTests {
         let positionBefore = try WSSupport.fetchPosition(container).rawValue
         #expect(positionBefore == 3)
 
-        let reference = try await Self.revise(
-            target.id, expected: 1, bytes: 20, in: history
-        )
+        let receipt = try await history.perform(.revise(Self.replaceRequest(
+            itemID: target.id,
+            expected: ContentVersion(rawValue: 1),
+            bytes: 20
+        )))
+        guard case let .committed(commit) = receipt,
+              case let .revised(reference) = commit.outcome else {
+            Issue.record("R.5: expected composed Revise commit, got \(receipt)")
+            return
+        }
+        #expect(commit.hasDestructiveRetentionEffects)
         #expect(reference.id == target.id)
         #expect(reference.contentVersion.rawValue == 2)
 

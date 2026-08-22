@@ -27,6 +27,7 @@
 | 正常路径 correctness batch 2 | Done | [PR #3](https://github.com/GuangDai/Clipy/pull/3)，[correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32562731920) | 三个 correctness jobs 全绿；未运行 perf/AB | 下表标为 Partial/Open 的 hosted、purge、signed/runtime 项 |
 | 正常路径 correctness batch 3 | Done | [PR #4](https://github.com/GuangDai/Clipy/pull/4)，[correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32565262175) | 三个 correctness jobs 全绿；覆盖下表列出的 capture、preview、storage 与 presentation leaves；未运行 perf/AB | 不证明 AX/WindowServer runtime、完整 destructive purge、全局格式模块或整项 DATA-1/DATA-2/DATA-11 |
 | 正常路径 correctness batch 4 | Done | [PR #5](https://github.com/GuangDai/Clipy/pull/5)，[correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32568061992) | 三个 correctness jobs 全绿；覆盖 receipt purge、singleton shape、revision ID、transaction aftermath 与 DEBUG seam leaves；未运行 perf/AB | Card 9B 与 DATA-1 仍仅 Partial；不证明 authoritative all-commit purge、signed/runtime 或完整 test-instrumentation audit |
+| 正常路径 correctness batch 5 | Done | [PR #6](https://github.com/GuangDai/Clipy/pull/6)，[correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32570362335) | 三个 correctness jobs 全绿；覆盖 projection recipe v2/rebuild、backfill signature coverage、startup scalar validation、capture change-count fence、relative-time refresh 与三进程 restart leaves；未运行 perf/AB | DATA-2、DATA-11 与 Card 5B 仍仅 Partial；不证明 hosted/signed runtime、通用 migration、性能或完整 crash durability |
 
 ## 3. 正常路径 leaf 状态
 
@@ -91,40 +92,57 @@ finding 的其余缺口仍以“支持上限”列和第 6 节为准。
 | DATA-1 unambiguous singleton startup shapes | Partial | [`ensurePositionSingleton`](../../../Sources/HistoryStorage/HistoryAuthority.swift#L404) 扫描完整position table并只允许fresh-compatible缺失；[`ensureRetentionExpansionConfig`](../../../Sources/HistoryStorage/HistoryAuthority+RetentionBootstrap.swift#L165) 不再把wrong-key config误作absence | [`nonFreshSingletonCorruptionIsRejectedWithoutDurableMutation`](../../../Tests/HistoryStorageTests/SingletonShapeStartupClassifierTests.swift#L208) 通过persistent public reopen覆盖missing-position、wrong/extra position与wrong/extra config且比较前后durable values | 只关闭可区分shape。仍有两个因果歧义：① 合法V1→V2迁移后待bootstrap的missing config与既有V2删除config同形；② fresh empty store与已clear且两个singleton均被删除的V2 store同形。没有durable provenance时不得猜测原因，DATA-1仍Partial |
 | Card 2D / WS13 public browse/details aftermath | Done（指定 leaf） | transaction owner仍是 [`HistoryAuthority`](../../../Sources/HistoryStorage/HistoryAuthority.swift)；failure后的oracle改走production [`SwiftDataHistory`](../../../Sources/HistoryStorage/SwiftDataHistory.swift) public facade | [`injectedClosureFailureCommitsNothingAndLeavesStoreAndIndexConsistent`](../../../Tests/HistoryStorageTests/WS13TransactionFailureTests.swift#L26)、[`injectedFailureBeforeSingletonUpdateCommitsNeitherRowsNorPosition`](../../../Tests/HistoryStorageTests/TransactionBoundaryProofTests.swift#L87) 在任何成功修复前核对public browse/details/notFound | 证明注入transaction failure后public reads仍精确返回pre-attempt state；failure injection本身仍是`@testable` Authority seam，不是无注入的端到端系统崩溃证明 |
 
-## 6. Batch 5 current work（unmerged）
+## 6. Batch 5 已合并 leaf 状态
 
-以下 production/test 证据仍只存在于当前工作树。即使源码与测试已经成对出现，合并且 correctness CI
-全绿前状态一律是 **In progress**。
+以下状态只覆盖 [PR #6](https://github.com/GuangDai/Clipy/pull/6) 经
+[correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32570362335) 验证的边界；Card 或 finding
+的其余缺口仍以“合并后的最高支持上限”列和第 8 节为准。
 
 | Leaf | 当前状态 | Production 证据 | Behavior 证据 | 合并后的最高支持上限 |
 |---|---|---|---|---|
-| Projection recipe v2 + startup rebuild | In progress | [`ContentProjector`](../../../Sources/HistoryStorage/ContentProjector.swift) 只投影exact plain codecs；[`ContentProjectionRebuild`](../../../Sources/HistoryStorage/ContentProjectionRebuild.swift) 在facade发布前把legacy tag 1原子重建为2；owning [`05 §15`](../../05-authority-kernel.md#15-projection-rules) 已批准 | [`ProjectionRecipeV2RebuildTests`](../../../Tests/HistoryStorageTests/ProjectionRecipeV2RebuildTests.swift) 覆盖active revision、mixed v1/v2、unknown tag、坏revision source与transaction rollback | 证明现有5,000 hard bound内的recipe-v1→v2 derived projection重建；不改SwiftData schema/ContentVersion/ChangePosition，不提供通用migration framework或RSS/perf证明 |
-| DATA-11 migration/backfill signature coverage | In progress（合并后仍仅 Partial） | [`RetainedBytesBackfill`](../../../Sources/HistoryStorage/RetainedBytesBackfill.swift) 在写projection前用已解码Canonical执行双向signature coverage | [`RetainedBytesBackfillTests`](../../../Tests/HistoryStorageTests/RetainedBytesBackfillTests.swift) 用独立literal oracle覆盖missing/extra type、wrong fingerprint/byteCount与forced collision | 关闭migration/backfill coverage leaf；startup/rebuild的Signature Index负证据contract仍Open，不能外推为整个DATA-11完成 |
-| DATA-2 startup relational scalars | In progress（合并后仍仅 Partial） | [`ValidatedRetainedBytesScalars`](../../../Sources/HistoryStorage/RetentionConfigLoading.swift) 被startup correspondence与planning共用；startup保持scalar-only | [`reopenFailsClosedOnImpossibleScalar`](../../../Tests/HistoryStorageTests/RetainedBytesScalarValidationTests.swift) 覆盖完整非法scalar矩阵并比较durable snapshot | 关闭public reopen的version/bound/relation验证；正常startup不逐blob equality，R3 exceeding-item piggyback cross-check仍Open |
-| Card 5B capture change-count fence | In progress（合并后仍仅 Partial） | [`PasteboardAdapter.captureOutcome`](../../../Sources/PasteboardAdapter/PasteboardAdapter.swift) 记录start/end `changeCount`并在变化时丢弃已读bytes；[`AppComposition`](../../../ClipyApp/Sources/AppComposition.swift) 在capture lane前拒绝 | [`pasteboardChangeBetweenRepresentationReadsProducesContentFreeRetryOutcome`](../../../Tests/PasteboardAdapterTests/PasteboardAdapterTests.swift) 与complete-convenience control | 精确证明adapter seam不发布跨generation partial；composition为源码接线+correctness compile。`CaptureOutcome`仍是optionals record，observer bounded-retry与hosted exact-outcome仍Open |
-| Relative-time shared refresh | In progress | [`HistoryListView`](../../../Sources/PresentationUI/HistoryListView.swift) 用一个minute cadence向所有[`HistoryRowView`](../../../Sources/PresentationUI/HistoryRowView.swift)传显式`now` | [`HistoryRowRenderingTests`](../../../Tests/PresentationUITests/HistoryRowRenderingTests.swift) 无sleep验证literal 59秒→1分钟变化 | 证明单list共享刷新与deterministic formatting；无逐row timer/全局clock，不证明WindowServer后台调度 |
-| Evidence Card 1C-1 true V2 restart | In progress | [`HistoryRestartProbe`](../../../Sources/HistoryRestartProbe/HistoryRestartProbe.swift) 三个短生命周期进程只经public History API共享一个StoreRoot，并用纯文本UUID manifest核对业务ID | [`TrueRestartChildTests`](../../../Tests/HistoryStorageTests/TrueRestartChildTests.swift) 驱动seed→operate→verify；B/C分别核对browse/details ID，B另核对coalesce receipt ID | 只证明普通V2三进程重启、公开业务ID/rows/details/position一致；不证明V1→V2 migration、SIGKILL、断电、externalStorage durability或独立schema inspector |
+| Projection recipe v2 + startup rebuild | Done | [`ContentProjector`](../../../Sources/HistoryStorage/ContentProjector.swift) 只投影exact plain codecs；[`ContentProjectionRebuild`](../../../Sources/HistoryStorage/ContentProjectionRebuild.swift) 在facade发布前把legacy tag 1原子重建为2；owning [`05 §15`](../../05-authority-kernel.md#15-projection-rules) 已批准 | [`ProjectionRecipeV2RebuildTests`](../../../Tests/HistoryStorageTests/ProjectionRecipeV2RebuildTests.swift) 覆盖active revision、mixed v1/v2、unknown tag、坏revision source与transaction rollback | 证明现有5,000 hard bound内的recipe-v1→v2 derived projection重建；不改SwiftData schema/ContentVersion/ChangePosition，不提供通用migration framework或RSS/perf证明 |
+| DATA-11 migration/backfill signature coverage | Partial | [`RetainedBytesBackfill`](../../../Sources/HistoryStorage/RetainedBytesBackfill.swift) 在写projection前用已解码Canonical执行双向signature coverage | [`RetainedBytesBackfillTests`](../../../Tests/HistoryStorageTests/RetainedBytesBackfillTests.swift) 用独立literal oracle覆盖missing/extra type、wrong fingerprint/byteCount与forced collision | 关闭migration/backfill coverage leaf；startup/rebuild的Signature Index负证据contract仍Open，不能外推为整个DATA-11完成 |
+| DATA-2 startup relational scalars | Partial | [`ValidatedRetainedBytesScalars`](../../../Sources/HistoryStorage/RetentionConfigLoading.swift) 被startup correspondence与planning共用；startup保持scalar-only | [`reopenFailsClosedOnImpossibleScalar`](../../../Tests/HistoryStorageTests/RetainedBytesScalarValidationTests.swift) 覆盖完整非法scalar矩阵并比较durable snapshot | 关闭public reopen的version/bound/relation验证；正常startup不逐blob equality，R3 exceeding-item piggyback cross-check仍Open |
+| Card 5B capture change-count fence | Partial | [`PasteboardAdapter.captureOutcome`](../../../Sources/PasteboardAdapter/PasteboardAdapter.swift) 记录start/end `changeCount`并在变化时丢弃已读bytes；[`AppComposition`](../../../ClipyApp/Sources/AppComposition.swift) 在capture lane前拒绝 | [`pasteboardChangeBetweenRepresentationReadsProducesContentFreeRetryOutcome`](../../../Tests/PasteboardAdapterTests/PasteboardAdapterTests.swift) 与complete-convenience control | 精确证明adapter seam不发布跨generation partial；composition为源码接线+correctness compile。`CaptureOutcome`仍是optionals record，observer bounded-retry与hosted exact-outcome仍Open |
+| Relative-time shared refresh | Done | [`HistoryListView`](../../../Sources/PresentationUI/HistoryListView.swift) 用一个minute cadence向所有[`HistoryRowView`](../../../Sources/PresentationUI/HistoryRowView.swift)传显式`now` | [`HistoryRowRenderingTests`](../../../Tests/PresentationUITests/HistoryRowRenderingTests.swift) 无sleep验证literal 59秒→1分钟变化 | 证明单list共享刷新与deterministic formatting；无逐row timer/全局clock，不证明WindowServer后台调度 |
+| Evidence Card 1C-1 true V2 restart | Done | [`HistoryRestartProbe`](../../../Sources/HistoryRestartProbe/HistoryRestartProbe.swift) 三个短生命周期进程只经public History API共享一个StoreRoot，并用纯文本UUID manifest核对业务ID | [`TrueRestartChildTests`](../../../Tests/HistoryStorageTests/TrueRestartChildTests.swift) 驱动seed→operate→verify；B/C分别核对browse/details ID，B另核对coalesce receipt ID | 只证明普通V2三进程重启、公开业务ID/rows/details/position一致；不证明V1→V2 migration、SIGKILL、断电、externalStorage durability或独立schema inspector |
 
-## 7. 明确仍 Open，禁止误报完成
+## 7. Batch 6 current work（unmerged）
 
-- Card 9B 的完整 destructive purge仍缺authoritative all-commit owner：capture及retention-policy commit
-  可能淘汰item/revision，不能由UI action dispatcher推断；Batch 4只关闭同一ViewState发起的
-  Clear/remove/revise receipt路径，合并后仍是Partial。
+以下代码、测试、workflow与规格修订只存在于当前工作树；合并且对应 evidence lane 全绿前一律保持
+**In progress**。
+
+| Leaf | 当前状态 | Production / owning 证据 | Behavior 证据 | 合并后的最高支持上限 |
+|---|---|---|---|---|
+| Card 9B authoritative retention-effect purge | In progress（合并后整体仍Partial） | package-only `HistoryCommit.hasDestructiveRetentionEffects` 由既有retire/prune plan推导；[`AppComposition`](../../../ClipyApp/Sources/AppComposition.swift)把capture receipt转交[`HistoryViewState`](../../../Sources/PresentationUI/HistoryViewState.swift) | [`captureRetentionReceiptPurgesSurfaceBeforeObservationCatchesUp`](../../../ClipyApp/Tests/ClipyIntegrationTests/AppCaptureLaneTests.swift) 与policy/revise receipt fixtures | 关闭单AppComposition/ViewState内capture与retention-policy同commit破坏的authoritative whole-surface purge；跨window/多panel/未来cache仍未证明 |
+| Card 6B typed ENOSPC + explicit capture retry | In progress（合并后仍Partial） | [`PersistenceErrorClassification`](../../../Sources/HistoryStorage/PersistenceErrorClassification.swift) 只识别direct Cocoa/POSIX及一层underlying；transaction rollback映射typed failure；App capture失败丢pending且只接受新observation重试 | [`PersistenceErrorClassificationTests`](../../../Tests/HistoryStorageTests/PersistenceErrorClassificationTests.swift)、[`TransactionBoundaryProofTests`](../../../Tests/HistoryStorageTests/TransactionBoundaryProofTests.swift)、[`lowDiskFailureDropsPendingUntilANewCaptureExplicitlyRetries`](../../../ClipyApp/Tests/ClipyIntegrationTests/AppCaptureLaneTests.swift) | 证明合成但穿过production transaction catch的ENOSPC、rollback、content-free health和显式retry；真实APFS满盘、open/migration、Developer ID环境恢复仍Open |
+| DATA-2 R3 hydrated-lineage cross-check | In progress（合并后整体仍Partial） | [`RetentionPolicySweep`](../../../Sources/HistoryStorage/RetentionPolicySweep.swift) 只对scalar已判R3 exceeding且已经hydrate的item核对canonical/count/revision bytes | [`RetainedBytesR3CrosscheckTests`](../../../Tests/HistoryStorageTests/RetainedBytesR3CrosscheckTests.swift) | 关闭R3 exceeding piggyback leaf；普通startup与non-exceeding item仍不逐blob equality，不能外推为全库扫描 |
+| ClipboardFormats stable-facts module | In progress | package-only Foundation target [`ClipboardFormats`](../../../Sources/ClipboardFormats/StableFormatFacts.swift)；Projection/Preview/Details/Edit各自保留purpose admission | [`StableFormatFactsTests`](../../../Tests/ClipboardFormatsTests/StableFormatFactsTests.swift) 及各owner回归 | 只统一exact identifier与declared codec facts；不是registry/plugin/中央policy/decoder/runtime capability inventory |
+| PLAY-PY-GW0 closed allow matrix | In progress | [`ExternalGatewayTypes`](../../../Sources/HistoryCore/ExternalGatewayTypes.swift) + pure [`ExternalAccessPolicy`](../../../Sources/HistoryStorage/ExternalAccessPolicy.swift) | [`ExternalAccessPolicyTests`](../../../Tests/HistoryStorageTests/ExternalAccessPolicyTests.swift) 覆盖2×8×15组合与unknown raw | 只冻结connection-kind/capability/operation classification；没有credential、Gateway actor/schema/audit/App Intents/CLI/socket |
+| Python/Gateway + U-scale/P3 spec unblock | In progress（docs decision leaf） | [`V2-05`](../../v2/V2-05-external-gateway.md)、[`07`](07-python-local-automation.md)、[`09`](09-tiered-storage-and-unbounded-history.md) 与owning roadmap已冻结顺序/分轨 | decision/PLAY ID与链接机械检查 | GW0已由本批实现；下一Gateway实现层是X.2 public contract，tier首叶为pre-G8 `PLAY-TIER-2A-THUMB`；authenticated ingress、runtime format injection、production count transition、P3 amendment仍BLOCKED/OPEN |
+| SIGNED-RUNTIME-0 manual lane | In progress（需workflow实跑） | workflow-dispatch-only [`signed-runtime.yml`](../../../.github/workflows/signed-runtime.yml) 与单次Release build脚本 [`run_signed_runtime.sh`](../../../scripts/ci/run_signed_runtime.sh) | 合并后手动run才可提供macOS codesign/runtime证据 | 只承诺ad-hoc signature、Hardened Runtime flag、entitlement negative gate与直接process liveness；Developer ID/notary/staple/Gatekeeper/TCC/WindowServer仍Open |
+
+## 8. 明确仍 Open，禁止误报完成
+
+- Card 9B 即使Batch 6合并也只关闭单AppComposition/ViewState内capture、policy、Clear/remove/revise
+  receipt路径；跨window/多panel、未来cache以及不经该owner的commit仍Open。
 - Card 5D 指定的pasteboard failure knobs已迁到更窄DEBUG/internal边界；完整Release/signed symbol与
   其余test instrumentation审计仍Open。
 - Card 5B 仍缺closed exhaustive freeze result、observer bounded-retry与hosted exact-outcome；Batch 5
   只关闭start/end `changeCount` fence与complete-convenience rejection。
-- Card 6B：low-disk/ENOSPC capture health 未实现。
+- Card 6B 仍缺真实bounded-volume/APFS ENOSPC、open/migration与发行身份环境恢复；Batch 6不能把
+  synthetic production-catch proof外推为物理磁盘验收。
 - Card 3D、Card 9D hosted Retry/no-Retry control、localization、VoiceOver/FKA、custom shortcut、signed release、StoreRoot/recovery、
-  Python/Gateway、format modules与tiered/unbounded storage仍按 `04`/`07`–`09` 的 gates执行。
-- DATA-1 的两个不可区分因果shape仍Open；DATA-11 Canonical↔Signature双向coverage也仍Open。本批的
+  Gateway后续层、format runtime/manifests与tiered/unbounded production transition仍按 `04`/`07`–`09` 的 gates执行。
+- DATA-1 的两个不可区分因果shape仍Open；DATA-11 的startup/rebuild Signature Index
+  负证据contract仍Open。本批的
   singleton可区分shape、existing-value与aggregate-byte leaf不得外推为整项完成。
 - `AppComposition` 的capture lane已形成独立调度责任；只有 deletion test 证明 locality 改善时才提取
   app-internal concrete `CaptureLane`，不得先造protocol/bus。Preview/Details/Edit目前重复的codec facts则
   留给已批准的format-facts模块统一；owner-specific admission仍必须分开，不能造中央policy开关。
 - 本文件中的“Done”只关闭所列 leaf；不能据此宣称 state 3、全面超过 Maccy 或字面无限历史。
 
-## 8. Agent 领取前检查
+## 9. Agent 领取前检查
 
 1. 先查本表：Done leaf 不得重做；Partial 只能领取“支持上限/下一步”列中的缺口。
 2. 再查 `04` 的唯一 leaf 与 decision/spec gate；没有唯一 observable behavior 就不编码。

@@ -95,11 +95,14 @@ Each requires an approved product specification and a fresh architecture review.
 
 ### 5. Scaffold file and target plan
 
-The first implementation work must create only these product/library targets,
-plus the non-product `HistoryPerfRunner` proof executable:
+The original state-2 implementation created these product/library targets plus
+the non-product `HistoryPerfRunner` proof executable. The post-step-9
+`ClipboardFormats` deepening is also admitted below after Projection, Preview,
+Details, and Edit provided independent callers and a deletion test:
 
 ```text
 HistoryCore
+ClipboardFormats
 HistoryDomain
 HistoryStorage
 PasteboardAdapter
@@ -113,6 +116,7 @@ Test targets mirror the owner target:
 
 ```text
 HistoryCoreTests
+ClipboardFormatsTests
 HistoryDomainTests
 HistoryStorageTests
 HistoryPerfTests
@@ -122,6 +126,9 @@ ClipyIntegrationTests
 ```
 
 The scaffold must not add an implementation target for a deferred feature.
+`ClipboardFormats` is not a placeholder for future plugins or policies: it is
+a package-only Foundation target containing only open-world exact identifiers
+and declared codec facts. Each behavior owner retains its purpose admission.
 `HistoryPerfTests` imports the executable target only to prove its pure
 §9 helpers and declarative coverage/envelope tables; workload acceptance still
 runs the release executable itself. It runs in its own CI lane
@@ -150,6 +157,7 @@ Before “executable specification”:
 - The exact Part I target graph builds in Swift 6 complete concurrency mode on macOS 26 deployment settings.
 - A deliberate forbidden edge fails to compile or fails the import gate.
 - `HistoryCore` imports only Foundation.
+- `ClipboardFormats` imports only Foundation and owns no purpose policy.
 - `HistoryDomain` imports only Foundation and `HistoryCore`.
 - `import SwiftData` appears only in `HistoryStorage`; AppKit only in its adapter; SwiftUI only in Presentation.
 - No public symbol mentions Canonical Content, Domain facts/plans, SwiftData types, AppKit objects, fingerprints, or internal invalidations.

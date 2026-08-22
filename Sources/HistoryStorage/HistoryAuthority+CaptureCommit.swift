@@ -262,10 +262,13 @@ extension HistoryAuthority {
         invalidationPublisher.publish(
             HistoryInvalidation(latestPosition: stamped.position)
         )
-        // 3. construct and return the committed receipt.
+        // 3. construct and return the committed receipt, including the
+        //    stamped retention-effect fact (never a victim list).
         return .committed(HistoryCommit(
             position: stamped.position,
-            outcome: stamped.receiptOutcome
+            outcome: stamped.receiptOutcome,
+            hasDestructiveRetentionEffects:
+                stamped.hasDestructiveRetentionEffects
         ))
     }
 

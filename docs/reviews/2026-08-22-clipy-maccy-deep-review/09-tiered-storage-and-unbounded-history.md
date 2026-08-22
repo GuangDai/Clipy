@@ -171,10 +171,20 @@ copy 变成随历史增长而越来越慢的操作。
    action = 一个原子大 sweep”，则必须用外部 plan/spool 保持 resident bounded，并接受
    transaction/lock 时间风险。
 
-V2-06 P1当前设计的`StartupCheckpointRow.indexBlob`会恢复完整in-memory `SignatureIndex`，适合5k capped
-regime的启动优化，却与本节U-scale resident-bound目标不兼容。`DEC-U-SCALE-STARTUP-INDEX`必须在实现
-`PLAY-COUNT-1`前修订owning P1：选择durable sharded/index-query + bounded cache，或明确hot window并提供
-authoritative exact fallback；不能先落complete checkpoint，再由另一套index并存来“优化”无限历史。
+当前 recipe-v2 rebuild和 V2-06 P1 都要按 regime 分开。已落地的 recipe-v2 open 步骤在当前
+5,000 hard bound 下一次预计算所有 legacy replacements，然后在一个 transaction 中 stamp；它是
+**capped-regime correctness migration**，不是 U-scale 启动算法，也不能被 P1 checkpoint 跳过。
+V2-06 P1 当前设计的 `StartupCheckpointRow.indexBlob` 会恢复完整 in-memory `SignatureIndex`，
+同样只适合 5k capped regime。`DEC-U-SCALE-STARTUP-INDEX` 必须在 `PLAY-COUNT-1`
+前做一次明确、排他的裁决：
+
+1. P1 保持现状但明确仅对 capped profile 有效；U-scale 以 durable indexed signature-candidate
+   query + bounded candidate batches 取代 complete checkpoint/index；或
+2. 在 owning V2-06 中把 P1 本身修订为同一套 durable candidate query / lazy shard 合同。
+
+不得同时落地 complete checkpoint 与另一套 U-scale index。无论选哪条，新 commit 都必须维护
+authoritative candidate projection；从 recipe-v2 legacy store 进入 U-scale 前，要另有可恢复、有界的
+projection/signature validation 路径，不能把当前全库 recipe rebuild 外推到无 count cap。
 
 随后还要处理 pin ordinal 全量 compaction/validation、UI row window、GC live-set、
 migration 与后台一致性验证。它们不是取消 count cap 的首个 tracer bullet，但都决定
@@ -212,9 +222,11 @@ materialization。每个 renderer 必须通过实际 access trace 与 RSS child 
 
 ### 方案 A：继续使用 SwiftData aggregate blob，只加 caller-shape/telemetry 与 permits
 
-形状：保留当前 monolithic Canonical/revision codecs 与 `.externalStorage`；先只让caller收到目标
-representation并诚实计入aggregate hydration，增加重型操作permits、UI window和局部cache改善。没有G8
-trigger时不因此新增History read seam。
+形状：保留当前 monolithic Canonical/revision codecs 与 `.externalStorage`；在已有 purpose lane
+内先只让 caller 收到它选定的目标 representation，同时诚实计入为完成筛选而整体 hydrate
+的 aggregate bytes。再按已观测证据增加重型操作 permits 和 UI window；没有 owner-specific
+reuse 证据时不加 cache。没有 G8 trigger 时不因此新增 History read protocol 或通用
+content-source abstraction。
 
 优点：迁移少；继续享有 SwiftData 管理 row/property 的现有 durable boundary；适合先减少可证明的
 无谓副本、限制whole-item hydration并发，并把其真实成本纳入峰值账本。
@@ -437,10 +449,10 @@ P3 admission 前还应重新裁决：
   compatibility lane；
 - stream-open version fence、mid-stream revision/delete、consumer early-stop 与 end-of-stream
   integrity各有什么保证；
-- whole-file digest 在 stream结束前无法证明，因而是 fail-late。必须按 purpose裁决：用
-  authenticated fixed chunks、先完整 prepass再交付，或让有外部副作用的 consumer先写
-  private staging并在 end verification 后才 publish/commit；不能边验证边把未认证 bytes
-  写入 pasteboard或外部目标后仍称 fail closed；
+- 当前没有获批的 persisted content-authentication 合同；本轮不新增 content hash/checksum。
+  迁移/publish 可在本次冻结 source 仍可用时做 byte-exact staged readback；有外部副作用的
+  consumer 在该 validation 完成前不得 publish。runtime read 只能对 missing/wrong identity/read
+  error/length mismatch fail closed，不声称能自检同长 silent media corruption；
 - `FileHandle.AsyncBytes` 不是自动 chunk-size/RSS proof；必要时由 actor-confined repeated
   `read(upToCount:)` adapter 提供明确 chunk shape；
 - in-flight blob 不能只靠 volatile set + elapsed grace 防止 GC；crash/restart需要 durable
@@ -470,7 +482,8 @@ P3 admission 前还应重新裁决：
 SwiftData 与 app-owned file 没有公开跨介质 transaction，所以正确目标是可恢复，不是
 伪装原子：
 
-1. 在 private staging 以随机、不可猜测 `BlobID` 写入，校验 length 与强完整性摘要；
+1. 在 private staging 以随机、不可猜测 `BlobID` 写入，校验 exact length，并在迁移/
+   publish 路径将 staged bytes 与本次已冻结的 source value 做 byte-exact readback；
 2. 在同卷执行immutable publish；只把通过指定macOS/filesystem的process-kill/reopen matrix支持的行为称为
    crash-recoverable，不把它称为fsync/power-loss durable。此时文件可能是 orphan，但业务不可见；
 3. 唯一 `HistoryAuthority` transaction 写 descriptor/reference、logical bytes、History
@@ -483,9 +496,11 @@ SwiftData 与 app-owned file 没有公开跨介质 transaction，所以正确目
    representation/item typed-fail；只有 metadata/ownership invariant 无法确定边界时才
    升级为 whole-facade open failure，二者必须由规格分别列举。
 
-当前 xxh3 fingerprint 是 dedup evidence，不是 identity；不能直接把它当唯一 BlobID。
-同 bytes 的 physical dedup 若以后需要，必须强 digest + byte confirmation + refcount/crash
-协议独立 admission。
+`BlobID` 必须是与内容无关的随机 identity。当前 xxh3 fingerprint 仅是 product-domain dedup
+candidate evidence，不得被复用为 BlobID、路径、manifest 或基础设施状态。本设计不新增内容
+hash/checksum。因此 runtime 能 fail closed 的是 wrong identity、missing source、read error 和 length
+mismatch；“同长 silent media corruption 必然自检”不在当前承诺中。若未来必须承诺该性质，需要
+独立 authoritative security spec 和用户批准，不能顺手复用 dedup fingerprint。
 
 这里还有三条 correctness fence：
 
@@ -611,7 +626,7 @@ admission record 前统一为 `BLOCKED-SPEC`/`BLOCKED-G8`。
 
 - Characterization：同一 run 分别报告 logical、physical/store-family、derived cache、resident/
   in-flight high-water；只增加 content-free measurement receipt/signposts；
-- 记录要求：每条记录带 schema、fixture digest、OS build、机器类别。没有这些元数据的
+- 记录要求：每条记录带 schema、显式 fixture ID/version、OS build、机器类别。没有这些元数据的
   数字不进入 gate。
 
 **DESIGN-TIER-CHAR-2：当前 hydration map**
@@ -639,9 +654,13 @@ admission record 前统一为 `BLOCKED-SPEC`/`BLOCKED-G8`。
 
 **DESIGN-TIER-2A：caller-visible purpose shape（方案 A）**
 
-- caller 只收到 exact item/version 的目标 representation，旧 `ContentVersion` 返回 typed stale；
-- instrumentation 必须把当前 monolithic codec 为选择目标而整体 hydrate 的 aggregate bytes 全部记账；
-- 这不允许宣称 physical single-representation/range read。
+- pre-G8 首发只收窄**已有 thumbnail purpose lane**：caller 只收到 exact item/version 下已选中的
+  一个 source representation，旧 `ContentVersion` 仍返回 typed stale；
+- instrumentation 仅记录 content-free `returnedRepresentationBytes` 与当前 monolithic codecs 为选择
+  它而整体 hydrate 的 `aggregateHydratedBytes`；两者不相等也不互相代替；
+- 不新增 public/`package` content-read protocol，不抽象通用 reader，不改 paste/details 语义；
+- 这不允许宣称 physical single-representation/range read。后续每个 purpose 必须由自己的行为
+  Red 扩展，不能把 thumbnail 证据外推。
 
 **DESIGN-TIER-2B：physical purpose read（方案 B / `BLOCKED-SPEC` / `BLOCKED-G8`）**
 
@@ -717,6 +736,12 @@ generic raw cache或复杂算法。
 - retention sweep按 bounded cursor推进，aggregate在 capture/revise/remove/crash 后与重算
   oracle一致。
 
+当前 recipe-v2 startup rebuild 与 P1 complete checkpoint 都仅能作为 capped-profile 路径。
+`DEC-U-SCALE-STARTUP-INDEX` 必须明确选择“P1 仅 capped，U-scale 以 durable candidate query
+取代”或“owning P1 被修订为同一套 bounded query/lazy-shard 合同”。新 commit 维护的
+candidate projection、legacy recipe/projection 的 bounded validation 与第一次 same-content capture 是同一个
+correctness 闭环；不允许用未验证 shard 的 negative evidence 产生 silent duplicate。
+
 **DESIGN-TIER-8：UI/pin/validation follow-through**
 
 - 滚动 20,000 rows 后 UI retained row/window不增长；
@@ -736,7 +761,7 @@ pagination，以及7B/7C/8A/8B；只让平均candidate/page有界不能关闭U-s
 - disabled count 不使用 `Int.max` sentinel；
 - 第 5,001 item真实入库/分页；
 - disabled count 不改变 per-representation safety、disk reserve和typed failure。
-- production enable还要求shared `PLAY-DISK-0A/0B/1/2A/3…6`、current-schema migration/backup headroom与逐级
+- production enable还要求shared `PLAY-DISK-0A/0B/1/2A/3/4/5/6`、current-schema migration/backup headroom与逐级
   scale/soak gate闭合；这些不依赖P3。只通过test-only5,001 fixture不能发布；1m scheduled/release
   evidence由`PLAY-COUNT-9C`单列并先关闭，真正production transition才由9A/9B完成。
 
@@ -759,9 +784,10 @@ pagination，以及7B/7C/8A/8B；只让平均candidate/page有界不能关闭U-s
   内同步 open+`fstat`，或先登记 GC-visible read reservation 再异步 open、失败 exactly-once 归还；
 - 64 MiB blob 以固定最大 chunk 消费，consumer 不形成第二份完整 `Data`；
 - cancel/early stop 后 descriptor 与 permit归零；
-- missing、length mismatch、digest mismatch 是 typed corruption，不静默 fallback；
-- whole-file digest路径明确标为 fail-late，并分别测试 authenticated chunks、prepass、
-  staging-until-verified三种候选；有外部副作用的 lane在 integrity完成前不得 publish；
+- missing、wrong identity、read error、length mismatch 是 typed corruption，不静默 fallback；
+- 本设计不新增 persisted content hash/checksum；迁移/publish 可在本次冻结 source 仍可用时做
+  byte-exact readback，runtime 不承诺自检同长 silent media corruption。有外部副作用的 lane 仍须在
+  本次批准的 validation/readback 完成前不 publish；
 - exact ContentVersion 改变后旧 open失败；mid-stream revision/delete由 race test冻结。
 
 ### Phase 6：P3 随后的 ENOSPC、crash 与 GC
@@ -858,7 +884,8 @@ arrays并全量 decode/rewrite，不能外推到无 count cap
 - cache bytes永不越界，cancel/settle后回到稳定 plateau；
 - 24–72 小时 capture/coalesce/revise/pin/remove/search/preview/Python read；
 - 周期性 SIGKILL、memory pressure、disk pressure、restart与GC；
-- 随机抽样 content hash、logical aggregates、references与纯 oracle对比；
+- 按显式 item/reference/type manifest 随机抽样 public byte-exact content，logical aggregates、
+  references 与纯 oracle 对比；
 - 只有方案 B 在该 soak 中出现可复现的 inode/directory/file-open/backup-enumeration或
   loose-file GC瓶颈，才触发方案 C segments/packfiles实验。
 
@@ -872,12 +899,12 @@ arrays并全量 decode/rewrite，不能外推到无 count cap
 |---|---|
 | `DESIGN-TIER-CHAR-1…3` | §26 characterization + `PLAY-STOR-1…4`；未批准阈值前不是Red |
 | `DESIGN-TIER-1` | `PLAY-MEM-1…7`；cache只有具体owner复用证据后才mint `PLAY-LRU-{OWNER}-*` |
-| `DESIGN-TIER-2A/2B` | `PLAY-TIER-2A/2B`；2B受spec/G8阻塞 |
+| `DESIGN-TIER-2A/2B` | 首张=`PLAY-TIER-2A-THUMB`；后续 purpose 另 mint leaf；2B受spec/G8阻塞 |
 | `DESIGN-TIER-3` | `PLAY-STOR-2`与`PLAY-COUNT-7A`，分别证明blob不触碰和规模/tie访问量 |
 | `DESIGN-TIER-4/5/6` | `PLAY-MEM-*`、owner-specific `PLAY-LRU-*`、`PLAY-SOAK-*` |
 | `DESIGN-TIER-7` | `PLAY-COUNT-1/1B/1C/1D/2/3C/3R/3CV/3RV/4E/4F/4R/5A/5B/5C/5R3/5X/5D`，含lazy-validation poison、candidate-storm、victim/R3组合/revise/remove/Clear tail |
 | `DESIGN-TIER-8` | `PLAY-COUNT-7A…7C/8A/8B` |
-| `DESIGN-TIER-9` | test-only=`PLAY-COUNT-6A/6B`；aggregate=`8C` + shared `PLAY-DISK-0A/0B/1/2A/3…6`；production=`9A/9B`，1m evidence=`9C` |
+| `DESIGN-TIER-9` | test-only=`PLAY-COUNT-6A/6B`；aggregate=`8C` + shared `PLAY-DISK-0A/0B/1/2A/3/4/5/6`；production=`9A/9B`，1m evidence=`9C` |
 | `DESIGN-TIER-10/11` | `PLAY-TIER-SPEC-0`后才领`PLAY-TIER-6/2B/3/4/5S/5P`与`PLAY-BLOB-*`；5S仅为internal test sink，5P另受audit gate阻塞 |
 | `DESIGN-TIER-12/13/14` | P3 variants of `PLAY-DISK-*`、`PLAY-CRASH-*`、`PLAY-GC-*` |
 | `DESIGN-TIER-15` | `PLAY-MIG-1…6`；future真实schema migration才继承规模gate，concurrent writes由独立decision拥有 |

@@ -28,6 +28,7 @@ struct HistoryDetailsFormatSafetyTests {
             ("public.text", "abstract text"),
             ("public.plain-text", "unspecified encoding"),
             ("public.utf16-plain-text", "not UTF-16"),
+            ("public.utf8-external-plain-text", "external text"),
         ]
 
         for (typeIdentifier, literal) in fixtures {

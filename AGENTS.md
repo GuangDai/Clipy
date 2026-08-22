@@ -60,18 +60,20 @@ canonical content internals.
 
 ```text
 ClipyApp (XcodeGen app, composition root)
-├── PresentationUI ────────→ HistoryCore
+├── PresentationUI ────────→ HistoryCore + ClipboardFormats
 ├── PasteboardAdapter ─────→ HistoryCore
-└── HistoryStorage ────────→ HistoryCore
+└── HistoryStorage ────────→ HistoryCore + ClipboardFormats
           │                → HistoryDomain
           ├───────────────→ xxh3 (vendored C, package-internal)
           └───────────────→ Fuse (external SPM, fuzzy search)
 HistoryDomain ─────────────→ HistoryCore
+ClipboardFormats ──────────→ Foundation only (package-only stable facts)
 HistoryRestartProbe ───────→ HistoryCore + HistoryStorage (test evidence only)
 ```
 
 | Target | Surface | Role |
 |---|---|---|
+| `ClipboardFormats` | Package-only, Foundation-only | Open-world exact identifiers and declared string-codec facts; no purpose policy, registry, plugin, cache, or decoder |
 | `HistoryCore` | Public, Foundation-only | `ClipboardHistory` protocol, IDs/tokens, closed `HistoryAction` set, request/response DTOs, receipts, typed failures, `HistoryLimits.standard` |
 | `HistoryDomain` | `package` access, Foundation-only, pure | Content lineage, complete action facts, seven pure planners, typed mutation plans. No I/O, actors, clocks, UUID/Date generation, or async |
 | `HistoryStorage` | Public concrete `SwiftDataHistory` + internal implementation | Sole SwiftData authority, schema/codecs, `HistoryAuthority` actor (single writer), fact loaders, Signature Index, read projections, observation plumbing, thumbnail single-flight |
@@ -147,12 +149,18 @@ xcodegen generate --spec ClipyApp/project.yml     # or bash scripts/generate-xco
 xcodebuild -project ClipyApp/ClipyApp.xcodeproj -scheme ClipyApp \
   -configuration Debug -destination 'platform=macOS,arch=arm64' \
   CODE_SIGNING_ALLOWED=NO test
+
+# Manual Release runtime evidence (ad-hoc signature only; macOS CI equivalent)
+bash scripts/ci/run_signed_runtime.sh \
+  signed-runtime-logs DerivedData-SignedRuntime \
+  "${TMPDIR:-/tmp}/xcodegen-2.45.4"
 ```
 
 **Gate semantics:**
 
 - `scripts/import_gate.py` — per-target import confinement (Part I §8):
-  `HistoryCore` → Foundation only; `HistoryDomain` → Foundation + HistoryCore;
+  `ClipboardFormats` → Foundation only; `HistoryCore` → Foundation only;
+  `HistoryDomain` → Foundation + HistoryCore;
   `HistoryStorage` must not import AppKit/SwiftUI/adapters/PresentationUI;
   `PasteboardAdapter` must not import HistoryDomain/HistoryStorage/SwiftUI/
   SwiftData; `PresentationUI` must not import HistoryDomain/HistoryStorage/
@@ -255,6 +263,13 @@ logs are not parsed as compiler output. Write warning-free code.
   bot-commits a regenerated HistoryCore symbol snapshot. Bot pushes do not
   re-trigger CI; the snapshot is enforced by the SwiftPM correctness job on
   subsequent pushes.
+- `.github/workflows/signed-runtime.yml` is `workflow_dispatch`-only. It builds
+  the Release app once, applies and verifies a local ad-hoc signature carrying
+  the Hardened Runtime flag, rejects iCloud/ubiquity entitlements in that exact
+  signed artifact, and runs a direct process-lifecycle smoke. It does **not**
+  prove Developer ID identity, secure timestamp, notarization/stapling,
+  Gatekeeper, TCC, login-item, Carbon/status-item, Space, or WindowServer
+  behavior; those remain state-3 distribution/manual cells.
 - There is no release/deployment pipeline yet: the app is a step-0 scaffold
   (`LSUIElement` agent stub, placeholder window). Packaging, accessibility,
   and localization are Part VI §11 "state 3" acceptance, outside the current

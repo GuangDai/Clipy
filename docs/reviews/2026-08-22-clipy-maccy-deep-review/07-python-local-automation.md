@@ -39,16 +39,15 @@ external-storage 与 migration 规则，又会绕开 grant、audit、OCC、dedup
 
 这个定义有四个重要边界：
 
-same EUID是account-wide边界，不能证明同一GUI/login/audit session；若产品以后要求session隔离，需要
-新的audit-session/transport证据，而不是继续外推`getpeereid`。
-
-1. **显式 opt-in、deny by default。** 安装 Clipy 或第一次运行 Python 不自动开放 history。
-2. **共享同用户身份。** Terminal、IDE、venv、launchd job 中的 Python 若都能执行
+1. **same EUID 是 account-wide 边界。** 它不证明同一 GUI、login 或 audit session；若产品以后
+   要求 session 隔离，需要新的 audit-session/transport 证据，而不是继续外推 `getpeereid`。
+2. **显式 opt-in、deny by default。** 安装 Clipy 或第一次运行 Python 不自动开放 history。
+3. **共享同用户身份。** Terminal、IDE、venv、launchd job 中的 Python 若都能执行
    `clipyctl`，它们共享一个 `localAutomation` connection、grant、quota 与 audit attribution。
    `getpeereid` 只可证明连接 peer 的 effective UID/GID；chosen signed transport 是否还能证明
    first-party CLI 必须另有平台证据。两者都不可能识别“是哪一个 `.py` 文件”。
-3. **不承诺 remote 或其它用户。** 网络、SSH remote gateway、跨用户 daemon 都是另一项产品。
-4. **受限 sandbox 是外部约束。** 一个由别的 sandboxed app 启动、禁止执行外部工具的 Python
+4. **不承诺 remote 或其它用户。** 网络、SSH remote gateway、跨用户 daemon 都是另一项产品。
+5. **受限 sandbox 是外部约束。** 一个由别的 sandboxed app 启动、禁止执行外部工具的 Python
    可能无法调用 CLI；Clipy 不能绕过调用方自己的 sandbox policy。
 
 因此“任意 Python”应理解为同用户、经第一方 CLI、在用户授权范围内的本机自动化，不是
@@ -120,7 +119,7 @@ Interface contract 应冻结：
 - unknown field 可按明确 forward-compatibility policy 忽略或拒绝，但两者必须冻结一种；unknown
   protocol major 必须 fail closed；
 - duplicate object key、超深/超宽 container、非有限数字、非整数或越界整数必须在 typed request
-  构造前拒绝；mutation digest只对验证后的 canonical typed request计算，不对原始JSON文本计算；
+  构造前拒绝；本规格不增加request digest或基于原始JSON文本的身份；
 - `requestID` 是固定形状、caller-minted 的随机 ID，只作 correlation；是否同时承担 mutation
   idempotency 必须在写能力 slice 前单独裁决；
 - 每个 request 有 deadline、最大 JSON bytes、最大 response bytes 与最大 representation bytes；
@@ -152,7 +151,7 @@ JSON 很适合 control/result manifest，不适合无界 binary。建议分两�
 - 小 payload 可用显式 `inlineBase64`，其 decoded size 在 allocation 前检查；
 - 大 payload 优先由 caller/CLI 在 **caller 权限下**安全创建文件并把已打开 descriptor交给CLI
   writer；app只返回有界bytes/segments，不使用自己的权限解释或写入任意caller path。stdout只返回
-  type identifier、byte count、digest与descriptor/result manifest。若未来采用CLI-owned temp，必须
+  type identifier、byte count与descriptor/result manifest。若未来采用CLI-owned temp，必须
   `O_EXCL`、owner-only、有界生命周期并有失败清理；不能把路径选择变成app confused deputy。
 
 private transport 可以用 `magic + major/minor + requestID + checked header length + checked segment
@@ -199,12 +198,12 @@ framing 保持 private，不能成为 Python 需要重写的第二 public interf
 `deleteItem`/`reviseContent`，也不能把 `.readContent` 自动解释成 full lineage继续开放；应 revoke
 到最小能力并让用户重新确认。当前它仍是未实现设计，最便宜的时机是 scaffold 前先改 owning spec。
 
-同时必须冻结closed allow-matrix，而不是只增加shared enum cases：
+owning V2-05 §0.2 现已冻结 closed allow-matrix，而不是只增加 shared enum cases：
 
 | Connection kind | 可grant/调用 | 必须拒绝 |
 |---|---|---|
-| `.appIntents` | 仅owning V2-05当前批准的App Intents capability/operation | 新增local-only `deleteItem`/`reviseContent`与未知pair；除非另有App Intents amendment |
-| `.localAutomation` | 本节逐项批准的browse/read/organize/delete；revise后期 | capture、clear、retention/admin、generic action及未grant pair |
+| `.appIntents` | 既有`.browse -> recent/search`、`.readContent -> details/pastePayload`、`.manage -> pin/unpin/remove`，并保留manage-implies-browse | 全部local-only capability/operation与未知pair；除非另有App Intents amendment |
+| `.localAutomation` | `browsePreview`、`readEffectiveContent`、`organize -> pin/unpin`、`deleteItem` | App-Intents-only details/pastePayload/manage、capture、clear、retention/admin、generic action、未知pair及尚未准入的revise |
 
 Gateway以durable connection kind与typed operation权威检查；adapter/request不能自报kind绕过。新增enum case
 必须让closed switch/source gate失败，不能因“类型可构造”自动对所有connection开放。
@@ -231,7 +230,7 @@ Gateway 应拥有三种 wire value：
 3. **Page cursor**：绑定 connection、完整 query shape、snapshot/generation与limit的短期 opaque token；
    app/store generation变化后 typed expired。它不是item locator，不能被 mutation 接受。
 
-locator/cursor parser、bounds、version、MAC/credential binding或 server-side mapping都藏在 Gateway
+locator/cursor parser、bounds、version、credential binding或 server-side mapping都藏在 Gateway
 implementation。先用伪造、截断、跨connection、跨query和restart fixture选择最小实现；不能为了
 “opaque”直接引入永久 locator table或通用 token framework。删除这一 module 后如果 raw IDs、cursor
 payload与validation重新散入 CLI/App Intents/未来 adapters，才说明它通过 deletion test。
@@ -270,7 +269,7 @@ capabilities；`browsePreview` 也可能泄漏内容片段。更强隔离只能�
 单独 bearer credential或用户逐次确认，届时就不再是零配置任意 Python。
 
 root、已控制用户会话的 malware、读取进程内存或全磁盘的 attacker不在此 capability model可解决的
-范围；不要用 audit hash chain或 socket mode宣称抵御它们。
+范围；不要用audit metadata或socket mode宣称抵御它们。
 
 当前`project.yml`没有App Sandbox，store又在用户Application Support范围；本轮没有证据表明Gateway能阻止
 hostile same-UID进程绕过IPC直接读写store family。即使以后改到app container，`0700/0600`也只隔离其他
@@ -295,8 +294,9 @@ History mutation。
 
 ### 6.1 推荐结论
 
-1. **先规格化 `clipyctl` JSON/exit-code shape，不先shipping实现。** Gateway/AUTO-2与已接纳App Intents
-   tracer闭合后才落pure codec tests；这样transport spike可替换，Python script不随平台实验重写。
+1. **先规格化 `clipyctl` JSON/exit-code shape，不先shipping实现。** 文档、golden examples与pure
+   wire contract可以先冻结；parser/executable代码必须等Gateway/AUTO-2与已接纳App Intents tracer闭合后
+   才落。这样transport spike可替换，Python script不随平台实验重写。
 2. **第一项 runtime experiment用 signed Developer-ID、non-sandbox Clipy + app-owned UDS +
    LaunchServices cold-start/ready handshake。** 它最直接回答 arbitrary Python、binary、same-UID
    与 single-process Authority 是否能同时成立。
@@ -369,17 +369,18 @@ read-only tracer测成本，再决定它与full bytes是否采用相同强度。
 read-only tracer可把 `requestID` 只作correlation，安全重试仍受cursor/snapshot规则约束；这不阻断
 第一版browse。
 
-任何 mutation 自动retry前必须批准 idempotency contract：相同 connection + requestID + operation digest
-是返回原receipt、返回alreadyProcessed，还是拒绝duplicate？若需要exactly-once effect，dedupe事实必须
+任何 mutation 自动retry前必须批准 idempotency contract：相同 connection + requestID 与 exact typed
+operation 是返回原receipt、返回alreadyProcessed，还是拒绝duplicate？本规格不增加request digest。
+若需要exactly-once effect，dedupe事实必须
 与history mutation/audit在同一 Authority transaction durable commit；仅在 CLI memory中记ID不能跨crash，
 也不能阻止 timeout后的重复 revise。第一张 write slice可以明确“不自动retry mutation”，把durable
 idempotency延后；但不能静默重发。
 
 ## 9. 支持类型与 Preview 如何向 Python 清晰暴露
 
-Python 不应靠 hard-coded UTI list 猜“Clipy支持什么”。未来应提供一个只读、无需history-content
-grant但仍需enrollment的 `describeFormatCapabilities` operation；它返回**产品当前 build 的声明能力**，
-而不是扫描用户history：
+Python 不应靠 hard-coded UTI list 猜“Clipy支持什么”。`describeFormatCapabilities` 当前只冻结为
+一个只读、无需history-content grant但仍需enrollment的声明合同；它只能返回各行为owner导出的
+immutable Foundation summaries，不扫描用户history：
 
 ```json
 {
@@ -422,7 +423,8 @@ test/build artifact；production projection 的合法 owner/target graph 尚未�
 `DEC-FORMAT-INVENTORY-OWNER` 为 hard stop：候选是 ClipyApp composition join owner-exported immutable
 Foundation summaries并注入restricted external facade，production owners不反过来依赖中央policy catalog。
 若无法合法取得 Edit manifest，首版省略 Edit，不复制一份；Python成为第二个 edit caller前再按 deletion
-test提取`ContentEditing` owner。
+test提取`ContentEditing` owner。在该owner/injection decision关闭前，golden JSON和pure serializer不构成
+runtime endpoint，CLI/Gateway也不得复制一份catalog来提前开放它。
 
 新增格式的agent流程应是：先加stable fact与raw fixture；只在本次确实承诺的owner manifest加入route；
 最后inventory/projection反映join后的结果。Capture能opaque round-trip而Preview不支持时，必须诚实报告
@@ -459,6 +461,8 @@ Access level建议：
   已绑定connection的facade；Local Automation在未enroll/unknown credential阶段必须经
   `DEC-PY-AUTHENTICATED-INGRESS`批准的受限 app-facing ingress，由HistoryStorage内部解析connection。
   不得把Gateway/CredentialStore公开，也不得让transport import internal Storage types；
+- `DEC-PY-AUTHENTICATED-INGRESS`当前是明确的`BLOCKED-SPEC`：它不阻塞in-process Gateway或App Intents，
+  但阻塞任何production transport、CLI正向tracer与Local Automation history access；
 - socket endpoint、credential representation、framing、locator payload、cursor payload、Gateway内部
   IDs全部internal/package；
 - 不新增 `LocalAutomationProtocol`，直到 production UDS与另一个真实adapter都需要同一in-process seam；
@@ -482,6 +486,27 @@ production Gateway positive path与App Intents tracer闭合后才从pure codec�
 non-behavior interface gate，不是Red。`browsePreview` audit选择在首次成功browse前批准；binary
 `DEC-PY-READ-AUDIT`在PY-7前批准A/B之一；mutation retry/idempotency在PY-9前批准。编译错误不是Red。
 
+### 当前 Batch 6 code leaf — `PLAY-PY-GW0`
+
+`DEC-PY-CONNECTION-ALLOW-MATRIX` 已由 V2-05 §0.2 关闭；Batch 6的第一张Gateway代码卡固定为pure
+closed-matrix behavior，不碰schema、audit、Gateway actor、App Intents、CLI或transport：
+
+- 新建 `Sources/HistoryCore/ExternalGatewayTypes.swift`：只声明closed
+  `ConnectionEnrollKind`、`ExternalCapability` 与 `ExternalOperationKind` vocabulary；
+- 新建 `Sources/HistoryStorage/ExternalAccessPolicy.swift`：一个total pure function返回某个
+  `(kind, capability, operation)`是否获准；unknown/cross-kind组合一律false；
+- 新建 `Tests/HistoryStorageTests/ExternalAccessPolicyTests.swift`：表驱动覆盖§3 matrix的所有正向pair、
+  App Intents现有`manage -> browse` implication、local-only pair对App Intents的拒绝、App-Intents-only
+  pair对Local Automation的拒绝、revise与unknown pair拒绝；
+
+GW0合并后不得重复领取。下一实现层是owning roadmap X.2 public Gateway contract；GW1…GW4
+仍在其后，不能跳过X.2去写schema、actor或transport。
+- 由macOS runner更新
+  `Tests/HistoryCoreTests/SymbolSurface/HistoryCore.symbols.txt`，并运行source gates与默认functional tests。
+
+验收上限仅是“closed policy可编译且matrix total”；它不证明真实Gateway在History read前拒绝，也不关闭
+`PLAY-PY-B1/B2/B0G`。该leaf不得新增credential、hash/request digest、socket、JSON parser或CLI target。
+
 ### PY-1 — 当前安全负对照
 
 第一张 Red 直接穿过真实 in-process Gateway absent/unknown-connection seam：未 enrollment 的 browse 在任何
@@ -493,8 +518,8 @@ Gateway deny path。只有 production adapter已接入后，CLI exit 3 才是端
 
 Pure Red逐张覆盖：unknown major、oversized stdin、duplicate object keys、超深/超宽container、
 非有限/非整数/越界number、invalid-shaped requestID、unknown operation、stdout恰一个JSON值、stderr
-无request/query/content。最低Green只完成parser/result/exit mapping，不连接app；未来idempotency digest只从
-validated typed request的canonical encoding生成。跨请求重复 requestID 的行为留给 PY-11/idempotency裁决，
+无request/query/content。最低Green只完成parser/result/exit mapping，不连接app；不生成request digest。
+跨请求重复 requestID 的行为留给 PY-11/idempotency裁决，
 不能在尚未决定其语义时直接拒绝。
 
 ### PY-3 — Format capability discovery
@@ -559,7 +584,7 @@ write必须在Authority transaction内拒绝且无mutation；read必须在已批
 
 第一张cycle冻结“不自动retry mutation”：park write越过/未越过commit线性化点后让CLI timeout，JSON
 明确返回outcome unknown或typed transient，CLI不得重发。若之后批准durable idempotency，再另写相同
-requestID+digest跨crash只产生一个commit/audit并返回原receipt的Red；不把内存set称exactly-once。
+requestID与exact typed operation跨crash只产生一个commit/audit并返回原receipt的Red；不把内存set称exactly-once。
 
 ### PY-12A — reviseContent stale（后期）
 
@@ -618,14 +643,17 @@ socket test最多证明protocol实现。
 
 ## 12. 建议实施顺序
 
-1. **先改规格，不先写transport。** V2-05加入 `localAutomation`、细 capability、opaque wire values与
-   audit/idempotency决策点，并先关闭AUTO-2的Gateway内部矛盾；明确已接纳App Intents的capability如何细分。
+1. **先改规格，不先写transport。** V2-05已加入 `localAutomation`、closed connection allow matrix与
+   opaque wire values方向；wire contract可以先冻结。AUTO-2其余Gateway内部矛盾仍逐项关闭，App Intents
+   既有capability/operation不因Local Automation而改变。
 2. **先完成唯一Gateway的in-process trust substrate。** enrollment/grant/revoke/quota/audit/opaque
    locator与Authority recheck先以真实History闭环；按既有V2路线让App Intents成为第一个adapter，不另写
    mutation语义。
-3. **冻结CLI纯contract。** JSON、exit codes、no-content diagnostics、format discovery由pure tests锁定，
-   但此时仍不宣称Python已连到History。
-4. **只做read-only transport tracer。** Developer-ID non-sandbox UDS + LaunchServices ready只是首个候选，
+3. **实现CLI pure codec。** JSON、exit codes与no-content diagnostics由pure tests锁定，但此时仍不宣称
+   Python已连到History。Format discovery只可冻结owner-summary schema；runtime injection owner未批准前
+   不实现endpoint。
+4. **先关闭authenticated-ingress blocker，再做read-only transport tracer。** Developer-ID non-sandbox
+   UDS + LaunchServices ready只是首个候选，
    必须连接步骤2同一Gateway，先闭环
    enroll/deny/grant/revoke/browse；没有write，没有subscription。
 5. **再做Effective-only binary read。** 先批准`DEC-PY-READ-AUDIT`所选合同与binary output，绝不复用full details

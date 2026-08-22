@@ -6,7 +6,7 @@
   [32319164667](https://github.com/GuangDai/Clipy/actions/runs/32319164667);
   see `../PROGRESS.md` step 9)
 - **Spec references:** ownership `../01-architecture.md` §2 row + §6 (Main actor isolation) + §4 (scripted-preview adapter allowance); browse/search DTOs `../03b-instruction-set.md` §8; detail/paste/thumbnail DTOs `../03b-instruction-set.md` §9; protocol `../03a-instruction-set.md` §3 (`ClipboardHistory`); flows `../01-architecture.md` §5.2, §5.4, §5.5, §5.7.
-- **Dependencies:** `HistoryCore` (DTOs + `any ClipboardHistory`); `SwiftUI`. Never imports `HistoryDomain`, `HistoryStorage`, SwiftData, or `@Model`; receives value snapshots and an injected `any ClipboardHistory`.
+- **Dependencies:** `HistoryCore` (DTOs + `any ClipboardHistory`), package-only Foundation facts from `ClipboardFormats`, and `SwiftUI`. Never imports `HistoryDomain`, `HistoryStorage`, SwiftData, or `@Model`; receives value snapshots and an injected `any ClipboardHistory`. Preview/Details/Edit keep separate purpose admission.
 - **Test target:** `PresentationUITests`.
 - **Step:** 9a.
 

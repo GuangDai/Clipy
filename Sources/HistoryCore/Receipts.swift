@@ -19,6 +19,11 @@ public enum HistoryReceipt: Sendable {
 public struct HistoryCommit: Sendable {
     public let position: ChangePosition
     public let outcome: HistoryCommitOutcome
+    /// True only when the committed plan also retired an item or pruned an
+    /// immutable revision for retention. Package callers use this receipt
+    /// fact to discard derived presentation state without exposing storage's
+    /// victim vocabulary at the public History boundary.
+    package let hasDestructiveRetentionEffects: Bool
 
     public init(
         position: ChangePosition,
@@ -26,6 +31,17 @@ public struct HistoryCommit: Sendable {
     ) {
         self.position = position
         self.outcome = outcome
+        self.hasDestructiveRetentionEffects = false
+    }
+
+    package init(
+        position: ChangePosition,
+        outcome: HistoryCommitOutcome,
+        hasDestructiveRetentionEffects: Bool
+    ) {
+        self.position = position
+        self.outcome = outcome
+        self.hasDestructiveRetentionEffects = hasDestructiveRetentionEffects
     }
 }
 

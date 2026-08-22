@@ -22,6 +22,14 @@ custom_rules:
 
   # ---- Import confinement (mirror of scripts/import_gate.py) ----
 
+  clipboardformats_import_confinement:
+    name: "ClipboardFormats import confinement"
+    included: "Sources/ClipboardFormats/"
+    # Allowlist: immutable stable facts remain Foundation-only.
+    regex: '^\s*(?:@_\w+\s+)*import\s+(?!(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?Foundation)\w'
+    message: "ClipboardFormats may import Foundation (and its submodules) only (Part I §8)."
+    severity: error
+
   historycore_import_confinement:
     name: "HistoryCore import confinement"
     included: "Sources/HistoryCore/"

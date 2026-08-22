@@ -522,6 +522,11 @@ SwiftData History/WAL/index 有成本，且系统可能拒绝写入。
 > 删除历史。元数据查询和内容加载保持有界；当可用磁盘跌破保留线或写入失败时，
 > Clipy停止接收新内容并给出可恢复的 typed 状态，而不是静默删除或无限占用 RAM。
 
+其中 `count=nil` 不是单一设置变更。它必须同时表示：（1）user maximum-unpinned
+policy/action/config 是可选值；（2）包含 pinned items 的独立 global hard retained-item
+bound 已被移除或由已批准的资源安全线取代。只把其中一个变成 optional，或用 `Int.max`
+伪装，都不是取消 count cap。
+
 这一定义仍需要明确：
 
 1. pinned 与 unpinned 在 disk-pressure 下谁可删除；推荐默认都不静默删，交给用户。
@@ -545,6 +550,14 @@ SwiftData History/WAL/index 有成本，且系统可能拒绝写入。
 上列是 many-small-items 的 count-scale blockers。monolithic canonical/revision blobs 与
 detail/paste/preview whole-lineage hydration 是独立 large-content/G8 问题；它们可以触发 P3，但不是解除
 固定 count cap 的必经前置。
+
+当前 projection recipe-v2 rebuild 在 5,000 hard bound 下一次预计算 legacy replacements、
+然后单 transaction stamp；V2-06 P1 则拟序列化并恢复完整 `SignatureIndex`。两者都只能
+作为 capped-regime 合同，不能作为 U-scale 已解决的证据。进入 U-scale 前必须二选一：
+P1 明确仅 capped、U-scale 用 durable indexed signature-candidate query 取代；或在 owning
+V2-06 中把 P1 修订为这同一套 bounded query/lazy-shard 合同。不并存 complete checkpoint
+和第二套 scale index。legacy recipe/signature validation 也必须可恢复、有界，不把当前
+open 全库 rebuild 外推到 count disabled。
 
 这些不能一次性删除。应按 vertical slice 逐个替换，并在每次替换后保持当前
 dedup、OCC、ChangePosition、fail-closed codec 和唯一 writer 语义。
@@ -591,8 +604,8 @@ ClipboardFormats stable facts + owner manifest/profile
 SwiftData transaction 无法公开地把任意 app-owned 文件写和 DB row commit 变成一个
 跨介质事务。因此建议使用可恢复协议，而不是假装原子：
 
-1. 生成随机 immutable `BlobID`；在 private staging 写入有界内容并校验 byte count /
-   digest。
+1. 生成与内容无关的随机 immutable `BlobID`；在 private staging 写入有界内容，
+   校验 exact byte count，并在本次冻结 source 仍可用时做 byte-exact readback。
 2. 在同卷把staging完成品publish到immutable blob namespace；通过process-kill/reopen矩阵后只能称该
    OS/filesystem/build下crash-recoverable，不能从rename/write推导fsync或突然断电durability。此时它可能是
    orphan，但尚未成为业务可见内容。
@@ -606,8 +619,9 @@ SwiftData transaction 无法公开地把任意 app-owned 文件写和 DB row com
    证明不可达后才清理orphan。进程kill在每个步骤都必须恢复到可解释状态。
 
 不要把当前 xxh3 fingerprint 直接当 BlobID：仓库已经正确规定 fingerprint 是 evidence，
-不是 identity。可以另存强 digest 用于完整性/去重候选，但业务 locator 应独立且碰撞
-安全。
+不是 identity。本设计不新增 content hash/checksum；BlobID、path、manifest 和 backup identity
+都使用明确随机 ID/version。所以当前 runtime 只对 wrong identity、missing source、read error和
+length mismatch fail closed，不承诺自检同长 silent media corruption。
 
 ### 14.3 Storage 接口必须保持类型无关
 
@@ -663,7 +677,7 @@ capacity 不足时优先删除 DerivedCache；仍不足则暂停新 capture并�
 ## 15. TDD / 真机判别流程
 
 所有 performance 数值 gate 必须在固定 macOS 26 patch、Xcode/Swift 版本、arm64 机器
-类别和 fixture digest 下记录。unit tests 证明语义；hosted child-process、Instruments、
+类别和显式 fixture ID/version 下记录。unit tests 证明语义；hosted child-process、Instruments、
 XCTMemoryMetric 与 disposable volumes 证明资源行为。一次机器的结果不是 Apple 契约。
 
 ### MEMO-STOR-0：冻结基线
@@ -679,7 +693,7 @@ XCTMemoryMetric 与 disposable volumes 证明资源行为。一次机器的结�
 
 **Refactor gate**
 
-- 报告 schema/version/fixture digest/OS build；否则数据不可比较。
+- 报告 schema/version/fixture ID/version/OS build；否则数据不可比较。
 
 ### MEMO-STOR-1：证明 scalar fetch 不触碰 blob 的支持上限
 
@@ -791,7 +805,7 @@ XCTMemoryMetric 与 disposable volumes 证明资源行为。一次机器的结�
 
 1. staging file create 前/后；
 2. 写每个 chunk 中；
-3. validate/digest 后；
+3. length validation 与 staged byte-exact readback 后；
 4. immutable publish 后；
 5. DB transaction 前/中/返回后；
 6. response 前；
@@ -853,6 +867,11 @@ UNKNOWN。
 7. UI滚动使用bounded row window，cursor在连续writes下保持批准语义。
 
 details/preview range read属于独立large-content/G8 track；可并行研究，但不阻塞many-small-item count unlock。
+方案 A 可以在 G8 不触发时长期承载 U-scale：只要 metadata/index/pagination 路径有界，
+已有 purpose lane 只向 caller 交付选定 representation，并把为选择它而 whole-aggregate
+hydrate 的 bytes 如实记账。这不是 physical range read，但也不是强制迁移 P3 的理由。
+只有 approved G8/range/stream trigger 才允许 scheme B/P3 的 per-representation/range physical
+layout。
 
 “通过 1m fixture”仍不叫无限，只证明该规模和机器类别。
 

@@ -109,6 +109,8 @@ public enum UnavailableReason: Sendable, Equatable {
     case factProof
     /// The dedup index is being rebuilt.
     case dedupIndexRebuild
+    /// A durable write failed because the store volume has no free space.
+    case insufficientDiskSpace
 }
 
 /// Persistence-layer failures, mapped at the storage boundary.

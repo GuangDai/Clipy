@@ -25,6 +25,7 @@ let package = Package(
         .package(url: "https://github.com/krisk/fuse-swift.git", revision: "26ba868691b2d8b7bf2b1322951eb591be70ccca"),
     ],
     targets: [
+        .target(name: "ClipboardFormats"),
         .target(name: "HistoryCore"),
         .target(
             name: "HistoryDomain",
@@ -35,6 +36,7 @@ let package = Package(
             dependencies: [
                 "HistoryCore",
                 "HistoryDomain",
+                "ClipboardFormats",
                 "xxh3",
                 .product(name: "Fuse", package: "fuse-swift"),
             ]
@@ -45,7 +47,7 @@ let package = Package(
         ),
         .target(
             name: "PresentationUI",
-            dependencies: ["HistoryCore"]
+            dependencies: ["HistoryCore", "ClipboardFormats"]
         ),
         .target(
             name: "xxh3",
@@ -68,6 +70,10 @@ let package = Package(
         .executableTarget(
             name: "HistoryRestartProbe",
             dependencies: ["HistoryCore", "HistoryStorage"]
+        ),
+        .testTarget(
+            name: "ClipboardFormatsTests",
+            dependencies: ["ClipboardFormats"]
         ),
         .testTarget(
             name: "HistoryCoreTests",

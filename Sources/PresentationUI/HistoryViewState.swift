@@ -152,6 +152,11 @@ public final class HistoryViewState {
     /// cursor for `.snapshotExpired` pagination.
     private var observedCursor: HistoryPageCursor?
 
+    /// Position of the latest authoritative first page. A receipt may return
+    /// after an equal or newer observation; that page must not be erased,
+    /// though the receipt still publishes its derived-state purge.
+    private var observedPosition: ChangePosition?
+
     /// Rows-epoch counter. Bumped on every observation restart AND on every
     /// applied observed page, so a one-shot pagination result captured against
     /// superseded rows is discarded instead of appending to replaced rows.
@@ -396,7 +401,10 @@ public final class HistoryViewState {
 
     /// Applies the v1 count-dimension retention cap.
     public func applyMaximumUnpinnedItems(_ count: Int) async throws -> HistoryReceipt {
-        try await history.perform(.setRetentionPolicy(maximumUnpinnedItems: count))
+        let action = HistoryAction.setRetentionPolicy(maximumUnpinnedItems: count)
+        let receipt = try await history.perform(action)
+        publishSurfacePurge(for: action, receipt: receipt)
+        return receipt
     }
 
     /// Applies the V2-02 age/storage/revision policy dimensions
@@ -404,7 +412,17 @@ public final class HistoryViewState {
     public func applyRetentionPolicies(
         _ policies: HistoryRetentionPolicies
     ) async throws -> HistoryReceipt {
-        try await history.perform(.setRetentionPolicies(policies))
+        let action = HistoryAction.setRetentionPolicies(policies)
+        let receipt = try await history.perform(action)
+        publishSurfacePurge(for: action, receipt: receipt)
+        return receipt
+    }
+
+    /// Composition-root receipt handoff for clipboard captures. Capture has
+    /// no panel-owned action method, but its same-commit retention victims
+    /// must retire derived surface state before observation catches up.
+    public func acceptCaptureReceipt(_ receipt: HistoryReceipt) {
+        publishDestructiveRetentionPurge(receipt)
     }
 
     /// The authoritative configured retention state (docs/v2/V2-07-ux.md
@@ -439,6 +457,7 @@ public final class HistoryViewState {
         rows = []
         nextPageCursor = nil
         observedCursor = nil
+        observedPosition = nil
         observedRows = []
         clearQueryFailure()
         isLoadingFirstPage = true
@@ -487,6 +506,7 @@ public final class HistoryViewState {
         observedRows = page.rows
         nextPageCursor = page.next
         observedCursor = page.next
+        observedPosition = page.position
         clearQueryFailure()
         isLoadingFirstPage = false
     }
@@ -564,27 +584,34 @@ public final class HistoryViewState {
         guard case .committed(let commit) = receipt else { return }
 
         let scope: HistorySurfacePurge.Scope?
-        switch (action, commit.outcome) {
-        case (.clear(.all), .cleared(let count)) where count > 0:
+        if commit.hasDestructiveRetentionEffects {
             scope = .all
-        case (.clear(.unpinned), .cleared(let count)) where count > 0:
-            scope = .unpinned
-        case (.remove(let id), .removed(let count)) where count > 0:
-            scope = .item(id)
-        case (.revise(let request), .revised(let newReference)):
-            scope = .revision(
-                old: HistoryItemReference(
-                    id: request.itemID,
-                    contentVersion: request.expected
-                ),
-                new: newReference
-            )
-        default:
-            scope = nil
+        } else {
+            switch (action, commit.outcome) {
+            case (.clear(.all), .cleared(let count)) where count > 0:
+                scope = .all
+            case (.clear(.unpinned), .cleared(let count)) where count > 0:
+                scope = .unpinned
+            case (.remove(let id), .removed(let count)) where count > 0:
+                scope = .item(id)
+            case (.revise(let request), .revised(let newReference)):
+                scope = .revision(
+                    old: HistoryItemReference(
+                        id: request.itemID,
+                        contentVersion: request.expected
+                    ),
+                    new: newReference
+                )
+            default:
+                scope = nil
+            }
         }
 
         guard let scope else { return }
-        if scope != .unpinned {
+        let hasObservedCommit = observedPosition.map {
+            $0 >= commit.position
+        } ?? false
+        if scope != .unpinned, !hasObservedCommit {
             applyReceiptConfirmedRowPurge(scope)
         }
         let generation = (surfacePurge?.generation ?? 0) + 1
@@ -598,6 +625,21 @@ public final class HistoryViewState {
             // the post-receipt authoritative snapshot may repopulate it.
             replaceObservationImmediately()
         }
+    }
+
+    /// Capture receipts have no local action-to-outcome scope. Only the
+    /// authoritative retention-effect bit can invalidate their surfaces.
+    private func publishDestructiveRetentionPurge(_ receipt: HistoryReceipt) {
+        guard case .committed(let commit) = receipt,
+              commit.hasDestructiveRetentionEffects else { return }
+        let hasObservedCommit = observedPosition.map {
+            $0 >= commit.position
+        } ?? false
+        if !hasObservedCommit {
+            applyReceiptConfirmedRowPurge(.all)
+        }
+        let generation = (surfacePurge?.generation ?? 0) + 1
+        surfacePurge = HistorySurfacePurge(generation: generation, scope: .all)
     }
 
     /// Retires executable list state for precise destructive scopes. Clear

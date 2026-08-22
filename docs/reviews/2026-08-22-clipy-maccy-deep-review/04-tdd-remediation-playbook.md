@@ -82,8 +82,8 @@ Green且owner suite通过后才审查：重复是否真的跨两处、module dep
 按风险升级测试层：pure → real storage → adapter/hosted app → actual view/XCUI → signed
 platform → Release perf。只有跨层行为才升级，不为每个planner edge写XCUI。
 
-最终PR记录：final SHA、targeted commands、full workflow run、测试层的支持上限。`PROGRESS`
-只能引用final SHA，不引用中间green或另一个head。
+最终PR记录：受保护PR/ref、targeted commands、full workflow run、测试层的支持上限。`PROGRESS`
+只能引用该PR/ref的最终run，不引用中间green或另一个head。
 
 ## 3. Test doubles 的边界
 
@@ -133,7 +133,7 @@ production条件树。
 6. `bash scripts/run_gates.sh` 与 `swiftlint lint --strict --no-cache`。Zero-warning self-scan
    当前内嵌workflow YAML，没有等价单独命令；最终以CI job为准，或先把scan抽成有测试的
    共享脚本，不能用一句“本地scan通过”替代。
-7. final SHA的完整GitHub workflow
+7. 受保护PR/ref最终checkout的完整GitHub workflow
 
 命令的具体filter以实际Swift Testing发现名为准；不要为了文档中的示例名称改生产命名。
 需要real-scale fixtures的owner/app suite在运行前还必须执行
@@ -170,7 +170,7 @@ production Red→Green cycle。
 ### 回归
 
 PresentationUITests单filter → full functional → perf-helper → app build/test/self-scan → 同一
-SHA五个常规jobs。之后按第4节先领正常可达correctness；不能因为编号顺序直接跳到卡1。
+最终checkout的五个常规jobs。之后按第4节先领正常可达correctness；不能因为编号顺序直接跳到卡1。
 
 ### 支持上限
 
@@ -232,7 +232,7 @@ value-corrupt、bootstrap injection failure。`@Attribute(.unique)`可能阻止�
 ### Evidence Card 1C-1：true three-child restart / migration tracer
 
 不要让旧`ModelContainer`、context或attached `@Model`跨阶段存活。child A只负责seed V1/V2并
-写出primitive manifest/digests后正常退出；child B只负责open/migrate与一次批准的public read，
+写出primitive manifest后正常退出；child B只负责open/migrate与一次批准的public read，
 写出receipt后正常退出；child C只负责fresh reopen、全量public projection与独立schema inspector。
 父进程只传路径和primitive manifest，不持有任何SwiftData对象。第一张cycle只证明一次正常
 V1→V2 process teardown；第二张再证明普通V2 restart，不能用同一进程reopen给二者背书。
@@ -245,12 +245,12 @@ transaction return，以及大型external capture/revise/clear的已批准barrie
 duplicate或半个external blob。若现实现已通过，只记录proof；若Red，再根据实际残留shape决定
 staging/idempotent recovery，不预先加复杂机制。
 
-### Evidence Card 1C-3：external clone full hydration / digest
+### Evidence Card 1C-3：external clone full hydration / byte-exact manifest
 
 现有“过滤已知external clone诊断”不能作为数据完整性oracle。child A写入每种canonical、revision、
-thumbnail/paste可达的大blob并输出按item/reference/type分组的length+digest manifest；复制完整的
+thumbnail/paste可达的大blob并输出按item/reference/type分组的fixture ID、type与length manifest；复制完整的
 app-owned store family后child A退出；child B只从clone fresh open，并经public browse/details/paste/
-thumbnail逐一强制hydrate，重新计算manifest。第一张cycle只比较一个representation的digest；其余
+thumbnail逐一强制hydrate，与独立fixture bytes逐项byte-exact比较。第一张cycle只比较一个representation；其余
 按类型逐张扩展。最低Green先修clone/fixture流程；在所有public payload都被读取前，不把被过滤的
 Core Data诊断定性为benign，也不据此设计recovery。
 
@@ -330,7 +330,7 @@ snapshot；在一次非空capture/revise plan的commit点注入失败。注入�
 
 这不是预设失败的Red。用短命child、Release build和至少三个`N × revisions × blob-size`尺度，包含
 接近批准上限的external blobs与真正会进入R3的lineages；记录peak RSS、hydrated bytes、row count、
-wall time及退出后的public digest。先保存raw artifact并由owner批准scale envelope。只有当前实现
+wall time及退出后的public byte-exact fixture结果。先保存raw artifact并由owner批准scale envelope。只有当前实现
 超过envelope，下一张cycle才写“单个bounded maintenance batch完成且result等价”的Red；若未超过，
 不加入batch cursor/applying state。
 
@@ -896,15 +896,30 @@ DEBUG summon bridge必须调用Carbon callback之后相同的product tail；不�
 
 ### Card 16A — Archive identity / build contract
 
-Red：tag、source SHA、marketing version、build version任一不一致即失败；Release archive缺
-bundle identity/icon/category/entitlements/expected executable也失败。最低Green只建立protected
-tag→exact-SHA CI→Release archive与effective-build-settings contract，不做签名或UI改造。
+Red：受保护release ref、实际checkout、marketing version、build version任一不一致即失败；Release
+archive缺bundle identity/icon/category/entitlements/expected executable也失败。最低Green只建立
+protected release ref→单一checkout→Release archive与effective-build-settings contract，不做签名、
+hash/checksum machinery或UI改造。
 
 ### Card 16B — Codesign / notarize / staple / Gatekeeper
 
 以16A archive为输入。Red：任一nested executable未Developer ID签名、缺hardened runtime/secure
 timestamp、notary失败、未staple、下载后`codesign`/`spctl`失败。最低Green只完成一条direct
 distribution信任链；不同时加入updater/MAS/Homebrew。
+
+当前先落一个更低、不可冒充16B Green的 `SIGNED-RUNTIME-0` 判别格：手动触发的macOS 26 arm64
+workflow只构建一次Release app，对该产物施加本机ad-hoc签名与Hardened Runtime code-directory flag，
+用`codesign --verify --deep --strict`复验，读取同一已签名产物的entitlements并拒绝iCloud/ubiquity，
+随后直接启动进程、确认在短lifecycle checkpoint仍存活后终止。此格通过只证明该runner上的Release app可被ad-hoc签名、
+签名携带runtime flag、最终entitlement negative gate成立且最小进程lifecycle可达；它明确不运行
+`spctl`/`notarytool`/`stapler`，不支持Developer ID、secure timestamp、notarization、Gatekeeper、TCC、
+login item、Carbon/status item、Space或WindowServer claim。真正`DEPLOY-16B`仍保持Red/Open，且必须
+从16A冻结的archive identity开始，不得把本判别格产物发布给用户。
+
+| Cell | 触发与输入 | 当前可观察通过条件 | 明确不支持的外推 |
+|---|---|---|---|
+| `SIGNED-RUNTIME-0` | `workflow_dispatch`；当前source构建一次Release app | ad-hoc signature与runtime flag可验证；同一signed app无iCloud/ubiquity entitlement；进程存活至lifecycle checkpoint | Developer ID/timestamp/notary/staple/Gatekeeper/TCC/LaunchServices/WindowServer |
+| `DEPLOY-16B` | 受保护16A archive + 发布身份/凭据 | Developer ID全nested code、hardened runtime、secure timestamp、notary、staple、下载后`codesign`与`spctl`全部通过 | updater/MAS/Homebrew、跨版本升级与全部UI/权限行为 |
 
 ### Card 16C-1 — characterize open-error observability first
 
@@ -976,9 +991,9 @@ SMAppService requiresApproval/revoke/logout-login、真实hotkey/status action�
 5. manifest新增非法dependency、ClipyApp新增banned spelling、第二ModelContext writer必须失败；
 6. XcodeGen output缺scheme/host/Release/bundle field或app tests executed=0必须失败；
 7. functional与`HistoryPerfTests` filter分别要求非零目标test执行，防止错误filter静默绿；
-8. symbol bot提交snapshot后，主workflow必须在**bot final SHA**重跑并成为ledger引用；
-9. XcodeGen下载archive必须有固定checksum；tampered archive在执行前失败，不能让同一受污染
-   binary连续生成两次仍通过repeatability gate。
+8. symbol bot提交snapshot后，主workflow必须在该受保护分支的最终checkout重跑并成为ledger引用；
+9. XcodeGen使用仓库批准的固定版本与原生版本检查；同一checkout连续生成两次并直接`diff`输出，
+   不增加下载checksum或hash-derived repeatability状态。
 
 ### Perf流程
 
@@ -1005,7 +1020,7 @@ Targeted runs:
 Owner/full runs:
 Evidence ceiling / remaining runtime gate:
 Public surface change: none / approved record:
-Final SHA + CI run:
+Protected ref / PR + CI run:
 ```
 
 若一张卡需要同时改schema、public protocol、AppKit lifecycle、cache与release workflow，说明
@@ -1043,13 +1058,13 @@ nonfinite/noninteger/overflow、**PLAY-PY-A2F** requestID shape、**PLAY-PY-A2G*
 content-free stderr、**PLAY-PY-A2H** stable exit mapping、**PLAY-PY-A2I** unknown operation/closed method set；
 不得一张parser test关闭全部。
 
-在任何positive Gateway tracer前，**PLAY-PY-GW0 [PURE / BLOCKED-SPEC]**先冻结
+在任何positive Gateway tracer前，**PLAY-PY-GW0 [PURE / RESOLVED-SPEC]**先冻结
 `(ConnectionEnrollKind, capability/operation) -> grantable` closed matrix：`.appIntents`只保留owning V2-05
 已批准surface；`deleteItem/reviseContent`等local-only operation即使共享enum可构造也必须denied，unknown pair
 deny且不触发History/audit side effect。只有独立App Intents amendment才能扩它。
 
 AUTO-2不是一张browse可关闭的标签。V2-05 owning spec分别修订后，再完成四张Gateway substrate Red：
-**PLAY-PY-GW1** 三条survivor+marker compaction后的hash chain仍连续；**PLAY-PY-GW2** 每个admin kind的closed、
+**PLAY-PY-GW1** 三条survivor+marker compaction后的sequence/record-ID连续性仍成立；**PLAY-PY-GW2** 每个admin kind的closed、
 bounded、privacy-safe request/result/capability encoding可golden round-trip；**PLAY-PY-GW3** revoke后re-grant在
 批准的event/state模型下不撞unique key且最多一个live grant；**PLAY-PY-GW4** ordinary open面对corrupt/missing
 audit singleton仍fail closed，而用户确认的recovery-only seam只能诊断/rebase/quarantine，不能读content或
@@ -1125,8 +1140,9 @@ Red；**PLAY-PY-E4**才证明fresh token只append一次revision。不要把revis
 commit后、response前断线，CLI本地只报告`outcomeUnknown`且仍不blind retry；在
 `DEC-PY-IDEMPOTENCY`批准前没有request-status/recheck operation。只有批准后才领
 **PLAY-PY-E7**：同
-connection+requestID+digest在response-lost/restart后返回原receipt且mutation/audit各一次；different digest
-用同ID必须拒绝。它不依赖P3，也不复用`PLAY-CRASH-7`。
+connection+requestID与持久化的bounded canonical request fields在response-lost/restart后返回原receipt且
+mutation/audit各一次；同ID但fields/bytes不一致时必须拒绝。它不依赖P3，也不复用`PLAY-CRASH-7`，
+不新增request hash。
 
 ### PLAY-PY-F family（不可直接标记完成）— transport与signed acceptance只证明最后一公里
 
@@ -1300,10 +1316,11 @@ purpose-read interface 需要 owning spec/target-graph 批准；blob/migration/G
 下列标题是**两条独立 track + 一组共享 device-health gates**，不是从上到下的必然实施顺序：
 
 - U-scale 先做 `PLAY-STOR/PLAY-MEM/PLAY-COUNT` 四类 O(N) 与 UI window；
-- current SwiftData StoreRoot 的 `PLAY-DISK-0A/0B/1/2A/3…6`（writer identity/lease、四账、reserve、真实ENOSPC、
+- current SwiftData StoreRoot 的 `PLAY-DISK-0A/0B/1/2A/3/4/5/6`（writer identity/lease、四账、reserve、真实ENOSPC、
   recovery与backup/restore）不依赖G8，且在
   解除hard count cap前必须有证据；若日后进入P3，再对blob staging/publish路径重跑扩展variant；
-- pre-G8可做`PLAY-TIER-1A` characterization与`PLAY-TIER-2A` caller-shape/aggregate-hydration tracer，
+- pre-G8可做`PLAY-TIER-1A` characterization与首张`PLAY-TIER-2A-THUMB` caller-shape/
+  aggregate-hydration tracer，
   它们负责产生G8证据且不新增History seam；`PLAY-TIER-1B`只是获批profile的pure planner；
 - `PLAY-TIER-2B/3/4/5S/5P/6`、`PLAY-DISK-2B`以及blob-specific
   `PLAY-BLOB/PLAY-GC/PLAY-CRASH/PLAY-MIG/PLAY-BACKUP`
@@ -1331,21 +1348,23 @@ content-read seam、blob schema、migration 或 GC 前，先正式修订 `docs/v
 owner。用户retention只改第一本账；cache eviction只改第三本账；disk health读取第二本账；第四本账
 决定是否准入并发重活。任何resource receipt都必须content-free。
 
-建议的新package seam是类型无关的purpose read：exact immutable representation/blob locator +
-content version、`purpose`、full/sequential/range shape、maximum-return bytes、deadline/cancellation →
-bounded value/stream/typed failure。Storage只强制range、budget、version fence与lease；
-具体behavior owner/renderer以`ClipboardFormats` stable facts、自己的manifest与实测profile决定某个UTI和
-purpose需要哪些bytes。不得把裸file URL交给UI、
+长期 P3 的候选package seam是类型无关的purpose read：exact immutable
+representation/blob locator + content version、`purpose`、full/sequential/range shape、maximum-return
+bytes、deadline/cancellation → bounded value/stream/typed failure。Storage只强制range、budget、
+version fence与lease；具体behavior owner/renderer以`ClipboardFormats` stable facts、自己的
+manifest与实测profile决定某个UTI和purpose需要哪些bytes。不得把裸file URL交给UI、
 Python或renderer。
 
-这项声明要先经过owning spec/ADR、target graph与access-level批准。随后只建返回`unsupported`的neutral
-shell和compile/import/source gate；这是**interface gate，不是Red**。若当前`.externalStorage`整体`Data`
-read已能满足已批准bound，就先沿用；只有range/stream或实测peak要求无法满足时，才批准
-Authority-owned app-managed immutable blob tier。不能通过解析SwiftData external-storage目录伪造reader。
+这个新 seam 与它的 neutral shell 都受 `PLAY-TIER-SPEC-0` + G8 阻塞；pre-G8 不先造 protocol、
+DTO、actor 或 compile gate。方案 A 只在已有 purpose lane 内收窄 caller output，并如实记录
+whole-aggregate hydration。若 G8 不触发，它可以与 durable candidate query/pagination 一起长期承载
+many-small U-scale；不为了“更像多级”而迁移。只有range/stream或实测peak越过 G8 时，
+才批准Authority-owned app-managed immutable blob tier。不能通过解析SwiftData
+external-storage目录伪造reader。
 
 ### STOR — 基线、计量与当前SwiftData边界
 
-**[PERF / characterization，均不是Red]** 固定macOS/Xcode/build/machine和fixture digest，分别记录
+**[PERF / characterization，均不是Red]** 固定macOS/Xcode/build/machine和versioned fixture ID，分别记录
 0/200/5,000 items下browse、search、capture、details、paste、preview、R3与migration的wall time、
 peak/settled RSS、dirty memory、logical bytes、各physical category、read/write bytes和file count；另用
 small/near-limit blob对照scalar fetch。Characterization只保存事实，不因“还没有阈值”而失败。owner批准
@@ -1429,32 +1448,48 @@ permit与卡6的pending-byte账连起来；真实provider能否避免整体mater
 
 ### TIER — purpose-specific read与app-owned blob的最小纵切
 
-`PLAY-TIER-1A/2A`可直接用当前layout characterization/caller shape领取；其余卡按上面的spec/G8门逐项
-解除。以下每一行都是独立cycle：
+`PLAY-TIER-1A` 和首张 `PLAY-TIER-2A-THUMB` 可直接用当前layout characterization/
+caller shape领取；其余卡按上面的spec/G8门逐项解除。以下每一行都是独立cycle：
 
 1. **PLAY-TIER-1A [PLATFORM CHARACTERIZATION，非 Red]：**用具体 decoder、fixture与OS trace记录某个
    purpose实际使用header/range/full中的哪一种；不能按UTI名称预设“header-only”。
 2. **PLAY-TIER-1B [PURE] — access-plan Red：**只有1A evidence profile获批后，pure planner才输出对应range、
    maximum bytes与fallback。Storage/plan test不调用decoder。
-3. **PLAY-TIER-2A [MEM] — caller-shape Red：**调用者只收到目标 representation；在当前 aggregate blob
-   方案下，telemetry 必须诚实计入为筛选它而整体 hydrate 的 bytes，不能以返回值较小宣称按需 I/O。
-   Green 只收窄 caller-visible shape。
-4. **PLAY-TIER-2B [MEM / BLOCKED-SPEC/BLOCKED-G8] — physical range Red：**读取 literal `[offset, length]` 时，source
+3. **`PLAY-TIER-2A-{OWNER}` [MINTING TEMPLATE，非可领取 ID]：**每个已有 purpose lane
+   各自 mint concrete ID；调用者只收到该 purpose 选定的 representation，同时分开记录
+   returned bytes 与当前 aggregate codecs 为筛选它而整体 hydrate 的 bytes。不能以返回值
+   较小宣称按需 I/O，也不能用一个 owner 的 Green 关闭全部 purpose。
+4. **PLAY-TIER-2A-THUMB [MEM] — pre-G8 first code leaf：**在已有 thumbnail source lane 中，
+   构造一个 exact item/version，其 Effective Content 同时含可选 image representation 与一个较大无关
+   representation。Authority 仍按当前 codec 完整 hydrate item，但 source caller 只收到被选中的
+   image bytes；content-free receipt 分别报告 `returnedRepresentationBytes` 和
+   `aggregateHydratedBytes`，后者覆盖本次访问的 Canonical/revision encoded aggregate 而不只是
+   返回值。stale/missing 继续使用现有 typed failure，no-supported-image 仍返回 `nil`；
+   不改 History Commit/
+   `ChangePosition`。Green 只允许修改
+   `Sources/HistoryStorage/HistoryAuthority+DetailAndThumbnail.swift`、
+   `Sources/HistoryStorage/ThumbnailService.swift`、
+   `Sources/HistoryStorage/SwiftDataHistory.swift` 与新测试
+   `Tests/HistoryStorageTests/ThumbnailAggregateHydrationAccountingTests.swift`；不改 `HistoryCore`、
+   `Package.swift`、paste/details API、codec/layout，不加 cache/permit/BlobStore。测试同时锁定返回内容和两个
+   byte counters；它是 current-layout accounting，不是 RSS 或 physical single-representation I/O proof。
+5. **PLAY-TIER-2B [MEM / BLOCKED-SPEC/BLOCKED-G8] — physical range Red：**读取 literal `[offset, length]` 时，source
    instrumentation 证明实际打开/读取不超过该 range 加批准 overhead，返回量不超过 request maximum；
    只能在 representation layout/P3 gate 后领取。整块 `Data` 后再 `subdata` 仍是 Red。
-5. **PLAY-TIER-3 [MEM / BLOCKED-SPEC/BLOCKED-G8] — version-fence Red：**request locator为V1而committed descriptor已是V2时返回stale，
+6. **PLAY-TIER-3 [MEM / BLOCKED-SPEC/BLOCKED-G8] — version-fence Red：**request locator为V1而committed descriptor已是V2时返回stale，
    不返回V2或cache中的V1。Green只加authoritative fence。
-6. **PLAY-TIER-4 [MEM / BLOCKED-SPEC/BLOCKED-G8] — cancellation Red：**caller取消sequential read后不再发布chunk，permit最终归零。
+7. **PLAY-TIER-4 [MEM / BLOCKED-SPEC/BLOCKED-G8] — cancellation Red：**caller取消sequential read后不再发布chunk，permit最终归零。
    Green只打通这一structured cancellation path。
-7. **PLAY-TIER-5S [MEM / BLOCKED-SPEC/BLOCKED-G8] — internal sequential test-sink Red：**一个不shipping的
+8. **PLAY-TIER-5S [MEM / BLOCKED-SPEC/BLOCKED-G8] — internal sequential test-sink Red：**一个不shipping的
    bounded sink按顺序消费byte-exact chunks，reader不拼出第二份完整aggregate`Data`；它只证明base reader/
    lease contract，不授权产品export。当前paste在signed provider/ownership proof前仍是有界full-`Data` lane，
    另测permit与single-flight；不能从test sink外推paste或任意产品surface已流式化。
-8. **PLAY-TIER-5P [MEM / BLOCKED-SPEC/BLOCKED-G8/BLOCKED-AUDIT] — Python streaming-sink Red：**在5S
+9. **PLAY-TIER-5P [MEM / BLOCKED-SPEC/BLOCKED-G8/BLOCKED-AUDIT] — Python streaming-sink Red：**在5S
    base reader shape之外，还必须先闭合readContent grant、audit-before-first-byte、binary stdout ownership、
    disconnect cleanup与caller output budget；不得借storage stream绕过ExternalGateway。
 
-若 `PLAY-TIER-1A/2A` 的current-layout trace证明whole hydration越过G8，且`.externalStorage`没有公开方式满足
+若 `PLAY-TIER-1A` 与 `PLAY-TIER-2A-THUMB`（或以后单独 mint 的其他 purpose leaf）的current-layout
+trace证明whole hydration越过G8，且`.externalStorage`没有公开方式满足
 批准的physical range/stream需求，才通过`PLAY-TIER-SPEC-0`批准app-managed blob；不能先要求2B在旧layout
 通过/失败来触发它。compile、schema和source gate仍不是Red。第一张
 **PLAY-TIER-6 [DISK-CHILD / BLOCKED-SPEC/BLOCKED-G8] — one-blob vertical Red**只让一次新capture写入一个representation/item；该
@@ -1487,7 +1522,8 @@ bytes，不理解PNG/PDF/RTF；SwiftData仍保存metadata/reference与唯一业�
    `PLAY-CRASH-7` 指定的 external/migration operation。Green 只接通该恢复 transition。
 8. **PLAY-DISK-6 [DISK-CHILD / PREREQ Card16C-2] — current StoreRoot backup/restore Red：**先批准并落地
    dedicated StoreRoot ownership；owner必须完全退出或进入owning spec批准的quiesced状态，再按
-   characterization得到的required-member manifest复制完整root。从fresh path恢复后，逐item public digest、
+   characterization得到的required-member manifest复制完整root。从fresh path恢复后，按明确
+   item/reference/type/length manifest 做public byte-exact重读，
    `ChangePosition`与配置均匹配manifest；漏掉任一已枚举required member的负控制必须typed incomplete-store/
    quarantine，不能静默造空库或部分库。不得要求“只复制某个当前inline main file必然打不开”这种Apple
    未保证的结果。Green只形成current SwiftData store-family backup合同；P3落地后再以独立
@@ -1517,8 +1553,10 @@ matrix放进一个timeout test：
 
 1. **PLAY-BLOB-1A [DISK-CHILD] — path identity Red：**root-relative no-follow open + `fstat`拒绝symlink swap、
    directory/file type、wrong owner与path escape；字符串standardize不足以Green。
-2. **PLAY-BLOB-1B [DISK-CHILD] — integrity Red：**truncate、length mismatch、digest mismatch与wrong blob ID均
-   typed fail；有副作用consumer在批准的prepass/chunk-auth/stage-until-verified完成前不得publish。
+2. **PLAY-BLOB-1B [DISK-CHILD] — descriptor/read integrity Red：**truncate、length mismatch、
+   wrong blob ID、missing source 与 read error 均 typed fail。本卡不新增 content hash/checksum；迁移/
+   publish 在本次冻结 source 仍可用时做 byte-exact staged readback，有副作用consumer在该
+   validation 前不得publish。runtime不承诺自检同长 silent media corruption。
 3. **PLAY-GC-1 [DISK-CHILD] — live lease race Red：**retire/remove与active open descriptor交错时，GC不删
    live reservation；consumer结束后才能进入reclaimable。
 4. **PLAY-GC-2 [DISK-CHILD/PERF] — bounded enumeration Red：**每轮目录enumeration、reference query与delete
@@ -1540,7 +1578,7 @@ matrix放进一个timeout test：
    precedence读到一份authoritative content。Green只加兼容read，不做全库切换。
 3. **PLAY-MIG-3 [DISK-CHILD] — checkpoint Red：**一个bounded batch完成后kill，fresh child只从下一个
    checkpoint继续，不重复发布业务commit。Green只持久化该batch进度。
-4. **PLAY-MIG-4 [DISK-CHILD] — verify-before-delete Red：**新blob digest/readback尚未成功时，旧payload不得
+4. **PLAY-MIG-4 [DISK-CHILD] — verify-before-delete Red：**新blob的declared length与byte-exact staged readback尚未成功时，旧payload不得
    删除。Green只把旧内容cleanup移到verification之后。
 5. **PLAY-MIG-5 [PERF] — migration envelope Red：**在characterization得到并批准batch RSS/IO envelope后，
    一个batch不越界。Green只调batch/read shape；不在同cycle改GC和search index。
@@ -1557,7 +1595,7 @@ matrix放进一个timeout test：
 2. **PLAY-BACKUP-2 [DISK-CHILD] — incomplete family Red：**只复制主store、只复制blob或缺一个reachable source
    时，restore返回typed quarantine/recovery failure，不能补空bytes或新建空库。
 3. **PLAY-BACKUP-3 [SIGNED] — policy Red：**最终Application Support/Caches布局与backup include/exclude行为符合
-   已批准产品承诺；从上一正式版本restore+upgrade后逐item digest/OCC/position一致。
+   已批准产品承诺；从上一正式版本restore+upgrade后逐item public bytes/OCC/position一致。
 
 ### COUNT — 移除5,000之前先消掉四类全局 O(N) 路径
 
@@ -1571,10 +1609,15 @@ matrix放进一个timeout test：
 下面每一行是一个独立Red；第一类刻意拆成cold-open与incoming-candidate两张卡。expected只观察批准的
 访问量/resource receipt与public结果，不断言具体SQL或private collection：
 
-- **PLAY-COUNT-1 [PERF / BLOCKED-DECISION] — cold-start Red：**先由`DEC-U-SCALE-STARTUP-INDEX`修订V2-06 P1；
-   store规模从N到10N时，ready不再同步构建全retained signature
-   coverage；首次browse结果正确。fresh cold open 后第一次 same-content capture（含forced-collision fixture）
-   仍正确coalesce，不能用“index尚未ready”换取启动常数。Green只引入可恢复checkpoint/lazy shard。
+- **PLAY-COUNT-1 [PERF / BLOCKED-DECISION] — cold-start Red：**先由
+   `DEC-U-SCALE-STARTUP-INDEX` 做排他裁决：V2-06 P1 保持 complete checkpoint 但仅限 capped
+   profile，U-scale 用 durable indexed signature-candidate query + bounded batches 取代；或者
+   owning P1 本身被修订为这同一套 query/lazy-shard 合同。不得并存 complete checkpoint 和第二套
+   scale index。当前 recipe-v2 全库 rebuild 也仅属于 5k capped open；U-scale 的 legacy
+   projection/signature validation 必须可恢复且有界。store规模从N到10N时，ready不再同步构建全
+   retained signature coverage；首次browse结果正确。fresh cold open 后第一次
+   same-content capture（含forced-collision fixture）仍正确coalesce，不能用“index尚未ready”
+   换取启动常数。Green只落地被批准的一种 candidate path。
 - **PLAY-COUNT-1B [DISK-CHILD / BLOCKED-DECISION] — background validation Red：**bounded validator从durable cursor恢复，发现
    corrupted/missing signature projection时按批准scope fail closed；不阻塞first page，也不漏掉期间的新commit。
 - **PLAY-COUNT-1C [DISK-CHILD / BLOCKED-DECISION] — unvalidated signature negative-evidence Red：**park
@@ -1587,8 +1630,9 @@ matrix放进一个timeout test：
 - **PLAY-COUNT-2 [PERF] — dedup Red：**捕获一个signature只有k个candidate的值时，resident/fetched candidate
    facts随k而非总N增长，forced collision仍做byte-exact确认。Green只替换完整process-wide
    postings/reverse-map是correctness前提的那条路径。另跑k=N collision/candidate-storm child：候选分批释放、
-   peak有界、byte-exact不丢；wall time/typed overload按批准合同处理。若加secondary digest仍必须byte-confirm，
-   不能把O(k)宣称N-independent。
+   peak有界、byte-exact不丢；wall time/typed overload按批准合同处理。不新增 secondary
+   hash/checksum；现有 fingerprint 仍只产生 candidates，候选必须 byte-confirm。不能把O(k)
+   宣称N-independent。
 - **PLAY-COUNT-3C [PERF] — no-victim capture admission Red：**一次明确不触发淘汰的capture不得读取全部
    retained item facts。Green只用同History commit维护的persistent aggregate/indexed victim cursor满足这一行为。
 - **PLAY-COUNT-3R [PERF/DISK-CHILD] — no-victim revise/remove aggregate Red：**under-budget ordinary
@@ -1650,13 +1694,16 @@ ChangePosition/receipt、capture/revise/unpin交错；实现agent不得用测试
     `PLAY-DISK-0A/0B/1/2A/3/4/5/6`与当前StoreRoot backup/reopen证据；没有这些leaf不开放production count=nil。
 - **PLAY-COUNT-9A [PURE / BLOCKED-SPEC/BLOCKED-GATES] — production surface Red：**只有8C、本节全部适用
     behavior leaves与`DEC-COUNT-DISABLED/DEC-SCALE-GATES`关闭后，production public/config/persistence round-trip
-    才能表达真实`count=nil`，不以`Int.max`伪装，也不改变单representation/capture/revision安全上限。
+    才能表达真实`count=nil`：user maximum-unpinned policy/action/config 可选，且包含 pins 的
+    独立 global `hardMaximumRetainedItems` 已移除或被批准的资源安全线取代。不以`Int.max`
+    伪装，也不改变单representation/capture/revision安全上限。
 - **PLAY-COUNT-9B [DISK-CHILD / BLOCKED-SPEC/BLOCKED-GATES] — production behavior Red：**用production build/config
     写入5,001个small items（另跑all-pinned），fresh reopen全部可分页读取且没有因固定count constant静默retire；
     low-disk仍按shared health policy typed pause，不自动删除source history。
 - **PLAY-COUNT-9C [PERF / BLOCKED-GATES] — 1m scheduled evidence：**test-only scale path在固定Release child、
     fixture与机器上完成1m cold/warm open、browse、capture/dedup、exact/fuzzy/regexp、retention/Clear、UI window
-    和restart digest；每个mode只按`DEC-SCALE-GATES`批准的SLO/范围判定。它不进每PR，也不把1m写成无限。
+    和restart后按显式 item/reference/type/length manifest 抽样 public byte-exact 内容；每个mode
+    只按`DEC-SCALE-GATES`批准的SLO/范围判定。它不进每PR，也不把1m写成无限。
 
 8C聚合的全部适用non-aggregate `PLAY-COUNT-1…8` leaves、shared
 `PLAY-DISK-0A/0B/1/2A/3/4/5/6`、5,001功能边界、`DEC-SCALE-GATES`要求的各级scale/backup headroom及适用
@@ -1672,14 +1719,14 @@ claim。即使1M通过，也只能写“该build/机器/fixture支持1M”，不
 ### SOAK — 跨owner峰值与长期plateau
 
 先characterize代表性混合workload；它不是Red。固定并公布capture mix、format/size分布、browse/search/
-preview/paste比例、retention/migration是否并发、duration、build、machine和fixture digest。批准envelope后，
+preview/paste比例、retention/migration是否并发、duration、build、machine和versioned fixture ID。批准envelope后，
 以下每一行才成为独立cycle：
 
 1. **PLAY-SOAK-1 [PERF] — quiescent Red：**一轮混合负载停止并等待批准settle window后，active permits归零。
 2. **PLAY-SOAK-2 [PERF] — cache Red：**整个run中每个local owned-cache ledger都不越各自hard budget。
 3. **PLAY-SOAK-3 [PERF] — plateau Red：**重复固定轮次后quiescent RSS/dirty slope不超过批准envelope。
-4. **PLAY-SOAK-4 [PERF] — durability Red：**soak child正常退出后，fresh child的public digest与成功receipt
-   manifest一致。
+4. **PLAY-SOAK-4 [PERF] — durability Red：**soak child正常退出后，fresh child的public IDs/positions与
+byte-exact payload fixture同成功receipt manifest一致。
 5. **PLAY-SOAK-5 [SIGNED] — product journey Red：**distribution形态在memory pressure + low disk + panel activity
    的一个批准组合下给出可见health、保持旧history可读且不崩溃。
 

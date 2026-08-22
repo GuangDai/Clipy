@@ -10,6 +10,7 @@
 /// `RevisionDecision`, `.incoherentRevisionDraft`); detail DTOs
 /// docs/03b-instruction-set.md §9; Main-actor UI docs/01-architecture.md §6;
 /// roadmap: docs/roadmap/05-presentationui.md (step 9).
+import ClipboardFormats
 import Foundation
 import HistoryCore
 import SwiftUI
@@ -293,7 +294,7 @@ public struct ReviseEditorView: View {
                     Text("Hide").tag(ReviseEditorDraft.Choice.hide)
                     if replacementIsAvailable {
                         // The first encoder-backed editing route is exact
-                        // `public.utf8-plain-text` only (review TYPE-2).
+                        // Exact UTF-8 plain text only (review TYPE-2).
                         Text("Replace").tag(ReviseEditorDraft.Choice.replace)
                     }
                 }
@@ -456,17 +457,17 @@ private func editorPreviewDetails() -> HistoryDetails {
         ),
         canonical: [
             HistoryRepresentation(
-                typeIdentifier: "public.utf8-plain-text",
+                typeIdentifier: ClipboardFormatIdentifier.utf8PlainText.rawValue,
                 bytes: Data("Meeting notes — first line\nSecond line".utf8)
             ),
             HistoryRepresentation(
-                typeIdentifier: "public.html",
+                typeIdentifier: ClipboardFormatIdentifier.html.rawValue,
                 bytes: Data("<p>Meeting notes</p>".utf8)
             ),
         ],
         effective: [
             HistoryRepresentation(
-                typeIdentifier: "public.utf8-plain-text",
+                typeIdentifier: ClipboardFormatIdentifier.utf8PlainText.rawValue,
                 bytes: Data("Meeting notes — first line".utf8)
             ),
         ],
@@ -476,7 +477,9 @@ private func editorPreviewDetails() -> HistoryDetails {
                 createdAt: Date(timeIntervalSinceNow: -3_600),
                 isActive: true,
                 title: "Meeting notes — first line",
-                typeIdentifiers: ["public.utf8-plain-text"],
+                typeIdentifiers: [
+                    ClipboardFormatIdentifier.utf8PlainText.rawValue,
+                ],
                 byteCount: 27
             ),
         ],

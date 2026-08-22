@@ -29,7 +29,9 @@
 /// the v1 WS21 posture), §8.1 (`prunedRevisions` counts only SURVIVING
 /// items' prunes), §11 D24 (single commit, victim safety); Record 3 gates
 /// `RET-PERF-2` (scalar exceedance detection — lineages decoded ONLY for
-/// exceeding items), `RET-PRUNE-2`, `RET-STAMP-2`, `RET-SECURITY-1`.
+/// exceeding items; each decoded item is then checked for exact projection /
+/// lineage equality before planning), `RET-PRUNE-2`, `RET-STAMP-2`,
+/// `RET-SECURITY-1`.
 import Foundation
 import HistoryCore
 import HistoryDomain
@@ -61,8 +63,10 @@ extension HistoryAuthority {
     /// 4. **PHASE A — R3 first** (§4.4/§3.2, mirroring the revise path):
     ///    for each item whose `revisionCount`/`revisionBytes` scalars exceed
     ///    the NEW thresholds (scalar detection only, `RET-PERF-2`), load that
-    ///    item's lineage (bounded; only exceeding items) and plan the prune
-    ///    via `planRevisionRetentionExpansion(target:
+    ///    item's lineage (bounded; only exceeding items), require its three
+    ///    projected scalars to exactly equal the hydrated Canonical/revision
+    ///    lineage (DATA-2), and plan the prune via
+    ///    `planRevisionRetentionExpansion(target:
     ///    .setRetentionPolicies(activeRevisionID:))` — NO veto here. Project
     ///    each pruned item's scalars to the post-prune state
     ///    (`loadedRevisions \ pruneSet`).
@@ -210,6 +214,25 @@ extension HistoryAuthority {
                     in: context,
                     limits: limits
                 )
+                // DATA-2: scalar exceedance is only the bounded selector for
+                // this R3 slow path. Once the item is hydrated, require the
+                // selected projection row to equal the exact Canonical and
+                // revision lineage it summarizes before destructive
+                // planning. This preserves `RET-PERF-2`: non-exceeding rows
+                // are not decoded or cross-checked, while a plausible stale
+                // scalar cannot choose victims for an exceeding item.
+                var hydratedCanonicalBytes = 0
+                for representation in facts.item.canonical.representations {
+                    hydratedCanonicalBytes += representation.content.bytes.count
+                }
+                let hydratedRevisionScalars = RetainedBytesStamping
+                    .revisionScalars(of: facts.item.revisions)
+                guard scalars.canonicalBytes == hydratedCanonicalBytes,
+                      scalars.revisionCount == hydratedRevisionScalars.count,
+                      scalars.revisionBytes == hydratedRevisionScalars.bytes
+                else {
+                    throw HistoryFailure.persistence(.invariantViolation)
+                }
                 // §5.5/§6.5: the policy-change target flavor — no append;
                 // the effective list is the loaded lineage and the active is
                 // the stored active. The planner never returns the active

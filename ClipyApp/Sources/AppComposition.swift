@@ -449,7 +449,7 @@ final class AppComposition {
     }
 
     private enum CaptureExecutionOutcome: Sendable {
-        case completed
+        case completed(HistoryReceipt)
         case cancelled
         case excluded
         case failed(ClipyCaptureFailure)
@@ -462,8 +462,8 @@ final class AppComposition {
         history: any ClipboardHistory
     ) async -> CaptureExecutionOutcome {
         do {
-            _ = try await history.perform(.capture(capture))
-            return .completed
+            let receipt = try await history.perform(.capture(capture))
+            return .completed(receipt)
         } catch is CancellationError {
             return .cancelled
         } catch let failure as HistoryFailure {
@@ -485,7 +485,8 @@ final class AppComposition {
         captureTask = nil
         activeCaptureBytes = 0
         switch outcome {
-        case .completed:
+        case .completed(let receipt):
+            viewState.acceptCaptureReceipt(receipt)
             if failureCountAtAdmission == failedCaptureCount {
                 lastCaptureFailure = nil
             }
@@ -498,6 +499,14 @@ final class AppComposition {
         case .failed(let failure):
             failedCaptureCount += 1
             lastCaptureFailure = failure
+            if failure == .temporarilyUnavailable(.insufficientDiskSpace) {
+                // A full volume is not made healthier by immediately
+                // replaying bytes observed while the failed transaction was
+                // active. Drop that value before publishing the episode; a
+                // later pasteboard observation is the only v1 retry signal
+                // (REVIEW Card 6B; 05 §16).
+                pendingCapture = nil
+            }
         }
         publishCaptureHealthIfChanged()
 

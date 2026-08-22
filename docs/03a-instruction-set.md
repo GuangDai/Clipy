@@ -273,6 +273,7 @@ public enum HistoryReceipt: Sendable {
 public struct HistoryCommit: Sendable {
     public let position: ChangePosition
     public let outcome: HistoryCommitOutcome
+    package let hasDestructiveRetentionEffects: Bool
 
     public init(
         position: ChangePosition,
@@ -280,6 +281,17 @@ public struct HistoryCommit: Sendable {
     ) {
         self.position = position
         self.outcome = outcome
+        self.hasDestructiveRetentionEffects = false
+    }
+
+    package init(
+        position: ChangePosition,
+        outcome: HistoryCommitOutcome,
+        hasDestructiveRetentionEffects: Bool
+    ) {
+        self.position = position
+        self.outcome = outcome
+        self.hasDestructiveRetentionEffects = hasDestructiveRetentionEffects
     }
 }
 
@@ -298,6 +310,8 @@ public enum HistoryCommitOutcome: Sendable {
 `unchanged` means there was no durable mutation. It has no position, publishes no invalidation, and is not a History Commit.
 
 A committed capture returns the stable winner/new item reference. Metadata-only outcomes keep the existing Content Version, so the outcome does not pretend to mint a new reference state.
+
+`hasDestructiveRetentionEffects` is true exactly when the same committed plan also retired at least one item or pruned at least one immutable revision for retention. It is package-only invalidation evidence for composed callers: it carries no victim IDs, never changes the primary `HistoryCommitOutcome`, and is false on the public initializer. Presentation owners publish a whole-surface derived-state purge when it is true; held rows are retired only while observation lags the receipt, because an already-observed page at an equal or newer `ChangePosition` is authoritative and must be preserved.
 
 ### 7. Browse and search requests
 

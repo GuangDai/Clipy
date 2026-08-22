@@ -130,12 +130,11 @@ internal enum AuthoritySuspensionPoint: String, Sendable {
 /// seam); WS13: docs/06-cross-cutting.md §8.
 ///
 /// Test seam, compiled in always and harmless in production: disarmed unless
-/// a test arms it via @testable (no `#if DEBUG`). Each case is one-shot and
-/// consumed only when its matching production guard is reached. The WS13
-/// case preserves its exact interleaving — row mutation applied, singleton
-/// position not yet written — while the guard-specific cases alter only a
-/// local decision value, never durable fixture state. Every injected guard
-/// failure therefore traverses the real transaction catch and commits nothing
+/// a test arms it via @testable (no `#if DEBUG`). Each case is one-shot. The
+/// WS13 and out-of-space cases preserve the exact interleaving — row mutation
+/// applied, singleton position not yet written — while the guard-specific
+/// cases alter only a local decision value, never durable fixture state.
+/// Every injected failure traverses the real transaction catch and commits nothing
 /// (§10: "Closure failure commits nothing. There is no receipt, index delta,
 /// or invalidation").
 internal enum InjectedTransactionFailure: Error, Sendable, Equatable {
@@ -158,6 +157,11 @@ internal enum InjectedTransactionFailure: Error, Sendable, Equatable {
     /// Add one impossible ordinal to the validator's local scalar snapshot so
     /// its real D12 contiguity guard rejects the transaction.
     case finalPinOrderViolated
+
+    /// Throw a Cocoa out-of-space error after row mutation and before the
+    /// singleton update so the production transaction catch and rollback are
+    /// exercised.
+    case insufficientDiskSpace
 }
 
 // MARK: - HistoryAuthority (docs/05-authority-kernel.md §2, §5)

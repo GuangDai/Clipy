@@ -3,9 +3,10 @@
 /// with no extra `save()`; closure failure commits neither.
 /// Owning spec: docs/05-authority-kernel.md §10 (the only durable History
 /// Commit primitive is `ModelContext.transaction`; "closure success is the
-/// save boundary", "closure failure commits nothing"), §16 (every closure
-/// failure maps to `.persistence(.transaction)`); WS13 durable half:
-/// docs/06-cross-cutting.md §8.
+/// save boundary", "closure failure commits nothing"), §16 (ordinary
+/// closure failures map to `.persistence(.transaction)`); WS13 durable half:
+/// docs/06-cross-cutting.md §8. A proved Cocoa out-of-space/POSIX ENOSPC
+/// closure failure is the narrower retryable exception (docs/05 §16).
 ///
 /// The one-shot transaction-failure seam
 /// (`setTransactionFailureInjection` /
@@ -308,6 +309,55 @@ struct TransactionBoundaryProofTests {
 
         let position = try WSSupport.fetchPosition(verification)
         #expect(position.rawValue == 2)
+    }
+
+    /// The low-disk injection throws a Cocoa out-of-space error from inside
+    /// the real transaction closure after row mutation. The production catch
+    /// translates it without string matching, while transaction rollback
+    /// preserves every durable column and the Change Position (§10, §16).
+    @Test func injectedOutOfSpaceTraversesProductionCatchAndRollsBack() async throws {
+        let url = WSSupport.tempStoreURL("tx-boundary-out-of-space")
+        defer { WSSupport.removeStore(url) }
+
+        let history = try await WSSupport.openHistory(storeURL: url)
+        let authority = history.authority
+        let preparation = IngestPreparationActor()
+        let seed = try await preparation.prepare(
+            WSSupport.textCapture(
+                "tx-boundary disk seed",
+                observedAt: Date(timeIntervalSinceReferenceDate: 4_000)
+            )
+        )
+        _ = try await authority.commitCapture(seed)
+        let before = try autoreleasepool {
+            try TransactionStoreSnapshot.read(from: url)
+        }
+
+        await authority.setTransactionFailureInjection(.insufficientDiskSpace)
+        let rejected = try await preparation.prepare(
+            WSSupport.textCapture(
+                "tx-boundary disk rejected",
+                observedAt: Date(timeIntervalSinceReferenceDate: 4_100)
+            )
+        )
+
+        await #expect(
+            throws: HistoryFailure.temporarilyUnavailable(.insufficientDiskSpace)
+        ) {
+            try await authority.commitCapture(rejected)
+        }
+
+        let after = try autoreleasepool {
+            try TransactionStoreSnapshot.read(from: url)
+        }
+        #expect(after == before)
+
+        let readableOldState = try await history.browse(HistoryBrowseRequest(
+            kind: .recent,
+            limit: 10
+        ))
+        #expect(readableOldState.position.rawValue == 1)
+        #expect(readableOldState.rows.map(\.title) == ["tx-boundary disk seed"])
     }
 }
 

@@ -2,6 +2,7 @@
 /// current-vs-canonical decisions.  The view renders and mutates this value;
 /// this module alone translates those choices into HistoryCore vocabulary.
 /// Owning spec: docs/03a-instruction-set.md §5; review Card 3.
+import ClipboardFormats
 import Foundation
 import HistoryCore
 
@@ -287,7 +288,8 @@ package struct ReviseEditorDraft: Sendable {
     /// unspecified-encoding UTIs remain byte-exact through Keep Current / Use
     /// Original / Hide until their own encoders land (review TYPE-2; pasteboard
     /// type-system memo §9.2).
-    private static let replaceableTypeIdentifier = "public.utf8-plain-text"
+    private static let replaceableTypeIdentifier: ClipboardFormatIdentifier =
+        .utf8PlainText
 
     /// A visible current value must decode with the same exact codec used to
     /// encode its replacement. When the type is currently hidden, a valid
@@ -309,7 +311,9 @@ package struct ReviseEditorDraft: Sendable {
     private static func supportsLiteralReplacement(
         _ representation: HistoryRepresentation
     ) -> Bool {
-        guard representation.typeIdentifier == replaceableTypeIdentifier else {
+        guard ClipboardFormatIdentifier(
+            rawValue: representation.typeIdentifier
+        ) == replaceableTypeIdentifier else {
             return false
         }
         return String(data: representation.bytes, encoding: .utf8) != nil
@@ -318,7 +322,9 @@ package struct ReviseEditorDraft: Sendable {
     private static func decodedText(
         _ representation: HistoryRepresentation
     ) -> String? {
-        guard representation.typeIdentifier == replaceableTypeIdentifier else {
+        guard ClipboardFormatIdentifier(
+            rawValue: representation.typeIdentifier
+        ) == replaceableTypeIdentifier else {
             return nil
         }
         return String(data: representation.bytes, encoding: .utf8)

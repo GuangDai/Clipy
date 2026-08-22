@@ -8,14 +8,16 @@ All library targets live in one Swift package so package-only implementation voc
 
 ```text
 ClipyApp
-├── PresentationUI ────────→ HistoryCore
+├── PresentationUI ────────→ HistoryCore + ClipboardFormats
 ├── PasteboardAdapter ─────→ HistoryCore
-└── HistoryStorage ────────→ HistoryCore
+└── HistoryStorage ────────→ HistoryCore + ClipboardFormats
           │                 → HistoryDomain
           ├────────────────→ xxh3
           └────────────────→ Fuse
 
 HistoryDomain ─────────────→ HistoryCore
+
+ClipboardFormats ────────→ Foundation only
 
 HistoryPerfRunner ─────────→ HistoryCore + HistoryStorage
                              (proof executable; no shipped product surface)
@@ -29,6 +31,7 @@ There is no `DomainCore` target. The few values that must appear in both the cal
 
 | Target | Surface | Owns | Must not own |
 |---|---|---|---|
+| `ClipboardFormats` | Package-only, Foundation-only | Open-world exact identifiers and declared string-codec facts | Purpose admission, decoders, bytes, registries, caches, plugins, framework objects |
 | `HistoryCore` | Public, Foundation-only | `ClipboardHistory`, IDs/tokens, History Actions, request/response DTOs, receipts, typed failures | Canonical state, fingerprints, SwiftData, AppKit, concrete storage |
 | `HistoryDomain` | Package-only, Foundation-only | Content lineage, immutable state, complete fact values, pure planners, semantic mutation plans and invariants | Public ports, I/O, actors, clocks, UUID generation, persistence |
 | `HistoryStorage` | Public concrete adapter plus internal implementation | `SwiftDataHistory`, Authority actor, schema/codecs, fact loaders, version minting, ingest preparation, Signature Index, read projections, observation plumbing, thumbnail production | AppKit pasteboard, UI state, service location |
@@ -44,6 +47,7 @@ There is no `DomainCore` target. The few values that must appear in both the cal
 
 - `public` is reserved for caller-visible `HistoryCore`, the concrete `HistoryStorage` constructor needed by `ClipyApp`, and adapter/UI entry points.
 - Cross-target implementation declarations use Swift `package` access.
+- `ClipboardFormats` states stable exact facts only. Projection, Preview, Details, and Edit retain separate purpose policy; unknown identifiers remain opaque raw values.
 - Intra-target storage declarations use `internal` or `private`.
 - `@Model` types are internal to `HistoryStorage` and never occur in a public or package signature.
 - Domain planners and facts are not protocols intended for third-party extension. Adding a v1 History Action is an owned source change and must make compiler-exhaustive switches fail until handled.
@@ -116,6 +120,18 @@ The adapter never constructs `CanonicalContent` and never calls xxh3. Preparatio
 
 If `CopyOriginObservation.lineageHint` names a retained item, the fact loader fetches that item directly by `HistoryItemID`; it does not require the hint to appear in a canonical-signature result. Exact equality with the hinted item's Effective Content is required before the hint can win.
 
+`ClipyApp` owns a fixed one-active/one-replaceable-latest capture lane. A
+capture transaction that returns
+`.temporarilyUnavailable(.insufficientDiskSpace)` publishes that exact
+content-free health episode and drops the value that was already pending;
+replaying it immediately cannot establish that volume capacity recovered. A
+later complete pasteboard observation is the explicit retry, and only a
+successful capture admitted after the episode clears it. Other typed failures
+keep the ordinary active/latest drain rule, while a success admitted before a
+newer failure never clears that newer episode. The app does not retain rejected
+clipboard bytes for automatic retry and does not claim that remove or clear
+will reclaim physical disk capacity.
+
 #### 5.2 Pin, reorder, remove, and clear
 
 ```text
@@ -185,6 +201,11 @@ The UI requests a thumbnail using `HistoryItemReference(id, contentVersion)` and
 #### Main actor
 
 - SwiftUI views, observable presentation state, selection, and window behavior.
+- `ClipyApp` forwards every capture `HistoryReceipt` to `HistoryViewState` on
+  the main actor. When the package-only `hasDestructiveRetentionEffects` fact
+  is true, the view state publishes its existing whole-surface purge before
+  observation catches up, while an already-observed page at an equal or newer
+  `ChangePosition` is preserved.
 - No SwiftData context, row, or model identity.
 - No content fingerprinting, rich-text parsing, search scan, or image decode.
 - Relative copy-time labels use the system abbreviated formatter. One
@@ -222,6 +243,7 @@ The Authority does not retain model objects between operations. Each isolated re
 
 ### 8. Forbidden dependencies and anti-goals
 
+- `ClipboardFormats` may import Foundation only and must not own a purpose-specific behavior policy.
 - `HistoryCore` must not import `HistoryDomain`, `HistoryStorage`, SwiftData, AppKit, SwiftUI, ImageIO, or xxh3.
 - `HistoryDomain` must not import `HistoryStorage`, SwiftData, AppKit, SwiftUI, ImageIO, or xxh3.
 - Adapters and UI must not import `HistoryDomain` or `HistoryStorage`.

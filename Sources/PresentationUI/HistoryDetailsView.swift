@@ -9,6 +9,7 @@
 /// docs/03a-instruction-set.md §5; thumbnail discipline
 /// docs/01-architecture.md §5.7 / docs/04-coherence.md §9; roadmap:
 /// docs/roadmap/05-presentationui.md (step 9).
+import ClipboardFormats
 import Foundation
 import HistoryCore
 import SwiftUI
@@ -837,7 +838,9 @@ package enum DetailsRepresentationPresentation: Equatable, Sendable {
     package static func resolve(
         _ representation: HistoryRepresentation
     ) -> DetailsRepresentationPresentation {
-        guard representation.typeIdentifier == "public.utf8-plain-text",
+        guard ClipboardFormatIdentifier(
+            rawValue: representation.typeIdentifier
+        ) == .utf8PlainText,
             let text = String(data: representation.bytes, encoding: .utf8),
             !text.isEmpty
         else {
@@ -869,13 +872,13 @@ private enum DetailsFormat {
 /// `DetailsRepresentationPresentation` owns exact preview admission (review
 /// TYPE-2).
 private let textualTypeIdentifiers: Set<String> = [
-    "public.plain-text",
-    "public.utf8-plain-text",
-    "public.utf16-plain-text",
-    "public.utf8-external-plain-text",
-    "public.text",
-    "public.rtf",
-    "public.html",
+    ClipboardFormatIdentifier.plainText.rawValue,
+    ClipboardFormatIdentifier.utf8PlainText.rawValue,
+    ClipboardFormatIdentifier.utf16PlainText.rawValue,
+    ClipboardFormatIdentifier.utf8ExternalPlainText.rawValue,
+    ClipboardFormatIdentifier.text.rawValue,
+    ClipboardFormatIdentifier.rtf.rawValue,
+    ClipboardFormatIdentifier.html.rawValue,
 ]
 
 /// Mirror of storage's frozen v1 ImageIO-decodable set (docs/04-coherence.md
@@ -969,11 +972,11 @@ private func detailsPreviewDetails() -> HistoryDetails {
         ),
         canonical: [
             HistoryRepresentation(
-                typeIdentifier: "public.html",
+                typeIdentifier: ClipboardFormatIdentifier.html.rawValue,
                 bytes: Data("<p>Meeting notes</p>".utf8)
             ),
             HistoryRepresentation(
-                typeIdentifier: "public.utf8-plain-text",
+                typeIdentifier: ClipboardFormatIdentifier.utf8PlainText.rawValue,
                 bytes: Data(
                     (
                         "Meeting notes — Clipy design review\n"
@@ -984,7 +987,7 @@ private func detailsPreviewDetails() -> HistoryDetails {
         ],
         effective: [
             HistoryRepresentation(
-                typeIdentifier: "public.utf8-plain-text",
+                typeIdentifier: ClipboardFormatIdentifier.utf8PlainText.rawValue,
                 bytes: Data(
                     (
                         "Meeting notes — Clipy design review\n"
@@ -999,7 +1002,9 @@ private func detailsPreviewDetails() -> HistoryDetails {
                 createdAt: Date(timeIntervalSinceNow: -3_600),
                 isActive: true,
                 title: "Meeting notes — Clipy design review",
-                typeIdentifiers: ["public.utf8-plain-text"],
+                typeIdentifiers: [
+                    ClipboardFormatIdentifier.utf8PlainText.rawValue,
+                ],
                 byteCount: 64
             ),
             RevisionSummary(
@@ -1007,7 +1012,10 @@ private func detailsPreviewDetails() -> HistoryDetails {
                 createdAt: Date(timeIntervalSinceNow: -86_400),
                 isActive: false,
                 title: "Meeting notes",
-                typeIdentifiers: ["public.html", "public.utf8-plain-text"],
+                typeIdentifiers: [
+                    ClipboardFormatIdentifier.html.rawValue,
+                    ClipboardFormatIdentifier.utf8PlainText.rawValue,
+                ],
                 byteCount: 96
             ),
         ],
