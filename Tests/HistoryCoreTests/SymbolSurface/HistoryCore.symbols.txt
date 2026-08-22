@@ -338,7 +338,7 @@ policies
 position
 rawValue
 read(_:)
-rebaseAuditChain(reason:)
+rebaseAuditLog(reason:)
 representations
 requestedAt
 retentionConfiguration()
