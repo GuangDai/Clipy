@@ -121,10 +121,6 @@ public struct HistoryPanelView: View {
             }
             mainColumn
                 .frame(width: PanelGeometry.contentWidth)
-                // Stable hosted-test and assistive-technology identity for
-                // the surface Card 9C/9F requires AppKit to keep fixed.
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("clipy.history.main-column")
             if previewState.isOpen, previewPlacement == .trailing {
                 Divider()
                 previewColumn
@@ -191,8 +187,6 @@ public struct HistoryPanelView: View {
             selection: previewSelection
         )
         .frame(width: PanelGeometry.previewWidth)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("clipy.history.preview-column")
         // Opacity-only fade (Maccy's lesson: animating the WIDTH forces an
         // NSHostingView re-layout per frame; compositing a fade does not).
         .transition(.opacity)
