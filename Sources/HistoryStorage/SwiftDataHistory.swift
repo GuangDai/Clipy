@@ -14,6 +14,17 @@ import Foundation
 import HistoryCore
 import SwiftData
 
+#if DEBUG
+/// Operation-local observation hook for deterministic outer-buffer tests.
+/// Task-local inheritance reaches the producer `Task` without adding stored
+/// state to the five-actor facade; Release builds contain no hook or branch.
+internal enum ObservationDebugInstrumentation {
+    @TaskLocal internal static var pageDidYield: (
+        @Sendable (HistoryPage) async -> Void
+    )? = nil
+}
+#endif
+
 // MARK: - SwiftDataHistory (docs/05-authority-kernel.md §2)
 
 /// The production `ClipboardHistory` adapter, backed by SwiftData.
@@ -134,16 +145,23 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         // store runs no stage; a v1 store migrates inside construction
         // (additive schema change + the RetainedBytesRow didMigrate
         // backfill), so both complete before `open` returns
-        // (`RET-PLATFORM-1b(d)`). The durability medium is unchanged.
+        // (`RET-PLATFORM-1b(d)`). The durability medium is unchanged. Both
+        // branches explicitly disable managed CloudKit discovery: clipboard
+        // history is local-only, independent of future app entitlements.
         let schema = Schema(versionedSchema: HistorySchemaV2.self)
         let modelConfiguration: ModelConfiguration
         switch configuration.persistence {
         case .persistent(let storeURL):
-            modelConfiguration = ModelConfiguration(schema: schema, url: storeURL)
+            modelConfiguration = ModelConfiguration(
+                schema: schema,
+                url: storeURL,
+                cloudKitDatabase: .none
+            )
         case .memory:
             modelConfiguration = ModelConfiguration(
                 schema: schema,
-                isStoredInMemoryOnly: true
+                isStoredInMemoryOnly: true,
+                cloudKitDatabase: .none
             )
         }
         let container: ModelContainer
@@ -295,10 +313,12 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     /// page's (§5 steps 2–5); and each later invalidation newer than the
     /// last yielded page produces exactly one replacement page, with the
     /// subscriber's `.bufferingNewest(1)` buffer coalescing bursts (§5 steps
-    /// 6–8; §4). The loop also owns the search evaluation: a `.search`
-    /// observation runs its `SearchWorker` evaluation as a plain await
-    /// inside the producer task (§14.4), so cancelling the producer abandons
-    /// the in-flight evaluation with it.
+    /// 6–8; §4). The public stream independently keeps only its newest page:
+    /// snapshots are replaceable state, so a paused consumer resumes at the
+    /// latest page rather than replaying superseded pages. The loop also owns
+    /// the search evaluation: a `.search` observation runs its `SearchWorker`
+    /// evaluation as a plain await inside the producer task (§14.4), so
+    /// cancelling the producer abandons the in-flight evaluation with it.
     ///
     /// Cancellation unregisters the continuation and releases query/search
     /// tasks (§5): terminating the stream cancels the producer task and hops
@@ -323,7 +343,7 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         // Sendable facade through `firstPage(for:)`.
         let registration = await authority.registerInvalidationSubscriber()
         let authority = self.authority
-        return AsyncThrowingStream { continuation in
+        return AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
             let task = Task {
                 do {
                     // §5 steps 2–4: the first page (P = page.position), then
@@ -342,6 +362,9 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
                     }
                     // §5 step 5.
                     continuation.yield(page)
+#if DEBUG
+                    await ObservationDebugInstrumentation.pageDidYield?(page)
+#endif
 
                     // §5 steps 6–8: an invalidation at or behind the last
                     // yielded page is a buffered wake-up the page already
@@ -357,6 +380,9 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
                         }
                         page = try await firstPage(for: request)
                         continuation.yield(page)
+#if DEBUG
+                        await ObservationDebugInstrumentation.pageDidYield?(page)
+#endif
                     }
                     // The publisher finished the registration stream
                     // (Authority teardown, §14.4): end normally.

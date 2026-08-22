@@ -27,6 +27,9 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// Whether the preview column is currently shown (drives the width).
     private(set) var isPreviewVisible = false
 
+    /// The real column order shared with the hosted SwiftUI view.
+    private(set) var previewPlacement: PreviewPlacement = .trailing
+
     /// The preview pane state whose panel-lifecycle hooks the window
     /// delegate drives (Maccy's `windowDidBecomeKey` → `enableAutoOpen` /
     /// `windowDidResignKey` → `disableAutoOpen` pair).
@@ -36,21 +39,22 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// view state, reset the preview pane).
     private let onPanelClosed: () -> Void
 
+    /// Publishes geometry's placement decision to AppDelegate so the hosted
+    /// HistoryPanelView orders its columns from the same value.
+    private let onPreviewPlacementChange: (PreviewPlacement) -> Void
+
     /// Set around programmatic `setFrame` calls so `windowDidMove` persists
     /// only USER drag positions as the `.lastPosition` anchor.
     private var isProgrammaticMove = false
 
-    /// How the preview column last opened: pinned the right edge (extended
-    /// left) or the left edge (extended right) — closing reverses it
-    /// (Maccy's `computePlacement` anchor-edge rule).
-    private var previewOpenedLeft = false
-
     init(
         rootView: PanelRootView,
         previewState: PreviewPaneState,
+        onPreviewPlacementChange: @escaping (PreviewPlacement) -> Void,
         onClosed: @escaping () -> Void
     ) {
         self.previewState = previewState
+        self.onPreviewPlacementChange = onPreviewPlacementChange
         self.onPanelClosed = onClosed
         super.init(
             contentRect: NSRect(
@@ -124,6 +128,9 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         guard isPresented else { return }
         super.close()
         isPresented = false
+        if isPreviewVisible {
+            setPreviewVisible(false)
+        }
         onPanelClosed()
     }
 
@@ -144,28 +151,28 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// Widens/narrows the panel by the preview column width in a single
     /// `setFrame` — never animated (an animated resize forces a full
     /// NSHostingView layout per display-link frame; Maccy documents the
-    /// resulting layout storm). The anchor edge stays pinned: the column
-    /// extends rightward unless that would spill past the screen, in which
-    /// case it extends leftward (Maccy's `computePlacement`).
+    /// resulting layout storm). Geometry chooses the side with room while
+    /// preserving the main surface's exact screen frame (Card 9C/9F).
     func setPreviewVisible(_ visible: Bool) {
         guard visible != isPreviewVisible else { return }
-        isPreviewVisible = visible
-        guard isPresented else { return }
-        let newWidth = PanelGeometry.totalWidth(previewOpen: visible)
-        var frame = self.frame
-        let delta = newWidth - frame.size.width
-        frame.size.width = newWidth
-        if delta > 0 {
-            if let screenFrame = screen?.visibleFrame, frame.maxX > screenFrame.maxX {
-                frame.origin.x -= delta
-                previewOpenedLeft = true
-            } else {
-                previewOpenedLeft = false
-            }
-        } else if delta < 0, previewOpenedLeft {
-            frame.origin.x -= delta  // delta < 0: shift right, pinning the right edge
+        if visible {
+            let expansion = PopupPositionGeometry.expandedPreviewFrame(
+                preservingMainSurface: frame,
+                in: screen?.visibleFrame
+            )
+            isPreviewVisible = true
+            setPreviewPlacement(expansion.placement)
+            setFrameProgrammatically(expansion.panelFrame, display: isPresented)
+        } else {
+            let mainSurfaceFrame = PopupPositionGeometry.mainSurfaceFrame(
+                in: frame,
+                previewPlacement: previewPlacement,
+                previewVisible: true
+            )
+            isPreviewVisible = false
+            setPreviewPlacement(.trailing)
+            setFrameProgrammatically(mainSurfaceFrame, display: isPresented)
         }
-        setFrameProgrammatically(frame, display: true)
     }
 
     // MARK: - Window delegate
@@ -176,6 +183,9 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         guard !isProgrammaticMove, let screenFrame = screen?.visibleFrame else { return }
         let anchor = PopupPositionGeometry.normalizedAnchor(
             forPanelFrame: frame,
+            previewPlacement: previewPlacement,
+            previewVisible: isPreviewVisible,
+            mainSurfaceWidth: PanelGeometry.contentWidth,
             in: screenFrame
         )
         UserDefaults.standard.set(anchor.x, forKey: Self.anchorXKey)
@@ -213,6 +223,12 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         isProgrammaticMove = true
         setFrame(frame, display: display)
         isProgrammaticMove = false
+    }
+
+    private func setPreviewPlacement(_ placement: PreviewPlacement) {
+        guard placement != previewPlacement else { return }
+        previewPlacement = placement
+        onPreviewPlacementChange(placement)
     }
 }
 

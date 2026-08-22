@@ -13,6 +13,57 @@ import Foundation
 import HistoryCore
 import SwiftUI
 
+/// Which side of the stable history column displays the optional preview.
+/// ClipyApp chooses this from screen geometry; PresentationUI uses the same
+/// value to order the columns without depending on AppKit (01 §8).
+public enum PreviewPlacement: Equatable, Sendable {
+    case leading
+    case trailing
+}
+
+/// The list selection reconciled against the latest authoritative rows.
+/// The ID remains the list-control identity, while `reference` is the exact
+/// content target consumed by preview. A row removal clears both; a same-ID
+/// ContentVersion advance changes this value (review Card 9A).
+package struct PreviewSelectionResolution: Equatable {
+    package let selectedID: HistoryItemID?
+    package let reference: HistoryItemReference?
+    private let availableItemIDs: Set<HistoryItemID>
+
+    package static func resolve(
+        selectedID: HistoryItemID?,
+        rows: [HistoryRow]
+    ) -> PreviewSelectionResolution {
+        guard let selectedID,
+              let reference = rows.first(where: { $0.item.id == selectedID })?.item
+        else {
+            return PreviewSelectionResolution(
+                selectedID: nil,
+                reference: nil,
+                availableItemIDs: Set(rows.map(\.item.id))
+            )
+        }
+        return PreviewSelectionResolution(
+            selectedID: selectedID,
+            reference: reference,
+            availableItemIDs: Set(rows.map(\.item.id))
+        )
+    }
+
+    /// Keeps PreviewPaneState's cross-item dwell target, but immediately
+    /// advances the exact reference when observation revises that same item.
+    /// A missing selected row invalidates preview immediately.
+    package func previewTarget(
+        previewedItem: HistoryItemReference?
+    ) -> HistoryItemReference? {
+        guard let reference,
+              let previewedItem,
+              availableItemIDs.contains(previewedItem.id)
+        else { return nil }
+        return reference.id == previewedItem.id ? reference : previewedItem
+    }
+}
+
 /// The composition point ClipyApp hosts inside its floating panel window.
 /// Owns the reference-exact `ThumbnailStore` (created from
 /// `viewState.history`; 01 §5.7), the hoisted list selection, and the
@@ -27,6 +78,7 @@ import SwiftUI
 public struct HistoryPanelView: View {
     private let viewState: HistoryViewState
     private let previewState: PreviewPaneState
+    private let previewPlacement: PreviewPlacement
     private let onOpenSettings: () -> Void
     private let onQuit: () -> Void
     private let onRequestClose: () -> Void
@@ -35,7 +87,7 @@ public struct HistoryPanelView: View {
     @State private var thumbnails: ThumbnailStore
     @State private var detailsPath: [HistoryItemReference] = []
     @State private var selection: HistoryItemID?
-    @State private var dismissedFailure: HistoryFailure?
+    @State private var dismissedFailureEpisode: Int?
     @State private var pendingClear: ClearScope?
     @FocusState private var isSearchFieldFocused: Bool
 
@@ -45,6 +97,7 @@ public struct HistoryPanelView: View {
     public init(
         viewState: HistoryViewState,
         previewState: PreviewPaneState,
+        previewPlacement: PreviewPlacement = .trailing,
         onOpenSettings: @escaping () -> Void = {},
         onQuit: @escaping () -> Void = {},
         onRequestClose: @escaping () -> Void = {},
@@ -52,6 +105,7 @@ public struct HistoryPanelView: View {
     ) {
         self.viewState = viewState
         self.previewState = previewState
+        self.previewPlacement = previewPlacement
         self.onOpenSettings = onOpenSettings
         self.onQuit = onQuit
         self.onRequestClose = onRequestClose
@@ -61,16 +115,15 @@ public struct HistoryPanelView: View {
 
     public var body: some View {
         HStack(spacing: 0) {
+            if previewState.isOpen, previewPlacement == .leading {
+                previewColumn
+                Divider()
+            }
             mainColumn
                 .frame(width: PanelGeometry.contentWidth)
-            if previewState.isOpen {
+            if previewState.isOpen, previewPlacement == .trailing {
                 Divider()
-                HistoryPreviewView(viewState: viewState, previewState: previewState)
-                    .frame(width: PanelGeometry.previewWidth)
-                    // Opacity-only fade (Maccy's lesson: animating the WIDTH
-                    // forces an NSHostingView re-layout per frame — a layout
-                    // storm; compositing a fade does not).
-                    .transition(.opacity)
+                previewColumn
             }
         }
         .frame(
@@ -81,7 +134,35 @@ public struct HistoryPanelView: View {
         .task { viewState.activate() }
         .onDisappear { viewState.deactivate() }
         .onChange(of: selection) { _, newSelection in
-            previewState.handleSelectionChange(reference(for: newSelection))
+            previewState.handleSelectionChange(
+                PreviewSelectionResolution.resolve(
+                    selectedID: newSelection,
+                    rows: viewState.rows
+                ).reference
+            )
+        }
+        // An authoritative row replacement can change the exact reference
+        // while the ID-only list selection stays fixed (Card 9A).
+        .onChange(of: previewSelection.reference) { _, reference in
+            guard let reference else {
+                selection = nil
+                previewState.handleSelectionChange(nil)
+                return
+            }
+            // Preserve cross-ID dwell and manual-close suppression. Only an
+            // already-open preview of this same item needs state retargeting.
+            if previewState.isOpen, previewState.previewedItem?.id == reference.id {
+                previewState.refreshOpenPreview(reference)
+            }
+        }
+        .onChange(of: resolvedPreviewTarget) { _, target in
+            guard previewState.isOpen, target == nil else { return }
+            // The selected row may still exist while the previously displayed
+            // cross-item dwell target was removed. Close only the preview;
+            // preserve the valid list selection and restart its dwell from
+            // this authoritative transition.
+            previewState.handleSelectionChange(nil)
+            previewState.handleSelectionChange(previewSelection.reference)
         }
         .onChange(of: previewState.isOpen) { _, isOpen in
             onPreviewVisibilityChange?(isOpen)
@@ -98,6 +179,18 @@ public struct HistoryPanelView: View {
     }
 
     // MARK: Main column
+
+    private var previewColumn: some View {
+        HistoryPreviewView(
+            viewState: viewState,
+            previewState: previewState,
+            selection: previewSelection
+        )
+        .frame(width: PanelGeometry.previewWidth)
+        // Opacity-only fade (Maccy's lesson: animating the WIDTH forces an
+        // NSHostingView re-layout per frame; compositing a fade does not).
+        .transition(.opacity)
+    }
 
     /// The pre-preview 400pt column, unchanged: search header, the list in
     /// its details NavigationStack, failure banner, footer.
@@ -131,24 +224,31 @@ public struct HistoryPanelView: View {
         }
     }
 
-    /// The selected row's exact reference (item ID + Content Version) — the
-    /// preview pane's dwell target; `nil` when the selection no longer
-    /// resolves (e.g. the row was removed).
-    private func reference(for selection: HistoryItemID?) -> HistoryItemReference? {
-        guard let selection else { return nil }
-        return viewState.rows.first { $0.item.id == selection }?.item
+    /// One lookup supplies both list reconciliation and preview's exact
+    /// reference, making authoritative row replacement part of the change key.
+    private var previewSelection: PreviewSelectionResolution {
+        PreviewSelectionResolution.resolve(
+            selectedID: selection,
+            rows: viewState.rows
+        )
+    }
+
+    private var resolvedPreviewTarget: HistoryItemReference? {
+        previewSelection.previewTarget(
+            previewedItem: previewState.previewedItem
+        )
     }
 
     // MARK: Failure banner
 
     /// Icon + typed-failure message; Retry appears only for
     /// `.temporarilyUnavailable` (03b §10: the caller may retry later).
-    /// Dismissal is local: `HistoryViewState` owns the authoritative
-    /// `failure` value, so the panel remembers which failure instance it
-    /// dismissed and a new, different failure re-shows the banner.
+    /// Dismissal is local and keyed by the publication episode, not by typed
+    /// value equality. The same failure after recovery therefore reappears.
     @ViewBuilder
     private var failureBanner: some View {
-        if let failure = viewState.failure, failure != dismissedFailure {
+        if let failure = viewState.failure,
+           viewState.failureEpisode != dismissedFailureEpisode {
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.secondary)
@@ -156,15 +256,15 @@ public struct HistoryPanelView: View {
                 Text(FailurePresentation.message(for: failure))
                     .font(.footnote)
                     .fixedSize(horizontal: false, vertical: true)
-                if case .temporarilyUnavailable = failure {
+                if case .temporarilyUnavailable = failure,
+                   viewState.canRetryFailureByRefreshing {
                     Button("Retry") {
-                        dismissedFailure = nil
                         viewState.refresh()
                     }
                 }
                 Spacer(minLength: 4)
                 Button {
-                    dismissedFailure = failure
+                    dismissedFailureEpisode = viewState.failureEpisode
                 } label: {
                     Image(systemName: "xmark")
                         .font(.footnote)
@@ -284,7 +384,7 @@ public struct HistoryPanelView: View {
         Group {
             Button("Clear Search or Close") {
                 if viewState.isSearchActive {
-                    viewState.searchText = ""
+                    viewState.clearSearch()
                 } else {
                     onRequestClose()
                 }
@@ -292,7 +392,7 @@ public struct HistoryPanelView: View {
             .keyboardShortcut(.cancelAction)
 
             Button("Toggle Preview") {
-                previewState.togglePreview(for: reference(for: selection))
+                previewState.togglePreview(for: previewSelection.reference)
             }
             .keyboardShortcut(.space, modifiers: .control)
         }

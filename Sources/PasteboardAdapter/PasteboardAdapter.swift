@@ -27,10 +27,9 @@
 /// unavailable" (`CaptureOutcome.unavailableTypeIdentifiers` — Apple
 /// documents a nil `data(forType:)` as the contents having changed or the
 /// provider having timed out), and the write throws
-/// `PasteboardWriteFailure` when the pasteboard refuses a representation
-/// (a false `setData(_:forType:)` return — Apple: ownership changed), so
-/// neither a partial freeze nor a partial write can masquerade as a
-/// complete success.
+/// `PasteboardWriteFailure` when an item refuses a staged representation or
+/// the pasteboard refuses the completed item, so neither a partial freeze
+/// nor a known incomplete write can masquerade as a complete success.
 import AppKit
 import Foundation
 import HistoryCore
@@ -56,10 +55,13 @@ public struct PasteboardAdapter {
     public var simulatedUnavailableTypeIdentifiers: Set<String> = []
 
     /// The write half of the same seam: a type identifier listed here is
-    /// treated as refused by `setData(_:forType:)` — the false return
-    /// Apple documents as the pasteboard's ownership having changed.
+    /// treated as refused while staging the new `NSPasteboardItem`.
     /// Absent from Release; never set outside Debug tests.
     public var simulatedRejectedWriteTypeIdentifiers: Set<String> = []
+
+    /// Simulates the pasteboard rejecting the completed item after the old
+    /// contents have been cleared. Absent from Release.
+    public var simulatedItemWriteRejected = false
     #endif
 
     /// Creates an adapter over `pasteboard` (`.general` in production).
@@ -168,42 +170,38 @@ public struct PasteboardAdapter {
     /// lineage hint equal to the item ID (docs/03b-instruction-set.md §9;
     /// docs/04-coherence.md §8; docs/01-architecture.md §5.6).
     ///
-    /// The pasteboard is cleared first (`clearContents()`), then each
-    /// representation is written under its type identifier, then the
-    /// lineage hint is written under `com.clipy.lineageHint` so the next
-    /// capture of this same paste coalesces into the item instead of
+    /// Every representation and the `com.clipy.lineageHint` metadata are
+    /// first staged on one new, unbound `NSPasteboardItem`. Only a complete
+    /// item reaches the system pasteboard: the adapter then clears the old
+    /// contents and makes one `writeObjects([item])` attempt. The hint lets
+    /// the next capture of this same paste coalesce into the item instead of
     /// inserting a duplicate (WS4 copy-coalescing through History; the
-    /// end-to-end proof lives in HistoryStorage, not this target). The
-    /// write is a framework side effect owned by the composition root's
-    /// paste orchestration and is intentionally outside any History
-    /// transaction (docs/04-coherence.md §8).
+    /// end-to-end proof lives in HistoryStorage, not this target). The write
+    /// is a framework side effect owned by the composition root's paste
+    /// orchestration and is intentionally outside any History transaction
+    /// (docs/04-coherence.md §8).
     ///
     /// Failure is explicit, never silent (audit SPEC-IMPL-005; the 03b §12
-    /// caller example already writes `try ... write(payload)`): every
-    /// `setData(_:forType:)` Boolean is honored — a false return, which
-    /// Apple documents as the pasteboard's ownership having changed, is
-    /// collected into `PasteboardWriteFailure` and thrown AFTER every
-    /// write was attempted, so the pasteboard holds as much of the payload
-    /// as the system accepted and the failure names everything refused.
-    /// `clearContents()` has no failure signal of its own; a failed clear
-    /// surfaces through the subsequent write refusals. A thrown write may
-    /// leave a PREFIX of the payload on the pasteboard — the caller (the
-    /// composition root) must not present the paste as completed.
+    /// caller example already writes `try ... write(payload)`). A staging
+    /// rejection is reported before `clearContents()`, leaving the existing
+    /// pasteboard and its `changeCount` untouched. A false `writeObjects`
+    /// result is reported separately. One framework write attempt narrows
+    /// the partial-write window; Apple does not document it as a cross-process
+    /// atomic transaction, so this API makes no atomicity claim.
     public func write(_ payload: PastePayload) throws {
-        pasteboard.clearContents()
+        let item = NSPasteboardItem()
         var rejectedTypeIdentifiers: [String] = []
         for representation in payload.representations {
             #if DEBUG
-            // The Debug seam models the refusal faithfully: an injected
-            // rejection skips the write entirely, exactly as a false
-            // `setData` return leaves the type unwritten.
+            // The Debug seam rejects staging without touching the observed
+            // pasteboard, matching a false item-setter result.
             let isSimulatedRejection = simulatedRejectedWriteTypeIdentifiers.contains(
                 representation.typeIdentifier
             )
             #else
             let isSimulatedRejection = false
             #endif
-            let accepted = !isSimulatedRejection && pasteboard.setData(
+            let accepted = !isSimulatedRejection && item.setData(
                 representation.bytes,
                 forType: NSPasteboard.PasteboardType(representation.typeIdentifier)
             )
@@ -218,7 +216,7 @@ public struct PasteboardAdapter {
         #else
         let isSimulatedHintRejection = false
         #endif
-        let hintAccepted = !isSimulatedHintRejection && pasteboard.setData(
+        let hintAccepted = !isSimulatedHintRejection && item.setData(
             PasteboardLineageHint.encode(payload.lineageHint),
             forType: NSPasteboard.PasteboardType(PasteboardLineageHint.typeIdentifier)
         )
@@ -229,6 +227,17 @@ public struct PasteboardAdapter {
             throw PasteboardWriteFailure.representationsRejected(
                 typeIdentifiers: rejectedTypeIdentifiers
             )
+        }
+
+        pasteboard.clearContents()
+        #if DEBUG
+        let itemAccepted = !simulatedItemWriteRejected
+            && pasteboard.writeObjects([item])
+        #else
+        let itemAccepted = pasteboard.writeObjects([item])
+        #endif
+        guard itemAccepted else {
+            throw PasteboardWriteFailure.itemRejected
         }
     }
 }
@@ -264,10 +273,14 @@ public struct CaptureOutcome: Sendable, Equatable {
 
 /// The typed failure of a paste write (03b §9; 04 §8; audit SPEC-IMPL-005).
 public enum PasteboardWriteFailure: Error, Sendable, Equatable {
-    /// One or more `setData(_:forType:)` calls returned false — the
-    /// outcome Apple documents as the pasteboard's ownership having
-    /// changed mid-write. Carries every refused type identifier in write
-    /// order: payload representations first, the lineage-hint marker type
-    /// last. The pasteboard may hold a PREFIX of the payload.
+    /// One or more setters rejected a representation while building the
+    /// unbound item. Carries every refused type identifier in staging order:
+    /// payload representations first, the lineage-hint marker type last.
+    /// This failure occurs before the existing pasteboard is changed.
     case representationsRejected(typeIdentifiers: [String])
+
+    /// The framework rejected the one completed item passed to
+    /// `writeObjects`. This is a distinct post-clear failure; the framework
+    /// does not promise rollback or cross-process atomicity.
+    case itemRejected
 }

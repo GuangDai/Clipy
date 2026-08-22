@@ -12,6 +12,22 @@ import Foundation
 import HistoryCore
 import SwiftUI
 
+/// Pure Card 8B decision seam: pagination belongs to the complete displayed
+/// ordering, not specifically to the Recent section that happens to own most
+/// continuation rows.
+package enum HistoryListPaginationTrigger {
+    package static func shouldLoadNextPage(
+        appearingRowID: HistoryItemID,
+        lastDisplayedRowID: HistoryItemID?,
+        hasNextPage: Bool,
+        isLoadingPage: Bool
+    ) -> Bool {
+        hasNextPage
+            && !isLoadingPage
+            && lastDisplayedRowID == appearingRowID
+    }
+}
+
 /// The browsing list. Rows are keyed by `HistoryItemID`; the selection
 /// (hoisted to the panel so the preview pane can dwell on it) drives the
 /// panel shortcuts (⏎ copy, ⌫ remove, ⌘P pin toggle, ⌘I details push).
@@ -67,9 +83,6 @@ public struct HistoryListView: View {
             Section("Recent") {
                 ForEach(viewState.unpinnedRows, id: \.item.id) { row in
                     rowContent(row, pinnedOrdinal: nil)
-                        .onAppear {
-                            prefetchNextPageIfNeeded(lastRowID: row.item.id)
-                        }
                 }
                 if viewState.isLoadingPage {
                     loadingRow
@@ -85,13 +98,16 @@ public struct HistoryListView: View {
             row: row,
             pinnedOrdinal: pinnedOrdinal,
             thumbnails: thumbnails,
-            onCopy: { viewState.requestPaste($0) },
+            onCopy: { viewState.requestPasteFromDisplayedRow($0) },
             onPin: { id, placement in viewState.pin(id, at: placement) },
             onUnpin: { id in viewState.unpin(id) },
             onRemove: { id in viewState.remove(id) },
             onShowDetails: onShowDetails
         )
         .tag(row.item.id)
+        .onAppear {
+            prefetchNextPageIfNeeded(appearingRowID: row.item.id)
+        }
     }
 
     private var loadingRow: some View {
@@ -105,11 +121,13 @@ public struct HistoryListView: View {
         .accessibilityLabel("Loading more items")
     }
 
-    private func prefetchNextPageIfNeeded(lastRowID: HistoryItemID) {
-        guard viewState.hasNextPage,
-              !viewState.isLoadingPage,
-              viewState.rows.last?.item.id == lastRowID
-        else { return }
+    private func prefetchNextPageIfNeeded(appearingRowID: HistoryItemID) {
+        guard HistoryListPaginationTrigger.shouldLoadNextPage(
+            appearingRowID: appearingRowID,
+            lastDisplayedRowID: viewState.rows.last?.item.id,
+            hasNextPage: viewState.hasNextPage,
+            isLoadingPage: viewState.isLoadingPage
+        ) else { return }
         viewState.loadNextPage()
     }
 
@@ -117,7 +135,7 @@ public struct HistoryListView: View {
 
     @ViewBuilder
     private var emptyState: some View {
-        if viewState.isLoadingPage {
+        if viewState.isLoadingFirstPage {
             ProgressView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .accessibilityLabel("Loading clipboard history")
@@ -150,7 +168,7 @@ public struct HistoryListView: View {
         Group {
             Button("Copy to Clipboard") {
                 if let row = selectedRow {
-                    viewState.requestPaste(row.item)
+                    viewState.requestPasteFromDisplayedRow(row.item)
                 }
             }
             .keyboardShortcut(.return, modifiers: [])

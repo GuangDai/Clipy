@@ -13,9 +13,16 @@ package struct ReviseEditorDraft: Sendable {
         case replace
     }
 
+    package enum DismissalDecision: Hashable, Sendable {
+        case dismiss
+        case confirmDiscard
+    }
+
     private let item: HistoryItemReference
     private let canonical: [HistoryRepresentation]
     private let effectiveByType: [String: HistoryRepresentation]
+    private let openingChoices: [String: Choice]
+    private let openingReplacementBytes: [String: Data]
     private var choices: [String: Choice]
     private var replacementTexts: [String: String]
 
@@ -40,8 +47,25 @@ package struct ReviseEditorDraft: Sendable {
                     ?? ""
             }
         }
+        openingChoices = initialChoices
+        openingReplacementBytes = initialTexts.mapValues {
+            Data($0.utf8)
+        }
         choices = initialChoices
         replacementTexts = initialTexts
+    }
+
+    /// Dirty state is relative to the exact draft presented when the sheet
+    /// opened. Swift String equality is canonically equivalent, so compare
+    /// replacement UTF-8 bytes to preserve byte-exact edit intent.
+    package var isDirty: Bool {
+        choices != openingChoices
+            || replacementTexts.mapValues { Data($0.utf8) }
+                != openingReplacementBytes
+    }
+
+    package var dismissalDecision: DismissalDecision {
+        isDirty ? .confirmDiscard : .dismiss
     }
 
     package var allRepresentationsHidden: Bool {
@@ -50,6 +74,14 @@ package struct ReviseEditorDraft: Sendable {
                 return true
             }
             return false
+        }
+    }
+
+    package var hasEmptyReplacement: Bool {
+        canonical.contains { representation in
+            let typeIdentifier = representation.typeIdentifier
+            return choice(for: typeIdentifier) == .replace
+                && replacementText(for: typeIdentifier).isEmpty
         }
     }
 

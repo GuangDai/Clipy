@@ -32,6 +32,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The failure that ended the open attempt, shown in the failure pane.
     private(set) var openFailure: (any Error)?
 
+    /// Content-free copy failure surfaced over the panel until dismissed or
+    /// a later verified copy succeeds.
+    private(set) var pasteFailure: ClipyPasteFailure?
+
     /// Guards the open attempt against re-entrancy while its `await`s are
     /// in flight.
     private var isOpening = false
@@ -39,6 +43,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The preview pane state shared by the panel content (SwiftUI) and the
     /// panel window (AppKit) — the single object both sides drive.
     let previewState = PreviewPaneState()
+
+    /// The side selected from the panel's current screen geometry. The hosted
+    /// HistoryPanelView reads this same value to order its columns (Card 9C).
+    private(set) var previewPlacement: PreviewPlacement = .trailing
 
     // MARK: - AppKit-owned surfaces
 
@@ -76,6 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         hotKey?.unregister()
+        composition?.stop()
     }
 
     // MARK: - Panel lifecycle
@@ -107,6 +116,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             panel = FloatingPanel(
                 rootView: PanelRootView(appDelegate: self),
                 previewState: previewState,
+                onPreviewPlacementChange: { [weak self] placement in
+                    self?.previewPlacement = placement
+                },
                 onClosed: { [weak self] in self?.panelDidClose() }
             )
         }
@@ -121,6 +133,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `panelDidClose` via its `onPanelClosed` callback).
     func closePanel() {
         panel?.close()
+    }
+
+    func dismissPasteFailure() {
+        pasteFailure = nil
     }
 
     /// The preview column's visibility changed inside the SwiftUI content;
@@ -152,7 +168,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // Paste ⇒ close the panel (Maccy's paste-dismiss); the panel
                 // never activates the app, so the paste target keeps focus.
                 opened.onPasteCompleted = { [weak self] in
+                    self?.pasteFailure = nil
                     self?.closePanel()
+                }
+                opened.onPasteFailed = { [weak self] failure in
+                    self?.pasteFailure = failure
                 }
                 composition = opened
             } catch is CancellationError {

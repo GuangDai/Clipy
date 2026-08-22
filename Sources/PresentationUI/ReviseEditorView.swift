@@ -5,7 +5,7 @@
 /// the Content Version the editor was opened on; storage enforces optimistic
 /// concurrency (03a §5 `RevisionRequest.expected`), so an edit based on a
 /// superseded state fails typed as `.staleContent` (03b §10), which this
-/// view surfaces as an alert and a dismissal.
+/// view surfaces without dismissing or replacing the user's draft.
 /// Owning spec: docs/03a-instruction-set.md §5 (`RevisionDraft`,
 /// `RevisionDecision`, `.incoherentRevisionDraft`); detail DTOs
 /// docs/03b-instruction-set.md §9; Main-actor UI docs/01-architecture.md §6;
@@ -20,11 +20,12 @@ import SwiftUI
 /// submits a single `.replace(RevisionDraft(decisions:))` intent.
 public struct ReviseEditorView: View {
 
-    /// The single alert this sheet can raise: a stale base version or a
-    /// typed failure message (03b §10).
+    /// The single alert this sheet can raise: a stale base version, a typed
+    /// failure message (03b §10), or dirty-draft discard confirmation.
     private enum EditorAlert {
         case stale
         case failure(String)
+        case discardDraft
     }
 
     @Environment(\.dismiss) private var dismiss
@@ -68,14 +69,29 @@ public struct ReviseEditorView: View {
                 set: { if !$0 { activeAlert = nil } }
             )
         ) {
-            Button("OK") {
-                if case .stale? = activeAlert {
-                    dismiss()
-                }
-                activeAlert = nil
-            }
+            alertActions
         } message: {
             Text(alertMessage)
+        }
+    }
+
+    @ViewBuilder
+    private var alertActions: some View {
+        switch activeAlert {
+        case .discardDraft:
+            Button("Keep Editing", role: .cancel) {
+                activeAlert = nil
+            }
+            Button("Discard Changes", role: .destructive) {
+                activeAlert = nil
+                dismiss()
+            }
+        case .stale, .failure:
+            Button("OK") {
+                activeAlert = nil
+            }
+        case nil:
+            EmptyView()
         }
     }
 
@@ -86,6 +102,8 @@ public struct ReviseEditorView: View {
             return "Revision Not Saved"
         case .failure:
             return "Couldn't Save Revision"
+        case .discardDraft:
+            return "Discard Changes?"
         case nil:
             return ""
         }
@@ -99,6 +117,8 @@ public struct ReviseEditorView: View {
             return "Edited content changed — your edit was not saved."
         case .failure(let message):
             return message
+        case .discardDraft:
+            return "Your unsaved changes will be lost."
         case nil:
             return ""
         }
@@ -108,25 +128,28 @@ public struct ReviseEditorView: View {
 
     private var footer: some View {
         HStack(spacing: 12) {
-            if allRepresentationsHidden {
+            if let validationMessage {
                 Label(
-                    "Hiding every representation is not allowed",
+                    validationMessage,
                     systemImage: "exclamationmark.triangle.fill"
                 )
                 .font(.caption)
                 .foregroundStyle(.red)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityLabel(
-                    "Validation hint: hiding every representation is not"
-                        + " allowed"
+                    "Validation hint: \(validationMessage)"
                 )
             }
             Spacer(minLength: 8)
             Button("Cancel") {
-                dismiss()
+                requestDismissal()
             }
             .keyboardShortcut(.cancelAction)
-            .accessibilityHint("Closes the editor without changing the item.")
+            .accessibilityHint(
+                draft.isDirty
+                    ? "Asks before discarding unsaved changes."
+                    : "Closes the editor without changing the item."
+            )
             Button {
                 Task { await save() }
             } label: {
@@ -146,16 +169,37 @@ public struct ReviseEditorView: View {
         .padding(12)
     }
 
-    /// The draft must leave at least one representation effective: storage
-    /// rejects an all-hidden draft as `.invalidInput(.incoherentRevisionDraft)`
-    /// (03a §5), so Save is disabled and the hint shows in exactly that
-    /// state.
+    /// The draft must leave at least one representation effective. An
+    /// unchanged Save remains a supported `.unchanged` History receipt;
+    /// storage rejects an all-hidden draft as
+    /// `.invalidInput(.incoherentRevisionDraft)` (03a §5).
     private var allRepresentationsHidden: Bool {
         draft.allRepresentationsHidden
     }
 
     private var canSave: Bool {
-        !allRepresentationsHidden
+        validationMessage == nil
+    }
+
+    private var validationMessage: String? {
+        if allRepresentationsHidden {
+            return "Hiding every representation is not allowed"
+        }
+        if draft.hasEmptyReplacement {
+            return "Replacement text cannot be empty"
+        }
+        return nil
+    }
+
+    /// Cancel and the `.cancelAction` keyboard shortcut share this intent so
+    /// neither path can bypass dirty-draft confirmation (review Card 3C).
+    private func requestDismissal() {
+        switch draft.dismissalDecision {
+        case .dismiss:
+            dismiss()
+        case .confirmDiscard:
+            activeAlert = .discardDraft
+        }
     }
 
     // MARK: Rows
@@ -244,10 +288,10 @@ public struct ReviseEditorView: View {
 
     // MARK: Save
 
-    /// Saves the draft as one `.replace` revision. `.staleContent` alerts
-    /// and dismisses (the base version is gone); any other typed failure
-    /// shows its `FailurePresentation` message (03b §10); success dismisses
-    /// — the observation loop refreshes the row list (04 §5).
+    /// Saves the draft as one `.replace` revision. `.staleContent` leaves the
+    /// sheet and draft intact while presenting an alert; any other typed
+    /// failure shows its `FailurePresentation` message (03b §10). Success
+    /// dismisses and the observation loop refreshes the row list (04 §5).
     @MainActor
     private func save() async {
         isSaving = true

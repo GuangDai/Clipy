@@ -15,11 +15,9 @@ import SwiftUI
 /// bare-key shortcuts away from the text field (01 §6: selection and keyboard
 /// behavior are main-actor UI concerns).
 ///
-/// The fuzzy-mode clamp (06 §2 `maximumFuzzyQueryCharacters`) is enforced in
-/// the field's binding — and again on a mode switch — because Fuse 1.4.0's
-/// bitap cannot represent a longer pattern: storage rejects an over-bound
-/// query as `invalidInput(.invalidSearchTerm)` (03b §8), so the field never
-/// lets one be typed in fuzzy mode.
+/// The field always preserves the user's raw draft. `HistoryViewState` owns
+/// mode-specific admission, including fuzzy's 64-character execution view,
+/// so switching modes never truncates clipboard syntax typed by the user.
 public struct SearchHeaderView: View {
     private let viewState: HistoryViewState
     private let searchFieldFocused: FocusState<Bool>.Binding
@@ -41,9 +39,6 @@ public struct SearchHeaderView: View {
             modeMenu
         }
         .background { modeShortcuts }
-        .onChange(of: viewState.searchMode) { _, _ in
-            clampForFuzzyMode()
-        }
     }
 
     // MARK: Search field
@@ -53,10 +48,25 @@ public struct SearchHeaderView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            TextField("Search clipboard…", text: clampedSearchText)
+            TextField("Search clipboard…", text: searchTextBinding)
                 .textFieldStyle(.plain)
                 .focused(searchFieldFocused)
+                .autocorrectionDisabled(true)
                 .accessibilityLabel("Search clipboard history")
+            if !viewState.searchText.isEmpty {
+                Button {
+                    viewState.clearSearch()
+                    searchFieldFocused.wrappedValue = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+                .accessibilityHint(
+                    "Clears the query and keeps focus in search."
+                )
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
@@ -102,17 +112,10 @@ public struct SearchHeaderView: View {
 
     // MARK: Bindings
 
-    private var clampedSearchText: Binding<String> {
-        let fuzzyLimit = HistoryLimits.standard.maximumFuzzyQueryCharacters
-        return Binding<String>(
+    private var searchTextBinding: Binding<String> {
+        Binding<String>(
             get: { viewState.searchText },
-            set: { newValue in
-                if viewState.searchMode == .fuzzy, newValue.count > fuzzyLimit {
-                    viewState.searchText = String(newValue.prefix(fuzzyLimit))
-                } else {
-                    viewState.searchText = newValue
-                }
-            }
+            set: { viewState.searchText = $0 }
         )
     }
 
@@ -121,17 +124,6 @@ public struct SearchHeaderView: View {
             get: { viewState.searchMode },
             set: { viewState.searchMode = $0 }
         )
-    }
-
-    /// Re-clamps already-typed text when the mode switches to fuzzy, so a
-    /// long exact/regexp term cannot survive into a mode that cannot
-    /// represent it (06 §2; 03b §8).
-    private func clampForFuzzyMode() {
-        let fuzzyLimit = HistoryLimits.standard.maximumFuzzyQueryCharacters
-        guard viewState.searchMode == .fuzzy,
-              viewState.searchText.count > fuzzyLimit
-        else { return }
-        viewState.searchText = String(viewState.searchText.prefix(fuzzyLimit))
     }
 
     // MARK: Hidden mode shortcuts
