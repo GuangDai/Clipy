@@ -8,6 +8,32 @@ import HistoryCore
 import SwiftData
 
 internal enum HCRStore {
+    /// Pure structural decision for whether append-time retention needs HCR
+    /// rows at all. Tests lock this value instead of instrumenting SwiftData:
+    /// `.none` returns before a descriptor exists, count-only pressure reads
+    /// exactly its oldest prefix, and age/byte pressure needs the full bounded
+    /// suffix.
+    internal enum PrefixReadScope: Sendable, Equatable {
+        case none
+        case oldestPrefix(count: Int)
+        case fullSuffix
+    }
+
+    internal static func prefixReadScope(
+        minimumDeleteCount: Int,
+        bytesAfterAppend: UInt64,
+        scansAge: Bool,
+        maxJournalBytes: UInt64
+    ) -> PrefixReadScope {
+        if scansAge || bytesAfterAppend > maxJournalBytes {
+            return .fullSuffix
+        }
+        if minimumDeleteCount > 0 {
+            return .oldestPrefix(count: minimumDeleteCount)
+        }
+        return .none
+    }
+
     /// Stages exactly one HCR plus any required oldest-prefix trim inside the
     /// caller's existing History Commit transaction. The singleton position
     /// is still the previous value here and remains written last by the shared
@@ -143,39 +169,39 @@ private extension HCRStore {
         in context: ModelContext,
         limits: JournalLimits
     ) throws -> PrefixTrim {
-        guard minimumDeleteCount > 0
-                || bytesAfterAppend > limits.maxJournalBytes
-                || scansAge else {
-            return PrefixTrim(rows: [], deletedBytes: 0)
-        }
-
-        var descriptor = FetchDescriptor<HistoryChangeRecordRow>(
-            sortBy: [SortDescriptor(\.sequence)]
+        let readScope = HCRStore.prefixReadScope(
+            minimumDeleteCount: minimumDeleteCount,
+            bytesAfterAppend: bytesAfterAppend,
+            scansAge: scansAge,
+            maxJournalBytes: limits.maxJournalBytes
         )
-        let requiresFullSuffix = scansAge
-            || bytesAfterAppend > limits.maxJournalBytes
-        if requiresFullSuffix {
-            let (fetchLimit, fetchLimitOverflow) = limits.maxJournalRecordCount
+        let fetchLimit: Int
+        let expectedFetchedCount: Int
+        switch readScope {
+        case .none:
+            return PrefixTrim(rows: [], deletedBytes: 0)
+        case .oldestPrefix(let count):
+            fetchLimit = count
+            expectedFetchedCount = count
+        case .fullSuffix:
+            let (fullFetchLimit, fetchLimitOverflow) = limits.maxJournalRecordCount
                 .addingReportingOverflow(1)
             guard !fetchLimitOverflow else {
                 throw HistoryFailure.persistence(.invariantViolation)
             }
-            descriptor.fetchLimit = fetchLimit
-        } else {
-            // Once the count cap is reached, the steady state deletes one
-            // oldest row per append. Fetch exactly that prefix rather than
-            // hydrating the full 10,000-row suffix on every commit.
-            descriptor.fetchLimit = minimumDeleteCount
+            fetchLimit = fullFetchLimit
+            expectedFetchedCount = existingCount
         }
+        var descriptor = FetchDescriptor<HistoryChangeRecordRow>(
+            sortBy: [SortDescriptor(\.sequence)]
+        )
+        descriptor.fetchLimit = fetchLimit
         let rows: [HistoryChangeRecordRow]
         do {
             rows = try context.fetch(descriptor)
         } catch {
             throw HistoryFailure.persistence(.transaction)
         }
-        let expectedFetchedCount = requiresFullSuffix
-            ? existingCount
-            : minimumDeleteCount
         guard rows.count == expectedFetchedCount else {
             throw HistoryFailure.persistence(.invariantViolation)
         }

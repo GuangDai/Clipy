@@ -1,6 +1,7 @@
-/// A three-phase, public-API-only restart tracer for Review Evidence Card
-/// 1C-1. Each invocation owns one `SwiftDataHistory` for one short process;
-/// no SwiftData object or generated identity crosses a phase boundary.
+/// A public-API-only restart tracer for Review Evidence Card 1C-1 and the
+/// bounded X-HCR post-success crash fixture. Each invocation owns one
+/// `SwiftDataHistory` for one short process; no SwiftData object or generated
+/// identity crosses a phase boundary.
 import Foundation
 import HistoryCore
 import HistoryStorage
@@ -8,6 +9,7 @@ import HistoryStorage
 private enum ProbePhase: String {
     case seed
     case operate
+    case crashCommit
     case verify
 }
 
@@ -160,7 +162,10 @@ private func seed(storeURL: URL) async throws {
     ).write(siblingOf: storeURL)
 }
 
-private func operate(storeURL: URL) async throws {
+private func operate(
+    storeURL: URL,
+    crashAfterCommit: Bool = false
+) async throws {
     let manifest = try ProbeManifest.read(siblingOf: storeURL)
     let history = try await openHistory(at: storeURL)
     try await requireInitialProjection(history, manifest: manifest)
@@ -176,6 +181,23 @@ private func operate(storeURL: URL) async throws {
           reference.contentVersion.rawValue == 1 else {
         throw ProbeFailure.unexpectedState
     }
+    if crashAfterCommit {
+        // Keep the concrete History facade (and therefore its Authority and
+        // ModelContainer ownership) alive through the abnormal termination.
+        // Without this explicit lifetime fence, an optimizer may release the
+        // last local owner before the intentional fatal signal.
+        withExtendedLifetime(history) {
+            fatalError("intentional crash after committed History transaction")
+        }
+    }
+}
+
+/// Commits the same phase-B coalesce, validates its receipt, then terminates
+/// abnormally before any success token or graceful process teardown. The
+/// parent requires an uncaught signal and a fresh third process proves open.
+private func crashCommit(storeURL: URL) async throws -> Never {
+    try await operate(storeURL: storeURL, crashAfterCommit: true)
+    fatalError("crash phase unexpectedly returned")
 }
 
 private func verify(storeURL: URL) async throws {
@@ -259,6 +281,8 @@ private struct HistoryRestartProbe {
                 try await seed(storeURL: storeURL)
             case .operate:
                 try await operate(storeURL: storeURL)
+            case .crashCommit:
+                try await crashCommit(storeURL: storeURL)
             case .verify:
                 try await verify(storeURL: storeURL)
             }
