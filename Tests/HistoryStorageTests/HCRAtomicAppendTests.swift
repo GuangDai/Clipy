@@ -385,4 +385,60 @@ struct HCRAtomicAppendTests {
         #expect(deferredState.floor == 0)
         #expect(deferredState.sequences == [1, 2])
     }
+
+    @Test("below count/byte bounds off cadence selects no prefix read")
+    func noPressureSelectsNoPrefixRead() {
+        #expect(HCRStore.prefixReadScope(
+            minimumDeleteCount: 0,
+            bytesAfterAppend: 19,
+            scansAge: false,
+            maxJournalBytes: 20
+        ) == .none)
+
+        // Equality is admitted: byte pressure begins only above the cap.
+        #expect(HCRStore.prefixReadScope(
+            minimumDeleteCount: 0,
+            bytesAfterAppend: 20,
+            scansAge: false,
+            maxJournalBytes: 20
+        ) == .none)
+    }
+
+    @Test("count-only pressure selects exactly the bounded oldest prefix")
+    func countOnlySelectsBoundedPrefix() {
+        #expect(HCRStore.prefixReadScope(
+            minimumDeleteCount: 1,
+            bytesAfterAppend: 20,
+            scansAge: false,
+            maxJournalBytes: 20
+        ) == .oldestPrefix(count: 1))
+        #expect(HCRStore.prefixReadScope(
+            minimumDeleteCount: 3,
+            bytesAfterAppend: 19,
+            scansAge: false,
+            maxJournalBytes: 20
+        ) == .oldestPrefix(count: 3))
+    }
+
+    @Test("only age cadence or byte pressure selects the full suffix")
+    func ageOrBytePressureSelectsFullSuffix() {
+        #expect(HCRStore.prefixReadScope(
+            minimumDeleteCount: 0,
+            bytesAfterAppend: 20,
+            scansAge: true,
+            maxJournalBytes: 20
+        ) == .fullSuffix)
+        #expect(HCRStore.prefixReadScope(
+            minimumDeleteCount: 0,
+            bytesAfterAppend: 21,
+            scansAge: false,
+            maxJournalBytes: 20
+        ) == .fullSuffix)
+        #expect(HCRStore.prefixReadScope(
+            minimumDeleteCount: 1,
+            bytesAfterAppend: 21,
+            scansAge: false,
+            maxJournalBytes: 20
+        ) == .fullSuffix)
+    }
 }
