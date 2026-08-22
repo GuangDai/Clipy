@@ -317,7 +317,9 @@ internal actor HistoryAuthority {
     /// new store (step 3), validate exactly one singleton (step 4),
     /// bootstrap/validate the retention-expansion config singleton and the
     /// X.3 deny-by-default Gateway config/App Intents connection pair
-    /// (`V2-roadmap` §5 total open order step 5, M1.3), validate the
+    /// (`V2-roadmap` §5 total open order step 5, M1.3), then bootstrap/
+    /// validate and age-compact the internal DC-25 X-HCR suffix before any
+    /// projection/index work, validate the
     /// retained row count against the hard bound, first rebuild legacy
     /// projection rows from their validated content lineage, then require
     /// projection schema version 2 and enforce the
@@ -398,6 +400,16 @@ internal actor HistoryAuthority {
             // grant or audit row; X.4 replaces that exact-zero audit rule
             // together with the first writer and complete validation.
             let appIntentsConnectionID = try ensureGatewayBootstrap(in: context)
+
+            // DC-25 X-HCR open-order step 7: V4 migration has completed and
+            // Gateway/Audit state is valid. Bootstrap or fail-closed validate
+            // the internal journal suffix, then run its fixed startup prefix
+            // compaction before projection/index construction or publication.
+            try HCRBootstrap.ensureReady(
+                in: context,
+                now: storageClock.now(),
+                historyLimits: limits
+            )
 
             // §13 step 6 / §15: projection recipe v1 → v2 rebuild is an
             // Authority-owned, bounded, atomic startup operation. It finishes
@@ -512,10 +524,10 @@ internal actor HistoryAuthority {
 
     /// The only currently distinguishable write authorization for an absent
     /// position singleton.
-    /// `HistorySchemaV3` contains the three history/retention siblings queried
-    /// here plus the four Gateway tables queried by
-    /// `gatewayTablesAreEmpty(in:)`; zero rows in every sibling table is the
-    /// fresh-compatible shape. It is not causal proof: an existing V3 store
+    /// Current `HistorySchemaV4` contains the history/retention siblings
+    /// queried here plus the Gateway and HCR tables queried by their bounded
+    /// absence classifiers; zero rows in every sibling table is the
+    /// fresh-compatible shape. It is not causal proof: an existing V4 store
     /// stripped of every durable row is identical without provenance. This is
     /// intentionally not a generic repair classifier; any surviving durable
     /// fact makes missing authoritative position state unrecoverable.
@@ -537,7 +549,8 @@ internal actor HistoryAuthority {
                   retainedBytesCount == 0 else {
                 return false
             }
-            return try gatewayTablesAreEmpty(in: context)
+            guard try gatewayTablesAreEmpty(in: context) else { return false }
+            return try HCRBootstrap.tablesAreEmpty(in: context)
         } catch let failure as HistoryFailure {
             throw failure
         } catch {

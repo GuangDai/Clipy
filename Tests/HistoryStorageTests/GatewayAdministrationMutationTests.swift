@@ -71,7 +71,7 @@ struct GatewayAdministrationMutationTests {
     }
 
     private static func makeFixture() async throws -> Fixture {
-        let schema = Schema(versionedSchema: HistorySchemaV3.self)
+        let schema = Schema(versionedSchema: HistorySchemaV4.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(

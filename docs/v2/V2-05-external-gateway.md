@@ -24,6 +24,14 @@
 > `HistoryAction` is **untouched** (admin and external operations live on distinct
 > "concern" protocols, §7.2/§7.1). The aggregate Gateway/product behavior is
 > not shipped by X.1–X.3 or by the X.4 spec decision alone.
+>
+> **2026-08-23 DC-25 closure:** X.6 depends on the internal X-HCR substrate
+> frozen by `V2-03` §0: immutable `HistorySchemaV4`, five-field HCR rows,
+> four-field journal config, manual affected-items codec, validated bounded
+> suffix, and one atomic HCR per non-empty commit. X.6 does not publish or rely
+> on `ReconnectHistory`, cursors, a journal reader, collection cache, rebase, or
+> journal UX. References below to “V2-03 HCR” mean this X-HCR subset unless a
+> paragraph explicitly discusses a later J1 consumer.
 
 ## 0. 2026-08-22 Local Automation controlling amendment
 
@@ -656,7 +664,7 @@ internal final class OperationRecordRow {
                                        // included — has one from its audit transaction; writes == the
                                        // history commit time). Reconciled with §5.4/§7.2.
     var changePositionRaw: UInt64?     // nil for reads; the write's ChangePosition (cross-ref to
-                                       // HistoryChangeRecordRow.sequence when V2-03 is active, D34)
+                                       // required X-HCR HistoryChangeRecordRow.sequence, D34)
     var auditSchemaVersion: UInt16     // 1 for V2-05
 }
 ```
@@ -1159,6 +1167,8 @@ ExternalGateway.perform(.remove(itemID), as: connID)   [actor]
             for mutation in plan.mutations { try apply(mutation, in: context) }   // v1
             try validateFinalPinOrder(in: context)                                 // v1
             try appendHistoryChangeRow(plan.hcrAppend, in: context)                // V2-03 (always-on)
+            try trimHistoryChangePrefixForHardBoundsAndDueAge(                     // X-HCR (§0)
+                  newPosition: plan.position, in: context)
             try appendOperationRecord(plan.auditAppend, in: context)               // V2-05 (external path only)
             meta.rawValue = plan.position.rawValue                                 // v1, written last
        -> apply nonthrowing Signature Index delta        (05 §11 step 1, unchanged)
@@ -1206,7 +1216,8 @@ projection (`05` §14). It mutates no history state and produces no HCR row:
 ```text
 ExternalGateway.read(.search(text, mode, limit), as: connID)   [actor]
   1. VALIDATE (D35): text/limit within v1 HistoryLimits bounds; reject as
-       requestDenied(.invalidInput) before any read.
+       requestDenied(.invalidInput) before any read, token debit, or audit append;
+       malformed pre-admission has no truthful `RequestSummaryV1` (§3.1).
   2. Authority.performExternalRead(.search(...), connection: connID,
        requestedAt:)   [single writer, read context; authoritative gate]
        Fetch ConnectionRow and only the required live GrantRow, plus the
@@ -1272,19 +1283,19 @@ failure instead; the underlying DTO/content or failure is not published. A
 process crash before the append commits likewise cannot follow a successful
 method return, because return is sequenced after the commit.
 
-**Input-validation failureKind consistency (D35).** The conceptual class
-"invalid input" is caught at two layers: bounds/shape at the gateway (D35) and
-structural-safety (e.g., regexp admission — nested quantifiers, backreferences,
-per `03b` §8) inside the off-actor SearchWorker. To keep the audit
-`failureKind` discriminator consistent across the class, a SearchWorker-surfaced
+**Input-validation classification (D35).** The conceptual class "invalid
+input" is caught at two layers: bounds/shape at pre-admission (D35) and
+structural safety (e.g., regexp admission — nested quantifiers,
+backreferences, per `03b` §8) inside the off-actor SearchWorker. The first has
+no truthful admitted request summary and therefore consumes no token and writes
+no audit (§3.1). The second has already entered the admitted search path. For
+that admitted failure, a SearchWorker-surfaced
 `HistoryFailure.invalidInput(...)` is **re-classified to
 `failureKind == .requestDenied` (`denialReason == .invalidInput`) for audit**,
-NOT `.history` — i.e., it audits identically to a gateway-caught
-`requestDenied(.invalidInput)`, even though it is thrown to the caller wrapped
+NOT `.history`, even though it is thrown to the caller wrapped
 as `ExternalFailure.history(HistoryFailure.invalidInput(...))`. (Other
 SearchWorker `HistoryFailure`s — e.g., `.notFound` — keep their natural
-`failureKind`.) This closes the §5.2 step-1 vs SearchWorker split so the audit
-log records all invalid-input events under one discriminator.
+`failureKind`.) This does not fabricate an audit for malformed pre-admission.
 
 Reads are audited (D34) because clipboard history is sensitive: a connection
 reading items is a privacy-relevant event, and the audit gives the user
@@ -1529,8 +1540,9 @@ is `01` §8 / `06` §6: "`import SwiftData` appears only in `HistoryStorage`"):
   This mirrors how v1 exposes `SwiftDataHistory.open(...)` to `ClipyApp`
   (`01` §2: `public` is reserved for the concrete `HistoryStorage` constructor
   needed by `ClipyApp`). The existing §9 symbol snapshot remains a
-  `HistoryCore`-only gate and is unchanged: it already covers the X.2 protocol
-  and DTO contract, but cannot represent a type declared by `HistoryStorage`.
+  `HistoryCore`-only gate. It changes intentionally at X.6 for
+  `ExternalTransientReason.insufficientDiskSpace`; it cannot represent a type
+  declared by `HistoryStorage`.
   X.6 proves the facade and accessor with an out-of-package
   `ClipyIntegrationTests` compile/behavior test that imports `HistoryStorage`
   normally; package-level tests alone cannot prove `public` rather than
@@ -2083,6 +2095,8 @@ public enum ExternalDenialReason: Int16, Sendable, Equatable, Codable {
 public enum ExternalTransientReason: Int16, Sendable, Equatable, Codable {
     case indexRebuild = 1      // Signature Index rebuild in progress
     case storeLocked = 2       // Authority interval unavailable
+    case insufficientDiskSpace = 3 // transaction reached the platform's
+                                   // truthful ENOSPC/out-of-space classification
 }
 
 // Stable raw-value discriminator persisted in OperationRecordRow.failureKindRaw
@@ -2161,7 +2175,7 @@ does (`V2-03` §6.3).
 ### 7.3.1 Complete v1-failure -> ExternalFailure mapping (frozen subset)
 
 `failureKindRaw` is persisted (§4.3), so every v1 failure the gateway can
-surface has exactly one row below. Three precedence rules close the
+surface has exactly one row below. Four precedence rules close the
 ambiguities left open by §5.1/§5.2:
 
 - **P1 sibling wins.** A `HistoryFailure` case with a dedicated
@@ -2172,12 +2186,18 @@ ambiguities left open by §5.1/§5.2:
 - **P2 transient reasons.** v1 `.factProof` -> `.storeLocked`
   (retry-later, not an index rebuild); v1 `.dedupIndexRebuild` ->
   `.indexRebuild` (reserved - capture-path-only, not producible from
-  the frozen subset). `.storeLocked` is also gateway-minted for
+  the frozen subset); v1 `.insufficientDiskSpace` ->
+  `.insufficientDiskSpace` (truthful transaction classification; it is never
+  mislabeled as a lock). `.storeLocked` is also gateway-minted for
   facade-resolution failure (§6.5).
 - **P3 audit-only reclassification (§5.2 D35).** A SearchWorker-surfaced
   `HistoryFailure.invalidInput` is THROWN as `.history` (raw 5) but
   AUDITED as raw 3 + `denialReasonRaw == .invalidInput`. No other case
   is reclassified.
+- **P4 coherence exhaustion.** Stamping-time
+  `.capacityExceeded(.coherenceToken)` has no `ExternalFailure` sibling and is
+  therefore thrown as `.history(...)` and audited raw 5. It is the only
+  capacity kind reachable from the frozen subset.
 
 | v1 failure (producible case; source) | thrown as | raw |
 |---|---|---|
@@ -2186,8 +2206,10 @@ ambiguities left open by §5.1/§5.2:
 | `.invalidPinnedPlacement(.targetMissing)` — pin | `.history(...)` | 5 |
 | `.invalidInput(.invalidSearchTerm)` — search | `.history` (audit 3) | 5 / 3 |
 | `.invalidInput(.invalidRegularExpression)` — search | `.history` (audit 3) | 5 / 3 |
-| `.invalidInput(.invalidPageLimit)` — recent/search | `.requestDenied` at the D35 gate; else `.history` (audit 3) | 3 (or 5 / 3) |
+| `.invalidInput(.invalidPageLimit)` — recent/search | `.requestDenied(.invalidInput)` at the pre-admission D35 gate; no OperationRecord because no truthful admitted summary exists | 3 / no audit |
 | `.temporarilyUnavailable(.factProof)` — fact loads | `.temporarilyUnavailable(.storeLocked)` | 6 |
+| `.temporarilyUnavailable(.insufficientDiskSpace)` — write transaction | `.temporarilyUnavailable(.insufficientDiskSpace)` | 6 |
+| `.capacityExceeded(.coherenceToken)` — stamping at exhausted ChangePosition | `.history(...)` | 5 |
 | `.persistence(.corruptStoredValue)` — decode | `.persistence(...)` | 7 |
 | `.persistence(.invariantViolation)` — sequence/floor/prevalidation/corpus | `.persistence(...)` | 7 |
 | `.persistence(.transaction)` — commit closure | `.persistence(...)` | 7 |
@@ -2195,7 +2217,8 @@ ambiguities left open by §5.1/§5.2:
 **Not producible** from the frozen subset (pin is `.first`-only,
 `ExternalRead` carries no cursor, no capture/revision/thumbnail/
 retention path): `.staleContent`, `.revisionNotFound`,
-`.snapshotExpired`, `.capacityExceeded` (all kinds),
+`.snapshotExpired`, `.capacityExceeded` except the producible
+`.coherenceToken` row above,
 `.invalidPinnedPlacement(.targetEqualsAnchor/.anchorMissingOrUnpinned)`,
 `.temporarilyUnavailable(.dedupIndexRebuild)`,
 `.persistence(.openStore)` (open throws before the facade is
@@ -2206,6 +2229,13 @@ published, §4.6), and the ten capture/revision/thumbnail/retention
 `.connectionRevoked`, `.requestDenied(.invalidInput/.rateLimited)`,
 `.temporarilyUnavailable(.storeLocked)` (§6.5),
 `.auditCompactedBefore(floor:)` (§5.6).
+
+**Coherence-token exception to P1.** `ExternalFailure` has no dedicated
+capacity sibling. The only capacity failure reachable from the frozen subset is
+stamping-time `.capacityExceeded(.coherenceToken)`, so it is deliberately
+wrapped as `.history` and audited raw 5. Other capacity kinds remain
+not-producible. This is not a reclassification: P1 applies only where a sibling
+exists.
 
 **Absent-target asymmetry (deliberate, v1 WS16):** remove/unpin and
 details/pastePayload report raw 4; pin reports raw 5 via
@@ -2430,8 +2460,10 @@ on macOS 26:
   (CRIT-M3 — `ClipyApp` is the separate Xcode app target outside the package,
   `01` §2; `package` access would not compile). An out-of-package
   `ClipyIntegrationTests` compile/behavior test imports `HistoryStorage`
-  normally and calls the accessor; the HistoryCore-only symbol snapshot remains
-  unchanged and is not evidence for this HistoryStorage surface.
+  normally and calls the accessor. The HistoryCore snapshot changes
+  intentionally at X.6 for the new truthful
+  `ExternalTransientReason.insufficientDiskSpace` raw-3 case; the
+  HistoryStorage facade itself remains outside that snapshot.
   `SwiftDataHistory` does not itself conform to `ExternalHistory`. `ClipyApp`
   resolves the facade via `@Dependency` and registers it once into
   `AppDependencyManager.shared`;
@@ -2489,16 +2521,20 @@ on macOS 26:
   carries only sibling-less cases; (b) P2 - `.factProof` throws
   `.temporarilyUnavailable(.storeLocked)` and the reserved
   `.dedupIndexRebuild` -> `.indexRebuild` row is never produced
-  from the frozen subset; (c) P3 - a SearchWorker
+  from the frozen subset, while transaction ENOSPC throws
+  `.temporarilyUnavailable(.insufficientDiskSpace)`; (c) P3 - a SearchWorker
   `.invalidInput` is thrown as `.history` (raw 5) but audited
   as raw 3 + `denialReasonRaw == .invalidInput`, and no other
   case is reclassified; (d) the absent-target asymmetry -
   remove/unpin and details/pastePayload report raw 4, pin
   reports raw 5 via `.history(.invalidPinnedPlacement(
   .targetMissing))` (v1 WS16, deliberate); (e) the §7.3.1
+  capacity boundary is explicit - exhausted ChangePosition throws
+  `.history(.capacityExceeded(.coherenceToken))` and audits raw 5, while all
+  other capacity kinds remain not-producible; (f) the remaining
   not-producible list holds - no frozen-subset request can
   surface `.staleContent`, `.revisionNotFound`,
-  `.snapshotExpired`, `.capacityExceeded`, or the capture/
+  `.snapshotExpired`, the other `.capacityExceeded` cases, or the capture/
   revision/thumbnail/retention `.invalidInput` reasons, and any
   fixture that surfaces a listed case fails the gate.
 - **X-SECURITY-1 (App Intents in-process/entitlement).** `V2-facts.md` cycle 6, OPEN 1:
@@ -2582,12 +2618,19 @@ X.3 touches the **schema** layer and post-migration bootstrap (`05` §17):
   classes from a future V3 store. Only config absent + at least one surviving
   dependent row is distinguishable corruption and rejected. Record 5 claims no
   stronger detection and adds no marker/hash to manufacture one.
+- **DC-25 X-HCR migration prerequisite for X.6.** New immutable
+  `HistorySchemaV4` adds only `HistoryChangeRecordRow` and the exact four-field
+  `JournalConfigRow` through a lightweight V3 -> V4 stage. The migration adds
+  no data; Authority bootstrap creates an empty journal with
+  `compactionFloorRaw ==` the current ChangePosition and `journalBytes == 0`.
+  `AffectedItemsBlobV1` is the manual wire in V2-03 §0.2. There is no historical
+  backfill and no public reconnect/cursor/reader/cache/rebase surface.
 - **No writes before completeness.** The V2-05 bootstrap (§4.6) runs at `open`,
-  and the exact config/active-connection/zero-grant/zero-audit state is
-  validated before any future facade could be published. X.3 itself constructs
-   no actor, facade, external dispatch, or admin service. No capture/write is enabled before Signature Index /
-  change-journal completeness is restored (the v1/V2-03 open sequence is
-  unchanged; V2-05 appends its bootstrap after it).
+  followed by the V4 X-HCR bootstrap/validation from V2-03 §0.3, and both
+  complete before projection/index construction or facade publication. X.3
+  itself constructs no actor, facade, external dispatch, or admin service. No
+  capture/write is enabled before Signature Index and X-HCR completeness are
+  established.
 - **No `ContentVersion` change, no ID reuse, no invented bytes** (`05` §17).
 
 ### Record 6 — Security boundary
@@ -2674,7 +2717,7 @@ extends the set:
     may leave a record without caller observation; the reverse (successful
     return without a committed record) is forbidden.
   `changePositionRaw` is scoped: for **succeeded writes** it equals the commit's
-  `ChangePosition` (and the HCR's `sequence` when V2-03 is active); for reads,
+  `ChangePosition` (and the required X-HCR `sequence`); for reads,
   admin ops, noOp, and denied/failed records it is `nil` (no commit). The
   succeeded-write/admin atomicity and the mandatory append-before-publication
   barrier for every no-mutation branch are the audit-completeness guarantee.

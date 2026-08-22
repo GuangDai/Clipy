@@ -179,6 +179,10 @@ internal struct StampedCommitPlan: Sendable {
     internal let mutations: [StampedMutation]
     internal let receiptOutcome: HistoryCommitOutcome
     internal let indexDelta: SignatureIndexDelta
+    /// The mandatory HCR derived from this same non-empty commit. It carries
+    /// the plan's one position and every touched business ID; no no-op reaches
+    /// `StampedCommitPlan` (`V2-03` §5.1–§5.2).
+    internal let hcrAppend: HistoryChangeRecordPayload
     /// Receipt-facing summary derived from the Domain plan's explicit
     /// retire/prune facts before a compose-with-append prune is folded away.
     /// It is presentation invalidation only: identity and transaction
@@ -190,12 +194,14 @@ internal struct StampedCommitPlan: Sendable {
         mutations: [StampedMutation],
         receiptOutcome: HistoryCommitOutcome,
         indexDelta: SignatureIndexDelta,
+        hcrAppend: HistoryChangeRecordPayload,
         hasDestructiveRetentionEffects: Bool = false
     ) {
         self.position = position
         self.mutations = mutations
         self.receiptOutcome = receiptOutcome
         self.indexDelta = indexDelta
+        self.hcrAppend = hcrAppend
         self.hasDestructiveRetentionEffects = hasDestructiveRetentionEffects
     }
 
@@ -391,7 +397,9 @@ internal enum CommitPlanStamper {
     internal static func stamp(
         _ plan: MutationPlan,
         currentPosition: ChangePosition,
-        inputs: StampingInputs
+        inputs: StampingInputs,
+        createdAt: Date,
+        clearScope: ClearScope? = nil
     ) throws -> StampedCommitPlan {
         // Plan invariant 1 (docs/02-domain.md §7): a commit plan is non-empty.
         guard !plan.mutations.isEmpty else {
@@ -630,15 +638,24 @@ internal enum CommitPlanStamper {
             throw StampingRejection.incoherentPlan
         }
 
+        let stampedReceiptOutcome = try receiptOutcome(
+            for: plan.outcome,
+            inputs: inputs,
+            revisedNextVersion: revisedNextVersion
+        )
+        let hcrAppend = try HistoryChangeRecordPayload.derive(
+            position: position,
+            mutations: mutations,
+            receiptOutcome: stampedReceiptOutcome,
+            clearScope: clearScope,
+            createdAt: createdAt
+        )
         return StampedCommitPlan(
             position: position,
             mutations: mutations,
-            receiptOutcome: try receiptOutcome(
-                for: plan.outcome,
-                inputs: inputs,
-                revisedNextVersion: revisedNextVersion
-            ),
+            receiptOutcome: stampedReceiptOutcome,
             indexDelta: SignatureIndexDelta(additions: additions, removals: removals),
+            hcrAppend: hcrAppend,
             hasDestructiveRetentionEffects: plan.mutations.contains { mutation in
                 switch mutation {
                 case .retire(_, .retention), .pruneRevisions:

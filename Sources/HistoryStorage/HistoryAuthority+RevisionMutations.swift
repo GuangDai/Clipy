@@ -194,7 +194,8 @@ extension HistoryAuthority {
                     currentVersion: facts.item.contentVersion,
                     existingRevisions: facts.item.revisions,
                     projection: bundle.projection
-                )
+                ),
+                createdAt: storageClock.now()
             )
         } catch let rejection as StampingRejection {
             throw rejection.historyFailure
@@ -284,7 +285,8 @@ extension HistoryAuthority {
             stamped = try CommitPlanStamper.stamp(
                 mutationPlan,
                 currentPosition: currentPosition,
-                inputs: .none
+                inputs: .none,
+                createdAt: storageClock.now()
             )
         } catch let rejection as StampingRejection {
             throw rejection.historyFailure

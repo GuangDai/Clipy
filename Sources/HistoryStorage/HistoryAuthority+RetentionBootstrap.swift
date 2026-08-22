@@ -161,10 +161,10 @@ extension HistoryAuthority {
     /// schema but awaiting this bootstrap has empty Gateway tables. That
     /// shape remains indistinguishable from an earlier store whose config was
     /// deleted before X.3 bootstrap, so it remains migration-compatible. Any
-    /// Gateway fact proves post-X3 durable state and makes absence an
-    /// invariant violation. No provenance marker is introduced; the fully
-    /// empty causal ambiguity remains. A present wrong-key row is never
-    /// treated as absence.
+    /// Gateway fact proves post-X3 durable state, and any HCR fact proves
+    /// post-V4 durable state; either makes absence an invariant violation.
+    /// No provenance marker is introduced; the fully empty causal ambiguity
+    /// remains. A present wrong-key row is never treated as absence.
     internal static func ensureRetentionExpansionConfig(
         in context: ModelContext
     ) throws {
@@ -179,7 +179,8 @@ extension HistoryAuthority {
         }
         switch rows.count {
         case 0:
-            guard try gatewayTablesAreEmpty(in: context) else {
+            guard try gatewayTablesAreEmpty(in: context),
+                  try HCRBootstrap.tablesAreEmpty(in: context) else {
                 throw HistoryFailure.persistence(.invariantViolation)
             }
             // `V2-02` §3.3 / `V2-roadmap` §5 step 5: created at open, all

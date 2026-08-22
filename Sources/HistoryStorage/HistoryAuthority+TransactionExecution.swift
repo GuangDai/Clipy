@@ -11,9 +11,9 @@ extension HistoryAuthority {
     /// The one durable History Commit primitive (§10), shared by every
     /// stamped plan: fetch the singleton inside the closure, guard the
     /// expected previous position, apply every stamped mutation in order,
-    /// revalidate the final pin order, fire the armed test injection if any,
-    /// and write the singleton position last — all in one
-    /// `ModelContext.transaction`.
+    /// revalidate the final pin order, append the plan's one HCR, fire the
+    /// armed test injection if any, and write the singleton position last —
+    /// all in one `ModelContext.transaction`.
     ///
     /// Rules (§10): no `await` in the closure or between fact load and
     /// closure completion; production lookups fetch rows by business ID
@@ -68,6 +68,17 @@ extension HistoryAuthority {
                 if plan.requiresFinalPinOrderValidation {
                     try self.validateFinalPinOrder(in: context)
                 }
+                // DC-25/J.3: every non-empty stamped plan carries exactly one
+                // HCR derived from the same explicit mutations. Stage it (and
+                // any fixed-limit oldest-prefix trim) before the existing
+                // failure injections and position-last write, so closure
+                // failure rolls back item rows, HCR, config counters, and
+                // Change Position together.
+                try HCRStore.append(
+                    plan.hcrAppend,
+                    expectedPreviousPosition: expectedPreviousPosition,
+                    in: context
+                )
                 // Roadmap-owned WS13 seam: one-shot injection after row
                 // mutation, before the singleton update. Disarmed (nil) in
                 // production.

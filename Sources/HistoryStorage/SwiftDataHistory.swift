@@ -106,12 +106,13 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     ///
     /// 1. validates `configuration.initialMaximumUnpinnedItems` against the
     ///    fixed Part VI user range (`HistoryLimits.standard`, §2);
-    /// 2. opens/creates the `ModelContainer` over the current immutable V3
-    ///    schema (`Schema(versionedSchema: HistorySchemaV3.self)`) through
+    /// 2. opens/creates the `ModelContainer` over the current immutable V4
+    ///    schema (`Schema(versionedSchema: HistorySchemaV4.self)`) through
     ///    `HistoryMigrationPlan`: the custom `V1 → V2` stage (DC-02;
-    ///    `V2-02` §3.3 / Record 5), then the additive lightweight `V2 → V3`
-    ///    Gateway-table stage (DC-03; `V2-roadmap` §10 X.3). A fresh store is
-    ///    created directly at V3 and runs no stage; a v1
+    ///    `V2-02` §3.3 / Record 5), the additive lightweight `V2 → V3`
+    ///    Gateway-table stage (DC-03; `V2-roadmap` §10 X.3), then the
+    ///    additive HCR-only `V3 → V4` stage (DC-25). A fresh store is
+    ///    created directly at V4 and runs no stage; a v1
     ///    store migrates during construction — the additive schema change
     ///    plus the `RetainedBytesRow` `didMigrate` backfill (idempotent by
     ///    construction) — on the migration-owned context, the sole
@@ -156,7 +157,7 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         }
 
         // §13 step 2, extended by the M1 total open order (`V2-roadmap` §5
-        // step 2; DC-02 / DC-03): build the current V3 schema ONCE and
+        // step 2; DC-02 / DC-03 / DC-25): build the current V4 schema ONCE and
         // construct the container through the ordered `HistoryMigrationPlan`.
         // A fresh store runs no stage; a v1 store migrates inside construction
         // (additive schema change + the RetainedBytesRow didMigrate
@@ -164,7 +165,7 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         // (`RET-PLATFORM-1b(d)`). The durability medium is unchanged. Both
         // branches explicitly disable managed CloudKit discovery: clipboard
         // history is local-only, independent of future app entitlements.
-        let schema = Schema(versionedSchema: HistorySchemaV3.self)
+        let schema = Schema(versionedSchema: HistorySchemaV4.self)
         let modelConfiguration: ModelConfiguration
         switch configuration.persistence {
         case .persistent(let storeURL):

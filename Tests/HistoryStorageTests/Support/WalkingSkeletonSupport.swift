@@ -44,16 +44,16 @@ enum WSSupport {
     /// An INDEPENDENT container over the same store file, used only for
     /// row-level assertions (never for mutations in these tests).
     ///
-    /// Built at the current immutable schema (`HistorySchemaV3`, X.3) since
-    /// `SwiftDataHistory.open` constructs V3 stores through the migration
+    /// Built at the current immutable schema (`HistorySchemaV4`, DC-25) since
+    /// `SwiftDataHistory.open` constructs V4 stores through the migration
     /// plan (`V2-roadmap` §5 step 2) and `HistoryAuthority.performStartup`
     /// bootstraps the retention-expansion config singleton (step 5, M1.3) —
     /// a v1-schema container carries no `RetentionExpansionConfigRow`
     /// entity. No migration plan is passed: an assertion container never
-    /// writes, and every store it opens here is created at V3 (freshly by
+    /// writes, and every store it opens here is created at V4 (freshly by
     /// itself, or by `SwiftDataHistory.open`), so no stage could run.
     static func makeContainer(storeURL: URL) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: HistorySchemaV3.self)
+        let schema = Schema(versionedSchema: HistorySchemaV4.self)
         return try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, url: storeURL)]

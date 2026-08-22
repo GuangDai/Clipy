@@ -1,15 +1,156 @@
 # V2-03 - Change Journal & Reconnect (J1 durable History Change Record + reconnect cursor + collection cache)
 
-> **Status (2026-07-25):** V2 design-consolidated, scaffold proof pending. This
-> doc extends the v1 specification (`00`–`06`) by **addition only**.
+> **Status (2026-08-23):** the internal X-HCR subset in §0 is implemented in
+> the current Batch 11 worktree and awaits correctness CI; the public reconnect
+> and collection-cache J1 product remains design-only and separately gated.
+> This doc extends the v1 specification (`00`–`06`) by **addition only**.
 > v1 owns v1 read/observation behavior; V2-03 owns the durable History Change
 > Record (HCR) journal, the reconnect cursor, and the G2 collection cache, grafted
 > onto the v1 commit seam. It redefines no v1 public type, `HistoryAction` case,
 > `HistoryMutation` case, `StampedMutation` case, `PlannedOutcome` case, schema
 > column, codec, invariant (D1–D19, `02` §14), or proof gate. The frozen v1
 > `HistoryFailure` enum is **untouched** (V2-03 introduces a sibling
-> `ReconnectFailure`, see §6.3). Like v1 and V2-01/V2-02 at consolidation time,
-> V2-03 is "design-consolidated, scaffold proof pending."
+> `ReconnectFailure`, see §6.3). The prospective public J1 sections remain
+> "design-consolidated, scaffold proof pending"; the narrower X-HCR status and
+> ceiling are owned by the controlling amendment below.
+
+## 0. 2026-08-23 DC-25 controlling amendment: X-HCR before public J1
+
+This section supersedes the consolidated-era schema/version and admission
+wording elsewhere in this document. The shipped sequence is now immutable
+`HistorySchemaV1` (v1), immutable `HistorySchemaV2` (retention), immutable
+`HistorySchemaV3` (Gateway/Audit), then immutable **`HistorySchemaV4`** for the
+internal HCR substrate. No earlier `VersionedSchema` is edited.
+
+DC-25 is resolved as follows: approved X1/X2 subsumes only the internal
+**X-HCR** prerequisite needed by V2-05 X.6. X-HCR includes:
+
+- `HistoryChangeRecordRow`, the minimal `JournalConfigRow`, the fixed internal
+  kind tags, manual `AffectedItemsBlobV1`, and `HistoryChangeRecordPayload`;
+- a lightweight V3 -> V4 table-add migration with no historical HCR backfill;
+- bootstrap, bounded retained-suffix validation, fixed-limit internal prefix
+  compaction, and exactly one HCR appended atomically with every non-empty
+  History Commit;
+- the existing Storage-clock witness for `createdAt`, with no new public or
+  global clock seam.
+
+X-HCR explicitly does **not** admit or publish `JournalEntryKind`,
+`ReconnectCursor`, `HistoryChangeRecord`, `ReconnectBatch`, `ReconnectFailure`,
+`ReconnectHistory`, `ChangeJournal`, `JournalAdminHistory`, collection-cache
+state, automatic journal rebase, or journal UX. Sections 6-8, 9.2, 10's reader/
+admin methods, 13, and the public/cache portions of Records 1-6 remain
+prospective J1 design only. A later J1 admission must add its public contract,
+cursor/reader/cache state, recovery policy, migration, and proof gates in a new
+slice; it may project the durable V4 tags but may not pretend X-HCR already
+proved replay.
+
+### 0.1 Frozen X-HCR V4 rows
+
+`HistoryChangeRecordRow` has exactly the five fields in §4.1: unique
+`sequence`, `changePositionRaw`, `changeKindRaw`, `affectedItemsBlob`, and
+`createdAt`. `sequence == changePositionRaw ==` the owning commit's
+`ChangePosition`; `createdAt` must be finite. The internal stable kind encoding
+is:
+
+| raw | kind |
+|---:|---|
+| 1 | insert |
+| 2 | coalesce |
+| 3 | pin |
+| 4 | unpin |
+| 5 | remove |
+| 6 | clearAll |
+| 7 | clearUnpinned |
+| 8 | revise |
+| 9 | retire |
+| 10 | policySet |
+| 11 | retireRevision |
+
+Raw 0 and every unknown value fail closed. These are internal storage tags in
+X-HCR, not a public `HistoryCore` enum. A later `JournalEntryKind` may expose the
+same cases only when J1 is separately admitted.
+
+`JournalConfigRow` has exactly four fields:
+
+```swift
+@Model
+internal final class JournalConfigRow {
+    @Attribute(.unique) var key: String       // exactly "change-journal"
+    var compactionFloorRaw: UInt64            // greatest ChangePosition
+                                               // intentionally not represented
+    var journalBytes: UInt64                  // checked exact sum of retained
+                                               // affectedItemsBlob.count only
+    var configSchemaVersion: UInt16           // exactly 1
+}
+```
+
+There is no `cacheEnabled`, generation, materializer version, store-instance
+UUID, user retention setting, cursor state, or hash. Fixed internal limits own
+compaction; future J1-only state requires a later immutable schema.
+
+### 0.2 Manual AffectedItemsBlobV1 wire
+
+The X-HCR codec is not synthesized `Codable`. Its complete network-byte-order
+wire is:
+
+```text
+UInt16 formatVersion = 1
+UInt16 itemCount
+itemCount * 16 raw UUID bytes
+```
+
+The decoder rejects an unknown version, count above
+`HistoryLimits.standard.hardMaximumRetainedItems + 1` (5,001 in the frozen
+profile, computed with checked arithmetic), length other than
+`4 + itemCount * 16`, a duplicate ID, non-ascending UUID raw-byte order, or any
+trailing byte before allocating an output beyond the fixed bound. Producers
+sort by UUID raw bytes ascending and deduplicate before encoding. An item count
+of zero is valid only for `clearAll`, `clearUnpinned`, and victim-free `policySet`;
+every other kind requires at least one ID. No query text or content bytes enter
+this blob.
+
+### 0.3 Migration, bootstrap, validation, and proof ceiling
+
+The V3 -> V4 migration is purely additive and creates no data. During
+`SwiftDataHistory.open`, after the landed Gateway/Audit bootstrap and before
+projection/index construction or facade publication, the Authority performs:
+
+1. fetch at most one `JournalConfigRow` and determine the current validated
+   `LastChangePositionRow.rawValue` P;
+2. if config is absent, require zero HCR rows, then atomically create config
+   with `key == "change-journal"`, `compactionFloorRaw == P`,
+   `journalBytes == 0`, and `configSchemaVersion == 1`;
+3. if config exists, require the exact key/version and `floor <= P`;
+4. fetch at most `maxJournalRecordCount + 1` rows; 10,001 rows fails closed.
+   Otherwise require exactly the contiguous interval `(floor, P]`, validate
+   every five-field row, and recompute
+   the checked sum of retained `affectedItemsBlob.count` exactly. Then run the
+   startup age-prefix compaction in one transaction,
+   advancing `compactionFloorRaw` to the greatest deleted sequence and
+   subtracting exactly the deleted blobs' byte counts; revalidate the suffix;
+5. on every append, pre-encode the row and, inside the same History transaction,
+   immediately trim the oldest prefix required to keep the post-append retained
+   state at or below 10,000 rows and 80 MiB of exact blob bytes. The new row is
+   never the trim victim. Count/byte caps therefore hold at every successful
+   save boundary, not only at a later maintenance pass. Age scanning runs on
+   startup and when the new commit position is an exact multiple of 50; this
+   cadence is derived from `ChangePosition` and adds no durable counter/state.
+
+Missing config with any surviving HCR, an empty HCR table with `floor != P`, a
+gap, duplicate, out-of-range row, row/position mismatch, unknown tag/version,
+non-finite timestamp, overflow, or byte-counter mismatch fails ordinary open
+closed. X-HCR performs no automatic rebase or silent repair. A fresh store
+starts with P/floor 0; a migrated store at position N starts with floor N and
+no HCR, so its first post-V4 commit is N+1. No pre-V4 change is invented.
+
+The proof ceiling is equally strict: X-HCR proves atomic post-V4 History-commit
+records and bounded retained-suffix integrity. It does not yet prove the future
+external-write equality
+`OperationRecord.changePosition == HCR.sequence == ChangePosition`; X.6 must
+prove that when it adds the positive external write path. X-HCR also proves no
+public replay, cursor survival, historical backfill, reconnect visibility,
+collection-cache correctness, automatic recovery, or cryptographic tamper
+evidence. No hash, digest, or hash-derived identity is added.
 
 ## 1. Role and boundary
 
@@ -37,12 +178,10 @@ J1 (`V2-00` §3) bundles three deliverables onto one substrate:
    invalidation is driven by the HCR stream and which obeys the Part IV §12
 > cache law.
 
-V2-03 owns:
+The full, separately admitted J1 design owns:
 
-- the HCR data model (a new V2 `HistoryChangeRecordRow` table, a versioned
-  `AffectedItemsBlobV1` codec, a new public `JournalEntryKind` enum, and a
-  `JournalConfigRow` singleton, all internal to `HistoryStorage` except the
-  public reconnect DTOs);
+- the HCR data model. X-HCR ships the internal V4 rows/tags/manual codec from
+  §0; a public `JournalEntryKind` and reconnect DTOs remain future J1 surface;
 - the HCR append path (a capability-gated extension of the v1 stamping +
   transaction stages, `05` §9/§10);
 - the `ChangeJournal` reader (a new internal `actor`) and the `ReconnectCursor` /
@@ -237,12 +376,12 @@ inherits v1's evidence rather than introducing a new platform dependency.
 
 ## 4. History Change Record data model
 
-All declarations in this section are `internal` to `HistoryStorage` unless
-explicitly noted as a public `HistoryCore` type. HCR types are part of
-`HistorySchemaV2` (the consolidated V2 schema introduced by V2-01 and extended
-by V2-02); they never appear in `HistorySchemaV1` (`05` §3, frozen).
+All X-HCR declarations in this section are `internal` to `HistoryStorage`.
+They first appear in immutable `HistorySchemaV4`; immutable V1/V2/V3 remain
+unchanged. Public reconnect types discussed below are future J1-only surface
+under the controlling amendment in §0.
 
-### 4.1 HistoryChangeRecordRow (V2 schema)
+### 4.1 HistoryChangeRecordRow (V4 X-HCR schema)
 
 ```swift
 @Model
@@ -257,7 +396,7 @@ internal final class HistoryChangeRecordRow {
                                      // Defensive duplicate of `sequence` for the §9.1
                                      // startup invariant check.
 
-    var changeKindRaw: Int16          // JournalEntryKind raw value (internal);
+    var changeKindRaw: Int16          // HistoryChangeKindRawV1 raw value;
                                      // :Int16 raw representable (§4.2); 0 is
                                      // reserved unset/invalid so a zeroed Int16
                                      // fails closed on decode
@@ -272,19 +411,12 @@ internal final class HistoryChangeRecordRow {
 }
 ```
 
-**No per-row `materializerVersion` column.** The materializer version is carried
-by `JournalConfigRow.materializerVersion` (the source of truth, §4.6), by the
-`ReconnectCursor` (the cursor-mint snapshot, §6.1), and by the
-`CollectionCacheKey` (§7.2). A materializer bump advances `JournalConfigRow.
-materializerVersion` **and** `JournalConfigRow.generation` together (§4.6),
-which expires every live cursor (D26) **before** any record minted under the new
-version could be replayed against a consumer keyed to the old version. A mid-
-replay materializer change is therefore impossible by construction (the cursor
-is rejected at the bump). A per-row column would have no consumer and is omitted
-to avoid dead schema; this mirrors the v1 discipline of not storing derivable
-redundancy (`05` §3.2 stores only what the singleton must own).
+**No materializer/cursor columns.** X-HCR has no materializer, cache, cursor, or
+reader consumer and therefore stores none of their state on either V4 row. A
+later J1 must introduce every newly consumed field through a later immutable
+schema; V4 is never widened.
 
-`HistoryChangeRecordRow` is a new V2 model. It is **not** a v1 schema column: it
+`HistoryChangeRecordRow` is a new V4 X-HCR model. It is **not** a v1 schema column: it
 adds a table; it does not alter `HistoryItemRow` or `LastChangePositionRow`. It
 references items **by value** (`HistoryItemID` inside `affectedItemsBlob`), not by
 a SwiftData `@Relationship`, mirroring `EnrichmentRow.itemID` (`V2-01` §3.2) — so
@@ -296,30 +428,27 @@ keeps historical references meaningful. Lookups use a bounded
 `#Predicate { $0.sequence > cursor.sequence }`, `V2-facts.md` cycle 7 §7.1, fact 7), never
 `registeredModel(for:)` (`05` §18).
 
-**Two decode paths, one policy: fail-closed.** The HCR is a derivation off the
-commit path, but it is also the **completeness mechanism** the collection cache
-depends on (`04` §12), so its integrity is load-bearing, not best-effort. A
+**Decode policy: fail-closed.** HCR integrity is load-bearing for the commit
+record and future consumers, not best-effort. A
 corrupt `affectedItemsBlob` (unknown version, oversize/unbounded array,
 malformed UUID), an **unknown `changeKindRaw`** (forward-incompatible enum raw
 value, mirroring `05` §4 exhaustive-decode discipline and the
 `configSchemaVersion` contract in §4.6), or a `changePositionRaw != sequence`
 divergence is `.persistence(.corruptStoredValue)` /
 `.persistence(.invariantViolation)` (`05` §16), mirroring v1 codec discipline
-(`05` §4). There is no "silent skip" path: a corrupt HCR row breaks the journal's
-completeness, so the journal is marked unready and reconnects fail closed
-`.temporarilyUnavailable` until the journal is rebased (§9).
+(`05` §4). There is no "silent skip" path: X-HCR ordinary open fails closed.
+A future J1 recovery path remains separately gated (§9.2).
 
-### 4.2 JournalEntryKind (public DTO)
+### 4.2 HistoryChangeKindRawV1 (internal X-HCR storage tags; public JournalEntryKind deferred)
 
-A new public enum in `HistoryCore` (Foundation-only). It is the lossy, codec-
-friendly discriminator of the commit's semantic event, distinct from the richer
-`HistoryCommitOutcome` (which carries associated values like
-`HistoryItemReference`). The mapping from a commit's `StampedMutation` set
-(plus the originating action's scope where the mutation set is scope-less) to
-`JournalEntryKind` is mechanical and total (§5.2):
+X-HCR freezes an internal codec-friendly discriminator of the commit's semantic
+event, distinct from the richer `HistoryCommitOutcome`. The mapping from a
+commit's `StampedMutation` set (plus the originating action's scope where the
+mutation set is scope-less) is mechanical and total (§5.2). No public
+`HistoryCore` type ships in this prerequisite:
 
 ```swift
-public enum JournalEntryKind: Int16, Sendable, Hashable, Codable {
+internal enum HistoryChangeKindRawV1: Int16, Sendable, Hashable {
     case insert = 1         // .inserted outcome
     case coalesce = 2       // .coalesced
     case pin = 3            // .placedPinned
@@ -335,9 +464,8 @@ public enum JournalEntryKind: Int16, Sendable, Hashable, Codable {
 }
 ```
 
-The type is `RawRepresentable` as `Int16` (n4): the on-disk wire value is the
-raw `Int16`, so the codec is the raw-value `Codable` derivation (no separate
-encode/decode logic), and `changeKindRaw` (`§4.1`) is exactly `kind.rawValue`.
+The type is `RawRepresentable` as `Int16`: the on-disk value is the raw `Int16`
+and `changeKindRaw` (§4.1) is exactly `kind.rawValue`.
 Raw values start at 1; **0 is reserved unset/invalid** so a zero-initialized
 `Int16` column decodes to no case and fails closed. The raw-value map is
 versioned by `configSchemaVersion` (`§4.6`): a future case addition is a
@@ -348,15 +476,10 @@ discipline governs forward-incompatible enum raw values). An **unknown
 (`.persistence(.corruptStoredValue)`, §4.1) — it is never silently coerced to a
 default case.
 
-**The raw values are a storage encoding, not an API contract.** The `Int16`
-raw type exists so `changeKindRaw` (§4.1) is a plain stored column with a
-fail-closed, zero-reserved decode; it is not an interchange format. Every
-v1 public enum in `HistoryCore` is raw-free (`HistoryAction`,
-`HistoryCommitOutcome`, `HistoryFailure`, ...); `JournalEntryKind` is the
-first raw-typed public enum, so callers must not persist, hash, or branch
-on `rawValue` - the public contract is the case set, versioned by
-`configSchemaVersion` (§4.6). Its raw-value `Codable` synthesis encodes
-the wire value; treat those bytes as storage-owned, not app-owned.
+**The raw values are storage encoding, not an API contract.** Callers cannot
+observe this type. A later separately admitted J1 may add a public
+`JournalEntryKind` projection over the same cases, but must not expose these
+raw values as an interchange or identity mechanism.
 
 **Why `.clear` is split into `.clearAll` / `.clearUnpinned` rather than one
 `.clear` kind.** A single `.clear` collapses the clear scope (`.all` vs
@@ -373,13 +496,9 @@ removed, and `.clearAll` knows the history was emptied. Both keep
 `HistoryAction.clear(scope)`, not from the scope-less `RetirementReason.clear`
 / `PlannedOutcome.cleared(count:)` — see §5.2.)
 
-**Naming.** The type is `JournalEntryKind` (not `HistoryChangeKind`) by
-pre-emptive choice (n5): the deleted-vocabulary token is the *phrase*
-"ChangeKind-driven bump" (`06` §10), a deleted live-observation bump mechanism.
-`JournalEntryKind` shares no stem with that deleted phrase, so it needs no
-`V2-00` §8 carve-out and V2-03's self-review consolidation is unconditional
-(§16). This is the same pre-emptive-rename posture V2-01 took for `SourceStamp`
-(`V2-01` §11).
+**Naming.** The executable internal type is `HistoryChangeKindRawV1`; its name
+states storage ownership and wire version. `JournalEntryKind` remains reserved
+for the future public J1 projection and is not present in X-HCR.
 
 ### 4.3 Sequence ↔ ChangePosition identity (D25)
 
@@ -433,16 +552,14 @@ for all `affectedItemIDs`" and refetches — exactly the cache's conservative fl
 
 ### 4.4 AffectedItemsBlobV1 codec
 
-The affected-item list is persisted through an explicit versioned wire value,
-not synthesized `Codable`, mirroring the v1 codec discipline (`05` §4):
+The affected-item list is persisted through the explicit manual wire frozen in
+§0.2, not synthesized `Codable`, mirroring the v1 codec discipline (`05` §4):
 
 ```swift
-internal struct AffectedItemsBlobV1: Codable, Sendable {
-    let formatVersion: UInt16    // exactly 1
-    let itemIDs: [UUID]          // HistoryItemID.rawValue; bounded by JournalLimits
-                                 // (§4.5); empty only when changeKind is
-                                 // self-describing (.clearAll / .clearUnpinned /
-                                 // .policySet)
+internal struct AffectedItemsBlobV1: Sendable {
+    let formatVersion: UInt16    // exactly 1; network byte order
+    let itemIDs: [UUID]          // encoded as UInt16 count + 16 raw bytes each;
+                                 // sorted raw-byte ASC, unique, <= 5,001
 }
 ```
 
@@ -450,9 +567,11 @@ Decode reconstructs through validators and checks, exactly as v1 codecs (`05` §
 
 - known `formatVersion` (exactly 1);
 - `itemIDs` count ≤ `JournalLimits.maxAffectedItemsPerRecord` (§4.5) before any
-  large allocation;
-- each element is a valid `UUID` (the codec does not synthesize `HistoryItemID`
-  meaning; it stores raw `UUID`s the reader re-wraps);
+  output allocation;
+- exact encoded length `4 + count * 16`, using checked arithmetic, with no
+  trailing byte;
+- UUID raw bytes are strictly ascending, which jointly proves deterministic
+  ordering and uniqueness;
 - `itemIDs` is non-empty **unless** the record's `changeKindRaw` encodes a
   self-describing kind: `.clearAll` / `.clearUnpinned` (the kind conveys the
   scope; enumerating up to 5,000 UUIDs would be wasteful) or `.policySet` (a
@@ -469,18 +588,13 @@ Any violation is `.persistence(.corruptStoredValue)` /
 `.persistence(.invariantViolation)` (`05` §16). The decoder does not silently
 drop IDs, reset to a default, or substitute.
 
-`AffectedItemsBlobV1` is a wire codec, like the v1 blobs (`CanonicalBlobV1`
+`AffectedItemsBlobV1` is a manual wire codec, like the v1 blobs (`CanonicalBlobV1`
 etc., `05` §4): it is encoded to `Data` for storage and decoded back within
 `HistoryStorage`'s isolation. The blob itself **does not cross an actor
 boundary** — the `HistoryChangeRecord` DTO (§6.3) and the
 `HistoryChangeRecordPayload` (§5.2) carry the **decoded** `[HistoryItemID]`
-array (a `Sendable` value type), not the blob. The `Codable` conformance is the
-load-bearing one (the encode/decode discipline above). The type is also
-`Sendable` (all stored properties are `let` of `Sendable` types, so the
-conformance is derived without `@unchecked Sendable`) as harmless future-proofing
-in case a future evolution moves the encoded blob across isolation; this mirrors
-V2-01's `EnrichmentBlobV1` (`V2-01` §3.3) without claiming a crossing that does
-not exist (review-minor-5).
+array (a `Sendable` value type), not the blob. `Sendable` is derived without an
+escape hatch; no synthesized serializer, hash, or generic envelope participates.
 
 ### 4.5 JournalLimits (admission bounds)
 
@@ -491,25 +605,29 @@ and V2-01's `EnrichmentLimits`):
 
 | Bound | V2 value |
 |---|---:|
-| `maxAffectedItemsPerRecord` | 5,000 (the hard retained maximum, `06` §2; bounds multi-retirement ID unions — `.clearAll`/`.clearUnpinned` rows carry no IDs, §4.4) |
+| `maxAffectedItemsPerRecord` | `HistoryLimits.standard.hardMaximumRetainedItems + 1` (5,001 in the frozen profile, checked; a capture may create one item and retire all 5,000 prior items in the same commit; `.clearAll`/`.clearUnpinned` rows carry no IDs, §4.4) |
 | `maxJournalRecordCount` (compaction cap) | 10,000 |
 | `maxJournalAgeSeconds` (compaction cap) | 604,800 (7 days) |
-| `maxJournalBytes` (whole-journal **payload-bytes** cap; C3-n3) | 80 MiB (an APPROXIMATION of journal footprint, not the literal on-disk size: it bounds the sum of `affectedItemsBlob.count + fixedRowOverhead` over all rows — payload bytes only, tracked by the `JournalConfigRow.journalBytes` counter, §4.5/§4.6. The ACTUAL SQLite footprint is LARGER (per-row B-tree node headers, index pages for `@Attribute(.unique) sequence` + the `key` index, WAL frames); `fixedRowOverhead` is a fixed per-row byte allowance that approximates the row-header share but does NOT model index/WAL overhead. The cap is therefore a payload-bytes trigger that forces an earlier compaction when per-record payloads are large — a `.clearAll`/`.clearUnpinned` row carries no IDs, but a multi-retire row can approach `maxAffectedItemsPerRecord` × 16 B ≈ 80 KiB, so without the cap the payload-byte sum could reach 10,000 × 80 KiB ≈ 800 MiB; the actual SQLite footprint at that point would be higher still) |
-| `compactionCadenceCommits` (trim every N-th commit) | 50 |
-| `maxReconnectBatchSize` (per-call fetch limit) | 500 (the `journalChanges(since:)` `fetchLimit`, §6.2; bounds a single reconnect call independently of the journal cap so a stale cursor at `sequence == 0` cannot unspool all 10,000 rows in one call; the caller paginates via `nextCursor` until `isCaughtUp`) |
+| `maxJournalBytes` (whole-journal affected-items payload cap) | 80 MiB; exactly the checked sum of retained `affectedItemsBlob.count`, tracked by `JournalConfigRow.journalBytes`. This is not a physical SQLite/WAL/index-byte claim; record count/floor bounds are separate. |
+| `ageCompactionCadenceCommits` | 50; derived from `ChangePosition % 50`, no stored counter. Count/byte trimming is immediate on every append. |
+| `maxReconnectBatchSize` (future J1 only; absent from X-HCR) | 500 if the `journalChanges(since:)` reader is separately admitted; it is not a V4 field or executable X-HCR limit. |
 
 Rules (matching `06` §2):
 
 - All byte/count arithmetic is checked; overflow fails closed and never wraps
   (`06` §2, `02` §13).
-- `maxJournalRecordCount`, `maxJournalAgeSeconds`, and `maxJournalBytes` are
-  alternative compaction triggers (whichever fires first); they bound journal
+- `maxJournalRecordCount` and `maxJournalBytes` are hard post-append bounds:
+  the append transaction trims the oldest required prefix before success, so
+  durable state never exceeds 10,000 rows or 80 MiB of blob bytes.
+  `maxJournalAgeSeconds` is checked at startup and at commit positions divisible
+  by 50; it bounds an actively opened store subject to that scan cadence. These
+  triggers bound journal
   footprint independently of history retention (V2-02). Journal retention is
   **separate** from item retention: trimming HCR rows never retires items, and
   retiring items never auto-trims the journal (§9). The byte bound is tracked by
   a **running `JournalConfigRow.journalBytes` counter** (C2-m3), not by scanning
   blobs at the compaction pass: the append closure increments it by
-  `affectedItemsBlob.count + fixedRowOverhead` (O(1) per commit, the blob's
+  `affectedItemsBlob.count` (O(1) per commit, the blob's
   encoded length known at encode time — no blob-content materialization), and the
   compaction pass subtracts the deleted rows' contributions (it knows which rows
   it deletes). Evaluating the byte trigger is therefore an O(1) compare against
@@ -517,20 +635,24 @@ Rules (matching `06` §2):
   serialize on the Authority and blow the 20 ms queue p95 (`J1-PERF-5`); the
   counter is the byte-trigger input, and `J1-PERF-5` budgets the compaction pass
   cost net of this.
-- `maxReconnectBatchSize` is a **read** bound (per-call `fetchLimit`), not a
+- In future J1, `maxReconnectBatchSize` is a **read** bound (per-call `fetchLimit`), not a
   compaction trigger; it bounds a single `changes(since:)` call's work and
   forces pagination (D26 is stated at the protocol level — the union of batches
   via `nextCursor` until `isCaughtUp` is complete-or-rejected; contiguous-prefix
   batching is not "partial replay," §16).
-- These are admission bounds, not runtime user knobs; the advanced-settings UX
-  exposure (§13) reads/writes `JournalConfigRow` fields but clamps to these
-  bounds at the boundary.
+- X-HCR count/age/byte limits are fixed internal constants, not runtime user
+  knobs. Any advanced-settings UX and writable retention fields in §13 are
+  future J1-only design and require a later schema/API admission.
 
-### 4.6 JournalConfigRow (singleton)
+### 4.6 Future J1 JournalConfigRow extension (not the X-HCR V4 row)
 
-A new `@Model` singleton stores the durable journal configuration. It is
-internal to `HistoryStorage` and **does not modify any v1 model** (no column is
-added to `HistoryItemRow` or `LastChangePositionRow`). It mirrors V2-01's
+The expanded model below is retained only as prospective full-J1 design. It is
+**not** the V4 model, and none of its cache/cursor fields may be copied into
+X-HCR. The executable X-HCR singleton is the exact four-field row in §0.1. A
+later J1 must add any admitted fields through a later immutable schema and
+re-prove their consumer. Subject to that future admission, the expanded model
+would remain internal to `HistoryStorage` and **does not modify any v1 model**.
+It mirrors V2-01's
 `EnrichmentConfigRow` (`V2-01` §3.5), V2-02's `RetentionExpansionConfigRow`
 (`V2-02` §3.3), and the v1 `LastChangePositionRow` singleton pattern (`05` §3.2):
 
@@ -572,7 +694,7 @@ internal final class JournalConfigRow {
                                           // .tokenExpired BEFORE the range fetch
                                           // (D26, §6.2). 0 when no compaction has run.
     var journalBytes: UInt64              // running whole-journal byte counter (C2-m3,
-                                          // §4.5): += (blob.count + fixedRowOverhead)
+                                          // §4.5): += blob.count
                                           // per append, -= deleted rows' contributions
                                           // on compaction. Checked arithmetic (02 §13);
                                           // the O(1) byte-trigger input.
@@ -639,8 +761,9 @@ than being silently reset (`05` §4 exhaustive-decode discipline; mirrors V2-02
 `RetentionExpansionConfigRow`, `V2-02` §3.3). An absent row (the migrated-v1
 case) is the only "create with defaults" path, not a version mismatch.
 
-**Singleton bootstrap at open (total order).** `SwiftDataHistory.open` performs
-the V2-03 steps in a fixed total order, after the v1 position-singleton (`05` §13
+**Future J1 singleton bootstrap.** This sequence is not executable in X-HCR;
+§0.3 owns the V4 bootstrap. If J1 later admits the expanded row,
+`SwiftDataHistory.open` performs its steps in a fixed total order, after the v1 position-singleton (`05` §13
 step 3) and the V2-01 `EnrichmentConfigRow` / V2-02 `RetentionExpansionConfigRow`
 singletons, and before the facade is published:
 
@@ -695,18 +818,18 @@ before the step-5 startup compaction pass (which reads `compactionFloor`,
 runs before the facade is published (no caller observes an inconsistent
 journal). This step applies to the `.memory` store path too.
 
-**HCR is always-on; the cache is gated.** Once V2-03 ships, the HCR append is
-part of every History Commit (one O(1) row insert, `J1-PERF-1`). There is no
-"journal disabled" mode: the journal is the substrate both deliverables need,
-and an extra row per commit is invisible to callers. The **collection cache** is
-the gated part: `cacheEnabled == false` makes reads byte-for-byte v1 (the cache
+**HCR is always-on; the future cache is separately gated.** Once X-HCR ships,
+the HCR append is part of every History Commit. There is no
+"journal disabled" mode: the journal is the substrate X.6 requires and future J1 may consume,
+and an extra row per commit is invisible to callers. The **future J1 collection
+cache** is separately gated: `cacheEnabled == false` makes reads byte-for-byte v1 (the cache
 is bypassed; the HCR still appends, but nothing consults it for reads). This is
 the cache-law disabled-path (Record 4).
 
 ## 5. HCR append path (data flow)
 
-The HCR append is a capability-gated extension of the v1 stamping + transaction
-stages (`05` §9/§10). It is **not** a new `HistoryMutation` case, **not** a new
+The HCR append is an always-on extension of the v1 stamping + transaction stages
+(`05` §9/§10). It is **not** a new `HistoryMutation` case, **not** a new
 `StampedMutation` case, and **not** a new `HistoryAction`. The v1 stamping table
 (`05` §9: 1:1 `HistoryMutation` → `StampedMutation`) is **unchanged**; V2-03
 adds one derived field to `StampedCommitPlan` and one insert step to the
@@ -733,6 +856,8 @@ Authority commit kernel (05 §9 / §10), V2-03-extended:
          for mutation in plan.mutations { try apply(mutation, in: context) }   // v1
          try validateFinalPinOrder(in: context)                                  // v1
          try appendHistoryChangeRow(plan.hcrAppend, in: context)                 // V2-03
+         try trimHistoryChangePrefixForHardBoundsAndDueAge(                      // X-HCR
+             newPosition: plan.position, in: context)
          meta.rawValue = plan.position.rawValue                                  // v1, written last
   -> apply nonthrowing Signature Index delta        (05 §11 step 1, unchanged)
   -> synchronously yield HistoryInvalidation         (05 §11 step 2, unchanged)
@@ -755,6 +880,12 @@ Every `05` §10 transaction rule is preserved:
   *before* the singleton write (carrying `plan.position.rawValue`, which equals
   the to-be-written singleton value); order within the closure does not affect
   atomicity.
+- **Hard bounds share the commit boundary.** After staging the new HCR, the
+  closure trims the oldest prefix required for the post-commit row/blob-byte
+  caps and, when `plan.position.rawValue % 50 == 0`, also trims the expired-age
+  prefix. The new row is never deleted. Row insert, prefix delete,
+  `compactionFloorRaw`, `journalBytes`, item mutations, and position therefore
+  commit or roll back together.
 - **Closure success is the save boundary**; the kernel does not call `save()`,
   `processPendingChanges()`, or a compensating `rollback()` afterward (`05` §10).
 
@@ -768,7 +899,7 @@ the Authority's existing operation-local transaction. Single-writer is preserved
 internal struct HistoryChangeRecordPayload: Sendable {
     let sequence: UInt64                    // == plan.position.rawValue
     let changePositionRaw: UInt64           // == plan.position.rawValue (D25)
-    let changeKind: JournalEntryKind
+    let changeKind: HistoryChangeKindRawV1     // internal frozen tag, §0.1/§4.2
     let affectedItemIDs: [HistoryItemID]    // union over plan.mutations; sorted,
                                             // deduplicated (deterministic total
                                             // order: HistoryItemID raw bytes
@@ -780,10 +911,8 @@ internal struct HistoryChangeRecordPayload: Sendable {
 }
 ```
 
-(The payload carries no `materializerVersion`: that value lives on
-`JournalConfigRow` and the `ReconnectCursor`, and a materializer bump expires
-every cursor before any new-version record is minted — §4.1 "No per-row
-`materializerVersion` column.")
+(The payload carries no `materializerVersion`: X-HCR has no materializer or
+cursor consumer. Any future J1 value requires a later immutable schema, §0.1.)
 
 `StampedCommitPlan` (`05` §9) gains one field:
 
@@ -906,14 +1035,13 @@ stage for the clear case (see "Clear-scope input" below):
   prune-owning item), deduplicated and sorted by `HistoryItemID` raw bytes
   ascending (a deterministic total order chosen for stable encoding — NOT D9's
   dedup-winner tie-break and NOT `02` §12's eviction order; those govern
-  different decisions; C3-n1). Bounded by
-  `JournalLimits.maxAffectedItemsPerRecord`: if the union exceeds the cap,
-  the encoder keeps the smallest `HistoryItemID`s (raw bytes ascending,
-  deterministic) and drops the rest - `affectedItemIDs` is best-effort
-  (the §4.3 consumer obligation), never a completeness claim; the
-  decoder's count-≤-cap check (§4.4) remains the invariant. The bound is
-  reachable: a capture at the 5,000-item hard cap under a count-1 policy
-  retires 5,000 and creates 1 (union 5,001). Empty only for the
+  different decisions; C3-n1). Bounded by the checked value
+  `HistoryLimits.standard.hardMaximumRetainedItems + 1` (5,001 in the frozen
+  profile). This covers the reachable maximum: a capture at the 5,000-item
+  hard cap may retire 5,000 and create one item in the same commit. No ID is
+  truncated or dropped. If arithmetic overflows or a producer exceeds the
+  bound, encoding fails and the whole History transaction commits nothing.
+  Empty only for the
   self-describing kinds (`.clearAll` / `.clearUnpinned` / `.policySet`),
   per the §4.4 codec rule.
 - `createdAt` ← the Storage clock seam (§6.4), read inside the serialized
@@ -1859,6 +1987,11 @@ unbounded. V2-03 defines a compaction policy **separate from history retention**
 
 ### 9.1 Startup invariant check
 
+For the shipping X-HCR prerequisite, §0.3 is controlling: ordinary open
+validates the complete bounded suffix `(compactionFloorRaw, currentPosition]`
+and fails closed on any divergence. The cheaper max-only check below belongs
+only to the superseded consolidated/full-J1 draft and is not sufficient for V4.
+
 `SwiftDataHistory.open` (`05` §13) gains one validation step after the V2-01/V2-02
 singleton creation and before the facade is published:
 
@@ -1903,6 +2036,10 @@ fires (D25); it fires only on a should-never-happen invariant violation
 edited out-of-band).
 
 ### 9.2 Journal rebase (the recovery path)
+
+This automatic rebase is **not admitted by X-HCR**. V4 ordinary open fails
+closed and exposes no public recovery opener. The remainder of this subsection
+is prospective J1 recovery design that requires separate admission and proof.
 
 The HCR is a **derivation** off the commit path: its records past changes, and
 past changes are **not reconstructable** from durable item state (Record 5: no
@@ -2437,14 +2574,15 @@ Gates use the `J1-` prefix.
   silent partial-replay race D26 forbids, and keeping `isCaughtUp` consistent with
   the gate under one snapshot). This is the custom-HCR-owned snapshot-consistency
   property SwiftData does not document for multi-`fetch` read sequences.
-- **J1-PERF-1 (HCR append O(1) + per-commit clock).** The HCR append adds one
-  row insert per History Commit (O(1) in retained size). It also adds one
-  per-commit Storage-clock read on **every** commit path (pin/unpin/remove/clear/
-  retire/policySet/revise too, not only capture), because the HCR is always-on
-  (§6.4, m2); this read is O(1) and cheaper than the codec encode + insert it
-  shares the closure with. Capture/revise/pin commit p95 with the HCR append +
-  clock read is within the agreed commit-interval budget (`06` §9); the append
-  is non-suspending and adds no `await` to the commit closure.
+- **J1-PERF-1 / X-HCR performance ceiling (Open).** Every commit adds one
+  pre-encoded row insert and one Storage-clock read. A non-cadence append that
+  remains below both hard bounds performs no HCR prefix fetch. When position is
+  divisible by 50, or count/blob-byte pressure requires trimming, the same
+  transaction performs a bounded oldest-prefix scan/delete over at most the
+  retained 10,000 rows. The append remains non-suspending and adds no `await`,
+  but the overall path is therefore not claimed O(1). No performance lane runs
+  in the X-HCR correctness batch; commit p95/Authority-queue evidence remains
+  Open under `J1-PERF-1`/`J1-PERF-5`.
 - **J1-PERF-2 (collection-cache hit avoids the scan — between commits).** On a
   cache hit, the G2 read returns the cached page without the v1 scalar scan; the
   §7.1 fence confirms freshness. **Honest hit-rate scope (m9) + bursty-write
@@ -2509,66 +2647,51 @@ equivalence (§15).
 
 ### Record 5 — Migration impact (Part V §17 three layers)
 
-- **Schema layer (SwiftData migration):** add `HistoryChangeRecordRow` and
-  `JournalConfigRow` tables to `HistorySchemaV2` (the consolidated V2 schema =
-  the frozen v1 models plus V2-01's `EnrichmentRow`/`EnrichmentConfigRow` and
-  V2-02's `RetentionExpansionConfigRow` and `RetainedBytesRow`, `V2-01` §3.2 /
-  `V2-02` §3.3/§3.3b). The
-  migration is `MigrationStage.lightweight(fromVersion: HistorySchemaV1.self,
-  toVersion: HistorySchemaV2.self)` — purely additive, no v1 row or column
-  rewritten (`V2-facts.md` cycles 1-3; reuses V2-01's `HistorySchemaV1:
-  VersionedSchema` retrofit, `V2-01` §10 `E1-PLATFORM-1`). **Incremental
-  shipping:** if V2-03 ships after V2-01/V2-02, its models are a further
-  lightweight stage (`HistorySchemaV2 -> HistorySchemaV3`) in an ordered
-  `SchemaMigrationPlan` (`V2-02` §3.3 incremental-shipping note), not a
-  modification of an already-shipped schema. **Data bootstrap (not migration):**
-  a lightweight migration adds schema, not data; `SwiftDataHistory.open` creates
-  the `JournalConfigRow` singleton (`cacheEnabled == false` until recorded
-  G2 evidence — DC-10; `generation == 1`,
-  bounds clamped) if absent (§4.6), mirroring v1 `LastChangePositionRow` creation
-  (`05` §13 step 3) and V2-01/V2-02's config singletons, so a migrated v1 store
-  starts with a configured journal and an **empty HCR table**.
+- **Schema layer (SwiftData migration; DC-25 controlling form):** add
+  `HistoryChangeRecordRow` and the exact four-field `JournalConfigRow` only to
+  new immutable `HistorySchemaV4`. The ordered plan retains the shipped custom
+  V1 -> V2 retention stage and lightweight V2 -> V3 Gateway stage, then adds a
+  purely additive lightweight V3 -> V4 stage. No V1/V2/V3 model or column is
+  edited. The migration creates schema only; post-migration Authority bootstrap
+  creates config with `compactionFloorRaw ==` current ChangePosition and
+  `journalBytes == 0` only when the HCR table is empty (§0.3). No cache,
+  generation, materializer, store-instance, cursor, reader, or public journal
+  field is reserved.
 - **Blob layer (versioned blob migration):** `AffectedItemsBlobV1` is a new
   codec (`formatVersion == 1`). No v1 blob (`CanonicalBlobV1`,
   `RevisionStateBlobV1`, `SignatureBlobV1`, `EffectiveTypeIdentifiersBlobV1`,
   `05` §4) is reinterpreted. No `ContentVersion` is reinterpreted. A future
-  affected-items codec bump would add `AffectedItemsBlobV2` and a `generation`
-  bump (expiring all cursors), exactly as v1 projection schema changes rebuild
-  (`05` §15).
+  affected-items codec bump would add `AffectedItemsBlobV2` through a later
+  immutable schema. Cursor-expiry behavior belongs to future J1, not V4.
 - **Projection layer (rebuild):** the HCR is **not reconstructable** from
   durable item state (past changes are gone; no backfill). The journal therefore
-  starts **empty** at migration. On a **fresh** store the first commit is
+  starts **empty** at migration, with `compactionFloorRaw` equal to the current
+  position. On a **fresh** store the first commit is
   `sequence == 1` (the singleton moves `0 → 1`, `05` §3.2). On a **migrated v1
   store** with existing history, the singleton `ChangePosition` is already `N >
   0` at migration; the first post-migration commit takes the checked successor
   `N → N+1` (D6, `05` §9), so the **first HCR row's `sequence == N+1`**, not
-  `N`. The HCR therefore has a gap from 0 to `N+1` (sequences `1..N` and the
-  empty-table prefix do not exist); this is **expected and not corruption** —
-  the journal covers only post-migration changes, §1.1 — and the §6.2 reject
-  gate's contiguity reasoning does not rely on the initial range being
-  contiguous (the `compactionFloor`-based reject and the cache's position fence
-  are gap-agnostic). The collection cache starts empty
-  (in-memory). **Past changes are NOT reconstructable** — reconnect covers only
-  post-migration changes; this limitation is stated explicitly (§1.1). No
+  `N`. The absent prefix is represented exactly by `compactionFloorRaw == N`,
+  so retained rows thereafter occupy `(N, currentPosition]` without inventing
+  sequences 1...N. **Past changes are NOT reconstructable** and X-HCR exposes
+  no reconnect API. No
   migration invents missing bytes, reinterprets an old `ContentVersion`, reuses
   removed IDs, or enables capture before Signature Index / journal completeness
   is restored (`V2-00` §5 decision 18). The startup invariant check (§9.1)
   guards the journal/position consistency post-migration; on a fresh migration
-  it trivially holds (empty HCR, `max(sequence)` undefined → treated as
-  equality with `lastSeenPosition = current position`).
+  it holds as the explicit empty interval `(floor == position, position]`.
 
 ### Record 6 — Security boundary
 
 V2-03 is **not external-facing** (no X1 boundary). Its security record is §12:
 internal change-journal state; new durable per-commit metadata exposure (kind +
 IDs + timestamp, retained up to the journal window); removal-record deletion
-latency (lingers until compaction - wall-clock-bounded for a launching or
-always-running process by §8's startup + periodic triggers, unbounded only for a
-store never opened again);
-no TCC/entitlement; no `OperationRecord` (X2 owns external-write audit). The
-collection cache is in-memory and stores only v1 scalar projections. The HCR is
-a derivation; its loss degrades to a rebase + cursor expiry, never wrong durable
-state.
+latency (lingers until startup or the next 50-position age scan; an open but
+idle store may therefore retain an over-age row until another qualifying
+commit, and a never-reopened store retains it indefinitely);
+no TCC/entitlement; no `OperationRecord` (X2 owns external-write audit). X-HCR
+ships no collection cache or cursor. Its ordinary open fails closed on HCR
+loss/corruption; rebase + cursor expiry is only prospective J1 recovery.
 
 ## 16. New invariants D25–D28 (extend `02` §14)
 
@@ -2723,13 +2846,11 @@ new contract:
   `.setRetentionPolicy` or V2-02 `.setRetentionPolicies` with R1/R2 — produces
   `.retire` with the victim IDs (C2-M8: the two paths are symmetric; `.policySet`
   is reserved for the no-victim value-only change).
-- **V2-WS-J1-1b (encode-side cap truncation).** A plan whose affected-ID
-  union exceeds `JournalLimits.maxAffectedItemsPerRecord` (capture at the
-  5,000-item hard cap under a count-1 policy: union 5,001) encodes exactly
-  the cap's smallest `HistoryItemID`s (raw bytes ascending), decodes under
-  the §4.4 count-<=-cap check, and is byte-identical across two runs
-  (deterministic truncation; best-effort per §4.3, never a completeness
-  claim).
+- **V2-WS-J1-1b (encode-side affected-ID completeness).** A capture at the
+  5,000-item hard cap under a count-1 policy (5,000 retirees + one created item)
+  encodes all 5,001 unique IDs in raw-byte ascending order, with no truncation,
+  and is byte-identical across two runs. A synthetic 5,002-ID payload and a
+  checked-bound overflow both fail the whole commit before publication.
 - **V2-WS-J1-2 (reconnect completeness).** Persist a `ReconnectCursor`, perform
   N commits, call `changes(since: cursor)`; assert the complete ordered stream
   of N records is returned, `nextCursor.sequence == currentPosition`, and

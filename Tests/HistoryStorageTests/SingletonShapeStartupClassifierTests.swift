@@ -1,7 +1,7 @@
 /// DATA-1 startup-shape proofs (`05` §13; deep review Card 1A-1).
 ///
 /// The production seam is a persistent `SwiftDataHistory.open`: each fixture
-/// first creates a real current V3 store and captures one item through the public
+/// first creates a real current V4 store and captures one item through the public
 /// boundary, then an independent container damages only one singleton shape.
 /// A second public open must reject the shape. A fresh independent inspector
 /// compares durable singleton, item/blob, retained-byte, and Gateway values
@@ -14,7 +14,7 @@
 /// surviving Gateway rows prove current durable state and prohibit repair.
 /// A migrated V1/V2 store awaiting bootstrap still has empty Gateway tables,
 /// so its documented create-with-defaults path remains available. The causal
-/// ceiling still applies to a store stripped of every V3 row: its all-empty
+/// ceiling still applies to a store stripped of every post-V2 row: its all-empty
 /// shape is indistinguishable from fresh state without provenance.
 import Foundation
 import HistoryCore
@@ -121,7 +121,7 @@ struct SingletonShapeStartupClassifierTests {
     }
 
     private static func makeContainer(at storeURL: URL) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: HistorySchemaV3.self)
+        let schema = Schema(versionedSchema: HistorySchemaV4.self)
         return try ModelContainer(
             for: schema,
             migrationPlan: HistoryMigrationPlan.self,
@@ -133,7 +133,7 @@ struct SingletonShapeStartupClassifierTests {
         )
     }
 
-    private static func seedExistingV3(at storeURL: URL) async throws {
+    private static func seedExistingV4(at storeURL: URL) async throws {
         let history = try await SwiftDataHistory.open(
             configuration: HistoryConfiguration(
                 persistence: .persistent(storeURL: storeURL),
@@ -146,7 +146,7 @@ struct SingletonShapeStartupClassifierTests {
         )))
     }
 
-    private static func seedFreshCurrentV3(at storeURL: URL) async throws {
+    private static func seedFreshCurrentV4(at storeURL: URL) async throws {
         _ = try await SwiftDataHistory.open(
             configuration: HistoryConfiguration(
                 persistence: .persistent(storeURL: storeURL),
@@ -240,7 +240,7 @@ struct SingletonShapeStartupClassifierTests {
                 "singleton-shape-\(damage.label)"
             )
             defer { WSSupport.removeStore(storeURL) }
-            try await Self.seedExistingV3(at: storeURL)
+            try await Self.seedExistingV4(at: storeURL)
             try Self.damage(damage, at: storeURL)
             let before = try Self.snapshot(at: storeURL)
             #expect(before.gateway.configs.count == 1)
@@ -277,7 +277,7 @@ struct SingletonShapeStartupClassifierTests {
             "singleton-shape-gateway-only-missing-position"
         )
         defer { WSSupport.removeStore(storeURL) }
-        try await Self.seedFreshCurrentV3(at: storeURL)
+        try await Self.seedFreshCurrentV4(at: storeURL)
         try Self.deletePositionAndRetentionConfig(at: storeURL)
         let before = try Self.snapshot(at: storeURL)
         #expect(before.positions.isEmpty)

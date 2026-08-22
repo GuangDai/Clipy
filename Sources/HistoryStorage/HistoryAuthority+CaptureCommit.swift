@@ -163,7 +163,8 @@ extension HistoryAuthority {
                 inputs: .capture(
                     projection: prepared.projection,
                     coalescedWinnerVersion: coalescedWinnerVersion
-                )
+                ),
+                createdAt: storageClock.now()
             )
         } catch let rejection as StampingRejection {
             throw rejection.historyFailure
