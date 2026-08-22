@@ -104,7 +104,10 @@ struct WS13TransactionFailureTests {
         #expect(Set(before.items.map(\.copyCount)) == [1])
         #expect(Set(before.items.compactMap(\.firstSource)) == [firstSource, secondSource])
         #expect(Set(before.items.compactMap(\.lastSource)) == [firstSource, secondSource])
-        #expect(Set(before.items.map(\.projectionSchemaVersion)) == [1])
+        #expect(
+            Set(before.items.map(\.projectionSchemaVersion))
+                == [ContentProjector.schemaVersion]
+        )
         #expect(before.items.allSatisfy { $0.pinOrdinal == nil })
         for item in before.items {
             let expectedText = item.id == firstReference.id.rawValue

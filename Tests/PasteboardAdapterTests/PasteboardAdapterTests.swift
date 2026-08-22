@@ -18,6 +18,9 @@
 ///   through History, not here.
 /// - The observer captures the current contents immediately on start, then
 ///   fires the handler once per distinct `changeCount` bump.
+/// - A start/end `changeCount` mismatch discards every representation read
+///   during that attempt and produces an explicit content-free retry outcome;
+///   the complete-capture convenience returns nil (REVIEW Card 5B).
 /// - Failure is explicit, never silent (audit SPEC-IMPL-005,
 ///   docs/reviews/2026-08-20-clipy-maccy-audit/02-spec-implementation.md):
 ///   a declared-but-unavailable type (Apple: contents changed / provider
@@ -102,6 +105,70 @@ func captureFreezesEveryRetainableTypedRepresentation() {
         } == true
     )
 }
+
+#if DEBUG
+@Test @MainActor
+func pasteboardChangeBetweenRepresentationReadsProducesContentFreeRetryOutcome() throws {
+    let pasteboard = makePasteboard()
+    pasteboard.clearContents()
+    pasteboard.setData(Data("old plain".utf8), forType: .string)
+    pasteboard.setData(
+        Data("<b>old rich</b>".utf8),
+        forType: NSPasteboard.PasteboardType("public.html")
+    )
+    let startChangeCount = pasteboard.changeCount
+    var didReplaceContents = false
+    var adapter = PasteboardAdapter(pasteboard: pasteboard)
+    adapter.payloadReadCompletionHook = { _ in
+        guard !didReplaceContents else { return }
+        didReplaceContents = true
+        pasteboard.clearContents()
+        pasteboard.setData(Data("new plain".utf8), forType: .string)
+        pasteboard.setData(
+            Data("<b>new rich</b>".utf8),
+            forType: NSPasteboard.PasteboardType("public.html")
+        )
+    }
+
+    let outcome = try #require(adapter.captureOutcome())
+
+    #expect(didReplaceContents)
+    #expect(outcome.startChangeCount == startChangeCount)
+    #expect(outcome.endChangeCount == pasteboard.changeCount)
+    #expect(outcome.endChangeCount != outcome.startChangeCount)
+    #expect(outcome.changedDuringRead)
+    #expect(!outcome.isComplete)
+    // Neither the old first read nor the new board may enter History as a
+    // complete snapshot. Ownership change is its own retry reason, not a
+    // fabricated provider-timeout/unavailable-type diagnosis.
+    #expect(outcome.capture.representations.isEmpty)
+    #expect(outcome.unavailableTypeIdentifiers.isEmpty)
+    #expect(outcome.concealmentMarkerTypeIdentifier == nil)
+    #expect(outcome.unsupportedPasteboardItemCount == nil)
+}
+
+@Test @MainActor
+func completeCaptureConvenienceRejectsPasteboardChangedDuringRead() {
+    let pasteboard = makePasteboard()
+    pasteboard.clearContents()
+    pasteboard.setData(Data("old plain".utf8), forType: .string)
+    pasteboard.setData(
+        Data("<b>old rich</b>".utf8),
+        forType: NSPasteboard.PasteboardType("public.html")
+    )
+    var didReplaceContents = false
+    var adapter = PasteboardAdapter(pasteboard: pasteboard)
+    adapter.payloadReadCompletionHook = { _ in
+        guard !didReplaceContents else { return }
+        didReplaceContents = true
+        pasteboard.clearContents()
+        pasteboard.setString("new plain", forType: .string)
+    }
+
+    #expect(adapter.capture() == nil)
+    #expect(didReplaceContents)
+}
+#endif
 
 @Test @MainActor
 func captureOfEmptyPasteboardReturnsNil() {
@@ -388,6 +455,7 @@ func captureOfAFullyObservedItemIsACompleteOutcome() {
     let pasteboard = makePasteboard()
     pasteboard.clearContents()
     pasteboard.setData(Data("plain".utf8), forType: .string)
+    let stableChangeCount = pasteboard.changeCount
 
     let observedAt = Date(timeIntervalSince1970: 1_760_000_000)
     let outcome = PasteboardAdapter(pasteboard: pasteboard)
@@ -396,6 +464,9 @@ func captureOfAFullyObservedItemIsACompleteOutcome() {
     #expect(outcome != nil)
     #expect(outcome?.isComplete == true)
     #expect(outcome?.unavailableTypeIdentifiers == [])
+    #expect(outcome?.changedDuringRead == false)
+    #expect(outcome?.startChangeCount == stableChangeCount)
+    #expect(outcome?.endChangeCount == stableChangeCount)
     // The convenience half drops the record but freezes the same bytes;
     // both calls share one injected observedAt so the comparison is
     // deterministic (the default Date() stamps would differ sub-second).

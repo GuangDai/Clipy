@@ -13,7 +13,7 @@
 /// discipline), §3.2 ("row existence is the migration invariant ... never
 /// ... a zero-byte read"), §4.1/§7 (mandatory maintenance while disabled,
 /// DC-04), §5.3 (the shorter same-active `RevisionStateBlobV1`), §6.4 (the
-/// Storage clock seam); open order: `V2-roadmap` §5 step 7.
+/// Storage clock seam); open order: `V2-roadmap` §5 step 11.
 ///
 /// Every lifecycle case crosses the public `SwiftDataHistory.perform` /
 /// real `HistoryAuthority` commit paths and asserts rows through an
@@ -401,7 +401,7 @@ struct RetainedBytesProjectionLifecycleTests {
         #expect(try Self.fetchBytesRows(container).count == 1)
     }
 
-    // MARK: - (e) Restart 1:1 enforcement (V2-roadmap §5 step 7)
+    // MARK: - (e) Restart 1:1 enforcement (V2-roadmap §5 step 11)
 
     private enum ProjectionCorruption: Equatable {
         /// Direction 1 violation: a retained item with no projection row.

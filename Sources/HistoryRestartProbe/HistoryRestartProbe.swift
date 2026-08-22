@@ -1,0 +1,272 @@
+/// A three-phase, public-API-only restart tracer for Review Evidence Card
+/// 1C-1. Each invocation owns one `SwiftDataHistory` for one short process;
+/// no SwiftData object or generated identity crosses a phase boundary.
+import Foundation
+import HistoryCore
+import HistoryStorage
+
+private enum ProbePhase: String {
+    case seed
+    case operate
+    case verify
+}
+
+private enum ProbeFailure: Error {
+    case unexpectedState
+}
+
+private let textType = "public.utf8-plain-text"
+private let alphaText = "restart alpha"
+private let bravoText = "restart bravo"
+private let alphaFirstDate = Date(timeIntervalSinceReferenceDate: 10_000)
+private let bravoDate = Date(timeIntervalSinceReferenceDate: 20_000)
+private let alphaSecondDate = Date(timeIntervalSinceReferenceDate: 30_000)
+private let alphaFirstSource = "restart.seed.alpha"
+private let bravoSource = "restart.seed.bravo"
+private let alphaSecondSource = "restart.operate.alpha"
+private let manifestFileName = "restart-manifest.txt"
+
+private struct ProbeManifest {
+    let alpha: UUID
+    let bravo: UUID
+
+    static func read(siblingOf storeURL: URL) throws -> Self {
+        let data = try Data(contentsOf: manifestURL(siblingOf: storeURL))
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw ProbeFailure.unexpectedState
+        }
+        let lines = text.split(separator: "\n")
+        guard lines.count == 2,
+              lines[0].hasPrefix("alpha="),
+              lines[1].hasPrefix("bravo="),
+              let alpha = UUID(uuidString: String(lines[0].dropFirst(6))),
+              let bravo = UUID(uuidString: String(lines[1].dropFirst(6))),
+              alpha != bravo else {
+            throw ProbeFailure.unexpectedState
+        }
+        return Self(alpha: alpha, bravo: bravo)
+    }
+
+    func write(siblingOf storeURL: URL) throws {
+        let text = "alpha=\(alpha.uuidString)\nbravo=\(bravo.uuidString)\n"
+        try Data(text.utf8).write(to: manifestURL(siblingOf: storeURL))
+    }
+}
+
+private func manifestURL(siblingOf storeURL: URL) -> URL {
+    storeURL.deletingLastPathComponent()
+        .appendingPathComponent(manifestFileName)
+}
+
+private func capture(
+    _ text: String,
+    at date: Date,
+    source: String
+) -> ClipboardCapture {
+    ClipboardCapture(
+        representations: [CapturedRepresentation(
+            typeIdentifier: textType,
+            bytes: Data(text.utf8)
+        )],
+        origin: CopyOriginObservation(
+            sourceApplication: source,
+            lineageHint: nil
+        ),
+        observedAt: date
+    )
+}
+
+private func openHistory(at storeURL: URL) async throws -> SwiftDataHistory {
+    try await SwiftDataHistory.open(configuration: HistoryConfiguration(
+        persistence: .persistent(storeURL: storeURL),
+        initialMaximumUnpinnedItems: 200
+    ))
+}
+
+private func requireInserted(
+    _ receipt: HistoryReceipt,
+    position: UInt64
+) throws -> HistoryItemReference {
+    guard case .committed(let commit) = receipt,
+          commit.position.rawValue == position,
+          case .inserted(let reference) = commit.outcome,
+          reference.contentVersion.rawValue == 1 else {
+        throw ProbeFailure.unexpectedState
+    }
+    return reference
+}
+
+private func requireInitialProjection(
+    _ history: SwiftDataHistory,
+    manifest: ProbeManifest
+) async throws {
+    let page = try await history.browse(HistoryBrowseRequest(
+        kind: .recent,
+        limit: 10
+    ))
+    guard page.position.rawValue == 2,
+          page.next == nil,
+          page.rows.count == 2,
+          page.rows[0].item.id.rawValue == manifest.bravo,
+          page.rows[0].title == bravoText,
+          page.rows[0].typeIdentifiers == [textType],
+          page.rows[0].lastCopiedAt == bravoDate,
+          page.rows[0].copyCount == 1,
+          page.rows[0].lastSource == bravoSource,
+          page.rows[0].pinnedPosition == nil,
+          page.rows[0].search == nil,
+          page.rows[1].item.id.rawValue == manifest.alpha,
+          page.rows[1].title == alphaText,
+          page.rows[1].typeIdentifiers == [textType],
+          page.rows[1].lastCopiedAt == alphaFirstDate,
+          page.rows[1].copyCount == 1,
+          page.rows[1].lastSource == alphaFirstSource,
+          page.rows[1].pinnedPosition == nil,
+          page.rows[1].search == nil else {
+        throw ProbeFailure.unexpectedState
+    }
+
+    let bravo = try await history.details(for: page.rows[0].item.id)
+    let alpha = try await history.details(for: page.rows[1].item.id)
+    guard bravo.item.id.rawValue == manifest.bravo,
+          bravo.item == page.rows[0].item,
+          alpha.item.id.rawValue == manifest.alpha,
+          alpha.item == page.rows[1].item else {
+        throw ProbeFailure.unexpectedState
+    }
+}
+
+private func seed(storeURL: URL) async throws {
+    let history = try await openHistory(at: storeURL)
+    let alpha = try requireInserted(
+        try await history.perform(.capture(capture(
+            alphaText,
+            at: alphaFirstDate,
+            source: alphaFirstSource
+        ))),
+        position: 1
+    )
+    let bravo = try requireInserted(
+        try await history.perform(.capture(capture(
+            bravoText,
+            at: bravoDate,
+            source: bravoSource
+        ))),
+        position: 2
+    )
+    try ProbeManifest(
+        alpha: alpha.id.rawValue,
+        bravo: bravo.id.rawValue
+    ).write(siblingOf: storeURL)
+}
+
+private func operate(storeURL: URL) async throws {
+    let manifest = try ProbeManifest.read(siblingOf: storeURL)
+    let history = try await openHistory(at: storeURL)
+    try await requireInitialProjection(history, manifest: manifest)
+    let receipt = try await history.perform(.capture(capture(
+        alphaText,
+        at: alphaSecondDate,
+        source: alphaSecondSource
+    )))
+    guard case .committed(let commit) = receipt,
+          commit.position.rawValue == 3,
+          case .coalesced(let reference) = commit.outcome,
+          reference.id.rawValue == manifest.alpha,
+          reference.contentVersion.rawValue == 1 else {
+        throw ProbeFailure.unexpectedState
+    }
+}
+
+private func verify(storeURL: URL) async throws {
+    let manifest = try ProbeManifest.read(siblingOf: storeURL)
+    let history = try await openHistory(at: storeURL)
+    let page = try await history.browse(HistoryBrowseRequest(
+        kind: .recent,
+        limit: 10
+    ))
+    guard page.position.rawValue == 3,
+          page.next == nil,
+          page.rows.count == 2,
+          page.rows[0].item.id.rawValue == manifest.alpha,
+          page.rows[0].title == alphaText,
+          page.rows[0].typeIdentifiers == [textType],
+          page.rows[0].item.contentVersion.rawValue == 1,
+          page.rows[0].lastCopiedAt == alphaSecondDate,
+          page.rows[0].copyCount == 2,
+          page.rows[0].lastSource == alphaSecondSource,
+          page.rows[0].pinnedPosition == nil,
+          page.rows[0].search == nil,
+          page.rows[1].item.id.rawValue == manifest.bravo,
+          page.rows[1].title == bravoText,
+          page.rows[1].typeIdentifiers == [textType],
+          page.rows[1].item.contentVersion.rawValue == 1,
+          page.rows[1].lastCopiedAt == bravoDate,
+          page.rows[1].copyCount == 1,
+          page.rows[1].lastSource == bravoSource,
+          page.rows[1].pinnedPosition == nil,
+          page.rows[1].search == nil else {
+        throw ProbeFailure.unexpectedState
+    }
+
+    let alpha = try await history.details(for: page.rows[0].item.id)
+    guard alpha.item.id.rawValue == manifest.alpha,
+          alpha.item == page.rows[0].item,
+          alpha.canonical.map(\.typeIdentifier) == [textType],
+          alpha.canonical.map(\.bytes) == [Data(alphaText.utf8)],
+          alpha.effective == alpha.canonical,
+          alpha.revisions.isEmpty,
+          alpha.occurrence.firstCopiedAt == alphaFirstDate,
+          alpha.occurrence.lastCopiedAt == alphaSecondDate,
+          alpha.occurrence.count == 2,
+          alpha.occurrence.firstSource == alphaFirstSource,
+          alpha.occurrence.lastSource == alphaSecondSource,
+          alpha.pinnedPosition == nil else {
+        throw ProbeFailure.unexpectedState
+    }
+
+    let bravo = try await history.details(for: page.rows[1].item.id)
+    guard bravo.item.id.rawValue == manifest.bravo,
+          bravo.item == page.rows[1].item,
+          bravo.canonical.map(\.typeIdentifier) == [textType],
+          bravo.canonical.map(\.bytes) == [Data(bravoText.utf8)],
+          bravo.effective == bravo.canonical,
+          bravo.revisions.isEmpty,
+          bravo.occurrence.firstCopiedAt == bravoDate,
+          bravo.occurrence.lastCopiedAt == bravoDate,
+          bravo.occurrence.count == 1,
+          bravo.occurrence.firstSource == bravoSource,
+          bravo.occurrence.lastSource == bravoSource,
+          bravo.pinnedPosition == nil else {
+        throw ProbeFailure.unexpectedState
+    }
+}
+
+@main
+private struct HistoryRestartProbe {
+    static func main() async {
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        guard arguments.count == 2,
+              let phase = ProbePhase(rawValue: arguments[0]) else {
+            FileHandle.standardOutput.write(Data("USAGE\n".utf8))
+            exit(EXIT_FAILURE)
+        }
+
+        do {
+            let storeURL = URL(fileURLWithPath: arguments[1])
+            switch phase {
+            case .seed:
+                try await seed(storeURL: storeURL)
+            case .operate:
+                try await operate(storeURL: storeURL)
+            case .verify:
+                try await verify(storeURL: storeURL)
+            }
+            FileHandle.standardOutput.write(Data("\(phase.rawValue.uppercased())_OK\n".utf8))
+            exit(EXIT_SUCCESS)
+        } catch {
+            FileHandle.standardOutput.write(Data("\(phase.rawValue.uppercased())_FAIL\n".utf8))
+            exit(EXIT_FAILURE)
+        }
+    }
+}

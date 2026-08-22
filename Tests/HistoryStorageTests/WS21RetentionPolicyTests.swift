@@ -268,7 +268,7 @@ struct WS21RetentionPolicyTests {
     }
 
     // Pin the oldest item at the front of the pinned lane (03a §5 `.first`):
-    // with a single pinned row the lane is exactly 0 ..< 1 (05 §13 step 9,
+    // with a single pinned row the lane is exactly 0 ..< 1 (05 §13 step 10,
     // D12), so its ordinal is 0.
     let pinReceipt = try await history.perform(.placePinned(pinnedReference.id, at: .first))
     guard case let .committed(pinCommit) = pinReceipt else {

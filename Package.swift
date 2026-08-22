@@ -65,6 +65,10 @@ let package = Package(
             // (docs/06-cross-cutting.md §9; V1-Verified/04).
             dependencies: ["HistoryCore", "HistoryStorage"]
         ),
+        .executableTarget(
+            name: "HistoryRestartProbe",
+            dependencies: ["HistoryCore", "HistoryStorage"]
+        ),
         .testTarget(
             name: "HistoryCoreTests",
             dependencies: ["HistoryCore"],
@@ -86,6 +90,11 @@ let package = Package(
                 // `swift test` builds that executable even without a prior
                 // `swift build`.
                 .target(name: "HistoryPerfRunner"),
+                // Evidence Card 1C-1 runs three short-lived probe processes.
+                // This build edge guarantees `.build/debug/HistoryRestartProbe`
+                // exists before the test launches it directly; never nest a
+                // second SwiftPM process inside `swift test`.
+                .target(name: "HistoryRestartProbe"),
             ]
         ),
         .testTarget(

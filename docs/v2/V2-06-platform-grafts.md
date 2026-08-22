@@ -160,8 +160,6 @@ internal final class StartupCheckpointRow {
     var key: String                     // always "signature-index"
 
     var positionRaw: UInt64             // ChangePosition at which indexBlob was captured
-    var retainedCount: Int              // retained item count at capture (diagnostic; fast path uses positionRaw only)
-    var signatureSetHash: UInt64        // xxh3-64 over the sorted signature set (diagnostic slow-path integrity; §3.5)
     var indexCodecVersion: UInt16       // SignatureIndexBlob codec version (currently 1)
     var signatureSchemaVersion: UInt16  // the SignatureIndex structural schema (posting shape); a bump invalidates all checkpoints
 
@@ -176,8 +174,6 @@ Semantic mapping:
 |---|---|
 | `key` | Singleton anchor (`@Attribute(.unique)`); exactly one row, validated on open exactly as v1 validates `LastChangePositionRow` (`05` §3.2). |
 | `positionRaw` | The `ChangePosition` captured **with** the index. The fast-path unchanged-detector (§3.3): `checkpoint.positionRaw == currentDurablePosition` ⟹ no History Commit since capture ⟹ Signature set identical ⟹ index reusable. |
-| `retainedCount` | Diagnostic only. Not consulted on the fast path (it is implied by position equality); recorded so a slow-path audit can detect count/hash divergence. |
-| `signatureSetHash` | xxh3-64 over the sorted `(HistoryItemID, signature entries)` set, computed once at checkpoint write. **Not** recomputed on the fast path (doing so would require the O(retained) scan P1 exists to avoid). Used as a slow-path/audit integrity check and is recomputed whenever a rebuild occurs (§3.5). |
 | `indexCodecVersion` | The `SignatureIndexBlob` codec version. A bump (codec shape change) invalidates every prior checkpoint — a stale `indexCodecVersion` forces a rebuild (D37). |
 | `signatureSchemaVersion` | The Signature Index *structural* schema (posting representation). A bump invalidates every prior checkpoint independently of the blob codec. |
 | `indexBlob` | The serialized Signature Index (`SignatureIndexBlobV1`). `.externalStorage` is a storage hint only (`01` §10, `05` §3.1); correctness does not depend on it. |
@@ -234,15 +230,19 @@ gate (`P1-PLATFORM-3`).
 
 ### 3.3 Startup data flow (reuse path vs rebuild path)
 
-v1 startup (`05` §13) is **unchanged in the rebuild path**; P1 adds a reuse fast
-path that, when it fails, falls back to the exact v1 sequence. `open` performs:
+Current startup (`05` §13) keeps its recipe-v2 rebuild and version fence on
+both paths; P1 adds a Signature Index reuse fast path that, when it fails,
+falls back to the exact current signature rebuild. `open` performs:
 
 ```text
 validate configuration and hard limits                                          [v1 §13 step 1]
 open/create the ModelContainer                                                   [v1 §13 step 2]
 enter HistoryAuthority; create the position singleton at 0 if a new store        [v1 §13 step 3]
 validate exactly one position singleton                                          [v1 §13 step 4]
-validate retained row count ≤ hard bound                                         [v1 §13 step 5]
+bootstrap/validate the retention-expansion config singleton                      [current §13 step 5]
+rebuild every projection-schema-v1 row to recipe v2 in one transaction           [current §13 step 6]
+validate retained row count ≤ hard bound; fetch ID/version/projection/pin scalars [current §13 step 7]
+require projection schema version 2                                              [current §13 step 8]
 P1 FAST PATH (new, all inside one non-suspending Authority interval):
   fetch LastChangePositionRow.rawValue  -> currentPosition (O(1) scalar)         [v1 §13 reads the singleton]
   fetch StartupCheckpointRow by key     -> checkpoint?   (O(1) scalar + lazy blob)
@@ -256,25 +256,23 @@ P1 FAST PATH (new, all inside one non-suspending Authority interval):
      mark SignatureIndex state .ready (the v1 State type is
      unchanged - 05 §7.1: no generation counter; freshness is
      proved by positionRaw == currentPosition above)
-     -> REUSE SUCCEEDED (skip v1 §13 steps 6–8 signature fetch/decode/posting-build)
-P1 REBUILD PATH (== v1 §13 steps 6–8, byte-for-byte, on any fast-path miss):
-  fetch each row's business ID, nonzero ContentVersion, projection schema version, pin ordinal, signature metadata
-  require projection schema version 1 for the greenfield v1 schema
+     -> REUSE SUCCEEDED (skip current §13 step 9 signature fetch/decode/posting-build)
+P1 REBUILD PATH (== current §13 step 9, on any fast-path miss):
+  fetch each row's signature metadata after the recipe-v2 fence
   decode/validate signatures and build the complete index
-v1 §13 step 9 (validate the full pinned ordinal set from scalar fields)           [unchanged — always runs; cheap, scalar]
+current §13 step 10 (validate the full pinned ordinal set from scalar fields)     [unchanged — always runs; cheap, scalar]
+current §13 step 11 (RetainedBytes correspondence/scalar validation)              [unchanged — always runs]
 P1 CHECKPOINT WRITE (new; only after a successful rebuild — a successful reuse
                      implies the row already exists and is current at currentPosition, so no
                      write occurs on the reuse path):
   serialize the in-memory SignatureIndex -> SignatureIndexBlobV1
-  compute signatureSetHash (xxh3 over sorted postings; diagnostic)
   upsert StartupCheckpointRow - update the existing uniquely-keyed row,
     insert only when absent - { positionRaw: currentPosition,
-    retainedCount, signatureSetHash, indexCodecVersion,
-    signatureSchemaVersion, indexBlob }
+    indexCodecVersion, signatureSchemaVersion, indexBlob }
     in a separate ModelContext.transaction that writes only StartupCheckpointRow
     (during startup no History Commit is open; the write advances no ChangePosition
     and yields no HistoryInvalidation; §3.6)
-v1 §13 step 10 (publish the SwiftDataHistory facade)                              [unchanged]
+current §13 step 12 (publish the SwiftDataHistory facade)                         [unchanged]
 ```
 
 **Why `positionRaw == currentPosition` is a sound unchanged-detector.** Every
@@ -297,10 +295,10 @@ when in doubt (D37).
 
 **What the reuse path skips.** The v1 rebuild's p95 cost at 5,000 items is the
 per-row signature-metadata fetch and `SignatureBlobV1` decode + posting
-construction (`05` §13 steps 6–8; `06` §9 "Index rebuild is O(retained signature
+construction (`05` §13 step 9; `06` §9 "Index rebuild is O(retained signature
 metadata)"). The reuse path replaces that with one singleton read + one
 checkpoint-row scalar read + one bounded `indexBlob` decode + an in-memory
-posting reconstruction. It still performs v1 step 9 (pin-order validation from
+posting reconstruction. It still performs current step 10 (pin-order validation from
 scalars — cheap, and required for correctness independent of the index). It does
 not decode Canonical or revision blobs (Part VI §7.5 preserved; `P1-PLATFORM-2`).
 
@@ -322,7 +320,7 @@ This mirrors v1 (`.memory` changes durability medium only; `05` §2).
   availability, never browse/detail/paste correctness (`05` §12). A reused
   `.ready` index satisfies capture's `Require Signature Index state .ready`
   gate (`05` §7.1 step 1) exactly as a rebuilt one does.
-- **Pin order is still validated.** v1 step 9 runs unconditionally on both
+- **Pin order is still validated.** Current step 10 runs unconditionally on both
   paths; a reused index never bypasses pin-order validation.
 - **The checkpoint is not a second persistence authority.** It is an actor-owned
   cached value materialized to disk, exactly as the in-memory Signature Index is
@@ -349,24 +347,12 @@ recoverable from durable rows alone, and P1 never weakens that. Formally:
   optimization miss, recovered transparently by rebuild. Only a corrupt *store*
   (the rebuild path failing v1 `05` §13/§4 checks) fails `open` as
   `.persistence(.corruptStoredValue)` / `.invariantViolation`, exactly as v1.
-- **Diagnostic slow-path audit.** Whenever the rebuild path runs, the Authority
-  recomputes `signatureSetHash` over the rebuilt postings and compares it to the
-  (stale) checkpoint's hash if one exists. A mismatch is logged internally as a
-  checkpoint/store divergence diagnostic (it implies the store was edited
-  outside `HistoryAuthority`, which v1's single-writer model forbids, `00` §3.3);
-  it never affects correctness because the rebuild result is authoritative. The
-  hash is **never** consulted on the fast path (it would require the O(retained)
-  scan P1 exists to avoid). **Threat-model boundary (P1 honesty):** the
-  diagnostic runs *only on the rebuild path*; the fast path computes no hash.
-  P1's correctness is therefore conditional on v1's single-writer invariant
-  (`00` §3.3): an out-of-band edit that mutates retained rows or their signature
-  blobs *without* advancing `ChangePosition` would be served stale on the fast
-  path **and** would escape the `signatureSetHash` diagnostic (which fires only
-  on rebuild). v1's single-writer model is the preventive control; P1 adds no
-  new detection on the fast path by design (any such detection would repeat the
-  O(retained) scan P1 exists to avoid). Additionally, `signatureSetHash` is
-  xxh3-64 — evidence, not identity (D7) — so the diagnostic can false-negative by
-  collision; it is a best-effort audit, not a guarantee.
+- **Threat-model boundary (P1 honesty).** P1 correctness is conditional on the
+  single-writer invariant (`00` §3.3): an out-of-band edit that mutates retained
+  rows or signature blobs without advancing `ChangePosition` could be served
+  stale on the fast path. The single-writer boundary is the preventive control;
+  P1 adds no diagnostic hash or second O(retained) audit that would duplicate
+  the rebuild it exists to avoid.
 - **Crash safety.** The checkpoint is written in a separate transaction after a
   successful rebuild (never on the reuse path - the row is already current)
   and before `open` returns (§3.6). A crash before the
@@ -396,14 +382,13 @@ internal extension HistoryAuthority {
     /// ChangePosition; yields no HistoryInvalidation.
     func writeStartupCheckpoint(
         position: ChangePosition,
-        retainedCount: Int,
         index: SignatureIndex
     ) async throws
 }
 ```
 
 `writeStartupCheckpoint` runs **after a successful rebuild** and **before**
-`open` publishes the facade (v1 `05` §13 step 10). It is a separate
+`open` publishes the facade (`05` §13 step 12). It is a separate
 `ModelContext.transaction` that writes only `StartupCheckpointRow`. It touches
 neither `HistoryItemRow` nor `LastChangePositionRow`, advances no
 `ChangePosition`, and yields no `HistoryInvalidation` (it is not a History
@@ -1514,22 +1499,18 @@ WS14 alone does not prove the full cache law.
 
 **Record 5 — Migration impact.** Layer 1 (SwiftData schema): add the
 `StartupCheckpointRow` table (additive, lightweight). Layers 2/3 untouched.
-First open after migration rebuilds and writes the first checkpoint. No blob
-change, no `ContentVersion` change, no projection rebuild; no capture is enabled
-before Signature Index completeness (the reuse path serves a proved-complete
-index or rebuilds, §3.4).
+First open after migration rebuilds and writes the first checkpoint. P1 adds no
+projection rebuild beyond the current §13 recipe-v2 step and changes no
+`ContentVersion`; no capture is enabled before Signature Index completeness
+(the reuse path serves a proved-complete index or rebuilds, §3.4).
 
 **Record 6 — Security boundary.** P1 is **not external-facing**. The checkpoint
-is internal; no TCC/sandbox/entitlement impact. The `signatureSetHash` diagnostic
-detects (does not prevent) out-of-band store edits; v1's single-writer model
-(`00` §3.3) is the preventive control. **Threat-model boundary (Lens A):** the
-diagnostic runs *only on the rebuild path* — the fast path computes no hash — so
-an out-of-band edit that mutates retained rows or signature blobs without
-advancing `ChangePosition` would be served stale on the fast path **and** would
-escape the `signatureSetHash` diagnostic. P1's correctness is therefore
-conditional on v1's single-writer invariant; the diagnostic is a best-effort
-audit (xxh3-64 evidence per D7, can false-negative by collision), not a
-guarantee.
+is internal; no TCC/sandbox/entitlement impact. P1 correctness is conditional
+on v1's single-writer invariant (`00` §3.3): an out-of-band edit that mutates
+retained rows or signature blobs without advancing `ChangePosition` could be
+served stale on the fast path. P1 intentionally adds no diagnostic hash or
+duplicate O(retained) audit; the single-writer boundary remains the preventive
+control.
 
 ### 7.2 P2 — locale-sensitive exact search
 

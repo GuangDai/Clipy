@@ -330,14 +330,24 @@ singleton" statements. Step numbers cite the v1 `05` §13 steps they extend.
    present → validate `configSchemaVersion == 1`, `ageMaxSeconds`
    finiteness (DC-21), and non-contradictory combinations (V2-02 §3.3);
    duplicates or violations fail closed before any write path opens;
-6. validate retained row count does not exceed the hard bound;
-   *(05 §13 step 5)*
-7. fetch each row's scalar projection metadata (business ID, nonzero
+6. rebuild every projection-schema-v1 row to recipe v2 from validated
+   Canonical/revision Effective Content in one bounded transaction; accept
+   only tags 1 and 2, and publish no partial replacement on failure;
+   *(05 §13 step 6; this is a derived-projection rebuild, not a SwiftData
+   schema stage)*
+7. validate retained row count does not exceed the hard bound, then fetch
+   each row's scalar projection metadata (business ID, nonzero
    Content Version, projection schema version, pin ordinal, signature
-   metadata) **and** the `RetainedBytesRow` 1:1 correspondence both
-   directions with `bytesSchemaVersion == 1` (`RET-PLATFORM-1b(a)`); a
-   fresh store holds this vacuously (zero items; rows arrive via the
-   capture-insert stamping); *(extends 05 §13 step 6. Sequencing: the
+   metadata); *(05 §13 step 7)*
+8. require projection schema version 2; *(05 §13 step 8)*
+9. decode/validate signatures and build the complete index;
+   *(05 §13 step 9)*
+10. validate the full pinned ordinal set from scalar fields;
+    *(05 §13 step 10)*
+11. enforce the `RetainedBytesRow` 1:1 correspondence both directions with
+   `bytesSchemaVersion == 1` and valid scalar relations
+   (`RET-PLATFORM-1b(a)`); a fresh store holds this vacuously (zero items;
+   rows arrive via capture-insert stamping). *(05 §13 step 11. Sequencing: the
    runtime 1:1 existence check is enforced from slice R.3, when projection
    stamping on create/append/prune/delete exists — before R.3, capture
    creates items without rows, so an unconditional check would fail every
@@ -348,19 +358,14 @@ singleton" statements. Step numbers cite the v1 `05` §13 steps they extend.
    two phases — a missing-rows-only RECOVERY that re-runs the idempotent
    backfill once (`V2-02` Record 5 "Interruption recovery"), then the
    strict both-directions validation; orphans/duplicates/version
-   mismatches never recover.)*
-8. require projection schema version 1 for the v1 projections;
-   *(05 §13 step 7)*
-9. decode/validate signatures and build the complete index;
-   *(05 §13 step 8)*
-10. validate the full pinned ordinal set from scalar fields;
-    *(05 §13 step 9)*
-11. publish the constructed `SwiftDataHistory` facade. *(05 §13 step 10)*
+   mismatches and invalid scalar relations never recover.)*
+12. publish the constructed `SwiftDataHistory` facade. *(05 §13 step 12)*
 
-The v1 invariant "startup does not decode Canonical/revision bytes merely to
-build the index" (`05` §13) is unchanged: the only full-blob decodes at open
-are the migration backfill's one-per-item pass (step 2, migrated stores
-only), which is the projection rebuild, not the index build.
+The invariant "startup does not decode Canonical/revision bytes merely to
+build the index" (`05` §13) is unchanged. Full-blob decodes at open belong to
+the V1→V2 migration backfill (step 2, migrated stores only) or the explicit
+legacy projection-recipe rebuild (step 6); the index build itself remains
+scalar/signature-only.
 
 ## 6. V2-02 — retention expansion (R1/R2/R3)
 

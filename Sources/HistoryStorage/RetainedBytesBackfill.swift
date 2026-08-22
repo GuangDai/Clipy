@@ -1,8 +1,8 @@
 /// M1.4 — the one-time `RetainedBytesRow` projection-rebuild backfill.
-/// Owning spec: `V2-02` Record 5 (projection layer: "For each existing
-/// `HistoryItemRow` (<= 5,000, `06` §2), the stage decodes its
-/// `canonicalSignatureBlob` (envelope only, no Canonical content) and
-/// `revisionStateBlob` once and writes the 1:1 `RetainedBytesRow`"),
+/// Owning spec: `V2-02` Record 5 (the projection layer decodes each existing
+/// item's `canonicalSignatureBlob` and `revisionStateBlob` once and writes
+/// the 1:1 `RetainedBytesRow`), plus DATA-11's required companion Canonical
+/// decode and bidirectional signature-coverage check (`05` §4),
 /// `RET-PLATFORM-1b` (the (a)–(e) migration proof gates), §3.3b/§3.2 (the
 /// representation-byte measure), and DC-02 (`V2-02` §3.3 Stage topology: the
 /// backfill runs as the single custom hop's `didMigrate`, after the additive
@@ -94,11 +94,12 @@ internal enum RetainedBytesBackfill {
     /// Rebuilds the `RetainedBytesRow` projection for EVERY retained
     /// `HistoryItemRow` (≤ 5,000, `06` §2) in `context`:
     ///
-    /// - `canonicalBytes` — the sum of the decoded
+    /// - `canonicalBytes` — the sum of the decoded and coverage-validated
     ///   `canonicalSignatureBlob` entries' `StoredSignatureEntryV1.byteCount`
-    ///   (`V2-02` §3.2/§3.3b; `05` §4). The signature decode is envelope
-    ///   only — no Canonical content and no fingerprint/coverage check runs
-    ///   here (`05` §13's index-build decode discipline).
+    ///   (`V2-02` §3.2/§3.3b; `05` §4). The Canonical blob already needed by
+    ///   revision containment also proves the signature list's bidirectional
+    ///   type/fingerprint/byte-count coverage before any projection scalar is
+    ///   accepted (DATA-11 / `05` §4).
     /// - `revisionCount` — the count of stored revisions.
     /// - `revisionBytes` — the sum of stored-revision representation bytes
     ///   (`V2-02` §3.2: "revision content bytes (the sum of stored-revision
@@ -180,23 +181,31 @@ internal enum RetainedBytesBackfill {
         var computed: [ComputedBytes] = []
         computed.reserveCapacity(items.count)
         for item in items {
-            // canonicalBytes: the signature envelope's stored per-entry byte
-            // counts (StoredSignatureEntryV1.byteCount via the validated
-            // decode), never the JSON framing of the blob itself.
+            // Decode both durable copies before deriving a scalar. The
+            // Canonical decode is also required by revision containment, so
+            // DATA-11's coverage proof adds no blob read or second decode.
             let signatureEntries = try mapCodecFailure {
                 try SignatureBlobCodec.decode(item.canonicalSignatureBlob)
             }
+            let canonical = try mapCodecFailure {
+                try CanonicalBlobCodec.decode(item.canonicalBlob)
+            }
+            try mapCodecFailure {
+                try SignatureBlobCodec.validateCoverage(
+                    canonical: canonical,
+                    entries: signatureEntries
+                )
+            }
+
+            // canonicalBytes: coverage-validated stored per-entry byte
+            // counts, never the JSON framing of either blob.
             var canonicalBytes = 0
             for entry in signatureEntries {
                 canonicalBytes += entry.byteCount
             }
 
             // The revision decode requires the Canonical type set for its
-            // §4 containment check, so the Canonical blob is decoded first
-            // (one decode per blob, Record 5).
-            let canonical = try mapCodecFailure {
-                try CanonicalBlobCodec.decode(item.canonicalBlob)
-            }
+            // §4 containment check (one decode per blob, Record 5).
             let revisionState = try mapCodecFailure {
                 try RevisionStateBlobCodec.decode(
                     item.revisionStateBlob,

@@ -56,33 +56,44 @@ public struct HistoryListView: View {
     }
 
     public var body: some View {
-        content
-            .background { selectionShortcuts }
+        // Minute precision is the owning UX decision for relative metadata.
+        // One list-owned timeline supplies the same minute-boundary instant
+        // to every visible row. `.everyMinute` performs an immediate render
+        // and then advances at wall-clock minute boundaries; rows do not own
+        // timers, and no process-global clock service is introduced.
+        TimelineView(.everyMinute) { timeline in
+            content(now: timeline.date)
+                .background { selectionShortcuts }
+        }
     }
 
     @ViewBuilder
-    private var content: some View {
+    private func content(now: Date) -> some View {
         if viewState.rows.isEmpty {
             emptyState
         } else {
-            list
+            list(now: now)
         }
     }
 
     // MARK: List
 
-    private var list: some View {
+    private func list(now: Date) -> some View {
         List(selection: selection) {
             if !viewState.pinnedRows.isEmpty {
                 Section("Pinned") {
                     ForEach(viewState.pinnedRows, id: \.item.id) { row in
-                        rowContent(row, pinnedOrdinal: (row.pinnedPosition ?? 0) + 1)
+                        rowContent(
+                            row,
+                            now: now,
+                            pinnedOrdinal: (row.pinnedPosition ?? 0) + 1
+                        )
                     }
                 }
             }
             Section("Recent") {
                 ForEach(viewState.unpinnedRows, id: \.item.id) { row in
-                    rowContent(row, pinnedOrdinal: nil)
+                    rowContent(row, now: now, pinnedOrdinal: nil)
                 }
                 if viewState.isLoadingPage {
                     loadingRow
@@ -93,9 +104,14 @@ public struct HistoryListView: View {
         .scrollContentBackground(.hidden)
     }
 
-    private func rowContent(_ row: HistoryRow, pinnedOrdinal: Int?) -> some View {
+    private func rowContent(
+        _ row: HistoryRow,
+        now: Date,
+        pinnedOrdinal: Int?
+    ) -> some View {
         HistoryRowView(
             row: row,
+            now: now,
             pinnedOrdinal: pinnedOrdinal,
             thumbnails: thumbnails,
             onCopy: { viewState.requestPasteFromDisplayedRow($0) },

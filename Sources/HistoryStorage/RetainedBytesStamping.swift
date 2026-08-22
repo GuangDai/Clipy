@@ -17,7 +17,7 @@
 /// missing row is corruption, "never ... a zero-byte read"); roadmap:
 /// `V2-roadmap` §6 R.3 ("maintain the 1:1 scalar projection on create,
 /// append, prune, and delete even while policies are disabled") and §5
-/// total open order step 7 (`RET-PLATFORM-1b(a)`, "enforced from slice
+/// total open order step 11 (`RET-PLATFORM-1b(a)`, "enforced from slice
 /// R.3").
 ///
 /// Boundary (roadmap R.3/R.4): this file owns projection maintenance ONLY.
@@ -278,7 +278,7 @@ internal enum RetainedBytesStamping {
         return byItem
     }
 
-    // MARK: Startup 1:1 check (V2-roadmap §5 total open order step 7)
+    // MARK: Startup 1:1 check (V2-roadmap §5 total open order step 11)
 
     /// The runtime `RET-PLATFORM-1b(a)` check, live from slice R.3
     /// (`V2-roadmap` §5 step-7 sequencing note: before R.3, capture creates
@@ -286,8 +286,9 @@ internal enum RetainedBytesStamping {
     /// capture-created item; R.3's lifecycle stamping is what makes the
     /// check enforceable): after the v1 scalar scan, every retained item has
     /// exactly one `RetainedBytesRow`, every row names a retained item
-    /// (both directions), and every `bytesSchemaVersion == 1` — the
-    /// projection-coherence fence (`V2-02` §3.3b). A fresh store holds the
+    /// (both directions), every `bytesSchemaVersion == 1`, and every scalar
+    /// value/relation satisfies the same validated-value contract used by
+    /// retention planning (`V2-02` §3.3b; DATA-2). A fresh store holds the
     /// correspondence vacuously (zero items; rows arrive via the
     /// capture-insert stamping).
     ///
@@ -296,7 +297,7 @@ internal enum RetainedBytesStamping {
     ///
     /// - Phase (i) RECOVERY: a correspondence incomplete ONLY in the
     ///   missing-rows direction — every existing row names a retained item
-    ///   and carries `bytesSchemaVersion == 1`, but some retained item
+    ///   and carries a valid version and scalar set, but some retained item
     ///   lacks its row — is the one producible interrupted-migration shape.
     ///   SwiftData stamps the store's schema version before (or
     ///   independently of) the custom stage's `didMigrate` data work
@@ -311,10 +312,10 @@ internal enum RetainedBytesStamping {
     ///   new writer; the same sanctioned context that creates the position
     ///   singleton — and re-reads the correspondence.
     /// - Phase (ii) STRICT VALIDATION: any violation that remains — missing
-    ///   rows after recovery, an orphan row, or a version mismatch — fails
-    ///   closed `.persistence(.invariantViolation)` ("row existence is the
-    ///   migration invariant ... never ... a zero-byte read", `V2-02`
-    ///   §3.2). Orphans and version mismatches NEVER recover: the backfill
+    ///   rows after recovery, an orphan row, or an invalid version/scalar —
+    ///   fails closed `.persistence(.invariantViolation)` ("row existence is
+    ///   the migration invariant ... never ... a zero-byte read", `V2-02`
+    ///   §3.2). Orphans and invalid present rows NEVER recover: the backfill
     ///   writes only complete rows for retained items, so neither is a
     ///   producible interruption shape.
     ///
@@ -385,22 +386,28 @@ internal enum RetainedBytesStamping {
     }
 
     /// One strict row-side read of the correspondence: fetches every
-    /// `RetainedBytesRow`'s identity fields under the hard-bound guard and
-    /// returns the validated row item-ID set (the shared read of phases (i)
-    /// and (ii) above). Per-row failures — an unknown `bytesSchemaVersion`,
-    /// a duplicate business ID, or an orphan naming no retained item — fail
-    /// closed `.persistence(.invariantViolation)` and are NEVER
-    /// recoverable: the backfill writes only complete rows for retained
-    /// items, so none of them is a producible interruption shape (amended
-    /// Record 5). A store that cannot be read fails as
-    /// `.persistence(.openStore)` (§2).
+    /// `RetainedBytesRow`'s identity and scalar fields under the hard-bound
+    /// guard and returns the validated row item-ID set (the shared read of
+    /// phases (i) and (ii) above). Per-row failures — an unknown
+    /// `bytesSchemaVersion`, an impossible scalar value/relation, a duplicate
+    /// business ID, or an orphan naming no retained item — fail closed
+    /// `.persistence(.invariantViolation)` and are NEVER recoverable: the
+    /// backfill writes only complete rows for retained items, so none of them
+    /// is a producible interruption shape (amended Record 5). A store that
+    /// cannot be read fails as `.persistence(.openStore)` (§2).
     private static func fetchedValidatedRowItemIDs(
         in context: ModelContext,
         limits: HistoryLimits,
         itemIDs: Set<UUID>
     ) throws -> Set<UUID> {
         var rowsDescriptor = FetchDescriptor<RetainedBytesRow>()
-        rowsDescriptor.propertiesToFetch = [\.itemID, \.bytesSchemaVersion]
+        rowsDescriptor.propertiesToFetch = [
+            \.itemID,
+            \.canonicalBytes,
+            \.revisionCount,
+            \.revisionBytes,
+            \.bytesSchemaVersion
+        ]
         // A store satisfying 1:1 cannot hold more projection rows than the
         // hard retained-item bound; one past it proves corruption without
         // fetching the rest.
@@ -416,11 +423,17 @@ internal enum RetainedBytesStamping {
         }
         var rowItemIDs = Set<UUID>(minimumCapacity: rows.count)
         for row in rows {
-            // The version fence (V2-02 §3.3b): an unknown projection version
-            // is never read as a possibly-correct byte fact.
-            guard row.bytesSchemaVersion == bytesSchemaVersion else {
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
+            // Validate every PRESENT row before deciding that any missing
+            // rows form the recoverable interrupted-migration shape. This is
+            // the same scalar-only value factory destructive planning uses;
+            // no Canonical/revision blob is fetched or compared (DATA-2).
+            _ = try ValidatedRetainedBytesScalars.validating(
+                canonicalBytes: row.canonicalBytes,
+                revisionCount: row.revisionCount,
+                revisionBytes: row.revisionBytes,
+                bytesSchemaVersion: row.bytesSchemaVersion,
+                limits: limits
+            )
             // The `.unique` attribute plus the single-writer rule make a
             // duplicate business ID impossible through public behavior; an
             // overwrite in the set would itself prove one.

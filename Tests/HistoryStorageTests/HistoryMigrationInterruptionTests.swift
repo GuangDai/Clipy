@@ -203,7 +203,7 @@ struct HistoryMigrationInterruptionTests {
         }
 
         // 3. The interrupted store RE-OPENS through the complete public
-        //    open path (steps 1–10: the migration hop inside `ModelContainer`
+        //    open path (steps 1–12: the migration hop inside `ModelContainer`
         //    construction, then the Authority startup). The seam is disarmed
         //    in THIS process, so the engine-level re-run runs to completion.
         _ = try await SwiftDataHistory.open(

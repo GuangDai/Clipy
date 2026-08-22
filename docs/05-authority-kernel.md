@@ -53,7 +53,7 @@ public struct HistoryConfiguration: Sendable, Hashable {
 }
 ```
 
-`HistoryConfiguration` selects persistent or in-memory storage and the initial retention value for a new store. An existing store uses its durable singleton value; the public retention action changes it. `open` validates the initial value against Part VI's fixed range and always uses the fixed `HistoryLimits.standard` safety profile. It throws `HistoryFailure`: `.invalidInput(.invalidRetentionPolicy)` for an out-of-range `initialMaximumUnpinnedItems`, or `.persistence(.openStore)` / `.persistence(.corruptStoredValue)` / `.persistence(.invariantViolation)` for store-open or startup-corruption failures (Part V §13). `.memory` changes durability medium only; it uses the same Authority, planners, codecs, and transaction path.
+`HistoryConfiguration` selects persistent or in-memory storage and the initial retention value for a new store. An existing store uses its durable singleton value; the public retention action changes it. `open` validates the initial value against Part VI's fixed range and always uses the fixed `HistoryLimits.standard` safety profile. It throws `HistoryFailure`: `.invalidInput(.invalidRetentionPolicy)` for an out-of-range `initialMaximumUnpinnedItems`, or `.persistence(.openStore)` / `.persistence(.corruptStoredValue)` / `.persistence(.invariantViolation)` for store-open or startup-corruption failures (Part V §13). A projection-rebuild transaction or durable-commit failure is `.persistence(.transaction)` under §16's uniform transaction boundary. `.memory` changes durability medium only; it uses the same Authority, planners, codecs, and transaction path.
 
 Internal isolation:
 
@@ -223,7 +223,7 @@ Decode is not a blind memberwise conversion. It reconstructs Domain values throu
   copy count ≥1, monotone first/last copy time, and bounded source values;
 - a non-negative pin ordinal (negative is corruption);
 - the `effectiveTypeIdentifiersBlob` decodes to a sorted, unique, non-empty list of type identifiers at format version 1;
-- `projectionSchemaVersion` is exactly the v1 value, and the stored `title` (≤ 1,024 UTF-8 bytes) and `searchBody` (≤ 256 KiB) obey their Part VI bounds.
+- `projectionSchemaVersion` is exactly the current value (v2), and the stored `title` (≤ 1,024 UTF-8 bytes) and `searchBody` (≤ 256 KiB) obey their Part VI bounds. A v1 tag is accepted only by the bounded startup rebuild below; ordinary reads never consume v1 projection scalars.
 
 Projection checks live at the scalar boundary rather than inside a blob codec:
 startup validates every row's schema tag; recent browse validates the fetched
@@ -287,7 +287,7 @@ internal struct PreparedCaptureBundle: Sendable {
 }
 
 internal struct ContentProjection: Sendable {
-    let schemaVersion: UInt16       // v1 = 1
+    let schemaVersion: UInt16       // projection recipe v2 = 2
     let title: String
     let searchBody: String
     let effectiveTypeIdentifiers: [String]
@@ -599,19 +599,29 @@ same-interval proof, rather than an otherwise unread generation counter.
 `SwiftDataHistory.open` performs:
 
 1. validate configuration and hard limits;
-2. open/create the v1 `ModelContainer`;
+2. open/create the current V2 `ModelContainer` through the V1 → V2 migration plan;
 3. enter `HistoryAuthority` and create the singleton at position 0 if this is a new store;
 4. validate exactly one singleton;
-5. validate retained row count does not exceed the hard bound;
-6. fetch each row's business ID, nonzero Content Version, projection schema version, pin ordinal, and signature metadata;
-7. require projection schema version 1 for the greenfield v1 schema;
-8. decode/validate signatures and build the complete index;
-9. validate the full pinned ordinal set from scalar fields;
-10. publish the constructed `SwiftDataHistory` facade.
+5. bootstrap/validate the retention-expansion config singleton;
+6. derive every projection-schema-v1 replacement from validated Canonical/revision bytes, then stamp them as recipe v2 in one bounded transaction; an unknown tag, invalid source, or failed transaction fails open without publishing a partial rebuild;
+7. validate retained row count does not exceed the hard bound and fetch each row's business ID, nonzero Content Version, current projection schema version, pin ordinal, and signature metadata;
+8. require projection schema version 2;
+9. decode/validate signatures and build the complete index;
+10. validate the full pinned ordinal set from scalar fields;
+11. enforce the `RetainedBytesRow` 1:1 correspondence and scalar relation/version fence, including the one missing-rows-only recovery rerun;
+12. publish the constructed `SwiftDataHistory` facade.
 
-Startup does not decode Canonical/revision bytes merely to build the index. Whether the chosen SwiftData projection API truly avoids faulting those blobs is an implementation-time performance proof, not assumed prose. If the API cannot prove it, correctness remains intact but the startup performance claim must be weakened.
+Startup decodes Canonical/revision bytes only for rows carrying the legacy
+projection tag, before capture can be enabled. Once every row carries v2, the
+Signature Index build itself remains scalar/signature-only. Whether the chosen
+SwiftData projection API truly avoids faulting unrelated blobs is an
+implementation-time performance proof, not assumed prose. If the API cannot
+prove it, correctness remains intact but the startup performance claim must be
+weakened.
 
-Corrupt durable signature or pin metadata fails open rather than enabling writes from an unproved state. v1 has no silent repair/migration path for corrupted data.
+Corrupt durable signature or pin metadata fails open rather than enabling
+writes from an unproved state. The explicit v1-to-v2 derived-projection rebuild
+is not a silent or general repair path for corrupted data.
 
 ### 14. Read implementation
 
@@ -681,25 +691,40 @@ Both fetch exactly one row and decode/validate its full lineage. Detail maps it 
 
 - title: first eligible textual line after normalization, otherwise a stable type-based fallback;
 - search body: eligible textual representations in deterministic type order, normalized and truncated to the hard search-body bound;
-- textual decoding is type-strict: `public.utf16-plain-text` uses UTF-16 and every other frozen v1 textual type uses UTF-8; malformed bytes are skipped, never guessed through a fallback encoding;
+- textual decoding is type-strict under projection recipe v2: only
+  `public.utf8-plain-text` and `public.utf8-external-plain-text` use UTF-8,
+  and only `public.utf16-plain-text` uses UTF-16. `public.plain-text` has no
+  declared encoding; `public.text` is abstract; RTF and HTML are structured
+  formats. Those four families remain opaque and never enter title/search
+  through a guessed UTF-8 decode. Malformed bytes of an exact plain type are
+  skipped, never guessed through a fallback encoding;
 - effective type identifiers: sorted unique list;
 - image bytes are not decoded for title/search.
 
 Capture projection uses initial Effective Content. Revision projection uses the prepared proposed Effective Content. Copy Coalescing, pin, unpin, clear, removal, and retention do not recompute content projection.
 
-The v1 projector constructs the joined search body directly under that hard
+The projector constructs the joined search body directly under that hard
 UTF-8 bound; it does not materialize an unbounded concatenation and truncate it
 afterward. Read paths that need only a revision-summary title use the title-only
 projection and do not construct a search body.
 
-Projection schema changes require an explicit schema version and migration/rebuild plan. They never change Canonical Content, revisions, or Content Version by themselves; a projection-only migration is not a History Action and emits no user-visible commit.
+Projection schema changes require an explicit schema version and migration/rebuild plan. They never change Canonical Content, revisions, Content Version, or Change Position by themselves; a projection-only migration is not a History Action and emits no user-visible commit.
 
-The V1-Verified projector corrections land before Clipy's first product
-release or persistence-compatibility promise. They therefore remain
-projection schema v1 and require existing development stores to be reset;
-there is no deployed user store to migrate. After the first release, any
-change to textual decoding, normalization, title, or body derivation must
-increment the projection schema and ship an explicit migration/rebuild plan.
+Projection recipe v2 is the first such rebuild. `HistoryItemRow` already
+carries the consistency fence, so this is not a SwiftData schema change and
+does not add a schema-migration stage. During `SwiftDataHistory.open`, after
+singleton bootstrap and before Signature Index publication or capture, the
+Authority fetches at most the hard retained-item bound plus one, accepts only
+projection tags 1 and 2, then derives every v1 replacement from validated
+Canonical/revision bytes before entering one `ModelContext.transaction` that
+updates the title, search body, effective-type blob, and tag. Source decode
+failure, an unknown tag, or
+transaction failure leaves no partially published v2 set and fails the open.
+Ordinary reads accept only v2.
+
+Future changes to textual decoding, normalization, title, or body derivation
+must increment the projection schema again and ship an explicit bounded
+rebuild plan.
 
 ### 16. Failure translation
 

@@ -683,7 +683,7 @@ singletons, and before the facade is published:
 6. **D25 startup invariant check** (§9.1): `max(HCR.sequence) ==
    LastChangePositionRow.rawValue`, else journal rebase (§9.2);
 7. end of the V2-03 module segment of the single open order (`05` §13
-   steps 1-10, publication at step 10, composed per roadmap M1.3): the
+   steps 1-12, publication at step 12, composed per roadmap M1.3): the
    `ChangeJournal` reader and `CollectionCache` see the validated,
    consistent config - the facade itself is published once, after every
    admitted module's segment.

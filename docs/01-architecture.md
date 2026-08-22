@@ -19,6 +19,8 @@ HistoryDomain ─────────────→ HistoryCore
 
 HistoryPerfRunner ─────────→ HistoryCore + HistoryStorage
                              (proof executable; no shipped product surface)
+HistoryRestartProbe ───────→ HistoryCore + HistoryStorage
+                             (test-owned restart tracer; no shipped product surface)
 ```
 
 There is no `DomainCore` target. The few values that must appear in both the caller interface and Domain planning—`HistoryItemID`, `RevisionID`, `ContentVersion`, and `ChangePosition`—belong to `HistoryCore`. Everything else in `HistoryDomain` is `package` by default.
@@ -36,6 +38,7 @@ There is no `DomainCore` target. The few values that must appear in both the cal
 | `xxh3` | Package-internal C/ObjC++ sibling | 64-bit representation fingerprints | Item identity or final dedup decisions |
 | `Fuse` | External Swift library used internally | Threshold-based fuzzy matching inside `SearchWorker` | Public search score or cross-actor matcher state |
 | `HistoryPerfRunner` | Package executable, no product surface | Part VI §9 release-like workloads, machine metadata, and versioned fixtures | Caller APIs, alternate writers, production state, absolute-latency claims |
+| `HistoryRestartProbe` | Package executable target, no declared product | Evidence Card 1C-1 short-lived public-API restart phases | App lifecycle, alternate writers, production state, migration/kill claims |
 
 #### Access rules
 
@@ -184,6 +187,10 @@ The UI requests a thumbnail using `HistoryItemReference(id, contentVersion)` and
 - SwiftUI views, observable presentation state, selection, and window behavior.
 - No SwiftData context, row, or model identity.
 - No content fingerprinting, rich-text parsing, search scan, or image decode.
+- Relative copy-time labels use the system abbreviated formatter. One
+  list-owned wall-clock minute cadence supplies the same explicit `now` to
+  every row; an item-relative threshold may lag by less than one minute.
+  Individual rows do not own timers, and there is no global clock service.
 
 #### Background isolation
 

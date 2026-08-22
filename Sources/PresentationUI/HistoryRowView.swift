@@ -18,6 +18,7 @@ import SwiftUI
 /// the row never talks to storage itself (01 §6).
 public struct HistoryRowView: View {
     private let row: HistoryRow
+    private let rendering: HistoryRowRenderingModel
     private let pinnedOrdinal: Int?
     private let thumbnails: ThumbnailStore
     private let onCopy: (HistoryItemReference) -> Void
@@ -28,6 +29,7 @@ public struct HistoryRowView: View {
 
     public init(
         row: HistoryRow,
+        now: Date,
         pinnedOrdinal: Int?,
         thumbnails: ThumbnailStore,
         onCopy: @escaping (HistoryItemReference) -> Void,
@@ -37,6 +39,7 @@ public struct HistoryRowView: View {
         onShowDetails: @escaping (HistoryItemReference) -> Void
     ) {
         self.row = row
+        rendering = HistoryRowRenderingModel(row: row, now: now)
         self.pinnedOrdinal = pinnedOrdinal
         self.thumbnails = thumbnails
         self.onCopy = onCopy
@@ -159,7 +162,7 @@ public struct HistoryRowView: View {
 
     private var metadataColumn: some View {
         VStack(alignment: .trailing, spacing: 2) {
-            Text(relativeTimeText)
+            Text(rendering.relativeTimeText)
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if let source = sourceDisplayName {
@@ -176,13 +179,6 @@ public struct HistoryRowView: View {
                     .accessibilityLabel(copyAccessibilityLabel)
             }
         }
-    }
-
-    private var relativeTimeText: String {
-        RowFormatters.relativeTime.localizedString(
-            for: row.lastCopiedAt,
-            relativeTo: Date()
-        )
     }
 
     /// Plain-`String` rendering of the ×N count: `Text(_:)`'s
@@ -294,15 +290,27 @@ public struct HistoryRowView: View {
     }
 }
 
-/// Row-scoped formatter storage, main-actor confined: Foundation formatters
-/// are not Sendable, so they never cross an isolation boundary (01 §6).
+/// Deterministic row rendering at an explicitly supplied instant. The list
+/// owns the clock cadence and supplies one shared `now` to all rows; the row
+/// owns only formatting, so it never creates a timer or reaches for a global
+/// time service (review relative-time refresh leaf; 01 §6).
 @MainActor
-private enum RowFormatters {
-    static let relativeTime: RelativeDateTimeFormatter = {
+package struct HistoryRowRenderingModel {
+    package let relativeTimeText: String
+
+    package init(
+        row: HistoryRow,
+        now: Date,
+        locale: Locale = .current
+    ) {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
-        return formatter
-    }()
+        formatter.locale = locale
+        relativeTimeText = formatter.localizedString(
+            for: row.lastCopiedAt,
+            relativeTo: now
+        )
+    }
 }
 
 #Preview {
@@ -322,6 +330,7 @@ private enum RowFormatters {
     )
     return HistoryRowView(
         row: row,
+        now: Date(),
         pinnedOrdinal: 1,
         thumbnails: ThumbnailStore(history: PreviewClipboardHistory.populated),
         onCopy: { _ in },

@@ -190,7 +190,7 @@ internal extension HistoryAuthority {
     /// Orders the pinned lane by the full key `(pinOrdinal ascending)`.
     ///
     /// The pinned lane sorts by `pinOrdinal`, which is unique and contiguous
-    /// (D12, proved at startup §13 step 9), so no tie is possible and the
+    /// (D12, proved at startup §13 step 10), so no tie is possible and the
     /// small slice is ordered directly. A full slice (limit+1 rows) is still
     /// safe: `pinOrdinal` alone is a total order over the pinned set.
     func orderPinnedLane(
