@@ -1,12 +1,10 @@
 /// X.3 Gateway bootstrap (`V2-roadmap` §10 X.3; `V2-05` §4.6).
 ///
-/// This is deliberately only the deny-by-default startup slice. The current
-/// release has no Gateway writer or audit appender, so every open requires
-/// exactly one config row, exactly one matching active App Intents connection,
-/// and zero grant/audit rows. X.4 must replace the exact-zero audit rule with
-/// its complete row/counter validation in the same change that introduces the
-/// first audit writer. No hash or audit-chain validation belongs to this
-/// resolved schema.
+/// X.3's absent-store path remains the deny-by-default bootstrap. Existing X.4
+/// stores delegate bounded connection/grant validation to
+/// `GatewayAdministration` and retained audit validation to
+/// `GatewayAuditStore`. No hash or audit-chain validation belongs to this
+/// schema.
 import Foundation
 import HistoryCore
 import SwiftData
@@ -126,59 +124,13 @@ extension HistoryAuthority {
         guard config.configSchemaVersion == gatewayConfigSchemaVersion else {
             throw HistoryFailure.persistence(.corruptStoredValue)
         }
-        guard config.nextAuditSequence == 1,
-              config.auditBytes == 0,
-              config.compactionFloor == 1 else {
-            throw HistoryFailure.persistence(.invariantViolation)
-        }
-
-        var connectionDescriptor = FetchDescriptor<ConnectionRow>()
-        connectionDescriptor.fetchLimit = 2
-        let connections: [ConnectionRow]
-        do {
-            connections = try context.fetch(connectionDescriptor)
-        } catch {
-            throw HistoryFailure.persistence(.openStore)
-        }
-        guard connections.count == 1 else {
-            throw HistoryFailure.persistence(.invariantViolation)
-        }
-        let connection = connections[0]
-        guard connection.configSchemaVersion == gatewayConfigSchemaVersion else {
-            throw HistoryFailure.persistence(.corruptStoredValue)
-        }
-
-        guard let enrollKind = ConnectionEnrollKind(
-            rawValue: connection.enrollKindRaw
-        ), let status = ConnectionStatus(rawValue: connection.statusRaw) else {
-            throw HistoryFailure.persistence(.corruptStoredValue)
-        }
-        guard connection.id == config.appIntentsConnectionID,
-              enrollKind == .appIntents,
-              status == .active,
-              connection.revokedAt == nil else {
-            throw HistoryFailure.persistence(.invariantViolation)
-        }
-        guard connection.displayNameRaw.utf8.count
-                <= ExternalLimits.standard.maximumDisplayNameUTF8Bytes,
-              connection.displayNameRaw == gatewayConnectionDisplayName else {
-            throw HistoryFailure.persistence(.invariantViolation)
-        }
-
-        var grantDescriptor = FetchDescriptor<GrantRow>()
-        grantDescriptor.fetchLimit = 1
-        var operationDescriptor = FetchDescriptor<OperationRecordRow>()
-        operationDescriptor.fetchLimit = 1
-        do {
-            let grants = try context.fetch(grantDescriptor)
-            let operations = try context.fetch(operationDescriptor)
-            guard grants.isEmpty, operations.isEmpty else {
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
-        } catch let failure as HistoryFailure {
-            throw failure
-        } catch {
-            throw HistoryFailure.persistence(.openStore)
-        }
+        _ = try GatewayAdministration.loadCurrentState(
+            appIntentsConnectionID: config.appIntentsConnectionID,
+            in: context
+        )
+        try GatewayAuditStore.validateRetainedState(
+            config: config,
+            in: context
+        )
     }
 }

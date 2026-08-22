@@ -234,10 +234,12 @@ internal actor HistoryAuthority {
     /// only on the absent-config bootstrap path before the create transaction.
     internal let storageClock: any StorageClock
 
-    /// One-time durable App Intents connection identity source (`V2-05`
-    /// §4.6). It is internal initializer injection for deterministic X.3
-    /// tests only: production uses an explicit `{ UUID() }` closure, and neither public
-    /// `HistoryConfiguration` nor a global locator can override it.
+    /// Durable Gateway connection identity source (`V2-05` §4.1/§4.6).
+    /// X.3 consumes it once for the bootstrapped App Intents identity; X.4
+    /// consumes it once per admitted enrollment. It is internal initializer
+    /// injection for deterministic tests only: production uses an explicit
+    /// `{ UUID() }` closure, and neither public `HistoryConfiguration` nor a
+    /// global locator can override it.
     internal let gatewayConnectionIDSource: @Sendable () -> UUID
 
 #if DEBUG
@@ -269,7 +271,7 @@ internal actor HistoryAuthority {
     /// internal to `HistoryStorage`, defaulted to the production
     /// `SystemStorageClock` witness so no existing construction site
     /// changes, and never carried on the public `open` signature. The
-    /// `gatewayConnectionIDSource` is the parallel X.3 one-time value seam;
+    /// `gatewayConnectionIDSource` is the Gateway connection-ID value seam;
     /// production defaults to an explicit `{ UUID() }` Sendable closure.
     internal init(
         container: ModelContainer,

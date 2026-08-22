@@ -1075,20 +1075,34 @@ re-grant event history由audit records承载；**PLAY-PY-GW4** ordinary open面�
 state仍fail closed，而用户确认的recovery-only seam只能诊断/rebase/quarantine，不能读content或执行History
 mutation。无audit off-switch；不新增hash/chain或`GatewayConfigRow.generation`。
 
-### 当前 Gateway code leaf — roadmap `X.3`
+### 当前 Gateway code leaf — roadmap `X.4`
 
-X.3只实现新immutable `HistorySchemaV3`、四个Gateway/Audit models、fixed `ExternalLimits`与bootstrap/
-validation；绝不编辑已shipping `HistorySchemaV2`。Red按最小边界拆开：V2→V3 migration、raw/config范围、
-missing config + surviving dependent row fail-closed、bootstrap identity reopen稳定、以及config + active
-`Siri / Shortcuts / Spotlight` connection + zero grants/audit的exact shape。config与三类dependent tables
-全部为空时允许fresh/migration-compatible重建；它与未来V3 complete deletion同形，不能宣称可检测，也不加
-marker/hash。
+X.3 schema/bootstrap已落地。X.4的spec-first Red不再是OPEN：owning `V2-05` §4.4已冻结
+17个request tags、15个result tags、outcome/attribution compatibility和operation raws。raw 10只是
+revoke connection；raw 16/17/18/19分别revoke capability、connections read、grants read和audit
+read。三个admin read都是durable-before-release：先得immutable DTO/snapshot，再append audit，成功
+后才return；audit append失败必须throw且不发布content/DTO。audit read以append前的
+exclusive `snapshotHead`选页，自身record不能递归出现在返回页中。
 
-最低Green不实现`OperationPayloadBlobV1`或任何operation literal case；codec随X.4 atomic audit同批。
-同样不实现registry/admin、`ExternalGateway` actor、facade/factory、App Intents、CLI或transport。
-`GrantRow` schema冻结为每个connection/capability一条current-state row；`OperationRecordRow`与public DTO的
-connection/capability允许nil以诚实表达global rebase/compact/admin；`GatewayConfigRow`没有write-only
-`generation`。X.3只保证bootstrap/validation先于任何未来facade publication，本叶本身不publish facade。
+Red/Green按owner拆，但同一PR落地，避免一个incomplete codec被writer使用：
+
+1. **GW2-codec：** `OperationPayloadBlobV1Tests` table-drive全部request/result tag、raw/cross-field
+   mismatch、outcome compatibility、enroll pre-create nil attribution、search/no-content privacy；输入
+   `Data.count > 16 KiB`在parse前拒绝，encode亦不得越界。Green只新建
+   `OperationPayloadBlobV1.swift`，没有writer。
+2. **GW1-audit store：** `GatewayAuditStoreTests`先证mint+insert+counter、retained interval、
+   bounded read以及exact logical accounting。每行贡献`payloadBlob.count + 128`，startup重算
+   必须等于`auditBytes`；overflow/underflow/mismatch fail closed。这不是physical disk-byte claim。
+3. **GW3-admin：** `GatewayAdministrationTests`通过真实Authority transaction证enroll/grant/
+   revoke-connection/revoke-capability的distinct audit kind与同transaction behavior；re-grant只更新
+   同一current-state row。connections/grants/auditLog各有自己的read kind，绝不经generic admin。
+4. **GW1/GW4-maintenance/startup：** compaction marker+prefix trim+floor+logical-byte subtract在同一
+   transaction；X.3 zero-row startup rule与首个writer同时替换为full validation。ordinary open遇
+   corrupt retained interval仍fail closed。可单测internal rebase transaction和healthy-store
+   `.adminForced`，但X.4不增public recovery opener，不得声称ordinary-open拒绝的store已可恢复。
+
+X.4不实现`ExternalGateway` actor、facade/factory、App Intents、credential、CLI或transport；
+不新增hash/chain/request digest、generic payload或performance gate。
 
 ### PLAY-PY-B family（不可直接标记完成）— deny tracer，再做read-only tracer
 
@@ -1128,7 +1142,7 @@ grant、content、path、History ID或credential。
 
 ### PLAY-PY-D family（不可直接标记完成）— Effective-only content read
 
-**PLAY-PY-D1A [BLOCKED-DECISION]：**`DEC-PY-READ-AUDIT`批准后，Red：Original=A、current revision=B时，拥有`readEffectiveContent` grant且请求all types的
+**PLAY-PY-D1A：**`DEC-PY-READ-AUDIT`已冻结；Red：Original=A、current revision=B时，拥有`readEffectiveContent` grant且请求all types的
 caller只得到B的全部Effective representations；不得得到A、Canonical、revision list或occurrence。只有browse
 grant仍必须denied。**PLAY-PY-D1B**再冻结explicit selected exact types及missing-type结果；
 **PLAY-PY-D1C**冻结aggregate response cap：超限必须在binary release前typed `tooLarge`，不能partial、截断或
@@ -1136,8 +1150,8 @@ grant仍必须denied。**PLAY-PY-D1B**再冻结explicit selected exact types及m
 
 最低Green只做purpose-specific Effective read seam；不得先取完整`details`再在CLI丢字段。
 **PLAY-PY-D2** binary length-before-allocation、**PLAY-PY-D3** caller/CLI-owned output FD、
-**PLAY-PY-D4** partial cleanup、**PLAY-PY-D5 [BLOCKED-DECISION]** read-audit-contract（只测试获批的
-best-effort at-most-one或first-byte-before-durable-record其中一种）、**PLAY-PY-D6** half-frame、
+**PLAY-PY-D4** partial cleanup、**PLAY-PY-D5** mandatory audit-publication barrier（append失败不发布
+DTO/content；crash-after-audit-before-return允许留record）、**PLAY-PY-D6** half-frame、
 **PLAY-PY-D7** slow sender与**PLAY-PY-D8** timeout分别是一张Red，不合成巨型test。
 
 ### PLAY-PY-E family（不可直接标记完成）— write能力按风险逐项开放

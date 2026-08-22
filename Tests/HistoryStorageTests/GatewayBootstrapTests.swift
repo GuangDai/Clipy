@@ -40,17 +40,15 @@ struct GatewayBootstrapTests {
         case auditBytes
         case compactionFloor
         case missingConnection
-        case extraConnection
         case mismatchedConnectionIdentity
         case knownWrongEnrollKind
         case unknownEnrollKind
-        case knownWrongStatus
+        case revokedConnectionWithoutRevokedAt
         case unknownStatus
         case activeConnectionWithRevokedAt
         case displayNameMismatch
         case oversizedDisplayName
         case connectionVersion
-        case grantPresent
         case operationPresent
 
         var expectedFailure: HistoryFailure {
@@ -166,25 +164,15 @@ struct GatewayBootstrapTests {
             config.compactionFloor = 0
         case .missingConnection:
             context.delete(connection)
-        case .extraConnection:
-            context.insert(ConnectionRow(
-                id: UUID(),
-                displayNameRaw: "extra",
-                enrollKindRaw: ConnectionEnrollKind.localAutomation.rawValue,
-                statusRaw: ConnectionStatus.active.rawValue,
-                enrolledAt: connection.enrolledAt,
-                revokedAt: nil,
-                configSchemaVersion: 1
-            ))
         case .mismatchedConnectionIdentity:
             config.appIntentsConnectionID = UUID()
         case .knownWrongEnrollKind:
             connection.enrollKindRaw = ConnectionEnrollKind.localAutomation.rawValue
         case .unknownEnrollKind:
             connection.enrollKindRaw = 0
-        case .knownWrongStatus:
+        case .revokedConnectionWithoutRevokedAt:
             connection.statusRaw = ConnectionStatus.revoked.rawValue
-            connection.revokedAt = connection.enrolledAt
+            connection.revokedAt = nil
         case .unknownStatus:
             connection.statusRaw = 0
         case .activeConnectionWithRevokedAt:
@@ -195,8 +183,6 @@ struct GatewayBootstrapTests {
             connection.displayNameRaw = String(repeating: "a", count: 257)
         case .connectionVersion:
             connection.configSchemaVersion = 2
-        case .grantPresent:
-            insertGrant(in: context, connectionID: connection.id)
         case .operationPresent:
             insertOperation(in: context, connectionID: connection.id)
         }
@@ -249,6 +235,77 @@ struct GatewayBootstrapTests {
         #expect(config.appIntentsConnectionID == expectedConnectionID)
         #expect(connection.id == expectedConnectionID)
         #expect(connection.enrolledAt == expectedEnrolledAt)
+    }
+
+    @Test("a coherently revoked durable App Intents identity survives reopen")
+    func coherentlyRevokedDefaultIdentitySurvivesReopen() async throws {
+        let storeURL = WSSupport.tempStoreURL("gateway-revoked-reopen")
+        defer { WSSupport.removeStore(storeURL) }
+
+        try await Self.openPublicly(at: storeURL)
+        do {
+            let context = ModelContext(try Self.makePersistentContainer(
+                at: storeURL
+            ))
+            context.autosaveEnabled = false
+            let connection = try #require(
+                context.fetch(FetchDescriptor<ConnectionRow>()).first
+            )
+            connection.statusRaw = ConnectionStatus.revoked.rawValue
+            connection.revokedAt = connection.enrolledAt.addingTimeInterval(1)
+            try context.save()
+        }
+        let expected = try GatewayStoreSnapshot.read(from: storeURL)
+
+        try await Self.openPublicly(at: storeURL)
+
+        #expect(try GatewayStoreSnapshot.read(from: storeURL) == expected)
+    }
+
+    @Test("an existing valid X.4 audit interval survives public reopen")
+    func existingAuditIntervalSurvivesReopen() async throws {
+        let storeURL = WSSupport.tempStoreURL("gateway-audit-reopen")
+        defer { WSSupport.removeStore(storeURL) }
+
+        try await Self.openPublicly(at: storeURL)
+        do {
+            let context = ModelContext(try Self.makePersistentContainer(
+                at: storeURL
+            ))
+            context.autosaveEnabled = false
+            let config = try #require(
+                context.fetch(FetchDescriptor<GatewayConfigRow>()).first
+            )
+            let timestamp = Date(timeIntervalSinceReferenceDate: 800_000_200)
+            _ = try GatewayAuditStore.append(
+                OperationRecordPayload(
+                    connectionID: ExternalConnectionID(
+                        rawValue: config.appIntentsConnectionID
+                    ),
+                    capability: .browse,
+                    operationKind: .readRecent,
+                    outcome: .succeeded,
+                    failureKind: nil,
+                    denialReason: nil,
+                    requestSummary: .recent(limit: 1),
+                    resultSummary: .page(
+                        returnedCount: 0,
+                        hasMore: false
+                    ),
+                    requestedAt: timestamp,
+                    committedAt: timestamp,
+                    changePosition: nil
+                ),
+                config: config,
+                in: context
+            )
+            try context.save()
+        }
+        let expected = try GatewayStoreSnapshot.read(from: storeURL)
+
+        try await Self.openPublicly(at: storeURL)
+
+        #expect(try GatewayStoreSnapshot.read(from: storeURL) == expected)
     }
 
     @Test("every malformed bootstrap relation fails closed without durable repair")
