@@ -83,9 +83,9 @@ struct WS1CaptureInsertTests {
     #expect(row.lastSource == source)
 
     // WS1: "correct initial … projection" — the §15 durable projection of the
-    // Canonical-as-Effective content, written with the item at schema
-    // version 1, and the item starts unpinned (`nil` ordinal, §3.1).
-    #expect(row.projectionSchemaVersion == 1)
+    // Canonical-as-Effective content, written with projection recipe v2,
+    // and the item starts unpinned (`nil` ordinal, §3.1).
+    #expect(row.projectionSchemaVersion == ContentProjector.schemaVersion)
     #expect(row.title == text)
     #expect(row.searchBody == text)
     #expect(

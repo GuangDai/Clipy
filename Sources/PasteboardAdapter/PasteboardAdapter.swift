@@ -59,6 +59,12 @@ public struct PasteboardAdapter {
     /// provider abstraction. Simulated-unavailable reads do not call the
     /// framework accessor and therefore do not notify this observer.
     package var payloadReadObserver: (@MainActor (String) -> Void)?
+
+    /// Runs immediately after each real payload accessor. Adapter tests use
+    /// this package-only boundary to replace a named private pasteboard
+    /// between representation reads and prove the start/end `changeCount`
+    /// fence. It is absent from Release and is not a provider abstraction.
+    package var payloadReadCompletionHook: (@MainActor (String) -> Void)?
     #endif
 
     /// Creates an adapter over `pasteboard` (`.general` in production).
@@ -138,12 +144,33 @@ public struct PasteboardAdapter {
     ///   outcome reaches the owner so the consumed change is not silent.
     ///   Concealed and unsupported-shape outcomes are likewise intentionally
     ///   empty and cannot masquerade as admissible content.
+    /// - The pasteboard `changeCount` is recorded before metadata access and
+    ///   after the last payload read. A mismatch produces an explicit
+    ///   changed-during-read outcome containing no representations. It is a
+    ///   retry signal, not an unavailable-type/provider-timeout diagnosis.
     public func captureOutcome(observedAt: Date = Date()) -> CaptureOutcome? {
+        let startChangeCount = pasteboard.changeCount
         guard let items = pasteboard.pasteboardItems,
               let item = items.first else {
+            let endChangeCount = pasteboard.changeCount
+            guard startChangeCount == endChangeCount else {
+                return changedDuringReadOutcome(
+                    observedAt: observedAt,
+                    startChangeCount: startChangeCount,
+                    endChangeCount: endChangeCount
+                )
+            }
             return nil
         }
         guard items.count == 1 else {
+            let endChangeCount = pasteboard.changeCount
+            guard startChangeCount == endChangeCount else {
+                return changedDuringReadOutcome(
+                    observedAt: observedAt,
+                    startChangeCount: startChangeCount,
+                    endChangeCount: endChangeCount
+                )
+            }
             return CaptureOutcome(
                 capture: ClipboardCapture(
                     representations: [],
@@ -156,13 +183,23 @@ public struct PasteboardAdapter {
                     isConcealed: false
                 ),
                 unavailableTypeIdentifiers: [],
-                unsupportedPasteboardItemCount: items.count
+                unsupportedPasteboardItemCount: items.count,
+                startChangeCount: startChangeCount,
+                endChangeCount: endChangeCount
             )
         }
         let typeIdentifiers = item.types.map { $0.rawValue }
         if let marker = typeIdentifiers.first(where: {
             PasteboardMarkers.concealedTypeIdentifiers.contains($0)
         }) {
+            let endChangeCount = pasteboard.changeCount
+            guard startChangeCount == endChangeCount else {
+                return changedDuringReadOutcome(
+                    observedAt: observedAt,
+                    startChangeCount: startChangeCount,
+                    endChangeCount: endChangeCount
+                )
+            }
             return CaptureOutcome(
                 capture: ClipboardCapture(
                     representations: [],
@@ -175,7 +212,9 @@ public struct PasteboardAdapter {
                     isConcealed: true
                 ),
                 unavailableTypeIdentifiers: [],
-                concealmentMarkerTypeIdentifier: marker
+                concealmentMarkerTypeIdentifier: marker,
+                startChangeCount: startChangeCount,
+                endChangeCount: endChangeCount
             )
         }
 
@@ -195,6 +234,7 @@ public struct PasteboardAdapter {
                 data = item.data(
                     forType: NSPasteboard.PasteboardType(typeIdentifier)
                 )
+                payloadReadCompletionHook?(typeIdentifier)
             }
             #else
             let data = item.data(
@@ -214,6 +254,14 @@ public struct PasteboardAdapter {
                 CapturedRepresentation(typeIdentifier: typeIdentifier, bytes: data)
             )
         }
+        let endChangeCount = pasteboard.changeCount
+        guard startChangeCount == endChangeCount else {
+            return changedDuringReadOutcome(
+                observedAt: observedAt,
+                startChangeCount: startChangeCount,
+                endChangeCount: endChangeCount
+            )
+        }
         guard !representations.isEmpty else {
             guard !unavailableTypeIdentifiers.isEmpty else { return nil }
             return CaptureOutcome(
@@ -227,7 +275,9 @@ public struct PasteboardAdapter {
                     observedAt: observedAt,
                     isConcealed: false
                 ),
-                unavailableTypeIdentifiers: unavailableTypeIdentifiers
+                unavailableTypeIdentifiers: unavailableTypeIdentifiers,
+                startChangeCount: startChangeCount,
+                endChangeCount: endChangeCount
             )
         }
 
@@ -243,7 +293,34 @@ public struct PasteboardAdapter {
                 isConcealed: false
             ),
             unavailableTypeIdentifiers: unavailableTypeIdentifiers,
-            concealmentMarkerTypeIdentifier: nil
+            concealmentMarkerTypeIdentifier: nil,
+            startChangeCount: startChangeCount,
+            endChangeCount: endChangeCount
+        )
+    }
+
+    /// Builds the one content-free retry outcome for an ownership change
+    /// observed by the freeze fence (REVIEW Card 5B). Bytes read before the
+    /// mismatch are intentionally discarded rather than partially admitted.
+    private func changedDuringReadOutcome(
+        observedAt: Date,
+        startChangeCount: Int,
+        endChangeCount: Int
+    ) -> CaptureOutcome {
+        CaptureOutcome(
+            capture: ClipboardCapture(
+                representations: [],
+                origin: CopyOriginObservation(
+                    sourceApplication: NSWorkspace.shared.frontmostApplication?
+                        .bundleIdentifier,
+                    lineageHint: nil
+                ),
+                observedAt: observedAt,
+                isConcealed: false
+            ),
+            unavailableTypeIdentifiers: [],
+            startChangeCount: startChangeCount,
+            endChangeCount: endChangeCount
         )
     }
 
@@ -347,11 +424,12 @@ package struct PasteboardFailureSimulation: Sendable {
 // MARK: - Capture outcome + write failure (audit SPEC-IMPL-005)
 
 /// The outcome of a capture freeze (03a §4): the frozen capture plus an
-/// unavailable-type record, an explicit early-concealment record, or an
-/// unsupported multi-item shape. These records keep partial, intentionally
-/// unread, and structurally unsupported content distinguishable from a
-/// complete freeze (SPEC-IMPL-005: incomplete Canonical Content must never
-/// enter History posing as complete).
+/// unavailable-type record, an explicit early-concealment record, an
+/// unsupported multi-item shape, or a start/end generation mismatch. These
+/// records keep partial, superseded, intentionally unread, and structurally
+/// unsupported content distinguishable from a complete freeze
+/// (SPEC-IMPL-005: incomplete Canonical Content must never enter History
+/// posing as complete).
 public struct CaptureOutcome: Sendable, Equatable {
     /// The frozen capture (03a §4). Holds only the representations whose
     /// bytes were actually observed.
@@ -375,12 +453,26 @@ public struct CaptureOutcome: Sendable, Equatable {
     /// duplicate type identifiers are never flattened or merged.
     public let unsupportedPasteboardItemCount: Int?
 
+    /// Pasteboard generation observed before reading item metadata.
+    public let startChangeCount: Int
+
+    /// Pasteboard generation observed after the final payload read.
+    public let endChangeCount: Int
+
+    /// Whether ownership/content changed while this freeze was being read.
+    /// Such an outcome is content-free and tells the caller to retry the
+    /// newer generation; it does not claim that a provider timed out.
+    public var changedDuringRead: Bool {
+        startChangeCount != endChangeCount
+    }
+
     /// Whether the freeze observed every declared representation — the
     /// only freeze a caller may treat as the complete observation.
     public var isComplete: Bool {
         unavailableTypeIdentifiers.isEmpty
             && concealmentMarkerTypeIdentifier == nil
             && unsupportedPasteboardItemCount == nil
+            && !changedDuringRead
     }
 
     /// Creates the outcome; the adapter is the only producer.
@@ -388,12 +480,16 @@ public struct CaptureOutcome: Sendable, Equatable {
         capture: ClipboardCapture,
         unavailableTypeIdentifiers: [String],
         concealmentMarkerTypeIdentifier: String? = nil,
-        unsupportedPasteboardItemCount: Int? = nil
+        unsupportedPasteboardItemCount: Int? = nil,
+        startChangeCount: Int,
+        endChangeCount: Int
     ) {
         self.capture = capture
         self.unavailableTypeIdentifiers = unavailableTypeIdentifiers
         self.concealmentMarkerTypeIdentifier = concealmentMarkerTypeIdentifier
         self.unsupportedPasteboardItemCount = unsupportedPasteboardItemCount
+        self.startChangeCount = startChangeCount
+        self.endChangeCount = endChangeCount
     }
 }
 

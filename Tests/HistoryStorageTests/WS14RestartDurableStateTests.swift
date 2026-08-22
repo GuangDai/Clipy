@@ -172,13 +172,13 @@ extension WS14RestartReconstructionTests {
     // WS14 (ii): §15 projection fields — A's projection is of the SECOND
     // replacement (revision projection uses the prepared proposed Effective
     // Content, §15); B and C keep their capture-time projections; every row
-    // carries the v1 projection schema version.
+    // carries the current projection recipe-v2 schema version.
     let effectiveTypesA = try EffectiveTypeIdentifiersBlobCodec.decode(rowA.effectiveTypeIdentifiersBlob)
     let effectiveTypesB = try EffectiveTypeIdentifiersBlobCodec.decode(rowB.effectiveTypeIdentifiersBlob)
     let effectiveTypesC = try EffectiveTypeIdentifiersBlobCodec.decode(rowC.effectiveTypeIdentifiersBlob)
     #expect(
-        rowA.projectionSchemaVersion == 1,
-        "WS14 (projections): A's projection schema version is the v1 value"
+        rowA.projectionSchemaVersion == ContentProjector.schemaVersion,
+        "WS14 (projections): A's projection schema version is current"
     )
     #expect(
         rowA.title == replacementTwo,
@@ -193,8 +193,8 @@ extension WS14RestartReconstructionTests {
         "WS14 (projections): A's effective type identifiers"
     )
     #expect(
-        rowB.projectionSchemaVersion == 1,
-        "WS14 (projections): B's projection schema version is the v1 value"
+        rowB.projectionSchemaVersion == ContentProjector.schemaVersion,
+        "WS14 (projections): B's projection schema version is current"
     )
     #expect(
         rowB.title == textB,
@@ -209,8 +209,8 @@ extension WS14RestartReconstructionTests {
         "WS14 (projections): B's effective type identifiers"
     )
     #expect(
-        rowC.projectionSchemaVersion == 1,
-        "WS14 (projections): C's projection schema version is the v1 value"
+        rowC.projectionSchemaVersion == ContentProjector.schemaVersion,
+        "WS14 (projections): C's projection schema version is current"
     )
     #expect(
         rowC.title == textC,

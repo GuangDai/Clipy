@@ -246,12 +246,12 @@ internal actor HistoryAuthority {
     /// The singleton row's well-known key (§3.2: always "retained-history").
     internal static let positionSingletonKey = "retained-history"
 
-    /// Constructs the Authority over an already-opened v1 container.
+    /// Constructs the Authority over an already-opened current container.
     /// docs/05-authority-kernel.md §2, §13
     ///
     /// `SwiftDataHistory.open` owns §13 steps 1–2 (configuration validation
     /// and container creation); this Authority then owns the store-side
-    /// startup steps 3–9 via `performStartup(initialMaximumUnpinnedItems:)`.
+    /// startup steps 3–11 via `performStartup(initialMaximumUnpinnedItems:)`.
     /// The Signature Index starts unready (§12) and the test seams disarmed.
     /// The `retentionClock` parameter is the V2-02 §6.4 Storage-clock seam:
     /// internal to `HistoryStorage`, defaulted to the production
@@ -299,23 +299,23 @@ internal actor HistoryAuthority {
     /// new store (step 3), validate exactly one singleton (step 4),
     /// bootstrap/validate the retention-expansion config singleton
     /// (`V2-roadmap` §5 total open order step 5, M1.3), validate the
-    /// retained row count against the hard bound (step 5), fetch each
-    /// row's scalar and signature metadata without decoding content blobs
-    /// (step 6), require projection schema version 1 (step 7), enforce the
+    /// retained row count against the hard bound, first rebuild legacy
+    /// projection rows from their validated content lineage, then require
+    /// projection schema version 2 and enforce the
     /// `RetainedBytesRow` 1:1 correspondence both directions with
-    /// `bytesSchemaVersion == 1` (the V2 half of `V2-roadmap` §5 step 7,
+    /// `bytesSchemaVersion == 1` (the V2 half of `V2-roadmap` §5 step 11,
     /// `RET-PLATFORM-1b(a)`; live from roadmap R.3 — with the amended
     /// Record 5 missing-rows recovery re-run first, see
     /// `RetainedBytesStamping.validateOneToOneCorrespondence`), decode and
-    /// validate signatures and build the complete Signature Index (step 8),
-    /// and validate the full pinned ordinal set from scalar fields (step 9).
+    /// validate signatures and build the complete Signature Index, and
+    /// validate the full pinned ordinal set from scalar fields.
     ///
     /// The initial retention value is revalidated against the fixed Part VI
     /// user range (§2) so the singleton is never written from an invalid
     /// value even when a test constructs the Authority directly.
     ///
     /// No suspension point is needed here: startup completes before the
-    /// facade is published (§13 step 10), and the whole sequence is one
+    /// facade is published (§13 step 12), and the whole sequence is one
     /// non-suspending interval on an operation-local context (§5).
     ///
     /// - Throws: `.invalidInput(.invalidRetentionPolicy)` for an out-of-range
@@ -332,7 +332,10 @@ internal actor HistoryAuthority {
     ///   malformed pinned order, or a violated `RetainedBytesRow` 1:1
     ///   correspondence / `bytesSchemaVersion` fence after the Record 5
     ///   missing-rows recovery re-run (`V2-02` §3.3b). Corrupt durable
-    ///   metadata fails open — v1 has no silent repair path (§13).
+    ///   metadata fails open; the explicit legacy derived-projection rebuild
+    ///   is not a general stored-data repair path (§13). A projection-rebuild
+    ///   transaction failure is
+    ///   `.persistence(.transaction)` under the uniform §16 boundary.
     internal func performStartup(initialMaximumUnpinnedItems: Int) async throws {
         // §2, §13 step 1: the singleton must never carry an out-of-range
         // retention value (D19 requires the stored policy to permit at
@@ -364,14 +367,22 @@ internal actor HistoryAuthority {
             // v1-faithful); present → the fail-closed V2-02 §3.3 validation.
             try Self.ensureRetentionExpansionConfig(in: context)
 
-            // §13 steps 5–9: scalar scan, Signature Index build, pin-order proof.
+            // §13 step 6 / §15: projection recipe v1 → v2 rebuild is an
+            // Authority-owned, bounded, atomic startup operation. It finishes
+            // before the Signature Index is declared ready or capture exists.
+            try ContentProjectionRebuild.rebuildIfNeeded(
+                in: context,
+                limits: limits
+            )
+
+            // §13 steps 7–10: scalar scan, Signature Index build, pin-order proof.
             signatureIndex = try Self.buildSignatureIndexAtStartup(
                 in: context,
                 limits: limits
             )
 
-            // V2-roadmap §5 total open order step 7 (roadmap R.3, live from
-            // this slice per the step-7 sequencing note): after the scalar
+            // V2-roadmap §5 total open order step 11 (roadmap R.3, live from
+            // this slice per the step-11 sequencing note): after the scalar
             // scan, enforce the `RetainedBytesRow` 1:1 correspondence both
             // directions with `bytesSchemaVersion == 1`
             // (`RET-PLATFORM-1b(a)`). A fresh store holds vacuously (zero
@@ -492,18 +503,18 @@ internal actor HistoryAuthority {
         }
     }
 
-    /// §13 steps 5–9: one bounded scalar fetch over every retained row
+    /// §13 scan/index steps 7–10: one bounded scalar
+    /// fetch over every retained row
     /// yields the startup proofs and the complete Signature Index, without
     /// decoding Canonical or revision blobs (§13). docs/05-authority-kernel.md
     /// §13, §12
     ///
-    /// Checks, in fetch order: row count within the hard retained-item bound
-    /// (step 5); unique business IDs; a nonzero Content Version (step 6, §4);
-    /// projection schema version exactly the v1 value (step 7); signature
-    /// blob decode plus complete index build (step 8); the full pinned
-    /// ordinal set unique and exactly `0 ..< p` from scalar fields (step 9,
-    /// D12). Corrupt metadata fails open (§13); a store that cannot be read
-    /// fails as `.persistence(.openStore)` (§2).
+    /// Checks, in fetch order: row count within the hard retained-item bound;
+    /// unique business IDs; a nonzero Content Version (§4); projection schema
+    /// version exactly the current v2 value; signature blob decode plus
+    /// complete index build; and the full pinned ordinal set unique and exactly
+    /// `0 ..< p` from scalar fields (D12). Corrupt metadata fails open (§13);
+    /// a store that cannot be read fails as `.persistence(.openStore)` (§2).
     internal static func buildSignatureIndexAtStartup(
         in context: ModelContext,
         limits: HistoryLimits
@@ -536,13 +547,13 @@ internal actor HistoryAuthority {
             guard seen.insert(itemID).inserted else {
                 throw HistoryFailure.persistence(.invariantViolation)
             }
-            // §13 step 6, §4: a valid (≥1) Content Version.
+            // §13 step 7, §4: a valid (≥1) Content Version.
             _ = try mapCodecFailure {
                 try RevisionStateBlobCodec.decodeContentVersion(row.contentVersionRaw)
             }
-            // §13 step 7: the greenfield v1 schema requires the known
-            // projection schema version. Reuse the same fail-closed validator
-            // as every read path (§4).
+            // §13 step 8: startup rebuild has already upgraded every legacy
+            // row, so only the current projection version is valid here.
+            // Reuse the same fail-closed validator as every read path (§4).
             let projectionSchemaVersion = row.projectionSchemaVersion
             try mapCodecFailure {
                 try ContentProjector.validateStoredSchemaVersion(
@@ -555,13 +566,13 @@ internal actor HistoryAuthority {
             if let pinOrdinal {
                 pinnedOrdinals.append(pinOrdinal.rawValue)
             }
-            // §13 step 8: decode/validate signatures — never content bytes.
+            // §13 step 9: decode/validate signatures — never content bytes.
             let entries = try mapCodecFailure {
                 try SignatureBlobCodec.decode(row.canonicalSignatureBlob, limits: limits)
             }
             signatures[itemID] = entries
         }
-        // §13 step 9 (D12): unique and exactly 0 ..< p. Direct slot
+        // §13 step 10 (D12): unique and exactly 0 ..< p. Direct slot
         // placement proves the permutation in O(P), without sorting.
         guard PinnedOrderValidator.sourceOffsetsByOrdinal(
             in: pinnedOrdinals,

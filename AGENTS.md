@@ -67,6 +67,7 @@ ClipyApp (XcodeGen app, composition root)
           ├───────────────→ xxh3 (vendored C, package-internal)
           └───────────────→ Fuse (external SPM, fuzzy search)
 HistoryDomain ─────────────→ HistoryCore
+HistoryRestartProbe ───────→ HistoryCore + HistoryStorage (test evidence only)
 ```
 
 | Target | Surface | Role |
@@ -79,6 +80,7 @@ HistoryDomain ─────────────→ HistoryCore
 | `ClipyApp` | Composition root | Concrete construction, lifecycle, paste orchestration, DI |
 | `xxh3` | Package-internal C | 64-bit representation fingerprints (vendored xxHash v0.8.3) |
 | `HistoryPerfRunner` | Executable | Part VI §9 performance-runner scaffold (fixtures populate at step 8) |
+| `HistoryRestartProbe` | Test evidence executable target | Card 1C-1 three-process public-API restart tracer; no declared package product |
 
 **Load-bearing rules (docs/01-architecture.md §3/§6/§8):**
 
@@ -154,7 +156,8 @@ xcodebuild -project ClipyApp/ClipyApp.xcodeproj -scheme ClipyApp \
   `HistoryStorage` must not import AppKit/SwiftUI/adapters/PresentationUI;
   `PasteboardAdapter` must not import HistoryDomain/HistoryStorage/SwiftUI/
   SwiftData; `PresentationUI` must not import HistoryDomain/HistoryStorage/
-  AppKit/SwiftData; `xxh3` and `Fuse` are confined to `HistoryStorage`.
+  AppKit/SwiftData; `HistoryRestartProbe` → Foundation + HistoryCore +
+  HistoryStorage only; `xxh3` and `Fuse` are confined to `HistoryStorage`.
   `.swiftlint.yml` mirrors these; keep both in sync when changing rules.
 - `scripts/escape_hatch_scan.py` — rejects `@unchecked Sendable`,
   `nonisolated(unsafe)`, and `static let/var shared|current` in `Sources/` and

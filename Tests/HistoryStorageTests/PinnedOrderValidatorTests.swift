@@ -1,6 +1,6 @@
 /// Pure-value coverage for the shared D12 pinned-order permutation proof.
 /// docs/02-domain.md §3.2, D12; docs/05-authority-kernel.md §7.2, §10,
-/// §13 step 9.
+/// §13 step 10.
 import Testing
 @testable import HistoryStorage
 

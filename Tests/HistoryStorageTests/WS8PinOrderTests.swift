@@ -13,7 +13,7 @@
 /// non-no-op action and no advance for a no-op placement (docs/02-domain.md
 /// §13), Content Version untouched by pin/reorder/unpin (§13: `.assignPin`
 /// preserves), a RESTART after each receipt (reopening the facade reruns the
-/// docs/05-authority-kernel.md §13 startup, whose step 9 revalidates the full
+/// docs/05-authority-kernel.md §13 startup, whose step 10 revalidates the full
 /// pinned ordinal set from scalar fields), and stored pin ordinals unique and
 /// exactly `0 ..< pinnedCount` (D12) with the expected id→ordinal mapping,
 /// all as seen through an INDEPENDENT second `ModelContainer` over the same
@@ -83,7 +83,7 @@ private static func expectUnpinned(
 
 /// WS8: "After each receipt, restart and assert … stored ordinals are unique
 /// and exactly `0 ..< count`." Reopens the facade over the same on-disk store
-/// — the docs/05-authority-kernel.md §13 startup (step 9) revalidates the
+/// — the docs/05-authority-kernel.md §13 startup (step 10) revalidates the
 /// full pinned ordinal set, so a successful open re-proves the durable lane —
 /// then asserts the exact id→ordinal mapping (`nil` is unpinned,
 /// docs/05-authority-kernel.md §3.1), D12 uniqueness/contiguity, preserved

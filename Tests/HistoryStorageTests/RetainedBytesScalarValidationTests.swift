@@ -18,14 +18,13 @@
 /// `.persistence(.invariantViolation)` — exactly as for its row-count,
 /// duplicate-ID, and `bytesSchemaVersion` violations.
 ///
-/// Every fixture crosses the public `SwiftDataHistory.perform` path with the
-/// row damaged behind the Authority's back through an INDEPENDENT container
-/// (the R.3 corruption-fixture stance), on all three projection consumers:
-/// the R.4 capture lane (R1/R2), the R.5 revise lane (R2/R3), and the R.6
-/// `.setRetentionPolicies` sweep (R1/R2/R3). The startup 1:1 check
-/// deliberately reads only `itemID`/`bytesSchemaVersion` (S-1's second
-/// bullet — a known, accepted open-time scope), so the corruption here is
-/// introduced AFTER `open` and the proofs pin the planning-read boundary.
+/// Every fixture crosses a public `SwiftDataHistory.open` or `perform` path,
+/// with the row damaged behind the Authority's back through an INDEPENDENT
+/// container (the R.3 corruption-fixture stance), on all four projection
+/// consumers: startup correspondence, the R.4 capture lane (R1/R2), the R.5
+/// revise lane (R2/R3), and the R.6 policy sweep (R1/R2/R3).
+/// Startup and planning deliberately share one scalar-only validator; neither
+/// boundary fetches or decodes Canonical/revision blobs.
 ///
 /// Exact in-range blob/projection mismatch (e.g. a plausible-but-wrong
 /// `canonicalBytes` of 12 where the blob sums to 15) remains the separate
@@ -45,7 +44,8 @@ struct RetainedBytesScalarValidationTests {
     /// The impossible-scalar matrix: one case per damaged field, negative
     /// and over-hard-bound (`06` §2 table values via `HistoryLimits
     /// .standard`), plus the one structural contradiction (an empty revision
-    /// list sums to zero bytes, DC-04).
+    /// list sums to zero bytes, while every non-empty revision contributes
+    /// at least one byte (DC-04 / DATA-2).
     enum ScalarCorruption: Equatable, CaseIterable {
         case negativeCanonicalBytes
         case overBoundCanonicalBytes
@@ -54,6 +54,8 @@ struct RetainedBytesScalarValidationTests {
         case negativeRevisionBytes
         case overBoundRevisionBytes
         case zeroCountNonzeroBytes
+        case positiveCountZeroBytes
+        case bytesBelowPositiveCount
     }
 
     /// Performs one raw text capture and returns the inserted reference.
@@ -113,6 +115,12 @@ struct RetainedBytesScalarValidationTests {
         case .zeroCountNonzeroBytes:
             row.revisionCount = 0
             row.revisionBytes = 1
+        case .positiveCountZeroBytes:
+            row.revisionCount = 1
+            row.revisionBytes = 0
+        case .bytesBelowPositiveCount:
+            row.revisionCount = 2
+            row.revisionBytes = 1
         }
         try context.save()
     }
@@ -122,6 +130,46 @@ struct RetainedBytesScalarValidationTests {
         _ container: ModelContainer
     ) throws -> [RetainedBytesRow] {
         try ModelContext(container).fetch(FetchDescriptor<RetainedBytesRow>())
+    }
+
+    // MARK: - Startup correspondence
+
+    @Test(
+        "public reopen fails closed on an impossible projected scalar (S-1)",
+        arguments: ScalarCorruption.allCases
+    )
+    func reopenFailsClosedOnImpossibleScalar(
+        corruption: ScalarCorruption
+    ) async throws {
+        let storeURL = WSSupport.tempStoreURL("s1-startup-\(corruption)")
+        defer { WSSupport.removeStore(storeURL) }
+        let history = try await WSSupport.openHistory(storeURL: storeURL)
+        let existing = try await Self.capture(
+            "s1 startup item",
+            at: 700_190_000,
+            source: "com.example.s1.startup",
+            in: history
+        )
+        try Self.corruptScalars(
+            of: existing.id,
+            corruption: corruption,
+            storeURL: storeURL
+        )
+        let before = try TransactionStoreSnapshot.read(from: storeURL)
+
+        do {
+            _ = try await WSSupport.openHistory(storeURL: storeURL)
+            Issue.record("\(corruption): expected startup rejection")
+        } catch let failure as HistoryFailure {
+            #expect(
+                failure == .persistence(.invariantViolation),
+                "\(corruption): wrong typed failure \(failure)"
+            )
+        } catch {
+            Issue.record("\(corruption): unexpected error \(error)")
+        }
+
+        #expect(try TransactionStoreSnapshot.read(from: storeURL) == before)
     }
 
     // MARK: - R.4 capture lane (V2-02 §4.2/§7: capture fires R1+R2)

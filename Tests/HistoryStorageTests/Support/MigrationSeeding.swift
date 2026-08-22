@@ -20,6 +20,13 @@ import SwiftData
 /// (`RET-PLATFORM-1b(b)`).
 enum MigrationSeeding {
 
+    /// Test-oracle-only failure. The migration proof must not call the
+    /// production coverage helper it is intended to check; this sentinel
+    /// keeps the oracle's independently written comparison fail-loud.
+    private enum SignatureCoverageOracleFailure: Error {
+        case mismatch
+    }
+
     /// One seeded v1 item: the insertable durable row plus the pre-migration
     /// copies and expected byte-projection scalars.
     struct SeededItem {
@@ -59,7 +66,7 @@ enum MigrationSeeding {
                 activeRevisionID: nil
             ),
             canonicalSignatureBlob: SignatureBlobCodec.encode(alphaBundle.signatureEntries),
-            projectionSchemaVersion: alphaBundle.projection.schemaVersion,
+            projectionSchemaVersion: ContentProjector.legacySchemaVersion,
             title: alphaBundle.projection.title,
             searchBody: alphaBundle.projection.searchBody,
             effectiveTypeIdentifiersBlob: EffectiveTypeIdentifiersBlobCodec.encode(
@@ -116,7 +123,7 @@ enum MigrationSeeding {
             canonicalBlob: CanonicalBlobCodec.encode(betaBundle.domain.canonical),
             revisionStateBlob: betaRevisionBlob,
             canonicalSignatureBlob: SignatureBlobCodec.encode(betaBundle.signatureEntries),
-            projectionSchemaVersion: betaBundle.projection.schemaVersion,
+            projectionSchemaVersion: ContentProjector.legacySchemaVersion,
             title: betaBundle.projection.title,
             searchBody: betaBundle.projection.searchBody,
             effectiveTypeIdentifiersBlob: EffectiveTypeIdentifiersBlobCodec.encode(
@@ -143,7 +150,7 @@ enum MigrationSeeding {
                 activeRevisionID: nil
             ),
             canonicalSignatureBlob: SignatureBlobCodec.encode(gammaBundle.signatureEntries),
-            projectionSchemaVersion: gammaBundle.projection.schemaVersion,
+            projectionSchemaVersion: ContentProjector.legacySchemaVersion,
             title: gammaBundle.projection.title,
             searchBody: gammaBundle.projection.searchBody,
             effectiveTypeIdentifiersBlob: EffectiveTypeIdentifiersBlobCodec.encode(
@@ -261,13 +268,20 @@ enum MigrationSeeding {
     }
 
     /// Independently recomputes the byte projection of one durable row
-    /// through the same production codecs (`RET-PLATFORM-1b(b)`), WITHOUT
-    /// touching the backfill under test.
+    /// through the production decoders (`RET-PLATFORM-1b(b)`), WITHOUT
+    /// touching the backfill under test or calling its production signature
+    /// coverage helper. Coverage is compared field-by-field below so a
+    /// missing production check cannot make both implementation and oracle
+    /// accept the same corrupt fixture (DATA-11).
     static func recomputedScalars(
         for row: HistoryItemRow
     ) throws -> (canonicalBytes: Int, revisionCount: Int, revisionBytes: Int) {
         let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
         let entries = try SignatureBlobCodec.decode(row.canonicalSignatureBlob)
+        try validateSignatureCoverageIndependently(
+            canonical: canonical,
+            entries: entries
+        )
         let state = try RevisionStateBlobCodec.decode(
             row.revisionStateBlob,
             canonical: canonical
@@ -277,5 +291,25 @@ enum MigrationSeeding {
             revision.content.representations.reduce(total) { $0 + $1.bytes.count }
         }
         return (canonicalBytes, state.revisions.count, revisionBytes)
+    }
+
+    private static func validateSignatureCoverageIndependently(
+        canonical: CanonicalContent,
+        entries: [ContentSignatureEntry]
+    ) throws {
+        guard canonical.representations.count == entries.count else {
+            throw SignatureCoverageOracleFailure.mismatch
+        }
+        // Both production decoders have independently proved normalized,
+        // unique type order. Equal counts plus pairwise equality therefore
+        // proves both directions without a second lookup structure.
+        for (representation, entry) in zip(canonical.representations, entries) {
+            guard entry.typeIdentifier == representation.content.typeIdentifier,
+                  entry.fingerprint.rawValue == representation.fingerprint.rawValue,
+                  entry.byteCount == representation.content.bytes.count
+            else {
+                throw SignatureCoverageOracleFailure.mismatch
+            }
+        }
     }
 }

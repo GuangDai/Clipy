@@ -32,7 +32,7 @@ import HistoryDomain
 /// unique, non-empty type summary of the projected content.
 internal struct ContentProjection: Sendable {
     /// Projection schema version; exactly `ContentProjector.schemaVersion`
-    /// (v1 = 1) for every value the v1 projector emits.
+    /// (projection recipe v2 = 2) for every newly projected value.
     internal let schemaVersion: UInt16
     /// First eligible textual line after normalization, otherwise a stable
     /// type-based fallback (§15).
@@ -59,19 +59,24 @@ internal struct StoredProjectionSize: Equatable, Sendable {
 ///
 /// The projector is a namespace of pure functions — no actor, clock, I/O, or
 /// framework decode. Image bytes are never decoded for title/search (§15):
-/// only representations whose type identifier is in the frozen v1 textual set
-/// are decoded, with a fixed encoding precedence, so identical content always
-/// projects identically.
+/// only representations whose exact type identifier declares the frozen v2
+/// plain-text encoding are decoded, so identical content always projects
+/// identically. Encoding-unspecified, abstract, and structured text formats
+/// remain opaque.
 internal enum ContentProjector {
-    /// The only projection schema version v1 writes (§6.1: "v1 = 1"; §15:
-    /// projection schema changes require an explicit schema version).
-    internal static let schemaVersion: UInt16 = 1
+    /// The current projection recipe. Version 2 removes the v1 guessed UTF-8
+    /// decode of encoding-unspecified, abstract, RTF, and HTML values (§15).
+    internal static let schemaVersion: UInt16 = 2
+
+    /// The only legacy projection recipe accepted by startup rebuild. It is
+    /// never accepted by an ordinary read boundary (§13, §15).
+    internal static let legacySchemaVersion: UInt16 = 1
 
     // MARK: Stored projection validation (docs/05-authority-kernel.md §4)
 
     /// Re-validates the schema tag before any durable projection scalar is
     /// trusted. A future projection schema requires an explicit migration;
-    /// v1 never guesses how to interpret another version.
+    /// ordinary reads never guess how to interpret another version.
     internal static func validateStoredSchemaVersion(_ found: UInt16) throws {
         guard found == schemaVersion else {
             throw CodecRejection.unknownProjectionSchemaVersion(found: found)
@@ -245,19 +250,14 @@ internal enum ContentProjector {
 
     // MARK: Textual eligibility and decoding (§15)
 
-    /// The frozen v1 set of type identifiers whose bytes are treated as text
-    /// for title/search projection. docs/05-authority-kernel.md §15 ("eligible
-    /// textual") — the spec does not enumerate the set; v1 freezes the
-    /// well-known textual UTIs so projection stays a pure, deterministic
-    /// function of the content with no framework conformance lookup.
+    /// The frozen projection-v2 set whose exact type names declare the byte
+    /// encoding used for title/search projection. Encoding-unspecified
+    /// `public.plain-text`, abstract `public.text`, RTF, and HTML stay opaque
+    /// until an owning format decoder is separately approved (§15).
     internal static let textualTypeIdentifiers: Set<String> = [
-        "public.plain-text",
         "public.utf8-plain-text",
         "public.utf16-plain-text",
         "public.utf8-external-plain-text",
-        "public.text",
-        "public.rtf",
-        "public.html",
     ]
 
     /// Decodes one representation's bytes as text, or returns `nil` when the
@@ -266,6 +266,8 @@ internal enum ContentProjector {
     /// `public.utf16-plain-text`, UTF-8 for every other frozen textual type.
     /// The projector never guesses a fallback encoding for malformed bytes;
     /// an undecodable representation is skipped rather than durable mojibake.
+    /// Set membership means the non-UTF-16 cases have an exact UTF-8 contract;
+    /// there is no generic textual fallback.
     private static func decodedText(
         of representation: ContentRepresentation
     ) -> String? {
@@ -340,7 +342,7 @@ internal enum ContentProjector {
 
     // MARK: Type-based fallback title (§15)
 
-    /// Image type identifiers recognized by the fallback title. Frozen for v1
+    /// Image type identifiers recognized by the fallback title. Frozen for v2
     /// alongside `textualTypeIdentifiers`.
     private static let imageTypeIdentifiers: Set<String> = [
         "public.image",

@@ -48,6 +48,14 @@ custom_rules:
     message: "HistoryPerfRunner may import Foundation, HistoryCore, and HistoryStorage only (Part I §8)."
     severity: error
 
+  historyrestartprobe_import_confinement:
+    name: "HistoryRestartProbe import confinement"
+    included: "Sources/HistoryRestartProbe/"
+    # Allowlist: the restart tracer is a public-API-only composition client.
+    regex: '^\s*(?:@_\w+\s+)*import\s+(?!(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:Foundation|HistoryCore|HistoryStorage)\b)\w'
+    message: "HistoryRestartProbe may import Foundation, HistoryCore, and HistoryStorage only (Part I §8)."
+    severity: error
+
   historystorage_import_confinement:
     name: "HistoryStorage import confinement"
     included: "Sources/HistoryStorage/"

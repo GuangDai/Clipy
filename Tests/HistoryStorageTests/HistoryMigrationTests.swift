@@ -209,7 +209,7 @@ struct HistoryMigrationTests {
         #expect(migratedItems.count == seeded.count)
         #expect(migratedBytes.count == seeded.count)
 
-        // Full open path over the SAME url: construct + startup (steps 1–10).
+        // Full open path over the SAME url: construct + startup (steps 1–12).
         _ = try await SwiftDataHistory.open(
             configuration: HistoryConfiguration(
                 persistence: .persistent(storeURL: storeURL),

@@ -1097,7 +1097,7 @@ path:
    image/PDF UTI, which is permitted on startup - not a Canonical/revision blob;
    the O(retained) projection-blob decode cost is bounded by the hard retained
    maximum, `06` §2). The backlog scan is **dispatched to the scheduler after
-   `open` returns** (the facade is published in `05` §13 step 10 first, then the
+   `open` returns** (the facade is published in `05` §13 step 12 first, then the
    scheduler runs the scan asynchronously on its own executor) - it does **not**
    run synchronously inside `open`, so store open is never blocked for user reads
    by enrichment. The startup drain also runs a `sweepOrphanedEnrichmentRows()`

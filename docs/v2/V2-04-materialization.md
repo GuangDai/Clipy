@@ -864,7 +864,7 @@ published:
 5. **Disk cache directory bootstrap.** If `diskCacheEnabled`, ensure the cache
    directory exists (lazy-create); do **not** scan it at open (§6.3).
 6. end of the V2-04 module segment of the single open order (the facade
-   is published once, in `05` §13 step 10, after every admitted module's
+   is published once, in `05` §13 step 12, after every admitted module's
    segment; roadmap M1.3).
 
 This step applies to the `.memory` store path too — except the disk cache is

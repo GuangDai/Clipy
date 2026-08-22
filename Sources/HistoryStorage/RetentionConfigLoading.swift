@@ -38,6 +38,58 @@ import SwiftData
 
 // MARK: - Config → policy loading (V2-02 §3.3, §4.2, §7)
 
+/// A scalar-only, validated reading of one durable `RetainedBytesRow`.
+/// Both startup and destructive retention planning use this one factory, so
+/// a present projection row cannot pass open and later fail only when a
+/// policy lane happens to read it. The factory deliberately accepts scalar
+/// values rather than a model object: callers keep narrow
+/// `propertiesToFetch` lists and never fault either content blob.
+internal struct ValidatedRetainedBytesScalars: Sendable, Equatable {
+    internal let canonicalBytes: Int
+    internal let revisionCount: Int
+    internal let revisionBytes: Int
+
+    private init(
+        canonicalBytes: Int,
+        revisionCount: Int,
+        revisionBytes: Int
+    ) {
+        self.canonicalBytes = canonicalBytes
+        self.revisionCount = revisionCount
+        self.revisionBytes = revisionBytes
+    }
+
+    /// Validates the projection-version fence, each `06` §2 hard bound, and
+    /// the relations implied by non-empty stored representations (DATA-2).
+    /// Every failure is durable-state corruption; values are never clamped
+    /// or repaired here.
+    internal static func validating(
+        canonicalBytes: Int,
+        revisionCount: Int,
+        revisionBytes: Int,
+        bytesSchemaVersion: UInt16,
+        limits: HistoryLimits
+    ) throws -> Self {
+        guard bytesSchemaVersion == RetainedBytesStamping.bytesSchemaVersion,
+              canonicalBytes > 0,
+              canonicalBytes <= limits.maximumCaptureBytes,
+              revisionCount >= 0,
+              revisionCount <= limits.maximumRevisionsPerItem,
+              revisionBytes >= 0,
+              revisionBytes <= limits.maximumTotalRevisionBytesPerItem,
+              (revisionCount == 0
+                ? revisionBytes == 0
+                : revisionBytes >= revisionCount) else {
+            throw HistoryFailure.persistence(.invariantViolation)
+        }
+        return Self(
+            canonicalBytes: canonicalBytes,
+            revisionCount: revisionCount,
+            revisionBytes: revisionBytes
+        )
+    }
+}
+
 /// Loads the persisted `RetentionExpansionConfigRow` singleton as the public
 /// `HistoryRetentionPolicies` value the capture lane plans with.
 internal enum RetentionConfigLoading {
@@ -219,13 +271,6 @@ internal enum RetentionConfigLoading {
         var scalarsByItem: [HistoryItemID: ProjectedItemScalars] = [:]
         scalarsByItem.reserveCapacity(rows.count)
         for row in rows {
-            // The projection-coherence fence (§3.3b): an unknown
-            // `bytesSchemaVersion` is never read as a possibly-correct byte
-            // fact.
-            guard row.bytesSchemaVersion == RetainedBytesStamping
-                .bytesSchemaVersion else {
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
             let itemID = HistoryItemID(rawValue: row.itemID)
             guard scalarsByItem[itemID] == nil else {
                 throw HistoryFailure.persistence(.invariantViolation)
@@ -250,21 +295,17 @@ internal enum RetentionConfigLoading {
             // sums to zero bytes (DC-04), while every stored revision has at
             // least one non-empty representation, so a non-empty list has at
             // least one byte per revision (DATA-2).
-            guard row.canonicalBytes > 0,
-                  row.canonicalBytes <= limits.maximumCaptureBytes,
-                  row.revisionCount >= 0,
-                  row.revisionCount <= limits.maximumRevisionsPerItem,
-                  row.revisionBytes >= 0,
-                  row.revisionBytes <= limits.maximumTotalRevisionBytesPerItem,
-                  (row.revisionCount == 0
-                    ? row.revisionBytes == 0
-                    : row.revisionBytes >= row.revisionCount) else {
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
-            scalarsByItem[itemID] = ProjectedItemScalars(
+            let validated = try ValidatedRetainedBytesScalars.validating(
                 canonicalBytes: row.canonicalBytes,
                 revisionCount: row.revisionCount,
-                revisionBytes: row.revisionBytes
+                revisionBytes: row.revisionBytes,
+                bytesSchemaVersion: row.bytesSchemaVersion,
+                limits: limits
+            )
+            scalarsByItem[itemID] = ProjectedItemScalars(
+                canonicalBytes: validated.canonicalBytes,
+                revisionCount: validated.revisionCount,
+                revisionBytes: validated.revisionBytes
             )
         }
         return scalarsByItem

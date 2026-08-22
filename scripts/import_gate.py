@@ -16,6 +16,7 @@ that violate the target's confinement rules:
   PresentationUI     blocklist: HistoryDomain, HistoryStorage, AppKit, SwiftData
                      (SwiftUI is allowed)
   HistoryPerfRunner  allowlist: Foundation, HistoryCore, HistoryStorage
+  HistoryRestartProbe allowlist: Foundation, HistoryCore, HistoryStorage
 
 Global rules: ``import xxh3`` and ``import Fuse`` are forbidden outside
 HistoryStorage.
@@ -54,6 +55,7 @@ ALLOWLIST: dict[str, frozenset[str]] = {
     "HistoryCore": frozenset({FOUNDATION}),
     "HistoryDomain": frozenset({FOUNDATION, "HistoryCore"}),
     "HistoryPerfRunner": frozenset({FOUNDATION, "HistoryCore", "HistoryStorage"}),
+    "HistoryRestartProbe": frozenset({FOUNDATION, "HistoryCore", "HistoryStorage"}),
 }
 
 # Blocklist targets: these specific imports are forbidden, anything else passes.
@@ -172,6 +174,7 @@ GOOD_FIXTURES: dict[str, str] = {
     "Sources/PasteboardAdapter/Good.swift": "import Foundation\nimport HistoryCore\nimport AppKit\n",
     "Sources/PresentationUI/Good.swift": "import Foundation\nimport HistoryCore\nimport SwiftUI\n",
     "Sources/HistoryPerfRunner/Good.swift": "import Foundation\nimport HistoryCore\nimport HistoryStorage\n",
+    "Sources/HistoryRestartProbe/Good.swift": "import Foundation\nimport HistoryCore\nimport HistoryStorage\n",
 }
 
 BAD_FIXTURES: dict[str, str] = {
@@ -186,6 +189,7 @@ BAD_FIXTURES: dict[str, str] = {
     "Sources/PresentationUI/BadXxh3.swift": "import xxh3\n",  # global xxh3 rule
     "Sources/PresentationUI/BadFuse.swift": "import Fuse\n",  # global Fuse rule
     "Sources/HistoryPerfRunner/Bad.swift": "import SwiftData\n",
+    "Sources/HistoryRestartProbe/Bad.swift": "import SwiftData\n",
 }
 
 EXPECTED_SELF_TEST_VIOLATIONS = {
@@ -200,6 +204,7 @@ EXPECTED_SELF_TEST_VIOLATIONS = {
     ("PresentationUI", "xxh3"),
     ("PresentationUI", "Fuse"),
     ("HistoryPerfRunner", "SwiftData"),
+    ("HistoryRestartProbe", "SwiftData"),
 }
 
 

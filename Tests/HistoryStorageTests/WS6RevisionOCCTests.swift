@@ -137,7 +137,7 @@ private static func replaceTextRequest(
         try EffectiveTypeIdentifiersBlobCodec.decode(reviseRow.effectiveTypeIdentifiersBlob)
             == ["public.utf8-plain-text"]
     )
-    #expect(reviseRow.projectionSchemaVersion == 1)
+    #expect(reviseRow.projectionSchemaVersion == ContentProjector.schemaVersion)
     // The durable singleton matches the receipt's position (one transaction,
     // docs/06-cross-cutting.md §7.1).
     let revisePosition = try WSSupport.fetchPosition(reviseContainer)
@@ -235,7 +235,7 @@ private static func replaceTextRequest(
         try EffectiveTypeIdentifiersBlobCodec.decode(revertRow.effectiveTypeIdentifiersBlob)
             == ["public.utf8-plain-text"]
     )
-    #expect(revertRow.projectionSchemaVersion == 1)
+    #expect(revertRow.projectionSchemaVersion == ContentProjector.schemaVersion)
     // The durable singleton matches the revert receipt's position.
     let revertPosition = try WSSupport.fetchPosition(revertContainer)
     #expect(revertPosition.rawValue == 3)

@@ -113,10 +113,11 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     ///    perform the store-side startup (create the position/retention
     ///    singleton for a new store, validate it, bootstrap/validate the
     ///    retention-expansion config singleton, bound the retained row
-    ///    count, and rebuild the complete Signature Index from durable
-    ///    signature metadata without decoding content blobs —
-    ///    `V2-roadmap` §5 total open order steps 3–10 over §13 steps 3–9);
-    /// 4. publishes the constructed facade with its five actors (§13 step 10).
+    ///    count, rebuild legacy projection rows from their content lineage,
+    ///    then rebuild the complete Signature Index from durable signature
+    ///    metadata without decoding content blobs for that index step —
+    ///    `V2-roadmap` §5 total open order steps 3–11 over §13 steps 3–11);
+    /// 4. publishes the constructed facade with its five actors (§13 step 12).
     ///
     /// Failure translation at this boundary (§16, §2): an out-of-range
     /// initial retention value throws `.invalidInput(.invalidRetentionPolicy)`;
@@ -125,7 +126,8 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     /// Authority propagates already typed as
     /// `.persistence(.corruptStoredValue)` or
     /// `.persistence(.invariantViolation)` — there is no silent repair path
-    /// for corrupted data (§13).
+    /// for corrupted data (§13). A projection-rebuild transaction failure
+    /// follows §16's uniform `.persistence(.transaction)` mapping.
     public static func open(
         configuration: HistoryConfiguration
     ) async throws -> SwiftDataHistory {
@@ -175,7 +177,10 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
             throw HistoryFailure.persistence(.openStore)
         }
 
-        // §13 steps 3–9: the Authority owns every store-side startup check.
+        // §13 steps 3–11: the Authority owns every store-side startup check,
+        // including the bounded recipe-v2 rebuild of legacy projection rows.
+        // Only that rebuild decodes legacy content; the following Signature
+        // Index construction remains scalar/signature-only (§13, §15).
         // The V2-02 §6.4 Storage clock is wired HERE, internally — the
         // production `SystemRetentionClock` witness (the `{ Date.now }`
         // default) — so the public `open(configuration:)` signature and the
@@ -192,14 +197,14 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
             )
         } catch let failure as HistoryFailure {
             // Already translated by the Authority (§16): corrupt stored
-            // values and invariant violations fail open — v1 has no silent
-            // repair path (§13).
+            // values and invariant violations fail open. The explicit legacy
+            // projection rebuild is not a general stored-data repair path (§13).
             throw failure
         } catch {
             throw HistoryFailure.persistence(.openStore)
         }
 
-        // §13 step 10: publish the constructed facade with its five actors.
+        // §13 step 12: publish the constructed facade with its five actors.
         return SwiftDataHistory(
             authority: authority,
             ingestPreparation: IngestPreparationActor(),

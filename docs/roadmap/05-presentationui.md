@@ -22,6 +22,11 @@
 - `PresentationUITests`: views render from DTO snapshots; interactions issue correct requests.
 - Import confinement (Part VI §6): `SwiftUI` confined to this target; a deliberate `HistoryDomain`/`HistoryStorage`/`SwiftData` import fails the scan.
 - Thumbnail application discipline: a thumbnail result tagged with `HistoryItemReference(id, contentVersion)` is applied only while the row still carries that exact reference (Part I §5.7, Part IV §9).
+- Relative copy time uses the system abbreviated formatter under the owning
+  `01` §6 rule. One list-owned wall-clock minute cadence supplies the same
+  explicit `now` to every row; a label may therefore lag its item-relative
+  threshold by less than one minute. Rows never own timers, and there is no
+  process-global clock service.
 - Negative: no `@Model`, Domain state, persistence rules, or change-feed bookkeeping in this target (Part I §2).
 
 ## Risks / notes

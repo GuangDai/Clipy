@@ -338,11 +338,12 @@ final class AppComposition {
         // History is suspended, newer observations replace the one pending
         // value instead of growing an unbounded task/byte backlog.
         // A PARTIAL freeze — the item declared a representation whose bytes
-        // were unavailable at freeze time (contents changed or provider
-        // timed out, per Apple's `data(forType:)` documentation) — is
-        // rejected HERE with a content-free health episode: partial Canonical
-        // Content would poison dedup/coalescing identity (audit SPEC-IMPL-005;
-        // 03a §4). The
+        // were unavailable at a stable generation, or the start/end
+        // `changeCount` fence observed a newer generation — is rejected HERE
+        // with a content-free health episode: partial Canonical Content would
+        // poison dedup/coalescing identity (audit SPEC-IMPL-005; 03a §4;
+        // REVIEW Card 5B). A generation mismatch is a retry signal and does
+        // not claim the provider timed out. The
         // observer has already consumed the changeCount, so the next copy
         // re-freezes whole. Typed History rejections are EXPECTED and
         // surfaced in the content-free `captureHealth`; only concealed
@@ -528,6 +529,10 @@ final class AppComposition {
         }
         if outcome.unsupportedPasteboardItemCount != nil {
             recordCaptureFailure(.unsupportedClipboardShape)
+            return
+        }
+        if outcome.changedDuringRead {
+            recordCaptureFailure(.declaredContentUnavailable)
             return
         }
         if !outcome.unavailableTypeIdentifiers.isEmpty {
