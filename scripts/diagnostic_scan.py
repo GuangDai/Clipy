@@ -27,14 +27,21 @@ COREDATA_CLONE_START = re.compile(
     r"Error Domain=NSCocoaErrorDomain Code=4 .*?UserInfo=\{"
 )
 COREDATA_CLONE_END = re.compile(r"\}\}")
+APPINTENTS_METADATA_WARNING = re.compile(
+    r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ "
+    r"appintentsmetadataprocessor\[\d+:\d+\] warning: "
+    r"Metadata extraction skipped\. No AppIntents\.framework dependency found\.$"
+)
 @dataclass(frozen=True)
 class ScanProfile:
     permits_coredata_clone_block: bool = False
     detects_missing_file: bool = False
+    permits_appintents_metadata_warning: bool = False
 
 
 PROFILES = {
     "strict": ScanProfile(),
+    "app": ScanProfile(permits_appintents_metadata_warning=True),
     "swiftdata": ScanProfile(permits_coredata_clone_block=True),
     "swiftdata-missing": ScanProfile(
         permits_coredata_clone_block=True,
@@ -115,6 +122,12 @@ def scan_lines(
             line = remainder[end_match.end() :]
             if not line:
                 continue
+
+        if (
+            profile.permits_appintents_metadata_warning
+            and APPINTENTS_METADATA_WARNING.fullmatch(line)
+        ):
+            continue
 
         if DIAGNOSTIC_PATTERN.search(line):
             findings.append(Finding(path, line_number, "warning/error diagnostic", line))

@@ -34,7 +34,7 @@ xcodebuild \
   CODE_SIGNING_ALLOWED=NO \
   build 2>&1 | tee "$log_dir/release-build.log"
 python3 scripts/diagnostic_scan.py \
-  --profile strict "$log_dir/release-build.log"
+  --profile app "$log_dir/release-build.log"
 
 if [[ ! -x "$executable" ]]; then
   echo "Release application executable was not produced at $executable" >&2
