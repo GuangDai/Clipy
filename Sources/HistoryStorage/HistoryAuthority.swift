@@ -357,7 +357,10 @@ internal actor HistoryAuthority {
     ///   is not a general stored-data repair path (§13). A projection-rebuild
     ///   transaction failure is
     ///   `.persistence(.transaction)` under the uniform §16 boundary.
-    internal func performStartup(initialMaximumUnpinnedItems: Int) async throws {
+    @discardableResult
+    internal func performStartup(
+        initialMaximumUnpinnedItems: Int
+    ) async throws -> ExternalConnectionID {
         // §2, §13 step 1: the singleton must never carry an out-of-range
         // retention value (D19 requires the stored policy to permit at
         // least one unpinned item).
@@ -365,7 +368,7 @@ internal actor HistoryAuthority {
             throw HistoryFailure.invalidInput(.invalidRetentionPolicy)
         }
 
-        try autoreleasepool {
+        let appIntentsConnectionID = try autoreleasepool {
             let context = ModelContext(container)
             context.autosaveEnabled = false
 #if DEBUG
@@ -394,7 +397,7 @@ internal actor HistoryAuthority {
             // connection before any facade can be published. X.3 admits no
             // grant or audit row; X.4 replaces that exact-zero audit rule
             // together with the first writer and complete validation.
-            try ensureGatewayBootstrap(in: context)
+            let appIntentsConnectionID = try ensureGatewayBootstrap(in: context)
 
             // §13 step 6 / §15: projection recipe v1 → v2 rebuild is an
             // Authority-owned, bounded, atomic startup operation. It finishes
@@ -433,10 +436,12 @@ internal actor HistoryAuthority {
                 rows: signatureIndex.itemCount
             )
 #endif
+            return appIntentsConnectionID
         }
 #if DEBUG
         storageLifecycleDebugProbe.record(phase: .startupAutoreleasePoolDrained)
 #endif
+        return appIntentsConnectionID
     }
 
     /// §13 steps 3–4: create the singleton at position 0 only for the

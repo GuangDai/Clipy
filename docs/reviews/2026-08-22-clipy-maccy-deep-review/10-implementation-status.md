@@ -31,6 +31,7 @@
 | 正常路径 correctness batch 6 | Done | [PR #7](https://github.com/GuangDai/Clipy/pull/7)，[correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32572531247) | 三个 correctness jobs 全绿；覆盖 authoritative retention-effect purge、typed ENOSPC classification、R3 hydrated cross-check、ClipboardFormats stable facts 与 Gateway allow matrix leaves；未运行 perf/AB | Card 9B、Card 6B 与 DATA-2 仍仅 Partial；不证明真实满盘、跨 surface purge、Gateway runtime 或物理按 representation I/O |
 | 正常路径 correctness batch 7 | Done | [PR #9](https://github.com/GuangDai/Clipy/pull/9)，[correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32575612061)，[HistoryCore symbol snapshot run](https://github.com/GuangDai/Clipy/actions/runs/32575532074) | 三个 correctness jobs 全绿；HistoryCore public symbol snapshot 随 X.2 contract 更新并由 correctness gate 约束；覆盖 closed capture outcome/bounded retry、Gateway contract、thumbnail current-layout accounting 与 capped-profile Signature Index coverage leaves；未运行 perf/AB | Card 5B、X.2 与 DATA-11 仍仅 Partial；不证明 hosted exact capture outcome、Gateway runtime/schema/audit、性能或 U-scale authority |
 | 正常路径 correctness batch 8 | Done | [PR #10](https://github.com/GuangDai/Clipy/pull/10)，[correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32577936510)，[HistoryCore symbol snapshot run](https://github.com/GuangDai/Clipy/actions/runs/32577662919) | 三个 correctness jobs 全绿；HistoryCore public contract 变更经runner重生成snapshot并由correctness gate约束；覆盖下表列出的 X.3 V3 schema/migration、fixed limits、deny-by-default bootstrap 与 docs/contract decisions；未运行 perf/AB | 不证明完整 Gateway、audit codec/writer/compaction、admin/runtime behavior、通用 future migration 或 crash durability |
+| 正常路径 correctness batch 9 | Done | [PR #11](https://github.com/GuangDai/Clipy/pull/11)，[correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32597687028)，[HistoryCore symbol snapshot run](https://github.com/GuangDai/Clipy/actions/runs/32582182996) | 三个 correctness jobs 全绿；HistoryCore audit/admin vocabulary 经runner重新生成snapshot并由correctness gate约束；覆盖 X.4 closed codec、current-state validation、central audit store、atomic admin mutation 与 audited admin public conformance；未运行 perf/AB | 只证明 X.4 audit/admin substrate；不证明 `ExternalGateway` actor、external facade/factory、external denial/positive runtime、App Intents、credential、CLI/transport、ordinary-open recovery 或性能 |
 | SIGNED-RUNTIME-0 | Done（指定验收 lane） | [PR #7](https://github.com/GuangDai/Clipy/pull/7) 引入 lane，[PR #8](https://github.com/GuangDai/Clipy/pull/8) 修正共享 diagnostic profile，[correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32573066624)，[master signed-runtime](https://github.com/GuangDai/Clipy/actions/runs/32573198119) | master 的手动 lane 完成一次 Release build、ad-hoc 签名及验证、Hardened Runtime flag、iCloud/ubiquity entitlement 负门与直接进程 liveness | 不证明 Developer ID、secure timestamp、notarization/stapling、Gatekeeper、TCC、login item、Carbon/status item、Space 或 WindowServer 行为 |
 
 ## 3. 正常路径 leaf 状态
@@ -118,7 +119,7 @@ finding 的其余缺口仍以“支持上限”列和第 6 节为准。
 边界另由 [PR #8](https://github.com/GuangDai/Clipy/pull/8) 的
 [correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32573066624) 与 master
 [signed-runtime run](https://github.com/GuangDai/Clipy/actions/runs/32573198119) 支持。Card 或 finding
-的其余缺口仍以“合并后的最高支持上限”列和第 10 节为准。
+的其余缺口仍以“合并后的最高支持上限”列和第 12 节为准。
 
 | Leaf | 当前状态 | Production / owning 证据 | Behavior 证据 | 合并后的最高支持上限 |
 |---|---|---|---|---|
@@ -135,7 +136,7 @@ finding 的其余缺口仍以“支持上限”列和第 6 节为准。
 以下状态只覆盖 [PR #9](https://github.com/GuangDai/Clipy/pull/9) 经
 [correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32575612061) 验证的边界；X.2 的
 HistoryCore public surface 另有 [symbol snapshot run](https://github.com/GuangDai/Clipy/actions/runs/32575532074)
-更新证据。这两条 lane 都不是 perf/AB 证据；其余缺口仍以“合并后的最高支持上限”与第 10 节为准。
+更新证据。这两条 lane 都不是 perf/AB 证据；其余缺口仍以“合并后的最高支持上限”与第 12 节为准。
 
 | Leaf | 当前状态 | Production / owning 证据 | Behavior / decision 证据 | 合并后的最高支持上限 |
 |---|---|---|---|---|
@@ -149,7 +150,7 @@ HistoryCore public surface 另有 [symbol snapshot run](https://github.com/Guang
 以下状态只覆盖 [PR #10](https://github.com/GuangDai/Clipy/pull/10) 经
 [correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32577936510) 验证的 X.3 边界；
 HistoryCore public contract 变更另有 [symbol snapshot run](https://github.com/GuangDai/Clipy/actions/runs/32577662919)
-更新证据。这两条 lane 都不是 perf/AB 证据；完整 Gateway 仍以“合并后的最高支持上限”与第 10 节为准。
+更新证据。这两条 lane 都不是 perf/AB 证据；完整 Gateway 仍以“合并后的最高支持上限”与第 12 节为准。
 
 | Leaf | 当前状态 | Production / owning 证据 | Behavior / decision 证据 | 合并后的最高支持上限 |
 |---|---|---|---|---|
@@ -158,22 +159,36 @@ HistoryCore public contract 变更另有 [symbol snapshot run](https://github.co
 | X.3 deny-by-default bootstrap | Done（指定 X.3 leaf） | [`GatewayBootstrap`](../../../Sources/HistoryStorage/GatewayBootstrap.swift) 由[`HistoryAuthority.performStartup`](../../../Sources/HistoryStorage/HistoryAuthority.swift) 在facade发布前创建/验证config+单一active App Intents connection，持久identity只铸造一次，不创建grant/audit row；只在config absent+全dependent tables empty时走migration/fresh-compatible create path | [`GatewayBootstrapTests`](../../../Tests/HistoryStorageTests/GatewayBootstrapTests.swift) 经public persistent open/reopen核对一次identity、零grants/operations，并以独立V3容器证明可区分的orphan/wrong/extra/counter/raw shapes fail closed且不持久repair | 证明X.3当前零audit表状态的原子bootstrap与可区分shape验证。无durable provenance时，“config与全dependent rows都absent”无法区分migration/fresh store与未来既有V3全删；不猜原因、不加marker/hash。X.4引入首个writer时须同步替换“零audit row”规则为完整counter/interval/payload验证 |
 | X.3 resolved schema/docs decisions | Done（指定 docs/contract leaf） | [`GatewaySchema`](../../../Sources/HistoryStorage/GatewaySchema.swift) 把 `GrantRow` 定为每 `(connection, capability)` 的current-state row，OperationRecord connection/capability为admin可缺席，`GatewayConfigRow` 不含write-only `generation`；[`ExternalGatewayContract`](../../../Sources/HistoryCore/ExternalGatewayContract.swift) 同步optional audit DTO shape | owning [`V2-05`](../../v2/V2-05-external-gateway.md#44-versioned-audit-codec-x4-frozen-contract) 明确不引入audit chain/hash/checksum，以monotone sequence+retained interval表达coherence；[`ExternalGatewayContractTests`](../../../Tests/HistoryCoreTests/ExternalGatewayContractTests.swift) 覆盖global admin的nil connection/capability | 只记录X.3 schema/contract与no-hash/DC-26决策；`OperationPayloadBlobV1`及所有operation-literal codec故意延后到X.4，因为旧illustrative admin payload shape不包含完整enroll/grant/revoke/compact/recovery cases，尚无codec、audit append/admin behavior或runtime Gateway |
 
-## 10. Batch 9 当前工作（未合并）
+## 10. Batch 9 已合并 leaf 状态
 
-以下行只记录当前工作树中已经存在的实现或冻结决定，统一保持 **In progress**；只有本 PR 的
-macOS correctness CI 绿色并合并后，下一正常实现批次才可按第 1 节规则晋级。
+以下状态只覆盖 [PR #11](https://github.com/GuangDai/Clipy/pull/11) 经
+[correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32597687028) 验证的 X.4 边界；
+HistoryCore public vocabulary 变更另有 [symbol snapshot run](https://github.com/GuangDai/Clipy/actions/runs/32582182996)
+更新证据。这两条 lane 都不是 perf/AB 证据。下表的 Done 只指所列 X.4 leaf；
+相对完整 Gateway 仍仅 Partial，因为 X.5 internal denial actor 与 X.6 positive/publication runtime 尚未由本批证明。
 
 | Leaf | 当前状态 | Production / owning 证据 | Behavior / decision 证据 | 合并后的最高支持上限 |
 |---|---|---|---|---|
-| X.4 closed audit vocabulary + limits | In progress | [`ExternalGatewayTypes`](../../../Sources/HistoryCore/ExternalGatewayTypes.swift) 保留raw 1...15并新增distinct admin raws 16...19；[`ExternalLimits`](../../../Sources/HistoryStorage/ExternalLimits.swift) 固定connection/grant/payload/逻辑accounting bounds | [`ExternalGatewayContractTests`](../../../Tests/HistoryCoreTests/ExternalGatewayContractTests.swift)、[`ExternalAccessPolicyTests`](../../../Tests/HistoryStorageTests/ExternalAccessPolicyTests.swift) 的2×8×19 closed matrix及[`ExternalLimitsTests`](../../../Tests/HistoryStorageTests/ExternalLimitsTests.swift) | 只冻结Core vocabulary、external deny matrix与固定值；symbol snapshot等待runner生成，不证明audit writer/admin/runtime |
-| X.4 `OperationPayloadBlobV1` | In progress | [`OperationPayloadBlobV1`](../../../Sources/HistoryStorage/OperationPayloadBlobV1.swift) 使用explicit 17 request / 15 result tags、16-byte UUID、16 KiB envelope与closed compatibility；没有generic map/hash/chain | [`OperationPayloadBlobV1Tests`](../../../Tests/HistoryStorageTests/OperationPayloadBlobV1Tests.swift) 的literal bytes、全tag、bounds/corruption/outcome/attribution/privacy fixtures | 本行只证明codec contract/source；writer/startup/admin/public reader由下列独立行举证，Swift编译仍待macOS CI |
-| X.4 Gateway current-state validation | In progress | [`GatewayAdministration`](../../../Sources/HistoryStorage/GatewayAdministration.swift) bounded加载Connection/Grant current rows、验证canonical非hash key/lifecycle/grantability并投影DTO；[`GatewayBootstrap`](../../../Sources/HistoryStorage/GatewayBootstrap.swift) 已移除X.3 exact-active/zero-grant重复验证 | [`GatewayCurrentStateValidationTests`](../../../Tests/HistoryStorageTests/GatewayCurrentStateValidationTests.swift) 覆盖raw/version/time/relation/cap/orphan/duplicate/regrant；[`GatewayBootstrapTests`](../../../Tests/HistoryStorageTests/GatewayBootstrapTests.swift) 增加coherent revoked reopen | 本行只关闭现有row的current-state validator与bootstrap wiring；mutation/audit/public conformance由下列独立行举证，credential仍未实现 |
-| X.4 central audit store | In progress | [`GatewayAuditStore`](../../../Sources/HistoryStorage/GatewayAuditStore.swift) 是OperationRecord insert/delete及head/floor/logical-byte counter的唯一owner，提供bounded append/read/startup validation/compact/rebase | [`GatewayAuditStoreTests`](../../../Tests/HistoryStorageTests/GatewayAuditStoreTests.swift)、[`GatewayAuditCompactionTests`](../../../Tests/HistoryStorageTests/GatewayAuditCompactionTests.swift) 覆盖sequence、exact logical accounting、bounded snapshot-head page、corruption、prefix trim、rollback与narrow recovery ceiling | 证明单Authority context内central mechanics；X.5才拥有process-local cadence scheduling，ordinary-open corruption仍无public recovery opener，不证明Gateway actor/transport或性能 |
-| X.4 atomic admin mutations | In progress | [`HistoryAuthority` Gateway admin extension](../../../Sources/HistoryStorage/GatewayAdministration.swift) 以one context/one transaction完成enroll/grant/regrant/revoke及central audit append；History ChangePosition不变 | [`GatewayAdministrationMutationTests`](../../../Tests/HistoryStorageTests/GatewayAdministrationMutationTests.swift) 覆盖injected ID、credential/connection-cap denial、current-row lifecycle、noOp audit、revoke-all与append后failure rollback | 只证明四种in-app admin mutation的Storage owner；public conformance/admin reads、Gateway actor、credential store与external dispatch尚未闭合 |
-| X.4 audited admin reads + public admin conformance | In progress | [`GatewayAdministrationReads`](../../../Sources/HistoryStorage/GatewayAdministrationReads.swift) 对connections/grants/auditLog执行mandatory append-before-publication并以pre-append head隔离audit self-row；[`SwiftDataHistory`](../../../Sources/HistoryStorage/SwiftDataHistory+GatewayAdministration.swift) 显式转发`GatewayAdminHistory`八个requirements | [`GatewayAdministrationReadTests`](../../../Tests/HistoryStorageTests/GatewayAdministrationReadTests.swift) 覆盖raw17/18/19、below/future-floor failures、high-water、audit failure barrier与healthy rebase；[`SwiftDataHistoryGatewayAdminConformanceTests`](../../../Tests/HistoryStorageTests/SwiftDataHistoryGatewayAdminConformanceTests.swift) 穿过public in-memory facade | 关闭in-app admin protocol的X.4 Storage conformance；不等于X.5 ExternalGateway actor/facade、external grant recheck、App Intents、credential或transport已交付 |
-| X.4 spec-first audit/admin contract | In progress（docs decision） | owning [`V2-05 §4.4`](../../v2/V2-05-external-gateway.md#44-versioned-audit-codec-x4-frozen-contract) 与[`V2 roadmap X.4`](../../v2/V2-roadmap.md#10-v2-05--external-gateway-and-audit-x1x2) | 已冻结mandatory audit-before-publication、read pre-append snapshot head、每call denial record、logical `payloadBlob.count + 128`及ordinary-open recovery ceiling | 这是implementation输入，不是代码行为证据；Gateway actor/facade/App Intents/CLI/transport仍未实现 |
+| X.4 closed audit vocabulary + limits | Done（指定 X.4 leaf） | [`ExternalGatewayTypes`](../../../Sources/HistoryCore/ExternalGatewayTypes.swift) 保留raw 1...15并新增distinct admin raws 16...19；[`ExternalLimits`](../../../Sources/HistoryStorage/ExternalLimits.swift) 固定connection/grant/payload/逻辑accounting bounds | [`ExternalGatewayContractTests`](../../../Tests/HistoryCoreTests/ExternalGatewayContractTests.swift)、[`ExternalAccessPolicyTests`](../../../Tests/HistoryStorageTests/ExternalAccessPolicyTests.swift) 的2×8×19 closed matrix及[`ExternalLimitsTests`](../../../Tests/HistoryStorageTests/ExternalLimitsTests.swift)；[runner snapshot](https://github.com/GuangDai/Clipy/actions/runs/32582182996) | 只冻结Core vocabulary、external deny matrix与固定值；不证明audit writer、Gateway actor/facade 或 runtime |
+| X.4 `OperationPayloadBlobV1` | Done（指定 X.4 leaf） | [`OperationPayloadBlobV1`](../../../Sources/HistoryStorage/OperationPayloadBlobV1.swift) 使用explicit 17 request / 15 result tags、16-byte UUID、16 KiB envelope与closed compatibility；没有generic map/hash/chain | [`OperationPayloadBlobV1Tests`](../../../Tests/HistoryStorageTests/OperationPayloadBlobV1Tests.swift) 的literal bytes、全tag、bounds/corruption/outcome/attribution/privacy fixtures | 只证明codec及其compatibility/bounds；不单独证明writer、startup、admin、Gateway runtime 或 tamper evidence |
+| X.4 Gateway current-state validation | Done（指定 X.4 leaf） | [`GatewayAdministration`](../../../Sources/HistoryStorage/GatewayAdministration.swift) bounded加载Connection/Grant current rows、验证canonical非hash key/lifecycle/grantability并投影DTO；[`GatewayBootstrap`](../../../Sources/HistoryStorage/GatewayBootstrap.swift) 已移除X.3 exact-active/zero-grant重复验证 | [`GatewayCurrentStateValidationTests`](../../../Tests/HistoryStorageTests/GatewayCurrentStateValidationTests.swift) 覆盖raw/version/time/relation/cap/orphan/duplicate/regrant；[`GatewayBootstrapTests`](../../../Tests/HistoryStorageTests/GatewayBootstrapTests.swift) 增加coherent revoked reopen | 只关闭现有row的current-state validator与bootstrap wiring；credential、external dispatch 与 facade runtime 未实现 |
+| X.4 central audit store | Done（指定 X.4 leaf） | [`GatewayAuditStore`](../../../Sources/HistoryStorage/GatewayAuditStore.swift) 是OperationRecord insert/delete及head/floor/logical-byte counter的唯一owner，提供bounded append/read/startup validation/compact/rebase | [`GatewayAuditStoreTests`](../../../Tests/HistoryStorageTests/GatewayAuditStoreTests.swift)、[`GatewayAuditCompactionTests`](../../../Tests/HistoryStorageTests/GatewayAuditCompactionTests.swift) 覆盖sequence、exact logical accounting、bounded snapshot-head page、corruption、prefix trim、rollback与narrow recovery ceiling | 证明单Authority context内central mechanics；X.5才拥有process-local cadence scheduling，ordinary-open corruption仍无public recovery opener，不证明Gateway actor/transport或性能 |
+| X.4 atomic admin mutations | Done（指定 X.4 leaf） | [`HistoryAuthority` Gateway admin extension](../../../Sources/HistoryStorage/GatewayAdministration.swift) 以one context/one transaction完成enroll/grant/regrant/revoke及central audit append；History ChangePosition不变 | [`GatewayAdministrationMutationTests`](../../../Tests/HistoryStorageTests/GatewayAdministrationMutationTests.swift) 覆盖injected ID、credential/connection-cap denial、current-row lifecycle、noOp audit、revoke-all与append后failure rollback | 只证明四种in-app admin mutation的Storage owner；public conformance/admin reads由下行举证，Gateway actor、credential store 与 external dispatch 未交付 |
+| X.4 audited admin reads + public admin conformance | Done（指定 X.4 leaf） | [`GatewayAdministrationReads`](../../../Sources/HistoryStorage/GatewayAdministrationReads.swift) 对connections/grants/auditLog执行mandatory append-before-publication并以pre-append head隔离audit self-row；[`SwiftDataHistory`](../../../Sources/HistoryStorage/SwiftDataHistory+GatewayAdministration.swift) 显式转发`GatewayAdminHistory`八个requirements | [`GatewayAdministrationReadTests`](../../../Tests/HistoryStorageTests/GatewayAdministrationReadTests.swift) 覆盖raw17/18/19、below/future-floor failures、high-water、audit failure barrier与healthy rebase；[`SwiftDataHistoryGatewayAdminConformanceTests`](../../../Tests/HistoryStorageTests/SwiftDataHistoryGatewayAdminConformanceTests.swift) 穿过public in-memory admin facade | 关闭in-app admin protocol的X.4 Storage conformance；不等于X.5 internal denial actor、X.6 external facade/positive runtime、App Intents、credential或transport已交付 |
+| X.4 spec-first audit/admin contract | Done（指定 docs decision leaf） | owning [`V2-05 §4.4`](../../v2/V2-05-external-gateway.md#44-versioned-audit-codec-x4-frozen-contract) 与[`V2 roadmap X.4`](../../v2/V2-roadmap.md#10-v2-05--external-gateway-and-audit-x1x2) | 已冻结mandatory audit-before-publication、read pre-append snapshot head、每call denial record、logical `payloadBlob.count + 128`及ordinary-open recovery ceiling | 这是implementation输入；代码行为只由上述独立rows/tests支持，Gateway actor/facade/App Intents/CLI/transport仍未实现 |
 
-## 11. 明确仍 Open，禁止误报完成
+## 11. Batch 10 X.5 当前工作（未合并）
+
+以下行只记录已领取的 X.5 工作边界，统一保持 **In progress**。它们不是已合并产品能力；
+只有本批实际源码、behavior tests、macOS correctness CI 与 PR 合并证据都到位后，
+下一正常批次才可按第 1 节晋级。本批不运行 perf/AB，也不在 internal denial actor runtime 实际穿过前声称 X.5 已支持。
+
+| Leaf | 当前状态 | Production / owning 证据 | Behavior / decision 证据 | 合并后最高支持上限 |
+|---|---|---|---|---|
+| X.5 internal rate/admission | In progress | [`ExternalRateLimiter`](../../../Sources/HistoryStorage/ExternalRateLimiter.swift) 与 [`ExternalGateway`](../../../Sources/HistoryStorage/ExternalGateway.swift)；owning [`V2-05 §3.1/§6.2`](../../v2/V2-05-external-gateway.md) | [`ExternalRateLimiterTests`](../../../Tests/HistoryStorageTests/ExternalRateLimiterTests.swift) 固定30-token、1秒refill、backward/cap/remainder；[`ExternalGatewayDenialTests`](../../../Tests/HistoryStorageTests/ExternalGatewayDenialTests.swift) 覆盖startup-baked ID、closed request bounds、pure allow-matrix、cadence及无sleep rate denial；macOS CI待本批提交后验证 | 最多只能关闭 internal admission classification/cadence；不包含public facade/factory、granted positive History read/write、App Intents、credential、CLI 或 transport |
+| X.5 authoritative denial actor substrate | In progress | [`GatewayAuthorization`](../../../Sources/HistoryStorage/GatewayAuthorization.swift) 由sole [`HistoryAuthority`](../../../Sources/HistoryStorage/HistoryAuthority.swift) 执行targeted live connection/grant check与mandatory denial audit；[`SwiftDataHistory.open`](../../../Sources/HistoryStorage/SwiftDataHistory.swift) 只在startup成功并返回durable App Intents ID后构造actor | [`GatewayAuthorizationTests`](../../../Tests/HistoryStorageTests/GatewayAuthorizationTests.swift) 与 [`ExternalGatewayDenialTests`](../../../Tests/HistoryStorageTests/ExternalGatewayDenialTests.swift) 覆盖unknown/invalid pair零token/零audit、no/revoked/implied grant、revoked connection、rate denial、History零读取/零mutation及content-free payload；macOS CI待本批提交后验证 | 只能支持internal actor substrate的denial/no-content/no-mutation边界；不证明public facade/factory、positive request、TOCTOU success path、App Intents 或跨进程调用 |
+
+## 12. 明确仍 Open，禁止误报完成
 
 - Card 9B 在Batch 6合并后仍只关闭单AppComposition/ViewState内capture、policy、Clear/remove/revise
   receipt路径；跨window/多panel、未来cache以及不经该owner的commit仍Open。
@@ -186,10 +201,11 @@ macOS correctness CI 绿色并合并后，下一正常实现批次才可按第 1
   synthetic production-catch proof外推为物理磁盘验收。
 - Card 3D、Card 9D hosted Retry/no-Retry control、localization、VoiceOver/FKA、custom shortcut、signed release、StoreRoot/recovery、
   Gateway后续层、format runtime/manifests与tiered/unbounded production transition仍按 `04`/`07`–`09` 的 gates执行。
-- Batch 8 已合并的V3 schema/migration、ExternalLimits、bootstrap与docs/contract alignment只关闭
-  X.3 persistence leaf，不是完整 Gateway。X.3 不实现 `OperationPayloadBlobV1`或任何audit
-  writer/admin behavior；完整admin literal shape、codec、append/compaction与startup interval validation
-  必须由下一层 X.4 spec-first atomic-audit leaf 同批落地。
+- Batch 9 已合并的 X.4 codec、audit store、current-state validation、admin mutation/read与public admin
+  conformance 只关闭audit/admin substrate，不是完整 Gateway。internal `ExternalGateway` denial actor由 X.5
+  负责；external facade/factory、positive runtime、App Intents、credential、CLI/transport由 X.6 及后续层负责。
+- Public `ExternalHistoryFacade`/factory 与其symbol/runtime publication不属于Batch 10；按最新批次边界移到
+  下一 X.6 positive+publication leaf，当前保持Open。internal denial actor Green不得被外推为public facade可构造或可用。
 - X.3 bootstrap 的“config absent+全dependent tables empty”是migration/fresh-compatible create shape，但与
   未来既有V3全删同形；无durable provenance时这个因果歧义仍Open，不得用marker、hash
   或猜测修复伪装成已证明。
@@ -203,7 +219,7 @@ macOS correctness CI 绿色并合并后，下一正常实现批次才可按第 1
   format-facts模块统一；owner-specific admission仍必须分开，不能造中央policy开关。
 - 本文件中的“Done”只关闭所列 leaf；不能据此宣称 state 3、全面超过 Maccy 或字面无限历史。
 
-## 12. Agent 领取前检查
+## 13. Agent 领取前检查
 
 1. 先查本表：Done leaf 不得重做；Partial 只能领取“支持上限/下一步”列中的缺口。
 2. 再查 `04` 的唯一 leaf 与 decision/spec gate；没有唯一 observable behavior 就不编码。
