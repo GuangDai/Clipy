@@ -24,9 +24,7 @@
 /// Failure vocabulary (audit SPEC-IMPL-005,
 /// docs/reviews/2026-08-20-clipy-maccy-audit/02-spec-implementation.md):
 /// the freeze distinguishes "nothing retainable" (nil) from "declared but
-/// unavailable" (`CaptureOutcome.unavailableTypeIdentifiers` — Apple
-/// documents a nil `data(forType:)` as the contents having changed or the
-/// provider having timed out), and the write throws
+/// unavailable" (`CaptureOutcome.declaredUnavailable`), and the write throws
 /// `PasteboardWriteFailure` when an item refuses a staged representation or
 /// the pasteboard refuses the completed item, so neither a partial freeze
 /// nor a known incomplete write can masquerade as a complete success. A
@@ -97,11 +95,18 @@ public struct PasteboardAdapter {
     /// concealed, and multi-item outcomes return nil here; callers needing
     /// the reason use `captureOutcome(observedAt:)`.
     public func capture(observedAt: Date = Date()) -> ClipboardCapture? {
-        guard let outcome = captureOutcome(observedAt: observedAt),
-              outcome.isComplete else {
+        guard let outcome = captureOutcome(observedAt: observedAt) else {
             return nil
         }
-        return outcome.capture
+        switch outcome {
+        case let .complete(complete):
+            return complete.capture
+        case .declaredUnavailable,
+             .concealed,
+             .unsupportedMultiItem,
+             .changedDuringRead:
+            return nil
+        }
     }
 
     /// Freezes the current pasteboard contents into a raw capture PLUS the
@@ -116,11 +121,10 @@ public struct PasteboardAdapter {
     /// - Every retainable typed representation of the supported single item
     ///   becomes one `CapturedRepresentation` (type identifier + bytes).
     /// - A type the item DECLARES but whose `data(forType:)` comes back
-    ///   nil is never silently dropped: Apple documents that outcome as
-    ///   the contents having changed or the provider having timed out, so
-    ///   the type identifier is recorded in
-    ///   `CaptureOutcome.unavailableTypeIdentifiers` and the freeze is
-    ///   partial — a caller must not treat it as the complete observation
+    ///   nil is never silently dropped: the type identifier is recorded in
+    ///   `CaptureOutcome.declaredUnavailable` and the freeze is partial — a
+    ///   caller must not treat it as the complete observation or infer a
+    ///   provider-specific cause
     ///   (the composition root drops partial freezes at the seam rather
     ///   than admitting partial Canonical Content, 01 §5.1).
     /// - Types whose payload is present but EMPTY are skipped without a
@@ -132,10 +136,8 @@ public struct PasteboardAdapter {
     /// - If the item's DECLARED types contain one of the six exclusion
     ///   markers (docs/05-authority-kernel.md §6.1), the adapter returns an
     ///   explicit concealed outcome before calling `data(forType:)` for any
-    ///   type. Its capture has no representations and `isConcealed == true`;
-    ///   storage still rejects that capture with
-    ///   `.invalidInput(.excludedFromHistory)` before fingerprinting if a
-    ///   direct caller submits it (defense in depth).
+    ///   type. The outcome carries no capture, so no caller can accidentally
+    ///   submit sibling bytes that were intentionally not read.
     /// - `origin.sourceApplication` is the frontmost application's bundle
     ///   identifier (`NSWorkspace`); nil when unknown.
     /// - Returns nil only when the item declared no unavailable content and
@@ -147,7 +149,7 @@ public struct PasteboardAdapter {
     /// - The pasteboard `changeCount` is recorded before metadata access and
     ///   after the last payload read. A mismatch produces an explicit
     ///   changed-during-read outcome containing no representations. It is a
-    ///   retry signal, not an unavailable-type/provider-timeout diagnosis.
+    ///   retry signal, not an unavailable-type diagnosis.
     public func captureOutcome(observedAt: Date = Date()) -> CaptureOutcome? {
         let startChangeCount = pasteboard.changeCount
         guard let items = pasteboard.pasteboardItems,
@@ -155,7 +157,6 @@ public struct PasteboardAdapter {
             let endChangeCount = pasteboard.changeCount
             guard startChangeCount == endChangeCount else {
                 return changedDuringReadOutcome(
-                    observedAt: observedAt,
                     startChangeCount: startChangeCount,
                     endChangeCount: endChangeCount
                 )
@@ -166,27 +167,14 @@ public struct PasteboardAdapter {
             let endChangeCount = pasteboard.changeCount
             guard startChangeCount == endChangeCount else {
                 return changedDuringReadOutcome(
-                    observedAt: observedAt,
                     startChangeCount: startChangeCount,
                     endChangeCount: endChangeCount
                 )
             }
-            return CaptureOutcome(
-                capture: ClipboardCapture(
-                    representations: [],
-                    origin: CopyOriginObservation(
-                        sourceApplication: NSWorkspace.shared.frontmostApplication?
-                            .bundleIdentifier,
-                        lineageHint: nil
-                    ),
-                    observedAt: observedAt,
-                    isConcealed: false
-                ),
-                unavailableTypeIdentifiers: [],
-                unsupportedPasteboardItemCount: items.count,
-                startChangeCount: startChangeCount,
-                endChangeCount: endChangeCount
-            )
+            return .unsupportedMultiItem(.init(
+                itemCount: items.count,
+                changeCount: startChangeCount
+            ))
         }
         let typeIdentifiers = item.types.map { $0.rawValue }
         if let marker = typeIdentifiers.first(where: {
@@ -195,27 +183,14 @@ public struct PasteboardAdapter {
             let endChangeCount = pasteboard.changeCount
             guard startChangeCount == endChangeCount else {
                 return changedDuringReadOutcome(
-                    observedAt: observedAt,
                     startChangeCount: startChangeCount,
                     endChangeCount: endChangeCount
                 )
             }
-            return CaptureOutcome(
-                capture: ClipboardCapture(
-                    representations: [],
-                    origin: CopyOriginObservation(
-                        sourceApplication: NSWorkspace.shared.frontmostApplication?
-                            .bundleIdentifier,
-                        lineageHint: nil
-                    ),
-                    observedAt: observedAt,
-                    isConcealed: true
-                ),
-                unavailableTypeIdentifiers: [],
-                concealmentMarkerTypeIdentifier: marker,
-                startChangeCount: startChangeCount,
-                endChangeCount: endChangeCount
-            )
+            return .concealed(.init(
+                markerTypeIdentifier: marker,
+                changeCount: startChangeCount
+            ))
         }
 
         var representations: [CapturedRepresentation] = []
@@ -257,71 +232,53 @@ public struct PasteboardAdapter {
         let endChangeCount = pasteboard.changeCount
         guard startChangeCount == endChangeCount else {
             return changedDuringReadOutcome(
-                observedAt: observedAt,
                 startChangeCount: startChangeCount,
                 endChangeCount: endChangeCount
             )
         }
+        let capture = ClipboardCapture(
+            representations: representations,
+            origin: CopyOriginObservation(
+                sourceApplication: NSWorkspace.shared.frontmostApplication?
+                    .bundleIdentifier,
+                lineageHint: lineageHint
+            ),
+            observedAt: observedAt,
+            isConcealed: false
+        )
         guard !representations.isEmpty else {
             guard !unavailableTypeIdentifiers.isEmpty else { return nil }
-            return CaptureOutcome(
-                capture: ClipboardCapture(
-                    representations: [],
-                    origin: CopyOriginObservation(
-                        sourceApplication: NSWorkspace.shared.frontmostApplication?
-                            .bundleIdentifier,
-                        lineageHint: lineageHint
-                    ),
-                    observedAt: observedAt,
-                    isConcealed: false
-                ),
+            return .declaredUnavailable(.init(
+                partialCapture: capture,
                 unavailableTypeIdentifiers: unavailableTypeIdentifiers,
-                startChangeCount: startChangeCount,
-                endChangeCount: endChangeCount
-            )
+                changeCount: startChangeCount
+            ))
         }
 
-        return CaptureOutcome(
-            capture: ClipboardCapture(
-                representations: representations,
-                origin: CopyOriginObservation(
-                    sourceApplication: NSWorkspace.shared.frontmostApplication?
-                        .bundleIdentifier,
-                    lineageHint: lineageHint
-                ),
-                observedAt: observedAt,
-                isConcealed: false
-            ),
+        if unavailableTypeIdentifiers.isEmpty {
+            return .complete(.init(
+                capture: capture,
+                changeCount: startChangeCount
+            ))
+        }
+        return .declaredUnavailable(.init(
+            partialCapture: capture,
             unavailableTypeIdentifiers: unavailableTypeIdentifiers,
-            concealmentMarkerTypeIdentifier: nil,
-            startChangeCount: startChangeCount,
-            endChangeCount: endChangeCount
-        )
+            changeCount: startChangeCount
+        ))
     }
 
     /// Builds the one content-free retry outcome for an ownership change
     /// observed by the freeze fence (REVIEW Card 5B). Bytes read before the
     /// mismatch are intentionally discarded rather than partially admitted.
     private func changedDuringReadOutcome(
-        observedAt: Date,
         startChangeCount: Int,
         endChangeCount: Int
     ) -> CaptureOutcome {
-        CaptureOutcome(
-            capture: ClipboardCapture(
-                representations: [],
-                origin: CopyOriginObservation(
-                    sourceApplication: NSWorkspace.shared.frontmostApplication?
-                        .bundleIdentifier,
-                    lineageHint: nil
-                ),
-                observedAt: observedAt,
-                isConcealed: false
-            ),
-            unavailableTypeIdentifiers: [],
+        .changedDuringRead(.init(
             startChangeCount: startChangeCount,
             endChangeCount: endChangeCount
-        )
+        ))
     }
 
     /// Writes the payload's Effective Content representations plus the
@@ -423,73 +380,97 @@ package struct PasteboardFailureSimulation: Sendable {
 
 // MARK: - Capture outcome + write failure (audit SPEC-IMPL-005)
 
-/// The outcome of a capture freeze (03a §4): the frozen capture plus an
-/// unavailable-type record, an explicit early-concealment record, an
-/// unsupported multi-item shape, or a start/end generation mismatch. These
-/// records keep partial, superseded, intentionally unread, and structurally
-/// unsupported content distinguishable from a complete freeze
-/// (SPEC-IMPL-005: incomplete Canonical Content must never enter History
-/// posing as complete).
-public struct CaptureOutcome: Sendable, Equatable {
-    /// The frozen capture (03a §4). Holds only the representations whose
-    /// bytes were actually observed.
-    public let capture: ClipboardCapture
+/// The closed outcome of a capture freeze (03a §4; REVIEW Card 5B). Each
+/// case carries only facts valid for that state, so callers cannot construct
+/// or receive contradictory combinations such as a complete concealed
+/// capture or an ownership-race result containing bytes. `nil` remains the
+/// truly empty or metadata-only observation.
+public enum CaptureOutcome: Sendable, Equatable {
+    /// One stable pasteboard generation whose retainable representations were
+    /// all observed. This is the only case callers may admit to History.
+    case complete(Complete)
 
-    /// Every declared type identifier whose payload was unavailable at
-    /// freeze time, in declaration order. Empty on a complete freeze.
-    public let unavailableTypeIdentifiers: [String]
+    /// One stable generation with at least one declared content type whose
+    /// bytes were unavailable. `partialCapture` holds only bytes actually
+    /// observed; the case records no provider-specific cause.
+    case declaredUnavailable(DeclaredUnavailable)
 
-    /// The declared marker that caused an early privacy short-circuit, in
-    /// pasteboard declaration order. A non-nil value means the adapter read
-    /// no payload bytes and the enclosed capture intentionally contains no
-    /// representations. This is distinct from an empty pasteboard or an
-    /// unavailable payload, while remaining compatible with the composition
-    /// root's existing `isComplete` admission check.
-    public let concealmentMarkerTypeIdentifier: String?
+    /// A declared privacy marker stopped the freeze before any payload read.
+    case concealed(Concealed)
 
-    /// The observed pasteboard item count when the current flat capture model
-    /// cannot preserve the clipboard shape. Non-nil means no item payload was
-    /// read and `capture.representations` is empty. Item boundaries and
-    /// duplicate type identifiers are never flattened or merged.
-    public let unsupportedPasteboardItemCount: Int?
+    /// The current flat capture model cannot preserve multiple item
+    /// boundaries. No item payload was read.
+    case unsupportedMultiItem(UnsupportedMultiItem)
 
-    /// Pasteboard generation observed before reading item metadata.
-    public let startChangeCount: Int
+    /// Ownership/content changed while the freeze was read. Bytes from the
+    /// superseded generation are discarded; this content-free case asks the
+    /// observer to retry without diagnosing unavailable content.
+    case changedDuringRead(ChangedDuringRead)
 
-    /// Pasteboard generation observed after the final payload read.
-    public let endChangeCount: Int
+    /// Facts of a stable, complete freeze. Only the adapter can create this
+    /// payload, so a caller cannot relabel a concealed capture as complete.
+    public struct Complete: Sendable, Equatable {
+        public let capture: ClipboardCapture
+        public let changeCount: Int
 
-    /// Whether ownership/content changed while this freeze was being read.
-    /// Such an outcome is content-free and tells the caller to retry the
-    /// newer generation; it does not claim that a provider timed out.
-    public var changedDuringRead: Bool {
-        startChangeCount != endChangeCount
+        fileprivate init(capture: ClipboardCapture, changeCount: Int) {
+            self.capture = capture
+            self.changeCount = changeCount
+        }
     }
 
-    /// Whether the freeze observed every declared representation — the
-    /// only freeze a caller may treat as the complete observation.
-    public var isComplete: Bool {
-        unavailableTypeIdentifiers.isEmpty
-            && concealmentMarkerTypeIdentifier == nil
-            && unsupportedPasteboardItemCount == nil
-            && !changedDuringRead
+    /// Facts of a stable partial freeze. The adapter calls the private
+    /// initializer only after observing a non-empty unavailable set.
+    public struct DeclaredUnavailable: Sendable, Equatable {
+        public let partialCapture: ClipboardCapture
+        public let unavailableTypeIdentifiers: [String]
+        public let changeCount: Int
+
+        fileprivate init(
+            partialCapture: ClipboardCapture,
+            unavailableTypeIdentifiers: [String],
+            changeCount: Int
+        ) {
+            self.partialCapture = partialCapture
+            self.unavailableTypeIdentifiers = unavailableTypeIdentifiers
+            self.changeCount = changeCount
+        }
     }
 
-    /// Creates the outcome; the adapter is the only producer.
-    fileprivate init(
-        capture: ClipboardCapture,
-        unavailableTypeIdentifiers: [String],
-        concealmentMarkerTypeIdentifier: String? = nil,
-        unsupportedPasteboardItemCount: Int? = nil,
-        startChangeCount: Int,
-        endChangeCount: Int
-    ) {
-        self.capture = capture
-        self.unavailableTypeIdentifiers = unavailableTypeIdentifiers
-        self.concealmentMarkerTypeIdentifier = concealmentMarkerTypeIdentifier
-        self.unsupportedPasteboardItemCount = unsupportedPasteboardItemCount
-        self.startChangeCount = startChangeCount
-        self.endChangeCount = endChangeCount
+    /// Facts observed before a privacy short-circuit. There is intentionally
+    /// no capture or payload field.
+    public struct Concealed: Sendable, Equatable {
+        public let markerTypeIdentifier: String
+        public let changeCount: Int
+
+        fileprivate init(markerTypeIdentifier: String, changeCount: Int) {
+            self.markerTypeIdentifier = markerTypeIdentifier
+            self.changeCount = changeCount
+        }
+    }
+
+    /// Facts of an unsupported multi-item clipboard. There is intentionally
+    /// no capture or payload field.
+    public struct UnsupportedMultiItem: Sendable, Equatable {
+        public let itemCount: Int
+        public let changeCount: Int
+
+        fileprivate init(itemCount: Int, changeCount: Int) {
+            self.itemCount = itemCount
+            self.changeCount = changeCount
+        }
+    }
+
+    /// The two generations around an unstable read. There is intentionally
+    /// no capture, unavailable-type, or provider-reason field.
+    public struct ChangedDuringRead: Sendable, Equatable {
+        public let startChangeCount: Int
+        public let endChangeCount: Int
+
+        fileprivate init(startChangeCount: Int, endChangeCount: Int) {
+            self.startChangeCount = startChangeCount
+            self.endChangeCount = endChangeCount
+        }
     }
 }
 

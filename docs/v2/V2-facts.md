@@ -2851,10 +2851,10 @@ claim is made (OPEN set unchanged).
   index drift between the `localizedStandardRange` result and the excerpt).
 
 ##### OPEN 7 — Performance gates (the G5/G7/G8 triggers, restated as proof)
-- `P1-PERF-1`: metadata-only startup/index rebuild p95 < 250 ms at 5,000 items
-  on the minimum hardware profile with the checkpoint reuse path; and the reuse
-  path is measurably faster than the rebuild path (the G5 trigger is the
-  *admission* bar; the proof shows the graft actually clears it).
+- `P1-PERF-1`: **blocked by the V2-06 DATA-11 controlling amendment**. Any
+  future checkpoint proof must preserve authoritative Canonical coverage on a
+  hit and then show the admitted path clears the 250 ms G5 bar; the obsolete
+  metadata-only reuse claim is not executable.
 - `P2-PERF-1`: locale-sensitive exact search p95 and correctness across the
   supported locales within the v1 search cost model (`06` §9 — scan all bounded
   scalar projections, no cache).

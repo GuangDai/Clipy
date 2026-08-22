@@ -45,16 +45,31 @@ struct WS5ComposedCaptureRejectionTests {
         // Early whole-item privacy semantics (05 §6.1): the marker is enough
         // to construct a concealed rejection value; sibling bytes remain
         // unread and therefore cannot be retained by the adapter.
+        let observedAt = Date(timeIntervalSinceReferenceDate: 700_200_900)
         let outcome = try #require(
             adapter.captureOutcome(
-                observedAt: Date(timeIntervalSinceReferenceDate: 700_200_900)
+                observedAt: observedAt
             )
         )
-        let capture = outcome.capture
-        #expect(!outcome.isComplete)
-        #expect(capture.isConcealed == true)
-        #expect(capture.representations.isEmpty)
+        guard case let .concealed(value) = outcome else {
+            Issue.record("WS5: expected the closed concealed adapter outcome")
+            return
+        }
+        #expect(value.markerTypeIdentifier == "org.nspasteboard.ConcealedType")
         #expect(adapter.capture() == nil)
+
+        // Production stops at the content-free outcome above. Construct a
+        // raw concealed capture separately to preserve Storage's independent
+        // defense-in-depth rejection proof.
+        let capture = ClipboardCapture(
+            representations: [],
+            origin: CopyOriginObservation(
+                sourceApplication: nil,
+                lineageHint: nil
+            ),
+            observedAt: observedAt,
+            isConcealed: true
+        )
 
         do {
             _ = try await history.perform(.capture(capture))

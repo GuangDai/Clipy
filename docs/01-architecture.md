@@ -273,7 +273,12 @@ These are required future gates, not current claims:
 - `ModelContext.transaction` is the v1 atomic write primitive. Closure success commits pending changes; the kernel does not call a second `save()` afterward.
 - `registeredModel(for:)` accepts a SwiftData `PersistentIdentifier`, not `HistoryItemID`, and therefore is not a business-ID lookup mechanism.
 - The design does not depend on undocumented manual-refresh APIs or on a permanently resident context.
-- `FetchDescriptor.propertiesToFetch` may be used to limit scalar reads, but the scaffold must prove that browse/search/startup do not decode content blobs before making a performance claim.
+- `FetchDescriptor.propertiesToFetch` may be used to limit scalar reads. The
+  scaffold must prove that browse/search do not decode content blobs before
+  making a scalar-lane performance claim. Current hard-capped startup is a
+  separate correctness path: it deliberately decodes Canonical to recompute
+  authoritative Signature Index coverage, never revision state merely for the
+  index, and any open-time performance claim must include that capped pass.
 - `@Attribute(.externalStorage)` is a storage hint, not a correctness or memory guarantee.
 
 Part V translates these facts into the Authority and schema design. Part VI owns the executable proofs.

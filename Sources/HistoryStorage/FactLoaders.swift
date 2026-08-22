@@ -259,8 +259,9 @@ internal enum HistoryItemRowHydration {
 ///    An unavailable or over-bound inventory cannot prove candidacy and maps
 ///    to `.temporarilyUnavailable(.dedupIndexRebuild)` (WS5, §16). An
 ///    `.unready` index or a ready index whose `itemIDs` differs from the
-///    derived set triggers one complete rebuild from every retained row's
-///    signature blob within the hard item bound (§12).
+///    derived set triggers one complete hard-capped rebuild from every
+///    retained row's Canonical and signature blobs, including recomputed xxh3
+///    coverage (§12, DATA-11).
 /// 2. Intersect posting sets for all incoming signature entries (derived
 ///    from the prepared Canonical Content, the same entries preparation
 ///    constructed at §6.1 step 6) via `SignatureIndex.candidateIDs`.
@@ -336,7 +337,10 @@ internal enum IngestFactLoader {
         let retainedIDs = Set(inventory.map(\.id))
 
         // §7.1 step 1: require a ready index for exactly that retained set;
-        // otherwise attempt one complete signature-metadata rebuild (§12).
+        // otherwise attempt one complete authoritative rebuild (§12). The
+        // current hard-capped rebuild decodes Canonical and recomputes xxh3;
+        // this full hydration runs ONLY on the unready/stale branch and must
+        // not survive the U-scale index replacement (DATA-11).
         let index: SignatureIndex
         if case .ready = signatureIndex.state, signatureIndex.itemIDs == retainedIDs {
             index = signatureIndex
@@ -415,21 +419,25 @@ internal enum IngestFactLoader {
     }
 
     /// Rebuilds the complete Signature Index from every retained row's
-    /// signature blob within the hard item bound. docs/05-authority-kernel.md
-    /// §7.1 step 1, §12 ("Ready means every retained row contributes every
-    /// Canonical signature entry exactly once"), §13.
+    /// Canonical and signature blobs within the hard item bound, recomputing
+    /// xxh3 before declaring the entries authoritative negative evidence.
+    /// docs/05-authority-kernel.md §7.1 step 1, §12 ("Ready means every
+    /// retained row contributes every Canonical signature entry exactly
+    /// once"), §13; DATA-11.
     ///
-    /// The fetch is scalar-plus-signature-blob only; Canonical and revision
-    /// blobs are never decoded for a rebuild (§13). Failure mapping (§16,
-    /// docs/02-domain.md §5.1, and `SignatureIndexRejection`'s documented
-    /// capture-path mapping):
+    /// This full Canonical pass occurs only when the existing index is
+    /// unready/stale, remains capped by `hardMaximumRetainedItems`, never
+    /// decodes revision blobs, and must not survive the U-scale index
+    /// replacement. Failure mapping (§16, docs/02-domain.md §5.1, and
+    /// `SignatureIndexRejection`'s documented capture-path mapping):
     ///
     /// - a framework fetch failure, an over-bound retained set, or a
     ///   `SignatureIndex.build` rejection means the index cannot be rebuilt
     ///   to a proved-complete state →
     ///   `.temporarilyUnavailable(.dedupIndexRebuild)` (the WS5 path,
     ///   docs/06-cross-cutting.md §8);
-    /// - a corrupt signature blob is a decode failure →
+    /// - a corrupt Canonical/signature blob or authoritative fingerprint
+    ///   coverage failure is a decode failure →
     ///   `.persistence(.corruptStoredValue)` via the codec mapping (the §13
     ///   stance: corrupt durable signature metadata fails closed rather than
     ///   enabling writes from an unproved state);
@@ -442,7 +450,11 @@ internal enum IngestFactLoader {
         limits: HistoryLimits
     ) throws -> SignatureIndex {
         var descriptor = FetchDescriptor<HistoryItemRow>()
-        descriptor.propertiesToFetch = [\.id, \.canonicalSignatureBlob]
+        descriptor.propertiesToFetch = [
+            \.id,
+            \.canonicalBlob,
+            \.canonicalSignatureBlob,
+        ]
         descriptor.fetchLimit = limits.hardMaximumRetainedItems + 1
         let rows: [HistoryItemRow]
         do {
@@ -457,8 +469,17 @@ internal enum IngestFactLoader {
         signatures.reserveCapacity(rows.count)
         for row in rows {
             let itemID = HistoryItemID(rawValue: row.id)
+            // DATA-11 capped-only proof: an unready/stale index cannot use
+            // structurally valid signature metadata as negative evidence
+            // until xxh3 has been recomputed from authoritative Canonical
+            // bytes. The ready fast path above never enters this full scan;
+            // revision blobs remain untouched.
             let entries = try mapCodecFailure {
-                try SignatureBlobCodec.decode(row.canonicalSignatureBlob, limits: limits)
+                try SignatureBlobCodec.decodeAuthoritativeEntries(
+                    canonicalBlob: row.canonicalBlob,
+                    signatureBlob: row.canonicalSignatureBlob,
+                    limits: limits
+                )
             }
             guard signatures.updateValue(entries, forKey: itemID) == nil else {
                 throw HistoryFailure.persistence(.invariantViolation)

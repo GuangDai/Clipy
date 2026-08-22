@@ -1101,12 +1101,12 @@ path:
    scheduler runs the scan asynchronously on its own executor) - it does **not**
    run synchronously inside `open`, so store open is never blocked for user reads
    by enrichment. The startup drain also runs a `sweepOrphanedEnrichmentRows()`
-   pass (§6.4). **G5 / P1 interaction:** the projection-blob decode over up to
-   5,000 retained items is a new non-metadata startup cost introduced by V2-01
-   (v1's startup is metadata-only, `05` §13 / G5 trigger `06` §3). If
-   enrichment-enabled startup p95 exceeds the G5 budget (250 ms), the P1
-   persistent-startup-checkpoint graft (V2-06) or an enrichment-specific
-   checkpoint is required; this is assigned proof gate `E1-PERF-7`.
+   pass (§6.4). **G5 / P1 interaction:** this projection scan runs after facade
+   publication and is not part of the current capped Canonical-coverage open
+   path (`05` §13). If its own asynchronous startup work exceeds the approved
+   enrichment budget, an enrichment-specific decision is required. P1 cannot
+   bypass the DATA-11 coverage pass until V2-06's controlling amendment is
+   resolved; this remains assigned proof gate `E1-PERF-7`.
 2. **Invalidation-driven drain (precise item targeting).** In post-commit step 2
    (`05` §11), alongside yielding `HistoryInvalidation` to observer
    continuations, the Authority yields the **affected itemID(s) it just

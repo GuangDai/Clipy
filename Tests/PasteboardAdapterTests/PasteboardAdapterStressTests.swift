@@ -180,7 +180,11 @@ struct PasteboardAdapterStressTests {
 
         var received: [ClipboardCapture] = []
         observer.start { outcome in
-            received.append(outcome.capture)
+            guard case let .complete(value) = outcome else {
+                Issue.record("stable stress writes must produce complete freezes")
+                return
+            }
+            received.append(value.capture)
         }
 
         // The burst: 30 distinct writes, no run-loop yields between them.
@@ -239,11 +243,12 @@ struct PasteboardAdapterStressTests {
         )
 
         let adapter = PasteboardAdapter(pasteboard: pasteboard)
-        let outcome = adapter.captureOutcome()
-
-        #expect(outcome?.isComplete == false)
-        #expect(outcome?.capture.isConcealed == true)
-        #expect(outcome?.capture.representations.isEmpty == true)
+        let outcome = try #require(adapter.captureOutcome())
+        guard case let .concealed(value) = outcome else {
+            Issue.record("concealed marker must produce the closed concealed case")
+            return
+        }
+        #expect(value.markerTypeIdentifier == "org.nspasteboard.ConcealedType")
         #expect(adapter.capture() == nil)
     }
 }

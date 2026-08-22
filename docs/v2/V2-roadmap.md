@@ -141,7 +141,7 @@ not waive the proof gates that must pass after implementation.
 | C3 | At least 20% of thumbnail work superseded/discarded despite cancellation and single-flight. |
 | Thumbnail S1 | Repeated thumbnail invalidation while selected source bytes provably remain unchanged. |
 | X1/X2 | Approved product spec plus a recorded fresh architecture review (including its security analysis); X2 is mandatory with X1. |
-| P1 | Metadata-only startup/index rebuild p95 > 250 ms at 5,000 items. |
+| P1 | Current capped Canonical-coverage/index rebuild p95 > 250 ms at 5,000 items, plus an approved DATA-11-compatible checkpoint proof. |
 | P2 | Approved locale-sensitive matching requirement plus fixed locale fixtures. |
 | P3 | Representative workload exceeds the capture-path memory budget or shows p95 copy cost unsolvable within bounded inline values. |
 
@@ -342,11 +342,11 @@ singleton" statements. Step numbers cite the v1 `05` §13 steps they extend.
    *(05 §13 step 6; this is a derived-projection rebuild, not a SwiftData
    schema stage)*
 7. validate retained row count does not exceed the hard bound, then fetch
-   each row's scalar projection metadata (business ID, nonzero
-   Content Version, projection schema version, pin ordinal, signature
-   metadata); *(05 §13 step 7)*
+   each row's business ID, nonzero Content Version, projection schema version,
+   pin ordinal, Canonical bytes, and signature metadata; *(05 §13 step 7)*
 8. require projection schema version 2; *(05 §13 step 8)*
-9. decode/validate signatures and build the complete index;
+9. decode Canonical/signatures, recompute xxh3, require authoritative
+   bidirectional coverage, and build the complete index;
    *(05 §13 step 9)*
 10. validate the full pinned ordinal set from scalar fields;
     *(05 §13 step 10)*
@@ -367,11 +367,12 @@ singleton" statements. Step numbers cite the v1 `05` §13 steps they extend.
    mismatches and invalid scalar relations never recover.)*
 12. publish the constructed `SwiftDataHistory` facade. *(05 §13 step 12)*
 
-The invariant "startup does not decode Canonical/revision bytes merely to
-build the index" (`05` §13) is unchanged. Full-blob decodes at open belong to
-the V1→V2 migration backfill (step 2, migrated stores only) or the explicit
-legacy projection-recipe rebuild (step 6); the index build itself remains
-scalar/signature-only.
+The current hard-capped index build decodes Canonical to prove authoritative
+negative evidence, but never decodes revision bytes merely to build the index.
+This O(N) Canonical pass is capped-only: `DEC-U-SCALE-STARTUP-INDEX` must replace
+it before the global hard item bound is removed, without retaining two truth
+indexes. Other full-lineage decodes at open remain limited to migration
+backfill or the explicit legacy projection-recipe rebuild.
 
 ## 6. V2-02 — retention expansion (R1/R2/R3)
 
@@ -531,10 +532,10 @@ private transport. No later row may fabricate evidence for an earlier row.
 |---|---|---|
 | X.0 Spec/evidence closure (no product code) | Freeze V2-05 §0, the `clipyctl` public wire shape, and platform evidence questions. Signed/TCC experiments may run here, but cannot choose or ship a transport. | Owning docs agree; unresolved authenticated ingress and format-inventory injection remain explicit blockers rather than inferred answers. |
 | X.1 Closed vocabulary and allow matrix — **Batch 6 implementation leaf** | Add only `Sources/HistoryCore/ExternalGatewayTypes.swift`, `Sources/HistoryStorage/ExternalAccessPolicy.swift`, and `Tests/HistoryStorageTests/ExternalAccessPolicyTests.swift`; update the HistoryCore symbol snapshot. Preserve App Intents browse/readContent/manage exactly; deny cross-kind, unknown, and not-yet-admitted revise pairs. | `PLAY-PY-GW0`; table-driven total-matrix proof plus public-symbol/import/escape-hatch gates. No schema, actor, CLI, transport, credential, hash, or request digest. |
-| X.2 Public Gateway contract — **next implementation layer after GW0** | Add the remaining `ExternalHistory`, `GatewayAdminHistory`, identities, requests/results, failures, connection/grant/audit DTOs, public `ExternalHistoryFacade`, and public `makeExternalHistoryFacade(for:)`. Leave every v1 closed enum/protocol unchanged. | `X-COMPILE-1/3`; public-symbol/import/escape-hatch gates. |
+| X.2 Public Gateway contract — **next implementation layer after GW0** | Add the remaining Foundation-only `ExternalHistory`, `GatewayAdminHistory`, identities, requests/results, failures, and connection/grant/audit DTOs. Leave every v1 closed enum/protocol unchanged. Do not fabricate a dispatcher or publish a facade before durable bootstrap and the real Gateway exist. | Run the public-symbol/import/escape-hatch checks for this contract-only leaf. It closes only the Foundation/public-surface clauses; aggregate `X-COMPILE-1/3` remain open until the real X.5 Gateway and its approved imports exist. No synthetic Gateway response. |
 | X.3 Schema/codecs/bootstrap | Add the four Gateway/Audit models, resolved audit codecs, and fixed limits. Bootstrap one durable active App Intents connection with no grants; validate all required state before facade publication. | `X-PLATFORM-1/2`; migration, corruption, missing-config-with-data, identity-persistence, and startup proofs. |
 | X.4 Audit/admin substrate | Implement the resolved audit/admin persistence behavior, registry/grants, recovery-only handling, and atomic admin audit. Deny by default; the §0.2 matrix is authoritative. | `PLAY-PY-GW1`, `PLAY-PY-GW2`, `PLAY-PY-GW3`, `PLAY-PY-GW4`; grant lifecycle, encoding, compaction/recovery, and corruption proofs. |
-| X.5 In-process Gateway denial | Add `ExternalGateway`/registry dispatch through the real Authority; prove unknown connection, no grant, revoked grant, invalid pair, and rate denial stop before History access. | `PLAY-PY-B1`, `PLAY-PY-B2`; authoritative denial and no-content/no-mutation proofs. |
+| X.5 In-process Gateway denial | Add `ExternalGateway`/registry dispatch through the real Authority. Only after X.3 bootstrap and this real actor exist, add the public `ExternalHistoryFacade` concrete type and `SwiftDataHistory.makeExternalHistoryFacade(for:)` accessor that bake the authoritative connection into the facade; never ship a placeholder/unavailable dispatcher. Prove unknown connection, no grant, revoked grant, invalid pair, and rate denial stop before History access. | `PLAY-PY-B1`, `PLAY-PY-B2`; authoritative denial and no-content/no-mutation proofs plus public facade/factory construction through the real Gateway. |
 | X.6 In-process Gateway positive | Through the same production actor and real Authority, complete one granted bounded browse plus the approved App-Intents write/read subset, including save-boundary recheck and audit behavior. | `PLAY-PY-B0G`, `X-BEHAVIOR-1`; positive browse, TOCTOU revoke, write atomicity, privacy, and failure mapping. |
 | X.7 App Intents composition | In `ClipyApp` only, add the six intents/shortcuts provider, obtain the baked App Intents facade, register it once with the framework-owned allowance, and resolve via `@Dependency`. It must use X.5/X.6, not duplicate policy. | `PLAY-PY-B0I`, `X-COMPILE-2/3/4`; cold/warm integration and unresolved-dependency clean-denial tests. |
 | X.8 `clipyctl` pure codec | After X.7, implement the already frozen JSON stdin/stdout and stable exit mapping as pure code. It produces no synthetic Gateway response and has no transport. Capability JSON remains owner-summary declaration only. | `PLAY-PY-A2A` through `PLAY-PY-A2I`; parser/stdio/closed-operation golden tests. No Python-to-History claim. |
@@ -559,7 +560,10 @@ not applicable independently.
 
 - **Status:** blocked on V2-0, M1, and DC-17; gated on G5.
 - **Regime:** capped profile only. Recipe-v2 legacy projection validation runs
-  before either reuse or rebuild. Production U-scale must first resolve
+  before either reuse or rebuild. The current DATA-11 authoritative Canonical
+  coverage pass also remains mandatory: a matching checkpoint may not bypass
+  it until an owning P1 amendment supplies an equally strong corruption proof.
+  Production U-scale must first resolve
   `DEC-U-SCALE-STARTUP-INDEX` by replacing/amending this complete in-memory
   index with one authoritative durable candidate-query/lazy-shard path; it may
   not keep two truth indexes.

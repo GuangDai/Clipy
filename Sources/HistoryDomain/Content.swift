@@ -37,8 +37,9 @@ package struct ContentRepresentation: Sendable, Hashable {
 /// docs/02-domain.md §2.2
 ///
 /// Evidence only: a fingerprint is not identity and is never sufficient for
-/// Copy Coalescing (D7). A corrupted or colliding fingerprint may create an
-/// extra dedup candidate; it must never create a false confirmed match.
+/// Copy Coalescing (D7). A collision may add a candidate; Storage must prove
+/// authoritative coverage before absence can exclude one. No fingerprint may
+/// create a false confirmed match because confirmation remains byte-exact.
 package struct ContentFingerprint: Sendable, Hashable {
     package let rawValue: UInt64
 

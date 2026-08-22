@@ -54,9 +54,9 @@ internal enum HistorySchemaV1: VersionedSchema {
 ///   whenever `activeRevisionID` is non-nil; for a Canonical-state item
 ///   (`activeRevisionID == nil`) the revision list is empty and there are no
 ///   revision bytes — Effective Content equals Canonical Content.
-/// - `canonicalSignatureBlob` holds durable scalar metadata
-///   (`SignatureBlobV1`, §4) used to rebuild the complete Signature Index
-///   without decoding content bytes.
+/// - `canonicalSignatureBlob` holds durable signature metadata
+///   (`SignatureBlobV1`, §4). Current hard-capped index builds validate it
+///   against recomputed Canonical fingerprints before publishing readiness.
 /// - The projection fields are the durable bounded projection of the current
 ///   Effective Content for list/search (§15).
 /// - The occurrence fields hold the full first/last time and source summary.

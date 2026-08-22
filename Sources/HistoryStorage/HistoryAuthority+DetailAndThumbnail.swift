@@ -5,6 +5,28 @@ import HistoryCore
 import HistoryDomain
 import SwiftData
 
+/// Content-free accounting for one current-layout thumbnail source read.
+///
+/// `returnedRepresentationBytes` is the one selected image value handed to
+/// the decode lane. `aggregateHydratedBytes` is the encoded Canonical plus
+/// revision-state aggregate the monolithic row layout made the Authority
+/// access while selecting that value. The latter is not RSS, copied bytes, or
+/// physical I/O, and the two counters must not be substituted for each other.
+/// REVIEW `PLAY-TIER-2A-THUMB`; tiered-storage DESIGN-TIER-2A.
+internal struct ThumbnailSourceHydrationReceipt: Sendable {
+    internal let returnedRepresentationBytes: Int
+    internal let aggregateHydratedBytes: Int
+}
+
+/// Existing thumbnail-purpose source shape: exactly one selected immutable
+/// representation plus content-free current-layout accounting. This is local
+/// to HistoryStorage's already-shipped thumbnail lane; it is not a general
+/// content reader or a claim of representation-shaped physical storage.
+internal struct ThumbnailSourceSelection: Sendable {
+    internal let bytes: Data
+    internal let receipt: ThumbnailSourceHydrationReceipt
+}
+
 extension HistoryAuthority {
     internal func details(for id: HistoryItemID) async throws -> HistoryDetails {
         let context = ModelContext(container)
@@ -214,8 +236,11 @@ extension HistoryAuthority {
 
     /// Thumbnail source (docs/05-authority-kernel.md §14.5; docs/04-coherence.md
     /// §9): verifies the requested Content Version and returns immutable source
-    /// image bytes — `nil` when the item has no supported image representation —
-    /// inside one non-suspending Authority interval.
+    /// image selection — `nil` when the item has no supported image
+    /// representation — inside one non-suspending Authority interval. The
+    /// selection carries only that image value plus content-free byte
+    /// accounting; the current storage layout still hydrates the complete
+    /// Canonical/revision encoded aggregates to choose it.
     ///
     /// The §9 creator flow, steps 2–4 (the Authority's full-load part):
     /// 2. Validate both `pixels` axes before any context, fetch and fully
@@ -250,7 +275,7 @@ extension HistoryAuthority {
     internal func thumbnailSource(
         for item: HistoryItemReference,
         pixels: PixelSize
-    ) async throws -> Data? {
+    ) async throws -> ThumbnailSourceSelection? {
         // §9 step 2: validate both dimensions before any context — the fixed
         // Part VI thumbnail-dimension interval (docs/06-cross-cutting.md §2).
         try validateThumbnailDimensions(pixels)
@@ -269,6 +294,15 @@ extension HistoryAuthority {
             in: context
         ) else {
             throw HistoryFailure.notFound(item.id)
+        }
+        // PLAY-TIER-2A-THUMB: the current row layout exposes Canonical and
+        // revision content as two encoded aggregate values. Record both exact
+        // encoded byte counts before full hydration; this counter deliberately
+        // does not pretend to measure SwiftData physical reads, copies, or RSS.
+        let (aggregateHydratedBytes, aggregateOverflow) = row.canonicalBlob.count
+            .addingReportingOverflow(row.revisionStateBlob.count)
+        guard !aggregateOverflow else {
+            throw HistoryFailure.persistence(.corruptStoredValue)
         }
         let hydrated = try HistoryItemRowHydration.hydrate(row, limits: limits)
 
@@ -300,7 +334,13 @@ extension HistoryAuthority {
             if Self.thumbnailImageTypeIdentifiers.contains(
                 representation.typeIdentifier
             ) {
-                return representation.bytes
+                return ThumbnailSourceSelection(
+                    bytes: representation.bytes,
+                    receipt: ThumbnailSourceHydrationReceipt(
+                        returnedRepresentationBytes: representation.bytes.count,
+                        aggregateHydratedBytes: aggregateHydratedBytes
+                    )
+                )
             }
         }
         return nil

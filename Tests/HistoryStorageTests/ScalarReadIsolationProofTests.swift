@@ -1,26 +1,24 @@
 /// Scalar read isolation proof (docs/06-cross-cutting.md §7.5): the
-/// recent/search/startup read paths do NOT decode Canonical or revision blobs —
-/// they read only scalar projection fields, the small
-/// `effectiveTypeIdentifiersBlob`, and signature metadata. This file proves
-/// that behaviorally: it hand-crafts fully valid v1 rows via the production
-/// codecs, then CORRUPTS only the two content blobs in place
-/// (`canonicalBlob` and `revisionStateBlob`) via a direct context write behind
-/// the Authority's back, leaving every scalar/projection/signature column
-/// valid. The scalar read paths must still succeed (they never touch the
-/// corrupted blobs); the lineage-decoding detail/paste paths must FAIL
-/// (proving the corruption is real — the control).
+/// recent/search read paths do NOT decode Canonical or revision blobs, while
+/// current hard-capped startup decodes Canonical for authoritative Signature
+/// Index coverage but still does not decode revision bytes. This file proves
+/// that behaviorally: it hand-crafts a valid row, then corrupts only the
+/// `revisionStateBlob`, leaving Canonical/signature/projection scalars valid.
+/// Startup/recent/search must still succeed; lineage-decoding detail/paste
+/// paths must fail (proving the corruption is real — the control).
 ///
 /// Spec citations:
 /// - docs/06-cross-cutting.md §7.5 (scalar read isolation)
-/// - docs/05-authority-kernel.md §13 (startup — Signature Index built from
-///   signature metadata, never content blobs),
+/// - docs/05-authority-kernel.md §13 (startup — authoritative Canonical /
+///   signature coverage, without revision decode),
 ///   §14.1 (recentPage — scalar-only two-lane fetch),
 ///   §14.2 (searchCorpusSnapshot — scalar-only full-corpus fetch)
 /// - The §7.5 performance question (whether SwiftData suppresses faulting of
 ///   non-requested external-storage attributes) still requires a
 ///   supported-platform trace; neither this test nor the current runner proves
-///   it. This file proves only the correctness stance — scalar paths never
-///   access/decode and therefore must not depend on content blobs.
+///   it. This file proves only the correctness stance — recent/search do not
+///   depend on content blobs, and startup's coverage pass does not depend on
+///   revision state.
 import Foundation
 import HistoryCore
 import HistoryDomain
@@ -62,14 +60,10 @@ private static func makeRow(
 }
 
 /// §7.5 (docs/06-cross-cutting.md §7.5; docs/05-authority-kernel.md §13,
-/// §14.1, §14.2): with the Canonical and revision blobs corrupted in place
-/// but all scalar/projection/signature columns valid, the scalar read paths
-/// (startup, recentPage, searchCorpusSnapshot) succeed with correct scalar
-/// projections, while the lineage-decoding paths (details, pastePayload) fail
-/// closed with `.persistence(.corruptStoredValue)` — proving both that the
-/// corruption is real and that the scalar paths never touched the content
-/// blobs.
-@Test func corruptedContentBlobsLeaveScalarReadPathsIntactButBreakLineagePaths() async throws {
+/// §14.1, §14.2): with only revision state corrupted, startup and the scalar
+/// recent/search paths succeed, while lineage-decoding details/paste fail
+/// closed with `.persistence(.corruptStoredValue)`.
+@Test func corruptedRevisionBlobLeavesScalarReadPathsIntactButBreaksLineagePaths() async throws {
     let storeURL = WSSupport.tempStoreURL("scalar-read-isolation")
     defer { WSSupport.removeStore(storeURL) }
 
@@ -88,7 +82,7 @@ private static func makeRow(
     let row = try Self.makeRow(from: bundle, observedAt: observedAt, source: source)
     // The hand-crafted row belongs to a raw V2 store, so supply its valid
     // authoritative singleton rather than relying on fresh-store repair. The
-    // two content blobs below remain the fixture's only corruption (05 §13;
+    // revision blob below remains the fixture's only corruption (05 §13;
     // DATA-1).
     seedContext.insert(LastChangePositionRow(
         key: HistoryAuthority.positionSingletonKey,
@@ -102,10 +96,14 @@ private static func makeRow(
     // capture-insert stamping would write it (the signature entries'
     // byte-count sum; a v1 insert carries an empty revision list, so
     // revisionCount 0 / revisionBytes 0; `bytesSchemaVersion == 1`). The
-    // corruption applied below stays confined to the two content blobs.
+    // corruption applied below stays confined to revision state.
     var canonicalBytes = 0
     for entry in bundle.signatureEntries {
-        canonicalBytes += entry.byteCount
+        let (next, overflow) = canonicalBytes.addingReportingOverflow(
+            entry.byteCount
+        )
+        try #require(!overflow)
+        canonicalBytes = next
     }
     seedContext.insert(RetainedBytesRow(
         itemID: bundle.domain.candidateID.rawValue,
@@ -116,8 +114,8 @@ private static func makeRow(
     ))
     try seedContext.save()
 
-    // ── Corrupt ONLY the two content blobs in place, leaving all scalar,
-    //    projection, and signature columns valid (§7.5). Invalid under every
+    // ── Corrupt ONLY revision state in place, leaving Canonical, signature,
+    //    projection, and scalar columns valid (§7.5). Invalid under every
     //    codec: a truncated/malformed payload that no version tag matches.
     //    Done in a CLEAN second context over the same on-disk store so the
     //    corruption is durable and visible to every later container open. ──
@@ -125,25 +123,23 @@ private static func makeRow(
     let corruptContext = ModelContext(corruptContainer)
     let fetchedRows = try corruptContext.fetch(FetchDescriptor<HistoryItemRow>())
     let targetRow = try #require(fetchedRows.first)
-    targetRow.canonicalBlob = Data([0x00, 0xFF, 0x00])
     targetRow.revisionStateBlob = Data([0x01])
     try corruptContext.save()
 
-    // ── (a) §13: STARTUP succeeds — the Signature Index is built from
-    //        signature metadata, not content blobs (§13 step 8 decodes
-    //        signature blobs; Canonical/revision blobs are never touched). ──
+    // ── (a) §13: STARTUP succeeds — Canonical/signature coverage is valid;
+    //        the index build does not decode revision state. ──
     let authority = try await WSSupport.makeAuthority(storeURL: storeURL)
 
     // ── (b) §14.1: recentPage returns the row with correct scalar
     //        projections. The scalar-only path never accesses or decodes the
-    //        corrupted content blobs (§14.1 `propertiesToFetch`). Actual
+    //        corrupt revision blob (§14.1 `propertiesToFetch`). Actual
     //        external-storage fault suppression remains the separate macOS
     //        performance proof named in the file header. ──
     let recentPage = try await authority.recentPage(limit: 10, after: nil)
     // §7.5: the page carries the corrupted row's scalar projection intact.
     #expect(
         recentPage.rows.count == 1,
-        "§7.5/§14.1: recentPage must return the row despite corrupted content blobs"
+        "§7.5/§14.1: recentPage must return the row despite corrupt revision state"
     )
     let recentRow = try #require(recentPage.rows.first)
     #expect(
@@ -192,7 +188,7 @@ private static func makeRow(
     // §7.5: the snapshot includes the corrupted row's scalar projection.
     #expect(
         corpusRows.count == 1,
-        "§7.5/§14.2: searchCorpusSnapshot must include the row despite corrupted content blobs"
+        "§7.5/§14.2: searchCorpusSnapshot must include the row despite corrupt revision state"
     )
     let corpusRow = try #require(corpusRows.first)
     #expect(
@@ -234,7 +230,7 @@ private static func makeRow(
 
     // ── (d) CONTROL: details and pastePayload decode full lineage via
     //        `HistoryItemRowHydration.hydrate`, which decodes the Canonical
-    //        blob first (FactLoaders §hydrate). The corruption IS real — these
+    //        blobs (FactLoaders §hydrate). The corruption IS real — these
     //        paths must fail closed with `.persistence(.corruptStoredValue)`,
     //        proving the scalar paths' success is because they never touched
     //        the blobs, not because the blobs were uncorrupted. ──

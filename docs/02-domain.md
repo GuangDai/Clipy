@@ -57,7 +57,7 @@ package struct ContentSignatureEntry: Sendable, Hashable {
 
 The fingerprint is xxh3-64 over one representation's bytes. A signature entry is derived from a Canonical representation. Neither value is identity and neither is sufficient for Copy Coalescing.
 
-The equality and hashing of Canonical or Effective Content ignore fingerprints. A corrupted or colliding fingerprint may create an extra candidate; it must never create a false confirmed match.
+The equality and hashing of Canonical or Effective Content ignore fingerprints. A collision may create an extra candidate, and any unvalidated corrupted fingerprint could add or remove candidate evidence; therefore Storage must prove authoritative coverage before using absence as negative evidence. No fingerprint may ever create a false confirmed match because confirmation remains byte-exact.
 
 #### 2.3 Canonical Content
 

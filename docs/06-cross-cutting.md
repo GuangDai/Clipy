@@ -73,7 +73,7 @@ None of these types, tables, protocols, or state machines belongs to v1. The tri
 | G2 | Collection cache plus durable History Change Record journal | At the hard retained bound, recent/search p95 exceeds 50 ms or Authority queue wait p95 exceeds 20 ms under the agreed workload; alternatively, a real replay/reconnect product requirement is approved. |
 | G3 | Disk thumbnail cache | G1 is already justified, measured cross-launch reuse is substantial, and a structural decoder/materializer fingerprint is specified and fixture-proved. |
 | G4 | Per-purpose content subversions/source stamps | Profiling shows material work repeatedly invalidated by Effective Content changes that provably leave that purpose's source bytes unchanged. |
-| G5 | Persistent startup checkpoint | Metadata-only startup/index rebuild p95 exceeds 250 ms at 5,000 items on the minimum supported hardware profile. |
+| G5 | Persistent startup checkpoint | Current capped Canonical-coverage/index rebuild p95 exceeds 250 ms at 5,000 items on the minimum supported hardware profile; P1 remains blocked until its DATA-11 amendment preserves authoritative negative evidence. |
 | G6 | Multi-state materialization lifecycle/publish fence | At least 20% of thumbnail work is measured as superseded or discarded despite cancellation and single-flight. |
 | G7 | Localized search projection | Product requirements specify locale-sensitive matching and migration behavior; fixtures define normalization and ordering for supported locales. |
 | G8 | Blob-store handle/streaming content abstraction | A representative capture- or read-path workload exceeds its memory budget, or shows p95 copy cost that cannot be solved within the bounded inline-value design. Read-path evidence includes peak transient hydration RSS and aggregate resident DTO bytes under representative concurrent callers. |
@@ -172,8 +172,8 @@ The macOS runner must prove:
 2. **Fresh-context visibility:** after a committed receipt, a newly created serialized read context sees the commit immediately.
 3. **Codec round trip:** Canonical bytes/fingerprints, full revisions including the active revision, active ID, occurrence first/last source, pin ordinal, and projections survive restart.
 4. **Corruption rejection:** the Part V §4 decode checks are exhaustive and each fails closed as `.persistence(.corruptStoredValue)` or `.persistence(.invariantViolation)`: unknown blob version; unbounded or oversize byte/count values; duplicate or unnormalized type identifiers, or an empty-bytes representation; a Canonical representation lacking fingerprint/signature coverage; duplicate revision IDs or revision-history overflow; a non-nil active ID naming no stored revision, or a non-empty revision list with a nil active ID; revision content that is empty, non-normalized, or contains a non-Canonical type; a zero or invalid Content Version; zero copy count, over-bound source observations, invalid or non-finite occurrence/revision dates; a negative pin ordinal; an `effectiveTypeIdentifiersBlob` that is not a valid versioned sorted-unique list; an unknown projection schema version; an over-bound stored title; and an over-bound stored search body. Fixtures pin the consuming-path boundaries: startup rejects schema corruption; recent and search validate every occurrence/projection scalar they consume before sorting or cursor minting; full hydration validates the complete occurrence and all projection scalars.
-5. **Scalar read isolation:** recent/search/startup paths do not decode Canonical or revision blobs. If SwiftData cannot prove no fault, the performance claim is removed and an alternative projection schema is designed; correctness tests must still pass.
-6. **Signature completeness:** startup postings cover every retained Canonical signature entry; forced xxh3 collision still requires byte confirmation.
+5. **Read isolation:** recent/search paths do not decode Canonical or revision blobs. Current hard-capped startup decodes Canonical only to recompute authoritative Signature Index coverage; it does not decode revision blobs. If SwiftData cannot prove no fault for a claimed scalar lane, the performance claim is removed and an alternative projection schema is designed; correctness tests must still pass.
+6. **Signature completeness:** under the current hard cap, startup recomputes xxh3 from every retained Canonical representation and postings cover every resulting signature entry; forced xxh3 collision still requires byte confirmation. U-scale must replace this O(N) hydration proof before removing the cap.
 7. **No invalid platform API:** business-ID lookup uses a fetch, not `registeredModel(for:)`; no undocumented refresh method appears.
 8. **Deployment floor:** all APIs are available on macOS 26 or correctly availability-gated and tested.
 
@@ -274,8 +274,8 @@ Correctness gates run first. Performance claims are accepted only from a release
 - Warm persistent-store open is measured at 200/500/1,000 retained-metadata
   rows within the 5,000-item hard bound. The timed public
   `SwiftDataHistory.open` construct includes `ModelContainer`/SQLite open,
-  singleton and startup validation, scalar-metadata reads, and Signature Index
-  rebuild. Population, warmup, and each of the five samples run in fresh child
+  singleton and startup validation, the capped Canonical coverage pass, scalar
+  metadata reads, and Signature Index rebuild. Population, warmup, and each of the five samples run in fresh child
   processes; a child clocks only the public open, excluding process launch and
   teardown. This is not an isolated index-rebuild timer, cold-start proof,
   external-storage teardown proof, or G5 absolute-latency fixture.

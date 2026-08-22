@@ -439,10 +439,11 @@ Ask→Allow/Deny、System Settings切换、restart、login launch。Fake不能�
 
 **Seam：** `PasteboardAdapter.captureOutcome`，named private pasteboard + internal item boundary。
 
-**Decision gate：** 当前`CaptureOutcome?`无法区分all-unavailable与empty，改变它可能是public
-source/API change；lineage hint又被现规视为optional metadata。先分别决定：content type
-unavailable、lineage absent/malformed、ownership-during-read的taxonomy与public surface，再为
-chosen contract写Red。
+**Decision（Batch 7）：** `CaptureOutcome?` 的 `nil` 只表示真正empty/metadata-only；非空结果是闭合
+public enum：stable `complete`、`declaredUnavailable` partial、payload-read前的`concealed`、
+`unsupportedMultiItem`和content-free `changedDuringRead`。每个case只携带该状态合法的字段，调用者必须
+穷举。lineage hint继续是optional metadata：absent/malformed本身不把已完整读取的content降级为partial。
+结果只表达observed unavailable，不推断provider timeout。
 
 Red：
 
@@ -453,8 +454,9 @@ Red：
 - public complete convenience不得返回partial；
 - stable complete返回exact representations。
 
-最低Green：closed exhaustive result、start/end fence、有界retry。结果只表达observed unavailable，
-不声称provider timeout原因。
+最低Green：closed exhaustive result、start/end fence、有界一次retry。`capture()`只从`complete`返回值；
+observer遇到第一次`changedDuringRead`立即再freeze一次，stable complete替换旧代，第二次race作为唯一
+terminal content-free结果，其他partial结果不能把旧代bytes重新带回。
 
 ### Card 5C — Concealed before bytes
 

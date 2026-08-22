@@ -125,7 +125,7 @@ Semantic mapping:
 | `contentVersionRaw` | Current Effective Content version, always at least 1. |
 | `canonicalBlob` | Immutable Canonical representations including per-representation fingerprint evidence. |
 | `revisionStateBlob` | Full revision list plus active Revision ID. The active revision's bytes are present whenever `activeRevisionID` is non-nil; for a Canonical-state item (`activeRevisionID == nil`) the revision list is empty and there are no revision bytes — Effective Content equals Canonical Content. |
-| `canonicalSignatureBlob` | Durable scalar metadata used to rebuild the complete Signature Index without decoding content bytes. |
+| `canonicalSignatureBlob` | Durable signature metadata used with authoritative Canonical bytes to rebuild the complete Signature Index in the current hard-capped profile. |
 | projection fields | Durable bounded projection of current Effective Content for list/search. |
 | occurrence fields | Full first/last time and source summary. |
 | `pinOrdinal` | Internal encoding of pinned order; `nil` is unpinned. |
@@ -215,7 +215,7 @@ Decode is not a blind memberwise conversion. It reconstructs Domain values throu
 - known blob version (exactly 1 for each V1 blob);
 - bounded byte/count values before any large allocation;
 - normalized, unique, non-empty type identifiers, with no empty-bytes representation;
-- fingerprint/signature coverage is checked **bidirectionally** against Canonical representations — every Canonical representation has a signature entry and every signature entry corresponds to a Canonical representation (no orphan entries). Fingerprint correctness is **not** re-verified at decode, because by D7 a divergent fingerprint may add a spurious candidate but can never produce a false byte-confirmed match;
+- fingerprint/signature coverage is checked **bidirectionally** against Canonical representations — every Canonical representation has a signature entry and every signature entry corresponds to a Canonical representation (no orphan entries). Ordinary blob decode checks the two stored copies structurally; the current hard-capped startup/unready-index paths additionally recompute xxh3 from Canonical bytes before the index may use absence as negative evidence. D7 still requires byte-exact confirmation for every positive candidate;
 - unique revision IDs and bounded full revision history within the per-item revision-count/byte bounds;
 - active ID: when non-nil it is unique and names exactly one stored revision; `nil` is valid only when the revision list is empty (D3); a non-nil active ID with no matching revision, or a non-empty list with a nil active ID, is corruption;
 - normalized, non-empty revision content containing only Canonical representation types;
@@ -358,7 +358,8 @@ Each public action selects one loader. There is no generic partial map.
    unavailable or over the hard bound, candidacy cannot be proved and capture
    returns `.temporarilyUnavailable(.dedupIndexRebuild)` (WS5). If the index is
    unready or its retained-ID coverage differs, attempt one complete rebuild
-   from every retained row's signature blob within the hard item bound.
+   from every retained row's Canonical and signature blobs within the hard
+   item bound, recomputing xxh3 before absence becomes negative evidence.
 2. Intersect posting sets for all incoming signature entries.
 3. Fetch and fully decode every candidate ID.
 4. If a lineage hint exists, fetch it separately by ID even when it is absent from the candidate intersection.
@@ -587,7 +588,10 @@ internal struct SignatureIndex {
 Correctness requirements:
 
 - Ready means every retained row contributes every Canonical signature entry exactly once.
-- Startup reads all `(id, canonicalSignatureBlob)` metadata and constructs postings before declaring ready.
+- In the current hard-capped profile, startup reads each retained row's
+  Canonical bytes together with `canonicalSignatureBlob`, recomputes the
+  Canonical signature entries, requires bidirectional byte-count/fingerprint
+  coverage, and only then constructs postings and declares the index ready.
 - An empty ready index is valid only for an empty retained store.
 - Create adds all entries; delete removes all entries and empty postings.
 - Every fact-load checks that candidate IDs remain retained in its serialized Authority interval.
@@ -609,20 +613,23 @@ same-interval proof, rather than an otherwise unread generation counter.
 4. validate exactly one singleton;
 5. bootstrap/validate the retention-expansion config singleton;
 6. derive every projection-schema-v1 replacement from validated Canonical/revision bytes, then stamp them as recipe v2 in one bounded transaction; an unknown tag, invalid source, or failed transaction fails open without publishing a partial rebuild;
-7. validate retained row count does not exceed the hard bound and fetch each row's business ID, nonzero Content Version, current projection schema version, pin ordinal, and signature metadata;
+7. validate retained row count does not exceed the hard bound and fetch each row's business ID, nonzero Content Version, current projection schema version, pin ordinal, Canonical bytes, and signature metadata;
 8. require projection schema version 2;
-9. decode/validate signatures and build the complete index;
+9. decode Canonical and signature metadata, recompute Canonical signature
+   entries, require bidirectional coverage, and build the complete index;
 10. validate the full pinned ordinal set from scalar fields;
 11. enforce the `RetainedBytesRow` 1:1 correspondence and scalar relation/version fence, including the one missing-rows-only recovery rerun;
 12. publish the constructed `SwiftDataHistory` facade.
 
-Startup decodes Canonical/revision bytes only for rows carrying the legacy
-projection tag, before capture can be enabled. Once every row carries v2, the
-Signature Index build itself remains scalar/signature-only. Whether the chosen
-SwiftData projection API truly avoids faulting unrelated blobs is an
-implementation-time performance proof, not assumed prose. If the API cannot
-prove it, correctness remains intact but the startup performance claim must be
-weakened.
+The Canonical coverage pass is a correctness-first rule for the current
+hard-capped profile: a structurally valid but incomplete signature blob could
+otherwise create false-negative dedup candidates. Revision bytes remain
+untouched except when a legacy projection row already requires recipe rebuild.
+This full Canonical pass is not an admissible U-scale design. Before the global
+hard item bound can be removed, `DEC-U-SCALE-STARTUP-INDEX` must replace it with
+the approved durable candidate-query/lazy-shard authority and an equally strong
+negative-evidence contract; it may not retain this O(N) hydration path or add a
+second truth index.
 
 Corrupt durable signature or pin metadata fails open rather than enabling
 writes from an unproved state. The explicit v1-to-v2 derived-projection rebuild

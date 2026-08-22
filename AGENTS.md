@@ -30,18 +30,16 @@ thumbnails.
   run on any platform; everything else (including
   `scripts/public_symbol_snapshot.sh`) needs macOS + `xcrun`.
 
-**Current state (2026-08-19, branch `codex/v2-implementation`):** steps 0–8
+**Current state (2026-08-22, `master` through PR #8):** steps 0–8
 are done and CI-green (scaffold + gates, `HistoryCore` public surface,
 `HistoryDomain` pure core, dependency pins, schema v1 + codecs,
 `HistoryAuthority` capture/mutations/reads/observation/thumbnail), the V2
 M1 schema migration plus V2-02 retention slices R.1–R.6 are landed
 (`docs/v2/V2-PROGRESS.md`), and step 9 (product wiring: PasteboardAdapter,
-PresentationUI, ClipyApp composition) is **done and CI-green** at run
-32260455839 (tests-only scope) — menu-bar panel (search/pin/reorder/
-remove/clear), details + revise editor, unified retention settings (v1
-count + V2-02 age/storage/revision dimensions), pasteboard capture/paste
-round-trip, and the WS1–WS21 composed re-verification in
-`ClipyIntegrationTests` all pass on macOS CI.
+PresentationUI, ClipyApp composition) is done. The current landed baseline is
+correctness-green through PR #7 (run 32572531247) and PR #8 (run 32573066624).
+Manual signed-runtime run 32573198119 is also green on `master`, within the
+bounded proof scope described in §7.
 Post-step-9 additions: the perf/AB helper proofs live in the separate
 `HistoryPerfTests` target/lane (the default `swift test` skips them), and the
 panel is a Maccy-style AppDelegate-owned floating `NSPanel` (Carbon ⇧⌘C
@@ -254,9 +252,8 @@ logs are not parsed as compiler output. Write warning-free code.
   so the same commands are reproducible without copying shell across YAML.
 - The performance helper/proof, exact-matcher, and scale-admission workflows
   are reusable `workflow_call` modules with no caller in this repository.
-  Therefore they cannot run on push, pull request, or manual dispatch while
-  correctness remediation is active. A future caller is a deliberate CI policy
-  change after correctness is green; add it only when performance work resumes.
+  They do not run on push, pull request, or manual dispatch. Adding a caller is
+  a deliberate CI policy change for resumed performance work.
 - `scripts/diagnostic_scan.py` owns the narrow log profiles. Every macOS job
   invokes the shared macOS 26/arm64 runner contract.
 - `.github/workflows/symbol-snapshot.yml` is `workflow_dispatch`-only and
@@ -270,10 +267,9 @@ logs are not parsed as compiler output. Write warning-free code.
   prove Developer ID identity, secure timestamp, notarization/stapling,
   Gatekeeper, TCC, login-item, Carbon/status-item, Space, or WindowServer
   behavior; those remain state-3 distribution/manual cells.
-- There is no release/deployment pipeline yet: the app is a step-0 scaffold
-  (`LSUIElement` agent stub, placeholder window). Packaging, accessibility,
-  and localization are Part VI §11 "state 3" acceptance, outside the current
-  roadmap.
+- There is no release/deployment pipeline yet. The product-wired app remains
+  short of Part VI §11 "state 3": packaging, accessibility, localization, and
+  the distribution/manual acceptance cells are still open.
 
 ## 8. Dependencies and pins
 
