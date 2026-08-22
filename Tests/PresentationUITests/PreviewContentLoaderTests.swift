@@ -51,7 +51,16 @@ struct PreviewContentLoaderTests {
                 )
             )
         }
-        return HistoryDetails(
+        return details(for: item, effective: effective)
+    }
+
+    /// Details fixture for a representation shape outside the text/image
+    /// convenience above (for example a valid unsupported UTI).
+    private func details(
+        for item: HistoryItemReference,
+        effective: [HistoryRepresentation]
+    ) -> HistoryDetails {
+        HistoryDetails(
             item: item,
             canonical: effective,
             effective: effective,
@@ -82,7 +91,7 @@ struct PreviewContentLoaderTests {
 
         Task { await loader.load(item: refA) }
         #expect(await pollUntil { await history.detailRequests.count == 1 })
-        #expect(loader.isLoading)
+        #expect(loader.phase == .loading)
 
         Task { await loader.load(item: refB) }
         #expect(await pollUntil { await history.detailRequests.count == 2 })
@@ -90,15 +99,14 @@ struct PreviewContentLoaderTests {
 
         // B completes FIRST and publishes.
         await history.resumeDetails(for: refB.id)
-        #expect(await pollUntil { loader.content == .text("bravo") })
+        #expect(await pollUntil { loader.phase == .content(.text("bravo")) })
         #expect(loader.occurrence?.lastSource == "com.example.preview")
-        #expect(!loader.isLoading)
 
         // A completes LATE: superseded, so the fence discards it — the
         // settle window lets A's completion run in full before asserting.
         await history.resumeDetails(for: refA.id)
         try? await Task.sleep(for: .milliseconds(150))
-        #expect(loader.content == .text("bravo"))
+        #expect(loader.phase == .content(.text("bravo")))
         #expect(loader.requestedItem == refB)
     }
 
@@ -117,30 +125,28 @@ struct PreviewContentLoaderTests {
 
         await history.resumeRequest(1, with: details(for: ref, text: "newer"))
         _ = await newerLoad.value
-        #expect(loader.content == .text("newer"))
-        #expect(!loader.isLoading)
+        #expect(loader.phase == .content(.text("newer")))
 
         await history.resumeRequest(0, with: details(for: ref, text: "older"))
         _ = await olderLoad.value
-        #expect(loader.content == .text("newer"))
-        #expect(!loader.isLoading)
+        #expect(loader.phase == .content(.text("newer")))
     }
 
     /// A cancelled load publishes nothing: the details read still completes
     /// (the double is not cancellation-aware), but the cancellation check
     /// after the await discards the result.
-    @Test func cancelledLoadPublishesNothing() async {
+    @Test func cancelledLoadPublishesNothing() async throws {
         let refA = reference("00000000-0000-0000-0000-0000000001C1", version: 1)
         let history = PausableDetailsHistory()
         await history.scriptDetails(details(for: refA, text: "alpha"))
         let loader = PreviewContentLoader(history: history)
 
         let task = Task { await loader.load(item: refA) }
-        #expect(await pollUntil { await history.detailRequests.count == 1 })
+        try #require(await pollUntil { await history.detailRequests.count == 1 })
         task.cancel()
         await history.resumeDetails(for: refA.id)
         _ = await task.value  // deterministic: the discarded load ran to its end
-        #expect(loader.content == .unavailable)
+        #expect(loader.phase == .loading)
         #expect(loader.occurrence == nil)
     }
 
@@ -161,12 +167,8 @@ struct PreviewContentLoaderTests {
         #expect(await pollUntil { await history.detailRequests.count == 1 })
         await history.resumeDetails(for: refV1.id)
         _ = await task.value
-        #expect(loader.content == .unavailable)
+        #expect(loader.phase == .failed)
         #expect(loader.occurrence == nil)
-        #expect(
-            !loader.isLoading,
-            "a current-generation reference mismatch must settle instead of spinning forever"
-        )
     }
 
     /// When observation advances the selected row from v1 to v2, beginning
@@ -184,42 +186,102 @@ struct PreviewContentLoaderTests {
         try #require(await pollUntil { await history.detailRequests.count == 1 })
         await history.resumeDetails(for: refV1.id)
         _ = await firstLoad.value
-        #expect(loader.content == .text("sensitive v1"))
+        #expect(loader.phase == .content(.text("sensitive v1")))
         #expect(loader.occurrence != nil)
 
         await history.scriptDetails(details(for: refV2, text: "current v2"))
         let secondLoad = Task { await loader.load(item: refV2) }
         try #require(await pollUntil { await history.detailRequests.count == 2 })
         #expect(loader.requestedItem == refV2)
-        #expect(loader.isLoading)
-        #expect(loader.content == .unavailable)
+        #expect(loader.phase == .loading)
         #expect(loader.occurrence == nil)
         #expect(loader.appliedImageSize == nil)
 
         await history.resumeDetails(for: refV2.id)
         _ = await secondLoad.value
-        #expect(loader.content == .text("current v2"))
-        #expect(!loader.isLoading)
+        #expect(loader.phase == .content(.text("current v2")))
     }
 
-    /// A typed failure renders as unavailable (the preview is a convenience
-    /// surface, not an error owner — 03b §10 stays with the panel's banner)
-    /// and clears the spinner.
-    @Test func typedFailureRendersUnavailable() async {
+    /// A transient History read failure is retryable presentation state, not
+    /// the stable unsupported state. Retrying uses the SAME exact reference;
+    /// a successful answer clears the failure episode.
+    @Test func transientFailureRetriesTheSameReferenceAndClearsFailure() async throws {
         let refA = reference("00000000-0000-0000-0000-0000000001E1", version: 1)
         let history = PausableDetailsHistory()
         let loader = PreviewContentLoader(history: history)
 
         let task = Task { await loader.load(item: refA) }
-        #expect(await pollUntil { await history.detailRequests.count == 1 })
+        try #require(await pollUntil { await history.detailRequests.count == 1 })
         await history.resumeDetails(
             for: refA.id,
             throwing: .temporarilyUnavailable(.dedupIndexRebuild)
         )
         _ = await task.value
-        #expect(loader.content == .unavailable)
+        #expect(loader.phase == .failed)
         #expect(loader.occurrence == nil)
-        #expect(!loader.isLoading)
+
+        await history.scriptDetails(details(for: refA, text: "recovered"))
+        let retry = Task { await loader.retry() }
+        try #require(await pollUntil { await history.detailRequests.count == 2 })
+        #expect(loader.requestedItem == refA)
+        #expect(loader.phase == .loading)
+        await history.resumeDetails(for: refA.id)
+        _ = await retry.value
+
+        #expect(loader.requestedItem == refA)
+        #expect(loader.phase == .content(.text("recovered")))
+    }
+
+    /// A legal representation for which this phase has no renderer is a
+    /// stable unsupported result. It is distinct from a retryable load or
+    /// decode failure and therefore the view does not offer Retry.
+    @Test func validNonPreviewableRepresentationIsStableUnsupported() async throws {
+        let ref = reference("00000000-0000-0000-0000-0000000001E2", version: 1)
+        let representation = HistoryRepresentation(
+            typeIdentifier: "public.url",
+            bytes: Data("https://example.com".utf8)
+        )
+        let history = PausableDetailsHistory()
+        await history.scriptDetails(details(for: ref, effective: [representation]))
+        let loader = PreviewContentLoader(history: history)
+
+        let task = Task { await loader.load(item: ref) }
+        try #require(await pollUntil { await history.detailRequests.count == 1 })
+        await history.resumeDetails(for: ref.id)
+        _ = await task.value
+
+        #expect(loader.requestedItem == ref)
+        #expect(loader.phase == .unsupported)
+    }
+
+    /// RTF/HTML are valid opaque clipboard representations but have no safe
+    /// semantic renderer in this phase. They settle as unsupported, and the
+    /// Card 9D retry affordance cannot start another History read.
+    @Test func structuredTextWithoutPlainSiblingIsUnsupportedAndNotRetryable() async throws {
+        let ref = reference("00000000-0000-0000-0000-0000000001E3", version: 1)
+        let representations = [
+            HistoryRepresentation(
+                typeIdentifier: "public.rtf",
+                bytes: Data(#"{\rtf1\ansi Literal RTF}"#.utf8)
+            ),
+            HistoryRepresentation(
+                typeIdentifier: "public.html",
+                bytes: Data("<p>Literal HTML</p>".utf8)
+            ),
+        ]
+        let history = PausableDetailsHistory()
+        await history.scriptDetails(details(for: ref, effective: representations))
+        let loader = PreviewContentLoader(history: history)
+
+        let task = Task { await loader.load(item: ref) }
+        try #require(await pollUntil { await history.detailRequests.count == 1 })
+        await history.resumeDetails(for: ref.id)
+        _ = await task.value
+
+        #expect(loader.phase == .unsupported)
+        await loader.retry()
+        #expect(await history.detailRequests.count == 1)
+        #expect(loader.phase == .unsupported)
     }
 
     // MARK: - Bounded off-MainActor decode (S-2/SPEC-IMPL-002)
@@ -237,14 +299,13 @@ struct PreviewContentLoaderTests {
         #expect(await pollUntil { await history.detailRequests.count == 1 })
         await history.resumeDetails(for: ref.id)
         _ = await task.value
-        #expect(loader.content == .image)
+        #expect(loader.phase == .content(.image))
         #expect(loader.appliedImageSize == CGSize(width: 1, height: 1))
-        #expect(!loader.isLoading)
     }
 
-    /// Bytes that look decodable but are not land on the decode-failure
-    /// state, never on a partial publish.
-    @Test func undecodableImageBytesRenderAsDecodeFailure() async {
+    /// A supported image type whose decoder cannot produce an artifact lands
+    /// on the retryable failed phase, never stable unsupported.
+    @Test func supportedImageDecodeFailureIsRetryable() async throws {
         let ref = reference("00000000-0000-0000-0000-0000000001F2", version: 1)
         let history = PausableDetailsHistory()
         await history.scriptDetails(
@@ -253,11 +314,33 @@ struct PreviewContentLoaderTests {
         let loader = PreviewContentLoader(history: history)
 
         let task = Task { await loader.load(item: ref) }
-        #expect(await pollUntil { await history.detailRequests.count == 1 })
+        try #require(await pollUntil { await history.detailRequests.count == 1 })
         await history.resumeDetails(for: ref.id)
         _ = await task.value
-        #expect(loader.content == .imageDecodeFailed)
+        #expect(loader.phase == .failed)
         #expect(loader.appliedImageSize == nil)
+    }
+
+    /// The declared text codec is part of preview support. Invalid bytes are
+    /// therefore a failed decode episode, not evidence that the UTI itself is
+    /// unsupported.
+    @Test func supportedTextDecodeFailureIsRetryable() async throws {
+        let ref = reference("00000000-0000-0000-0000-0000000001F3", version: 1)
+        let representation = HistoryRepresentation(
+            typeIdentifier: "public.utf8-plain-text",
+            bytes: Data([0xFF, 0xFE, 0xFF])
+        )
+        let history = PausableDetailsHistory()
+        await history.scriptDetails(details(for: ref, effective: [representation]))
+        let loader = PreviewContentLoader(history: history)
+
+        let task = Task { await loader.load(item: ref) }
+        try #require(await pollUntil { await history.detailRequests.count == 1 })
+        await history.resumeDetails(for: ref.id)
+        _ = await task.value
+
+        #expect(loader.phase == .failed)
+        #expect(loader.occurrence == nil)
     }
 
     // MARK: - Clearing
@@ -273,13 +356,12 @@ struct PreviewContentLoaderTests {
         Task { await loader.load(item: refA) }
         #expect(await pollUntil { await history.detailRequests.count == 1 })
         await history.resumeDetails(for: refA.id)
-        #expect(await pollUntil { loader.content == .text("alpha") })
+        #expect(await pollUntil { loader.phase == .content(.text("alpha")) })
 
         await loader.load(item: nil)
-        #expect(loader.content == .unavailable)
+        #expect(loader.phase == .unsupported)
         #expect(loader.occurrence == nil)
         #expect(loader.requestedItem == nil)
-        #expect(!loader.isLoading)
     }
 }
 

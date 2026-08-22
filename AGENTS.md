@@ -297,3 +297,6 @@ logs are not parsed as compiler output. Write warning-free code.
 - `docs/PROGRESS.md` — landed steps, CI evidence, notable deviations, and open
   spec questions (e.g. the pin-ordinal compaction question flagged for step 6).
 - `docs/AUDIT.md` — design audit history; behavior changes may need a §3 entry.
+- `docs/reviews/2026-08-22-clipy-maccy-deep-review/10-implementation-status.md`
+  — the REVIEW implementation ledger. Check it before taking a review card;
+  update the affected row in the same PR so completed leaves are not repeated.

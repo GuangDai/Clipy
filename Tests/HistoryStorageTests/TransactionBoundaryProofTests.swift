@@ -108,6 +108,47 @@ struct TransactionBoundaryProofTests {
         }
         #expect(firstCommit.position.rawValue == 1)
 
+        // Freeze every persisted column before the failed attempt. The
+        // snapshot is value-only and its independent container is released
+        // before the transaction injection is armed.
+        let before = try autoreleasepool {
+            try TransactionStoreSnapshot.read(from: url)
+        }
+        #expect(before.items.count == 1)
+        #expect(before.items.map(\.id) == [firstReference.id.rawValue])
+        #expect(before.items.map(\.title) == [firstText])
+        #expect(before.items.map(\.contentVersionRaw) == [1])
+        #expect(before.items.map(\.copyCount) == [1])
+        #expect(before.retainedBytes == [TransactionRetainedBytesSnapshot(
+            itemID: firstReference.id.rawValue,
+            canonicalBytes: 27,
+            revisionCount: 0,
+            revisionBytes: 0,
+            bytesSchemaVersion: 1
+        )])
+        #expect(before.positions == [TransactionPositionSnapshot(
+            key: "retained-history",
+            rawValue: 1,
+            maximumUnpinnedItems: 200
+        )])
+        #expect(before.configs == [TransactionConfigSnapshot(
+            key: "retention-expansion",
+            agePolicyEnabled: false,
+            ageMaxSeconds: 0,
+            storagePolicyEnabled: false,
+            storageMaxBytes: 0,
+            revisionPolicyEnabled: false,
+            revisionMaxCount: nil,
+            revisionMaxBytes: nil,
+            configSchemaVersion: 1
+        )])
+
+        // This subscriber belongs only to the failed attempt. Closing and
+        // draining it before any later success makes a false publish directly
+        // observable even though production buffering keeps only the newest
+        // invalidation.
+        let failedAttemptRegistration = await authority.registerInvalidationSubscriber()
+
         // Roadmap-owned WS13 seam: the next transaction closure entered
         // throws after row mutation, before the singleton update.
         await authority.setTransactionFailureInjection(.beforeSingletonUpdate)
@@ -126,21 +167,34 @@ struct TransactionBoundaryProofTests {
             try await authority.commitCapture(rejectedBundle)
         }
 
-        // §7 item 1 proof: the fresh independent container sees EXACTLY the
-        // pre-attempt state — one row (the first capture's, unchanged) and
-        // the singleton still at position 1. The rejected row never became
-        // durable and the position never advanced (§10: "Closure failure
-        // commits nothing").
-        let verification = try WSSupport.makeContainer(storeURL: url)
-        let rows = try WSSupport.fetchRows(verification)
-        #expect(rows.count == 1)
-        let row = try #require(rows.first)
-        #expect(row.id == firstReference.id.rawValue)
-        #expect(row.title == firstText)
-        #expect(row.copyCount == 1)
+        // §7 item 1 immediate proof: every column of HistoryItemRow and its
+        // 1:1 RetainedBytesRow, plus both singleton rows, is identical to the
+        // baseline before any successful operation can repair or obscure a
+        // partial write. The rejected business ID is absent from both tables.
+        let afterFailure = try autoreleasepool {
+            try TransactionStoreSnapshot.read(from: url)
+        }
+        #expect(afterFailure.items == before.items)
+        #expect(afterFailure.retainedBytes == before.retainedBytes)
+        #expect(afterFailure.positions == before.positions)
+        #expect(afterFailure.configs == before.configs)
+        #expect(
+            !afterFailure.items.map(\.id)
+                .contains(rejectedBundle.domain.candidateID.rawValue)
+        )
+        #expect(
+            !afterFailure.retainedBytes.map(\.itemID)
+                .contains(rejectedBundle.domain.candidateID.rawValue)
+        )
 
-        let position = try WSSupport.fetchPosition(verification)
-        #expect(position.rawValue == 1)
+        await authority.unregisterInvalidationSubscriber(
+            failedAttemptRegistration.subscription
+        )
+        var failedAttemptInvalidations: [HistoryInvalidation] = []
+        for try await invalidation in failedAttemptRegistration.stream {
+            failedAttemptInvalidations.append(invalidation)
+        }
+        #expect(failedAttemptInvalidations.isEmpty)
     }
 
     /// §7 item 1 / WS13 seam contract: the injection is ONE-SHOT — it fires
@@ -206,5 +260,168 @@ struct TransactionBoundaryProofTests {
 
         let position = try WSSupport.fetchPosition(verification)
         #expect(position.rawValue == 2)
+    }
+}
+
+/// Shared value-only rollback oracle for transaction-boundary tests. Raw blobs
+/// are copied directly so equality covers every persisted column without a
+/// hash or a codec-derived summary.
+struct TransactionItemSnapshot: Equatable, Sendable {
+    let id: UUID
+    let contentVersionRaw: UInt64
+    let canonicalBlob: Data
+    let revisionStateBlob: Data
+    let canonicalSignatureBlob: Data
+    let projectionSchemaVersion: UInt16
+    let title: String
+    let searchBody: String
+    let effectiveTypeIdentifiersBlob: Data
+    let firstCopiedAt: Date
+    let lastCopiedAt: Date
+    let copyCount: UInt64
+    let firstSource: String?
+    let lastSource: String?
+    let pinOrdinal: Int?
+
+    init(_ row: HistoryItemRow) {
+        id = row.id
+        contentVersionRaw = row.contentVersionRaw
+        canonicalBlob = row.canonicalBlob
+        revisionStateBlob = row.revisionStateBlob
+        canonicalSignatureBlob = row.canonicalSignatureBlob
+        projectionSchemaVersion = row.projectionSchemaVersion
+        title = row.title
+        searchBody = row.searchBody
+        effectiveTypeIdentifiersBlob = row.effectiveTypeIdentifiersBlob
+        firstCopiedAt = row.firstCopiedAt
+        lastCopiedAt = row.lastCopiedAt
+        copyCount = row.copyCount
+        firstSource = row.firstSource
+        lastSource = row.lastSource
+        pinOrdinal = row.pinOrdinal
+    }
+}
+
+struct TransactionRetainedBytesSnapshot: Equatable, Sendable {
+    let itemID: UUID
+    let canonicalBytes: Int
+    let revisionCount: Int
+    let revisionBytes: Int
+    let bytesSchemaVersion: UInt16
+
+    init(_ row: RetainedBytesRow) {
+        itemID = row.itemID
+        canonicalBytes = row.canonicalBytes
+        revisionCount = row.revisionCount
+        revisionBytes = row.revisionBytes
+        bytesSchemaVersion = row.bytesSchemaVersion
+    }
+
+    init(
+        itemID: UUID,
+        canonicalBytes: Int,
+        revisionCount: Int,
+        revisionBytes: Int,
+        bytesSchemaVersion: UInt16
+    ) {
+        self.itemID = itemID
+        self.canonicalBytes = canonicalBytes
+        self.revisionCount = revisionCount
+        self.revisionBytes = revisionBytes
+        self.bytesSchemaVersion = bytesSchemaVersion
+    }
+}
+
+struct TransactionPositionSnapshot: Equatable, Sendable {
+    let key: String
+    let rawValue: UInt64
+    let maximumUnpinnedItems: Int
+
+    init(_ row: LastChangePositionRow) {
+        key = row.key
+        rawValue = row.rawValue
+        maximumUnpinnedItems = row.maximumUnpinnedItems
+    }
+
+    init(key: String, rawValue: UInt64, maximumUnpinnedItems: Int) {
+        self.key = key
+        self.rawValue = rawValue
+        self.maximumUnpinnedItems = maximumUnpinnedItems
+    }
+}
+
+struct TransactionConfigSnapshot: Equatable, Sendable {
+    let key: String
+    let agePolicyEnabled: Bool
+    let ageMaxSeconds: Double
+    let storagePolicyEnabled: Bool
+    let storageMaxBytes: Int
+    let revisionPolicyEnabled: Bool
+    let revisionMaxCount: Int?
+    let revisionMaxBytes: Int?
+    let configSchemaVersion: UInt16
+
+    init(_ row: RetentionExpansionConfigRow) {
+        key = row.key
+        agePolicyEnabled = row.agePolicyEnabled
+        ageMaxSeconds = row.ageMaxSeconds
+        storagePolicyEnabled = row.storagePolicyEnabled
+        storageMaxBytes = row.storageMaxBytes
+        revisionPolicyEnabled = row.revisionPolicyEnabled
+        revisionMaxCount = row.revisionMaxCount
+        revisionMaxBytes = row.revisionMaxBytes
+        configSchemaVersion = row.configSchemaVersion
+    }
+
+    init(
+        key: String,
+        agePolicyEnabled: Bool,
+        ageMaxSeconds: Double,
+        storagePolicyEnabled: Bool,
+        storageMaxBytes: Int,
+        revisionPolicyEnabled: Bool,
+        revisionMaxCount: Int?,
+        revisionMaxBytes: Int?,
+        configSchemaVersion: UInt16
+    ) {
+        self.key = key
+        self.agePolicyEnabled = agePolicyEnabled
+        self.ageMaxSeconds = ageMaxSeconds
+        self.storagePolicyEnabled = storagePolicyEnabled
+        self.storageMaxBytes = storageMaxBytes
+        self.revisionPolicyEnabled = revisionPolicyEnabled
+        self.revisionMaxCount = revisionMaxCount
+        self.revisionMaxBytes = revisionMaxBytes
+        self.configSchemaVersion = configSchemaVersion
+    }
+}
+
+struct TransactionStoreSnapshot: Equatable, Sendable {
+    let items: [TransactionItemSnapshot]
+    let retainedBytes: [TransactionRetainedBytesSnapshot]
+    let positions: [TransactionPositionSnapshot]
+    let configs: [TransactionConfigSnapshot]
+
+    static func read(from storeURL: URL) throws -> TransactionStoreSnapshot {
+        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let context = ModelContext(container)
+        let itemRows = try context.fetch(FetchDescriptor<HistoryItemRow>())
+        let bytesRows = try context.fetch(FetchDescriptor<RetainedBytesRow>())
+        let positionRows = try context.fetch(FetchDescriptor<LastChangePositionRow>())
+        let configRows = try context.fetch(FetchDescriptor<RetentionExpansionConfigRow>())
+        return TransactionStoreSnapshot(
+            items: itemRows.map(TransactionItemSnapshot.init).sorted {
+                HistoryItemID(rawValue: $0.id) < HistoryItemID(rawValue: $1.id)
+            },
+            retainedBytes: bytesRows.map(TransactionRetainedBytesSnapshot.init).sorted {
+                HistoryItemID(rawValue: $0.itemID) < HistoryItemID(rawValue: $1.itemID)
+            },
+            positions: positionRows.map(TransactionPositionSnapshot.init).sorted {
+                $0.key < $1.key
+            },
+            configs: configRows.map(TransactionConfigSnapshot.init).sorted {
+                $0.key < $1.key
+            }
+        )
     }
 }

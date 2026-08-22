@@ -493,8 +493,9 @@ private struct DetailsBody: View {
 
 /// One representation row in the Content section: monospaced type identifier,
 /// byte size, "Hidden" badge (canonical-but-not-effective types), and the
-/// bounded preview — ≤500 characters of monospaced text for UTF-8-decodable
-/// textual types, or the item thumbnail for image types (03b §9).
+/// bounded preview — ≤500 characters only for exact UTF-8 plain text, or the
+/// item thumbnail for image types. Structured, abstract, encoding-unspecified,
+/// and unknown representations remain type + byte metadata (review TYPE-2).
 private struct RepresentationRow: View {
 
     let representation: HistoryRepresentation
@@ -503,6 +504,9 @@ private struct RepresentationRow: View {
     let item: HistoryItemReference
 
     var body: some View {
+        let presentation = DetailsRepresentationPresentation.resolve(
+            representation
+        )
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
                 Text(representation.typeIdentifier)
@@ -532,7 +536,7 @@ private struct RepresentationRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
-            if let preview = textPreview(of: representation) {
+            if case .plainText(let preview) = presentation {
                 ScrollView {
                     Text(preview)
                         .font(.system(.callout, design: .monospaced))
@@ -553,6 +557,16 @@ private struct RepresentationRow: View {
                 .accessibilityLabel(
                     "Text preview of \(representation.typeIdentifier)"
                 )
+            }
+            if presentation == .metadataOnly,
+                !isImageType(representation.typeIdentifier)
+            {
+                Label("Preview unavailable", systemImage: "doc")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel(
+                        "Preview unavailable for \(representation.typeIdentifier)"
+                    )
             }
             if isImageType(representation.typeIdentifier),
                 let image = thumbnails.image(for: item)
@@ -637,6 +651,31 @@ private enum ContentBasis: String, Hashable {
     case canonical
 }
 
+/// Details' complete text-preview decision for one representation row.
+///
+/// Exact `public.utf8-plain-text` is the only admitted text contract in this
+/// owner. Valid UTF-8 bytes under RTF, HTML, abstract `public.text`, or
+/// encoding-unspecified `public.plain-text` remain opaque; a sibling exact
+/// plain-text representation is rendered independently by its own row. This
+/// path performs no document import or external-resource work (review TYPE-2;
+/// content-types review §3.4).
+package enum DetailsRepresentationPresentation: Equatable, Sendable {
+    case plainText(String)
+    case metadataOnly
+
+    package static func resolve(
+        _ representation: HistoryRepresentation
+    ) -> DetailsRepresentationPresentation {
+        guard representation.typeIdentifier == "public.utf8-plain-text",
+            let text = String(data: representation.bytes, encoding: .utf8),
+            !text.isEmpty
+        else {
+            return .metadataOnly
+        }
+        return .plainText(String(text.prefix(500)))
+    }
+}
+
 /// Main-actor-cached formatters (Foundation formatters are not Sendable;
 /// they stay confined to the UI actor, 01 §6).
 @MainActor
@@ -655,9 +694,9 @@ private enum DetailsFormat {
     }()
 }
 
-/// Mirror of storage's frozen v1 textual UTI set (docs/05-authority-kernel.md
-/// §15) — PresentationUI cannot import HistoryStorage, so the well-known set
-/// is duplicated here for display-only heuristics.
+/// Text-like icon classification only. This set is not a decoding contract:
+/// `DetailsRepresentationPresentation` owns exact preview admission (review
+/// TYPE-2).
 private let textualTypeIdentifiers: Set<String> = [
     "public.plain-text",
     "public.utf8-plain-text",
@@ -679,41 +718,6 @@ private let imageTypeIdentifiers: Set<String> = [
     "com.compuserve.gif",
     "com.microsoft.bmp",
 ]
-
-/// `true` when the representation's type is one of the frozen textual UTIs
-/// and its bytes decode as UTF-8 — the preview eligibility rule. The UTF-16
-/// type is in the frozen set but naturally fails the UTF-8 decode.
-private func isUTF8TextRepresentation(
-    _ representation: HistoryRepresentation
-) -> Bool {
-    guard textualTypeIdentifiers.contains(representation.typeIdentifier) else {
-        return false
-    }
-    return String(data: representation.bytes, encoding: .utf8) != nil
-}
-
-/// The ≤500-character UTF-8 preview of a textual representation, or `nil`
-/// when the type is not textual or the bytes do not decode as UTF-8.
-private func textPreview(of representation: HistoryRepresentation) -> String? {
-    guard isUTF8TextRepresentation(representation),
-        let text = String(data: representation.bytes, encoding: .utf8),
-        !text.isEmpty
-    else { return nil }
-    return String(text.prefix(500))
-}
-
-/// Decodes one textual representation per its frozen encoding (UTF-16 for
-/// `public.utf16-plain-text`, UTF-8 otherwise) — mirrors storage's
-/// projector rule (05 §15): never guess a fallback encoding.
-private func decodedText(of representation: HistoryRepresentation) -> String? {
-    guard textualTypeIdentifiers.contains(representation.typeIdentifier) else {
-        return nil
-    }
-    if representation.typeIdentifier == "public.utf16-plain-text" {
-        return String(data: representation.bytes, encoding: .utf16)
-    }
-    return String(data: representation.bytes, encoding: .utf8)
-}
 
 /// Image-type display heuristic (thumbnail row in the Content section).
 private func isImageType(_ typeIdentifier: String) -> Bool {
@@ -744,7 +748,9 @@ private func detailTitle(for details: HistoryDetails) -> String {
         return active.title
     }
     for representation in details.effective {
-        guard let text = decodedText(of: representation) else { continue }
+        guard case .plainText(let text) =
+            DetailsRepresentationPresentation.resolve(representation)
+        else { continue }
         let firstLine = text
             .split(whereSeparator: \.isNewline)
             .first?

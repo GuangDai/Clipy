@@ -58,9 +58,16 @@ struct PanelRootView: View {
             }
         }
         .overlay(alignment: .top) {
-            if let pasteFailure = appDelegate.pasteFailure {
-                pasteFailureBanner(pasteFailure)
-                    .padding(8)
+            if appDelegate.pasteFailure != nil || appDelegate.captureNotice != nil {
+                VStack(spacing: 8) {
+                    if let pasteFailure = appDelegate.pasteFailure {
+                        pasteFailureBanner(pasteFailure)
+                    }
+                    if let captureNotice = appDelegate.captureNotice {
+                        captureNoticeBanner(captureNotice)
+                    }
+                }
+                .padding(8)
             }
         }
         // The panel window is transparent; the content carries the
@@ -138,6 +145,47 @@ struct PanelRootView: View {
             return FailurePresentation.message(for: historyFailure)
         case .write:
             return "The pasteboard refused this copy. Try again."
+        }
+    }
+
+    /// Card 6 health never renders clipboard bytes, declared types, source
+    /// applications, or query text. No Retry button is offered because the
+    /// bounded owner intentionally does not retain a rejected/replaced value
+    /// after its episode; the message states the safe new-copy action instead.
+    private func captureNoticeBanner(_ notice: ClipyCaptureNotice) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.yellow)
+                .accessibilityHidden(true)
+            Text(captureNoticeMessage(notice))
+                .font(.callout)
+            Spacer(minLength: 8)
+            Button {
+                appDelegate.dismissCaptureNotice()
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss capture warning")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .shadow(radius: 4)
+    }
+
+    private func captureNoticeMessage(_ notice: ClipyCaptureNotice) -> String {
+        switch notice {
+        case .replacedCapture:
+            return "A pending clipboard change was replaced by a newer one "
+                + "and wasn't saved. To try again, copy the older content again."
+        case .failed(.unsupportedClipboardShape):
+            return "Clipy can't save multiple clipboard items yet. Copy one item at a time."
+        case .failed(.declaredContentUnavailable):
+            return "Clipy couldn't read the complete clipboard change. Copy the content again to make a new attempt."
+        case .failed:
+            return "A clipboard change wasn't saved. Clipy can't retry it "
+                + "automatically; copy the content again to make a new attempt."
         }
     }
 }

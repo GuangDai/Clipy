@@ -76,7 +76,9 @@ private func makeLimits(
     representations: Int = 2,
     typeIdentifierUTF8Bytes: Int = 16,
     representationBytes: Int = 64,
-    captureBytes: Int = 128
+    captureBytes: Int = 128,
+    proposedRevisionBytes: Int = 64,
+    totalRevisionBytesPerItem: Int = 256
 ) -> HistoryLimits {
     // Force unwrap mirrors `HistoryLimits.standard`: these fixture values
     // satisfy every consistency check, and a violation must fail loudly.
@@ -85,9 +87,9 @@ private func makeLimits(
         maximumTypeIdentifierUTF8Bytes: typeIdentifierUTF8Bytes,
         maximumRepresentationBytes: representationBytes,
         maximumCaptureBytes: captureBytes,
-        maximumProposedRevisionBytes: 64,
+        maximumProposedRevisionBytes: proposedRevisionBytes,
         maximumRevisionsPerItem: 100,
-        maximumTotalRevisionBytesPerItem: 256,
+        maximumTotalRevisionBytesPerItem: totalRevisionBytesPerItem,
         hardMaximumRetainedItems: 5_000,
         userMaximumUnpinnedLowerBound: 1,
         userMaximumUnpinnedUpperBound: 5_000,
@@ -265,6 +267,72 @@ private func makeLimits(
         )
     )
     #expect(throws: CodecRejection.signatureByteCountExceedsBound(found: 5, bound: 4)) {
+        try SignatureBlobCodec.decode(blob, limits: limits)
+    }
+}
+
+@Test func decodeRejectsAggregateByteCountAboveCaptureBound() throws {
+    // Both entries obey the 3-byte representation bound, but their literal
+    // 6-byte aggregate cannot describe a capture admitted under the 5-byte
+    // capture bound (Part V §4; Part VI §2).
+    let limits = makeLimits(representationBytes: 3, captureBytes: 5)
+    let blob = try SignatureBlobCodec.encodeWire(
+        SignatureBlobV1(
+            formatVersion: 1,
+            entries: [
+                storedEntry("a", fingerprint: 1, byteCount: 3),
+                storedEntry("b", fingerprint: 2, byteCount: 3),
+            ]
+        )
+    )
+
+    #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+        try mapCodecFailure {
+            try SignatureBlobCodec.decode(blob, limits: limits)
+        }
+    }
+}
+
+@Test func decodeAcceptsAggregateByteCountAtCaptureBound() throws {
+    let limits = makeLimits(representationBytes: 3, captureBytes: 5)
+    let blob = try SignatureBlobCodec.encodeWire(
+        SignatureBlobV1(
+            formatVersion: 1,
+            entries: [
+                storedEntry("a", fingerprint: 1, byteCount: 3),
+                storedEntry("b", fingerprint: 2, byteCount: 2),
+            ]
+        )
+    )
+
+    let decoded = try SignatureBlobCodec.decode(blob, limits: limits)
+
+    #expect(decoded.map(\.byteCount) == [3, 2])
+}
+
+@Test func decodeRejectsAggregateByteCountOverflow() throws {
+    let limits = makeLimits(
+        representationBytes: Int.max,
+        captureBytes: Int.max,
+        proposedRevisionBytes: Int.max,
+        totalRevisionBytesPerItem: Int.max
+    )
+    let blob = try SignatureBlobCodec.encodeWire(
+        SignatureBlobV1(
+            formatVersion: 1,
+            entries: [
+                storedEntry("a", fingerprint: 1, byteCount: Int.max),
+                storedEntry("b", fingerprint: 2, byteCount: 1),
+            ]
+        )
+    )
+
+    #expect(
+        throws: CodecRejection.totalBytesExceedBound(
+            found: Int.max,
+            bound: Int.max
+        )
+    ) {
         try SignatureBlobCodec.decode(blob, limits: limits)
     }
 }

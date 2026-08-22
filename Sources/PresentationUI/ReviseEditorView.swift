@@ -20,29 +20,51 @@ import SwiftUI
 /// submits a single `.replace(RevisionDraft(decisions:))` intent.
 public struct ReviseEditorView: View {
 
-    /// The single alert this sheet can raise: a stale base version, a typed
-    /// failure message (03b §10), or dirty-draft discard confirmation.
+    /// Alerts distinguish save and reload failures so a typed read failure is
+    /// never mislabeled as a failed revision (03b §10; review Card 3B).
     private enum EditorAlert {
         case stale
-        case failure(String)
+        case saveFailure(String)
+        case reloadFailure(String)
         case discardDraft
+
+        var presentation: (title: String, message: String) {
+            switch self {
+            case .stale:
+                return (
+                    "Revision Not Saved",
+                    "Edited content changed — your draft is intact. "
+                        + "Reload Latest updates the base while keeping your "
+                        + "edits for formats that are still editable."
+                )
+            case .saveFailure(let message):
+                return ("Couldn't Save Revision", message)
+            case .reloadFailure(let message):
+                return ("Couldn't Reload Latest", message)
+            case .discardDraft:
+                return (
+                    "Discard Changes?",
+                    "Your unsaved changes will be lost."
+                )
+            }
+        }
     }
 
     @Environment(\.dismiss) private var dismiss
 
     private let viewState: HistoryViewState
-    private let details: HistoryDetails
 
     /// Pure current-vs-canonical draft owner.  The view never translates
     /// "Keep Current" into HistoryCore actions itself.
     @State private var draft: ReviseEditorDraft
 
     @State private var isSaving = false
+    @State private var isReloading = false
+    @State private var reloadNotice: String?
     @State private var activeAlert: EditorAlert?
 
     public init(viewState: HistoryViewState, details: HistoryDetails) {
         self.viewState = viewState
-        self.details = details
 
         _draft = State(initialValue: ReviseEditorDraft(details: details))
     }
@@ -51,7 +73,10 @@ public struct ReviseEditorView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(spacing: 12) {
-                    ForEach(details.canonical, id: \.typeIdentifier) {
+                    ForEach(
+                        draft.canonicalRepresentations,
+                        id: \.typeIdentifier
+                    ) {
                         representation in
                         decisionRow(for: representation)
                     }
@@ -59,6 +84,7 @@ public struct ReviseEditorView: View {
                 .padding(16)
             }
             Divider()
+            reloadStatus
             footer
         }
         .frame(width: 520, height: 440)
@@ -86,7 +112,23 @@ public struct ReviseEditorView: View {
                 activeAlert = nil
                 dismiss()
             }
-        case .stale, .failure:
+        case .stale:
+            Button("Keep Editing", role: .cancel) {
+                activeAlert = nil
+            }
+            Button("Reload Latest") {
+                activeAlert = nil
+                Task { await reloadLatest() }
+            }
+        case .reloadFailure:
+            Button("Keep Editing", role: .cancel) {
+                activeAlert = nil
+            }
+            Button("Retry Reload") {
+                activeAlert = nil
+                Task { await reloadLatest() }
+            }
+        case .saveFailure:
             Button("OK") {
                 activeAlert = nil
             }
@@ -95,36 +137,48 @@ public struct ReviseEditorView: View {
         }
     }
 
-    /// The alert title for the current alert state (03b §10 mapping).
-    private var alertTitle: String {
-        switch activeAlert {
-        case .stale:
-            return "Revision Not Saved"
-        case .failure:
-            return "Couldn't Save Revision"
-        case .discardDraft:
-            return "Discard Changes?"
-        case nil:
-            return ""
-        }
+    /// Empty strings are observed only while the alert binding is false.
+    private var alertPresentation: (title: String, message: String) {
+        activeAlert?.presentation ?? ("", "")
     }
 
-    /// The alert message for the current alert state — the contract string
-    /// for a stale base version, `FailurePresentation` otherwise.
+    private var alertTitle: String {
+        alertPresentation.title
+    }
+
     private var alertMessage: String {
-        switch activeAlert {
-        case .stale:
-            return "Edited content changed — your edit was not saved."
-        case .failure(let message):
-            return message
-        case .discardDraft:
-            return "Your unsaved changes will be lost."
-        case nil:
-            return ""
-        }
+        alertPresentation.message
     }
 
     // MARK: Footer
+
+    @ViewBuilder
+    private var reloadStatus: some View {
+        if draft.isAwaitingLatestContent {
+            HStack(spacing: 12) {
+                Label(
+                    "Reload latest content before saving again.",
+                    systemImage: "arrow.clockwise"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Button(isReloading ? "Reloading…" : "Reload Latest") {
+                    Task { await reloadLatest() }
+                }
+                .disabled(isReloading)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+        } else if let reloadNotice {
+            Label(reloadNotice, systemImage: "checkmark.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.top, 10)
+        }
+    }
 
     private var footer: some View {
         HStack(spacing: 12) {
@@ -160,7 +214,7 @@ public struct ReviseEditorView: View {
                 }
             }
             .keyboardShortcut("s", modifiers: .command)
-            .disabled(!canSave || isSaving)
+            .disabled(!canSave || isSaving || isReloading)
             .accessibilityLabel(isSaving ? "Saving revision" : "Save Revision")
             .accessibilityHint(
                 "Applies these decisions as a new revision of the item."
@@ -178,7 +232,7 @@ public struct ReviseEditorView: View {
     }
 
     private var canSave: Bool {
-        validationMessage == nil
+        draft.canSubmit
     }
 
     private var validationMessage: String? {
@@ -208,6 +262,11 @@ public struct ReviseEditorView: View {
         for representation: HistoryRepresentation
     ) -> some View {
         let typeIdentifier = representation.typeIdentifier
+        let replacementIsAvailable = draft.canReplace(representation)
+        let replacementAccessibilityHint = replacementIsAvailable
+            ? " Replace substitutes literal UTF-8 plain text."
+            : " Replace is unavailable because Clipy cannot safely decode"
+                + " and re-encode this format yet."
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -232,9 +291,9 @@ public struct ReviseEditorView: View {
                     Text("Keep Current").tag(ReviseEditorDraft.Choice.keepCurrent)
                     Text("Use Original").tag(ReviseEditorDraft.Choice.useOriginal)
                     Text("Hide").tag(ReviseEditorDraft.Choice.hide)
-                    if draft.canReplace(representation) {
-                        // Replace is text-only: the editor's payload is one
-                        // UTF-8 string per type (03a §5 `.replace(bytes:)`).
+                    if replacementIsAvailable {
+                        // The first encoder-backed editing route is exact
+                        // `public.utf8-plain-text` only (review TYPE-2).
                         Text("Replace").tag(ReviseEditorDraft.Choice.replace)
                     }
                 }
@@ -246,8 +305,19 @@ public struct ReviseEditorView: View {
                     "Keep Current preserves the bytes currently used for"
                         + " pasting. Use Original restores the captured bytes."
                         + " Hide omits this type from pasting."
-                        + " Replace substitutes edited text."
+                        + replacementAccessibilityHint
                 )
+            }
+            if !replacementIsAvailable {
+                Label(
+                    "Replace unavailable: Clipy cannot safely decode and "
+                        + "re-encode this format yet. Keep Current preserves "
+                        + "its exact bytes.",
+                    systemImage: "lock"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
             if draft.choice(for: typeIdentifier) == .replace {
                 TextEditor(text: textBinding(for: typeIdentifier))
@@ -289,11 +359,12 @@ public struct ReviseEditorView: View {
     // MARK: Save
 
     /// Saves the draft as one `.replace` revision. `.staleContent` leaves the
-    /// sheet and draft intact while presenting an alert; any other typed
-    /// failure shows its `FailurePresentation` message (03b §10). Success
-    /// dismisses and the observation loop refreshes the row list (04 §5).
+    /// sheet and byte-exact draft intact, then blocks another save until the
+    /// user explicitly reloads. Success dismisses and observation refreshes
+    /// the row list (03b §10; 04 §5; review Card 3B).
     @MainActor
     private func save() async {
+        guard !isSaving, draft.canSubmit else { return }
         isSaving = true
         defer { isSaving = false }
         do {
@@ -301,15 +372,53 @@ public struct ReviseEditorView: View {
             dismiss()
         } catch let failure as HistoryFailure {
             if case .staleContent = failure {
+                draft.markStale()
+                reloadNotice = nil
                 activeAlert = .stale
             } else {
-                activeAlert = .failure(
+                activeAlert = .saveFailure(
                     FailurePresentation.message(for: failure)
                 )
             }
         } catch {
             guard error is CancellationError else {
-                activeAlert = .failure("Clipy couldn't save this revision.")
+                activeAlert = .saveFailure(
+                    "Clipy couldn't save this revision."
+                )
+                return
+            }
+        }
+    }
+
+    /// Fetches current details only after explicit user intent, then rebases
+    /// the pure draft. It never auto-merges or submits. A typed read failure
+    /// leaves the stale gate and all draft bytes untouched so Retry is safe.
+    @MainActor
+    private func reloadLatest() async {
+        guard !isReloading, draft.isAwaitingLatestContent else { return }
+        isReloading = true
+        defer { isReloading = false }
+        do {
+            let latest = try await viewState.details(for: draft.itemID)
+            guard draft.reloadLatest(details: latest) else {
+                activeAlert = .reloadFailure(
+                    "Latest content can't be safely rebased onto this draft. "
+                        + "Your edits are intact; keep editing or try again "
+                        + "after the item changes."
+                )
+                return
+            }
+            reloadNotice = "Latest content loaded. Your draft was kept for "
+                + "formats that remain editable."
+        } catch let failure as HistoryFailure {
+            activeAlert = .reloadFailure(
+                FailurePresentation.message(for: failure)
+            )
+        } catch {
+            guard error is CancellationError else {
+                activeAlert = .reloadFailure(
+                    "Clipy couldn't load the latest content."
+                )
                 return
             }
         }

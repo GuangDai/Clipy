@@ -321,7 +321,8 @@ internal actor HistoryAuthority {
     /// - Throws: `.invalidInput(.invalidRetentionPolicy)` for an out-of-range
     ///   initial value; `.persistence(.openStore)` when the store cannot be
     ///   read or the singleton cannot be created (§2: store-open failures);
-    ///   `.persistence(.corruptStoredValue)` for corrupt durable signature,
+    ///   `.persistence(.corruptStoredValue)` for an out-of-range durable
+    ///   position-singleton retention value, or corrupt durable signature,
     ///   projection-version, Content Version, pin-ordinal, or
     ///   retention-config values (unknown `configSchemaVersion` or a
     ///   non-finite `ageMaxSeconds`, `V2-02` §3.3 / DC-21);
@@ -352,7 +353,8 @@ internal actor HistoryAuthority {
             // §13 steps 3–4: load-or-create the singleton; validate exactly one.
             try Self.ensurePositionSingleton(
                 in: context,
-                initialMaximumUnpinnedItems: initialMaximumUnpinnedItems
+                initialMaximumUnpinnedItems: initialMaximumUnpinnedItems,
+                limits: limits
             )
 
             // V2-roadmap §5 total open order step 5 (M1.3): bootstrap/validate
@@ -405,10 +407,14 @@ internal actor HistoryAuthority {
     /// `save()` follows it. A store that cannot be read or written at this
     /// point fails open as `.persistence(.openStore)` (§2's startup failure
     /// vocabulary, which does not include `.transaction`); zero or
-    /// duplicate singletons are `.persistence(.invariantViolation)`.
+    /// duplicate singletons are `.persistence(.invariantViolation)`. An
+    /// existing row is decoded with the same §3.2 scalar validation used by
+    /// reads and commits; startup never repairs or replaces its durable
+    /// policy from the caller's initial value.
     internal static func ensurePositionSingleton(
         in context: ModelContext,
-        initialMaximumUnpinnedItems: Int
+        initialMaximumUnpinnedItems: Int,
+        limits: HistoryLimits
     ) throws {
         let key = positionSingletonKey
         var descriptor = FetchDescriptor<LastChangePositionRow>(
@@ -439,8 +445,9 @@ internal actor HistoryAuthority {
             }
         case 1:
             // Existing store: its durable singleton value rules; the
-            // configuration's initial value is ignored (§2).
-            break
+            // configuration's initial value is ignored (§2), but startup
+            // must validate the stored scalars before publishing the facade.
+            _ = try Self.decodePositionRow(rows[0], limits: limits)
         default:
             throw HistoryFailure.persistence(.invariantViolation)
         }

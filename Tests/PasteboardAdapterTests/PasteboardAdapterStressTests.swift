@@ -225,15 +225,10 @@ struct PasteboardAdapterStressTests {
 
     // MARK: - Concealed 5 MiB text (05 §6.1; 03a §4)
 
-    /// A pasteboard carrying the 5 MiB text AND the
-    /// `org.nspasteboard.ConcealedType` marker captures with
-    /// `isConcealed == true`, and whole-capture semantics keep the full
-    /// sibling bytes frozen next to the marker — the adapter never strips
-    /// the marker and submits the plaintext as an ordinary capture
-    /// (05 §6.1 step 3; roadmap 04 acceptance 2). Storage then rejects the
-    /// whole observation as `.invalidInput(.excludedFromHistory)` before
-    /// fingerprinting; that half is proven in HistoryStorage, not here.
-    @Test func concealedFiveMegabyteTextFreezesWholeCapture() throws {
+    /// A declared concealment marker prevents the adjacent 5 MiB payload
+    /// from entering the frozen capture. The exact accessor-zero proof lives
+    /// in PasteboardAdapterTests; this fixture locks the resulting value shape.
+    @Test func concealedFiveMegabyteTextProducesUnreadOutcome() throws {
         let textBytes = Data(try FixtureCatalog.text("text/lorem-5mb.txt").utf8)
         let pasteboard = makePasteboard()
         pasteboard.clearContents()
@@ -243,13 +238,12 @@ struct PasteboardAdapterStressTests {
             forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
         )
 
-        let capture = PasteboardAdapter(pasteboard: pasteboard).capture()
+        let adapter = PasteboardAdapter(pasteboard: pasteboard)
+        let outcome = adapter.captureOutcome()
 
-        #expect(capture != nil)
-        #expect(capture?.isConcealed == true)
-        #expect(capture?.representations.contains {
-            $0.typeIdentifier == NSPasteboard.PasteboardType.string.rawValue
-                && $0.bytes == textBytes
-        } == true)
+        #expect(outcome?.isComplete == false)
+        #expect(outcome?.capture.isConcealed == true)
+        #expect(outcome?.capture.representations.isEmpty == true)
+        #expect(adapter.capture() == nil)
     }
 }

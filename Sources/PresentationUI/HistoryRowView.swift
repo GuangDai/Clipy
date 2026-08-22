@@ -66,7 +66,25 @@ public struct HistoryRowView: View {
         .onTapGesture(count: 2) { onCopy(row.item) }
         .contextMenu { contextMenu }
         .accessibilityElement(children: .combine)
-        .accessibilityHint("Double-click to copy to the clipboard.")
+        .accessibilityIdentifier("clipy.history.row.\(row.item.id.description)")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction {
+            onCopy(row.item)
+        }
+        .accessibilityAction(named: Text(pinAccessibilityActionName)) {
+            if row.pinnedPosition == nil {
+                onPin(row.item.id, .first)
+            } else {
+                onUnpin(row.item.id)
+            }
+        }
+        .accessibilityAction(named: Text("Show Details")) {
+            onShowDetails(row.item)
+        }
+        .accessibilityAction(named: Text("Remove")) {
+            onRemove(row.item.id)
+        }
+        .accessibilityHint("Copies this item to the clipboard.")
     }
 
     // MARK: Leading thumbnail
@@ -178,6 +196,14 @@ public struct HistoryRowView: View {
     /// `UInt64`-interpolation reason (docs/v2/V2-07-ux.md §9 point 1).
     private var copyAccessibilityLabel: String {
         "Copied \(row.copyCount) times"
+    }
+
+    /// The compact Actions rotor exposes the state-changing pin operation,
+    /// not the context menu's two placement variants. Placement remains an
+    /// explicit pointer/keyboard-menu choice while assistive technology gets
+    /// one unambiguous Pin or Unpin action (V2-07 §9).
+    private var pinAccessibilityActionName: String {
+        row.pinnedPosition == nil ? "Pin" : "Unpin"
     }
 
     /// Last path component of the observed source bundle identifier
