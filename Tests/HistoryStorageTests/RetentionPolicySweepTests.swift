@@ -17,7 +17,8 @@
 /// PHASE-C veto; the same-value satisfied `.unchanged` — the v1 WS21
 /// posture), §11 D24; Record 3 gates `RET-PERF-2` (lineages decoded only
 /// for exceeding items — proven behaviorally here through a corrupted
-/// non-exceeding blob the sweep must never decode), `RET-SECURITY-1`
+/// non-exceeding blob and plausible scalar mismatch the sweep must never
+/// inspect), `RET-SECURITY-1`
 /// (deletion atomicity — a vetoed sweep commits nothing).
 ///
 /// Every fixture crosses the public `perform(.setRetentionPolicies(...))`
@@ -435,6 +436,7 @@ struct RetentionPolicySweepTests {
         }
         #expect(retiredItems == 2)
         #expect(prunedRevisions == 0)
+        #expect(sweepCommit.hasDestructiveRetentionEffects)
 
         // Storage side: A and B retired; P (pinned), D (exactly at the
         // strict cutoff), and C survive; the pinned lane is untouched.
@@ -594,10 +596,11 @@ struct RetentionPolicySweepTests {
     /// non-exceeding in both dimensions. No R1/R2 lane is active, so the
     /// receipt carries `retiredItems == 0` / `prunedRevisions == 2` and ONE
     /// position advance. The zero-decode law (`RET-PERF-2`) is proven
-    /// behaviorally: T's `revisionStateBlob` is corrupted behind the
-    /// Authority's back BEFORE the sweep — a lineage decode of T would fail
-    /// the whole sweep `.corruptStoredValue` — and T's row and corrupt blob
-    /// emerge byte-identical.
+    /// behaviorally: T's `revisionStateBlob` and its plausible-but-wrong
+    /// `canonicalBytes` scalar are corrupted behind the Authority's back
+    /// BEFORE the sweep — a lineage decode of T would fail the whole sweep
+    /// `.corruptStoredValue`, while an exact projection cross-check would
+    /// reject the scalar — and T's row and corrupt blob emerge byte-identical.
     @Test("R3 sweep prunes exceeding items only; non-exceeding lineages are never decoded")
     func r3SweepPrunesExceedingItemsOnlyWithoutDecodingNonExceeding() async throws {
         let storeURL = WSSupport.tempStoreURL("r6-r3-sweep")
@@ -641,6 +644,13 @@ struct RetentionPolicySweepTests {
                 .first { $0.id == t.id.rawValue }
         )
         damageRow.revisionStateBlob = corruptBlob
+        let tRawID = t.id.rawValue
+        let damageBytesRow = try #require(
+            try damageContext.fetch(FetchDescriptor<RetainedBytesRow>(
+                predicate: #Predicate { row in row.itemID == tRawID }
+            )).first
+        )
+        damageBytesRow.canonicalBytes = 9
         try damageContext.save()
 
         let receipt = try await history.perform(.setRetentionPolicies(
@@ -666,6 +676,7 @@ struct RetentionPolicySweepTests {
         }
         #expect(retiredItems == 0)
         #expect(prunedRevisions == 2)
+        #expect(sweepCommit.hasDestructiveRetentionEffects)
 
         // A: oldest-inactive prefix [rev1] pruned; survivors keep append
         // order; the active (rev3) survives (D3/D23); the projection row
@@ -698,7 +709,7 @@ struct RetentionPolicySweepTests {
         )
         #expect(untouchedRow.revisionStateBlob == corruptBlob)
         let tRow = try #require(try Self.fetchBytesRow(for: t.id, in: container))
-        #expect(tRow.canonicalBytes == 10)
+        #expect(tRow.canonicalBytes == 9)
         #expect(tRow.revisionCount == 1)
         #expect(tRow.revisionBytes == 5)
     }
@@ -954,6 +965,7 @@ struct RetentionPolicySweepTests {
         }
         #expect(firstRetired == 0)
         #expect(firstPruned == 0)
+        #expect(!firstCommit.hasDestructiveRetentionEffects)
 
         // Same value, satisfied state: the WS21-shaped `.unchanged` — no
         // commit, no position advance, no invalidation (§4.4/§5.6).

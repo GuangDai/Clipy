@@ -295,6 +295,7 @@ public enum CapacityKind: Sendable, Equatable {
 public enum UnavailableReason: Sendable, Equatable {
     case factProof
     case dedupIndexRebuild
+    case insufficientDiskSpace
 }
 
 public enum PersistenceFailure: Sendable, Equatable {

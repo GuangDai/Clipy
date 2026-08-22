@@ -13,6 +13,7 @@
 /// retention never recompute it (§15). Projection schema changes require an
 /// explicit schema version and a migration/rebuild plan; they never change
 /// Canonical Content, revisions, or Content Version by themselves.
+import ClipboardFormats
 import Foundation
 import HistoryCore
 import HistoryDomain
@@ -250,14 +251,13 @@ internal enum ContentProjector {
 
     // MARK: Textual eligibility and decoding (§15)
 
-    /// The frozen projection-v2 set whose exact type names declare the byte
-    /// encoding used for title/search projection. Encoding-unspecified
-    /// `public.plain-text`, abstract `public.text`, RTF, and HTML stay opaque
-    /// until an owning format decoder is separately approved (§15).
-    internal static let textualTypeIdentifiers: Set<String> = [
-        "public.utf8-plain-text",
-        "public.utf16-plain-text",
-        "public.utf8-external-plain-text",
+    /// Projection-owned recipe-v2 admission. `ClipboardFormats` supplies the
+    /// exact codec facts, but adding a future stable codec must not silently
+    /// change durable title/search behavior.
+    private static let textualProjectionIdentifiers: Set<ClipboardFormatIdentifier> = [
+        .utf8PlainText,
+        .utf8ExternalPlainText,
+        .utf16PlainText,
     ]
 
     /// Decodes one representation's bytes as text, or returns `nil` when the
@@ -266,18 +266,24 @@ internal enum ContentProjector {
     /// `public.utf16-plain-text`, UTF-8 for every other frozen textual type.
     /// The projector never guesses a fallback encoding for malformed bytes;
     /// an undecodable representation is skipped rather than durable mojibake.
-    /// Set membership means the non-UTF-16 cases have an exact UTF-8 contract;
-    /// there is no generic textual fallback.
+    /// The declared codec means the non-UTF-16 cases have an exact UTF-8
+    /// contract; there is no generic textual fallback.
     private static func decodedText(
         of representation: ContentRepresentation
     ) -> String? {
-        guard textualTypeIdentifiers.contains(representation.typeIdentifier) else {
+        let identifier = ClipboardFormatIdentifier(
+            rawValue: representation.typeIdentifier
+        )
+        guard textualProjectionIdentifiers.contains(identifier),
+              let codec = identifier.declaredStringCodec else {
             return nil
         }
-        let encoding: String.Encoding =
-            representation.typeIdentifier == "public.utf16-plain-text"
-            ? .utf16
-            : .utf8
+        let encoding: String.Encoding = switch codec {
+        case .utf8:
+            .utf8
+        case .nativeUTF16:
+            .utf16
+        }
         return String(data: representation.bytes, encoding: encoding)
     }
 
@@ -342,8 +348,8 @@ internal enum ContentProjector {
 
     // MARK: Type-based fallback title (§15)
 
-    /// Image type identifiers recognized by the fallback title. Frozen for v2
-    /// alongside `textualTypeIdentifiers`.
+    /// Image type identifiers recognized by the fallback title. This remains
+    /// projection-owned purpose policy; it is frozen with recipe v2.
     private static let imageTypeIdentifiers: Set<String> = [
         "public.image",
         "public.png",

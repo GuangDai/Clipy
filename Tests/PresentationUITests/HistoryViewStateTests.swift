@@ -1157,6 +1157,163 @@ struct HistoryViewStateTests {
         state.deactivate()
     }
 
+    /// A retention expansion may delete rows or prune revision bytes while
+    /// its caller-visible outcome remains the primary Revise/Policy result.
+    /// The receipt's authoritative effect bit therefore widens the existing
+    /// exact purge to `.all`; presentation never guesses victims from held
+    /// rows or from outcome counters.
+    @Test func destructiveRetentionEffectsPublishWholeSurfacePurge() async throws {
+        let oldRow = fixtureRow(
+            id: "00000000-0000-0000-0000-000000009C10",
+            title: "possibly-retired"
+        )
+        let history = PausableMutationHistory(
+            observedFirstPage: fixturePage(
+                rows: [oldRow],
+                next: "pre-retention-cursor"
+            )
+        )
+        let state = HistoryViewState(history: history)
+        state.activate()
+        try #require(await pollUntil { state.rows == [oldRow] })
+
+        let policies = Task {
+            try await state.applyRetentionPolicies(
+                HistoryRetentionPolicies(
+                    age: nil,
+                    storage: nil,
+                    revisions: RevisionRetention(
+                        maxRevisionsPerItem: 1,
+                        maxRevisionBytesPerItem: nil
+                    )
+                )
+            )
+        }
+        try #require(await pollUntil { await history.requestCount == 1 })
+        await history.complete(
+            with: .success(.committed(HistoryCommit(
+                position: ChangePosition(rawValue: 20),
+                outcome: .retentionPoliciesSet(
+                    retiredItems: 0,
+                    prunedRevisions: 1
+                ),
+                hasDestructiveRetentionEffects: true
+            )))
+        )
+        _ = try await policies.value
+
+        #expect(state.surfacePurge?.generation == 1)
+        #expect(state.surfacePurge?.scope == .all)
+        #expect(state.rows.isEmpty)
+        #expect(!state.hasNextPage)
+
+        state.deactivate()
+    }
+
+    /// If observation has already delivered a newer authoritative snapshot,
+    /// the older receipt must still purge derived caches but must not erase
+    /// rows containing a concurrent edit that observation already included.
+    @Test func destructiveReceiptPreservesNewerObservedRows() async throws {
+        let oldRow = fixtureRow(
+            id: "00000000-0000-0000-0000-000000009C30",
+            title: "old"
+        )
+        let concurrentRow = fixtureRow(
+            id: "00000000-0000-0000-0000-000000009C31",
+            title: "concurrent"
+        )
+        let history = PausableMutationHistory(
+            observedFirstPage: fixturePage(rows: [oldRow], next: nil)
+        )
+        let state = HistoryViewState(history: history)
+        state.activate()
+        try #require(await pollUntil { state.rows == [oldRow] })
+
+        let policies = Task {
+            try await state.applyRetentionPolicies(
+                HistoryRetentionPolicies(
+                    age: AgeRetention(maxAge: 60),
+                    storage: nil,
+                    revisions: nil
+                )
+            )
+        }
+        try #require(await pollUntil { await history.requestCount == 1 })
+        await history.emitObservedPage(HistoryPage(
+            position: ChangePosition(rawValue: 31),
+            rows: [concurrentRow],
+            next: nil
+        ))
+        try #require(await pollUntil { state.rows == [concurrentRow] })
+        await history.complete(
+            with: .success(.committed(HistoryCommit(
+                position: ChangePosition(rawValue: 30),
+                outcome: .retentionPoliciesSet(
+                    retiredItems: 1,
+                    prunedRevisions: 0
+                ),
+                hasDestructiveRetentionEffects: true
+            )))
+        )
+        _ = try await policies.value
+
+        #expect(state.surfacePurge?.scope == .all)
+        #expect(state.rows == [concurrentRow])
+
+        state.deactivate()
+    }
+
+    /// A composed Revise that also prunes/retires cannot use only the exact
+    /// old-reference purge: other presentation-derived state may be stale.
+    @Test func reviseWithDestructiveRetentionEffectsPublishesWholeSurfacePurge() async throws {
+        let itemID = HistoryItemID(
+            rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000009C20")!
+        )
+        let oldRow = fixtureRow(
+            id: "00000000-0000-0000-0000-000000009C20",
+            title: "old-version"
+        )
+        let survivor = fixtureRow(
+            id: "00000000-0000-0000-0000-000000009C21",
+            title: "may-be-retired"
+        )
+        let history = PausableMutationHistory(
+            observedFirstPage: fixturePage(rows: [oldRow, survivor], next: nil)
+        )
+        let state = HistoryViewState(history: history)
+        state.activate()
+        try #require(await pollUntil { state.rows.count == 2 })
+        let request = RevisionRequest(
+            itemID: itemID,
+            expected: ContentVersion(rawValue: 1),
+            intent: .replace(RevisionDraft(decisions: [
+                RevisionDecision(
+                    typeIdentifier: "public.utf8-plain-text",
+                    action: .replace(bytes: Data("new".utf8))
+                ),
+            ]))
+        )
+
+        let revision = Task { try await state.revise(request) }
+        try #require(await pollUntil { await history.requestCount == 1 })
+        await history.complete(
+            with: .success(.committed(HistoryCommit(
+                position: ChangePosition(rawValue: 21),
+                outcome: .revised(HistoryItemReference(
+                    id: itemID,
+                    contentVersion: ContentVersion(rawValue: 2)
+                )),
+                hasDestructiveRetentionEffects: true
+            )))
+        )
+        _ = try await revision.value
+
+        #expect(state.surfacePurge?.scope == .all)
+        #expect(state.rows.isEmpty)
+
+        state.deactivate()
+    }
+
     /// Details-owned pin toggles expose an awaiting receipt seam. The readback
     /// can start only after success; a typed failure is still published by the
     /// shared mutation boundary for the existing inline/banner presentation.

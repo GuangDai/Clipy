@@ -25,10 +25,9 @@ extension HistoryAuthority {
     /// or invalidation; closure success is the save boundary, with no
     /// trailing `save()`/`processPendingChanges()`/`rollback()`.
     ///
-    /// - Throws: `.persistence(.transaction)` for ANY closure failure —
-    ///   including the `StorageInvariant.positionChanged` guard, executor
-    ///   divergence, the armed `InjectedTransactionFailure` — or any
-    ///   framework-level failure to durably commit (§16).
+    /// - Throws: `.temporarilyUnavailable(.insufficientDiskSpace)` for a
+    ///   Cocoa out-of-space/POSIX `ENOSPC` transaction failure; otherwise
+    ///   `.persistence(.transaction)` for closure or framework failure (§16).
     internal func executeCommitTransaction(
         _ plan: StampedCommitPlan,
         expectedPreviousPosition: ChangePosition,
@@ -75,6 +74,12 @@ extension HistoryAuthority {
                 if self.consumeTransactionFailureInjection(.beforeSingletonUpdate) {
                     throw InjectedTransactionFailure.beforeSingletonUpdate
                 }
+                if self.consumeTransactionFailureInjection(.insufficientDiskSpace) {
+                    throw NSError(
+                        domain: NSCocoaErrorDomain,
+                        code: CocoaError.Code.fileWriteOutOfSpace.rawValue
+                    )
+                }
                 // The singleton position is written last, inside the same
                 // transaction (§10, D6).
                 meta.rawValue = plan.position.rawValue
@@ -83,7 +88,9 @@ extension HistoryAuthority {
             // §16: a `ModelContext.transaction` closure failure (including
             // the `StorageInvariant.positionChanged` guard) or any
             // framework-level failure to durably commit the transaction.
-            throw HistoryFailure.persistence(.transaction)
+            // Only a platform domain/code proof of exhausted disk space gets
+            // the narrower retryable failure.
+            throw PersistenceErrorClassification.transactionFailure(for: error)
         }
     }
 

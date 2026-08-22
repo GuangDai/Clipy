@@ -383,7 +383,12 @@ Fetch target existence plus every row with a non-nil pin ordinal. Validate uniqu
 - Revision fetches and decodes exactly the target item.
 - Remove fetches the target's scalar summary plus the complete pinned order (the §7.2 load): removing a pinned item compacts the pinned lane in the same commit (docs/02-domain.md §10, D12).
 - Clear fetches every ID/pin value selected by scope.
-- Retention fetches every retained ID, last-copied time, and pin ordinal.
+- v1 retention fetches every retained ID, last-copied time, and pin ordinal.
+  The V2 R3 policy sweep selects exceeding items from the validated scalar
+  projection, then fully hydrates only those selected lineages and requires
+  exact `canonicalBytes`/`revisionCount`/`revisionBytes` equality before
+  destructive planning. Non-exceeding items remain on the scalar-only path;
+  their content blobs and exact projection correspondence are not inspected.
 
 All collection-wide loads are bounded by the hard retained-item maximum. A loader never labels an incomplete result as complete.
 
@@ -738,10 +743,11 @@ At the `SwiftDataHistory` boundary:
 - cursor shape, generation, or position mismatch → `.snapshotExpired`;
 - inability to rebuild the Signature Index to a proved-complete state → `.temporarilyUnavailable(.dedupIndexRebuild)` (Part V §7.1 step 1, §12);
 - inability to load or prove any other action-specific complete fact → `.temporarilyUnavailable(.factProof)`;
+- a durable transaction error whose Cocoa code is `fileWriteOutOfSpace` or whose POSIX code is `ENOSPC` (directly or in the single observed `NSUnderlyingErrorKey` wrapper) → `.temporarilyUnavailable(.insufficientDiskSpace)`; classification uses domains/codes, never localized strings;
 - hard retained/revision/copy-count limits → `.capacityExceeded` with the matching `CapacityKind`; valid encoded thumbnail output over the Part VI byte envelope → `.capacityExceeded(.thumbnailBytes)`; a `ContentVersion`/`ChangePosition` successor overflow → `.capacityExceeded(.coherenceToken)`;
 - decode/schema invariant failures or corrupt persisted values → `.persistence(.corruptStoredValue)` or `.persistence(.invariantViolation)`;
 - a PNG destination/finalization failure after source decode → `.persistence(.invariantViolation)` (encode-side invariant, never stored-value corruption);
-- a `ModelContext.transaction` closure failure (including the `StorageInvariant.positionChanged` guard) or any framework-level failure to durably commit the transaction → `.persistence(.transaction)`.
+- any other `ModelContext.transaction` closure failure (including the `StorageInvariant.positionChanged` guard) or framework-level failure to durably commit the transaction → `.persistence(.transaction)`.
 
 Platform error strings may be logged internally with privacy controls but are not used as public semantic discriminators.
 

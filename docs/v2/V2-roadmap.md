@@ -174,7 +174,9 @@ V2 design closure + durable facts + trigger ledger (V2-1/V2-2)
         |
         +-- E1/S1 enrichment
         |
-        +-- J1 journal/reconnect --> X1/X2 gateway/audit (relation resolved by DC-25)
+        +-- J1 journal/reconnect --> X1/X2 in-process gateway/audit
+        |                           --> App Intents --> clipyctl codec
+        |                           --> authenticated ingress + one private transport
         |
         +-- completed v1 thumbnail --> S1+C1 --> C3
         |                                      \----> C2
@@ -212,7 +214,9 @@ Recommended build order for a release that admits every graft is:
 3. V2-01 enrichment;
 4. V2-03 journal/reconnect, then its separately justified collection cache;
 5. V2-04 S1+C1, C3, then C2;
-6. V2-05 storage/gateway/audit, then App Intents;
+6. V2-05 storage/audit and complete in-process Gateway deny/positive substrate,
+   then App Intents, then `clipyctl` pure codec, then the separately admitted
+   authenticated ingress and one private transport;
 7. independently admitted P1/P2/P3 grafts;
 8. the matching V2-07 UI slice alongside each backend;
 9. the cross-capability and product-completion pass.
@@ -246,8 +250,8 @@ document and its proof gates before starting the affected slice.
 | DC-16 | V2-05 | Make audit payload/DTOs represent optional commit positions and rebase range/reason; include every integrity-bearing column in the hash or narrow D36; provide a reachable recovery mode when normal `open` rejects a broken chain. |
 | DC-17 | V2-06 P1 | Replace `readStartupCheckpoint() -> StartupCheckpointRow?` with an immutable `Sendable` snapshot so no `@Model` crosses a context/actor boundary. |
 | DC-18 | V2-06 P2 | Define deterministic behavior when the system locale is outside the five supported fixture locales. |
-| DC-19 | V2-06 P3 | Specify crash-resumable/idempotent eager migration, concrete commit/abort coordination for in-flight sidecars, and the actor-confined buffered stream that actually enforces the 256 KiB residency bound. *(2026-08-15: the residency clause is reconciled to V2-06 §5.4 — `readChunkSize` is a residency TARGET, not an enforced bound, because `FileHandle.AsyncBytes` exposes no public chunk control; enforcement is the conditional chunked adapter (`read(upToCount:)`) vended when `P3-PLATFORM-2` measures buffering above target, so "actually enforces" resolves as target-plus-conditional-adapter, never a silently exceeded bound; P3.4 aligned.)* |
-| DC-20 | V2-06/V2-07 | Resolve OPEN-7: P3 is transparent in V2-07, or a separately designed post-V2 large-attachment consumer owns `BlobStreamingHistory`. Do not leave a dangling consumer claim. |
+| DC-19 | V2-06 P3 | **Superseded as executable closure by `DEC-P3-ADMISSION`, `DEC-P3-MIGRATION-WRITES`, and the required V2-06 §5 replacement amendment.** The historical eager-migration/raw-`AsyncBytes` direction must not be implemented. The replacement must specify bounded cursor migration, concurrent-write linearization, staging ownership, and one bounded internal reader before G8 can admit P3. |
+| DC-20 | V2-06/V2-07 | **Superseded as executable closure by `DEC-PURPOSE-READ` plus the same P3 replacement amendment.** The former public `BlobStreamingHistory` consumer claim is withdrawn; a future approved purpose-read seam must name its real caller and keep framework transport objects internal. |
 | DC-21 | V2-02 | Specify finite-value validation for `TimeInterval`, retain the `RET-PLATFORM-4` fallback if R3 and the v1 revision-byte hard bound use different measures, and resolve the new-item/coalesce byte-projection wording before fixtures freeze. *(2026-08-15: resolved — `maxAge.isFinite` required at the boundary (`NaN`/`±∞` → `.invalidInput(.invalidRetentionPolicy)`) and a persisted non-finite `ageMaxSeconds` fails closed at config load (V2-02 §8.3 "Finiteness"); `RET-PLATFORM-4` measure-identity fallback retained verbatim; the wording item closed under DC-04 second pass.)* |
 | DC-22 | V2-05 | Reconcile “CredentialStore/Security is unbuilt and future-only” with §14’s statement that `X-PLATFORM-3` must pass for V2-05. Either remove the gate from X1/X2 completion or admit and specify the Keychain slice. |
 | DC-23 | V2-00/V2-02/V2-07 | Decide whether R1/R2/R3 are one atomic retention bundle or independently admitted dimensions. Align trigger recording, public enums and policy fields, schema/defaults, implementation slices, and visible controls with that decision. *(2026-08-15: resolved — **one three-dimensional policy value, independently disable-able** (product decision, recorded as the admission record in V2-02 Record 1): the `HistoryRetentionPolicies` struct ships whole with per-dimension `nil` disabling; trigger matrix, public surface, schema defaults, and UX switches follow V2-02 as written; R.1–R.7 slices are not trimmed.)* |
@@ -283,7 +287,7 @@ substitute for one executable order.
 | M1.2 | Define the next immutable schema for only the grafts admitted in that release and append the ordered migration stage. Record a schema-version ledger. | Fresh, `.memory`, and on-disk V1 stores open; already-shipped schemas are never edited. |
 | M1.3 | Implement data bootstrap separately from schema migration: create/validate exactly-one config rows in the resolved total open order, with v1-faithful defaults. | Duplicate, missing-with-dependent-data, unknown-version, and downgrade cases fail closed before facade publication. |
 | M1.4 | Implement projection rebuilds, notably `RetainedBytesRow`, before `open` returns. Never invent bytes or enable callers against an incomplete projection. | Backfill completeness/coherence, interruption, retry/idempotence, and rollback are fixture-proved. |
-| M1.5 | When P3 is admitted, run its separate eager blob-codec/sidecar migration. Preserve logical bytes and tokens; publish only after every row is V2-readable. | Crash-resume, worst-case duration/memory, missing-sidecar, rollback, and no-V1-read-fallback proofs pass. |
+| M1.5 | **Superseded pending the P3 replacement amendment.** If P3 is admitted, migrate a bounded item batch under a durable cursor and the approved concurrent-write policy; validate each new representation before deleting legacy bytes. Do not require an eager whole-store first-launch rewrite. | Cursor resume, concurrent capture/revise/remove, bounded duration/memory per batch, missing-source, rollback, and legacy-deletion-after-validation proofs pass. |
 
 Migration inventory:
 
@@ -296,11 +300,13 @@ Migration inventory:
 | V2-05 | `ConnectionRow`, `GrantRow`, `OperationRecordRow`, `GatewayConfigRow` | new audit codecs only | bootstrap one ungranted App Intents connection |
 | P1 | `StartupCheckpointRow` | new checkpoint codec | rebuild on miss/corruption |
 | P2 | `LocalizedSearchConfigRow` | none | query-time only; no search projection rebuild |
-| P3 | no new SwiftData model | eager `CanonicalBlobV1→V2` and `RevisionStateBlobV1→V2` | sidecar spool plus orphan/in-flight recovery |
+| P3 | blocked until replacement amendment selects metadata/cursor rows | bounded representation migration; exact codec shape is amendment-owned | staged depot write/readback plus bounded orphan/in-flight recovery; no eager whole-store cutover |
 
 M1 is complete only when each admitted module’s migration proof gates pass,
 including `E1-PLATFORM-1/4`, `RET-PLATFORM-1/1b`, `J1-PLATFORM-2`,
-`X-PLATFORM-1`, `P1-PLATFORM-3`, and `P3-PLATFORM-3/5` as applicable.
+`X-PLATFORM-1`, `P1-PLATFORM-3`, and the replacement amendment's bounded
+P3 migration/recovery gates as applicable. The old eager P3 gate wording is
+not executable.
 
 ### M1 total `SwiftDataHistory.open` order (first release: M1 + V2-02)
 
@@ -504,25 +510,37 @@ All acceptance gates:
   DC-01, DC-14 through DC-16, DC-22, and DC-25; otherwise gated on an approved
   X1 product spec and recorded fresh architecture review, whose review record
   includes the security analysis. X2 is mandatory with X1.
-- **Spec references:** `V2-05` §2–§13; D32–D36.
+- **Spec references:** `V2-05` §0–§14; D32–D36.
 - **Dependencies:** completed app composition; the HCR and Storage-clock
   substrate resolved under DC-24/DC-25; CryptoKit in HistoryStorage and
   AppIntents in ClipyApp only.
 - **Security posture:** main app process only; one gateway/Authority; no App
-  Intents extension, network enrollment, second writer, audit off-switch, or
-  Keychain implementation in this V2 slice.
+  Intents extension, network enrollment, second writer, or audit off-switch.
+  Local Automation is a later same-EUID-account continuation through
+  `clipyctl`, not a login-session identity claim.
 
 ### Gateway slices
 
+The public `clipyctl` JSON/exit-code contract may be frozen as documentation and
+golden examples before product code. That design activity is not a production
+slice. Product implementation follows the table strictly: complete in-process
+Gateway deny/positive behavior, then App Intents, then CLI codec, then one
+private transport. No later row may fabricate evidence for an earlier row.
+
 | Step | Deliverables | Exit proof |
 |---|---|---|
-| X.1 Platform/security spike | Durably verify main-process/TCC behavior, cold/warm `@Dependency` order and Swift 6 crash-freedom, parameter API, caller identity, and fixed rate/audit bounds. | `X-COMPILE-2/4`, `X-SECURITY-1/3/4`; architecture review. |
-| X.2 Public contract | Add `ExternalHistory`, `GatewayAdminHistory`, identities/capabilities, requests/results, failures, connection/grant/audit DTOs, public `ExternalHistoryFacade`, and public `makeExternalHistoryFacade(for:)`. Leave every v1 closed enum/protocol unchanged. | `X-COMPILE-1/3`; public-symbol/import/escape-hatch gates. |
-| X.3 Schema/codecs/bootstrap | Add four models, resolved audit codecs, and fixed limits. Bootstrap one durable active App Intents connection with no grants; validate singleton/connection/chain before facade publication; audit is always on. | `X-PLATFORM-1/2`; migration, corruption, missing-config-with-data, identity-persistence, and chain proofs. |
-| X.4 Audit/admin substrate | Implement monotone sequence, checked bytes, append, full chain validation, resolved compaction/relink, explicit recovery-mode rebase, admin registry/grants, and atomic admin audit. Deny by default; manage implies browse, never readContent. | `X-SECURITY-2`, `X-PERF-1/2/4`; grant lifecycle, tamper matrix, compaction/rebase, and recovery reachability. |
-| X.5 Gateway execution | Add `ExternalGateway` and `ConnectionRegistry`; rate-limit, validate, fast-precheck, then authoritative grant recheck. Map the safe write subset to existing v1 actions. Successful writes atomically commit item mutation, HCR, audit, and final position; reads/no-op/denials use the documented best-effort audit bound. | `X-PERF-1/2/3`, `X-BEHAVIOR-1`; TOCTOU revoke, write atomicity, read-capability split, search two-interval, audit privacy, and failure-mapping proofs. |
-| X.6 App Intents composition | In ClipyApp only, add the six intents/shortcuts provider; open history, obtain the baked-connection facade, register it once with the sole framework-owned `AppDependencyManager.shared` allowance, and resolve via `@Dependency`. | `X-COMPILE-2/3/4`; cold/warm Siri/Shortcuts integration and unresolved-dependency clean-denial tests. |
-| X.7 UX handoff | Add enable/revoke, separate browse/read-content/manage controls, paginated audit, denial/failure/rebase/compaction state, shared-caller/quota disclosure, and audit-persistence disclosure. Pull-refresh only. | Corresponding `UX-*`, privacy, accessibility, and product tests. |
+| X.0 Spec/evidence closure (no product code) | Freeze V2-05 §0, the `clipyctl` public wire shape, and platform evidence questions. Signed/TCC experiments may run here, but cannot choose or ship a transport. | Owning docs agree; unresolved authenticated ingress and format-inventory injection remain explicit blockers rather than inferred answers. |
+| X.1 Closed vocabulary and allow matrix — **Batch 6 implementation leaf** | Add only `Sources/HistoryCore/ExternalGatewayTypes.swift`, `Sources/HistoryStorage/ExternalAccessPolicy.swift`, and `Tests/HistoryStorageTests/ExternalAccessPolicyTests.swift`; update the HistoryCore symbol snapshot. Preserve App Intents browse/readContent/manage exactly; deny cross-kind, unknown, and not-yet-admitted revise pairs. | `PLAY-PY-GW0`; table-driven total-matrix proof plus public-symbol/import/escape-hatch gates. No schema, actor, CLI, transport, credential, hash, or request digest. |
+| X.2 Public Gateway contract — **next implementation layer after GW0** | Add the remaining `ExternalHistory`, `GatewayAdminHistory`, identities, requests/results, failures, connection/grant/audit DTOs, public `ExternalHistoryFacade`, and public `makeExternalHistoryFacade(for:)`. Leave every v1 closed enum/protocol unchanged. | `X-COMPILE-1/3`; public-symbol/import/escape-hatch gates. |
+| X.3 Schema/codecs/bootstrap | Add the four Gateway/Audit models, resolved audit codecs, and fixed limits. Bootstrap one durable active App Intents connection with no grants; validate all required state before facade publication. | `X-PLATFORM-1/2`; migration, corruption, missing-config-with-data, identity-persistence, and startup proofs. |
+| X.4 Audit/admin substrate | Implement the resolved audit/admin persistence behavior, registry/grants, recovery-only handling, and atomic admin audit. Deny by default; the §0.2 matrix is authoritative. | `PLAY-PY-GW1`, `PLAY-PY-GW2`, `PLAY-PY-GW3`, `PLAY-PY-GW4`; grant lifecycle, encoding, compaction/recovery, and corruption proofs. |
+| X.5 In-process Gateway denial | Add `ExternalGateway`/registry dispatch through the real Authority; prove unknown connection, no grant, revoked grant, invalid pair, and rate denial stop before History access. | `PLAY-PY-B1`, `PLAY-PY-B2`; authoritative denial and no-content/no-mutation proofs. |
+| X.6 In-process Gateway positive | Through the same production actor and real Authority, complete one granted bounded browse plus the approved App-Intents write/read subset, including save-boundary recheck and audit behavior. | `PLAY-PY-B0G`, `X-BEHAVIOR-1`; positive browse, TOCTOU revoke, write atomicity, privacy, and failure mapping. |
+| X.7 App Intents composition | In `ClipyApp` only, add the six intents/shortcuts provider, obtain the baked App Intents facade, register it once with the framework-owned allowance, and resolve via `@Dependency`. It must use X.5/X.6, not duplicate policy. | `PLAY-PY-B0I`, `X-COMPILE-2/3/4`; cold/warm integration and unresolved-dependency clean-denial tests. |
+| X.8 `clipyctl` pure codec | After X.7, implement the already frozen JSON stdin/stdout and stable exit mapping as pure code. It produces no synthetic Gateway response and has no transport. Capability JSON remains owner-summary declaration only. | `PLAY-PY-A2A` through `PLAY-PY-A2I`; parser/stdio/closed-operation golden tests. No Python-to-History claim. |
+| X.9 Authenticated ingress and one private transport | First resolve `DEC-PY-AUTHENTICATED-INGRESS` target/access ownership; then select one transport from signed evidence and connect `clipyctl` to the same Gateway. The same-EUID claim is account-wide, not login-session identity. | `PLAY-PY-F0`, `PLAY-PY-F1`, then `PLAY-PY-B3`, `PLAY-PY-B3A`, `PLAY-PY-B3B`, `PLAY-PY-B3C`, `PLAY-PY-B4`, `PLAY-PY-B5`. **BLOCKED-SPEC** while ingress is unresolved. |
+| X.10 Local Automation capability rollout | Separately admit browsePreview, Effective-only content, organize, delete, and only later revise. `describeFormatCapabilities` may execute only after the owner-summary runtime injection owner is approved. | Corresponding `PLAY-PY-C1` through `PLAY-PY-C5`, `PLAY-PY-D1A` through `PLAY-PY-D9`, `PLAY-PY-E1A` through `PLAY-PY-E7`, and signed `PLAY-PY-F3A…F3D` leaves; live grant, OCC, audit, bounded-content, and release proofs. |
+| X.11 UX handoff | Add enable/revoke, per-kind capability controls, paginated audit, denial/failure/recovery state, same-account disclosure, shared-caller/quota, and audit-persistence disclosure. | Corresponding `UX-*`, privacy, accessibility, and product tests. |
 
 All acceptance gates:
 
@@ -540,9 +558,13 @@ not applicable independently.
 ### P1 — persistent Signature Index checkpoint
 
 - **Status:** blocked on V2-0, M1, and DC-17; gated on G5.
-- **Dependencies:** completed authoritative Signature Index rebuild. If P3 also
-  ships, P3 migration/reconstruction precedes checkpoint capture. P1 does not
-  checkpoint the enrichment backlog or HCR.
+- **Regime:** capped profile only. Recipe-v2 legacy projection validation runs
+  before either reuse or rebuild. Production U-scale must first resolve
+  `DEC-U-SCALE-STARTUP-INDEX` by replacing/amending this complete in-memory
+  index with one authoritative durable candidate-query/lazy-shard path; it may
+  not keep two truth indexes.
+- **Dependencies:** completed authoritative Signature Index rebuild. P1 does
+  not checkpoint the enrichment backlog or HCR.
 
 | Step | Deliverable |
 |---|---|
@@ -574,25 +596,37 @@ predicate-change cursor-expiry fixtures.
 
 ### P3 — sidecar blob store and streaming
 
-- **Status:** blocked on V2-0, M1, DC-19, and DC-20; gated on G8.
+- **Status:** blocked on V2-0, M1, `DEC-P3-ADMISSION`,
+  `DEC-P3-MIGRATION-WRITES`, and a replacement amendment for V2-06 §5; gated
+  on G8. P3 is never a prerequisite for the independent many-small U-scale
+  track.
 - **Dependencies:** completed capture/revision preparation and detail/paste read
   paths. P3 is local only.
 
 | Step | Deliverable |
 |---|---|
-| P3.1 | Add actor-confined `BlobStore`, limits, V2 canonical/revision codecs and handle values; add the public `HistoryCore` `BlobStreamingHistory` surface (C-M2: public, resolved in loop R4) and resolve its consumer (DC-20). |
-| P3.2 | Write ≥1 MiB representations to unique nonce-bearing, path-confined, fsynced sidecars during preparation; force `.memory` inline; track explicit in-flight ownership and commit/abort outcomes. |
-| P3.3 | Commit only small handle codecs through Authority, mark handles durable after commit, and implement full materialization with length/path/fingerprint checks. |
-| P3.4 | Implement a real bounded/Sendable stream adapter: fence `ContentVersion` at open, target residency at 256 KiB (enforced by the V2-06 §5.4 chunked adapter when `P3-PLATFORM-2` shows raw `AsyncBytes` buffering above target), validate length before vending, and verify the whole-file fingerprint at end. |
-| P3.5 | Implement crash-resumable eager V1→V2 migration and bounded orphan/in-flight cleanup. Treat `<storeURL>.blobs/` as inseparable from backup/restore; no inline or V1 fallback remains after migration. |
+| P3.1 | After the owning amendment resolves purpose-read and migration-write semantics, add the actor-confined `ContentDepot`, representation locators, and one bounded reader/lease seam. |
+| P3.2 | Write selected large representations to random-ID, path-confined staging files during preparation; force `.memory` inline and track explicit commit/abort ownership. Do not use content hashes as identity or integrity machinery. |
+| P3.3 | Commit only small locators through Authority; before publish, validate declared length and perform staged byte-exact readback through the same reader. Missing source, short/truncated read, path escape, and read failure are typed failures. |
+| P3.4 | Implement one bounded `Sendable` sequential reader: fence `ContentVersion` at open, use the approved chunk/permit budget, and keep the transport/framework object internal. No raw `FileHandle.AsyncBytes` or end-of-stream hash contract is public. |
+| P3.5 | Implement a bounded, resumable item-by-item legacy migration with a durable cursor and the approved concurrent-write policy; validate new representation state before deleting legacy bytes. Treat the depot generation as inseparable from backup/restore and reclaim orphans by bounded enumeration. |
 
 Acceptance: `P3-COMPILE-1`, `P3-PLATFORM-1`, `P3-PLATFORM-2`,
 `P3-PLATFORM-3`, `P3-PLATFORM-4`, `P3-PLATFORM-5`, and
-`P3-PERF-1`, including worst-case first-launch migration, capture/sweep race,
+`P3-PERF-1`, including bounded migration/resume, capture/sweep race,
 abort cleanup, path/symlink escape, missing-sidecar, stream integrity-window,
-memory-residency, deterministic O_EXCL name-collision retry (forced EEXIST
-via the injected ID source, then success on a fresh nonce, V2-06 §5.3.2),
-and backup-boundary proofs.
+memory-residency, deterministic O_EXCL random-ID collision retry (forced
+EEXIST, then success on the next injected ID), and backup-boundary proofs.
+
+### Independent U-scale/count track
+
+Many-small history remains on Scheme A unless its own evidence selects a new
+layout. Production `count=nil` requires both an optional user maximum-unpinned
+policy and removal/replacement of the separate pinned-inclusive global hard
+bound. Before that transition, current-layout `PLAY-DISK-0A/0B/1/2A/3/4/5/6`,
+metadata/index/search/retention/UI boundedness, and the 5,001 → 50k → 250k →
+1m scale gates must pass. P3 success neither unlocks nor substitutes for this
+track.
 
 ## 12. V2-07 — incremental UX integration
 

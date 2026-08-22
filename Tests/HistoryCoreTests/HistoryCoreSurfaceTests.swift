@@ -194,8 +194,18 @@ import Testing
 
 @Test func historyCommitConstruction() {
     let commit = HistoryCommit(position: .zero, outcome: .removed(count: 1))
+    let destructiveRetentionCommit = HistoryCommit(
+        position: ChangePosition(rawValue: 1),
+        outcome: .inserted(HistoryItemReference(
+            id: HistoryItemID(rawValue: UUID()),
+            contentVersion: .initial
+        )),
+        hasDestructiveRetentionEffects: true
+    )
 
     #expect(commit.position == .zero)
+    #expect(!commit.hasDestructiveRetentionEffects)
+    #expect(destructiveRetentionCommit.hasDestructiveRetentionEffects)
 }
 
 @Test func historyBrowseRequestConstruction() {

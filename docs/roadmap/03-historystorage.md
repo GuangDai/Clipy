@@ -3,7 +3,7 @@
 - **Status:** done and accepted (sub-steps 4–8, WS gates, platform proofs, and
   all 13 §9 workloads are green in supported run 31449682036)
 - **Spec references:** coherence `../04-coherence.md` §1–§12 (Part IV); commit kernel `../05-authority-kernel.md` §1–§18 (Part V); adapter + config `../05-authority-kernel.md` §2.
-- **Dependencies:** `HistoryCore`, `HistoryDomain`, `xxh3`, `Fuse`; frameworks `SwiftData` (sole importer), `ImageIO` (thumbnail decode). Never imports AppKit/SwiftUI or an adapter.
+- **Dependencies:** `HistoryCore`, `HistoryDomain`, package-only Foundation facts from `ClipboardFormats`, `xxh3`, `Fuse`; frameworks `SwiftData` (sole importer), `ImageIO` (thumbnail decode). Never imports AppKit/SwiftUI or an adapter. `ClipboardFormats` supplies exact identifiers/codecs only; projection remains the policy owner.
 - **Test target:** `HistoryStorageTests` (in-memory semantic tests + persistent temp-store durability tests; also owns Module 7's xxh3 collision + Fuse fixture tests).
 - **Steps:** 4–8 (sub-steps below).
 

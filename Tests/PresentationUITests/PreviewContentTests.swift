@@ -31,6 +31,19 @@ struct PreviewContentTests {
         #expect(content == .text("hello preview"))
     }
 
+    /// A shared declared codec is a wire fact, not Preview admission. External
+    /// UTF-8 remains opaque here until this owner deliberately adds it.
+    @Test func externalUTF8FactDoesNotExpandPreviewPolicy() {
+        let content = PreviewContent.resolve(effective: [
+            representation(
+                "public.utf8-external-plain-text",
+                Data("external text".utf8)
+            ),
+        ])
+
+        #expect(content == .unavailable)
+    }
+
     /// RTF bytes are an opaque structured representation at this preview
     /// seam. An exact UTF-8 plain-text sibling is the semantic body.
     @Test func rtfUsesExactUTF8PlainTextSibling() {

@@ -15,6 +15,99 @@
 > "concern" protocols, §7.2/§7.1). Like v1 and V2-01..V2-04 at consolidation time,
 > V2-05 is "design-consolidated, scaffold proof pending."
 
+## 0. 2026-08-22 Local Automation controlling amendment
+
+This amendment is the owning rule when the older App-Intents-only text in this
+document is read together with the Local Automation review. It adds a later
+`.localAutomation` connection kind without changing the already approved App
+Intents surface. It does **not** claim that the gateway, CLI, authenticated
+ingress, or transport exists in the current source tree.
+
+### 0.1 Stable public interface and mandatory implementation order
+
+The only stable process-external interface is the first-party `clipyctl`
+executable: one versioned UTF-8 JSON request on stdin, one versioned UTF-8 JSON
+reply on stdout, and a small frozen set of exit-code classes. Socket paths,
+framing, credentials, launch handshakes, XPC names, and App Intent names are
+private implementation details and are not a second public interface.
+
+The JSON contract may be reviewed and frozen before implementation. Production
+code must nevertheless land in this order:
+
+1. the complete in-process gateway substrate, including authoritative denial
+   and one granted bounded positive path through the real Authority;
+2. the existing App Intents adapter through a prebound connection-scoped
+   facade to that same gateway;
+3. the pure `clipyctl` JSON/exit-code codec, with no transport and no fabricated
+   gateway result;
+4. one selected, replaceable private transport and its restricted authenticated
+   ingress;
+5. Local Automation browse, content read, and mutations as separate grant-gated
+   leaves.
+
+Writing examples or golden JSON before step 1 is specification work, not a
+license to ship an `unsupported` CLI shell. No CLI target, socket listener, or
+transport may be used to make an absent gateway look implemented.
+
+### 0.2 Connection-kind allow matrix
+
+`ConnectionEnrollKind` is closed. It contains `.appIntents` for the existing
+surface and adds `.localAutomation` for user-enabled `clipyctl` access. A
+durable connection kind is minted by the owning enrollment path; a request or
+adapter cannot self-report or replace it.
+
+Authorization is a total, closed function of connection kind, capability, and
+operation. Unknown combinations deny before History access or an audit side
+effect. Shared enum constructibility never grants an operation:
+
+| Connection kind | Grantable capability and allowed operations | Always denied |
+|---|---|---|
+| `.appIntents` | Existing V2-05 surface only: `.browse` -> `recent/search`; `.readContent` -> `details/pastePayload`; `.manage` -> `pin/unpin/remove`, with the existing `.manage`-implies-`.browse` rule | Every Local-Automation-only capability/operation and every unknown pair |
+| `.localAutomation` | `.browsePreview` -> bounded recent/search; `.readEffectiveContent` -> Effective-only representations; `.organize` -> pin/unpin; `.deleteItem` -> one-item delete | App-Intents-only `details/pastePayload/manage`, capture, clear, retention/admin, generic action, every unknown pair, and `.reviseContent` until its separate OCC contract is admitted |
+
+This table preserves the current App Intents capability names, implication, and
+operation set. Adding `.localAutomation` does not silently narrow, broaden, or
+migrate existing App Intents grants. Conversely, `.manage` never becomes a
+Local Automation shortcut for delete or revise.
+
+For clarity, this pre-admission rule narrows the older blanket statement that
+every denial is audited: an unrecognized raw value or a capability/operation
+pair forbidden for its durable connection kind is not an admitted external
+operation and produces no OperationRecord. A well-formed operation that belongs
+to the kind but lacks a live grant is an admitted request and follows the
+existing denial-audit rule. `PLAY-PY-GW0` proves only the pure classification;
+the later Gateway denial leaf proves the side-effect ordering.
+
+### 0.3 Account scope, capability declaration, and unresolved ingress
+
+Local Automation is scoped to the same **effective user account (same EUID)**.
+That is an account-wide product boundary, not proof of the same GUI, login, or
+audit session and not per-script identity. A final chosen transport must verify
+its peer evidence in the signed release matrix; the gateway still performs
+enrollment, live-grant, and authoritative operation checks.
+
+`describeFormatCapabilities` is only a declared JSON shape until a production
+composition owner can inject immutable Foundation summaries exported by each
+format owner. It is not a history-content grant, must not read History, and must
+not copy a build/test inventory or a second UTI policy table into the CLI or
+gateway. Until that injection owner is approved, no runtime endpoint is
+claimed, even if golden JSON examples or a pure serializer exist.
+
+The Local Automation transport also needs a restricted app-facing
+authenticated-ingress interface because `ClipyApp` cannot reach an internal
+`ExternalGateway` and an unknown credential cannot use the App Intents
+prebound facade. That interface may carry only bounded peer evidence, an opaque
+credential, and a typed request, then delegate authentication, connection
+resolution, grant evaluation, and execution to the internal gateway. Its exact
+owner and public/package placement remain **BLOCKED-SPEC**. No production
+transport or positive Local Automation tracer may land until that blocker is
+resolved; the blocker does not prevent the in-process gateway or App Intents
+stages above.
+
+This amendment introduces no request digest, integrity hash, token framework,
+or transport security framework. Retry remains non-automatic until a later
+typed idempotency contract is separately approved.
+
 ## 1. Role and boundary
 
 V2-05 answers one question:
@@ -134,6 +227,11 @@ than implied: a v1 reader finds no `ExternalGateway`, no connection/grant
 tables, no `OperationRecord`, no `AppIntent`, and no `@Dependency`, by design.
 
 ## 2. Capability scope
+
+Sections 2–14 specify the first production stage: the App Intents gateway and
+audit substrate. The later Local Automation continuation is governed by §0;
+where this body says "V2 ships App Intents only," it describes that first stage,
+not a permanent prohibition on the ordered `clipyctl` continuation.
 
 ### 2.1 In scope (X1 + X2)
 
@@ -264,12 +362,13 @@ delegates. This mirrors v1's `PasteboardAdapter` posture (raw observation
 validated by preparation before it becomes Domain state, `01` §5.1) and the
 thumbnail/OCR source-fetch posture (`05` §14.5, `V2-01` §4).
 
-### 3.2 Capability vocabulary (the safe external subset)
+### 3.2 Capability vocabulary (the App Intents safe subset)
 
-V2-05 exposes a deliberately **smaller** request set than v1 `HistoryAction`.
+The App Intents stage exposes a deliberately **smaller** request set than v1 `HistoryAction`.
 External callers cannot spell `capture`, `revise`, `clear`, or
 `setRetentionPolicy` — those cases do not exist on `ExternalHistory` (§7.1).
-The external capability set is closed and frozen for V2:
+The App Intents capability set is closed and frozen for its existing surface;
+§0.2 adds Local-Automation-only cases behind a connection-kind allow matrix:
 
 ```swift
 public enum ExternalCapability: Int16, Sendable, Hashable, Codable {
@@ -284,6 +383,13 @@ public enum ExternalCapability: Int16, Sendable, Hashable, Codable {
                           // .browse (a manage caller can enumerate items to
                           // manage) but NOT .readContent (manage operations do
                           // not return content).
+    // Local Automation only (§0.2); the connection-kind matrix prevents these
+    // cases from broadening an App Intents connection.
+    case browsePreview = 10
+    case readEffectiveContent = 11
+    case organize = 12
+    case deleteItem = 13
+    case reviseContent = 14 // declared but not grantable until separately admitted
 }
 ```
 
@@ -338,9 +444,10 @@ public struct ExternalConnectionID: Sendable, Hashable, CustomStringConvertible 
 
 public enum ConnectionEnrollKind: Int16, Sendable, Hashable, Codable {
     case appIntents = 1   // Siri / Shortcuts / Spotlight (V2)
-    // Reserved (post-V2 enrollment kinds; not exercised in V2):
-    // case urlScheme = 2  // bearer-token URL scheme (Keychain credential)
-    // case xpc = 3        // XPC service-label connection (Keychain credential)
+    case localAutomation = 2 // same-EUID account, first-party clipyctl (§0)
+    // Reserved enrollment kinds; not exercised by this design:
+    // case urlScheme = 3  // bearer-token URL scheme
+    // case xpc = 4        // XPC service-label connection
 }
 
 public enum ConnectionStatus: Int16, Sendable, Hashable, Codable {
@@ -355,6 +462,11 @@ public enum ConnectionStatus: Int16, Sendable, Hashable, Codable {
   grants an initial capability set. The App Intents connection is bootstrapped
   at `open` (§4.6) with **no** capability granted by default — the user must
   explicitly grant `read` and/or `manage` via the UX (deny-by-default).
+  `.localAutomation` is never bootstrapped: the user explicitly enables it
+  after the App Intents/Gateway stage exists, and it starts with no grants.
+  Credential creation, storage, and rotation for that kind remain blocked with
+  the authenticated-ingress/transport decision (§0.3); this amendment does not
+  assign them to Keychain or another new security module.
 - **Grant** is per `(connectionID, capability)` (`GrantRow`, §4.2). Granting
   `.manage` implicitly satisfies `.browse` requests (no separate `.browse` row
   required, though the UX may record both for clarity); `.manage` does **not**
@@ -1798,6 +1910,9 @@ public enum ExternalOperationKind: Int16, Sendable, Hashable, Codable {
     case adminRevoke = 10
     case adminRebase = 11
     case adminCompact = 12
+    case readEffectiveContent = 13 // Local Automation only (§0.2)
+    case reviseContent = 14        // declared; denied until separately admitted
+    case describeFormatCapabilities = 15 // declared shape; runtime blocked by §0.3
 }
 
 public enum ExternalOutcome: Int16, Sendable, Hashable, Codable {

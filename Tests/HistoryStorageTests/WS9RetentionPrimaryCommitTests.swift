@@ -65,6 +65,7 @@ struct WS9RetentionPrimaryCommitTests {
     }
     // WS9: the first insert moves the singleton 0 → 1.
     #expect(firstCommit.position.rawValue == 1)
+    #expect(!firstCommit.hasDestructiveRetentionEffects)
 
     // Insert two: `.inserted` at position 2 — two unpinned items still
     // satisfy the policy, so nothing retires yet.
@@ -78,6 +79,7 @@ struct WS9RetentionPrimaryCommitTests {
         return
     }
     #expect(secondCommit.position.rawValue == 2)
+    #expect(!secondCommit.hasDestructiveRetentionEffects)
 
     // WS9: the SECOND commit carried no victim — the policy (2 unpinned) is
     // exactly satisfied, so both rows and the position singleton at 2 are
@@ -103,6 +105,7 @@ struct WS9RetentionPrimaryCommitTests {
     // retire are ONE plan, so the position moves 2 → 3 exactly once
     // (docs/02-domain.md §13: one advance per plan, not per mutation).
     #expect(thirdCommit.position.rawValue == 3)
+    #expect(thirdCommit.hasDestructiveRetentionEffects)
 
     // Storage side, through the INDEPENDENT container.
     let container = try WSSupport.makeContainer(storeURL: storeURL)

@@ -63,15 +63,15 @@ ledger仍是`04`。各Phase只回答“最终由谁拥有这项能力、边界�
 在任何功能batch前：
 
 1. 只修当前测试编译和warning，不改生产语义；
-2. 同一 SHA 跑完functional、perf-helper、app、source gates、perf proofs；
+2. 同一受保护branch/PR checkout跑完functional、perf-helper、app、source gates、perf proofs；
 3. 决定 retention readback、PresentationUI/ImageIO、completed thumbnail cache三项到底是
    改规还是撤回；
 4. 更新00/01/06、V2 owning docs、roadmap、AUDIT、PROGRESS与AGENTS的状态段；
-5. symbol snapshot只在public change获准后更新；bot生成后仍要为新SHA跑主CI；
+5. symbol snapshot只在public change获准后更新；bot生成后仍要为最终checkout跑主CI；
 6. 每一后续finding独立PR/slice，禁止再把preview、cache、retention readback、CI evidence
    合成一个难审的大batch。
 
-完成条件不是“本地看起来通过”，而是 ledger 引用 final SHA 的 exact run，且文档没有
+完成条件不是“本地看起来通过”，而是 ledger 引用受保护PR/ref的最终run，且文档没有
 同一事实的相反句子。
 
 ## 4. Phase 1：数据完整性与安全边界
@@ -427,7 +427,8 @@ GC必须从一致的committed reachability事实证明不可达。
 
 即使有blob depot，也不能解除count cap，直到以下随N增长的路径都被替换：
 
-1. 5,000 hard maximum改为明确的产品安全/磁盘规则，而不是简单放大常量；
+1. user maximum-unpinned policy变为可选，同时独立移除/替换包含pinned的global hard bound，
+   而不是简单放大常量或另造固定count安全上限；
 2. 完整resident `SignatureIndex`改成durable/on-demand posting lookup + bounded hot cache；
 3. full `SearchCorpusSnapshot`改为持久projection/index、keyset candidate page与bounded top-K；
 4. per-capture完整retention inventory改为transactional aggregate、ordered victim cursor和bounded slice；
@@ -444,7 +445,9 @@ many-small-item count cap 的必经前置。
 
 ### 7.8 Phase 4的最小交付切片
 
-第一批只交付四账measurement receipt、SwiftData characterization、caller-shape/telemetry tracer和
+第一张可领取代码叶是`PLAY-TIER-2A-THUMB`：只量现有aggregate details→thumbnail caller shape、
+selected source与authoritative whole-hydration费用，不新增History seam。第一批其余工作只交付四账
+measurement receipt、SwiftData characterization、caller-shape/telemetry tracer和
 owner-local source/in-flight permit；不迁移现有source layout。之后分成两条互不门禁的track：U-scale直接在
 方案A上按metadata/index/UI/maintenance的5,001→50k→250k→1m阶梯推进；large-content则按exact
 format/behavior分别测plain-text caller shape、large-image hydration、revision-heavy aggregate与unknown UTI
@@ -587,8 +590,8 @@ production，也不反向驱动格式policy。
 优先选择Developer ID direct distribution：
 
 ```text
-protected tag == source SHA == marketing/build version
-→ exact-SHA full CI
+protected release ref == marketing/build version
+→ one exact protected-ref full CI
 → Release archive
 → sign all code + hardened runtime + secure timestamp
 → notarize + staple
@@ -642,6 +645,8 @@ Python唯一稳定依赖是第一方`clipyctl`：JSON stdin/stdout、少量稳�
 operations、checked size/deadline和content-free stderr。clipboard bytes、query、credential不得进
 argv/environment/log/audit。public compatibility属于executable wire，不要求把socket path、Mach
 service、Swift enum raw value或SwiftData schema变成public SDK。
+该wire contract及golden examples可以先于实现冻结；CLI parser/executable代码仍必须排在完整in-process
+Gateway deny/positive substrate与App Intents tracer之后。
 
 `clipyctl`之后的transport保持private且可替换。第一项判别spike可以是signed Developer ID、
 non-sandbox artifact上的app-owned UDS + LaunchServices ready handshake；它只证明这一artifact，不能
@@ -668,19 +673,22 @@ request bounds、credential→connection resolution、rate limit、live grant re
 `HistoryAuthority` transaction完成。ingress只把bounded evidence/credential/request原样委托，不能解析
 connection或缓存授权。V2-05已经接纳的App Intents不是non-goal：它应作为共享Gateway的
 第一个用户可见adapter，不能另写一份capability/audit逻辑，也不能冒充稳定Python RPC。本轮Python
-要求是对V2-05的显式amendment；先通过process-internal Gateway测试和App Intents tracer冻结授权、
-审计与opaque-token语义，再选择和实现Python的production transport。Transport不得反向定义Gateway
+要求是对V2-05的显式amendment；先通过process-internal Gateway deny/positive tests和App Intents tracer
+冻结授权、审计与opaque-token语义，再实现CLI pure codec，最后选择和实现Python的production transport。Transport不得反向定义Gateway
 capability或History mutation。
 
 App Intents使用预绑定connection-scoped facade；Local Automation在credential尚未解析时不能伪造同一个
-入口。具体authenticated-ingress surface由`DEC-PY-AUTHENTICATED-INGRESS`裁决。Local Automation新增
+入口。具体authenticated-ingress surface由`DEC-PY-AUTHENTICATED-INGRESS`裁决；它当前明确为
+`BLOCKED-SPEC`，不阻塞Gateway/App Intents，却阻塞production transport和任何Local Automation正向
+History tracer。Local Automation新增
 独立、deny-by-default的enrollment kind，产品明确告知：同一effective user account（same EUID）下能执行
 `clipyctl`的进程共享这一connection/grant/audit attribution；same UID或signed CLI都不能识别某个
 `.py`文件。network listener、SSH/remote daemon、跨用户service和direct store access继续明确非目标。
 
 ### 10.4 capability先拆细，`reviseContent`最后开放
 
-V2-05当前`.browse`/`.readContent`/`.manage`对任意本机进程仍过粗；在Local Automation准入前拆为：
+V2-05当前`.browse`/`.readContent`/`.manage`保留为App Intents既有surface，不迁移也不改 implication；
+它们对任意本机进程过粗，因此Local Automation使用独立closed capability cases：
 
 - `browsePreview`：bounded title/snippet/types/time/pin；它仍是content-bearing，授权文案不能称
   “无敏感metadata”；
@@ -694,16 +702,17 @@ V2-05当前`.browse`/`.readContent`/`.manage`对任意本机进程仍过粗；�
 
 继续禁止external `capture`、bulk `clear`、retention config、generic `HistoryAction`字符串命令和
 grant/audit admin。若旧`.manage`先实现，迁移也不能自动给现有connection升级delete/revise权限。
-`clipyctl` stdin的`describeFormatCapabilities` JSON operation只有在
-`DEC-FORMAT-INVENTORY-OWNER`批准后，才消费各owner-exported immutable Foundation summaries与独立pure
-serializer，让Python看见当前build/runtime格式能力；它不得import/reuse build/test audit inventory，也不是
-content grant。Gateway仍须按live grant、exact token与authoritative owner policy重新验证实际操作。
+`clipyctl` stdin的`describeFormatCapabilities` JSON shape可以先声明，但只有在
+`DEC-FORMAT-INVENTORY-OWNER`批准后，production endpoint才可消费各owner-exported immutable Foundation
+summaries与独立pure serializer，让Python看见当前build/runtime格式能力；它不得import/reuse build/test
+audit inventory，也不是content grant。在runtime injection owner存在前，golden JSON不是已实现endpoint。
+Gateway仍须按live grant、exact token与authoritative owner policy重新验证实际操作。
 
 ### 10.5 最小vertical release顺序
 
-先修订V2-05并用in-process tests冻结`ExternalGateway`的closed operations、grant、audit与idempotency；
-再让已接纳的App Intents adapter只走该Gateway。之后才锁Python的JSON/exit/no-content diagnostics与
-未enroll deny，完成signed transport discriminator并shipping唯一transport；其上的第一个cold-start
+先修订V2-05并用in-process tests完成`ExternalGateway`的closed matrix、deny与positive substrate；
+再让已接纳的App Intents adapter只走该Gateway。之后才实现Python的JSON/exit/no-content pure codec，
+关闭authenticated-ingress blocker，完成signed transport discriminator并shipping唯一transport；其上的第一个cold-start
 tracer是`browsePreview`，随后是Effective-only bounded binary read，最后按
 `organize → deleteItem → reviseContent`逐项开放。
 每一步都跑revoke race、wrong credential/different UID、timeout/no-blind-retry、audit与single-commit proof。
@@ -716,7 +725,7 @@ tracer是`browsePreview`，随后是Effective-only bounded binary read，最后�
 后续Agent不得按Phase编号整章开工，也不得把所有P1风险升级成同一个blocker。与
 [`00-executive-review.md`](00-executive-review.md#6-建议执行顺序)一致的领取顺序是：
 
-1. **可信baseline**：只修当前compile/warning与truth drift；final SHA全lane绿色。
+1. **可信baseline**：只修当前compile/warning与truth drift；受保护PR/ref最终checkout全lane绿色。
 2. **正常可达correctness**：先修Revise Keep/dirty draft、exclusive paste、UI generation/session/
    exact-reference/pagination与failure episode。这些日常路径明确早于singleton corruption等人工损坏
    hardening。
@@ -771,8 +780,10 @@ settled RSS、CPU/energy、failure rate，不生成综合分数。
 
 ## 13. 需要规格裁决、不能由实现Agent擅自决定的项目
 
-所有条目初始状态均为 `OPEN / BLOCKED-SPEC`。`Owner` 是必须被修改并记录批准的 owning document，
-不是建议找谁口头确认；`Blocks` 指最早不能领取的设计/执行族。
+未裁决条目为 `OPEN`；已有明确冲突且无法安全推断的条目标为
+`BLOCKED-SPEC`；owning document 已冻结答案的条目标为 `RESOLVED`。
+`Owner` 是必须被修改并记录批准的 owning document，不是建议找谁口头确认；
+`Blocks` 指最早不能领取的设计/执行族。
 
 | Decision | Owner | Status | Blocks | 必须冻结的问题 |
 |---|---|---|---|---|
@@ -794,8 +805,8 @@ settled RSS、CPU/energy、failure rate，不生成综合分数。
 | `DEC-OBSERVER-START` | pasteboard/app lifecycle spec | OPEN | observer/capture | start立即导入current board，还是baseline + explicit Import Current。 |
 | `DEC-RICH-EDIT` | 03a + V2-07 | OPEN | FORMAT edit | HTML/RTF是raw markup editor、rich serializer还是禁用。 |
 | `DEC-PY-TRANSPORT` | V2-05 amendment | OPEN | Python production adapter | public surface已固定为first-party`clipyctl`；signed/sandbox/TCC后只选择其背后的单一private transport。 |
-| `DEC-PY-AUTHENTICATED-INGRESS` | V2-05 + 01 target graph | OPEN | PLAY-PY-F1、B3/B3A/B3B/B3C/B4/B5 | unknown credential如何经受限public ingress解析为connection；App Intent预绑定facade与Local Automation入口不得混用。 |
-| `DEC-PY-CONNECTION-ALLOW-MATRIX` | V2-05 connection/capability owning spec | OPEN | PLAY-PY-GW0及所有Local Automation grant/write leaves | `(ConnectionEnrollKind, capability/operation) -> grantable` closed matrix；`.appIntents`保持既有surface，local-only delete/revise不能因共享enum自动获准。 |
+| `DEC-PY-AUTHENTICATED-INGRESS` | V2-05 + 01 target graph | **BLOCKED-SPEC** | `PLAY-PY-F1`、`PLAY-PY-B3`、`PLAY-PY-B3A`、`PLAY-PY-B3B`、`PLAY-PY-B3C`、`PLAY-PY-B4`、`PLAY-PY-B5` | ClipyApp不能访问internal Gateway，unknown credential也不能使用App Intent预绑定facade；必须批准一个只携带bounded peer evidence、opaque credential与typed request的受限app-facing ingress及其target/access placement。不得用公开Gateway、公开CredentialStore或transport-side policy绕过。 |
+| `DEC-PY-CONNECTION-ALLOW-MATRIX` | V2-05 §0.2 | **RESOLVED (2026-08-22)** | PLAY-PY-GW0由Batch 6实现；下一层为roadmap X.2 public contract | closed total matrix保持`.appIntents`既有browse/readContent/manage与operation/implication不变；`.localAutomation`只准browsePreview/readEffectiveContent/organize/deleteItem，revise后置；所有cross-kind/unknown pair在History/audit前deny。 |
 | `DEC-PY-READ-AUDIT` | V2-05 audit | OPEN | 首次真实content release：PLAY-PY-D1A/B/C、D3/D5/D9及future stream | best-effort at-most-one还是first-byte前durable authorization record；pure framing/length可先做但不能先释放History bytes。 |
 | `DEC-PY-IDEMPOTENCY` | V2-05 mutation/audit | OPEN | PLAY-PY-E7及future revise retry | request ID如何与mutation/audit同transaction及保留窗口；E6A/E6B的default no-blind-retry可先测。 |
 | `DEC-PY-REORDER` | V2-05 organize + pin ordering | OPEN | future organize-reorder leaf | reorder locator/OCC/position/audit语义；首版organize仅pin/unpin。 |
@@ -803,8 +814,8 @@ settled RSS、CPU/energy、failure rate，不生成综合分数。
 | `DEC-PY-REVISE-SUBSET` | V2-05 + 03a revisions | OPEN | future hide/revert leaves | 首版replace后，hide与revert-to-canonical各自basis/effective-result/OCC/audit。 |
 | `DEC-PY-REVISE-CONTRACT` | V2-05 amendment + 03a revisions | OPEN | PLAY-PY-D9/E3/E4 | 首版replace-only draft、readRevisionBasis shape、独立grant、read/write audit、OCC token与failure语义。 |
 | `DEC-FORMAT-TIERS` | V2-07 + format roadmap | OPEN | FORMAT/PREVIEW runtime | 首发format/resource envelope与helper isolation阈值。 |
-| `DEC-FORMAT-INVENTORY-OWNER` | 01 target graph + V2-05/V2-07 | OPEN | PLAY-FORMAT-G production injection | production capability projection由谁合法join/inject；pure inventory/C1可先做；是否提取`ContentEditing`，不能让Gateway反向import UI。 |
-| `DEC-COUNT-DISABLED` | V2-02 + HistoryLimits/public config | OPEN | PLAY-COUNT-6A/6B test-only shape；9A/9B production transition | user count policy optional与global hard max分别如何移除；低盘pause还是opt-in cleanup。 |
+| `DEC-FORMAT-INVENTORY-OWNER` | 01 target graph + V2-05 §0.3/V2-07 | **BLOCKED-SPEC** | PLAY-FORMAT-G production injection | `describeFormatCapabilities`目前只允许从各owner声明的immutable Foundation summaries做pure projection/schema；production由谁join/inject尚未批准，不能让Gateway反向import UI、复用test inventory或在CLI复制catalog。 |
+| `DEC-COUNT-DISABLED` | V2-02 + HistoryLimits/public config | OPEN | PLAY-COUNT-6A/6B test-only shape；9A/9B production transition | user count policy optional与global hard max分别如何移除；production transition还必须先通过shared `PLAY-DISK-0A/0B/1/2A/3/4/5/6`；低盘pause还是opt-in cleanup。 |
 | `DEC-RETENTION-BATCH` | V2-02 commit/trigger/receipt semantics | OPEN | PLAY-COUNT-3CV/3RV、5A/B/C/5R3/5X及future unpin-victim leaf | capture/revise/unpin/policy触发大量victims/prunes时，是external spool+one History commit还是durable applying batches；R3→R1/R2组合、position、receipt、交错与恢复语义。 |
 | `DEC-CLEAR-SCALE` | 03a clear + 06 maintenance | OPEN | PLAY-COUNT-5D | 大库Clear的立即可见性、batch progress、ChangePosition/receipt、capture交错、cancel与crash恢复。 |
 | `DEC-STARTUP-VALIDATION` | 05 startup + signature/retained projections | OPEN | PLAY-COUNT-1C/1D production fallback | lazy/background validation尚未触及的projection能否用于negative evidence；poisoned signature/aggregate时capture/revise是authoritative bounded fallback、typed pause还是fail-closed health。 |
@@ -812,9 +823,9 @@ settled RSS、CPU/energy、failure rate，不生成综合分数。
 | `DEC-PERMIT-SCHEDULING` | 06 cross-cutting resource ownership | OPEN | PLAY-MEM-7 | 多资源原子预留还是固定顺序/no-hold-and-wait；priority aging/fairness。 |
 | `DEC-P3-ADMISSION` | V2-00/V2-06/facts/roadmap/AUDIT | OPEN | PLAY-TIER-SPEC-0及P3 | 何种large-content证据批准representation layout、`ContentDepot`/blob subroot，以及既有StoreRoot backup-generation的P3扩展。 |
 | `DEC-P3-MIGRATION-WRITES` | V2-06 P3 migration + History commit semantics | OPEN | PLAY-MIG-6 | dual-read迁移期间capture/revise/remove是write-new、受限dual-write还是typed maintenance gate；cursor与concurrent commit的线性化点。 |
-| `DEC-PURPOSE-READ` | 01 architecture + 03b + V2-07 | OPEN | PLAY-TIER-2B/3/4/5S/5P/6 + future PY-D seam | 首批future purpose、cross-target Foundation seam、cancellation/lease/max-return/exact-reference；不阻塞1A/1B/2A或existing-details Preview。 |
+| `DEC-PURPOSE-READ` | 01 architecture + 03b + V2-07 | OPEN | PLAY-TIER-2B/3/4/5S/5P/6 + future PY-D seam | 首批future purpose、cross-target Foundation seam、cancellation/lease/max-return/exact-reference；不阻塞1A/1B/`PLAY-TIER-2A-THUMB`或existing-details Preview。 |
 | `DEC-SCALE-GATES` | 06 cross-cutting + V2-06 | OPEN | PLAY-COUNT-9A/9B production transition、9C/release claim | COUNT/test-only scale evidence可先做；决定5,001与50k/250k/1m SLO、headroom及时限。 |
-| `DEC-U-SCALE-STARTUP-INDEX` | V2-06 P1 + startup/dedup owning specs | OPEN | PLAY-COUNT-1/1B/1C、production count transition | P1 complete checkpoint/in-memory SignatureIndex只保留在5k capped regime、被sharded/index-query+bounds取代，还是定义hot window+authoritative fallback；不能同时把complete index称correctness前提又宣传U-scale resident有界。 |
+| `DEC-U-SCALE-STARTUP-INDEX` | V2-06 P1 + startup/dedup owning specs | OPEN | PLAY-COUNT-1/1B/1C、production count transition | Recipe-v2 validation与P1 complete checkpoint/in-memory SignatureIndex只保留在5k capped regime；U-scale必须排他选择一个durable indexed candidate-query/lazy-shard authority（可含bounded hot window但必须authoritative fallback），不得保留双truth index，也不能把complete resident index继续当correctness前提。 |
 | `DEC-SEARCH-SCALE-SCOPE` | 03b search + 06 performance | OPEN | PLAY-COUNT-4F/4R | exact保持现有全历史语义；fuzzy/regexp在大历史仍全历史还是显式bounded scope，并冻结ranking/cursor/cancellation/SLO。 |
 
 这些问题必须记录到owning spec/ADR并配判别测试。Review给出选项与风险，但不应替代产品

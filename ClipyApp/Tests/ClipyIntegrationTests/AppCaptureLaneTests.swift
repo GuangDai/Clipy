@@ -2,12 +2,12 @@
 ///
 /// The seam is the real `AppComposition` entry plus its content-free health
 /// snapshot. Durable assertions always read through a real in-memory
-/// `SwiftDataHistory`. The sole test adapter pauses the first `perform` and
-/// then forwards it; it never substitutes storage semantics.
+/// `SwiftDataHistory`. Test adapters only delay one real boundary operation;
+/// every write and read still forwards to that authority.
 import AppKit
 import Foundation
 import HistoryCore
-import HistoryStorage
+@testable import HistoryStorage
 import PasteboardAdapter
 import Testing
 @testable import ClipyApp
@@ -87,6 +87,48 @@ struct AppCaptureLaneTests {
         #expect(page.rows.map(\.title) == ["D", "A"])
         #expect(!page.rows.map(\.title).contains("B"))
         #expect(!page.rows.map(\.title).contains("C"))
+    }
+
+    /// A capture receipt carries same-commit retention effects back through
+    /// the app owner before the next authoritative observation is delivered.
+    /// The held pre-commit rows are therefore non-executable during that
+    /// delivery gap, then the real storage snapshot repopulates survivors.
+    @Test @MainActor
+    func captureRetentionReceiptPurgesSurfaceBeforeObservationCatchesUp() async throws {
+        let base = try await ComposedSupport.openMemoryHistory(maximumUnpinned: 2)
+        _ = try await base.perform(.capture(Self.capture("A", at: 5)))
+        _ = try await base.perform(.capture(Self.capture("B", at: 6)))
+        let history = PostInitialObservationSuspendingHistory(base: base)
+        let pasteboard = ComposedSupport.makePasteboard()
+        pasteboard.clearContents()
+        let composition = AppComposition.makeForTesting(
+            history: history,
+            adapter: PasteboardAdapter(pasteboard: pasteboard)
+        )
+        defer { composition.stop() }
+
+        composition.viewState.activate()
+        let initialPageArrived = await ComposedSupport.waitFor {
+            composition.viewState.rows.map(\.title) == ["B", "A"]
+        }
+        #expect(initialPageArrived)
+
+        composition.submitCaptureForTesting(Self.capture("C", at: 7))
+        await history.waitUntilPostInitialObservationIsHeld()
+        let drained = await ComposedSupport.waitFor {
+            composition.captureHealth.activeCommitCount == 0
+        }
+        #expect(drained)
+        #expect(
+            composition.viewState.rows.isEmpty,
+            "the destructive receipt retires stale executable rows"
+        )
+
+        await history.releasePostInitialObservation()
+        let authoritativePageArrived = await ComposedSupport.waitFor {
+            composition.viewState.rows.map(\.title) == ["C", "B"]
+        }
+        #expect(authoritativePageArrived)
     }
 
     /// A stopped owner drops its pending capture and cancels the active task.
@@ -187,6 +229,68 @@ struct AppCaptureLaneTests {
             HistoryBrowseRequest(kind: .recent, limit: 10)
         )
         #expect(page.rows.isEmpty)
+    }
+
+    /// An ENOSPC failure is a recoverable capture-health episode, not a
+    /// reason to drain bytes that were already waiting behind the failed
+    /// transaction. B is dropped when A fails; only the later, explicit C
+    /// observation retries against the same real History authority.
+    @Test @MainActor
+    func lowDiskFailureDropsPendingUntilANewCaptureExplicitlyRetries() async throws {
+        let base = try await ComposedSupport.openMemoryHistory()
+        _ = try await base.perform(.capture(Self.capture("seed", at: 19)))
+        let history = FirstCaptureLowDiskFailingHistory(base: base)
+        let pasteboard = ComposedSupport.makePasteboard()
+        pasteboard.clearContents()
+        let composition = AppComposition.makeForTesting(
+            history: history,
+            adapter: PasteboardAdapter(pasteboard: pasteboard)
+        )
+        let appDelegate = AppDelegate()
+        appDelegate.installCompositionForTesting(composition)
+        let appDelegateHealthSink = composition.onCaptureHealthChanged
+        let healthProbe = CaptureHealthProbe()
+        composition.onCaptureHealthChanged = { health in
+            appDelegateHealthSink?(health)
+            healthProbe.receive(health)
+        }
+        defer { composition.stop() }
+
+        composition.submitCaptureForTesting(Self.capture("A", at: 20))
+        await history.waitUntilFirstCaptureIsSuspended()
+        composition.submitCaptureForTesting(Self.capture("B", at: 21))
+        #expect(composition.captureHealth.pendingCaptureCount == 1)
+
+        await history.failFirstCaptureWithLowDisk()
+        await healthProbe.waitForIdle(
+            failedCaptureCount: 1,
+            lastFailure: .temporarilyUnavailable(.insufficientDiskSpace)
+        )
+
+        #expect(composition.captureHealth.pendingCaptureCount == 0)
+        #expect(composition.captureHealth.pendingCaptureBytes == 0)
+        #expect(await history.captureAttemptCount == 1)
+        #expect(
+            appDelegate.captureNotice
+                == .failed(.temporarilyUnavailable(.insufficientDiskSpace))
+        )
+        let afterFailure = try await base.browse(
+            HistoryBrowseRequest(kind: .recent, limit: 10)
+        )
+        #expect(afterFailure.rows.map(\.title) == ["seed"])
+
+        composition.submitCaptureForTesting(Self.capture("C", at: 22))
+        await healthProbe.waitForIdle(
+            failedCaptureCount: 1,
+            lastFailure: nil
+        )
+
+        #expect(await history.captureAttemptCount == 2)
+        #expect(appDelegate.captureNotice == nil)
+        let afterExplicitRetry = try await base.browse(
+            HistoryBrowseRequest(kind: .recent, limit: 10)
+        )
+        #expect(afterExplicitRetry.rows.map(\.title) == ["C", "seed"])
     }
 
     /// The owner applies its aggregate memory bound before a complete capture
@@ -467,6 +571,146 @@ struct AppCaptureLaneTests {
     }
 }
 
+/// A one-shot transaction-boundary failure adapter. It parks only the first
+/// capture, returns History's public low-disk failure when released, then
+/// forwards every later operation and every read to the same real store.
+private actor FirstCaptureLowDiskFailingHistory: ClipboardHistory {
+    private let base: SwiftDataHistory
+    private var captureAttempts = 0
+    private var firstCaptureContinuation: CheckedContinuation<Void, Never>?
+    private var firstCaptureWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(base: SwiftDataHistory) {
+        self.base = base
+    }
+
+    var captureAttemptCount: Int {
+        captureAttempts
+    }
+
+    func perform(_ action: HistoryAction) async throws -> HistoryReceipt {
+        guard case .capture = action else {
+            return try await base.perform(action)
+        }
+
+        captureAttempts += 1
+        guard captureAttempts == 1 else {
+            return try await base.perform(action)
+        }
+
+        let waiters = firstCaptureWaiters
+        firstCaptureWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+        await withCheckedContinuation { continuation in
+            firstCaptureContinuation = continuation
+        }
+        await base.authority.setTransactionFailureInjection(
+            .insufficientDiskSpace
+        )
+        return try await base.perform(action)
+    }
+
+    func waitUntilFirstCaptureIsSuspended() async {
+        guard captureAttempts == 0 else { return }
+        await withCheckedContinuation { continuation in
+            firstCaptureWaiters.append(continuation)
+        }
+    }
+
+    func failFirstCaptureWithLowDisk() {
+        let continuation = firstCaptureContinuation
+        firstCaptureContinuation = nil
+        continuation?.resume()
+    }
+
+    func browse(_ request: HistoryBrowseRequest) async throws -> HistoryPage {
+        try await base.browse(request)
+    }
+
+    func observe(
+        _ request: HistoryObservationRequest
+    ) async -> AsyncThrowingStream<HistoryPage, Error> {
+        await base.observe(request)
+    }
+
+    func details(for id: HistoryItemID) async throws -> HistoryDetails {
+        try await base.details(for: id)
+    }
+
+    func pastePayload(for id: HistoryItemID) async throws -> PastePayload {
+        try await base.pastePayload(for: id)
+    }
+
+    func thumbnail(
+        for item: HistoryItemReference,
+        pixels: PixelSize
+    ) async throws -> ThumbnailPayload? {
+        try await base.thumbnail(for: item, pixels: pixels)
+    }
+
+    func retentionConfiguration() async throws -> HistoryRetentionConfiguration {
+        try await base.retentionConfiguration()
+    }
+}
+
+/// Deterministic observation of AppComposition's existing content-free push
+/// seam. A waiter first checks the latest snapshot, so it cannot miss a
+/// synchronous transition and needs neither polling nor a timer.
+@MainActor
+private final class CaptureHealthProbe {
+    private var latest = ClipyCaptureHealth.inactive
+    private var waiter: (
+        failedCaptureCount: Int,
+        lastFailure: ClipyCaptureFailure?,
+        continuation: CheckedContinuation<Void, Never>
+    )?
+
+    func receive(_ health: ClipyCaptureHealth) {
+        latest = health
+        resumeWaiterIfSatisfied()
+    }
+
+    func waitForIdle(
+        failedCaptureCount: Int,
+        lastFailure: ClipyCaptureFailure?
+    ) async {
+        if matches(
+            failedCaptureCount: failedCaptureCount,
+            lastFailure: lastFailure
+        ) {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            precondition(waiter == nil)
+            waiter = (failedCaptureCount, lastFailure, continuation)
+        }
+    }
+
+    private func resumeWaiterIfSatisfied() {
+        guard let waiter,
+              matches(
+                failedCaptureCount: waiter.failedCaptureCount,
+                lastFailure: waiter.lastFailure
+              ) else {
+            return
+        }
+        self.waiter = nil
+        waiter.continuation.resume()
+    }
+
+    private func matches(
+        failedCaptureCount: Int,
+        lastFailure: ClipyCaptureFailure?
+    ) -> Bool {
+        latest.activeCommitCount == 0
+            && latest.pendingCaptureCount == 0
+            && latest.failedCaptureCount == failedCaptureCount
+            && latest.lastFailure == lastFailure
+    }
+}
+
 /// The only History adapter in this suite: pause capture 1 at the process
 /// boundary, then forward every operation/read to the same real store. Its
 /// detached forward makes capture 1 intentionally non-cooperative with the
@@ -527,6 +771,99 @@ private actor FirstCaptureSuspendingHistory: ClipboardHistory {
         _ request: HistoryObservationRequest
     ) async -> AsyncThrowingStream<HistoryPage, Error> {
         await base.observe(request)
+    }
+
+    func details(for id: HistoryItemID) async throws -> HistoryDetails {
+        try await base.details(for: id)
+    }
+
+    func pastePayload(for id: HistoryItemID) async throws -> PastePayload {
+        try await base.pastePayload(for: id)
+    }
+
+    func thumbnail(
+        for item: HistoryItemReference,
+        pixels: PixelSize
+    ) async throws -> ThumbnailPayload? {
+        try await base.thumbnail(for: item, pixels: pixels)
+    }
+
+    func retentionConfiguration() async throws -> HistoryRetentionConfiguration {
+        try await base.retentionConfiguration()
+    }
+}
+
+/// Forwards every write and read to one real History authority, delaying only
+/// observation pages after the initial snapshot. This exposes the real
+/// commit-receipt/observation ordering gap without substituting storage.
+private actor PostInitialObservationSuspendingHistory: ClipboardHistory {
+    private let base: SwiftDataHistory
+    private var heldObservationContinuation: CheckedContinuation<Void, Never>?
+    private var holdWaiters: [CheckedContinuation<Void, Never>] = []
+    private var isHoldingPostInitialObservation = false
+
+    init(base: SwiftDataHistory) {
+        self.base = base
+    }
+
+    func perform(_ action: HistoryAction) async throws -> HistoryReceipt {
+        try await base.perform(action)
+    }
+
+    func browse(_ request: HistoryBrowseRequest) async throws -> HistoryPage {
+        try await base.browse(request)
+    }
+
+    func observe(
+        _ request: HistoryObservationRequest
+    ) async -> AsyncThrowingStream<HistoryPage, Error> {
+        let upstream = await base.observe(request)
+        return AsyncThrowingStream { continuation in
+            let producer = Task {
+                var emittedInitialPage = false
+                do {
+                    for try await page in upstream {
+                        if emittedInitialPage {
+                            await self.holdPostInitialObservation()
+                        }
+                        guard !Task.isCancelled else { return }
+                        continuation.yield(page)
+                        emittedInitialPage = true
+                    }
+                    continuation.finish()
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in producer.cancel() }
+        }
+    }
+
+    private func holdPostInitialObservation() async {
+        isHoldingPostInitialObservation = true
+        let waiters = holdWaiters
+        holdWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+        await withCheckedContinuation { continuation in
+            heldObservationContinuation = continuation
+        }
+        isHoldingPostInitialObservation = false
+    }
+
+    func waitUntilPostInitialObservationIsHeld() async {
+        guard !isHoldingPostInitialObservation else { return }
+        await withCheckedContinuation { continuation in
+            holdWaiters.append(continuation)
+        }
+    }
+
+    func releasePostInitialObservation() {
+        let continuation = heldObservationContinuation
+        heldObservationContinuation = nil
+        continuation?.resume()
     }
 
     func details(for id: HistoryItemID) async throws -> HistoryDetails {

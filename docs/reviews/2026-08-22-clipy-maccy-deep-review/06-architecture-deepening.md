@@ -325,8 +325,8 @@ coherence truth，缺失必须 fail closed。只读 phase/validated value 应表
 
 1. Seed child 分别创建 empty fresh、合法 V1、完整 V2、V2 items+missing position、wrong-key、missing
    config、invalid position value；child 必须退出。
-2. Red：open child 对 corrupt shapes 在任何 transaction 前失败；目录内 store family digest、items、
-   position 与 policies byte-exact 不变。
+2. Red：open child 对 corrupt shapes 在任何 transaction 前失败；目录内store-family文件逐项直接比较，
+items、position 与 policies byte-exact不变。
 3. Control：fresh 只创建一次；合法 V1 只做批准 bootstrap；完整 V2 不写。
 4. Red：SignatureBlob 结构合法但漏掉 canonical representation；startup/capture 不得把缺失 posting 当
    “没有 candidate”的可靠负证据。
@@ -709,7 +709,7 @@ offset、length 与 integrity。GC 通过 live-density 选择 segment、copy liv
 **优点：** 极大历史下减少 inode、directory enumeration、open/close 与 small-file metadata cost；顺序 scan
 与 backup 可能更好。
 
-**缺点：** compaction 本身成为第二套 storage engine：需要 torn-tail recovery、record framing/checksum、
+**缺点：** compaction 本身成为第二套 storage engine：需要 torn-tail recovery、record framing/length validation、
 generation fence、copy-forward transaction、reader epoch/lease、free-space amplification、后台 I/O budget 与
 crash-resumable GC。一个 offset bug 会扩大为 segment blast radius。若 loose blobs 没有被测出 inode/open/
 directory bottleneck，这些 interface vocabulary 大部分在删除 module 后直接消失，deletion test 不通过。
@@ -739,12 +739,12 @@ reclaimed-metadata-pending ─→ Authority cleanup transaction ─→ absent
 - `prepared-unreferenced`/`sealed-unreferenced`不能被与capture并发的sweep删除；需要持久ownership/checkpoint
   或Authority-coordinated in-flight generation，并由指定OS/filesystem的process-kill fixture证明。age/grace只能决定何时开始核对，
   不能单独证明一条慢 capture 已终止，更不能靠 wall-clock 猜测 correctness。
-- file 必须在History transaction引用它**之前**完成bounded write、length/digest验证与process-kill-scoped
+- file 必须在History transaction引用它**之前**完成bounded write、declared length与byte-exact staged readback验证及process-kill-scoped
   publish；transaction
   failure 只能留下 orphan，绝不能留下一个 committed row 指向从未 published 的 file。DB 中的 live
   representation metadata 是 liveness source of truth；突然断电/fsync仍为UNKNOWN。不能依赖 commit 后的 `markCommitted` callback——若
   进程在 commit 与 callback 之间死亡，那条设计会把真正 live 的 file 错判为 orphan。
-- committed live file 缺失、length mismatch、path escape 或 integrity mismatch 必须 fail closed 为 typed
+- committed live file 缺失、length mismatch、path escape 或 staged-readback failure 必须 fail closed 为 typed
   persistence failure；不能退回“相同 UTI 的另一份 bytes”或静默空 Preview。
 - retirement/prune 在同一 transaction durable 移除内容 ownership 并写 reclaim metadata/outbox；unlink 是
   commit 后 best-effort GC。delete 成功后再用 Authority 的 idempotent cleanup transaction 移除 reclaim
@@ -753,12 +753,10 @@ reclaimed-metadata-pending ─→ Authority cleanup transaction ─→ absent
 - live lease 与 deletion race 要么依赖已打开 descriptor 的平台语义并用 proof 固定，要么 deferred-delete；
   不能在 mid-stream 重新按 path 打开而偶然读到新 generation。
 - open-time repair 不做全库、全目录同步 sweep；恢复只处理 bounded metadata/outbox batch，loose-file
-  orphan enumeration 使用 durable shard cursor + grace/process epoch 在后台继续。GC state 本身有版本与
-  checksum，不依赖扫描所有 aggregate content codecs 才知道哪些 file live。
-- 一个全文件 length + xxh3 只能在 stream 结束时发现 length-preserving corruption；这不等于“任何已交付
-  chunk 都已验证”。若 consumer contract 要求 fail-before-release，必须另证 pre-pass 或分块 integrity
-  envelope 的 I/O/RSS 代价；否则把 detection window 作为显式 residual，不在 interface 注释中暗示更强
-  保证。
+  orphan enumeration 使用 durable shard cursor + grace/process epoch 在后台继续。GC state 本身有明确schema
+  version与typed cursor，不依赖扫描所有 aggregate content codecs 才知道哪些 file live。
+- sequential reader只承诺locator/path/declared-length/read-error合同，不增加全文件hash。若未来consumer要求
+  内容损坏在release前被检测，必须先批准具体安全属性与相应pre-pass/分块envelope，不能把新checksum当默认防御。
 - backup/export/restore 将 SwiftData store family、depot root 与 manifest 当成一个 consistency unit；只备份
   SQLite 而漏 depot 必须被检测并拒绝，不产生部分可读的“成功恢复”。
 
@@ -1110,7 +1108,7 @@ History/lifecycle complexity 不会散回，因为那本来就不是 renderer �
    文件 open、security-scope 或 helper launch；未批准 route 返回 typed unsupported。显式外部文件必须由
    future spec新增不可伪造的user-action/lease case，不能复用布尔开关。
 6. Red：只修改Preview manifest identity（或future cache已准入后的`PreviewRecipeVersion`）后，持久store
-   digest、projection values、revision count 与
+   rows/fields逐项比较不变，projection values、revision count 与
    paste payload 不变。
 7. Refactor：当第二个 renderer family 到来时只抽 internal common budget/error helper；只有出现第二个
    **真实外部 renderer implementation** 才评估 protocol seam。
@@ -1129,7 +1127,8 @@ fetcher；需要外部 I/O 的 future Preview 必须有独立授权/lease 与 SL
 当前 Clipy 没有支持 Python 访问 History 的进程间 interface；未来可以支持，但“任意 Python”应准确
 定义为：用户显式启用 Local Automation 并授予 capability 后，同一effective user account（same EUID）下、能够执行第一方
 `clipyctl` 的 Python 进程可通过 versioned JSON request/reply 调用获准操作。它不表示任意脚本可直连
-SwiftData、绕过授权，也不保证受第三方 sandbox 限制的 Python 能启动外部 executable。
+SwiftData、绕过授权，也不保证受第三方 sandbox 限制的 Python 能启动外部 executable。same EUID是
+effective-user-account范围，不证明同一GUI/login/audit session或per-script identity。
 
 稳定 public interface 是 `clipyctl` 的 stdin/stdout JSON 与少量 exit-code classes；socket path、XPC
 service name、Apple Event encoding 或 App Intent 名称都是可替换的 private transport。建议边界：
@@ -1153,6 +1152,8 @@ actions。**只有 JSON/exit-code shape 可以先在规格中冻结**；实现�
 `describeFormatCapabilities` 还受`DEC-FORMAT-INVENTORY-OWNER`阻塞。任何production transport的
 `browsePreview` 或 mutation 必须等 `ExternalGateway` 的 enrollment/grant/quota/audit/locator recheck 规格与
 implementation 先完成；revision/remove 再等各自 OCC 与 audit-before-release/commit proof 后逐项开放。
+`DEC-PY-AUTHENTICATED-INGRESS`也明确为`BLOCKED-SPEC`：它不阻塞in-process Gateway或App Intents，
+但在target/access owner获批前阻塞transport与Local Automation正向tracer。
 
 ### 为什么绝不能并入 `ClipboardFlow`
 
@@ -1164,8 +1165,9 @@ capture/pasteboard side effects。两条路径只在Authority/Domain的History s
 Gateway不绕过capability facade去调用一般用途`ClipboardHistory`。相反，让gateway自建SwiftData writer会创建第二 writer并绕过
 Authority transaction/index/observation invariants。
 
-`clipyctl` stdin的`describeFormatCapabilities` operation可以复用Rank 7的build/runtime audit projection
-serializer，但capability
+`clipyctl` stdin的`describeFormatCapabilities`只能消费各owner导出的immutable Foundation summaries；
+Rank 7的build/test inventory不能直接成为production依赖。runtime join/injection owner未批准前只允许冻结
+schema与pure serializer，不宣称endpoint已实现。capability
 清单只是信息，不是授权凭证；gateway 必须以 server-side manifest 与当前 grant为准，不能相信 Python
 回传的能力。输出不得含 clipboard bytes、query、用户路径、store path 或历史中的实际 UTI inventory。
 
@@ -1182,17 +1184,19 @@ Events 判别 spike，但一次只保留一个 production implementation；publi
 2. Red：直接驱动 internal `ExternalGateway`：未 enrollment、未 grant、revoke-before-authoritative-check、
    跨 connection locator、quota/timeout 与 app not-ready 都返回稳定 typed code；不能以空列表/unchanged
    冒充成功。
-3. Green：先实现唯一 ExternalGateway与bounded read mapping，并让已接纳App Intents使用它。
-4. Red：随后实现CLI pure parser/serializer；unknown major/oversize/duplicate keys失败，stdout恰一个JSON，
+3. Green：先实现唯一 ExternalGateway的deny与真实Authority-backed bounded positive path。
+4. Red/Green：让已接纳App Intents通过prebound facade使用同一Gateway，不复制policy。
+5. Red：随后实现CLI pure parser/serializer；unknown major/oversize/duplicate keys失败，stdout恰一个JSON，
    stderr/content logs无clipboard内容。它不伪造Gateway result。
-5. Red：用signed/sandbox/cold-launch matrix选一个production private transport并把CLI接到同一Gateway；
+6. Red：先关闭authenticated-ingress blocker，再用signed/sandbox/cold-launch matrix选一个production
+   private transport并把CLI接到同一Gateway；
    第一production operation只读且bounded。
-6. Red：获准单项 mutation 从 Python 发出，park 在 pre-commit、随后 revoke；不得 commit。获准且 token
+7. Red：获准单项 mutation 从 Python 发出，park 在 pre-commit、随后 revoke；不得 commit。获准且 token
    current 时 exactly one Authority commit/position，observer 收到同一 authoritative state。
-7. Red：扫描/运行时 canary 证明 `clipyctl`不import HistoryStorage/SwiftData，ClipyApp transport只见
+8. Red：扫描/运行时 canary 证明 `clipyctl`不import HistoryStorage/SwiftData，ClipyApp transport只见
    restricted public ingress/HistoryCore DTO、不import internal Storage types，且只有
    `HistoryAuthority` 创建 writable contexts。
-8. Refactor：删除所有test-only fallback wiring；只保留一个已证明的 private
+9. Refactor：删除所有test-only fallback wiring；只保留一个已证明的 private
    transport，不向 Python公开 transport framing。
 
 ### 明确拒绝的 overdesign
@@ -1248,7 +1252,7 @@ jobs；deletion test 通过。删除它不应影响 scanner、symbol snapshot �
 
 工具维护本身有成本，因此排在产品 correctness 后。不要新增 `validate-repository.sh` 总入口来冒充深
 module，不要发明 YAML DSL、跨项目 CI framework、统一 validation/evidence policy、通用 policy engine、
-自动把任意 benchmark 合成总分，或让一个绿色 job 替代 exact-SHA 多 job ledger。
+自动把任意 benchmark 合成总分，或让一个绿色 job 替代同一最终checkout的多job ledger。
 
 ## 13. 已经够深：修 implementation，不再包一层
 

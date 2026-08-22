@@ -15,6 +15,7 @@
 /// §SPEC-IMPL-007 and 05-recommended-target-design.md §4.1 PREVIEW-FENCE-1
 /// (exact-reference fence; late results never publish).
 import CoreGraphics
+import ClipboardFormats
 import Foundation
 import HistoryCore
 import SwiftUI
@@ -84,25 +85,23 @@ public enum PreviewContent: Equatable, Sendable {
 /// declares. External UTF-16 is intentionally not admitted until its distinct
 /// big-endian rule has an owned fixture (review TYPE-2 / PLAY-FORMAT-B).
 private enum PreviewTextCodec: Sendable {
-    case utf8
-    case nativeUTF16
+    case declared(DeclaredStringCodec)
 
     init?(typeIdentifier: String) {
-        switch typeIdentifier {
-        case "public.utf8-plain-text":
-            self = .utf8
-        case "public.utf16-plain-text":
-            self = .nativeUTF16
-        default:
+        let identifier = ClipboardFormatIdentifier(rawValue: typeIdentifier)
+        guard previewTextIdentifiers.contains(identifier),
+              let codec = identifier.declaredStringCodec
+        else {
             return nil
         }
+        self = .declared(codec)
     }
 
     func decode(_ bytes: Data) -> String? {
         switch self {
-        case .utf8:
+        case .declared(.utf8):
             return String(data: bytes, encoding: .utf8)
-        case .nativeUTF16:
+        case .declared(.nativeUTF16):
             // UTType.utf16PlainText is native byte order with an optional
             // BOM. Clipy's only platform is arm64 macOS, so BOM-less input is
             // UTF-16LE; an explicit BOM overrides that default.
@@ -116,6 +115,14 @@ private enum PreviewTextCodec: Sendable {
         }
     }
 }
+
+/// Preview owns this admission choice. The shared module contributes only the
+/// exact identifiers and their declared codec facts; external UTF-8 remains a
+/// separate product decision even though its wire encoding is known.
+private let previewTextIdentifiers: Set<ClipboardFormatIdentifier> = [
+    .utf8PlainText,
+    .utf16PlainText,
+]
 
 /// Mirror of storage's frozen v1 ImageIO-decodable set (04 §9), duplicated
 /// for display-only heuristics (same convention as HistoryDetailsView and

@@ -87,6 +87,8 @@ public enum FailurePresentation {
             return "History is busy. Try again shortly."
         case .dedupIndexRebuild:
             return "History is reindexing. Try again shortly."
+        case .insufficientDiskSpace:
+            return "Not enough disk space. Free some space and try again."
         }
     }
 }
