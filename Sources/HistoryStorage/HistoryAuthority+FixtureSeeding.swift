@@ -134,17 +134,28 @@ extension HistoryAuthority {
                 throw HistoryFailure.persistence(.invariantViolation)
             }
 
+            let receiptOutcome = HistoryCommitOutcome.inserted(
+                HistoryItemReference(
+                    id: finalItem.id,
+                    contentVersion: finalItem.contentVersion
+                )
+            )
+            let hcrAppend = try HistoryChangeRecordPayload.derive(
+                position: nextPosition,
+                mutations: mutations,
+                receiptOutcome: receiptOutcome,
+                clearScope: nil,
+                createdAt: storageClock.now()
+            )
             let stamped = StampedCommitPlan(
                 position: nextPosition,
                 mutations: mutations,
-                receiptOutcome: .inserted(HistoryItemReference(
-                    id: finalItem.id,
-                    contentVersion: finalItem.contentVersion
-                )),
+                receiptOutcome: receiptOutcome,
                 indexDelta: SignatureIndexDelta(
                     additions: additions,
                     removals: []
-                )
+                ),
+                hcrAppend: hcrAppend
             )
             _ = try executeStampedPlan(
                 stamped,

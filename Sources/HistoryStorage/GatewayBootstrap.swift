@@ -18,7 +18,8 @@ extension HistoryAuthority {
     /// Bootstraps or validates the complete X.3 Gateway table shape.
     ///
     /// Absence is a migration-compatible create path only when all four
-    /// Gateway tables are empty. The config singleton and its matching
+    /// Gateway tables and both later V4 HCR tables are empty. The config
+    /// singleton and its matching
     /// active App Intents connection are inserted in one transaction/save
     /// boundary before facade publication; no grant is created. Once config
     /// exists, its durable connection identity is authoritative and is never
@@ -45,7 +46,8 @@ extension HistoryAuthority {
 
         switch configs.count {
         case 0:
-            guard try Self.gatewayTablesAreEmpty(in: context) else {
+            guard try Self.gatewayTablesAreEmpty(in: context),
+                  try HCRBootstrap.tablesAreEmpty(in: context) else {
                 throw HistoryFailure.persistence(.invariantViolation)
             }
             let connectionID = gatewayConnectionIDSource()

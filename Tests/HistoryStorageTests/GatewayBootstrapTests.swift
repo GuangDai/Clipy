@@ -3,10 +3,11 @@
 /// The production seam is persistent `SwiftDataHistory.open`: a first open
 /// must durably publish one deny-by-default App Intents connection together
 /// with its config singleton, and a reopen must preserve that one-time
-/// identity. Corruption fixtures are installed through an independent V3
-/// container; after the public reopen rejects them, a second independent
-/// container supplies the durable before/after oracle. The oracle proves no
-/// repair was committed. It does not claim that SwiftData attempted no work.
+/// identity. Corruption fixtures are installed through an independent V4
+/// current-schema container; after the public reopen rejects them, a second
+/// independent container supplies the durable before/after oracle. The oracle
+/// proves no repair was committed. It does not claim that SwiftData attempted
+/// no work.
 import Foundation
 import HistoryCore
 import SwiftData
@@ -67,7 +68,7 @@ struct GatewayBootstrapTests {
     private static func makePersistentContainer(
         at storeURL: URL
     ) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: HistorySchemaV3.self)
+        let schema = Schema(versionedSchema: HistorySchemaV4.self)
         return try ModelContainer(
             for: schema,
             migrationPlan: HistoryMigrationPlan.self,
@@ -205,7 +206,7 @@ struct GatewayBootstrapTests {
     @Test("internal UUID source makes the one-time durable identity deterministic")
     func internalUUIDSourceIsDeterministic() async throws {
         let expectedConnectionID = Self.injectedConnectionID
-        let schema = Schema(versionedSchema: HistorySchemaV3.self)
+        let schema = Schema(versionedSchema: HistorySchemaV4.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(

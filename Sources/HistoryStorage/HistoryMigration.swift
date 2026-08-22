@@ -1,4 +1,4 @@
-/// M1.4/M1 + X.3 — the ordered V1 → V2 → V3 migration plan.
+/// M1.4/M1 + X.3 + J.2 — the ordered V1 → V2 → V3 → V4 migration plan.
 /// Owning spec: `V2-02` §3.3 "Stage topology" (DC-02, closed 2026-08-15) and
 /// Record 5 ("Schema layer"); `V2-roadmap` §5 M1 total open order step 2;
 /// the X.3 additive Gateway schema slice (`V2-roadmap` §10 X.3; `V2-05`
@@ -30,7 +30,9 @@
 /// via `HistoryAuthority.ensureRetentionExpansionConfig(in:)` in the total
 /// open order step 5. The lightweight V2 → V3 stage likewise creates no
 /// Gateway data; the following Authority step atomically bootstraps the X.3
-/// config/App Intents connection pair before facade publication.
+/// config/App Intents connection pair before facade publication. The HCR-only
+/// V3 → V4 stage is also additive and performs no journal backfill or
+/// singleton bootstrap: a migrated store first has both new tables empty.
 import SwiftData
 
 // MARK: - Migration plan (V2-02 §3.3 / X.3, DC-02 / DC-03)
@@ -41,18 +43,26 @@ internal enum HistoryMigrationPlan: SchemaMigrationPlan {
     /// shipping): the frozen v1 anchor (`V2-roadmap` §5 M1.1), then the
     /// first shipped V2 schema carrying only the retention rows
     /// (`V2-roadmap` §5 M1.2), then the additive Gateway/Audit schema
-    /// (`V2-roadmap` §10 X.3). Shipped schemas are never edited.
+    /// (`V2-roadmap` §10 X.3), then the internal HCR-only V4 graft
+    /// (`V2-roadmap` J.2/J.3; DC-25). Shipped schemas are never edited.
     internal static var schemas: [any VersionedSchema.Type] {
-        [HistorySchemaV1.self, HistorySchemaV2.self, HistorySchemaV3.self]
+        [
+            HistorySchemaV1.self,
+            HistorySchemaV2.self,
+            HistorySchemaV3.self,
+            HistorySchemaV4.self,
+        ]
     }
 
-    /// Two ship-ordered stages: the custom `V1 → V2` hop whose `didMigrate`
+    /// Three ship-ordered stages: the custom `V1 → V2` hop whose `didMigrate`
     /// performs the projection backfill (DC-02; `V2-02` Record 5), followed
     /// by the purely additive lightweight `V2 → V3` Gateway-table hop
-    /// (DC-03; X.3). A fresh store runs no stage and is created directly at
-    /// V3; older stores migrate during `ModelContainer` construction. The
+    /// (DC-03; X.3), then the additive lightweight `V3 → V4` HCR-table
+    /// hop. A fresh store runs no stage and is created directly at V4; older
+    /// stores migrate during `ModelContainer` construction. The retention
     /// backfill is idempotent by construction (`RET-PLATFORM-1b(e)`), so an
-    /// engine-level re-run reproduces exactly the same rows.
+    /// engine-level re-run reproduces exactly the same rows. V3 → V4 inserts
+    /// neither historical HCRs nor the later bootstrap singleton.
     internal static var stages: [MigrationStage] {
         [
             .custom(
@@ -66,6 +76,10 @@ internal enum HistoryMigrationPlan: SchemaMigrationPlan {
             .lightweight(
                 fromVersion: HistorySchemaV2.self,
                 toVersion: HistorySchemaV3.self
+            ),
+            .lightweight(
+                fromVersion: HistorySchemaV3.self,
+                toVersion: HistorySchemaV4.self
             )
         ]
     }

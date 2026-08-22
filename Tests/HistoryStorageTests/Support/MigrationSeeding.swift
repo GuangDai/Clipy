@@ -229,11 +229,11 @@ enum MigrationSeeding {
         )
     }
 
-    /// A migration-plan container over the same URL: the current V3 schema plus
+    /// A migration-plan container over the same URL: the current V4 schema plus
     /// `HistoryMigrationPlan` — the exact construction `SwiftDataHistory.open`
     /// step 2 performs.
     static func makeMigrationContainer(storeURL: URL) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: HistorySchemaV3.self)
+        let schema = Schema(versionedSchema: HistorySchemaV4.self)
         return try ModelContainer(
             for: schema,
             migrationPlan: HistoryMigrationPlan.self,

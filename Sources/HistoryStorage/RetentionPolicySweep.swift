@@ -455,7 +455,8 @@ extension HistoryAuthority {
             stamped = try CommitPlanStamper.stamp(
                 mutationPlan,
                 currentPosition: currentPosition,
-                inputs: .prune(lineagesByItem: lineagesByItem)
+                inputs: .prune(lineagesByItem: lineagesByItem),
+                createdAt: now
             )
         } catch let rejection as StampingRejection {
             throw rejection.historyFailure
