@@ -311,7 +311,8 @@ internal actor HistoryAuthority {
     /// `RET-PLATFORM-1b(a)`; live from roadmap R.3 — with the amended
     /// Record 5 missing-rows recovery re-run first, see
     /// `RetainedBytesStamping.validateOneToOneCorrespondence`), decode and
-    /// validate signatures and build the complete Signature Index, and
+    /// decode Canonical/signatures, recompute authoritative signature
+    /// coverage and build the complete Signature Index, and
     /// validate the full pinned ordinal set from scalar fields.
     ///
     /// The initial retention value is revalidated against the fixed Part VI
@@ -507,18 +508,21 @@ internal actor HistoryAuthority {
         }
     }
 
-    /// §13 scan/index steps 7–10: one bounded scalar
-    /// fetch over every retained row
-    /// yields the startup proofs and the complete Signature Index, without
-    /// decoding Canonical or revision blobs (§13). docs/05-authority-kernel.md
-    /// §13, §12
+    /// §13 scan/index steps 7–10: one bounded fetch over every retained row
+    /// yields the startup proofs and the complete Signature Index. In the
+    /// current hard-capped profile it decodes Canonical together with
+    /// signature metadata and recomputes xxh3 from every representation's
+    /// bytes before publishing a ready index; revision blobs remain untouched
+    /// (§12–§13, DATA-11). This O(N) hydration is capped-only and must not
+    /// survive the `DEC-U-SCALE-STARTUP-INDEX` transition.
     ///
     /// Checks, in fetch order: row count within the hard retained-item bound;
     /// unique business IDs; a nonzero Content Version (§4); projection schema
-    /// version exactly the current v2 value; signature blob decode plus
-    /// complete index build; and the full pinned ordinal set unique and exactly
-    /// `0 ..< p` from scalar fields (D12). Corrupt metadata fails open (§13);
-    /// a store that cannot be read fails as `.persistence(.openStore)` (§2).
+    /// version exactly the current v2 value; Canonical/signature decode plus
+    /// authoritative recomputed coverage and complete index build; and the
+    /// full pinned ordinal set unique and exactly `0 ..< p` from scalar fields
+    /// (D12). Corrupt metadata fails open (§13); a store that cannot be read
+    /// fails as `.persistence(.openStore)` (§2).
     internal static func buildSignatureIndexAtStartup(
         in context: ModelContext,
         limits: HistoryLimits
@@ -529,6 +533,7 @@ internal actor HistoryAuthority {
             \.contentVersionRaw,
             \.projectionSchemaVersion,
             \.pinOrdinal,
+            \.canonicalBlob,
             \.canonicalSignatureBlob,
         ]
         descriptor.fetchLimit = limits.hardMaximumRetainedItems + 1
@@ -570,9 +575,16 @@ internal actor HistoryAuthority {
             if let pinOrdinal {
                 pinnedOrdinals.append(pinOrdinal.rawValue)
             }
-            // §13 step 9: decode/validate signatures — never content bytes.
+            // §13 step 9, DATA-11: the current hard-capped ready index may
+            // provide negative dedup evidence only after Canonical bytes are
+            // decoded and their xxh3 values recomputed. Revision bytes remain
+            // untouched. This complete hydration must not survive U-scale.
             let entries = try mapCodecFailure {
-                try SignatureBlobCodec.decode(row.canonicalSignatureBlob, limits: limits)
+                try SignatureBlobCodec.decodeAuthoritativeEntries(
+                    canonicalBlob: row.canonicalBlob,
+                    signatureBlob: row.canonicalSignatureBlob,
+                    limits: limits
+                )
             }
             signatures[itemID] = entries
         }

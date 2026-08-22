@@ -15,9 +15,10 @@
 ///
 /// The version fence (WS15, docs/06-cross-cutting.md §8): ImageIO decode
 /// occurs only after all SwiftData objects and context have been released —
-/// the facade guarantees that by construction: `thumbnailSource` returns
-/// immutable `Data` across the actor boundary, so this service never touches a
-/// `ModelContext` or `@Model` value (§14.5). If the item changes during decode
+/// the facade guarantees that by construction: `thumbnailSource` returns one
+/// immutable selection and the facade passes only its `Data` into this
+/// service, so the service never touches a `ModelContext` or `@Model` value
+/// (§14.5). If the item changes during decode
 /// the result remains tagged with the old reference (the payload's `item` IS
 /// the request's reference); the caller applies it only if its row still
 /// carries that reference. A request whose reference was already stale before
@@ -200,8 +201,8 @@ package actor ThumbnailService {
 ///
 /// Owns no state: every decode is independent and only immutable `Sendable`
 /// values cross the actor boundary (`Data` in, `ThumbnailPayload` out). The
-/// worker never touches SwiftData — the facade's `thumbnailSource` returns
-/// immutable source bytes after releasing all `@Model` values and context
+/// worker never touches SwiftData — the facade extracts immutable source bytes
+/// from `thumbnailSource` after releasing all `@Model` values and context
 /// (§14.5: "ImageIO decode occurs only after all SwiftData objects and context
 /// have been released"). The worker is a separate actor from
 /// `ThumbnailService` so the ImageIO decode does not block the flight table's

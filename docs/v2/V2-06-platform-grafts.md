@@ -126,7 +126,18 @@ gates).
 
 ### 3.1 Capability scope and evidence trigger
 
-**In scope.** A durable checkpoint of the in-memory Signature Index (`05` §12),
+> **Controlling DATA-11 amendment (2026-08-22).** The checkpoint reuse path
+> below predates the authoritative negative-evidence rule now owned by `05`
+> §12–§13. Equality of `ChangePosition` proves that no History Commit changed
+> Canonical state; it does not detect at-rest corruption of the two stored
+> fingerprint copies. Therefore P1.2 may not bypass the capped Canonical xxh3
+> coverage pass merely because a checkpoint matches. P1 remains blocked until
+> an owning amendment either preserves that validation on every hit or
+> replaces it with an equally authoritative, non-hash-derived generation
+> proof. Until then the current implementation always rebuilds/validates and
+> no checkpoint fast path or performance claim in this section is executable.
+
+**Historical proposed scope, blocked by the amendment above.** A durable checkpoint of the in-memory Signature Index (`05` §12),
 captured at the end of `SwiftDataHistory.open`, that lets a subsequent open
 **skip** the O(retained) signature-metadata fetch + decode + posting build
 (`05` §13 steps 6–8) when the store is provably unchanged since the checkpoint
@@ -134,8 +145,8 @@ was written. The checkpoint stores the serialized Signature Index paired with
 the `ChangePosition` at which it was captured.
 
 **Evidence trigger (admits design work).** Lifts `06` §3 G5 ("Persistent
-startup checkpoint"). Trigger: metadata-only startup / Signature-Index rebuild
-**p95 > 250 ms at 5,000 items on the minimum supported hardware profile**
+startup checkpoint"). Trigger: current capped Canonical-coverage / Signature
+Index rebuild **p95 > 250 ms at 5,000 items on the minimum supported hardware profile**
 (`V2-00` §3 P1). Until the trigger fires, P1 is design only and reserves no v1
 surface. The trigger is the *admission* bar; proof gate `P1-PERF-1` shows the
 graft actually clears it (the reuse path is measurably faster than rebuild).
@@ -293,14 +304,17 @@ Position advance is treated
 commit may have been a signature-preserving coalesce or pin — fail-safe rebuild
 when in doubt (D37).
 
-**What the reuse path skips.** The v1 rebuild's p95 cost at 5,000 items is the
+**Historical fast-path target; not currently admissible.** The pre-DATA-11
+rebuild's p95 cost at 5,000 items is the
 per-row signature-metadata fetch and `SignatureBlobV1` decode + posting
 construction (`05` §13 step 9; `06` §9 "Index rebuild is O(retained signature
 metadata)"). The reuse path replaces that with one singleton read + one
 checkpoint-row scalar read + one bounded `indexBlob` decode + an in-memory
 posting reconstruction. It still performs current step 10 (pin-order validation from
 scalars — cheap, and required for correctness independent of the index). It does
-not decode Canonical or revision blobs (Part VI §7.5 preserved; `P1-PLATFORM-2`).
+not decode Canonical or revision blobs. That is no longer sufficient for
+authoritative negative evidence; the controlling amendment above blocks this
+path until the owning proof changes.
 
 **`.memory` store.** The reuse path applies to `.memory` too: an in-process
 store still has a `ChangePosition` singleton and a checkpoint row. A `.memory`
@@ -1468,8 +1482,9 @@ unchanged.
 ### 7.1 P1 — persistent startup checkpoint
 
 **Record 1 — Lifted exclusion + evidence trigger.** Lifts `06` §3 G5. Trigger:
-metadata-only startup / Signature-Index rebuild p95 > 250 ms at 5,000 items on
-the minimum supported hardware profile (`V2-00` §3 P1).
+current capped Canonical-coverage / Signature-Index rebuild p95 > 250 ms at
+5,000 items on the minimum supported hardware profile, plus the controlling
+DATA-11 amendment (`V2-00` §3 P1).
 
 **Record 2 — Invariant impact.** D1–D19 preserved unchanged. The
 `ChangePosition`-based unchanged-detector reuses D5/D6 (precise monotone tokens)

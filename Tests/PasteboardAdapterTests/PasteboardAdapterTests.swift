@@ -23,9 +23,9 @@
 ///   the complete-capture convenience returns nil (REVIEW Card 5B).
 /// - Failure is explicit, never silent (audit SPEC-IMPL-005,
 ///   docs/reviews/2026-08-20-clipy-maccy-audit/02-spec-implementation.md):
-///   a declared-but-unavailable type (Apple: contents changed / provider
-///   timed out) is recorded on `CaptureOutcome.unavailableTypeIdentifiers`
-///   instead of being silently dropped, and `write(_:)` throws
+///   a declared-but-unavailable type is recorded by the
+///   `CaptureOutcome.declaredUnavailable` case instead of being silently
+///   dropped, and `write(_:)` throws
 ///   `PasteboardWriteFailure` for refused item staging or a refused whole-item
 ///   write instead of ignoring framework Booleans. A Debug-only package,
 ///   immutable failure configuration injects unavailable reads, staging
@@ -133,18 +133,16 @@ func pasteboardChangeBetweenRepresentationReadsProducesContentFreeRetryOutcome()
     let outcome = try #require(adapter.captureOutcome())
 
     #expect(didReplaceContents)
-    #expect(outcome.startChangeCount == startChangeCount)
-    #expect(outcome.endChangeCount == pasteboard.changeCount)
-    #expect(outcome.endChangeCount != outcome.startChangeCount)
-    #expect(outcome.changedDuringRead)
-    #expect(!outcome.isComplete)
+    guard case let .changedDuringRead(changed) = outcome else {
+        Issue.record("expected a content-free changed-during-read outcome")
+        return
+    }
+    #expect(changed.startChangeCount == startChangeCount)
+    #expect(changed.endChangeCount == pasteboard.changeCount)
+    #expect(changed.endChangeCount != changed.startChangeCount)
     // Neither the old first read nor the new board may enter History as a
-    // complete snapshot. Ownership change is its own retry reason, not a
-    // fabricated provider-timeout/unavailable-type diagnosis.
-    #expect(outcome.capture.representations.isEmpty)
-    #expect(outcome.unavailableTypeIdentifiers.isEmpty)
-    #expect(outcome.concealmentMarkerTypeIdentifier == nil)
-    #expect(outcome.unsupportedPasteboardItemCount == nil)
+    // complete snapshot. Ownership change is its own retry reason, not an
+    // unavailable-type diagnosis.
 }
 
 @Test @MainActor
@@ -211,12 +209,12 @@ func multipleItemsAreExplicitlyUnsupportedBeforeAnyPayloadRead() throws {
     let outcome = try #require(adapter.captureOutcome())
 
     #expect(payloadAccessorCalls.isEmpty)
-    #expect(outcome.unsupportedPasteboardItemCount == 2)
-    #expect(!outcome.isComplete)
-    #expect(outcome.capture.representations.isEmpty)
-    #expect(!outcome.capture.isConcealed)
-    #expect(outcome.unavailableTypeIdentifiers.isEmpty)
-    #expect(outcome.concealmentMarkerTypeIdentifier == nil)
+    guard case let .unsupportedMultiItem(unsupported) = outcome else {
+        Issue.record("expected the unsupported multi-item outcome")
+        return
+    }
+    #expect(unsupported.itemCount == 2)
+    #expect(unsupported.changeCount == pasteboard.changeCount)
     // The convenience API must not disguise the first item as the complete
     // clipboard gesture when the public capture model cannot preserve the
     // two item boundaries or their duplicate string representations.
@@ -250,10 +248,12 @@ func declaredConcealmentMarkerShortCircuitsBeforeReadingLargeSiblingPayload() th
     let outcome = try #require(adapter.captureOutcome())
 
     #expect(payloadAccessorCalls.isEmpty)
-    #expect(outcome.concealmentMarkerTypeIdentifier == marker)
-    #expect(!outcome.isComplete)
-    #expect(outcome.capture.isConcealed)
-    #expect(outcome.capture.representations.isEmpty)
+    guard case let .concealed(concealed) = outcome else {
+        Issue.record("expected the concealed-before-bytes outcome")
+        return
+    }
+    #expect(concealed.markerTypeIdentifier == marker)
+    #expect(concealed.changeCount == pasteboard.changeCount)
     #expect(adapter.capture() == nil)
     #expect(payloadAccessorCalls.isEmpty)
 }
@@ -272,10 +272,13 @@ func payloadReadInstrumentationObservesUnmarkedCaptureWithoutChangingIt() throws
     let outcome = try #require(adapter.captureOutcome())
 
     #expect(payloadAccessorCalls == [NSPasteboard.PasteboardType.string.rawValue])
-    #expect(outcome.isComplete)
-    #expect(outcome.concealmentMarkerTypeIdentifier == nil)
-    #expect(outcome.capture.isConcealed == false)
-    #expect(outcome.capture.representations == [
+    guard case let .complete(complete) = outcome else {
+        Issue.record("expected the stable complete outcome")
+        return
+    }
+    #expect(complete.changeCount == pasteboard.changeCount)
+    #expect(complete.capture.isConcealed == false)
+    #expect(complete.capture.representations == [
         CapturedRepresentation(
             typeIdentifier: NSPasteboard.PasteboardType.string.rawValue,
             bytes: Data("ordinary".utf8)
@@ -292,16 +295,20 @@ func everyConcealmentMarkerMarksTheWholeCaptureConcealed() {
         pasteboard.setData(Data("sensitive".utf8), forType: .string)
         pasteboard.setData(Data("marker".utf8), forType: NSPasteboard.PasteboardType(marker))
 
-        let outcome = PasteboardAdapter(pasteboard: pasteboard).captureOutcome()
+        guard let outcome = PasteboardAdapter(pasteboard: pasteboard).captureOutcome() else {
+            Issue.record("expected concealed outcome for \(marker)")
+            continue
+        }
 
-        #expect(outcome?.capture.isConcealed == true, "\(marker)")
-        #expect(outcome?.concealmentMarkerTypeIdentifier == marker, "\(marker)")
-        #expect(outcome?.isComplete == false, "\(marker)")
+        guard case let .concealed(concealed) = outcome else {
+            Issue.record("expected concealed outcome for \(marker)")
+            continue
+        }
+        #expect(concealed.markerTypeIdentifier == marker, "\(marker)")
+        #expect(concealed.changeCount == pasteboard.changeCount, "\(marker)")
         // Whole-item privacy semantics: declared types are enough to reject
-        // this observation. No sibling payload is retained by the adapter;
-        // `HistoryStorage` still rejects the concealed empty capture if a
-        // direct caller deliberately submits it as a defense-in-depth check.
-        #expect(outcome?.capture.representations.isEmpty == true, "\(marker)")
+        // this observation. The case has no capture field, so sibling bytes
+        // cannot be retained or accidentally submitted by a caller.
     }
 }
 
@@ -430,21 +437,27 @@ func captureRecordsADeclaredButUnavailableTypeAsAPartialFreeze() {
         )
     )
 
-    let outcome = adapter.captureOutcome()
+    guard let outcome = adapter.captureOutcome() else {
+        Issue.record("expected the declared-unavailable partial outcome")
+        return
+    }
 
-    // The nil-data type is RECORDED, never silently dropped (Apple:
-    // contents changed / provider timed out); the available representation
-    // is still frozen, and the record is what marks the freeze partial.
-    #expect(outcome != nil)
-    #expect(outcome?.isComplete == false)
-    #expect(outcome?.unavailableTypeIdentifiers == ["public.html"])
-    #expect(outcome?.capture.representations.count == 1)
+    // The nil-data type is RECORDED, never silently dropped. The available
+    // representation is still frozen, and the closed case marks it partial
+    // without claiming why the system did not vend those bytes.
+    guard case let .declaredUnavailable(partial) = outcome else {
+        Issue.record("expected the declared-unavailable partial outcome")
+        return
+    }
+    #expect(partial.unavailableTypeIdentifiers == ["public.html"])
+    #expect(partial.changeCount == pasteboard.changeCount)
+    #expect(partial.partialCapture.representations.count == 1)
     #expect(
-        outcome?.capture.representations.first?.typeIdentifier
+        partial.partialCapture.representations.first?.typeIdentifier
             == NSPasteboard.PasteboardType.string.rawValue
     )
     #expect(
-        outcome?.capture.representations.first?.bytes == Data("plain".utf8)
+        partial.partialCapture.representations.first?.bytes == Data("plain".utf8)
     )
     #expect(adapter.capture() == nil)
 }
@@ -458,21 +471,23 @@ func captureOfAFullyObservedItemIsACompleteOutcome() {
     let stableChangeCount = pasteboard.changeCount
 
     let observedAt = Date(timeIntervalSince1970: 1_760_000_000)
-    let outcome = PasteboardAdapter(pasteboard: pasteboard)
-        .captureOutcome(observedAt: observedAt)
+    guard let outcome = PasteboardAdapter(pasteboard: pasteboard)
+        .captureOutcome(observedAt: observedAt) else {
+        Issue.record("expected the stable complete outcome")
+        return
+    }
 
-    #expect(outcome != nil)
-    #expect(outcome?.isComplete == true)
-    #expect(outcome?.unavailableTypeIdentifiers == [])
-    #expect(outcome?.changedDuringRead == false)
-    #expect(outcome?.startChangeCount == stableChangeCount)
-    #expect(outcome?.endChangeCount == stableChangeCount)
+    guard case let .complete(complete) = outcome else {
+        Issue.record("expected the stable complete outcome")
+        return
+    }
+    #expect(complete.changeCount == stableChangeCount)
     // The convenience half drops the record but freezes the same bytes;
     // both calls share one injected observedAt so the comparison is
     // deterministic (the default Date() stamps would differ sub-second).
     #expect(
         PasteboardAdapter(pasteboard: pasteboard)
-            .capture(observedAt: observedAt) == outcome?.capture
+            .capture(observedAt: observedAt) == complete.capture
     )
 }
 
@@ -491,16 +506,23 @@ func everyUnavailableRepresentationProducesAnExplicitPartialOutcome() {
         )
     )
 
-    let outcome = adapter.captureOutcome()
+    guard let outcome = adapter.captureOutcome() else {
+        Issue.record("expected the all-unavailable partial outcome")
+        return
+    }
 
     // The observer has consumed this changeCount, so an all-unavailable
     // gesture must remain distinguishable from a cleared pasteboard.
-    #expect(outcome?.isComplete == false)
+    guard case let .declaredUnavailable(partial) = outcome else {
+        Issue.record("expected the all-unavailable partial outcome")
+        return
+    }
     #expect(
-        outcome?.unavailableTypeIdentifiers
+        partial.unavailableTypeIdentifiers
             == [NSPasteboard.PasteboardType.string.rawValue]
     )
-    #expect(outcome?.capture.representations.isEmpty == true)
+    #expect(partial.partialCapture.representations.isEmpty)
+    #expect(partial.changeCount == pasteboard.changeCount)
     #expect(adapter.capture() == nil)
 }
 
@@ -673,9 +695,16 @@ func observerDeliversAPartialOutcomeForTheCompositionToJudge() {
     // freeze reaches the handler owner (the composition root drops it
     // rather than admitting partial Canonical Content, 01 §5.1).
     #expect(received.count == 1)
-    #expect(received.first?.isComplete == false)
-    #expect(received.first?.unavailableTypeIdentifiers == ["public.html"])
-    #expect(received.first?.capture.representations.count == 1)
+    guard let firstOutcome = received.first else {
+        Issue.record("expected the observer to deliver an outcome")
+        return
+    }
+    guard case let .declaredUnavailable(partial) = firstOutcome else {
+        Issue.record("expected the observer to deliver the partial outcome")
+        return
+    }
+    #expect(partial.unavailableTypeIdentifiers == ["public.html"])
+    #expect(partial.partialCapture.representations.count == 1)
 }
 #endif
 
@@ -693,7 +722,9 @@ func observerCapturesImmediatelyThenFiresOncePerChangeCountBump() {
 
     var received: [ClipboardCapture] = []
     observer.start { outcome in
-        received.append(outcome.capture)
+        if case let .complete(complete) = outcome {
+            received.append(complete.capture)
+        }
     }
 
     // start delivers the CURRENT contents synchronously before returning.
@@ -738,7 +769,9 @@ func observerStopHaltsDelivery() {
 
     var received: [ClipboardCapture] = []
     observer.start { outcome in
-        received.append(outcome.capture)
+        if case let .complete(complete) = outcome {
+            received.append(complete.capture)
+        }
     }
     observer.stop()
 

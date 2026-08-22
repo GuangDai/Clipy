@@ -132,7 +132,7 @@ allocated bytes，decode 后可能占 200 MiB resident pixels，而 thumbnail de
 - `HistoryLimits.standard.hardMaximumRetainedItems == 5_000`，生产只使用该固定 profile
   ([`Limits.swift`](../../../Sources/HistoryCore/Limits.swift#L38),
   [`Limits.swift`](../../../Sources/HistoryCore/Limits.swift#L200))；
-- startup 获取所有 retained signature metadata 并构建完整内存 index
+- current capped startup 获取所有 retained Canonical + signature metadata、重算 authoritative coverage 并构建完整内存 index
   ([`HistoryAuthority.swift`](../../../Sources/HistoryStorage/HistoryAuthority.swift#L449))；
 - capture 先取完整 retention inventory，并把完整 retained ID set 与 Signature Index
   coverage 对齐 ([`FactLoaders.swift`](../../../Sources/HistoryStorage/FactLoaders.swift#L247))；

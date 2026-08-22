@@ -6,9 +6,9 @@
 /// public `SwiftDataHistory.perform` and the real step-6 mutation commit
 /// paths (docs/02-domain.md §10/§11, docs/05-authority-kernel.md §9); the
 /// facade is then REOPENED over the same store, rerunning the
-/// docs/05-authority-kernel.md §13 startup, whose steps 5–9 rebuild the
-/// complete Signature Index from durable signature metadata without decoding
-/// content blobs and revalidate the full pinned ordinal set.
+/// docs/05-authority-kernel.md §13 startup, whose steps 5–9 recompute
+/// authoritative Canonical/signature coverage, rebuild the complete Signature
+/// Index without decoding revision state, and revalidate the pinned order.
 ///
 /// This file closes WS14's step-6 durable-reconstruction clauses; the
 /// separately landed step-7 read suites own the public-result clauses. All
@@ -279,8 +279,8 @@ private static func revisedReference(
 
     // ── RESTART: reopen the facade over the same on-disk store. The
     // docs/05-authority-kernel.md §13 startup (steps 5–9) rebuilds the
-    // complete Signature Index from durable signature metadata WITHOUT
-    // decoding content blobs and revalidates the full pinned ordinal set, so
+    // complete Signature Index from authoritative Canonical/signature
+    // coverage WITHOUT decoding revision state and revalidates the full pinned ordinal set, so
     // a successful open re-proves both from durable state.
     let restartedHistory = try await WSSupport.openHistory(storeURL: storeURL)
 

@@ -17,7 +17,9 @@ import HistoryCore
 
 /// changeCount-polled observation (01 §5.1; roadmap 04). Main-actor
 /// confined; polls the pasteboard's `changeCount` on a main-`RunLoop`
-/// `Timer` and delivers one capture outcome per distinct change count.
+/// `Timer` and delivers one capture outcome per distinct change count. A
+/// freeze whose start/end generations differ receives exactly one immediate
+/// retry before delivery (REVIEW Card 5B).
 @MainActor
 public final class PasteboardObserver {
     private let adapter: PasteboardAdapter
@@ -42,17 +44,15 @@ public final class PasteboardObserver {
     /// is non-nil (a change that clears the pasteboard or yields nothing
     /// retainable is recorded but not delivered; a PARTIAL freeze — a
     /// declared representation's bytes unavailable — IS delivered, marked
-    /// by `CaptureOutcome.unavailableTypeIdentifiers`, for the handler
-    /// owner to judge). Calling `start` again while running replaces the
-    /// handler without re-capturing.
+    /// by `CaptureOutcome.declaredUnavailable`, for the handler owner to
+    /// judge). Calling `start` again while running replaces the handler
+    /// without re-capturing.
     public func start(handler: @escaping @MainActor (CaptureOutcome) -> Void) {
         self.handler = handler
         guard timer == nil else { return }
 
         lastChangeCount = adapter.pasteboard.changeCount
-        if let outcome = adapter.captureOutcome() {
-            handler(outcome)
-        }
+        deliverCurrentOutcome(to: handler)
 
         // The timer is added to the main run loop's common modes explicitly
         // rather than via `Timer.scheduledTimer` (which would silently bind
@@ -87,8 +87,53 @@ public final class PasteboardObserver {
         guard changeCount != lastChangeCount else { return }
         lastChangeCount = changeCount
         guard let handler else { return }
-        if let outcome = adapter.captureOutcome() {
-            handler(outcome)
+        deliverCurrentOutcome(to: handler)
+    }
+
+    /// Freezes one observed generation for delivery. Ownership movement
+    /// during that freeze gets one synchronous retry: a stable complete retry
+    /// replaces the superseded first attempt, while another unstable or
+    /// otherwise incomplete attempt leaves one content-free generation-race
+    /// outcome for the owner. There is no delay, task, or retry loop.
+    private func deliverCurrentOutcome(
+        to handler: @MainActor (CaptureOutcome) -> Void
+    ) {
+        guard let outcome = captureOutcomeWithOneOwnershipRetry() else {
+            lastChangeCount = adapter.pasteboard.changeCount
+            return
+        }
+        switch outcome {
+        case let .complete(value):
+            lastChangeCount = value.changeCount
+        case let .declaredUnavailable(value):
+            lastChangeCount = value.changeCount
+        case let .concealed(value):
+            lastChangeCount = value.changeCount
+        case let .unsupportedMultiItem(value):
+            lastChangeCount = value.changeCount
+        case let .changedDuringRead(value):
+            lastChangeCount = value.endChangeCount
+        }
+        handler(outcome)
+    }
+
+    /// Card 5B's bounded retry is deliberately one additional freeze, not a
+    /// general retry policy. Partial bytes from the retry cannot replace the
+    /// first content-free ownership-race result.
+    private func captureOutcomeWithOneOwnershipRetry() -> CaptureOutcome? {
+        guard let firstOutcome = adapter.captureOutcome() else { return nil }
+        guard case .changedDuringRead = firstOutcome else {
+            return firstOutcome
+        }
+
+        guard let retryOutcome = adapter.captureOutcome() else {
+            return firstOutcome
+        }
+        switch retryOutcome {
+        case .complete, .changedDuringRead:
+            return retryOutcome
+        case .declaredUnavailable, .concealed, .unsupportedMultiItem:
+            return firstOutcome
         }
     }
 }

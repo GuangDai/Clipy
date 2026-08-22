@@ -11,16 +11,29 @@
 > criteria live in the design modules (`00`–`06`) and the roadmap module docs;
 > they are cited here, never restated as new semantics.
 
-**Audit baseline:** `8f316c9` (2026-08-02). **Current landed head:**
-`cc59aa8` (2026-08-20). Steps 0–9 are implemented and CI-green; M2/state 2
-is complete. Step 9 (product wiring: PasteboardAdapter + PresentationUI +
-ClipyApp composition) is done, including its post-step-9 revisions: the
-perf/AB measurement-helper proofs now run in the split `HistoryPerfTests`
-lane, and the browsing surface is a Maccy-style AppDelegate-owned floating
-`NSPanel` (Carbon ⇧⌘C summon, cursor/status-item/center/last-position
-placement, dwell-driven preview pane) rather than a SwiftUI `MenuBarExtra`.
-M3/state 3 (packaging, accessibility, localization, product acceptance per
-Part VI §11) remains open.
+**Audit baseline:** `8f316c9` (2026-08-02). **Current landed baseline:**
+`master` through PR #8 (2026-08-22). Steps 0–9 are implemented and CI-green;
+M2/state 2 is complete. Step 9 (product wiring: PasteboardAdapter +
+PresentationUI + ClipyApp composition) is done, including its post-step-9
+revisions: the perf/AB measurement-helper proofs live in the split
+`HistoryPerfTests` target, and the browsing surface is a Maccy-style
+AppDelegate-owned floating `NSPanel` (Carbon ⇧⌘C summon,
+cursor/status-item/center/last-position placement, dwell-driven preview pane)
+rather than a SwiftUI `MenuBarExtra`. M3/state 3 (packaging, accessibility,
+localization, product acceptance per Part VI §11) remains open.
+
+**Current CI provenance (2026-08-22):** PR #7 correctness run
+[32572531247](https://github.com/GuangDai/Clipy/actions/runs/32572531247)
+and PR #8 correctness run
+[32573066624](https://github.com/GuangDai/Clipy/actions/runs/32573066624)
+are green across Lint + source gates, SwiftPM build + test, and XcodeGen
+generate + app build/test. Manual signed-runtime run
+[32573198119](https://github.com/GuangDai/Clipy/actions/runs/32573198119)
+is green on `master`; it proves only an ad-hoc signed Release carrying the
+Hardened Runtime flag, the iCloud/ubiquity entitlement negative, and direct
+process liveness. It does not prove Developer ID identity, secure timestamp,
+notarization/stapling, Gatekeeper, TCC, login-item, Carbon/status-item, Space,
+or WindowServer behavior.
 
 **CI provenance of the landed head (2026-08-20):** the post-step-9
 convergence ran `a028c8c` (run 32316689047, cancelled —
@@ -479,8 +492,8 @@ then splitting two files); the by-number evidence map is recorded in
   HistoryCore public-symbol snapshot as the bot (`contents: write`). It
   produced the original `1cf1715` lock and remediation snapshot `9d65dcb`
   (workflow 31448087991). Bot pushes do not trigger the macOS CI workflow; the
-  snapshot is enforced by the gates job on every subsequent push, including
-  final code-head run 31449682036.
+  snapshot is enforced by the SwiftPM correctness job on every subsequent
+  push, including final code-head run 31449682036.
 - **Dependency pins.** xxHash is vendored at v0.8.3 (`Sources/xxh3/VENDORED.md`
   records the pin) with a package-only forced-collision double for Storage
   tests; Fuse is pinned at the exact 1.4.0 tag commit (the 2.0.0-rc.x
@@ -781,10 +794,9 @@ test.
   `HistoryPerfRunnerTests` to the renamed SwiftPM target `HistoryPerfTests`
   (`Tests/HistoryPerfTests/`). The default `swift test` lane now skips it
   (`--skip 'HistoryPerfTests\.'`) so the standard targets carry functional
-  tests only; a dedicated per-push `perf-tests` CI job runs
-  `--filter 'HistoryPerfTests\.'` with the same zero-warning self-scan. The
-  dispatch-only admission lanes (5,000-row p50/p95/p99 + RSS, exact-matcher
-  A/B) are unchanged.
+  tests only. The current performance helper/proof, 5,000-row admission, and
+  exact-matcher A/B workflows are reusable `workflow_call` modules with no
+  caller; they do not run on push, pull request, or manual dispatch.
 - **Panel (Maccy replication):** the browsing surface moved off the SwiftUI
   `MenuBarExtra` (a menu-bar-extra window can be neither summoned nor
   positioned programmatically) onto Maccy's model: an AppDelegate-owned
@@ -828,3 +840,17 @@ test.
   `XCTestConfigurationFilePath`) skips the status item, hotkey, and
   production-store open under the test host — Maccy's `enable-testing`
   pattern; the composed suites keep composing their own stacks.
+
+## Master correctness closeout (2026-08-22)
+
+- **Status:** landed on `master` through PR #8. PR #7 is correctness-green at
+  run 32572531247; PR #8 is correctness-green at run 32573066624. Both runs
+  passed the three supported correctness jobs named in the header.
+- **Signed Release runtime evidence:** manual `master` run 32573198119 is
+  green. Its support ceiling is the ad-hoc signature, Hardened Runtime flag,
+  iCloud/ubiquity entitlement negative, and direct process-lifecycle smoke;
+  the state-3 distribution and WindowServer-dependent cells remain open.
+- **Workflow state:** `.github/workflows/correctness.yml` is the only push/PR
+  workflow. Performance helper/proof, scale-admission, and exact-matcher
+  evidence are reusable-only with no caller; symbol-snapshot and signed-runtime
+  remain `workflow_dispatch`-only.

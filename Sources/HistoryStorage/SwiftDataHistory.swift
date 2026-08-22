@@ -114,8 +114,8 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     ///    singleton for a new store, validate it, bootstrap/validate the
     ///    retention-expansion config singleton, bound the retained row
     ///    count, rebuild legacy projection rows from their content lineage,
-    ///    then rebuild the complete Signature Index from durable signature
-    ///    metadata without decoding content blobs for that index step —
+    ///    then rebuild the complete Signature Index from authoritative
+    ///    Canonical/signature coverage without decoding revision state —
     ///    `V2-roadmap` §5 total open order steps 3–11 over §13 steps 3–11);
     /// 4. publishes the constructed facade with its five actors (§13 step 12).
     ///
@@ -179,8 +179,9 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
 
         // §13 steps 3–11: the Authority owns every store-side startup check,
         // including the bounded recipe-v2 rebuild of legacy projection rows.
-        // Only that rebuild decodes legacy content; the following Signature
-        // Index construction remains scalar/signature-only (§13, §15).
+        // The current hard-capped Signature Index build additionally decodes
+        // Canonical and recomputes xxh3 coverage; revision bytes remain
+        // untouched unless the legacy recipe rebuild requires them (§13, §15).
         // The V2-02 §6.4 Storage clock is wired HERE, internally — the
         // production `SystemRetentionClock` witness (the `{ Date.now }`
         // default) — so the public `open(configuration:)` signature and the
@@ -467,7 +468,11 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
             for: item,
             pixels: pixels,
             loadSource: {
-                try await authority.thumbnailSource(for: item, pixels: pixels)
+                let selection = try await authority.thumbnailSource(
+                    for: item,
+                    pixels: pixels
+                )
+                return selection?.bytes
             },
             validateJoin: {
                 try await authority.validateThumbnailFlightJoin(

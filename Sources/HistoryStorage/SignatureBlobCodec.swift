@@ -1,7 +1,7 @@
 /// SignatureBlobV1 / SignatureBlobCodec — the versioned wire value and codec
 /// for `HistoryItemRow.canonicalSignatureBlob`, the durable scalar metadata
-/// used to rebuild the complete Signature Index without decoding content
-/// bytes.
+/// used alongside Canonical bytes to build authoritative Signature Index
+/// coverage in the current hard-capped profile.
 /// Owning spec: docs/05-authority-kernel.md §3.1 (column semantics), §4
 /// (versioned storage codecs), §12–§13 (Signature Index lifecycle and
 /// startup); gates: docs/06-cross-cutting.md §7.3 (codec round trip) and
@@ -81,10 +81,12 @@ internal enum SignatureBlobCodec {
     ///   (Canonical bytes are non-empty and per-representation bounded), and
     ///   their checked aggregate does not exceed `maximumCaptureBytes`.
     ///
-    /// Startup (Part V §13) decodes signature metadata without decoding
-    /// Canonical bytes; the §4 bidirectional fingerprint/signature coverage
-    /// check against the Canonical blob is
-    /// `validateCoverage(canonical:entries:)`.
+    /// General row hydration uses
+    /// `validateCoverage(canonical:entries:)` for the §4 bidirectional
+    /// stored-copy check. The current hard-capped Signature Index build paths
+    /// additionally use `validateAuthoritativeCoverage(canonical:entries:)`
+    /// to recompute xxh3 from Canonical bytes before treating the entries as
+    /// complete negative dedup evidence (§12–§13).
     ///
     /// `limits` is the fixed `HistoryLimits.standard` profile in production
     /// (Part VI §2); focused tests inject smaller bounds.
@@ -159,10 +161,11 @@ internal enum SignatureBlobCodec {
     /// requires the same type identifier, the same stored fingerprint
     /// evidence, and a `byteCount` equal to the representation's byte length.
     ///
-    /// Fingerprint *correctness* — recomputing xxh3 over the bytes — is not
-    /// re-verified (§4, D7): a fingerprint corrupted identically in both
-    /// durable copies may add a spurious dedup candidate but can never
-    /// produce a false byte-confirmed match.
+    /// This stored-copy helper does not recompute xxh3. An identically corrupt
+    /// fingerprint could add or remove candidate evidence, so this helper
+    /// alone is not an authoritative negative-evidence proof; index builders
+    /// use `validateAuthoritativeCoverage` below. D7 still prevents any
+    /// fingerprint from producing a false byte-confirmed match.
     ///
     /// `entries` are expected to come from `decode(_:limits:)` (unique type
     /// identifiers); a hand-built list is checked as given.
@@ -208,6 +211,69 @@ internal enum SignatureBlobCodec {
                 )
             }
         }
+    }
+
+    // MARK: Authoritative index coverage (docs/05-authority-kernel.md §12–§13)
+
+    /// Proves that signature entries are authoritative negative dedup
+    /// evidence for the current hard-capped Signature Index build paths.
+    ///
+    /// The ordinary §4 stored-copy coverage check runs first, proving the
+    /// one-to-one type and byte-count relation. This stronger pass then
+    /// recomputes xxh3 over every Canonical representation's bytes and
+    /// requires *both* durable fingerprint copies — the one in Canonical and
+    /// the one in `canonicalSignatureBlob` — to equal that recomputation. A
+    /// fingerprint corrupted identically in both blobs therefore fails closed
+    /// instead of creating a false-negative candidate lookup (DATA-11).
+    ///
+    /// This O(all retained Canonical bytes) proof is deliberately capped-only
+    /// and must be removed when `DEC-U-SCALE-STARTUP-INDEX` replaces the
+    /// complete resident index with its U-scale authority. It is called only
+    /// by startup and by capture when the existing index is unready/stale;
+    /// normal ready-index captures do not scan retained Canonical bytes.
+    internal static func validateAuthoritativeCoverage(
+        canonical: CanonicalContent,
+        entries: [ContentSignatureEntry]
+    ) throws {
+        try validateCoverage(canonical: canonical, entries: entries)
+
+        let entriesByType = Dictionary(
+            uniqueKeysWithValues: entries.map { ($0.typeIdentifier, $0) }
+        )
+        for representation in canonical.representations {
+            let typeIdentifier = representation.content.typeIdentifier
+            let recomputed = ContentFingerprint(
+                rawValue: XXH3Fingerprint.digest(representation.content.bytes)
+            )
+            guard representation.fingerprint == recomputed,
+                  entriesByType[typeIdentifier]?.fingerprint == recomputed
+            else {
+                throw CodecRejection.signatureCoverageFingerprintMismatch(
+                    typeIdentifier: typeIdentifier
+                )
+            }
+        }
+    }
+
+    /// Decodes one row's two durable values and returns entries only after
+    /// the capped-profile authoritative coverage proof succeeds. Startup and
+    /// the unready capture rebuild share this exact shape; callers retain
+    /// ownership of fetch/build error mapping.
+    internal static func decodeAuthoritativeEntries(
+        canonicalBlob: Data,
+        signatureBlob: Data,
+        limits: HistoryLimits
+    ) throws -> [ContentSignatureEntry] {
+        let canonical = try CanonicalBlobCodec.decode(
+            canonicalBlob,
+            limits: limits
+        )
+        let entries = try decode(signatureBlob, limits: limits)
+        try validateAuthoritativeCoverage(
+            canonical: canonical,
+            entries: entries
+        )
+        return entries
     }
 
     // MARK: Decode envelope

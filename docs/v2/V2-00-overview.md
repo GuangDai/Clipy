@@ -87,7 +87,7 @@ preserve:
 | S1 | Per-purpose content source stamps | `06` §3 G4 | Profiling shows material work repeatedly invalidated by Effective Content changes that provably leave that purpose's source bytes unchanged | V2-01, V2-04 |
 | X1 | ExternalGateway + external connections/grants + App Intents + third-party writes | `00` §2; `06` §4 | Approved product spec | V2-05 |
 | X2 | Operation Record auditing + Audit/Connections domains | `00` §2; `06` §4 | X1 approved (audit is X1's consequence; subsumption justified in V2-05 Record 1) | V2-05 |
-| P1 | Persistent startup checkpoint | `06` §3 G5 | Metadata-only startup/index rebuild p95 > 250 ms at 5,000 items on the minimum supported hardware profile | V2-06 |
+| P1 | Persistent startup checkpoint | `06` §3 G5 | Current capped Canonical-coverage/index rebuild p95 > 250 ms at 5,000 items plus an approved DATA-11-compatible checkpoint proof | V2-06 |
 | P2 | Localized search projection (G7 slot; V2-06 implements query-time, no projection column) | `06` §3 G7 | Product requirement for locale-sensitive matching + migration behavior; fixtures define normalization/ordering for supported locales | V2-06 |
 | P3 | Blob-store handle/streaming content abstraction | `06` §3 G8 | A representative capture- **or read-path** workload exceeds its memory budget (read-path evidence: peak transient hydration RSS and aggregate resident DTO bytes under representative concurrent callers) or shows p95 copy cost unsolvable within the bounded inline-value design | V2-06 |
 | M1 | V1 -> V2 schema / blob / projection migration | `05` §17 | Any of the above ships | each |

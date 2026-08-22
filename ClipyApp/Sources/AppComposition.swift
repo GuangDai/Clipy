@@ -343,7 +343,7 @@ final class AppComposition {
         // with a content-free health episode: partial Canonical Content would
         // poison dedup/coalescing identity (audit SPEC-IMPL-005; 03a §4;
         // REVIEW Card 5B). A generation mismatch is a retry signal and does
-        // not claim the provider timed out. The
+        // not diagnose why bytes were unavailable. The
         // observer has already consumed the changeCount, so the next copy
         // re-freezes whole. Typed History rejections are EXPECTED and
         // surfaced in the content-free `captureHealth`; only concealed
@@ -532,23 +532,17 @@ final class AppComposition {
             return
         }
 #endif
-        if outcome.concealmentMarkerTypeIdentifier != nil
-            || outcome.capture.isConcealed {
+        switch outcome {
+        case let .complete(complete):
+            admitCapture(complete.capture)
+        case .concealed:
             return
-        }
-        if outcome.unsupportedPasteboardItemCount != nil {
+        case .unsupportedMultiItem:
             recordCaptureFailure(.unsupportedClipboardShape)
-            return
-        }
-        if outcome.changedDuringRead {
+        case .changedDuringRead,
+             .declaredUnavailable:
             recordCaptureFailure(.declaredContentUnavailable)
-            return
         }
-        if !outcome.unavailableTypeIdentifiers.isEmpty {
-            recordCaptureFailure(.declaredContentUnavailable)
-            return
-        }
-        admitCapture(outcome.capture)
     }
 
     /// Checked aggregate-byte admission for the two owner-held slots. Storage

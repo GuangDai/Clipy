@@ -109,11 +109,11 @@ internal struct SignatureIndex: Sendable, Equatable {
     /// evidence, and byte count. For correctly derived metadata, equal bytes
     /// have equal xxh3 and length, so the full key does not drop a true
     /// candidate; a fingerprint collision can only add a candidate that
-    /// mandatory byte confirmation then rejects (§12, D7). Signature decode
-    /// deliberately does not recompute xxh3 from Canonical bytes, however: a
-    /// silently corrupted stored fingerprint can exclude a true candidate
-    /// and a later identical capture can therefore create a recoverable
-    /// duplicate. It still cannot create a false byte-confirmed match.
+    /// mandatory byte confirmation then rejects (§12, D7). The current
+    /// hard-capped startup and unready-index rebuild paths recompute xxh3 from
+    /// Canonical bytes before publishing this value (DATA-11), so a ready
+    /// index may use absence as negative evidence. Ordinary signature decode
+    /// remains only structural validation and never establishes that proof.
     private var postings: [ContentSignatureEntry: Set<HistoryItemID>]
 
     /// Reverse map: retained item → its complete signature entry list,
@@ -156,10 +156,10 @@ internal struct SignatureIndex: Sendable, Equatable {
     /// every retained row — the one proving point shared by §13 step-8
     /// startup construction and the §7.1 step-1 capture-time rebuild.
     ///
-    /// `signatures` must contain every retained row exactly once: the caller
-    /// fetches each row's `canonicalSignatureBlob` and decodes it with
-    /// `SignatureBlobCodec.decode` — startup constructs postings before
-    /// declaring ready and never decodes Canonical/revision bytes to build
+    /// `signatures` must contain every retained row exactly once: the current
+    /// hard-capped callers decode Canonical/signature blobs and recompute xxh3
+    /// coverage before passing entries here. Startup constructs postings
+    /// before declaring ready and never decodes revision bytes merely to build
     /// the index (§12–§13). An empty dictionary builds an empty ready index,
     /// valid only for an empty retained store (§12); the caller passes the
     /// complete retained set, and every capture fact load re-verifies index
