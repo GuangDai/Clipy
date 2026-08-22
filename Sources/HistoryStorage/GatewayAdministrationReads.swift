@@ -291,7 +291,7 @@ private extension HistoryAuthority {
             let config = try Self.loadGatewayConfig(in: context)
             let newFloor = config.nextAuditSequence
             try context.transaction {
-                _ = try GatewayAuditStore.rebase(
+                _ = try rebaseGatewayAudit(
                     reason: .adminForced,
                     newFloor: newFloor,
                     requestedAt: requestedAt,

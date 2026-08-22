@@ -459,6 +459,32 @@ internal enum GatewayAuditStore {
     }
 }
 
+extension HistoryAuthority {
+    /// Actor-isolated bridge for transaction closures. The central store
+    /// remains the sole implementation owner; this bridge only preserves the
+    /// Authority isolation that Swift 6 requires for ModelContext/model rows.
+    @discardableResult
+    internal func rebaseGatewayAudit(
+        reason: AuditRebaseReason,
+        newFloor: UInt64,
+        requestedAt: Date,
+        committedAt: Date,
+        config: GatewayConfigRow,
+        in context: ModelContext,
+        limits: ExternalLimits = .standard
+    ) throws -> UInt64 {
+        try GatewayAuditStore.rebase(
+            reason: reason,
+            newFloor: newFloor,
+            requestedAt: requestedAt,
+            committedAt: committedAt,
+            config: config,
+            in: context,
+            limits: limits
+        )
+    }
+}
+
 // MARK: - Validation and projection
 
 private extension GatewayAuditStore {
