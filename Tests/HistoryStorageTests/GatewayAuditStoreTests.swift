@@ -16,13 +16,9 @@ enum GatewayAuditTestSupport {
     )!)
     static let requestedAt = Date(timeIntervalSinceReferenceDate: 900_000_000)
 
-    static func makeContext(
-        nextAuditSequence: UInt64 = 1,
-        auditBytes: UInt64 = 0,
-        compactionFloor: UInt64 = 1
-    ) throws -> (ModelContext, GatewayConfigRow) {
+    static func makeContainer() throws -> ModelContainer {
         let schema = Schema(versionedSchema: HistorySchemaV3.self)
-        let container = try ModelContainer(
+        return try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(
                 schema: schema,
@@ -30,6 +26,15 @@ enum GatewayAuditTestSupport {
                 cloudKitDatabase: .none
             )]
         )
+    }
+
+    static func makeContext(
+        nextAuditSequence: UInt64 = 1,
+        auditBytes: UInt64 = 0,
+        compactionFloor: UInt64 = 1,
+        in container: ModelContainer? = nil
+    ) throws -> (ModelContext, GatewayConfigRow) {
+        let container = try container ?? makeContainer()
         let context = ModelContext(container)
         context.autosaveEnabled = false
         let config = GatewayConfigRow(

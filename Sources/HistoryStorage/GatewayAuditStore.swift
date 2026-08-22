@@ -333,135 +333,179 @@ internal enum GatewayAuditStore {
         }
     }
 
-    /// Internal mechanics only: callers must explicitly identify the prefix
-    /// to quarantine. No public recovery opener or Authority is created here.
+}
+
+extension HistoryAuthority {
+    /// Owns the complete rebase interval. Only Sendable values enter this
+    /// actor method; its SwiftData context and rows are created, transacted,
+    /// and released without crossing an actor or suspension boundary.
     @discardableResult
-    internal static func rebase(
+    internal func rebaseGatewayAudit(
         reason: AuditRebaseReason,
-        newFloor: UInt64,
+        newFloor requestedFloor: UInt64?,
         requestedAt: Date,
         committedAt: Date,
-        config: GatewayConfigRow,
-        in context: ModelContext,
         limits: ExternalLimits = .standard
     ) throws -> UInt64 {
-        do {
-            guard requestedAt.timeIntervalSinceReferenceDate.isFinite,
-                  committedAt.timeIntervalSinceReferenceDate.isFinite else {
-                throw StoreRejection.invariantViolation
-            }
-            try validateConfig(config)
-            let oldFloor = config.compactionFloor
-            guard newFloor >= oldFloor,
-                  newFloor <= config.nextAuditSequence else {
-                throw StoreRejection.invariantViolation
-            }
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let config = try Self.loadGatewayConfig(in: context)
+        let newFloor = requestedFloor ?? config.nextAuditSequence
+        let markerSequence = config.nextAuditSequence
 
-            // Recovery may discard corrupt prefix payloads, but it publishes
-            // only after the suffix it retains is typed and contiguous.
-            try requireNoRowsAtOrAboveHead(config: config, in: context)
-            let suffixBytes = try validateInterval(
-                lowerBound: newFloor,
-                upperBound: config.nextAuditSequence,
-                config: config,
-                in: context,
-                limits: limits
-            )
-            let prefixBytes: UInt64
-            switch reason {
-            case .adminForced:
-                try requireNoRowsOutsideRetainedInterval(
+        do {
+            try context.transaction {
+                guard requestedAt.timeIntervalSinceReferenceDate.isFinite,
+                      committedAt.timeIntervalSinceReferenceDate.isFinite else {
+                    throw GatewayAuditStore.StoreRejection.invariantViolation
+                }
+                try GatewayAuditStore.validateConfig(config)
+                let oldFloor = config.compactionFloor
+                guard newFloor >= oldFloor,
+                      newFloor <= config.nextAuditSequence else {
+                    throw GatewayAuditStore.StoreRejection.invariantViolation
+                }
+
+                // Recovery may discard corrupt prefix payloads, but it
+                // publishes only after the retained suffix is typed and
+                // contiguous.
+                try GatewayAuditStore.requireNoRowsAtOrAboveHead(
                     config: config,
                     in: context
                 )
-                let fullBytes = try validateInterval(
-                    lowerBound: oldFloor,
+                let suffixBytes = try GatewayAuditStore.validateInterval(
+                    lowerBound: newFloor,
                     upperBound: config.nextAuditSequence,
                     config: config,
                     in: context,
                     limits: limits
                 )
-                guard fullBytes == config.auditBytes else {
-                    throw StoreRejection.invariantViolation
+                let prefixBytes: UInt64
+                switch reason {
+                case .adminForced:
+                    try GatewayAuditStore.requireNoRowsOutsideRetainedInterval(
+                        config: config,
+                        in: context
+                    )
+                    let fullBytes = try GatewayAuditStore.validateInterval(
+                        lowerBound: oldFloor,
+                        upperBound: config.nextAuditSequence,
+                        config: config,
+                        in: context,
+                        limits: limits
+                    )
+                    guard fullBytes == config.auditBytes else {
+                        throw GatewayAuditStore.StoreRejection.invariantViolation
+                    }
+                    prefixBytes = try GatewayAuditStore.accountRawInterval(
+                        lowerBound: oldFloor,
+                        upperBound: newFloor,
+                        in: context,
+                        limits: limits
+                    )
+                    let recomputedBytes = try GatewayAuditStore.checkedAdd(
+                        prefixBytes,
+                        suffixBytes
+                    )
+                    guard recomputedBytes == config.auditBytes else {
+                        throw GatewayAuditStore.StoreRejection.invariantViolation
+                    }
+                case .corruptionDetected:
+                    // V1 marker bytes define discardedCount as
+                    // newFloor-oldFloor. X.4 can quarantine malformed prefix
+                    // values, but not a gapped or duplicated prefix.
+                    try GatewayAuditStore.requireNoRowsBelowFloor(
+                        config: config,
+                        in: context
+                    )
+                    prefixBytes = try GatewayAuditStore.accountRawInterval(
+                        lowerBound: oldFloor,
+                        upperBound: newFloor,
+                        in: context,
+                        limits: limits
+                    )
                 }
-                prefixBytes = try accountRawInterval(
+
+                let intervalWidth = newFloor - oldFloor
+                guard let discardedCount = UInt32(exactly: intervalWidth) else {
+                    throw GatewayAuditStore.StoreRejection.invariantViolation
+                }
+                let marker = GatewayAuditStore.maintenancePayload(
+                    request: .rebase(reason: reason),
+                    result: .rebased(
+                        oldFloor: oldFloor,
+                        newFloor: newFloor,
+                        discardedCount: discardedCount
+                    ),
+                    kind: .adminRebase,
+                    outcome: .succeeded,
+                    requestedAt: requestedAt,
+                    committedAt: committedAt
+                )
+                let prepared = try GatewayAuditStore.prepareAppend(
+                    marker,
+                    config: config,
+                    limits: limits,
+                    accountingBase: reason == .corruptionDetected
+                        ? suffixBytes
+                        : nil
+                )
+                let finalAuditBytes: UInt64
+                switch reason {
+                case .adminForced:
+                    finalAuditBytes = try GatewayAuditStore.checkedSubtract(
+                        prepared.resultingAuditBytes,
+                        prefixBytes
+                    )
+                case .corruptionDetected:
+                    finalAuditBytes = prepared.resultingAuditBytes
+                }
+
+                GatewayAuditStore.applyAppend(
+                    prepared,
+                    config: config,
+                    in: context
+                )
+                try GatewayAuditStore.deletePrefix(
                     lowerBound: oldFloor,
                     upperBound: newFloor,
                     in: context,
-                    limits: limits
+                    batchSize: limits.maxAuditReadBatchSize
                 )
-                let recomputedBytes = try checkedAdd(prefixBytes, suffixBytes)
-                guard recomputedBytes == config.auditBytes else {
-                    throw StoreRejection.invariantViolation
+                config.auditBytes = finalAuditBytes
+                config.compactionFloor = newFloor
+
+                if consumeTransactionFailureInjection(
+                    .beforeSingletonUpdate
+                ) {
+                    throw InjectedTransactionFailure.beforeSingletonUpdate
                 }
-            case .corruptionDetected:
-                // V1 marker bytes define discardedCount as newFloor-oldFloor.
-                // Therefore X.4 recovery can quarantine malformed payload/raw
-                // values and a bad byte counter, but not a gapped/duplicated
-                // sequence prefix. That wider repair needs a new codec version.
-                try requireNoRowsBelowFloor(config: config, in: context)
-                prefixBytes = try accountRawInterval(
-                    lowerBound: oldFloor,
-                    upperBound: newFloor,
-                    in: context,
-                    limits: limits
-                )
+                if consumeTransactionFailureInjection(
+                    .insufficientDiskSpace
+                ) {
+                    throw NSError(
+                        domain: NSCocoaErrorDomain,
+                        code: CocoaError.Code.fileWriteOutOfSpace.rawValue
+                    )
+                }
             }
-
-            let intervalWidth = newFloor - oldFloor
-            guard let discardedCount = UInt32(exactly: intervalWidth) else {
-                throw StoreRejection.invariantViolation
-            }
-            let marker = maintenancePayload(
-                request: .rebase(reason: reason),
-                result: .rebased(
-                    oldFloor: oldFloor,
-                    newFloor: newFloor,
-                    discardedCount: discardedCount
-                ),
-                kind: .adminRebase,
-                outcome: .succeeded,
-                requestedAt: requestedAt,
-                committedAt: committedAt
-            )
-            let prepared = try prepareAppend(
-                marker,
-                config: config,
-                limits: limits,
-                accountingBase: reason == .corruptionDetected
-                    ? suffixBytes
-                    : nil
-            )
-            let finalAuditBytes: UInt64
-            switch reason {
-            case .adminForced:
-                finalAuditBytes = try checkedSubtract(
-                    prepared.resultingAuditBytes,
-                    prefixBytes
-                )
-            case .corruptionDetected:
-                finalAuditBytes = prepared.resultingAuditBytes
-            }
-
-            applyAppend(prepared, config: config, in: context)
-            try deletePrefix(
-                lowerBound: oldFloor,
-                upperBound: newFloor,
-                in: context,
-                batchSize: limits.maxAuditReadBatchSize
-            )
-            config.auditBytes = finalAuditBytes
-            config.compactionFloor = newFloor
-            return prepared.sequence
-        } catch let rejection as StoreRejection {
+            return markerSequence
+        } catch let rejection as GatewayAuditStore.StoreRejection {
             throw rejection.externalFailure
+        } catch let failure as ExternalFailure {
+            throw failure
+        } catch {
+            // The public composition layer distinguishes a typed validation
+            // failure (which is itself audited) from a transaction/save
+            // failure (which must not attempt a second write).
+            throw error
         }
     }
 }
 
 // MARK: - Validation and projection
 
-private extension GatewayAuditStore {
+fileprivate extension GatewayAuditStore {
     struct PreparedAppend {
         let sequence: UInt64
         let nextSequence: UInt64

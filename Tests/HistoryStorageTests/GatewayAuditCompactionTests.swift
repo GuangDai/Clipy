@@ -157,23 +157,32 @@ struct GatewayAuditCompactionTests {
     }
 
     @Test("rebase discards the named prefix, preserves head, and appends marker")
-    func rebasePreservesMonotoneHeadAndSuffix() throws {
-        let (context, config) = try GatewayAuditTestSupport.makeContext()
-        try GatewayAuditTestSupport.appendRecent(
-            count: 3,
-            config: config,
-            context: context
-        )
+    func rebasePreservesMonotoneHeadAndSuffix() async throws {
+        let container = try GatewayAuditTestSupport.makeContainer()
+        do {
+            let (context, config) = try GatewayAuditTestSupport.makeContext(
+                in: container
+            )
+            try GatewayAuditTestSupport.appendRecent(
+                count: 3,
+                config: config,
+                context: context
+            )
+            try context.save()
+        }
+        let authority = HistoryAuthority(container: container)
 
-        let markerSequence = try GatewayAuditStore.rebase(
+        let markerSequence = try await authority.rebaseGatewayAudit(
             reason: .adminForced,
             newFloor: 3,
             requestedAt: GatewayAuditTestSupport.requestedAt,
-            committedAt: GatewayAuditTestSupport.requestedAt.addingTimeInterval(4),
-            config: config,
-            in: context
+            committedAt: GatewayAuditTestSupport.requestedAt.addingTimeInterval(4)
         )
 
+        let context = ModelContext(container)
+        let config = try #require(
+            context.fetch(FetchDescriptor<GatewayConfigRow>()).first
+        )
         #expect(markerSequence == 4)
         #expect(config.compactionFloor == 3)
         #expect(config.nextAuditSequence == 5)
@@ -184,24 +193,34 @@ struct GatewayAuditCompactionTests {
     }
 
     @Test("rebase can quarantine a corrupt prefix but requires a valid suffix")
-    func rebaseValidatesOnlyRetainedSuffix() throws {
-        let (context, config) = try GatewayAuditTestSupport.makeContext()
-        try GatewayAuditTestSupport.appendRecent(
-            count: 3,
-            config: config,
-            context: context
-        )
-        let rows = try GatewayAuditTestSupport.rows(in: context)
-        rows[0].payloadBlob = Data([0])
-        config.auditBytes = .max
+    func rebaseValidatesOnlyRetainedSuffix() async throws {
+        let container = try GatewayAuditTestSupport.makeContainer()
+        do {
+            let (context, config) = try GatewayAuditTestSupport.makeContext(
+                in: container
+            )
+            try GatewayAuditTestSupport.appendRecent(
+                count: 3,
+                config: config,
+                context: context
+            )
+            let rows = try GatewayAuditTestSupport.rows(in: context)
+            rows[0].payloadBlob = Data([0])
+            config.auditBytes = .max
+            try context.save()
+        }
+        let authority = HistoryAuthority(container: container)
 
-        _ = try GatewayAuditStore.rebase(
+        _ = try await authority.rebaseGatewayAudit(
             reason: .corruptionDetected,
             newFloor: 2,
             requestedAt: GatewayAuditTestSupport.requestedAt,
-            committedAt: GatewayAuditTestSupport.requestedAt.addingTimeInterval(4),
-            config: config,
-            in: context
+            committedAt: GatewayAuditTestSupport.requestedAt.addingTimeInterval(4)
+        )
+
+        let context = ModelContext(container)
+        let config = try #require(
+            context.fetch(FetchDescriptor<GatewayConfigRow>()).first
         )
         try GatewayAuditStore.validateRetainedState(config: config, in: context)
 
@@ -211,71 +230,99 @@ struct GatewayAuditCompactionTests {
     }
 
     @Test("corruption rebase rejects anomalous rows below the declared floor")
-    func corruptionRebaseRejectsRowsBelowOldFloor() throws {
-        let (context, config) = try GatewayAuditTestSupport.makeContext()
-        try GatewayAuditTestSupport.appendRecent(
-            count: 2,
-            config: config,
-            context: context
-        )
-        config.compactionFloor = 2
-        config.auditBytes = try GatewayAuditTestSupport.contribution(
-            of: try #require(GatewayAuditTestSupport.rows(in: context).last)
-        )
+    func corruptionRebaseRejectsRowsBelowOldFloor() async throws {
+        let container = try GatewayAuditTestSupport.makeContainer()
+        do {
+            let (context, config) = try GatewayAuditTestSupport.makeContext(
+                in: container
+            )
+            try GatewayAuditTestSupport.appendRecent(
+                count: 2,
+                config: config,
+                context: context
+            )
+            config.compactionFloor = 2
+            config.auditBytes = try GatewayAuditTestSupport.contribution(
+                of: try #require(GatewayAuditTestSupport.rows(in: context).last)
+            )
+            try context.save()
+        }
+        let authority = HistoryAuthority(container: container)
 
-        #expect(throws: ExternalFailure.persistence(.invariantViolation)) {
-            try GatewayAuditStore.rebase(
+        await #expect(
+            throws: ExternalFailure.persistence(.invariantViolation)
+        ) {
+            try await authority.rebaseGatewayAudit(
                 reason: .corruptionDetected,
                 newFloor: 2,
                 requestedAt: GatewayAuditTestSupport.requestedAt,
-                committedAt: GatewayAuditTestSupport.requestedAt,
-                config: config,
-                in: context
+                committedAt: GatewayAuditTestSupport.requestedAt
             )
         }
+        let context = ModelContext(container)
         #expect(try GatewayAuditTestSupport.rows(in: context).map(\.auditSequence)
             == [1, 2])
     }
 
     @Test("invalid rebase floor and byte underflow do not partially mutate")
-    func invalidRebaseHasNoPartialMutation() throws {
-        let (context, config) = try GatewayAuditTestSupport.makeContext()
-        try GatewayAuditTestSupport.appendRecent(
-            count: 2,
-            config: config,
-            context: context
-        )
-        let originalRows = try GatewayAuditTestSupport.rows(in: context)
-            .map(\.auditSequence)
-        let originalBytes = config.auditBytes
+    func invalidRebaseHasNoPartialMutation() async throws {
+        let container = try GatewayAuditTestSupport.makeContainer()
+        let originalRows: [UInt64]
+        let originalBytes: UInt64
+        do {
+            let (context, config) = try GatewayAuditTestSupport.makeContext(
+                in: container
+            )
+            try GatewayAuditTestSupport.appendRecent(
+                count: 2,
+                config: config,
+                context: context
+            )
+            originalRows = try GatewayAuditTestSupport.rows(in: context)
+                .map(\.auditSequence)
+            originalBytes = config.auditBytes
+            try context.save()
+        }
+        let authority = HistoryAuthority(container: container)
 
-        #expect(throws: ExternalFailure.persistence(.invariantViolation)) {
-            try GatewayAuditStore.rebase(
+        await #expect(
+            throws: ExternalFailure.persistence(.invariantViolation)
+        ) {
+            try await authority.rebaseGatewayAudit(
                 reason: .adminForced,
                 newFloor: 4,
                 requestedAt: GatewayAuditTestSupport.requestedAt,
-                committedAt: GatewayAuditTestSupport.requestedAt,
-                config: config,
-                in: context
+                committedAt: GatewayAuditTestSupport.requestedAt
             )
         }
-        #expect(config.compactionFloor == 1)
-        #expect(config.nextAuditSequence == 3)
-        #expect(config.auditBytes == originalBytes)
-        #expect(try GatewayAuditTestSupport.rows(in: context).map(\.auditSequence)
-            == originalRows)
+        do {
+            let context = ModelContext(container)
+            let config = try #require(
+                context.fetch(FetchDescriptor<GatewayConfigRow>()).first
+            )
+            #expect(config.compactionFloor == 1)
+            #expect(config.nextAuditSequence == 3)
+            #expect(config.auditBytes == originalBytes)
+            #expect(try GatewayAuditTestSupport.rows(in: context)
+                .map(\.auditSequence) == originalRows)
+            config.auditBytes = 0
+            try context.save()
+        }
 
-        config.auditBytes = 0
-        #expect(throws: ExternalFailure.persistence(.invariantViolation)) {
-            try GatewayAuditStore.rebase(
+        await #expect(
+            throws: ExternalFailure.persistence(.invariantViolation)
+        ) {
+            try await authority.rebaseGatewayAudit(
                 reason: .adminForced,
                 newFloor: 2,
                 requestedAt: GatewayAuditTestSupport.requestedAt,
-                committedAt: GatewayAuditTestSupport.requestedAt,
-                config: config,
-                in: context
+                committedAt: GatewayAuditTestSupport.requestedAt
             )
         }
+        let context = ModelContext(container)
+        let config = try #require(
+            context.fetch(FetchDescriptor<GatewayConfigRow>()).first
+        )
         #expect(config.compactionFloor == 1)
         #expect(config.nextAuditSequence == 3)
         #expect(try GatewayAuditTestSupport.rows(in: context).map(\.auditSequence)
