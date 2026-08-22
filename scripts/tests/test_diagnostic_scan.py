@@ -11,6 +11,11 @@ COREDATA_CLONE_OPENER = (
     'error: Error Domain=NSCocoaErrorDomain Code=4 "value.interim missing" '
     "UserInfo={"
 )
+APPINTENTS_METADATA_WARNING = (
+    "2026-08-22 12:20:45.202 "
+    "appintentsmetadataprocessor[13320:39783] warning: "
+    "Metadata extraction skipped. No AppIntents.framework dependency found.\n"
+)
 
 
 def scan(text: str, profile: str = "strict"):
@@ -31,6 +36,18 @@ class DiagnosticScanTests(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0].line_number, 2)
         self.assertIn("captured var mutated", findings[0].line)
+
+    def test_app_profile_permits_the_observed_metadata_warning_only(self) -> None:
+        self.assertEqual(scan(APPINTENTS_METADATA_WARNING, "app"), [])
+        self.assertEqual(len(scan(APPINTENTS_METADATA_WARNING, "strict")), 1)
+
+        similar = APPINTENTS_METADATA_WARNING.replace(
+            "No AppIntents.framework dependency found.",
+            "Metadata schema was invalid.",
+        )
+        findings = scan(similar, "app")
+        self.assertEqual(len(findings), 1)
+        self.assertIn("warning/error", findings[0].message)
 
     def test_complete_known_coredata_block_is_permitted(self) -> None:
         findings = scan(
