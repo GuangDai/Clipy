@@ -279,6 +279,27 @@ extension HistoryAuthority {
 }
 
 private extension HistoryAuthority {
+    /// Private same-file bridge lets complete concurrency prove that the
+    /// context-bound values never escape this Authority interval.
+    @discardableResult
+    func rebaseGatewayAudit(
+        reason: AuditRebaseReason,
+        newFloor: UInt64,
+        requestedAt: Date,
+        committedAt: Date,
+        config: GatewayConfigRow,
+        in context: ModelContext
+    ) throws -> UInt64 {
+        try GatewayAuditStore.rebase(
+            reason: reason,
+            newFloor: newFloor,
+            requestedAt: requestedAt,
+            committedAt: committedAt,
+            config: config,
+            in: context
+        )
+    }
+
     /// Keeps every context-bound value inside one synchronous actor interval.
     /// The async public witness owns no ModelContext or model row.
     func commitAdminForcedRebase(
