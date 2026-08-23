@@ -257,12 +257,11 @@ internal actor HistoryAuthority {
 
     /// The store volume's spare-capacity reader consulted by stamped-plan
     /// capacity admission (§16). `SwiftDataHistory.open` injects a reader
-    /// over the persistent store URL's
-    /// `volumeAvailableCapacityForImportantUsage` fact; the `{ nil }`
-    /// default (any unreadable fact, and every in-memory store) leaves
-    /// admission fail-open. The synchronous `URLResourceValues` read inside
-    /// the non-suspending commit interval performs no `await` (§5 bans
-    /// suspension, not syscalls).
+    /// over the persistent store URL's raw `volumeAvailableCapacity` fact;
+    /// the `{ nil }` default (any unreadable fact, and every in-memory
+    /// store) leaves admission fail-open. The synchronous
+    /// `URLResourceValues` read inside the non-suspending commit interval
+    /// performs no `await` (§5 bans suspension, not syscalls).
     internal let volumeAvailableCapacityReader: @Sendable () -> Int64?
 
     /// Test seam: fixed spare-capacity witness overriding the volume reader

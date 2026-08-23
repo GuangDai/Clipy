@@ -217,22 +217,25 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         let storageClock = SystemStorageClock()
         let searchWorker = SearchWorker()
         // §16 capacity admission reads the store volume's spare capacity.
-        // Clipboard capture is user-requested important-usage data, so the
-        // important-usage fact is the Apple-guided key (it also accounts
-        // for purgeable space the raw key ignores); a dedicated probe
-        // volume has no purgeable content, leaving its facts identical. An
-        // in-memory store (or any unreadable fact) keeps the reader nil
-        // and admission fail-open.
+        // The raw available-capacity fact, not the important-usage variant:
+        // the OS maintains purgeable-space accounting only on the boot
+        // volume, and dispatch run 32634051113 observed the
+        // important-usage fact return zero on the dedicated mounted probe
+        // volume (254 MiB free), refusing every capture. The raw fact
+        // matches the filesystem's own accounting on every volume and only
+        // errs conservative on the boot volume, where it ignores purgeable
+        // space a typed, retryable refusal already governs. An in-memory
+        // store (or any unreadable fact) keeps the reader nil and
+        // admission fail-open.
         let volumeAvailableCapacityReader: @Sendable () -> Int64?
         if case .persistent(let storeURL) = configuration.persistence {
             volumeAvailableCapacityReader = {
                 guard let values = try? storeURL.resourceValues(
-                    forKeys: [.volumeAvailableCapacityForImportantUsageKey]
-                ), let capacity = values
-                    .volumeAvailableCapacityForImportantUsage else {
+                    forKeys: [.volumeAvailableCapacityKey]
+                ), let capacity = values.volumeAvailableCapacity else {
                     return nil
                 }
-                return capacity
+                return Int64(capacity)
             }
         } else {
             volumeAvailableCapacityReader = { nil }
