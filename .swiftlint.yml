@@ -73,6 +73,20 @@ custom_rules:
     message: "HistoryRestartProbe may import Foundation, HistoryCore, and HistoryStorage only (Part I §8)."
     severity: error
 
+  clipy_uds_f0_shared_import_confinement:
+    name: "Clipy UDS F0 shared import confinement"
+    included: "ClipyApp/Tools/ClipyUDSF0Shared/"
+    regex: '^\s*(?:@[A-Za-z_][A-Za-z0-9_]*(?:\([^\n)]*\))?\s+)*(?:(?:public|package|internal|fileprivate|private)\s+)?import\s+(?!(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:Foundation|Darwin)\b)\w'
+    message: "ClipyUDSF0Shared may import Foundation and Darwin only (Part I §8)."
+    severity: error
+
+  clipy_uds_f0_client_import_confinement:
+    name: "Clipy UDS F0 client import confinement"
+    included: "ClipyApp/Tools/ClipyUDSF0Client/"
+    regex: '^\s*(?:@[A-Za-z_][A-Za-z0-9_]*(?:\([^\n)]*\))?\s+)*(?:(?:public|package|internal|fileprivate|private)\s+)?import\s+(?!(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:Foundation|AppKit|Darwin)\b)\w'
+    message: "ClipyUDSF0Client may import Foundation, AppKit, and Darwin only (Part I §8)."
+    severity: error
+
   historystorage_import_confinement:
     name: "HistoryStorage import confinement"
     included: "Sources/HistoryStorage/"
@@ -127,21 +141,21 @@ custom_rules:
 
   no_unchecked_sendable:
     name: "No @unchecked Sendable"
-    included: "(Sources|Tests|ClipyApp/Sources|ClipyApp/Tests)/"
+    included: "(Sources|Tests|ClipyApp/Sources|ClipyApp/Tests|ClipyApp/Tools)/"
     regex: '@unchecked\s+Sendable'
     message: "@unchecked Sendable is banned in the greenfield targets (Part I §8)."
     severity: error
 
   no_nonisolated_unsafe:
     name: "No nonisolated(unsafe)"
-    included: "(Sources|Tests|ClipyApp/Sources|ClipyApp/Tests)/"
+    included: "(Sources|Tests|ClipyApp/Sources|ClipyApp/Tests|ClipyApp/Tools)/"
     regex: 'nonisolated\s*\(\s*unsafe\s*\)'
     message: "nonisolated(unsafe) is banned in the greenfield targets (Part I §8)."
     severity: error
 
   no_service_locator:
     name: "No service locator"
-    included: "(Sources|Tests|ClipyApp/Sources|ClipyApp/Tests)/"
+    included: "(Sources|Tests|ClipyApp/Sources|ClipyApp/Tests|ClipyApp/Tools)/"
     regex: '\bstatic\s+(?:let|var)\s+(?:shared|current)\b'
     message: "Service-locator spelling 'static let/var shared|current' is banned (Part I §8); inject dependencies instead."
     severity: error

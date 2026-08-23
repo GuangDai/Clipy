@@ -12,7 +12,7 @@
 > they are cited here, never restated as new semantics.
 
 **Audit baseline:** `8f316c9` (2026-08-02). **Current landed baseline:**
-`master` through PR #16 (2026-08-23). Steps 0–9 are implemented and CI-green;
+`master` through PR #17 (2026-08-23). Steps 0–9 are implemented and CI-green;
 M2/state 2 is complete. Step 9 (product wiring: PasteboardAdapter +
 PresentationUI + ClipyApp composition) is done, including its post-step-9
 revisions: the perf/AB measurement-helper proofs live in the split
@@ -22,12 +22,12 @@ cursor/status-item/center/last-position placement, dwell-driven preview pane)
 rather than a SwiftUI `MenuBarExtra`. M3/state 3 (packaging, accessibility,
 localization, product acceptance per Part VI §11) remains open.
 
-**Current CI provenance (2026-08-23):** PR #16 correctness run
-[32609910701](https://github.com/GuangDai/Clipy/actions/runs/32609910701)
+**Current CI provenance (2026-08-23):** PR #17 correctness run
+[32613689337](https://github.com/GuangDai/Clipy/actions/runs/32613689337)
 is green across Lint + source gates, SwiftPM build + test, and XcodeGen
-generate + app build/test. Its HistoryCore public-surface update is runner-generated
-by [symbol run 32609018894](https://github.com/GuangDai/Clipy/actions/runs/32609018894).
-No performance/AB lane ran for this batch. Manual signed-runtime run
+generate + app build/test. This batch changed no HistoryCore public surface,
+so no symbol-snapshot run was needed. No performance/AB lane ran for this
+batch. Manual signed-runtime run
 [32573198119](https://github.com/GuangDai/Clipy/actions/runs/32573198119)
 is green on `master`; it proves only an ad-hoc signed Release carrying the
 Hardened Runtime flag, the iCloud/ubiquity entitlement negative, and direct
@@ -880,8 +880,10 @@ test.
   system-manager resolution, process placement, Swift 6 queue-crash freedom,
   cross-process pasteboard visibility, and TCC remain signed-runtime cells and
   are not closed by hosted tests.
-- **X.8 current work:** the current branch contains the no-product,
-  Foundation-only pure wire seam: the shared
+- **X.8 landed:** [PR #17](https://github.com/GuangDai/Clipy/pull/17) is
+  correctness-green at
+  [run 32613689337](https://github.com/GuangDai/Clipy/actions/runs/32613689337).
+  It adds the no-product, Foundation-only pure wire seam: the shared
   [`ClipyCLIContract`](../Sources/ClipyCLIContract/ClipyCLIContract.swift)
   constants/types, typed
   [request codec](../Sources/ClipyCLIContract/ClipyCLIRequestCodec.swift) with
@@ -892,9 +894,24 @@ test.
   plus the
   `PLAY-PY-A2A`–`A2I` tests under
   [`ClipyCLIContractTests`](../Tests/ClipyCLIContractTests/PLAYPYA2AUnknownMajorTests.swift).
-  This unmerged leaf remains **In progress** until macOS correctness CI is
-  green. Its intended evidence ceiling is pure bounded UTF-8 JSON grammar,
-  deterministic reply bytes, the closed `browsePreview` operation, and stable
-  exit mapping; it adds no executable, process I/O, Python-to-History path,
-  transport, authentication, Gateway dispatch, grant/audit behavior, or
-  signed-runtime proof.
+  The runner evidence closes only the specified pure bounded UTF-8 JSON
+  request grammar, deterministic reply bytes, closed `browsePreview`
+  operation, content-free stderr bytes, and stable exit mapping. This batch
+  changed no HistoryCore public surface, so it needed no symbol-snapshot run;
+  no performance/AB lane ran. It adds no executable, process I/O,
+  Python-to-History path, transport, authentication, Gateway dispatch,
+  grant/audit behavior, or signed-runtime proof; those X.9+ layers remain
+  open.
+- **X.9 F0A discriminator in progress:** the current branch adds a
+  compile-time-isolated app-side
+  [`UnixSocketF0Listener`](../ClipyApp/Sources/Automation/UnixSocketF0Listener.swift),
+  fixed probe-only [frame codec](../ClipyApp/Tools/ClipyUDSF0Shared/UnixSocketF0Protocol.swift),
+  and non-product diagnostic
+  [`ClipyUDSF0Client`](../ClipyApp/Tools/ClipyUDSF0Client/ClipyUDSF0Client.swift). The
+  dispatch-only signed-runtime lane is being extended to test bounded ad-hoc
+  signed same-EUID UDS cold/warm, incomplete-frame, normal-cleanup, and
+  SIGKILL/stale-recovery mechanics. This evidence is pending macOS compile and
+  runtime execution. It is not `clipyctl`, does not decode X.8 JSON or reach
+  History/Gateway, and proves no credential, authenticated ingress, Developer
+  ID/notarization, App Sandbox, Keychain sharing, different-EUID caller, TCC,
+  or interactive no-activation behavior.

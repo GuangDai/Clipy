@@ -37,7 +37,8 @@
 | 正常路径 correctness batch 12 | Done | [PR #14](https://github.com/GuangDai/Clipy/pull/14)，[correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32603682935) | 三个 correctness jobs 全绿；闭合 X-HCR.2 的reachable commit-family、pre/post-HCR rollback、bounded persistent/crash reopen与structural prefix-fetch proofs | 只证明下表列出的 internal HCR prerequisite；不证明mid-transaction kill、断电、物理durability、性能、public J1 reader/cursor/cache/rebase、OperationRecord等式或X.6 runtime |
 | 正常路径 correctness batch 13 | Done | [PR #15](https://github.com/GuangDai/Clipy/pull/15)，[correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32607389771)，[HistoryCore symbol snapshot run](https://github.com/GuangDai/Clipy/actions/runs/32606749388) | 三个 correctness jobs 全绿；闭合 X.6 bounded positive reads/writes、HCR + audit + History atomicity、failure mapping、cadence fence 与 public connection-bound facade/factory；未运行 perf/AB | 不证明 App Intents framework composition、signed/system invocation、性能、credential、CLI 或 transport |
 | 正常路径 correctness batch 14 | Done | [PR #16](https://github.com/GuangDai/Clipy/pull/16)，[correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32609910701)，[HistoryCore symbol snapshot run](https://github.com/GuangDai/Clipy/actions/runs/32609018894) | 三个 correctness jobs 全绿；闭合 X.7 六个 intent、output-only projection、一个 early async facade provider、direct-call failure mapping与已有pasteboard writer的hosted路径；未运行 perf/AB | 不证明framework system-manager resolution、真Siri/Shortcuts discovery/cold/warm invocation、process placement、Swift 6 queue-crash freedom、cross-process pasteboard visibility、TCC、credential、CLI 或 transport |
-| 正常路径 correctness batch 15 | In progress | 请求侧 [`ClipyCLIRequestCodec`](../../../Sources/ClipyCLIContract/ClipyCLIRequestCodec.swift) + [`BoundedJSONParser`](../../../Sources/ClipyCLIContract/BoundedJSONParser.swift)，响应侧 [`ClipyCLIReplyRenderer`](../../../Sources/ClipyCLIContract/ClipyCLIReplyRenderer.swift) + [`BoundedJSONWriter`](../../../Sources/ClipyCLIContract/BoundedJSONWriter.swift)，共享 [`ClipyCLIContract`](../../../Sources/ClipyCLIContract/ClipyCLIContract.swift) constants/types 与 [`PLAY-PY-A2A`–`A2I` tests](../../../Tests/ClipyCLIContractTests/PLAYPYA2AUnknownMajorTests.swift) 已在当前工作树出现 | 目标只覆盖 X.8 pure bounded wire grammar、deterministic reply bytes、closed operation与exit mapping；macOS correctness CI待运行 | 尚未合并；不证明executable、process I/O、Python-to-History、transport、authentication、Gateway dispatch、grant/audit或signed/runtime behavior |
+| 正常路径 correctness batch 15 | Done | [PR #17](https://github.com/GuangDai/Clipy/pull/17)，[correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32613689337) | 三个 correctness jobs 全绿；闭合 X.8 指定的 `PLAY-PY-A2A`–`A2I` pure bounded request grammar、deterministic reply bytes、content-free stderr bytes、closed `browsePreview` operation 与 stable exit mapping；HistoryCore surface 未变，无需 symbol run；未运行 perf/AB | 只证明 package-only pure codec/renderer seam；不交付 `clipyctl` executable、真实 process I/O、Python-to-History、transport、authentication、Gateway dispatch、grant/audit 或 signed/runtime behavior |
+| 正常路径 correctness batch 16 | In progress | app [`UnixSocketF0Listener`](../../../ClipyApp/Sources/Automation/UnixSocketF0Listener.swift)，probe-only [`UnixSocketF0Protocol`](../../../ClipyApp/Tools/ClipyUDSF0Shared/UnixSocketF0Protocol.swift)，diagnostic [`ClipyUDSF0Client`](../../../ClipyApp/Tools/ClipyUDSF0Client/ClipyUDSF0Client.swift)，[`run_signed_runtime.sh`](../../../scripts/ci/run_signed_runtime.sh) | 目标仅为 PLAY-PY-F0A：compile-time-isolated、ad-hoc signed UDS hello/ready 的 bounded cold/warm、half-frame、normal cleanup 与 SIGKILL/stale recovery；macOS correctness/runtime仍待运行 | 不是产品 `clipyctl`；不解码X.8 JSON、不访问History/Gateway，不证明credential/authenticated ingress、Developer ID/notary、sandbox、Keychain、different-EUID、TCC或interactive no-activation |
 | SIGNED-RUNTIME-0 | Done（指定验收 lane） | [PR #7](https://github.com/GuangDai/Clipy/pull/7) 引入 lane，[PR #8](https://github.com/GuangDai/Clipy/pull/8) 修正共享 diagnostic profile，[correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32573066624)，[master signed-runtime](https://github.com/GuangDai/Clipy/actions/runs/32573198119) | master 的手动 lane 完成一次 Release build、ad-hoc 签名及验证、Hardened Runtime flag、iCloud/ubiquity entitlement 负门与直接进程 liveness | 不证明 Developer ID、secure timestamp、notarization/stapling、Gatekeeper、TCC、login item、Carbon/status item、Space 或 WindowServer 行为 |
 
 ## 3. 正常路径 leaf 状态
@@ -257,18 +258,26 @@ V4 schema/migration、bounded affected-items codec、empty/existing bootstrap、
 | X.7 six intents + paste semantics | Done（指定 X.7 leaf） | [`ClipboardHistoryIntents`](../../../ClipyApp/Sources/AppIntents/ClipboardHistoryIntents.swift) 定义search/details/paste/pin/unpin/remove六个intent，macOS 26 `supportedModes = [.background]`、exact limit parameter，paste经已有`PasteboardAdapter.write`而不合成Command-V；[`ClipboardShortcuts`](../../../ClipyApp/Sources/AppIntents/ClipboardShortcuts.swift) 是唯一provider；[`AppIntentBehaviorTests`](../../../ClipyApp/Tests/ClipyIntegrationTests/AppIntentBehaviorTests.swift) 与 [`AppIntentFailureTests`](../../../ClipyApp/Tests/ClipyIntegrationTests/AppIntentFailureTests.swift) 经correctness runner验证 | 只证明hosted direct-call与app-owned pasteboard-adapter边界；不声称Shortcuts discovery、General Pasteboard跨进程可见性、TCC或signed invocation |
 | X.7 one early async dependency provider | Done（指定 X.7 leaf） | [`AppIntentDependencyRegistration`](../../../ClipyApp/Sources/AppIntents/AppIntentDependencyRegistration.swift) 是production唯一framework `.shared` registration；[`AppDelegate`](../../../ClipyApp/Sources/AppDelegate.swift) 在首个store-open suspension前注册provider，[`AppComposition`](../../../ClipyApp/Sources/AppComposition.swift) 复用同一open work；[`AppIntentDependencyTests`](../../../ClipyApp/Tests/ClipyIntegrationTests/AppIntentDependencyTests.swift) 使用standalone `AppDependencyManager()`验证logical cold/warm及provider-side open failure | Hosted logical cold/warm 与provider-side open failure不证明framework system-manager resolution、真Siri/Shortcuts cold/warm ordering、Swift 6 queue-crash freedom、process placement或TCC；这些仍是signed-runtime cells |
 
-## 16. Batch 15 X.8 pure CLI wire contract 当前工作（未合并）
+## 16. Batch 15 X.8 pure CLI wire contract 已合并 leaf 状态
 
-> 下列 source/tests 已在当前工作树出现，但尚未经 macOS 26
-> compile/correctness CI，因此保持 **In progress**。本节只防止重复领取并记录
-> 当前 leaf 边界；它不是 Python automation 或 shipping CLI 的完成声明。
+> 下列状态只覆盖 [PR #17](https://github.com/GuangDai/Clipy/pull/17) 经
+> [correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32613689337)
+> 验证的 package-only pure wire leaf。HistoryCore public surface 未改变，
+> 因此无需 symbol-snapshot run；本批也未运行 perf/AB。它不是
+> Python automation 或 shipping CLI 的完成声明。
 
 | Leaf | 当前状态 | 当前 source / test | 当前支持上限 |
 |---|---|---|---|
-| X.8 bounded request grammar | In progress | [`ClipyCLIRequestCodec`](../../../Sources/ClipyCLIContract/ClipyCLIRequestCodec.swift) 拥有typed request shape，[`BoundedJSONParser`](../../../Sources/ClipyCLIContract/BoundedJSONParser.swift) 拥有结构解析，[`ClipyCLIContract`](../../../Sources/ClipyCLIContract/ClipyCLIContract.swift) 冻结protocol/request/response bounds constants；[`PLAYPYA2AUnknownMajorTests`](../../../Tests/ClipyCLIContractTests/PLAYPYA2AUnknownMajorTests.swift)、[`PLAYPYA2BRequestEnvelopeTests`](../../../Tests/ClipyCLIContractTests/PLAYPYA2BRequestEnvelopeTests.swift)、[`PLAYPYA2CDuplicateKeyTests`](../../../Tests/ClipyCLIContractTests/PLAYPYA2CDuplicateKeyTests.swift)、[`PLAYPYA2DStructuralBoundsTests`](../../../Tests/ClipyCLIContractTests/PLAYPYA2DStructuralBoundsTests.swift)、[`PLAYPYA2ENumberAndSyntaxTests`](../../../Tests/ClipyCLIContractTests/PLAYPYA2ENumberAndSyntaxTests.swift)、[`PLAYPYA2FRequestIDTests`](../../../Tests/ClipyCLIContractTests/PLAYPYA2FRequestIDTests.swift) 待runner验证 | 当前source意图冻结request byte/UTF-8/JSON结构边界、protocol major、canonical request ID与唯一`browsePreview` operation；compile/correctness结论待CI |
-| X.8 deterministic reply/exit contract | In progress | [`ClipyCLIReplyRenderer`](../../../Sources/ClipyCLIContract/ClipyCLIReplyRenderer.swift) 拥有typed reply/exit rendering，[`BoundedJSONWriter`](../../../Sources/ClipyCLIContract/BoundedJSONWriter.swift) 拥有bounded JSON emission，[`ClipyCLIContract`](../../../Sources/ClipyCLIContract/ClipyCLIContract.swift) 提供共享constants/types；[`PLAYPYA2GEmissionGoldenTests`](../../../Tests/ClipyCLIContractTests/PLAYPYA2GEmissionGoldenTests.swift)、[`PLAYPYA2HExitMappingTests`](../../../Tests/ClipyCLIContractTests/PLAYPYA2HExitMappingTests.swift)、[`PLAYPYA2IClosedRequestGrammarTests`](../../../Tests/ClipyCLIContractTests/PLAYPYA2IClosedRequestGrammarTests.swift)、[`PLAYPYA2IReplyBoundsTests`](../../../Tests/ClipyCLIContractTests/PLAYPYA2IReplyBoundsTests.swift) 待runner验证 | 只计划证明caller-supplied typed reply的deterministic bounded bytes、content-free stderr bytes与stable exit mapping；不证明真实file descriptor/stdin/stdout、Gateway result或Python调用 |
+| X.8 bounded request grammar | Done（指定 A2A–A2F leaf） | [`ClipyCLIRequestCodec`](../../../Sources/ClipyCLIContract/ClipyCLIRequestCodec.swift) 拥有typed request shape，[`BoundedJSONParser`](../../../Sources/ClipyCLIContract/BoundedJSONParser.swift) 拥有结构解析，[`ClipyCLIContract`](../../../Sources/ClipyCLIContract/ClipyCLIContract.swift) 冻结protocol/request/response bounds constants；[`PLAYPYA2AUnknownMajorTests`](../../../Tests/ClipyCLIContractTests/PLAYPYA2AUnknownMajorTests.swift)、[`PLAYPYA2BRequestEnvelopeTests`](../../../Tests/ClipyCLIContractTests/PLAYPYA2BRequestEnvelopeTests.swift)、[`PLAYPYA2CDuplicateKeyTests`](../../../Tests/ClipyCLIContractTests/PLAYPYA2CDuplicateKeyTests.swift)、[`PLAYPYA2DStructuralBoundsTests`](../../../Tests/ClipyCLIContractTests/PLAYPYA2DStructuralBoundsTests.swift)、[`PLAYPYA2ENumberAndSyntaxTests`](../../../Tests/ClipyCLIContractTests/PLAYPYA2ENumberAndSyntaxTests.swift)、[`PLAYPYA2FRequestIDTests`](../../../Tests/ClipyCLIContractTests/PLAYPYA2FRequestIDTests.swift) 经 correctness runner 编译/执行 | 证明指定 request byte/UTF-8/JSON 结构边界、protocol major、canonical request ID 与唯一 `browsePreview` operation；不证明 transport 或 Gateway dispatch |
+| X.8 deterministic reply/exit contract | Done（指定 A2G–A2I leaf） | [`ClipyCLIReplyRenderer`](../../../Sources/ClipyCLIContract/ClipyCLIReplyRenderer.swift) 拥有typed reply/exit rendering，[`BoundedJSONWriter`](../../../Sources/ClipyCLIContract/BoundedJSONWriter.swift) 拥有bounded JSON emission，[`ClipyCLIContract`](../../../Sources/ClipyCLIContract/ClipyCLIContract.swift) 提供共享constants/types；[`PLAYPYA2GEmissionGoldenTests`](../../../Tests/ClipyCLIContractTests/PLAYPYA2GEmissionGoldenTests.swift)、[`PLAYPYA2HExitMappingTests`](../../../Tests/ClipyCLIContractTests/PLAYPYA2HExitMappingTests.swift)、[`PLAYPYA2IClosedRequestGrammarTests`](../../../Tests/ClipyCLIContractTests/PLAYPYA2IClosedRequestGrammarTests.swift)、[`PLAYPYA2IReplyBoundsTests`](../../../Tests/ClipyCLIContractTests/PLAYPYA2IReplyBoundsTests.swift) 经 correctness runner 编译/执行 | 只证明caller-supplied typed reply的deterministic bounded bytes、content-free stderr bytes与stable exit mapping；不证明真实file descriptor/stdin/stdout、Gateway result或Python调用 |
 
-## 17. 明确仍 Open，禁止误报完成
+## 17. Batch 16 X.9 F0A UDS discriminator 当前工作（未合并）
+
+| Leaf | 当前状态 | 当前 source / runtime 证据 | 当前支持上限 |
+|---|---|---|---|
+| PLAY-PY-F0A fixed UDS mechanics | In progress | [`UnixSocketF0Listener`](../../../ClipyApp/Sources/Automation/UnixSocketF0Listener.swift) 与 [`UnixSocketF0Protocol`](../../../ClipyApp/Tools/ClipyUDSF0Shared/UnixSocketF0Protocol.swift)；[`ClipyUDSF0Client`](../../../ClipyApp/Tools/ClipyUDSF0Client/ClipyUDSF0Client.swift)；[`signed-runtime`](../../../.github/workflows/signed-runtime.yml) 编排 | source gates已覆盖tool imports/escape hatches；Swift 6 compile、ad-hoc signed cold/warm/half-frame/stale recovery仍待runner。零History/JSON/credential/Gateway行为 |
+
+## 18. 明确仍 Open，禁止误报完成
 
 - Card 9B 在Batch 6合并后仍只关闭单AppComposition/ViewState内capture、policy、Clear/remove/revise
   receipt路径；跨window/多panel、未来cache以及不经该owner的commit仍Open。
@@ -287,9 +296,10 @@ V4 schema/migration、bounded affected-items codec、empty/existing bootstrap、
   Siri/Shortcuts invocation、discovery、
   process placement、Swift 6 queue-crash或TCC cells。public `ReconnectHistory`/cursor/reader/cache
   不属于当前 prerequisite；credential、CLI/transport仍属于后续层。
-- Batch 15 的 X.8 仍为 In progress；即使 pure codec 通过 correctness CI，也只关闭
-  `ClipyCLIContract` 的字节/grammar/renderer/exit-map leaf，不会交付 `clipyctl` executable、
-  process I/O、Python-to-History、authenticated ingress、transport、Gateway dispatch或runtime。
+- Batch 15 的 X.8 已以 [PR #17](https://github.com/GuangDai/Clipy/pull/17) 合并，但只关闭
+  `ClipyCLIContract` 的指定 A2A–A2I 字节/grammar/renderer/exit-map leaf。X.9+
+  仍需交付 `clipyctl` executable、process I/O、Python-to-History、authenticated ingress、
+  transport、Gateway dispatch 与runtime 证据；这些未被本批关闭。
 - X.3 bootstrap 的“config absent+全dependent tables empty”是migration/fresh-compatible create shape，但与
   未来既有V3全删同形；无durable provenance时这个因果歧义仍Open，不得用marker、hash
   或猜测修复伪装成已证明。
@@ -303,7 +313,7 @@ V4 schema/migration、bounded affected-items codec、empty/existing bootstrap、
   format-facts模块统一；owner-specific admission仍必须分开，不能造中央policy开关。
 - 本文件中的“Done”只关闭所列 leaf；不能据此宣称 state 3、全面超过 Maccy 或字面无限历史。
 
-## 18. Agent 领取前检查
+## 19. Agent 领取前检查
 
 1. 先查本表：Done leaf 不得重做；Partial 只能领取“支持上限/下一步”列中的缺口。
 2. 再查 `04` 的唯一 leaf 与 decision/spec gate；没有唯一 observable behavior 就不编码。

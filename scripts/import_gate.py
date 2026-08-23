@@ -2,7 +2,8 @@
 """Import-confinement gate for the Clipy target graph (docs/01-architecture.md Part I §8).
 
 Scans ``Sources/<Target>/**/*.swift``, ``Tests/<Target>/**/*.swift``,
-``ClipyApp/Sources/**/*.swift``, and XcodeGen-owned app-test sources for
+``ClipyApp/Sources/**/*.swift``, XcodeGen-owned app-test sources, and the
+compile-time-isolated F0 diagnostic tool/shared sources for
 ``import X`` lines and rejects imports that violate the target's confinement
 rules:
 
@@ -21,6 +22,8 @@ rules:
                      (SwiftUI is allowed)
   HistoryPerfRunner  allowlist: Foundation, HistoryCore, HistoryStorage
   HistoryRestartProbe allowlist: Foundation, HistoryCore, HistoryStorage
+  ClipyUDSF0Shared    allowlist: Foundation, Darwin
+  ClipyUDSF0Client    allowlist: Foundation, AppKit, Darwin
 
 Global rules: ``import xxh3`` and ``import Fuse`` are forbidden outside
 HistoryStorage. ``import AppIntents`` is forbidden outside the XcodeGen-owned
@@ -66,6 +69,8 @@ ALLOWLIST: dict[str, frozenset[str]] = {
     "HistoryDomain": frozenset({FOUNDATION, "HistoryCore"}),
     "HistoryPerfRunner": frozenset({FOUNDATION, "HistoryCore", "HistoryStorage"}),
     "HistoryRestartProbe": frozenset({FOUNDATION, "HistoryCore", "HistoryStorage"}),
+    "ClipyUDSF0Shared": frozenset({FOUNDATION, "Darwin"}),
+    "ClipyUDSF0Client": frozenset({FOUNDATION, "AppKit", "Darwin"}),
 }
 
 # Blocklist targets: these specific imports are forbidden, anything else passes.
@@ -185,6 +190,18 @@ def scan(root: Path) -> tuple[list[Violation], dict[str, int]]:
             (target_dir.name, target_dir)
             for target_dir in sorted(path for path in app_tests.iterdir() if path.is_dir())
         )
+    explicit_roots.extend(
+        [
+            (
+                "ClipyUDSF0Shared",
+                root / "ClipyApp" / "Tools" / "ClipyUDSF0Shared",
+            ),
+            (
+                "ClipyUDSF0Client",
+                root / "ClipyApp" / "Tools" / "ClipyUDSF0Client",
+            ),
+        ]
+    )
     for target, target_root in explicit_roots:
         if not target_root.is_dir():
             continue
@@ -223,6 +240,8 @@ GOOD_FIXTURES: dict[str, str] = {
     "Sources/PresentationUI/Good.swift": "import Foundation\nimport HistoryCore\nimport SwiftUI\n",
     "Sources/HistoryPerfRunner/Good.swift": "import Foundation\nimport HistoryCore\nimport HistoryStorage\n",
     "Sources/HistoryRestartProbe/Good.swift": "import Foundation\nimport HistoryCore\nimport HistoryStorage\n",
+    "ClipyApp/Tools/ClipyUDSF0Shared/Good.swift": "import Foundation\nimport Darwin\n",
+    "ClipyApp/Tools/ClipyUDSF0Client/Good.swift": "import Foundation\nimport AppKit\nimport Darwin\n",
     "Tests/HistoryCoreTests/Good.swift": "import Testing\nimport HistoryCore\n",
     "ClipyApp/Sources/AppIntent.swift": (
         "@preconcurrency import AppIntents\n"
@@ -249,6 +268,8 @@ BAD_FIXTURES: dict[str, str] = {
     "Sources/PresentationUI/BadFuse.swift": "import Fuse\n",  # global Fuse rule
     "Sources/HistoryPerfRunner/Bad.swift": "import SwiftData\n",
     "Sources/HistoryRestartProbe/Bad.swift": "import SwiftData\n",
+    "ClipyApp/Tools/ClipyUDSF0Shared/Bad.swift": "import HistoryCore\n",
+    "ClipyApp/Tools/ClipyUDSF0Client/Bad.swift": "import ClipyCLIContract\n",
     "Sources/HistoryStorage/BadAppIntents.swift": "@preconcurrency import AppIntents\n",
     "Sources/UnknownClient/BadAppIntents.swift": "private import AppIntents\n",
     "Tests/HistoryCoreTests/BadAppIntents.swift": "internal import AppIntents\n",
@@ -270,6 +291,8 @@ EXPECTED_SELF_TEST_VIOLATIONS = {
     ("PresentationUI", "Fuse"),
     ("HistoryPerfRunner", "SwiftData"),
     ("HistoryRestartProbe", "SwiftData"),
+    ("ClipyUDSF0Shared", "HistoryCore"),
+    ("ClipyUDSF0Client", "ClipyCLIContract"),
     ("HistoryStorage", "AppIntents"),
     ("UnknownClient", "AppIntents"),
     ("HistoryCoreTests", "AppIntents"),

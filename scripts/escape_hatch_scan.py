@@ -2,7 +2,7 @@
 """Escape-hatch and service-locator scan for Clipy (docs/01-architecture.md Part I §8).
 
 Scans all Swift files under ``Sources/``, ``Tests/``, ``ClipyApp/Sources/``,
-and ``ClipyApp/Tests/`` and rejects:
+``ClipyApp/Tests/``, and ``ClipyApp/Tools/`` and rejects:
 
   - ``@unchecked Sendable``
   - ``nonisolated(unsafe)``
@@ -31,7 +31,13 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-SCAN_DIRS = ("Sources", "Tests", "ClipyApp/Sources", "ClipyApp/Tests")
+SCAN_DIRS = (
+    "Sources",
+    "Tests",
+    "ClipyApp/Sources",
+    "ClipyApp/Tests",
+    "ClipyApp/Tools",
+)
 APP_DEPENDENCY_REGISTRATION_PATH = Path(
     "ClipyApp/Sources/AppIntents/AppIntentDependencyRegistration.swift"
 )
@@ -167,6 +173,10 @@ BAD_FIXTURES: dict[str, tuple[str, str]] = {
     "Tests/HistoryCoreTests/CurrentLocator.swift": (
         "struct Fixture { static var current: Fixture? }\n",
         "no-service-locator",
+    ),
+    "ClipyApp/Tools/ClipyUDSF0Client/UnsafeTool.swift": (
+        "final class ToolState: @unchecked Sendable {}\n",
+        "no-unchecked-sendable",
     ),
 }
 

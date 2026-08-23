@@ -21,6 +21,7 @@ targets:
     platform: macOS
     sources:
       - Sources
+      - Tools/ClipyUDSF0Shared
     settings:
       PRODUCT_NAME: Clipy
       SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
@@ -39,6 +40,17 @@ targets:
         product: PasteboardAdapter
       - package: Clipy
         product: PresentationUI
+  ClipyUDSF0Client:
+    type: commandLineTool
+    platform: macOS
+    sources:
+      - Tools/ClipyUDSF0Client
+      - Tools/ClipyUDSF0Shared
+    settings:
+      PRODUCT_NAME: ClipyUDSF0Client
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: CLIPY_UDS_F0
+      SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+      GCC_TREAT_WARNINGS_AS_ERRORS: YES
   ClipyIntegrationTests:
     type: bundle.unit-test
     platform: macOS
@@ -73,3 +85,8 @@ schemes:
     test:
       targets:
         - ClipyIntegrationTests
+  ClipyUDSF0Evidence:
+    build:
+      targets:
+        ClipyApp: all
+        ClipyUDSF0Client: all

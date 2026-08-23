@@ -1,4 +1,4 @@
-name: Signed Release runtime evidence
+name: Signed Release UDS F0 evidence
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ env:
 
 jobs:
   signed-runtime:
-    name: Ad-hoc signed Release lifecycle
+    name: Ad-hoc signed UDS mechanics
     runs-on: macos-26
     timeout-minutes: 25
     env:
@@ -27,18 +27,18 @@ jobs:
         shell: bash
         run: bash scripts/ci/verify_macos_runner.sh "$LOG_DIR/runner.log"
 
-      - name: Build, sign, verify, and launch once
+      - name: Build, sign, and exercise UDS F0
         shell: bash
         run: >-
           bash scripts/ci/run_signed_runtime.sh
           "$LOG_DIR" "$DERIVED_DATA"
           "$RUNNER_TEMP/xcodegen-2.45.4"
 
-      - name: Upload bounded evidence
+      - name: Upload bounded ad-hoc UDS evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: signed-runtime-${{ github.run_id }}-${{ github.run_attempt }}
+          name: signed-uds-f0-${{ github.run_id }}-${{ github.run_attempt }}
           path: signed-runtime-logs
           if-no-files-found: warn
           retention-days: 14

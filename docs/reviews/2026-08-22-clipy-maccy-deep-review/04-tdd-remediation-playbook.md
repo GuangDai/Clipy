@@ -1151,7 +1151,7 @@ X.4不实现`ExternalGateway` actor、facade/factory、App Intents、credential�
 - **PLAY-PY-B0I：**B1/B2/B0G全绿后，已接纳的App Intent再用prebound connection-scoped facade穿过同一
    production Gateway，得到与B0G相同的bounded result；revoked/no-grant control在History read前拒绝。
    Green只闭合V2-05既有adapter baseline，不实现CLI/transport，也不复制mutation语义。
-- **PLAY-PY-B3：**`PLAY-PY-F0/F1`选择并接入production adapter后才做CLI端到端Red：真实Python向`clipyctl`发送同一request并映射exit 3；
+- **PLAY-PY-B3：**F0A不满足此前置；只有后续transport decision与`PLAY-PY-F1`接入production adapter后才做CLI端到端Red：真实Python向`clipyctl`发送同一request并映射exit 3；
    hard-coded deny response不得算Green。首个正向browse前分别关闭：**PLAY-PY-B3A** wrong credential、
    **PLAY-PY-B3B** revoked credential、**PLAY-PY-B3C** kernel peer evidence为different EUID；三者都必须在History
    read/response content前拒绝。B3C先用platform seam deterministic验证，最终different-user signed cell另证真实delivery。
@@ -1215,10 +1215,43 @@ mutation/audit各一次；同ID但fields/bytes不一致时必须拒绝。它不�
 
 ### PLAY-PY-F family（不可直接标记完成）— transport与signed acceptance只证明最后一公里
 
-**PLAY-PY-F0 [SIGNED DISCRIMINATOR，非产品完成]**只有B1/B2/B0G/B0I与本次transport所需的
-`PLAY-PY-A2*` codec leaves全绿后，才以deny/hello/ready与caller matrix比较候选transport，
-不读History、不写mutation；选择唯一候选。**PLAY-PY-F1**随后把该adapter经authenticated ingress接到
-Gateway的read-only path，才允许领取B3–B5。只有未来出现第二个真实adapter需求时才领
+**PLAY-PY-F0A [AD-HOC SIGNED DISCRIMINATOR，非产品完成]**先只回答main-app-owned UDS的机械
+问题，不等待或暗中解决authenticated ingress。该卡只在手工dispatch signed-runtime proof artifact中
+给main app注入compile-time `CLIPY_UDS_F0` listener，并把独立XcodeGen诊断工具
+`ClipyUDSF0Client`复制进该次proof app后分别签nested tool与outer app。normal Debug/Release无listener、
+无nested diagnostic client，也没有产品`clipyctl`。
+
+F0A的private wire恰为：request 25 bytes = ASCII `CLIPYF0Q` 8 bytes + version `0x01` + nonce 16 bytes；
+reply 53 bytes = ASCII `CLIPYF0R` 8 bytes + version `0x01` + echoed nonce 16 bytes + per-process generation
+16 bytes + EUID/EGID/server PID三个UInt32 big-endian。一个connection只处理一个request/reply；listen backlog
+为4；accepted read与write各自2秒deadline；不得产生unbounded task/queue/stream。它不解析X.8 JSON，
+不读写History，不访问Gateway、credential、authenticated ingress或durable audit，也不输出public CLI
+stdout/stderr。
+
+Endpoint Red分别固定：strict UTF-8 path最多103 bytes；owner-only directory `0700`、socket `0600`、
+lifetime advisory lock `0600`；symlink/non-socket/wrong owner/wrong mode fail closed；live connect成功绝不unlink；
+只有持锁时`ECONNREFUSED`且两次`lstat`观察到同owner、同socket type、同device/inode才清stale node；
+shutdown也只unlink bind后记录的同device/inode。client不能删endpoint。cold-start先观察absent/refused，
+发出LaunchServices request后由reconnect独占10秒总deadline；completion不当作readiness且不等待。成功路径
+内部必须至少发生一次后续connect attempt；启动配置四项都必须显式为false：
+`activates`、`addsToRecentItems`、`promptsUserIfNeeded`、`createsNewApplicationInstance`。
+
+同一ad-hoc-signed artifact依次跑三格：
+
+1. cold先观察absent/refused connect，再LaunchServices启动并成功hello；
+2. warm不启动第二instance，server PID与generation必须与cold相同；
+3. `SIGKILL`留下socket后重新cold launch，保守stale recovery成功，PID与generation都必须更新。
+
+runner若不能建立different-UID或交互式focus/Dock/panel/recent-items观察，这两格明确保持open；不得用
+same-EUID response或`activates=false`配置值代替。F0A Green最多证明该ad-hoc-signed、non-sandbox artifact的
+bounded UDS mechanics；它不证明Developer ID/team、secure timestamp、notary/staple、Gatekeeper、
+App Sandbox/App Groups、Keychain sharing/client custody、TCC、caller matrix、Python→History或production
+transport选择。
+
+**PLAY-PY-F0B / F1（仍未冻结、不得由F0A领取）：**根据F0A结果与final signed requirements选择或拒绝
+UDS；先关闭`DEC-PY-AUTHENTICATED-INGRESS`及client credential custody，再把唯一adapter接到Gateway的
+read-only `browsePreview` path。roadmap X.9最终拥有B3–B5，包括warm B4与cold B5；X.10从Effective-only
+content、organize、delete与后期revise开始。只有未来出现第二个真实adapter需求时才领
 **PLAY-PY-F2** contract substitution；不要为“可替换”同时shipping UDS、Apple Events和XPC。
 
 **PLAY-PY-F3A…F3D**用distribution形态分别运行：签名/公证链；cold/warm/退出/崩溃lifecycle；

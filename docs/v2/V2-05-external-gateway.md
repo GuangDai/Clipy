@@ -279,17 +279,109 @@ claimed, even if golden JSON examples or a pure serializer exist.
 The Local Automation transport also needs a restricted app-facing
 authenticated-ingress interface because `ClipyApp` cannot reach an internal
 `ExternalGateway` and an unknown credential cannot use the App Intents
-prebound facade. That interface may carry only bounded peer evidence, an opaque
-credential, and a typed request, then delegate authentication, connection
-resolution, grant evaluation, and execution to the internal gateway. Its exact
-owner and public/package placement remain **BLOCKED-SPEC**. No production
-transport or positive Local Automation tracer may land until that blocker is
-resolved; the blocker does not prevent the in-process gateway or App Intents
-stages above.
+prebound facade. The current design direction is an opaque public facade owned
+by `HistoryStorage`; only an approved SwiftPM transport target calls its
+`package` execution method, using neutral package-only request/result/peer DTOs
+rather than Gateway or SwiftData vocabulary. The facade delegates credential
+resolution, grant evaluation, authoritative recheck, audit, and execution to
+the internal Gateway. This is a **design direction, not a resolved ingress or
+an implementation admission**.
+
+The candidate credential shape is exactly 48 opaque bytes: a 16-byte durable
+connection identifier plus a 32-byte secret. Neither field is a request hash,
+digest, signature, or derived identity. The server-side secret would be held
+in Keychain, not a new SwiftData column; this direction therefore requires no
+schema revision. How a separately executed first-party client receives and retains
+its copy remains **BLOCKED-SPEC** because an ordinary app Keychain item cannot
+be assumed to be shared with a nested tool. App Sandbox, access-group, explicit
+handoff, and client-custody choices require signed configuration evidence. No
+production transport, credential enrollment, or positive Local Automation
+tracer may land until those blockers are resolved. The blockers do not prevent
+the evidence-only F0A discriminator below.
 
 This amendment introduces no request digest, integrity hash, token framework,
 or transport security framework. Retry remains non-automatic until a later
 typed idempotency contract is separately approved.
+
+### 0.4 F0A ad-hoc-signed UDS discriminator (evidence only)
+
+`PLAY-PY-F0A` is a compile-time-isolated platform experiment, not the selected
+private transport. It exists only in the manually dispatched signed-runtime
+proof artifact. The Apple/XNU provenance and its claim ceiling are recorded in
+the [platform source memo §13.1](../reviews/2026-08-22-clipy-maccy-deep-review/apple-platform-source-memo.md):
+
+- the main-app listener is compiled only with `CLIPY_UDS_F0`;
+- `ClipyUDSF0Client` is an XcodeGen diagnostic tool, not a SwiftPM product, not
+  a `clipyctl` product, and not part of normal Debug or Release artifacts;
+- the dispatch proof copies that tool into the one proof app, signs the nested
+  tool and then the outer app, and exercises that exact artifact. The normal
+  app has no listener or bundled diagnostic client.
+
+F0A has its own fixed private bytes and must not reuse X.8 JSON. One connection
+carries one request and one reply, then closes:
+
+```text
+request (25 bytes) = ASCII "CLIPYF0Q" (8) | version 0x01 (1) | client nonce (16)
+reply   (53 bytes) = ASCII "CLIPYF0R" (8) | version 0x01 (1) | echoed nonce (16)
+                   | per-process generation (16)
+                   | effective UID UInt32 big-endian (4)
+                   | effective GID UInt32 big-endian (4)
+                   | server PID UInt32 big-endian (4)
+```
+
+The generation is a fresh opaque 16-byte value for each app process. It is not
+derived from the request, executable, endpoint, PID, or a hash. The listener
+does no JSON decoding, History request or mutation, credential handling,
+authenticated ingress, Gateway call, durable audit, idempotency, or public
+stdout/stderr emission. It uses backlog 4, admits at most one request per
+connection, and applies a 2-second deadline independently to the complete
+accepted-socket read and write. It creates no unbounded task, connection pool,
+queue, stream, or retry loop.
+
+The endpoint path is strict UTF-8 and at most 103 bytes before the terminating
+NUL for `sockaddr_un.sun_path`. Its dedicated directory is owner-only mode
+`0700`; the socket and lifetime advisory-lock file are mode `0600`. The lock is
+coordination evidence, not authentication. Existing symlinks, non-socket
+nodes, wrong owners, or wrong modes fail closed. If bind reports an occupied
+path, a successful connection means a live listener and is never unlinked.
+Only `ECONNREFUSED`, followed by two `lstat` observations of the same
+owner-owned socket device/inode while the lifetime lock is held, permits stale
+unlink and one bind retry. Every other probe result fails closed. Normal stop
+unlinks only when the path still has the device/inode captured after bind.
+These rules reduce accidental live-node deletion; they do not prevent a
+malicious same-EUID process from denial of service.
+
+For a cold attempt the diagnostic client resolves the containing proof
+`Clipy.app` from its own executable location, not cwd or a bundle-ID search.
+After an observed absent/refused connect, it calls
+`NSWorkspace.openApplication` with all four configuration values explicit:
+`activates = false`, `addsToRecentItems = false`,
+`promptsUserIfNeeded = false`, and
+`createsNewApplicationInstance = false`. Launch completion is neither awaited
+nor treated as readiness: after issuing the request, the client owns a single
+10-second reconnect deadline. The cold success path is structurally admitted
+only after an initial absent/refused observation and at least one subsequent
+connect attempt, distinguishing it from a client that found a warm listener.
+
+The signed-runtime F0A proof has three required same-EUID cells:
+
+1. **Cold:** start with no app process, observe an initial absent/refused
+   connect, launch without requested activation, then receive one valid reply.
+2. **Warm:** reconnect without launching another instance and observe the same
+   server PID and generation.
+3. **Crash residue:** send `SIGKILL`, leave the stale socket, relaunch, and
+   observe both a new PID and a new generation after conservative stale
+   recovery.
+
+A different-UID rejection and interactive confirmation that no Dock, focus,
+panel, or recent-items activation occurred remain open when the hosted runner
+cannot observe them. F0A therefore supports only this conclusion: the exact
+ad-hoc-signed, non-sandbox proof artifact demonstrated bounded main-app-owned
+UDS mechanics for a same-EUID diagnostic client. It does **not** establish
+Developer ID identity or team, secure timestamp, notarization/stapling,
+Gatekeeper, App Sandbox/App Groups, Keychain sharing or client custody, TCC,
+the final caller matrix, Python-to-History access, or a production transport
+choice.
 
 ## 1. Role and boundary
 

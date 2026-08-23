@@ -115,6 +115,7 @@ ClipyApp
 xxh3
 HistoryPerfRunner
 HistoryRestartProbe
+ClipyUDSF0Client             # XcodeGen evidence target, not a package product
 ```
 
 Test targets mirror the owner target:
@@ -154,6 +155,13 @@ never dispatches an operation or fabricates a Gateway result.
 `ClipyCLIContractTests` is a functional test target that depends only on that
 contract target.
 
+`ClipyUDSF0Client` and the app-side `CLIPY_UDS_F0` listener are a disposable
+PLAY-PY-F0 signed-runtime discriminator. They exchange only one fixed
+hello/ready frame and exist to falsify the current non-sandbox, same-EUID UDS
+mechanics. They do not decode X.8 JSON, dispatch History/Gateway work, own
+credentials, or constitute the future product `clipyctl`. The client is not
+embedded or installed by the normal app build.
+
 Recommended implementation order:
 
 1. Compile `HistoryCore` public values/interface and lock its symbol surface.
@@ -177,6 +185,9 @@ Before “executable specification”:
 - `ClipboardFormats` imports only Foundation and owns no purpose policy.
 - `ClipyCLIContract` imports only Foundation and owns no I/O or operation
   dispatch.
+- the F0 shared source imports only Foundation/Darwin and its diagnostic client
+  only Foundation/AppKit/Darwin; neither imports the CLI contract or any
+  History/SwiftData/AppIntents module.
 - `HistoryDomain` imports only Foundation and `HistoryCore`.
 - `import SwiftData` appears only in `HistoryStorage`; AppKit only in its adapter; SwiftUI only in Presentation.
 - No public symbol mentions Canonical Content, Domain facts/plans, SwiftData types, AppKit objects, fingerprints, or internal invalidations.

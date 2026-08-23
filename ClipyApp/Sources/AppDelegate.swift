@@ -83,6 +83,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var panel: FloatingPanel?
     private var hotKey: GlobalHotKey?
+#if CLIPY_UDS_F0
+    /// PLAY-PY-F0 signed discriminator only. The compile flag is absent from
+    /// every normal app build, which therefore has no listener behavior.
+    private var unixSocketF0Listener: UnixSocketF0Listener?
+#endif
 
     /// The UserDefaults key for the configured summon position (the
     /// Settings picker's `@AppStorage` writes it; the delegate reads it at
@@ -126,6 +131,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         hotKey?.unregister()
         compositionOpenAttempt?.task.cancel()
+#if CLIPY_UDS_F0
+        unixSocketF0Listener?.stop()
+        unixSocketF0Listener = nil
+#endif
         composition?.stop()
     }
 
@@ -251,6 +260,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let opened = try await attempt.task.value
             if composition == nil {
                 installComposition(opened)
+#if CLIPY_UDS_F0
+                startUnixSocketF0ListenerIfRequested()
+#endif
             }
             if compositionOpenAttempt === attempt {
                 compositionOpenAttempt = nil
@@ -301,6 +313,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         composition = opened
     }
+
+#if CLIPY_UDS_F0
+    /// Starts only after the production graph has been installed. The hosted
+    /// test helper calls `installComposition` directly and therefore cannot
+    /// accidentally publish this runtime-only endpoint.
+    private func startUnixSocketF0ListenerIfRequested() {
+        guard unixSocketF0Listener == nil,
+              let endpointPath = ProcessInfo.processInfo.environment[
+                  UnixSocketF0Protocol.endpointEnvironmentKey
+              ] else {
+            return
+        }
+        unixSocketF0Listener = try? UnixSocketF0Listener.start(
+            endpointPath: endpointPath
+        )
+    }
+#endif
 
     private func receiveCaptureHealth(_ health: ClipyCaptureHealth) {
         let previous = captureHealth
