@@ -1011,3 +1011,27 @@ test.
   is one content-free declared-unavailable failure, zero capture-lane slots,
   and unchanged empty History. This unmerged test has no macOS CI evidence;
   it does not diagnose timeout/permission or prove General pasteboard/TCC.
+- **Card 10C launch-at-login state is in progress:**
+  [`LaunchAtLoginSettings`](../Sources/PresentationUI/LaunchAtLoginSettings.swift)
+  exposes neutral off/on/requires-approval/unavailable presentation, while
+  app-owned
+  [`LaunchAtLoginController`](../ClipyApp/Sources/Settings/LaunchAtLoginController.swift)
+  confines ServiceManagement, refreshes authoritative status, preserves a
+  content-free operation-failure episode, and fences stale completions.
+  [`LaunchAtLoginSettingsTests`](../Tests/PresentationUITests/LaunchAtLoginSettingsTests.swift)
+  and
+  [`LaunchAtLoginControllerTests`](../ClipyApp/Tests/ClipyIntegrationTests/LaunchAtLoginControllerTests.swift)
+  cover the current model/controller seams; settings appearance and app-active
+  refresh are wired through `ClipySettingsView`/`AppDelegate`. No macOS CI has
+  compiled this work. It does not prove fresh-install registration, external
+  revoke, logout/login, actual System Settings behavior, or a signed installed
+  artifact.
+- **Hosted panel accessibility characterization is in progress:**
+  [`HostedPanelAccessibilityTests`](../ClipyApp/Tests/ClipyIntegrationTests/HostedPanelAccessibilityTests.swift)
+  mounts the production `PanelRootView` in the production `FloatingPanel` and
+  traverses AppKit's public accessibility interface for the search field and
+  an observed row. Its bounded same-process oracle checks stable identifiers,
+  row button role/label, and that the default press action is accepted; it
+  does not claim the asynchronous paste completed. The unmerged test has no
+  macOS CI evidence and cannot prove XCUI, VoiceOver, Full Keyboard Access,
+  an external accessibility client, or WindowServer behavior.
