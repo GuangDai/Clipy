@@ -25,6 +25,9 @@ HistoryPerfRunner ─────────→ HistoryCore + HistoryStorage
                              (proof executable; no shipped product surface)
 HistoryRestartProbe ───────→ HistoryCore + HistoryStorage
                              (test-owned restart tracer; no shipped product surface)
+
+ClipyUDSF0Client ──────────→ Foundation + AppKit + Darwin
+                             (XcodeGen evidence target; no product CLI or History edge)
 ```
 
 There is no `DomainCore` target. The few values that must appear in both the caller interface and Domain planning—`HistoryItemID`, `RevisionID`, `ContentVersion`, and `ChangePosition`—belong to `HistoryCore`. Everything else in `HistoryDomain` is `package` by default.
@@ -45,6 +48,7 @@ There is no `DomainCore` target. The few values that must appear in both the cal
 | `Fuse` | External Swift library used internally | Threshold-based fuzzy matching inside `SearchWorker` | Public search score or cross-actor matcher state |
 | `HistoryPerfRunner` | Package executable, no product surface | Part VI §9 release-like workloads, machine metadata, and versioned fixtures | Caller APIs, alternate writers, production state, absolute-latency claims |
 | `HistoryRestartProbe` | Package executable target, no declared product | Evidence Card 1C-1 short-lived public-API restart phases plus the X-HCR post-committed-receipt fatal-signal phase | App lifecycle, alternate writers, production state, migration, mid-transaction kill, power-loss, or physical-durability claims |
+| `ClipyUDSF0Client` | XcodeGen command-line evidence target, not embedded or installed | The compile-time-isolated PLAY-PY-F0 fixed hello/ready client, bounded LaunchServices reconnect, and diagnostic process control | X.8 JSON, product `clipyctl`, History/Gateway access, credentials, authenticated ingress, or a supported automation surface |
 
 #### Access rules
 
@@ -54,6 +58,9 @@ There is no `DomainCore` target. The few values that must appear in both the cal
 - `ClipyCLIContract` describes and validates the X.8 wire boundary only. It has
   no executable entry point and neither dispatches operations nor fabricates a
   positive Gateway result.
+- `ClipyUDSF0Client` and the app-side `CLIPY_UDS_F0` listener are disposable
+  signed-runtime evidence only. Normal app builds contain no listener behavior;
+  the diagnostic target is not embedded in a normal app artifact.
 - Intra-target storage declarations use `internal` or `private`.
 - `@Model` types are internal to `HistoryStorage` and never occur in a public or package signature.
 - Domain planners and facts are not protocols intended for third-party extension. Adding a v1 History Action is an owned source change and must make compiler-exhaustive switches fail until handled.
@@ -255,6 +262,10 @@ The Authority does not retain model objects between operations. Each isolated re
 - `ClipboardFormats` may import Foundation only and must not own a purpose-specific behavior policy.
 - `ClipyCLIContract` may import Foundation only and must not own standard-stream
   I/O, transport, credential, Gateway, History, or product-CLI behavior.
+- `ClipyUDSF0Shared` may import Foundation and Darwin only;
+  `ClipyUDSF0Client` may additionally import AppKit solely for bounded
+  LaunchServices/process observation. Neither may import `ClipyCLIContract`,
+  History modules, SwiftData, AppIntents, or a product transport.
 - `HistoryCore` must not import `HistoryDomain`, `HistoryStorage`, SwiftData, AppKit, SwiftUI, ImageIO, or xxh3.
 - `HistoryDomain` must not import `HistoryStorage`, SwiftData, AppKit, SwiftUI, ImageIO, or xxh3.
 - Adapters and UI must not import `HistoryDomain` or `HistoryStorage`.
@@ -277,10 +288,11 @@ The Authority does not retain model objects between operations. Each isolated re
 1. A single Swift package expresses exactly the target edges above and fails on a deliberate back-edge.
 2. SwiftLint and portable source scans reject forbidden framework imports
    outside their owner targets, including attributed/access-level import
-   spellings. They scan SwiftPM sources/tests plus `ClipyApp` sources/hosted
-   tests, confine `AppIntents`, reject service-locator declarations, and enforce
+   spellings. They scan SwiftPM sources/tests plus `ClipyApp` sources, hosted
+   tests, and diagnostic tools; confine `AppIntents`, reject service-locator declarations, and enforce
    the single framework-owned App Intents dependency registration above.
-   The same gates keep `ClipyCLIContract` Foundation-only.
+   The same gates keep `ClipyCLIContract` Foundation-only and the F0 shared/client
+   sources confined to their Foundation/Darwin/AppKit evidence boundary.
 3. Swift 6 complete strict-concurrency compilation succeeds without unchecked escape hatches.
 4. The public `HistoryCore` symbol surface is snapshot-tested so package-only Domain/Storage vocabulary cannot leak accidentally.
 5. App-level tests construct `SwiftDataHistory` with an in-memory store; they do not replace the semantic write path.

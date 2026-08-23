@@ -17,8 +17,10 @@
 ### 1.1 当前 Clipy：不能
 
 当前 tracked source 已有CI-green的in-process `ExternalGateway`、public connection-bound facade及
-`ClipyApp`中的六个App Intents，但没有 `clipyctl` executable/product、socket listener、
-Local Automation authenticated ingress、Apple Events dictionary或XPC external listener。
+`ClipyApp`中的六个App Intents，但没有 `clipyctl` executable/product、production socket listener、
+Local Automation authenticated ingress、Apple Events dictionary或XPC external listener。F0A允许
+normal build中被compile-time erase的UDS诊断源码；它只在手工dispatch的ad-hoc-signed proof artifact
+中形成listener与diagnostic client，不是Python入口。
 X.7 的限定证据来自[PR #16](https://github.com/GuangDai/Clipy/pull/16)、
 [correctness run 32609910701](https://github.com/GuangDai/Clipy/actions/runs/32609910701)与
 [symbol run 32609018894](https://github.com/GuangDai/Clipy/actions/runs/32609018894)；它们不证明
@@ -77,8 +79,9 @@ Python / shell / editor / launchd
   -> HistoryAuthority: the only writable ModelContext and commit path
 ```
 
-这让 public interface 与 transport 演进解耦。第一版可以在 Developer-ID、non-sandbox build 上
-试 app-owned Unix-domain socket；以后若 signed/sandbox 证据支持 XPC 或 Apple Events 更好，
+这让 public interface 与 transport 演进解耦。第一项F0A先在ad-hoc-signed、non-sandbox诊断artifact上
+判别app-owned Unix-domain socket的机械行为；它不选择production transport。以后若完整
+Developer-ID/sandbox证据支持UDS、XPC或Apple Events中的一种，
 可以替换 private adapter，而不要求所有 Python scripts 改写。socket wire 不是公开 SDK，禁止
 第三方绕过 `clipyctl` 绑定它的 path/framing。
 
@@ -344,7 +347,7 @@ History mutation。
 
 | 方案 | Python/CLI reachability | cold start | 身份与授权 | binary | 架构代价 | 判断 |
 |---|---|---|---|---|---|---|
-| app-owned UDS + LaunchServices ready | Python只需启动CLI；native CLI直接连 byte stream | transport本身不launch；CLI用 LaunchServices/`open`启动 app，再有界等ready | `getpeereid`只证same EUID；另需localAutomation credential + gateway grant | 最直接；必须自定义checked framing/backpressure | 一个app内listener/connection task；无需第二writer | **首个判别spike**，仅限signed Developer-ID non-sandbox artifact先证明；不是最终承诺。 |
+| app-owned UDS + LaunchServices ready | Python只需启动CLI；native CLI直接连 byte stream | transport本身不launch；CLI用 LaunchServices启动 app，再有界等ready | `getpeereid`只证same EUID；另需localAutomation credential + gateway grant | 最直接；必须自定义checked framing/backpressure | 一个app内listener/connection task；无需第二writer | **首个判别spike**：先用ad-hoc-signed F0A只证mechanics；Developer ID与最终transport选择仍后置。 |
 | Apple Events + `sdef` | CLI可发native event；Python也可借`osascript` | local `tell` request/reply可hidden launch | Automation TCC明确存在，但responsible sender/per-script identity未知；仍需Clipy grant | native descriptor可bytes；`osascript`文本/size contract弱 | script command bridge、TCC UX、dictionary/versioning | 适合窄AppleScript adapter；不优先承载大history protocol。 |
 | App Intents/App Shortcuts + `shortcuts` CLI | Python可调用系统CLI，但按shortcut显示名，不是bundle/action-ID RPC | extension/foreground modes有系统lifecycle；Clipy main-process cold path仍未证明 | shared App Intents connection；无documented per-script identity | `IntentFile`可传data，但多representation会变manifest/file protocol | 符合既有V2-05，但CLI contract受Shortcuts collection/name影响 | 保留为用户可见automation surface；不作为稳定 `clipyctl` 底层RPC首选。 |
 | XPC / NSXPC + signed CLI | Python间接调用native CLI；不能用stdlib直解opaque XPC | launchd lifecycle强 | EUID/PID/code-signing requirement强；仍需gateway grant | 原生Data/typed serialization | app-bundled private XPC不能给外部CLI；Mach service/LaunchAgent会逼近Authority ownership重构 | 只有signed bridge topology与single-writer proof明确优于UDS时采用；不因“更原生”先加第二进程。 |
@@ -354,9 +357,9 @@ History mutation。
 1. **先规格化 `clipyctl` JSON/exit-code shape，不先shipping实现。** 文档、golden examples与pure
    wire contract可以先冻结；parser/executable代码必须等Gateway/AUTO-2与已接纳App Intents tracer闭合后
    才落。这样transport spike可替换，Python script不随平台实验重写。
-2. **第一项 runtime experiment用 signed Developer-ID、non-sandbox Clipy + app-owned UDS +
-   LaunchServices cold-start/ready handshake。** 它最直接回答 arbitrary Python、binary、same-UID
-   与 single-process Authority 是否能同时成立。
+2. **第一项 runtime experiment用ad-hoc-signed、non-sandbox F0A artifact + app-owned UDS +
+   LaunchServices cold-start/ready handshake。** 它只判别bounded same-EUID socket mechanics、cold/warm
+   lifecycle与`SIGKILL`残留恢复；不回答Python、Gateway、credential或Developer ID是否成立。
 3. **不把这次 spike 自动升级为 final architecture。** 若发行最终开启 App Sandbox，矩阵应分别测
    Terminal/IDE/venv/launchd Python能否启动packaged CLI、caller sandbox是否阻断子进程，以及
    first-party `clipyctl`能否连接app。Python不直接访问private socket；Apple的 App Group资料也不能
@@ -369,9 +372,35 @@ History mutation。
 这是一处真正的 seam：至少有 UDS spike adapter 与测试loopback adapter；若未来替换为XPC，caller
 仍不变。不要为四种候选同时提交四套 production transports。
 
+### 6.2 F0A 的精确证据合同
+
+F0A不是缩小版`clipyctl`。main-app listener仅由`CLIPY_UDS_F0`编入手工dispatch signed-runtime
+artifact；`ClipyUDSF0Client`是XcodeGen诊断tool，只复制进该次proof app。normal Debug/Release既没有
+listener，也没有nested tool或产品CLI。
+
+其private request固定25 bytes：ASCII `CLIPYF0Q`、version `0x01`、16-byte nonce。reply固定53
+bytes：ASCII `CLIPYF0R`、version `0x01`、echoed nonce、16-byte per-process generation、big-endian
+UInt32 EUID、EGID与server PID。每connection一问一答后关闭，backlog 4，accepted read/write各自2秒
+deadline；不解析X.8 JSON，不产生credential/Gateway/History/audit行为，也不建立unbounded task或stream。
+
+Endpoint path按UTF-8最多103 bytes；directory `0700`、socket `0600`、lifetime advisory lock `0600`。
+live connect成功不得unlink；只有持锁时`ECONNREFUSED`且两次`lstat`仍为同owner socket、同device/inode
+才可清理；shutdown只移除bind后记录的同device/inode。client永不删除path。cold client以自身executable
+位置定位proof app，并把`NSWorkspace.OpenConfiguration`的`activates`、`addsToRecentItems`、
+`promptsUserIfNeeded`与`createsNewApplicationInstance`都显式设为`false`；LaunchServices completion不作
+readiness且不等待，发出launch request后的reconnect共用10秒deadline。cold成功路径必须先观察
+absent/refused并至少执行一次后续connect attempt。
+
+同一artifact必须依次证明：cold先失败后launch成功；warm保持同PID/generation；`SIGKILL`留下stale
+socket后relaunch获得新PID/generation。runner不能观察的different-UID和交互式no-activation格保持open。
+因此F0A通过也只说明这个ad-hoc-signed non-sandbox artifact的UDS mechanics成立；Developer ID/team、
+timestamp/notary/Gatekeeper、Sandbox/App Groups、Keychain sharing、TCC、caller matrix与production adapter
+都未成立。
+
 ## 7. Cold start、ready 与 shutdown contract
 
-`clipyctl` 不能把“进程存在”当成“history可用”。推荐最小状态序列：
+`clipyctl` 不能把“进程存在”当成“history可用”。下面是production方向，不是F0A fixed hello；只有
+authenticated ingress与credential custody关闭后才可实现：
 
 ```text
 connect private endpoint
@@ -490,8 +519,8 @@ representation/count/byte limits和multi-item shape约束，不能用无条件`g
 | Module | Interface | Implementation 隐藏 | 不拥有 |
 |---|---|---|---|
 | `clipyctl` executable | JSON stdin/stdout + exit codes | app discovery、ready retry、credential use、private frames、typed error mapping | SwiftData、grant decision、History planner、UI。 |
-| Local Automation adapter（app-internal） | `start/stop` + one framed request handler | listener lifecycle、frame preflight、kernel peer evidence、backpressure | credential/grant/locator授权、History semantics、第二writer。 |
-| authenticated ingress facade（受限public app-facing seam） | bounded peer evidence + opaque credential + typed request | 无policy薄包装，只委托Gateway `authenticateAndPerform` | credential/connection/grant判断、transport lifecycle、UI、公开Gateway/CredentialStore。 |
+| Local Automation adapter（future approved SwiftPM target） | `start/stop` + one framed request handler | listener lifecycle、frame preflight、kernel peer evidence、backpressure | credential/grant/locator授权、History semantics、第二writer。 |
+| authenticated ingress facade（opaque public value） | approved SwiftPM adapter经`package` method提交neutral package-only peer/request DTO与opaque credential | 无policy薄包装，只委托Gateway完成authenticate/resolve/check/execute | credential/connection/grant判断、transport lifecycle、UI、公开Gateway/CredentialStore。 |
 | `ExternalGateway`（唯一） | prebound connection request或authenticated ingress request | credential→connection resolution、unknown/revoked denial、validation、rate limit、live grant recheck、audit、opaque locator/token resolution | UI transport details。 |
 | `ClipboardFormats` + owner manifests + capability audit projection | stable facts；各owner recipe；只读joined projection | exact identifiers、owner route与runtime/evidence展示 | 中央runtime policy、payload decode、grant、plugin loading。 |
 
@@ -503,12 +532,14 @@ app；删除 Gateway 后grant/audit/validation会散到每个transport；两者�
 Access level建议：
 
 - public compatibility是 executable wire，不是 Swift `public` type数量；
-- `ConnectionEnrollKind.localAutomation` 与 capability DTO若需跨 `HistoryStorage`/`ClipyApp`，按现有
-  distinct-concern seam做最小 `HistoryCore` public addition，并更新symbol snapshot；
-- ClipyApp 位于 Swift package 外，不能直接访问 package/internal `ExternalGateway`。App Intents可以使用
-  已绑定connection的facade；Local Automation在未enroll/unknown credential阶段必须经
-  `DEC-PY-AUTHENTICATED-INGRESS`批准的受限 app-facing ingress，由HistoryStorage内部解析connection。
-  不得把Gateway/CredentialStore公开，也不得让transport import internal Storage types；
+- future neutral peer/request/result DTO放在`HistoryCore`并保持`package`；不为transport扩张public
+  History protocol或symbol snapshot；
+- ClipyApp 位于 Swift package 外，不能直接访问 package/internal `ExternalGateway`。HistoryStorage可
+  提供一个opaque public facade值，只有approved SwiftPM transport target能调用其`package` execution
+  method；ClipyApp只负责构造/传递。facade内部解析connection，不公开Gateway/CredentialStore；
+- candidate credential是16-byte connection ID + 32-byte secret，不是hash/digest或derived identity。
+  该方向不新增SwiftData schema/secret column；server侧Keychain与client侧custody/access-group/handoff仍是
+  `BLOCKED-SPEC`，F0A不携带credential；
 - `DEC-PY-AUTHENTICATED-INGRESS`当前是明确的`BLOCKED-SPEC`：它不阻塞in-process Gateway或App Intents，
   但阻塞任何production transport、CLI正向tracer与Local Automation history access；
 - socket endpoint、credential representation、framing、locator payload、cursor payload、Gateway内部
@@ -591,7 +622,9 @@ Given signed test app完全退出、已enroll但只grant `browsePreview`、temp 
 When Python标准库启动真实 `clipyctl`。Then CLI启动app、等ready、返回三个opaque locators；没有
 `readEffectiveContent` grant时内容读取仍exit 3。最低Green只连通一种private transport。
 
-证据上限：Developer-ID non-sandbox UDS tracer只证明该artifact/machine；不证明Sandbox/MAS/TCC。
+该tracer属于roadmap X.9的B4/B5，不是F0A。证据上限：Developer-ID non-sandbox UDS tracer只证明
+该artifact/machine；不证明Sandbox/MAS/TCC。X.10从Effective-only content/organize/delete/revise开始，
+不重复领取browse。
 
 ### PY-5 — browse 也是敏感内容
 
@@ -683,7 +716,7 @@ socket test最多证明protocol实现。
 | `PY-1` | `PLAY-PY-B1/B2/B3A…B3C`；真实CLI deny另为`B3`且依赖`F0/F1` |
 | `PY-2` | `PLAY-PY-A2A…A2I`，每种parser/stdio/closed-operation行为独立 |
 | `PY-3` | pure projection=`PLAY-PY-C1`；production export=`PLAY-FORMAT-G` |
-| `PY-4/5` | `PLAY-PY-F0/F1`后领取`PLAY-PY-B3/B4/B5` |
+| `PY-4/5` | `PLAY-PY-F0A`只做mechanics；后续transport decision + `F1`后才领取`PLAY-PY-B3/B4/B5` |
 | `PY-6` | `PLAY-PY-C2…C5` |
 | `PY-7/8` | `PLAY-PY-D1A…D8`，all/selected/aggregate-cap与binary lifecycle分开 |
 | `PY-9A/9B` | `PLAY-PY-E1A/E1B`与decision-gated`E2` |
@@ -709,10 +742,10 @@ socket test最多证明protocol实现。
 3. **实现CLI pure codec。** JSON、exit codes与no-content diagnostics由pure tests锁定，但此时仍不宣称
    Python已连到History。Format discovery只可冻结owner-summary schema；runtime injection owner未批准前
    不实现endpoint。
-4. **先关闭authenticated-ingress blocker，再做read-only transport tracer。** Developer-ID non-sandbox
-   UDS + LaunchServices ready只是首个候选，
-   必须连接步骤2同一Gateway，先闭环
-   enroll/deny/grant/revoke/browse；没有write，没有subscription。
+4. **先跑F0A，再关闭authenticated-ingress blocker，最后做read-only transport tracer。** F0A仅在
+   ad-hoc-signed artifact证明cold/warm/stale UDS mechanics，不带JSON、credential或History。随后另行
+   关闭opaque facade ownership、server Keychain与client credential custody，才可让一个selected adapter
+   连接步骤2同一Gateway并在X.9闭环enroll/deny/grant/revoke/browse；没有write，没有subscription。
 5. **再做Effective-only binary read。** 使用已冻结的durable-before-publication audit contract与binary output，绝不复用full details
    暴露lineage。
 6. **按风险逐项开放write。** organize → deleteItem；每项独立grant与transaction/audit proof。
@@ -742,7 +775,7 @@ socket test最多证明protocol实现。
 |---|---|---|---|---|
 | 当前Python不能访问Clipy history | tracked source已有in-process Gateway/App Intents，但无`clipyctl` executable、Local Automation authenticated ingress或transport | 当前source snapshot事实 | future feasibility、真实process I/O或Python-to-History | X.8 pure codec后，X.9 ingress/transport与PY-4 vertical tracer |
 | 任意Python可经CLI调用 | Python可启动first-party executable；public contract不依赖Swift bridge | 设计上可行 | signed/sandbox/TCC/cold-start可靠性 | PY-15 matrix |
-| UDS适合private CLI→app binary | POSIX byte stream + `getpeereid`；详见Apple memo §5 | non-sandbox私有transport首选spike | arbitrary sandbox caller一定能执行CLI或CLI一定可连接 | signed三类caller matrix |
+| UDS F0A值得作为private transport判别器 | `sockaddr_un`路径界限、`getpeereid`与LaunchServices primary contract；详见Apple memo §13.1 | ad-hoc-signed non-sandbox artifact可测same-EUID cold/warm/stale mechanics | Developer ID、credential、Python/History、Sandbox/TCC或final transport | F0A三格后，ingress决策与signed caller matrix |
 | XPC不是stdlib Python interface | Apple XPC encoding opaque；需native client | signed CLI可隐藏它 | Python直接实现受支持XPC client | 仅在批准signed bridge后跑X-PY-XPC |
 | browse仍可能泄密 | current `HistoryRow.title/search.snippet`直接来自内容presentation | capability必须按content-bearing披露 | 每条title实际都敏感 | synthetic-secret grant test + user UX review |
 | details对首版过宽 | current `HistoryDetails`含canonical/effective/revisions/occurrence | Effective-only应是目的型read | 新projection性能/实现必然更好 | PY-7 + G8/resource measure |

@@ -901,6 +901,69 @@ Maccy 则合成 Command-V：
 5. 不把当前 Maccy fork 当 shipping gold standard；Clipy 的目标应是有可复现、可验证的
    notarized artifact 和真实 upgrade journey，而不是“也能打一个 zip”。
 
+### 13.1 UDS F0A：一手资料支持机械判别，不支持发行身份
+
+#### Apple / XNU 公开事实（DOC）
+
+- Apple 的macOS 26开源发布清单对应XNU `12377.1.9`与Libc `1725.0.11`：
+  [macOS release manifest](https://github.com/apple-oss-distributions/distribution-macOS/blob/main/release.json)。
+- 该XNU的[`sockaddr_un`](https://github.com/apple-oss-distributions/xnu/blob/xnu-12377.1.9/bsd/sys/un.h)
+  把`sun_path`定义为104-byte `char` array。因此本次使用NUL-terminated pathname的F0A把
+  UTF-8 endpoint限制为103 bytes；这不是`PATH_MAX`，也不授权静默退回world-writable `/tmp`。
+- macOS 26 Libc在[`unistd.h`](https://github.com/apple-oss-distributions/Libc/blob/Libc-1725.0.11/include/unistd.h)
+  声明`getpeereid`，其
+  [实现](https://github.com/apple-oss-distributions/Libc/blob/Libc-1725.0.11/gen/FreeBSD/getpeereid.c)
+  读取`LOCAL_PEERCRED`。Apple的
+  [`getpeereid(3)`](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man3/getpeereid.3.html)
+  只支持“连接peer的effective UID/GID”这一结论；它不证明PID、code signature、Team ID、
+  Python script、GUI/login session或credential。
+- Apple的[`bind(2)`](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/bind.2.html)
+  说明Unix-domain bind创建文件系统node且调用方负责unlink。它没有替Clipy定义live/stale竞争语义，
+  所以F0A把lifetime lock、live-connect probe、双`lstat` device/inode确认与shutdown inode match作为
+  保守的应用不变量，而不是声称系统提供了自动stale recovery。
+- [`NSWorkspace.openApplication`](https://developer.apple.com/documentation/appkit/nsworkspace/openapplication%28at%3Aconfiguration%3Acompletionhandler%3A%29)
+  是F0A的cold-start API；
+  [`OpenConfiguration`](https://developer.apple.com/documentation/appkit/nsworkspace/openconfiguration)
+  与其[`activates`](https://developer.apple.com/documentation/appkit/nsworkspace/openconfiguration/activates)
+  属性允许显式请求不activate；F0A还显式关闭recent-items、prompt与第二instance。completion只支持
+  “launch request已完成”，不支持“socket或Gateway已ready”，所以client仍需一个共享10秒总deadline的
+  observed reconnect loop。
+- [`LSUIElement`](https://developer.apple.com/documentation/bundleresources/information-property-list/lsuielement)
+  支持agent app不出现在Dock的bundle行为，但不能单独证明app、panel或workspace从未激活。
+- Apple的[App Groups配置](https://developer.apple.com/documentation/xcode/configuring-app-groups)、
+  [entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.application-groups)
+  与[macOS group container](https://developer.apple.com/documentation/xcode/accessing-app-group-containers)
+  资料可以支持“同组、正确签名配置的process共享container”这一候选方向；不能外推成unsigned、
+  non-team或任意Python可访问group-container UDS。
+- [App Sandbox inheritance](https://developer.apple.com/library/archive/documentation/Miscellaneous/Reference/EntitlementKeyReference/Chapters/EnablingAppSandbox.html)
+  与[在sandboxed app中嵌入command-line tool](https://developer.apple.com/documentation/xcode/embedding-a-helper-tool-in-a-sandboxed-app)
+  要求按具体parent/child签名模型验证；它们不证明Terminal或Python直接执行的CLI继承Clipy权限。
+- [Keychain sharing](https://developer.apple.com/documentation/security/sharing-access-to-keychain-items-among-a-collection-of-apps)、
+  [`kSecUseDataProtectionKeychain`](https://developer.apple.com/documentation/security/ksecusedataprotectionkeychain)
+  与[TN3137](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains)说明共享访问依赖
+  具体Keychain/entitlement/configuration。F0A的ad-hoc signature没有TeamIdentifier/profile authority，
+  因而不能关闭nested client credential custody或access-group共享。
+- Apple的[macOS distribution signing guidance](https://developer.apple.com/documentation/xcode/creating-distribution-signed-code-for-the-mac/)
+  要求nested code按inside-out顺序签名，并反对用`--deep`代替正确签名步骤。F0A因此先签diagnostic tool
+  再签outer app；这仍然只是ad-hoc identity，不是Developer ID发行证据。
+
+访问日期：**2026-08-23 UTC**。
+
+#### F0A证据设计与支持上限
+
+F0A只在手工dispatch的ad-hoc-signed、Hardened Runtime proof app中编入`CLIPY_UDS_F0`
+main-app listener，并临时嵌入XcodeGen诊断tool `ClipyUDSF0Client`。normal Debug/Release中两者都不
+存在；该tool不是产品`clipyctl`。固定25-byte hello与53-byte ready只回显nonce、per-process
+generation、EUID/GID和server PID；没有X.8 JSON、History、credential、Gateway、audit、hash或
+idempotency语义。
+
+Hosted proof可判别三件事：cold先观察connect失败再由LaunchServices有界启动；warm response保持同一
+PID/generation；`SIGKILL`后的stale socket由新process保守恢复并返回新PID/generation。即使三格全绿，
+证据也只支持“该ad-hoc-signed、non-sandbox artifact上的same-EUID UDS mechanics成立”。它不能建立
+Developer ID/team、secure timestamp、notarization/stapling、Gatekeeper、App Sandbox/App Groups、
+Keychain sharing/client credential custody、TCC、different-UID实际delivery、交互式no-activation、
+Python-to-History或production transport选择。后两项runner不可观察时必须保持open。
+
 ---
 
 ## 14. 建议写入新 review 的最小 Apple proof matrix
@@ -919,6 +982,7 @@ Maccy 则合成 Command-V：
 | `APPLE-IMAGE-1` | primary HEIF、lazy-decode profiling、bomb/corrupt/128 MiB | bounded pixels/source；first render无意外 main decode；peak RSS有证据 |
 | `APPLE-A11Y-1` | 全 main-task matrix × VoiceOver/FKA；抽查 Voice Control/Switch | common tasks无需 sighted help；focus/labels/commands 合理 |
 | `APPLE-SHIP-1` | clean-machine install + N-1→N update + interrupted update | Developer ID/hardened/notarized/stapled；identity连续；可恢复/回滚 |
+| `APPLE-UDS-F0A-1` | ad-hoc-signed proof app cold/warm/`SIGKILL` stale recovery | bounded same-EUID hello/ready mechanics；same warm PID/generation；new recovered PID/generation；不提升distribution/credential/Python claim |
 
 ## 15. 给总 review 的措辞约束
 
