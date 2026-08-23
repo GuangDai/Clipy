@@ -78,8 +78,7 @@ struct HistoryListPaginationHostedTests {
         }
         #expect(
             continuationLoaded,
-            "Card 8B: mounting the production list makes its last pinned row"
-                + " appear and appends the continuation page"
+            "Card 8B: mounting the production list makes its last pinned row appear and appends the continuation page"
         )
         #expect(viewState.rows.map(\.item.id) == expectedIDs)
         #expect(viewState.failure == nil)
