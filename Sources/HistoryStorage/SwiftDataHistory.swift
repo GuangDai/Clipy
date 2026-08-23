@@ -216,9 +216,31 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         // `@testable` `HistoryAuthority` initializer.
         let storageClock = SystemStorageClock()
         let searchWorker = SearchWorker()
+        // §16 capacity admission reads the store volume's spare capacity.
+        // Clipboard capture is user-requested important-usage data, so the
+        // important-usage fact is the Apple-guided key (it also accounts
+        // for purgeable space the raw key ignores); a dedicated probe
+        // volume has no purgeable content, leaving its facts identical. An
+        // in-memory store (or any unreadable fact) keeps the reader nil
+        // and admission fail-open.
+        let volumeAvailableCapacityReader: @Sendable () -> Int64?
+        if case .persistent(let storeURL) = configuration.persistence {
+            volumeAvailableCapacityReader = {
+                guard let values = try? storeURL.resourceValues(
+                    forKeys: [.volumeAvailableCapacityForImportantUsageKey]
+                ), let capacity = values
+                    .volumeAvailableCapacityForImportantUsage else {
+                    return nil
+                }
+                return capacity
+            }
+        } else {
+            volumeAvailableCapacityReader = { nil }
+        }
         let authority = HistoryAuthority(
             container: container,
-            storageClock: storageClock
+            storageClock: storageClock,
+            volumeAvailableCapacityReader: volumeAvailableCapacityReader
         )
         let appIntentsConnectionID: ExternalConnectionID
         do {

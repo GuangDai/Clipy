@@ -203,7 +203,10 @@ extension HistoryAuthority {
     ///
     /// - Throws: `.persistence(.invariantViolation)` when the delta
     ///   prevalidation fails — an internal invariant violation raised before
-    ///   any durable write (§12, §16); `.persistence(.transaction)` for any
+    ///   any durable write (§12, §16);
+    ///   `.temporarilyUnavailable(.insufficientDiskSpace)` when capacity
+    ///   admission refuses the plan's new external payload (§16);
+    ///   `.persistence(.transaction)` for any
     ///   transaction-closure failure (§16).
     internal func executeStampedPlan(
         _ stamped: StampedCommitPlan,
@@ -211,6 +214,24 @@ extension HistoryAuthority {
         in context: ModelContext,
         createExistenceProof: CreateExistenceProof = .durableLookup
     ) throws -> HistoryReceipt {
+        // §16 capacity admission, ahead of any durable write: the
+        // external-storage save path raises an uncatchable
+        // `NSInternalInconsistencyException` on a full volume (Card 6B
+        // physical-ENOSPC runner, run 32632262141), so a plan whose encoded
+        // `.externalStorage` payload provably cannot fit is refused here —
+        // typed, before the index-delta prevalidation, stamp effects, or
+        // the transaction. Plans writing no new external bytes (coalesced
+        // repeats, pin/occurrence/policy/delete-only commits) never refuse.
+        if let admissionFailure = CaptureCapacityAdmission.failure(
+            demandBytes: CaptureCapacityAdmission.externalDemandBytes(
+                of: stamped
+            ),
+            availableCapacity: volumeAvailableCapacityOverride
+                ?? volumeAvailableCapacityReader()
+        ) {
+            throw admissionFailure
+        }
+
         // §9: prevalidate the index delta before the transaction so the
         // §11 post-commit dictionary application cannot fail after durable
         // commit. A prevalidation failure happens before any durable write

@@ -62,6 +62,7 @@ Pass 1 (2026-07-19) — all 15 MAJORS + ~20 minors/nits; re-audit follows.
 
 | Finding | File:§ | Change |
 |---|---|---|
+| Card 6B physical-ENOSPC discovery (2026-08-23, dispatch run 32632262141) | 05 §16 | Core Data's external-storage save path returns no out-of-space error: creating the `_EXTERNAL_DATA` interim file on a full volume raises an uncaught `NSInternalInconsistencyException` (SIGABRT) before §16 translation runs. Added stamped-plan capacity admission before any durable write: a plan whose encoded `.externalStorage` payload total (`.create`/`.appendRevision`/`.pruneRevisions` bytes) plus a fixed 1 MiB margin exceeds the store volume's readable `volumeAvailableCapacityForImportantUsage` is refused as `.temporarilyUnavailable(.insufficientDiskSpace)`; plans writing no new external bytes never refuse; unreadable capacity fails open. Mid-transaction exhaustion that begins after admission passes remains an Apple-framework crash ceiling, not a typed failure. |
 | S1-01/S1-02/S4-01 | 02 §5.5 | `maximumUnpinnedItemCount`→`maximumUnpinnedItems`; "non-negative"→"at least 1, matching Part VI 1–5,000; 0 rejected at boundary" |
 | S4-02 | 02 §6, §11 | added `DomainRejection.corruptLineage`; full DomainRejection→HistoryFailure mapping table; step 2→staleContent, step 3→corruptLineage, step 4 = Domain invariants only (Storage enforces numeric bounds) |
 | S4-08 | 02 §3.1 | lastSource = `incoming.sourceApplication ?? existing.lastSource` (no nil overwrite / source regression) |
