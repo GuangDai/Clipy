@@ -32,6 +32,13 @@ bootstrap_cleanup_on_exit() {
   local cleanup_status=0
   local outgoing_status="$original_status"
 
+  # Same substitution-subshell guard as cleanup_on_exit: bash 3.2 can run
+  # an inherited EXIT trap inside a subshell while the top-level shell is
+  # still executing (run 32634454727).
+  if [[ "${BASH_SUBSHELL:-0}" -ne 0 ]]; then
+    return "$original_status"
+  fi
+
   trap - EXIT
   if [[ -n "$temp_root" ]]; then
     case "$temp_root" in
@@ -394,7 +401,10 @@ EOF
     || -z "$available_kib" ]]; then
     printf 'volume.%s=facts-unavailable\n' "$checkpoint" \
       >> "$runtime_facts_log"
-    return 1
+    # A missing fact is a recorded breadcrumb, never a gate: every call
+    # site runs bare under `set -e`, and run 32634454727 died mid-phase
+    # only because a failed redirect made this path return nonzero.
+    return 0
   fi
   printf 'volume.%s.capacity_bytes=%s\n' \
     "$checkpoint" "$((capacity_kib * 1024))" >> "$runtime_facts_log"
@@ -610,6 +620,18 @@ cleanup_resources() {
 cleanup_on_exit() {
   local original_status=$?
   local outgoing_status=0
+
+  # The runner's bash 3.2 runs an inherited EXIT trap inside substitution
+  # subshells: run 32634454727's pressure-result token check fired this trap
+  # from `cmp … <(printf …)` mid-body, detaching the evidence volume and
+  # deleting the disposable root while the main shell kept executing (the
+  # line-383 df redirect then failed against the removed root and the run
+  # ended red with the evidence already proven). Cleanup is owned by the
+  # top-level shell only: $BASH_SUBSHELL is 0 there and at least 1 in every
+  # subshell form on bash 3.2 and later.
+  if [[ "${BASH_SUBSHELL:-0}" -ne 0 ]]; then
+    return "$original_status"
+  fi
 
   # A bare return from an EXIT trap cannot replace the status that entered the
   # trap. Disable recursion and exit explicitly so a cleanup failure following
