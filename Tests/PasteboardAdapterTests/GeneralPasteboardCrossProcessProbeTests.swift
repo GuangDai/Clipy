@@ -125,11 +125,12 @@ struct GeneralPasteboardCrossProcessProbeTests {
     /// Values intentionally exclude pasteboard bytes (06 §10.4, Card 9B).
     private static func reportProcess(phase: String) {
         let process = ProcessInfo.processInfo
+        let declaredPhase = process.environment[phaseEnvironmentKey] ?? "missing"
         report(
             "phase=\(phase) boundary=process " +
                 "pid=\(process.processIdentifier) " +
                 "process_name=\(process.processName) " +
-                "declared_phase=\(process.environment[phaseEnvironmentKey] ?? \"missing\")"
+                "declared_phase=\(declaredPhase)"
         )
     }
 
