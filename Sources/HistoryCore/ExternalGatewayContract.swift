@@ -237,6 +237,8 @@ public enum ExternalDenialReason: Int16, Sendable, Equatable, Codable {
 public enum ExternalTransientReason: Int16, Sendable, Equatable, Codable {
     case indexRebuild = 1
     case storeLocked = 2
+    case insufficientDiskSpace = 3
+    case cancelled = 4
 }
 
 /// Stable discriminator persisted for a failed operation record.

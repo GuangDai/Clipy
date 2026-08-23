@@ -123,6 +123,12 @@ internal enum AuthoritySuspensionPoint: String, Sendable {
     /// race-closing recheck drives (docs/06-cross-cutting.md §8;
     /// docs/04-coherence.md §5).
     case positionRecheckEntry = "HistoryAuthority.currentPosition.entry"
+
+    /// On Gateway audit cadence-maintenance entry, before its operation-local
+    /// context exists. X.6 uses this to prove concurrent Gateway callers share
+    /// one Authority compaction attempt across actor reentrancy.
+    case gatewayAuditCompactionEntry =
+        "HistoryAuthority.compactExternalAudit.entry"
 }
 
 /// The failure a test can inject inside the transaction closure.
@@ -167,6 +173,10 @@ internal enum InjectedTransactionFailure: Error, Sendable, Equatable {
     /// singleton update so the production transaction catch and rollback are
     /// exercised.
     case insufficientDiskSpace
+
+    /// Throw inside the cadence-maintenance transaction before Gateway audit
+    /// compaction. Only `compactExternalAuditIfNeeded` consumes this case.
+    case beforeGatewayAuditCompaction
 }
 
 // MARK: - HistoryAuthority (docs/05-authority-kernel.md §2, §5)
@@ -227,16 +237,14 @@ internal actor HistoryAuthority {
     /// production (see `InjectedTransactionFailure`).
     internal var injectedTransactionFailure: InjectedTransactionFailure?
 
-    /// The Storage-side clock (V2-02 §6.4 / V2-05 §4.6), supplying the R1
-    /// reference `now` for the `.setRetentionPolicies` sweep lane and the
-    /// one-time App Intents connection enrollment timestamp. Injected at this
-    /// INTERNAL initializer (production wires `SystemStorageClock` inside
-    /// `SwiftDataHistory.open`; tests inject a fixed `Date` via
-    /// `@testable`) and never exposed on the public `open` /
-    /// `HistoryConfiguration` seam (§6.4 "Injection mechanism";
-    /// `RET-COMPILE-1`). The sweep reads it once per commit inside the
-    /// serialized Authority interval before fact load (§6.4); X.3 reads it
-    /// only on the absent-config bootstrap path before the create transaction.
+    /// The Storage-side clock (V2-02 §6.4 / V2-05 §5.5), supplying retention,
+    /// HCR, Gateway bootstrap/admin, and mandatory audit timestamps. Production
+    /// constructs one `SystemStorageClock` in `SwiftDataHistory.open` and gives
+    /// the same witness to this actor and `ExternalGateway`, so X.6 entry-time
+    /// `requestedAt` and Authority-owned durability samples share one clock.
+    /// Tests inject fixed/stepped witnesses through internal initializers only;
+    /// the public `open` / `HistoryConfiguration` seam remains unchanged
+    /// (`RET-COMPILE-1`).
     internal let storageClock: any StorageClock
 
     /// Durable Gateway connection identity source (`V2-05` §4.1/§4.6).

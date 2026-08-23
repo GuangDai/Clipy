@@ -320,15 +320,19 @@ struct GatewayAuthorizationTests {
     func rateDenialIsAuditedBeforeAuthorizationPolicy() async throws {
         let fixture = try await Self.makeFixture()
         try Self.revokeConnection(in: fixture)
+        let requestedAt = fixture.clock.now()
 
         try await fixture.authority.commitExternalRateDenial(
             Self.pinDescriptor,
-            as: Self.connectionID
+            as: Self.connectionID,
+            requestedAt: requestedAt
         )
 
         let snapshot = try Self.snapshot(fixture)
         let operation = try #require(snapshot.operations.first)
         #expect(snapshot.operations.count == 1)
+        #expect(operation.requestedAt == requestedAt)
+        #expect(operation.committedAt > requestedAt)
         try Self.expectDeniedOperation(
             operation,
             descriptor: Self.pinDescriptor,

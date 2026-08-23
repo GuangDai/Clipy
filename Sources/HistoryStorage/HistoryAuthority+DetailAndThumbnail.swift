@@ -31,6 +31,16 @@ extension HistoryAuthority {
     internal func details(for id: HistoryItemID) async throws -> HistoryDetails {
         let context = ModelContext(container)
         context.autosaveEnabled = false
+        return try details(for: id, in: context)
+    }
+
+    /// Synchronous V1 detail projection for an Authority caller that already
+    /// owns the operation-local context. X.6 uses it after the live grant gate
+    /// and before the audit append in that same non-suspending interval.
+    internal func details(
+        for id: HistoryItemID,
+        in context: ModelContext
+    ) throws -> HistoryDetails {
 
         // ── Non-suspending read interval (§5): no `await` past this
         //    line while the context or fetched row is live. ──
@@ -124,6 +134,14 @@ extension HistoryAuthority {
     internal func pastePayload(for id: HistoryItemID) async throws -> PastePayload {
         let context = ModelContext(container)
         context.autosaveEnabled = false
+        return try pastePayload(for: id, in: context)
+    }
+
+    /// Synchronous V1 paste projection for a caller-owned Authority context.
+    internal func pastePayload(
+        for id: HistoryItemID,
+        in context: ModelContext
+    ) throws -> PastePayload {
 
         // ── Non-suspending read interval (§5): no `await` past this
         //    line while the context or fetched row is live. ──

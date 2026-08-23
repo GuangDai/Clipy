@@ -183,6 +183,11 @@ internal struct StampedCommitPlan: Sendable {
     /// the plan's one position and every touched business ID; no no-op reaches
     /// `StampedCommitPlan` (`V2-03` §5.1–§5.2).
     internal let hcrAppend: HistoryChangeRecordPayload
+    /// External-write provenance staged in the same save boundary as the
+    /// mutation, HCR, and position. Every app-internal plan keeps this nil;
+    /// no-op/denied/failed external attempts use their separate mandatory
+    /// audit barrier because they have no successful History Commit.
+    internal let auditAppend: OperationRecordPayload?
     /// Receipt-facing summary derived from the Domain plan's explicit
     /// retire/prune facts before a compose-with-append prune is folded away.
     /// It is presentation invalidation only: identity and transaction
@@ -195,6 +200,7 @@ internal struct StampedCommitPlan: Sendable {
         receiptOutcome: HistoryCommitOutcome,
         indexDelta: SignatureIndexDelta,
         hcrAppend: HistoryChangeRecordPayload,
+        auditAppend: OperationRecordPayload? = nil,
         hasDestructiveRetentionEffects: Bool = false
     ) {
         self.position = position
@@ -202,7 +208,30 @@ internal struct StampedCommitPlan: Sendable {
         self.receiptOutcome = receiptOutcome
         self.indexDelta = indexDelta
         self.hcrAppend = hcrAppend
+        self.auditAppend = auditAppend
         self.hasDestructiveRetentionEffects = hasDestructiveRetentionEffects
+    }
+
+    /// Returns the external-write form of an already complete internal plan.
+    /// The History plan remains the single source for every mutation, receipt,
+    /// index delta, HCR, and position; this adds only provenance.
+    internal func attachingAuditAppend(
+        _ payload: OperationRecordPayload
+    ) throws -> Self {
+        guard auditAppend == nil,
+              payload.outcome == .succeeded,
+              payload.changePosition == position else {
+            throw StampingRejection.incoherentPlan
+        }
+        return Self(
+            position: position,
+            mutations: mutations,
+            receiptOutcome: receiptOutcome,
+            indexDelta: indexDelta,
+            hcrAppend: hcrAppend,
+            auditAppend: payload,
+            hasDestructiveRetentionEffects: hasDestructiveRetentionEffects
+        )
     }
 
     /// Whether §10 must re-prove D12 before transaction success. Revision,

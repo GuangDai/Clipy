@@ -1,8 +1,8 @@
 # V2-03 - Change Journal & Reconnect (J1 durable History Change Record + reconnect cursor + collection cache)
 
-> **Status (2026-08-23):** the internal X-HCR subset in §0 is implemented in
-> the current Batch 11 worktree and awaits correctness CI; the public reconnect
-> and collection-cache J1 product remains design-only and separately gated.
+> **Status (2026-08-23):** the internal X-HCR subset in §0 is landed and
+> correctness-CI-green through Batch 11–12; the public reconnect and
+> collection-cache J1 product remains design-only and separately gated.
 > This doc extends the v1 specification (`00`–`06`) by **addition only**.
 > v1 owns v1 read/observation behavior; V2-03 owns the durable History Change
 > Record (HCR) journal, the reconnect cursor, and the G2 collection cache, grafted

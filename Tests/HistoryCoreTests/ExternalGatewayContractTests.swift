@@ -14,6 +14,8 @@ import Testing
 
     #expect(ExternalTransientReason.indexRebuild.rawValue == 1)
     #expect(ExternalTransientReason.storeLocked.rawValue == 2)
+    #expect(ExternalTransientReason.insufficientDiskSpace.rawValue == 3)
+    #expect(ExternalTransientReason.cancelled.rawValue == 4)
 
     #expect(ExternalFailureKindRaw.unauthorized.rawValue == 1)
     #expect(ExternalFailureKindRaw.connectionRevoked.rawValue == 2)
@@ -55,6 +57,7 @@ import Testing
     #expect(ConnectionStatus(rawValue: 0) == nil)
     #expect(ExternalDenialReason(rawValue: 0) == nil)
     #expect(ExternalTransientReason(rawValue: 0) == nil)
+    #expect(ExternalTransientReason(rawValue: 5) == nil)
     #expect(ExternalFailureKindRaw(rawValue: 0) == nil)
     #expect(AuditRebaseReason(rawValue: 0) == nil)
     #expect(ExternalOutcome(rawValue: 0) == nil)

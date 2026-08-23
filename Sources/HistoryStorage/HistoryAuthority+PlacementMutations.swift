@@ -40,7 +40,8 @@ extension HistoryAuthority {
     ///   (§16).
     internal func commitPinnedPlacement(
         _ itemID: HistoryItemID,
-        _ placement: PinnedPlacement
+        _ placement: PinnedPlacement,
+        externalWrite: ExternalWriteCommitContext? = nil
     ) async throws -> HistoryReceipt {
         let context = ModelContext(container)
         context.autosaveEnabled = false
@@ -80,6 +81,12 @@ extension HistoryAuthority {
             // §9: release the context and return — nothing is retained
             // across the operation (§5), and a no-op yields no receipt,
             // index delta, or invalidation (docs/04-coherence.md §4).
+            if let externalWrite {
+                try commitExternalWriteNoOpAudit(
+                    externalWrite,
+                    in: context
+                )
+            }
             return .unchanged
         }
 
@@ -87,12 +94,20 @@ extension HistoryAuthority {
         // (docs/02-domain.md §4, §13).
         let stamped: StampedCommitPlan
         do {
-            stamped = try CommitPlanStamper.stamp(
+            let committedAt = storageClock.now()
+            let internalPlan = try CommitPlanStamper.stamp(
                 mutationPlan,
                 currentPosition: currentPosition,
                 inputs: .none,
-                createdAt: storageClock.now()
+                createdAt: committedAt
             )
+            stamped = try externalWrite.map {
+                try Self.attachExternalWriteAudit(
+                    to: internalPlan,
+                    write: $0,
+                    committedAt: committedAt
+                )
+            } ?? internalPlan
         } catch let rejection as StampingRejection {
             throw rejection.historyFailure
         } catch let rejection as CodecRejection {
@@ -123,7 +138,10 @@ extension HistoryAuthority {
     ///   `CodecRejection.encodingFailed` via their §16 mappings;
     ///   `.persistence(.transaction)` for any transaction-closure failure
     ///   (§16).
-    internal func commitUnpin(_ itemID: HistoryItemID) async throws -> HistoryReceipt {
+    internal func commitUnpin(
+        _ itemID: HistoryItemID,
+        externalWrite: ExternalWriteCommitContext? = nil
+    ) async throws -> HistoryReceipt {
         let context = ModelContext(container)
         context.autosaveEnabled = false
 
@@ -158,6 +176,12 @@ extension HistoryAuthority {
             // §9: release the context and return — nothing is retained
             // across the operation (§5), and a no-op yields no receipt,
             // index delta, or invalidation (docs/04-coherence.md §4).
+            if let externalWrite {
+                try commitExternalWriteNoOpAudit(
+                    externalWrite,
+                    in: context
+                )
+            }
             return .unchanged
         }
 
@@ -165,12 +189,20 @@ extension HistoryAuthority {
         // (docs/02-domain.md §4, §13).
         let stamped: StampedCommitPlan
         do {
-            stamped = try CommitPlanStamper.stamp(
+            let committedAt = storageClock.now()
+            let internalPlan = try CommitPlanStamper.stamp(
                 mutationPlan,
                 currentPosition: currentPosition,
                 inputs: .none,
-                createdAt: storageClock.now()
+                createdAt: committedAt
             )
+            stamped = try externalWrite.map {
+                try Self.attachExternalWriteAudit(
+                    to: internalPlan,
+                    write: $0,
+                    committedAt: committedAt
+                )
+            } ?? internalPlan
         } catch let rejection as StampingRejection {
             throw rejection.historyFailure
         } catch let rejection as CodecRejection {
@@ -205,7 +237,10 @@ extension HistoryAuthority {
     ///   `CodecRejection.encodingFailed` via their §16 mappings;
     ///   `.persistence(.transaction)` for any transaction-closure failure
     ///   (§16).
-    internal func commitRemove(_ itemID: HistoryItemID) async throws -> HistoryReceipt {
+    internal func commitRemove(
+        _ itemID: HistoryItemID,
+        externalWrite: ExternalWriteCommitContext? = nil
+    ) async throws -> HistoryReceipt {
         let context = ModelContext(container)
         context.autosaveEnabled = false
 
@@ -240,6 +275,12 @@ extension HistoryAuthority {
             // §9: release the context and return — nothing is retained
             // across the operation (§5), and a no-op yields no receipt,
             // index delta, or invalidation (docs/04-coherence.md §4).
+            if let externalWrite {
+                try commitExternalWriteNoOpAudit(
+                    externalWrite,
+                    in: context
+                )
+            }
             return .unchanged
         }
 
@@ -247,12 +288,20 @@ extension HistoryAuthority {
         // (docs/02-domain.md §4, §13).
         let stamped: StampedCommitPlan
         do {
-            stamped = try CommitPlanStamper.stamp(
+            let committedAt = storageClock.now()
+            let internalPlan = try CommitPlanStamper.stamp(
                 mutationPlan,
                 currentPosition: currentPosition,
                 inputs: .none,
-                createdAt: storageClock.now()
+                createdAt: committedAt
             )
+            stamped = try externalWrite.map {
+                try Self.attachExternalWriteAudit(
+                    to: internalPlan,
+                    write: $0,
+                    committedAt: committedAt
+                )
+            } ?? internalPlan
         } catch let rejection as StampingRejection {
             throw rejection.historyFailure
         } catch let rejection as CodecRejection {

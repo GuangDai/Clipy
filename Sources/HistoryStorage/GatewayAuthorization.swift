@@ -58,6 +58,129 @@ internal struct ExternalOperationDescriptor: Sendable {
     }
 }
 
+extension ExternalOperationDescriptor {
+    /// Nonthrowing capability classification used before request-shape
+    /// validation so the baked unknown-connection check retains X.5
+    /// precedence over malformed parameters.
+    internal static func requiredCapability(
+        for read: ExternalRead
+    ) -> ExternalCapability {
+        switch read {
+        case .recent, .search:
+            .browse
+        case .details, .pastePayload:
+            .readContent
+        }
+    }
+
+    /// One owner for the closed manage-subset descriptor mapping.
+    internal static func forRequest(_ request: ExternalRequest) -> Self {
+        switch request {
+        case .pin(let id):
+            Self(
+                capability: .manage,
+                operationKind: .managePin,
+                requestSummary: .pin(itemID: id.rawValue)
+            )
+        case .unpin(let id):
+            Self(
+                capability: .manage,
+                operationKind: .manageUnpin,
+                requestSummary: .unpin(itemID: id.rawValue)
+            )
+        case .remove(let id):
+            Self(
+                capability: .manage,
+                operationKind: .manageRemove,
+                requestSummary: .remove(itemID: id.rawValue)
+            )
+        }
+    }
+
+    /// One owner for external read bounds, capability, operation, and
+    /// privacy-safe request-summary classification.
+    internal static func forRead(
+        _ read: ExternalRead,
+        limits: HistoryLimits = .standard
+    ) throws -> Self {
+        switch read {
+        case .recent(let limit):
+            return Self(
+                capability: .browse,
+                operationKind: .readRecent,
+                requestSummary: .recent(
+                    limit: try encodedLimit(limit, limits: limits)
+                )
+            )
+
+        case .search(let text, let mode, let limit):
+            guard text.utf8.count <= limits.maximumSearchTermUTF8Bytes,
+                  let queryByteCount = UInt16(exactly: text.utf8.count) else {
+                throw ExternalFailure.requestDenied(.invalidInput)
+            }
+            let encodedMode: SearchModeRawV1
+            switch mode {
+            case .exact:
+                encodedMode = .exact
+            case .fuzzy:
+                guard text.count <= limits.maximumFuzzyQueryCharacters else {
+                    throw ExternalFailure.requestDenied(.invalidInput)
+                }
+                encodedMode = .fuzzy
+            case .regexp:
+                guard text.count <= limits.maximumRegexpPatternCharacters else {
+                    throw ExternalFailure.requestDenied(.invalidInput)
+                }
+                encodedMode = .regexp
+            }
+            return Self(
+                capability: .browse,
+                operationKind: .readSearch,
+                requestSummary: .search(
+                    queryUTF8ByteCount: queryByteCount,
+                    mode: encodedMode,
+                    limit: try encodedLimit(limit, limits: limits)
+                )
+            )
+
+        case .details(let id):
+            return Self(
+                capability: .readContent,
+                operationKind: .readDetails,
+                requestSummary: .details(itemID: id.rawValue)
+            )
+
+        case .pastePayload(let id):
+            return Self(
+                capability: .readContent,
+                operationKind: .readPastePayload,
+                requestSummary: .pastePayload(itemID: id.rawValue)
+            )
+        }
+    }
+
+    private static func encodedLimit(
+        _ limit: Int,
+        limits: HistoryLimits
+    ) throws -> UInt16 {
+        guard limits.pageRowLimitRange.contains(limit),
+              let encoded = UInt16(exactly: limit) else {
+            throw ExternalFailure.requestDenied(.invalidInput)
+        }
+        return encoded
+    }
+}
+
+/// Pure caller-context result of the targeted durable connection/grant check.
+/// The helper performs no audit or mutation: read and write callers therefore
+/// decide inside their own owning interval/transaction when a known denial
+/// crosses its mandatory publication barrier.
+internal enum TargetedExternalAuthorizationDecision: Sendable {
+    case authorized
+    case unknownConnection
+    case denied(ExternalFailure)
+}
+
 extension HistoryAuthority {
     /// Re-fetches and validates exactly one connection plus at most nine
     /// per-connection grant rows. Unknown connections and forbidden
@@ -72,47 +195,60 @@ extension HistoryAuthority {
         as connection: ExternalConnectionID
     ) throws {
         let requestedAt = storageClock.now()
+        try authorizeExternal(
+            descriptor,
+            as: connection,
+            requestedAt: requestedAt
+        )
+    }
+
+    /// X.5 wrapper for a Gateway entry that already sampled the shared
+    /// Storage clock. Keeping the timestamp explicit prevents a second sample
+    /// from changing denial attribution.
+    internal func authorizeExternal(
+        _ descriptor: ExternalOperationDescriptor,
+        as connection: ExternalConnectionID,
+        requestedAt: Date
+    ) throws {
         let context = ModelContext(container)
         context.autosaveEnabled = false
         let config = try Self.loadGatewayConfig(in: context)
 
-        guard let current = try Self.loadExternalConnection(
-            connection,
+        try authorizeExternal(
+            descriptor,
+            as: connection,
+            requestedAt: requestedAt,
             config: config,
             in: context
-        ) else {
+        )
+    }
+
+    /// Caller-context X.5 denial wrapper. A known denial is appended through
+    /// the caller's context before it escapes; an unknown connection remains
+    /// unaudited. Positive reads use this immediately before their V1
+    /// projection, while the legacy X.5 entry above preserves its behavior.
+    internal func authorizeExternal(
+        _ descriptor: ExternalOperationDescriptor,
+        as connection: ExternalConnectionID,
+        requestedAt: Date,
+        config: GatewayConfigRow,
+        in context: ModelContext
+    ) throws {
+        let decision = try Self.targetedExternalAuthorizationDecision(
+            descriptor,
+            connection: connection,
+            config: config,
+            in: context
+        )
+        switch decision {
+        case .authorized:
+            return
+        case .unknownConnection:
             throw ExternalFailure.unauthorized(
                 requestedCapability: descriptor.capability,
                 connectionID: connection
             )
-        }
-        guard current.status == .active else {
-            let failure = ExternalFailure.connectionRevoked(
-                connectionID: connection
-            )
-            try commitGatewayAudit(
-                Self.deniedExternalPayload(
-                    descriptor,
-                    connection: connection,
-                    requestedAt: requestedAt,
-                    failure: failure
-                ),
-                config: config,
-                in: context
-            )
-            throw failure
-        }
-        let hasLiveGrant = try Self.hasValidatedLiveGrant(
-            descriptor.capability,
-            for: current,
-            connection: connection,
-            in: context
-        )
-        guard hasLiveGrant else {
-            let failure = ExternalFailure.unauthorized(
-                requestedCapability: descriptor.capability,
-                connectionID: connection
-            )
+        case .denied(let failure):
             try commitGatewayAudit(
                 Self.deniedExternalPayload(
                     descriptor,
@@ -127,14 +263,48 @@ extension HistoryAuthority {
         }
     }
 
+    /// Reuses the X.5 exact targeted loaders in a caller-supplied context.
+    /// Reads call this before projection and audit in one Authority interval;
+    /// writes call it inside their save-boundary transaction.
+    internal static func targetedExternalAuthorizationDecision(
+        _ descriptor: ExternalOperationDescriptor,
+        connection: ExternalConnectionID,
+        config: GatewayConfigRow,
+        in context: ModelContext
+    ) throws -> TargetedExternalAuthorizationDecision {
+        guard let current = try loadExternalConnection(
+            connection,
+            config: config,
+            in: context
+        ) else {
+            return .unknownConnection
+        }
+        guard current.status == .active else {
+            return .denied(.connectionRevoked(connectionID: connection))
+        }
+        let hasLiveGrant = try hasValidatedLiveGrant(
+            descriptor.capability,
+            for: current,
+            connection: connection,
+            in: context
+        )
+        guard hasLiveGrant else {
+            return .denied(.unauthorized(
+                requestedCapability: descriptor.capability,
+                connectionID: connection
+            ))
+        }
+        return .authorized
+    }
+
     /// Commits the process-local rate limiter's denial before publishing it.
     /// Rate denial intentionally precedes grant/status policy: only a known,
     /// structurally valid connection and admitted descriptor are required.
     internal func commitExternalRateDenial(
         _ descriptor: ExternalOperationDescriptor,
-        as connection: ExternalConnectionID
+        as connection: ExternalConnectionID,
+        requestedAt: Date
     ) throws {
-        let requestedAt = storageClock.now()
         let context = ModelContext(container)
         context.autosaveEnabled = false
         let config = try Self.loadGatewayConfig(in: context)
@@ -162,17 +332,24 @@ extension HistoryAuthority {
         )
     }
 
-    /// Runs the X.4 maintenance primitive on the X.5 actor-owned dispatch
-    /// cadence. The context and transaction stay inside the sole writer.
+    /// Runs the X.4 maintenance primitive as the Gateway actor's retryable
+    /// pre-dispatch cadence barrier. The context and transaction stay inside
+    /// the sole writer.
     internal func compactExternalAuditIfNeeded(
         limits: ExternalLimits
-    ) throws {
+    ) async throws {
+        await suspendIfRequested(.gatewayAuditCompactionEntry)
         let now = storageClock.now()
         let context = ModelContext(container)
         context.autosaveEnabled = false
         let config = try Self.loadGatewayConfig(in: context)
         do {
             try context.transaction {
+                if consumeTransactionFailureInjection(
+                    .beforeGatewayAuditCompaction
+                ) {
+                    throw InjectedTransactionFailure.beforeGatewayAuditCompaction
+                }
                 _ = try GatewayAuditStore.compactIfNeeded(
                     now: now,
                     config: config,

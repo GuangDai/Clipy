@@ -37,6 +37,97 @@ struct ExternalGatewayDenialTests {
         }
     }
 
+#if DEBUG
+    private struct ExpectedParkMissing: Error {}
+
+    private final class FirstEventRace: Sendable {
+        enum Event: Sendable, Equatable {
+            case parked
+            case completed
+        }
+
+        private struct State: Sendable {
+            var first: Event?
+            var waiter: CheckedContinuation<Event, Never>?
+        }
+
+        private let state = Mutex(State())
+
+        func track(
+            _ operation: @escaping @Sendable () async throws -> Void
+        ) async throws {
+            do {
+                try await operation()
+                signal(.completed)
+            } catch {
+                signal(.completed)
+                throw error
+            }
+        }
+
+        func signal(_ event: Event) {
+            let waiter = state.withLock { state in
+                guard state.first == nil else { return nil }
+                state.first = event
+                defer { state.waiter = nil }
+                return state.waiter
+            }
+            waiter?.resume(returning: event)
+        }
+
+        func wait() async -> Event {
+            await withCheckedContinuation { continuation in
+                let immediate = state.withLock { state in
+                    if let first = state.first { return first }
+                    precondition(state.waiter == nil)
+                    state.waiter = continuation
+                    return nil
+                }
+                if let immediate {
+                    continuation.resume(returning: immediate)
+                }
+            }
+        }
+    }
+
+    private final class CompactionEntryCounter: Sendable {
+        private struct State: Sendable {
+            var count = 0
+            var thirdRequestExpected = false
+        }
+
+        private let state = Mutex(State())
+
+        func record() -> (count: Int, thirdRequestExpected: Bool) {
+            state.withLock { state in
+                state.count += 1
+                return (state.count, state.thirdRequestExpected)
+            }
+        }
+
+        func expectThirdRequest() {
+            state.withLock { $0.thirdRequestExpected = true }
+        }
+
+        var value: Int {
+            state.withLock { $0.count }
+        }
+    }
+
+    private static func requirePark(
+        _ race: FirstEventRace,
+        before task: Task<Void, Error>
+    ) async throws {
+        switch await race.wait() {
+        case .parked:
+            return
+        case .completed:
+            try await task.value
+            throw ExpectedParkMissing()
+        }
+    }
+#endif
+
     private struct HistoryValueSnapshot: Equatable {
         struct Item: Equatable {
             let id: UUID
@@ -73,6 +164,47 @@ struct ExternalGatewayDenialTests {
         let position: UInt64
         let items: [Item]
         let retainedBytes: [RetainedBytes]
+    }
+
+    private struct JournalValueSnapshot: Equatable {
+        struct Config: Equatable {
+            let key: String
+            let compactionFloorRaw: UInt64
+            let journalBytes: UInt64
+            let configSchemaVersion: UInt16
+
+            init(_ row: JournalConfigRow) {
+                key = row.key
+                compactionFloorRaw = row.compactionFloorRaw
+                journalBytes = row.journalBytes
+                configSchemaVersion = row.configSchemaVersion
+            }
+        }
+
+        struct Record: Equatable {
+            let sequence: UInt64
+            let changePositionRaw: UInt64
+            let changeKindRaw: Int16
+            let affectedItemsBlob: Data
+            let createdAt: Date
+
+            init(_ row: HistoryChangeRecordRow) {
+                sequence = row.sequence
+                changePositionRaw = row.changePositionRaw
+                changeKindRaw = row.changeKindRaw
+                affectedItemsBlob = row.affectedItemsBlob
+                createdAt = row.createdAt
+            }
+        }
+
+        let configs: [Config]
+        let records: [Record]
+    }
+
+    private struct DurableValueSnapshot: Equatable {
+        let history: HistoryValueSnapshot
+        let journal: JournalValueSnapshot
+        let gateway: GatewayStoreSnapshot
     }
 
     private struct Fixture {
@@ -115,9 +247,10 @@ struct ExternalGatewayDenialTests {
         let idSource = UUIDSource([
             Self.appIntentsUUID,
         ])
+        let storageClock = FixedClock(fixed: Self.epoch)
         let authority = HistoryAuthority(
             container: container,
-            storageClock: FixedClock(fixed: Self.epoch),
+            storageClock: storageClock,
             gatewayConnectionIDSource: { idSource.next() }
         )
         try await authority.performStartup(initialMaximumUnpinnedItems: 200)
@@ -137,6 +270,8 @@ struct ExternalGatewayDenialTests {
             rateLimiter: rateLimiter
                 ?? ExternalRateLimiter(initialUptimeNanoseconds: 0),
             limits: limits,
+            searchWorker: SearchWorker(),
+            storageClock: storageClock,
             uptimeNanoseconds: { 0 }
         )
         return Fixture(
@@ -171,6 +306,33 @@ struct ExternalGatewayDenialTests {
         in container: ModelContainer
     ) throws -> GatewayStoreSnapshot {
         try GatewayStoreSnapshot.read(in: ModelContext(container))
+    }
+
+    private static func durableSnapshot(
+        in container: ModelContainer
+    ) throws -> DurableValueSnapshot {
+        let context = ModelContext(container)
+        let configs = try context.fetch(FetchDescriptor<JournalConfigRow>())
+            .map(JournalValueSnapshot.Config.init)
+            .sorted { $0.key < $1.key }
+        let records = try context.fetch(FetchDescriptor<HistoryChangeRecordRow>())
+            .map(JournalValueSnapshot.Record.init)
+            .sorted { $0.sequence < $1.sequence }
+        return DurableValueSnapshot(
+            history: try historySnapshot(in: container),
+            journal: JournalValueSnapshot(configs: configs, records: records),
+            gateway: try GatewayStoreSnapshot.read(in: context)
+        )
+    }
+
+    private static func rateLimiterWithTwoTokensRemaining()
+        -> ExternalRateLimiter
+    {
+        var limiter = ExternalRateLimiter(initialUptimeNanoseconds: 0)
+        for _ in 0..<28 {
+            _ = limiter.admit(atUptimeNanoseconds: 0)
+        }
+        return limiter
     }
 
 #if DEBUG
@@ -535,13 +697,249 @@ struct ExternalGatewayDenialTests {
 #endif
     }
 
-    @Test("the admitted-operation cadence invokes central audit compaction")
-    func admittedCadenceCompactsAfterThePublishedDenial() async throws {
+    @Test("failed cadence maintenance precedes a destructive request")
+    func failedCadenceMaintenanceDoesNotRemoveOrDebit() async throws {
+        let limits = GatewayAuditTestSupport.limits(
+            maxAuditLogSize: 1,
+            compactionCadenceOps: 2
+        )
+        let fixture = try await Self.makeFixture(
+            limits: limits,
+            rateLimiter: Self.rateLimiterWithTwoTokensRemaining()
+        )
+        try await fixture.authority.grantCapability(
+            .manage,
+            to: fixture.connection
+        )
+        await #expect(throws: ExternalFailure.unauthorized(
+            requestedCapability: .browse,
+            connectionID: fixture.connection
+        )) {
+            try await fixture.gateway.authorize(
+                .recent(limit: 1),
+                as: fixture.connection
+            )
+        }
+        let before = try Self.durableSnapshot(in: fixture.container)
+        let itemUUID = try #require(before.history.items.first).id
+        let itemID = HistoryItemID(rawValue: itemUUID)
+        await fixture.authority.setTransactionFailureInjection(
+            .beforeGatewayAuditCompaction
+        )
+
+        await #expect(throws: ExternalFailure.persistence(.transaction)) {
+            _ = try await fixture.gateway.perform(
+                .remove(itemID),
+                as: fixture.connection
+            )
+        }
+        #expect(try Self.durableSnapshot(in: fixture.container) == before)
+
+        guard case .removed(count: 1) = try await fixture.gateway.perform(
+            .remove(itemID),
+            as: fixture.connection
+        ) else {
+            Issue.record("expected identical retry to remove one item")
+            return
+        }
+        #expect(try Self.historySnapshot(in: fixture.container).items.isEmpty)
+        let afterRetry = try Self.gatewaySnapshot(in: fixture.container)
+        #expect(afterRetry.operations.last?.operationKindRaw
+            == ExternalOperationKind.manageRemove.rawValue)
+        #expect(afterRetry.operations.dropLast().last?.operationKindRaw
+            == ExternalOperationKind.adminCompact.rawValue)
+    }
+
+    @Test("failed cadence maintenance precedes a History read")
+    func failedCadenceMaintenanceDoesNotReadOrDebit() async throws {
+        let limits = GatewayAuditTestSupport.limits(
+            maxAuditLogSize: 1,
+            compactionCadenceOps: 2
+        )
+        let fixture = try await Self.makeFixture(
+            limits: limits,
+            rateLimiter: Self.rateLimiterWithTwoTokensRemaining()
+        )
+        try await fixture.authority.grantCapability(
+            .browse,
+            to: fixture.connection
+        )
+        try await fixture.gateway.authorize(
+            .recent(limit: 1),
+            as: fixture.connection
+        )
+        let before = try Self.durableSnapshot(in: fixture.container)
+        let expectedItemID = HistoryItemID(
+            rawValue: try #require(before.history.items.first).id
+        )
+#if DEBUG
+        let phases = await Self.installHistoryReadProbe(on: fixture.authority)
+#endif
+        await fixture.authority.setTransactionFailureInjection(
+            .beforeGatewayAuditCompaction
+        )
+
+        await #expect(throws: ExternalFailure.persistence(.transaction)) {
+            _ = try await fixture.gateway.read(
+                .recent(limit: 1),
+                as: fixture.connection
+            )
+        }
+        #expect(try Self.durableSnapshot(in: fixture.container) == before)
+#if DEBUG
+        Self.expectNoRecentHistoryRead(phases)
+#endif
+
+        guard case .page(let page) = try await fixture.gateway.read(
+            .recent(limit: 1),
+            as: fixture.connection
+        ) else {
+            Issue.record("expected identical retry to return a page")
+            return
+        }
+        #expect(page.rows.map(\.item.id) == [expectedItemID])
+        let afterRetry = try Self.gatewaySnapshot(in: fixture.container)
+        #expect(afterRetry.operations.last?.operationKindRaw
+            == ExternalOperationKind.readRecent.rawValue)
+        #expect(afterRetry.operations.dropLast().last?.operationKindRaw
+            == ExternalOperationKind.adminCompact.rawValue)
+    }
+
+#if DEBUG
+    @Test("concurrent cadence follower shares and advances maintenance")
+    func concurrentFollowerSharesCompactionAndCountsNextInterval() async throws {
+        let limits = GatewayAuditTestSupport.limits(
+            maxAuditLogSize: ExternalLimits.standard.maxAuditLogSize,
+            compactionCadenceOps: 2
+        )
+        let fixture = try await Self.makeFixture(limits: limits)
+        try await fixture.authority.grantCapability(
+            .browse,
+            to: fixture.connection
+        )
+        try await fixture.gateway.authorize(
+            .recent(limit: 1),
+            as: fixture.connection
+        )
+
+        let compactionGate = SuspensionGate()
+        let followerGate = SuspensionGate()
+        let firstCompactionRace = FirstEventRace()
+        let followerRace = FirstEventRace()
+        let thirdCompactionRace = FirstEventRace()
+        let entryCounter = CompactionEntryCounter()
+        let entryPoint = AuthoritySuspensionPoint
+            .gatewayAuditCompactionEntry.rawValue
+        let followerPoint = "ExternalGateway.compactionFollower.joined"
+        let gateway = fixture.gateway
+        let connection = fixture.connection
+        await fixture.authority.setSuspensionHandler { point in
+            guard point == .gatewayAuditCompactionEntry else { return }
+            let entry = entryCounter.record()
+            if entry.count == 1 {
+                firstCompactionRace.signal(.parked)
+                await compactionGate.park(at: point.rawValue)
+            } else if entry.count == 2, entry.thirdRequestExpected {
+                thirdCompactionRace.signal(.parked)
+                await compactionGate.park(at: point.rawValue)
+            }
+        }
+
+        var first: Task<Void, Error>?
+        var second: Task<Void, Error>?
+        var third: Task<Void, Error>?
+        do {
+            let firstTask = Task {
+                try await firstCompactionRace.track {
+                    try await gateway.authorize(
+                        .recent(limit: 1),
+                        as: connection
+                    )
+                }
+            }
+            first = firstTask
+            try await Self.requirePark(
+                firstCompactionRace,
+                before: firstTask
+            )
+
+            let secondTask = Task {
+                try await followerRace.track {
+                    try await ExternalGatewayDebugInstrumentation
+                        .$compactionFollowerDidJoin.withValue({
+                            followerRace.signal(.parked)
+                            await followerGate.park(at: followerPoint)
+                        }) {
+                            try await gateway.authorize(
+                                .recent(limit: 1),
+                                as: connection
+                            )
+                        }
+                }
+            }
+            second = secondTask
+            try await Self.requirePark(followerRace, before: secondTask)
+
+            await followerGate.resume(followerPoint)
+            await compactionGate.resume(entryPoint)
+            try await firstTask.value
+            try await secondTask.value
+            try #require(entryCounter.value == 1)
+
+            entryCounter.expectThirdRequest()
+            let thirdTask = Task {
+                try await thirdCompactionRace.track {
+                    try await gateway.authorize(
+                        .recent(limit: 1),
+                        as: connection
+                    )
+                }
+            }
+            third = thirdTask
+            try await Self.requirePark(
+                thirdCompactionRace,
+                before: thirdTask
+            )
+            #expect(entryCounter.value == 2)
+            await compactionGate.resume(entryPoint)
+            try await thirdTask.value
+        } catch {
+            await followerGate.resumeAll()
+            await compactionGate.resumeAll()
+            first?.cancel()
+            second?.cancel()
+            third?.cancel()
+            if let first {
+                _ = try? await first.value
+            }
+            if let second {
+                _ = try? await second.value
+            }
+            if let third {
+                _ = try? await third.value
+            }
+            await fixture.authority.setSuspensionHandler(nil)
+            throw error
+        }
+        await fixture.authority.setSuspensionHandler(nil)
+    }
+#endif
+
+    @Test("the admitted-operation cadence precedes the request denial")
+    func admittedCadenceCompactsBeforeThePublishedDenial() async throws {
         let limits = GatewayAuditTestSupport.limits(
             maxAuditLogSize: 1,
             compactionCadenceOps: 1
         )
         let fixture = try await Self.makeFixture(limits: limits)
+        try await fixture.authority.grantCapability(
+            .browse,
+            to: fixture.connection
+        )
+        try await fixture.authority.revokeCapability(
+            .browse,
+            of: fixture.connection
+        )
 
         await #expect(throws: ExternalFailure.unauthorized(
             requestedCapability: .browse,
@@ -557,6 +955,10 @@ struct ExternalGatewayDenialTests {
         let config = try #require(snapshot.configs.first)
         #expect(config.compactionFloor > 1)
         #expect(snapshot.operations.last?.operationKindRaw
+            == ExternalOperationKind.readRecent.rawValue)
+        #expect(snapshot.operations.last?.outcomeRaw
+            == ExternalOutcome.denied.rawValue)
+        #expect(snapshot.operations.dropLast().last?.operationKindRaw
             == ExternalOperationKind.adminCompact.rawValue)
     }
 
@@ -575,6 +977,10 @@ struct ExternalGatewayDenialTests {
             limits: limits,
             rateLimiter: exhausted
         )
+        try await fixture.authority.grantCapability(
+            .browse,
+            to: fixture.connection
+        )
 
         await #expect(throws: ExternalFailure.requestDenied(.rateLimited)) {
             try await fixture.gateway.authorize(
@@ -587,6 +993,10 @@ struct ExternalGatewayDenialTests {
         let config = try #require(snapshot.configs.first)
         #expect(config.compactionFloor > 1)
         #expect(snapshot.operations.last?.operationKindRaw
+            == ExternalOperationKind.readRecent.rawValue)
+        #expect(snapshot.operations.last?.outcomeRaw
+            == ExternalOutcome.denied.rawValue)
+        #expect(snapshot.operations.dropLast().last?.operationKindRaw
             == ExternalOperationKind.adminCompact.rawValue)
     }
 }

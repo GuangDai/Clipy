@@ -7,8 +7,9 @@
 /// internal actors); coherence: docs/04-coherence.md (Part IV); implementation
 /// sequence: docs/roadmap/03-historystorage.md (steps 5–8).
 ///
-/// `SwiftDataHistory` is a value of five `actor` references and nothing else:
-/// the `Sendable` conformance is fully derived from the fields, so no unsafe
+/// `SwiftDataHistory` is a value of six actor references plus the immutable,
+/// `Sendable` App Intents connection identity accepted during startup. Its
+/// `Sendable` conformance is fully derived from those fields, so no unsafe
 /// conformance or other escape hatch appears here (Part V §2; Part VI §6).
 import Foundation
 import HistoryCore
@@ -35,8 +36,9 @@ internal enum ObservationDebugInstrumentation {
 /// isolation tree — `HistoryAuthority` (sole writer and the serialization
 /// point for snapshot capture and observer registration),
 /// `IngestPreparationActor`, `RevisionPreparationActor`, `SearchWorker`, and
-/// `ThumbnailService`, and the internal X.5 `ExternalGateway` denial module —
-/// and every stored field is an `actor` type, so the
+/// `ThumbnailService`, and the internal X.5/X.6 `ExternalGateway` — plus the
+/// immutable App Intents connection identity. Every stored field is Sendable,
+/// so the
 /// `Sendable` conformance is derived without any escape hatch. The facade
 /// translates no semantics of its own: it validates nothing the actors own,
 /// dispatches actions through one closed switch (§8), forwards reads to the
@@ -74,11 +76,16 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     internal let thumbnailService: ThumbnailService
 
     /// Owns process-local external admission/rate state and delegates every
-    /// durable authorization decision to `HistoryAuthority`. X.5 exposes no
-    /// public facade; X.6 completes positive dispatch before publication.
+    /// durable authorization and operation to `HistoryAuthority`. X.6's
+    /// public connection-bound facade retains this actor reference.
     internal let externalGateway: ExternalGateway
 
-    /// Assembles the facade from its six actors. Construction is internal to
+    /// The exact durable App Intents identity accepted during startup. X.6
+    /// copies it into the public connection-bound facade and never re-mints it.
+    private let appIntentsConnectionID: ExternalConnectionID
+
+    /// Assembles the facade from its six actors and startup-validated external
+    /// identity. Construction is internal to
     /// `open(configuration:)` — there is no other way to obtain a
     /// `SwiftDataHistory` (docs/05-authority-kernel.md §2).
     private init(
@@ -87,7 +94,8 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         revisionPreparation: RevisionPreparationActor,
         searchWorker: SearchWorker,
         thumbnailService: ThumbnailService,
-        externalGateway: ExternalGateway
+        externalGateway: ExternalGateway,
+        appIntentsConnectionID: ExternalConnectionID
     ) {
         self.authority = authority
         self.ingestPreparation = ingestPreparation
@@ -95,6 +103,7 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         self.searchWorker = searchWorker
         self.thumbnailService = thumbnailService
         self.externalGateway = externalGateway
+        self.appIntentsConnectionID = appIntentsConnectionID
     }
 
     // MARK: Open (docs/05-authority-kernel.md §2, §13)
@@ -129,10 +138,10 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     ///    Canonical/signature coverage without decoding revision state —
     ///    `V2-roadmap` §5 current total-order steps 3–12 over the v1 `05`
     ///    §13 store-side steps 3–11);
-    /// 4. constructs the internal X.5 Gateway denial actor only after every
-    ///    startup validation succeeds, then publishes the facade with its six
-    ///    actors (current
-    ///    roadmap step 13; v1 `05` §13 step 12).
+    /// 4. constructs the X.5/X.6 Gateway actor only after every startup
+    ///    validation succeeds, sharing the facade's SearchWorker and the
+    ///    Authority's Storage clock, then publishes the facade with its six
+    ///    actors (current roadmap step 14; v1 `05` §13 step 12).
     ///
     /// Failure translation at this boundary (§16, §2): an out-of-range
     /// initial retention value throws `.invalidInput(.invalidRetentionPolicy)`;
@@ -205,9 +214,11 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         // frozen `HistoryConfiguration` carry no clock parameter
         // (`RET-COMPILE-1`); tests inject a fixed clock only through the
         // `@testable` `HistoryAuthority` initializer.
+        let storageClock = SystemStorageClock()
+        let searchWorker = SearchWorker()
         let authority = HistoryAuthority(
             container: container,
-            storageClock: SystemStorageClock()
+            storageClock: storageClock
         )
         let appIntentsConnectionID: ExternalConnectionID
         do {
@@ -223,21 +234,34 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
             throw HistoryFailure.persistence(.openStore)
         }
 
-        // Current roadmap step 13 (v1 §13 step 12): startup has accepted the
-        // complete V3 Gateway state, so construct the internal X.5 denial
-        // actor and publish the six-actor facade. No ExternalHistory facade is
-        // public until X.6 completes every granted positive path.
+        // Current roadmap step 14 (v1 §13 step 12): startup has accepted the
+        // complete V4 HCR and Gateway state, so construct the X.5/X.6 actor
+        // from the SAME SearchWorker and Storage clock witnesses, then publish
+        // the six-actor History facade and its bound X.6 accessor.
         let externalGateway = ExternalGateway(
             authority: authority,
-            appIntentsConnectionID: appIntentsConnectionID
+            appIntentsConnectionID: appIntentsConnectionID,
+            searchWorker: searchWorker,
+            storageClock: storageClock
         )
         return SwiftDataHistory(
             authority: authority,
             ingestPreparation: IngestPreparationActor(),
             revisionPreparation: RevisionPreparationActor(),
-            searchWorker: SearchWorker(),
+            searchWorker: searchWorker,
             thumbnailService: ThumbnailService(),
-            externalGateway: externalGateway
+            externalGateway: externalGateway,
+            appIntentsConnectionID: appIntentsConnectionID
+        )
+    }
+
+    /// Returns the External History entry bound to the startup-validated
+    /// durable App Intents connection (`V2-05` §6.5; roadmap X.6).
+    /// This synchronous no-argument accessor cannot select or mint an ID.
+    public func makeAppIntentsHistoryFacade() -> ExternalHistoryFacade {
+        ExternalHistoryFacade(
+            gateway: externalGateway,
+            connectionID: appIntentsConnectionID
         )
     }
 
