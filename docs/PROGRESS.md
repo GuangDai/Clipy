@@ -12,7 +12,8 @@
 > they are cited here, never restated as new semantics.
 
 **Audit baseline:** `8f316c9` (2026-08-02). **Current landed baseline:**
-`master` through PR #17 (2026-08-23). Steps 0–9 are implemented and CI-green;
+`master` through PR #19 / merge `2ec8911` (2026-08-23). Steps 0–9 are
+implemented and CI-green;
 M2/state 2 is complete. Step 9 (product wiring: PasteboardAdapter +
 PresentationUI + ClipyApp composition) is done, including its post-step-9
 revisions: the perf/AB measurement-helper proofs live in the split
@@ -22,19 +23,19 @@ cursor/status-item/center/last-position placement, dwell-driven preview pane)
 rather than a SwiftUI `MenuBarExtra`. M3/state 3 (packaging, accessibility,
 localization, product acceptance per Part VI §11) remains open.
 
-**Current CI provenance (2026-08-23):** PR #17 correctness run
-[32613689337](https://github.com/GuangDai/Clipy/actions/runs/32613689337)
+**Current CI provenance (2026-08-23):** PR #19 correctness run
+[32617502726](https://github.com/GuangDai/Clipy/actions/runs/32617502726)
 is green across Lint + source gates, SwiftPM build + test, and XcodeGen
-generate + app build/test. This batch changed no HistoryCore public surface,
-so no symbol-snapshot run was needed. No performance/AB lane ran for this
-batch. Manual signed-runtime run
-[32573198119](https://github.com/GuangDai/Clipy/actions/runs/32573198119)
-is green on `master`; it proves only an ad-hoc signed Release carrying the
-Hardened Runtime flag, the iCloud/ubiquity entitlement negative, and direct
-process liveness. It does not prove Developer ID identity, secure timestamp,
-notarization/stapling, Gatekeeper, TCC, login-item, Carbon/status-item, Space,
-WindowServer behavior, App Intents system-manager resolution, or true
-Siri/Shortcuts discovery and cold/warm invocation.
+generate + app build/test. This storage-only hardening changed no HistoryCore
+public surface, so no symbol-snapshot run was needed; no performance/AB or
+signed-runtime lane ran for PR #19. The latest signed UDS discriminator
+evidence remains bounded to run
+[32615713100](https://github.com/GuangDai/Clipy/actions/runs/32615713100).
+It does not prove credential custody or authenticated ingress, Developer ID
+identity, secure timestamp, notarization/stapling, Gatekeeper, App Sandbox,
+Keychain sharing, different-EUID callers, TCC, login-item,
+Carbon/status-item, Space, WindowServer behavior, or true Siri/Shortcuts
+discovery and cold/warm invocation.
 
 **CI provenance of the landed head (2026-08-20):** the post-step-9
 convergence ran `a028c8c` (run 32316689047, cancelled —
@@ -641,6 +642,24 @@ the recent-equivalent window fix it required (anchor row must stay in the
 evaluated array for `page` to drop) is locked by the new continuation
 test.
 
+## V2-02 retention final-gate closeout
+
+- **Engine gates:** `e352166` added the process-death migration fixture and
+  behavioral capture/revise zero-decode proofs; `d30673c` fixed the fixture
+  compile. The runner observation required `04234c3`: SwiftData had stamped
+  the schema before the killed custom-stage data committed, so `open` owns one
+  idempotent missing-row recovery pass followed by the strict bidirectional
+  validation. The owning V2-02/roadmap docs cite
+  [run 31955551834](https://github.com/GuangDai/Clipy/actions/runs/31955551834)
+  for that recovered outcome. This closes the final two engine-gate groups;
+  it does not claim SwiftData migration interruption is atomic.
+- **R.7 handoff:** v1 step 9 later delivered the unified retention settings,
+  configured-policy reads, receipt feedback, pinned-over-budget guidance, and
+  hosted/accessibility source wiring. Its tests-only-scope evidence is
+  [run 32260455839](https://github.com/GuangDai/Clipy/actions/runs/32260455839),
+  recorded below. Actual localization, VoiceOver/FKA, and other state-3
+  runtime cells remain open; R.7 is no longer pending on step 9.
+
 ## Step 9 — product wiring: PasteboardAdapter + PresentationUI + ClipyApp
 
 - **Status:** done. Green at run
@@ -919,3 +938,76 @@ test.
   History/Gateway, and proves no credential, authenticated ingress, Developer
   ID/notarization, App Sandbox, Keychain sharing, different-EUID caller, TCC,
   or interactive no-activation behavior.
+- **X.9 F1 prerequisite kind hardening landed:**
+  [PR #19](https://github.com/GuangDai/Clipy/pull/19), merged as `2ec8911`, is
+  green across all three correctness jobs at
+  [run 32617502726](https://github.com/GuangDai/Clipy/actions/runs/32617502726).
+  [`ExternalGateway`](../Sources/HistoryStorage/ExternalGateway.swift) threads
+  the expected connection kind into the Authority-owned read, write, and rate
+  paths; [`GatewayAuthorization`](../Sources/HistoryStorage/GatewayAuthorization.swift)
+  rechecks the durable row kind and closed policy at the authoritative storage
+  boundary. The real in-memory V4
+  [`GatewayConnectionKindRecheckTests`](../Tests/HistoryStorageTests/GatewayConnectionKindRecheckTests.swift)
+  prove bidirectional wrong-kind authorization/read and wrong-kind writes are
+  unaudited and do not mutate History/HCR/ChangePosition, while correct-kind
+  granted/revoked behavior retains its existing audit contract. The rate path
+  is threaded and compiled but has no dedicated wrong-kind behavioral fixture
+  in this leaf. This is only a storage-layer expected-kind/policy prerequisite:
+  it adds no credential
+  custody, authenticated UDS ingress, local positive browse, X.8 JSON
+  dispatch, product `clipyctl`, locator/cursor, schema/public surface, or new
+  signed platform evidence.
+- **X.9 F1 server credential custody is in progress:** the current unmerged
+  Batch 18 worktree contains the exact 16-byte connection UUID + 32-byte
+  secret value in
+  [`LocalAutomationCredential`](../Sources/HistoryStorage/LocalAutomationCredential.swift)
+  and the actor-confined app-private Data Protection Keychain adapter in
+  [`CredentialStore`](../Sources/HistoryStorage/CredentialStore.swift).
+  [`LocalAutomationCredentialStoreTests`](../Tests/HistoryStorageTests/LocalAutomationCredentialStoreTests.swift)
+  currently exercise literal shape, system secret generation, exact
+  round-trip/delete, duplicate/malformed/corrupt/unavailable behavior through
+  an injected in-memory external-operations seam. This is not landed or CI
+  evidence. It does not yet prove a signed artifact can persist/reopen/delete
+  the production Keychain item, and it includes no client credential file,
+  enrollment/revocation coordination, credential comparison/authentication,
+  authenticated ingress, Gateway/History dispatch, product CLI, or new signed
+  platform result.
+- **Additional unmerged Batch 18 evidence leaves are in progress:**
+  [`StableIdentityRetirementTests`](../Tests/HistoryStorageTests/StableIdentityRetirementTests.swift)
+  is a tests-only public-History D1 proof that byte-identical recapture after
+  removal mints a fresh item identity; it changes no production code.
+  [`GatewayConnectionKindRateDenialTests`](../Tests/HistoryStorageTests/GatewayConnectionKindRateDenialTests.swift)
+  directly covers the PR #19 rate-denial follow-up: bidirectional wrong-kind
+  calls remain unaudited and correct-kind local denial appends one bounded
+  audit without changing History/HCR/position. The dispatch-only
+  [`release-surface`](../.github/workflows/release-surface.yml) workflow,
+  [`run_release_surface.sh`](../scripts/ci/run_release_surface.sh), and finite
+  [`release-forbidden-symbols.txt`](../scripts/ci/release-forbidden-symbols.txt)
+  inventory build one ordinary ad-hoc Release artifact and check only the
+  reviewed demangled symbol literals. None has macOS CI evidence yet. The
+  symbol lane is not a complete instrumentation audit and proves no Developer
+  ID, timestamp, notarization, Gatekeeper, TCC, UI, or other runtime behavior.
+- **Card 5A capture-access wiring is in progress:**
+  [`PasteboardAccess`](../Sources/PasteboardAdapter/PasteboardAccess.swift)
+  maps the documented AppKit access cases to a neutral Sendable value, while
+  [`CaptureAccessState`](../ClipyApp/Sources/Capture/CaptureAccessState.swift)
+  owns six content-free app states and deny-by-default polling policy.
+  [`PasteboardObserver`](../Sources/PasteboardAdapter/PasteboardObserver.swift)
+  now preflights access on immediate/timer cycles, and the composition/panel
+  wiring publishes a non-empty-history recovery banner. The new
+  [`PasteboardAccessTests`](../Tests/PasteboardAdapterTests/PasteboardAccessTests.swift)
+  and [`AppCaptureAccessTests`](../ClipyApp/Tests/ClipyIntegrationTests/AppCaptureAccessTests.swift),
+  plus the existing observer-retry suite, cover mapping, reducer precedence,
+  denied-startup zero reads, live-revoke stop-before-payload, and allowed
+  observer reuse in the current worktree. No macOS CI has compiled this work.
+  There is no Pause UI, no provider-specific timeout/cause inference, and no
+  proof of the General pasteboard prompt, TCC/System Settings transitions,
+  clean profiles, or signed runtime behavior.
+- **Card 5B optional hosted exact-outcome characterization is in progress:**
+  [`AppCaptureExactOutcomeTests`](../ClipyApp/Tests/ClipyIntegrationTests/AppCaptureExactOutcomeTests.swift)
+  uses a real named private `NSPasteboard`, public lazy-data-provider API,
+  production observer/composition, and real in-memory History to characterize
+  a declared type whose provider supplies no bytes. The intended observation
+  is one content-free declared-unavailable failure, zero capture-lane slots,
+  and unchanged empty History. This unmerged test has no macOS CI evidence;
+  it does not diagnose timeout/permission or prove General pasteboard/TCC.
