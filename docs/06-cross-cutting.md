@@ -98,11 +98,15 @@ Each requires an approved product specification and a fresh architecture review.
 The original state-2 implementation created these product/library targets plus
 the non-product `HistoryPerfRunner` proof executable. The post-step-9
 `ClipboardFormats` deepening is also admitted below after Projection, Preview,
-Details, and Edit provided independent callers and a deletion test:
+Details, and Edit provided independent callers and a deletion test. The V2
+X.8 remediation later adds `ClipyCLIContract` as a no-product, Foundation-only
+wire-contract target; it is not the deferred `clipyctl` executable or an
+external transport:
 
 ```text
 HistoryCore
 ClipboardFormats
+ClipyCLIContract
 HistoryDomain
 HistoryStorage
 PasteboardAdapter
@@ -110,6 +114,7 @@ PresentationUI
 ClipyApp
 xxh3
 HistoryPerfRunner
+HistoryRestartProbe
 ```
 
 Test targets mirror the owner target:
@@ -117,6 +122,7 @@ Test targets mirror the owner target:
 ```text
 HistoryCoreTests
 ClipboardFormatsTests
+ClipyCLIContractTests
 HistoryDomainTests
 HistoryStorageTests
 HistoryPerfTests
@@ -129,13 +135,24 @@ The scaffold must not add an implementation target for a deferred feature.
 `ClipboardFormats` is not a placeholder for future plugins or policies: it is
 a package-only Foundation target containing only open-world exact identifiers
 and declared codec facts. Each behavior owner retains its purpose admission.
-`HistoryPerfTests` imports the executable target only to prove its pure
+`HistoryRestartProbe` is likewise a no-product test-evidence executable; it is
+not part of the app or the future `clipyctl` surface. `HistoryPerfTests` imports
+the performance executable target only to prove its pure
 §9 helpers and declarative coverage/envelope tables; workload acceptance still
 runs the release executable itself. It runs in its own CI lane
 (`swift test --filter 'HistoryPerfTests\.'`): the default `swift test` lane
 skips it (`--skip 'HistoryPerfTests\.'`) so the standard targets carry
 functional tests only. `HistoryStorageTests` uses both persistent
 temporary stores and the same implementation's in-memory configuration.
+
+`ClipyCLIContract` owns only the versioned UTF-8 JSON request/reply values,
+bounded pure decoding/encoding, and stable exit classes admitted by X.8. It
+has no declared package product, dependencies, executable entry point,
+`FileHandle` or standard-stream side effects, transport, credentials, Gateway
+or History access. It may encode a caller-supplied typed success reply, but it
+never dispatches an operation or fabricates a Gateway result.
+`ClipyCLIContractTests` is a functional test target that depends only on that
+contract target.
 
 Recommended implementation order:
 
@@ -158,6 +175,8 @@ Before “executable specification”:
 - A deliberate forbidden edge fails to compile or fails the import gate.
 - `HistoryCore` imports only Foundation.
 - `ClipboardFormats` imports only Foundation and owns no purpose policy.
+- `ClipyCLIContract` imports only Foundation and owns no I/O or operation
+  dispatch.
 - `HistoryDomain` imports only Foundation and `HistoryCore`.
 - `import SwiftData` appears only in `HistoryStorage`; AppKit only in its adapter; SwiftUI only in Presentation.
 - No public symbol mentions Canonical Content, Domain facts/plans, SwiftData types, AppKit objects, fingerprints, or internal invalidations.

@@ -5,7 +5,15 @@
 > positive paths plus the public facade/factory are landed and
 > correctness-green**. The immutable V4 X-HCR prerequisite and its
 > migration/rollback/restart suite are also landed and CI-green. **X.7 App
-> Intents composition is the current unmerged implementation leaf.** X.4 owns the complete
+> Intents composition is landed through
+> [PR #16](https://github.com/GuangDai/Clipy/pull/16):** the scoped correctness
+> evidence is green in
+> [run 32609910701](https://github.com/GuangDai/Clipy/actions/runs/32609910701),
+> and the runner-regenerated HistoryCore symbol evidence is green in
+> [run 32609018894](https://github.com/GuangDai/Clipy/actions/runs/32609018894).
+> Those runs prove the hosted/source boundaries recorded under roadmap X.7;
+> they do not prove signed Siri/Shortcuts invocation, TCC, or process placement.
+> X.8 is therefore the next implementation leaf. X.4 owns the complete
 > `OperationPayloadBlobV1` codec, public operation-kind additions, central audit
 > store, current-state connection/grant administration, public in-app admin
 > conformance, and startup validation; it does **not** publish an
@@ -50,8 +58,9 @@
 This amendment is the owning rule when the older App-Intents-only text in this
 document is read together with the Local Automation review. It adds a later
 `.localAutomation` connection kind without changing the already approved App
-Intents surface. It does **not** claim that the gateway, CLI, authenticated
-ingress, or transport exists in the current source tree.
+Intents surface. The in-process gateway and App Intents composition are landed;
+no `clipyctl` executable, Local Automation authenticated ingress, or transport
+exists in the current source tree.
 
 ### 0.1 Stable public interface and mandatory implementation order
 
@@ -78,6 +87,150 @@ code must nevertheless land in this order:
 Writing examples or golden JSON before step 1 is specification work, not a
 license to ship an `unsupported` CLI shell. No CLI target, socket listener, or
 transport may be used to make an absent gateway look implemented.
+
+### 0.1.1 X.8 pure codec boundary
+
+X.8 adds the no-product, Foundation-only SwiftPM target `ClipyCLIContract`.
+It owns pure request decoding, reply encoding, and the stable exit-class map;
+it owns no `main`, `FileHandle`, executable product, process I/O, launch logic,
+credential, authenticated ingress, private transport, Gateway dependency, or
+History dependency. A later executable may call this codec, but the codec does
+not dispatch a request or fabricate a positive Gateway result. Tests may encode
+typed reply fixtures only to prove the wire grammar and stdout bytes; such a
+fixture is not evidence that History or Python automation is available.
+
+Protocol v1 admits exactly one request operation: `browsePreview`. It is a
+closed wire set for X.8. In particular, `readEffectiveContent`, `organize`,
+`deleteItem`, `describeFormatCapabilities`, and `reviseContent` are not v1
+codec operations in this leaf. Adding one is a later owner-approved protocol
+and Gateway-admission slice, not an unknown-field extension.
+
+Request bytes are admitted under this complete envelope:
+
+- at most **65,536 bytes**, checked on the supplied byte buffer before UTF-8
+  decoding, JSON parsing, or any parser-owned allocation; input must be strict
+  UTF-8 and must not start with a UTF-8 BOM;
+- exactly one root JSON object followed only by RFC 8259 JSON whitespace
+  (`0x20`, `0x09`, `0x0A`, `0x0D`); every other leading/trailing byte, a second
+  value, or an empty input is invalid;
+- maximum nesting depth **8** (the root object is depth 1 and each contained
+  object/array adds 1), maximum lexical members in any object **32**, and
+  maximum elements in any array **512**;
+- unknown fields are rejected at every object boundary, and object keys that
+  decode to the same UTF-8 scalar/byte sequence are duplicates and are rejected
+  before a typed request is constructed (`"a"` equals `"\u0061"`; the codec
+  introduces no NFC/NFD normalization);
+- JSON numeric tokens must use the JSON integer lexical form. Fractions,
+  exponents, implementation non-finite extensions, and values that fail the
+  target field's checked integer conversion are invalid. A decoder must not
+  round through floating point.
+
+The encoded reply is at most **33,554,432 bytes**, including the terminal LF.
+The bound applies to the complete future stdout byte buffer before any write;
+exceeding it is an invalid codec output, never truncation. X.8 adds no
+representation or binary-content operation, so this response envelope is not
+an admission of large-content export.
+
+`requestID` is exactly a lowercase canonical, 36-character hyphenated,
+non-nil UUID string (`8-4-4-4-12`). It is minted by the caller and used only to
+correlate one reply. Reusing the same value across requests is accepted by the
+codec: X.8 adds no idempotency, retry cache, digest, hash, or identity derived
+from the request text.
+
+The root request has exactly `protocolVersion`, `requestID`, `operation`, and
+`arguments`. `protocolVersion` is the integer `1` and `operation` is the string
+`browsePreview`:
+
+```json
+{"protocolVersion":1,"requestID":"9bd92054-bd3f-4d20-8f8a-5d77aa63b726","operation":"browsePreview","arguments":{"limit":20}}
+```
+
+`browsePreview.arguments` is one of these exact objects. The union is
+discriminated by field presence; it has no `kind` field:
+
+```json
+{"limit":20}
+{"limit":20,"cursor":"opaque-nonempty-cursor"}
+{"query":"needle","mode":"exact","limit":20}
+{"query":"needle","mode":"regexp","limit":20,"cursor":"opaque-nonempty-cursor"}
+```
+
+The recent form omits both `query` and `mode`; the search form requires both.
+`mode` is exactly `exact`, `fuzzy`, or `regexp`. `limit` is an integer in
+`1...500`. A search query is non-empty and
+at most 4,096 UTF-8 bytes; fuzzy additionally admits at most 64 Characters and
+regexp at most 512 Characters, matching `03b` §8 and `06` §2. Exact has no
+second Character limit. A cursor, when present, is opaque, non-empty UTF-8 of
+at most 4,096 bytes. Having exactly one of `query` and `mode` is invalid. All
+string bounds are checked on the decoded string, not on JSON escape spelling.
+
+### 0.1.2 Frozen reply and process-emission grammar
+
+A success reply has exactly this envelope:
+
+```json
+{"ok":true,"protocolVersion":1,"requestID":"9bd92054-bd3f-4d20-8f8a-5d77aa63b726","result":{"items":[],"nextCursor":null}}
+```
+
+`result.items` preserves the authoritative browse order. Every item is an exact
+object with `locator`, `title`, `typeIdentifiers`, `lastCopiedAt`, `pinned`, and
+`snippet`. `locator` is non-empty opaque UTF-8 of at most 1,024 bytes;
+`typeIdentifiers` contains at most 32 strings and each identifier is at most
+512 UTF-8 bytes. `lastCopiedAt` is UTC RFC 3339 with exactly milliseconds and a
+literal `Z`. `pinned` is Boolean; `snippet` is either a string or `null`.
+`title` and `snippet` must already satisfy their owning History projection
+bounds: title at most 1,024 UTF-8 bytes and snippet at most 322 Characters
+(`06` §2). These are references to the owning limits, not second wire-specific
+literals.
+`nextCursor` is either `null` or an opaque, non-empty UTF-8 string of at most
+4,096 bytes. Item order and
+`typeIdentifiers` order are semantic input order, not encoder-sorted order.
+For example, one item is emitted with lexicographically ordered keys as:
+
+```json
+{"lastCopiedAt":"2026-08-23T12:34:56.789Z","locator":"opaque-locator","pinned":false,"snippet":null,"title":"Example","typeIdentifiers":["public.utf8-plain-text"]}
+```
+
+An error reply has exactly this envelope; `requestID` is the validated request
+ID when one was available before the failure, otherwise `null`:
+
+```json
+{"error":{"code":"invalid_request"},"ok":false,"protocolVersion":1,"requestID":null}
+```
+
+Object keys at every level are emitted in lexicographic order as compact UTF-8
+JSON, followed by exactly one LF byte. There are no other stdout bytes. This is
+a pure byte-rendering rule in X.8: a real file-descriptor/stdin/stdout proof
+belongs to X.9. A future executable's stderr is exactly
+`clipyctl: <error.code>\n` on failure and empty on success; it contains no free
+text, query, cursor, request fragment, content, credential, or internal error.
+
+The exit class is stable and deliberately coarser than `error.code`:
+
+| Exit | Meaning | Exact `error.code` values |
+|---:|---|---|
+| `0` | success | Success envelope only; a future `unchanged` result is also success. |
+| `2` | invalid invocation/request | `invalid_json`, `invalid_request`, `unsupported_protocol_version`, `unknown_operation`, `request_too_large`, `response_too_large` |
+| `3` | denied | `not_enrolled`, `not_granted`, `connection_revoked`, `authentication_failed`, `peer_rejected` |
+| `4` | target conflict | `not_found`, `cursor_expired`, `content_stale`, `locator_invalidated` |
+| `5` | transient | `not_ready`, `rate_limited`, `busy`, `timeout`, `cancelled`, `outcome_unknown` |
+| `6` | Clipy/data failure | `store_open_failed`, `corrupt_data`, `invariant_violation`, `transaction_failed`, `audit_failed` |
+
+Exit-2 parser/encoder classification is deterministic. `request_too_large`
+means only that input exceeded the 65,536-byte request envelope. `invalid_json`
+covers
+invalid UTF-8, BOM, JSON syntax, non-whitespace trailing bytes or a second root,
+duplicate decoded keys, depth/width limits, and `NaN`/`Infinity` extensions.
+`invalid_request` covers typed root/field shape, unknown or missing fields, type
+mismatch, the no-fraction/no-exponent policy, checked integer overflow,
+`requestID`, and operation-argument bounds. A valid but unsupported
+`protocolVersion` maps to `unsupported_protocol_version`; a valid closed-set
+operation miss maps to `unknown_operation`. `response_too_large` means only the
+complete encoder-output envelope failed.
+
+The code set is closed for protocol v1. X.8 may render any typed error fixture
+in this table to prove stable bytes and exit mapping, but it does not produce a
+Gateway failure or claim that the corresponding production path exists.
 
 ### 0.2 Connection-kind allow matrix
 
@@ -322,9 +475,9 @@ not a permanent prohibition on the ordered `clipyctl` continuation.
 - **X2** lifts `00` §2 and `06` §4. Trigger: X1 approved (audit is X1's
   consequence) (`V2-00` §3).
 
-Both triggers have fired: V2-00 approved the graft, and X.1–X.6 are landed.
+Both triggers have fired: V2-00 approved the graft, and X.1–X.7 are landed.
 This subsection records the admission history; it does not waive the separate
-proof gates for current unmerged X.7 or later slices.
+proof gates for X.8 or later slices, nor X.7's still-open signed-runtime cells.
 
 ## 3. Trust boundary and capability model
 
@@ -2965,9 +3118,10 @@ audit log / grant list on demand (like V2-01 enrichment status, `V2-01` §8).
   (Lens B minor; not load-bearing — the gateway re-validates `limit` at D35).
 
 Individual leaves may land only with their own recorded proof ceilings: X.1/X.2
-already reserve the public contract vocabulary, while X.3 is the current
-schema/bootstrap leaf. Until the remaining applicable `X-COMPILE-*`,
+reserve the public contract vocabulary and X.3–X.7 are landed at their recorded
+boundaries; X.8 is the current pure-codec leaf. Until the remaining applicable `X-COMPILE-*`,
 `X-PLATFORM-*`, `X-BEHAVIOR-*`, and `X-SECURITY-*` gates pass on macOS 26, the
-aggregate Gateway actor, administration, App Intents behavior, and external
-product surface remain unshipped. Deferred `X-PERF-*` gates support later
-performance claims and do not upgrade a correctness leaf's status.
+landed Gateway/administration/App Intents claims stay at their recorded
+source/hosted-test ceilings, and the Local Automation external product surface
+remains unshipped. Deferred `X-PERF-*` gates support later performance claims
+and do not upgrade a correctness leaf's status.

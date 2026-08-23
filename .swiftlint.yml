@@ -31,6 +31,14 @@ custom_rules:
     message: "ClipboardFormats may import Foundation (and its submodules) only (Part I §8)."
     severity: error
 
+  clipycli_contract_import_confinement:
+    name: "ClipyCLIContract import confinement"
+    included: "Sources/ClipyCLIContract/"
+    # Allowlist: the pure wire contract has no product or transport dependency.
+    regex: '^\s*(?:@[A-Za-z_][A-Za-z0-9_]*(?:\([^\n)]*\))?\s+)*(?:(?:public|package|internal|fileprivate|private)\s+)?import\s+(?!(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?Foundation)\w'
+    message: "ClipyCLIContract may import Foundation (and its submodules) only (Part I §8)."
+    severity: error
+
   historycore_import_confinement:
     name: "HistoryCore import confinement"
     included: "Sources/HistoryCore/"

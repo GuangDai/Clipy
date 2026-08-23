@@ -18,6 +18,8 @@ ClipyApp
 HistoryDomain ─────────────→ HistoryCore
 
 ClipboardFormats ────────→ Foundation only
+ClipyCLIContract ────────→ Foundation only
+                            (pure wire contract; no shipped product surface)
 
 HistoryPerfRunner ─────────→ HistoryCore + HistoryStorage
                              (proof executable; no shipped product surface)
@@ -32,6 +34,7 @@ There is no `DomainCore` target. The few values that must appear in both the cal
 | Target | Surface | Owns | Must not own |
 |---|---|---|---|
 | `ClipboardFormats` | Package-only, Foundation-only | Open-world exact identifiers and declared string-codec facts | Purpose admission, decoders, bytes, registries, caches, plugins, framework objects |
+| `ClipyCLIContract` | Package-only, Foundation-only, no product | Versioned UTF-8 JSON request/reply values, bounded decoding/encoding, and stable exit classes | File handles or standard-stream side effects, transport, credentials, Gateway/History access, a product CLI, operation dispatch, or fabricated Gateway results |
 | `HistoryCore` | Public, Foundation-only | `ClipboardHistory`, IDs/tokens, History Actions, request/response DTOs, receipts, typed failures | Canonical state, fingerprints, SwiftData, AppKit, concrete storage |
 | `HistoryDomain` | Package-only, Foundation-only | Content lineage, immutable state, complete fact values, pure planners, semantic mutation plans and invariants | Public ports, I/O, actors, clocks, UUID generation, persistence |
 | `HistoryStorage` | Public concrete adapter plus internal implementation | `SwiftDataHistory`, Authority actor, schema/codecs, fact loaders, version minting, ingest preparation, Signature Index, read projections, observation plumbing, thumbnail production | AppKit pasteboard, UI state, service location |
@@ -48,6 +51,9 @@ There is no `DomainCore` target. The few values that must appear in both the cal
 - `public` is reserved for caller-visible `HistoryCore`, the concrete `HistoryStorage` constructor needed by `ClipyApp`, and adapter/UI entry points.
 - Cross-target implementation declarations use Swift `package` access.
 - `ClipboardFormats` states stable exact facts only. Projection, Preview, Details, and Edit retain separate purpose policy; unknown identifiers remain opaque raw values.
+- `ClipyCLIContract` describes and validates the X.8 wire boundary only. It has
+  no executable entry point and neither dispatches operations nor fabricates a
+  positive Gateway result.
 - Intra-target storage declarations use `internal` or `private`.
 - `@Model` types are internal to `HistoryStorage` and never occur in a public or package signature.
 - Domain planners and facts are not protocols intended for third-party extension. Adding a v1 History Action is an owned source change and must make compiler-exhaustive switches fail until handled.
@@ -247,6 +253,8 @@ The Authority does not retain model objects between operations. Each isolated re
 ### 8. Forbidden dependencies and anti-goals
 
 - `ClipboardFormats` may import Foundation only and must not own a purpose-specific behavior policy.
+- `ClipyCLIContract` may import Foundation only and must not own standard-stream
+  I/O, transport, credential, Gateway, History, or product-CLI behavior.
 - `HistoryCore` must not import `HistoryDomain`, `HistoryStorage`, SwiftData, AppKit, SwiftUI, ImageIO, or xxh3.
 - `HistoryDomain` must not import `HistoryStorage`, SwiftData, AppKit, SwiftUI, ImageIO, or xxh3.
 - Adapters and UI must not import `HistoryDomain` or `HistoryStorage`.
@@ -272,6 +280,7 @@ The Authority does not retain model objects between operations. Each isolated re
    spellings. They scan SwiftPM sources/tests plus `ClipyApp` sources/hosted
    tests, confine `AppIntents`, reject service-locator declarations, and enforce
    the single framework-owned App Intents dependency registration above.
+   The same gates keep `ClipyCLIContract` Foundation-only.
 3. Swift 6 complete strict-concurrency compilation succeeds without unchecked escape hatches.
 4. The public `HistoryCore` symbol surface is snapshot-tested so package-only Domain/Storage vocabulary cannot leak accidentally.
 5. App-level tests construct `SwiftDataHistory` with an in-memory store; they do not replace the semantic write path.
