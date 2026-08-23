@@ -16,7 +16,7 @@ struct SearchHistoryIntent: AppIntent {
     static let supportedModes: IntentModes = [.background]
 
     @Parameter(title: "Query", description: "Search text.")
-    var query: String = ""
+    var query: String
 
     @Parameter(title: "Mode", default: ClipboardSearchMode.exact)
     var mode: ClipboardSearchMode
@@ -74,7 +74,7 @@ struct GetItemDetailsIntent: AppIntent {
     static let supportedModes: IntentModes = [.background]
 
     @Parameter(title: "Item ID", description: "Clipboard item identifier.")
-    var itemID: String = ""
+    var itemID: String
 
     @Dependency private var history: ExternalHistoryFacade
 
@@ -109,7 +109,7 @@ struct PasteItemIntent: AppIntent {
     static let supportedModes: IntentModes = [.background]
 
     @Parameter(title: "Item ID", description: "Clipboard item identifier.")
-    var itemID: String = ""
+    var itemID: String
 
     @Dependency private var history: ExternalHistoryFacade
 
@@ -158,7 +158,7 @@ struct PinItemIntent: AppIntent {
     static let supportedModes: IntentModes = [.background]
 
     @Parameter(title: "Item ID", description: "Clipboard item identifier.")
-    var itemID: String = ""
+    var itemID: String
 
     @Dependency private var history: ExternalHistoryFacade
 
@@ -194,7 +194,7 @@ struct UnpinItemIntent: AppIntent {
     static let supportedModes: IntentModes = [.background]
 
     @Parameter(title: "Item ID", description: "Clipboard item identifier.")
-    var itemID: String = ""
+    var itemID: String
 
     @Dependency private var history: ExternalHistoryFacade
 
@@ -232,7 +232,7 @@ struct RemoveItemIntent: AppIntent {
     static let supportedModes: IntentModes = [.background]
 
     @Parameter(title: "Item ID", description: "Clipboard item identifier.")
-    var itemID: String = ""
+    var itemID: String
 
     @Dependency private var history: ExternalHistoryFacade
 

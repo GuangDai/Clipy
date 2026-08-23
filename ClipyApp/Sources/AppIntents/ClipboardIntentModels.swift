@@ -32,34 +32,43 @@ struct ClipboardHistoryItemEntity: TransientAppEntity {
     static let typeDisplayRepresentation: TypeDisplayRepresentation =
         "Clipboard History Item"
 
-    var id: String = ""
+    var id: String
 
     @Property(title: "Title")
-    var title: String = ""
+    var title: String
 
     @Property(title: "Type Identifiers")
-    var typeIdentifiers: [String] = []
+    var typeIdentifiers: [String]
 
     @Property(title: "Last Copied")
-    var lastCopiedAt: Date = .distantPast
+    var lastCopiedAt: Date
 
     @Property(title: "Copy Count")
-    var copyCount: String = "0"
+    var copyCount: String
 
     @Property(title: "Source Application")
-    var lastSource: String? = nil
+    var lastSource: String?
 
     @Property(title: "Pinned")
-    var isPinned: Bool = false
+    var isPinned: Bool
 
     @Property(title: "Revision Count")
-    var revisionCount: Int = 0
+    var revisionCount: Int
 
     var displayRepresentation: DisplayRepresentation {
         DisplayRepresentation(title: "\(title)")
     }
 
-    init() {}
+    init() {
+        id = ""
+        title = ""
+        typeIdentifiers = []
+        lastCopiedAt = .distantPast
+        copyCount = "0"
+        lastSource = nil
+        isPinned = false
+        revisionCount = 0
+    }
 
     init(row: HistoryRow) {
         id = row.item.id.description
