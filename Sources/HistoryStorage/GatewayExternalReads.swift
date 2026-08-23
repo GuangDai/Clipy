@@ -15,6 +15,7 @@ extension HistoryAuthority {
     internal func performExternalRead(
         _ request: ExternalRead,
         connection: ExternalConnectionID,
+        expectedConnectionKind: ConnectionEnrollKind = .appIntents,
         requestedAt: Date,
         searchWorker: SearchWorker
     ) async throws -> ExternalReadResult {
@@ -26,6 +27,7 @@ extension HistoryAuthority {
                 try performExternalReadInOneInterval(
                     descriptor: facts.descriptor,
                     connection: connection,
+                    expectedConnectionKind: expectedConnectionKind,
                     requestedAt: requestedAt,
                     operation: .readRecent
                 ) { context in
@@ -43,6 +45,7 @@ extension HistoryAuthority {
                 try performExternalReadInOneInterval(
                     descriptor: facts.descriptor,
                     connection: connection,
+                    expectedConnectionKind: expectedConnectionKind,
                     requestedAt: requestedAt,
                     operation: .readDetails
                 ) { context in
@@ -69,6 +72,7 @@ extension HistoryAuthority {
                 try performExternalReadInOneInterval(
                     descriptor: facts.descriptor,
                     connection: connection,
+                    expectedConnectionKind: expectedConnectionKind,
                     requestedAt: requestedAt,
                     operation: .readPastePayload
                 ) { context in
@@ -100,6 +104,7 @@ extension HistoryAuthority {
                     browseRequest,
                     descriptor: facts.descriptor,
                     connection: connection,
+                    expectedConnectionKind: expectedConnectionKind,
                     requestedAt: requestedAt
                 )
             }
@@ -169,6 +174,7 @@ private extension HistoryAuthority {
     func performExternalReadInOneInterval(
         descriptor: ExternalOperationDescriptor,
         connection: ExternalConnectionID,
+        expectedConnectionKind: ConnectionEnrollKind,
         requestedAt: Date,
         operation: ExternalHistoryOperationContext,
         projection: (ModelContext) throws
@@ -180,6 +186,7 @@ private extension HistoryAuthority {
         try authorizeExternal(
             descriptor,
             as: connection,
+            expectedConnectionKind: expectedConnectionKind,
             requestedAt: requestedAt,
             config: config,
             in: context
@@ -230,6 +237,7 @@ private extension HistoryAuthority {
         _ request: HistoryBrowseRequest,
         descriptor: ExternalOperationDescriptor,
         connection: ExternalConnectionID,
+        expectedConnectionKind: ConnectionEnrollKind,
         requestedAt: Date
     ) throws -> (
         snapshot: SearchCorpusSnapshot,
@@ -241,6 +249,7 @@ private extension HistoryAuthority {
         try authorizeExternal(
             descriptor,
             as: connection,
+            expectedConnectionKind: expectedConnectionKind,
             requestedAt: requestedAt,
             config: config,
             in: context

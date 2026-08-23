@@ -20,7 +20,14 @@
 `ClipyApp`中的六个App Intents，但没有 `clipyctl` executable/product、production socket listener、
 Local Automation authenticated ingress、Apple Events dictionary或XPC external listener。F0A允许
 normal build中被compile-time erase的UDS诊断源码；它只在手工dispatch的ad-hoc-signed proof artifact
-中形成listener与diagnostic client，不是Python入口。
+中形成listener与diagnostic client，不是Python入口。X.8 pure codec已由
+[PR #17](https://github.com/GuangDai/Clipy/pull/17)与
+[correctness run 32613689337](https://github.com/GuangDai/Clipy/actions/runs/32613689337)
+落地；F0A已由[PR #18](https://github.com/GuangDai/Clipy/pull/18)落地，normal graph/app scheme见
+[run 32615569895](https://github.com/GuangDai/Clipy/actions/runs/32615569895)，exact flagged
+artifact的cold/warm/`SIGKILL` proof见
+[run 32615713100](https://github.com/GuangDai/Clipy/actions/runs/32615713100)。这些证据仍没有
+authenticated ingress、credential或History request。
 X.7 的限定证据来自[PR #16](https://github.com/GuangDai/Clipy/pull/16)、
 [correctness run 32609910701](https://github.com/GuangDai/Clipy/actions/runs/32609910701)与
 [symbol run 32609018894](https://github.com/GuangDai/Clipy/actions/runs/32609018894)；它们不证明
@@ -310,11 +317,24 @@ enable 时只创建 durable connection 与 credential，grant set 仍为空；�
 `browsePreview`、`readEffectiveContent`、`organize`、`deleteItem`，`reviseContent` 后期另开。
 Disable/revoke 后，下一次 authoritative recheck立即拒绝。
 
-credential 的最低要求：高熵、connection-scoped、可 revoke/rotate、不出现在 argv/env/log/audit，
-且只能在 gateway ready 后使用。到底由 same-team Keychain、owner-only file还是 signed CLI 与 app
-之间的 enrollment handshake承载，必须由 Developer-ID + Sandbox/TCC 实验证据决定；Review不能凭
-API 名称替平台作保证。credential 证明“请求属于被 enroll 的 localAutomation surface”，**不证明
-是哪一个 Python program**。
+credential 的当前产品方向已冻结为non-sandbox、account-wide same-EUID：exact 48 bytes = preassigned
+connection UUID 16 bytes + `SecRandomCopyBytes`直接生成的secret 32 bytes。它不是hash、digest、signature或
+derived identity。server把exact token保存到app-private Data Protection Keychain；client把exact token保存
+到validated owner-only目录中的no-follow regular file（directory `0700`、file `0600`，打开后重验owner/
+mode/type/length），由dedicated inherited stdin provision，不经argv/env/log/audit/cwd或caller-selected path。
+credential证明“请求属于被enroll的localAutomation surface”，**不证明是哪一个Python program**，也不
+声称对malicious same-EUID process保密。
+
+Enrollment publication order是load-bearing：client exact readback -> server Keychain exact readback ->
+Authority最后以preassigned ID在单一transaction插入`.localAutomation` row和successful admin-enroll audit。
+新row恰为zero grants。Authority前crash留下的file/Keychain orphan没有durable row或grant，因此无权；startup
+和retry先清理exact orphan，清理失败阻止publication，不从secret推导connection。Revoke反向执行：Authority
+先durable revoke connection/live grants/admin audit，再保留bounded server verifier使旧exact credential
+稳定得到audited `connection_revoked`，client file仅best-effort删除。Rotation是新connection，不迁移grant。
+
+Malformed/unknown credential、wrong secret与kernel peer reject在Gateway admission前停止且unaudited；valid
+exact revoked与valid exact active-but-ungranted credential分别产生audited `connection_revoked`与
+`not_granted`。这一顺序避免用attacker-controlled失败填充audit，同时保留已知connection的授权历史。
 
 ### 5.2 same UID 是刻意接受的风险，不是漏洞修复后的残余
 
@@ -337,6 +357,10 @@ UID，不自动成为同UID机密性边界。若威胁模型要求抵御这类�
 Keychain-held encryption key与derived projection/cache泄漏面；这会与“任意同用户Python零摩擦”形成真实
 trade-off，不能靠bearer grant文案抹平。
 
+如果以后产品要求抵御malicious same-EUID进程或启用App Sandbox，owner-only file不再满足要求：需要
+app-like wrapped CLI与实际验证过Team ID/profile/access-group的shared Data Protection Keychain，或另一项
+明确批准的custody model。当前决策不能被外推为该更强威胁模型已经解决。
+
 ## 6. Design It Twice：四种 private transport
 
 比较的前提是 public interface 始终为 `clipyctl`；下面只决定 CLI 到 running Clipy 的私有
@@ -357,7 +381,7 @@ History mutation。
 1. **先规格化 `clipyctl` JSON/exit-code shape，不先shipping实现。** 文档、golden examples与pure
    wire contract可以先冻结；parser/executable代码必须等Gateway/AUTO-2与已接纳App Intents tracer闭合后
    才落。这样transport spike可替换，Python script不随平台实验重写。
-2. **第一项 runtime experiment用ad-hoc-signed、non-sandbox F0A artifact + app-owned UDS +
+2. **第一项 runtime experiment已用ad-hoc-signed、non-sandbox F0A artifact + app-owned UDS +
    LaunchServices cold-start/ready handshake。** 它只判别bounded same-EUID socket mechanics、cold/warm
    lifecycle与`SIGKILL`残留恢复；不回答Python、Gateway、credential或Developer ID是否成立。
 3. **不把这次 spike 自动升级为 final architecture。** 若发行最终开启 App Sandbox，矩阵应分别测
@@ -397,10 +421,28 @@ socket后relaunch获得新PID/generation。runner不能观察的different-UID和
 timestamp/notary/Gatekeeper、Sandbox/App Groups、Keychain sharing、TCC、caller matrix与production adapter
 都未成立。
 
+PR #18关闭了F0A的三项hosted mechanics：normal graph/app scheme由
+[correctness run 32615569895](https://github.com/GuangDai/Clipy/actions/runs/32615569895)覆盖，exact final
+flagged artifact由
+[signed-runtime run 32615713100](https://github.com/GuangDai/Clipy/actions/runs/32615713100)覆盖。
+不同UID、interactive no-activation、Developer ID/profile/Keychain与product caller cells仍open。
+
+### 6.3 F1 credential、publication 与当前 blockers
+
+F1按§5.1的exact 48-byte custody执行。一个storage-only hardening leaf可先给targeted authorization加入
+`expectedKind`，并在durable row不是调用方预期kind时于History前拒绝；这防止未来adapter把另一kind的
+connection误送到同一路径。它不检查peer或secret，不是authentication，也不能作为B3/B4/B5 Green。
+
+F1还不能把现有private values直接塞进X.8 wire。X.8 cursor上限为4,096 UTF-8 bytes，而当前
+`HistoryPageCursor`在admitted query bounds下可约为26 KiB；external locator也尚未冻结stable lifetime与
+invalidated encoding。二者需另选bounded server-side state或明确versioned encoding。不得用hash、digest、
+truncated fingerprint或hash-derived identity把它们强行缩短。实际Developer ID/profile、Data Protection
+Keychain round-trip、nested client/provisioning、notary/Gatekeeper与caller matrix也仍是signed evidence gate。
+
 ## 7. Cold start、ready 与 shutdown contract
 
 `clipyctl` 不能把“进程存在”当成“history可用”。下面是production方向，不是F0A fixed hello；只有
-authenticated ingress与credential custody关闭后才可实现：
+§5.1 custody、authenticated ingress与signed platform proof实际实现后才可发布：
 
 ```text
 connect private endpoint
@@ -537,11 +579,13 @@ Access level建议：
 - ClipyApp 位于 Swift package 外，不能直接访问 package/internal `ExternalGateway`。HistoryStorage可
   提供一个opaque public facade值，只有approved SwiftPM transport target能调用其`package` execution
   method；ClipyApp只负责构造/传递。facade内部解析connection，不公开Gateway/CredentialStore；
-- candidate credential是16-byte connection ID + 32-byte secret，不是hash/digest或derived identity。
-  该方向不新增SwiftData schema/secret column；server侧Keychain与client侧custody/access-group/handoff仍是
-  `BLOCKED-SPEC`，F0A不携带credential；
-- `DEC-PY-AUTHENTICATED-INGRESS`当前是明确的`BLOCKED-SPEC`：它不阻塞in-process Gateway或App Intents，
-  但阻塞任何production transport、CLI正向tracer与Local Automation history access；
+- credential是exact UUID16 + `SecRandomCopyBytes` secret32，不是hash/digest或derived identity。server
+  app-private Data Protection Keychain与client no-follow `0700`/`0600` file按§5.1持有exact value；该方向
+  不新增SwiftData secret column，也不声称malicious-same-EUID confidentiality；
+- `DEC-PY-AUTHENTICATED-INGRESS`的custody/publication方向已冻结，但实现与signed evidence仍open，继续阻塞
+  production transport、CLI正向tracer与Local Automation history access；
+- locator lifetime/encoding与4,096-byte wire cursor对约26-KiB private cursor的表示仍为`BLOCKED-SPEC`；
+  两者不得通过新增hash/digest“修复”；
 - socket endpoint、credential representation、framing、locator payload、cursor payload、Gateway内部
   IDs全部internal/package；
 - 不新增 `LocalAutomationProtocol`，直到 production UDS与另一个真实adapter都需要同一in-process seam；
@@ -585,14 +629,22 @@ GW0合并后不得重复领取；X.2 public Gateway contract也排在当前叶�
 验收上限仅是“closed policy可编译且matrix total”；它不证明真实Gateway在History read前拒绝，也不关闭
 `PLAY-PY-B1/B2/B0G`。该leaf不得新增credential、hash/request digest、socket、JSON parser或CLI target。
 
-### 当前 code leaf — roadmap `X.8`
+### 已完成 code leaf — roadmap `X.8`
 
 X.1–X.6的Gateway substrate/positive facade以及X.7 App Intents composition均已按各自证据上限landed；
-X.7由PR #16、correctness run 32609910701与symbol run 32609018894支持。当前X.8只领取§2.2的
+X.7由PR #16、correctness run 32609910701与symbol run 32609018894支持。X.8由PR #17与
+correctness run 32613689337落地，只领取§2.2的
 `ClipyCLIContract` pure codec：它可证明bounded parser、deterministic renderer、closed operation与exit map，
 但不新增executable/product、process I/O、authenticated ingress、credential或transport，也不能把typed
 success fixture说成real Gateway response。因此“Python/Gateway已可用”仍不成立；第一条真实Python→History
 claim至少要等X.9解除ingress blocker并通过对应signed tracer。
+
+### 当前 code direction — roadmap `X.9` / `PLAY-PY-F1`
+
+F0A由PR #18关闭到§6.2的证据上限。接下来允许先领取storage-only `expectedKind` hardening Red；它只证明
+targeted authorization拒绝kind mismatch。随后F1按§5.1的exact credential、authority-last enrollment、
+authority-first revoke和unaudited/authenticated-denial分类逐张实现。cursor/locator规格与真实signed
+Developer ID/profile/Keychain proof未关闭前，不领取positive B4/B5。
 
 ### PY-1 — 当前安全负对照
 
@@ -739,12 +791,12 @@ socket test最多证明protocol实现。
 2. **先完成唯一Gateway的in-process trust substrate。** enrollment/grant/revoke/quota/audit/opaque
    locator与Authority recheck先以真实History闭环；按既有V2路线让App Intents成为第一个adapter，不另写
    mutation语义。
-3. **实现CLI pure codec。** JSON、exit codes与no-content diagnostics由pure tests锁定，但此时仍不宣称
+3. **CLI pure codec已实现。** JSON、exit codes与no-content diagnostics由pure tests锁定，但此时仍不宣称
    Python已连到History。Format discovery只可冻结owner-summary schema；runtime injection owner未批准前
    不实现endpoint。
-4. **先跑F0A，再关闭authenticated-ingress blocker，最后做read-only transport tracer。** F0A仅在
-   ad-hoc-signed artifact证明cold/warm/stale UDS mechanics，不带JSON、credential或History。随后另行
-   关闭opaque facade ownership、server Keychain与client credential custody，才可让一个selected adapter
+4. **F0A已跑；现在逐张实现F1，最后做read-only transport tracer。** F0A仅在
+   ad-hoc-signed artifact证明cold/warm/stale UDS mechanics，不带JSON、credential或History。F1按§5.1
+   实现opaque facade ownership、server Keychain与client credential custody，才可让一个selected adapter
    连接步骤2同一Gateway并在X.9闭环enroll/deny/grant/revoke/browse；没有write，没有subscription。
 5. **再做Effective-only binary read。** 使用已冻结的durable-before-publication audit contract与binary output，绝不复用full details
    暴露lineage。
@@ -773,9 +825,11 @@ socket test最多证明protocol实现。
 
 | Claim | Reason / source | 当前最多支持 | 不能建立 | 下一判别证据 |
 |---|---|---|---|---|
-| 当前Python不能访问Clipy history | tracked source已有in-process Gateway/App Intents，但无`clipyctl` executable、Local Automation authenticated ingress或transport | 当前source snapshot事实 | future feasibility、真实process I/O或Python-to-History | X.8 pure codec后，X.9 ingress/transport与PY-4 vertical tracer |
+| 当前Python不能访问Clipy history | tracked source已有in-process Gateway/App Intents、X.8 pure codec与proof-only F0A，但无产品`clipyctl`、Local Automation authenticated ingress或transport | 当前source snapshot事实 | future feasibility、真实process I/O或Python-to-History | X.9 F1 ingress/transport与PY-4 vertical tracer |
 | 任意Python可经CLI调用 | Python可启动first-party executable；public contract不依赖Swift bridge | 设计上可行 | signed/sandbox/TCC/cold-start可靠性 | PY-15 matrix |
-| UDS F0A值得作为private transport判别器 | `sockaddr_un`路径界限、`getpeereid`与LaunchServices primary contract；详见Apple memo §13.1 | ad-hoc-signed non-sandbox artifact可测same-EUID cold/warm/stale mechanics | Developer ID、credential、Python/History、Sandbox/TCC或final transport | F0A三格后，ingress决策与signed caller matrix |
+| UDS F0A mechanics在exact proof artifact成立 | PR #18 correctness 32615569895 + signed-runtime 32615713100；Apple边界见memo §13.1 | ad-hoc-signed non-sandbox same-EUID cold/warm/stale mechanics | Developer ID、credential、Python/History、Sandbox/TCC或final transport | F1 ingress + signed caller matrix |
+| F1 file custody适合当前account-wide promise | other-UID由owner/mode/path checks排除；same-EUID风险被产品明确接受 | 当前non-sandbox方向与可检验publication order | malicious same-EUID confidentiality、Sandbox/shared-Keychain可用性 | exact file/DPK tests + Developer ID/profile matrix；更强模型改用app-like wrapped CLI/shared DPK |
+| F1不能转发private cursor/ID | X.8 cursor最多4,096 bytes，现有private cursor约26 KiB；locator lifetime未冻结 | 这是明确的wire blocker | 某种压缩/映射方案必然正确 | bounded server state或versioned encoding Red；禁止hash/digest shortcut |
 | XPC不是stdlib Python interface | Apple XPC encoding opaque；需native client | signed CLI可隐藏它 | Python直接实现受支持XPC client | 仅在批准signed bridge后跑X-PY-XPC |
 | browse仍可能泄密 | current `HistoryRow.title/search.snippet`直接来自内容presentation | capability必须按content-bearing披露 | 每条title实际都敏感 | synthetic-secret grant test + user UX review |
 | details对首版过宽 | current `HistoryDetails`含canonical/effective/revisions/occurrence | Effective-only应是目的型read | 新projection性能/实现必然更好 | PY-7 + G8/resource measure |

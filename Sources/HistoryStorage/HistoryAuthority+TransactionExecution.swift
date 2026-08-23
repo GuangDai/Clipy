@@ -61,6 +61,10 @@ extension HistoryAuthority {
                     let decision = try Self.targetedExternalAuthorizationDecision(
                         descriptor,
                         connection: connection,
+                        // The current positive write vocabulary is the closed
+                        // X.6 App Intents manage subset. Local Automation has
+                        // no positive Authority write entry in this leaf.
+                        expectedConnectionKind: .appIntents,
                         config: config,
                         in: context
                     )
@@ -69,6 +73,11 @@ extension HistoryAuthority {
                         externalAuditConfig = config
                     case .unknownConnection:
                         throw ExternalWriteGateRejection.unknownConnection(
+                            requestedCapability: capability,
+                            connectionID: connection
+                        )
+                    case .inadmissibleConnection:
+                        throw ExternalWriteGateRejection.inadmissibleConnection(
                             requestedCapability: capability,
                             connectionID: connection
                         )

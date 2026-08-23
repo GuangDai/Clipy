@@ -964,6 +964,61 @@ Developer ID/team、secure timestamp、notarization/stapling、Gatekeeper、App 
 Keychain sharing/client credential custody、TCC、different-UID实际delivery、交互式no-activation、
 Python-to-History或production transport选择。后两项runner不可观察时必须保持open。
 
+该判别器已由[PR #18](https://github.com/GuangDai/Clipy/pull/18)落地：
+[correctness run 32615569895](https://github.com/GuangDai/Clipy/actions/runs/32615569895)
+覆盖normal SwiftPM graph与app scheme，
+[signed-runtime run 32615713100](https://github.com/GuangDai/Clipy/actions/runs/32615713100)
+覆盖exact final flagged artifact的cold/warm/`SIGKILL`三格。第二个run不是Developer ID/notary/profile
+证据，因此通过记录不会提高上一段的support ceiling。
+
+### 13.2 F1 credential custody：当前non-sandbox方向与证据上限
+
+#### Apple公开事实（DOC）
+
+- Apple的[`SecRandomCopyBytes`](https://developer.apple.com/documentation/security/secrandomcopybytes(_:_:_:))
+  是F1生成32-byte secret的系统随机字节API。该API支持“这些bytes来自系统随机源”，不支持把UUID、
+  bearer token或某个进程自动提升为身份；connection UUID仍由Clipy单独preassign。
+- [`kSecUseDataProtectionKeychain`](https://developer.apple.com/documentation/security/ksecusedataprotectionkeychain)
+  允许Keychain query选择Data Protection Keychain。结合
+  [TN3137](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains)，这支持app server copy的
+  候选存储API，不证明一个独立bare command-line client能读同一item。
+- Apple的[Keychain sharing](https://developer.apple.com/documentation/security/sharing-access-to-keychain-items-among-a-collection-of-apps)
+  与[App Groups配置](https://developer.apple.com/documentation/xcode/configuring-app-groups)把共享访问绑定到
+  具体signed targets、access group、Team/profile/entitlement configuration。它们支持“若以后把CLI包装成
+  app-like signed target，可实测shared DPK”这一替代方向；不能支持当前bare client已经共享，也不能支持
+  arbitrary same-EUID Python读取shared Keychain item。
+- POSIX owner/mode/no-follow/descriptor recheck与inherited stdin是Clipy选择的file-provisioning机制，不是
+  Apple文档承诺的same-EUID secrecy boundary。`0700`/`0600`可作为other-UID与accidental path-substitution
+  controls；同一EUID进程仍可能读取owner文件，因此本文明确不作malicious-same-EUID confidentiality claim。
+
+#### 决策、因果链与non-support
+
+当前产品承诺本来就是non-sandbox、account-wide same-EUID，因此F1选择一个exact 48-byte token：UUID 16
+bytes + `SecRandomCopyBytes` secret 32 bytes。server把exact value放app-private DPK；client通过dedicated
+inherited stdin收到同一exact value，并存到validated owner-only `0700`目录/`0600` no-follow regular file。
+这不是hash/digest/derived identity，也不把file mode当authentication。
+
+Authority-last enrollment使crash artifact保持powerless：client exact readback先成功，server Keychain
+exact readback再成功，最后Authority才以preassigned ID durable写connection row + admin audit，且zero
+implicit grants。此前crash最多留下没有row/grant的orphan；startup清理或retry失败时阻止publication。
+Revoke则Authority-first：先durable revoke row/grants/audit，再保留bounded server verifier以稳定区分
+`connection_revoked`，最后best-effort删除client file。Rotation mint新connection，不迁移grants。
+
+Unknown/malformed/wrong secret和peer reject发生在credential/peer admission前，因此unaudited；valid exact
+revoked/no-grant request已解析到durable connection并分别audited为`connection_revoked`/`not_granted`。
+这一区分是Clipy的audit privacy policy，不是Keychain API自动提供的性质。
+
+**支持上限：**本节关闭了当前non-sandbox产品的custody规格选择，没有关闭实现或平台证据。仍需在实际
+Developer ID/team/profile artifact中证明DPK exact add/read/delete、nested provisioner signing、inherited-FD
+handoff、restart cleanup、notarization/stapling、Gatekeeper与caller matrix。若未来要求malicious same-EUID
+confidentiality或App Sandbox，当前owner-file方案失效，必须改为app-like wrapped CLI + proven shared DPK
+configuration或另一项已批准custody model。
+
+另有两个非Apple-platform blocker：X.8 cursor最多4,096 UTF-8 bytes，而current private
+`HistoryPageCursor`在admitted query bounds下约26 KiB；external locator也没有冻结stable lifetime/invalidated
+encoding。解决它们需要bounded server state或explicit versioned representation；增加hash/digest、截断
+fingerprint或hash-derived identity既无本文Apple证据，也违反项目的no-useless-hash边界。
+
 ---
 
 ## 14. 建议写入新 review 的最小 Apple proof matrix
@@ -983,6 +1038,7 @@ Python-to-History或production transport选择。后两项runner不可观察时�
 | `APPLE-A11Y-1` | 全 main-task matrix × VoiceOver/FKA；抽查 Voice Control/Switch | common tasks无需 sighted help；focus/labels/commands 合理 |
 | `APPLE-SHIP-1` | clean-machine install + N-1→N update + interrupted update | Developer ID/hardened/notarized/stapled；identity连续；可恢复/回滚 |
 | `APPLE-UDS-F0A-1` | ad-hoc-signed proof app cold/warm/`SIGKILL` stale recovery | bounded same-EUID hello/ready mechanics；same warm PID/generation；new recovered PID/generation；不提升distribution/credential/Python claim |
+| `APPLE-LA-F1-1` | actual Developer-ID/profile app + provisioner：DPK exact 48-byte round trip、inherited-stdin owner-file exact readback、restart orphan cleanup | 当前non-sandbox account-wide custody implementation；不支持malicious same-EUID secrecy |
 
 ## 15. 给总 review 的措辞约束
 

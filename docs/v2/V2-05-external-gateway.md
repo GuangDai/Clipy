@@ -13,7 +13,23 @@
 > [run 32609018894](https://github.com/GuangDai/Clipy/actions/runs/32609018894).
 > Those runs prove the hosted/source boundaries recorded under roadmap X.7;
 > they do not prove signed Siri/Shortcuts invocation, TCC, or process placement.
-> X.8 is therefore the next implementation leaf. X.4 owns the complete
+> X.8 is landed through
+> [PR #17](https://github.com/GuangDai/Clipy/pull/17), with all three
+> correctness jobs green in
+> [run 32613689337](https://github.com/GuangDai/Clipy/actions/runs/32613689337).
+> The evidence-only F0A discriminator is landed through
+> [PR #18](https://github.com/GuangDai/Clipy/pull/18): the same SwiftPM graph
+> and normal app scheme are green in
+> [run 32615569895](https://github.com/GuangDai/Clipy/actions/runs/32615569895),
+> and the exact final `CLIPY_UDS_F0` ad-hoc-signed proof artifact passed the
+> bounded cold/warm/`SIGKILL` cells in
+> [run 32615713100](https://github.com/GuangDai/Clipy/actions/runs/32615713100).
+> Those results reach only the claim ceiling in §0.4; they do not establish
+> authenticated ingress, credential custody, Python-to-History access, or a
+> distribution identity. The next storage-only hardening leaf may require an
+> `expectedKind` at targeted authorization and reject a durable kind mismatch.
+> That closes a precondition needed by a later Local Automation adapter; it is
+> not authentication and cannot by itself close X.9. X.4 owns the complete
 > `OperationPayloadBlobV1` codec, public operation-kind additions, central audit
 > store, current-state connection/grant administration, public in-app admin
 > conformance, and startup validation; it does **not** publish an
@@ -261,7 +277,7 @@ to the kind but lacks a live grant is an admitted request and follows the
 existing denial-audit rule. `PLAY-PY-GW0` proves only the pure classification;
 the later Gateway denial leaf proves the side-effect ordering.
 
-### 0.3 Account scope, capability declaration, and unresolved ingress
+### 0.3 Account scope, capability declaration, and F1 ingress decision
 
 Local Automation is scoped to the same **effective user account (same EUID)**.
 That is an account-wide product boundary, not proof of the same GUI, login, or
@@ -284,20 +300,96 @@ by `HistoryStorage`; only an approved SwiftPM transport target calls its
 `package` execution method, using neutral package-only request/result/peer DTOs
 rather than Gateway or SwiftData vocabulary. The facade delegates credential
 resolution, grant evaluation, authoritative recheck, audit, and execution to
-the internal Gateway. This is a **design direction, not a resolved ingress or
-an implementation admission**.
+the internal Gateway. F1 may implement this shape only after its neutral DTOs,
+framing bounds, and failure mapping are frozen; it must not publish the Gateway,
+CredentialStore, socket path, or framing as a second public interface.
 
-The candidate credential shape is exactly 48 opaque bytes: a 16-byte durable
-connection identifier plus a 32-byte secret. Neither field is a request hash,
-digest, signature, or derived identity. The server-side secret would be held
-in Keychain, not a new SwiftData column; this direction therefore requires no
-schema revision. How a separately executed first-party client receives and retains
-its copy remains **BLOCKED-SPEC** because an ordinary app Keychain item cannot
-be assumed to be shared with a nested tool. App Sandbox, access-group, explicit
-handoff, and client-custody choices require signed configuration evidence. No
-production transport, credential enrollment, or positive Local Automation
-tracer may land until those blockers are resolved. The blockers do not prevent
-the evidence-only F0A discriminator below.
+For the current **non-sandbox, account-wide** product direction, credential
+custody is now decided as follows:
+
+- one credential is exactly 48 opaque bytes: the preassigned connection UUID
+  as 16 bytes followed by 32 bytes generated directly with `SecRandomCopyBytes`;
+  neither component is a request hash, digest, signature, derived identity, or
+  password encoding;
+- the server stores that exact 48-byte value in the app-private Data Protection
+  Keychain (`kSecUseDataProtectionKeychain`), keyed by the connection UUID. No
+  secret is added to SwiftData, an audit payload, argv, environment, or log;
+- the first-party client stores the same exact value in one owner-only file
+  beneath a validated owner-only directory: directory mode `0700`, regular-file
+  mode `0600`, no symlink traversal, no-follow open, owner/mode/type checks on
+  the opened descriptor, and byte-exact length/readback. The provisioning
+  helper receives the value only through a dedicated inherited stdin descriptor,
+  never argv, environment, cwd-derived input, or a caller-selected output path;
+- these filesystem modes and same-EUID peer checks exclude other UIDs and
+  accidental path substitution under the validated rules. They do **not**
+  provide confidentiality against another malicious process already running as
+  the same EUID. That limitation is part of the product promise, not a claim
+  repaired by calling the bytes a credential.
+
+Enrollment publishes authority last. The app preassigns the connection UUID and
+secret, invokes the bounded provisioning helper, verifies an exact client-file
+readback, writes and exact-reads the server Keychain item, and only then asks the
+single Authority transaction to insert the preassigned `.localAutomation`
+connection row plus its successful admin-enroll audit. That row starts with
+**zero grants**; enrollment never grants `browsePreview` or another capability
+implicitly. A crash before the Authority transaction can leave a client file,
+a Keychain item, or both, but no durable connection row or grant: those orphans
+are powerless. At startup, exact 48-byte Keychain/client artifacts whose UUID
+has no matching durable local-automation row are removed best-effort; a repeated
+enable retries the same cleanup before minting a fresh UUID. Cleanup failure is
+reported and blocks publication rather than causing a row to be inferred from a
+secret.
+
+This is the sole F1 enrollment seam. The existing public
+`GatewayAdminHistory.enrollConnection(kind:displayName:credential:)` overload
+is not allowed to create a usable `.localAutomation` connection: it cannot
+express the preassigned identifier or prove the two custody readbacks. The F1
+implementation must therefore route the in-app enable action through one
+concrete enrollment coordinator and make the generic overload reject
+`.localAutomation` before mutation. Until that coordinator lands, direct
+`.localAutomation` enrollment remains only a storage-test fixture for kind and
+grant validation; no product composition exposes it as enrollment. The
+coordinator alone calls a narrower internal Authority method carrying the
+preassigned ID and `credentialWasProvided == true`; callers never supply secret
+bytes to the public admin protocol.
+
+Revocation takes the opposite authority-first order. The Authority transaction
+first durably marks the connection revoked, revokes every live grant, and appends
+the admin-revoke audit. The server then retains a bounded verifier record for
+that exact credential so a later valid presentation returns the stable
+`connection_revoked` result; retention is bounded by the existing connection
+limit and is removed only by an explicit later maintenance policy. Client-file
+deletion is best effort and cannot make revocation succeed or fail. Rotation is
+enrollment of a **new connection and credential** followed by revocation of the
+old one; grants do not migrate or copy, so the new connection again starts with
+zero grants.
+
+Ingress classification is ordered and privacy-bounded. A malformed credential,
+unknown UUID, wrong secret, malformed frame, or rejected kernel peer fails before
+Gateway admission and is unaudited. A byte-exact credential for a durable revoked
+connection produces an audited `connection_revoked`; a byte-exact active
+credential without the required live grant produces an audited `not_granted`.
+The stored secret comparison is byte-exact and timing-safe, but that mechanism
+does not change the accepted same-EUID threat model.
+
+This decision removes the former F1 client-custody **spec** blocker only for the
+current non-sandbox account-wide promise. Actual Developer ID/team/profile,
+Data Protection Keychain round-trip, nested-tool signing, installer/provisioning,
+notarization/stapling, Gatekeeper, and the real caller matrix remain open signed
+evidence. If a future threat model requires confidentiality from malicious
+same-EUID processes or enables App Sandbox, the client must become an app-like
+wrapped executable with an approved shared Data Protection Keychain access
+group (and matching Team ID/profile/entitlements) or another separately approved
+custody model. A bare owner-only file cannot satisfy that stronger promise.
+
+Two wire-identity blockers also remain open. X.8 admits a cursor of at most
+4,096 UTF-8 bytes, while the current private `HistoryPageCursor` can encode to
+roughly 26 KiB at its admitted query bounds; it therefore cannot be forwarded
+as the CLI cursor. The external item locator likewise needs an owner-approved
+stable lifetime/invalidated behavior rather than exposing a raw History UUID.
+F1 must choose bounded server-side state or another explicit versioned encoding
+for each. It must not add a hash, digest, truncated fingerprint, or hash-derived
+identity to squeeze either value under the wire bound.
 
 This amendment introduces no request digest, integrity hash, token framework,
 or transport security framework. Retry remains non-automatic until a later
@@ -305,9 +397,10 @@ typed idempotency contract is separately approved.
 
 ### 0.4 F0A ad-hoc-signed UDS discriminator (evidence only)
 
-`PLAY-PY-F0A` is a compile-time-isolated platform experiment, not the selected
-private transport. It exists only in the manually dispatched signed-runtime
-proof artifact. The Apple/XNU provenance and its claim ceiling are recorded in
+`PLAY-PY-F0A` is a landed compile-time-isolated platform experiment, not the
+selected private transport. PR #18 compiled it only into the manually
+dispatched signed-runtime proof artifact. The Apple/XNU provenance and its
+claim ceiling are recorded in
 the [platform source memo §13.1](../reviews/2026-08-22-clipy-maccy-deep-review/apple-platform-source-memo.md):
 
 - the main-app listener is compiled only with `CLIPY_UDS_F0`;
@@ -381,7 +474,8 @@ UDS mechanics for a same-EUID diagnostic client. It does **not** establish
 Developer ID identity or team, secure timestamp, notarization/stapling,
 Gatekeeper, App Sandbox/App Groups, Keychain sharing or client custody, TCC,
 the final caller matrix, Python-to-History access, or a production transport
-choice.
+choice. PR #18's green runs establish exactly those hosted/source cells and do
+not upgrade this paragraph's support ceiling.
 
 ## 1. Role and boundary
 
@@ -455,8 +549,9 @@ V2-05 owns:
   actor);
 - the `AppIntent` conformances and `ClipboardShortcuts: AppShortcutsProvider` in
   `ClipyApp`;
-- the credential-store seam (Keychain `SecItem*`, reserved for non-App-Intents
-  enrollment kinds; unused by the V2 App Intents path);
+- the F1 credential-store seam (server-side app-private Data Protection
+  Keychain `SecItem*` plus the §0.3 client-file custody decision; unused by the
+  App Intents path and not yet implemented);
 - new public "distinct concern" protocols in `HistoryCore`
   (`ExternalHistory`, `GatewayAdminHistory`) and DTOs;
 - the six graft-admission records (`V2-00` §4), V2 proof gates, migration
@@ -768,17 +863,20 @@ public enum ConnectionStatus: Int16, Sendable, Hashable, Codable {
 }
 ```
 
-- **Enrollment** is an admin operation (`GatewayAdminHistory.enrollConnection`,
-  §7.2) performed in-app by the user (V2-07 UX). It mints an
-  `ExternalConnectionID`, creates a `ConnectionRow` (`status == active`), and
-  grants an initial capability set. The App Intents connection is bootstrapped
+- **Enrollment** is an in-app admin operation (V2-07 UX). The ordinary
+  `GatewayAdminHistory.enrollConnection` path may mint an
+  `ExternalConnectionID` for its admitted non-local kinds and creates a
+  `ConnectionRow` (`status == active`) with zero grants. The App Intents
+  connection is bootstrapped
   at `open` (§4.6) with **no** capability granted by default — the user must
   explicitly grant `read` and/or `manage` via the UX (deny-by-default).
-  `.localAutomation` is never bootstrapped: the user explicitly enables it
-  after the App Intents/Gateway stage exists, and it starts with no grants.
-  Credential creation, storage, and rotation for that kind remain blocked with
-  the authenticated-ingress/transport decision (§0.3); this amendment does not
-  assign them to Keychain or another new security module.
+  `.localAutomation` is never bootstrapped and is never created through that
+  generic overload. Its sole admitted path is the §0.3 concrete coordinator:
+  custody succeeds first, then Authority inserts the preassigned ID and
+  successful audit last, still with zero grants. The currently landed generic
+  local-enrollment behavior is transitional test scaffolding and must be closed
+  in the same F1 leaf that introduces the coordinator; it is not a product
+  enrollment contract.
 - **Grant** is per `(connectionID, capability)` (`GrantRow`, §4.2). Granting
   `.manage` implicitly satisfies `.browse` requests (no separate `.browse` row
   required, though the UX may record both for clarity); `.manage` does **not**
@@ -814,21 +912,22 @@ public enum ConnectionStatus: Int16, Sendable, Hashable, Codable {
   enrollment kinds (URL scheme bearer token, XPC service label) and is unused
   by the V2 App Intents path.
 
-### 3.4 Credential storage (Keychain, reserved)
+### 3.4 Local Automation credential custody (F1 direction)
 
-For a future `urlScheme` / `xpc` enrollment that needs a bearer token or
-service-label secret, V2-05 specifies a Keychain-backed `CredentialStore` actor
-(`SecItemAdd` / `SecItemCopyMatching` / `SecItemDelete`, macOS 10.6+,
-pending verification under `X-PLATFORM-3`; `V2-facts.md` cycle 6, facts 5–7). All `SecItem*` calls are confined to the actor
-(they block the calling thread; pending verification under `X-PLATFORM-3`; `V2-facts.md` cycle 6, facts 5–6), mirroring v1's
-Fuse confinement (`01` §6). The credential is keyed by `ExternalConnectionID`
-under the app's default keychain access group (`application-identifier`
-entitlement; no cross-app sharing in V2). **This path is not exercised in V2**
-(App Intents need no credential); it is specified so a future enrollment kind
-does not require a new architecture review of the credential surface. Proof
-gate `X-PLATFORM-3` confirms the Keychain API compiles and round-trips under
-Swift 6 strict concurrency when that future kind ships; until then the
-`CredentialStore` actor is unbuilt and carries no `@unchecked Sendable`.
+The controlling F1 decision is §0.3: an exact 48-byte credential is stored
+server-side in the app-private Data Protection Keychain and client-side in a
+validated owner-only no-follow file for the deliberately non-sandbox,
+account-wide product. `CredentialStore` remains actor-confined around
+`SecItemAdd` / `SecItemCopyMatching` / `SecItemDelete`; the client file is not
+a shared Keychain substitute and makes no malicious-same-EUID confidentiality
+claim. App Intents still use no credential.
+
+This section fixes architecture and publication order, not platform evidence.
+`X-PLATFORM-3` must still prove exact 48-byte Data Protection Keychain
+add/read/delete behavior, duplicate/retry handling, process restart, and
+Developer ID/profile behavior in the actual signed artifact. Until that leaf
+lands, HistoryStorage does not link `Security` for this surface and no positive
+Local Automation request may be released.
 
 ## 4. Data model
 
@@ -1859,10 +1958,10 @@ is `01` §8 / `06` §6: "`import SwiftData` appears only in `HistoryStorage`"):
   **not** import `AppIntents` — the gateway exposes a Foundation-only
   `ExternalHistory` protocol, and the `AppIntent` conformances that consume it
   live in `ClipyApp` (R-m2 / Lens B nit). For the V2 build `HistoryStorage` adds
-  no new hashing or cryptography import. `import Security` (Keychain `SecItem*`) is **not** in the V2
+  no new hashing or cryptography import. `import Security` (Keychain `SecItem*`) is **not** in the current
   build — the `CredentialStore` actor is unbuilt and `HistoryStorage` does not
-  link `Security` until a future enrollment kind ships (§3.4 / §6.7; Lens B
-  minor). When that kind ships, `X-PLATFORM-3` adds `Security` and confirms the
+  link `Security` until the F1 implementation leaf ships (§3.4 / §6.7; Lens B
+  minor). That leaf adds `Security` and `X-PLATFORM-3` confirms the
   actor-confined round trip. The v1 source gate (`01` §9) is extended to permit
   no additional import in `HistoryStorage` for X.3/X.4 (proof
   `X-COMPILE-3`); `Security` is added to the gate only when
@@ -2251,26 +2350,26 @@ direct hosted invocation do not establish that system-created intents run in
 the main app process or inherit its TCC/entitlements; those remain
 `X-SECURITY-1` signed-runtime questions.
 
-### 6.7 CredentialStore (Keychain, reserved — not exercised in V2)
+### 6.7 CredentialStore (F1 Data Protection Keychain direction)
 
 ```swift
 internal actor CredentialStore {
-    // Confines blocking SecItem* calls (pending verification under X-PLATFORM-3; V2-facts.md cycle 6, facts 5-6). Unused by
-    // the V2 App Intents path; specified for a future urlScheme/xpc enrollment
-    // kind. When built, X-PLATFORM-3 confirms Swift 6 strict-concurrency
-    // compilation + round trip.
+    // Confines blocking SecItem* calls. F1 stores exactly 48 bytes in the
+    // app-private Data Protection Keychain. X-PLATFORM-3 still owns the actual
+    // signed-artifact compilation and exact round-trip proof.
     func storeCredential(_ data: Data, for connection: ExternalConnectionID) async throws
     func loadCredential(for connection: ExternalConnectionID) async throws -> Data?
     func deleteCredential(for connection: ExternalConnectionID) async throws
 }
 ```
 
-The `SecItem*` API is macOS 10.6+ (pending verification under `X-PLATFORM-3`; `V2-facts.md` cycle 6, facts 5–7) and blocks the
-calling thread, so all calls are actor-confined. The credential is scoped to
-the app's default keychain access group (no cross-app sharing in V2). Until a
-future enrollment kind ships, this actor is unbuilt and `HistoryStorage` does
-not link `Security` for it; it is recorded here so a future kind does not reopen
-the credential surface's architecture.
+The actor owns only the server copy. The separately executed client receives
+the exact value through inherited stdin and keeps it in the §0.3 owner-only
+file; no access group is claimed for that client. Until F1 ships, this actor is
+unbuilt and `HistoryStorage` does not link `Security` for it. A future sandbox
+or malicious-same-EUID confidentiality requirement invalidates the file-custody
+choice and requires an app-like wrapped client plus proven shared Data
+Protection Keychain entitlements, not a silent widening of this actor.
 
 ## 7. Public surface (HistoryCore, Foundation-only)
 
@@ -2333,9 +2432,12 @@ V2 surface, never the v1 `HistoryAction` enum.
 
 ```swift
 public protocol GatewayAdminHistory: Sendable {
-    // credential is nil for .appIntents; a bearer token / service-label secret
-    // for future urlScheme/xpc kinds (stored via CredentialStore §6.7). Optional
-    // now so a credential-bearing kind needs no protocol change (CRIT-M11).
+    // This generic admin method does not own Local Automation custody. F1 must
+    // reject kind == .localAutomation before mutation and route the in-app
+    // enable action through the concrete §0.3 coordinator, which preassigns the
+    // ID and never exposes credential bytes through this public protocol.
+    // `credential` remains reserved for a separately admitted future kind; it
+    // is nil for .appIntents and is not an F1 bearer-token input.
     func enrollConnection(
         kind: ConnectionEnrollKind,
         displayName: String,
@@ -2741,9 +2843,10 @@ its dedicated v1 vocabulary (`02` §10), and `ExternalFailure` has no
   app's single in-process `HistoryAuthority` and the app's pasteboard TCC; no
   separate entitlement is needed for the intent to call `ClipboardHistory`. An
   App Intents extension target is a second process and is post-V2.
-- **Keychain credentials (reserved).** Unused in V2 (App Intents need no
-  credential); specified for future enrollment kinds, actor-confined (`01` §6 /
-  `V2-facts.md` cycle 6, facts 5–7).
+- **F1 credential custody.** App Intents need no credential. Local Automation's
+  server-side app-private Data Protection Keychain and client-side owner-file
+  direction is frozen in §0.3 but remains unimplemented and open under
+  `X-PLATFORM-3`; actor confinement applies to blocking Keychain work.
 - **Crash safety.** The audit log is durable state (not a derivation): its loss
   loses audit provenance (irreversible — Record 4 states it is NOT a cache).
   Typed payload or retained-sequence corruption is surfaced as a typed failure;
@@ -2825,8 +2928,8 @@ on macOS 26:
 
 - **X-COMPILE-1 (compile/dependency).** Swift 6 complete strict-concurrency
   build succeeds; no hashing/cryptography import is added for audit
-  (`Security` is **not** imported in V2 — the `CredentialStore` is unbuilt; it
-  is added only when `X-PLATFORM-3` fires, Lens B minor); `AppIntents` imported
+  (`Security` is **not** imported in the current build — the `CredentialStore` is unbuilt; it
+  is added only when the F1 `X-PLATFORM-3` leaf fires, Lens B minor); `AppIntents` imported
   only in `ClipyApp` production sources, with the narrow hosted
   `ClipyIntegrationTests` exception needed to exercise those app-owned types;
   `HistoryCore` external-gateway types import only
@@ -2891,10 +2994,14 @@ on macOS 26:
   `OperationPayloadBlobV1` round-trip/corruption matrix belongs to X.4, where
   every admitted admin literal lands with atomic audit behavior; X.3 must not
   freeze the incomplete §4.4 illustration.
-- **X-PLATFORM-3 (Keychain, reserved).** When a future enrollment kind ships,
-  confirm `SecItemAdd`/`SecItemCopyMatching`/`SecItemDelete` compile under Swift
-  6 strict concurrency in the actor-confined `CredentialStore` and round-trip a
-  credential (macOS 10.6+; `V2-facts.md` cycle 6, facts 5–7). Not exercised in V2.
+- **X-PLATFORM-3 (F1 credential custody).** In the actual Developer-ID/profile
+  configuration, confirm `SecRandomCopyBytes` produces the 32-byte secret and
+  actor-confined `SecItemAdd`/`SecItemCopyMatching`/`SecItemDelete` round-trip
+  the exact 48-byte value in the app-private Data Protection Keychain. Separately
+  prove inherited-stdin provisioning, no-follow `0700`/`0600` client-file exact
+  readback, restart cleanup/retry, and the authority-last enrollment / authority-
+  first revocation order from §0.3. This remains open; F0A's ad-hoc signature and
+  no-credential hello do not exercise it.
 - **X-BEHAVIOR-1 (admitted failure -> ExternalFailure mapping, §7.3.1).**
   Fixture-prove the frozen mapping end to end, none of which
   X.4's codec-corruption proof or `X-PERF-*` (mechanism
@@ -3044,8 +3151,8 @@ typed payload and monotone contiguous retained sequence (D36), with explicit
 compaction/recovery floors and **no tamper-evidence claim**;
 privacy discipline (audit carries shape+count, never content/query text);
 in-process App Intents (X-SECURITY-1); coarse process-wide rate throttle with
-per-caller attribution deferred to X-SECURITY-4 (X-SECURITY-3); Keychain
-credentials reserved for future kinds (X-PLATFORM-3).
+per-caller attribution deferred to X-SECURITY-4 (X-SECURITY-3); F1 credential
+custody frozen but unimplemented (X-PLATFORM-3).
 **Content-sensitivity note:** the `readContent` capability (especially
 `pastePayload`/`details`) exposes sensitive clipboard content to the enrolled
 connection; the user grants this explicitly (deny-by-default — `browse` may be
@@ -3210,8 +3317,9 @@ audit log / grant list on demand (like V2-01 enrichment status, `V2-01` §8).
   (Lens B minor; not load-bearing — the gateway re-validates `limit` at D35).
 
 Individual leaves may land only with their own recorded proof ceilings: X.1/X.2
-reserve the public contract vocabulary and X.3–X.7 are landed at their recorded
-boundaries; X.8 is the current pure-codec leaf. Until the remaining applicable `X-COMPILE-*`,
+reserve the public contract vocabulary, X.3–X.7 are landed at their recorded
+boundaries, X.8 is landed as a pure codec, and F0A is landed only as a proof
+discriminator. X.9/F1 is current. Until the remaining applicable `X-COMPILE-*`,
 `X-PLATFORM-*`, `X-BEHAVIOR-*`, and `X-SECURITY-*` gates pass on macOS 26, the
 landed Gateway/administration/App Intents claims stay at their recorded
 source/hosted-test ceilings, and the Local Automation external product surface

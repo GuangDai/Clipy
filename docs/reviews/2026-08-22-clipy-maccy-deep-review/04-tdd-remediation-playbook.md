@@ -1095,6 +1095,11 @@ A2是family，下面九张Red各自独立Green，不得用一张parser test关�
   512/513、date-millisecond、nextCursor 4,096/4,097与result count 500/501
   bounds另用encoder goldens覆盖。
 
+`PLAY-PY-A2A…A2I`已由
+[PR #17](https://github.com/GuangDai/Clipy/pull/17)与
+[correctness run 32613689337](https://github.com/GuangDai/Clipy/actions/runs/32613689337)
+关闭。该证据只覆盖pure codec，不能作为process I/O、transport、credential或Python→History Green。
+
 在任何positive Gateway tracer前，**PLAY-PY-GW0 [PURE / RESOLVED-SPEC]**先冻结
 `(ConnectionEnrollKind, capability/operation) -> grantable` closed matrix：`.appIntents`只保留owning V2-05
 已批准surface；`deleteItem/reviseContent`等local-only operation即使共享enum可构造也必须denied，unknown pair
@@ -1215,7 +1220,7 @@ mutation/audit各一次；同ID但fields/bytes不一致时必须拒绝。它不�
 
 ### PLAY-PY-F family（不可直接标记完成）— transport与signed acceptance只证明最后一公里
 
-**PLAY-PY-F0A [AD-HOC SIGNED DISCRIMINATOR，非产品完成]**先只回答main-app-owned UDS的机械
+**PLAY-PY-F0A [LANDED，AD-HOC SIGNED DISCRIMINATOR，非产品完成]**先只回答main-app-owned UDS的机械
 问题，不等待或暗中解决authenticated ingress。该卡只在手工dispatch signed-runtime proof artifact中
 给main app注入compile-time `CLIPY_UDS_F0` listener，并把独立XcodeGen诊断工具
 `ClipyUDSF0Client`复制进该次proof app后分别签nested tool与outer app。normal Debug/Release无listener、
@@ -1248,9 +1253,38 @@ bounded UDS mechanics；它不证明Developer ID/team、secure timestamp、notar
 App Sandbox/App Groups、Keychain sharing/client custody、TCC、caller matrix、Python→History或production
 transport选择。
 
-**PLAY-PY-F0B / F1（仍未冻结、不得由F0A领取）：**根据F0A结果与final signed requirements选择或拒绝
-UDS；先关闭`DEC-PY-AUTHENTICATED-INGRESS`及client credential custody，再把唯一adapter接到Gateway的
-read-only `browsePreview` path。roadmap X.9最终拥有B3–B5，包括warm B4与cold B5；X.10从Effective-only
+PR #18按此合同landed；normal graph/app scheme由
+[correctness run 32615569895](https://github.com/GuangDai/Clipy/actions/runs/32615569895)
+支持，最终flagged proof artifact的cold/warm/`SIGKILL`三格由
+[signed-runtime run 32615713100](https://github.com/GuangDai/Clipy/actions/runs/32615713100)
+支持。两次run合起来仍只关闭上述mechanics，不关闭credential、Python→History或distribution格。
+
+**PLAY-PY-F1 [FROZEN DIRECTION，当前X.9]：**当前产品方向明确限定为non-sandbox、account-wide
+same-EUID。credential恰为48 opaque bytes：preassigned UUID 16 bytes + `SecRandomCopyBytes`直接生成的
+secret 32 bytes，不是hash/digest/derived identity。server保存exact token于app-private Data Protection
+Keychain；client保存exact token于validated owner-only目录中的no-follow regular file（目录`0700`、文件
+`0600`、descriptor上重验owner/mode/type/length），由dedicated inherited stdin provision，不经argv/env/
+cwd/caller-selected path。该文件不声称抵御malicious same-EUID process；若未来需要这种confidentiality或
+Sandbox，必须改为app-like wrapped CLI + 已验证Team/profile/access-group的shared Data Protection Keychain，
+不能把现有file mode外推。
+
+F1 enrollment Red必须固定publication order：client exact readback -> server Keychain exact readback ->
+Authority以preassigned ID在最后一个transaction写`.localAutomation` row + successful admin-enroll audit；新row
+恰为zero grants。Authority前crash留下的client/Keychain orphan没有connection/grant，因此无权；startup与retry
+先best-effort清理exact orphan，清理失败阻止publication。Revoke Red反向排序：Authority先durable revoke row、
+live grants与admin audit，再保留bounded server verifier使旧exact credential稳定得到audited
+`connection_revoked`，最后best-effort删client file。Rotation=new connection；不迁移grant。
+
+Ingress分类也必须独立Red：unknown/malformed/wrong secret与peer reject均在Gateway admission前停止且unaudited；
+valid exact revoked credential与valid exact active-but-ungranted credential分别得到audited
+`connection_revoked`/`not_granted`。先落storage-only `expectedKind` targeted authorization mismatch rejection是
+允许的hardening leaf，但它既不验证secret/peer，也不算F1 authentication或B3 Green。
+
+F1仍有两个wire blocker：X.8 cursor上限4,096 UTF-8 bytes，而现有private `HistoryPageCursor`在admitted
+query bounds下约26 KiB；locator也还没有approved stable lifetime/invalidated encoding。先为二者选择bounded
+server-side state或明确versioned encoding，不得用hash/digest/truncated fingerprint压缩或当identity。
+Developer ID/profile、Data Protection Keychain、nested client/provisioning、notary/Gatekeeper与caller matrix的
+实际signed proof仍open。roadmap X.9最终拥有B3–B5，包括warm B4与cold B5；X.10从Effective-only
 content、organize、delete与后期revise开始。只有未来出现第二个真实adapter需求时才领
 **PLAY-PY-F2** contract substitution；不要为“可替换”同时shipping UDS、Apple Events和XPC。
 
