@@ -767,7 +767,7 @@ set +e
 CLIPY_APFS_PROBE_DIAGNOSTICS=1 \
 CLIPY_RUNTIME_DIAGNOSTICS=1 \
 "$probe" seed "$store" \
-  > "$log_dir/seed.stdout.log" \
+  > "$temp_root/seed.stdout.raw.log" \
   2> "$temp_root/seed.stderr.raw.log"
 seed_status=$?
 set -e
@@ -778,7 +778,8 @@ if [[ "$seed_status" -ne 0 ]]; then
   record_event "child-failed"
   exit 1
 fi
-require_literal_file "$log_dir/seed.stdout.log" "SEED_OK" "seed-token"
+require_literal_file "$temp_root/seed.stdout.raw.log" "SEED_OK" "seed-token"
+printf 'SEED_OK\n' > "$log_dir/seed.stdout.log"
 record_volume_facts "seeded"
 record_event "complete"
 
@@ -830,10 +831,11 @@ else
   record_event "readiness-timeout-or-eof"
   exit 1
 fi
-printf '%s\n' "$ready_line" > "$log_dir/pressure-ready.stdout.log"
+printf '%s\n' "$ready_line" > "$temp_root/pressure-ready.stdout.raw.log"
 require_literal_file \
-  "$log_dir/pressure-ready.stdout.log" "APFS_PRESSURE_READY" \
+  "$temp_root/pressure-ready.stdout.raw.log" "APFS_PRESSURE_READY" \
   "pressure-ready-token"
+printf 'APFS_PRESSURE_READY\n' > "$log_dir/pressure-ready.stdout.log"
 record_event "ready"
 
 # The requested write exceeds the entire image capacity. Require dd both to
@@ -896,10 +898,11 @@ else
   record_event "result-timeout-or-eof"
   exit 1
 fi
-printf '%s\n' "$result_line" > "$log_dir/pressure-result.stdout.log"
+printf '%s\n' "$result_line" > "$temp_root/pressure-result.stdout.raw.log"
 require_literal_file \
-  "$log_dir/pressure-result.stdout.log" "PRESSURECAPTURE_OK" \
+  "$temp_root/pressure-result.stdout.raw.log" "PRESSURECAPTURE_OK" \
   "pressure-result-token"
+printf 'PRESSURECAPTURE_OK\n' > "$log_dir/pressure-result.stdout.log"
 
 if bounded_wait "$pressure_pid" 15 "pressure-exit"; then
   pressure_status=0
@@ -944,7 +947,7 @@ set +e
 CLIPY_APFS_PROBE_DIAGNOSTICS=1 \
 CLIPY_RUNTIME_DIAGNOSTICS=1 \
 "$probe" verifySeed "$store" \
-  > "$log_dir/verify.stdout.log" \
+  > "$temp_root/verify.stdout.raw.log" \
   2> "$temp_root/verify.stderr.raw.log"
 verify_status=$?
 set -e
@@ -956,7 +959,8 @@ if [[ "$verify_status" -ne 0 ]]; then
   exit 1
 fi
 require_literal_file \
-  "$log_dir/verify.stdout.log" "VERIFYSEED_OK" "verify-token"
+  "$temp_root/verify.stdout.raw.log" "VERIFYSEED_OK" "verify-token"
+printf 'VERIFYSEED_OK\n' > "$log_dir/verify.stdout.log"
 record_event "complete"
 
 begin_phase "detach-image"
