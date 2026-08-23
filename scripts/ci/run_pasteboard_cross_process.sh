@@ -17,6 +17,7 @@ mkdir -p "$log_dir" "$build_dir"
 swift build \
   --configuration release \
   --scratch-path "$build_dir" \
+  -Xswiftc -enable-testing \
   --build-tests 2>&1 | tee "$log_dir/build.log"
 swift build \
   --configuration release \

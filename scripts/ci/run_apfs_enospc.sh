@@ -162,7 +162,6 @@ hdiutil create \
   -size "${image_size_mib}m" \
   -fs APFS \
   -volname CLIPY_ENOSPC \
-  -type UDIF \
   -format UDRW \
   "$image" >"$log_dir/image-create.log" 2>&1
 hdiutil attach \
