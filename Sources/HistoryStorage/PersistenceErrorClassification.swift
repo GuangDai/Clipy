@@ -74,15 +74,16 @@ internal enum PersistenceErrorClassification {
                     continue
                 }
                 var visitedContainers: Set<ObjectIdentifier> = []
+                let renderedValue = diagnosticDescription(
+                    of: value,
+                    depth: 0,
+                    visitedContainers: &visitedContainers
+                )
                 candidates.append(
                     "CLIPY_PERSISTENCE_ERROR_USER_INFO depth=\(depth) "
                         + "index=\(index) key=\(quoted(key)) "
                         + "value_type=\(quoted(reflectedType(of: value))) "
-                        + "value=\(quoted(diagnosticDescription(
-                            of: value,
-                            depth: 0,
-                            visitedContainers: &visitedContainers
-                        )))"
+                        + "value=\(quoted(renderedValue))"
                 )
             }
             if keys.count > maxUserInfoEntries {

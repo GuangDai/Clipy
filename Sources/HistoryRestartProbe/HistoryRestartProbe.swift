@@ -106,15 +106,16 @@ private func probeErrorDiagnosticLines(for error: any Error) -> [String] {
                 continue
             }
             var visitedContainers: Set<ObjectIdentifier> = []
+            let renderedValue = probeValueDescription(
+                value,
+                depth: 0,
+                visitedContainers: &visitedContainers
+            )
             candidates.append(
                 "platform-error-user-info depth=\(depth) index=\(index) "
                     + "key=\(probeQuoted(key)) "
                     + "value_type=\(probeQuoted(probeReflectedType(of: value))) "
-                    + "value=\(probeQuoted(probeValueDescription(
-                        value,
-                        depth: 0,
-                        visitedContainers: &visitedContainers
-                    )))"
+                    + "value=\(probeQuoted(renderedValue))"
             )
         }
         if keys.count > userInfoEntryLimit {
