@@ -167,32 +167,20 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
         #expect(second.next == nil)
     }
 
-    /// The recent-equivalent lane materializes at most `limit + 1` evaluated
-    /// rows per page; the observable `evaluation-complete` event carries
-    /// that bounded matched-row count, and three pages partition the corpus.
-    @Test func recentEquivalentMaterializesOnlyTheBoundedWindow() async throws {
+    /// Empty search routes through the scalar recent lane, whose three pages
+    /// partition the retained ordering without SearchWorker evaluation.
+    @Test func recentEquivalentUsesScalarRecentPagination() async throws {
         let storeURL = WSSupport.tempStoreURL("scan-budget-recent")
         defer { WSSupport.removeStore(storeURL) }
         let history = try await WSSupport.openHistory(storeURL: storeURL)
         try await Self.seedCorpus(history, bodies: (0..<12).map { "0123456789 \($0)" })
 
-        let (events, eventContinuation, _) = await Self.captureProbe(into: history)
         let first = try await history.browse(HistoryBrowseRequest(
             kind: .search(text: "", mode: .exact),
             limit: 5
         ))
         #expect(first.rows.count == 5)
         #expect(first.next != nil)
-        let firstEvents = await Self.finishCapture(
-            history,
-            stream: events,
-            continuation: eventContinuation
-        )
-        let evaluation = try #require(firstEvents.first {
-            $0.component == "worker" && $0.phase == "evaluation-complete"
-        })
-        #expect(evaluation.matchedRows == 6)
-        #expect(evaluation.rowsTotal == 12)
 
         var cursor = first.next
         var seen = Set(first.rows.map(\.item.id))
