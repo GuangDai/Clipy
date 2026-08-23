@@ -1045,3 +1045,40 @@ test.
   does not prove fresh-install registration, external
   revoke, logout/login, actual System Settings behavior, or a signed installed
   artifact.
+- **Batch 19 Card 6B APFS capture-transaction evidence is in progress:**
+  [`HistoryRestartProbe`](../Sources/HistoryRestartProbe/HistoryRestartProbe.swift)
+  now has bounded `pressureCapture` and `verifySeed` phases, while
+  [`run_apfs_enospc.sh`](../scripts/ci/run_apfs_enospc.sh) and the dispatch-only
+  [`apfs-enospc`](../.github/workflows/apfs-enospc.yml) workflow define one
+  disposable fixed-size APFS image experiment. The intended observation is a
+  real competing allocation ENOSPC, a production capture transaction rejected
+  as insufficient disk space with the seed unchanged, and a fresh-process
+  seed reopen after capacity is released. No workflow run exists yet, so this
+  is scaffold rather than physical runtime evidence. Its ceiling excludes
+  disk-full open/migration, revise/remove/clear, StoreRoot recovery, and any
+  signed or distribution environment.
+- **Batch 19 General pasteboard cross-process evidence is in progress:**
+  [`GeneralPasteboardCrossProcessProbeTests`](../Tests/PasteboardAdapterTests/GeneralPasteboardCrossProcessProbeTests.swift),
+  [`run_pasteboard_cross_process.sh`](../scripts/ci/run_pasteboard_cross_process.sh),
+  and the dispatch-only
+  [`pasteboard-cross-process`](../.github/workflows/pasteboard-cross-process.yml)
+  workflow define two independent short-lived ad-hoc test-host processes in
+  one login session. The first writes independently declared synthetic bytes
+  to `.general` through production `PasteboardAdapter.write`; only after it
+  exits does the second use native AppKit to byte-compare the value. No
+  workflow run exists yet, so cross-process visibility has not been observed.
+  This leaf does not test TCC, App Intents, a target application, write
+  atomicity, or WindowServer behavior.
+- **Batch 19 Settings Clear surface-purge routing is in progress:**
+  [`ClipySettingsView`](../Sources/PresentationUI/ClipySettingsView.swift) now
+  sends Danger Zone Clear through the shared
+  [`HistoryViewState.clearAwaitingReceipt`](../Sources/PresentationUI/HistoryViewState.swift)
+  owner instead of performing the History action directly. The new
+  [`SettingsClearSurfacePurgeTests`](../Tests/PresentationUITests/SettingsClearSurfacePurgeTests.swift)
+  fixture distinguishes unchanged, typed failure, and committed receipts:
+  unchanged/failure must preserve the existing surface, while only a committed
+  Clear may publish and apply the whole-surface purge. No macOS CI run has
+  compiled or executed this current source yet. This removes the Settings
+  Clear bypass only; App Intents/Gateway external remove still bypasses the
+  owner, and page observation still lacks off-page purge facts, so Card 9B
+  remains Partial.
