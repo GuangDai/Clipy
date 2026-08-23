@@ -112,7 +112,7 @@ final class UnixSocketF0Listener: Sendable {
                currentIdentity == createdIdentity {
                 _ = Darwin.unlink(endpointPath)
             }
-            _ = Darwin.flock(lockDescriptor, LOCK_UN)
+            _ = flock(lockDescriptor, LOCK_UN)
             _ = Darwin.close(lockDescriptor)
             throw error
         }
@@ -135,7 +135,7 @@ final class UnixSocketF0Listener: Sendable {
         defer {
             _ = Darwin.close(listenerDescriptor)
             unlinkBoundEndpointIfStillOwned()
-            _ = Darwin.flock(lockDescriptor, LOCK_UN)
+            _ = flock(lockDescriptor, LOCK_UN)
             _ = Darwin.close(lockDescriptor)
             finished.signal()
         }
@@ -179,10 +179,10 @@ final class UnixSocketF0Listener: Sendable {
             return
         }
 
-        guard configureConnectedSocket(descriptor) else { return }
+        guard Self.configureConnectedSocket(descriptor) else { return }
         let readDeadline = DispatchTime.now().uptimeNanoseconds
             + Self.connectionDeadlineNanoseconds
-        guard let requestData = receiveExactly(
+        guard let requestData = Self.receiveExactly(
             UnixSocketF0Protocol.requestByteCount,
             from: descriptor,
             deadline: readDeadline
@@ -199,7 +199,7 @@ final class UnixSocketF0Listener: Sendable {
         }
         let writeDeadline = DispatchTime.now().uptimeNanoseconds
             + Self.connectionDeadlineNanoseconds
-        _ = sendExactly(reply, to: descriptor, deadline: writeDeadline)
+        _ = Self.sendExactly(reply, to: descriptor, deadline: writeDeadline)
     }
 
     private static func prepareEndpointDirectory(for endpointPath: String) throws {
@@ -240,7 +240,7 @@ final class UnixSocketF0Listener: Sendable {
               status.st_mode & mode_t(0o777) == mode_t(0o600) else {
             throw StartError.endpointNotOwned
         }
-        guard Darwin.flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
             if errno == EWOULDBLOCK {
                 throw StartError.endpointAlreadyLive
             }
