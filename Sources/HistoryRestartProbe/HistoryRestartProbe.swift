@@ -32,6 +32,58 @@ private let pressureCaptureDate = Date(timeIntervalSinceReferenceDate: 40_000)
 private let pressureCaptureSource = "restart.pressure.capture"
 private let pressureCaptureByteCount = 8 * 1_048_576
 private let manifestFileName = "restart-manifest.txt"
+private let diagnosticsEnabled = ProcessInfo.processInfo.environment[
+    "CLIPY_APFS_PROBE_DIAGNOSTICS"
+] == "1"
+
+/// Probe-only, opt-in diagnostics for the physical APFS evidence workflow.
+/// Messages use a frozen, content-free vocabulary: no store path, clipboard
+/// bytes, identifiers, descriptions, or `NSError.userInfo` values are emitted.
+/// `HistoryRestartProbe` has no package product and the app never executes it.
+private func diagnostic(_ event: String) {
+    guard diagnosticsEnabled else {
+        return
+    }
+    FileHandle.standardError.write(Data("CLIPY_PROBE event=\(event)\n".utf8))
+}
+
+private func diagnostic(error: any Error) {
+    if let failure = error as? HistoryFailure {
+        let kind: String
+        if failure == .temporarilyUnavailable(.insufficientDiskSpace) {
+            kind = "history-insufficient-disk-space"
+        } else if failure == .persistence(.transaction) {
+            kind = "history-transaction"
+        } else {
+            kind = "history-other"
+        }
+        diagnostic("failure kind=\(kind)")
+    }
+
+    var platformError = error as NSError
+    for depth in 0..<4 {
+        let domain: String
+        switch platformError.domain {
+        case NSCocoaErrorDomain:
+            domain = "cocoa"
+        case NSPOSIXErrorDomain:
+            domain = "posix"
+        case "NSSQLiteErrorDomain":
+            domain = "sqlite"
+        default:
+            domain = "other"
+        }
+        diagnostic(
+            "platform-error depth=\(depth) domain=\(domain) code=\(platformError.code)"
+        )
+        guard let underlying = platformError.userInfo[
+            NSUnderlyingErrorKey
+        ] as? NSError else {
+            break
+        }
+        platformError = underlying
+    }
+}
 
 private struct ProbeManifest {
     let alpha: UUID
@@ -209,7 +261,9 @@ private func requireSeedState(
 }
 
 private func seed(storeURL: URL) async throws {
+    diagnostic("seed.phase-start")
     let history = try await openHistory(at: storeURL)
+    diagnostic("seed.store-opened")
     let alpha = try requireInserted(
         try await history.perform(.capture(capture(
             alphaText,
@@ -218,6 +272,7 @@ private func seed(storeURL: URL) async throws {
         ))),
         position: 1
     )
+    diagnostic("seed.first-capture-committed")
     let bravo = try requireInserted(
         try await history.perform(.capture(capture(
             bravoText,
@@ -226,10 +281,12 @@ private func seed(storeURL: URL) async throws {
         ))),
         position: 2
     )
+    diagnostic("seed.second-capture-committed")
     try ProbeManifest(
         alpha: alpha.id.rawValue,
         bravo: bravo.id.rawValue
     ).write(siblingOf: storeURL)
+    diagnostic("seed.manifest-written")
 }
 
 private func operate(
@@ -284,14 +341,20 @@ private func readExactStandardInput(byteCount: Int) throws -> Data {
 }
 
 private func pressureCapture(storeURL: URL) async throws {
+    diagnostic("pressure.phase-start")
     let manifest = try ProbeManifest.read(siblingOf: storeURL)
+    diagnostic("pressure.manifest-read")
     let history = try await openHistory(at: storeURL)
+    diagnostic("pressure.store-opened")
     try await requireSeedState(history, manifest: manifest)
+    diagnostic("pressure.seed-before-verified")
 
     FileHandle.standardOutput.write(Data("APFS_PRESSURE_READY\n".utf8))
+    diagnostic("pressure.ready-published")
     guard try readExactStandardInput(byteCount: 3) == Data("GO\n".utf8) else {
         throw ProbeFailure.unexpectedState
     }
+    diagnostic("pressure.go-received")
 
     let pressureCapture = ClipboardCapture(
         representations: [CapturedRepresentation(
@@ -304,23 +367,32 @@ private func pressureCapture(storeURL: URL) async throws {
         ),
         observedAt: pressureCaptureDate
     )
+    diagnostic("pressure.capture-built bytes=8388608")
     do {
         _ = try await history.perform(.capture(pressureCapture))
+        diagnostic("pressure.capture-unexpectedly-committed")
         throw ProbeFailure.unexpectedState
     } catch {
+        diagnostic(error: error)
         guard let failure = error as? HistoryFailure,
               failure == .temporarilyUnavailable(.insufficientDiskSpace) else {
             throw ProbeFailure.unexpectedState
         }
     }
+    diagnostic("pressure.capture-rejected-as-insufficient-disk-space")
 
     try await requireSeedState(history, manifest: manifest)
+    diagnostic("pressure.seed-after-verified")
 }
 
 private func verifySeed(storeURL: URL) async throws {
+    diagnostic("verify-seed.phase-start")
     let manifest = try ProbeManifest.read(siblingOf: storeURL)
+    diagnostic("verify-seed.manifest-read")
     let history = try await openHistory(at: storeURL)
+    diagnostic("verify-seed.store-opened")
     try await requireSeedState(history, manifest: manifest)
+    diagnostic("verify-seed.projection-verified")
 }
 
 private func verify(storeURL: URL) async throws {
@@ -399,6 +471,7 @@ private struct HistoryRestartProbe {
 
         do {
             let storeURL = URL(fileURLWithPath: arguments[1])
+            diagnostic("process.phase=\(phase.rawValue) start")
             switch phase {
             case .seed:
                 try await seed(storeURL: storeURL)
@@ -413,9 +486,12 @@ private struct HistoryRestartProbe {
             case .verifySeed:
                 try await verifySeed(storeURL: storeURL)
             }
+            diagnostic("process.phase=\(phase.rawValue) complete")
             FileHandle.standardOutput.write(Data("\(phase.rawValue.uppercased())_OK\n".utf8))
             exit(EXIT_SUCCESS)
         } catch {
+            diagnostic(error: error)
+            diagnostic("process.phase=\(phase.rawValue) failed")
             FileHandle.standardOutput.write(Data("\(phase.rawValue.uppercased())_FAIL\n".utf8))
             exit(EXIT_FAILURE)
         }
