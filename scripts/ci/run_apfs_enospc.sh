@@ -294,6 +294,26 @@ write_exit_summary() {
   } > "$failure_summary_log"
 }
 
+finish_after_publication_failure() {
+  local command_label="$1"
+  local publication_status="$2"
+
+  set +e
+  current_phase="complete"
+  record_command_status "$command_label" "$publication_status"
+  record_event "success-evidence-publication-failed"
+  write_exit_summary "complete" "$publication_status" 0 "$publication_status"
+  if write_diagnostic_manifest; then
+    printf 'CLIPY_APFS_MANIFEST status=0 after_publication_failure=1\n' >&2
+  else
+    rm -f -- "$diagnostic_manifest_log"
+    printf 'CLIPY_APFS_MANIFEST status=1 after_publication_failure=1\n' >&2
+  fi
+  printf 'CLIPY_APFS_PUBLICATION_FAILURE command=%s status=%s\n' \
+    "$command_label" "$publication_status" >&2
+  exit "$publication_status"
+}
+
 emit_bounded_diagnostics() {
   local safe_file=""
   local relative_name=""
@@ -560,7 +580,9 @@ cleanup_resources() {
     "$outgoing_status" >> "$phase_log"
   write_exit_summary \
     "$phase_at_exit" "$original_status" "$cleanup_status" "$outgoing_status"
-  if [[ "$finalize_manifest" -eq 1 ]]; then
+  # A caller may defer the manifest only when cleanup itself is fully green;
+  # every cleanup failure must leave a finalized failure artifact immediately.
+  if [[ "$finalize_manifest" -eq 1 || "$outgoing_status" -ne 0 ]]; then
     if write_diagnostic_manifest; then
       # On EXIT paths the manifest is the final filesystem write, so its
       # recorded sizes cannot be made stale by a later status breadcrumb.
@@ -1014,6 +1036,7 @@ else
   exit "$final_cleanup_status"
 fi
 
+set +e
 {
   printf 'artifact=%s\n' "HistoryRestartProbe Release product"
   printf 'filesystem=%s\n' "APFS"
@@ -1026,9 +1049,21 @@ fi
   printf '%s\n' \
     "evidence_ceiling=Card 6B exact capture transaction physical ENOSPC leaf only"
 } | tee "$log_dir/apfs-enospc-summary.log"
+success_summary_status=$?
+set -e
+if [[ "$success_summary_status" -ne 0 ]]; then
+  finish_after_publication_failure \
+    "write-success-summary" "$success_summary_status"
+fi
 
 current_phase="complete"
-record_event "evidence-passed"
+if record_event "evidence-passed"; then
+  :
+else
+  evidence_phase_status=$?
+  finish_after_publication_failure \
+    "write-success-phase" "$evidence_phase_status"
+fi
 if write_diagnostic_manifest; then
   # Normal success writes its summary and terminal phase first. The manifest
   # is then the absolute final artifact-file write.
