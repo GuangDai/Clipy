@@ -139,7 +139,16 @@ info_plist="$test_bundle/Contents/Info.plist"
     # without aborting before discovery, signing, writer, or reader execution.
     probe "boundary=test-host-inventory info_plist=absent expected_for_swiftpm=true"
   fi
-  otool -L "$test_binary"
+  # `otool -L` prefixes dependencies with absolute host filesystem paths.
+  # Preserve the useful inventory coordinate without publishing those paths.
+  otool -L "$test_binary" | awk '
+    NR == 1 { next }
+    {
+      library = $1
+      sub(/^.*\//, "", library)
+      printf "linked_library_role=%s\n", library
+    }
+  '
 } 2>&1 | redact_physical_paths | tee "$log_dir/test-host-inventory.log"
 probe "boundary=phase phase=test-host-inventory event=end exit_status=0"
 
