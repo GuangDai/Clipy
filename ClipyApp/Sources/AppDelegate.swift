@@ -33,6 +33,25 @@ enum ClipyCaptureNotice: Sendable, Equatable {
 @MainActor @Observable
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
+    private let accessibilityAnnouncement: AccessibilityAnnouncement
+
+    override init() {
+        accessibilityAnnouncement = AccessibilityAnnouncement(
+            operations: .live
+        )
+        super.init()
+    }
+
+    init(
+        accessibilityAnnouncementOperations:
+            AccessibilityAnnouncementOperations
+    ) {
+        accessibilityAnnouncement = AccessibilityAnnouncement(
+            operations: accessibilityAnnouncementOperations
+        )
+        super.init()
+    }
+
     // MARK: - Observable state for the scenes (Settings)
 
     /// The composed application object once `AppComposition.open` has
@@ -375,11 +394,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func receiveCaptureHealth(_ health: ClipyCaptureHealth) {
         let previous = captureHealth
+        // The two episode counts are cumulative for one composition lifetime.
+        // A late snapshot from an older admission may change lane occupancy,
+        // but it cannot authoritatively recover or replace a newer episode.
+        guard health.failedCaptureCount >= previous.failedCaptureCount,
+              health.replacedCaptureCount >= previous.replacedCaptureCount
+        else { return }
         captureHealth = health
 
         if health.failedCaptureCount > previous.failedCaptureCount,
            let failure = health.lastFailure {
             captureNotice = .failed(failure)
+            accessibilityAnnouncement.announceCaptureFailure(failure)
         } else if health.replacedCaptureCount > previous.replacedCaptureCount {
             captureNotice = .replacedCapture(
                 totalReplaced: health.replacedCaptureCount
@@ -397,6 +423,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// then install it through the same callback wiring as production.
     func installCompositionForTesting(_ composition: AppComposition) {
         installComposition(composition)
+    }
+
+    /// Hosted Card 15D tests enter through the composition-owned callback
+    /// boundary without constructing an AX tree or real assistive client.
+    func receiveCaptureHealthForTesting(_ health: ClipyCaptureHealth) {
+        receiveCaptureHealth(health)
     }
 #endif
 

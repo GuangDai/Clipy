@@ -167,7 +167,7 @@ struct PanelRootView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.yellow)
                 .accessibilityHidden(true)
-            Text(captureNoticeMessage(notice))
+            Text(CaptureNoticePresentation.message(for: notice))
                 .font(.callout)
             Spacer(minLength: 8)
             Button {
@@ -182,21 +182,6 @@ struct PanelRootView: View {
         .padding(.vertical, 8)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
         .shadow(radius: 4)
-    }
-
-    private func captureNoticeMessage(_ notice: ClipyCaptureNotice) -> String {
-        switch notice {
-        case .replacedCapture:
-            return "A pending clipboard change was replaced by a newer one "
-                + "and wasn't saved. To try again, copy the older content again."
-        case .failed(.unsupportedClipboardShape):
-            return "Clipy can't save multiple clipboard items yet. Copy one item at a time."
-        case .failed(.declaredContentUnavailable):
-            return "Clipy couldn't read the complete clipboard change. Copy the content again to make a new attempt."
-        case .failed:
-            return "A clipboard change wasn't saved. Clipy can't retry it "
-                + "automatically; copy the content again to make a new attempt."
-        }
     }
 
     /// Access state is intentionally separate from capture failure state: a
