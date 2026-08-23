@@ -77,7 +77,7 @@ HistoryRestartProbe ───────→ HistoryCore + HistoryStorage (test 
 | `HistoryStorage` | Public concrete `SwiftDataHistory` + internal implementation | Sole SwiftData authority, schema/codecs, `HistoryAuthority` actor (single writer), fact loaders, Signature Index, read projections, observation plumbing, thumbnail single-flight |
 | `PasteboardAdapter` | Public adapter | NSPasteboard observation/writes ↔ `HistoryCore` raw values. No Domain state, no fingerprints |
 | `PresentationUI` | Public UI | SwiftUI view state over `HistoryCore` DTOs only |
-| `ClipyApp` | Composition root | Concrete construction, lifecycle, paste orchestration, DI |
+| `ClipyApp` | Composition root | Concrete construction, lifecycle, paste orchestration, App Intents entry points, DI |
 | `xxh3` | Package-internal C | 64-bit representation fingerprints (vendored xxHash v0.8.3) |
 | `HistoryPerfRunner` | Executable | Part VI §9 performance-runner scaffold (fixtures populate at step 8) |
 | `HistoryRestartProbe` | Test evidence executable target | Card 1C-1 three-process public-API restart tracer; no declared package product |
@@ -94,8 +94,11 @@ HistoryRestartProbe ───────→ HistoryCore + HistoryStorage (test 
   `package` access. `@Model` types are internal to `HistoryStorage`.
 - Accessing a closed `HistoryAction` set: adding an action is an owned source
   change and must make compiler-exhaustive switches fail until handled.
-- No `.shared`/`.current` service locators, no `@unchecked Sendable`, no
-  `nonisolated(unsafe)` — enforced by gates (§4).
+- No application-owned `.shared`/`.current` service locators, no
+  `@unchecked Sendable`, no `nonisolated(unsafe)` — enforced by gates (§4).
+  The only framework-owned exception is one composition-root
+  `AppDependencyManager.shared.add(dependency:)` registration; hosted tests use
+  standalone `AppDependencyManager()` instances.
 - Two-stage dedup: xxh3 signature candidates, then byte-exact confirmation; a
   fingerprint is evidence, never identity. `HistoryItemID` is independent of
   SwiftData identity and content hashes.
@@ -163,11 +166,18 @@ bash scripts/ci/run_signed_runtime.sh \
   `PasteboardAdapter` must not import HistoryDomain/HistoryStorage/SwiftUI/
   SwiftData; `PresentationUI` must not import HistoryDomain/HistoryStorage/
   AppKit/SwiftData; `HistoryRestartProbe` → Foundation + HistoryCore +
-  HistoryStorage only; `xxh3` and `Fuse` are confined to `HistoryStorage`.
+  HistoryStorage only; `xxh3` and `Fuse` are confined to `HistoryStorage`;
+  `AppIntents` is confined to `ClipyApp/Sources` and the hosted
+  `ClipyIntegrationTests`. Import attributes such as `@preconcurrency` and
+  access-level imports are parsed and cannot evade the gate. The scan covers
+  SwiftPM sources plus XcodeGen-owned app sources and app test targets.
   `.swiftlint.yml` mirrors these; keep both in sync when changing rules.
 - `scripts/escape_hatch_scan.py` — rejects `@unchecked Sendable`,
-  `nonisolated(unsafe)`, and `static let/var shared|current` in `Sources/` and
-  `Tests/`.
+  `nonisolated(unsafe)`, and `static let/var shared|current` in SwiftPM and
+  `ClipyApp` sources/tests. It also requires exactly one framework-owned
+  `AppDependencyManager.shared.add(dependency:)` call at
+  `ClipyApp/Sources/AppIntents/AppIntentDependencyRegistration.swift` and
+  rejects shared-manager access everywhere else, including hosted tests.
 - `scripts/public_symbol_snapshot.sh` — diffs the extracted public symbol graph
   of `HistoryCore` against `Tests/HistoryCoreTests/SymbolSurface/
   HistoryCore.symbols.txt`. Snapshot content is runner-derived: if it drifts

@@ -7,14 +7,27 @@ import Foundation
 /// docs/03a-instruction-set.md §2
 ///
 /// The raw UUID is observable for logging, pasteboard lineage encoding, and
-/// stable persistence, but minting is centralized in `HistoryStorage`: the
-/// initializer is package-only. This is not a security boundary.
+/// stable persistence. Its raw-value initializer is package-only so minting
+/// stays centralized in `HistoryStorage`; the public string initializer only
+/// reconstructs previously exported identity. This is not a security boundary.
 public struct HistoryItemID:
     Sendable, Hashable, Comparable, CustomStringConvertible
 {
     public let rawValue: UUID
 
     package init(rawValue: UUID) {
+        self.rawValue = rawValue
+    }
+
+    /// Reconstructs an identity previously exported as its canonical UUID
+    /// string. Parsing an arbitrary UUID confers no History authority; a
+    /// missing item is still rejected by the receiving History/Gateway call.
+    public init?(uuidString: String) {
+        guard let rawValue = UUID(uuidString: uuidString),
+              rawValue.uuidString == uuidString.uppercased()
+        else {
+            return nil
+        }
         self.rawValue = rawValue
     }
 

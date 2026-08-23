@@ -16,6 +16,8 @@
 /// production store open; the suites compose their own stacks with private
 /// pasteboards and temp stores.
 import AppKit
+import HistoryCore
+import HistoryStorage
 import PresentationUI
 import ServiceManagement
 import SwiftUI
@@ -54,9 +56,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// publishes a new episode even when its typed failure equals the old one.
     private(set) var captureNotice: ClipyCaptureNotice?
 
-    /// Guards the open attempt against re-entrancy while its `await`s are
-    /// in flight.
-    private var isOpening = false
+    /// The one production store-open flight shared by the app shell and the
+    /// App Intents dependency provider. Reference identity fences a late
+    /// completion from an older cancelled attempt so it cannot clear a later
+    /// retry; no wrapping lifecycle counter is needed.
+    private final class CompositionOpenAttempt {
+        let task: Task<AppComposition, Error>
+
+        init(task: Task<AppComposition, Error>) {
+            self.task = task
+        }
+    }
+
+    private var compositionOpenAttempt: CompositionOpenAttempt?
 
     /// The preview pane state shared by the panel content (SwiftUI) and the
     /// panel window (AppKit) — the single object both sides drive.
@@ -92,6 +104,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !Self.isRunningTests else { return }
+
+        // App Intents can be invoked immediately after process launch. Install
+        // its framework-owned dependency provider before starting any async
+        // store work or other app-owned side effect. The provider joins the
+        // exact same open flight as the UI shell; it never opens another
+        // ModelContainer or creates another History writer (V2-05 §6.5).
+        AppIntentDependencyRegistration.registerProduction { [weak self] in
+            guard let self else { throw CancellationError() }
+            return try await self.resolveAppIntentsHistoryFacade()
+        }
+
         installStatusItem()
         hotKey = GlobalHotKey.summonPanelHotKey { [weak self] in
             self?.togglePanelFromHotKey()
@@ -102,6 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         hotKey?.unregister()
+        compositionOpenAttempt?.task.cancel()
         composition?.stop()
     }
 
@@ -181,20 +205,82 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// shows a progress view; on failure, the failure pane; a cancelled
     /// attempt returns to idle so a later summon retries.
     func openCompositionIfNeeded() {
-        guard composition == nil, openFailure == nil, !isOpening else { return }
-        isOpening = true
+        guard composition == nil,
+              openFailure == nil,
+              compositionOpenAttempt == nil else { return }
         Task { [weak self] in
             guard let self else { return }
             do {
-                let opened = try await AppComposition.open()
-                installComposition(opened)
+                _ = try await openOrAwaitComposition()
             } catch is CancellationError {
                 // Stay idle; a later summon retries the open.
             } catch {
+                // `openOrAwaitComposition` retains the original failure for
+                // the panel; App Intents receives only a content-free mapped
+                // availability error from its registration boundary.
+            }
+        }
+    }
+
+    /// Returns the one opened app graph, starting it when neither the app
+    /// shell nor App Intents has done so. All waiters join the same Task.
+    /// A cancelled attempt clears its slot and remains retryable; a genuine
+    /// open failure remains terminal for the app shell and keeps its original
+    /// diagnostic value in `openFailure`.
+    private func openOrAwaitComposition() async throws -> AppComposition {
+        if let composition {
+            return composition
+        }
+        if let openFailure {
+            throw openFailure
+        }
+
+        let attempt: CompositionOpenAttempt
+        if let current = compositionOpenAttempt {
+            attempt = current
+        } else {
+            let started = Task { @MainActor in
+                try await AppComposition.open()
+            }
+            let newAttempt = CompositionOpenAttempt(task: started)
+            compositionOpenAttempt = newAttempt
+            attempt = newAttempt
+        }
+
+        do {
+            let opened = try await attempt.task.value
+            if composition == nil {
+                installComposition(opened)
+            }
+            if compositionOpenAttempt === attempt {
+                compositionOpenAttempt = nil
+            }
+            return composition ?? opened
+        } catch is CancellationError {
+            if compositionOpenAttempt === attempt {
+                compositionOpenAttempt = nil
+                openFailure = nil
+            }
+            throw CancellationError()
+        } catch {
+            if compositionOpenAttempt === attempt {
+                compositionOpenAttempt = nil
                 openFailure = error
             }
-            isOpening = false
+            throw error
         }
+    }
+
+    /// App Intents' async dependency provider. The registration boundary
+    /// maps every open/unavailable failure to the content-free X.6 transient
+    /// vocabulary; this method therefore keeps the app shell's richer error
+    /// untouched while returning only the retained facade on success.
+    private func resolveAppIntentsHistoryFacade() async throws -> ExternalHistoryFacade {
+        let opened = try await openOrAwaitComposition()
+        guard let facade = opened.appIntentsHistoryFacade else {
+            throw ExternalFailure.temporarilyUnavailable(.storeLocked)
+        }
+        return facade
     }
 
     /// Installs the three one-way production callbacks. Capture health stays

@@ -12,7 +12,7 @@
 > they are cited here, never restated as new semantics.
 
 **Audit baseline:** `8f316c9` (2026-08-02). **Current landed baseline:**
-`master` through PR #8 (2026-08-22). Steps 0–9 are implemented and CI-green;
+`master` through PR #15 (2026-08-23). Steps 0–9 are implemented and CI-green;
 M2/state 2 is complete. Step 9 (product wiring: PasteboardAdapter +
 PresentationUI + ClipyApp composition) is done, including its post-step-9
 revisions: the perf/AB measurement-helper proofs live in the split
@@ -22,12 +22,12 @@ cursor/status-item/center/last-position placement, dwell-driven preview pane)
 rather than a SwiftUI `MenuBarExtra`. M3/state 3 (packaging, accessibility,
 localization, product acceptance per Part VI §11) remains open.
 
-**Current CI provenance (2026-08-22):** PR #7 correctness run
-[32572531247](https://github.com/GuangDai/Clipy/actions/runs/32572531247)
-and PR #8 correctness run
-[32573066624](https://github.com/GuangDai/Clipy/actions/runs/32573066624)
-are green across Lint + source gates, SwiftPM build + test, and XcodeGen
-generate + app build/test. Manual signed-runtime run
+**Current CI provenance (2026-08-23):** PR #15 correctness run
+[32607389771](https://github.com/GuangDai/Clipy/actions/runs/32607389771)
+is green across Lint + source gates, SwiftPM build + test, and XcodeGen
+generate + app build/test. Its HistoryCore public-surface update is runner-generated
+by [symbol run 32606749388](https://github.com/GuangDai/Clipy/actions/runs/32606749388).
+No performance/AB lane ran for this batch. Manual signed-runtime run
 [32573198119](https://github.com/GuangDai/Clipy/actions/runs/32573198119)
 is green on `master`; it proves only an ad-hoc signed Release carrying the
 Hardened Runtime flag, the iCloud/ubiquity entitlement negative, and direct
@@ -854,3 +854,23 @@ test.
   workflow. Performance helper/proof, scale-admission, and exact-matcher
   evidence are reusable-only with no caller; symbol-snapshot and signed-runtime
   remain `workflow_dispatch`-only.
+
+## External Gateway continuation (2026-08-23)
+
+- **X.6 landed:** [PR #15](https://github.com/GuangDai/Clipy/pull/15) is
+  correctness-green at
+  [run 32607389771](https://github.com/GuangDai/Clipy/actions/runs/32607389771);
+  its HistoryCore symbol update came from
+  [run 32606749388](https://github.com/GuangDai/Clipy/actions/runs/32606749388).
+  This closes the bounded positive Gateway reads/writes, atomic HCR + audit +
+  History commit path, failure mapping, cadence fence, and public
+  connection-bound facade/factory at their test seams. It does not prove
+  performance, App Intents framework invocation, credential, CLI, or transport
+  behavior.
+- **X.7 current work:** App Intents composition is in progress on an unmerged
+  branch. Hosted tests may prove real-store facade delegation, standalone
+  provider registration/behavior, explicit wrapper-value injection for
+  direct intent calls, and pasteboard-adapter wiring. True
+  Siri/Shortcuts cold/warm launch, framework unresolved-resolution behavior,
+  system discovery, process placement, Swift 6 queue-crash freedom, and TCC
+  remain signed-runtime cells and are not closed by hosted tests.

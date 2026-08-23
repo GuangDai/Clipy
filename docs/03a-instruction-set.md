@@ -18,6 +18,15 @@ public struct HistoryItemID:
         self.rawValue = rawValue
     }
 
+    public init?(uuidString: String) {
+        guard let rawValue = UUID(uuidString: uuidString),
+              rawValue.uuidString == uuidString.uppercased()
+        else {
+            return nil
+        }
+        self.rawValue = rawValue
+    }
+
     public var description: String { rawValue.uuidString }
 
     public static func < (lhs: Self, rhs: Self) -> Bool {
@@ -73,7 +82,7 @@ public struct ChangePosition: Sendable, Hashable, Comparable {
 }
 ```
 
-The raw UUID is observable for logging, pasteboard lineage encoding, and stable persistence, but its initializers are package-only. This is not a security boundary; it centralizes minting in `HistoryStorage`. Versions use checked arithmetic and never wrap.
+The raw UUID is observable for logging, pasteboard lineage encoding, and stable persistence. The raw UUID initializer is package-only so minting remains centralized in `HistoryStorage`; the public failable string initializer only reconstructs an identity previously exported in canonical UUID form (case-insensitively). It rejects noncanonical spelling such as braces, omitted separators, or surrounding whitespace. Parsing an arbitrary UUID confers no History authority: a missing item still fails at the receiving History or Gateway operation. Versions use checked arithmetic and never wrap.
 
 ```swift
 public struct HistoryItemReference: Sendable, Hashable {

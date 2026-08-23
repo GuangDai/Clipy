@@ -37,7 +37,7 @@ There is no `DomainCore` target. The few values that must appear in both the cal
 | `HistoryStorage` | Public concrete adapter plus internal implementation | `SwiftDataHistory`, Authority actor, schema/codecs, fact loaders, version minting, ingest preparation, Signature Index, read projections, observation plumbing, thumbnail production | AppKit pasteboard, UI state, service location |
 | `PasteboardAdapter` | Public adapter values used by the app | NSPasteboard observation/writes and translation to/from `HistoryCore` raw values | Deduplication, Canonical Content, fingerprints, persistence |
 | `PresentationUI` | Public UI assembly | View state and interactions over History DTOs | `@Model`, Domain state, persistence rules, change-feed bookkeeping |
-| `ClipyApp` | Composition root | Concrete construction, lifecycle, paste orchestration, dependency injection | Domain decisions or duplicate persistence paths |
+| `ClipyApp` | Composition root | Concrete construction, lifecycle, paste orchestration, App Intents entry points, and dependency injection | Domain decisions or duplicate persistence paths |
 | `xxh3` | Package-internal C/ObjC++ sibling | 64-bit representation fingerprints | Item identity or final dedup decisions |
 | `Fuse` | External Swift library used internally | Threshold-based fuzzy matching inside `SearchWorker` | Public search score or cross-actor matcher state |
 | `HistoryPerfRunner` | Package executable, no product surface | Part VI §9 release-like workloads, machine metadata, and versioned fixtures | Caller APIs, alternate writers, production state, absolute-latency claims |
@@ -252,18 +252,26 @@ The Authority does not retain model objects between operations. Each isolated re
 - Adapters and UI must not import `HistoryDomain` or `HistoryStorage`.
 - `HistoryStorage` must not import an adapter or `PresentationUI`.
 - No adapter may import another adapter.
-- No `.shared`, `.current`, or other mutable authoritative service locator.
+- `AppIntents` is confined to `ClipyApp/Sources` and the explicitly hosted
+  `ClipyIntegrationTests`; it must not enter any SwiftPM target.
+- No application-owned `.shared`, `.current`, or other mutable authoritative
+  service locator. The sole framework-owned exception is exactly one
+  `AppDependencyManager.shared.add(dependency:)` registration in
+  `ClipyApp/Sources/AppIntents/AppIntentDependencyRegistration.swift`.
+  Hosted tests inject a standalone `AppDependencyManager()`.
 - No second writer, UI-bound `ModelContext`, or background context outside `HistoryAuthority`.
 - No hidden behavior in model observers or lifecycle callbacks.
 - No public protocol whose only implementation simply forwards to SwiftData.
 - No `@unchecked Sendable` or `nonisolated(unsafe)` escape hatch in the greenfield targets.
 
-### 9. Build-time gates to create with the scaffold
-
-These are required future gates, not current claims:
+### 9. Build-time gates
 
 1. A single Swift package expresses exactly the target edges above and fails on a deliberate back-edge.
-2. SwiftLint or an equivalent source scan rejects forbidden framework imports outside their owner targets and rejects service-locator spellings.
+2. SwiftLint and portable source scans reject forbidden framework imports
+   outside their owner targets, including attributed/access-level import
+   spellings. They scan SwiftPM sources/tests plus `ClipyApp` sources/hosted
+   tests, confine `AppIntents`, reject service-locator declarations, and enforce
+   the single framework-owned App Intents dependency registration above.
 3. Swift 6 complete strict-concurrency compilation succeeds without unchecked escape hatches.
 4. The public `HistoryCore` symbol surface is snapshot-tested so package-only Domain/Storage vocabulary cannot leak accidentally.
 5. App-level tests construct `SwiftDataHistory` with an in-memory store; they do not replace the semantic write path.

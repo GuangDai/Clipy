@@ -1,20 +1,25 @@
 # V2-05 - External Gateway & Audit (X1 ExternalGateway + X2 Operation Record auditing)
 
 > **Status (2026-08-23):** X.1 closed vocabulary, X.2 public contract, X.3
-> schema/bootstrap, X.4 audit/admin, and **X.5 internal in-process Gateway
-> denial are landed**. The immutable V4 X-HCR prerequisite and its
-> migration/rollback/restart suite are also landed and CI-green. **X.6 granted
-> positive paths plus the public facade/factory are the current unmerged
-> implementation leaf.** X.4 owns the complete
+> schema/bootstrap, X.4 audit/admin, X.5 internal denial, and **X.6 granted
+> positive paths plus the public facade/factory are landed and
+> correctness-green**. The immutable V4 X-HCR prerequisite and its
+> migration/rollback/restart suite are also landed and CI-green. **X.7 App
+> Intents composition is the current unmerged implementation leaf.** X.4 owns the complete
 > `OperationPayloadBlobV1` codec, public operation-kind additions, central audit
 > store, current-state connection/grant administration, public in-app admin
 > conformance, and startup validation; it does **not** publish an
 > `ExternalGateway`, external facade/factory, App Intents, CLI, or transport.
-> X.5 adds only the real internal denial substrate. X.6 current work adds the
+> X.5 adds only the real internal denial substrate. X.6 adds the
 > first public `ExternalHistoryFacade`/factory and truthful
 > `ExternalTransientReason.insufficientDiskSpace` raw 3 plus `.cancelled`
-> raw 4 only alongside the same production actor's granted positive paths; it
-> remains unmerged and its HistoryCore snapshot awaits runner regeneration. An
+> raw 4 only alongside the same production actor's granted positive paths. Its
+> HistoryCore snapshot was runner-regenerated in
+> [run 32606749388](https://github.com/GuangDai/Clipy/actions/runs/32606749388),
+> and [PR #15](https://github.com/GuangDai/Clipy/pull/15) is
+> correctness-green at
+> [run 32607389771](https://github.com/GuangDai/Clipy/actions/runs/32607389771);
+> no performance/AB lane ran for that batch. An
 > authorized connection must never receive a permanently-denying placeholder. This
 > doc extends the v1 specification (`00`–`06`) by **addition only**.
 > v1 owns v1 behavior (single in-app writer, no external access, no audit); V2-05
@@ -165,10 +170,12 @@ X1 (`V2-00` §3) and X2 (`V2-00` §3) bundle onto one substrate:
 3. **App Intents exposure (X1).** A set of `AppIntent` conformances in `ClipyApp`
    (the composition root) that resolve a capability-scoped `ExternalHistory`
    facade via `@Dependency` and `await` it in `perform()` (pending verification under `X-COMPILE-2` / `X-SECURITY-1`; `V2-facts.md`
-   cycle 6, facts 1–4). The facade is **obtained by `ClipyApp` from `SwiftDataHistory` at
-   launch** (`makeAppIntentsHistoryFacade()`, §6.5), registered into
-   `AppDependencyManager.shared` once at launch, and delegates every write to
-   `HistoryAuthority`. `@Dependency` is App Intents' mandated DI mechanism, NOT
+   cycle 6, facts 1–4). At the earliest launch entry, before awaiting store
+   open, `ClipyApp` registers one asynchronous facade provider into
+   `AppDependencyManager.shared`; it awaits the same composition-open work as
+   the UI and then returns `makeAppIntentsHistoryFacade()`'s value (§6.5).
+   Every write still delegates to `HistoryAuthority`. `@Dependency` is App
+   Intents' mandated DI mechanism, NOT
    a banned `.shared`/`.current` service locator — justification and carve-out
    in §6.5.
 4. **`OperationRecord` audit (X2).** Every external operation — read or write,
@@ -315,9 +322,9 @@ not a permanent prohibition on the ordered `clipyctl` continuation.
 - **X2** lifts `00` §2 and `06` §4. Trigger: X1 approved (audit is X1's
   consequence) (`V2-00` §3).
 
-Both triggers have fired: V2-00 approved the graft, and X.1–X.5 are landed.
+Both triggers have fired: V2-00 approved the graft, and X.1–X.6 are landed.
 This subsection records the admission history; it does not waive the separate
-proof gates for current unmerged X.6 or later slices.
+proof gates for current unmerged X.7 or later slices.
 
 ## 3. Trust boundary and capability model
 
@@ -747,8 +754,10 @@ explicit versioned value with closed request and result enums; it is not
 synthesized `Codable`, a generic map, or an extensible string envelope. This
 decision is based on the callable `ExternalHistory` and `GatewayAdminHistory`
 protocols plus the already-admitted Local Automation Effective-content read.
-It therefore covers all seven App Intents operations, the Effective-content
-read, all eight public admin requirements (four state mutations, three reads,
+It therefore covers all seven approved App-Intents-stage Gateway operations,
+including the bounded `.recent` read retained on `ExternalHistory`; X.7 exposes
+exactly six intent types and does not add a separate recent intent. The codec
+also covers the Effective-content read, all eight public admin requirements (four state mutations, three reads,
 and rebase), and the two distinct revoke semantics. It also covers automatic
 internal compaction as the ninth admin-class operation.
 `reviseContent` and `describeFormatCapabilities` remain unadmitted and have no
@@ -1590,6 +1599,14 @@ is `01` §8 / `06` §6: "`import SwiftData` appears only in `HistoryStorage`"):
   `ClipyIntegrationTests` compile/behavior test that imports `HistoryStorage`
   normally; package-level tests alone cannot prove `public` rather than
   `package` access. This proof belongs to `X-COMPILE-2` (Record 3).
+  X.7 adds one narrow `HistoryCore` identity reconstruction seam:
+  `HistoryItemID.init?(uuidString:)` accepts only the canonical UUID spelling
+  already exported by `description`/`rawValue`. It reconstructs lookup identity
+  after App Intents parameter serialization; it does not mint a stored item,
+  create a grant, or confer authority. The raw-UUID initializer remains
+  package-only, and the Gateway still returns the authoritative not-found or
+  authorization result. This also avoids an incomplete retained-history scan
+  disguised as an `EntityQuery`.
 - **Implementation** (`ExternalGateway`, `CredentialStore`, the `@Model`s,
   codecs, and the `commitExternal` / `performExternalRead` / targeted access
   check / audit-append methods on
@@ -1610,11 +1627,17 @@ is `01` §8 / `06` §6: "`import SwiftData` appears only in `HistoryStorage`"):
   `PinItemIntent`, `UnpinItemIntent`, `RemoveItemIntent` — and
   `ClipboardShortcuts: AppShortcutsProvider`) is added to `ClipyApp`, which
   gains `import AppIntents`. `ClipyApp` obtains the `ExternalGateway`-backed
-  connection-scoped `ExternalHistory` facade from `SwiftDataHistory` at launch
-  and registers it into `AppDependencyManager.shared` (§6.5). `ClipyApp` imports
+  connection-scoped `ExternalHistory` facade from `SwiftDataHistory`. At the
+  earliest launch entry it registers one asynchronous provider into
+  `AppDependencyManager.shared`; the provider and UI await the same single
+  composition-open work (§6.5). `ClipyApp` imports
   `HistoryCore` (for the DTOs) `HistoryStorage` (for `SwiftDataHistory` and
   `makeAppIntentsHistoryFacade`); it does **not** touch `@Model` types (they are
-  `internal` to `HistoryStorage`).
+  `internal` to `HistoryStorage`). Search output uses an output-only
+  `TransientAppEntity`. The five item-target intents take a canonical UUID
+  string and call `HistoryItemID(uuidString:)`; there is no `EntityQuery`,
+  because resolving through a capped recent-page scan would be incomplete and
+  would also require browse permission for manage-only operations.
 - X.4 gives `SwiftDataHistory` its landed `GatewayAdminHistory` conformance.
   `SwiftDataHistory` deliberately does **not** conform to `ExternalHistory`:
   that protocol has no connection argument, so direct conformance would create
@@ -1808,11 +1831,15 @@ by four controls:
    `ExternalConnectionID`. The facade creates no `ModelContext` and routes
    every write back through `HistoryAuthority`. There is no path from the
    facade to a writable context except through the single writer (D32).
-2. **The facade is constructed at the composition root.** `ClipyApp`
-   (`01` §2 sole composition root) builds the facade once at launch and
-   registers it; the dependency is not constructed by the App Intent and not
-   reachable except through the registry. This honors the composition-root-
-   injection intent of `01` §8.
+2. **The facade provider is registered at the composition root before the
+   first store-opening suspension.** `ClipyApp` (`01` §2 sole composition
+   root) installs exactly one asynchronous provider at its earliest launch
+   entry. That provider awaits the same single composition-open work used by
+   the UI and returns that open's connection-bound facade; it never calls
+   `SwiftDataHistory.open` independently and cannot create a second writer.
+   The dependency is not constructed by an App Intent. This preserves the
+   composition-root-injection intent of `01` §8 while avoiding a cold-launch
+   race caused by registering an already-opened value only after an `await`.
 3. **The registry is framework-owned DI infrastructure, not app-owned
    authority.** `01` §8 bans app-owned *authoritative* locators — locators that
    ARE the authority for an app concern (e.g., a hypothetical
@@ -1840,7 +1867,8 @@ carve-out is the single sanctioned registration under that amended rule, not a
 pending exception. `AppDependencyManager
 .shared` is framework-owned DI infrastructure the app populates once at the
 composition root, not app authority (control 3 above). The exception is scoped to
-exactly **one registration** (the `ExternalHistoryFacade`) in exactly **one site**
+exactly **one asynchronous provider registration** (for the
+`ExternalHistoryFacade`) in exactly **one site**
 (`ClipyApp`) with no app-owned authoritative locator, no second writer, and no
 bypass. The literal `.shared` spelling of `AppDependencyManager.shared` would
 trip a naive grep for `01` §8 violations; the §9 source gate is amended to
@@ -1852,16 +1880,14 @@ write to `HistoryAuthority`, and resolves from the out-of-package `ClipyApp`
 target (CRIT-M3 / CRIT-M4).
 
 ```swift
-// ClipyApp (composition root), at launch:
-let history = try await SwiftDataHistory.open(configuration: cfg)   // v1 path, unchanged
-// SwiftDataHistory owns its ExternalGateway field internally (constructed in
-// `open`, where the Authority ref is in scope); ClipyApp never touches the
-// Authority directly. A PUBLIC accessor returns the connection-scoped facade
-// for the bootstrapped App Intents connection (public because ClipyApp is the
-// separate Xcode app target outside the History Swift package, 01 §2):
-let facade = history.makeAppIntentsHistoryFacade()                  // Sendable; validated connectionID baked in
-AppDependencyManager.shared.add(dependency: facade)                 // the ONE permitted .shared use
-// App Intents resolve `@Dependency var history: ExternalHistoryFacade` via this registry.
+// ClipyApp (composition root), synchronously at the earliest launch entry:
+let compositionOpen = makeTheSingleCompositionOpenWork()
+AppDependencyManager.shared.add(dependency: {                      // the ONE permitted .shared use
+    let composition = try await compositionOpen.value
+    return composition.appIntentsHistoryFacade                     // Sendable; validated connectionID baked in
+})
+// The UI and the provider await the SAME open work. App Intents resolve
+// `@Dependency var history: ExternalHistoryFacade` via this registry.
 ```
 
 `makeAppIntentsHistoryFacade()` is a **`public`, synchronous, no-argument**
@@ -1886,66 +1912,99 @@ which is why `@Dependency` is typed `ExternalHistoryFacade` in `ClipyApp`.
 obtain this explicitly bound facade.
 
 **Registration-before-resolution on background launch (CRIT-M4).** Siri /
-Shortcuts / Spotlight can invoke an intent while the app is **not running**,
-background-launching it to perform the intent. Whether
-`AppDependencyManager.shared.add(...)` has completed by the time the system
-first resolves an intent's `@Dependency` on that launch-to-perform path is the
-unverified platform assumption of `V2-facts.md` cycle 6, OPEN 2 — `X-COMPILE-2` as originally scoped
-only confirmed the Swift 6 build, not this ordering. `X-COMPILE-2` is therefore
-**strengthened** to confirm on macOS 26 that a Siri/Shortcuts-triggered
-background launch resolves `@Dependency` AFTER `ClipyApp`'s launch-time
-`AppDependencyManager.shared.add` runs, across both cold-start and
-warm-invocation paths. If the ordering cannot be guaranteed, the fallback
-OUTCOME is that `ClipyApp` performs the `add` synchronously at the earliest
-launch entry point (before any intent can perform), and the facade resolution
-failure (`AppDependencyManager.Error.failedToLoadDependency`) is surfaced as
-`ExternalFailure.temporarilyUnavailable(.storeLocked)` rather than a crash — so
-an intent whose dependency has not yet resolved is denied cleanly and retried by
-the system, never a hard fault.
+Shortcuts / Spotlight can invoke an intent while the app is **not running**.
+X.7 therefore performs the asynchronous-provider `add` synchronously at the
+earliest launch entry, before awaiting the single composition open. A hosted
+test may use Apple's public standalone `AppDependencyManager()` initializer to
+prove that this provider awaits the same real in-memory-store open and resolves
+again on a logical warm call. That evidence does **not** establish when the
+framework-owned manager resolves dependencies during a true background launch,
+what an absent/unresolved registration does, or whether the reported Swift 6
+queue-assertion failure is absent under a Siri/Shortcuts invocation. Those
+cold/warm ordering, unresolved-resolution, and crash-free claims remain
+signed-runtime `X-COMPILE-2` / `X-SECURITY-1` cells. A provider-side store-open
+failure may be mapped to
+`ExternalFailure.temporarilyUnavailable(.storeLocked)`; that mapping must not
+be described as proof of the framework's missing-dependency behavior.
+
+Direct hosted calls to an intent's `perform()` do not run the framework's
+pre-perform dependency-initialization phase. Those tests therefore use Apple's
+public `AppDependency.wrappedValue` setter to inject the same real facade after
+constructing the wrapper with the standalone manager. This proves the intent
+adapter's request/result behavior without claiming that the manager resolved
+the dependency; only signed App Intents execution can prove that.
 
 ### 6.6 AppIntent conformances (ClipyApp)
 
 ```swift
 struct SearchHistoryIntent: AppIntent {
-    static var title: LocalizedStringResource { "Search clipboard history" }
+    static let title: LocalizedStringResource = "Search clipboard history"
     static var description = IntentDescription("Search retained clipboard items.")
+    static let supportedModes: IntentModes = [.background] // macOS 26
 
     @Parameter(title: "Query", description: "Search text.")
     var query: String
     @Parameter(title: "Mode", default: SearchModeArg.exact)
     var mode: SearchModeArg
-    @Parameter(title: "Limit", default: 20 /* controlStyle spelling + Int-bounding
-                                          mechanism unverified on macOS 26 — see
-                                          X-COMPILE-4 below; bounds are re-checked
-                                          at the gateway regardless (D35) */)
+    @Parameter(
+        title: "Limit",
+        default: 20,
+        controlStyle: .stepper,
+        inclusiveRange: (lowerBound: 1, upperBound: 500)
+    )
     var limit: Int   // bounds enforced at the gateway (D35); 1...500 (06 §2).
 
     @Dependency private var history: ExternalHistoryFacade   // connection-scoped
 
-    func perform() async throws -> some IntentResult & ReturnsValue<[HistoryRowDTO]> {
-        let result = try await history.read(.search(text: query, mode: mode.asMode, limit: limit))
-        return .result(value: result.asRows)   // HistoryRowDTO = illustrative App-Intents output
-                                               // projection (an AppEntity-conforming projection of v1
-                                               // HistoryRow for the Shortcuts output surface); exact
-                                               // spelling resolved at scaffold under X-COMPILE-2.
+    func perform() async throws -> some IntentResult & ReturnsValue<[ClipboardHistoryItemEntity]> {
+        let result = try await history.read(
+            .search(text: query, mode: mode.asMode, limit: limit)
+        )
+        return .result(value: result.asTransientEntities)
     }
 }
-// PinItemIntent / UnpinItemIntent / RemoveItemIntent: .manage capability; @Dependency the same facade.
-// GetItemDetailsIntent / PasteItemIntent: .readContent capability (the full-content path, §3.2).
-// ClipboardShortcuts: AppShortcutsProvider surfaces them to Shortcuts/Siri (pending verification under X-COMPILE-2; V2-facts.md cycle 6, fact 3).
+
+// Output only: no EntityQuery and therefore no hidden capped-history scan.
+struct ClipboardHistoryItemEntity: TransientAppEntity { /* HistoryRow projection */ }
+
+// PinItemIntent / UnpinItemIntent / RemoveItemIntent: String `itemID`, parsed
+// through HistoryItemID(uuidString:), then the corresponding .manage request.
+// GetItemDetailsIntent: String `itemID`, then the .readContent details request;
+// its returned transient entity is a bounded metadata projection, not raw bytes.
+// PasteItemIntent: String `itemID`, then audited .pastePayload and
+// `PasteboardAdapter.write(payload)` on the main actor. It writes the General
+// Pasteboard but never synthesizes Command-V or foreground-app keystrokes.
+// ClipboardShortcuts: AppShortcutsProvider surfaces exactly these six intents.
 ```
 
-Each intent maps to exactly one `ExternalRequest` / `ExternalRead` case. No
-intent can spell `capture`/`revise`/`clear`/`setRetentionPolicy` — those cases
-do not exist on `ExternalHistory`. `perform()` is `async throws -> some
-IntentResult` (pending verification under `X-COMPILE-2` / `X-SECURITY-1`; `V2-facts.md` cycle 6, fact 1); it `await`s the facade,
-which `await`s the gateway, which `await`s the Authority. The intent itself
-carries no `HistoryAuthority`/`@Model` reference; only the `Sendable` facade.
-Intents run in the app's process (`V2-facts.md` cycle 6, OPEN 1 / `X-SECURITY-1`), inheriting the app's
-single in-process Authority. The intent's `@Parameter` values are untrusted
-(D35) and re-validated at the gateway (the system resolves parameters before
-`perform()`, pending verification under `X-COMPILE-2` (`V2-facts.md` cycle 6, fact 1), but V2-05 does not trust that resolution
-for bounds — it re-checks at the boundary).
+Exactly six `AppIntent` types ship: `SearchHistoryIntent`,
+`GetItemDetailsIntent`, `PasteItemIntent`, `PinItemIntent`,
+`UnpinItemIntent`, and `RemoveItemIntent`, plus one
+`ClipboardShortcuts: AppShortcutsProvider`. Search maps each invocation to one
+bounded search read; details maps to one details read; pin/unpin/remove each maps to its one
+external write. Paste has two sequenced owners: one audited `pastePayload` read
+followed by the existing `PasteboardAdapter.write` side effect. It is still not
+a new Gateway request or a Command-V operation.
+
+The item-target parameters deliberately use canonical UUID strings rather than
+`AppEntity` inputs. `HistoryItemID(uuidString:)` reconstructs the exported
+identity, after which the Gateway performs the authoritative grant and
+existence checks. Search and details return output-only
+`TransientAppEntity` metadata projections; there is no `EntityQuery` and no
+raw `Data` result. Paste consumes the audited `PastePayload` only to perform
+the adapter write and returns a content-free success value. All six intents declare
+macOS 26 `supportedModes = [.background]`; they do not use
+`allowedExecutionTargets`, which is a macOS 27 API.
+
+No intent can spell `capture`/`revise`/`clear`/`setRetentionPolicy` — those
+cases do not exist on `ExternalHistory`. Each `perform()` awaits the facade,
+which awaits the gateway and Authority. The intent carries no
+`HistoryAuthority`/`@Model` reference. The parameter declarations improve the
+Shortcuts UI, but their values remain untrusted (D35): canonical identity,
+mode, text, and bounds are revalidated at the owning boundary. Compilation and
+direct hosted invocation do not establish that system-created intents run in
+the main app process or inherit its TCC/entitlements; those remain
+`X-SECURITY-1` signed-runtime questions.
 
 ### 6.7 CredentialStore (Keychain, reserved — not exercised in V2)
 
@@ -2346,10 +2405,9 @@ its dedicated v1 vocabulary (`02` §10), and `ExternalFailure` has no
 - **§11 self-review scan:** `ExternalHistory`, `ExternalGateway`,
   `GatewayAdminHistory`, `OperationRecord`, `ExternalHistoryFacade`,
   `ConnectionRow`/`GrantRow`/`OperationRecordRow`/`GatewayConfigRow`,
-  `ExternalFailure`, `ExternalCapability`, and `HistoryRowDTO` (illustrative
-  App-Intents output projection; final spelling resolved at scaffold under
-  `X-COMPILE-2`, §6.6) are added to the V2 naming-consistency scan (`V2-00` §8)
-  — none collides with v1 vocabulary.
+  `ExternalFailure`, `ExternalCapability`, and the ClipyApp-only
+  `ClipboardHistoryItemEntity` output projection are added to the V2
+  naming-consistency scan (`V2-00` §8) — none collides with v1 vocabulary.
 
 ## 8. Security boundaries
 
@@ -2524,7 +2582,9 @@ on macOS 26:
   build succeeds; no hashing/cryptography import is added for audit
   (`Security` is **not** imported in V2 — the `CredentialStore` is unbuilt; it
   is added only when `X-PLATFORM-3` fires, Lens B minor); `AppIntents` imported
-  only in `ClipyApp`; `HistoryCore` external-gateway types import only
+  only in `ClipyApp` production sources, with the narrow hosted
+  `ClipyIntegrationTests` exception needed to exercise those app-owned types;
+  `HistoryCore` external-gateway types import only
   Foundation; no `@unchecked Sendable` or `nonisolated(unsafe)`;
   `ExternalGateway` is an `actor` type so
   `SwiftDataHistory: Sendable` is derived.
@@ -2535,42 +2595,44 @@ on macOS 26:
   (CRIT-M3 — `ClipyApp` is the separate Xcode app target outside the package,
   `01` §2; `package` access would not compile). An out-of-package
   `ClipyIntegrationTests` compile/behavior test imports `HistoryStorage`
-  normally and calls the accessor. The HistoryCore snapshot changes
+  normally and calls the accessor. The HistoryCore snapshot changed
   intentionally at X.6 for the new truthful
   `ExternalTransientReason.insufficientDiskSpace` raw-3 and `.cancelled`
-  raw-4 cases; the
+  raw-4 cases and was runner-regenerated in run 32606749388; the
   HistoryStorage facade itself remains outside that snapshot.
   `SwiftDataHistory` does not itself conform to `ExternalHistory`. `ClipyApp`
-  resolves the facade via `@Dependency` and registers it once into
-  `AppDependencyManager.shared`;
+  resolves the facade via `@Dependency` and registers exactly one asynchronous
+  provider into `AppDependencyManager.shared` at the earliest launch entry,
+  before awaiting store open. That provider and the UI reuse the same single
+  composition-open work;
   the facade delegates every write to `HistoryAuthority` (single writer; no
   bypass). The §9 source gate is amended to permit this single `.shared`
-  registration in `ClipyApp` and reject every other `.shared`/`.current`
-  spelling. **CRIT-M4 strengthening:** confirm on macOS 26 that a
-  Siri/Shortcuts-triggered **background launch** resolves `@Dependency` AFTER
-  `ClipyApp`'s launch-time `AppDependencyManager.shared.add` runs, across
-  cold-start and warm-invocation paths; if the ordering is not guaranteeable,
-  confirm the fallback (§6.5) — synchronous `add` at the earliest launch entry,
-  unresolved-dependency surfaced as
-  `ExternalFailure.temporarilyUnavailable(.storeLocked)`, never a crash.
-  **Swift 6 crash-free confirmation:** a Swift Forums report documents a known
-  `AppDependencyManager` / `@Dependency` crash in Swift 6 strict-concurrency
-  mode, so this gate must confirm CRASH-FREE resolution under a
-  Siri/Shortcuts-invoked `perform()` (not just that it compiles).
+  registration in `ClipyApp` and reject every other app-owned authoritative
+  `.shared`/`.current` spelling. A hosted test uses
+  `AppDependencyManager()` rather than `.shared` to prove the provider against
+  one real in-memory `SwiftDataHistory` open and logical repeated provider
+  calls. Direct hosted intent calls set the documented writable
+  `AppDependency.wrappedValue` and do not claim framework manager resolution.
+  **Evidence ceiling:** that hosted proof does not close CRIT-M4. macOS 26
+  signed invocation must still confirm true Siri/Shortcuts cold and warm
+  launch ordering, framework behavior when registration/resolution is absent
+  or unresolved, and crash-free Swift 6 dependency resolution. A provider-side
+  store-open failure mapped to `.temporarilyUnavailable(.storeLocked)` is not
+  evidence for the framework's missing-dependency behavior.
 - **X-COMPILE-3 (import gate).** The v1 source gate (`01` §9) is extended to
-  permit `AppIntents` in `ClipyApp` only. Audit adds no `CryptoKit`, Security,
-  or hashing exception. `Security` is added only when `X-PLATFORM-3` fires.
+  permit `AppIntents` in `ClipyApp` production sources plus only its hosted
+  `ClipyIntegrationTests`; no SwiftPM target may import it. Audit adds no
+  `CryptoKit`, Security, or hashing exception. `Security` is added only when
+  `X-PLATFORM-3` fires.
 - **X-COMPILE-4 (`@Parameter` controlStyle spelling + Int bounding — Lens B
-  minor, OPEN).** The `@Parameter(title: "Limit", ...)` example in §6.6 omits
-  the `controlStyle` spelling because the exact case (`IntentParameterControlStyle`
-  — e.g., `.stepper` vs `.Stepper`) and the mechanism for bounding an `Int`
-  parameter to `1...500` from the parameter declaration alone could not be
-  MCP-verified (search returned 0; `developer.apple.com` fetch blocked). This
-  is not load-bearing: the gateway re-validates `limit` against
-  `HistoryLimits.standard` (`06` §2) at D35 regardless. `X-COMPILE-4` confirms
-  the verified spelling and the bounding mechanism on macOS 26 at scaffold time,
-  and the example is updated then; until then the parameter is declared without
-  `controlStyle` and the bounds are enforced at the gateway.
+  minor).** The macOS 26 declaration is frozen as
+  `@Parameter(title: "Limit", default: 20, controlStyle: .stepper,
+  inclusiveRange: (lowerBound: 1, upperBound: 500))`. X.7 must compile that
+  exact spelling on the macOS 26 runner. The Gateway independently revalidates
+  `limit` against `HistoryLimits.standard` (`06` §2) at D35, so parameter UI
+  admission cannot bypass the trust boundary. All six intents use
+  `supportedModes = [.background]`; they must not use macOS 27-only
+  `allowedExecutionTargets`.
 - **X-PLATFORM-1 (schema migration).** A new immutable `HistorySchemaV3` adds
   `ConnectionRow`/`GrantRow`/`OperationRecordRow`/`GatewayConfigRow` via the
   additive `V2 -> V3` stage; already-shipped `HistorySchemaV2` is byte-for-byte
@@ -2626,6 +2688,10 @@ on macOS 26:
   confirm a main-app-target `AppIntent.perform()` runs in the app process on
   macOS 26 and inherits the app's pasteboard/file TCC + entitlements; confirm
   no separate entitlement is required for the intent to call `ClipboardHistory`.
+  Hosted direct `perform()` calls cannot close process placement, system
+  discovery, true cold/warm launch, unresolved dependency behavior, the Swift
+  6 queue-crash report, or pasteboard/file TCC. These require signed
+  Siri/Shortcuts invocation evidence.
 - **X-SECURITY-2 (audit sequence/compaction honesty; X.4).** Fixture-prove
   atomic mint+insert, monotone contiguous retained sequences, duplicate/gap
   rejection, and a compaction/recovery transaction that records its marker and

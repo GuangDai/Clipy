@@ -291,6 +291,7 @@ init(snippet:matchedRanges:)
 init(sourceApplication:lineageHint:)
 init(typeIdentifier:action:)
 init(typeIdentifier:bytes:)
+init(uuidString:)
 init(width:height:)
 intent
 isActive

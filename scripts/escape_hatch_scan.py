@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Escape-hatch and service-locator scan for Clipy (docs/01-architecture.md Part I §8).
 
-Scans all Swift files under ``Sources/`` and ``Tests/`` and rejects:
+Scans all Swift files under ``Sources/``, ``Tests/``, ``ClipyApp/Sources/``,
+and ``ClipyApp/Tests/`` and rejects:
 
   - ``@unchecked Sendable``
   - ``nonisolated(unsafe)``
   - service-locator spellings: ``static let shared``, ``static var shared``,
     ``static let current``, ``static var current``
+  - any use of ``AppDependencyManager.shared`` except the one framework-owned
+    ``add(dependency:)`` registration in the designated composition-root file
 
 Matching is line-based; occurrences inside comments or string literals are also
 flagged (keep such text out of the tree rather than weakening the gate).
@@ -16,7 +19,8 @@ Usage:
   escape_hatch_scan.py --self-test     run fixture-based assertions, then exit
 
 Exit codes: 0 = clean, 1 = violations found, 2 = usage/internal error.
-Missing Sources/ or Tests/ directories are scanned as zero files.
+Missing scan directories are scanned as zero files. The production dependency
+registration is not optional: the repository scan requires exactly one.
 """
 from __future__ import annotations
 
@@ -27,7 +31,17 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-SCAN_DIRS = ("Sources", "Tests")
+SCAN_DIRS = ("Sources", "Tests", "ClipyApp/Sources", "ClipyApp/Tests")
+APP_DEPENDENCY_REGISTRATION_PATH = Path(
+    "ClipyApp/Sources/AppIntents/AppIntentDependencyRegistration.swift"
+)
+APP_DEPENDENCY_SHARED_RE = re.compile(
+    r"\bAppDependencyManager\s*\.\s*shared\b"
+)
+APP_DEPENDENCY_REGISTRATION_RE = re.compile(
+    r"\bAppDependencyManager\s*\.\s*shared\s*\.\s*add\s*"
+    r"\(\s*dependency\s*:"
+)
 
 PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
     (
@@ -75,12 +89,13 @@ def scan_file(path: Path) -> list[Violation]:
 
 
 def scan(root: Path) -> tuple[list[Violation], int]:
-    """Scan root/{Sources,Tests}/**/*.swift. Returns (violations, files scanned).
+    """Scan all governed Swift roots. Returns (violations, files scanned).
 
     Missing scan directories are not an error — they scan as zero files.
     """
     violations: list[Violation] = []
     file_count = 0
+    shared_uses: list[tuple[Path, str, re.Match[str]]] = []
     for scan_dir in SCAN_DIRS:
         base = root / scan_dir
         if not base.is_dir():
@@ -88,6 +103,48 @@ def scan(root: Path) -> tuple[list[Violation], int]:
         for swift_file in sorted(base.rglob("*.swift")):
             file_count += 1
             violations.extend(scan_file(swift_file))
+            text = swift_file.read_text(encoding="utf-8")
+            shared_uses.extend(
+                (swift_file, text, match)
+                for match in APP_DEPENDENCY_SHARED_RE.finditer(text)
+            )
+
+    designated = root / APP_DEPENDENCY_REGISTRATION_PATH
+    if len(shared_uses) != 1:
+        violations.append(
+            Violation(
+                designated,
+                1,
+                "appdependency-registration-cardinality",
+                "exactly one AppDependencyManager.shared use is required, as the "
+                "framework-owned add(dependency:) registration in the designated "
+                f"composition-root file; found {len(shared_uses)} (Part I §8)",
+            )
+        )
+
+    for path, text, match in shared_uses:
+        line = text.count("\n", 0, match.start()) + 1
+        if path != designated:
+            violations.append(
+                Violation(
+                    path,
+                    line,
+                    "appdependency-shared-location",
+                    "AppDependencyManager.shared is allowed only for the one "
+                    f"registration in {APP_DEPENDENCY_REGISTRATION_PATH} (Part I §8)",
+                )
+            )
+            continue
+        if APP_DEPENDENCY_REGISTRATION_RE.match(text, match.start()) is None:
+            violations.append(
+                Violation(
+                    path,
+                    line,
+                    "appdependency-shared-shape",
+                    "the sole AppDependencyManager.shared use must directly call "
+                    "add(dependency:) (Part I §8)",
+                )
+            )
     return violations, file_count
 
 
@@ -126,6 +183,17 @@ GOOD_FIXTURES: dict[str, str] = {
         "}\n"
     ),
     "Tests/HistoryCoreTests/Good.swift": "import Foundation\nfinal class GoodTests {}\n",
+    "ClipyApp/Tests/ClipyIntegrationTests/Good.swift": (
+        "let manager = AppDependencyManager()\n"
+    ),
+    str(APP_DEPENDENCY_REGISTRATION_PATH): (
+        "import AppIntents\n"
+        "func register() {\n"
+        "    AppDependencyManager\n"
+        "        .shared\n"
+        "        .add( dependency : makeDependency())\n"
+        "}\n"
+    ),
 }
 
 
@@ -172,15 +240,80 @@ def self_test() -> int:
             f"clean fixture was flagged: {[v.render(root) for v in violations]}",
         )
 
-    # 3) Missing Sources/ and Tests/ trees are tolerated.
+    # 3) The production registration is required even when every source tree is
+    #    otherwise missing.
     with tempfile.TemporaryDirectory(prefix="escape-hatch-selftest-empty-") as tmp:
         violations, file_count = scan(Path(tmp))
-        _require(not violations and file_count == 0, "empty tree should scan as zero files, zero violations")
+        _require(file_count == 0, "empty tree should scan as zero files")
+        _require(
+            [v.rule for v in violations] == ["appdependency-registration-cardinality"],
+            "empty tree must fail the exact-one production registration rule",
+        )
+
+    # 4) A sole registration at the wrong path is rejected.
+    with tempfile.TemporaryDirectory(prefix="escape-hatch-selftest-wrong-path-") as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "ClipyApp/Sources/Wrong.swift",
+            "AppDependencyManager.shared.add(dependency: makeDependency())\n",
+        )
+        violations, _ = scan(root)
+        _require(
+            {v.rule for v in violations} == {"appdependency-shared-location"},
+            f"wrong-path rule mismatch: {[v.rule for v in violations]}",
+        )
+
+    # 5) A second use is rejected by cardinality and location.
+    with tempfile.TemporaryDirectory(prefix="escape-hatch-selftest-second-") as tmp:
+        root = Path(tmp)
+        _write(root, str(APP_DEPENDENCY_REGISTRATION_PATH), GOOD_FIXTURES[str(APP_DEPENDENCY_REGISTRATION_PATH)])
+        _write(
+            root,
+            "ClipyApp/Sources/Second.swift",
+            "AppDependencyManager.shared.add(dependency: makeOtherDependency())\n",
+        )
+        violations, _ = scan(root)
+        _require(
+            {v.rule for v in violations}
+            == {"appdependency-registration-cardinality", "appdependency-shared-location"},
+            f"second-use rule mismatch: {[v.rule for v in violations]}",
+        )
+
+    # 6) Hosted tests must use standalone AppDependencyManager() instances,
+    #    never the framework-owned shared manager.
+    with tempfile.TemporaryDirectory(prefix="escape-hatch-selftest-test-use-") as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "ClipyApp/Tests/ClipyIntegrationTests/Bad.swift",
+            "AppDependencyManager.shared.add(dependency: makeDependency())\n",
+        )
+        violations, _ = scan(root)
+        _require(
+            {v.rule for v in violations} == {"appdependency-shared-location"},
+            f"hosted-test rule mismatch: {[v.rule for v in violations]}",
+        )
+
+    # 7) The designated file cannot turn the framework manager into a general
+    #    locator; its one use has to be the registration call itself.
+    with tempfile.TemporaryDirectory(prefix="escape-hatch-selftest-shape-") as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            str(APP_DEPENDENCY_REGISTRATION_PATH),
+            "let manager = AppDependencyManager.shared\n",
+        )
+        violations, _ = scan(root)
+        _require(
+            {v.rule for v in violations} == {"appdependency-shared-shape"},
+            f"registration-shape rule mismatch: {[v.rule for v in violations]}",
+        )
 
     print(
         "escape_hatch_scan: self-test OK — "
-        f"{len(BAD_FIXTURES)} deliberate violations flagged, "
-        "clean fixture passes, missing Sources/ and Tests/ tolerated"
+        f"{len(BAD_FIXTURES)} construct violations and AppDependencyManager "
+        "location/cardinality fixtures verified; clean fixture passes"
     )
     return 0
 

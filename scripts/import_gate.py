@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Import-confinement gate for the Clipy target graph (docs/01-architecture.md Part I §8).
 
-Scans ``Sources/<Target>/**/*.swift`` for ``import X`` lines and rejects imports
-that violate the target's confinement rules:
+Scans ``Sources/<Target>/**/*.swift``, ``Tests/<Target>/**/*.swift``,
+``ClipyApp/Sources/**/*.swift``, and XcodeGen-owned app-test sources for
+``import X`` lines and rejects imports that violate the target's confinement
+rules:
 
   ClipboardFormats  allowlist: Foundation (incl. submodules)
   HistoryCore        allowlist: Foundation (incl. submodules, e.g. FoundationNetworking)
@@ -20,12 +22,14 @@ that violate the target's confinement rules:
   HistoryRestartProbe allowlist: Foundation, HistoryCore, HistoryStorage
 
 Global rules: ``import xxh3`` and ``import Fuse`` are forbidden outside
-HistoryStorage.
+HistoryStorage. ``import AppIntents`` is forbidden outside the XcodeGen-owned
+ClipyApp product and its explicitly hosted integration-test target.
 
-ClipyApp (XcodeGen app target / composition root) and the C target xxh3 itself
-are not governed by this gate. Matching is line-based: ``import`` statements at
-line start inside block comments or string literals would also be seen — Swift
-style keeps imports at line start, so this is acceptable for a scaffold gate.
+The C target xxh3 itself is not governed by this gate. Matching is line-based:
+``import`` statements at line start inside block comments or string literals
+would also be seen — Swift style keeps imports at line start, so this is
+acceptable for a source gate. Import attributes (including ``@preconcurrency``)
+and access-level imports are parsed rather than providing an evasion.
 
 Usage:
   import_gate.py [--root REPO]   scan the repo (default: repo containing this script)
@@ -49,6 +53,8 @@ XXH3_MODULE = "xxh3"
 XXH3_OWNER = "HistoryStorage"
 FUSE_MODULE = "Fuse"
 FUSE_OWNER = "HistoryStorage"
+APPINTENTS_MODULE = "AppIntents"
+APPINTENTS_OWNERS = frozenset({"ClipyApp", "ClipyIntegrationTests"})
 
 # Allowlist targets: every import must be in this set (Foundation prefix matches
 # submodules wherever Foundation is listed).
@@ -67,10 +73,14 @@ BLOCKLIST: dict[str, frozenset[str]] = {
     "PresentationUI": frozenset({"HistoryDomain", "HistoryStorage", "AppKit", "SwiftData"}),
 }
 
-# Matches `import Foo`, `@_exported import Foo`, `import struct Foo.Bar`, etc.
-# Captures the top-level module name only.
+# Matches `import Foo`, `@_exported import Foo`, `@preconcurrency import Foo`,
+# `public import Foo`, `import struct Foo.Bar`, and combinations thereof.
+# Captures the top-level module name only. Keep this grammar aligned with the
+# SwiftLint import prefixes below so access-level/attribute spelling cannot
+# evade either gate.
 IMPORT_RE = re.compile(
-    r"^\s*(?:@_\w+\s+)*import\s+"
+    r"^\s*(?:@[A-Za-z_][A-Za-z0-9_]*(?:\([^\n)]*\))?\s+)*"
+    r"(?:(?:public|package|internal|fileprivate|private)\s+)?import\s+"
     r"(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?"
     r"([A-Za-z_][A-Za-z0-9_]*)"
 )
@@ -104,6 +114,11 @@ def check_import(target: str, module: str) -> str | None:
             f"target '{target}' must not import '{FUSE_MODULE}' "
             f"({FUSE_MODULE} is confined to {FUSE_OWNER}; Part I §8)"
         )
+    if module == APPINTENTS_MODULE and target not in APPINTENTS_OWNERS:
+        return (
+            f"target '{target}' must not import '{APPINTENTS_MODULE}' "
+            "(AppIntents is confined to ClipyApp and its hosted integration tests; Part I §8)"
+        )
     if target in ALLOWLIST:
         allowed = ALLOWLIST[target]
         if module in allowed:
@@ -134,7 +149,7 @@ def scan_file(path: Path, target: str) -> list[Violation]:
 
 
 def scan(root: Path) -> tuple[list[Violation], dict[str, int]]:
-    """Scan root/Sources/<Target>/**/*.swift.
+    """Scan SwiftPM sources plus the XcodeGen app and hosted tests.
 
     Returns (violations, files-scanned-per-target). A missing Sources/ tree or
     missing per-target directory is not an error — it scans as zero files.
@@ -144,13 +159,37 @@ def scan(root: Path) -> tuple[list[Violation], dict[str, int]]:
     violations: list[Violation] = []
     counts: dict[str, int] = {}
     sources = root / "Sources"
-    if not sources.is_dir():
-        return violations, counts
-    for target_dir in sorted(p for p in sources.iterdir() if p.is_dir()):
-        files = sorted(target_dir.rglob("*.swift"))
-        counts[target_dir.name] = len(files)
+    if sources.is_dir():
+        for target_dir in sorted(p for p in sources.iterdir() if p.is_dir()):
+            files = sorted(target_dir.rglob("*.swift"))
+            counts[target_dir.name] = len(files)
+            for swift_file in files:
+                violations.extend(scan_file(swift_file, target_dir.name))
+
+    explicit_roots: list[tuple[str, Path]] = [
+        ("ClipyApp", root / "ClipyApp" / "Sources")
+    ]
+    swiftpm_tests = root / "Tests"
+    if swiftpm_tests.is_dir():
+        explicit_roots.extend(
+            (target_dir.name, target_dir)
+            for target_dir in sorted(
+                path for path in swiftpm_tests.iterdir() if path.is_dir()
+            )
+        )
+    app_tests = root / "ClipyApp" / "Tests"
+    if app_tests.is_dir():
+        explicit_roots.extend(
+            (target_dir.name, target_dir)
+            for target_dir in sorted(path for path in app_tests.iterdir() if path.is_dir())
+        )
+    for target, target_root in explicit_roots:
+        if not target_root.is_dir():
+            continue
+        files = sorted(target_root.rglob("*.swift"))
+        counts[target] = len(files)
         for swift_file in files:
-            violations.extend(scan_file(swift_file, target_dir.name))
+            violations.extend(scan_file(swift_file, target))
     return violations, counts
 
 
@@ -178,6 +217,15 @@ GOOD_FIXTURES: dict[str, str] = {
     "Sources/PresentationUI/Good.swift": "import Foundation\nimport HistoryCore\nimport SwiftUI\n",
     "Sources/HistoryPerfRunner/Good.swift": "import Foundation\nimport HistoryCore\nimport HistoryStorage\n",
     "Sources/HistoryRestartProbe/Good.swift": "import Foundation\nimport HistoryCore\nimport HistoryStorage\n",
+    "Tests/HistoryCoreTests/Good.swift": "import Testing\nimport HistoryCore\n",
+    "ClipyApp/Sources/AppIntent.swift": (
+        "@preconcurrency import AppIntents\n"
+        "private import HistoryCore\n"
+    ),
+    "ClipyApp/Tests/ClipyIntegrationTests/AppIntentTests.swift": (
+        "import AppIntents\n"
+        "import Testing\n"
+    ),
 }
 
 BAD_FIXTURES: dict[str, str] = {
@@ -194,6 +242,10 @@ BAD_FIXTURES: dict[str, str] = {
     "Sources/PresentationUI/BadFuse.swift": "import Fuse\n",  # global Fuse rule
     "Sources/HistoryPerfRunner/Bad.swift": "import SwiftData\n",
     "Sources/HistoryRestartProbe/Bad.swift": "import SwiftData\n",
+    "Sources/HistoryStorage/BadAppIntents.swift": "@preconcurrency import AppIntents\n",
+    "Sources/UnknownClient/BadAppIntents.swift": "private import AppIntents\n",
+    "Tests/HistoryCoreTests/BadAppIntents.swift": "internal import AppIntents\n",
+    "ClipyApp/Tests/OtherAppTests/BadAppIntents.swift": "public import AppIntents\n",
 }
 
 EXPECTED_SELF_TEST_VIOLATIONS = {
@@ -210,6 +262,10 @@ EXPECTED_SELF_TEST_VIOLATIONS = {
     ("PresentationUI", "Fuse"),
     ("HistoryPerfRunner", "SwiftData"),
     ("HistoryRestartProbe", "SwiftData"),
+    ("HistoryStorage", "AppIntents"),
+    ("UnknownClient", "AppIntents"),
+    ("HistoryCoreTests", "AppIntents"),
+    ("OtherAppTests", "AppIntents"),
 }
 
 
@@ -250,7 +306,7 @@ def self_test() -> int:
             f"clean fixture file count mismatch: {counts}",
         )
 
-    # 3) A missing Sources/ tree is tolerated (scaffold targets may not exist yet).
+    # 3) Missing SwiftPM/app trees are tolerated (scaffold targets may not exist yet).
     with tempfile.TemporaryDirectory(prefix="import-gate-selftest-empty-") as tmp:
         violations, counts = scan(Path(tmp))
         _require(not violations and not counts, "empty tree should scan as zero files, zero violations")
@@ -258,7 +314,7 @@ def self_test() -> int:
     print(
         "import_gate: self-test OK — "
         f"{len(EXPECTED_SELF_TEST_VIOLATIONS)} deliberate forbidden imports flagged, "
-        "clean fixture passes, missing Sources/ tolerated"
+        "clean fixture passes, missing source trees tolerated"
     )
     return 0
 
@@ -307,7 +363,7 @@ def main(argv: list[str] | None = None) -> int:
         per_target = ", ".join(f"{target}: {n} file(s)" for target, n in sorted(counts.items()))
         print(f"import_gate: OK — {total} Swift file(s) scanned, no violations ({per_target})")
     else:
-        print("import_gate: OK — no Sources/ tree found, nothing to scan")
+        print("import_gate: OK — no governed source tree found, nothing to scan")
     return 0
 
 
