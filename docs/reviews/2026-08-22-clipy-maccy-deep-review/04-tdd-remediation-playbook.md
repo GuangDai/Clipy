@@ -1050,15 +1050,50 @@ peer evidence、opaque credential与request原样委托给Gateway完成authentic
 grant check。amendment不能把Gateway/CredentialStore公开，也不能让transport复制授权policy或import Storage
 内部类型。
 
-**PLAY-PY-A2 [PURE contract]：**只冻结versioned JSON stdin/stdout、稳定exit-code类别与golden codec；实现
-tests在`PLAY-PY-B0G/B0I` Gateway/App Intents tracer后领取，不要求先shipping一个长期`unsupported` executable。
-若首个production adapter需要neutral declaration，把它与PLAY-PY-F1同一slice引入；compile smoke不是行为Green。
+**PLAY-PY-A2 [PURE contract]：**X.7 landed后，只在no-product、Foundation-only
+`ClipyCLIContract`冻结versioned JSON request/reply、稳定exit-code类别与golden codec；不新增`main`、
+`FileHandle`、process I/O、executable product、transport、credential、Gateway/History dependency或fabricated
+positive result。若首个production adapter需要neutral declaration，把它与PLAY-PY-F1同一slice引入；
+compile smoke不是行为Green。
 
-A2是family：领取前分别使用 **PLAY-PY-A2A** unknown major、**PLAY-PY-A2B** oversize-before-allocation、
-**PLAY-PY-A2C** duplicate keys、**PLAY-PY-A2D** depth/width、**PLAY-PY-A2E**
-nonfinite/noninteger/overflow、**PLAY-PY-A2F** requestID shape、**PLAY-PY-A2G** exactly-one stdout JSON +
-content-free stderr、**PLAY-PY-A2H** stable exit mapping、**PLAY-PY-A2I** unknown operation/closed method set；
-不得一张parser test关闭全部。
+A2是family，下面九张Red各自独立Green，不得用一张parser test关闭全部：
+
+- **PLAY-PY-A2A — protocol major：**`protocolVersion != 1`稳定输出
+  `unsupported_protocol_version`、exit 2，不dispatch。
+- **PLAY-PY-A2B — size-before-parse：**65,536-byte request仍由其它规则决定，65,537 bytes在UTF-8
+  decode/JSON parse/parser-owned allocation前得到`request_too_large`、exit 2。完整reply上限
+  33,554,432 bytes（含terminal LF），超限得到`response_too_large`而不truncate。
+- **PLAY-PY-A2C — duplicate keys：**任一object内decode成同一UTF-8 scalar/byte sequence的key拒绝，
+  包括`"a"`与`"\u0061"`；不做NFC/NFD normalization。Red不得只覆盖同spelling duplicate。
+- **PLAY-PY-A2D — structural bounds：**root object计depth 1，depth 8/object 32 lexical members/array
+  512 elements是admitted edge；
+  9/33/513分别拒绝。strict UTF-8、no BOM、one root plus RFC JSON whitespace only也各有boundary fixture。
+- **PLAY-PY-A2E — numbers：**只接受JSON lexical integer与target-field checked conversion；fraction、
+  exponent、nonfinite extension及overflow分别拒绝，不能经floating point round-trip。
+- **PLAY-PY-A2F — requestID：**只接受lowercase canonical 36-character hyphenated non-nil UUID；跨request
+  重复ID必须decode成功，因为X.8只定义correlation，不定义idempotency/digest/hash。
+- **PLAY-PY-A2G — pure emission：**success/error object keys递归lexicographic sort、compact UTF-8、
+  stdout bytes最后恰好一个LF且无其它bytes；future stderr template恰为
+  `clipyctl: <error.code>\n`，无query/cursor/content/input fragment/free text。这里只证明pure bytes，真实FD
+  stdin/stdout/stderr属于X.9。
+- **PLAY-PY-A2H — stable mapping：**exit 0只对应success；exit 2精确映射
+  `invalid_json|invalid_request|unsupported_protocol_version|unknown_operation|request_too_large|response_too_large`；
+  exit 3映射`not_enrolled|not_granted|connection_revoked|authentication_failed|peer_rejected`；exit 4映射
+  `not_found|cursor_expired|content_stale|locator_invalidated`；exit 5映射
+  `not_ready|rate_limited|busy|timeout|cancelled|outcome_unknown`；exit 6映射
+  `store_open_failed|corrupt_data|invariant_violation|transaction_failed|audit_failed`。每个code至少一个golden，
+  不能只测每组代表值。exit 2还要固定原因分类：byte envelope=`request_too_large`；UTF-8/BOM/JSON
+  syntax/trailing/second-root/duplicate/depth/width/NaN/Infinity=`invalid_json`；typed shape、unknown/missing
+  field、type mismatch、fraction/exponent、checked overflow、requestID/argument bounds=`invalid_request`；
+  supported-grammar major/operation miss用各自dedicated code；encoder总界限=`response_too_large`。
+- **PLAY-PY-A2I — closed operation/shape：**protocol v1只接受`operation:"browsePreview"`；recent args
+  恰为`{limit,cursor?}`且query/mode都缺席，search args恰为`{query,mode,limit,cursor?}`且query/mode都存在，
+  没有`kind`字段。unknown operation/field拒绝；limit `1...500`、query `1...4096` UTF-8 bytes、fuzzy
+  64 Characters、regexp 512 Characters、cursor `1...4096` UTF-8 bytes逐边界覆盖。成功reply item/result
+  exact fields、non-empty locator 1,024/1,025 UTF-8 bytes、title 1,024/1,025
+  UTF-8 bytes、snippet 322/323 Characters、type count 32/33、type byte
+  512/513、date-millisecond、nextCursor 4,096/4,097与result count 500/501
+  bounds另用encoder goldens覆盖。
 
 在任何positive Gateway tracer前，**PLAY-PY-GW0 [PURE / RESOLVED-SPEC]**先冻结
 `(ConnectionEnrollKind, capability/operation) -> grantable` closed matrix：`.appIntents`只保留owning V2-05

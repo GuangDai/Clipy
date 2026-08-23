@@ -12,7 +12,7 @@
 > they are cited here, never restated as new semantics.
 
 **Audit baseline:** `8f316c9` (2026-08-02). **Current landed baseline:**
-`master` through PR #15 (2026-08-23). Steps 0–9 are implemented and CI-green;
+`master` through PR #16 (2026-08-23). Steps 0–9 are implemented and CI-green;
 M2/state 2 is complete. Step 9 (product wiring: PasteboardAdapter +
 PresentationUI + ClipyApp composition) is done, including its post-step-9
 revisions: the perf/AB measurement-helper proofs live in the split
@@ -22,18 +22,19 @@ cursor/status-item/center/last-position placement, dwell-driven preview pane)
 rather than a SwiftUI `MenuBarExtra`. M3/state 3 (packaging, accessibility,
 localization, product acceptance per Part VI §11) remains open.
 
-**Current CI provenance (2026-08-23):** PR #15 correctness run
-[32607389771](https://github.com/GuangDai/Clipy/actions/runs/32607389771)
+**Current CI provenance (2026-08-23):** PR #16 correctness run
+[32609910701](https://github.com/GuangDai/Clipy/actions/runs/32609910701)
 is green across Lint + source gates, SwiftPM build + test, and XcodeGen
 generate + app build/test. Its HistoryCore public-surface update is runner-generated
-by [symbol run 32606749388](https://github.com/GuangDai/Clipy/actions/runs/32606749388).
+by [symbol run 32609018894](https://github.com/GuangDai/Clipy/actions/runs/32609018894).
 No performance/AB lane ran for this batch. Manual signed-runtime run
 [32573198119](https://github.com/GuangDai/Clipy/actions/runs/32573198119)
 is green on `master`; it proves only an ad-hoc signed Release carrying the
 Hardened Runtime flag, the iCloud/ubiquity entitlement negative, and direct
 process liveness. It does not prove Developer ID identity, secure timestamp,
 notarization/stapling, Gatekeeper, TCC, login-item, Carbon/status-item, Space,
-or WindowServer behavior.
+WindowServer behavior, App Intents system-manager resolution, or true
+Siri/Shortcuts discovery and cold/warm invocation.
 
 **CI provenance of the landed head (2026-08-20):** the post-step-9
 convergence ran `a028c8c` (run 32316689047, cancelled —
@@ -867,10 +868,33 @@ test.
   connection-bound facade/factory at their test seams. It does not prove
   performance, App Intents framework invocation, credential, CLI, or transport
   behavior.
-- **X.7 current work:** App Intents composition is in progress on an unmerged
-  branch. Hosted tests may prove real-store facade delegation, standalone
-  provider registration/behavior, explicit wrapper-value injection for
-  direct intent calls, and pasteboard-adapter wiring. True
-  Siri/Shortcuts cold/warm launch, framework unresolved-resolution behavior,
-  system discovery, process placement, Swift 6 queue-crash freedom, and TCC
-  remain signed-runtime cells and are not closed by hosted tests.
+- **X.7 landed:** [PR #16](https://github.com/GuangDai/Clipy/pull/16) is
+  correctness-green at
+  [run 32609910701](https://github.com/GuangDai/Clipy/actions/runs/32609910701);
+  its HistoryCore identity reconstruction surface came from
+  [symbol run 32609018894](https://github.com/GuangDai/Clipy/actions/runs/32609018894).
+  This closes the bounded six-intent composition, output-only projections,
+  one early async facade provider, direct-call failure mapping, and real
+  in-memory History/pasteboard-adapter hosted paths at their tested seams.
+  True Siri/Shortcuts discovery and cold/warm invocation, framework
+  system-manager resolution, process placement, Swift 6 queue-crash freedom,
+  cross-process pasteboard visibility, and TCC remain signed-runtime cells and
+  are not closed by hosted tests.
+- **X.8 current work:** the current branch contains the no-product,
+  Foundation-only pure wire seam: the shared
+  [`ClipyCLIContract`](../Sources/ClipyCLIContract/ClipyCLIContract.swift)
+  constants/types, typed
+  [request codec](../Sources/ClipyCLIContract/ClipyCLIRequestCodec.swift) with
+  bounded JSON [parser](../Sources/ClipyCLIContract/BoundedJSONParser.swift),
+  and typed
+  [reply renderer](../Sources/ClipyCLIContract/ClipyCLIReplyRenderer.swift)
+  with bounded JSON [writer](../Sources/ClipyCLIContract/BoundedJSONWriter.swift),
+  plus the
+  `PLAY-PY-A2A`–`A2I` tests under
+  [`ClipyCLIContractTests`](../Tests/ClipyCLIContractTests/PLAYPYA2AUnknownMajorTests.swift).
+  This unmerged leaf remains **In progress** until macOS correctness CI is
+  green. Its intended evidence ceiling is pure bounded UTF-8 JSON grammar,
+  deterministic reply bytes, the closed `browsePreview` operation, and stable
+  exit mapping; it adds no executable, process I/O, Python-to-History path,
+  transport, authentication, Gateway dispatch, grant/audit behavior, or
+  signed-runtime proof.

@@ -26,6 +26,7 @@ let package = Package(
     ],
     targets: [
         .target(name: "ClipboardFormats"),
+        .target(name: "ClipyCLIContract"),
         .target(name: "HistoryCore"),
         .target(
             name: "HistoryDomain",
@@ -74,6 +75,10 @@ let package = Package(
         .testTarget(
             name: "ClipboardFormatsTests",
             dependencies: ["ClipboardFormats"]
+        ),
+        .testTarget(
+            name: "ClipyCLIContractTests",
+            dependencies: ["ClipyCLIContract"]
         ),
         .testTarget(
             name: "HistoryCoreTests",

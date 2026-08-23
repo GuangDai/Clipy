@@ -16,11 +16,13 @@
 
 ### 1.1 当前 Clipy：不能
 
-当前 tracked source 没有 `clipyctl` executable、socket listener、Apple Events dictionary、
-XPC external listener或已经实现的 `ExternalGateway`。根
-[`Package.swift`](../../../Package.swift) 只发布五个 library products，另声明
-`HistoryPerfRunner` executable target；没有 `clipyctl` target/product。V2-05 自己也仍标为
-**design-consolidated, scaffold proof pending**。
+当前 tracked source 已有CI-green的in-process `ExternalGateway`、public connection-bound facade及
+`ClipyApp`中的六个App Intents，但没有 `clipyctl` executable/product、socket listener、
+Local Automation authenticated ingress、Apple Events dictionary或XPC external listener。
+X.7 的限定证据来自[PR #16](https://github.com/GuangDai/Clipy/pull/16)、
+[correctness run 32609910701](https://github.com/GuangDai/Clipy/actions/runs/32609910701)与
+[symbol run 32609018894](https://github.com/GuangDai/Clipy/actions/runs/32609018894)；它们不证明
+signed Siri/Shortcuts调用，也不建立Python入口。
 因此 Python 目前最多能像任何程序一样操作 macOS General pasteboard；它不能通过受支持的
 Clipy interface 查询、定位或修改 Clipy 保存的 history。
 
@@ -37,7 +39,7 @@ external-storage 与 migration 规则，又会绕开 grant、audit、OCC、dedup
 > `subprocess`，通过 versioned JSON request/reply 查询或执行获准的单项修改；所有请求最终
 > 仍经过唯一 `ExternalGateway` 与唯一 `HistoryAuthority`。
 
-这个定义有四个重要边界：
+这个定义有五个重要边界：
 
 1. **same EUID 是 account-wide 边界。** 它不证明同一 GUI、login 或 audit session；若产品以后
    要求 session 隔离，需要新的 audit-session/transport 证据，而不是继续外推 `getpeereid`。
@@ -91,7 +93,12 @@ HistoryStorage store，也不得拥有 `ModelContext`；它只负责：
 
 ### 2.2 JSON contract 的最小形状
 
-以下只是 interface shape，不是 production code：
+X.8 将下面的wire contract冻结在no-product、Foundation-only SwiftPM target
+`ClipyCLIContract`中。该target只做pure request decode、reply encode与exit mapping；它没有
+`main`、`FileHandle`、process I/O、transport、credential、Gateway/History依赖，也不fabricate
+positive Gateway result。protocol v1的closed operation set只包含`browsePreview`。
+
+Recent request：
 
 ```json
 {
@@ -102,39 +109,85 @@ HistoryStorage store，也不得拥有 `ModelContext`；它只负责：
 }
 ```
 
+Search request：
+
 ```json
 {
   "protocolVersion": 1,
   "requestID": "9bd92054-bd3f-4d20-8f8a-5d77aa63b726",
-  "ok": true,
-  "result": { "items": [], "nextCursor": null }
+  "operation": "browsePreview",
+  "arguments": { "query": "needle", "mode": "exact", "limit": 20 }
 }
 ```
 
-Interface contract 应冻结：
+Deterministic success reply：
 
-- stdin 恰好读取一个 UTF-8 JSON request；stdout 恰好输出一个 UTF-8 JSON result；
+```json
+{"ok":true,"protocolVersion":1,"requestID":"9bd92054-bd3f-4d20-8f8a-5d77aa63b726","result":{"items":[],"nextCursor":null}}
+```
+
+Deterministic error reply：
+
+```json
+{"error":{"code":"invalid_request"},"ok":false,"protocolVersion":1,"requestID":null}
+```
+
+冻结的输入规则是：
+
+- request最多65,536 bytes；在UTF-8 decode、JSON parse或任何parser-owned allocation前先检查
+  supplied byte-buffer length；strict UTF-8，不接受BOM；
+- 恰好一个root object，后面只允许RFC 8259 JSON whitespace；空输入、第二个value或其它
+  leading/trailing byte均拒绝；
+- 最大depth 8（root object为1，每层contained object/array加1）、每个object最多32 lexical
+  members、每个array最多512 elements；
+- every-object unknown field全部拒绝；decode后UTF-8 scalar/byte sequence相同的key在typed
+  request构造前视为duplicate（`"a"`等于`"\u0061"`），不新增NFC/NFD normalization；
+- JSON number必须是lexical integer；fraction、exponent、non-finite extension或field checked
+  conversion越界均拒绝，不经floating-point round-trip；
+- `requestID`必须是lowercase canonical 36-character hyphenated non-nil UUID。它只作
+  correlation；跨request重复值合法，X.8不新增idempotency、retry cache、digest或hash；
+- recent arguments恰为`{limit,cursor?}`，`query`与`mode`都缺席；search arguments恰为
+  `{query,mode,limit,cursor?}`，`query`与`mode`都存在。没有`kind`字段；
+- `mode`只允许`exact|fuzzy|regexp`；`limit`为integer `1...500`；query非空且最多4,096
+  UTF-8 bytes，fuzzy再限64 Characters、regexp再限512 Characters，exact无第二个Character bound；
+  cursor若存在则是opaque non-empty UTF-8，最多4,096 bytes；所有string bound作用于decoded string，
+  不作用于JSON escape spelling。
+
+冻结的输出规则是：
+
+- success envelope只有`ok/protocolVersion/requestID/result`；error envelope只有
+  `error/ok/protocolVersion/requestID`，其中error只有`code`；无法先取得合法requestID时输出`null`；
+- `result`只有`items`与`nextCursor`。每个item恰有`locator/title/typeIdentifiers/lastCopiedAt/pinned/snippet`；
+  locator为non-empty且最多1,024 UTF-8 bytes；typeIdentifiers最多32项且每项最多512 UTF-8 bytes；
+  lastCopiedAt为UTC RFC 3339、exact milliseconds与literal `Z`；pinned为Boolean；snippet为
+  string或null；nextCursor为null或non-empty、最多4,096 UTF-8 bytes的opaque string；title最多
+  1,024 UTF-8 bytes、snippet最多322 Characters，均直接复用`06` §2的owning History
+  projection bounds，不另造wire literal；
+- 完整reply stdout buffer（含terminal LF）最多33,554,432 bytes，超限返回typed codec failure，不截断；items与
+  typeIdentifiers保持typed input order；所有object key按lexicographic order输出compact UTF-8 JSON，
+  最后恰好一个LF；
 - clipboard bytes、query 与 credential 从不放 argv、environment、stderr 或 audit；
-- stderr 只允许 content-free 人类诊断，机器结果始终在 stdout；
-- unknown field 可按明确 forward-compatibility policy 忽略或拒绝，但两者必须冻结一种；unknown
-  protocol major 必须 fail closed；
-- duplicate object key、超深/超宽 container、非有限数字、非整数或越界整数必须在 typed request
-  构造前拒绝；本规格不增加request digest或基于原始JSON文本的身份；
-- `requestID` 是固定形状、caller-minted 的随机 ID，只作 correlation；是否同时承担 mutation
-  idempotency 必须在写能力 slice 前单独裁决；
-- 每个 request 有 deadline、最大 JSON bytes、最大 response bytes 与最大 representation bytes；
+- X.8只证明pure emission bytes。未来executable成功时stderr为空，失败时恰为
+  `clipyctl: <error.code>\n`，不得添加free text、input fragment或internal error；真实FD/stdin/stdout
+  属于X.9；
 - CLI version 与 protocol version 分开；升级 CLI 不自动改变 wire semantics。
 
-建议只冻结少量 exit-code classes；详细原因仍在 JSON `error.code` 中：
+exit-code classes与exact snake-case codes冻结为：
 
-| Exit | 稳定类别 | 示例 |
+| Exit | 稳定类别 | Exact `error.code` |
 |---:|---|---|
-| `0` | success | 请求完成；`unchanged` 仍是成功 result。 |
-| `2` | invalid invocation/request | CLI 参数、JSON、版本或大小非法。 |
-| `3` | denied | 未 enrollment、未 grant、已 revoke、peer/credential 不通过。 |
-| `4` | target conflict | locator 不存在、cursor expired、OCC stale。 |
-| `5` | transient | Clipy 未 ready、rate limited、busy、timeout。 |
-| `6` | Clipy/data failure | typed persistence/invariant failure；不得降成空结果。 |
+| `0` | success | 只有success envelope；future `unchanged`仍是success。 |
+| `2` | invalid invocation/request | `invalid_json`, `invalid_request`, `unsupported_protocol_version`, `unknown_operation`, `request_too_large`, `response_too_large` |
+| `3` | denied | `not_enrolled`, `not_granted`, `connection_revoked`, `authentication_failed`, `peer_rejected` |
+| `4` | target conflict | `not_found`, `cursor_expired`, `content_stale`, `locator_invalidated` |
+| `5` | transient | `not_ready`, `rate_limited`, `busy`, `timeout`, `cancelled`, `outcome_unknown` |
+| `6` | Clipy/data failure | `store_open_failed`, `corrupt_data`, `invariant_violation`, `transaction_failed`, `audit_failed` |
+
+exit 2内部也不允许implementation随意选code：input超过65,536-byte envelope只对应`request_too_large`；
+invalid UTF-8/BOM/JSON syntax/trailing或second root/duplicate/depth/width/NaN/Infinity对应`invalid_json`；
+typed shape、unknown/missing field、type mismatch、fraction/exponent policy、checked overflow、requestID与
+arguments bound对应`invalid_request`；valid unsupported major与valid unknown operation分别对应
+`unsupported_protocol_version`和`unknown_operation`；encoder总界限只对应`response_too_large`。
 
 不要把每个 Swift error case都做成 shell exit code；那会把实现 vocabulary 永久泄到 public
 interface。JSON error code可更细，exit code只服务 shell/Python 的顶层分支。
@@ -208,14 +261,13 @@ owning V2-05 §0.2 现已冻结 closed allow-matrix，而不是只增加 shared 
 Gateway以durable connection kind与typed operation权威检查；adapter/request不能自报kind绕过。新增enum case
 必须让closed switch/source gate失败，不能因“类型可构造”自动对所有connection开放。
 
-而且“复用 V2-05”不等于Gateway已可调用。2026-08-22 owning决策已关闭内部形状矛盾：不实现audit
+而且“复用 V2-05”不等于Python已可调用Gateway。2026-08-22 owning决策已关闭内部形状矛盾：不实现audit
 hash/chain或tamper-evidence claim；用typed codec、transaction内sequence mint、contiguous retained suffix与
 `compactionFloor`诚实表达边界；GrantRow是一对connection/capability一条current-state row，re-grant更新该行，
-event history进audit；global rebase/compact没有connection/capability attribution；audit无off-switch。已合并
-基线仍止于X.3；当前未合并Batch 9工作树已实现X.4 codec、central audit store、current-state/admin
-mutations、audited admin reads及`SwiftDataHistory: GatewayAdminHistory`。macOS correctness CI与合并尚未
-发生，`ExternalGateway` actor、connection-bound external facade、App Intents、credential、CLI/transport仍
-不存在，所以Local Automation仍不能依赖“未来Gateway”。
+event history进audit；global rebase/compact没有connection/capability attribution；audit无off-switch。
+X.3–X.6已依次交付schema/bootstrap、audit/admin、denial、positive Gateway与connection-bound facade；
+X.7又在PR #16交付App Intents composition。仍不存在的是Local Automation credential、authenticated
+ingress、`clipyctl` executable与transport，所以这些landed in-process事实不能升级成Python可用claim。
 
 ## 4. Wire identity：外部只看 opaque locator/token
 
@@ -502,20 +554,14 @@ GW0合并后不得重复领取；X.2 public Gateway contract也排在当前叶�
 验收上限仅是“closed policy可编译且matrix total”；它不证明真实Gateway在History read前拒绝，也不关闭
 `PLAY-PY-B1/B2/B0G`。该leaf不得新增credential、hash/request digest、socket、JSON parser或CLI target。
 
-### 当前 code leaf — roadmap `X.4`
+### 当前 code leaf — roadmap `X.8`
 
-X.3已只新增immutable `HistorySchemaV3`（不修改已shipping V2）、四个Gateway/Audit models、fixed
-`ExternalLimits`与bootstrap/validation。exact startup shape是一个config、一个active且display name固定为
-`Siri / Shortcuts / Spotlight`的App Intents connection、zero grants、zero audit；既有config缺connection或
-identity/display/status不匹配均fail closed，不silent repair。只有config absent且三类dependent rows全空时可在同一
-bootstrap transaction创建config+connection；该shape与未来V3四类Gateway rows被全部删除同形，无法区分，故只
-claim可拒绝“config absent + surviving dependent row”，不加marker/hash。
-
-当前未合并工作树已按V2-05 §4.4的closed 17 request / 15 result table完成codec→central audit
-store→current-state/admin/startup及public in-app admin conformance；re-grant更新同一current row，event
-history归audit，global rebase/compact的connection/capability为nil，config不保留write-only generation。
-这些仍须一次macOS correctness CI与合并；而且X.4明确没有`ExternalGateway` actor、external
-facade/factory、App Intents、credential、CLI或transport，故任何“Python/Gateway已可用”claim仍不成立。
+X.1–X.6的Gateway substrate/positive facade以及X.7 App Intents composition均已按各自证据上限landed；
+X.7由PR #16、correctness run 32609910701与symbol run 32609018894支持。当前X.8只领取§2.2的
+`ClipyCLIContract` pure codec：它可证明bounded parser、deterministic renderer、closed operation与exit map，
+但不新增executable/product、process I/O、authenticated ingress、credential或transport，也不能把typed
+success fixture说成real Gateway response。因此“Python/Gateway已可用”仍不成立；第一条真实Python→History
+claim至少要等X.9解除ingress blocker并通过对应signed tracer。
 
 ### PY-1 — 当前安全负对照
 
@@ -526,11 +572,11 @@ Gateway deny path。只有 production adapter已接入后，CLI exit 3 才是端
 
 ### PY-2 — JSON contract
 
-Pure Red逐张覆盖：unknown major、oversized stdin、duplicate object keys、超深/超宽container、
-非有限/非整数/越界number、invalid-shaped requestID、unknown operation、stdout恰一个JSON值、stderr
-无request/query/content。最低Green只完成parser/result/exit mapping，不连接app；不生成request digest。
-跨请求重复 requestID 的行为留给 PY-11/idempotency裁决，
-不能在尚未决定其语义时直接拒绝。
+Pure Red按§2.2的exact literals逐张覆盖：unknown major、65,537-byte request、duplicate decoded keys、
+depth 9/object width 33/array width 513、fraction/exponent/nonfinite/checked-overflow、noncanonical或nil
+requestID、unknown operation与unknown field、lexicographic compact JSON＋exactly-one LF、content-free
+stderr template及完整exit map。最低Green只完成parser/result/exit mapping，不连接app；不生成request
+digest。跨请求重复 requestID 必须被codec接受；它只证明correlation，不提前批准mutation retry。
 
 ### PY-3 — Format capability discovery
 
@@ -694,7 +740,7 @@ socket test最多证明protocol实现。
 
 | Claim | Reason / source | 当前最多支持 | 不能建立 | 下一判别证据 |
 |---|---|---|---|---|
-| 当前Python不能访问Clipy history | tracked source/manifest无CLI/transport/ExternalGateway implementation；当前未合并X.4只有in-app admin substrate/conformance | 当前source snapshot事实 | future feasibility | PY-1/PY-4 vertical tracer |
+| 当前Python不能访问Clipy history | tracked source已有in-process Gateway/App Intents，但无`clipyctl` executable、Local Automation authenticated ingress或transport | 当前source snapshot事实 | future feasibility、真实process I/O或Python-to-History | X.8 pure codec后，X.9 ingress/transport与PY-4 vertical tracer |
 | 任意Python可经CLI调用 | Python可启动first-party executable；public contract不依赖Swift bridge | 设计上可行 | signed/sandbox/TCC/cold-start可靠性 | PY-15 matrix |
 | UDS适合private CLI→app binary | POSIX byte stream + `getpeereid`；详见Apple memo §5 | non-sandbox私有transport首选spike | arbitrary sandbox caller一定能执行CLI或CLI一定可连接 | signed三类caller matrix |
 | XPC不是stdlib Python interface | Apple XPC encoding opaque；需native client | signed CLI可隐藏它 | Python直接实现受支持XPC client | 仅在批准signed bridge后跑X-PY-XPC |

@@ -66,12 +66,14 @@ ClipyApp (XcodeGen app, composition root)
           └───────────────→ Fuse (external SPM, fuzzy search)
 HistoryDomain ─────────────→ HistoryCore
 ClipboardFormats ──────────→ Foundation only (package-only stable facts)
+ClipyCLIContract ──────────→ Foundation only (package-only pure wire contract)
 HistoryRestartProbe ───────→ HistoryCore + HistoryStorage (test evidence only)
 ```
 
 | Target | Surface | Role |
 |---|---|---|
 | `ClipboardFormats` | Package-only, Foundation-only | Open-world exact identifiers and declared string-codec facts; no purpose policy, registry, plugin, cache, or decoder |
+| `ClipyCLIContract` | Package-only, Foundation-only, no product | X.8 bounded UTF-8 JSON request/reply codec and stable exit classes; no executable, standard-stream I/O, transport, credential, Gateway/History access, or fabricated result |
 | `HistoryCore` | Public, Foundation-only | `ClipboardHistory` protocol, IDs/tokens, closed `HistoryAction` set, request/response DTOs, receipts, typed failures, `HistoryLimits.standard` |
 | `HistoryDomain` | `package` access, Foundation-only, pure | Content lineage, complete action facts, seven pure planners, typed mutation plans. No I/O, actors, clocks, UUID/Date generation, or async |
 | `HistoryStorage` | Public concrete `SwiftDataHistory` + internal implementation | Sole SwiftData authority, schema/codecs, `HistoryAuthority` actor (single writer), fact loaders, Signature Index, read projections, observation plumbing, thumbnail single-flight |
@@ -160,7 +162,8 @@ bash scripts/ci/run_signed_runtime.sh \
 **Gate semantics:**
 
 - `scripts/import_gate.py` — per-target import confinement (Part I §8):
-  `ClipboardFormats` → Foundation only; `HistoryCore` → Foundation only;
+  `ClipboardFormats` and `ClipyCLIContract` → Foundation only;
+  `HistoryCore` → Foundation only;
   `HistoryDomain` → Foundation + HistoryCore;
   `HistoryStorage` must not import AppKit/SwiftUI/adapters/PresentationUI;
   `PasteboardAdapter` must not import HistoryDomain/HistoryStorage/SwiftUI/

@@ -7,6 +7,7 @@ Scans ``Sources/<Target>/**/*.swift``, ``Tests/<Target>/**/*.swift``,
 rules:
 
   ClipboardFormats  allowlist: Foundation (incl. submodules)
+  ClipyCLIContract  allowlist: Foundation (incl. submodules)
   HistoryCore        allowlist: Foundation (incl. submodules, e.g. FoundationNetworking)
   HistoryDomain      allowlist: Foundation, HistoryCore
   HistoryStorage     blocklist: AppKit, SwiftUI, PasteboardAdapter, PresentationUI
@@ -60,6 +61,7 @@ APPINTENTS_OWNERS = frozenset({"ClipyApp", "ClipyIntegrationTests"})
 # submodules wherever Foundation is listed).
 ALLOWLIST: dict[str, frozenset[str]] = {
     "ClipboardFormats": frozenset({FOUNDATION}),
+    "ClipyCLIContract": frozenset({FOUNDATION}),
     "HistoryCore": frozenset({FOUNDATION}),
     "HistoryDomain": frozenset({FOUNDATION, "HistoryCore"}),
     "HistoryPerfRunner": frozenset({FOUNDATION, "HistoryCore", "HistoryStorage"}),
@@ -197,6 +199,10 @@ def scan(root: Path) -> tuple[list[Violation], dict[str, int]]:
 
 GOOD_FIXTURES: dict[str, str] = {
     "Sources/ClipboardFormats/Good.swift": "import Foundation\n",
+    "Sources/ClipyCLIContract/Good.swift": (
+        "import Foundation\n"
+        "import FoundationEssentials\n"
+    ),
     "Sources/HistoryCore/Good.swift": (
         "import Foundation\n"
         "import FoundationNetworking\n"          # Foundation submodule: allowed
@@ -230,6 +236,7 @@ GOOD_FIXTURES: dict[str, str] = {
 
 BAD_FIXTURES: dict[str, str] = {
     "Sources/ClipboardFormats/Bad.swift": "import SwiftUI\n",
+    "Sources/ClipyCLIContract/Bad.swift": "private import HistoryCore\n",
     "Sources/HistoryCore/Bad.swift": "import AppKit\n",
     "Sources/HistoryCore/BadFuse.swift": "import Fuse\n",  # global Fuse rule
     "Sources/HistoryDomain/Bad.swift": "import HistoryStorage\n",
@@ -250,6 +257,7 @@ BAD_FIXTURES: dict[str, str] = {
 
 EXPECTED_SELF_TEST_VIOLATIONS = {
     ("ClipboardFormats", "SwiftUI"),
+    ("ClipyCLIContract", "HistoryCore"),
     ("HistoryCore", "AppKit"),
     ("HistoryCore", "Fuse"),
     ("HistoryDomain", "HistoryStorage"),
