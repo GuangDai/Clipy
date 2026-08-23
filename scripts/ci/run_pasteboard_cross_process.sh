@@ -61,9 +61,19 @@ run_logged_phase() {
   probe "boundary=phase phase=$phase event=start"
   set +e
   "$@" 2>&1 | redact_physical_paths | tee "$output"
-  local status="${PIPESTATUS[0]}"
+  local pipeline_statuses=("${PIPESTATUS[@]}")
+  local command_status="${pipeline_statuses[0]}"
+  local redactor_status="${pipeline_statuses[1]}"
+  local tee_status="${pipeline_statuses[2]}"
+  local status="$command_status"
+  if [[ "$status" -eq 0 && "$redactor_status" -ne 0 ]]; then
+    status="$redactor_status"
+  fi
+  if [[ "$status" -eq 0 && "$tee_status" -ne 0 ]]; then
+    status="$tee_status"
+  fi
   set -e
-  probe "boundary=phase phase=$phase event=end exit_status=$status"
+  probe "boundary=phase phase=$phase event=end exit_status=$status command_exit_status=$command_status redactor_exit_status=$redactor_status tee_exit_status=$tee_status"
   return "$status"
 }
 
