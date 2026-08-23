@@ -43,10 +43,8 @@ struct SearchHistoryIntent: AppIntent {
         self.query = query
         self.mode = mode
         self.limit = limit
-        _history = AppDependency(
-            manager: dependencyManager,
-            default: history
-        )
+        _history = AppDependency(manager: dependencyManager)
+        _history.wrappedValue = history
     }
 
     func perform() async throws -> some IntentResult & ReturnsValue<[
@@ -90,10 +88,8 @@ struct GetItemDetailsIntent: AppIntent {
         dependencyManager: AppDependencyManager
     ) {
         self.itemID = itemID
-        _history = AppDependency(
-            manager: dependencyManager,
-            default: history
-        )
+        _history = AppDependency(manager: dependencyManager)
+        _history.wrappedValue = history
     }
 
     func perform() async throws -> some IntentResult & ReturnsValue<
@@ -140,10 +136,8 @@ struct PasteItemIntent: AppIntent {
     ) {
         self.itemID = itemID
         self.pasteboardName = pasteboardName
-        _history = AppDependency(
-            manager: dependencyManager,
-            default: history
-        )
+        _history = AppDependency(manager: dependencyManager)
+        _history.wrappedValue = history
     }
 
     func perform() async throws -> some IntentResult & ReturnsValue<Bool> {
@@ -185,10 +179,8 @@ struct PinItemIntent: AppIntent {
         dependencyManager: AppDependencyManager
     ) {
         self.itemID = itemID
-        _history = AppDependency(
-            manager: dependencyManager,
-            default: history
-        )
+        _history = AppDependency(manager: dependencyManager)
+        _history.wrappedValue = history
     }
 
     func perform() async throws -> some IntentResult & ReturnsValue<Bool> {
@@ -228,10 +220,8 @@ struct UnpinItemIntent: AppIntent {
         dependencyManager: AppDependencyManager
     ) {
         self.itemID = itemID
-        _history = AppDependency(
-            manager: dependencyManager,
-            default: history
-        )
+        _history = AppDependency(manager: dependencyManager)
+        _history.wrappedValue = history
     }
 
     func perform() async throws -> some IntentResult & ReturnsValue<Bool> {
@@ -273,10 +263,8 @@ struct RemoveItemIntent: AppIntent {
         dependencyManager: AppDependencyManager
     ) {
         self.itemID = itemID
-        _history = AppDependency(
-            manager: dependencyManager,
-            default: history
-        )
+        _history = AppDependency(manager: dependencyManager)
+        _history.wrappedValue = history
     }
 
     func perform() async throws -> some IntentResult & ReturnsValue<Bool> {

@@ -869,7 +869,7 @@ test.
   behavior.
 - **X.7 current work:** App Intents composition is in progress on an unmerged
   branch. Hosted tests may prove real-store facade delegation, standalone
-  provider registration/behavior, explicit wrapper-default injection for
+  provider registration/behavior, explicit wrapper-value injection for
   direct intent calls, and pasteboard-adapter wiring. True
   Siri/Shortcuts cold/warm launch, framework unresolved-resolution behavior,
   system discovery, process placement, Swift 6 queue-crash freedom, and TCC

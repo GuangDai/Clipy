@@ -1929,10 +1929,10 @@ be described as proof of the framework's missing-dependency behavior.
 
 Direct hosted calls to an intent's `perform()` do not run the framework's
 pre-perform dependency-initialization phase. Those tests therefore use Apple's
-`AppDependency(manager:default:)` initializer to inject the same real facade as
-an explicit wrapper default while retaining the standalone manager. This proves
-the intent adapter's request/result behavior without claiming that the manager
-resolved the dependency; only signed App Intents execution can prove that.
+public `AppDependency.wrappedValue` setter to inject the same real facade after
+constructing the wrapper with the standalone manager. This proves the intent
+adapter's request/result behavior without claiming that the manager resolved
+the dependency; only signed App Intents execution can prove that.
 
 ### 6.6 AppIntent conformances (ClipyApp)
 
@@ -2611,9 +2611,8 @@ on macOS 26:
   `.shared`/`.current` spelling. A hosted test uses
   `AppDependencyManager()` rather than `.shared` to prove the provider against
   one real in-memory `SwiftDataHistory` open and logical repeated provider
-  calls. Direct hosted intent calls use the documented
-  `AppDependency(manager:default:)` injection and do not claim framework
-  manager resolution.
+  calls. Direct hosted intent calls set the documented writable
+  `AppDependency.wrappedValue` and do not claim framework manager resolution.
   **Evidence ceiling:** that hosted proof does not close CRIT-M4. macOS 26
   signed invocation must still confirm true Siri/Shortcuts cold and warm
   launch ordering, framework behavior when registration/resolution is absent
