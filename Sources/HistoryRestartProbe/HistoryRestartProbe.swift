@@ -11,6 +11,8 @@ private enum ProbePhase: String {
     case operate
     case crashCommit
     case verify
+    case pressureCapture
+    case verifySeed
 }
 
 private enum ProbeFailure: Error {
@@ -26,6 +28,9 @@ private let alphaSecondDate = Date(timeIntervalSinceReferenceDate: 30_000)
 private let alphaFirstSource = "restart.seed.alpha"
 private let bravoSource = "restart.seed.bravo"
 private let alphaSecondSource = "restart.operate.alpha"
+private let pressureCaptureDate = Date(timeIntervalSinceReferenceDate: 40_000)
+private let pressureCaptureSource = "restart.pressure.capture"
+private let pressureCaptureByteCount = 8 * 1_048_576
 private let manifestFileName = "restart-manifest.txt"
 
 private struct ProbeManifest {
@@ -138,6 +143,71 @@ private func requireInitialProjection(
     }
 }
 
+private func requireSeedState(
+    _ history: SwiftDataHistory,
+    manifest: ProbeManifest
+) async throws {
+    let page = try await history.browse(HistoryBrowseRequest(
+        kind: .recent,
+        limit: 10
+    ))
+    guard page.position.rawValue == 2,
+          page.next == nil,
+          page.rows.count == 2,
+          page.rows[0].item.id.rawValue == manifest.bravo,
+          page.rows[0].item.contentVersion.rawValue == 1,
+          page.rows[0].title == bravoText,
+          page.rows[0].typeIdentifiers == [textType],
+          page.rows[0].lastCopiedAt == bravoDate,
+          page.rows[0].copyCount == 1,
+          page.rows[0].lastSource == bravoSource,
+          page.rows[0].pinnedPosition == nil,
+          page.rows[0].search == nil,
+          page.rows[1].item.id.rawValue == manifest.alpha,
+          page.rows[1].item.contentVersion.rawValue == 1,
+          page.rows[1].title == alphaText,
+          page.rows[1].typeIdentifiers == [textType],
+          page.rows[1].lastCopiedAt == alphaFirstDate,
+          page.rows[1].copyCount == 1,
+          page.rows[1].lastSource == alphaFirstSource,
+          page.rows[1].pinnedPosition == nil,
+          page.rows[1].search == nil else {
+        throw ProbeFailure.unexpectedState
+    }
+
+    let bravo = try await history.details(for: page.rows[0].item.id)
+    guard bravo.item.id.rawValue == manifest.bravo,
+          bravo.item == page.rows[0].item,
+          bravo.canonical.map(\.typeIdentifier) == [textType],
+          bravo.canonical.map(\.bytes) == [Data(bravoText.utf8)],
+          bravo.effective == bravo.canonical,
+          bravo.revisions.isEmpty,
+          bravo.occurrence.firstCopiedAt == bravoDate,
+          bravo.occurrence.lastCopiedAt == bravoDate,
+          bravo.occurrence.count == 1,
+          bravo.occurrence.firstSource == bravoSource,
+          bravo.occurrence.lastSource == bravoSource,
+          bravo.pinnedPosition == nil else {
+        throw ProbeFailure.unexpectedState
+    }
+
+    let alpha = try await history.details(for: page.rows[1].item.id)
+    guard alpha.item.id.rawValue == manifest.alpha,
+          alpha.item == page.rows[1].item,
+          alpha.canonical.map(\.typeIdentifier) == [textType],
+          alpha.canonical.map(\.bytes) == [Data(alphaText.utf8)],
+          alpha.effective == alpha.canonical,
+          alpha.revisions.isEmpty,
+          alpha.occurrence.firstCopiedAt == alphaFirstDate,
+          alpha.occurrence.lastCopiedAt == alphaFirstDate,
+          alpha.occurrence.count == 1,
+          alpha.occurrence.firstSource == alphaFirstSource,
+          alpha.occurrence.lastSource == alphaFirstSource,
+          alpha.pinnedPosition == nil else {
+        throw ProbeFailure.unexpectedState
+    }
+}
+
 private func seed(storeURL: URL) async throws {
     let history = try await openHistory(at: storeURL)
     let alpha = try requireInserted(
@@ -198,6 +268,59 @@ private func operate(
 private func crashCommit(storeURL: URL) async throws -> Never {
     try await operate(storeURL: storeURL, crashAfterCommit: true)
     fatalError("crash phase unexpectedly returned")
+}
+
+private func readExactStandardInput(byteCount: Int) throws -> Data {
+    var result = Data()
+    while result.count < byteCount {
+        guard let chunk = try FileHandle.standardInput.read(
+            upToCount: byteCount - result.count
+        ), !chunk.isEmpty else {
+            throw ProbeFailure.unexpectedState
+        }
+        result.append(chunk)
+    }
+    return result
+}
+
+private func pressureCapture(storeURL: URL) async throws {
+    let manifest = try ProbeManifest.read(siblingOf: storeURL)
+    let history = try await openHistory(at: storeURL)
+    try await requireSeedState(history, manifest: manifest)
+
+    FileHandle.standardOutput.write(Data("APFS_PRESSURE_READY\n".utf8))
+    guard try readExactStandardInput(byteCount: 3) == Data("GO\n".utf8) else {
+        throw ProbeFailure.unexpectedState
+    }
+
+    let pressureCapture = ClipboardCapture(
+        representations: [CapturedRepresentation(
+            typeIdentifier: "public.data",
+            bytes: Data(repeating: 0xA5, count: pressureCaptureByteCount)
+        )],
+        origin: CopyOriginObservation(
+            sourceApplication: pressureCaptureSource,
+            lineageHint: nil
+        ),
+        observedAt: pressureCaptureDate
+    )
+    do {
+        _ = try await history.perform(.capture(pressureCapture))
+        throw ProbeFailure.unexpectedState
+    } catch {
+        guard let failure = error as? HistoryFailure,
+              failure == .temporarilyUnavailable(.insufficientDiskSpace) else {
+            throw ProbeFailure.unexpectedState
+        }
+    }
+
+    try await requireSeedState(history, manifest: manifest)
+}
+
+private func verifySeed(storeURL: URL) async throws {
+    let manifest = try ProbeManifest.read(siblingOf: storeURL)
+    let history = try await openHistory(at: storeURL)
+    try await requireSeedState(history, manifest: manifest)
 }
 
 private func verify(storeURL: URL) async throws {
@@ -285,6 +408,10 @@ private struct HistoryRestartProbe {
                 try await crashCommit(storeURL: storeURL)
             case .verify:
                 try await verify(storeURL: storeURL)
+            case .pressureCapture:
+                try await pressureCapture(storeURL: storeURL)
+            case .verifySeed:
+                try await verifySeed(storeURL: storeURL)
             }
             FileHandle.standardOutput.write(Data("\(phase.rawValue.uppercased())_OK\n".utf8))
             exit(EXIT_SUCCESS)
