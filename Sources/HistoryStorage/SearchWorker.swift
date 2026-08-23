@@ -171,20 +171,12 @@ internal actor SearchWorker {
             rowsTotal: corpus.rows.count
         )
 #endif
-        guard case .search(let term, let mode) = request.kind else {
-            // The facade routes `.recent` to the Authority's §14.1
-            // interval; a `.recent` kind here is a wiring violation —
-            // the §16 defensive internal-invariant mapping.
-            throw HistoryFailure.persistence(.invariantViolation)
-        }
-
-        // Part VI §2: the UTF-8 byte bound is common to every search mode and
-        // therefore precedes regexp/fuzzy Character-specific admission. This
-        // also prevents a small number of extremely wide grapheme clusters
-        // from bypassing the scalar input envelope.
-        guard term.utf8.count <= limits.maximumSearchTermUTF8Bytes else {
-            throw HistoryFailure.invalidInput(.invalidSearchTerm)
-        }
+        // Repeat the Authority's pre-I/O caller-input admission at the worker
+        // boundary. The worker never trusts the already-materialized corpus
+        // to imply that its independently supplied request was admitted.
+        let admitted = try AdmittedSearchRequest(request, limits: limits)
+        let term = admitted.term
+        let mode = admitted.mode
 
         // WS12/search-observation seam: the Authority has already released
         // its operation-local context and handed over this immutable snapshot.
