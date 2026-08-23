@@ -20,9 +20,12 @@ package extension ClipyCLIContract {
         guard case let .object(root) = value else {
             return .failure(.init(code: .invalidRequest, requestID: nil))
         }
-        let requestID = root.value(named: "requestID").flatMap {
-            guard case let .string(rawValue) = $0 else { return nil }
-            return ClipyCLIRequestID(validating: rawValue)
+        let requestID: ClipyCLIRequestID?
+        if let requestIDValue = root.value(named: "requestID"),
+           case let .string(rawValue) = requestIDValue {
+            requestID = ClipyCLIRequestID(validating: rawValue)
+        } else {
+            requestID = nil
         }
         func failure(_ code: ClipyCLIErrorCode) -> ClipyCLIRequestDecoding {
             .failure(.init(code: code, requestID: requestID))
