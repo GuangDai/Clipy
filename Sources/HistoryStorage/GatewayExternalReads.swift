@@ -157,7 +157,7 @@ private extension HistoryAuthority {
             return ExternalReadFacts(
                 descriptor: descriptor,
                 searchRequest: HistoryBrowseRequest(
-                    kind: .search(text, mode: mode),
+                    kind: .search(text: text, mode: mode),
                     limit: limit
                 )
             )
