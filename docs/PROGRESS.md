@@ -908,10 +908,11 @@ test.
   fixed probe-only [frame codec](../ClipyApp/Tools/ClipyUDSF0Shared/UnixSocketF0Protocol.swift),
   and non-product diagnostic
   [`ClipyUDSF0Client`](../ClipyApp/Tools/ClipyUDSF0Client/ClipyUDSF0Client.swift). The
-  dispatch-only signed-runtime lane is being extended to test bounded ad-hoc
+  dispatch-only signed-runtime lane tests bounded ad-hoc
   signed same-EUID UDS cold/warm, incomplete-frame, normal-cleanup, and
-  SIGKILL/stale-recovery mechanics. This evidence is pending macOS compile and
-  runtime execution. It is not `clipyctl`, does not decode X.8 JSON or reach
+  SIGKILL/stale-recovery mechanics. The exact flagged app/client artifact is
+  green at [signed-runtime run 32615713100](https://github.com/GuangDai/Clipy/actions/runs/32615713100);
+  PR correctness remains pending. It is not `clipyctl`, does not decode X.8 JSON or reach
   History/Gateway, and proves no credential, authenticated ingress, Developer
   ID/notarization, App Sandbox, Keychain sharing, different-EUID caller, TCC,
   or interactive no-activation behavior.
