@@ -329,8 +329,9 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
 
     /// One-shot browse (docs/05-authority-kernel.md §14.1–§14.2).
     ///
-    /// A `.recent` page is read entirely inside one Authority interval from
-    /// scalar projection fields only (§14.1). A `.search` page follows the
+    /// A `.recent` page, including the recent-equivalent empty-search shape,
+    /// is read entirely inside one Authority interval from scalar projection
+    /// fields only (§14.1; 03b §8). A non-empty `.search` page follows the
     /// two-step value pipeline: the Authority captures a bounded
     /// `SearchCorpusSnapshot` plus the continuation anchor the next-page
     /// cursor is minted from, then `SearchWorker` evaluates the request over
@@ -344,6 +345,11 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     ) async throws -> HistoryPage {
         switch request.kind {
         case .recent:
+            return try await authority.recentPage(
+                limit: request.limit,
+                after: request.after
+            )
+        case .search(let text, _) where text.isEmpty:
             return try await authority.recentPage(
                 limit: request.limit,
                 after: request.after
@@ -539,16 +545,19 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     /// cursorless `browse` for the observation's query shape; observation
     /// intentionally has no cursor (docs/03a-instruction-set.md §7). The
     /// loop reuses it for the phase-1 recheck requeries and for every
-    /// phase-2 replacement page (docs/04-coherence.md §5). A `.search` page
-    /// keeps the two-step value pipeline: the Authority captures the bounded
-    /// corpus plus the continuation anchor, and `SearchWorker` evaluates
-    /// off-actor with the Authority's process marker for cursor minting
-    /// (docs/05-authority-kernel.md §14.2; docs/04-coherence.md §6–§7).
+    /// phase-2 replacement page (docs/04-coherence.md §5). Empty search uses
+    /// the same scalar recent path as one-shot browse (03b §8); a non-empty
+    /// `.search` page keeps the two-step value pipeline: the Authority captures
+    /// the bounded corpus plus the continuation anchor, and `SearchWorker`
+    /// evaluates off-actor with the Authority's process marker for cursor
+    /// minting (docs/05-authority-kernel.md §14.2; docs/04-coherence.md §6–§7).
     private func firstPage(
         for request: HistoryObservationRequest
     ) async throws -> HistoryPage {
         switch request.kind {
         case .recent:
+            return try await authority.recentPage(limit: request.limit, after: nil)
+        case .search(let text, _) where text.isEmpty:
             return try await authority.recentPage(limit: request.limit, after: nil)
         case .search:
             let browseRequest = HistoryBrowseRequest(

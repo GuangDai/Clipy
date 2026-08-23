@@ -27,7 +27,7 @@ jobs:
         shell: bash
         run: bash scripts/ci/verify_macos_runner.sh "$LOG_DIR/runner.log"
 
-      - name: Build, sign, and exercise General pasteboard visibility
+      - name: Build DEBUG-only probe host and exercise General pasteboard visibility
         shell: bash
         run: >-
           bash scripts/ci/run_pasteboard_cross_process.sh

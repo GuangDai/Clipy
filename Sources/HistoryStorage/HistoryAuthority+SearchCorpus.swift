@@ -41,10 +41,15 @@ extension HistoryAuthority {
         let debugAdmissionStart = debugClock.now
 #endif
 
-        // §16: validate the page-row limit before any context.
+        // Preserve §16's page-limit precedence, then perform REVIEW Card 11A
+        // caller-input admission before cursor resolution, ModelContext
+        // creation, and corpus fetch. The SearchWorker repeats the same closed
+        // checks defensively after the immutable corpus crosses the actor
+        // boundary.
         guard limits.pageRowLimitRange.contains(request.limit) else {
             throw HistoryFailure.invalidInput(.invalidPageLimit)
         }
+        _ = try AdmittedSearchRequest(request, limits: limits)
 
         // §6 steps 1–2: decode the cursor and verify shape match. The
         // position check runs inside the interval below.

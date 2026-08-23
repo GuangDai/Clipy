@@ -26,10 +26,11 @@
 > [run 32615713100](https://github.com/GuangDai/Clipy/actions/runs/32615713100).
 > Those results reach only the claim ceiling in §0.4; they do not establish
 > authenticated ingress, credential custody, Python-to-History access, or a
-> distribution identity. The next storage-only hardening leaf may require an
-> `expectedKind` at targeted authorization and reject a durable kind mismatch.
-> That closes a precondition needed by a later Local Automation adapter; it is
-> not authentication and cannot by itself close X.9. X.4 owns the complete
+> distribution identity. [PR #19](https://github.com/GuangDai/Clipy/pull/19)
+> subsequently landed the storage-only `expectedKind` authoritative recheck;
+> [PR #20](https://github.com/GuangDai/Clipy/pull/20) added the dedicated
+> wrong-kind rate-denial fixture. Those close a prerequisite needed by a later
+> Local Automation adapter, not authentication or X.9. X.4 owns the complete
 > `OperationPayloadBlobV1` codec, public operation-kind additions, central audit
 > store, current-state connection/grant administration, public in-app admin
 > conformance, and startup validation; it does **not** publish an
@@ -551,9 +552,9 @@ V2-05 owns:
   `ClipyApp`;
 - the F1 credential-store seam (server-side app-private Data Protection
   Keychain `SecItem*` plus the §0.3 client-file custody decision; unused by the
-  App Intents path. The current Batch 18 worktree implements only the internal
-  exact-value/server-store leaf; client custody, coordination, authentication,
-  and ingress remain unimplemented);
+  App Intents path. PR #20 landed only the internal exact-value/server-store
+  leaf; client custody, coordination, authentication, and ingress remain
+  unimplemented);
 - new public "distinct concern" protocols in `HistoryCore`
   (`ExternalHistory`, `GatewayAdminHistory`) and DTOs;
 - the six graft-admission records (`V2-00` §4), V2 proof gates, migration
@@ -925,8 +926,8 @@ a shared Keychain substitute and makes no malicious-same-EUID confidentiality
 claim. App Intents still use no credential.
 
 This section fixes architecture and publication order, not platform evidence.
-The current Batch 18 worktree links `Security` only for an internal 48-byte
-value plus actor-confined server-store leaf. Its ordinary correctness tests use
+PR #20 links `Security` only for an internal 48-byte value plus actor-confined
+server-store leaf. Its ordinary correctness tests use
 an injected in-memory adapter for the true Keychain boundary, so they establish
 shape, validation, and content-free store semantics, not Data Protection
 Keychain behavior. `X-PLATFORM-3` must still prove exact add/read/delete,
@@ -2365,8 +2366,8 @@ internal actor CredentialStore {
 }
 ```
 
-The actor owns only the server copy. The current Batch 18 worktree implements
-this actor, exact UUID16 + secret32 validation/generation, duplicate rejection,
+The actor owns only the server copy. PR #20 implements this actor, exact UUID16
++ secret32 validation/generation, duplicate rejection,
 idempotent missing delete, corrupt-value fail-closed behavior, and content-free
 failure mapping. Its deterministic tests substitute only the true external
 Security operations; they do not exercise a real Keychain. The separately
@@ -2935,10 +2936,10 @@ The analog of Part VI §6 (compile/dependency), §7 (schema/platform), §9 (perf
 on macOS 26:
 
 - **X-COMPILE-1 (compile/dependency).** Swift 6 complete strict-concurrency
-  build succeeds; no hashing/cryptography import is added for audit. The
-  current F1 server-store worktree imports `Security` only in
-  `HistoryStorage`; its macOS compile remains pending and real DPK behavior
-  remains `X-PLATFORM-3` evidence. `AppIntents` is imported
+  build succeeds; no hashing/cryptography import is added for audit. The F1
+  server-store leaf imports `Security` only in `HistoryStorage`; PR #20 passed
+  the macOS Swift 6 compile/import gates in correctness run 32619384577, while
+  real DPK behavior remains `X-PLATFORM-3` evidence. `AppIntents` is imported
   only in `ClipyApp` production sources, with the narrow hosted
   `ClipyIntegrationTests` exception needed to exercise those app-owned types;
   `HistoryCore` external-gateway types import only
@@ -2985,8 +2986,8 @@ on macOS 26:
 - **X-COMPILE-4 (`@Parameter` controlStyle spelling + Int bounding — Lens B
   minor).** The macOS 26 declaration is frozen as
   `@Parameter(title: "Limit", default: 20, controlStyle: .stepper,
-  inclusiveRange: (lowerBound: 1, upperBound: 500))`. X.7 must compile that
-  exact spelling on the macOS 26 runner. The Gateway independently revalidates
+  inclusiveRange: (lowerBound: 1, upperBound: 500))`. X.7 compiled that exact
+  spelling on the macOS 26 runner in correctness run 32609910701. The Gateway independently revalidates
   `limit` against `HistoryLimits.standard` (`06` §2) at D35, so parameter UI
   admission cannot bypass the trust boundary. All six intents use
   `supportedModes = [.background]`; they must not use macOS 27-only

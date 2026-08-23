@@ -32,6 +32,24 @@ jobs:
           bash scripts/ci/run_apfs_enospc.sh
           "$LOG_DIR" "$RUNNER_TEMP"
 
+      - name: Emit bounded phase diagnostics
+        if: always()
+        shell: bash
+        run: |
+          for diagnostic_name in \
+            phase-events.log \
+            command-status.log \
+            runtime-facts.log \
+            seed-diagnostics.log \
+            pressure-diagnostics.log \
+            verify-diagnostics.log
+          do
+            if [[ -f "$LOG_DIR/$diagnostic_name" ]]; then
+              printf '== %s ==\n' "$diagnostic_name"
+              sed -n '1,240p' "$LOG_DIR/$diagnostic_name"
+            fi
+          done
+
       - name: Upload bounded content-free evidence
         if: always()
         uses: actions/upload-artifact@v7

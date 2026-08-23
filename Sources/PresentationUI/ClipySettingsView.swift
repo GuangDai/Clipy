@@ -262,7 +262,7 @@ private struct GeneralSettingsTab: View {
     /// The parsed count, or `nil` when the text is not a whole number
     /// inside `userMaximumUnpinnedRange` (06 §2).
     private var maximumUnpinnedValue: Int? {
-        validatedWholeNumber(
+        validatedSettingsWholeNumber(
             maximumUnpinnedText,
             in: HistoryLimits.standard.userMaximumUnpinnedRange
         )
@@ -399,36 +399,15 @@ private struct RetentionSettingsTab: View {
 
     private let viewState: HistoryViewState
 
-    /// R1 days: the field is day-granular over `1 s ... 3,650 d` (`V2-02`
-    /// §8.3); `AgeRetention.maxAge` is seconds, so Apply multiplies by
-    /// 86,400.
-    private static let ageDaysRange: ClosedRange<Int> = 1...3_650
-
-    /// R2 MiB: `1 ... 5,000 × 384 MiB` expressed in MiB (`V2-02` §8.3);
-    /// `StorageRetention.maxTotalBytes` is bytes, so Apply multiplies by
-    /// 1,048,576 (binary units; 06 §2).
-    private static let storageMiBRange: ClosedRange<Int> = 1...1_920_000
-
-    /// R3 revision count: `1 ... 100` (`V2-02` §8.3).
-    private static let revisionCountRange: ClosedRange<Int> = 1...100
-
-    /// R3 revision MiB: `1 ... 256 MiB` (`V2-02` §8.3).
-    private static let revisionMiBRange: ClosedRange<Int> = 1...256
-
-    /// The toggle/field values below are neutral prefills until
-    /// `loadConfiguredPolicies()` reflects the persisted configured policy
-    /// into them on appear; Apply is gated on that read having landed.
-    @State private var ageEnabled = false
-    @State private var ageDaysText = "30"
-    @State private var storageEnabled = false
-    @State private var storageMiBText = "500"
-    @State private var revisionCountEnabled = false
-    @State private var revisionCountText = "20"
-    @State private var revisionBytesEnabled = false
-    @State private var revisionMiBText = "64"
+    /// Exact configured values plus whole-unit display text and edit
+    /// generations. Keeping this as one value prevents one field from being
+    /// rounded merely because another field was edited.
+    @State private var draft = RetentionSettingsDraft()
     @State private var hasLoadedConfiguration = false
     @State private var status: SettingStatus?
     @State private var isWorking = false
+    @State private var pendingSubmission: RetentionSettingsDraft.Submission?
+    @State private var isConfirmingTightening = false
 
     init(viewState: HistoryViewState) {
         self.viewState = viewState
@@ -438,67 +417,85 @@ private struct RetentionSettingsTab: View {
         ScrollView {
             Form {
                 Section("Item age") {
-                    Toggle("Limit item age", isOn: $ageEnabled)
+                    Toggle("Limit item age", isOn: ageEnabled)
                         .accessibilityHint("Retire items whose last copy is older than the entered age.")
                     ValueFieldRow(
                         label: "Maximum item age",
                         unit: "days",
-                        text: $ageDaysText,
-                        isEnabled: ageEnabled,
-                        isValid: ageDays != nil,
-                        range: Self.ageDaysRange
+                        text: ageDaysText,
+                        isEnabled: draft.ageEnabled,
+                        isValid: draft.ageInputIsValid,
+                        range: RetentionSettingsDraft.ageDaysRange
                     )
                 }
                 Section("Storage") {
-                    Toggle("Limit storage budget", isOn: $storageEnabled)
+                    Toggle("Limit storage budget", isOn: storageEnabled)
                         .accessibilityHint("Retire the oldest unpinned items until history fits the budget.")
                     ValueFieldRow(
                         label: "Storage budget",
-                        unit: "MB",
-                        text: $storageMiBText,
-                        isEnabled: storageEnabled,
-                        isValid: storageMiB != nil,
-                        range: Self.storageMiBRange
+                        unit: RetentionSettingsDraft.mebibyteUnitLabel,
+                        text: storageMiBText,
+                        isEnabled: draft.storageEnabled,
+                        isValid: draft.storageInputIsValid,
+                        range: RetentionSettingsDraft.storageMiBRange
                     )
                 }
                 Section("Revision limits") {
-                    Toggle("Keep at most", isOn: $revisionCountEnabled)
+                    Toggle("Keep at most", isOn: revisionCountEnabled)
                         .accessibilityHint("Prune the oldest inactive revisions beyond this count.")
                     ValueFieldRow(
                         label: "Revisions per item",
                         unit: "revisions",
-                        text: $revisionCountText,
-                        isEnabled: revisionCountEnabled,
-                        isValid: revisionCount != nil,
-                        range: Self.revisionCountRange
+                        text: revisionCountText,
+                        isEnabled: draft.revisionCountEnabled,
+                        isValid: draft.revisionCountInputIsValid,
+                        range: RetentionSettingsDraft.revisionCountRange
                     )
-                    Toggle("Limit revision storage", isOn: $revisionBytesEnabled)
+                    Toggle("Limit revision storage", isOn: revisionBytesEnabled)
                         .accessibilityHint("Prune the oldest inactive revisions until they fit this budget.")
                     ValueFieldRow(
                         label: "Revision storage per item",
-                        unit: "MB",
-                        text: $revisionMiBText,
-                        isEnabled: revisionBytesEnabled,
-                        isValid: revisionMiB != nil,
-                        range: Self.revisionMiBRange
+                        unit: RetentionSettingsDraft.mebibyteUnitLabel,
+                        text: revisionMiBText,
+                        isEnabled: draft.revisionBytesEnabled,
+                        isValid: draft.revisionBytesInputIsValid,
+                        range: RetentionSettingsDraft.revisionMiBRange
                     )
                 }
                 Section {
                     HStack {
                         Button("Apply") {
-                            Task { await applyRetention() }
+                            requestApply()
                         }
                         .disabled(
-                            !retentionInputIsValid || isWorking
+                            !draft.inputIsValid || isWorking
                                 || !hasLoadedConfiguration
                         )
-                        if let status {
+                        .confirmationDialog(
+                            "Apply stricter retention limits?",
+                            isPresented: $isConfirmingTightening,
+                            titleVisibility: .visible
+                        ) {
+                            Button("Apply Stricter Limits", role: .destructive) {
+                                guard let submission = pendingSubmission else { return }
+                                Task { await applyRetention(submission) }
+                            }
+                            Button("Cancel", role: .cancel) {
+                                pendingSubmission = nil
+                            }
+                        } message: {
+                            // Deep review `04` Red 10D: only a strict local
+                            // tightening is destructive-confirmed; equal or
+                            // looser policy values apply directly.
+                            Text("Stricter limits can permanently remove items or revisions.")
+                        }
+                        if let successMessage = draft.acceptedSuccessMessage {
+                            SettingStatusView(status: .success(successMessage))
+                        } else if let status {
                             SettingStatusView(status: status)
                         }
                     }
-                    // Honest note (contract §4.4; V2-07 §5.2 — no live usage
-                    // read exists on the public surface, OPEN-2).
-                    Text("Changes apply to new and existing items at once. Usage totals are not shown (OPEN-2).")
+                    Text("Changes apply to new and existing items at once.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -509,45 +506,83 @@ private struct RetentionSettingsTab: View {
         .task { await loadConfiguredPolicies() }
     }
 
-    private var ageDays: Int? {
-        validatedWholeNumber(ageDaysText, in: Self.ageDaysRange)
+    private var ageEnabled: Binding<Bool> {
+        Binding(
+            get: { draft.ageEnabled },
+            set: {
+                draft.setAgeEnabled($0)
+                status = nil
+            }
+        )
     }
 
-    private var storageMiB: Int? {
-        validatedWholeNumber(storageMiBText, in: Self.storageMiBRange)
+    private var ageDaysText: Binding<String> {
+        Binding(
+            get: { draft.ageDaysText },
+            set: {
+                draft.setAgeDaysText($0)
+                status = nil
+            }
+        )
     }
 
-    private var revisionCount: Int? {
-        validatedWholeNumber(revisionCountText, in: Self.revisionCountRange)
+    private var storageEnabled: Binding<Bool> {
+        Binding(
+            get: { draft.storageEnabled },
+            set: {
+                draft.setStorageEnabled($0)
+                status = nil
+            }
+        )
     }
 
-    private var revisionMiB: Int? {
-        validatedWholeNumber(revisionMiBText, in: Self.revisionMiBRange)
+    private var storageMiBText: Binding<String> {
+        Binding(
+            get: { draft.storageMiBText },
+            set: {
+                draft.setStorageMiBText($0)
+                status = nil
+            }
+        )
     }
 
-    /// Apply stays disabled while any enabled dimension's field is not a
-    /// whole number inside its range (contract §4.4 validation).
-    private var retentionInputIsValid: Bool {
-        (!ageEnabled || ageDays != nil)
-            && (!storageEnabled || storageMiB != nil)
-            && (!revisionCountEnabled || revisionCount != nil)
-            && (!revisionBytesEnabled || revisionMiB != nil)
+    private var revisionCountEnabled: Binding<Bool> {
+        Binding(
+            get: { draft.revisionCountEnabled },
+            set: {
+                draft.setRevisionCountEnabled($0)
+                status = nil
+            }
+        )
     }
 
-    /// R3 policy: each threshold is independently optional via its own
-    /// toggle; both off ⇒ `nil`. A both-nil `RevisionRetention` would be
-    /// normalized away by `HistoryRetentionPolicies.init` anyway (`V2-02`
-    /// §3.1), but the tab sends `nil` explicitly so the intent is visible
-    /// at the call site.
-    private var revisionPolicy: RevisionRetention? {
-        let maxRevisions = revisionCountEnabled ? revisionCount : nil
-        let maxRevisionBytes = revisionBytesEnabled
-            ? revisionMiB.map { $0 * 1_048_576 }
-            : nil
-        guard maxRevisions != nil || maxRevisionBytes != nil else { return nil }
-        return RevisionRetention(
-            maxRevisionsPerItem: maxRevisions,
-            maxRevisionBytesPerItem: maxRevisionBytes
+    private var revisionCountText: Binding<String> {
+        Binding(
+            get: { draft.revisionCountText },
+            set: {
+                draft.setRevisionCountText($0)
+                status = nil
+            }
+        )
+    }
+
+    private var revisionBytesEnabled: Binding<Bool> {
+        Binding(
+            get: { draft.revisionBytesEnabled },
+            set: {
+                draft.setRevisionBytesEnabled($0)
+                status = nil
+            }
+        )
+    }
+
+    private var revisionMiBText: Binding<String> {
+        Binding(
+            get: { draft.revisionMiBText },
+            set: {
+                draft.setRevisionMiBText($0)
+                status = nil
+            }
         )
     }
 
@@ -557,9 +592,15 @@ private struct RetentionSettingsTab: View {
     /// set replaces the WHOLE policy value (`V2-02` §8.1), so applying the
     /// neutral prefill would silently disable every persisted dimension.
     private func loadConfiguredPolicies() async {
+        let request = draft.beginLoadRequest()
         do {
             let configuration = try await viewState.retentionConfiguration()
-            reflect(configuration.policies)
+            // Deep review `04` Red 10A: a read started before a user edit may
+            // update the strictness baseline, but never replace newer fields.
+            draft.acceptLoaded(
+                configuration.policies,
+                requestedAt: request
+            )
             hasLoadedConfiguration = true
         } catch let failure as HistoryFailure {
             status = .failure(Self.retentionFailureMessage(failure))
@@ -568,97 +609,51 @@ private struct RetentionSettingsTab: View {
         }
     }
 
-    /// Reflects one persisted policy value in the toggles/fields. A
-    /// disabled dimension keeps its neutral prefill text — its dormant
-    /// stored value is never read as a policy (`V2-02` §3.3), so nothing
-    /// is reflected for it. Unit conversions CEILING-round and then clamp
-    /// into the field range: the day/MiB fields cannot express every
-    /// persisted value exactly, and rounding up guarantees an unexamined
-    /// Apply loosens — never tightens — retention relative to the
-    /// configured state (SPEC-IMPL-003's failure mode is silent data loss
-    /// through an under-stated budget, not silent slack).
-    private func reflect(_ policies: HistoryRetentionPolicies) {
-        ageEnabled = policies.age != nil
-        if let age = policies.age {
-            ageDaysText = String(Self.ceilingDays(
-                forSeconds: age.maxAge,
-                clampedTo: Self.ageDaysRange
-            ))
+    private func requestApply() {
+        guard let submission = draft.submission() else { return }
+        if draft.requiresTighteningConfirmation(for: submission.policies) {
+            pendingSubmission = submission
+            isConfirmingTightening = true
+        } else {
+            Task { await applyRetention(submission) }
         }
-        storageEnabled = policies.storage != nil
-        if let storage = policies.storage {
-            storageMiBText = String(Self.ceilingMiB(
-                forBytes: storage.maxTotalBytes,
-                clampedTo: Self.storageMiBRange
-            ))
-        }
-        revisionCountEnabled = policies.revisions?.maxRevisionsPerItem != nil
-        if let maxRevisions = policies.revisions?.maxRevisionsPerItem {
-            // Already an in-range whole count (`V2-02` §8.3 validation
-            // admits nothing else) — no unit conversion.
-            revisionCountText = String(maxRevisions)
-        }
-        revisionBytesEnabled = policies.revisions?.maxRevisionBytesPerItem != nil
-        if let maxRevisionBytes = policies.revisions?.maxRevisionBytesPerItem {
-            revisionMiBText = String(Self.ceilingMiB(
-                forBytes: maxRevisionBytes,
-                clampedTo: Self.revisionMiBRange
-            ))
-        }
-    }
-
-    /// Seconds → whole days, ceiling-rounded and clamped (see `reflect`).
-    private static func ceilingDays(
-        forSeconds seconds: TimeInterval,
-        clampedTo range: ClosedRange<Int>
-    ) -> Int {
-        let days = Int((seconds / 86_400).rounded(.up))
-        return min(max(days, range.lowerBound), range.upperBound)
-    }
-
-    /// Bytes → whole MiB, ceiling-rounded and clamped (see `reflect`). The
-    /// plain addition cannot overflow: admitted values stay under the
-    /// `V2-02` §8.3 bound (5,000 × 384 MiB).
-    private static func ceilingMiB(
-        forBytes bytes: Int,
-        clampedTo range: ClosedRange<Int>
-    ) -> Int {
-        let mib = (bytes + 1_048_575) / 1_048_576
-        return min(max(mib, range.lowerBound), range.upperBound)
     }
 
     /// Applies all dimensions as one policy value and reports the receipt
     /// inline (`.retentionPoliciesSet(retiredItems:prunedRevisions:)`,
     /// 03a §6 / `V2-02` §8.1; feedback per V2-07 §5.2).
-    private func applyRetention() async {
-        guard retentionInputIsValid else { return }
-        let policies = HistoryRetentionPolicies(
-            age: ageEnabled
-                ? ageDays.map { AgeRetention(maxAge: TimeInterval($0 * 86_400)) }
-                : nil,
-            storage: storageEnabled
-                ? storageMiB.map { StorageRetention(maxTotalBytes: $0 * 1_048_576) }
-                : nil,
-            revisions: revisionPolicy
-        )
+    private func applyRetention(
+        _ submission: RetentionSettingsDraft.Submission
+    ) async {
+        guard draft.isCurrent(submission) else { return }
+        pendingSubmission = nil
         isWorking = true
         defer { isWorking = false }
         do {
-            let receipt = try await viewState.applyRetentionPolicies(policies)
+            let receipt = try await viewState.applyRetentionPolicies(submission.policies)
+            let successMessage: String
             if case .committed(let commit) = receipt,
                case .retentionPoliciesSet(
                    retiredItems: let retired,
                    prunedRevisions: let pruned
                ) = commit.outcome {
-                status = .success(
-                    Self.retentionFeedback(retiredItems: retired, prunedRevisions: pruned)
+                successMessage = Self.retentionFeedback(
+                    retiredItems: retired,
+                    prunedRevisions: pruned
                 )
             } else {
-                status = .success("Done.")
+                successMessage = "Done."
             }
+            guard draft.acceptApplied(
+                submission,
+                successMessage: successMessage
+            ) else { return }
+            status = nil
         } catch let failure as HistoryFailure {
+            guard draft.isCurrent(submission) else { return }
             status = .failure(Self.retentionFailureMessage(failure))
         } catch {
+            guard draft.isCurrent(submission) else { return }
             status = .failure("The policies could not be saved.")
         }
     }
@@ -756,15 +751,6 @@ private struct SettingStatusView: View {
                 .foregroundStyle(.red)
         }
     }
-}
-
-/// Parses a whole-number field, returning the value only when it lies
-/// inside `range`. Strict `Int` parsing: decimals, empty text, and
-/// out-of-range values return `nil`, which disables Apply and shows the
-/// row's range hint (contract §4.4 validation).
-private func validatedWholeNumber(_ text: String, in range: ClosedRange<Int>) -> Int? {
-    guard let value = Int(text.trimmingCharacters(in: .whitespaces)) else { return nil }
-    return range.contains(value) ? value : nil
 }
 
 #Preview("Settings") {
