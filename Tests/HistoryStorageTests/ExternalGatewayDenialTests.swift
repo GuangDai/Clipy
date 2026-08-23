@@ -66,7 +66,8 @@ struct ExternalGatewayDenialTests {
         }
 
         func signal(_ event: Event) {
-            let waiter = state.withLock { state in
+            let waiter: CheckedContinuation<Event, Never>? =
+                state.withLock { state in
                 guard state.first == nil else { return nil }
                 state.first = event
                 defer { state.waiter = nil }
@@ -77,7 +78,7 @@ struct ExternalGatewayDenialTests {
 
         func wait() async -> Event {
             await withCheckedContinuation { continuation in
-                let immediate = state.withLock { state in
+                let immediate: Event? = state.withLock { state in
                     if let first = state.first { return first }
                     precondition(state.waiter == nil)
                     state.waiter = continuation
