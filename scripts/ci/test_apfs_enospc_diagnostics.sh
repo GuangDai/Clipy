@@ -36,9 +36,10 @@ last_argument=""
 for argument in "$@"; do
   last_argument="$argument"
 done
-printf 'create failed image=%s device=/dev/disk42 uuid=%s\n' \
+printf 'create failed image=%s device=/dev/disk42 parent=disk42s1 uuid=%s\n' \
   "$last_argument" '01234567-89AB-CDEF-0123-456789ABCDEF' >&2
-printf 'localizedDescription=must-not-escape userInfo=must-not-escape\n' >&2
+printf 'localizedDescription=retained-debug-detail userInfo=retained-debug-keys\n' >&2
+printf 'host=/Users/runner/work/Clipy file=file:///private/tmp/clipy.dmg\n' >&2
 exit 9
 FAKE_HDIUTIL
 chmod +x "$fake_bin/hdiutil"
@@ -62,25 +63,20 @@ grep -Fxq 'exit_phase=create-image' "$log_dir/failure-summary.log"
 grep -Fxq 'body_status=1' "$log_dir/failure-summary.log"
 grep -Fxq 'cleanup_status=0' "$log_dir/failure-summary.log"
 grep -Fxq 'outgoing_status=1' "$log_dir/failure-summary.log"
-grep -Fq 'file=raw-sanitized/hdiutil-create.log' \
+grep -Fq 'file=raw-bounded/hdiutil-create.log' \
   "$log_dir/diagnostic-manifest.log"
-grep -Fq '<IMAGE>' "$log_dir/raw-sanitized/hdiutil-create.log"
-grep -Fq '<DEVICE>' "$log_dir/raw-sanitized/hdiutil-create.log"
-grep -Fq '<UUID>' "$log_dir/raw-sanitized/hdiutil-create.log"
+grep -Fq "$fixture_root" "$log_dir/raw-bounded/hdiutil-create.log"
+grep -Fq '/dev/disk42' "$log_dir/raw-bounded/hdiutil-create.log"
+grep -Fq 'disk42s1' "$log_dir/raw-bounded/hdiutil-create.log"
+grep -Fq "$raw_uuid" "$log_dir/raw-bounded/hdiutil-create.log"
+grep -Fq 'localizedDescription=retained-debug-detail' \
+  "$log_dir/raw-bounded/hdiutil-create.log"
+grep -Fq 'userInfo=retained-debug-keys' \
+  "$log_dir/raw-bounded/hdiutil-create.log"
+grep -Fq '/Users/runner/work/Clipy' \
+  "$log_dir/raw-bounded/hdiutil-create.log"
+grep -Fq 'file:///private/tmp/clipy.dmg' \
+  "$log_dir/raw-bounded/hdiutil-create.log"
 grep -Fq 'CLIPY_APFS_DIAGNOSTIC failure-summary.log' "$captured_stderr"
-
-if grep -R -Fq "$fixture_root" "$log_dir"; then
-  echo "exact temporary path escaped into published diagnostics" >&2
-  exit 1
-fi
-if grep -R -Fq "$raw_uuid" "$log_dir"; then
-  echo "UUID escaped into published diagnostics" >&2
-  exit 1
-fi
-if grep -R -Eiq 'localizedDescription|userInfo' "$log_dir"; then
-  grep -R -Ein 'localizedDescription|userInfo' "$log_dir" >&2 || true
-  echo "forbidden framework error detail escaped" >&2
-  exit 1
-fi
 
 echo "APFS diagnostic early-failure regression passed"

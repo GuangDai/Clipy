@@ -11,7 +11,6 @@ fi
 
 log_dir="$1"
 runner_temp="$2"
-workspace_root="$(pwd -P)"
 probe="${CLIPY_APFS_PROBE_PATH:-.build/release/HistoryRestartProbe}"
 image_size_mib=256
 competitor_size_mib=512
@@ -26,6 +25,7 @@ pressure_output_open=0
 attached=0
 current_phase="bootstrap"
 last_command_status=0
+diagnostic_publication_status=0
 
 bootstrap_cleanup_on_exit() {
   local original_status=$?
@@ -85,10 +85,10 @@ diagnostic_manifest_log="$log_dir/diagnostic-manifest.log"
 : > "$failure_summary_log"
 : > "$diagnostic_manifest_log"
 
-# Durable, content-free breadcrumb vocabulary. Raw APFS-tool output is copied
-# through the bounded sanitizer below before the disposable root is removed.
-# Probe stderr is never copied wholesale: only its closed CLIPY_* vocabulary is
-# admitted, so clipboard bytes and framework error descriptions cannot escape.
+# Durable phase breadcrumbs remain content-free. APFS/system/build/probe stderr
+# is copied without semantic redaction, but with hard line-count and line-length
+# bounds, before the disposable root is removed. Probe stdout alone remains a
+# closed-token channel because it is the only path that could carry payload.
 record_event() {
   printf 'phase=%s event=%s\n' "$current_phase" "$1" >> "$phase_log"
 }
@@ -103,33 +103,8 @@ record_command_status() {
     "$current_phase" "$1" "$2" >> "$command_status_log"
 }
 
-sanitize_apfs_diagnostics() {
-  CLIPY_REDACT_STORE="$store" \
-  CLIPY_REDACT_IMAGE="$image" \
-  CLIPY_REDACT_MOUNT="$mountpoint" \
-  CLIPY_REDACT_TEMP_ROOT="$temp_root" \
-  CLIPY_REDACT_RUNNER_TEMP="$runner_temp" \
-  CLIPY_REDACT_WORKSPACE="$workspace_root" \
-  perl -pe '
-    BEGIN {
-      @redactions = (
-        [$ENV{CLIPY_REDACT_STORE}, "<STORE>"],
-        [$ENV{CLIPY_REDACT_IMAGE}, "<IMAGE>"],
-        [$ENV{CLIPY_REDACT_MOUNT}, "<MOUNT>"],
-        [$ENV{CLIPY_REDACT_TEMP_ROOT}, "<TEMP_ROOT>"],
-        [$ENV{CLIPY_REDACT_RUNNER_TEMP}, "<RUNNER_TEMP>"],
-        [$ENV{CLIPY_REDACT_WORKSPACE}, "<WORKSPACE>"]
-      );
-    }
-    for my $redaction (@redactions) {
-      my ($literal, $replacement) = @{$redaction};
-      s/\Q$literal\E/$replacement/g if defined($literal) && length($literal);
-    }
-    s{/dev/disk[[:alnum:]]*}{<DEVICE>}g;
-    s{\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b}{<UUID>}g;
-    if (/localizedDescription|userInfo/i) { $_ = ""; next; }
-    if (/checksum|\bsha(?:1|256|512)?\b|\bcrc(?:32)?\b/i) { $_ = ""; next; }
-  ' | awk '
+bound_apfs_diagnostics() {
+  awk '
     length($0) > 4096 { print substr($0, 1, 4096) "<LINE_TRUNCATED>"; next }
     { print }
   '
@@ -138,7 +113,7 @@ sanitize_apfs_diagnostics() {
 publish_bounded_diagnostic() {
   local label="$1"
   local raw_log="$2"
-  local safe_dir="$log_dir/raw-sanitized"
+  local safe_dir="$log_dir/raw-bounded"
   local safe_log="$safe_dir/$label.log"
   local staged_log="$safe_dir/$label.staged"
   local line_count=0
@@ -146,20 +121,28 @@ publish_bounded_diagnostic() {
   if [[ ! -f "$raw_log" ]]; then
     return 0
   fi
-  mkdir -p "$safe_dir"
-  sanitize_apfs_diagnostics < "$raw_log" > "$staged_log"
-  line_count="$(wc -l < "$staged_log" | tr -d ' ')"
-  if [[ "$line_count" -le 240 ]]; then
-    mv "$staged_log" "$safe_log"
-  else
-    {
-      sed -n '1,160p' "$staged_log"
-      printf '<DIAGNOSTIC_TRUNCATED omitted_lines=%s>\n' \
-        "$((line_count - 240))"
-      tail -n 80 "$staged_log"
-    } > "$safe_log"
-    rm -f -- "$staged_log"
+  if (
+    set -euo pipefail
+    mkdir -p "$safe_dir"
+    bound_apfs_diagnostics < "$raw_log" > "$staged_log"
+    line_count="$(wc -l < "$staged_log" | tr -d ' ')"
+    if [[ "$line_count" -le 240 ]]; then
+      mv "$staged_log" "$safe_log"
+    else
+      {
+        sed -n '1,160p' "$staged_log"
+        printf '<DIAGNOSTIC_TRUNCATED omitted_lines=%s>\n' \
+          "$((line_count - 240))"
+        tail -n 80 "$staged_log"
+      } > "$safe_log"
+      rm -f -- "$staged_log"
+    fi
+  ); then
+    return 0
   fi
+  diagnostic_publication_status=1
+  rm -f -- "$staged_log"
+  return 1
 }
 
 publish_plist_key_inventory() {
@@ -221,6 +204,8 @@ publish_known_raw_diagnostics() {
   local raw_log=""
   local raw_name=""
 
+  diagnostic_publication_status=0
+
   publish_bounded_diagnostic "swift-build" \
     "$temp_root/release-build.raw.log"
   publish_bounded_diagnostic "diagnostic-scan" \
@@ -251,6 +236,12 @@ publish_known_raw_diagnostics() {
     "$temp_root/preflight.raw.log"
   publish_bounded_diagnostic "competitor-dd" \
     "$temp_root/competitor-dd.stderr.raw.log"
+  publish_bounded_diagnostic "seed-child-stderr" \
+    "$temp_root/seed.stderr.raw.log"
+  publish_bounded_diagnostic "pressure-child-stderr" \
+    "$temp_root/pressure.stderr.raw.log"
+  publish_bounded_diagnostic "verify-child-stderr" \
+    "$temp_root/verify.stderr.raw.log"
   publish_bounded_diagnostic "hdiutil-detach" \
     "$temp_root/detach.raw.log"
   publish_bounded_diagnostic "hdiutil-force-detach" \
@@ -262,6 +253,7 @@ publish_known_raw_diagnostics() {
       publish_bounded_diagnostic "$raw_name" "$raw_log"
     fi
   done
+  return "$diagnostic_publication_status"
 }
 
 write_diagnostic_manifest() {
@@ -270,18 +262,36 @@ write_diagnostic_manifest() {
   local byte_count=0
   local line_count=0
 
-  : > "$diagnostic_manifest_log"
-  while IFS= read -r safe_file; do
-    if [[ "$safe_file" == "$diagnostic_manifest_log" ]]; then
-      continue
-    fi
-    relative_name="${safe_file#"$log_dir"/}"
-    byte_count="$(wc -c < "$safe_file" | tr -d ' ')"
-    line_count="$(wc -l < "$safe_file" | tr -d ' ')"
-    printf 'file=%s bytes=%s lines=%s\n' \
-      "$relative_name" "$byte_count" "$line_count" \
-      >> "$diagnostic_manifest_log"
-  done < <(find "$log_dir" -type f | LC_ALL=C sort)
+  (
+    set -euo pipefail
+    : > "$diagnostic_manifest_log"
+    while IFS= read -r safe_file; do
+      if [[ "$safe_file" == "$diagnostic_manifest_log" ]]; then
+        continue
+      fi
+      relative_name="${safe_file#"$log_dir"/}"
+      byte_count="$(wc -c < "$safe_file" | tr -d ' ')"
+      line_count="$(wc -l < "$safe_file" | tr -d ' ')"
+      printf 'file=%s bytes=%s lines=%s\n' \
+        "$relative_name" "$byte_count" "$line_count" \
+        >> "$diagnostic_manifest_log"
+    done < <(find "$log_dir" -type f | LC_ALL=C sort)
+  )
+}
+
+write_exit_summary() {
+  local result="failure"
+
+  if [[ "$4" -eq 0 ]]; then
+    result="success"
+  fi
+  {
+    printf 'result=%s\n' "$result"
+    printf 'exit_phase=%s\n' "$1"
+    printf 'body_status=%s\n' "$2"
+    printf 'cleanup_status=%s\n' "$3"
+    printf 'outgoing_status=%s\n' "$4"
+  } > "$failure_summary_log"
 }
 
 emit_bounded_diagnostics() {
@@ -477,12 +487,14 @@ cleanup_resources() {
     pressure_output_open=0
     record_event "pressure-output-closed"
   fi
-  if [[ -n "$pressure_pid" ]] && kill -0 "$pressure_pid" 2>/dev/null; then
-    if kill -TERM "$pressure_pid" 2>/dev/null; then
-      record_command_status "terminate-pressure-child" 0
-    else
-      record_command_status "terminate-pressure-child" 1
-      cleanup_status=1
+  if [[ -n "$pressure_pid" ]]; then
+    if kill -0 "$pressure_pid" 2>/dev/null; then
+      if kill -TERM "$pressure_pid" 2>/dev/null; then
+        record_command_status "terminate-pressure-child" 0
+      else
+        record_command_status "terminate-pressure-child" 1
+        cleanup_status=1
+      fi
     fi
     if bounded_wait "$pressure_pid" 10 "pressure-cleanup" >/dev/null 2>&1; then
       record_event "pressure-child-reaped"
@@ -490,6 +502,7 @@ cleanup_resources() {
       cleanup_status=1
       record_event "pressure-child-reap-failed"
     fi
+    pressure_pid=""
   fi
   collect_probe_diagnostics \
     "$temp_root/seed.stderr.raw.log" "$log_dir/seed-diagnostics.log"
@@ -510,9 +523,15 @@ cleanup_resources() {
   if ! detach_volume; then
     cleanup_status=1
   fi
-  # Copy every APFS-tool diagnostic only after detach has produced its own
+  # Copy every bounded APFS-tool diagnostic only after detach has produced its own
   # output, but before deleting the disposable root that owns the raw files.
-  publish_known_raw_diagnostics
+  if publish_known_raw_diagnostics; then
+    record_command_status "publish-bounded-diagnostics" 0
+  else
+    record_command_status "publish-bounded-diagnostics" 1
+    cleanup_status=1
+    record_event "diagnostic-publication-failed"
+  fi
   if [[ -n "$temp_root" ]]; then
     case "$temp_root" in
       "$runner_temp"/clipy-apfs-enospc.*)
@@ -538,18 +557,24 @@ cleanup_resources() {
   fi
   printf 'phase=cleanup event=complete outgoing_status=%s\n' \
     "$outgoing_status" >> "$phase_log"
-  {
-    if [[ "$outgoing_status" -eq 0 ]]; then
-      printf 'result=success\n'
-    else
-      printf 'result=failure\n'
+  write_exit_summary \
+    "$phase_at_exit" "$original_status" "$cleanup_status" "$outgoing_status"
+  if write_diagnostic_manifest; then
+    # The manifest is the final filesystem write on this success path, so its
+    # recorded sizes cannot be made stale by a later status breadcrumb.
+    printf 'CLIPY_APFS_MANIFEST status=0\n' >&2
+  else
+    rm -f -- "$diagnostic_manifest_log"
+    record_command_status "write-diagnostic-manifest" 1
+    cleanup_status=1
+    record_event "diagnostic-manifest-failed"
+    if [[ "$original_status" -eq 0 ]]; then
+      outgoing_status=1
     fi
-    printf 'exit_phase=%s\n' "$phase_at_exit"
-    printf 'body_status=%s\n' "$original_status"
-    printf 'cleanup_status=%s\n' "$cleanup_status"
-    printf 'outgoing_status=%s\n' "$outgoing_status"
-  } > "$failure_summary_log"
-  write_diagnostic_manifest
+    write_exit_summary \
+      "$phase_at_exit" "$original_status" "$cleanup_status" "$outgoing_status"
+    printf 'CLIPY_APFS_MANIFEST status=1\n' >&2
+  fi
   if [[ "$outgoing_status" -ne 0 ]]; then
     emit_bounded_diagnostics
   fi
@@ -725,28 +750,31 @@ if [[ "$writable_volume_status" -ne 0 ]]; then
 fi
 if [[ "$writable_fact_status" -eq 0 \
   && "$writable_fact" == "false" ]]; then
-  printf 'volume.writable=false\n' >> "$runtime_facts_log"
+  printf 'volume.writable_metadata=false\n' >> "$runtime_facts_log"
   printf 'volume.writable_metadata_key=%s\n' "$writable_fact_key" \
     >> "$runtime_facts_log"
-  record_event "explicit-nonwritable-volume"
-  exit 1
-fi
-if [[ "$writable_fact_status" -eq 0 \
+  record_event "writable-metadata-reports-false"
+elif [[ "$writable_fact_status" -eq 0 \
   && "$writable_fact" == "true" ]]; then
-  printf 'volume.writable=true\n' >> "$runtime_facts_log"
+  printf 'volume.writable_metadata=true\n' >> "$runtime_facts_log"
   printf 'volume.writable_metadata_key=%s\n' "$writable_fact_key" \
     >> "$runtime_facts_log"
 else
   # `diskutil info -plist` is not a frozen schema: the prior ReadOnlyVolume
   # extraction failed on the observed macOS 26.5 runner. These positive keys
   # are optional; the real one-MiB create/remove below remains authoritative.
-  printf 'volume.writable=metadata-unavailable\n' >> "$runtime_facts_log"
+  printf 'volume.writable_metadata=unavailable\n' >> "$runtime_facts_log"
   record_event "writable-metadata-unavailable"
 fi
 printf 'volume.filesystem=apfs\n' >> "$runtime_facts_log"
 
 if ! run_quiet_command "writable-preflight" "$temp_root/preflight.raw.log" \
   dd if=/dev/zero of="$mountpoint/writable.preflight" bs=1048576 count=1; then
+  if [[ "$writable_fact_status" -eq 0 \
+    && "$writable_fact" == "true" ]]; then
+    printf 'volume.writable_metadata_contradiction=write-failed\n' \
+      >> "$runtime_facts_log"
+  fi
   record_event "writable-preflight-failed"
   exit 1
 fi
@@ -754,6 +782,11 @@ if rm -f -- "$mountpoint/writable.preflight"; then
   record_command_status "remove-writable-preflight" 0
   printf 'volume.writable_preflight=write-and-remove-complete\n' \
     >> "$runtime_facts_log"
+  if [[ "$writable_fact_status" -eq 0 \
+    && "$writable_fact" == "false" ]]; then
+    printf 'volume.writable_metadata_contradiction=write-succeeded\n' \
+      >> "$runtime_facts_log"
+  fi
 else
   record_command_status "remove-writable-preflight" 1
   record_event "writable-preflight-removal-failed"

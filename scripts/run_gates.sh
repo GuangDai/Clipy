@@ -2,12 +2,13 @@
 # run_gates.sh — run all Clipy scaffold gates (docs/01-architecture.md Part I §9).
 #
 #   1. scripts/tests/test_diagnostic_scan.py — CI diagnostic parser fixtures
-#   2. scripts/import_gate.py          — per-target import confinement (Part I §8)
-#   3. scripts/escape_hatch_scan.py    — no @unchecked Sendable / nonisolated(unsafe)
+#   2. scripts/ci/test_apfs_enospc_diagnostics.sh — APFS failure evidence fixture
+#   3. scripts/import_gate.py          — per-target import confinement (Part I §8)
+#   4. scripts/escape_hatch_scan.py    — no @unchecked Sendable / nonisolated(unsafe)
 #                                        / service-locator spellings (Part I §8)
-#   4. scripts/vendor_integrity_gate.py — pinned xxHash source byte identity
-#   5. scripts/xxh3_symbol_gate.sh      — vendored C symbol confinement
-#   6. scripts/public_symbol_snapshot.sh — HistoryCore public symbol surface
+#   5. scripts/vendor_integrity_gate.py — pinned xxHash source byte identity
+#   6. scripts/xxh3_symbol_gate.sh      — vendored C symbol confinement
+#   7. scripts/public_symbol_snapshot.sh — HistoryCore public symbol surface
 #                                        (Part VI §6); macOS + xcrun only, skipped
 #                                        elsewhere.
 #
@@ -33,33 +34,38 @@ case "${1:-}" in
         ;;
 esac
 
-echo "== gate 1/6: diagnostic scanner fixtures =="
+echo "== gate 1/7: diagnostic scanner fixtures =="
 if ! PYTHONPATH="$REPO_ROOT" python3 -m unittest \
     scripts.tests.test_diagnostic_scan; then
     status=1
 fi
 
-echo "== gate 2/6: import confinement =="
+echo "== gate 2/7: APFS failure diagnostic fixture =="
+if ! "$REPO_ROOT/scripts/ci/test_apfs_enospc_diagnostics.sh"; then
+    status=1
+fi
+
+echo "== gate 3/7: import confinement =="
 if ! python3 "$REPO_ROOT/scripts/import_gate.py"; then
     status=1
 fi
 
-echo "== gate 3/6: escape-hatch / service-locator scan =="
+echo "== gate 4/7: escape-hatch / service-locator scan =="
 if ! python3 "$REPO_ROOT/scripts/escape_hatch_scan.py"; then
     status=1
 fi
 
-echo "== gate 4/6: vendored dependency integrity =="
+echo "== gate 5/7: vendored dependency integrity =="
 if ! python3 "$REPO_ROOT/scripts/vendor_integrity_gate.py"; then
     status=1
 fi
 
-echo "== gate 5/6: vendored xxh3 symbol confinement =="
+echo "== gate 6/7: vendored xxh3 symbol confinement =="
 if ! "$REPO_ROOT/scripts/xxh3_symbol_gate.sh"; then
     status=1
 fi
 
-echo "== gate 6/6: HistoryCore public symbol snapshot =="
+echo "== gate 7/7: HistoryCore public symbol snapshot =="
 if [[ "$source_only" -eq 1 ]]; then
     echo "run_gates: skipping compiled symbol snapshot (--source-only)"
 elif [[ "$(uname -s)" == "Darwin" ]] && command -v xcrun >/dev/null 2>&1; then
