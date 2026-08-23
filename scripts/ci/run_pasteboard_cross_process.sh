@@ -73,6 +73,9 @@ if [[ -z "$test_binary" || ! -x "$test_binary" ]]; then
 fi
 test_bundle="${test_binary%%/Contents/MacOS/*}"
 probe "boundary=test-host-inventory result=found binary=$test_binary bundle=$test_bundle"
+current_phase="test-host-inventory"
+probe "boundary=phase phase=test-host-inventory event=start"
+info_plist="$test_bundle/Contents/Info.plist"
 {
   printf 'bin_path=%s\n' "$bin_path"
   printf 'test_bundle=%s\n' "$test_bundle"
@@ -80,9 +83,18 @@ probe "boundary=test-host-inventory result=found binary=$test_binary bundle=$tes
   file "$test_binary"
   stat -f 'binary_mode=%Sp binary_size=%z binary_owner=%Su binary_group=%Sg' \
     "$test_binary"
-  plutil -p "$test_bundle/Contents/Info.plist"
+  if [[ -f "$info_plist" ]]; then
+    probe "boundary=test-host-inventory info_plist=present"
+    plutil -p "$info_plist"
+  else
+    # SwiftPM's command-line `.xctest` bundle need not contain an Info.plist.
+    # Run 32623507717 observed exactly that bundle shape; inventory records it
+    # without aborting before discovery, signing, writer, or reader execution.
+    probe "boundary=test-host-inventory info_plist=absent expected_for_swiftpm=true"
+  fi
   otool -L "$test_binary"
 } 2>&1 | tee "$log_dir/test-host-inventory.log"
+probe "boundary=phase phase=test-host-inventory event=end exit_status=0"
 
 run_logged_phase test-discovery "$log_dir/test-discovery.log" swift test list \
   --configuration debug \
