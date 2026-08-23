@@ -592,9 +592,15 @@ private struct RetentionSettingsTab: View {
     /// set replaces the WHOLE policy value (`V2-02` §8.1), so applying the
     /// neutral prefill would silently disable every persisted dimension.
     private func loadConfiguredPolicies() async {
+        let request = draft.beginLoadRequest()
         do {
             let configuration = try await viewState.retentionConfiguration()
-            draft.load(configuration.policies)
+            // Deep review `04` Red 10A: a read started before a user edit may
+            // update the strictness baseline, but never replace newer fields.
+            draft.acceptLoaded(
+                configuration.policies,
+                requestedAt: request
+            )
             hasLoadedConfiguration = true
         } catch let failure as HistoryFailure {
             status = .failure(Self.retentionFailureMessage(failure))

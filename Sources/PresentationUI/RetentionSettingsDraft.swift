@@ -12,6 +12,10 @@ import Foundation
 import HistoryCore
 
 internal struct RetentionSettingsDraft {
+    internal struct LoadRequest: Sendable {
+        fileprivate let editGeneration: UInt64
+    }
+
     internal struct Submission: Sendable {
         internal let policies: HistoryRetentionPolicies
         fileprivate let editGeneration: UInt64
@@ -57,8 +61,21 @@ internal struct RetentionSettingsDraft {
     internal var revisionCountInputIsValid: Bool { revisionCount != nil }
     internal var revisionBytesInputIsValid: Bool { revisionMiB != nil }
 
-    internal mutating func load(_ policies: HistoryRetentionPolicies) {
+    internal func beginLoadRequest() -> LoadRequest {
+        LoadRequest(editGeneration: editGeneration)
+    }
+
+    /// Accepts a configured-policy read against the edit generation at which
+    /// it started (`04` Red 10A). A late read always refreshes the hidden
+    /// authoritative comparison baseline, but it may reflect into controls
+    /// only when no user edit happened while the request was suspended.
+    @discardableResult
+    internal mutating func acceptLoaded(
+        _ policies: HistoryRetentionPolicies,
+        requestedAt request: LoadRequest
+    ) -> Bool {
         configuredPolicies = policies
+        guard request.editGeneration == editGeneration else { return false }
         ageEnabled = policies.age != nil
         if let age = policies.age {
             ageDaysText = String(Self.ceilingDays(age.maxAge))
@@ -86,6 +103,7 @@ internal struct RetentionSettingsDraft {
         revisionCountValueIsDirty = false
         revisionBytesValueIsDirty = false
         acceptedSuccessMessage = nil
+        return true
     }
 
     internal mutating func setAgeEnabled(_ enabled: Bool) {
