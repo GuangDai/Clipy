@@ -36,21 +36,23 @@ jobs:
         if: always()
         shell: bash
         run: |
-          for diagnostic_name in \
-            phase-events.log \
-            command-status.log \
-            runtime-facts.log \
-            seed-diagnostics.log \
-            pressure-diagnostics.log \
-            verify-diagnostics.log
-          do
-            if [[ -f "$LOG_DIR/$diagnostic_name" ]]; then
-              printf '== %s ==\n' "$diagnostic_name"
-              sed -n '1,240p' "$LOG_DIR/$diagnostic_name"
-            fi
-          done
+          # This is a best-effort evidence emitter: it must never mask the
+          # owning APFS step status, even after a partial bootstrap failure.
+          set +e
+          if [[ ! -d "$LOG_DIR" ]]; then
+            printf 'CLIPY_APFS_DIAGNOSTIC log-directory=absent\n'
+            exit 0
+          fi
+          find "$LOG_DIR" -type f | LC_ALL=C sort |
+            while IFS= read -r diagnostic_path
+            do
+              diagnostic_name="${diagnostic_path#"$LOG_DIR"/}"
+              printf '== CLIPY_APFS_DIAGNOSTIC %s ==\n' "$diagnostic_name"
+              sed -n '1,240p' "$diagnostic_path"
+            done
+          exit 0
 
-      - name: Upload bounded content-free evidence
+      - name: Upload bounded runtime diagnostics
         if: always()
         uses: actions/upload-artifact@v7
         with:

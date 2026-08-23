@@ -5,8 +5,9 @@
 /// The writer crosses the production `PasteboardAdapter.write` interface.
 /// Only after that process exits does the reader use AppKit directly and
 /// byte-compare an independently declared synthetic literal. Failures report
-/// content-free messages and do not infer TCC, timeout, atomicity, target-app
-/// paste behavior, App Intents behavior, or WindowServer behavior.
+/// bounded runner diagnostics without pasteboard bytes and do not infer TCC,
+/// timeout, atomicity, target-app paste behavior, App Intents behavior, or
+/// WindowServer behavior.
 import AppKit
 import Foundation
 import HistoryCore
@@ -63,9 +64,10 @@ struct GeneralPasteboardCrossProcessProbeTests {
         do {
             try PasteboardAdapter(pasteboard: pasteboard).write(payload)
         } catch {
-            Self.report(
-                "phase=writer boundary=adapter-write result=threw " +
-                    "error_type=\(String(reflecting: Swift.type(of: error)))"
+            Self.reportError(
+                phase: "writer",
+                boundary: "adapter-write",
+                error: error
             )
             Issue.record("General pasteboard writer failed")
             return
@@ -157,6 +159,104 @@ struct GeneralPasteboardCrossProcessProbeTests {
         print("[CLIPY_PB_XPROC] \(message)")
     }
 
+    /// Dispatch-only failure detail. User-info `Data` values are represented
+    /// by type and count only; no pasteboard payload bytes are rendered.
+    private static func reportError(
+        phase: String,
+        boundary: String,
+        error: any Error
+    ) {
+        #if DEBUG
+        guard ProcessInfo.processInfo.environment[phaseEnvironmentKey] == phase
+        else {
+            return
+        }
+
+        let nsError = error as NSError
+        report(
+            "phase=\(phase) boundary=\(boundary) result=threw " +
+                "error_type=\(String(reflecting: Swift.type(of: error)))"
+        )
+        report(
+            "phase=\(phase) boundary=\(boundary) error_reflection=" +
+                boundedSingleLine(String(reflecting: error), limit: 4_096)
+        )
+        report(
+            "phase=\(phase) boundary=\(boundary) nserror_domain=" +
+                "\(boundedSingleLine(nsError.domain, limit: 1_024)) " +
+                "nserror_code=\(nsError.code) localized_description=" +
+                boundedSingleLine(nsError.localizedDescription, limit: 4_096)
+        )
+
+        let entries = nsError.userInfo.sorted { $0.key < $1.key }
+        report(
+            "phase=\(phase) boundary=\(boundary) " +
+                "user_info_count=\(entries.count) emitted_count=" +
+                "\(min(entries.count, 64))"
+        )
+        for (key, value) in entries.prefix(64) {
+            report(
+                "phase=\(phase) boundary=\(boundary) user_info_key=" +
+                    "\(boundedSingleLine(key, limit: 1_024)) " +
+                    "value_type=\(String(reflecting: Swift.type(of: value))) " +
+                    "value=\(printableUserInfoValue(value))"
+            )
+        }
+        #endif
+    }
+
+    #if DEBUG
+    private static func printableUserInfoValue(_ value: Any) -> String {
+        switch value {
+        case let data as Data:
+            return "<Data count=\(data.count)>"
+        case let string as String:
+            return boundedSingleLine(string, limit: 4_096)
+        case let number as NSNumber:
+            return boundedSingleLine(number.stringValue, limit: 1_024)
+        case let url as URL:
+            return boundedSingleLine(url.absoluteString, limit: 4_096)
+        case let uuid as UUID:
+            return uuid.uuidString
+        case let date as Date:
+            return boundedSingleLine(
+                date.formatted(.iso8601),
+                limit: 1_024
+            )
+        case let strings as [String]:
+            return boundedSingleLine(String(reflecting: strings), limit: 4_096)
+        case let numbers as [NSNumber]:
+            return boundedSingleLine(String(reflecting: numbers), limit: 4_096)
+        case let nestedError as NSError:
+            return boundedSingleLine(
+                "<NSError domain=\(nestedError.domain) " +
+                    "code=\(nestedError.code) " +
+                    "localizedDescription=\(nestedError.localizedDescription)>",
+                limit: 4_096
+            )
+        case is NSNull:
+            return "<null>"
+        default:
+            return "<unprinted value_type=" +
+                "\(String(reflecting: Swift.type(of: value)))>"
+        }
+    }
+
+    private static func boundedSingleLine(_ value: String, limit: Int) -> String {
+        let escaped = value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\r", with: "\\r")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\t", with: "\\t")
+        guard escaped.count > limit else {
+            return escaped
+        }
+        let end = escaped.index(escaped.startIndex, offsetBy: limit)
+        return String(escaped[..<end]) +
+            "<truncated total_characters=\(escaped.count)>"
+    }
+    #endif
+
     private static func markPassed(phase: String) {
         guard let markerDirectory = ProcessInfo.processInfo.environment[
             markerDirectoryEnvironmentKey
@@ -173,9 +273,10 @@ struct GeneralPasteboardCrossProcessProbeTests {
             try Data().write(to: markerURL, options: .atomic)
             report("phase=\(phase) boundary=passed-marker result=written")
         } catch {
-            report(
-                "phase=\(phase) boundary=passed-marker result=threw " +
-                    "error_type=\(String(reflecting: Swift.type(of: error)))"
+            reportError(
+                phase: phase,
+                boundary: "passed-marker",
+                error: error
             )
             Issue.record("General pasteboard probe could not write passed marker")
         }

@@ -35,11 +35,15 @@ private let manifestFileName = "restart-manifest.txt"
 private let diagnosticsEnabled = ProcessInfo.processInfo.environment[
     "CLIPY_APFS_PROBE_DIAGNOSTICS"
 ] == "1"
+private let runtimeErrorDiagnosticsEnabled = diagnosticsEnabled
+    && ProcessInfo.processInfo.environment["CLIPY_RUNTIME_DIAGNOSTICS"] == "1"
 
 /// Probe-only, opt-in diagnostics for the physical APFS evidence workflow.
-/// Messages use a frozen, content-free vocabulary: no store path, clipboard
-/// bytes, identifiers, descriptions, or `NSError.userInfo` values are emitted.
-/// `HistoryRestartProbe` has no package product and the app never executes it.
+/// Fixed stage messages remain content-free. When the evidence-only runtime
+/// diagnostic switch is also enabled, failures retain bounded NSError paths,
+/// descriptions, and userInfo needed to debug the runner. `Data` values report
+/// only their byte count. `HistoryRestartProbe` has no package product and the
+/// app never executes it.
 private func diagnostic(_ event: String) {
     guard diagnosticsEnabled else {
         return
@@ -60,30 +64,251 @@ private func diagnostic(error: any Error) {
         diagnostic("failure kind=\(kind)")
     }
 
+    guard runtimeErrorDiagnosticsEnabled else {
+        return
+    }
+    for line in probeErrorDiagnosticLines(for: error) {
+        diagnostic(line)
+    }
+}
+
+#if DEBUG || CLIPY_RUNTIME_DIAGNOSTICS
+private func probeErrorDiagnosticLines(for error: any Error) -> [String] {
+    let errorDepthLimit = 8
+    let userInfoEntryLimit = 64
+    var candidates: [String] = []
+    var seenErrors: Set<ObjectIdentifier> = []
+    var swiftError: any Error = error
     var platformError = error as NSError
-    for depth in 0..<4 {
-        let domain: String
-        switch platformError.domain {
-        case NSCocoaErrorDomain:
-            domain = "cocoa"
-        case NSPOSIXErrorDomain:
-            domain = "posix"
-        case "NSSQLiteErrorDomain":
-            domain = "sqlite"
-        default:
-            domain = "other"
+    var chainWasTruncated = false
+
+    for depth in 0..<errorDepthLimit {
+        let edge = depth == 0 ? "root" : "underlying"
+        guard seenErrors.insert(ObjectIdentifier(platformError)).inserted else {
+            candidates.append(
+                "platform-error depth=\(depth) edge=\(edge) cycle=true "
+                    + "swift_type=\(probeQuoted(probeReflectedType(of: swiftError)))"
+            )
+            break
         }
-        diagnostic(
-            "platform-error depth=\(depth) domain=\(domain) code=\(platformError.code)"
+        candidates.append(
+            "platform-error depth=\(depth) edge=\(edge) "
+                + "swift_type=\(probeQuoted(probeReflectedType(of: swiftError))) "
+                + "domain=\(probeQuoted(platformError.domain)) "
+                + "code=\(platformError.code) "
+                + "localized_description=\(probeQuoted(platformError.localizedDescription)) "
+                + "user_info_count=\(platformError.userInfo.count)"
         )
+
+        let keys = platformError.userInfo.keys.sorted()
+        for (index, key) in keys.prefix(userInfoEntryLimit).enumerated() {
+            guard let value = platformError.userInfo[key] else {
+                continue
+            }
+            var visitedContainers: Set<ObjectIdentifier> = []
+            let renderedValue = probeValueDescription(
+                value,
+                depth: 0,
+                visitedContainers: &visitedContainers
+            )
+            candidates.append(
+                "platform-error-user-info depth=\(depth) index=\(index) "
+                    + "key=\(probeQuoted(key)) "
+                    + "value_type=\(probeQuoted(probeReflectedType(of: value))) "
+                    + "value=\(probeQuoted(renderedValue))"
+            )
+        }
+        if keys.count > userInfoEntryLimit {
+            candidates.append(
+                "platform-error-user-info depth=\(depth) "
+                    + "truncated_entries=\(keys.count - userInfoEntryLimit) "
+                    + "entry_limit=\(userInfoEntryLimit)"
+            )
+        }
+
         guard let underlying = platformError.userInfo[
             NSUnderlyingErrorKey
         ] as? NSError else {
             break
         }
+        if depth == errorDepthLimit - 1 {
+            chainWasTruncated = true
+        }
+        swiftError = underlying
         platformError = underlying
     }
+    if chainWasTruncated {
+        candidates.append(
+            "platform-error truncated_error_chain=true depth_limit=\(errorDepthLimit)"
+        )
+    }
+    return boundedProbeErrorLines(candidates)
 }
+
+private func probeReflectedType(of value: Any) -> String {
+    String(reflecting: Swift.type(of: value))
+}
+
+private func probeQuoted(_ value: String) -> String {
+    "\"\(boundedProbeText(escapedProbeText(value), utf8Limit: 1_024))\""
+}
+
+private func escapedProbeText(_ value: String) -> String {
+    var result = ""
+    result.reserveCapacity(value.utf8.count)
+    for scalar in value.unicodeScalars {
+        switch scalar.value {
+        case 0x09:
+            result += "\\t"
+        case 0x0A:
+            result += "\\n"
+        case 0x0D:
+            result += "\\r"
+        case 0x22:
+            result += "\\\""
+        case 0x5C:
+            result += "\\\\"
+        case 0x00...0x1F, 0x7F:
+            result += "\\u{\(String(scalar.value, radix: 16, uppercase: true))}"
+        default:
+            result.unicodeScalars.append(scalar)
+        }
+    }
+    return result
+}
+
+private func probeValueDescription(
+    _ value: Any,
+    depth: Int,
+    visitedContainers: inout Set<ObjectIdentifier>
+) -> String {
+    let valueDepthLimit = 6
+    let collectionEntryLimit = 16
+    guard depth < valueDepthLimit else {
+        return "<value-depth-limit type=\(probeReflectedType(of: value))>"
+    }
+    if let data = value as? Data {
+        return "Data(byte_count=\(data.count))"
+    }
+    if let string = value as? String {
+        return string
+    }
+    if let url = value as? URL {
+        return url.absoluteString
+    }
+    if let error = value as? NSError {
+        return "NSError(type=\(probeReflectedType(of: error)), "
+            + "domain=\(error.domain), code=\(error.code), "
+            + "localized_description=\(error.localizedDescription))"
+    }
+    if value is NSNull {
+        return "null"
+    }
+    if let dictionary = value as? NSDictionary {
+        let identity = ObjectIdentifier(dictionary)
+        guard visitedContainers.insert(identity).inserted else {
+            return "<cycle type=\(probeReflectedType(of: value))>"
+        }
+        defer { visitedContainers.remove(identity) }
+        var entries: [(key: String, value: Any)] = []
+        for key in dictionary.allKeys {
+            entries.append((
+                key: String(describing: key),
+                value: dictionary.object(forKey: key) ?? NSNull()
+            ))
+        }
+        entries.sort { $0.key < $1.key }
+        let rendered = entries.prefix(collectionEntryLimit).map { entry in
+            "\(entry.key): " + probeValueDescription(
+                entry.value,
+                depth: depth + 1,
+                visitedContainers: &visitedContainers
+            )
+        }
+        let omitted = entries.count - rendered.count
+        let suffix = omitted > 0 ? ", <truncated_entries=\(omitted)>" : ""
+        return "Dictionary(count=\(entries.count)){\(rendered.joined(separator: ", "))\(suffix)}"
+    }
+    if let array = value as? NSArray {
+        let identity = ObjectIdentifier(array)
+        guard visitedContainers.insert(identity).inserted else {
+            return "<cycle type=\(probeReflectedType(of: value))>"
+        }
+        defer { visitedContainers.remove(identity) }
+        let retainedCount = min(array.count, collectionEntryLimit)
+        var rendered: [String] = []
+        for index in 0..<retainedCount {
+            rendered.append(probeValueDescription(
+                array[index],
+                depth: depth + 1,
+                visitedContainers: &visitedContainers
+            ))
+        }
+        let omitted = array.count - rendered.count
+        let suffix = omitted > 0 ? ", <truncated_entries=\(omitted)>" : ""
+        return "Array(count=\(array.count))[\(rendered.joined(separator: ", "))\(suffix)]"
+    }
+    return String(describing: value)
+}
+
+private func boundedProbeText(_ value: String, utf8Limit: Int) -> String {
+    guard value.utf8.count > utf8Limit else {
+        return value
+    }
+    let suffix = "…<truncated utf8_bytes=\(value.utf8.count)>"
+    let prefixLimit = max(0, utf8Limit - suffix.utf8.count)
+    var prefix = ""
+    var prefixByteCount = 0
+    for scalar in value.unicodeScalars {
+        let scalarByteCount = String(scalar).utf8.count
+        guard prefixByteCount + scalarByteCount <= prefixLimit else {
+            break
+        }
+        prefix.unicodeScalars.append(scalar)
+        prefixByteCount += scalarByteCount
+    }
+    return prefix + suffix
+}
+
+private func boundedProbeErrorLines(_ candidates: [String]) -> [String] {
+    let lineLimit = 128
+    let totalUTF8Limit = 60_000
+    let truncationLine = "platform-error diagnostics_truncated=true"
+    var lines: [String] = []
+    var totalByteCount = 0
+    for candidate in candidates {
+        let line = boundedProbeText(candidate, utf8Limit: 4_096)
+        let separatorByteCount = lines.isEmpty ? 0 : 1
+        guard lines.count < lineLimit,
+              totalByteCount + separatorByteCount + line.utf8.count
+                <= totalUTF8Limit else {
+            if lines.count == lineLimit {
+                let removed = lines.removeLast()
+                totalByteCount -= removed.utf8.count
+                if !lines.isEmpty {
+                    totalByteCount -= 1
+                }
+            }
+            while !lines.isEmpty,
+                  totalByteCount + (lines.isEmpty ? 0 : 1) + truncationLine.utf8.count
+                    > totalUTF8Limit {
+                let removed = lines.removeLast()
+                totalByteCount -= removed.utf8.count
+                if !lines.isEmpty {
+                    totalByteCount -= 1
+                }
+            }
+            lines.append(truncationLine)
+            break
+        }
+        lines.append(line)
+        totalByteCount += separatorByteCount + line.utf8.count
+    }
+    return lines
+}
+#else
+private func probeErrorDiagnosticLines(for _: any Error) -> [String] { [] }
+#endif
 
 private struct ProbeManifest {
     let alpha: UUID

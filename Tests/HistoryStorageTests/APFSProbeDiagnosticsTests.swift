@@ -1,9 +1,9 @@
 /// Probe-only diagnostic contract for the physical Card 6B APFS workflow.
 ///
 /// This does not simulate ENOSPC. It protects the observable subprocess seam:
-/// normal executions remain silent, explicit evidence executions expose fixed
-/// stage labels, and those labels never contain a StoreRoot path or fixture
-/// content. The physical filesystem behavior remains owned by
+/// normal executions remain silent, successful evidence executions expose fixed
+/// stage labels, and failing evidence executions retain the full bounded
+/// platform-error evidence needed to debug a macOS runner. The physical behavior remains owned by
 /// `run_apfs_enospc.sh` on a macOS runner.
 import Foundation
 import Testing
@@ -62,6 +62,31 @@ struct APFSProbeDiagnosticsTests {
         #expect(!diagnostics.contains("restart.seed"))
     }
 
+    @Test("failing evidence execution includes the full platform error and path")
+    func failingDiagnosticsPreserveNSErrorEvidence() throws {
+        let fixture = try Self.makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.storeRoot) }
+
+        let result = try Self.runProbe(
+            phase: "verifySeed",
+            storeURL: fixture.storeURL,
+            probeURL: fixture.probeURL,
+            diagnosticsEnabled: true,
+            runtimeDiagnosticsEnabled: true
+        )
+
+        let diagnostics = result.diagnosticLines.joined(separator: "\n")
+        #expect(result.terminationStatus == EXIT_FAILURE)
+        #expect(result.standardOutput == Data("VERIFYSEED_FAIL\n".utf8))
+        #expect(diagnostics.contains("platform-error depth=0 edge=root"))
+        #expect(diagnostics.contains("swift_type=\""))
+        #expect(diagnostics.contains("domain=\"NSCocoaErrorDomain\""))
+        #expect(diagnostics.contains("localized_description=\""))
+        #expect(diagnostics.contains("platform-error-user-info depth=0"))
+        #expect(diagnostics.contains(fixture.storeRoot.path))
+        #expect(diagnostics.contains("restart-manifest.txt"))
+    }
+
     private static func makeFixture() throws -> (
         probeURL: URL,
         storeRoot: URL,
@@ -94,11 +119,27 @@ struct APFSProbeDiagnosticsTests {
         probeURL: URL,
         diagnosticsEnabled: Bool
     ) throws -> ChildResult {
+        try runProbe(
+            phase: "seed",
+            storeURL: storeURL,
+            probeURL: probeURL,
+            diagnosticsEnabled: diagnosticsEnabled,
+            runtimeDiagnosticsEnabled: false
+        )
+    }
+
+    private static func runProbe(
+        phase: String,
+        storeURL: URL,
+        probeURL: URL,
+        diagnosticsEnabled: Bool,
+        runtimeDiagnosticsEnabled: Bool
+    ) throws -> ChildResult {
         let process = Process()
         let output = Pipe()
         let diagnostics = Pipe()
         process.executableURL = probeURL
-        process.arguments = ["seed", storeURL.path]
+        process.arguments = [phase, storeURL.path]
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = output
         process.standardError = diagnostics
@@ -108,6 +149,11 @@ struct APFSProbeDiagnosticsTests {
             environment["CLIPY_APFS_PROBE_DIAGNOSTICS"] = "1"
         } else {
             environment.removeValue(forKey: "CLIPY_APFS_PROBE_DIAGNOSTICS")
+        }
+        if runtimeDiagnosticsEnabled {
+            environment["CLIPY_RUNTIME_DIAGNOSTICS"] = "1"
+        } else {
+            environment.removeValue(forKey: "CLIPY_RUNTIME_DIAGNOSTICS")
         }
         process.environment = environment
 

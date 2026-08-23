@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Build and ad-hoc sign the existing PasteboardAdapterTests host, then launch
 # it twice in one login session: adapter writer first, native reader second.
-# This is content-free evidence for that exact cross-process visibility leaf,
-# not App Intents, TCC, target-app paste, atomicity, or WindowServer evidence.
+# This is bounded runtime evidence for that exact cross-process visibility
+# leaf. Runner and framework diagnostics are retained; actual clipboard payload
+# bytes are not printed. It is not App Intents, TCC, target-app paste,
+# atomicity, or WindowServer evidence.
 set -euo pipefail
 
 if [[ "$#" -ne 2 ]]; then
@@ -38,9 +40,15 @@ run_logged_phase() {
   probe "boundary=phase phase=$phase event=start"
   set +e
   "$@" 2>&1 | tee "$output"
-  local status="${PIPESTATUS[0]}"
+  local pipeline_statuses=("${PIPESTATUS[@]}")
+  local command_status="${pipeline_statuses[0]}"
+  local tee_status="${pipeline_statuses[1]}"
+  local status="$command_status"
+  if [[ "$status" -eq 0 && "$tee_status" -ne 0 ]]; then
+    status="$tee_status"
+  fi
   set -e
-  probe "boundary=phase phase=$phase event=end exit_status=$status"
+  probe "boundary=phase phase=$phase event=end exit_status=$status command_exit_status=$command_status tee_exit_status=$tee_status"
   return "$status"
 }
 
@@ -59,7 +67,9 @@ run_logged_phase bin-path "$log_dir/bin-path.log" swift build \
   --configuration debug \
   --scratch-path "$build_dir" \
   --show-bin-path
-python3 scripts/diagnostic_scan.py --profile swiftdata \
+run_logged_phase build-diagnostic-scan \
+  "$log_dir/build-diagnostic-scan.log" \
+  python3 scripts/diagnostic_scan.py --profile swiftdata \
   "$log_dir/build.log" "$log_dir/bin-path.log"
 
 bin_path="$(tail -n 1 "$log_dir/bin-path.log")"
@@ -73,16 +83,30 @@ if [[ -z "$test_binary" || ! -x "$test_binary" ]]; then
 fi
 test_bundle="${test_binary%%/Contents/MacOS/*}"
 probe "boundary=test-host-inventory result=found binary=$test_binary bundle=$test_bundle"
-{
+info_plist="$test_bundle/Contents/Info.plist"
+
+test_host_inventory() {
+  set -e
   printf 'bin_path=%s\n' "$bin_path"
   printf 'test_bundle=%s\n' "$test_bundle"
   printf 'test_binary=%s\n' "$test_binary"
   file "$test_binary"
   stat -f 'binary_mode=%Sp binary_size=%z binary_owner=%Su binary_group=%Sg' \
     "$test_binary"
-  plutil -p "$test_bundle/Contents/Info.plist"
+  if [[ -f "$info_plist" ]]; then
+    probe "boundary=test-host-inventory info_plist=present"
+    plutil -p "$info_plist"
+  else
+    # SwiftPM's command-line `.xctest` bundle need not contain an Info.plist.
+    # Run 32623507717 observed exactly that bundle shape; inventory records it
+    # without aborting before discovery, signing, writer, or reader execution.
+    probe "boundary=test-host-inventory info_plist=absent expected_for_swiftpm=true"
+  fi
   otool -L "$test_binary"
-} 2>&1 | tee "$log_dir/test-host-inventory.log"
+}
+
+run_logged_phase test-host-inventory "$log_dir/test-host-inventory.log" \
+  test_host_inventory
 
 run_logged_phase test-discovery "$log_dir/test-discovery.log" swift test list \
   --configuration debug \
@@ -155,7 +179,9 @@ if [[ ! -f "$marker_dir/reader.passed" ]] || \
 fi
 probe "boundary=reader-launch result=exited-zero"
 
-python3 scripts/diagnostic_scan.py --profile swiftdata \
+run_logged_phase probe-diagnostic-scan \
+  "$log_dir/probe-diagnostic-scan.log" \
+  python3 scripts/diagnostic_scan.py --profile swiftdata \
   "$log_dir/writer.log" "$log_dir/reader.log"
 
 {
@@ -165,7 +191,8 @@ python3 scripts/diagnostic_scan.py --profile swiftdata \
   printf '%s\n' "processes=2 independent short-lived ad-hoc test hosts"
   printf '%s\n' "execution_guard=phase-specific passed marker from each test host"
   printf '%s\n' "comparison=byte-exact synthetic custom type"
-  printf '%s\n' "outputs=content-free"
+  printf '%s\n' "actual_clipboard_payload_bytes=excluded"
+  printf '%s\n' "runner_diagnostics=retained_bounded"
   printf '%s\n' "evidence_ceiling=cross-process General pasteboard visibility in this login session only"
   printf '%s\n' "non_claims=AppIntents,TCC,target-app paste,atomicity,WindowServer"
 } | tee "$log_dir/summary.log"
