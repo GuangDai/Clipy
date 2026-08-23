@@ -56,6 +56,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// publishes a new episode even when its typed failure equals the old one.
     private(set) var captureNotice: ClipyCaptureNotice?
 
+    /// Authoritative, content-free pasteboard access posture. It is distinct
+    /// from an empty History and controls the access/recovery banner.
+    private(set) var captureAccessState: CaptureAccessState = .systemDefault
+
     /// The one production store-open flight shared by the app shell and the
     /// App Intents dependency provider. Reference identity fences a late
     /// completion from an older cancelled attempt so it cannot clear a later
@@ -194,6 +198,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         captureNotice = nil
     }
 
+    func recoverCaptureAccess() {
+        switch captureAccessState.recovery {
+        case .resume:
+            composition?.setCapturePaused(false)
+        case .retry:
+            composition?.retryCaptureAccess()
+        case nil:
+            break
+        }
+    }
+
     /// The preview column's visibility changed inside the SwiftUI content;
     /// resize the window to match (single no-animation `setFrame`).
     func previewVisibilityDidChange(_ isOpen: Bool) {
@@ -310,6 +325,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         opened.onCaptureHealthChanged = { [weak self] health in
             self?.receiveCaptureHealth(health)
+        }
+        opened.onCaptureAccessStateChanged = { [weak self] state in
+            self?.captureAccessState = state
         }
         composition = opened
     }

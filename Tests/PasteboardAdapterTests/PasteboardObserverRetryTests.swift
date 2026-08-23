@@ -89,4 +89,35 @@ func observerStopsAfterOneRetryAndEmitsOneTerminalContentFreeOutcome() throws {
     }
     #expect(value.endChangeCount == pasteboard.changeCount)
 }
+
+@Test @MainActor
+func observerChecksRevocationBeforeReadingChangedPasteboardItems() {
+    let pasteboard = makeRetryPasteboard()
+    replaceString(on: pasteboard, with: "allowed-generation")
+    var accessBehavior = PasteboardAccessBehavior.allowed
+    var payloadReads = 0
+    var adapter = PasteboardAdapter(pasteboard: pasteboard)
+    adapter.payloadReadObserver = { _ in payloadReads += 1 }
+    let observer = PasteboardObserver(adapter: adapter)
+    observer.setAccessBehaviorProviderForTesting { accessBehavior }
+    var accessEvents: [PasteboardAccessBehavior] = []
+    var received: [CaptureOutcome] = []
+
+    observer.start(
+        onAccessBehaviorChanged: { accessEvents.append($0) },
+        handler: { received.append($0) }
+    )
+    defer { observer.stop() }
+    #expect(accessEvents == [.allowed])
+    #expect(payloadReads == 1)
+    #expect(received.count == 1)
+
+    accessBehavior = .denied
+    replaceString(on: pasteboard, with: "denied-generation")
+    observer.pollForTesting()
+
+    #expect(accessEvents == [.allowed, .denied])
+    #expect(payloadReads == 1)
+    #expect(received.count == 1)
+}
 #endif
