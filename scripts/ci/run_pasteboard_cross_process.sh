@@ -22,29 +22,6 @@ probe() {
   printf '[CLIPY_PB_XPROC] %s\n' "$*" | tee -a "$probe_log"
 }
 
-redact_physical_paths() {
-  local line
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    if [[ -n "${test_binary:-}" ]]; then
-      line="${line//"$test_binary"/<TEST_BINARY>}"
-    fi
-    if [[ -n "${test_bundle:-}" ]]; then
-      line="${line//"$test_bundle"/<TEST_BUNDLE>}"
-    fi
-    if [[ -n "${bin_path:-}" ]]; then
-      line="${line//"$bin_path"/<SWIFT_BIN_PATH>}"
-    fi
-    if [[ "$build_dir" == /* ]]; then
-      line="${line//"$build_dir"/<BUILD_DIR>}"
-    fi
-    if [[ "$log_dir" == /* ]]; then
-      line="${line//"$log_dir"/<LOG_DIR>}"
-    fi
-    line="${line//"$PWD"/<WORKSPACE>}"
-    printf '%s\n' "$line"
-  done
-}
-
 finish() {
   local status="$?"
   trap - EXIT
@@ -60,20 +37,16 @@ run_logged_phase() {
   current_phase="$phase"
   probe "boundary=phase phase=$phase event=start"
   set +e
-  "$@" 2>&1 | redact_physical_paths | tee "$output"
+  "$@" 2>&1 | tee "$output"
   local pipeline_statuses=("${PIPESTATUS[@]}")
   local command_status="${pipeline_statuses[0]}"
-  local redactor_status="${pipeline_statuses[1]}"
-  local tee_status="${pipeline_statuses[2]}"
+  local tee_status="${pipeline_statuses[1]}"
   local status="$command_status"
-  if [[ "$status" -eq 0 && "$redactor_status" -ne 0 ]]; then
-    status="$redactor_status"
-  fi
   if [[ "$status" -eq 0 && "$tee_status" -ne 0 ]]; then
     status="$tee_status"
   fi
   set -e
-  probe "boundary=phase phase=$phase event=end exit_status=$status command_exit_status=$command_status redactor_exit_status=$redactor_status tee_exit_status=$tee_status"
+  probe "boundary=phase phase=$phase event=end exit_status=$status command_exit_status=$command_status tee_exit_status=$tee_status"
   return "$status"
 }
 
@@ -88,46 +61,34 @@ run_logged_phase build "$log_dir/build.log" swift build \
   --configuration debug \
   --scratch-path "$build_dir" \
   --build-tests
-current_phase="bin-path"
-probe "boundary=phase phase=bin-path event=start"
-set +e
-bin_path_output="$(swift build \
+run_logged_phase bin-path "$log_dir/bin-path.log" swift build \
   --configuration debug \
   --scratch-path "$build_dir" \
-  --show-bin-path 2>&1)"
-bin_path_status="$?"
-set -e
-if [[ "$bin_path_status" -eq 0 ]]; then
-  bin_path="$(printf '%s\n' "$bin_path_output" | tail -n 1)"
-fi
-printf '%s\n' "$bin_path_output" | redact_physical_paths \
-  | tee "$log_dir/bin-path.log"
-probe "boundary=phase phase=bin-path event=end exit_status=$bin_path_status"
-if [[ "$bin_path_status" -ne 0 ]]; then
-  exit "$bin_path_status"
-fi
-python3 scripts/diagnostic_scan.py --profile swiftdata \
+  --show-bin-path
+run_logged_phase build-diagnostic-scan \
+  "$log_dir/build-diagnostic-scan.log" \
+  python3 scripts/diagnostic_scan.py --profile swiftdata \
   "$log_dir/build.log" "$log_dir/bin-path.log"
 
+bin_path="$(tail -n 1 "$log_dir/bin-path.log")"
 test_binary="$(find "$bin_path" -type f \
   -path '*/ClipyPackageTests.xctest/Contents/MacOS/ClipyPackageTests' \
   -print -quit)"
 if [[ -z "$test_binary" || ! -x "$test_binary" ]]; then
-  probe "boundary=test-host-inventory result=missing search_root_role=swift-bin-path"
+  probe "boundary=test-host-inventory result=missing bin_path=$bin_path"
   echo "The Debug SwiftPM test host was not produced" >&2
   exit 1
 fi
 test_bundle="${test_binary%%/Contents/MacOS/*}"
-probe "boundary=test-host-inventory result=found binary_role=package-tests bundle_role=package-tests-xctest"
-current_phase="test-host-inventory"
-probe "boundary=phase phase=test-host-inventory event=start"
+probe "boundary=test-host-inventory result=found binary=$test_binary bundle=$test_bundle"
 info_plist="$test_bundle/Contents/Info.plist"
-{
-  printf '%s\n' 'bin_path_role=SwiftPM Debug build products'
-  printf '%s\n' 'test_bundle_role=ClipyPackageTests.xctest'
-  printf '%s\n' \
-    'test_binary_role=ClipyPackageTests.xctest/Contents/MacOS/ClipyPackageTests'
-  file -b "$test_binary"
+
+test_host_inventory() {
+  set -e
+  printf 'bin_path=%s\n' "$bin_path"
+  printf 'test_bundle=%s\n' "$test_bundle"
+  printf 'test_binary=%s\n' "$test_binary"
+  file "$test_binary"
   stat -f 'binary_mode=%Sp binary_size=%z binary_owner=%Su binary_group=%Sg' \
     "$test_binary"
   if [[ -f "$info_plist" ]]; then
@@ -139,18 +100,11 @@ info_plist="$test_bundle/Contents/Info.plist"
     # without aborting before discovery, signing, writer, or reader execution.
     probe "boundary=test-host-inventory info_plist=absent expected_for_swiftpm=true"
   fi
-  # `otool -L` prefixes dependencies with absolute host filesystem paths.
-  # Preserve the useful inventory coordinate without publishing those paths.
-  otool -L "$test_binary" | awk '
-    NR == 1 { next }
-    {
-      library = $1
-      sub(/^.*\//, "", library)
-      printf "linked_library_role=%s\n", library
-    }
-  '
-} 2>&1 | redact_physical_paths | tee "$log_dir/test-host-inventory.log"
-probe "boundary=phase phase=test-host-inventory event=end exit_status=0"
+  otool -L "$test_binary"
+}
+
+run_logged_phase test-host-inventory "$log_dir/test-host-inventory.log" \
+  test_host_inventory
 
 run_logged_phase test-discovery "$log_dir/test-discovery.log" swift test list \
   --configuration debug \
@@ -223,7 +177,9 @@ if [[ ! -f "$marker_dir/reader.passed" ]] || \
 fi
 probe "boundary=reader-launch result=exited-zero"
 
-python3 scripts/diagnostic_scan.py --profile swiftdata \
+run_logged_phase probe-diagnostic-scan \
+  "$log_dir/probe-diagnostic-scan.log" \
+  python3 scripts/diagnostic_scan.py --profile swiftdata \
   "$log_dir/writer.log" "$log_dir/reader.log"
 
 {
