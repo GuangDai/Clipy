@@ -7,7 +7,10 @@ import Synchronization
 import Testing
 @testable import HistoryStorage
 
-@Suite("Gateway authoritative connection-kind recheck")
+// Every case opens and seeds a complete V4 store. Serializing this suite keeps
+// five ModelContainer startup/migration paths from competing at once with the
+// MainActor-driven PresentationUI suites in the package-wide test process.
+@Suite("Gateway authoritative connection-kind recheck", .serialized)
 struct GatewayConnectionKindRecheckTests {
     private static let epoch = Date(
         timeIntervalSinceReferenceDate: 915_000_000
