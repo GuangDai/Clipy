@@ -103,7 +103,8 @@ collect_probe_diagnostics() {
   local safe_log="$2"
 
   if [[ -f "$raw_log" ]]; then
-    grep '^CLIPY_PROBE ' "$raw_log" > "$safe_log" || : > "$safe_log"
+    grep -E '^CLIPY_(PROBE|PERSISTENCE_ERROR) ' "$raw_log" \
+      > "$safe_log" || : > "$safe_log"
   fi
 }
 
@@ -212,8 +213,10 @@ detach_volume() {
   return 1
 }
 
-cleanup() {
-  local original_status=$?
+cleanup_resources() {
+  local original_status="$1"
+  local cleanup_status=0
+  local outgoing_status=0
 
   set +e
   current_phase="cleanup"
@@ -231,8 +234,12 @@ cleanup() {
   fi
   if [[ -n "$pressure_pid" ]] && kill -0 "$pressure_pid" 2>/dev/null; then
     kill -TERM "$pressure_pid" 2>/dev/null
-    bounded_wait "$pressure_pid" 10 "pressure-cleanup" >/dev/null 2>&1
-    record_event "pressure-child-reaped"
+    if bounded_wait "$pressure_pid" 10 "pressure-cleanup" >/dev/null 2>&1; then
+      record_event "pressure-child-reaped"
+    else
+      cleanup_status=1
+      record_event "pressure-child-reap-failed"
+    fi
   fi
   collect_probe_diagnostics \
     "$temp_root/seed.stderr.raw.log" "$log_dir/seed-diagnostics.log"
@@ -241,26 +248,59 @@ cleanup() {
   collect_probe_diagnostics \
     "$temp_root/verify.stderr.raw.log" "$log_dir/verify-diagnostics.log"
   if [[ -n "$filler" && -e "$filler" ]]; then
-    rm -f -- "$filler"
-    record_event "competitor-removed"
+    if rm -f -- "$filler"; then
+      record_event "competitor-removed"
+    else
+      cleanup_status=1
+      record_event "competitor-removal-failed"
+    fi
   fi
-  detach_volume
+  if ! detach_volume; then
+    cleanup_status=1
+  fi
   if [[ -n "$temp_root" ]]; then
     case "$temp_root" in
       "$runner_temp"/clipy-apfs-enospc.*)
-        rm -rf -- "$temp_root"
-        record_event "temporary-root-removed"
+        if rm -rf -- "$temp_root"; then
+          record_event "temporary-root-removed"
+        else
+          cleanup_status=1
+          record_event "temporary-root-removal-failed"
+        fi
         ;;
       *)
+        cleanup_status=1
         record_event "temporary-root-prefix-rejected"
         ;;
     esac
   fi
+  if [[ "$original_status" -ne 0 ]]; then
+    outgoing_status="$original_status"
+  else
+    outgoing_status="$cleanup_status"
+  fi
   printf 'phase=cleanup event=complete outgoing_status=%s\n' \
-    "$original_status" >> "$phase_log"
-  return "$original_status"
+    "$outgoing_status" >> "$phase_log"
+  set -e
+  return "$outgoing_status"
 }
-trap cleanup EXIT
+
+cleanup_on_exit() {
+  local original_status=$?
+  local outgoing_status=0
+
+  # A bare return from an EXIT trap cannot replace the status that entered the
+  # trap. Disable recursion and exit explicitly so a cleanup failure following
+  # an otherwise successful body cannot produce a green workflow.
+  trap - EXIT
+  if cleanup_resources "$original_status"; then
+    outgoing_status=0
+  else
+    outgoing_status=$?
+  fi
+  exit "$outgoing_status"
+}
+trap cleanup_on_exit EXIT
 
 require_literal_file() {
   local path="$1"
@@ -279,6 +319,7 @@ require_literal_file() {
 begin_phase "build-probe"
 set +e
 swift build -c release --product HistoryRestartProbe \
+  -Xswiftc -D -Xswiftc CLIPY_RUNTIME_DIAGNOSTICS \
   > "$temp_root/release-build.raw.log" 2>&1
 build_status=$?
 set -e
@@ -408,8 +449,11 @@ record_event "complete"
 
 begin_phase "seed-store"
 set +e
-CLIPY_APFS_PROBE_DIAGNOSTICS=1 "$probe" seed "$store" \
-  > "$log_dir/seed.stdout.log" 2> "$temp_root/seed.stderr.raw.log"
+CLIPY_APFS_PROBE_DIAGNOSTICS=1 \
+CLIPY_RUNTIME_DIAGNOSTICS=1 \
+"$probe" seed "$store" \
+  > "$log_dir/seed.stdout.log" \
+  2> "$temp_root/seed.stderr.raw.log"
 seed_status=$?
 set -e
 record_command_status "seed-child" "$seed_status"
@@ -434,7 +478,9 @@ pressure_output_open=1
 exec 8<>"$pressure_input_fifo"
 pressure_input_open=1
 begin_phase "start-pressure-child"
-CLIPY_APFS_PROBE_DIAGNOSTICS=1 "$probe" pressureCapture "$store" \
+CLIPY_APFS_PROBE_DIAGNOSTICS=1 \
+CLIPY_RUNTIME_DIAGNOSTICS=1 \
+"$probe" pressureCapture "$store" \
   <"$pressure_input_fifo" >"$pressure_output_fifo" \
   2>"$temp_root/pressure.stderr.raw.log" 7>&- 8>&- &
 pressure_pid=$!
@@ -532,8 +578,11 @@ record_event "complete"
 
 begin_phase "fresh-process-verify"
 set +e
-CLIPY_APFS_PROBE_DIAGNOSTICS=1 "$probe" verifySeed "$store" \
-  > "$log_dir/verify.stdout.log" 2> "$temp_root/verify.stderr.raw.log"
+CLIPY_APFS_PROBE_DIAGNOSTICS=1 \
+CLIPY_RUNTIME_DIAGNOSTICS=1 \
+"$probe" verifySeed "$store" \
+  > "$log_dir/verify.stdout.log" \
+  2> "$temp_root/verify.stderr.raw.log"
 verify_status=$?
 set -e
 record_command_status "verify-child" "$verify_status"
@@ -550,6 +599,17 @@ record_event "complete"
 begin_phase "detach-image"
 detach_volume
 record_event "complete"
+
+# Delete the raw tool/framework logs and disposable image before publishing a
+# success result. The EXIT trap remains the abnormal-path fallback until this
+# explicit cleanup has succeeded.
+trap - EXIT
+if cleanup_resources 0; then
+  :
+else
+  final_cleanup_status=$?
+  exit "$final_cleanup_status"
+fi
 
 {
   printf 'artifact=%s\n' "HistoryRestartProbe Release product"
