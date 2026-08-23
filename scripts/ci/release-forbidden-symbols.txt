@@ -1,0 +1,28 @@
+# Card 5D reviewed literal inventory. Each non-comment line is matched as a
+# fixed substring against `swift-demangle` output from every Mach-O file in the
+# ordinary Release Clipy.app. This is intentionally a finite inventory, not a
+# claim that every possible test instrument has been audited.
+ClipyApp.AppComposition.makeForTesting
+ClipyApp.AppComposition.nextCaptureFailureForTesting
+ClipyApp.AppComposition.pasteWriteFailureForTesting
+ClipyApp.AppComposition.submitCaptureForTesting
+ClipyApp.AppDelegate.installCompositionForTesting
+ClipyApp.UnixSocketF0Listener
+ClipyApp.UnixSocketF0Protocol
+ClipyUDSF0Client
+HistoryStorage.ExactLiteralMatchDebugResult
+HistoryStorage.ExternalFailureDebugInstrumentation
+HistoryStorage.ExternalGatewayDebugInstrumentation
+HistoryStorage.MigrationBackfillAbortProbe
+HistoryStorage.ObservationDebugInstrumentation
+HistoryStorage.SearchDebugEvent
+HistoryStorage.SearchDebugProbe
+HistoryStorage.SearchDebugTrace
+HistoryStorage.StorageLifecycleDebugEvent
+HistoryStorage.StorageLifecycleDebugPhase
+HistoryStorage.StorageLifecycleDebugProbe
+PasteboardAdapter.PasteboardAdapter.payloadReadCompletionHook
+PasteboardAdapter.PasteboardAdapter.payloadReadObserver
+PasteboardAdapter.PasteboardFailureSimulation
+PresentationUI.ThumbnailStore.debugDiscardedFetchCompletionCount
+PresentationUI.ThumbnailStore.debugFetchCompletionCount
