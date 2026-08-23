@@ -41,7 +41,7 @@ targets:
       - package: Clipy
         product: PresentationUI
   ClipyUDSF0Client:
-    type: commandLineTool
+    type: tool
     platform: macOS
     sources:
       - Tools/ClipyUDSF0Client
