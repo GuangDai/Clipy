@@ -126,6 +126,14 @@ final class AppComposition {
     /// path; never duplicated (01 §8).
     let history: any ClipboardHistory
 
+    /// The App Intents-only X.6 projection of the SAME production History
+    /// graph. Production open creates this immediately after
+    /// `SwiftDataHistory.open` returns; hosted compositions built from a
+    /// scripted `ClipboardHistory` deliberately have no external facade.
+    /// Keeping the value here prevents App Intents dependency resolution
+    /// from opening a second store or constructing a second writer.
+    let appIntentsHistoryFacade: ExternalHistoryFacade?
+
     /// The NSPasteboard ↔ HistoryCore translator (01 §5.1/§5.6).
     let adapter: PasteboardAdapter
 
@@ -244,11 +252,13 @@ final class AppComposition {
     /// a History or pasteboard adapter with mismatched collaborators.
     private init(
         history: any ClipboardHistory,
+        appIntentsHistoryFacade: ExternalHistoryFacade?,
         adapter: PasteboardAdapter,
         observerPollInterval: TimeInterval = 0.5,
         captureByteLimit: Int = HistoryLimits.standard.maximumCaptureBytes
     ) {
         self.history = history
+        self.appIntentsHistoryFacade = appIntentsHistoryFacade
         self.adapter = adapter
         observer = PasteboardObserver(
             adapter: adapter,
@@ -287,7 +297,9 @@ final class AppComposition {
         }
         openedStoreURLs.insert(storeURL)
         do {
+            try Task.checkCancellation()
             let composition = try await openReserved(storeURL: storeURL)
+            try Task.checkCancellation()
             composition.start()
             return composition
         } catch {
@@ -312,9 +324,11 @@ final class AppComposition {
                 persistence: .persistent(storeURL: storeURL)
             )
         )
+        let appIntentsHistoryFacade = history.makeAppIntentsHistoryFacade()
         let adapter = PasteboardAdapter()
         return AppComposition(
             history: history,
+            appIntentsHistoryFacade: appIntentsHistoryFacade,
             adapter: adapter
         )
     }
@@ -392,6 +406,7 @@ final class AppComposition {
     ) -> AppComposition {
         let composition = AppComposition(
             history: history,
+            appIntentsHistoryFacade: nil,
             adapter: adapter,
             observerPollInterval: observerPollInterval,
             captureByteLimit: captureByteLimit

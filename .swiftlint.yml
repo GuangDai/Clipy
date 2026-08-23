@@ -9,7 +9,8 @@
 #
 # Matching notes:
 #   - `included`/`excluded` are regexes matched against each file's path.
-#   - Import regexes tolerate `@_exported import` and kind imports
+#   - Import regexes tolerate import attributes (`@_exported`,
+#     `@preconcurrency`), access-level imports, and kind imports
 #     (`import struct Foo.Bar`); the module name is what is checked.
 
 only_rules:
@@ -26,7 +27,7 @@ custom_rules:
     name: "ClipboardFormats import confinement"
     included: "Sources/ClipboardFormats/"
     # Allowlist: immutable stable facts remain Foundation-only.
-    regex: '^\s*(?:@_\w+\s+)*import\s+(?!(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?Foundation)\w'
+    regex: '^\s*(?:@[A-Za-z_][A-Za-z0-9_]*(?:\([^\n)]*\))?\s+)*(?:(?:public|package|internal|fileprivate|private)\s+)?import\s+(?!(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?Foundation)\w'
     message: "ClipboardFormats may import Foundation (and its submodules) only (Part I §8)."
     severity: error
 
@@ -34,7 +35,7 @@ custom_rules:
     name: "HistoryCore import confinement"
     included: "Sources/HistoryCore/"
     # Allowlist: Foundation and its submodules (prefix match) only.
-    regex: '^\s*(?:@_\w+\s+)*import\s+(?!(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?Foundation)\w'
+    regex: '^\s*(?:@[A-Za-z_][A-Za-z0-9_]*(?:\([^\n)]*\))?\s+)*(?:(?:public|package|internal|fileprivate|private)\s+)?import\s+(?!(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?Foundation)\w'
     message: "HistoryCore may import Foundation (and its submodules) only (Part I §8)."
     severity: error
 
@@ -42,7 +43,7 @@ custom_rules:
     name: "HistoryDomain import confinement"
     included: "Sources/HistoryDomain/"
     # Allowlist: Foundation (+ submodules) and HistoryCore only.
-    regex: '^\s*(?:@_\w+\s+)*import\s+(?!(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:Foundation|HistoryCore)\b)\w'
+    regex: '^\s*(?:@[A-Za-z_][A-Za-z0-9_]*(?:\([^\n)]*\))?\s+)*(?:(?:public|package|internal|fileprivate|private)\s+)?import\s+(?!(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:Foundation|HistoryCore)\b)\w'
     message: "HistoryDomain may import Foundation and HistoryCore only (Part I §8)."
     severity: error
 
@@ -52,7 +53,7 @@ custom_rules:
     # Allowlist: Foundation (+ submodules), HistoryCore, and HistoryStorage.
     # HistoryStorage added at step 8: the §9 runner drives the public
     # SwiftDataHistory concrete facade (docs/06-cross-cutting.md §9).
-    regex: '^\s*(?:@_\w+\s+)*import\s+(?!(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:Foundation|HistoryCore|HistoryStorage)\b)\w'
+    regex: '^\s*(?:@[A-Za-z_][A-Za-z0-9_]*(?:\([^\n)]*\))?\s+)*(?:(?:public|package|internal|fileprivate|private)\s+)?import\s+(?!(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:Foundation|HistoryCore|HistoryStorage)\b)\w'
     message: "HistoryPerfRunner may import Foundation, HistoryCore, and HistoryStorage only (Part I §8)."
     severity: error
 
@@ -60,7 +61,7 @@ custom_rules:
     name: "HistoryRestartProbe import confinement"
     included: "Sources/HistoryRestartProbe/"
     # Allowlist: the restart tracer is a public-API-only composition client.
-    regex: '^\s*(?:@_\w+\s+)*import\s+(?!(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:Foundation|HistoryCore|HistoryStorage)\b)\w'
+    regex: '^\s*(?:@[A-Za-z_][A-Za-z0-9_]*(?:\([^\n)]*\))?\s+)*(?:(?:public|package|internal|fileprivate|private)\s+)?import\s+(?!(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:Foundation|HistoryCore|HistoryStorage)\b)\w'
     message: "HistoryRestartProbe may import Foundation, HistoryCore, and HistoryStorage only (Part I §8)."
     severity: error
 
@@ -69,7 +70,7 @@ custom_rules:
     included: "Sources/HistoryStorage/"
     # Blocklist target: SwiftData / ImageIO / xxh3 / Fuse / HistoryCore /
     # HistoryDomain are allowed (Fuse pinned at roadmap step 3).
-    regex: '^\s*(?:@_\w+\s+)*import\s+(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:AppKit|SwiftUI|PasteboardAdapter|PresentationUI)\b'
+    regex: '^\s*(?:@[A-Za-z_][A-Za-z0-9_]*(?:\([^\n)]*\))?\s+)*(?:(?:public|package|internal|fileprivate|private)\s+)?import\s+(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:AppKit|SwiftUI|PasteboardAdapter|PresentationUI)\b'
     message: "HistoryStorage must not import AppKit, SwiftUI, adapters, or PresentationUI (Part I §8)."
     severity: error
 
@@ -78,7 +79,7 @@ custom_rules:
     included: "Sources/PasteboardAdapter/"
     # Blocklist target: AppKit is allowed; other adapters would be added here
     # if a second adapter target ever appears (no adapter imports another).
-    regex: '^\s*(?:@_\w+\s+)*import\s+(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:HistoryDomain|HistoryStorage|SwiftUI|SwiftData)\b'
+    regex: '^\s*(?:@[A-Za-z_][A-Za-z0-9_]*(?:\([^\n)]*\))?\s+)*(?:(?:public|package|internal|fileprivate|private)\s+)?import\s+(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:HistoryDomain|HistoryStorage|SwiftUI|SwiftData)\b'
     message: "PasteboardAdapter must not import HistoryDomain, HistoryStorage, SwiftUI, or SwiftData (Part I §8)."
     severity: error
 
@@ -86,7 +87,7 @@ custom_rules:
     name: "PresentationUI import confinement"
     included: "Sources/PresentationUI/"
     # Blocklist target: SwiftUI is allowed.
-    regex: '^\s*(?:@_\w+\s+)*import\s+(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:HistoryDomain|HistoryStorage|AppKit|SwiftData)\b'
+    regex: '^\s*(?:@[A-Za-z_][A-Za-z0-9_]*(?:\([^\n)]*\))?\s+)*(?:(?:public|package|internal|fileprivate|private)\s+)?import\s+(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:HistoryDomain|HistoryStorage|AppKit|SwiftData)\b'
     message: "PresentationUI must not import HistoryDomain, HistoryStorage, AppKit, or SwiftData (Part I §8)."
     severity: error
 
@@ -94,7 +95,7 @@ custom_rules:
     name: "xxh3 confinement"
     included: "Sources/"
     excluded: "Sources/HistoryStorage/"
-    regex: '^\s*(?:@_\w+\s+)*import\s+(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?xxh3\b'
+    regex: '^\s*(?:@[A-Za-z_][A-Za-z0-9_]*(?:\([^\n)]*\))?\s+)*(?:(?:public|package|internal|fileprivate|private)\s+)?import\s+(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?xxh3\b'
     message: "xxh3 is confined to HistoryStorage (Part I §8)."
     severity: error
 
@@ -102,29 +103,45 @@ custom_rules:
     name: "Fuse confinement"
     included: "Sources/"
     excluded: "Sources/HistoryStorage/"
-    regex: '^\s*(?:@_\w+\s+)*import\s+(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?Fuse\b'
+    regex: '^\s*(?:@[A-Za-z_][A-Za-z0-9_]*(?:\([^\n)]*\))?\s+)*(?:(?:public|package|internal|fileprivate|private)\s+)?import\s+(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?Fuse\b'
     message: "Fuse is confined to HistoryStorage (Part I §8)."
+    severity: error
+
+  appintents_confinement:
+    name: "AppIntents confinement"
+    included: "(Sources|Tests|ClipyApp)/"
+    excluded: "(ClipyApp/Sources|ClipyApp/Tests/ClipyIntegrationTests)/"
+    regex: '^\s*(?:@[A-Za-z_][A-Za-z0-9_]*(?:\([^\n)]*\))?\s+)*(?:(?:public|package|internal|fileprivate|private)\s+)?import\s+(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?AppIntents\b'
+    message: "AppIntents is confined to ClipyApp and its hosted integration tests (Part I §8)."
     severity: error
 
   # ---- Escape hatches and service locators (mirror of scripts/escape_hatch_scan.py) ----
 
   no_unchecked_sendable:
     name: "No @unchecked Sendable"
-    included: "(Sources|Tests)/"
+    included: "(Sources|Tests|ClipyApp/Sources|ClipyApp/Tests)/"
     regex: '@unchecked\s+Sendable'
     message: "@unchecked Sendable is banned in the greenfield targets (Part I §8)."
     severity: error
 
   no_nonisolated_unsafe:
     name: "No nonisolated(unsafe)"
-    included: "(Sources|Tests)/"
+    included: "(Sources|Tests|ClipyApp/Sources|ClipyApp/Tests)/"
     regex: 'nonisolated\s*\(\s*unsafe\s*\)'
     message: "nonisolated(unsafe) is banned in the greenfield targets (Part I §8)."
     severity: error
 
   no_service_locator:
     name: "No service locator"
-    included: "(Sources|Tests)/"
+    included: "(Sources|Tests|ClipyApp/Sources|ClipyApp/Tests)/"
     regex: '\bstatic\s+(?:let|var)\s+(?:shared|current)\b'
     message: "Service-locator spelling 'static let/var shared|current' is banned (Part I §8); inject dependencies instead."
+    severity: error
+
+  appdependency_shared_confinement:
+    name: "AppDependencyManager.shared confinement"
+    included: "(Sources|Tests|ClipyApp)/"
+    excluded: "ClipyApp/Sources/AppIntents/AppIntentDependencyRegistration.swift"
+    regex: '\bAppDependencyManager\s*\.\s*shared\b'
+    message: "AppDependencyManager.shared is confined to the one composition-root add(dependency:) registration (Part I §8)."
     severity: error

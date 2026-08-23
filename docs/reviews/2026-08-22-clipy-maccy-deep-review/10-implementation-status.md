@@ -35,6 +35,7 @@
 | 正常路径 correctness batch 10 | Done | [PR #12](https://github.com/GuangDai/Clipy/pull/12)，[correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32599988000) | 三个 correctness jobs 全绿；覆盖下表列出的 X.5 internal rate/admission 与 authoritative denial actor leaves | 只证明 internal denial/admission substrate；不证明 granted positive History read/write、public facade/factory、App Intents、credential、CLI 或 transport |
 | 正常路径 correctness batch 11 | Done | [PR #13](https://github.com/GuangDai/Clipy/pull/13)，[correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32602514635) | 三个 correctness jobs 全绿；覆盖 internal HCR-only V4 schema/migration、affected-items codec、bootstrap、stamping 与 shared-transaction append prerequisite | 该批单独只证明下表列出的 HCR substrate；其commit-family、rollback、reopen与fetch-shape缺口由Batch 12关闭，不证明 X.6、public reader/cursor/cache/rebase 或 OperationRecord 等式 |
 | 正常路径 correctness batch 12 | Done | [PR #14](https://github.com/GuangDai/Clipy/pull/14)，[correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32603682935) | 三个 correctness jobs 全绿；闭合 X-HCR.2 的reachable commit-family、pre/post-HCR rollback、bounded persistent/crash reopen与structural prefix-fetch proofs | 只证明下表列出的 internal HCR prerequisite；不证明mid-transaction kill、断电、物理durability、性能、public J1 reader/cursor/cache/rebase、OperationRecord等式或X.6 runtime |
+| 正常路径 correctness batch 13 | Done | [PR #15](https://github.com/GuangDai/Clipy/pull/15)，[correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32607389771)，[HistoryCore symbol snapshot run](https://github.com/GuangDai/Clipy/actions/runs/32606749388) | 三个 correctness jobs 全绿；闭合 X.6 bounded positive reads/writes、HCR + audit + History atomicity、failure mapping、cadence fence 与 public connection-bound facade/factory；未运行 perf/AB | 不证明 App Intents framework composition、signed/system invocation、性能、credential、CLI 或 transport |
 | SIGNED-RUNTIME-0 | Done（指定验收 lane） | [PR #7](https://github.com/GuangDai/Clipy/pull/7) 引入 lane，[PR #8](https://github.com/GuangDai/Clipy/pull/8) 修正共享 diagnostic profile，[correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32573066624)，[master signed-runtime](https://github.com/GuangDai/Clipy/actions/runs/32573198119) | master 的手动 lane 完成一次 Release build、ad-hoc 签名及验证、Hardened Runtime flag、iCloud/ubiquity entitlement 负门与直接进程 liveness | 不证明 Developer ID、secure timestamp、notarization/stapling、Gatekeeper、TCC、login item、Carbon/status item、Space 或 WindowServer 行为 |
 
 ## 3. 正常路径 leaf 状态
@@ -223,21 +224,35 @@ V4 schema/migration、bounded affected-items codec、empty/existing bootstrap、
 | Persistent/crash HCR reopen proof | Done（指定 X-HCR.2 leaf） | [`HCRRestartTests`](../../../Tests/HistoryStorageTests/HCRRestartTests.swift) 对真实on-disk store释放首个owner后重新public open，核对HCR/config suffix并继续append N+1；[`HistoryRestartProbe`](../../../Sources/HistoryRestartProbe/HistoryRestartProbe.swift) 的`crashCommit`阶段在收到committed receipt后以fatal signal退出，[`HCRCrashRestartTests`](../../../Tests/HistoryStorageTests/HCRCrashRestartTests.swift) 要求第三个child public reopen并核对exact HCR/position/config | [correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32603682935) 已绿；只支持same-process owner-release/reopen与“transaction已返回receipt后”的真子进程崩溃，不外推为mid-transaction process kill、断电、文件系统耐久性或跨版本恢复 |
 | Structural prefix-fetch proof | Done（指定 X-HCR.2 leaf） | [`HCRStore.prefixReadScope`](../../../Sources/HistoryStorage/HCRStore.swift) 在descriptor构造前选择none/bounded oldest prefix/full suffix；[`HCRAtomicAppendTests`](../../../Tests/HistoryStorageTests/HCRAtomicAppendTests.swift) 以literal覆盖无压力、count-only及age/byte分支 | [correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32603682935) 已绿；只证明non-cadence/no-pressure不构造prefix fetch、count-only bounded oldest-prefix及age/byte full bounded suffix的fetch shape，不证明latency、RSS、磁盘放大或无界scale |
 
-## 14. Batch 13 X.6 positive Gateway 当前工作（未合并）
+## 14. Batch 13 X.6 positive Gateway 已合并 leaf 状态
 
 > X-HCR.1/X-HCR.2 已在 Batch 11–12 以指定上限 CI-green，因此 X.6 的 HCR prerequisite 已满足。
-> 下列 X.6 实现仍只属于当前工作树的 **In progress**，不得在合并与 correctness CI 前宣称可用。
-> 本批有意改变 HistoryCore public failure vocabulary；symbol snapshot 必须由 macOS runner 再生成，
-> 当前尚未生成或验证，不能以手工编辑 snapshot 代替。
+> 下列状态只覆盖 [PR #15](https://github.com/GuangDai/Clipy/pull/15) 经
+> [correctness CI](https://github.com/GuangDai/Clipy/actions/runs/32607389771) 验证的 X.6 边界。
+> HistoryCore public failure vocabulary 的 snapshot 由
+> [runner](https://github.com/GuangDai/Clipy/actions/runs/32606749388) 再生成。两条 lane
+> 都不是 perf/AB 证据，也不支持 App Intents/signed/runtime 结论。
 
-| Leaf | 当前状态 | 预定 observable behavior | 当前支持上限 |
+| Leaf | 当前状态 | Production / behavior 证据 | 合并后最高支持上限 |
 |---|---|---|---|
-| X.6 truthful failure mapping | In progress | [`ExternalTransientReason`](../../../Sources/HistoryCore/ExternalGatewayContract.swift) 新增truthful insufficient-disk-space raw 3与cancelled raw 4；[`ExternalFailureMapping`](../../../Sources/HistoryStorage/ExternalFailureMapping.swift) 逐项映射approved History failures；[`ExternalFailureMappingTests`](../../../Tests/HistoryStorageTests/ExternalFailureMappingTests.swift) 锁定sibling precedence、ENOSPC、coherence-token raw 5、search-only audit reclassification与raw values；operation-aware sentinel把spec-not-producible/wrong-operation failure转为audited `.persistence(.invariantViolation)` raw 7 | 文件已落盘但尚未合并、未经本批 correctness CI；sentinel的DEBUG-only `TaskLocal` real-Authority read/write fixture在Release无hook；HistoryCore symbol snapshot有意等待runner再生成 |
-| X.6 granted positive reads | In progress | [`GatewayExternalReads`](../../../Sources/HistoryStorage/GatewayExternalReads.swift) 经同一个production [`ExternalGateway`](../../../Sources/HistoryStorage/ExternalGateway.swift) 执行bounded recent/search/details/paste-payload，在线性化点重检live grant，并在mandatory audit提交后才发布immutable result；admitted search cancellation固定为`.temporarilyUnavailable(.cancelled)` raw 4，先提交mandatory failed audit，audit failure覆盖cancellation；[`GatewayExternalReadTests`](../../../Tests/HistoryStorageTests/GatewayExternalReadTests.swift) 覆盖positive projections、audit barrier、cancellation、wrong-operation sentinel与revoke窗口；[`ExternalGatewayDenialTests`](../../../Tests/HistoryStorageTests/ExternalGatewayDenialTests.swift) 覆盖Nth cadence maintenance失败时不debit、不读History、不写request audit且retry仍due，并以deterministic DEBUG follower-join + Authority-entry witness证明并发caller共享one attempt、success后followers计入新区间 | 文件已落盘但仍在本批review修正中，尚未合并、未经本批 correctness CI；cadence并发fixture只属correctness evidence，不证明throughput/latency/perf；snapshot仍待runner再生成，不包含App Intents framework composition、credential或transport |
-| X.6 atomic positive writes | In progress | [`GatewayExternalWrites`](../../../Sources/HistoryStorage/GatewayExternalWrites.swift) 将granted pin/unpin/remove接入唯一Authority transaction并组合History mutation、HCR与OperationRecord；no-op与failure保持独立mandatory audit barrier，save-boundary重检拒绝TOCTOU revoke；[`GatewayExternalWriteTests`](../../../Tests/HistoryStorageTests/GatewayExternalWriteTests.swift) 覆盖三种positive write、ENOSPC/coherence、wrong-operation sentinel、rollback与revoke窗口；[`ExternalGatewayDenialTests`](../../../Tests/HistoryStorageTests/ExternalGatewayDenialTests.swift) 的pre-dispatch compaction regression覆盖maintenance失败不debit、不执行/审计destructive request且不能覆盖committed outcome；同文件deterministic DEBUG follower-join + Authority-entry test证明read/write共享的Gateway cadence只创建one in-flight attempt | 文件已落盘但仍未经本批最终review/compile/CI，尚未合并；cadence证据不支持performance claim，DEBUG `TaskLocal` sentinel hook在Release不存在；不包含capture/revise/clear/retention或任意external action surface |
-| X.6 public facade/factory | In progress | [`ExternalHistoryFacade`](../../../Sources/HistoryStorage/ExternalHistoryFacade.swift) 是connection-bound public `ExternalHistory` adapter；[`SwiftDataHistory.makeAppIntentsHistoryFacade`](../../../Sources/HistoryStorage/SwiftDataHistory.swift) 同步、无参数并复用startup验证的durable ID；[`ExternalHistoryFacadeTests`](../../../Tests/HistoryStorageTests/ExternalHistoryFacadeTests.swift) 与app-hosted [`ExternalHistoryFacadePublicTests`](../../../ClipyApp/Tests/ClipyIntegrationTests/ExternalHistoryFacadePublicTests.swift) 从正常import surface构造并调用，`SwiftDataHistory`本身不conform `ExternalHistory` | 文件已落盘但尚未合并、未经本批 correctness CI；不等于App Intents intents/shortcuts registration、credential、CLI、socket或跨进程调用 |
+| X.6 truthful failure mapping | Done（指定 X.6 leaf） | [`ExternalTransientReason`](../../../Sources/HistoryCore/ExternalGatewayContract.swift) 新增truthful insufficient-disk-space raw 3与cancelled raw 4；[`ExternalFailureMapping`](../../../Sources/HistoryStorage/ExternalFailureMapping.swift) 逐项映射approved History failures；[`ExternalFailureMappingTests`](../../../Tests/HistoryStorageTests/ExternalFailureMappingTests.swift) 锁定sibling precedence、ENOSPC、coherence-token raw 5、search-only audit reclassification与raw values | 支持指定operation的typed mapping与DEBUG real-Authority wrong-operation sentinel；DEBUG `TaskLocal` hook在Release不存在，不是signed/runtime证据 |
+| X.6 granted positive reads | Done（指定 X.6 leaf） | [`GatewayExternalReads`](../../../Sources/HistoryStorage/GatewayExternalReads.swift) 经production [`ExternalGateway`](../../../Sources/HistoryStorage/ExternalGateway.swift) 执行bounded recent/search/details/paste-payload；[`GatewayExternalReadTests`](../../../Tests/HistoryStorageTests/GatewayExternalReadTests.swift) 覆盖positive projection、audit barrier、cancellation、wrong-operation sentinel与revoke窗口；[`ExternalGatewayDenialTests`](../../../Tests/HistoryStorageTests/ExternalGatewayDenialTests.swift) 覆盖cadence failure/follower join | 支持在线性化点live-grant重检、mandatory audit-before-publication与取消/audit failure precedence；cadence fixture是correctness evidence，不证明throughput/latency/perf |
+| X.6 atomic positive writes | Done（指定 X.6 leaf） | [`GatewayExternalWrites`](../../../Sources/HistoryStorage/GatewayExternalWrites.swift) 将granted pin/unpin/remove接入唯一Authority transaction并组合History mutation、HCR与OperationRecord；[`GatewayExternalWriteTests`](../../../Tests/HistoryStorageTests/GatewayExternalWriteTests.swift) 覆盖三种positive write、rollback、failure与revoke窗口 | 支持指定write subset的save-boundary grant recheck与atomicity；不包含capture/revise/clear/retention或未批准external action |
+| X.6 public facade/factory | Done（指定 X.6 leaf） | [`ExternalHistoryFacade`](../../../Sources/HistoryStorage/ExternalHistoryFacade.swift) 是connection-bound public `ExternalHistory` adapter；[`SwiftDataHistory.makeAppIntentsHistoryFacade`](../../../Sources/HistoryStorage/SwiftDataHistory.swift) 同步、无参数并复用startup验证的durable ID；[`ExternalHistoryFacadeTests`](../../../Tests/HistoryStorageTests/ExternalHistoryFacadeTests.swift) 与app-hosted [`ExternalHistoryFacadePublicTests`](../../../ClipyApp/Tests/ClipyIntegrationTests/ExternalHistoryFacadePublicTests.swift) 从正常import surface构造并调用 | 证明public、connection-bound、可调用的facade/factory，且`SwiftDataHistory`不conform `ExternalHistory`；不等于App Intents registration/system invocation、credential、CLI、socket或跨进程调用 |
 
-## 15. 明确仍 Open，禁止误报完成
+## 15. Batch 14 X.7 App Intents 当前工作（未合并）
+
+> 下列文件已在当前工作树出现，但尚未经 macOS 26 compile/correctness CI，
+> 因此全部保持 **In progress**。Hosted tests 只能支持所列 in-process 边界；
+> framework/system 生命周期结论仍需 signed-runtime 证据。
+
+| Leaf | 当前状态 | 当前 source / test | 当前支持上限 |
+|---|---|---|---|
+| X.7 identity + output model | In progress | [`HistoryItemID(uuidString:)`](../../../Sources/HistoryCore/Identity.swift) 只重建canonical exported UUID identity；[`ClipboardIntentModels`](../../../ClipyApp/Sources/AppIntents/ClipboardIntentModels.swift) 使用output-only `TransientAppEntity`；[`HistoryItemIDParsingTests`](../../../Tests/HistoryCoreTests/HistoryItemIDParsingTests.swift) 与 [`AppIntentCatalogTests`](../../../ClipyApp/Tests/ClipyIntegrationTests/AppIntentCatalogTests.swift) 待runner编译/执行 | 不使用`EntityQuery`或capped recent scan；String ID parsing不铸造durable row、不授权，存在性与grant仍由Gateway判定 |
+| X.7 six intents + paste semantics | In progress | [`ClipboardHistoryIntents`](../../../ClipyApp/Sources/AppIntents/ClipboardHistoryIntents.swift) 定义search/details/paste/pin/unpin/remove六个intent，macOS 26 `supportedModes = [.background]`、exact limit parameter，paste经已有`PasteboardAdapter.write`而不合成Command-V；[`ClipboardShortcuts`](../../../ClipyApp/Sources/AppIntents/ClipboardShortcuts.swift) 是唯一provider；[`AppIntentBehaviorTests`](../../../ClipyApp/Tests/ClipyIntegrationTests/AppIntentBehaviorTests.swift) 待runner验证 | 当前只是unmerged source/tests；不声称Shortcuts discovery、General Pasteboard跨进程可见性、TCC或signed invocation |
+| X.7 one early async dependency provider | In progress | [`AppIntentDependencyRegistration`](../../../ClipyApp/Sources/AppIntents/AppIntentDependencyRegistration.swift) 是production唯一framework `.shared` registration；[`AppDelegate`](../../../ClipyApp/Sources/AppDelegate.swift) 与 [`AppComposition`](../../../ClipyApp/Sources/AppComposition.swift) 拟在首个store-open suspension前注册provider并复用同一open work；[`AppIntentDependencyTests`](../../../ClipyApp/Tests/ClipyIntegrationTests/AppIntentDependencyTests.swift) 使用standalone `AppDependencyManager()` | Hosted logical cold/warm 与provider-side open failure不证明framework unresolved-resolution、真Siri/Shortcuts cold/warm ordering、Swift 6 queue-crash freedom、process placement或TCC；这些仍是signed-runtime cells |
+
+## 16. 明确仍 Open，禁止误报完成
 
 - Card 9B 在Batch 6合并后仍只关闭单AppComposition/ViewState内capture、policy、Clear/remove/revise
   receipt路径；跨window/多panel、未来cache以及不经该owner的commit仍Open。
@@ -250,13 +265,12 @@ V4 schema/migration、bounded affected-items codec、empty/existing bootstrap、
   synthetic production-catch proof外推为物理磁盘验收。
 - Card 3D、Card 9D hosted Retry/no-Retry control、localization、VoiceOver/FKA、custom shortcut、signed release、StoreRoot/recovery、
   Gateway后续层、format runtime/manifests与tiered/unbounded production transition仍按 `04`/`07`–`09` 的 gates执行。
-- Batch 10 已合并的 X.5 rate/admission 与 authoritative denial actor 只关闭internal denial substrate，
-  不是完整 Gateway。Batch 11–12 已按指定上限闭合 internal HCR-only V4/X-HCR.2 prerequisite；
-  这只解除X.6的前置依赖，不交付Gateway positive runtime。Batch 13 的granted read/write、
-  failure mapping与public `ExternalHistoryFacade`/factory在合并且correctness CI全绿前仍为In progress；
-  X.5或X-HCR Green不得被外推为public facade可构造或可用。
-  public `ReconnectHistory`/cursor/reader/cache不属于当前 prerequisite；App Intents、credential、
-  CLI/transport仍属于后续层。
+- Batch 10 的 X.5 denial substrate、Batch 11–12 的 X-HCR prerequisite、Batch 13 的
+  X.6 positive Gateway/public facade 已分别以指定上限合并。不得把它们外推为
+  App Intents framework composition或signed invocation已完成。Batch 14 X.7 仍为In progress；
+  hosted tests 不关闭framework unresolved-resolution、真cold/warm Siri/Shortcuts、discovery、
+  process placement、Swift 6 queue-crash或TCC cells。public `ReconnectHistory`/cursor/reader/cache
+  不属于当前 prerequisite；credential、CLI/transport仍属于后续层。
 - X.3 bootstrap 的“config absent+全dependent tables empty”是migration/fresh-compatible create shape，但与
   未来既有V3全删同形；无durable provenance时这个因果歧义仍Open，不得用marker、hash
   或猜测修复伪装成已证明。
@@ -270,7 +284,7 @@ V4 schema/migration、bounded affected-items codec、empty/existing bootstrap、
   format-facts模块统一；owner-specific admission仍必须分开，不能造中央policy开关。
 - 本文件中的“Done”只关闭所列 leaf；不能据此宣称 state 3、全面超过 Maccy 或字面无限历史。
 
-## 16. Agent 领取前检查
+## 17. Agent 领取前检查
 
 1. 先查本表：Done leaf 不得重做；Partial 只能领取“支持上限/下一步”列中的缺口。
 2. 再查 `04` 的唯一 leaf 与 decision/spec gate；没有唯一 observable behavior 就不编码。
