@@ -14,6 +14,7 @@ struct AppIntentFailureTests {
             query: "[private-query",
             mode: .regexp,
             limit: 20,
+            history: support.facade,
             dependencyManager: support.manager
         )
 
@@ -31,6 +32,7 @@ struct AppIntentFailureTests {
         try await support.history.revokeConnection(connectionID)
         let intent = GetItemDetailsIntent(
             itemID: support.itemID.description,
+            history: support.facade,
             dependencyManager: support.manager
         )
 
@@ -46,6 +48,7 @@ struct AppIntentFailureTests {
             query: "[private-query",
             mode: .regexp,
             limit: 20,
+            history: support.facade,
             dependencyManager: support.manager
         )
 
@@ -62,6 +65,7 @@ struct AppIntentFailureTests {
         let absentID = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"
         let intent = GetItemDetailsIntent(
             itemID: absentID,
+            history: support.facade,
             dependencyManager: support.manager
         )
 
@@ -86,13 +90,19 @@ struct AppIntentFailureTests {
         )
         let intent = GetItemDetailsIntent(
             itemID: "not-an-identity",
+            history: support.facade,
             dependencyManager: support.manager
         )
-        let auditCount = try await support.history.auditLog(since: 0).count
+        let auditBefore = try await support.history.auditLog(since: 1).filter {
+            $0.operationKind != .adminReadAudit
+        }
 
         await #expect(throws: ClipboardIntentFailure.invalidRequest) {
             _ = try await intent.perform()
         }
-        #expect(try await support.history.auditLog(since: 0).count == auditCount)
+        let auditAfter = try await support.history.auditLog(since: 1).filter {
+            $0.operationKind != .adminReadAudit
+        }
+        #expect(auditAfter == auditBefore)
     }
 }

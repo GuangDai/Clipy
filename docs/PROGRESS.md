@@ -869,7 +869,8 @@ test.
   behavior.
 - **X.7 current work:** App Intents composition is in progress on an unmerged
   branch. Hosted tests may prove real-store facade delegation, standalone
-  dependency-manager resolution, and pasteboard-adapter wiring. True
+  provider registration/behavior, explicit wrapper-default injection for
+  direct intent calls, and pasteboard-adapter wiring. True
   Siri/Shortcuts cold/warm launch, framework unresolved-resolution behavior,
   system discovery, process placement, Swift 6 queue-crash freedom, and TCC
   remain signed-runtime cells and are not closed by hosted tests.

@@ -37,12 +37,16 @@ struct SearchHistoryIntent: AppIntent {
         query: String,
         mode: ClipboardSearchMode,
         limit: Int,
+        history: ExternalHistoryFacade,
         dependencyManager: AppDependencyManager
     ) {
         self.query = query
         self.mode = mode
         self.limit = limit
-        _history = AppDependency(manager: dependencyManager)
+        _history = AppDependency(
+            manager: dependencyManager,
+            default: history
+        )
     }
 
     func perform() async throws -> some IntentResult & ReturnsValue<[
@@ -80,9 +84,16 @@ struct GetItemDetailsIntent: AppIntent {
 
     init() {}
 
-    init(itemID: String, dependencyManager: AppDependencyManager) {
+    init(
+        itemID: String,
+        history: ExternalHistoryFacade,
+        dependencyManager: AppDependencyManager
+    ) {
         self.itemID = itemID
-        _history = AppDependency(manager: dependencyManager)
+        _history = AppDependency(
+            manager: dependencyManager,
+            default: history
+        )
     }
 
     func perform() async throws -> some IntentResult & ReturnsValue<
@@ -124,11 +135,15 @@ struct PasteItemIntent: AppIntent {
     init(
         itemID: String,
         pasteboardName: String,
+        history: ExternalHistoryFacade,
         dependencyManager: AppDependencyManager
     ) {
         self.itemID = itemID
         self.pasteboardName = pasteboardName
-        _history = AppDependency(manager: dependencyManager)
+        _history = AppDependency(
+            manager: dependencyManager,
+            default: history
+        )
     }
 
     func perform() async throws -> some IntentResult & ReturnsValue<Bool> {
@@ -164,9 +179,16 @@ struct PinItemIntent: AppIntent {
 
     init() {}
 
-    init(itemID: String, dependencyManager: AppDependencyManager) {
+    init(
+        itemID: String,
+        history: ExternalHistoryFacade,
+        dependencyManager: AppDependencyManager
+    ) {
         self.itemID = itemID
-        _history = AppDependency(manager: dependencyManager)
+        _history = AppDependency(
+            manager: dependencyManager,
+            default: history
+        )
     }
 
     func perform() async throws -> some IntentResult & ReturnsValue<Bool> {
@@ -200,9 +222,16 @@ struct UnpinItemIntent: AppIntent {
 
     init() {}
 
-    init(itemID: String, dependencyManager: AppDependencyManager) {
+    init(
+        itemID: String,
+        history: ExternalHistoryFacade,
+        dependencyManager: AppDependencyManager
+    ) {
         self.itemID = itemID
-        _history = AppDependency(manager: dependencyManager)
+        _history = AppDependency(
+            manager: dependencyManager,
+            default: history
+        )
     }
 
     func perform() async throws -> some IntentResult & ReturnsValue<Bool> {
@@ -238,9 +267,16 @@ struct RemoveItemIntent: AppIntent {
 
     init() {}
 
-    init(itemID: String, dependencyManager: AppDependencyManager) {
+    init(
+        itemID: String,
+        history: ExternalHistoryFacade,
+        dependencyManager: AppDependencyManager
+    ) {
         self.itemID = itemID
-        _history = AppDependency(manager: dependencyManager)
+        _history = AppDependency(
+            manager: dependencyManager,
+            default: history
+        )
     }
 
     func perform() async throws -> some IntentResult & ReturnsValue<Bool> {

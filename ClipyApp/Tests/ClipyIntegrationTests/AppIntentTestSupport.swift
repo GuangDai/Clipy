@@ -53,7 +53,7 @@ struct AppIntentTestSupport {
     }
 
     func lastAuditOperation() async throws -> ExternalOperationKind? {
-        try await history.auditLog(since: 0).last?.operationKind
+        try await history.auditLog(since: 1).last?.operationKind
     }
 
     func appIntentsConnectionID() async throws -> ExternalConnectionID {

@@ -17,6 +17,7 @@ struct AppIntentBehaviorTests {
             query: "intent-seed",
             mode: .exact,
             limit: 20,
+            history: support.facade,
             dependencyManager: support.manager
         )
 
@@ -34,6 +35,7 @@ struct AppIntentBehaviorTests {
         let support = try await AppIntentTestSupport.make(grants: [.readContent])
         let intent = GetItemDetailsIntent(
             itemID: support.itemID.description,
+            history: support.facade,
             dependencyManager: support.manager
         )
 
@@ -57,6 +59,7 @@ struct AppIntentBehaviorTests {
         let intent = PasteItemIntent(
             itemID: support.itemID.description,
             pasteboardName: pasteboardName,
+            history: support.facade,
             dependencyManager: support.manager
         )
 
@@ -81,6 +84,7 @@ struct AppIntentBehaviorTests {
         let support = try await AppIntentTestSupport.make(grants: [.manage])
         let intent = PinItemIntent(
             itemID: support.itemID.description,
+            history: support.facade,
             dependencyManager: support.manager
         )
 
@@ -96,6 +100,7 @@ struct AppIntentBehaviorTests {
         _ = try await support.facade.perform(.pin(support.itemID))
         let intent = UnpinItemIntent(
             itemID: support.itemID.description,
+            history: support.facade,
             dependencyManager: support.manager
         )
 
@@ -110,6 +115,7 @@ struct AppIntentBehaviorTests {
         let support = try await AppIntentTestSupport.make(grants: [.manage])
         let intent = RemoveItemIntent(
             itemID: support.itemID.description,
+            history: support.facade,
             dependencyManager: support.manager
         )
 
