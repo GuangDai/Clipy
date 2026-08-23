@@ -38,9 +38,9 @@ public struct ClipySettingsView: View {
     /// loop refreshes the panel after every commit.
     private let viewState: HistoryViewState
 
-    /// Non-`nil` only when the composition root wired SMAppService
-    /// (PresentationUI never imports ServiceManagement — contract §4.4).
-    private let launchAtLogin: Binding<Bool>?
+    /// Neutral immutable state plus narrow intents from the ClipyApp-owned
+    /// ServiceManagement controller. This target never imports that framework.
+    private let launchAtLogin: LaunchAtLoginSettings?
 
     /// Non-`nil` only when the composition root owns a floating panel whose
     /// placement the user can configure (the geometry lives in ClipyApp —
@@ -50,13 +50,13 @@ public struct ClipySettingsView: View {
     /// - Parameters:
     ///   - viewState: the shared interaction-state object (contract §3).
     ///   - launchAtLogin: when non-`nil`, the General tab shows the
-    ///     "Launch at Login" toggle bound to it; `nil` (previews, hosted
+    ///     "Launch at Login" state and controls; `nil` (previews, hosted
     ///     tests) omits the toggle entirely.
     ///   - popupPosition: when non-`nil`, the General tab shows the panel
     ///     position picker bound to it; `nil` omits the picker entirely.
     public init(
         viewState: HistoryViewState,
-        launchAtLogin: Binding<Bool>? = nil,
+        launchAtLogin: LaunchAtLoginSettings? = nil,
         popupPosition: Binding<PopupPositionMode>? = nil
     ) {
         self.viewState = viewState
@@ -96,7 +96,7 @@ public struct ClipySettingsView: View {
 private struct GeneralSettingsTab: View {
 
     private let viewState: HistoryViewState
-    private let launchAtLogin: Binding<Bool>?
+    private let launchAtLogin: LaunchAtLoginSettings?
     private let popupPosition: Binding<PopupPositionMode>?
 
     /// Text backing the count field; parsed and range-checked on every use
@@ -117,7 +117,7 @@ private struct GeneralSettingsTab: View {
 
     init(
         viewState: HistoryViewState,
-        launchAtLogin: Binding<Bool>?,
+        launchAtLogin: LaunchAtLoginSettings?,
         popupPosition: Binding<PopupPositionMode>?
     ) {
         self.viewState = viewState
@@ -162,7 +162,7 @@ private struct GeneralSettingsTab: View {
                     }
                 }
                 if let launchAtLogin {
-                    Toggle("Launch at Login", isOn: launchAtLogin)
+                    launchAtLoginControl(launchAtLogin)
                 }
                 if let popupPosition {
                     Picker("Panel position", selection: popupPosition) {
@@ -207,7 +207,56 @@ private struct GeneralSettingsTab: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear { launchAtLogin?.refresh() }
         .task { await loadConfiguredCount() }
+    }
+
+    @ViewBuilder
+    private func launchAtLoginControl(
+        _ settings: LaunchAtLoginSettings
+    ) -> some View {
+        Toggle(
+            "Launch at Login",
+            isOn: Binding(
+                get: { settings.isOn },
+                set: { settings.setEnabled($0) }
+            )
+        )
+        .disabled(!settings.canToggle)
+
+        switch settings.state {
+        case .off, .on:
+            EmptyView()
+        case .requiresApproval:
+            HStack {
+                Label(
+                    "Approval is required in System Settings.",
+                    systemImage: "person.badge.clock"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Button("Open Login Items Settings") {
+                    settings.openSystemSettings()
+                }
+            }
+        case .unavailable:
+            Label(
+                "Launch at Login is unavailable for this app.",
+                systemImage: "exclamationmark.triangle"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+
+        if settings.operationFailed {
+            Label(
+                "The Launch at Login setting couldn't be changed.",
+                systemImage: "exclamationmark.triangle"
+            )
+            .font(.caption)
+            .foregroundStyle(.red)
+        }
     }
 
     /// The parsed count, or `nil` when the text is not a whole number
@@ -724,6 +773,6 @@ private func validatedWholeNumber(_ text: String, in range: ClosedRange<Int>) ->
 #Preview("Settings") {
     ClipySettingsView(
         viewState: HistoryViewState(history: PreviewClipboardHistory.populated),
-        launchAtLogin: .constant(true)
+        launchAtLogin: LaunchAtLoginSettings(state: .on)
     )
 }
