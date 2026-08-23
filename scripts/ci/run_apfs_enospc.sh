@@ -29,42 +29,24 @@ diagnostic_publication_status=0
 
 bootstrap_cleanup_on_exit() {
   local original_status=$?
-  local cleanup_status=0
-  local outgoing_status="$original_status"
 
-  # Same substitution-subshell guard as cleanup_on_exit: bash 3.2 can run
-  # an inherited EXIT trap inside a subshell while the top-level shell is
-  # still executing (run 32634454727).
-  if [[ "${BASH_SUBSHELL:-0}" -ne 0 ]]; then
-    return "$original_status"
-  fi
-
-  trap - EXIT
-  if [[ -n "$temp_root" ]]; then
-    case "$temp_root" in
-      "$runner_temp"/clipy-apfs-enospc.*)
-        rm -rf -- "$temp_root" || cleanup_status=1
-        ;;
-      *)
-        cleanup_status=1
-        ;;
-    esac
-  fi
-  if [[ "$original_status" -eq 0 && "$cleanup_status" -ne 0 ]]; then
-    outgoing_status="$cleanup_status"
-  fi
+  # Breadcrumbs only. The runner's bash 3.2 runs an inherited EXIT trap in
+  # substitution subshells mid-body (runs 32634454727/32635233048/
+  # 32635568571: a trap fire between the pressure-result read and the next
+  # body statement tore down the volume while the main shell kept
+  # executing), so an EXIT trap must never touch processes, mounts, or the
+  # disposable root, and must never `exit`: a trap that only writes
+  # bounded evidence files into $log_dir is harmless in every context that
+  # can fire it, and the shell's own exit status is what the job sees.
   if [[ -d "$log_dir" ]]; then
     {
       printf 'result=failure\n'
       printf 'exit_phase=bootstrap\n'
       printf 'body_status=%s\n' "$original_status"
-      printf 'cleanup_status=%s\n' "$cleanup_status"
-      printf 'outgoing_status=%s\n' "$outgoing_status"
     } > "$log_dir/failure-summary.log"
   fi
-  printf 'CLIPY_APFS_BOOTSTRAP_FAILURE body_status=%s cleanup_status=%s outgoing_status=%s\n' \
-    "$original_status" "$cleanup_status" "$outgoing_status" >&2
-  exit "$outgoing_status"
+  printf 'CLIPY_APFS_BOOTSTRAP_FAILURE body_status=%s\n' \
+    "$original_status" >&2
 }
 trap bootstrap_cleanup_on_exit EXIT
 
@@ -619,30 +601,31 @@ cleanup_resources() {
 
 cleanup_on_exit() {
   local original_status=$?
-  local outgoing_status=0
 
-  # The runner's bash 3.2 runs an inherited EXIT trap inside substitution
-  # subshells: run 32634454727's pressure-result token check fired this trap
-  # from `cmp … <(printf …)` mid-body, detaching the evidence volume and
-  # deleting the disposable root while the main shell kept executing (the
-  # line-383 df redirect then failed against the removed root and the run
-  # ended red with the evidence already proven). Cleanup is owned by the
-  # top-level shell only: $BASH_SUBSHELL is 0 there and at least 1 in every
-  # subshell form on bash 3.2 and later.
-  if [[ "${BASH_SUBSHELL:-0}" -ne 0 ]]; then
-    return "$original_status"
+  # Breadcrumbs only — never teardown. The runner's bash 3.2 runs an
+  # inherited EXIT trap inside substitution subshells mid-body (observed
+  # three times between the pressure-result read and the very next body
+  # statement: runs 32634454727, 32635233048, 32635568571), and no
+  # in-trap discriminator ($BASH_SUBSHELL is not bumped by the firing
+  # form) can tell that context from a real exit. A trap that only
+  # publishes bounded evidence into $log_dir and returns is harmless in
+  # every context that can fire it: a mid-body fire duplicates at most
+  # breadcrumb lines that the final fire rewrites, the shell's own exit
+  # status still reaches the job unchanged, and process/mount/root
+  # teardown stays exclusively on the explicit success path
+  # (`trap - EXIT` + `cleanup_resources 0 0`). A failure path leaves the
+  # disposable image attached on the ephemeral runner VM — acceptable
+  # hygiene debt against the alternative of racing teardown.
+  if [[ -d "$log_dir" ]]; then
+    publish_known_raw_diagnostics || true
+    write_exit_summary "$current_phase" "$original_status" 0 \
+      "$original_status"
+    if write_diagnostic_manifest; then
+      printf 'CLIPY_APFS_MANIFEST status=0\n' >&2
+    else
+      printf 'CLIPY_APFS_MANIFEST status=1\n' >&2
+    fi
   fi
-
-  # A bare return from an EXIT trap cannot replace the status that entered the
-  # trap. Disable recursion and exit explicitly so a cleanup failure following
-  # an otherwise successful body cannot produce a green workflow.
-  trap - EXIT
-  if cleanup_resources "$original_status"; then
-    outgoing_status=0
-  else
-    outgoing_status=$?
-  fi
-  exit "$outgoing_status"
 }
 trap cleanup_on_exit EXIT
 
