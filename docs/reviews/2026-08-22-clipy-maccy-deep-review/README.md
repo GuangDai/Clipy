@@ -60,6 +60,10 @@
 - [`10-implementation-status.md`](10-implementation-status.md) — REVIEW 的唯一活实现账本：逐 leaf
   记录 Done/Partial/In progress/Open、production path、测试与 CI 证据及支持上限，后续 agent 先查此表，
   避免重复领取已关闭行为。
+- [`11-ai-todo-map-2026-08-23.md`](11-ai-todo-map-2026-08-23.md) — AI 生成的时点审计与待办地图
+  （2026-08-23，基线 `cda2ba0` → `a3e6774`）：对照本 REVIEW、实现树与真实 CI 记录汇总当前状态、
+  新发现问题与仍 Open 的分区待办。它不是活账本，也不是执行来源（不新增可领取 leaf）；状态与
+  执行仍以 `10` 与 owning spec 为准。
 - [`apple-platform-source-memo.md`](apple-platform-source-memo.md) — Apple 官方文档
   逐项备忘录。
 - [`apple-swiftdata-durability-memo.md`](apple-swiftdata-durability-memo.md) — SwiftData

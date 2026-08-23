@@ -1050,29 +1050,34 @@ test.
   does not prove fresh-install registration, external
   revoke, logout/login, actual System Settings behavior, or a signed installed
   artifact.
-- **Batch 19 Card 6B APFS capture-transaction scaffold landed; physical
-  evidence remains open:**
-  [`HistoryRestartProbe`](../Sources/HistoryRestartProbe/HistoryRestartProbe.swift)
-  now has bounded `pressureCapture` and `verifySeed` phases, while
-  [`run_apfs_enospc.sh`](../scripts/ci/run_apfs_enospc.sh) and the dispatch-only
-  [`apfs-enospc`](../.github/workflows/apfs-enospc.yml) workflow define one
-  disposable fixed-size APFS image experiment. The intended observation is a
-  real competing allocation ENOSPC, a production capture transaction rejected
-  as insufficient disk space with the seed unchanged, and a fresh-process
-  seed reopen after capacity is released. The scaffold and its ordinary tests
-  landed through [PR #21](https://github.com/GuangDai/Clipy/pull/21), merge
-  `0768688`, with all three jobs green in
-  [correctness run 32621152027](https://github.com/GuangDai/Clipy/actions/runs/32621152027).
-  The first physical attempt
-  [32621160012](https://github.com/GuangDai/Clipy/actions/runs/32621160012)
-  stopped at image creation before attach, seed, pressure, or production
-  capture because the blank-image `hdiutil create` options were incompatible.
-  PR #22 corrected that invocation, but the second attempt
-  [32621667292](https://github.com/GuangDai/Clipy/actions/runs/32621667292)
-  again stopped in `hdiutil create`: `-format UDRW` was still invalid without a
-  source device/folder. Neither failure reached the target behavior, so Card 6B
-  remains Partial. Its ceiling still excludes disk-full open/migration,
-  revise/remove/clear, StoreRoot recovery, and any signed or distribution
+- **Batch 19 Card 6B APFS capture-transaction physical evidence GREEN
+  (2026-08-23, dispatch run
+  [32636093920](https://github.com/GuangDai/Clipy/actions/runs/32636093920)):**
+  the disposable 256-MiB UDRW APFS image experiment observed the full leaf:
+  `volume.filesystem=apfs`, `volume.writable_metadata=true
+  (WritableVolume)`, a 1-MiB write+remove preflight, seed tokens matched, a
+  real competing-allocation ENOSPC (`competitor.result=enospc`, 6.6 MB left),
+  the production capture transaction rejected as
+  `.temporarilyUnavailable(.insufficientDiskSpace)` with the seed unchanged
+  (`PRESSURECAPTURE_OK`), capacity released, and a fresh-process seed reopen
+  (`VERIFYSEED_OK`); summary line `pressure_capture=transaction rejected with
+  seed preserved`. Reaching green required the batch-22..27 chain: the
+  branch's two multi-line-interpolation syntax errors (PR #24), stamped-plan
+  capacity admission in docs/05 §16 (PR #25) — added because run
+  [32632262141](https://github.com/GuangDai/Clipy/actions/runs/32632262141)
+  proved Core Data raises an uncaught
+  `NSInternalInconsistencyException` (`Can't create externalDataReference
+  interim file : 28`) instead of an out-of-space error when an
+  external-storage interim file cannot be created on a full volume — the raw
+  `volumeAvailableCapacity` fact after the important-usage variant returned
+  zero on the mounted volume (PR #26, run
+  [32634051113](https://github.com/GuangDai/Clipy/actions/runs/32634051113)),
+  and a breadcrumbs-only EXIT trap after the runner's bash 3.2 fired the
+  inherited trap inside substitution subshells mid-body three times (PRs
+  #27–#29, runs 32634454727/32635233048/32635568571). The ceiling still
+  excludes disk-full open/migration, revise/remove/clear under exhaustion
+  after admission passes (the Apple-framework crash ceiling documented in
+  §16/AUDIT), StoreRoot recovery, and any signed or distribution
   environment.
 - **Batch 19 General pasteboard cross-process scaffold landed; visibility
   evidence remains open:**
@@ -1092,8 +1097,14 @@ test.
   [32621668622](https://github.com/GuangDai/Clipy/actions/runs/32621668622)
   then failed in that same pre-launch aggregate Release build because a
   repository test referenced the DEBUG-only `MigrationBackfillAbortProbe`.
-  Neither run launched the writer or reader, so cross-process visibility has
-  not been observed. This leaf does not test TCC, App Intents, a target
+  **Cross-process visibility is now observed GREEN (2026-08-23, dispatch run
+  [32632263996](https://github.com/GuangDai/Clipy/actions/runs/32632263996))**
+  after PR #24 fixed the two build-blocking interpolation syntax errors and
+  the tolerant Info.plist-absent inventory: the writer published the
+  16-byte synthetic `com.clipy.probe.cross-process` payload through the
+  adapter, the ad-hoc+hardened-runtime bundle signing and the swift-testing
+  discovery/filter chain held, and the reader byte-compared the value after
+  the writer host exited. This leaf does not test TCC, App Intents, a target
   application, write atomicity, or WindowServer behavior.
 - **Batch 19 Settings Clear surface-purge routing landed:**
   [`ClipySettingsView`](../Sources/PresentationUI/ClipySettingsView.swift) now
