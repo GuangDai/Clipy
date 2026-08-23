@@ -33,7 +33,10 @@ struct RetentionSettingsDraftTests {
             HistoryRetentionPolicies(
                 age: AgeRetention(maxAge: 90_001),
                 storage: StorageRetention(maxTotalBytes: 20_971_520),
-                revisions: nil
+                revisions: RevisionRetention(
+                    maxRevisionsPerItem: 19,
+                    maxRevisionBytesPerItem: 1_048_577
+                )
             ),
             requestedAt: loadRequest
         ))
@@ -42,7 +45,16 @@ struct RetentionSettingsDraftTests {
         #expect(draft.storageEnabled)
         #expect(draft.storageMiBText == "15")
         #expect(draft.storageValueIsDirty)
+        #expect(draft.ageEnabled)
+        #expect(draft.ageDaysText == "2")
+        #expect(draft.revisionCountEnabled)
+        #expect(draft.revisionCountText == "19")
+        #expect(draft.revisionBytesEnabled)
+        #expect(draft.revisionMiBText == "2")
+        #expect(policies.age?.maxAge == 90_001)
         #expect(policies.storage?.maxTotalBytes == 15_728_640)
+        #expect(policies.revisions?.maxRevisionsPerItem == 19)
+        #expect(policies.revisions?.maxRevisionBytesPerItem == 1_048_577)
         #expect(draft.requiresTighteningConfirmation(for: policies))
     }
 

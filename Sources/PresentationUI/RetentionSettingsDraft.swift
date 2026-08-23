@@ -40,6 +40,10 @@ internal struct RetentionSettingsDraft {
     internal private(set) var storageValueIsDirty = false
     internal private(set) var revisionCountValueIsDirty = false
     internal private(set) var revisionBytesValueIsDirty = false
+    internal private(set) var ageToggleIsDirty = false
+    internal private(set) var storageToggleIsDirty = false
+    internal private(set) var revisionCountToggleIsDirty = false
+    internal private(set) var revisionBytesToggleIsDirty = false
 
     private var configuredPolicies = HistoryRetentionPolicies(
         age: nil,
@@ -67,41 +71,60 @@ internal struct RetentionSettingsDraft {
 
     /// Accepts a configured-policy read against the edit generation at which
     /// it started (`04` Red 10A). A late read always refreshes the hidden
-    /// authoritative comparison baseline, but it may reflect into controls
-    /// only when no user edit happened while the request was suspended.
+    /// authoritative comparison baseline and reflects each untouched control,
+    /// while preserving only toggles/fields carrying a newer dirty edit. This
+    /// per-control merge prevents one storage edit from erasing a configured
+    /// age or revision policy in the next whole-policy submission.
     @discardableResult
     internal mutating func acceptLoaded(
         _ policies: HistoryRetentionPolicies,
         requestedAt request: LoadRequest
     ) -> Bool {
+        let generationIsCurrent = request.editGeneration == editGeneration
         configuredPolicies = policies
-        guard request.editGeneration == editGeneration else { return false }
-        ageEnabled = policies.age != nil
-        if let age = policies.age {
+        if generationIsCurrent || !ageToggleIsDirty {
+            ageEnabled = policies.age != nil
+        }
+        if let age = policies.age,
+           generationIsCurrent || !ageValueIsDirty {
             ageDaysText = String(Self.ceilingDays(age.maxAge))
         }
-        storageEnabled = policies.storage != nil
-        if let storage = policies.storage {
+        if generationIsCurrent || !storageToggleIsDirty {
+            storageEnabled = policies.storage != nil
+        }
+        if let storage = policies.storage,
+           generationIsCurrent || !storageValueIsDirty {
             storageMiBText = String(Self.ceilingMiB(
                 storage.maxTotalBytes,
                 range: Self.storageMiBRange
             ))
         }
-        revisionCountEnabled = policies.revisions?.maxRevisionsPerItem != nil
-        if let count = policies.revisions?.maxRevisionsPerItem {
+        if generationIsCurrent || !revisionCountToggleIsDirty {
+            revisionCountEnabled = policies.revisions?.maxRevisionsPerItem != nil
+        }
+        if let count = policies.revisions?.maxRevisionsPerItem,
+           generationIsCurrent || !revisionCountValueIsDirty {
             revisionCountText = String(count)
         }
-        revisionBytesEnabled = policies.revisions?.maxRevisionBytesPerItem != nil
-        if let bytes = policies.revisions?.maxRevisionBytesPerItem {
+        if generationIsCurrent || !revisionBytesToggleIsDirty {
+            revisionBytesEnabled = policies.revisions?.maxRevisionBytesPerItem != nil
+        }
+        if let bytes = policies.revisions?.maxRevisionBytesPerItem,
+           generationIsCurrent || !revisionBytesValueIsDirty {
             revisionMiBText = String(Self.ceilingMiB(
                 bytes,
                 range: Self.revisionMiBRange
             ))
         }
+        guard generationIsCurrent else { return false }
         ageValueIsDirty = false
         storageValueIsDirty = false
         revisionCountValueIsDirty = false
         revisionBytesValueIsDirty = false
+        ageToggleIsDirty = false
+        storageToggleIsDirty = false
+        revisionCountToggleIsDirty = false
+        revisionBytesToggleIsDirty = false
         acceptedSuccessMessage = nil
         return true
     }
@@ -109,6 +132,7 @@ internal struct RetentionSettingsDraft {
     internal mutating func setAgeEnabled(_ enabled: Bool) {
         guard ageEnabled != enabled else { return }
         ageEnabled = enabled
+        ageToggleIsDirty = true
         recordEdit()
     }
 
@@ -122,6 +146,7 @@ internal struct RetentionSettingsDraft {
     internal mutating func setStorageEnabled(_ enabled: Bool) {
         guard storageEnabled != enabled else { return }
         storageEnabled = enabled
+        storageToggleIsDirty = true
         recordEdit()
     }
 
@@ -135,6 +160,7 @@ internal struct RetentionSettingsDraft {
     internal mutating func setRevisionCountEnabled(_ enabled: Bool) {
         guard revisionCountEnabled != enabled else { return }
         revisionCountEnabled = enabled
+        revisionCountToggleIsDirty = true
         recordEdit()
     }
 
@@ -148,6 +174,7 @@ internal struct RetentionSettingsDraft {
     internal mutating func setRevisionBytesEnabled(_ enabled: Bool) {
         guard revisionBytesEnabled != enabled else { return }
         revisionBytesEnabled = enabled
+        revisionBytesToggleIsDirty = true
         recordEdit()
     }
 
@@ -214,6 +241,10 @@ internal struct RetentionSettingsDraft {
         storageValueIsDirty = false
         revisionCountValueIsDirty = false
         revisionBytesValueIsDirty = false
+        ageToggleIsDirty = false
+        storageToggleIsDirty = false
+        revisionCountToggleIsDirty = false
+        revisionBytesToggleIsDirty = false
         acceptedSuccessMessage = successMessage
         return true
     }
