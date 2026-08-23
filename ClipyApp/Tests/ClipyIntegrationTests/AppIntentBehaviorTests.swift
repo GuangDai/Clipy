@@ -50,7 +50,7 @@ struct AppIntentBehaviorTests {
     func paste() async throws {
         let support = try await AppIntentTestSupport.make(grants: [.readContent])
         let pasteboardName = "com.clipy.tests.app-intent-paste"
-        await MainActor.run {
+        _ = await MainActor.run {
             NSPasteboard(name: NSPasteboard.Name(pasteboardName))
                 .clearContents()
         }
