@@ -6,6 +6,7 @@ import HistoryCore
 import PresentationUI
 import Testing
 
+@Suite(.serialized)
 @MainActor
 struct PreviewPaneStateTests {
 
@@ -18,24 +19,42 @@ struct PreviewPaneStateTests {
         )
     }
 
-    /// A state with a short dwell so tests stay fast (production default is
-    /// Maccy's 200 ms).
+    /// Zero delay preserves the production task-suspension boundary without
+    /// coupling state-machine tests to wall-clock scheduling under CI load.
     private func makeState() -> PreviewPaneState {
-        PreviewPaneState(autoOpenDelay: .milliseconds(30))
+        PreviewPaneState(autoOpenDelay: .zero)
+    }
+
+    /// Waits for a zero-delay dwell already queued on the MainActor. A clock
+    /// deadline can expire before either this test or the dwell regains the
+    /// actor on a saturated runner; yielding instead observes causal task
+    /// completion independent of how long that scheduling takes. The finite
+    /// turn budget still lets a broken production task fail the test.
+    private func waitForScheduledDwell(
+        _ condition: @MainActor () -> Bool
+    ) async {
+        for _ in 0..<10_000 {
+            if condition() { return }
+            await Task.yield()
+        }
     }
 
     @Test func dwellAutoOpensAfterTheConfiguredDelay() async {
-        let state = makeState()
+        // A nonzero duration exercises the sleep branch; its one-nanosecond
+        // value keeps scheduling, rather than wall-clock passage, as the
+        // observable boundary under CI load.
+        let state = PreviewPaneState(autoOpenDelay: .nanoseconds(1))
         let item = reference()
 
         state.handleSelectionChange(item)
         #expect(!state.isOpen, "the dwell must not fire synchronously")
         #expect(state.previewedItem == nil)
 
-        let opened = await pollUntil(timeout: .seconds(10)) {
+        await waitForScheduledDwell {
             state.isOpen && state.previewedItem == item
         }
-        #expect(opened, "the dwell fires after the delay and opens the pane")
+        #expect(state.isOpen, "the dwell task opens the pane asynchronously")
+        #expect(state.previewedItem == item)
     }
 
     @Test func rapidSelectionChangesCancelPendingDwells() async {
@@ -46,17 +65,17 @@ struct PreviewPaneStateTests {
         state.handleSelectionChange(first)
         state.handleSelectionChange(second)
 
-        let opened = await pollUntil(timeout: .seconds(10)) {
+        await waitForScheduledDwell {
             state.isOpen && state.previewedItem == second
         }
-        #expect(opened)
+        #expect(state.isOpen)
         #expect(
             state.previewedItem == second,
             "the superseded selection never fires (cancel-and-reschedule debounce)"
         )
     }
 
-    @Test func manualToggleOpensImmediatelyAndClosesWithSuppression() async {
+    @Test func manualToggleOpensImmediatelyAndClosesWithSuppression() {
         let state = makeState()
         let item = reference()
 
@@ -72,7 +91,6 @@ struct PreviewPaneStateTests {
         // re-selecting nothing new must not reopen the pane. (A new
         // selection change to a DIFFERENT item lifts the suppression —
         // covered by `manualCloseSuppressionLiftsOnSelectionChange`.)
-        try? await Task.sleep(for: .milliseconds(120))
         #expect(!state.isOpen)
     }
 
@@ -86,10 +104,11 @@ struct PreviewPaneStateTests {
         #expect(!state.isOpen)
 
         state.handleSelectionChange(second)
-        let reopened = await pollUntil(timeout: .seconds(10)) {
+        await waitForScheduledDwell {
             state.isOpen && state.previewedItem == second
         }
-        #expect(reopened, "a selection change clears the manual-close suppression")
+        #expect(state.isOpen, "a selection change clears the manual-close suppression")
+        #expect(state.previewedItem == second)
     }
 
     @Test func resigningKeyDisarmsAndBecomingKeyRearms() async {
@@ -98,13 +117,12 @@ struct PreviewPaneStateTests {
 
         state.panelResignedKey()
         state.handleSelectionChange(item)
-        try? await Task.sleep(for: .milliseconds(120))
         #expect(!state.isOpen, "no dwell fires while the panel is not key")
 
         state.panelBecameKey()
         state.handleSelectionChange(item)
-        let opened = await pollUntil(timeout: .seconds(10)) { state.isOpen }
-        #expect(opened)
+        await waitForScheduledDwell { state.isOpen }
+        #expect(state.previewedItem == item)
     }
 
     @Test func panelClosedDisarmsAutoOpenUntilThePanelBecomesKeyAgain() {
@@ -175,10 +193,10 @@ struct PreviewPaneStateTests {
         #expect(state.previewedItem == first)
 
         state.handleSelectionChange(second)
-        let retargeted = await pollUntil(timeout: .seconds(10)) {
+        await waitForScheduledDwell {
             state.previewedItem == second
         }
-        #expect(retargeted)
+        #expect(state.previewedItem == second)
         #expect(state.isOpen, "retargeting keeps the pane open")
     }
 

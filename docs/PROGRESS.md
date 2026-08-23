@@ -12,7 +12,7 @@
 > they are cited here, never restated as new semantics.
 
 **Audit baseline:** `8f316c9` (2026-08-02). **Current landed baseline:**
-`master` through PR #19 / merge `2ec8911` (2026-08-23). Steps 0–9 are
+`master` through PR #20 / merge `604e335` (2026-08-23). Steps 0–9 are
 implemented and CI-green;
 M2/state 2 is complete. Step 9 (product wiring: PasteboardAdapter +
 PresentationUI + ClipyApp composition) is done, including its post-step-9
@@ -23,17 +23,22 @@ cursor/status-item/center/last-position placement, dwell-driven preview pane)
 rather than a SwiftUI `MenuBarExtra`. M3/state 3 (packaging, accessibility,
 localization, product acceptance per Part VI §11) remains open.
 
-**Current CI provenance (2026-08-23):** PR #19 correctness run
-[32617502726](https://github.com/GuangDai/Clipy/actions/runs/32617502726)
-is green across Lint + source gates, SwiftPM build + test, and XcodeGen
-generate + app build/test. This storage-only hardening changed no HistoryCore
-public surface, so no symbol-snapshot run was needed; no performance/AB or
-signed-runtime lane ran for PR #19. The latest signed UDS discriminator
-evidence remains bounded to run
+**Current CI provenance (2026-08-23):** [PR #20](https://github.com/GuangDai/Clipy/pull/20),
+merged as `604e335`, is green across Lint + source gates, SwiftPM build + test,
+and XcodeGen generate + app build/test at
+[correctness run 32619384577](https://github.com/GuangDai/Clipy/actions/runs/32619384577).
+No HistoryCore public-surface change required a symbol-snapshot run, and no
+performance/AB lane ran. The merge-head ordinary ad-hoc Release artifact also
+passed the finite Card 5D symbol inventory at
+[release-surface run 32619756885](https://github.com/GuangDai/Clipy/actions/runs/32619756885).
+That dispatch proves zero matches for the 26 reviewed demangled literals in
+that exact artifact, not a complete instrumentation or distribution/runtime
+audit. The latest signed UDS discriminator evidence remains bounded to run
 [32615713100](https://github.com/GuangDai/Clipy/actions/runs/32615713100).
-It does not prove credential custody or authenticated ingress, Developer ID
-identity, secure timestamp, notarization/stapling, Gatekeeper, App Sandbox,
-Keychain sharing, different-EUID callers, TCC, login-item,
+Neither ordinary correctness nor the release-surface run proves production
+Data Protection Keychain persistence/reopen/delete or authenticated ingress,
+Developer ID identity, secure timestamp, notarization/stapling, Gatekeeper,
+App Sandbox, Keychain sharing, different-EUID callers, TCC, fresh login-item,
 Carbon/status-item, Space, WindowServer behavior, or true Siri/Shortcuts
 discovery and cold/warm invocation.
 
@@ -957,37 +962,45 @@ test.
   custody, authenticated UDS ingress, local positive browse, X.8 JSON
   dispatch, product `clipyctl`, locator/cursor, schema/public surface, or new
   signed platform evidence.
-- **X.9 F1 server credential custody is in progress:** the current unmerged
-  Batch 18 worktree contains the exact 16-byte connection UUID + 32-byte
+- **X.9 F1 server credential ordinary/injected leaf landed:**
+  [PR #20](https://github.com/GuangDai/Clipy/pull/20), merge `604e335`, contains
+  the exact 16-byte connection UUID + 32-byte
   secret value in
   [`LocalAutomationCredential`](../Sources/HistoryStorage/LocalAutomationCredential.swift)
   and the actor-confined app-private Data Protection Keychain adapter in
   [`CredentialStore`](../Sources/HistoryStorage/CredentialStore.swift).
   [`LocalAutomationCredentialStoreTests`](../Tests/HistoryStorageTests/LocalAutomationCredentialStoreTests.swift)
-  currently exercise literal shape, system secret generation, exact
+  exercise literal shape, system secret generation, exact
   round-trip/delete, duplicate/malformed/corrupt/unavailable behavior through
-  an injected in-memory external-operations seam. This is not landed or CI
-  evidence. It does not yet prove a signed artifact can persist/reopen/delete
-  the production Keychain item, and it includes no client credential file,
+  an injected in-memory external-operations seam; the suite passed in
+  [correctness run 32619384577](https://github.com/GuangDai/Clipy/actions/runs/32619384577).
+  This closes only the ordinary compiled implementation and injected-store
+  behavior leaf. Signed-artifact Data Protection Keychain
+  persistence/reopen/delete remains open, and the batch includes no client credential file,
   enrollment/revocation coordination, credential comparison/authentication,
-  authenticated ingress, Gateway/History dispatch, product CLI, or new signed
-  platform result.
-- **Additional unmerged Batch 18 evidence leaves are in progress:**
+  authenticated ingress, Gateway/History dispatch, product CLI, or signed DPK
+  result.
+- **Additional Batch 18 evidence leaves landed at their specified ceilings:**
   [`StableIdentityRetirementTests`](../Tests/HistoryStorageTests/StableIdentityRetirementTests.swift)
   is a tests-only public-History D1 proof that byte-identical recapture after
-  removal mints a fresh item identity; it changes no production code.
+  removal mints a fresh item identity while the retired ID stays not-found; it
+  changes no production code.
   [`GatewayConnectionKindRateDenialTests`](../Tests/HistoryStorageTests/GatewayConnectionKindRateDenialTests.swift)
   directly covers the PR #19 rate-denial follow-up: bidirectional wrong-kind
   calls remain unaudited and correct-kind local denial appends one bounded
-  audit without changing History/HCR/position. The dispatch-only
+  audit without changing History/HCR/position. Both suites passed in
+  [correctness run 32619384577](https://github.com/GuangDai/Clipy/actions/runs/32619384577).
+  The dispatch-only
   [`release-surface`](../.github/workflows/release-surface.yml) workflow,
   [`run_release_surface.sh`](../scripts/ci/run_release_surface.sh), and finite
   [`release-forbidden-symbols.txt`](../scripts/ci/release-forbidden-symbols.txt)
-  inventory build one ordinary ad-hoc Release artifact and check only the
-  reviewed demangled symbol literals. None has macOS CI evidence yet. The
-  symbol lane is not a complete instrumentation audit and proves no Developer
-  ID, timestamp, notarization, Gatekeeper, TCC, UI, or other runtime behavior.
-- **Card 5A capture-access wiring is in progress:**
+  inventory produced 0 matches across 26 reviewed literals in the exact
+  ordinary ad-hoc Release artifact at
+  [run 32619756885](https://github.com/GuangDai/Clipy/actions/runs/32619756885).
+  The symbol result is not a complete instrumentation audit and proves no
+  Developer ID, timestamp, notarization, Gatekeeper, TCC, UI, or other runtime
+  behavior.
+- **Card 5A mapping/live-revoke leaf landed:**
   [`PasteboardAccess`](../Sources/PasteboardAdapter/PasteboardAccess.swift)
   maps the documented AppKit access cases to a neutral Sendable value, while
   [`CaptureAccessState`](../ClipyApp/Sources/Capture/CaptureAccessState.swift)
@@ -999,19 +1012,22 @@ test.
   and [`AppCaptureAccessTests`](../ClipyApp/Tests/ClipyIntegrationTests/AppCaptureAccessTests.swift),
   plus the existing observer-retry suite, cover mapping, reducer precedence,
   denied-startup zero reads, live-revoke stop-before-payload, and allowed
-  observer reuse in the current worktree. No macOS CI has compiled this work.
+  observer reuse in [correctness run 32619384577](https://github.com/GuangDai/Clipy/actions/runs/32619384577).
+  This closes the specified mapping/live-revoke behavior, not platform access
+  acceptance.
   There is no Pause UI, no provider-specific timeout/cause inference, and no
   proof of the General pasteboard prompt, TCC/System Settings transitions,
   clean profiles, or signed runtime behavior.
-- **Card 5B optional hosted exact-outcome characterization is in progress:**
+- **Card 5B optional hosted exact-outcome characterization landed:**
   [`AppCaptureExactOutcomeTests`](../ClipyApp/Tests/ClipyIntegrationTests/AppCaptureExactOutcomeTests.swift)
   uses a real named private `NSPasteboard`, public lazy-data-provider API,
   production observer/composition, and real in-memory History to characterize
-  a declared type whose provider supplies no bytes. The intended observation
-  is one content-free declared-unavailable failure, zero capture-lane slots,
-  and unchanged empty History. This unmerged test has no macOS CI evidence;
-  it does not diagnose timeout/permission or prove General pasteboard/TCC.
-- **Card 10C launch-at-login state is in progress:**
+  a declared type whose provider supplies no bytes. The hosted suite passed in
+  [correctness run 32619384577](https://github.com/GuangDai/Clipy/actions/runs/32619384577),
+  observing one content-free declared-unavailable failure, zero capture-lane
+  slots, and unchanged empty History. It does not diagnose timeout/permission
+  or prove General pasteboard/TCC.
+- **Card 10C four-state hosted leaf landed:**
   [`LaunchAtLoginSettings`](../Sources/PresentationUI/LaunchAtLoginSettings.swift)
   exposes neutral off/on/requires-approval/unavailable presentation, while
   app-owned
@@ -1022,7 +1038,47 @@ test.
   and
   [`LaunchAtLoginControllerTests`](../ClipyApp/Tests/ClipyIntegrationTests/LaunchAtLoginControllerTests.swift)
   cover the current model/controller seams; settings appearance and app-active
-  refresh are wired through `ClipySettingsView`/`AppDelegate`. No macOS CI has
-  compiled this work. It does not prove fresh-install registration, external
+  refresh are wired through `ClipySettingsView`/`AppDelegate`. The SwiftPM
+  presentation suite and hosted controller suite passed in
+  [correctness run 32619384577](https://github.com/GuangDai/Clipy/actions/runs/32619384577).
+  This proves the four-state model and injected hosted controller behavior; it
+  does not prove fresh-install registration, external
   revoke, logout/login, actual System Settings behavior, or a signed installed
   artifact.
+- **Batch 19 Card 6B APFS capture-transaction evidence is in progress:**
+  [`HistoryRestartProbe`](../Sources/HistoryRestartProbe/HistoryRestartProbe.swift)
+  now has bounded `pressureCapture` and `verifySeed` phases, while
+  [`run_apfs_enospc.sh`](../scripts/ci/run_apfs_enospc.sh) and the dispatch-only
+  [`apfs-enospc`](../.github/workflows/apfs-enospc.yml) workflow define one
+  disposable fixed-size APFS image experiment. The intended observation is a
+  real competing allocation ENOSPC, a production capture transaction rejected
+  as insufficient disk space with the seed unchanged, and a fresh-process
+  seed reopen after capacity is released. No workflow run exists yet, so this
+  is scaffold rather than physical runtime evidence. Its ceiling excludes
+  disk-full open/migration, revise/remove/clear, StoreRoot recovery, and any
+  signed or distribution environment.
+- **Batch 19 General pasteboard cross-process evidence is in progress:**
+  [`GeneralPasteboardCrossProcessProbeTests`](../Tests/PasteboardAdapterTests/GeneralPasteboardCrossProcessProbeTests.swift),
+  [`run_pasteboard_cross_process.sh`](../scripts/ci/run_pasteboard_cross_process.sh),
+  and the dispatch-only
+  [`pasteboard-cross-process`](../.github/workflows/pasteboard-cross-process.yml)
+  workflow define two independent short-lived ad-hoc test-host processes in
+  one login session. The first writes independently declared synthetic bytes
+  to `.general` through production `PasteboardAdapter.write`; only after it
+  exits does the second use native AppKit to byte-compare the value. No
+  workflow run exists yet, so cross-process visibility has not been observed.
+  This leaf does not test TCC, App Intents, a target application, write
+  atomicity, or WindowServer behavior.
+- **Batch 19 Settings Clear surface-purge routing is in progress:**
+  [`ClipySettingsView`](../Sources/PresentationUI/ClipySettingsView.swift) now
+  sends Danger Zone Clear through the shared
+  [`HistoryViewState.clearAwaitingReceipt`](../Sources/PresentationUI/HistoryViewState.swift)
+  owner instead of performing the History action directly. The new
+  [`SettingsClearSurfacePurgeTests`](../Tests/PresentationUITests/SettingsClearSurfacePurgeTests.swift)
+  fixture distinguishes unchanged, typed failure, and committed receipts:
+  unchanged/failure must preserve the existing surface, while only a committed
+  Clear may publish and apply the whole-surface purge. No macOS CI run has
+  compiled or executed this current source yet. This removes the Settings
+  Clear bypass only; App Intents/Gateway external remove still bypasses the
+  owner, and page observation still lacks off-page purge facts, so Card 9B
+  remains Partial.

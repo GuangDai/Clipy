@@ -1,0 +1,42 @@
+name: APFS ENOSPC capture evidence
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NSUnbufferedIO: YES
+  OS_ACTIVITY_MODE: disable
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  apfs-enospc:
+    name: Card 6B capture transaction leaf
+    runs-on: macos-26
+    timeout-minutes: 25
+    env:
+      LOG_DIR: ${{ github.workspace }}/apfs-enospc-logs
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Verify runner contract
+        shell: bash
+        run: bash scripts/ci/verify_macos_runner.sh "$LOG_DIR/runner.log"
+
+      - name: Exercise disposable APFS ENOSPC capture
+        shell: bash
+        run: >-
+          bash scripts/ci/run_apfs_enospc.sh
+          "$LOG_DIR" "$RUNNER_TEMP"
+
+      - name: Upload bounded content-free evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: apfs-enospc-${{ github.run_id }}-${{ github.run_attempt }}
+          path: apfs-enospc-logs
+          if-no-files-found: warn
+          retention-days: 14

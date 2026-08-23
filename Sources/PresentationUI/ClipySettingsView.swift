@@ -332,17 +332,14 @@ private struct GeneralSettingsTab: View {
 
     /// Performs one Danger Zone clear (03a §5 `clear`/`ClearScope`).
     ///
-    /// Deviation note (contract §4.4): the clear rides the public
-    /// `viewState.history.perform` seam rather than the void-returning
-    /// `HistoryViewState.clear(_:)` helper, because this tab must show the
-    /// mandated "Removed N items." feedback from the `.cleared(count:)`
-    /// receipt (03a §6) and must surface the typed failure inline
-    /// (03b §10) instead of routing it to the panel banner.
+    /// The awaitable view-state intent preserves the receipt needed for the
+    /// mandated "Removed N items." feedback while keeping receipt-confirmed
+    /// Card 9B surface purge publication at the shared mutation owner.
     private func performClear(_ scope: ClearScope) async {
         isWorking = true
         defer { isWorking = false }
         do {
-            let receipt = try await viewState.history.perform(.clear(scope))
+            let receipt = try await viewState.clearAwaitingReceipt(scope)
             if case .committed(let commit) = receipt,
                case .cleared(count: let removed) = commit.outcome {
                 status = .success(Self.clearFeedback(removed))
