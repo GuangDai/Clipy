@@ -12,9 +12,9 @@ rules:
   HistoryCore        allowlist: Foundation (incl. submodules, e.g. FoundationNetworking)
   HistoryDomain      allowlist: Foundation, HistoryCore
   HistoryStorage     blocklist: AppKit, SwiftUI, PasteboardAdapter, PresentationUI
-                     (SwiftData / ImageIO / xxh3 / Fuse / HistoryCore / HistoryDomain
-                     allowed; Fuse was pinned at roadmap step 3 and is confined to
-                     HistoryStorage by the global rule below)
+                     (SwiftData / ImageIO / xxh3 / Fuse / Security / HistoryCore /
+                     HistoryDomain allowed; Fuse and the F1 Security edge are
+                     confined to HistoryStorage by global rules below)
   PasteboardAdapter  blocklist: HistoryDomain, HistoryStorage, SwiftUI, SwiftData,
                      and other adapters (PasteboardAdapter is the only adapter target
                      today, so that set is currently empty; AppKit is allowed)
@@ -25,9 +25,10 @@ rules:
   ClipyUDSF0Shared    allowlist: Foundation, Darwin
   ClipyUDSF0Client    allowlist: Foundation, AppKit, Darwin
 
-Global rules: ``import xxh3`` and ``import Fuse`` are forbidden outside
-HistoryStorage. ``import AppIntents`` is forbidden outside the XcodeGen-owned
-ClipyApp product and its explicitly hosted integration-test target.
+Global rules: ``import xxh3``, ``import Fuse``, and the F1 server-custody
+``import Security`` are forbidden outside HistoryStorage. ``import AppIntents``
+is forbidden outside the XcodeGen-owned ClipyApp product and its explicitly
+hosted integration-test target.
 
 The C target xxh3 itself is not governed by this gate. Matching is line-based:
 ``import`` statements at line start inside block comments or string literals
@@ -57,6 +58,8 @@ XXH3_MODULE = "xxh3"
 XXH3_OWNER = "HistoryStorage"
 FUSE_MODULE = "Fuse"
 FUSE_OWNER = "HistoryStorage"
+SECURITY_MODULE = "Security"
+SECURITY_OWNER = "HistoryStorage"
 APPINTENTS_MODULE = "AppIntents"
 APPINTENTS_OWNERS = frozenset({"ClipyApp", "ClipyIntegrationTests"})
 
@@ -120,6 +123,11 @@ def check_import(target: str, module: str) -> str | None:
         return (
             f"target '{target}' must not import '{FUSE_MODULE}' "
             f"({FUSE_MODULE} is confined to {FUSE_OWNER}; Part I §8)"
+        )
+    if module == SECURITY_MODULE and target != SECURITY_OWNER:
+        return (
+            f"target '{target}' must not import '{SECURITY_MODULE}' "
+            f"({SECURITY_MODULE} is confined to {SECURITY_OWNER}; Part I §8)"
         )
     if module == APPINTENTS_MODULE and target not in APPINTENTS_OWNERS:
         return (
@@ -235,6 +243,7 @@ GOOD_FIXTURES: dict[str, str] = {
         "import ImageIO\n"
         "import xxh3\n"                          # xxh3 allowed in its owner target
         "import Fuse\n"                          # Fuse allowed in its owner target
+        "import Security\n"                      # F1 server custody only
     ),
     "Sources/PasteboardAdapter/Good.swift": "import Foundation\nimport HistoryCore\nimport AppKit\n",
     "Sources/PresentationUI/Good.swift": "import Foundation\nimport HistoryCore\nimport SwiftUI\n",
@@ -266,6 +275,7 @@ BAD_FIXTURES: dict[str, str] = {
     "Sources/PresentationUI/Bad.swift": "import AppKit\n",
     "Sources/PresentationUI/BadXxh3.swift": "import xxh3\n",  # global xxh3 rule
     "Sources/PresentationUI/BadFuse.swift": "import Fuse\n",  # global Fuse rule
+    "Sources/PresentationUI/BadSecurity.swift": "import Security\n",
     "Sources/HistoryPerfRunner/Bad.swift": "import SwiftData\n",
     "Sources/HistoryRestartProbe/Bad.swift": "import SwiftData\n",
     "ClipyApp/Tools/ClipyUDSF0Shared/Bad.swift": "import HistoryCore\n",
@@ -289,6 +299,7 @@ EXPECTED_SELF_TEST_VIOLATIONS = {
     ("PresentationUI", "AppKit"),
     ("PresentationUI", "xxh3"),
     ("PresentationUI", "Fuse"),
+    ("PresentationUI", "Security"),
     ("HistoryPerfRunner", "SwiftData"),
     ("HistoryRestartProbe", "SwiftData"),
     ("ClipyUDSF0Shared", "HistoryCore"),
