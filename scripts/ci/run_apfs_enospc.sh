@@ -650,8 +650,17 @@ require_literal_file() {
   local path="$1"
   local expected="$2"
   local label="$3"
+  local expected_file="$temp_root/$label.expected"
 
-  if ! cmp -s "$path" <(printf '%s\n' "$expected"); then
+  # Compare via a staged file, never an argument-position process
+  # substitution: the runner's bash 3.2 runs the inherited EXIT trap
+  # inside a `<(…)` subshell (without bumping $BASH_SUBSHELL), so the
+  # old `cmp -s … <(printf …)` form fired the full teardown mid-body
+  # on runs 32634454727 and 32635233048 — detaching the volume and
+  # deleting the disposable root while the main shell kept executing,
+  # which then failed every later redirect into the removed root.
+  printf '%s\n' "$expected" > "$expected_file"
+  if ! cmp -s "$path" "$expected_file"; then
     printf 'phase=%s assertion=%s result=unexpected-output\n' \
       "$current_phase" "$label" >> "$runtime_facts_log"
     exit 1
