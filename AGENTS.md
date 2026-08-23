@@ -30,23 +30,37 @@ thumbnails.
   run on any platform; everything else (including
   `scripts/public_symbol_snapshot.sh`) needs macOS + `xcrun`.
 
-**Current state (2026-08-22, `master` through PR #8):** steps 0–8
-are done and CI-green (scaffold + gates, `HistoryCore` public surface,
+**Current state (2026-08-23, `master` through PR #29):** steps 0–9 are
+done and CI-green (scaffold + gates, `HistoryCore` public surface,
 `HistoryDomain` pure core, dependency pins, schema v1 + codecs,
-`HistoryAuthority` capture/mutations/reads/observation/thumbnail), the V2
+`HistoryAuthority` capture/mutations/reads/observation/thumbnail, product
+wiring: PasteboardAdapter, PresentationUI, ClipyApp composition); the V2
 M1 schema migration plus V2-02 retention slices R.1–R.6 are landed
-(`docs/v2/V2-PROGRESS.md`), and step 9 (product wiring: PasteboardAdapter,
-PresentationUI, ClipyApp composition) is done. The current landed baseline is
-correctness-green through PR #7 (run 32572531247) and PR #8 (run 32573066624).
-Manual signed-runtime run 32573198119 is also green on `master`, within the
-bounded proof scope described in §7.
+(`docs/v2/V2-PROGRESS.md`). The 2026-08-22 REVIEW remediation is under
+way: CI lane split (PR #2), normal-path correctness batches (PR #3–#7),
+and the External Gateway ladder X.2–X.7 (public contract, V3 schema +
+deny-by-default bootstrap, X.4 audit/admin substrate, X.5 denial/
+admission, X-HCR V4 substrate + atomic-evidence proofs, X.6 positive
+reads/writes + the public connection-bound `ExternalHistoryFacade`, and
+X.7 App Intents composition — six intents behind one async facade
+provider registered before store open, `supportedModes = [.background]`,
+output-only entities, no `EntityQuery`, confined to `ClipyApp/Sources`).
+Both dispatch-only physical-evidence cells are green on `master` as of
+2026-08-23: the General pasteboard cross-process run 32632263996 and the
+Card 6B APFS ENOSPC capture-transaction run 32636093920 (the latter via
+the §16 stamped-plan capacity admission added in PR #25 — Core Data
+raises an uncatchable `NSInternalInconsistencyException` instead of an
+out-of-space error when an external-storage interim file cannot be
+created on a full volume). Manual signed-runtime run 32573198119 is also
+green on `master`, within the bounded proof scope described in §7.
 Post-step-9 additions: the perf/AB helper proofs live in the separate
 `HistoryPerfTests` target/lane (the default `swift test` skips them), and the
 panel is a Maccy-style AppDelegate-owned floating `NSPanel` (Carbon ⇧⌘C
 summon, cursor/status-item/center/last-position placement, dwell-driven
 preview pane) — no longer a SwiftUI `MenuBarExtra` window.
-Always check `docs/PROGRESS.md` for the exact landed state before assuming a
-feature exists.
+Always check `docs/PROGRESS.md` and the REVIEW ledger
+(`docs/reviews/2026-08-22-clipy-maccy-deep-review/10-implementation-status.md`)
+for the exact landed state before assuming a feature exists.
 
 ## 2. Architecture and module layout
 
@@ -327,3 +341,7 @@ logs are not parsed as compiler output. Write warning-free code.
 - `docs/reviews/2026-08-22-clipy-maccy-deep-review/10-implementation-status.md`
   — the REVIEW implementation ledger. Check it before taking a review card;
   update the affected row in the same PR so completed leaves are not repeated.
+- `docs/reviews/2026-08-22-clipy-maccy-deep-review/11-ai-todo-map-2026-08-23.md`
+  — AI-generated point-in-time audit + todo map (2026-08-23, baseline
+  `cda2ba0` → `a3e6774`). Not a live ledger; when it drifts, the ledger and
+  owning specs win.
