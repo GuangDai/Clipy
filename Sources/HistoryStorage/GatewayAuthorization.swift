@@ -340,23 +340,20 @@ extension HistoryAuthority {
     ) async throws {
         await suspendIfRequested(.gatewayAuditCompactionEntry)
         let now = storageClock.now()
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
-        let config = try Self.loadGatewayConfig(in: context)
+        let transactionInjection: InjectedTransactionFailure? =
+            injectedTransactionFailure == .beforeGatewayAuditCompaction
+                ? .beforeGatewayAuditCompaction
+                : nil
         do {
-            try context.transaction {
-                if consumeTransactionFailureInjection(
-                    .beforeGatewayAuditCompaction
-                ) {
-                    throw InjectedTransactionFailure.beforeGatewayAuditCompaction
-                }
-                _ = try GatewayAuditStore.compactIfNeeded(
-                    now: now,
-                    config: config,
-                    in: context,
-                    limits: limits
-                )
-            }
+            try Self.executeExternalAuditCompaction(
+                in: container,
+                now: now,
+                limits: limits,
+                transactionInjection: transactionInjection
+            )
+        } catch let injection as InjectedTransactionFailure {
+            _ = consumeTransactionFailureInjection(injection)
+            throw ExternalFailure.persistence(.transaction)
         } catch let failure as ExternalFailure {
             throw failure
         } catch {
@@ -366,6 +363,32 @@ extension HistoryAuthority {
 }
 
 private extension HistoryAuthority {
+    /// Creates and releases every SwiftData value synchronously inside this
+    /// nonisolated executor. The async actor wrapper above crosses its test
+    /// suspension point before calling here, so no row or context is captured
+    /// by an actor-isolated transaction closure (`01` §6; `V2-05` §6.3).
+    static func executeExternalAuditCompaction(
+        in container: ModelContainer,
+        now: Date,
+        limits: ExternalLimits,
+        transactionInjection: InjectedTransactionFailure?
+    ) throws {
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let config = try loadGatewayConfig(in: context)
+        try context.transaction {
+            if transactionInjection == .beforeGatewayAuditCompaction {
+                throw InjectedTransactionFailure.beforeGatewayAuditCompaction
+            }
+            _ = try GatewayAuditStore.compactIfNeeded(
+                now: now,
+                config: config,
+                in: context,
+                limits: limits
+            )
+        }
+    }
+
     struct ValidatedExternalConnection {
         let kind: ConnectionEnrollKind
         let status: ConnectionStatus
