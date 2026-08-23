@@ -33,7 +33,7 @@ jobs:
           bash scripts/ci/run_pasteboard_cross_process.sh
           "$LOG_DIR" "$BUILD_DIR"
 
-      - name: Upload content-free cross-process evidence
+      - name: Upload bounded cross-process runtime diagnostics
         if: always()
         uses: actions/upload-artifact@v7
         with:

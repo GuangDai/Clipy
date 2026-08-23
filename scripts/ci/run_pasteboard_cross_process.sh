@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Build and ad-hoc sign the existing PasteboardAdapterTests host, then launch
 # it twice in one login session: adapter writer first, native reader second.
-# This is content-free evidence for that exact cross-process visibility leaf,
-# not App Intents, TCC, target-app paste, atomicity, or WindowServer evidence.
+# This is bounded runtime evidence for that exact cross-process visibility
+# leaf. Runner and framework diagnostics are retained; actual clipboard payload
+# bytes are not printed. It is not App Intents, TCC, target-app paste,
+# atomicity, or WindowServer evidence.
 set -euo pipefail
 
 if [[ "$#" -ne 2 ]]; then
@@ -189,7 +191,8 @@ run_logged_phase probe-diagnostic-scan \
   printf '%s\n' "processes=2 independent short-lived ad-hoc test hosts"
   printf '%s\n' "execution_guard=phase-specific passed marker from each test host"
   printf '%s\n' "comparison=byte-exact synthetic custom type"
-  printf '%s\n' "outputs=content-free"
+  printf '%s\n' "actual_clipboard_payload_bytes=excluded"
+  printf '%s\n' "runner_diagnostics=retained_bounded"
   printf '%s\n' "evidence_ceiling=cross-process General pasteboard visibility in this login session only"
   printf '%s\n' "non_claims=AppIntents,TCC,target-app paste,atomicity,WindowServer"
 } | tee "$log_dir/summary.log"
