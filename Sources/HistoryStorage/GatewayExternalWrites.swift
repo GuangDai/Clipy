@@ -11,6 +11,7 @@ import SwiftData
 
 internal struct ExternalWriteCommitContext: Sendable {
     internal let connection: ExternalConnectionID
+    internal let expectedConnectionKind: ConnectionEnrollKind
     internal let descriptor: ExternalOperationDescriptor
     internal let requestedAt: Date
 }
@@ -18,6 +19,10 @@ internal struct ExternalWriteCommitContext: Sendable {
 internal enum ExternalWriteGateRejection: Error, Sendable {
     case incoherentPlan
     case unknownConnection(
+        requestedCapability: ExternalCapability,
+        connectionID: ExternalConnectionID
+    )
+    case inadmissibleConnection(
         requestedCapability: ExternalCapability,
         connectionID: ExternalConnectionID
     )
@@ -35,12 +40,19 @@ extension HistoryAuthority {
     internal func commitExternal(
         request: ExternalRequest,
         connection: ExternalConnectionID,
+        expectedConnectionKind: ConnectionEnrollKind = .appIntents,
         requestedAt: Date
     ) async throws -> ExternalResponse {
         let write = ExternalWriteCommitContext(
             connection: connection,
+            expectedConnectionKind: expectedConnectionKind,
             descriptor: .forRequest(request),
             requestedAt: requestedAt
+        )
+        try requireExternalKindAdmissionBeforeHistory(
+            write.descriptor,
+            connection: write.connection,
+            expectedConnectionKind: write.expectedConnectionKind
         )
         let receipt: HistoryReceipt
         do {
@@ -144,6 +156,7 @@ extension HistoryAuthority {
                 let decision = try Self.targetedExternalAuthorizationDecision(
                     write.descriptor,
                     connection: write.connection,
+                    expectedConnectionKind: write.expectedConnectionKind,
                     config: config,
                     in: context
                 )
@@ -156,6 +169,11 @@ extension HistoryAuthority {
                     )
                 case .unknownConnection:
                     throw ExternalWriteGateRejection.unknownConnection(
+                        requestedCapability: write.descriptor.capability,
+                        connectionID: write.connection
+                    )
+                case .inadmissibleConnection:
+                    throw ExternalWriteGateRejection.inadmissibleConnection(
                         requestedCapability: write.descriptor.capability,
                         connectionID: write.connection
                     )
@@ -217,6 +235,7 @@ extension HistoryAuthority {
                 let decision = try Self.targetedExternalAuthorizationDecision(
                     write.descriptor,
                     connection: write.connection,
+                    expectedConnectionKind: write.expectedConnectionKind,
                     config: config,
                     in: context
                 )
@@ -226,6 +245,11 @@ extension HistoryAuthority {
                     publication = original
                 case .unknownConnection:
                     throw ExternalWriteGateRejection.unknownConnection(
+                        requestedCapability: write.descriptor.capability,
+                        connectionID: write.connection
+                    )
+                case .inadmissibleConnection:
+                    throw ExternalWriteGateRejection.inadmissibleConnection(
                         requestedCapability: write.descriptor.capability,
                         connectionID: write.connection
                     )
@@ -299,6 +323,16 @@ private extension HistoryAuthority {
         if let rejection = error as? ExternalWriteGateRejection {
             switch rejection {
             case .unknownConnection(let capability, let connectionID):
+                return ExternalWriteFailurePublication(
+                    failure: .unauthorized(
+                        requestedCapability: capability,
+                        connectionID: connectionID
+                    ),
+                    shouldAudit: false,
+                    failureKind: .unauthorized,
+                    denialReason: nil
+                )
+            case .inadmissibleConnection(let capability, let connectionID):
                 return ExternalWriteFailurePublication(
                     failure: .unauthorized(
                         requestedCapability: capability,

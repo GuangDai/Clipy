@@ -178,6 +178,7 @@ extension ExternalOperationDescriptor {
 internal enum TargetedExternalAuthorizationDecision: Sendable {
     case authorized
     case unknownConnection
+    case inadmissibleConnection
     case denied(ExternalFailure)
 }
 
@@ -192,12 +193,14 @@ extension HistoryAuthority {
     /// barrier before its typed failure is released. Success writes nothing.
     internal func authorizeExternal(
         _ descriptor: ExternalOperationDescriptor,
-        as connection: ExternalConnectionID
+        as connection: ExternalConnectionID,
+        expectedConnectionKind: ConnectionEnrollKind = .appIntents
     ) throws {
         let requestedAt = storageClock.now()
         try authorizeExternal(
             descriptor,
             as: connection,
+            expectedConnectionKind: expectedConnectionKind,
             requestedAt: requestedAt
         )
     }
@@ -208,6 +211,7 @@ extension HistoryAuthority {
     internal func authorizeExternal(
         _ descriptor: ExternalOperationDescriptor,
         as connection: ExternalConnectionID,
+        expectedConnectionKind: ConnectionEnrollKind,
         requestedAt: Date
     ) throws {
         let context = ModelContext(container)
@@ -217,6 +221,7 @@ extension HistoryAuthority {
         try authorizeExternal(
             descriptor,
             as: connection,
+            expectedConnectionKind: expectedConnectionKind,
             requestedAt: requestedAt,
             config: config,
             in: context
@@ -230,6 +235,7 @@ extension HistoryAuthority {
     internal func authorizeExternal(
         _ descriptor: ExternalOperationDescriptor,
         as connection: ExternalConnectionID,
+        expectedConnectionKind: ConnectionEnrollKind,
         requestedAt: Date,
         config: GatewayConfigRow,
         in context: ModelContext
@@ -237,13 +243,14 @@ extension HistoryAuthority {
         let decision = try Self.targetedExternalAuthorizationDecision(
             descriptor,
             connection: connection,
+            expectedConnectionKind: expectedConnectionKind,
             config: config,
             in: context
         )
         switch decision {
         case .authorized:
             return
-        case .unknownConnection:
+        case .unknownConnection, .inadmissibleConnection:
             throw ExternalFailure.unauthorized(
                 requestedCapability: descriptor.capability,
                 connectionID: connection
@@ -269,6 +276,7 @@ extension HistoryAuthority {
     internal static func targetedExternalAuthorizationDecision(
         _ descriptor: ExternalOperationDescriptor,
         connection: ExternalConnectionID,
+        expectedConnectionKind: ConnectionEnrollKind,
         config: GatewayConfigRow,
         in context: ModelContext
     ) throws -> TargetedExternalAuthorizationDecision {
@@ -278,6 +286,13 @@ extension HistoryAuthority {
             in: context
         ) else {
             return .unknownConnection
+        }
+        guard Self.externalConnectionIsAdmissible(
+            current,
+            expectedConnectionKind: expectedConnectionKind,
+            descriptor: descriptor
+        ) else {
+            return .inadmissibleConnection
         }
         guard current.status == .active else {
             return .denied(.connectionRevoked(connectionID: connection))
@@ -297,23 +312,56 @@ extension HistoryAuthority {
         return .authorized
     }
 
+    /// Rejects an unknown, mismatched, or policy-inadmissible connection before
+    /// a write loads any History facts. Status and grant denials deliberately
+    /// remain deferred to the existing save-boundary gate so their App Intents
+    /// audit ordering is unchanged.
+    internal func requireExternalKindAdmissionBeforeHistory(
+        _ descriptor: ExternalOperationDescriptor,
+        connection: ExternalConnectionID,
+        expectedConnectionKind: ConnectionEnrollKind
+    ) throws {
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let config = try Self.loadGatewayConfig(in: context)
+        guard let current = try Self.loadExternalConnection(
+            connection,
+            config: config,
+            in: context
+        ), Self.externalConnectionIsAdmissible(
+            current,
+            expectedConnectionKind: expectedConnectionKind,
+            descriptor: descriptor
+        ) else {
+            throw ExternalFailure.unauthorized(
+                requestedCapability: descriptor.capability,
+                connectionID: connection
+            )
+        }
+    }
+
     /// Commits the process-local rate limiter's denial before publishing it.
     /// Rate denial intentionally precedes grant/status policy: only a known,
     /// structurally valid connection and admitted descriptor are required.
     internal func commitExternalRateDenial(
         _ descriptor: ExternalOperationDescriptor,
         as connection: ExternalConnectionID,
+        expectedConnectionKind: ConnectionEnrollKind = .appIntents,
         requestedAt: Date
     ) throws {
         let context = ModelContext(container)
         context.autosaveEnabled = false
         let config = try Self.loadGatewayConfig(in: context)
 
-        guard try Self.loadExternalConnection(
+        guard let current = try Self.loadExternalConnection(
             connection,
             config: config,
             in: context
-        ) != nil else {
+        ), Self.externalConnectionIsAdmissible(
+            current,
+            expectedConnectionKind: expectedConnectionKind,
+            descriptor: descriptor
+        ) else {
             throw ExternalFailure.unauthorized(
                 requestedCapability: descriptor.capability,
                 connectionID: connection
@@ -393,6 +441,19 @@ private extension HistoryAuthority {
         let kind: ConnectionEnrollKind
         let status: ConnectionStatus
         let enrolledAt: Date
+    }
+
+    static func externalConnectionIsAdmissible(
+        _ current: ValidatedExternalConnection,
+        expectedConnectionKind: ConnectionEnrollKind,
+        descriptor: ExternalOperationDescriptor
+    ) -> Bool {
+        current.kind == expectedConnectionKind
+            && ExternalAccessPolicy.admits(
+                connectionKind: current.kind,
+                capability: descriptor.capability,
+                operation: descriptor.operationKind
+            )
     }
 
     static func loadExternalConnection(

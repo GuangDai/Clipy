@@ -89,6 +89,7 @@ internal actor ExternalGateway {
         try await authorizeKnownDescriptor(
             ExternalOperationDescriptor.forRequest(request),
             as: connection,
+            expectedConnectionKind: .appIntents,
             requestedAt: requestedAt
         )
     }
@@ -105,11 +106,13 @@ internal actor ExternalGateway {
         try await beginAdmittedOperation(
             descriptor,
             as: connection,
+            expectedConnectionKind: .appIntents,
             requestedAt: requestedAt
         )
         return try await authority.commitExternal(
             request: request,
             connection: connection,
+            expectedConnectionKind: .appIntents,
             requestedAt: requestedAt
         )
     }
@@ -129,6 +132,7 @@ internal actor ExternalGateway {
         try await authorizeKnownDescriptor(
             ExternalOperationDescriptor.forRead(read),
             as: connection,
+            expectedConnectionKind: .appIntents,
             requestedAt: requestedAt
         )
     }
@@ -148,11 +152,13 @@ internal actor ExternalGateway {
         try await beginAdmittedOperation(
             descriptor,
             as: connection,
+            expectedConnectionKind: .appIntents,
             requestedAt: requestedAt
         )
         return try await authority.performExternalRead(
             request,
             connection: connection,
+            expectedConnectionKind: .appIntents,
             requestedAt: requestedAt,
             searchWorker: searchWorker
         )
@@ -170,6 +176,7 @@ internal actor ExternalGateway {
         try await authorizeKnownDescriptor(
             descriptor,
             as: connection,
+            expectedConnectionKind: .appIntents,
             requestedAt: requestedAt
         )
     }
@@ -177,16 +184,19 @@ internal actor ExternalGateway {
     private func authorizeKnownDescriptor(
         _ descriptor: ExternalOperationDescriptor,
         as connection: ExternalConnectionID,
+        expectedConnectionKind: ConnectionEnrollKind,
         requestedAt: Date
     ) async throws {
         try await beginAdmittedOperation(
             descriptor,
             as: connection,
+            expectedConnectionKind: expectedConnectionKind,
             requestedAt: requestedAt
         )
         try await authority.authorizeExternal(
             descriptor,
             as: connection,
+            expectedConnectionKind: expectedConnectionKind,
             requestedAt: requestedAt
         )
     }
@@ -198,6 +208,7 @@ internal actor ExternalGateway {
     private func beginAdmittedOperation(
         _ descriptor: ExternalOperationDescriptor,
         as connection: ExternalConnectionID,
+        expectedConnectionKind: ConnectionEnrollKind,
         requestedAt: Date
     ) async throws {
         // The caller has already matched the startup-baked identity. A
@@ -205,7 +216,7 @@ internal actor ExternalGateway {
         // failure and consumes no process quota.
         guard descriptor.requestMatchesOperation,
               ExternalAccessPolicy.admits(
-                connectionKind: .appIntents,
+                connectionKind: expectedConnectionKind,
                 capability: descriptor.capability,
                 operation: descriptor.operationKind
               ) else {
@@ -219,6 +230,7 @@ internal actor ExternalGateway {
             try await authority.commitExternalRateDenial(
                 descriptor,
                 as: connection,
+                expectedConnectionKind: expectedConnectionKind,
                 requestedAt: requestedAt
             )
             throw ExternalFailure.requestDenied(.rateLimited)

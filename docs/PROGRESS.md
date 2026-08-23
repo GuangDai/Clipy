@@ -902,7 +902,7 @@ test.
   Python-to-History path, transport, authentication, Gateway dispatch,
   grant/audit behavior, or signed-runtime proof; those X.9+ layers remain
   open.
-- **X.9 F0A discriminator in progress:** the current branch adds a
+- **X.9 F0A discriminator landed:** [PR #18](https://github.com/GuangDai/Clipy/pull/18) adds a
   compile-time-isolated app-side
   [`UnixSocketF0Listener`](../ClipyApp/Sources/Automation/UnixSocketF0Listener.swift),
   fixed probe-only [frame codec](../ClipyApp/Tools/ClipyUDSF0Shared/UnixSocketF0Protocol.swift),
@@ -911,8 +911,11 @@ test.
   dispatch-only signed-runtime lane tests bounded ad-hoc
   signed same-EUID UDS cold/warm, incomplete-frame, normal-cleanup, and
   SIGKILL/stale-recovery mechanics. The exact flagged app/client artifact is
-  green at [signed-runtime run 32615713100](https://github.com/GuangDai/Clipy/actions/runs/32615713100);
-  PR correctness remains pending. It is not `clipyctl`, does not decode X.8 JSON or reach
+  green at [signed-runtime run 32615713100](https://github.com/GuangDai/Clipy/actions/runs/32615713100).
+  [Correctness run 32615569895](https://github.com/GuangDai/Clipy/actions/runs/32615569895)
+  is green across all three jobs for the same SwiftPM graph and normal app
+  scheme; the later F0-only Darwin-call correction is compiled and executed by
+  the signed run. It is not `clipyctl`, does not decode X.8 JSON or reach
   History/Gateway, and proves no credential, authenticated ingress, Developer
   ID/notarization, App Sandbox, Keychain sharing, different-EUID caller, TCC,
   or interactive no-activation behavior.
