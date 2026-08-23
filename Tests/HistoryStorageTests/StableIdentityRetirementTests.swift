@@ -41,10 +41,7 @@ struct StableIdentityRetirementTests {
         )
         guard case .committed(let removeCommit) = removeReceipt,
               case .removed(count: 1) = removeCommit.outcome else {
-            Issue.record(
-                "expected exact removal to commit one retirement, got "
-                    + "\(removeReceipt)"
-            )
+            Issue.record("expected one retirement, got \(removeReceipt)")
             return
         }
         #expect(removeCommit.position.rawValue == 2)

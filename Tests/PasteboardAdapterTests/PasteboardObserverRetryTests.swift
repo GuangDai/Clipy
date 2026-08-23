@@ -5,6 +5,7 @@
 import AppKit
 import Foundation
 import HistoryCore
+import Synchronization
 import Testing
 @testable import PasteboardAdapter
 
@@ -94,12 +95,14 @@ func observerStopsAfterOneRetryAndEmitsOneTerminalContentFreeOutcome() throws {
 func observerChecksRevocationBeforeReadingChangedPasteboardItems() {
     let pasteboard = makeRetryPasteboard()
     replaceString(on: pasteboard, with: "allowed-generation")
-    var accessBehavior = PasteboardAccessBehavior.allowed
+    let accessBehavior = Mutex(PasteboardAccessBehavior.allowed)
     var payloadReads = 0
     var adapter = PasteboardAdapter(pasteboard: pasteboard)
     adapter.payloadReadObserver = { _ in payloadReads += 1 }
     let observer = PasteboardObserver(adapter: adapter)
-    observer.setAccessBehaviorProviderForTesting { accessBehavior }
+    observer.setAccessBehaviorProviderForTesting {
+        accessBehavior.withLock { $0 }
+    }
     var accessEvents: [PasteboardAccessBehavior] = []
     var received: [CaptureOutcome] = []
 
@@ -112,7 +115,7 @@ func observerChecksRevocationBeforeReadingChangedPasteboardItems() {
     #expect(payloadReads == 1)
     #expect(received.count == 1)
 
-    accessBehavior = .denied
+    accessBehavior.withLock { $0 = .denied }
     replaceString(on: pasteboard, with: "denied-generation")
     observer.pollForTesting()
 

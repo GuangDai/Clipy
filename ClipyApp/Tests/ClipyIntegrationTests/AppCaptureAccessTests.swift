@@ -4,6 +4,7 @@
 import Foundation
 import HistoryCore
 import PasteboardAdapter
+import Synchronization
 import Testing
 @testable import ClipyApp
 
@@ -60,13 +61,15 @@ struct AppCaptureAccessTests {
         let pasteboard = ComposedSupport.makePasteboard()
         pasteboard.clearContents()
         pasteboard.setString("access-recovery", forType: .string)
-        var accessBehavior = PasteboardAccessBehavior.denied
+        let accessBehavior = Mutex(PasteboardAccessBehavior.denied)
 
         let composition = AppComposition.makeForTesting(
             history: history,
             adapter: PasteboardAdapter(pasteboard: pasteboard),
             observerPollInterval: 0.02,
-            captureAccessBehaviorProvider: { accessBehavior }
+            captureAccessBehaviorProvider: {
+                accessBehavior.withLock { $0 }
+            }
         )
         defer { composition.stop() }
         let appDelegate = AppDelegate()
@@ -79,14 +82,9 @@ struct AppCaptureAccessTests {
         )
         #expect(deniedPage.rows.isEmpty)
 
-        accessBehavior = .allowed
+        accessBehavior.withLock { $0 = .allowed }
         composition.retryCaptureAccess()
-        let captured = await ComposedSupport.waitFor {
-            guard let page = try? await history.browse(
-                HistoryBrowseRequest(kind: .recent, limit: 10)
-            ) else { return false }
-            return page.rows.count == 1
-        }
+        let captured = await Self.waitForRows(1, in: history)
         #expect(captured)
         #expect(appDelegate.captureAccessState == .allowed)
 
@@ -108,25 +106,22 @@ struct AppCaptureAccessTests {
         let pasteboard = ComposedSupport.makePasteboard()
         pasteboard.clearContents()
         pasteboard.setString("before-revoke", forType: .string)
-        var accessBehavior = PasteboardAccessBehavior.allowed
+        let accessBehavior = Mutex(PasteboardAccessBehavior.allowed)
         let composition = AppComposition.makeForTesting(
             history: history,
             adapter: PasteboardAdapter(pasteboard: pasteboard),
             observerPollInterval: 0.02,
-            captureAccessBehaviorProvider: { accessBehavior }
+            captureAccessBehaviorProvider: {
+                accessBehavior.withLock { $0 }
+            }
         )
         defer { composition.stop() }
         let appDelegate = AppDelegate()
         appDelegate.installCompositionForTesting(composition)
-        let initiallyCaptured = await ComposedSupport.waitFor {
-            guard let page = try? await history.browse(
-                HistoryBrowseRequest(kind: .recent, limit: 10)
-            ) else { return false }
-            return page.rows.count == 1
-        }
+        let initiallyCaptured = await Self.waitForRows(1, in: history)
         #expect(initiallyCaptured)
 
-        accessBehavior = .denied
+        accessBehavior.withLock { $0 = .denied }
         pasteboard.clearContents()
         pasteboard.setString("must-not-be-read", forType: .string)
         let revoked = await ComposedSupport.waitFor {
@@ -137,5 +132,24 @@ struct AppCaptureAccessTests {
             HistoryBrowseRequest(kind: .recent, limit: 10)
         )
         #expect(afterRevoke.rows.count == 1)
+    }
+
+    @MainActor
+    private static func waitForRows(
+        _ expectedCount: Int,
+        in history: any ClipboardHistory,
+        timeout: Duration = .seconds(2)
+    ) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while clock.now < deadline {
+            if let page = try? await history.browse(
+                HistoryBrowseRequest(kind: .recent, limit: 10)
+            ), page.rows.count == expectedCount {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return false
     }
 }
