@@ -255,6 +255,22 @@ internal actor HistoryAuthority {
     /// global locator can override it.
     internal let gatewayConnectionIDSource: @Sendable () -> UUID
 
+    /// The store volume's spare-capacity reader consulted by stamped-plan
+    /// capacity admission (§16). `SwiftDataHistory.open` injects a reader
+    /// over the persistent store URL's
+    /// `volumeAvailableCapacityForImportantUsage` fact; the `{ nil }`
+    /// default (any unreadable fact, and every in-memory store) leaves
+    /// admission fail-open. The synchronous `URLResourceValues` read inside
+    /// the non-suspending commit interval performs no `await` (§5 bans
+    /// suspension, not syscalls).
+    internal let volumeAvailableCapacityReader: @Sendable () -> Int64?
+
+    /// Test seam: fixed spare-capacity witness overriding the volume reader
+    /// for deterministic admission tests. `nil` in production, compiled in
+    /// always, set via `@testable`
+    /// (`setVolumeAvailableCapacityOverride(_:)`).
+    internal var volumeAvailableCapacityOverride: Int64?
+
 #if DEBUG
     /// Opt-in aggregate search tracing. This field and every call site are
     /// absent from Release builds; tests may replace the environment-backed
@@ -290,16 +306,19 @@ internal actor HistoryAuthority {
         container: ModelContainer,
         limits: HistoryLimits = .standard,
         storageClock: any StorageClock = SystemStorageClock(),
-        gatewayConnectionIDSource: @escaping @Sendable () -> UUID = { UUID() }
+        gatewayConnectionIDSource: @escaping @Sendable () -> UUID = { UUID() },
+        volumeAvailableCapacityReader: @escaping @Sendable () -> Int64? = { nil }
     ) {
         self.container = container
         self.limits = limits
         self.storageClock = storageClock
         self.gatewayConnectionIDSource = gatewayConnectionIDSource
+        self.volumeAvailableCapacityReader = volumeAvailableCapacityReader
         self.signatureIndex = SignatureIndex()
         self.invalidationPublisher = HistoryInvalidationPublisher()
         self.suspensionHandler = nil
         self.injectedTransactionFailure = nil
+        self.volumeAvailableCapacityOverride = nil
     }
 
     /// The process-instance marker for cursor minting (04 §6). The

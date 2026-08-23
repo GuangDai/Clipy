@@ -109,7 +109,10 @@ public enum UnavailableReason: Sendable, Equatable {
     case factProof
     /// The dedup index is being rebuilt.
     case dedupIndexRebuild
-    /// A durable write failed because the store volume has no free space.
+    /// A durable write failed because the store volume has no free space,
+    /// or storage's stamped-plan capacity admission refused the action
+    /// before any write because its external payload provably cannot fit
+    /// (docs/05-authority-kernel.md §16).
     case insufficientDiskSpace
 }
 
