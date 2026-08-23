@@ -12,7 +12,8 @@
 > they are cited here, never restated as new semantics.
 
 **Audit baseline:** `8f316c9` (2026-08-02). **Current landed baseline:**
-`master` through PR #20 / merge `604e335` (2026-08-23). Steps 0–9 are
+`master` through [PR #22](https://github.com/GuangDai/Clipy/pull/22) / merge
+`3d09455` (2026-08-23). Steps 0–9 are
 implemented and CI-green;
 M2/state 2 is complete. Step 9 (product wiring: PasteboardAdapter +
 PresentationUI + ClipyApp composition) is done, including its post-step-9
@@ -23,17 +24,21 @@ cursor/status-item/center/last-position placement, dwell-driven preview pane)
 rather than a SwiftUI `MenuBarExtra`. M3/state 3 (packaging, accessibility,
 localization, product acceptance per Part VI §11) remains open.
 
-**Current CI provenance (2026-08-23):** [PR #20](https://github.com/GuangDai/Clipy/pull/20),
-merged as `604e335`, is green across Lint + source gates, SwiftPM build + test,
-and XcodeGen generate + app build/test at
-[correctness run 32619384577](https://github.com/GuangDai/Clipy/actions/runs/32619384577).
-No HistoryCore public-surface change required a symbol-snapshot run, and no
-performance/AB lane ran. The merge-head ordinary ad-hoc Release artifact also
-passed the finite Card 5D symbol inventory at
+**Current CI provenance (2026-08-23):** PR #22 is green across Lint + source
+gates, SwiftPM build + test, and XcodeGen generate + app build/test in attempt 2
+of [correctness run 32621391305](https://github.com/GuangDai/Clipy/actions/runs/32621391305);
+the merge commit is also green at
+[run 32621658106](https://github.com/GuangDai/Clipy/actions/runs/32621658106).
+PR #22 changes only the two evidence scripts and proves their ordinary source
+integration, not either intended physical observation. No HistoryCore
+public-surface change required a symbol-snapshot run, and no performance/AB
+lane ran. The earlier PR #20 ordinary ad-hoc Release artifact passed the finite
+Card 5D symbol inventory at
 [release-surface run 32619756885](https://github.com/GuangDai/Clipy/actions/runs/32619756885).
 That dispatch proves zero matches for the 26 reviewed demangled literals in
-that exact artifact, not a complete instrumentation or distribution/runtime
-audit. The latest signed UDS discriminator evidence remains bounded to run
+that exact PR #20 artifact, not a complete instrumentation or
+distribution/runtime audit. The latest signed UDS discriminator evidence
+remains bounded to run
 [32615713100](https://github.com/GuangDai/Clipy/actions/runs/32615713100).
 Neither ordinary correctness nor the release-surface run proves production
 Data Protection Keychain persistence/reopen/delete or authenticated ingress,
@@ -1045,7 +1050,8 @@ test.
   does not prove fresh-install registration, external
   revoke, logout/login, actual System Settings behavior, or a signed installed
   artifact.
-- **Batch 19 Card 6B APFS capture-transaction evidence is in progress:**
+- **Batch 19 Card 6B APFS capture-transaction scaffold landed; physical
+  evidence remains open:**
   [`HistoryRestartProbe`](../Sources/HistoryRestartProbe/HistoryRestartProbe.swift)
   now has bounded `pressureCapture` and `verifySeed` phases, while
   [`run_apfs_enospc.sh`](../scripts/ci/run_apfs_enospc.sh) and the dispatch-only
@@ -1053,11 +1059,23 @@ test.
   disposable fixed-size APFS image experiment. The intended observation is a
   real competing allocation ENOSPC, a production capture transaction rejected
   as insufficient disk space with the seed unchanged, and a fresh-process
-  seed reopen after capacity is released. No workflow run exists yet, so this
-  is scaffold rather than physical runtime evidence. Its ceiling excludes
-  disk-full open/migration, revise/remove/clear, StoreRoot recovery, and any
-  signed or distribution environment.
-- **Batch 19 General pasteboard cross-process evidence is in progress:**
+  seed reopen after capacity is released. The scaffold and its ordinary tests
+  landed through [PR #21](https://github.com/GuangDai/Clipy/pull/21), merge
+  `0768688`, with all three jobs green in
+  [correctness run 32621152027](https://github.com/GuangDai/Clipy/actions/runs/32621152027).
+  The first physical attempt
+  [32621160012](https://github.com/GuangDai/Clipy/actions/runs/32621160012)
+  stopped at image creation before attach, seed, pressure, or production
+  capture because the blank-image `hdiutil create` options were incompatible.
+  PR #22 corrected that invocation, but the second attempt
+  [32621667292](https://github.com/GuangDai/Clipy/actions/runs/32621667292)
+  again stopped in `hdiutil create`: `-format UDRW` was still invalid without a
+  source device/folder. Neither failure reached the target behavior, so Card 6B
+  remains Partial. Its ceiling still excludes disk-full open/migration,
+  revise/remove/clear, StoreRoot recovery, and any signed or distribution
+  environment.
+- **Batch 19 General pasteboard cross-process scaffold landed; visibility
+  evidence remains open:**
   [`GeneralPasteboardCrossProcessProbeTests`](../Tests/PasteboardAdapterTests/GeneralPasteboardCrossProcessProbeTests.swift),
   [`run_pasteboard_cross_process.sh`](../scripts/ci/run_pasteboard_cross_process.sh),
   and the dispatch-only
@@ -1065,11 +1083,19 @@ test.
   workflow define two independent short-lived ad-hoc test-host processes in
   one login session. The first writes independently declared synthetic bytes
   to `.general` through production `PasteboardAdapter.write`; only after it
-  exits does the second use native AppKit to byte-compare the value. No
-  workflow run exists yet, so cross-process visibility has not been observed.
-  This leaf does not test TCC, App Intents, a target application, write
-  atomicity, or WindowServer behavior.
-- **Batch 19 Settings Clear surface-purge routing is in progress:**
+  exits does the second use native AppKit to byte-compare the value. The
+  scaffold landed in PR #21 and is correctness-green at run 32621152027. The
+  first physical attempt
+  [32621160138](https://github.com/GuangDai/Clipy/actions/runs/32621160138)
+  failed while compiling the aggregate Release test host because testable
+  modules had not been enabled. PR #22 enabled them, but attempt
+  [32621668622](https://github.com/GuangDai/Clipy/actions/runs/32621668622)
+  then failed in that same pre-launch aggregate Release build because a
+  repository test referenced the DEBUG-only `MigrationBackfillAbortProbe`.
+  Neither run launched the writer or reader, so cross-process visibility has
+  not been observed. This leaf does not test TCC, App Intents, a target
+  application, write atomicity, or WindowServer behavior.
+- **Batch 19 Settings Clear surface-purge routing landed:**
   [`ClipySettingsView`](../Sources/PresentationUI/ClipySettingsView.swift) now
   sends Danger Zone Clear through the shared
   [`HistoryViewState.clearAwaitingReceipt`](../Sources/PresentationUI/HistoryViewState.swift)
@@ -1077,8 +1103,50 @@ test.
   [`SettingsClearSurfacePurgeTests`](../Tests/PresentationUITests/SettingsClearSurfacePurgeTests.swift)
   fixture distinguishes unchanged, typed failure, and committed receipts:
   unchanged/failure must preserve the existing surface, while only a committed
-  Clear may publish and apply the whole-surface purge. No macOS CI run has
-  compiled or executed this current source yet. This removes the Settings
-  Clear bypass only; App Intents/Gateway external remove still bypasses the
-  owner, and page observation still lacks off-page purge facts, so Card 9B
-  remains Partial.
+  Clear may publish and apply the whole-surface purge. PR #21 and correctness
+  run 32621152027 compile and execute this discriminator. This closes only the
+  Settings Clear ingress: App Intents/Gateway external remove still bypasses
+  the owner, and page observation still lacks off-page purge facts, so overall
+  Card 9B remains Partial.
+- **Batch 19 preview dwell test repair landed without a new product claim:**
+  [`PreviewPaneStateTests`](../Tests/PresentationUITests/PreviewPaneStateTests.swift)
+  now use a finite scheduler-turn oracle and the delay-injection seam instead
+  of wall-clock sleeps that starved the MainActor on the hosted runner. The
+  repaired suite passed in correctness run 32621152027. Production dwell
+  behavior did not change, and this tests-only repair proves no WindowServer,
+  pixel, or accessibility behavior.
+- **PLAY-STOR-1 logical ledger arithmetic is Done at its pure ceiling:**
+  [`RetainedBytesStamping`](../Sources/HistoryStorage/RetainedBytesStamping.swift)
+  stamps capture insert `canonicalBytes` from the signature-envelope
+  representation-byte sum and initializes revision count/bytes to zero in the
+  same transaction. The literal
+  [`captureInsertStampsOneToOneRow`](../Tests/HistoryStorageTests/RetainedBytesProjectionLifecycleTests.swift#L138)
+  fixture independently decodes the signature entries and proves a 17-byte
+  capture produces exactly `canonicalBytes == 17`, `revisionCount == 0`, and
+  `revisionBytes == 0`; it is green in run 32621391305. This closes only the
+  pure committed-logical-payload arithmetic requested by `PLAY-STOR-1`.
+  `RetainedBytes` deliberately excludes WAL, staging, thumbnails, resident
+  copies, filesystem allocation, and other physical categories, so this is not
+  a physical storage, RSS, or capacity-manager result.
+- **Batch 21 non-conflicting Partial closure is in progress:** the current
+  branch contains source and fixtures for seven independently bounded leaves,
+  but none has macOS CI evidence yet. Hosted
+  [`HistoryListPaginationHostedTests`](../ClipyApp/Tests/ClipyIntegrationTests/HistoryListPaginationHostedTests.swift)
+  mounts the production list against an all-pinned first page;
+  [`FloatingPanelFrameHostedTests`](../ClipyApp/Tests/ClipyIntegrationTests/FloatingPanelFrameHostedTests.swift)
+  observes real same-process `NSPanel` frame expansion/collapse;
+  [`SearchAdmissionBeforeIOTests`](../Tests/HistoryStorageTests/SearchAdmissionBeforeIOTests.swift)
+  checks invalid exact/fuzzy/regexp requests before context/corpus I/O;
+  [`RetentionSettingsDraft`](../Sources/PresentationUI/RetentionSettingsDraft.swift)
+  and its tests preserve untouched sub-day/sub-MiB values, dirty-field
+  conversion, confirmation, and edit-generation fencing; and
+  [`AccessibilityAnnouncement`](../ClipyApp/Sources/Accessibility/AccessibilityAnnouncement.swift)
+  plus hosted tests publish one content-free AppKit announcement per new
+  authoritative capture-failure episode. The same branch also adds bounded,
+  content-free APFS owning-boundary diagnostics and explicit pasteboard
+  build/process/phase markers to discriminate the two failed workflows. Until
+  macOS CI runs, all remain **In progress**. Even after correctness-green, these
+  leaves do not close localization or the complete unified-retention journey,
+  AX/VoiceOver/FKA, multi-screen/Spaces/WindowServer behavior, General
+  pasteboard visibility, physical APFS ENOSPC, external surface purge, signed
+  Data Protection Keychain, or distribution acceptance.
