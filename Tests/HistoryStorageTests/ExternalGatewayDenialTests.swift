@@ -68,11 +68,11 @@ struct ExternalGatewayDenialTests {
         func signal(_ event: Event) {
             let waiter: CheckedContinuation<Event, Never>? =
                 state.withLock { state in
-                guard state.first == nil else { return nil }
-                state.first = event
-                defer { state.waiter = nil }
-                return state.waiter
-            }
+                    guard state.first == nil else { return nil }
+                    state.first = event
+                    defer { state.waiter = nil }
+                    return state.waiter
+                }
             waiter?.resume(returning: event)
         }
 
@@ -708,10 +708,6 @@ struct ExternalGatewayDenialTests {
             limits: limits,
             rateLimiter: Self.rateLimiterWithTwoTokensRemaining()
         )
-        try await fixture.authority.grantCapability(
-            .manage,
-            to: fixture.connection
-        )
         await #expect(throws: ExternalFailure.unauthorized(
             requestedCapability: .browse,
             connectionID: fixture.connection
@@ -721,6 +717,10 @@ struct ExternalGatewayDenialTests {
                 as: fixture.connection
             )
         }
+        try await fixture.authority.grantCapability(
+            .manage,
+            to: fixture.connection
+        )
         let before = try Self.durableSnapshot(in: fixture.container)
         let itemUUID = try #require(before.history.items.first).id
         let itemID = HistoryItemID(rawValue: itemUUID)
