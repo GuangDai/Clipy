@@ -45,6 +45,39 @@ extension HistoryAuthority {
                 else {
                     throw StorageInvariant.positionChanged
                 }
+                let externalAuditConfig: GatewayConfigRow?
+                if let auditAppend = plan.auditAppend {
+                    guard let connection = auditAppend.connectionID,
+                          let capability = auditAppend.capability,
+                          capability == .manage else {
+                        throw ExternalWriteGateRejection.incoherentPlan
+                    }
+                    let config = try Self.loadGatewayConfig(in: context)
+                    let descriptor = ExternalOperationDescriptor(
+                        capability: capability,
+                        operationKind: auditAppend.operationKind,
+                        requestSummary: auditAppend.requestSummary
+                    )
+                    let decision = try Self.targetedExternalAuthorizationDecision(
+                        descriptor,
+                        connection: connection,
+                        config: config,
+                        in: context
+                    )
+                    switch decision {
+                    case .authorized:
+                        externalAuditConfig = config
+                    case .unknownConnection:
+                        throw ExternalWriteGateRejection.unknownConnection(
+                            requestedCapability: capability,
+                            connectionID: connection
+                        )
+                    case .denied(let failure):
+                        throw ExternalWriteGateRejection.denied(failure)
+                    }
+                } else {
+                    externalAuditConfig = nil
+                }
                 // V2-02 §3.3 (roadmap R.3, perf discipline): when the plan
                 // retires items, supply every `.delete` with its 1:1
                 // projection row from ONE bounded scalar fetch — a per-item
@@ -84,6 +117,14 @@ extension HistoryAuthority {
                     expectedPreviousPosition: expectedPreviousPosition,
                     in: context
                 )
+                if let auditAppend = plan.auditAppend,
+                   let externalAuditConfig {
+                    _ = try GatewayAuditStore.append(
+                        auditAppend,
+                        config: externalAuditConfig,
+                        in: context
+                    )
+                }
                 // X-HCR.2 WS-J1-5 window (b): the existing WS13 one-shot
                 // failure now sits after HCR staging and before the singleton
                 // update. Disarmed (nil) in production.
@@ -100,6 +141,10 @@ extension HistoryAuthority {
                 // transaction (§10, D6).
                 meta.rawValue = plan.position.rawValue
             }
+        } catch let rejection as ExternalWriteGateRejection {
+            throw rejection
+        } catch let failure as ExternalFailure {
+            throw failure
         } catch {
             // §16: a `ModelContext.transaction` closure failure (including
             // the `StorageInvariant.positionChanged` guard) or any

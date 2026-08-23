@@ -9,6 +9,23 @@ extension HistoryAuthority {
     internal func searchCorpusSnapshot(
         for request: HistoryBrowseRequest
     ) async throws -> (snapshot: SearchCorpusSnapshot, continuationAnchor: StoredOrderingAnchor?) {
+        // WS12 seam: the one legal suspension point of this path — no
+        // context is live yet (§5).
+        await suspendIfRequested(.readEntry)
+        return try searchCorpusSnapshotInLocalContext(for: request)
+    }
+
+    /// Synchronous V1 corpus projection used after the caller has crossed its
+    /// owning read-entry suspension. Keeping context creation here lets the
+    /// external read path perform its live grant gate plus capture in one
+    /// non-suspending Authority interval (`V2-05` §5.2).
+    internal func searchCorpusSnapshotInLocalContext(
+        for request: HistoryBrowseRequest,
+        context callerContext: ModelContext? = nil
+    ) throws -> (
+        snapshot: SearchCorpusSnapshot,
+        continuationAnchor: StoredOrderingAnchor?
+    ) {
 #if DEBUG
         let debugClock = ContinuousClock()
         let debugTrace = SearchDebugTrace(id: UUID(), startedAt: debugClock.now)
@@ -21,12 +38,6 @@ extension HistoryAuthority {
             phaseElapsed: debugTotalStart.duration(to: debugClock.now),
             totalElapsed: debugTotalStart.duration(to: debugClock.now)
         )
-#endif
-        // WS12 seam: the one legal suspension point of this path — no
-        // context is live yet (§5).
-        await suspendIfRequested(.readEntry)
-
-#if DEBUG
         let debugAdmissionStart = debugClock.now
 #endif
 
@@ -65,7 +76,7 @@ extension HistoryAuthority {
         let debugContextStart = debugClock.now
 #endif
 
-        let context = ModelContext(container)
+        let context = callerContext ?? ModelContext(container)
         context.autosaveEnabled = false
 
 #if DEBUG

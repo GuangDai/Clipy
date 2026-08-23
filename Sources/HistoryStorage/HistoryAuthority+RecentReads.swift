@@ -109,7 +109,8 @@ extension HistoryAuthority {
     /// its CoreData backing reference inside the caller's autorelease pool.
     internal func recentPageInLocalContext(
         limit: Int,
-        after: HistoryPageCursor?
+        after: HistoryPageCursor?,
+        context callerContext: ModelContext? = nil
     ) throws -> HistoryPage {
         // §16: validate the page-row limit before any context.
         guard limits.pageRowLimitRange.contains(limit) else {
@@ -140,7 +141,7 @@ extension HistoryAuthority {
             resolvedCursor = nil
         }
 
-        let context = ModelContext(container)
+        let context = callerContext ?? ModelContext(container)
         context.autosaveEnabled = false
 
         // ── Non-suspending read interval (§5): no `await` past this

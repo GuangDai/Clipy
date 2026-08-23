@@ -11,17 +11,19 @@
 /// service locator (`01` §8 gates).
 ///
 /// Injection mechanism (`V2-02` §6.4 "Injection mechanism",
-/// `RET-COMPILE-1`): the parameter exists ONLY on `HistoryAuthority`'s
-/// internal init. Production wires `SystemStorageClock` inside
-/// `SwiftDataHistory.open`; tests inject a fixed `Date` via the `@testable`
-/// initializer. The v1 public `SwiftDataHistory.open(configuration:)`
-/// signature and the frozen `HistoryConfiguration` are untouched — the
-/// clock never rides on the public seam.
+/// `RET-COMPILE-1`; `V2-05` §5.5): production constructs one witness inside
+/// `SwiftDataHistory.open` and injects that same value into `HistoryAuthority`
+/// and `ExternalGateway`. Tests inject a fixed witness only through internal
+/// initializers. This adds no independent or public clock seam: the v1 public
+/// `SwiftDataHistory.open(configuration:)` signature and frozen
+/// `HistoryConfiguration` remain untouched.
 ///
 /// Slice boundary (`V2-roadmap` §6): the seam and its init plumbing landed
 /// with R.3 per that slice's row ("inject the Storage clock internally");
-/// its behavioral consumers are the R.6 policy sweep and X.3 Gateway
-/// bootstrap. Each reads the clock once at its existing Storage-owned point.
+/// later consumers reuse it for the R.6 policy sweep, HCR commit timestamps,
+/// Gateway bootstrap/admin/audit timestamps, and X.6 gateway-entry request
+/// timestamps. Each operation freezes the value at its owning Storage point;
+/// no consumer introduces a second clock seam.
 import Foundation
 
 // MARK: - Storage-side clock (V2-02 §6.4 / V2-05 §4.6)
@@ -34,10 +36,9 @@ internal protocol StorageClock: Sendable {
     func now() -> Date
 }
 
-/// The production clock witness `SwiftDataHistory.open` wires: stateless, so
-/// every read is the machine clock at that instant. Constructed and injected
-/// at `HistoryAuthority` init — there is no static accessor (the banned
-/// service-locator spelling; `01` §8).
+/// The production clock witness `SwiftDataHistory.open` wires to both Storage
+/// actors: stateless, so every read is the machine clock at that instant.
+/// There is no static accessor (the banned service-locator spelling; `01` §8).
 internal struct SystemStorageClock: StorageClock {
     internal init() {}
 

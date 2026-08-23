@@ -1,16 +1,21 @@
 # V2-05 - External Gateway & Audit (X1 ExternalGateway + X2 Operation Record auditing)
 
 > **Status (2026-08-23):** X.1 closed vocabulary, X.2 public contract, X.3
-> schema/bootstrap, and **X.4 audit/admin are landed**. **X.5 internal in-process
-> Gateway denial is the current implementation leaf.** X.4 owns the complete
+> schema/bootstrap, X.4 audit/admin, and **X.5 internal in-process Gateway
+> denial are landed**. The immutable V4 X-HCR prerequisite and its
+> migration/rollback/restart suite are also landed and CI-green. **X.6 granted
+> positive paths plus the public facade/factory are the current unmerged
+> implementation leaf.** X.4 owns the complete
 > `OperationPayloadBlobV1` codec, public operation-kind additions, central audit
 > store, current-state connection/grant administration, public in-app admin
 > conformance, and startup validation; it does **not** publish an
 > `ExternalGateway`, external facade/factory, App Intents, CLI, or transport.
-> X.5 adds only the real internal denial substrate. The first public
-> `ExternalHistoryFacade` and factory wait for X.6, where the same production
-> actor also has its granted positive paths; an authorized connection must never
-> receive a permanently-denying placeholder. This
+> X.5 adds only the real internal denial substrate. X.6 current work adds the
+> first public `ExternalHistoryFacade`/factory and truthful
+> `ExternalTransientReason.insufficientDiskSpace` raw 3 plus `.cancelled`
+> raw 4 only alongside the same production actor's granted positive paths; it
+> remains unmerged and its HistoryCore snapshot awaits runner regeneration. An
+> authorized connection must never receive a permanently-denying placeholder. This
 > doc extends the v1 specification (`00`–`06`) by **addition only**.
 > v1 owns v1 behavior (single in-app writer, no external access, no audit); V2-05
 > owns the single external trust boundary (`ExternalGateway`), the
@@ -28,7 +33,9 @@
 > **2026-08-23 DC-25 closure:** X.6 depends on the internal X-HCR substrate
 > frozen by `V2-03` §0: immutable `HistorySchemaV4`, five-field HCR rows,
 > four-field journal config, manual affected-items codec, validated bounded
-> suffix, and one atomic HCR per non-empty commit. X.6 does not publish or rely
+> suffix, and one atomic HCR per non-empty commit. That prerequisite and its
+> atomic migration/rollback/restart suite are now landed and CI-green. X.6 does
+> not publish or rely
 > on `ReconnectHistory`, cursors, a journal reader, collection cache, rebase, or
 > journal UX. References below to “V2-03 HCR” mean this X-HCR subset unless a
 > paragraph explicitly discusses a later J1 consumer.
@@ -308,9 +315,9 @@ not a permanent prohibition on the ordered `clipyctl` continuation.
 - **X2** lifts `00` §2 and `06` §4. Trigger: X1 approved (audit is X1's
   consequence) (`V2-00` §3).
 
-Both triggers have fired: V2-00 approved the graft, and X.1–X.4 are landed.
+Both triggers have fired: V2-00 approved the graft, and X.1–X.5 are landed.
 This subsection records the admission history; it does not waive the separate
-proof gates for current X.5 or later slices.
+proof gates for current unmerged X.6 or later slices.
 
 ## 3. Trust boundary and capability model
 
@@ -341,8 +348,22 @@ External caller (App Intent perform() / Siri / Shortcuts / Spotlight)
           summary.
           No durable lookup occurs here. A future authenticated ingress must
           resolve its durable Local Automation connection and kind before
-          entering step 0.
-       0. RATE-LIMIT (§8, X-SECURITY-3): on the ExternalGateway ACTOR (NOT inside
+          entering steps 0a/0b.
+       0a. CADENCE MAINTENANCE (§4.5): the Gateway actor counts structurally
+          admitted requests. Before every Nth request can debit a token or
+          enter a request-specific Authority operation, call the Authority's
+          throwing audit compaction. Maintenance failure keeps the cadence due,
+          consumes no token, executes and audits no request, and returns that
+          failure; the identical retry attempts maintenance again. This
+          pre-dispatch ordering means maintenance cannot replace an already
+          committed request outcome. Actor reentrancy does not create parallel
+          maintenance: the Gateway retains one shared in-flight compaction
+          attempt. The request that creates it is the Nth request; concurrent
+          followers await that same attempt. On success, followers count as
+          requests in the newly opened cadence interval. On shared failure,
+          creator and followers all observe the failure and cadence remains at
+          N−1 for the next structurally admitted retry.
+       0b. RATE-LIMIT (§8, X-SECURITY-3): on the ExternalGateway ACTOR (NOT inside
           the Authority interval — the bucket is process-wide in-memory state),
           debit the process-wide App-Intents token bucket; if exhausted, audit-
           as-denied and throw ExternalFailure.requestDenied(.rateLimited)
@@ -972,8 +993,21 @@ Rules (matching `06` §2 / V2-03 §4.5):
 - `compactionCadenceOps` is an X.5 process-local dispatch cadence, not a
   durable counter and never `nextAuditSequence % 100` (that sequence also
   includes admin/read/maintenance records). X.4 owns the synchronous
-  `compactIfNeeded` mechanism and its transaction proofs; the later Gateway
-  actor decides when every hundred admitted external operations has elapsed.
+  `compactIfNeeded` mechanism and its transaction proofs. The Gateway actor
+  counts structurally admitted external requests. Before the Nth request may
+  debit a rate token or enter any request-specific Authority operation, it must
+  synchronously complete the throwing audit-compaction check. If maintenance
+  fails, cadence remains due: that attempt consumes no token, executes and
+  audits no request, and returns the maintenance failure. The identical retry
+  runs maintenance again. Because maintenance is strictly pre-dispatch, its
+  failure cannot replace an already committed request outcome. Rate denials and
+  live-grant denials still participate in cadence once this pre-dispatch
+  maintenance succeeds. Across actor reentrancy the Gateway retains exactly one
+  shared in-flight compaction attempt: the creator is the Nth request and every
+  concurrent follower awaits that attempt. Success opens a new interval and
+  each follower then counts there; shared failure returns to all participants
+  and preserves N−1, so no follower can silently consume or skip the due
+  maintenance.
 - The two App Intents rate scalars are X.5 additions to the internal
   `ExternalLimits`; their presence in this aggregate table does not claim they
   landed with X.4. The X.5 bucket itself is process-local actor state, not
@@ -1283,6 +1317,15 @@ failure instead; the underlying DTO/content or failure is not published. A
 process crash before the append commits likewise cannot follow a successful
 method return, because return is sequenced after the commit.
 
+An admitted search cancellation follows this same failed-read publication
+barrier. A `CancellationError` raised after interval 1's authoritative gate is
+mapped to `ExternalFailure.temporarilyUnavailable(.cancelled)`; `.cancelled`
+has stable `ExternalTransientReason` raw value 4. Before that failure is
+released, interval 2 must commit exactly one `outcome == .failed`
+OperationRecord with `failureKindRaw == .temporarilyUnavailable` (raw 6) and
+no denial reason. If the mandatory audit append fails, its persistence failure
+replaces the cancellation; the caller never receives an unaudited cancellation.
+
 **Input-validation classification (D35).** The conceptual class "invalid
 input" is caught at two layers: bounds/shape at pre-admission (D35) and
 structural safety (e.g., regexp admission — nested quantifiers,
@@ -1541,8 +1584,8 @@ is `01` §8 / `06` §6: "`import SwiftData` appears only in `HistoryStorage`"):
   (`01` §2: `public` is reserved for the concrete `HistoryStorage` constructor
   needed by `ClipyApp`). The existing §9 symbol snapshot remains a
   `HistoryCore`-only gate. It changes intentionally at X.6 for
-  `ExternalTransientReason.insufficientDiskSpace`; it cannot represent a type
-  declared by `HistoryStorage`.
+  `ExternalTransientReason.insufficientDiskSpace` and `.cancelled`; it
+  cannot represent a type declared by `HistoryStorage`.
   X.6 proves the facade and accessor with an out-of-package
   `ClipyIntegrationTests` compile/behavior test that imports `HistoryStorage`
   normally; package-level tests alone cannot prove `public` rather than
@@ -2097,6 +2140,8 @@ public enum ExternalTransientReason: Int16, Sendable, Equatable, Codable {
     case storeLocked = 2       // Authority interval unavailable
     case insufficientDiskSpace = 3 // transaction reached the platform's
                                    // truthful ENOSPC/out-of-space classification
+    case cancelled = 4         // admitted search was cancelled after its
+                               // authoritative gate; retry is caller-controlled
 }
 
 // Stable raw-value discriminator persisted in OperationRecordRow.failureKindRaw
@@ -2172,23 +2217,30 @@ the v1 enum. `ExternalFailure.history(HistoryFailure)` and
 (standard scoped-error pattern, not a redefinition), exactly as `ReconnectFailure`
 does (`V2-03` §6.3).
 
-### 7.3.1 Complete v1-failure -> ExternalFailure mapping (frozen subset)
+### 7.3.1 Complete admitted-failure -> ExternalFailure mapping (frozen subset)
 
-`failureKindRaw` is persisted (§4.3), so every v1 failure the gateway can
-surface has exactly one row below. Four precedence rules close the
+`failureKindRaw` is persisted (§4.3), so every failure the gateway can
+surface has exactly one row below. Six precedence rules close the
 ambiguities left open by §5.1/§5.2:
 
-- **P1 sibling wins.** A `HistoryFailure` case with a dedicated
+- **P1 reachable sibling wins.** After P6 confirms that the source failure is
+  producible by the active operation, a `HistoryFailure` case with a dedicated
   `ExternalFailure` sibling is never wrapped in `.history`:
   `.notFound` -> `.notFound` (raw 4); `.persistence` -> `.persistence`
   (raw 7); `.temporarilyUnavailable` -> `.temporarilyUnavailable`
-  (raw 6). `.history` (raw 5) carries only cases with no sibling.
-- **P2 transient reasons.** v1 `.factProof` -> `.storeLocked`
-  (retry-later, not an index rebuild); v1 `.dedupIndexRebuild` ->
-  `.indexRebuild` (reserved - capture-path-only, not producible from
-  the frozen subset); v1 `.insufficientDiskSpace` ->
-  `.insufficientDiskSpace` (truthful transaction classification; it is never
-  mislabeled as a lock). `.storeLocked` is also gateway-minted for
+  (raw 6). `.history` (raw 5) carries only reachable cases with no sibling.
+  A sibling that belongs to a different operation does not bypass P6:
+  for example, read-side `.insufficientDiskSpace` is impossible and becomes
+  the audited invariant sentinel, not a transient read result.
+- **P2 transient reasons.** A reachable v1 `.factProof` ->
+  `.storeLocked` (retry-later, not an index rebuild). The public
+  `.indexRebuild` reason is reserved vocabulary only:
+  `.dedupIndexRebuild` is capture-path-only, and none of the frozen seven
+  external operations admits it; any such source therefore takes P6 until a
+  future owned operation explicitly adds that reachability. A write-transaction
+  `.insufficientDiskSpace` -> `.insufficientDiskSpace` (truthful
+  classification; never mislabeled as a lock), while the same source on a read
+  is impossible/P6. `.storeLocked` is also gateway-minted for
   facade-resolution failure (§6.5).
 - **P3 audit-only reclassification (§5.2 D35).** A SearchWorker-surfaced
   `HistoryFailure.invalidInput` is THROWN as `.history` (raw 5) but
@@ -2198,8 +2250,25 @@ ambiguities left open by §5.1/§5.2:
   `.capacityExceeded(.coherenceToken)` has no `ExternalFailure` sibling and is
   therefore thrown as `.history(...)` and audited raw 5. It is the only
   capacity kind reachable from the frozen subset.
+- **P5 admitted search cancellation.** Cancellation after the search request
+  passes interval 1's authoritative gate is not a pre-admission denial and is
+  not wrapped as `.history`. It throws
+  `.temporarilyUnavailable(.cancelled)` (transient-reason raw 4) only after
+  committing one failed audit row (failure-kind raw 6, no denial reason).
+  Mandatory audit failure overrides the cancellation with persistence failure.
+- **P6 operation-aware fail-closed sentinel.** A globally known
+  `HistoryFailure` is not automatically valid for every external operation.
+  If a structurally admitted request's real Authority read/write path produces
+  a §7.3.1 case that the active operation cannot produce, the gateway rejects
+  that impossible pairing as
+  `ExternalFailure.persistence(.invariantViolation)`. Before publishing it,
+  the request commits one `.failed` audit with failure-kind raw 7 and no
+  denial reason; mandatory audit failure still overrides. DEBUG-only
+  `TaskLocal` fixtures inject impossible failures at the real Authority
+  read/write seams to prove the sentinel and privacy. The hook has no Release
+  declaration or path.
 
-| v1 failure (producible case; source) | thrown as | raw |
+| failure (producible case; source) | thrown as | raw |
 |---|---|---|
 | `.notFound(id)` — unpin/remove planner | `.notFound(id)` | 4 |
 | `.notFound(id)` — details/pastePayload read | `.notFound(id)` | 4 |
@@ -2207,6 +2276,8 @@ ambiguities left open by §5.1/§5.2:
 | `.invalidInput(.invalidSearchTerm)` — search | `.history` (audit 3) | 5 / 3 |
 | `.invalidInput(.invalidRegularExpression)` — search | `.history` (audit 3) | 5 / 3 |
 | `.invalidInput(.invalidPageLimit)` — recent/search | `.requestDenied(.invalidInput)` at the pre-admission D35 gate; no OperationRecord because no truthful admitted summary exists | 3 / no audit |
+| `CancellationError` — admitted search after the authoritative gate | `.temporarilyUnavailable(.cancelled)`; mandatory `.failed` audit first, audit failure overrides | transient reason 4 / failure kind 6 |
+| `HistoryFailure` forbidden for the active operation — operation-aware sentinel | `.persistence(.invariantViolation)`; mandatory `.failed` audit first | 7 |
 | `.temporarilyUnavailable(.factProof)` — fact loads | `.temporarilyUnavailable(.storeLocked)` | 6 |
 | `.temporarilyUnavailable(.insufficientDiskSpace)` — write transaction | `.temporarilyUnavailable(.insufficientDiskSpace)` | 6 |
 | `.capacityExceeded(.coherenceToken)` — stamping at exhausted ChangePosition | `.history(...)` | 5 |
@@ -2214,7 +2285,7 @@ ambiguities left open by §5.1/§5.2:
 | `.persistence(.invariantViolation)` — sequence/floor/prevalidation/corpus | `.persistence(...)` | 7 |
 | `.persistence(.transaction)` — commit closure | `.persistence(...)` | 7 |
 
-**Not producible** from the frozen subset (pin is `.first`-only,
+**Not producible** from the frozen subset's healthy production paths (pin is `.first`-only,
 `ExternalRead` carries no cursor, no capture/revision/thumbnail/
 retention path): `.staleContent`, `.revisionNotFound`,
 `.snapshotExpired`, `.capacityExceeded` except the producible
@@ -2223,11 +2294,15 @@ retention path): `.staleContent`, `.revisionNotFound`,
 `.temporarilyUnavailable(.dedupIndexRebuild)`,
 `.persistence(.openStore)` (open throws before the facade is
 published, §4.6), and the ten capture/revision/thumbnail/retention
-`.invalidInput` reasons.
+`.invalidInput` reasons. This is an operation-aware contract, not permission
+to accept one of these cases when returned by the wrong operation: after
+structural admission P6 converts that impossible pairing to audited
+`.persistence(.invariantViolation)` raw 7.
 
 **Gateway-minted (no v1 source):** `.unauthorized`,
 `.connectionRevoked`, `.requestDenied(.invalidInput/.rateLimited)`,
 `.temporarilyUnavailable(.storeLocked)` (§6.5),
+`.temporarilyUnavailable(.cancelled)` for an admitted cancelled search,
 `.auditCompactedBefore(floor:)` (§5.6).
 
 **Coherence-token exception to P1.** `ExternalFailure` has no dedicated
@@ -2462,7 +2537,8 @@ on macOS 26:
   `ClipyIntegrationTests` compile/behavior test imports `HistoryStorage`
   normally and calls the accessor. The HistoryCore snapshot changes
   intentionally at X.6 for the new truthful
-  `ExternalTransientReason.insufficientDiskSpace` raw-3 case; the
+  `ExternalTransientReason.insufficientDiskSpace` raw-3 and `.cancelled`
+  raw-4 cases; the
   HistoryStorage facade itself remains outside that snapshot.
   `SwiftDataHistory` does not itself conform to `ExternalHistory`. `ClipyApp`
   resolves the facade via `@Dependency` and registers it once into
@@ -2512,17 +2588,18 @@ on macOS 26:
   confirm `SecItemAdd`/`SecItemCopyMatching`/`SecItemDelete` compile under Swift
   6 strict concurrency in the actor-confined `CredentialStore` and round-trip a
   credential (macOS 10.6+; `V2-facts.md` cycle 6, facts 5–7). Not exercised in V2.
-- **X-BEHAVIOR-1 (v1-failure -> ExternalFailure mapping, §7.3.1).**
+- **X-BEHAVIOR-1 (admitted failure -> ExternalFailure mapping, §7.3.1).**
   Fixture-prove the frozen mapping end to end, none of which
   X.4's codec-corruption proof or `X-PERF-*` (mechanism
   bounds) covers: (a) P1 - every `HistoryFailure` case with a
-  dedicated sibling is thrown as that sibling (`.notFound`,
+  dedicated sibling reachable for that active operation is thrown as that sibling (`.notFound`,
   `.persistence`, `.temporarilyUnavailable`), and `.history`
   carries only sibling-less cases; (b) P2 - `.factProof` throws
-  `.temporarilyUnavailable(.storeLocked)` and the reserved
-  `.dedupIndexRebuild` -> `.indexRebuild` row is never produced
-  from the frozen subset, while transaction ENOSPC throws
-  `.temporarilyUnavailable(.insufficientDiskSpace)`; (c) P3 - a SearchWorker
+  `.temporarilyUnavailable(.storeLocked)`; `.indexRebuild` remains reserved
+  public vocabulary because every frozen-operation `.dedupIndexRebuild`
+  source takes P6, while write-transaction ENOSPC throws
+  `.temporarilyUnavailable(.insufficientDiskSpace)` and read-side ENOSPC
+  takes P6; (c) P3 - a SearchWorker
   `.invalidInput` is thrown as `.history` (raw 5) but audited
   as raw 3 + `denialReasonRaw == .invalidInput`, and no other
   case is reclassified; (d) the absent-target asymmetry -
@@ -2536,7 +2613,15 @@ on macOS 26:
   surface `.staleContent`, `.revisionNotFound`,
   `.snapshotExpired`, the other `.capacityExceeded` cases, or the capture/
   revision/thumbnail/retention `.invalidInput` reasons, and any
-  fixture that surfaces a listed case fails the gate.
+  fixture that surfaces a listed case fails the gate; (g) cancellation after
+  an admitted search's authoritative gate throws
+  `.temporarilyUnavailable(.cancelled)` (transient raw 4), commits one failed
+  audit before publication, and an audit-append failure replaces cancellation
+  with persistence failure; (h) DEBUG-only `TaskLocal` fixtures inject
+  spec-not-producible and wrong-operation failures through real Authority
+  read/write paths, which the operation-aware sentinel converts to
+  `.persistence(.invariantViolation)` and audits raw 7; the hook is absent
+  from Release.
 - **X-SECURITY-1 (App Intents in-process/entitlement).** `V2-facts.md` cycle 6, OPEN 1:
   confirm a main-app-target `AppIntent.perform()` runs in the app process on
   macOS 26 and inherits the app's pasteboard/file TCC + entitlements; confirm
@@ -2552,7 +2637,7 @@ on macOS 26:
   in-memory, process-wide App-Intents token-bucket quota compiles and follows
   its deterministic admission state machine: a rate-exceeding external caller is throttled
   (`requestDenied(.rateLimited)`, one immutable denied record per well-formed
-  call before the denial is returned, §3.1 step 0) before the live
+  call before the denial is returned, §3.1 step 0b) before the live
   authorization gate or History evaluation. It does not bound denial-audit append rate or Authority
   load. The honest bound
   (§8): the quota is per single shared connection (no per-caller
@@ -2562,8 +2647,14 @@ on macOS 26:
   deterministic fixed-uptime witness (no sleep) proves: the initial 30 debits,
   same-time 31st denial, no refill at `999_999_999` ns, exactly one refill at
   `1_000_000_000` ns, a large-forward jump capped at 30, and a backward sample
-  producing zero elapsed without rewinding refill state. This is correctness
-  admission evidence, not a performance measurement.
+  producing zero elapsed without rewinding refill state. Cadence fixtures are
+  phrased and asserted as pre-dispatch maintenance proofs: the Nth structurally
+  admitted destructive request, History read, live-grant denial, and rate
+  denial first complete compaction; injected maintenance failure leaves cadence
+  due, consumes no token, executes/audits no request, and the identical retry
+  runs maintenance again. Because dispatch has not begun, maintenance failure
+  cannot override a committed request outcome. This is correctness admission
+  evidence, not a performance measurement.
 - **X-SECURITY-4 (per-caller identity survey — OPEN).** The §8 honest-bound
   bullet records that V2's rate limit cannot attribute operations to a specific
   caller (Siri vs a given Shortcut) because the App Intents surface provides a

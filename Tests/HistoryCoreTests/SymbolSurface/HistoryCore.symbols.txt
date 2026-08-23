@@ -113,7 +113,9 @@ ExternalResponse.removed(count:)
 ExternalResponse.unchanged
 ExternalResponse.unpin(_:)
 ExternalTransientReason
+ExternalTransientReason.cancelled
 ExternalTransientReason.indexRebuild
+ExternalTransientReason.insufficientDiskSpace
 ExternalTransientReason.storeLocked
 GatewayAdminHistory
 GrantDTO
