@@ -73,7 +73,7 @@ struct PersistenceErrorClassificationTests {
         let diagnostics = PersistenceErrorClassification.diagnosticLines(for: error)
             .joined(separator: "\n")
         #expect(diagnostics.contains("depth=0 edge=root"))
-        #expect(diagnostics.contains("swift_type=\"Foundation.NSError\""))
+        #expect(diagnostics.contains("swift_type=\"NSError\""))
         #expect(diagnostics.contains("domain=\"NSPOSIXErrorDomain\" code=28"))
         #expect(diagnostics.contains(
             "localized_description=\"write failed at /Volumes/Clipy ENOSPC/history.store\""
@@ -106,13 +106,13 @@ struct PersistenceErrorClassificationTests {
         let diagnostics = lines.joined(separator: "\n")
         #expect(lines.count >= 5)
         #expect(diagnostics.contains(
-            "depth=0 edge=root swift_type=\"Foundation.NSError\" "
+            "depth=0 edge=root swift_type=\"NSError\" "
                 + "domain=\"NSCocoaErrorDomain\" code=512"
         ))
         #expect(diagnostics.contains("key=\"NSFilePath\""))
         #expect(diagnostics.contains("value=\"/private/fixture.store\""))
         #expect(diagnostics.contains(
-            "depth=1 edge=underlying swift_type=\"Foundation.NSError\" "
+            "depth=1 edge=underlying swift_type=\"NSError\" "
                 + "domain=\"NSPOSIXErrorDomain\" code=28"
         ))
         #expect(diagnostics.contains("localized_description=\"device has no space\""))
