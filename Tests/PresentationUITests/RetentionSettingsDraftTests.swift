@@ -13,7 +13,8 @@ struct RetentionSettingsDraftTests {
         into draft: inout RetentionSettingsDraft
     ) {
         let request = draft.beginLoadRequest()
-        #expect(draft.acceptLoaded(policies, requestedAt: request))
+        let accepted = draft.acceptLoaded(policies, requestedAt: request)
+        #expect(accepted)
     }
 
     @Test("late configured-policy read preserves edits and advances strictness baseline")
@@ -29,7 +30,7 @@ struct RetentionSettingsDraftTests {
         // The request then returns the authoritative 20 MiB configuration.
         // Its baseline is needed to identify 15 MiB as destructive tightening,
         // but its displayed 20 must not replace the newer dirty 15.
-        #expect(!draft.acceptLoaded(
+        let accepted = draft.acceptLoaded(
             HistoryRetentionPolicies(
                 age: AgeRetention(maxAge: 90_001),
                 storage: StorageRetention(maxTotalBytes: 20_971_520),
@@ -39,7 +40,8 @@ struct RetentionSettingsDraftTests {
                 )
             ),
             requestedAt: loadRequest
-        ))
+        )
+        #expect(!accepted)
 
         let policies = try #require(draft.submission()?.policies)
         #expect(draft.storageEnabled)
@@ -154,7 +156,11 @@ struct RetentionSettingsDraftTests {
 
         draft.setStorageMiBText("2")
 
-        #expect(!draft.acceptApplied(staleSubmission, successMessage: "Done."))
+        let accepted = draft.acceptApplied(
+            staleSubmission,
+            successMessage: "Done."
+        )
+        #expect(!accepted)
         #expect(draft.storageMiBText == "2")
         #expect(draft.storageValueIsDirty)
         #expect(draft.acceptedSuccessMessage == nil)
@@ -173,7 +179,11 @@ struct RetentionSettingsDraftTests {
         let staleSubmission = try #require(draft.submission())
 
         draft.setStorageMiBText("15")
-        #expect(!draft.acceptApplied(staleSubmission, successMessage: "Done."))
+        let accepted = draft.acceptApplied(
+            staleSubmission,
+            successMessage: "Done."
+        )
+        #expect(!accepted)
 
         let newerPolicies = try #require(draft.submission()?.policies)
         #expect(draft.storageMiBText == "15")
@@ -193,7 +203,8 @@ struct RetentionSettingsDraftTests {
         draft.setAgeDaysText("3")
         let submission = try #require(draft.submission())
 
-        #expect(draft.acceptApplied(submission, successMessage: "Done."))
+        let accepted = draft.acceptApplied(submission, successMessage: "Done.")
+        #expect(accepted)
         #expect(draft.acceptedSuccessMessage == "Done.")
         #expect(!draft.ageValueIsDirty)
 
