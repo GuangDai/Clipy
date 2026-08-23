@@ -90,8 +90,9 @@ custom_rules:
   historystorage_import_confinement:
     name: "HistoryStorage import confinement"
     included: "Sources/HistoryStorage/"
-    # Blocklist target: SwiftData / ImageIO / xxh3 / Fuse / HistoryCore /
-    # HistoryDomain are allowed (Fuse pinned at roadmap step 3).
+    # Blocklist target: SwiftData / ImageIO / xxh3 / Fuse / Security /
+    # HistoryCore / HistoryDomain are allowed. Security is restricted again by
+    # the global owner rule below to this F1 server-custody target only.
     regex: '^\s*(?:@[A-Za-z_][A-Za-z0-9_]*(?:\([^\n)]*\))?\s+)*(?:(?:public|package|internal|fileprivate|private)\s+)?import\s+(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:AppKit|SwiftUI|PasteboardAdapter|PresentationUI)\b'
     message: "HistoryStorage must not import AppKit, SwiftUI, adapters, or PresentationUI (Part I §8)."
     severity: error
@@ -127,6 +128,14 @@ custom_rules:
     excluded: "Sources/HistoryStorage/"
     regex: '^\s*(?:@[A-Za-z_][A-Za-z0-9_]*(?:\([^\n)]*\))?\s+)*(?:(?:public|package|internal|fileprivate|private)\s+)?import\s+(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?Fuse\b'
     message: "Fuse is confined to HistoryStorage (Part I §8)."
+    severity: error
+
+  security_confinement:
+    name: "Security confinement"
+    included: "(Sources|Tests|ClipyApp)/"
+    excluded: "Sources/HistoryStorage/"
+    regex: '^\s*(?:@[A-Za-z_][A-Za-z0-9_]*(?:\([^\n)]*\))?\s+)*(?:(?:public|package|internal|fileprivate|private)\s+)?import\s+(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?Security\b'
+    message: "Security is confined to HistoryStorage F1 server credential custody (Part I §8)."
     severity: error
 
   appintents_confinement:

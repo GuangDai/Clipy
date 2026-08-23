@@ -189,7 +189,10 @@ Before “executable specification”:
   only Foundation/AppKit/Darwin; neither imports the CLI contract or any
   History/SwiftData/AppIntents module.
 - `HistoryDomain` imports only Foundation and `HistoryCore`.
-- `import SwiftData` appears only in `HistoryStorage`; AppKit only in its adapter; SwiftUI only in Presentation.
+- `import SwiftData` appears only in `HistoryStorage`; Security appears only in
+  the internal F1 server-credential implementation in `HistoryStorage`; AppKit
+  only in its adapter; SwiftUI only in Presentation. This Security edge does
+  not authorize a shared access group or client-side Keychain custody.
 - No public symbol mentions Canonical Content, Domain facts/plans, SwiftData types, AppKit objects, fingerprints, or internal invalidations.
 - No `@unchecked Sendable`, `nonisolated(unsafe)`, mutable service locator, or second writer exists.
 - Every public struct shown with public construction has a real public initializer; every declared protocol conformance compiles rather than relying on prose synthesis.

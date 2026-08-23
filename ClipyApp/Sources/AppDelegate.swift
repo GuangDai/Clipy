@@ -18,8 +18,8 @@
 import AppKit
 import HistoryCore
 import HistoryStorage
+import Observation
 import PresentationUI
-import ServiceManagement
 import SwiftUI
 
 /// The only two capture-health episodes that need panel presentation. Both
@@ -55,6 +55,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// this presentation value; a later replacement or failed-capture count
     /// publishes a new episode even when its typed failure equals the old one.
     private(set) var captureNotice: ClipyCaptureNotice?
+
+    /// Authoritative, content-free pasteboard access posture. It is distinct
+    /// from an empty History and controls the access/recovery banner.
+    private(set) var captureAccessState: CaptureAccessState = .systemDefault
+
+    /// Neutral launch-at-login status observed by Settings. The controller is
+    /// the sole ServiceManagement owner; this snapshot carries no framework
+    /// value or error description.
+    private(set) var launchAtLoginPresentation = LaunchAtLoginSettings(
+        state: .off
+    )
+    @ObservationIgnored
+    private lazy var launchAtLoginController: LaunchAtLoginController = {
+        let controller = LaunchAtLoginController(operations: .live)
+        launchAtLoginPresentation = controller.presentation
+        controller.onPresentationChanged = { [weak self] value in
+            self?.launchAtLoginPresentation = value
+        }
+        return controller
+    }()
 
     /// The one production store-open flight shared by the app shell and the
     /// App Intents dependency provider. Reference identity fences a late
@@ -138,6 +158,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         composition?.stop()
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard !Self.isRunningTests else { return }
+        // System Settings may have changed registration/approval while Clipy
+        // was inactive. Re-read the authoritative value; no cached Bool is
+        // allowed to survive activation (REVIEW Card 10C).
+        launchAtLoginController.refresh()
+    }
+
     // MARK: - Panel lifecycle
 
     /// The hotkey surface: toggle at the configured position.
@@ -192,6 +220,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func dismissCaptureNotice() {
         captureNotice = nil
+    }
+
+    func recoverCaptureAccess() {
+        switch captureAccessState.recovery {
+        case .resume:
+            composition?.setCapturePaused(false)
+        case .retry:
+            composition?.retryCaptureAccess()
+        case nil:
+            break
+        }
     }
 
     /// The preview column's visibility changed inside the SwiftUI content;
@@ -311,6 +350,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         opened.onCaptureHealthChanged = { [weak self] health in
             self?.receiveCaptureHealth(health)
         }
+        opened.onCaptureAccessStateChanged = { [weak self] state in
+            self?.captureAccessState = state
+        }
         composition = opened
     }
 
@@ -402,26 +444,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return PopupPositionMode(rawValue: raw) ?? .cursor
     }
 
-    /// The Launch-at-Login toggle backing, wired here — the sole legal home
-    /// for ServiceManagement (PresentationUI never imports it; roadmap 05).
-    /// Reads the authoritative `SMAppService.mainApp.status` and applies
-    /// register/unregister; a failed registration (for example denied by
-    /// the user) intentionally re-reads the authoritative status rather
-    /// than surfacing an error sheet v1 does not have.
-    func launchAtLoginBinding() -> Binding<Bool> {
-        Binding(
-            get: { SMAppService.mainApp.status == .enabled },
-            set: { enabled in
-                do {
-                    if enabled {
-                        try SMAppService.mainApp.register()
-                    } else {
-                        try SMAppService.mainApp.unregister()
-                    }
-                } catch {
-                    // Best effort: the binding's next get re-reads the
-                    // authoritative status, snapping the toggle back.
-                }
+    /// Immutable neutral state plus narrow intents. Keeping the historical
+    /// method name avoids a second composition call site while replacing its
+    /// lossy Bool contract.
+    func launchAtLoginBinding() -> LaunchAtLoginSettings {
+        // First access constructs the live controller and publishes its
+        // authoritative status; hosted tests that never open Settings do not
+        // touch process-global ServiceManagement state.
+        _ = launchAtLoginController
+        return LaunchAtLoginSettings(
+            state: launchAtLoginPresentation.state,
+            operationFailed: launchAtLoginPresentation.operationFailed,
+            setEnabled: { [weak self] enabled in
+                self?.launchAtLoginController.setEnabled(enabled)
+            },
+            refresh: { [weak self] in
+                self?.launchAtLoginController.refresh()
+            },
+            openSystemSettings: { [weak self] in
+                self?.launchAtLoginController.openSystemSettings()
             }
         )
     }

@@ -27,6 +27,11 @@ public final class PasteboardObserver {
     private var timer: Timer?
     private var lastChangeCount: Int
     private var handler: (@MainActor (CaptureOutcome) -> Void)?
+    private var accessBehaviorHandler:
+        (@MainActor (PasteboardAccessBehavior) -> Void)?
+    private var lastAccessBehavior: PasteboardAccessBehavior
+    private var accessBehaviorProvider:
+        @MainActor () -> PasteboardAccessBehavior
 
     /// Creates an observer over `adapter`'s pasteboard. `pollInterval` is
     /// the polling cadence in seconds (0.5 s in production; tests tighten
@@ -37,7 +42,21 @@ public final class PasteboardObserver {
         self.lastChangeCount = adapter.pasteboard.changeCount
         self.timer = nil
         self.handler = nil
+        self.accessBehaviorHandler = nil
+        self.lastAccessBehavior = adapter.captureAccessBehavior
+        self.accessBehaviorProvider = { adapter.captureAccessBehavior }
     }
+
+#if DEBUG
+    /// DEBUG-only AppKit-boundary substitution. Hosted app tests need to prove
+    /// a live allow→deny transition without mutating the user's General
+    /// pasteboard privacy setting. Release has no configurable access source.
+    public func setAccessBehaviorProviderForTesting(
+        _ provider: @escaping @MainActor () -> PasteboardAccessBehavior
+    ) {
+        accessBehaviorProvider = provider
+    }
+#endif
 
     /// Captures the CURRENT pasteboard immediately, then polls: the handler
     /// runs on the main actor once per distinct `changeCount` whose outcome
@@ -47,9 +66,19 @@ public final class PasteboardObserver {
     /// by `CaptureOutcome.declaredUnavailable`, for the handler owner to
     /// judge). Calling `start` again while running replaces the handler
     /// without re-capturing.
-    public func start(handler: @escaping @MainActor (CaptureOutcome) -> Void) {
+    public func start(
+        onAccessBehaviorChanged:
+            (@MainActor (PasteboardAccessBehavior) -> Void)? = nil,
+        handler: @escaping @MainActor (CaptureOutcome) -> Void
+    ) {
         self.handler = handler
+        self.accessBehaviorHandler = onAccessBehaviorChanged
         guard timer == nil else { return }
+
+        let accessBehavior = accessBehaviorProvider()
+        lastAccessBehavior = accessBehavior
+        onAccessBehaviorChanged?(accessBehavior)
+        guard accessBehavior == .allowed else { return }
 
         lastChangeCount = adapter.pasteboard.changeCount
         deliverCurrentOutcome(to: handler)
@@ -79,16 +108,33 @@ public final class PasteboardObserver {
         timer?.invalidate()
         timer = nil
         handler = nil
+        accessBehaviorHandler = nil
     }
 
     /// One poll tick: delivers an outcome only when `changeCount` moved.
     private func poll() {
+        let accessBehavior = accessBehaviorProvider()
+        if accessBehavior != lastAccessBehavior {
+            lastAccessBehavior = accessBehavior
+            accessBehaviorHandler?(accessBehavior)
+        }
+        guard accessBehavior == .allowed else { return }
+
         let changeCount = adapter.pasteboard.changeCount
         guard changeCount != lastChangeCount else { return }
         lastChangeCount = changeCount
         guard let handler else { return }
         deliverCurrentOutcome(to: handler)
     }
+
+#if DEBUG
+    /// Deterministic owner-test entry for one production poll cycle. It avoids
+    /// timing assertions while exercising the same access preflight and
+    /// capture path as the main-RunLoop timer.
+    package func pollForTesting() {
+        poll()
+    }
+#endif
 
     /// Freezes one observed generation for delivery. Ownership movement
     /// during that freeze gets one synchronous retry: a stable complete retry

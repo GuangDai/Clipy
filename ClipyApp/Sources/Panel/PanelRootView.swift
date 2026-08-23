@@ -58,8 +58,13 @@ struct PanelRootView: View {
             }
         }
         .overlay(alignment: .top) {
-            if appDelegate.pasteFailure != nil || appDelegate.captureNotice != nil {
+            if appDelegate.pasteFailure != nil
+                || appDelegate.captureNotice != nil
+                || captureAccessNeedsAttention {
                 VStack(spacing: 8) {
+                    if captureAccessNeedsAttention {
+                        captureAccessBanner(appDelegate.captureAccessState)
+                    }
                     if let pasteFailure = appDelegate.pasteFailure {
                         pasteFailureBanner(pasteFailure)
                     }
@@ -74,6 +79,11 @@ struct PanelRootView: View {
         // material so the rounded corners (FloatingPanel's content layer)
         // show material, not the desktop behind it.
         .background(.regularMaterial)
+    }
+
+    private var captureAccessNeedsAttention: Bool {
+        appDelegate.composition != nil
+            && appDelegate.captureAccessState != .allowed
     }
 
     /// The launch failure pane (fail-loud, no silent repair): the typed
@@ -186,6 +196,52 @@ struct PanelRootView: View {
         case .failed:
             return "A clipboard change wasn't saved. Clipy can't retry it "
                 + "automatically; copy the content again to make a new attempt."
+        }
+    }
+
+    /// Access state is intentionally separate from capture failure state: a
+    /// denied/default pasteboard must never look like empty History. Messages
+    /// contain no clipboard value, type, source application, or framework
+    /// error. Runtime prompt/System Settings behavior remains a signed gate.
+    private func captureAccessBanner(_ state: CaptureAccessState) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "hand.raised.fill")
+                .foregroundStyle(.yellow)
+                .accessibilityHidden(true)
+            Text(captureAccessMessage(state))
+                .font(.callout)
+            Spacer(minLength: 8)
+            if let recovery = state.recovery {
+                Button(recovery == .resume ? "Resume" : "Try Again") {
+                    appDelegate.recoverCaptureAccess()
+                }
+                .accessibilityLabel(
+                    recovery == .resume
+                        ? "Resume clipboard capture"
+                        : "Retry clipboard access"
+                )
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .shadow(radius: 4)
+    }
+
+    private func captureAccessMessage(_ state: CaptureAccessState) -> String {
+        switch state {
+        case .systemDefault:
+            return "Clipy needs permission before it can monitor clipboard changes."
+        case .ask:
+            return "Clipboard access needs your approval before monitoring can continue."
+        case .allowed:
+            return "Clipboard monitoring is allowed."
+        case .denied:
+            return "Clipboard access is denied, so monitoring is stopped."
+        case .readFailure:
+            return "Clipy couldn't check clipboard access. Try again."
+        case .userPaused:
+            return "Clipboard monitoring is paused."
         }
     }
 }

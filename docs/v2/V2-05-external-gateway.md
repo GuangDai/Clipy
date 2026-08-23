@@ -551,7 +551,9 @@ V2-05 owns:
   `ClipyApp`;
 - the F1 credential-store seam (server-side app-private Data Protection
   Keychain `SecItem*` plus the §0.3 client-file custody decision; unused by the
-  App Intents path and not yet implemented);
+  App Intents path. The current Batch 18 worktree implements only the internal
+  exact-value/server-store leaf; client custody, coordination, authentication,
+  and ingress remain unimplemented);
 - new public "distinct concern" protocols in `HistoryCore`
   (`ExternalHistory`, `GatewayAdminHistory`) and DTOs;
 - the six graft-admission records (`V2-00` §4), V2 proof gates, migration
@@ -923,11 +925,14 @@ a shared Keychain substitute and makes no malicious-same-EUID confidentiality
 claim. App Intents still use no credential.
 
 This section fixes architecture and publication order, not platform evidence.
-`X-PLATFORM-3` must still prove exact 48-byte Data Protection Keychain
-add/read/delete behavior, duplicate/retry handling, process restart, and
-Developer ID/profile behavior in the actual signed artifact. Until that leaf
-lands, HistoryStorage does not link `Security` for this surface and no positive
-Local Automation request may be released.
+The current Batch 18 worktree links `Security` only for an internal 48-byte
+value plus actor-confined server-store leaf. Its ordinary correctness tests use
+an injected in-memory adapter for the true Keychain boundary, so they establish
+shape, validation, and content-free store semantics, not Data Protection
+Keychain behavior. `X-PLATFORM-3` must still prove exact add/read/delete,
+duplicate/retry handling, process restart, and Developer ID/profile behavior in
+the actual signed artifact. No positive Local Automation request may be
+released from this server-only leaf.
 
 ## 4. Data model
 
@@ -1957,15 +1962,12 @@ is `01` §8 / `06` §6: "`import SwiftData` appears only in `HistoryStorage`"):
   `HistoryAuthority`) is added to `HistoryStorage`. `HistoryStorage` does
   **not** import `AppIntents` — the gateway exposes a Foundation-only
   `ExternalHistory` protocol, and the `AppIntent` conformances that consume it
-  live in `ClipyApp` (R-m2 / Lens B nit). For the V2 build `HistoryStorage` adds
-  no new hashing or cryptography import. `import Security` (Keychain `SecItem*`) is **not** in the current
-  build — the `CredentialStore` actor is unbuilt and `HistoryStorage` does not
-  link `Security` until the F1 implementation leaf ships (§3.4 / §6.7; Lens B
-  minor). That leaf adds `Security` and `X-PLATFORM-3` confirms the
-  actor-confined round trip. The v1 source gate (`01` §9) is extended to permit
-  no additional import in `HistoryStorage` for X.3/X.4 (proof
-  `X-COMPILE-3`); `Security` is added to the gate only when
-  `X-PLATFORM-3` fires.
+  live in `ClipyApp` (R-m2 / Lens B nit). Audit adds no hashing or cryptography
+  import. The Batch 18 F1 server-custody leaf adds `import Security` only inside
+  `HistoryStorage` for `SecRandomCopyBytes` and app-private Data Protection
+  Keychain `SecItem*`; it adds no Security edge to audit, Core, Domain, UI, or
+  adapters. Ordinary injected-operation tests do not close `X-PLATFORM-3`,
+  which still owns supported signed-artifact compile/runtime evidence.
 - **App Intents surface** (the `AppIntent` conformances — e.g.,
   `SearchHistoryIntent`, `GetItemDetailsIntent`, `PasteItemIntent`,
   `PinItemIntent`, `UnpinItemIntent`, `RemoveItemIntent` — and
@@ -2363,13 +2365,19 @@ internal actor CredentialStore {
 }
 ```
 
-The actor owns only the server copy. The separately executed client receives
+The actor owns only the server copy. The current Batch 18 worktree implements
+this actor, exact UUID16 + secret32 validation/generation, duplicate rejection,
+idempotent missing delete, corrupt-value fail-closed behavior, and content-free
+failure mapping. Its deterministic tests substitute only the true external
+Security operations; they do not exercise a real Keychain. The separately
+executed client receives
 the exact value through inherited stdin and keeps it in the §0.3 owner-only
-file; no access group is claimed for that client. Until F1 ships, this actor is
-unbuilt and `HistoryStorage` does not link `Security` for it. A future sandbox
-or malicious-same-EUID confidentiality requirement invalidates the file-custody
-choice and requires an app-like wrapped client plus proven shared Data
-Protection Keychain entitlements, not a silent widening of this actor.
+file; no access group is claimed for that client. That client leaf is still
+BLOCKED-SPEC on its executable/product placement and fixed production path. A
+future sandbox or malicious-same-EUID confidentiality requirement invalidates
+the file-custody choice and requires an app-like wrapped client plus proven
+shared Data Protection Keychain entitlements, not a silent widening of this
+actor.
 
 ## 7. Public surface (HistoryCore, Foundation-only)
 
@@ -2927,9 +2935,10 @@ The analog of Part VI §6 (compile/dependency), §7 (schema/platform), §9 (perf
 on macOS 26:
 
 - **X-COMPILE-1 (compile/dependency).** Swift 6 complete strict-concurrency
-  build succeeds; no hashing/cryptography import is added for audit
-  (`Security` is **not** imported in the current build — the `CredentialStore` is unbuilt; it
-  is added only when the F1 `X-PLATFORM-3` leaf fires, Lens B minor); `AppIntents` imported
+  build succeeds; no hashing/cryptography import is added for audit. The
+  current F1 server-store worktree imports `Security` only in
+  `HistoryStorage`; its macOS compile remains pending and real DPK behavior
+  remains `X-PLATFORM-3` evidence. `AppIntents` is imported
   only in `ClipyApp` production sources, with the narrow hosted
   `ClipyIntegrationTests` exception needed to exercise those app-owned types;
   `HistoryCore` external-gateway types import only
@@ -2970,8 +2979,9 @@ on macOS 26:
 - **X-COMPILE-3 (import gate).** The v1 source gate (`01` §9) is extended to
   permit `AppIntents` in `ClipyApp` production sources plus only its hosted
   `ClipyIntegrationTests`; no SwiftPM target may import it. Audit adds no
-  `CryptoKit`, Security, or hashing exception. `Security` is added only when
-  `X-PLATFORM-3` fires.
+  `CryptoKit`, Security, or hashing exception. The F1 server-store Security
+  import is confined to `HistoryStorage` and does not imply a shared client
+  access group.
 - **X-COMPILE-4 (`@Parameter` controlStyle spelling + Int bounding — Lens B
   minor).** The macOS 26 declaration is frozen as
   `@Parameter(title: "Limit", default: 20, controlStyle: .stepper,

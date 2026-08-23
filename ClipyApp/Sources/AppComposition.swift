@@ -172,6 +172,17 @@ final class AppComposition {
         }
     }
 
+    /// Content-free Card 5A access-state push. Installing the sole app-shell
+    /// consumer publishes the current authoritative state immediately; later
+    /// callbacks occur only when the reducer's value changes.
+    var onCaptureAccessStateChanged: (@MainActor (CaptureAccessState) -> Void)? {
+        didSet {
+            let state = captureAccessState
+            lastPublishedCaptureAccessState = state
+            onCaptureAccessStateChanged?(state)
+        }
+    }
+
     /// The entire v1 copy lane: one owned task means one active request and
     /// zero pending requests. The slot is installed synchronously before the
     /// task can reach its first `await`, so a second UI gesture is rejected as
@@ -186,6 +197,8 @@ final class AppComposition {
     /// are absent from Release.
     private var pasteWriteFailureForTesting: PasteboardWriteFailure?
     private var nextCaptureFailureForTesting: ClipyCaptureFailure?
+    private var captureAccessBehaviorForTesting:
+        (@MainActor () -> PasteboardAccessBehavior)?
 #endif
 
     /// REVIEW Card 6 capture ownership. The active task is the sole caller of
@@ -200,7 +213,10 @@ final class AppComposition {
     private var failedCaptureCount = 0
     private var lastCaptureFailure: ClipyCaptureFailure?
     private var acceptsCaptures = false
+    private var isStarted = false
     private var lastPublishedCaptureHealth = ClipyCaptureHealth.inactive
+    private var captureAccessReducer: CaptureAccessReducer
+    private var lastPublishedCaptureAccessState: CaptureAccessState
     private let captureByteLimit: Int
 
     /// One value admitted through the composition owner's memory boundary.
@@ -224,6 +240,10 @@ final class AppComposition {
             failedCaptureCount: failedCaptureCount,
             lastFailure: lastCaptureFailure
         )
+    }
+
+    var captureAccessState: CaptureAccessState {
+        captureAccessReducer.state
     }
 
     /// Store URLs this process has opened. The process-side half of the
@@ -255,7 +275,8 @@ final class AppComposition {
         appIntentsHistoryFacade: ExternalHistoryFacade?,
         adapter: PasteboardAdapter,
         observerPollInterval: TimeInterval = 0.5,
-        captureByteLimit: Int = HistoryLimits.standard.maximumCaptureBytes
+        captureByteLimit: Int = HistoryLimits.standard.maximumCaptureBytes,
+        initialCaptureAccessBehavior: PasteboardAccessBehavior? = nil
     ) {
         self.history = history
         self.appIntentsHistoryFacade = appIntentsHistoryFacade
@@ -265,6 +286,12 @@ final class AppComposition {
             pollInterval: observerPollInterval
         )
         viewState = HistoryViewState(history: history)
+        let accessBehavior = initialCaptureAccessBehavior
+            ?? adapter.captureAccessBehavior
+        captureAccessReducer = CaptureAccessReducer(
+            systemBehavior: accessBehavior
+        )
+        lastPublishedCaptureAccessState = captureAccessReducer.state
         self.captureByteLimit = captureByteLimit
     }
 
@@ -346,6 +373,8 @@ final class AppComposition {
             self?.requestPaste(item)
         }
 
+        isStarted = true
+
         // Capture loop (01 §5.1; 03a §4; REVIEW Card 6): one COMPLETE capture
         // per distinct pasteboard changeCount is admitted to this owner's
         // fixed active+latest lane. Only the active slot owns a task; while
@@ -368,10 +397,7 @@ final class AppComposition {
         // must not be suppressed. The observer callback stays synchronous
         // and MainActor-owned, so slot
         // replacement is atomic with respect to later poll deliveries.
-        acceptsCaptures = true
-        observer.start { [weak self] outcome in
-            self?.receiveCaptureOutcome(outcome)
-        }
+        reconcileCaptureObservation()
     }
 
     /// Stops app-owned side effects. Cancellation is advisory for History:
@@ -380,8 +406,8 @@ final class AppComposition {
     /// resolution and before touching the pasteboard. Neither lane may
     /// publish a late side effect after shutdown.
     func stop() {
-        acceptsCaptures = false
-        observer.stop()
+        isStarted = false
+        reconcileCaptureObservation()
         viewState.deactivate()
         viewState.onPaste = { _ in }
         pendingCapture = nil
@@ -393,6 +419,31 @@ final class AppComposition {
         pasteTask = nil
     }
 
+    /// User-owned pause always wins over system changes and read failures.
+    /// Resuming rechecks the current system value before deciding whether the
+    /// observer may restart.
+    func setCapturePaused(_ paused: Bool) {
+        captureAccessReducer.setUserPaused(paused)
+        if !paused {
+            captureAccessReducer.updateSystemBehavior(
+                currentCaptureAccessBehavior()
+            )
+        }
+        publishCaptureAccessStateIfChanged()
+        reconcileCaptureObservation()
+    }
+
+    /// Explicit recovery entry. It re-reads the system posture and never
+    /// guesses prompt/TCC behavior or turns a nil payload into an access
+    /// diagnosis. The signed clean-profile matrix owns those runtime facts.
+    func retryCaptureAccess() {
+        captureAccessReducer.retry(
+            systemBehavior: currentCaptureAccessBehavior()
+        )
+        publishCaptureAccessStateIfChanged()
+        reconcileCaptureObservation()
+    }
+
 #if DEBUG
     /// Hosted tests use the production graph builder with only the two system
     /// boundaries substituted, then drive the same started copy lane.
@@ -402,17 +453,29 @@ final class AppComposition {
         observerPollInterval: TimeInterval = 60,
         captureByteLimit: Int = HistoryLimits.standard.maximumCaptureBytes,
         pasteWriteFailure: PasteboardWriteFailure? = nil,
-        initialCaptureFailure: ClipyCaptureFailure? = nil
+        initialCaptureFailure: ClipyCaptureFailure? = nil,
+        initialCaptureAccessBehavior: PasteboardAccessBehavior? = nil,
+        captureAccessBehaviorProvider:
+            (@MainActor () -> PasteboardAccessBehavior)? = nil
     ) -> AppComposition {
         let composition = AppComposition(
             history: history,
             appIntentsHistoryFacade: nil,
             adapter: adapter,
             observerPollInterval: observerPollInterval,
-            captureByteLimit: captureByteLimit
+            captureByteLimit: captureByteLimit,
+            initialCaptureAccessBehavior: initialCaptureAccessBehavior
+                ?? captureAccessBehaviorProvider?()
         )
         composition.pasteWriteFailureForTesting = pasteWriteFailure
         composition.nextCaptureFailureForTesting = initialCaptureFailure
+        composition.captureAccessBehaviorForTesting =
+            captureAccessBehaviorProvider
+        if let captureAccessBehaviorProvider {
+            composition.observer.setAccessBehaviorProviderForTesting(
+                captureAccessBehaviorProvider
+            )
+        }
         composition.start()
         return composition
     }
@@ -429,7 +492,7 @@ final class AppComposition {
     /// active operation and one replaceable pending capture; no observation
     /// creates an independent task (REVIEW Card 6).
     private func admitCapture(_ capture: ClipboardCapture) {
-        guard acceptsCaptures else { return }
+        guard isStarted, acceptsCaptures else { return }
         guard let admitted = admittedCapture(capture) else {
             recordCaptureFailure(.invalidInput)
             return
@@ -592,6 +655,56 @@ final class AppComposition {
         guard health != lastPublishedCaptureHealth else { return }
         lastPublishedCaptureHealth = health
         onCaptureHealthChanged?(health)
+    }
+
+    /// Owns the only observer start/stop decision. `PasteboardObserver.start`
+    /// is idempotent while running, so repeated allowed refreshes replace the
+    /// same handler without re-freezing or installing another Timer.
+    private func reconcileCaptureObservation() {
+        let shouldObserve = isStarted
+            && captureAccessState.permitsBackgroundPolling
+        acceptsCaptures = shouldObserve
+        if shouldObserve {
+            observer.start(
+                onAccessBehaviorChanged: { [weak self] behavior in
+                    self?.receiveCaptureAccessBehavior(behavior)
+                },
+                handler: { [weak self] outcome in
+                    self?.receiveCaptureOutcome(outcome)
+                }
+            )
+        } else {
+            observer.stop()
+        }
+    }
+
+    private func publishCaptureAccessStateIfChanged() {
+        let state = captureAccessState
+        guard state != lastPublishedCaptureAccessState else { return }
+        lastPublishedCaptureAccessState = state
+        onCaptureAccessStateChanged?(state)
+    }
+
+    /// Every observer cycle reports the neutral AppKit value before touching
+    /// items. A live revoke therefore updates presentation and synchronously
+    /// stops the timer before the cycle can freeze clipboard content.
+    private func receiveCaptureAccessBehavior(
+        _ behavior: PasteboardAccessBehavior
+    ) {
+        captureAccessReducer.updateSystemBehavior(behavior)
+        publishCaptureAccessStateIfChanged()
+        if !captureAccessState.permitsBackgroundPolling {
+            reconcileCaptureObservation()
+        }
+    }
+
+    private func currentCaptureAccessBehavior() -> PasteboardAccessBehavior {
+#if DEBUG
+        if let captureAccessBehaviorForTesting {
+            return captureAccessBehaviorForTesting()
+        }
+#endif
+        return adapter.captureAccessBehavior
     }
 
     /// Paste orchestration — the ONLY History → pasteboard hand-off

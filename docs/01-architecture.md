@@ -40,7 +40,7 @@ There is no `DomainCore` target. The few values that must appear in both the cal
 | `ClipyCLIContract` | Package-only, Foundation-only, no product | Versioned UTF-8 JSON request/reply values, bounded decoding/encoding, and stable exit classes | File handles or standard-stream side effects, transport, credentials, Gateway/History access, a product CLI, operation dispatch, or fabricated Gateway results |
 | `HistoryCore` | Public, Foundation-only | `ClipboardHistory`, IDs/tokens, History Actions, request/response DTOs, receipts, typed failures | Canonical state, fingerprints, SwiftData, AppKit, concrete storage |
 | `HistoryDomain` | Package-only, Foundation-only | Content lineage, immutable state, complete fact values, pure planners, semantic mutation plans and invariants | Public ports, I/O, actors, clocks, UUID generation, persistence |
-| `HistoryStorage` | Public concrete adapter plus internal implementation | `SwiftDataHistory`, Authority actor, schema/codecs, fact loaders, version minting, ingest preparation, Signature Index, read projections, observation plumbing, thumbnail production | AppKit pasteboard, UI state, service location |
+| `HistoryStorage` | Public concrete adapter plus internal implementation | `SwiftDataHistory`, Authority actor, schema/codecs, fact loaders, version minting, ingest preparation, Signature Index, read projections, observation plumbing, thumbnail production, and the internal F1 server-credential Keychain owner | AppKit pasteboard, UI state, service location, client credential files, or transport |
 | `PasteboardAdapter` | Public adapter values used by the app | NSPasteboard observation/writes and translation to/from `HistoryCore` raw values | Deduplication, Canonical Content, fingerprints, persistence |
 | `PresentationUI` | Public UI assembly | View state and interactions over History DTOs | `@Model`, Domain state, persistence rules, change-feed bookkeeping |
 | `ClipyApp` | Composition root | Concrete construction, lifecycle, paste orchestration, App Intents entry points, and dependency injection | Domain decisions or duplicate persistence paths |
@@ -104,6 +104,7 @@ The following rejected surfaces are implementation detail, not public abstractio
 | NSPasteboard/AppKit | Framework | `PasteboardAdapter` translates framework values to raw `HistoryCore` capture values and paste payloads back to AppKit. |
 | SwiftUI | Framework | Confined to `PresentationUI`; views receive value snapshots and an injected `any ClipboardHistory`. |
 | ImageIO | Framework | Internal thumbnail implementation in `HistoryStorage`; one concrete decoder in v1, no hypothetical public port. |
+| Security / Data Protection Keychain | True external | The internal `HistoryStorage` `CredentialStore` actor owns only the exact F1 server credential. Production uses `SecRandomCopyBytes` and app-private Data Protection Keychain operations; deterministic correctness tests inject a narrow operations adapter. Client custody, enrollment coordination, and signed/profile evidence remain separate. |
 | xxh3 | In-process C dependency | Internal fingerprint function; a package-only deterministic collision double is permitted in Domain/Storage tests. |
 | Fuse 1.4.x | Local library | Confined to `SearchWorker` for the specified fuzzy mode; its matcher remains inside actor isolation. The scaffold pins an exact resolved revision and fixtures lock behavior. |
 | Clock and ID source | In-process injected dependencies | Package-only dependencies used to make planning and receipts deterministic in tests. They are not public application services. |
@@ -270,6 +271,9 @@ The Authority does not retain model objects between operations. Each isolated re
 - `HistoryDomain` must not import `HistoryStorage`, SwiftData, AppKit, SwiftUI, ImageIO, or xxh3.
 - Adapters and UI must not import `HistoryDomain` or `HistoryStorage`.
 - `HistoryStorage` must not import an adapter or `PresentationUI`.
+- `Security` is confined to `HistoryStorage`'s internal F1 server-credential
+  implementation; it must not enter `HistoryCore`, `HistoryDomain`, UI, or an
+  adapter as a credential-sharing shortcut.
 - No adapter may import another adapter.
 - `AppIntents` is confined to `ClipyApp/Sources` and the explicitly hosted
   `ClipyIntegrationTests`; it must not enter any SwiftPM target.
