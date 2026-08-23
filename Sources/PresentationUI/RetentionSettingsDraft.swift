@@ -6,12 +6,13 @@
 /// exact configured policy beside each displayed ceiling-rounded value. Until
 /// a field is actually edited, submission reuses that exact raw value instead
 /// of silently loosening it through the display conversion. An edit generation
-/// also fences asynchronous Apply completion from a newer draft.
+/// also fences asynchronous Apply completion from a newer draft (deep review
+/// `04` Red 10A/10D/10E).
 import Foundation
 import HistoryCore
 
-internal struct RetentionSettingsDraft: Equatable {
-    internal struct Submission: Equatable, Sendable {
+internal struct RetentionSettingsDraft {
+    internal struct Submission: Sendable {
         internal let policies: HistoryRetentionPolicies
         fileprivate let editGeneration: UInt64
     }
@@ -42,11 +43,7 @@ internal struct RetentionSettingsDraft: Equatable {
         revisions: nil
     )
     private var editGeneration: UInt64 = 0
-    private var acceptedApplyGeneration: UInt64?
-
-    internal var hasCurrentAcceptedApply: Bool {
-        acceptedApplyGeneration == editGeneration
-    }
+    internal private(set) var acceptedSuccessMessage: String?
 
     internal var inputIsValid: Bool {
         (!ageEnabled || ageInputIsValid)
@@ -88,7 +85,7 @@ internal struct RetentionSettingsDraft: Equatable {
         storageValueIsDirty = false
         revisionCountValueIsDirty = false
         revisionBytesValueIsDirty = false
-        acceptedApplyGeneration = nil
+        acceptedSuccessMessage = nil
     }
 
     internal mutating func setAgeEnabled(_ enabled: Bool) {
@@ -184,32 +181,39 @@ internal struct RetentionSettingsDraft: Equatable {
     /// Accepts an Apply result only for the edit generation that produced
     /// it. A successful current submission becomes the new exact baseline;
     /// an intervening edit leaves both its text and dirty state untouched.
+    /// The configured comparison baseline still advances after a stale-UI
+    /// success because that submission did commit to History; otherwise the
+    /// next draft could compare strictness against policy state that no longer
+    /// exists (`04` Red 10D/10E).
     @discardableResult
-    internal mutating func acceptApplied(_ submission: Submission) -> Bool {
-        guard isCurrent(submission) else { return false }
+    internal mutating func acceptApplied(
+        _ submission: Submission,
+        successMessage: String
+    ) -> Bool {
         configuredPolicies = submission.policies
+        guard isCurrent(submission) else { return false }
         ageValueIsDirty = false
         storageValueIsDirty = false
         revisionCountValueIsDirty = false
         revisionBytesValueIsDirty = false
-        acceptedApplyGeneration = editGeneration
+        acceptedSuccessMessage = successMessage
         return true
     }
 
     private var ageDays: Int? {
-        Self.validatedWholeNumber(ageDaysText, in: Self.ageDaysRange)
+        validatedSettingsWholeNumber(ageDaysText, in: Self.ageDaysRange)
     }
 
     private var storageMiB: Int? {
-        Self.validatedWholeNumber(storageMiBText, in: Self.storageMiBRange)
+        validatedSettingsWholeNumber(storageMiBText, in: Self.storageMiBRange)
     }
 
     private var revisionCount: Int? {
-        Self.validatedWholeNumber(revisionCountText, in: Self.revisionCountRange)
+        validatedSettingsWholeNumber(revisionCountText, in: Self.revisionCountRange)
     }
 
     private var revisionMiB: Int? {
-        Self.validatedWholeNumber(revisionMiBText, in: Self.revisionMiBRange)
+        validatedSettingsWholeNumber(revisionMiBText, in: Self.revisionMiBRange)
     }
 
     private var proposedAgePolicy: AgeRetention? {
@@ -264,7 +268,7 @@ internal struct RetentionSettingsDraft: Equatable {
 
     private mutating func recordEdit() {
         editGeneration += 1
-        acceptedApplyGeneration = nil
+        acceptedSuccessMessage = nil
     }
 
     private static func tightens<T: Comparable>(
@@ -274,16 +278,6 @@ internal struct RetentionSettingsDraft: Equatable {
         guard let candidate else { return false }
         guard let configured else { return true }
         return candidate < configured
-    }
-
-    private static func validatedWholeNumber(
-        _ text: String,
-        in range: ClosedRange<Int>
-    ) -> Int? {
-        guard let value = Int(text.trimmingCharacters(in: .whitespaces)) else {
-            return nil
-        }
-        return range.contains(value) ? value : nil
     }
 
     private static func ceilingDays(_ seconds: TimeInterval) -> Int {
@@ -298,4 +292,16 @@ internal struct RetentionSettingsDraft: Equatable {
         let mib = (bytes + 1_048_575) / 1_048_576
         return min(max(mib, range.lowerBound), range.upperBound)
     }
+}
+
+/// Shared strict integer parser for Settings numeric fields. A decimal,
+/// empty, or out-of-range value is not a whole policy value (contract §4.4).
+internal func validatedSettingsWholeNumber(
+    _ text: String,
+    in range: ClosedRange<Int>
+) -> Int? {
+    guard let value = Int(text.trimmingCharacters(in: .whitespaces)) else {
+        return nil
+    }
+    return range.contains(value) ? value : nil
 }

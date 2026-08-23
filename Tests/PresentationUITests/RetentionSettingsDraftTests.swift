@@ -101,11 +101,32 @@ struct RetentionSettingsDraftTests {
 
         draft.setStorageMiBText("2")
 
-        #expect(!draft.acceptApplied(staleSubmission))
+        #expect(!draft.acceptApplied(staleSubmission, successMessage: "Done."))
         #expect(draft.storageMiBText == "2")
         #expect(draft.storageValueIsDirty)
-        #expect(!draft.hasCurrentAcceptedApply)
+        #expect(draft.acceptedSuccessMessage == nil)
         #expect(draft.submission()?.policies.storage?.maxTotalBytes == 2_097_152)
+    }
+
+    @Test("stale success advances the strictness baseline without replacing newer text")
+    func staleSuccessAdvancesOnlyTheConfiguredComparisonBaseline() throws {
+        var draft = RetentionSettingsDraft()
+        draft.load(HistoryRetentionPolicies(
+            age: nil,
+            storage: StorageRetention(maxTotalBytes: 10_485_760),
+            revisions: nil
+        ))
+        draft.setStorageMiBText("20")
+        let staleSubmission = try #require(draft.submission())
+
+        draft.setStorageMiBText("15")
+        #expect(!draft.acceptApplied(staleSubmission, successMessage: "Done."))
+
+        let newerPolicies = try #require(draft.submission()?.policies)
+        #expect(draft.storageMiBText == "15")
+        #expect(draft.storageValueIsDirty)
+        #expect(draft.acceptedSuccessMessage == nil)
+        #expect(draft.requiresTighteningConfirmation(for: newerPolicies))
     }
 
     @Test("a new edit clears the accepted Done generation")
@@ -119,13 +140,13 @@ struct RetentionSettingsDraftTests {
         draft.setAgeDaysText("3")
         let submission = try #require(draft.submission())
 
-        #expect(draft.acceptApplied(submission))
-        #expect(draft.hasCurrentAcceptedApply)
+        #expect(draft.acceptApplied(submission, successMessage: "Done."))
+        #expect(draft.acceptedSuccessMessage == "Done.")
         #expect(!draft.ageValueIsDirty)
 
         draft.setAgeDaysText("4")
 
-        #expect(!draft.hasCurrentAcceptedApply)
+        #expect(draft.acceptedSuccessMessage == nil)
         #expect(draft.ageValueIsDirty)
         #expect(draft.ageDaysText == "4")
     }

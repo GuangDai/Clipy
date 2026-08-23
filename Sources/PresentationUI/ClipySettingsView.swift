@@ -262,7 +262,7 @@ private struct GeneralSettingsTab: View {
     /// The parsed count, or `nil` when the text is not a whole number
     /// inside `userMaximumUnpinnedRange` (06 §2).
     private var maximumUnpinnedValue: Int? {
-        validatedWholeNumber(
+        validatedSettingsWholeNumber(
             maximumUnpinnedText,
             in: HistoryLimits.standard.userMaximumUnpinnedRange
         )
@@ -484,9 +484,14 @@ private struct RetentionSettingsTab: View {
                                 pendingSubmission = nil
                             }
                         } message: {
+                            // Deep review `04` Red 10D: only a strict local
+                            // tightening is destructive-confirmed; equal or
+                            // looser policy values apply directly.
                             Text("Stricter limits can permanently remove items or revisions.")
                         }
-                        if let status {
+                        if let successMessage = draft.acceptedSuccessMessage {
+                            SettingStatusView(status: .success(successMessage))
+                        } else if let status {
                             SettingStatusView(status: status)
                         }
                     }
@@ -620,18 +625,24 @@ private struct RetentionSettingsTab: View {
         defer { isWorking = false }
         do {
             let receipt = try await viewState.applyRetentionPolicies(submission.policies)
-            guard draft.acceptApplied(submission) else { return }
+            let successMessage: String
             if case .committed(let commit) = receipt,
                case .retentionPoliciesSet(
                    retiredItems: let retired,
                    prunedRevisions: let pruned
                ) = commit.outcome {
-                status = .success(
-                    Self.retentionFeedback(retiredItems: retired, prunedRevisions: pruned)
+                successMessage = Self.retentionFeedback(
+                    retiredItems: retired,
+                    prunedRevisions: pruned
                 )
             } else {
-                status = .success("Done.")
+                successMessage = "Done."
             }
+            guard draft.acceptApplied(
+                submission,
+                successMessage: successMessage
+            ) else { return }
+            status = nil
         } catch let failure as HistoryFailure {
             guard draft.isCurrent(submission) else { return }
             status = .failure(Self.retentionFailureMessage(failure))
@@ -734,15 +745,6 @@ private struct SettingStatusView: View {
                 .foregroundStyle(.red)
         }
     }
-}
-
-/// Parses a whole-number field, returning the value only when it lies
-/// inside `range`. Strict `Int` parsing: decimals, empty text, and
-/// out-of-range values return `nil`, which disables Apply and shows the
-/// row's range hint (contract §4.4 validation).
-private func validatedWholeNumber(_ text: String, in range: ClosedRange<Int>) -> Int? {
-    guard let value = Int(text.trimmingCharacters(in: .whitespaces)) else { return nil }
-    return range.contains(value) ? value : nil
 }
 
 #Preview("Settings") {
