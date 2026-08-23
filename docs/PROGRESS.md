@@ -1026,12 +1026,3 @@ test.
   compiled this work. It does not prove fresh-install registration, external
   revoke, logout/login, actual System Settings behavior, or a signed installed
   artifact.
-- **Hosted panel accessibility characterization is in progress:**
-  [`HostedPanelAccessibilityTests`](../ClipyApp/Tests/ClipyIntegrationTests/HostedPanelAccessibilityTests.swift)
-  mounts the production `PanelRootView` in the production `FloatingPanel` and
-  traverses AppKit's public accessibility interface for the search field and
-  an observed row. Its bounded same-process oracle checks stable identifiers,
-  row button role/label, and that the default press action is accepted; it
-  does not claim the asynchronous paste completed. The unmerged test has no
-  macOS CI evidence and cannot prove XCUI, VoiceOver, Full Keyboard Access,
-  an external accessibility client, or WindowServer behavior.
