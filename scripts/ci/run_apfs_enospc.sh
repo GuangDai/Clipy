@@ -85,7 +85,7 @@ diagnostic_manifest_log="$log_dir/diagnostic-manifest.log"
 : > "$failure_summary_log"
 : > "$diagnostic_manifest_log"
 
-# Durable phase breadcrumbs remain content-free. APFS/system/build/probe stderr
+# Durable phase breadcrumbs use a closed vocabulary. APFS/system/build/probe stderr
 # is copied without semantic redaction, but with hard line-count and line-length
 # bounds, before the disposable root is removed. Probe stdout alone remains a
 # closed-token channel because it is the only path that could carry payload.
@@ -459,6 +459,7 @@ detach_volume() {
 
 cleanup_resources() {
   local original_status="$1"
+  local finalize_manifest="${2:-1}"
   local cleanup_status=0
   local outgoing_status=0
   local phase_at_exit="$current_phase"
@@ -559,21 +560,23 @@ cleanup_resources() {
     "$outgoing_status" >> "$phase_log"
   write_exit_summary \
     "$phase_at_exit" "$original_status" "$cleanup_status" "$outgoing_status"
-  if write_diagnostic_manifest; then
-    # The manifest is the final filesystem write on this success path, so its
-    # recorded sizes cannot be made stale by a later status breadcrumb.
-    printf 'CLIPY_APFS_MANIFEST status=0\n' >&2
-  else
-    rm -f -- "$diagnostic_manifest_log"
-    record_command_status "write-diagnostic-manifest" 1
-    cleanup_status=1
-    record_event "diagnostic-manifest-failed"
-    if [[ "$original_status" -eq 0 ]]; then
-      outgoing_status=1
+  if [[ "$finalize_manifest" -eq 1 ]]; then
+    if write_diagnostic_manifest; then
+      # On EXIT paths the manifest is the final filesystem write, so its
+      # recorded sizes cannot be made stale by a later status breadcrumb.
+      printf 'CLIPY_APFS_MANIFEST status=0\n' >&2
+    else
+      rm -f -- "$diagnostic_manifest_log"
+      record_command_status "write-diagnostic-manifest" 1
+      cleanup_status=1
+      record_event "diagnostic-manifest-failed"
+      if [[ "$original_status" -eq 0 ]]; then
+        outgoing_status=1
+      fi
+      write_exit_summary \
+        "$phase_at_exit" "$original_status" "$cleanup_status" "$outgoing_status"
+      printf 'CLIPY_APFS_MANIFEST status=1\n' >&2
     fi
-    write_exit_summary \
-      "$phase_at_exit" "$original_status" "$cleanup_status" "$outgoing_status"
-    printf 'CLIPY_APFS_MANIFEST status=1\n' >&2
   fi
   if [[ "$outgoing_status" -ne 0 ]]; then
     emit_bounded_diagnostics
@@ -1004,7 +1007,7 @@ record_event "complete"
 # success result. The EXIT trap remains the abnormal-path fallback until this
 # explicit cleanup has succeeded.
 trap - EXIT
-if cleanup_resources 0; then
+if cleanup_resources 0 0; then
   :
 else
   final_cleanup_status=$?
@@ -1026,4 +1029,16 @@ fi
 
 current_phase="complete"
 record_event "evidence-passed"
+if write_diagnostic_manifest; then
+  # Normal success writes its summary and terminal phase first. The manifest
+  # is then the absolute final artifact-file write.
+  printf 'CLIPY_APFS_MANIFEST status=0\n' >&2
+else
+  rm -f -- "$diagnostic_manifest_log"
+  record_command_status "write-diagnostic-manifest" 1
+  record_event "diagnostic-manifest-failed"
+  write_exit_summary "complete" 0 1 1
+  printf 'CLIPY_APFS_MANIFEST status=1\n' >&2
+  exit 1
+fi
 echo "APFS ENOSPC evidence: capture transaction leaf and fresh seed verification passed"

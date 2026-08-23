@@ -52,7 +52,7 @@ jobs:
             done
           exit 0
 
-      - name: Upload bounded content-free evidence
+      - name: Upload bounded runtime diagnostics
         if: always()
         uses: actions/upload-artifact@v7
         with:
