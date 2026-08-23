@@ -9,10 +9,9 @@ func requestBytes(
     operation: String = "browsePreview",
     arguments: String = "{\"limit\":20}"
 ) -> Data {
-    Data(
-        "{\"protocolVersion\":\(version),\"requestID\":\"\(requestID)\"," +
-            "\"operation\":\"\(operation)\",\"arguments\":\(arguments)}".utf8
-    )
+    let request = "{\"protocolVersion\":\(version),\"requestID\":\"\(requestID)\"," +
+        "\"operation\":\"\(operation)\",\"arguments\":\(arguments)}"
+    return Data(request.utf8)
 }
 
 func failure(
