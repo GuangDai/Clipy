@@ -23,6 +23,15 @@ struct HotKeyChord: Hashable, Sendable {
     var warning: HotKeyChordWarning? {
         self == .defaultSummon ? .knownColorsShortcut : nil
     }
+
+    /// Stable Settings text without guessing the person's current keyboard
+    /// layout. The product default has its familiar literal; an externally
+    /// persisted future chord remains inspectable by its exact Carbon facts
+    /// until a recorder/display contract is deliberately specified.
+    var settingsDisplayName: String {
+        if self == .defaultSummon { return "⇧⌘C" }
+        return "Key code \(keyCode), modifiers \(modifiers)"
+    }
 }
 
 enum HotKeyChordWarning: Equatable, Sendable {

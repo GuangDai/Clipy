@@ -1,4 +1,4 @@
-/// EditorRuntimeJourneyUITests — Cards 3B/3C public-control evidence. The
+/// EditorRuntimeJourneyUITests — Cards 3B/3C/3D public-control evidence. The
 /// app captures one real General-pasteboard value into a real persistent
 /// store, navigates through the production panel and Details surface, and
 /// drives the actual revision editor. The optional DEBUG launch seam changes
@@ -28,10 +28,17 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
     /// Card 3B: one real competing revision makes Save fail OCC-stale. The
     /// alert and footer preserve literal draft bytes. Explicit Reload then
     /// observes one typed transient failure, and Retry recovers through a
-    /// fresh read of the same real store without submitting the draft.
+    /// fresh read of the same real store without submitting the draft. Card
+    /// 3D also requires the approved disclosure through its stable public AX
+    /// identifier before this journey clicks the actual Save control.
     @MainActor
     func testStaleSavePreservesDraftAndReloadFailureRecovers() throws {
         let draft = "clipy-editor-stale-draft"
+        let revisionDisclosureIdentifier =
+            "clipy.editor.revision-disclosure"
+        let approvedRevisionDisclosure =
+            "Save appends an immutable revision. Previous and original "
+            + "content may remain in this item's revision history."
         let app = try launchEditor(
             capturing: "clipy-editor-stale-original",
             editorJourney: "stale-reload-failure-once"
@@ -39,6 +46,21 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
         defer { app.terminate() }
 
         let replacement = try authorReplacement(draft, in: app)
+        let revisionDisclosure = app.descendants(matching: .any)[
+            revisionDisclosureIdentifier
+        ]
+        guard assertEventually(
+            {
+                revisionDisclosure.exists
+                    && revisionDisclosure.identifier
+                        == revisionDisclosureIdentifier
+                    && self.accessibilityText(of: revisionDisclosure)
+                        == approvedRevisionDisclosure
+                    && app.buttons["clipy.editor.save"].isEnabled
+            },
+            in: app,
+            message: "The approved immutable-revision disclosure was not visible before Save."
+        ) else { return }
         app.buttons["clipy.editor.save"].click()
 
         let detailsDialog = editorDetailsDialog(in: app)

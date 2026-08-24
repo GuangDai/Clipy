@@ -111,13 +111,23 @@ public final class HistoryViewState {
     /// debounce; only the empty string means `.recent`. Exact and regexp
     /// whitespace is syntax and is never rewritten by presentation state.
     public var searchText: String = "" {
-        didSet { scheduleSearchRestart() }
+        didSet {
+            if searchText != oldValue {
+                advanceSearchQueryGeneration()
+            }
+            scheduleSearchRestart()
+        }
     }
 
     /// The search evaluation mode (docs/03a-instruction-set.md §7). A change
     /// restarts observation immediately.
     public var searchMode: SearchMode = .fuzzy {
-        didSet { replaceObservationImmediately() }
+        didSet {
+            if searchMode != oldValue {
+                advanceSearchQueryGeneration()
+            }
+            replaceObservationImmediately()
+        }
     }
 
     /// Composition-root paste hand-off (docs/01-architecture.md §5.6): the
@@ -132,6 +142,17 @@ public final class HistoryViewState {
     /// this callback, avoiding unsolicited or duplicate announcements.
     public var onCommittedUserRemoval:
         @MainActor @Sendable (HistorySurfacePurge) -> Void = { _ in }
+
+    /// Content-free accessibility handoff for one settled search intent.
+    /// Only the current query generation's first authoritative observation
+    /// page invokes this callback. Debounce drafts, stale completions,
+    /// replacement snapshots, and pagination never do (REVIEW UI-16/Card
+    /// 15D). `hasNextPage` keeps the app shell from presenting this bounded
+    /// first-page count as an exact total.
+    public var onSettledSearchResultCount:
+        @MainActor @Sendable (_ count: Int, _ hasNextPage: Bool) -> Void = {
+            _, _ in
+        }
 
     // MARK: - Pagination/observation bookkeeping (private)
 
@@ -171,6 +192,18 @@ public final class HistoryViewState {
     /// applied observed page, so a one-shot pagination result captured against
     /// superseded rows is discarded instead of appending to replaced rows.
     private var observationGeneration = 0
+
+    /// Monotonic identity of the raw-query/mode intent. Same-query refreshes,
+    /// observation replacement pages, lifecycle restarts, and pagination do
+    /// not advance it, so they cannot reannounce one already-settled search
+    /// generation (review UI-4/UI-16).
+    private var searchQueryGeneration = 0
+
+    /// The one active search intent still eligible for a result-count
+    /// announcement. Applying its first authoritative page consumes the
+    /// value before invoking the callback, so an identical later snapshot
+    /// cannot announce again.
+    private var pendingSearchAnnouncementGeneration: Int?
 
     /// The operation family that owns the visible failure. Observation and
     /// pagination recover through query activity; mutation failures remain
@@ -592,6 +625,7 @@ public final class HistoryViewState {
         let kind = admittedKind
         let limit = pageLimit
         let history = self.history
+        let queryGeneration = searchQueryGeneration
 
         observationTask = Task { [weak self] in
             let stream = await history.observe(
@@ -603,7 +637,10 @@ public final class HistoryViewState {
                     // replacement; cancellation flips before the first
                     // resume of a stale loop.
                     guard !Task.isCancelled else { return }
-                    self?.applyObservedPage(page)
+                    self?.applyObservedPage(
+                        page,
+                        forSearchGeneration: queryGeneration
+                    )
                 }
             } catch {
                 // The frozen Part III stream failure is untyped
@@ -623,7 +660,10 @@ public final class HistoryViewState {
     /// 04-coherence.md §5) and records its own cursor as both the live and
     /// the recovery resume point. The generation bump discards any in-flight
     /// one-shot append whose rows were captured before this replacement.
-    private func applyObservedPage(_ page: HistoryPage) {
+    private func applyObservedPage(
+        _ page: HistoryPage,
+        forSearchGeneration queryGeneration: Int
+    ) {
         invalidatePagination()
         observationGeneration += 1
         rows = page.rows
@@ -634,6 +674,20 @@ public final class HistoryViewState {
         hasAuthoritativeFirstPage = true
         clearQueryFailure()
         isLoadingFirstPage = false
+        if pendingSearchAnnouncementGeneration == queryGeneration {
+            pendingSearchAnnouncementGeneration = nil
+            onSettledSearchResultCount(page.rows.count, page.next != nil)
+        }
+    }
+
+    /// Advances only the user's admitted query/mode generation. Generic
+    /// observation restarts intentionally do not re-arm an announcement for
+    /// an identical settled search (REVIEW Card 15D).
+    private func advanceSearchQueryGeneration() {
+        searchQueryGeneration += 1
+        pendingSearchAnnouncementGeneration = isSearchActive
+            ? searchQueryGeneration
+            : nil
     }
 
     /// Cancels and invalidates pagination synchronously. The request may

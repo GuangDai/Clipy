@@ -33,6 +33,7 @@ struct SummonShortcutControllerTests {
                 retainedActive: .defaultSummon
             )
         )
+        #expect(controller.state.warning == .knownColorsShortcut)
         #expect(persistedChord(in: defaults) == nil)
         #expect(probe.cleanupChords.isEmpty)
         #expect(probe.fire(.defaultSummon))

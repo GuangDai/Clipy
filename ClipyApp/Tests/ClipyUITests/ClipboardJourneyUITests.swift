@@ -114,6 +114,29 @@ final class ClipboardJourneyUITests: XCTestCase {
         ]
         XCTAssertTrue(launchAtLogin.waitForExistence(timeout: 10))
 
+        // Card 14B: the real General scene receives the AppDelegate-owned
+        // neutral shortcut state. The default's advisory remains visible and
+        // Reset traverses the real Settings action without inventing a chord
+        // recorder or claiming signed Carbon delivery.
+        let shortcutStatus = app.descendants(matching: .any)[
+            "clipy.settings.shortcut.status"
+        ]
+        let shortcutWarning = app.descendants(matching: .any)[
+            "clipy.settings.shortcut.warning"
+        ]
+        let shortcutReset = app.buttons["clipy.settings.shortcut.reset"]
+        XCTAssertTrue(shortcutStatus.waitForExistence(timeout: 5))
+        XCTAssertTrue(shortcutWarning.waitForExistence(timeout: 5))
+        XCTAssertEqual(
+            shortcutWarning.label,
+            "This shortcut is also the standard Show Colors shortcut."
+        )
+        XCTAssertTrue(shortcutReset.waitForExistence(timeout: 5))
+        XCTAssertTrue(shortcutReset.isEnabled)
+        shortcutReset.click()
+        XCTAssertTrue(shortcutStatus.exists)
+        XCTAssertTrue(shortcutWarning.exists)
+
         let retentionTab = app.buttons["Retention"]
         XCTAssertTrue(retentionTab.waitForExistence(timeout: 5))
         retentionTab.click()

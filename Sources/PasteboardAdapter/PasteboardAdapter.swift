@@ -41,7 +41,10 @@ public struct PasteboardAdapter {
     /// The observed pasteboard. `.general` in production; tests inject a
     /// private `NSPasteboard(name:)` so they never read or mutate the
     /// user's clipboard.
-    public let pasteboard: NSPasteboard
+    /// Kept internal because only this target's translation implementation
+    /// and observer need the framework object. Callers interact through
+    /// capture/write behavior (01 §2 public seam; GOV-3).
+    internal let pasteboard: NSPasteboard
 
     #if DEBUG
     /// Immutable, package-only AppKit-failure injection. None of this state is

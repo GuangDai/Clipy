@@ -104,6 +104,69 @@ struct AppCaptureAccessTests {
 
     }
 
+    @Test("remaining non-allowed postures stay stopped until an allowed Retry")
+    @MainActor
+    func remainingAccessMatrixIsFailClosedAndRecoveryIsExact() async throws {
+        let cases: [(
+            behavior: PasteboardAccessBehavior,
+            state: CaptureAccessState,
+            label: String
+        )] = [
+            (.systemDefault, .systemDefault, "system-default"),
+            (.ask, .ask, "ask"),
+            (.unavailable, .readFailure, "read-failure"),
+        ]
+
+        for testCase in cases {
+            let history = try await ComposedSupport.openMemoryHistory()
+            let pasteboard = ComposedSupport.makePasteboard()
+            pasteboard.clearContents()
+            pasteboard.setString(
+                "must-not-capture-\(testCase.label)",
+                forType: .string
+            )
+            let accessBehavior = Mutex(testCase.behavior)
+            let composition = AppComposition.makeForTesting(
+                history: history,
+                adapter: PasteboardAdapter(pasteboard: pasteboard),
+                observerPollInterval: 0.02,
+                captureAccessBehaviorProvider: {
+                    accessBehavior.withLock { $0 }
+                }
+            )
+
+            #expect(composition.captureAccessState == testCase.state)
+            #expect(composition.captureAccessState.recovery == .retry)
+            #expect(!composition.isCaptureObservationActiveForTesting)
+
+            // A non-allowed posture cannot be converted into the user-owned
+            // Pause state, and repeating the same system fact cannot promote
+            // capture or consume the staged generation (CLIP-1 / Card 5A).
+            composition.pauseCapture()
+            composition.retryCaptureAccess()
+            #expect(composition.captureAccessState == testCase.state)
+            #expect(!composition.isCaptureObservationActiveForTesting)
+            var page = try await history.browse(
+                HistoryBrowseRequest(kind: .recent, limit: 10)
+            )
+            #expect(page.rows.isEmpty)
+
+            accessBehavior.withLock { $0 = .allowed }
+            composition.retryCaptureAccess()
+            #expect(composition.captureAccessState == .allowed)
+            #expect(composition.isCaptureObservationActiveForTesting)
+            #expect(await Self.waitForRows(1, in: history))
+            page = try await history.browse(
+                HistoryBrowseRequest(kind: .recent, limit: 10)
+            )
+            #expect(
+                page.rows.map(\.title)
+                    == ["must-not-capture-\(testCase.label)"]
+            )
+            composition.stop()
+        }
+    }
+
     @Test("user resume baselines pause-period clipboard generations")
     @MainActor
     func userResumeExcludesPausedValuesAndCapturesTheNextCopy() async throws {

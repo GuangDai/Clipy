@@ -28,7 +28,7 @@ package enum ReviseEditorPresentation {
 /// renders one decision row per Canonical representation and a footer with
 /// the coherence hint, Cancel, and Save Revision. Saving maps every row onto
 /// one `RevisionDecision` and submits one `.replace` intent.
-public struct ReviseEditorView: View {
+struct ReviseEditorView: View {
     private enum Layout: Equatable {
         case standaloneSheet
         case embeddedInDetails
@@ -81,7 +81,7 @@ public struct ReviseEditorView: View {
     @State private var reloadNotice: String?
     @State private var activeAlert: EditorAlert?
 
-    public init(viewState: HistoryViewState, details: HistoryDetails) {
+    init(viewState: HistoryViewState, details: HistoryDetails) {
         self.viewState = viewState
         self.onDismiss = nil
         self.onReferenceAdvance = nil
@@ -108,7 +108,7 @@ public struct ReviseEditorView: View {
         _draft = State(initialValue: ReviseEditorDraft(details: details))
     }
 
-    public var body: some View {
+    var body: some View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(spacing: 12) {

@@ -18,7 +18,7 @@ import SwiftUI
 /// The field always preserves the user's raw draft. `HistoryViewState` owns
 /// mode-specific admission, including fuzzy's 64-character execution view,
 /// so switching modes never truncates clipboard syntax typed by the user.
-public struct SearchHeaderView: View {
+package struct SearchHeaderView: View {
     @Environment(\.locale) private var locale
 
     private let viewState: HistoryViewState
@@ -26,7 +26,7 @@ public struct SearchHeaderView: View {
     private let onMoveSelection: (Int) -> Void
     private let onSubmitSelection: () -> Void
 
-    public init(
+    init(
         viewState: HistoryViewState,
         searchFieldFocused: FocusState<Bool>.Binding,
         onMoveSelection: @escaping (Int) -> Void = { _ in },
@@ -38,7 +38,7 @@ public struct SearchHeaderView: View {
         self.onSubmitSelection = onSubmitSelection
     }
 
-    public var body: some View {
+    package var body: some View {
         HStack(spacing: 8) {
             searchField
             if viewState.isSearchActive {

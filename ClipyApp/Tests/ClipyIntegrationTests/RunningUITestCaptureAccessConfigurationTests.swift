@@ -67,6 +67,50 @@ struct RunningUITestCaptureAccessConfigurationTests {
         #expect(configuration.currentCaptureAccessBehavior == .allowed)
     }
 
+    @Test("running UI tests select the remaining fail-closed access matrix")
+    func selectsRemainingAccessMatrixExactly() throws {
+        let cases: [(
+            value: String,
+            initial: PasteboardAccessBehavior,
+            current: PasteboardAccessBehavior
+        )] = [
+            ("system-default", .systemDefault, .systemDefault),
+            ("system-default-then-allowed", .systemDefault, .allowed),
+            ("ask", .ask, .ask),
+            ("ask-then-allowed", .ask, .allowed),
+            ("read-failure", .unavailable, .unavailable),
+            ("read-failure-then-allowed", .unavailable, .allowed),
+        ]
+
+        for testCase in cases {
+            let configuration = try #require(
+                RunningUITestConfiguration.current(environment: [
+                    "CLIPY_RUNNING_UI_TEST": "1",
+                    "CLIPY_UI_TEST_STORE_PATH":
+                        "/tmp/clipy-ui-\(testCase.value).store",
+                    "CLIPY_UI_TEST_CAPTURE_ACCESS": testCase.value,
+                ])
+            )
+            #expect(
+                configuration.initialCaptureAccessBehavior
+                    == testCase.initial
+            )
+            #expect(
+                configuration.currentCaptureAccessBehavior
+                    == testCase.current
+            )
+        }
+
+        #expect(
+            RunningUITestConfiguration.current(environment: [
+                "CLIPY_RUNNING_UI_TEST": "1",
+                "CLIPY_UI_TEST_STORE_PATH":
+                    "/tmp/clipy-ui-read-failure-invalid.store",
+                "CLIPY_UI_TEST_CAPTURE_ACCESS": "unavailable",
+            ]) == nil
+        )
+    }
+
     @Test("running UI tests accept only the exact short-Pause switch")
     func selectsShortPauseExactly() throws {
         let configuration = try #require(

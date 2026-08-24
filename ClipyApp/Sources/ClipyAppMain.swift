@@ -53,6 +53,7 @@ private struct SettingsRootView: View {
             ClipySettingsView(
                 viewState: composition.viewState,
                 launchAtLogin: appDelegate.launchAtLoginBinding(),
+                summonShortcut: appDelegate.summonShortcutBinding(),
                 popupPosition: $panelPosition
             )
         } else {

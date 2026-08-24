@@ -651,6 +651,135 @@ struct HistoryViewStateTests {
         await history.finishObservation()
     }
 
+    /// UI-16/Card 15D: the draft itself is not a result. Only the final
+    /// debounced query's authoritative first page announces, exactly once.
+    /// The page's cursor is carried with the count so the app shell can say
+    /// "N+ results" instead of fabricating an exact total. A later identical
+    /// observation snapshot, same-query refresh, and a one-shot continuation
+    /// page stay silent.
+    @Test func settledSearchFirstPageAnnouncesOnceButSnapshotsAndPaginationDoNot() async {
+        let cursor = fixtureCursor("search-announcement-next")
+        let firstPage = fixturePage(
+            rows: [
+                fixtureRow(
+                    id: "00000000-0000-0000-0000-000000000052",
+                    title: "settled-one"
+                ),
+                fixtureRow(
+                    id: "00000000-0000-0000-0000-000000000053",
+                    title: "settled-two"
+                ),
+            ],
+            next: "search-announcement-next"
+        )
+        let continuationPage = fixturePage(
+            rows: [fixtureRow(
+                id: "00000000-0000-0000-0000-000000000054",
+                title: "continued"
+            )],
+            next: nil
+        )
+        let history = ScriptedHistory(
+            browseScript: [cursor: .page(continuationPage)]
+        )
+        let state = HistoryViewState(history: history)
+        var announcements: [(count: Int, hasNextPage: Bool)] = []
+        state.onSettledSearchResultCount = { count, hasNextPage in
+            announcements.append((count, hasNextPage))
+        }
+
+        state.activate()
+        #expect(await pollUntil { await history.observeRequests.count == 1 })
+        await history.emitObservedPage(fixturePage(rows: [], next: nil))
+        #expect(await pollUntil { state.hasAuthoritativeFirstPage })
+        #expect(announcements.isEmpty)
+
+        state.searchText = "cl"
+        state.searchText = "clipy"
+        #expect(announcements.isEmpty)
+        #expect(
+            await pollUntil {
+                let requests = await history.observeRequests
+                return requests.count == 2
+                    && requests.last?.kind
+                        == .search(text: "clipy", mode: .fuzzy)
+            }
+        )
+
+        await history.emitObservedPage(firstPage)
+        #expect(await pollUntil { announcements.count == 1 })
+        #expect(announcements[0].count == 2)
+        #expect(announcements[0].hasNextPage)
+
+        await history.emitObservedPage(firstPage)
+        await Task.yield()
+        #expect(announcements.count == 1)
+
+        state.refresh()
+        #expect(await pollUntil { await history.observeRequests.count == 3 })
+        await history.emitObservedPage(firstPage)
+        #expect(await pollUntil { state.rows == firstPage.rows })
+        #expect(announcements.count == 1)
+
+        state.loadNextPage()
+        #expect(await pollUntil { state.rows.count == 3 })
+        #expect(announcements.count == 1)
+
+        state.deactivate()
+        await history.finishObservation()
+    }
+
+    /// Replacing a query cancels its exact observation stream before the new
+    /// debounce settles. A page then offered to that historical stream cannot
+    /// announce or replace rows; the current query's empty authoritative page
+    /// announces one real zero-result outcome.
+    @Test func supersededSearchObservationCannotAnnounceForCurrentQueryGeneration() async {
+        let history = ScriptedHistory()
+        let state = HistoryViewState(history: history)
+        var announcements: [(count: Int, hasNextPage: Bool)] = []
+        state.onSettledSearchResultCount = { count, hasNextPage in
+            announcements.append((count, hasNextPage))
+        }
+        state.activate()
+        #expect(await pollUntil { await history.observeRequests.count == 1 })
+
+        state.searchText = "superseded"
+        #expect(await pollUntil { await history.observeRequests.count == 2 })
+        state.searchText = "current"
+        #expect(state.isLoadingFirstPage)
+
+        let stalePage = fixturePage(
+            rows: [fixtureRow(
+                id: "00000000-0000-0000-0000-000000000055",
+                title: "must-not-announce"
+            )],
+            next: nil
+        )
+        await history.emitObservedPage(stalePage, observationIndex: 1)
+        await Task.yield()
+        #expect(announcements.isEmpty)
+        #expect(state.rows.isEmpty)
+
+        #expect(
+            await pollUntil {
+                let requests = await history.observeRequests
+                return requests.count == 3
+                    && requests.last?.kind
+                        == .search(text: "current", mode: .fuzzy)
+            }
+        )
+        await history.emitObservedPage(fixturePage(rows: [], next: nil))
+
+        #expect(await pollUntil { announcements.count == 1 })
+        #expect(announcements[0].count == 0)
+        #expect(!announcements[0].hasNextPage)
+        #expect(state.rows.isEmpty)
+        #expect(state.hasAuthoritativeFirstPage)
+
+        state.deactivate()
+        await history.finishObservation()
+    }
+
     /// Exact and regexp are syntax-bearing modes: leading, trailing, and
     /// whitespace-only drafts cross the History seam byte-for-byte. Only an
     /// actually empty draft becomes `.recent`.

@@ -18,17 +18,17 @@ import HistoryCore
 /// yields that page once and finishes; `perform` is always `.unchanged`;
 /// `details` and `pastePayload` throw `.notFound`; `thumbnail` returns
 /// `nil`; `retentionConfiguration` returns the new-store defaults.
-public struct PreviewClipboardHistory: ClipboardHistory, Sendable {
+package struct PreviewClipboardHistory: ClipboardHistory, Sendable {
 
     /// 2 pinned + 8 recent rows — realistic titles, types, timestamps,
     /// sources, and copy counts; one row carries a `SearchPresentation`
     /// with a snippet and matched ranges (docs/03b-instruction-set.md §8).
-    public static var populated: PreviewClipboardHistory {
+    package static var populated: PreviewClipboardHistory {
         PreviewClipboardHistory(page: Self.populatedPage)
     }
 
     /// No retained items at all.
-    public static var empty: PreviewClipboardHistory {
+    package static var empty: PreviewClipboardHistory {
         PreviewClipboardHistory(page: nil)
     }
 
@@ -41,17 +41,17 @@ public struct PreviewClipboardHistory: ClipboardHistory, Sendable {
 
     // MARK: - ClipboardHistory
 
-    public func perform(_ action: HistoryAction) async throws -> HistoryReceipt {
+    package func perform(_ action: HistoryAction) async throws -> HistoryReceipt {
         .unchanged
     }
 
-    public func browse(
+    package func browse(
         _ request: HistoryBrowseRequest
     ) async throws -> HistoryPage {
         page ?? HistoryPage(position: ChangePosition.zero, rows: [], next: nil)
     }
 
-    public func observe(
+    package func observe(
         _ request: HistoryObservationRequest
     ) async -> AsyncThrowingStream<HistoryPage, Error> {
         AsyncThrowingStream { continuation in
@@ -62,26 +62,26 @@ public struct PreviewClipboardHistory: ClipboardHistory, Sendable {
         }
     }
 
-    public func details(
+    package func details(
         for id: HistoryItemID
     ) async throws -> HistoryDetails {
         throw HistoryFailure.notFound(id)
     }
 
-    public func pastePayload(
+    package func pastePayload(
         for id: HistoryItemID
     ) async throws -> PastePayload {
         throw HistoryFailure.notFound(id)
     }
 
-    public func thumbnail(
+    package func thumbnail(
         for item: HistoryItemReference,
         pixels: PixelSize
     ) async throws -> ThumbnailPayload? {
         nil
     }
 
-    public func retentionConfiguration() async throws -> HistoryRetentionConfiguration {
+    package func retentionConfiguration() async throws -> HistoryRetentionConfiguration {
         // Previews show the new-store defaults: the Part VI default count
         // (06 §2) and every V2-02 dimension disabled (`V2-02` §3.3).
         HistoryRetentionConfiguration(

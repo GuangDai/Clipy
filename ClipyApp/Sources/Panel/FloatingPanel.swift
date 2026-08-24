@@ -14,23 +14,37 @@ import Carbon.HIToolbox
 import PresentationUI
 import SwiftUI
 
-enum PanelSubmitDecision {
-    static func shouldSubmit(
+enum PanelKeyEventDisposition: Equatable {
+    case deliverToMarkedTextResponder
+    case submitSelection
+    case forwardToWindow
+}
+
+enum PanelKeyEventDecision {
+    static func disposition(
         eventType: NSEvent.EventType,
         keyCode: UInt16,
         modifierFlags: NSEvent.ModifierFlags,
         hasMarkedText: Bool,
         isSelectionSubmissionEnabled: Bool
-    ) -> Bool {
+    ) -> PanelKeyEventDisposition {
+        guard eventType == .keyDown else { return .forwardToWindow }
+
+        let isReturn = keyCode == UInt16(kVK_Return)
+            || keyCode == UInt16(kVK_ANSI_KeypadEnter)
+        let isEscape = keyCode == UInt16(kVK_Escape)
+        if hasMarkedText, isReturn || isEscape {
+            return .deliverToMarkedTextResponder
+        }
+
         let disallowedModifiers: NSEvent.ModifierFlags = [
             .command, .control, .option,
         ]
-        return eventType == .keyDown
-            && (keyCode == UInt16(kVK_Return)
-                || keyCode == UInt16(kVK_ANSI_KeypadEnter))
-            && modifierFlags.intersection(disallowedModifiers).isEmpty
-            && !hasMarkedText
-            && isSelectionSubmissionEnabled
+        guard isReturn,
+              modifierFlags.intersection(disallowedModifiers).isEmpty,
+              isSelectionSubmissionEnabled
+        else { return .forwardToWindow }
+        return .submitSelection
     }
 }
 
@@ -133,9 +147,13 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     override var canBecomeKey: Bool { true }
 
     /// Window-owned Return routing keeps the behavior independent of which
-    /// SwiftUI child currently owns first responder. Marked text always goes
-    /// back to AppKit's field editor; only an unmodified settled Return enters
-    /// the product paste intent (REVIEW Card 14A/15).
+    /// SwiftUI child currently owns first responder. Marked Return/Escape is
+    /// delivered directly to that text responder so a window-level SwiftUI
+    /// key equivalent cannot overtake the IME. Settled Escape continues
+    /// through normal window dispatch: the list root owns Clear Search then
+    /// Close, while Details/editor destinations own their dismissal intent.
+    /// Only an unmodified settled Return enters the product paste intent
+    /// (REVIEW Card 14A/15; UI-7).
     override func sendEvent(_ event: NSEvent) {
         // `keyCode` is valid only for key events. Reading it from a mouse
         // event raises an AppKit exception before `super` can deliver the
@@ -145,19 +163,30 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
             super.sendEvent(event)
             return
         }
-        let hasMarkedText = (firstResponder as? NSTextInputClient)?
+        let responder = firstResponder
+        let hasMarkedText = (responder as? NSTextInputClient)?
             .hasMarkedText() ?? false
-        guard PanelSubmitDecision.shouldSubmit(
+        switch PanelKeyEventDecision.disposition(
             eventType: event.type,
             keyCode: event.keyCode,
             modifierFlags: event.modifierFlags,
             hasMarkedText: hasMarkedText,
             isSelectionSubmissionEnabled: isSelectionSubmissionEnabled()
-        ) else {
+        ) {
+        case .deliverToMarkedTextResponder:
+            // `firstResponder` is necessarily an NSTextInputClient when the
+            // fact above is true. Keep the fallback defensive for AppKit
+            // responder replacement between the two reads.
+            if let responder {
+                responder.keyDown(with: event)
+            } else {
+                super.sendEvent(event)
+            }
+        case .submitSelection:
+            onSubmitSelection()
+        case .forwardToWindow:
             super.sendEvent(event)
-            return
         }
-        onSubmitSelection()
     }
 
     // MARK: - Open / close

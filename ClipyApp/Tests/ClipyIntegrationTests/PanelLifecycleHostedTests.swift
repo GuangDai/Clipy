@@ -9,6 +9,7 @@
 /// behavior. Its sleep/wake leaves prove the documented NSWorkspace names,
 /// object, registration center, and the product response to their delivery.
 import AppKit
+import Carbon.HIToolbox
 import HistoryCore
 import HistoryStorage
 import PasteboardAdapter
@@ -20,6 +21,113 @@ import Testing
 @Suite("Hosted panel lifecycle", .serialized)
 @MainActor
 struct PanelLifecycleHostedTests {
+
+    /// UI-7 settled-Escape contract through the actual AppDelegate-owned
+    /// panel and SwiftUI list root. The first event clears the current query
+    /// without retiring the session; the next closes it. Editor/Details are
+    /// covered separately because their navigation destination owns Esc.
+    @Test("settled list-root Escape clears search, then closes")
+    func settledListRootEscapePreservesTheTwoStepIntent() async throws {
+        let installed = installedOwner()
+        let appDelegate = installed.appDelegate
+        let composition = installed.composition
+        let history = installed.history
+        defer {
+            appDelegate.closePanel()
+            composition.stop()
+        }
+
+        appDelegate.openPanelForTesting()
+        let panel = try #require(appDelegate.panelForTesting)
+        await history.waitForObservationCount(1)
+        _ = try #require(
+            await focusedFieldEditor(in: panel),
+            "The production search field never became first responder."
+        )
+        composition.viewState.searchText = "settled-escape-query"
+
+        NSApp.sendEvent(try #require(escapeKeyDown(for: panel)))
+        #expect(composition.viewState.searchText.isEmpty)
+        #expect(panel.isPresented)
+
+        NSApp.sendEvent(try #require(escapeKeyDown(for: panel)))
+        #expect(!panel.isPresented)
+        #expect(!(appDelegate.panelSurfaceState?.isSessionActive ?? true))
+    }
+
+    /// UI-7 destination ownership through the same hosted panel. This is a
+    /// synthetic AppKit key-equivalent proof, not a physical keyboard/IME
+    /// claim: the application dispatches an exact settled Escape to its key
+    /// window, Details pops, and the list-root session remains alive.
+    @Test("settled Details Escape returns to the live list session")
+    func settledDetailsEscapeDismissesOnlyDetails() async throws {
+        let history = try await ComposedSupport.openMemoryHistory()
+        _ = try await history.perform(.capture(
+            ComposedSupport.textCapture(
+                "details-escape-owner",
+                observedAt: Date(timeIntervalSinceReferenceDate: 800_043_005)
+            )
+        ))
+        let composition = AppComposition.makeForTesting(
+            history: history,
+            adapter: PasteboardAdapter(
+                pasteboard: ComposedSupport.makePasteboard()
+            )
+        )
+        let appDelegate = AppDelegate()
+        appDelegate.installCompositionForTesting(composition)
+        defer {
+            appDelegate.closePanel()
+            composition.stop()
+        }
+
+        appDelegate.openPanelForTesting()
+        let panel = try #require(appDelegate.panelForTesting)
+        let surface = try #require(appDelegate.panelSurfaceState)
+        let selected = await waitForHostedUI {
+            surface.selectedReference(in: composition.viewState.rows) != nil
+        }
+        try #require(
+            selected,
+            "The real observed row never became the list selection."
+        )
+
+        NSApp.sendEvent(try #require(keyDown(
+            for: panel,
+            keyCode: UInt16(kVK_ANSI_I),
+            characters: "i",
+            modifierFlags: .command
+        )))
+        let detailsRendered = await waitForHostedUI {
+            panel.contentView?.layoutSubtreeIfNeeded()
+            return containsAccessibilityIdentifier(
+                "clipy.details.root",
+                in: panel.contentView
+            )
+        }
+        try #require(
+            detailsRendered,
+            "The real rendered Details destination never became ready."
+        )
+
+        NSApp.sendEvent(try #require(escapeKeyDown(for: panel)))
+        let detailsDismissed = await waitForHostedUI {
+            panel.contentView?.layoutSubtreeIfNeeded()
+            return !containsAccessibilityIdentifier(
+                "clipy.details.root",
+                in: panel.contentView
+            )
+        }
+
+        #expect(detailsDismissed)
+        #expect(surface.isAtListRoot)
+        #expect(!containsAccessibilityIdentifier(
+            "clipy.details.root",
+            in: panel.contentView
+        ))
+        #expect(panel.isPresented)
+        #expect(surface.isSessionActive)
+    }
 
     /// Card 8G-2: the actual focused SwiftUI search field must override an
     /// inherited AppKit field-editor posture when a new panel session starts.
@@ -585,6 +693,72 @@ struct PanelLifecycleHostedTests {
             await Task.yield()
         }
         return nil
+    }
+
+    private func escapeKeyDown(for panel: FloatingPanel) -> NSEvent? {
+        keyDown(
+            for: panel,
+            keyCode: UInt16(kVK_Escape),
+            characters: "\u{1B}",
+            modifierFlags: []
+        )
+    }
+
+    private func keyDown(
+        for panel: FloatingPanel,
+        keyCode: UInt16,
+        characters: String,
+        modifierFlags: NSEvent.ModifierFlags
+    ) -> NSEvent? {
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: modifierFlags,
+            timestamp: 0,
+            windowNumber: panel.windowNumber,
+            context: nil,
+            characters: characters,
+            charactersIgnoringModifiers: characters,
+            isARepeat: false,
+            keyCode: keyCode
+        )
+    }
+
+    /// Reads only the app's own public accessibility hierarchy. This is the
+    /// hosted render-boundary join for the SwiftUI destination; it requires no
+    /// Accessibility authorization and does not inspect NSHostingView's
+    /// private implementation tree.
+    private func containsAccessibilityIdentifier(
+        _ expected: String,
+        in element: (any NSAccessibilityProtocol)?,
+        depth: Int = 0
+    ) -> Bool {
+        guard let element, depth < 64 else { return false }
+        if element.accessibilityIdentifier() == expected { return true }
+        return (element.accessibilityChildren() ?? []).contains { child in
+            containsAccessibilityIdentifier(
+                expected,
+                in: child as? any NSAccessibilityProtocol,
+                depth: depth + 1
+            )
+        }
+    }
+
+    /// A monotonic hosted-render deadline. Sleeping briefly releases the main
+    /// actor so AppKit/SwiftUI can publish responder and accessibility state;
+    /// unlike a fixed yield count, the budget remains meaningful on a busy
+    /// runner (REVIEW UI-7 / Card 14A).
+    private func waitForHostedUI(
+        timeout: Duration = .seconds(3),
+        condition: () -> Bool
+    ) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while !condition() {
+            guard clock.now < deadline else { return false }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return true
     }
 }
 

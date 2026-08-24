@@ -93,6 +93,13 @@ actor ScriptedHistory: ClipboardHistory {
     private var liveContinuation:
         AsyncThrowingStream<HistoryPage, Error>.Continuation?
 
+    /// All observation continuations in request order. Most tests use only
+    /// `liveContinuation`; UI-16's cancellation proof deliberately offers a
+    /// page to a superseded stream after its consumer was cancelled.
+    private var observationContinuations: [
+        AsyncThrowingStream<HistoryPage, Error>.Continuation
+    ] = []
+
     /// Parked non-cooperative browse calls keyed by the requested cursor.
     private var pausedBrowses: [
         HistoryPageCursor: (
@@ -123,6 +130,18 @@ actor ScriptedHistory: ClipboardHistory {
     /// authoritative snapshot (docs/04-coherence.md §5).
     func emitObservedPage(_ page: HistoryPage) {
         liveContinuation?.yield(page)
+    }
+
+    /// Pushes to one exact historical observation request (zero based).
+    /// This addresses the cancellation owner deterministically; it does not
+    /// claim that `AsyncThrowingStream` delivers into a cancelled iterator.
+    func emitObservedPage(
+        _ page: HistoryPage,
+        observationIndex: Int
+    ) {
+        guard observationContinuations.indices.contains(observationIndex)
+        else { return }
+        observationContinuations[observationIndex].yield(page)
     }
 
     /// Fails the current observation deterministically.
@@ -200,6 +219,7 @@ actor ScriptedHistory: ClipboardHistory {
         let (stream, continuation) =
             AsyncThrowingStream<HistoryPage, Error>.makeStream()
         liveContinuation = continuation
+        observationContinuations.append(continuation)
         if let observedFirstPage,
            repeatsObservedFirstPage || observeRequests.count == 1 {
             continuation.yield(observedFirstPage)

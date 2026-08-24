@@ -14,7 +14,12 @@
 ## Deliverables
 
 - **Concrete construction:** `SwiftDataHistory.open(configuration:)` with `HistoryLimits.standard`; wire it as the `any ClipboardHistory` injected into `PresentationUI` and used by the paste path (Part V §2).
-- **Lifecycle:** process-wide single `SwiftDataHistory`; no `.shared`/`.current` service locator; guard against a second `open` over the same persistent URL — an implementation responsibility inferred from Part I §8's no-second-writer rule (not stated verbatim by any single spec section).
+- **Lifecycle:** process-wide single `SwiftDataHistory`; no `.shared`/`.current`
+  service locator; guard against a second `open` over the same canonical
+  persistent StoreRoot, including standardized `..` and filesystem-symlink
+  aliases, before creating another `ModelContainer`. This is a same-process
+  guard inferred from Part I §8's no-second-writer rule; it is not a
+  cross-process lease.
 - **App activation lifecycle (REVIEW Card 14C):**
   `NSApplication.didResignActiveNotification` closes only the visible panel
   session and its browsing observation; the app-owned clipboard capture
@@ -57,8 +62,19 @@
   generation.
 - `ClipyIntegrationTests`: the app-internal summon-shortcut controller proves
   safe failed swap, Retry, reset, saved-startup failure, and exactly-once token
-  cleanup through an injected registration closure. This slice does not yet
-  connect the controller state to AppDelegate or Settings UI.
+  cleanup through an injected registration closure. AppDelegate owns that
+  controller's production start/stop lifecycle; General Settings receives
+  framework-neutral current/unavailable state, the exact Show Colors advisory,
+  and Retry/Reset intents. Chord recording remains outside this slice.
+- `ClipyIntegrationTests` + `PresentationUITests`: marked Return/Escape stays
+  with the current text responder; settled list-root Escape clears search then
+  closes, while Details and the editor retain their own dismissal behavior.
+  Synthetic hosted dispatch does not claim a physical CJK input-source matrix.
+- `PresentationUITests` + `ClipyIntegrationTests`: only the current settled
+  search generation's first authoritative page requests one content-free
+  result-count announcement. Replacement snapshots, refresh, pagination, and
+  superseded streams remain silent; a cursor preserves lower-bound (`N+`)
+  wording.
 - `ClipyIntegrationTests`: pausing the first real in-memory History capture and
   submitting an already-frozen burst preserves only the active and newest
   pending values, keeps stable owner-retained slot/byte facts bounded, records

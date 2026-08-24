@@ -229,6 +229,56 @@ struct AccessibilityAnnouncementTests {
         #expect(recorder.records.count == 1)
     }
 
+    @Test("installed settled-search callback announces the bounded count")
+    @MainActor
+    func settledSearchCountUsesTheAppOwnedAnnouncementBoundary() async throws {
+        #expect(
+            SearchResultCountAnnouncementPresentation.message(
+                count: 0,
+                hasNextPage: false
+            ) == "0 results"
+        )
+        #expect(
+            SearchResultCountAnnouncementPresentation.message(
+                count: 1,
+                hasNextPage: false
+            ) == "1 result"
+        )
+        #expect(
+            SearchResultCountAnnouncementPresentation.message(
+                count: 27,
+                hasNextPage: false
+            ) == "27 results"
+        )
+
+        let history = try await SwiftDataHistory.open(
+            configuration: HistoryConfiguration(persistence: .memory)
+        )
+        let composition = AppComposition.makeForTesting(
+            history: history,
+            adapter: PasteboardAdapter(
+                pasteboard: ComposedSupport.makePasteboard()
+            )
+        )
+        defer { composition.stop() }
+        let recorder = AccessibilityAnnouncementRecorder()
+        let appDelegate = AppDelegate(
+            accessibilityAnnouncementOperations: recorder.operations
+        )
+        appDelegate.installCompositionForTesting(composition)
+
+        composition.viewState.onSettledSearchResultCount(50, true)
+
+        #expect(recorder.records.count == 1)
+        #expect(recorder.records[0].targetsApplication)
+        #expect(recorder.records[0].notification == .announcementRequested)
+        #expect(recorder.records[0].message == "50+ results")
+        #expect(
+            recorder.records[0].priority
+                == NSAccessibilityPriorityLevel.medium.rawValue
+        )
+    }
+
     private static func health(
         replacedCaptureCount: Int = 0,
         failedCaptureCount: Int,
