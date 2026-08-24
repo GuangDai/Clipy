@@ -221,6 +221,24 @@ public final class HistoryPanelSurfaceState {
         previewState.panelClosed()
     }
 
+    /// Retargets only the currently open exact Details destination after that
+    /// child has crossed an authoritative editor read/receipt boundary. This
+    /// is not a purge: selection, preview, thumbnails, generations, and other
+    /// path entries are untouched. A later revision purge naming `old` then
+    /// cannot pop the already-retargeted `new` destination.
+    @discardableResult
+    package func advanceOpenDetailsReference(
+        from old: HistoryItemReference,
+        to new: HistoryItemReference
+    ) -> Bool {
+        guard old.id == new.id,
+              new.contentVersion >= old.contentVersion,
+              detailsPath.last == old
+        else { return false }
+        detailsPath[detailsPath.count - 1] = new
+        return true
+    }
+
     package func reconcileSessionSelection(
         rows: [HistoryRow],
         hasAuthoritativeFirstPage: Bool = true
@@ -487,7 +505,16 @@ public struct HistoryPanelView: View {
                     onShowDetails: { item in surfaceState.detailsPath.append(item) }
                 )
                 .navigationDestination(for: HistoryItemReference.self) { item in
-                    HistoryDetailsView(viewState: viewState, item: item)
+                    HistoryDetailsView(
+                        viewState: viewState,
+                        item: item,
+                        onReferenceAdvance: { old, new in
+                            surfaceState.advanceOpenDetailsReference(
+                                from: old,
+                                to: new
+                            )
+                        }
+                    )
                 }
             }
             .id(surfaceState.detailsPurgeGeneration)

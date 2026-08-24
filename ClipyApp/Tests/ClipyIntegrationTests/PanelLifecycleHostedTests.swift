@@ -4,12 +4,16 @@
 /// `HistoryPanelSurfaceState`; the History double only records observation
 /// registrations because storage semantics are outside this lifecycle leaf.
 ///
-/// This same-process evidence does not claim WindowServer, Spaces, sleep /
-/// wake, fast-user-switching, or cross-process focus behavior.
+/// This same-process evidence does not claim WindowServer, Spaces, an actual
+/// hardware power transition, fast-user-switching, or cross-process focus
+/// behavior. Its sleep/wake leaves prove the documented NSWorkspace names,
+/// object, registration center, and the product response to their delivery.
 import AppKit
 import HistoryCore
+import HistoryStorage
 import PasteboardAdapter
 import PresentationUI
+import Synchronization
 import Testing
 @testable import ClipyApp
 
@@ -114,6 +118,371 @@ struct PanelLifecycleHostedTests {
         #expect(await history.terminationCount == 2)
     }
 
+    /// Card 14C app-activation leaf. `NSApplication.didResignActiveNotification`
+    /// is not an `NSWorkspace` login-session resignation: it retires only the
+    /// visible panel/browsing session. Capture remains owned by the always-live
+    /// composition, and becoming active never fabricates a panel session.
+    @Test("app resign closes; active then explicit summon starts a fresh session")
+    func appActivationLifecycleRequiresAnExplicitFreshSummon() async throws {
+        let installed = installedOwner()
+        let appDelegate = installed.appDelegate
+        let composition = installed.composition
+        let history = installed.history
+        defer {
+            appDelegate.closePanel()
+            composition.stop()
+        }
+
+        appDelegate.openPanelForTesting()
+        let panel = try #require(appDelegate.panelForTesting)
+        let surface = try #require(appDelegate.panelSurfaceState)
+        await history.waitForObservationCount(1)
+        #expect(panel.isPresented)
+        #expect(surface.isSessionActive)
+        #expect(surface.sessionGeneration == 1)
+        #expect(composition.isCaptureObservationActiveForTesting)
+
+        appDelegate.applicationDidResignActive(
+            Notification(
+                name: NSApplication.didResignActiveNotification,
+                object: NSApp
+            )
+        )
+        await history.waitForTerminationCount(1)
+        #expect(!panel.isPresented)
+        #expect(!surface.isSessionActive)
+        #expect(await history.observationCount == 1)
+        #expect(await history.terminationCount == 1)
+        #expect(composition.isCaptureObservationActiveForTesting)
+
+        appDelegate.applicationDidBecomeActive(
+            Notification(
+                name: NSApplication.didBecomeActiveNotification,
+                object: NSApp
+            )
+        )
+        await Task.yield()
+
+        // Activation alone is not a summon and must not create an invisible
+        // browsing owner. The next explicit summon starts one fresh session.
+        #expect(!panel.isPresented)
+        #expect(!surface.isSessionActive)
+        #expect(surface.sessionGeneration == 1)
+        #expect(await history.observationCount == 1)
+        #expect(composition.isCaptureObservationActiveForTesting)
+
+        appDelegate.openPanelForTesting()
+        await history.waitForObservationCount(2)
+        #expect(panel.isPresented)
+        #expect(surface.isSessionActive)
+        #expect(surface.sessionGeneration == 2)
+        #expect(await history.observationCount == 2)
+        #expect(await history.terminationCount == 1)
+        #expect(composition.isCaptureObservationActiveForTesting)
+    }
+
+    /// Card 14C sleep leaf: production registers on the NSWorkspace-owned
+    /// notification center with the documented shared-workspace object. The
+    /// callback retires both visible browsing and capture observation without
+    /// turning system sleep into the user's visible Pause state.
+    @Test("workspace sleep closes panel and suspends capture observation")
+    func workspaceSleepRetiresPanelAndCaptureOwners() async throws {
+        let installed = installedOwner()
+        let appDelegate = installed.appDelegate
+        let composition = installed.composition
+        let history = installed.history
+        appDelegate.installWorkspaceLifecycleObservationForTesting()
+        defer {
+            appDelegate.removeWorkspaceLifecycleObservationForTesting()
+            appDelegate.closePanel()
+            composition.stop()
+        }
+
+        appDelegate.openPanelForTesting()
+        let panel = try #require(appDelegate.panelForTesting)
+        let surface = try #require(appDelegate.panelSurfaceState)
+        await history.waitForObservationCount(1)
+        #expect(panel.isPresented)
+        #expect(surface.isSessionActive)
+        #expect(composition.isCaptureObservationActiveForTesting)
+
+        // Apple explicitly says the default center does not deliver these
+        // messages. This negative discriminator prevents a superficially
+        // equivalent but incorrect NotificationCenter.default registration.
+        NotificationCenter.default.post(
+            name: NSWorkspace.willSleepNotification,
+            object: NSWorkspace.shared
+        )
+        await Task.yield()
+        #expect(panel.isPresented)
+        #expect(surface.isSessionActive)
+        #expect(composition.isCaptureObservationActiveForTesting)
+
+        NSWorkspace.shared.notificationCenter.post(
+            name: NSWorkspace.willSleepNotification,
+            object: NSObject()
+        )
+        await Task.yield()
+        #expect(panel.isPresented)
+        #expect(surface.isSessionActive)
+        #expect(composition.isCaptureObservationActiveForTesting)
+
+        NSWorkspace.shared.notificationCenter.post(
+            name: NSWorkspace.willSleepNotification,
+            object: NSWorkspace.shared
+        )
+        await history.waitForTerminationCount(1)
+
+        #expect(!panel.isPresented)
+        #expect(!surface.isSessionActive)
+        #expect(!composition.workspaceActivityForTesting.isSystemAwake)
+        #expect(!composition.isCaptureObservationActiveForTesting)
+        #expect(composition.captureAccessState == .allowed)
+
+        appDelegate.openPanelForTesting()
+        #expect(!panel.isPresented)
+        #expect(!surface.isSessionActive)
+        #expect(surface.sessionGeneration == 1)
+
+        composition.submitCaptureForTesting(
+            ComposedSupport.textCapture(
+                "must-not-enter-while-sleeping",
+                observedAt: Date(timeIntervalSinceReferenceDate: 1)
+            )
+        )
+        await Task.yield()
+        #expect(await history.captureAttemptCount == 0)
+    }
+
+    /// Stopping observation is not permission to erase values already frozen
+    /// and admitted before willSleep. The existing active+latest owner drains
+    /// both slots while refusing any new sleep-period admission.
+    @Test("workspace sleep drains an already admitted active and pending pair")
+    func workspaceSleepPreservesThePreSleepCaptureBacklog() async throws {
+        let base = try await ComposedSupport.openMemoryHistory()
+        let history = FirstCaptureSuspendingHistory(base: base)
+        let pasteboard = ComposedSupport.makePasteboard()
+        pasteboard.clearContents()
+        let accessBehavior = Mutex(PasteboardAccessBehavior.allowed)
+        let composition = AppComposition.makeForTesting(
+            history: history,
+            adapter: PasteboardAdapter(pasteboard: pasteboard),
+            observerPollInterval: 60,
+            initialCaptureAccessBehavior: .allowed,
+            captureAccessBehaviorProvider: {
+                accessBehavior.withLock { $0 }
+            }
+        )
+        let appDelegate = AppDelegate()
+        appDelegate.installCompositionForTesting(composition)
+        appDelegate.installWorkspaceLifecycleObservationForTesting()
+        defer {
+            appDelegate.removeWorkspaceLifecycleObservationForTesting()
+            composition.stop()
+        }
+
+        composition.submitCaptureForTesting(
+            ComposedSupport.textCapture(
+                "active-before-sleep",
+                observedAt: Date(timeIntervalSinceReferenceDate: 2)
+            )
+        )
+        await history.waitUntilFirstCaptureIsSuspended()
+        composition.submitCaptureForTesting(
+            ComposedSupport.textCapture(
+                "pending-before-sleep",
+                observedAt: Date(timeIntervalSinceReferenceDate: 3)
+            )
+        )
+        #expect(composition.captureHealth.activeCommitCount == 1)
+        #expect(composition.captureHealth.pendingCaptureCount == 1)
+
+        NSWorkspace.shared.notificationCenter.post(
+            name: NSWorkspace.willSleepNotification,
+            object: NSWorkspace.shared
+        )
+        #expect(!composition.isCaptureObservationActiveForTesting)
+        #expect(composition.captureHealth.pendingCaptureCount == 1)
+
+        accessBehavior.withLock { $0 = .denied }
+        NSWorkspace.shared.notificationCenter.post(
+            name: NSWorkspace.didWakeNotification,
+            object: NSWorkspace.shared
+        )
+        #expect(composition.captureAccessState == .denied)
+        #expect(!composition.isCaptureObservationActiveForTesting)
+        #expect(composition.captureHealth.pendingCaptureCount == 1)
+
+        await history.resumeFirstCapture()
+        let drained = await ComposedSupport.waitFor {
+            composition.captureHealth.activeCommitCount == 0
+                && composition.captureHealth.pendingCaptureCount == 0
+        }
+        #expect(drained)
+        let page = try await base.browse(
+            HistoryBrowseRequest(kind: .recent, limit: 10)
+        )
+        #expect(page.rows.map(\.title) == [
+            "pending-before-sleep",
+            "active-before-sleep",
+        ])
+    }
+
+    /// Card 14C wake leaf: wake restarts the one existing composition but
+    /// baselines the current generation, so sleep-period content is excluded.
+    /// Wake itself does not reopen UI; a later copy and explicit summon both
+    /// work through their normal production paths.
+    @Test("workspace wake baselines clipboard and allows a fresh summon")
+    func workspaceWakeBaselinesThenCapturesTheNextChange() async throws {
+        let history = try await ComposedSupport.openMemoryHistory()
+        let pasteboard = ComposedSupport.makePasteboard()
+        pasteboard.clearContents()
+        pasteboard.setString("before-sleep", forType: .string)
+        let composition = AppComposition.makeForTesting(
+            history: history,
+            adapter: PasteboardAdapter(pasteboard: pasteboard),
+            observerPollInterval: 0.02,
+            initialCaptureAccessBehavior: .allowed,
+            captureAccessBehaviorProvider: { .allowed }
+        )
+        let appDelegate = AppDelegate()
+        appDelegate.installCompositionForTesting(composition)
+        appDelegate.installWorkspaceLifecycleObservationForTesting()
+        defer {
+            appDelegate.removeWorkspaceLifecycleObservationForTesting()
+            appDelegate.closePanel()
+            composition.stop()
+        }
+
+        #expect(await Self.waitForRows(1, in: history))
+        NSWorkspace.shared.notificationCenter.post(
+            name: NSWorkspace.willSleepNotification,
+            object: NSWorkspace.shared
+        )
+        pasteboard.clearContents()
+        pasteboard.setString("copied-while-sleeping", forType: .string)
+
+        NSWorkspace.shared.notificationCenter.post(
+            name: NSWorkspace.didWakeNotification,
+            object: NSWorkspace.shared
+        )
+        #expect(composition.workspaceActivityForTesting.isSystemAwake)
+        #expect(composition.isCaptureObservationActiveForTesting)
+        #expect(composition.captureHealth.activeCommitCount == 0)
+        var page = try await history.browse(
+            HistoryBrowseRequest(kind: .recent, limit: 10)
+        )
+        #expect(page.rows.map(\.title) == ["before-sleep"])
+
+        pasteboard.clearContents()
+        pasteboard.setString("copied-after-wake", forType: .string)
+        #expect(await Self.waitForRows(2, in: history))
+        page = try await history.browse(
+            HistoryBrowseRequest(kind: .recent, limit: 10)
+        )
+        #expect(page.rows.map(\.title).contains("copied-after-wake"))
+        #expect(!page.rows.map(\.title).contains("copied-while-sleeping"))
+
+        #expect(appDelegate.panelForTesting == nil)
+        appDelegate.openPanelForTesting()
+        let panel = try #require(appDelegate.panelForTesting)
+        let surface = try #require(appDelegate.panelSurfaceState)
+        #expect(panel.isPresented)
+        #expect(surface.isSessionActive)
+        #expect(surface.sessionGeneration == 1)
+
+        // A user Pause remains authoritative across a later sleep/wake pair;
+        // didWake must not bypass the existing access reducer.
+        composition.pauseCapture()
+        NSWorkspace.shared.notificationCenter.post(
+            name: NSWorkspace.willSleepNotification,
+            object: NSWorkspace.shared
+        )
+        NSWorkspace.shared.notificationCenter.post(
+            name: NSWorkspace.didWakeNotification,
+            object: NSWorkspace.shared
+        )
+        #expect(composition.captureAccessState == .userPaused)
+        #expect(!composition.isCaptureObservationActiveForTesting)
+    }
+
+    /// Apple distinguishes login-session switching from ordinary app focus.
+    /// The exact NSWorkspace pair stops capture and closes sensitive UI while
+    /// switched out, then baselines on switch-in without reopening the panel.
+    @Test("workspace session switch baselines and requires a fresh summon")
+    func workspaceSessionSwitchUsesTheSharedLifecycleOwner() async throws {
+        let history = try await ComposedSupport.openMemoryHistory()
+        let pasteboard = ComposedSupport.makePasteboard()
+        pasteboard.clearContents()
+        pasteboard.setString("before-session-switch", forType: .string)
+        let composition = AppComposition.makeForTesting(
+            history: history,
+            adapter: PasteboardAdapter(pasteboard: pasteboard),
+            observerPollInterval: 0.02,
+            initialCaptureAccessBehavior: .allowed,
+            captureAccessBehaviorProvider: { .allowed }
+        )
+        let appDelegate = AppDelegate()
+        appDelegate.installCompositionForTesting(composition)
+        appDelegate.installWorkspaceLifecycleObservationForTesting()
+        defer {
+            appDelegate.removeWorkspaceLifecycleObservationForTesting()
+            appDelegate.closePanel()
+            composition.stop()
+        }
+
+        #expect(await Self.waitForRows(1, in: history))
+        appDelegate.openPanelForTesting()
+        let panel = try #require(appDelegate.panelForTesting)
+        let surface = try #require(appDelegate.panelSurfaceState)
+        #expect(panel.isPresented)
+        #expect(surface.sessionGeneration == 1)
+
+        NSWorkspace.shared.notificationCenter.post(
+            name: NSWorkspace.sessionDidResignActiveNotification,
+            object: NSWorkspace.shared
+        )
+        #expect(!panel.isPresented)
+        #expect(!surface.isSessionActive)
+        #expect(
+            !composition.workspaceActivityForTesting.isLoginSessionActive
+        )
+        #expect(!composition.isCaptureObservationActiveForTesting)
+
+        pasteboard.clearContents()
+        pasteboard.setString("copied-in-inactive-session", forType: .string)
+        NSWorkspace.shared.notificationCenter.post(
+            name: NSWorkspace.sessionDidBecomeActiveNotification,
+            object: NSWorkspace.shared
+        )
+        #expect(
+            composition.workspaceActivityForTesting.isLoginSessionActive
+        )
+        #expect(composition.isCaptureObservationActiveForTesting)
+        #expect(!panel.isPresented)
+        #expect(composition.captureHealth.activeCommitCount == 0)
+        var page = try await history.browse(
+            HistoryBrowseRequest(kind: .recent, limit: 10)
+        )
+        #expect(page.rows.map(\.title) == ["before-session-switch"])
+
+        pasteboard.clearContents()
+        pasteboard.setString("copied-after-session-active", forType: .string)
+        #expect(await Self.waitForRows(2, in: history))
+        page = try await history.browse(
+            HistoryBrowseRequest(kind: .recent, limit: 10)
+        )
+        #expect(page.rows.map(\.title).contains("copied-after-session-active"))
+        #expect(
+            !page.rows.map(\.title).contains("copied-in-inactive-session")
+        )
+
+        appDelegate.openPanelForTesting()
+        #expect(panel.isPresented)
+        #expect(surface.isSessionActive)
+        #expect(surface.sessionGeneration == 2)
+    }
+
     @Test("an attached NSAlert preserves the panel until the alert ends")
     func modalAlertSuppressesFocusLossClose() async throws {
         let installed = installedOwner()
@@ -189,6 +558,24 @@ struct PanelLifecycleHostedTests {
         return (appDelegate, composition, history)
     }
 
+    private static func waitForRows(
+        _ expectedCount: Int,
+        in history: any ClipboardHistory,
+        timeout: Duration = .seconds(2)
+    ) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while clock.now < deadline {
+            if let page = try? await history.browse(
+                HistoryBrowseRequest(kind: .recent, limit: 10)
+            ), page.rows.count == expectedCount {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return false
+    }
+
     /// SwiftUI applies FocusState after the hosted body is scheduled. A fixed
     /// scheduler-turn budget detects a missing focus transition without a
     /// wall-clock sleep or an unbounded hung test.
@@ -210,9 +597,10 @@ struct PanelLifecycleHostedTests {
 /// Records only lifecycle-facing observation registrations. Its streams stay
 /// open until the view-state cancels them, so each count is one live panel
 /// observation rather than a loop that immediately completes and restarts.
-private actor LifecycleObservationHistory: ClipboardHistory {
+actor LifecycleObservationHistory: ClipboardHistory {
     private(set) var observationCount = 0
     private(set) var terminationCount = 0
+    private(set) var captureAttemptCount = 0
     private var observationContinuations: [
         AsyncThrowingStream<HistoryPage, Error>.Continuation
     ] = []
@@ -238,7 +626,10 @@ private actor LifecycleObservationHistory: ClipboardHistory {
     }
 
     func perform(_ action: HistoryAction) async throws -> HistoryReceipt {
-        .unchanged
+        if case .capture = action {
+            captureAttemptCount += 1
+        }
+        return .unchanged
     }
 
     func browse(_ request: HistoryBrowseRequest) async throws -> HistoryPage {

@@ -23,11 +23,16 @@ package enum ReviseEditorPresentation {
         + "may remain in this item's revision history."
 }
 
-/// The "Edit Content…" sheet (contract §4.3): 520×440, one decision row per
-/// Canonical representation, and a footer with the coherence hint, Cancel,
-/// and Save Revision. Saving maps every row onto one `RevisionDecision` and
-/// submits a single `.replace(RevisionDraft(decisions:))` intent.
+/// The "Edit Content…" surface (contract §4.3): 520×440 when hosted as a
+/// standalone sheet, or fitted to the production panel's Details column. It
+/// renders one decision row per Canonical representation and a footer with
+/// the coherence hint, Cancel, and Save Revision. Saving maps every row onto
+/// one `RevisionDecision` and submits one `.replace` intent.
 public struct ReviseEditorView: View {
+    private enum Layout: Equatable {
+        case standaloneSheet
+        case embeddedInDetails
+    }
 
     /// Alerts distinguish save and reload failures so a typed read failure is
     /// never mislabeled as a failed revision (03b §10; review Card 3B).
@@ -62,6 +67,10 @@ public struct ReviseEditorView: View {
     @Environment(\.dismiss) private var dismiss
 
     private let viewState: HistoryViewState
+    private let onDismiss: (@MainActor () -> Void)?
+    private let onReferenceAdvance:
+        (@MainActor (HistoryItemReference) -> Void)?
+    private let layout: Layout
 
     /// Pure current-vs-canonical draft owner.  The view never translates
     /// "Keep Current" into HistoryCore actions itself.
@@ -74,6 +83,27 @@ public struct ReviseEditorView: View {
 
     public init(viewState: HistoryViewState, details: HistoryDetails) {
         self.viewState = viewState
+        self.onDismiss = nil
+        self.onReferenceAdvance = nil
+        self.layout = .standaloneSheet
+
+        _draft = State(initialValue: ReviseEditorDraft(details: details))
+    }
+
+    /// The production floating panel has a fixed 400-point main column. Its
+    /// editor uses that available Details surface rather than retaining the
+    /// standalone sheet's 520-point ideal width and being visibly clipped.
+    package init(
+        viewState: HistoryViewState,
+        details: HistoryDetails,
+        onDismiss: @escaping @MainActor () -> Void,
+        onReferenceAdvance:
+            @escaping @MainActor (HistoryItemReference) -> Void
+    ) {
+        self.viewState = viewState
+        self.onDismiss = onDismiss
+        self.onReferenceAdvance = onReferenceAdvance
+        self.layout = .embeddedInDetails
 
         _draft = State(initialValue: ReviseEditorDraft(details: details))
     }
@@ -97,7 +127,14 @@ public struct ReviseEditorView: View {
             reloadStatus
             footer
         }
-        .frame(width: 520, height: 440)
+        .frame(
+            minWidth: layout == .standaloneSheet ? 520 : nil,
+            maxWidth: layout == .embeddedInDetails ? .infinity : 520,
+            minHeight: layout == .standaloneSheet ? 440 : nil,
+            maxHeight: layout == .embeddedInDetails ? .infinity : 440
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("clipy.editor.root")
         .alert(
             alertTitle,
             isPresented: Binding(
@@ -120,8 +157,9 @@ public struct ReviseEditorView: View {
             }
             Button("Discard Changes", role: .destructive) {
                 activeAlert = nil
-                dismiss()
+                completeDismissal()
             }
+            .accessibilityIdentifier("clipy.editor.confirm-discard")
         case .stale:
             Button("Keep Editing", role: .cancel) {
                 activeAlert = nil
@@ -130,6 +168,7 @@ public struct ReviseEditorView: View {
                 activeAlert = nil
                 Task { await reloadLatest() }
             }
+            .accessibilityIdentifier("clipy.editor.stale-reload")
         case .reloadFailure:
             Button("Keep Editing", role: .cancel) {
                 activeAlert = nil
@@ -138,6 +177,7 @@ public struct ReviseEditorView: View {
                 activeAlert = nil
                 Task { await reloadLatest() }
             }
+            .accessibilityIdentifier("clipy.editor.retry-reload")
         case .saveFailure:
             Button("OK") {
                 activeAlert = nil
@@ -177,6 +217,7 @@ public struct ReviseEditorView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.top, 10)
+        .accessibilityIdentifier("clipy.editor.revision-disclosure")
     }
 
     @ViewBuilder
@@ -189,11 +230,13 @@ public struct ReviseEditorView: View {
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .accessibilityIdentifier("clipy.editor.awaiting-reload")
                 Spacer(minLength: 8)
                 Button(isReloading ? "Reloading…" : "Reload Latest") {
                     Task { await reloadLatest() }
                 }
                 .disabled(isReloading)
+                .accessibilityIdentifier("clipy.editor.reload-latest")
             }
             .padding(.horizontal, 12)
             .padding(.top, 10)
@@ -204,6 +247,7 @@ public struct ReviseEditorView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 12)
                 .padding(.top, 10)
+                .accessibilityIdentifier("clipy.editor.reload-notice")
         }
     }
 
@@ -226,6 +270,7 @@ public struct ReviseEditorView: View {
                 requestDismissal()
             }
             .keyboardShortcut(.cancelAction)
+            .accessibilityIdentifier("clipy.editor.cancel")
             .accessibilityHint(
                 draft.isDirty
                     ? "Asks before discarding unsaved changes."
@@ -243,6 +288,7 @@ public struct ReviseEditorView: View {
             .keyboardShortcut("s", modifiers: .command)
             .disabled(!canSave || isSaving || isReloading)
             .accessibilityLabel(isSaving ? "Saving revision" : "Save Revision")
+            .accessibilityIdentifier("clipy.editor.save")
             .accessibilityHint(
                 "Applies these decisions as a new revision of the item."
             )
@@ -277,7 +323,7 @@ public struct ReviseEditorView: View {
     private func requestDismissal() {
         switch draft.dismissalDecision {
         case .dismiss:
-            dismiss()
+            completeDismissal()
         case .confirmDiscard:
             activeAlert = .discardDraft
         }
@@ -328,6 +374,9 @@ public struct ReviseEditorView: View {
                 .labelsHidden()
                 .fixedSize()
                 .accessibilityLabel("Editing decision for \(typeIdentifier)")
+                .accessibilityIdentifier(
+                    "clipy.editor.decision.\(typeIdentifier)"
+                )
                 .accessibilityHint(
                     "Keep Current preserves the bytes currently used for"
                         + " pasting. Use Original restores the captured bytes."
@@ -358,6 +407,9 @@ public struct ReviseEditorView: View {
                     .accessibilityLabel(
                         "Replacement text for \(typeIdentifier)"
                     )
+                    .accessibilityIdentifier(
+                        "clipy.editor.replacement.\(typeIdentifier)"
+                    )
             }
         }
         .padding(12)
@@ -386,7 +438,7 @@ public struct ReviseEditorView: View {
     // MARK: Save
 
     /// Saves the draft as one `.replace` revision. `.staleContent` leaves the
-    /// sheet and byte-exact draft intact, then blocks another save until the
+    /// editor and byte-exact draft intact, then blocks another save until the
     /// user explicitly reloads. Success dismisses and observation refreshes
     /// the row list (03b §10; 04 §5; review Card 3B).
     @MainActor
@@ -395,8 +447,12 @@ public struct ReviseEditorView: View {
         isSaving = true
         defer { isSaving = false }
         do {
-            _ = try await viewState.revise(draft.revisionRequest())
-            dismiss()
+            _ = try await viewState.reviseFromEditor(
+                draft.revisionRequest()
+            ) { reference in
+                onReferenceAdvance?(reference)
+            }
+            completeDismissal()
         } catch let failure as HistoryFailure {
             if case .staleContent = failure {
                 draft.markStale()
@@ -414,6 +470,15 @@ public struct ReviseEditorView: View {
                 )
                 return
             }
+        }
+    }
+
+    @MainActor
+    private func completeDismissal() {
+        if let onDismiss {
+            onDismiss()
+        } else {
+            dismiss()
         }
     }
 
@@ -435,6 +500,7 @@ public struct ReviseEditorView: View {
                 )
                 return
             }
+            onReferenceAdvance?(latest.item)
             reloadNotice = "Latest content loaded. Your draft was kept for "
                 + "formats that remain editable."
         } catch let failure as HistoryFailure {

@@ -200,6 +200,13 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         onPanelClosed()
     }
 
+    /// Whether any current screen's safe drawing area still contains a
+    /// visible part of this panel. Screen configuration facts are supplied by
+    /// the AppDelegate at notification time and are never retained here.
+    func isReachable(in screenVisibleFrames: [NSRect]) -> Bool {
+        screenVisibleFrames.contains { $0.intersects(frame) }
+    }
+
     /// Closes the panel when it loses key status — an outside click
     /// dismisses (Maccy's `resignKey`); a modal alert on top keeps it open
     /// (`NSApplication.isModalAlertPresented` below — public modal/sheet
@@ -315,6 +322,13 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// Production has no caller-facing lifecycle seam.
     func waitForDeferredFocusLossCloseForTesting() async {
         await deferredFocusLossCloseTask?.value
+    }
+
+    /// Places the actual hosted panel without recording a user-drag anchor.
+    /// This lets the screen-parameter test represent a removed display while
+    /// leaving production placement and UserDefaults untouched.
+    func setFrameForScreenChangeTesting(_ frame: NSRect) {
+        setFrameProgrammatically(frame, display: false)
     }
 #endif
 }

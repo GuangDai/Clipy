@@ -107,6 +107,24 @@ struct ClipyCaptureHealth: Sendable, Equatable {
     )
 }
 
+/// Immutable AppKit workspace facts consumed by the one composition capture
+/// owner. Power and login-session activity are independent: either inactive
+/// fact stops new observation, and only both active facts permit a baseline
+/// restart. The AppDelegate remains the sole notification owner.
+struct WorkspaceActivityState: Sendable, Equatable {
+    let isSystemAwake: Bool
+    let isLoginSessionActive: Bool
+
+    static let active = WorkspaceActivityState(
+        isSystemAwake: true,
+        isLoginSessionActive: true
+    )
+
+    var permitsProductActivity: Bool {
+        isSystemAwake && isLoginSessionActive
+    }
+}
+
 // MARK: - AppComposition (docs/01-architecture.md §2, §5.6, §8)
 
 /// The assembled application object: the opened store, the pasteboard
@@ -208,6 +226,11 @@ final class AppComposition {
     private var nextCaptureFailureForTesting: ClipyCaptureFailure?
     private var captureAccessBehaviorForTesting:
         (@MainActor () -> PasteboardAccessBehavior)?
+    /// One deadline-sleep substitution for deterministic hosted lifecycle
+    /// evidence. Release always uses `ContinuousClock`; the seam never owns
+    /// policy, an instant, or a second path that can resume capture.
+    private var capturePauseSleepForTesting:
+        (@MainActor @Sendable (Duration) async throws -> Void)?
 #endif
 
     /// REVIEW Card 6 capture ownership. The active task is the sole caller of
@@ -223,6 +246,15 @@ final class AppComposition {
     private var lastCaptureFailure: ClipyCaptureFailure?
     private var acceptsCaptures = false
     private var isStarted = false
+    /// Sleep stops new observation/admission but does not erase a complete
+    /// value that crossed the admission boundary before willSleep. This bit
+    /// exists only while a pre-inactivity active slot still has one pending
+    /// value to drain.
+    private var drainsPreInactivityPendingCapture = false
+    /// Snapshot pushed by the sole AppDelegate workspace owner. It is
+    /// environmental state, not a user Pause and not terminal composition
+    /// state; the capture owner remains the sole observer start/stop owner.
+    private var workspaceActivity = WorkspaceActivityState.active
     private var lastPublishedCaptureHealth = ClipyCaptureHealth.inactive
     private var captureAccessReducer: CaptureAccessReducer
     private var lastPublishedCaptureAccessState: CaptureAccessState
@@ -351,31 +383,47 @@ final class AppComposition {
     /// `HistoryFailure.persistence(.openStore)`: preparing the store's
     /// location is part of opening it, and the storage boundary's own
     /// vocabulary already says exactly that (03b §10; 05 §16).
-    static func open(storeURL: URL = defaultStoreURL) async throws -> AppComposition {
+    static func open(
+        storeURL: URL = defaultStoreURL,
+        workspaceActivityProvider:
+            @escaping @MainActor @Sendable () -> WorkspaceActivityState = {
+                .active
+            }
+    ) async throws -> AppComposition {
         try await openConfigured(
             storeURL: storeURL,
             forcedInitialCaptureAccessBehavior: nil,
             forcedCurrentCaptureAccessBehavior: nil,
-            capturePauseDuration: CapturePausePolicy.standardDuration
+            capturePauseDuration: CapturePausePolicy.standardDuration,
+            injectEditorJourney: false,
+            workspaceActivityProvider: workspaceActivityProvider
         )
     }
 
 #if DEBUG
-    /// Running-app XCUI seam: only the store location and the macOS privacy
-    /// posture are substituted. Store open, observer capture, History writes,
-    /// paste payload resolution, General pasteboard write, and close callbacks
-    /// remain the one production graph (REVIEW Card 15 first tracer).
+    /// Running-app XCUI seam: store location, macOS privacy posture, and one
+    /// bounded editor ordering/failure journey may be selected. Store open,
+    /// observer capture, the sole `HistoryAuthority` writer, paste payload
+    /// resolution, General pasteboard write, and close callbacks remain the
+    /// production graph (REVIEW Card 15 first tracer; Card 3B).
     static func openForUITesting(
         storeURL: URL,
         initialCaptureAccessBehavior: PasteboardAccessBehavior = .allowed,
         currentCaptureAccessBehavior: PasteboardAccessBehavior = .allowed,
-        capturePauseDuration: Duration = CapturePausePolicy.standardDuration
+        capturePauseDuration: Duration = CapturePausePolicy.standardDuration,
+        editorJourney: RunningUITestConfiguration.EditorJourney = .none,
+        workspaceActivityProvider:
+            @escaping @MainActor @Sendable () -> WorkspaceActivityState = {
+                .active
+            }
     ) async throws -> AppComposition {
         try await openConfigured(
             storeURL: storeURL,
             forcedInitialCaptureAccessBehavior: initialCaptureAccessBehavior,
             forcedCurrentCaptureAccessBehavior: currentCaptureAccessBehavior,
-            capturePauseDuration: capturePauseDuration
+            capturePauseDuration: capturePauseDuration,
+            injectEditorJourney: editorJourney == .staleThenReloadFailureOnce,
+            workspaceActivityProvider: workspaceActivityProvider
         )
     }
 #endif
@@ -384,7 +432,10 @@ final class AppComposition {
         storeURL: URL,
         forcedInitialCaptureAccessBehavior: PasteboardAccessBehavior?,
         forcedCurrentCaptureAccessBehavior: PasteboardAccessBehavior?,
-        capturePauseDuration: Duration
+        capturePauseDuration: Duration,
+        injectEditorJourney: Bool,
+        workspaceActivityProvider:
+            @escaping @MainActor @Sendable () -> WorkspaceActivityState
     ) async throws -> AppComposition {
         guard !openedStoreURLs.contains(storeURL) else {
             throw ClipyCompositionError.storeAlreadyOpen(storeURL)
@@ -398,10 +449,13 @@ final class AppComposition {
                     forcedInitialCaptureAccessBehavior,
                 forcedCurrentCaptureAccessBehavior:
                     forcedCurrentCaptureAccessBehavior,
-                capturePauseDuration: capturePauseDuration
+                capturePauseDuration: capturePauseDuration,
+                injectEditorJourney: injectEditorJourney
             )
             try Task.checkCancellation()
-            composition.start()
+            composition.start(
+                workspaceActivity: workspaceActivityProvider()
+            )
             return composition
         } catch {
             openedStoreURLs.remove(storeURL)
@@ -414,7 +468,8 @@ final class AppComposition {
         storeURL: URL,
         forcedInitialCaptureAccessBehavior: PasteboardAccessBehavior?,
         forcedCurrentCaptureAccessBehavior: PasteboardAccessBehavior?,
-        capturePauseDuration: Duration
+        capturePauseDuration: Duration,
+        injectEditorJourney: Bool
     ) async throws -> AppComposition {
         do {
             try FileManager.default.createDirectory(
@@ -441,6 +496,10 @@ final class AppComposition {
             capturePauseDuration: capturePauseDuration
         )
 #if DEBUG
+        if injectEditorJourney {
+            composition.viewState
+                .configureEditorStaleJourneyForRunningUITest()
+        }
         if let forcedCurrentCaptureAccessBehavior {
             composition.captureAccessBehaviorForTesting = {
                 forcedCurrentCaptureAccessBehavior
@@ -456,7 +515,9 @@ final class AppComposition {
     /// Wires the paste hand-off and starts capture observation. Called
     /// exactly once by `open(storeURL:)`; the composition is not ready for
     /// UI use until it returns.
-    private func start() {
+    private func start(
+        workspaceActivity: WorkspaceActivityState = .active
+    ) {
         // Paste hand-off (01 §5.6; 03b §12): `requestPaste(_:)` is
         // MainActor-isolated, matching PresentationUI's stored
         // `@MainActor @Sendable` callback. Admit directly into the one owned
@@ -471,6 +532,10 @@ final class AppComposition {
         }
 
         isStarted = true
+        self.workspaceActivity = workspaceActivity
+        if !workspaceActivity.permitsProductActivity {
+            captureCurrentOnNextObserverStart = false
+        }
 
         // Capture loop (01 §5.1; 03a §4; REVIEW Card 6): one COMPLETE capture
         // per distinct pasteboard changeCount is admitted to this owner's
@@ -511,12 +576,31 @@ final class AppComposition {
         viewState.onPaste = { _ in }
         viewState.onCommittedUserRemoval = { _ in }
         pendingCapture = nil
+        drainsPreInactivityPendingCapture = false
         captureTask?.cancel()
         captureTask = nil
         activeCaptureBytes = 0
         publishCaptureHealthIfChanged()
         pasteTask?.cancel()
         pasteTask = nil
+    }
+
+    /// Card 14C: apply the AppDelegate-owned power/login-session facts without
+    /// changing the user's access/Pause choice. Becoming inactive stops new
+    /// observation while complete active/pending values already admitted keep
+    /// their normal drain order. Becoming fully active baselines before the
+    /// one observer restarts, so inactivity-period content is not imported.
+    func updateWorkspaceActivity(_ activity: WorkspaceActivityState) {
+        guard activity != workspaceActivity, isStarted else { return }
+        if workspaceActivity.permitsProductActivity,
+           !activity.permitsProductActivity {
+            drainsPreInactivityPendingCapture =
+                drainsPreInactivityPendingCapture
+                || (acceptsCaptures && pendingCapture != nil)
+        }
+        workspaceActivity = activity
+        captureCurrentOnNextObserverStart = false
+        reconcileCaptureObservation()
     }
 
     /// Starts CLIP-1's fixed, process-local five-minute privacy window. The
@@ -532,7 +616,16 @@ final class AppComposition {
         let duration = capturePauseDuration
         capturePauseTask = Task { @MainActor [weak self] in
             do {
+#if DEBUG
+                if let capturePauseSleepForTesting =
+                    self?.capturePauseSleepForTesting {
+                    try await capturePauseSleepForTesting(duration)
+                } else {
+                    try await ContinuousClock().sleep(for: duration)
+                }
+#else
                 try await ContinuousClock().sleep(for: duration)
+#endif
             } catch {
                 return
             }
@@ -595,7 +688,9 @@ final class AppComposition {
         initialCaptureAccessBehavior: PasteboardAccessBehavior? = nil,
         capturePauseDuration: Duration = CapturePausePolicy.standardDuration,
         captureAccessBehaviorProvider:
-            (@MainActor () -> PasteboardAccessBehavior)? = nil
+            (@MainActor () -> PasteboardAccessBehavior)? = nil,
+        capturePauseSleep:
+            (@MainActor @Sendable (Duration) async throws -> Void)? = nil
     ) -> AppComposition {
         let composition = AppComposition(
             history: history,
@@ -611,6 +706,7 @@ final class AppComposition {
         composition.nextCaptureFailureForTesting = initialCaptureFailure
         composition.captureAccessBehaviorForTesting =
             captureAccessBehaviorProvider
+        composition.capturePauseSleepForTesting = capturePauseSleep
         if let captureAccessBehaviorProvider {
             composition.observer.setAccessBehaviorProviderForTesting(
                 captureAccessBehaviorProvider
@@ -625,6 +721,12 @@ final class AppComposition {
     /// instant, clipboard value, or second way to drive expiration.
     var hasCapturePauseDeadlineForTesting: Bool {
         capturePauseTask != nil
+    }
+
+    /// Content-free Card 14C owner facts for hosted notification tests.
+    var isCaptureObservationActiveForTesting: Bool { acceptsCaptures }
+    var workspaceActivityForTesting: WorkspaceActivityState {
+        workspaceActivity
     }
 
     /// Deterministic Debug entry for the same admission path used by the
@@ -735,12 +837,16 @@ final class AppComposition {
         }
         publishCaptureHealthIfChanged()
 
-        guard acceptsCaptures, let next = pendingCapture else {
+        guard (acceptsCaptures || drainsPreInactivityPendingCapture),
+              let next = pendingCapture
+        else {
             pendingCapture = nil
+            drainsPreInactivityPendingCapture = false
             publishCaptureHealthIfChanged()
             return
         }
         pendingCapture = nil
+        drainsPreInactivityPendingCapture = false
         publishCaptureHealthIfChanged()
         startCapture(next)
     }
@@ -811,6 +917,7 @@ final class AppComposition {
     /// same handler without re-freezing or installing another Timer.
     private func reconcileCaptureObservation() {
         let shouldObserve = isStarted
+            && workspaceActivity.permitsProductActivity
             && captureAccessState.permitsBackgroundPolling
         acceptsCaptures = shouldObserve
         if shouldObserve {

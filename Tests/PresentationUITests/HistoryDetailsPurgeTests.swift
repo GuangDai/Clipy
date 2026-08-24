@@ -287,4 +287,75 @@ struct HistoryDetailsPurgeTests {
             #expect(!fence.owns(read))
         }
     }
+
+    /// An authoritative editor Reload may retarget the existing Details owner
+    /// from v1 to v2. The old in-flight token is retired, while a new read can
+    /// accept only the newly advanced exact reference.
+    @Test func editorReferenceAdvanceInvalidatesOldLoadAndAdmitsLatest() {
+        let original = reference(
+            "00000000-0000-0000-0000-000000009B0D",
+            version: 1
+        )
+        let latest = HistoryItemReference(
+            id: original.id,
+            contentVersion: ContentVersion(rawValue: 2)
+        )
+        var fence = HistoryDetailsLoadFence()
+        let oldToken = fence.begin()
+        #expect(oldToken != nil)
+
+        #expect(fence.advanceReference(from: original, to: latest))
+        if let oldToken {
+            #expect(!fence.owns(oldToken))
+        }
+
+        let latestToken = fence.begin()
+        #expect(latestToken != nil)
+        if let latestToken {
+            #expect(
+                fence.accepts(
+                    latestToken,
+                    returned: latest,
+                    expected: latest,
+                    isCancelled: false
+                )
+            )
+            #expect(
+                !fence.accepts(
+                    latestToken,
+                    returned: original,
+                    expected: latest,
+                    isCancelled: false
+                )
+            )
+        }
+    }
+
+    /// Retargeting is narrowly monotonic for the same item and cannot revive
+    /// a Details surface already retired by authoritative purge semantics.
+    @Test func editorReferenceAdvanceRejectsForeignRegressionAndPurgedOwner() {
+        let original = reference(
+            "00000000-0000-0000-0000-000000009B0E",
+            version: 2
+        )
+        let foreign = reference(
+            "00000000-0000-0000-0000-000000009B0F",
+            version: 3
+        )
+        let older = HistoryItemReference(
+            id: original.id,
+            contentVersion: ContentVersion(rawValue: 1)
+        )
+        let newer = HistoryItemReference(
+            id: original.id,
+            contentVersion: ContentVersion(rawValue: 3)
+        )
+        var fence = HistoryDetailsLoadFence()
+
+        #expect(!fence.advanceReference(from: original, to: foreign))
+        #expect(!fence.advanceReference(from: original, to: older))
+        #expect(fence.purge(.item(original.id), item: original))
+        #expect(!fence.advanceReference(from: original, to: newer))
+        #expect(fence.begin() == nil)
+    }
 }

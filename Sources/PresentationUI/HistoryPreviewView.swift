@@ -112,6 +112,19 @@ package final class PreviewContentLoader {
 
     private let renderer = ContentPreview()
 
+#if DEBUG
+    /// Running-app acceptance can make only this loader's first details read
+    /// transiently unavailable. The one-shot is instance-local: Retry still
+    /// replays the same exact reference through the production History read
+    /// and ContentPreview renderer, while Release has no failure switch
+    /// (review Card 9D / Card 15 runtime acceptance).
+    private var shouldFailNextDetailsReadForRunningUITest =
+        ProcessInfo.processInfo.environment["CLIPY_RUNNING_UI_TEST"] == "1"
+            && ProcessInfo.processInfo.environment[
+                "CLIPY_UI_TEST_PREVIEW_FAILURE"
+            ] == "transient-details-once"
+#endif
+
     package init(history: any ClipboardHistory) {
         self.history = history
     }
@@ -152,7 +165,7 @@ package final class PreviewContentLoader {
             return
         }
         do {
-            let details = try await history.details(for: item.id)
+            let details = try await readDetails(for: item.id)
             try Task.checkCancellation()
             guard requestGeneration == generation,
                   requestedItem == item
@@ -230,6 +243,20 @@ package final class PreviewContentLoader {
             phase = .failed
         }
     }
+
+    /// The DEBUG branch substitutes one outcome at the loader's details-call
+    /// boundary. A successful retry still has to traverse the real History
+    /// read, ContentPreview renderer, and view publication before content is
+    /// observable; the first substituted episode does not claim History I/O.
+    private func readDetails(for id: HistoryItemID) async throws -> HistoryDetails {
+#if DEBUG
+        if shouldFailNextDetailsReadForRunningUITest {
+            shouldFailNextDetailsReadForRunningUITest = false
+            throw HistoryFailure.temporarilyUnavailable(.dedupIndexRebuild)
+        }
+#endif
+        return try await history.details(for: id)
+    }
 }
 
 /// The preview column: a loading indicator while the item's content loads,
@@ -298,6 +325,8 @@ public struct HistoryPreviewView: View {
         .task(id: targetItem) {
             await loader.load(item: targetItem)
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("clipy.preview.root")
     }
 
     // MARK: - Content
@@ -338,6 +367,7 @@ public struct HistoryPreviewView: View {
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(10)
+                        .accessibilityIdentifier("clipy.preview.text")
                 }
             case .failed:
                 failedBody
@@ -357,6 +387,8 @@ public struct HistoryPreviewView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("clipy.preview.unsupported")
     }
 
     /// Retry is offered only when the failed episode's typed outcome admits
@@ -377,9 +409,12 @@ public struct HistoryPreviewView: View {
                         await loader.retry()
                     }
                 }
+                .keyboardShortcut("r", modifiers: .command)
                 .accessibilityIdentifier("clipy.preview.retry")
             }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("clipy.preview.failed")
     }
 
     // MARK: - Metadata bar

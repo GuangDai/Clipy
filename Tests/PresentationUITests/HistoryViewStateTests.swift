@@ -1240,6 +1240,60 @@ struct HistoryViewStateTests {
         state.deactivate()
     }
 
+    /// The embedded editor's receipt continuation must retarget its Details
+    /// owner before the matching revision purge becomes observable. This is
+    /// the sole ordering difference from ordinary `revise`; the same receipt
+    /// and exact purge are still published afterward.
+    @Test func editorReceivesCommittedReferenceBeforeRevisionPurge() async throws {
+        let itemID = HistoryItemID(
+            rawValue: UUID(
+                uuidString: "00000000-0000-0000-0000-000000009B13"
+            )!
+        )
+        let old = HistoryItemReference(
+            id: itemID,
+            contentVersion: ContentVersion(rawValue: 1)
+        )
+        let current = HistoryItemReference(
+            id: itemID,
+            contentVersion: ContentVersion(rawValue: 2)
+        )
+        let history = ScriptedHistory(
+            performReceipt: .committed(
+                HistoryCommit(
+                    position: ChangePosition(rawValue: 20),
+                    outcome: .revised(current)
+                )
+            )
+        )
+        let state = HistoryViewState(history: history)
+        let request = RevisionRequest(
+            itemID: itemID,
+            expected: old.contentVersion,
+            intent: .replace(
+                RevisionDraft(decisions: [
+                    RevisionDecision(
+                        typeIdentifier: "public.utf8-plain-text",
+                        action: .replace(bytes: Data("v2".utf8))
+                    )
+                ])
+            )
+        )
+        var callbackReference: HistoryItemReference?
+        var callbackSawPublishedPurge = true
+
+        _ = try await state.reviseFromEditor(request) { reference in
+            callbackReference = reference
+            callbackSawPublishedPurge = state.surfacePurge != nil
+        }
+
+        #expect(callbackReference == current)
+        #expect(!callbackSawPublishedPurge)
+        #expect(
+            state.surfacePurge?.scope == .revision(old: old, new: current)
+        )
+    }
+
     /// A retention expansion may delete rows or prune revision bytes while
     /// its caller-visible outcome remains the primary Revise/Policy result.
     /// The receipt's authoritative effect bit therefore widens the existing

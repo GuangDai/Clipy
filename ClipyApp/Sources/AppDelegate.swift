@@ -26,13 +26,20 @@ import SwiftUI
 #if DEBUG
 /// Exact launch envelope for the running-app XCUI journeys. It is compiled
 /// out of Release and accepts only an absolute temp-store path, exact privacy
-/// facts, and an exact short-Pause switch; no alternate History, capture pump,
-/// paste path, panel controller, or timer owner is constructed.
+/// facts, an exact short-Pause switch, and bounded loader/editor journeys; no
+/// alternate store/writer, capture pump, paste path, panel controller, or
+/// timer owner is constructed.
 struct RunningUITestConfiguration {
+    enum EditorJourney: Equatable {
+        case none
+        case staleThenReloadFailureOnce
+    }
+
     let storeURL: URL
     let initialCaptureAccessBehavior: PasteboardAccessBehavior
     let currentCaptureAccessBehavior: PasteboardAccessBehavior
     let capturePauseDuration: Duration
+    let editorJourney: EditorJourney
 
     static func current(
         environment: [String: String] = ProcessInfo.processInfo.environment
@@ -67,11 +74,27 @@ struct RunningUITestConfiguration {
         default:
             return nil
         }
+        switch environment["CLIPY_UI_TEST_PREVIEW_FAILURE"] {
+        case nil, "transient-details-once":
+            break
+        default:
+            return nil
+        }
+        let editorJourney: EditorJourney
+        switch environment["CLIPY_UI_TEST_EDITOR_JOURNEY"] {
+        case nil:
+            editorJourney = .none
+        case "stale-reload-failure-once":
+            editorJourney = .staleThenReloadFailureOnce
+        default:
+            return nil
+        }
         return RunningUITestConfiguration(
             storeURL: URL(fileURLWithPath: path).standardizedFileURL,
             initialCaptureAccessBehavior: initialCaptureAccessBehavior,
             currentCaptureAccessBehavior: currentCaptureAccessBehavior,
-            capturePauseDuration: capturePauseDuration
+            capturePauseDuration: capturePauseDuration,
+            editorJourney: editorJourney
         )
     }
 }
@@ -186,8 +209,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - AppKit-owned surfaces
 
     private var statusItem: NSStatusItem?
+#if DEBUG
+    /// Set only after the production updater assigns the requested symbol to
+    /// the real status-bar button. Hosted evidence can therefore distinguish
+    /// an applied image change from merely recomputing state in the test.
+    private var appliedStatusItemSymbolNameForTesting: String?
+#endif
     private var panel: FloatingPanel?
     private var hotKey: GlobalHotKey?
+    /// AppDelegate owns the only NSWorkspace lifecycle registrations. Tokens
+    /// are retained only to remove those exact registrations at termination;
+    /// no generic notification router or second lifecycle object is created.
+    @ObservationIgnored
+    private var workspaceLifecycleNotificationCenter: NotificationCenter?
+    @ObservationIgnored
+    private var workspaceLifecycleObserverTokens: [NSObjectProtocol] = []
+    private var workspaceActivity = WorkspaceActivityState.active
 #if CLIPY_UDS_F0
     /// PLAY-PY-F0 signed discriminator only. The compile flag is absent from
     /// every normal app build, which therefore has no listener behavior.
@@ -212,14 +249,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - NSApplicationDelegate
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        guard !Self.isRunningTests || isRunningUITest else { return }
+        // Apple can publish sessionDidResignActive after will-finish and
+        // before did-finish when the app launches in a switched-out login
+        // session. Register here so the store-open provider receives the
+        // authoritative initial session fact.
+        installWorkspaceLifecycleObservation()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !Self.isRunningTests || isRunningUITest else { return }
 
         // App Intents can be invoked immediately after process launch. Install
-        // its framework-owned dependency provider before starting any async
-        // store work or other app-owned side effect. The provider joins the
-        // exact same open flight as the UI shell; it never opens another
-        // ModelContainer or creates another History writer (V2-05 §6.5).
+        // its framework-owned dependency provider before the did-finish store,
+        // status-item, and hot-key work. The earlier workspace observers only
+        // establish the activity fact consumed by this same open flight; the
+        // provider never opens another ModelContainer or creates another
+        // History writer (V2-05 §6.5).
         AppIntentDependencyRegistration.registerProduction { [weak self] in
             guard let self else { throw CancellationError() }
             return try await self.resolveAppIntentHistoryIngress()
@@ -235,6 +282,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         hotKey?.unregister()
+        removeWorkspaceLifecycleObservation()
         compositionOpenAttempt?.task.cancel()
 #if CLIPY_UDS_F0
         unixSocketF0Listener?.stop()
@@ -243,12 +291,141 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         composition?.stop()
     }
 
+    /// Card 14C app-activation boundary. App deactivation is not an
+    /// `NSWorkspace` login-session resignation, so it retires only the
+    /// sensitive panel/browsing session. The app-owned clipboard observer
+    /// remains live, and a later activation does not reopen the panel.
+    func applicationDidResignActive(_ notification: Notification) {
+        closePanel()
+    }
+
+    /// Card 14C screen-parameter boundary. AppKit supplies no change payload,
+    /// and `NSScreen.screens` / `visibleFrame` are explicitly current facts,
+    /// so re-read them for every notification. A still-reachable panel keeps
+    /// its one browsing session. A panel stranded outside every current safe
+    /// drawing area closes through the existing sole lifecycle owner; only a
+    /// later explicit summon starts a fresh session using new screen facts.
+    func applicationDidChangeScreenParameters(_ notification: Notification) {
+        guard let panel,
+              panel.isPresented,
+              !panel.isReachable(
+                  in: NSScreen.screens.map(\.visibleFrame)
+              )
+        else { return }
+        closePanel()
+    }
+
     func applicationDidBecomeActive(_ notification: Notification) {
         guard !Self.isRunningTests || isRunningUITest else { return }
         // System Settings may have changed registration/approval while Clipy
         // was inactive. Re-read the authoritative value; no cached Bool is
         // allowed to survive activation (REVIEW Card 10C).
         launchAtLoginController.refresh()
+    }
+
+    // MARK: - Workspace power / login-session lifecycle
+
+    /// Apple requires power and login-session observers to use the workspace's
+    /// own notification center. Delivery is requested on the main operation
+    /// queue, so the callback can synchronously enter this MainActor owner.
+    private func installWorkspaceLifecycleObservation() {
+        guard workspaceLifecycleObserverTokens.isEmpty else { return }
+        let workspace = NSWorkspace.shared
+        let notificationCenter = workspace.notificationCenter
+        workspaceLifecycleNotificationCenter = notificationCenter
+        workspaceLifecycleObserverTokens = [
+            notificationCenter.addObserver(
+                forName: NSWorkspace.willSleepNotification,
+                object: workspace,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.workspaceWillSleep()
+                }
+            },
+            notificationCenter.addObserver(
+                forName: NSWorkspace.didWakeNotification,
+                object: workspace,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.workspaceDidWake()
+                }
+            },
+            notificationCenter.addObserver(
+                forName: NSWorkspace.sessionDidResignActiveNotification,
+                object: workspace,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.workspaceSessionDidResignActive()
+                }
+            },
+            notificationCenter.addObserver(
+                forName: NSWorkspace.sessionDidBecomeActiveNotification,
+                object: workspace,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.workspaceSessionDidBecomeActive()
+                }
+            },
+        ]
+    }
+
+    private func removeWorkspaceLifecycleObservation() {
+        guard let workspaceLifecycleNotificationCenter else { return }
+        for token in workspaceLifecycleObserverTokens {
+            workspaceLifecycleNotificationCenter.removeObserver(token)
+        }
+        workspaceLifecycleObserverTokens.removeAll()
+        self.workspaceLifecycleNotificationCenter = nil
+    }
+
+    /// `willSleep` has a bounded synchronous effect: retire sensitive panel
+    /// state and stop the existing capture observer. It never waits for
+    /// History I/O or attempts to delay system sleep.
+    private func workspaceWillSleep() {
+        applyWorkspaceActivity(WorkspaceActivityState(
+            isSystemAwake: false,
+            isLoginSessionActive: workspaceActivity.isLoginSessionActive
+        ))
+    }
+
+    /// Wake is not a clipboard event. The composition baselines the current
+    /// generation and waits for a later change; reopening remains an explicit
+    /// summon rather than a side effect of the power notification.
+    private func workspaceDidWake() {
+        applyWorkspaceActivity(WorkspaceActivityState(
+            isSystemAwake: true,
+            isLoginSessionActive: workspaceActivity.isLoginSessionActive
+        ))
+    }
+
+    private func workspaceSessionDidResignActive() {
+        applyWorkspaceActivity(WorkspaceActivityState(
+            isSystemAwake: workspaceActivity.isSystemAwake,
+            isLoginSessionActive: false
+        ))
+    }
+
+    private func workspaceSessionDidBecomeActive() {
+        applyWorkspaceActivity(WorkspaceActivityState(
+            isSystemAwake: workspaceActivity.isSystemAwake,
+            isLoginSessionActive: true
+        ))
+    }
+
+    /// Power and login-session facts enter through one AppDelegate owner and
+    /// one composition consumer. Any inactive fact closes sensitive UI;
+    /// becoming active only baselines capture and never reopens the panel.
+    private func applyWorkspaceActivity(_ activity: WorkspaceActivityState) {
+        guard activity != workspaceActivity else { return }
+        workspaceActivity = activity
+        if !activity.permitsProductActivity {
+            closePanel()
+        }
+        composition?.updateWorkspaceActivity(activity)
     }
 
     // MARK: - Panel lifecycle
@@ -276,6 +453,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// window. The view state's observation is re-activated per open (the
     /// panel's close deactivates it — browsing state is fresh per summon).
     private func openPanel(at mode: PopupPositionMode) {
+        guard workspaceActivity.permitsProductActivity else { return }
         if panel == nil {
             panel = FloatingPanel(
                 rootView: PanelRootView(appDelegate: self),
@@ -400,7 +578,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let openFailure {
             throw openFailure
         }
-
         let attempt: CompositionOpenAttempt
         if let current = compositionOpenAttempt {
             attempt = current
@@ -408,6 +585,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 #if DEBUG
             let runningUITestConfiguration = self.runningUITestConfiguration
 #endif
+            let workspaceActivityProvider:
+                @MainActor @Sendable () -> WorkspaceActivityState = {
+                    [weak self] in
+                    self?.workspaceActivity ?? WorkspaceActivityState(
+                        isSystemAwake: false,
+                        isLoginSessionActive: false
+                    )
+                }
             let started = Task { @MainActor in
 #if DEBUG
                 if let configuration = runningUITestConfiguration {
@@ -418,11 +603,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         currentCaptureAccessBehavior:
                             configuration.currentCaptureAccessBehavior,
                         capturePauseDuration:
-                            configuration.capturePauseDuration
+                            configuration.capturePauseDuration,
+                        editorJourney: configuration.editorJourney,
+                        workspaceActivityProvider: workspaceActivityProvider
                     )
                 }
 #endif
-                return try await AppComposition.open()
+                return try await AppComposition.open(
+                    workspaceActivityProvider: workspaceActivityProvider
+                )
             }
             let newAttempt = CompositionOpenAttempt(task: started)
             compositionOpenAttempt = newAttempt
@@ -512,6 +701,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.receiveCaptureAccessState(state)
         }
         composition = opened
+        opened.updateWorkspaceActivity(workspaceActivity)
     }
 
 #if CLIPY_UDS_F0
@@ -579,6 +769,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         openPanel(at: mode)
     }
 
+    /// Installs/removes the same observer wiring as production. Hosted tests
+    /// post Apple's exact names with the documented shared-workspace object.
+    func installWorkspaceLifecycleObservationForTesting() {
+        installWorkspaceLifecycleObservation()
+    }
+
+    func removeWorkspaceLifecycleObservationForTesting() {
+        removeWorkspaceLifecycleObservation()
+    }
+
     var panelForTesting: FloatingPanel? { panel }
 
     /// Hosted Card 15D tests enter through the composition-owned callback
@@ -602,13 +802,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateStatusItemImage() {
         let isPaused = captureAccessState == .userPaused
-        statusItem?.button?.image = NSImage(
-            systemSymbolName: isPaused ? "pause.circle" : "list.clipboard",
-            accessibilityDescription: isPaused
-                ? "Clipy, clipboard monitoring paused"
-                : "Clipy"
+        let symbolName = statusItemSymbolName
+        let accessibilityLabel = isPaused
+            ? "Clipy, clipboard monitoring paused"
+            : "Clipy"
+        let image = NSImage(
+            systemSymbolName: symbolName,
+            accessibilityDescription: accessibilityLabel
         )
+        statusItem?.button?.image = image
+#if DEBUG
+        if let image,
+           statusItem?.button?.image === image {
+            appliedStatusItemSymbolNameForTesting = symbolName
+        } else {
+            appliedStatusItemSymbolNameForTesting = nil
+        }
+#endif
+        // The image description gives assistive technology a fallback, while
+        // the status-bar button's explicit label is the stable AX surface.
+        statusItem?.button?.setAccessibilityLabel(accessibilityLabel)
     }
+
+    private var statusItemSymbolName: String {
+        captureAccessState == .userPaused ? "pause.circle" : "list.clipboard"
+    }
+
+#if DEBUG
+    /// Hosted CLIP-1 evidence installs only the production status item and
+    /// reads its public AX label. The ordinary test-host launch guard still
+    /// prevents incidental status-bar, hot-key, or store side effects.
+    func installStatusItemForTesting() {
+        installStatusItem()
+    }
+
+    func removeStatusItemForTesting() {
+        guard let statusItem else { return }
+        NSStatusBar.system.removeStatusItem(statusItem)
+        self.statusItem = nil
+        appliedStatusItemSymbolNameForTesting = nil
+    }
+
+    var statusItemAccessibilityLabelForTesting: String? {
+        statusItem?.button?.accessibilityLabel()
+    }
+
+    var statusItemHasImageForTesting: Bool {
+        statusItem?.button?.image != nil
+    }
+
+    var statusItemSymbolNameForTesting: String? {
+        appliedStatusItemSymbolNameForTesting
+    }
+#endif
 
     /// The status-item button's frame in screen coordinates (Maccy's
     /// `convert(bounds, to: nil)` + `convertToScreen` pair); nil when the

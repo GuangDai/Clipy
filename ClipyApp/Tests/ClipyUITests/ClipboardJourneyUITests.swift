@@ -122,6 +122,13 @@ final class ClipboardJourneyUITests: XCTestCase {
             "clipy.settings.retention.age-enabled"
         ]
         XCTAssertTrue(ageLimit.waitForExistence(timeout: 5))
+        let settingsWindow = app.windows.containing(
+            .textField,
+            identifier: "clipy.settings.retention.age-days"
+        ).firstMatch
+        XCTAssertTrue(settingsWindow.waitForExistence(timeout: 5))
+        let retentionScrollView = settingsWindow.scrollViews.firstMatch
+        XCTAssertTrue(retentionScrollView.waitForExistence(timeout: 5))
         ageLimit.click()
 
         let apply = app.buttons[
@@ -129,6 +136,12 @@ final class ClipboardJourneyUITests: XCTestCase {
         ]
         XCTAssertTrue(apply.waitForExistence(timeout: 5))
         XCTAssertTrue(apply.isEnabled)
+        guard scrollUntilFullyVisible(
+            apply,
+            in: retentionScrollView,
+            app: app,
+            context: "strict age retention Apply"
+        ) else { return }
         apply.click()
 
         let destructiveApply = app.buttons["Apply Stricter Limits"]
@@ -142,6 +155,43 @@ final class ClipboardJourneyUITests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 5) { !destructiveApply.exists })
         XCTAssertTrue(ageLimit.exists)
         XCTAssertEqual(ageLimit.value as? Int, 1)
+    }
+
+    /// SwiftUI's grouped Form exposes offscreen descendants as existing even
+    /// though macOS cannot compute a hit point for them. Move the real owning
+    /// scroll view in bounded wheel increments until the requested control is
+    /// inside its visible viewport and hittable.
+    @MainActor
+    @discardableResult
+    private func scrollUntilFullyVisible(
+        _ element: XCUIElement,
+        in scrollView: XCUIElement,
+        app: XCUIApplication,
+        context: String
+    ) -> Bool {
+        let scrollCoordinate = scrollView.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
+        )
+        func isFullyVisible() -> Bool {
+            element.exists
+                && scrollView.frame.contains(element.frame)
+                && element.isHittable
+        }
+        for _ in 0..<8 {
+            if isFullyVisible() {
+                return true
+            }
+            let deltaY: CGFloat = element.frame.midY < scrollView.frame.midY
+                ? 50
+                : -50
+            scrollCoordinate.scroll(byDeltaX: 0, deltaY: deltaY)
+        }
+        let result = isFullyVisible()
+        XCTAssertTrue(
+            result,
+            "\(context) did not scroll into view\n\(app.debugDescription)"
+        )
+        return result
     }
 
     @MainActor

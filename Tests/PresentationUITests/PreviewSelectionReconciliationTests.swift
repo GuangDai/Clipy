@@ -178,6 +178,71 @@ struct PreviewSelectionReconciliationTests {
         #expect(preview.previewedItem == current)
     }
 
+    /// An editor-owned authoritative advance replaces only the active path
+    /// tail before the matching receipt purge is published. The purge still
+    /// advances its owner generation, but it no longer removes the already
+    /// current Details destination or increments details-purge identity.
+    @Test func editorAdvanceRetargetsExactPathBeforeRevisionPurge() {
+        let history = ScriptedHistory()
+        let preview = PreviewPaneState(autoOpenDelay: .zero)
+        let surface = HistoryPanelSurfaceState(
+            history: history,
+            previewState: preview
+        )
+        let old = row(version: 1).item
+        let current = row(version: 2).item
+        surface.detailsPath = [old]
+        surface.selection = selectedID
+
+        #expect(
+            surface.advanceOpenDetailsReference(from: old, to: current)
+        )
+        #expect(surface.detailsPath == [current])
+        #expect(surface.detailsPurgeGeneration == 0)
+        #expect(surface.selection == selectedID)
+
+        surface.apply(
+            HistorySurfacePurge(
+                generation: 1,
+                scope: .revision(old: old, new: current)
+            )
+        )
+
+        #expect(surface.detailsPath == [current])
+        #expect(surface.detailsPurgeGeneration == 0)
+        #expect(surface.appliedPurgeGeneration == 1)
+        #expect(surface.selection == selectedID)
+    }
+
+    @Test func editorAdvanceRejectsNonTailForeignAndRegressingPaths() {
+        let history = ScriptedHistory()
+        let preview = PreviewPaneState(autoOpenDelay: .zero)
+        let surface = HistoryPanelSurfaceState(
+            history: history,
+            previewState: preview
+        )
+        let old = row(version: 2).item
+        let newer = row(version: 3).item
+        let other = row(
+            id: HistoryItemID(
+                rawValue: UUID(
+                    uuidString: "00000000-0000-0000-0000-0000000009B2"
+                )!
+            ),
+            version: 3
+        ).item
+        let older = HistoryItemReference(
+            id: old.id,
+            contentVersion: ContentVersion(rawValue: 1)
+        )
+        surface.detailsPath = [old, other]
+
+        #expect(!surface.advanceOpenDetailsReference(from: old, to: newer))
+        #expect(!surface.advanceOpenDetailsReference(from: other, to: older))
+        #expect(surface.detailsPath == [old, other])
+        #expect(surface.detailsPurgeGeneration == 0)
+    }
+
     /// `onChange` is latest-value observation, so two remove receipts can
     /// coalesce. A generation gap must reset this surface rather than leave
     /// sensitive state belonging to the skipped first purge.

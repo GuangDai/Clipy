@@ -94,6 +94,24 @@ package struct HistoryDetailsLoadFence {
     ) -> Bool {
         !isCancelled && owns(token) && returned == expected
     }
+
+    /// An editor may advance this Details owner only with an authoritative
+    /// reference returned by a successful details read or committed revision.
+    /// Advancing invalidates any load begun for the older exact reference;
+    /// it never revives a surface already retired by a purge.
+    package mutating func advanceReference(
+        from current: HistoryItemReference,
+        to latest: HistoryItemReference
+    ) -> Bool {
+        guard !isPurged,
+              latest.id == current.id,
+              latest.contentVersion >= current.contentVersion
+        else { return false }
+        if latest != current {
+            generation += 1
+        }
+        return true
+    }
 }
 
 /// Detail screen for one retained item (roadmap 05). Loads `HistoryDetails`
@@ -105,7 +123,9 @@ package struct HistoryDetailsLoadFence {
 public struct HistoryDetailsView: View {
 
     private let viewState: HistoryViewState
-    private let item: HistoryItemReference
+    private let onReferenceAdvance:
+        (@MainActor (HistoryItemReference, HistoryItemReference) -> Bool)?
+    @State private var currentItem: HistoryItemReference
 
     /// Reference-exact thumbnail cache (01 §5.7; 04 §9): keyed by
     /// `HistoryItemReference`, so a revised item never shows stale pixels.
@@ -125,7 +145,8 @@ public struct HistoryDetailsView: View {
 
     public init(viewState: HistoryViewState, item: HistoryItemReference) {
         self.viewState = viewState
-        self.item = item
+        self.onReferenceAdvance = nil
+        self._currentItem = State(initialValue: item)
         self._loadFence = State(
             initialValue: HistoryDetailsLoadFence(
                 baselinePurgeGeneration: viewState.surfacePurge?.generation ?? 0
@@ -139,54 +160,78 @@ public struct HistoryDetailsView: View {
         )
     }
 
+    package init(
+        viewState: HistoryViewState,
+        item: HistoryItemReference,
+        onReferenceAdvance: @escaping @MainActor (
+            HistoryItemReference,
+            HistoryItemReference
+        ) -> Bool
+    ) {
+        self.viewState = viewState
+        self.onReferenceAdvance = onReferenceAdvance
+        self._currentItem = State(initialValue: item)
+        self._loadFence = State(
+            initialValue: HistoryDetailsLoadFence(
+                baselinePurgeGeneration:
+                    viewState.surfacePurge?.generation ?? 0
+            )
+        )
+        self._thumbnails = State(
+            initialValue: ThumbnailStore(
+                history: viewState.history,
+                pixels: PixelSize(width: 128, height: 128)
+            )
+        )
+    }
+
     public var body: some View {
         VStack(spacing: 0) {
-            switch phase {
-            case .loading:
-                ProgressView("Loading…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .removed:
-                ContentUnavailableView(
-                    "Item Removed",
-                    systemImage: "trash",
-                    description: Text("This item is no longer in your clipboard history.")
+            if showsEditor, case .loaded(let details) = phase {
+                ReviseEditorView(
+                    viewState: viewState,
+                    details: details,
+                    onDismiss: closeEditor,
+                    onReferenceAdvance: advanceEditorReference
                 )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .failed(let message):
-                ContentUnavailableView {
-                    Label(
-                        "Couldn't Load Item",
-                        systemImage: "exclamationmark.triangle"
+            } else {
+                switch phase {
+                case .loading:
+                    ProgressView("Loading…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                case .removed:
+                    ContentUnavailableView(
+                        "Item Removed",
+                        systemImage: "trash",
+                        description: Text(
+                            "This item is no longer in your clipboard history."
+                        )
                     )
-                } description: {
-                    Text(message)
-                } actions: {
-                    Button("Retry") {
-                        Task { await load() }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                case .failed(let message):
+                    ContentUnavailableView {
+                        Label(
+                            "Couldn't Load Item",
+                            systemImage: "exclamationmark.triangle"
+                        )
+                    } description: {
+                        Text(message)
+                    } actions: {
+                        Button("Retry") {
+                            Task { await load() }
+                        }
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                case .loaded(let details):
+                    loadedLayout(for: details)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .loaded(let details):
-                loadedLayout(for: details)
             }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.details.root")
         .navigationTitle("Details")
+        .navigationBarBackButtonHidden(showsEditor)
         .task { await load() }
-        .sheet(
-            isPresented: $showsEditor,
-            onDismiss: {
-                // A saved revision advances the Content Version; this reload
-                // keeps the screen on current state (04 §5 — observation is
-                // snapshot replacement; the detail view re-reads on demand).
-                Task { await load(presentingTransition: false) }
-            }
-        ) {
-            if case .loaded(let details) = phase {
-                ReviseEditorView(viewState: viewState, details: details)
-            }
-        }
         .confirmationDialog(
             "Remove this item from your clipboard history?",
             isPresented: $showsRemoveConfirmation,
@@ -200,6 +245,41 @@ public struct HistoryDetailsView: View {
         }
         .onChange(of: viewState.surfacePurge, initial: true) { _, _ in
             _ = reconcileSurfacePurge(viewState.surfacePurge)
+        }
+    }
+
+    /// The floating nonactivating panel's attached SwiftUI sheet is exposed
+    /// by macOS as an empty public AX Dialog. Keeping the same editor View in
+    /// this Details-owned content switch gives keyboard and accessibility
+    /// clients the real controls while preserving one editor at a time. A
+    /// saved revision still joins the same explicit authoritative reload.
+    @MainActor
+    private func closeEditor() {
+        showsEditor = false
+        Task { await load(presentingTransition: false) }
+    }
+
+    /// Reload Latest and a committed editor Save are the only sources allowed
+    /// to retarget this already-open Details surface. Both values have crossed
+    /// History's authoritative read/receipt boundary. External mismatches on
+    /// ordinary `load()` remain rejected by the unchanged exact fence.
+    @MainActor
+    private func advanceEditorReference(_ latest: HistoryItemReference) {
+        let previous = currentItem
+        guard !loadFence.isPurged,
+              latest.id == previous.id,
+              latest.contentVersion >= previous.contentVersion
+        else { return }
+        if let onReferenceAdvance,
+           !onReferenceAdvance(previous, latest) {
+            return
+        }
+        guard loadFence.advanceReference(from: previous, to: latest) else {
+            return
+        }
+        currentItem = latest
+        if latest != previous {
+            thumbnails.purge(.revision(old: previous, new: latest))
         }
     }
 
@@ -251,7 +331,7 @@ public struct HistoryDetailsView: View {
             Button {
                 // The only History→pasteboard hand-off (01 §5.6); the view
                 // state routes it to the composition root's paste closure.
-                viewState.requestPaste(item)
+                viewState.requestPaste(currentItem)
             } label: {
                 Label("Copy to Clipboard", systemImage: "doc.on.doc")
             }
@@ -345,17 +425,17 @@ public struct HistoryDetailsView: View {
             phase = .loading
         }
         do {
-            let details = try await viewState.details(for: item.id)
+            let details = try await viewState.details(for: currentItem.id)
             guard reconcileSurfacePurge(viewState.surfacePurge) else { return }
             guard loadFence.accepts(
                 generation,
                 returned: details.item,
-                expected: item,
+                expected: currentItem,
                 isCancelled: Task.isCancelled
             ) else {
                 if !Task.isCancelled,
                    loadFence.owns(generation),
-                   details.item != item {
+                   details.item != currentItem {
                     phase = .removed
                 }
                 return
@@ -389,7 +469,7 @@ public struct HistoryDetailsView: View {
     private func reconcileSurfacePurge(
         _ purge: HistorySurfacePurge?
     ) -> Bool {
-        if let scope = loadFence.reconcile(purge, item: item) {
+        if let scope = loadFence.reconcile(purge, item: currentItem) {
             thumbnails.purge(scope)
             showsEditor = false
             phase = .removed
@@ -407,9 +487,9 @@ public struct HistoryDetailsView: View {
         defer { isTogglingPin = false }
         do {
             if isPinned {
-                _ = try await viewState.unpinAwaitingReceipt(item.id)
+                _ = try await viewState.unpinAwaitingReceipt(currentItem.id)
             } else {
-                _ = try await viewState.pinAwaitingReceipt(item.id)
+                _ = try await viewState.pinAwaitingReceipt(currentItem.id)
             }
             await load(presentingTransition: false)
         } catch let failure as HistoryFailure {
@@ -429,7 +509,11 @@ public struct HistoryDetailsView: View {
     private func revise(intent: RevisionIntent, expected: ContentVersion) async {
         do {
             _ = try await viewState.revise(
-                RevisionRequest(itemID: item.id, expected: expected, intent: intent)
+                RevisionRequest(
+                    itemID: currentItem.id,
+                    expected: expected,
+                    intent: intent
+                )
             )
             await load(presentingTransition: false)
         } catch let failure as HistoryFailure {
@@ -457,7 +541,7 @@ public struct HistoryDetailsView: View {
         isRemoving = true
         defer { isRemoving = false }
         do {
-            _ = try await viewState.removeAwaitingReceipt(item.id)
+            _ = try await viewState.removeAwaitingReceipt(currentItem.id)
             // The receipt-confirmed surface purge owns dismissal. Do not
             // issue a guaranteed-notFound read after a successful Remove.
         } catch let failure as HistoryFailure {
@@ -511,6 +595,7 @@ private struct DetailsBody: View {
                     Text(detailTitle(for: details))
                         .font(.headline)
                         .lineLimit(2)
+                        .accessibilityIdentifier("clipy.details.title")
                     pinBadge
                 }
                 Spacer(minLength: 0)
@@ -737,6 +822,10 @@ private struct RepresentationRow: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier(
+                            "clipy.details.text-preview."
+                                + representation.typeIdentifier
+                        )
                 }
                 .frame(maxHeight: 120)
                 .padding(8)

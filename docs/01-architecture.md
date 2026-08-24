@@ -158,6 +158,34 @@ deadline resumes on wake and first baselines the then-current generation.
 Quitting ends the in-memory Pause early; a deliberate relaunch follows normal
 startup semantics rather than adding durable privacy-preference state.
 
+System power/login-session lifecycle is distinct from the user-owned Pause
+window (`DEC-WORKSPACE-LIFECYCLE`). `AppDelegate` is the sole owner of the
+documented `NSWorkspace.willSleepNotification` / `didWakeNotification` and
+`sessionDidResignActiveNotification` / `sessionDidBecomeActiveNotification`
+registrations. It installs them at application will-finish so an inactive-
+session launch cannot miss Apple's pre-did-finish resign notification. Power
+and login-session activity remain independent facts; an
+inactive value from either pair closes the panel and stops new capture
+observation through the same composition owner. Ordinary
+`NSApplication.didResignActiveNotification` only closes the sensitive panel:
+losing app focus does not stop the clipboard manager's capture observation.
+On `willSleep`, it closes the panel through the existing panel owner and asks
+the existing `AppComposition` capture owner to stop pasteboard observation; it
+does not change the visible access/Pause choice or wait for History I/O.
+Complete active/pending values admitted before `willSleep` keep their normal
+active-then-latest drain order; the suspension rejects only new observation
+and admission. On `didWake`, the same composition baselines the then-current
+pasteboard `changeCount` and restarts observation only when the current
+access/Pause state permits it. Wake never imports that current generation and
+never opens the panel; only a later pasteboard generation and an explicit
+summon do so.
+Login-session resign/active uses the same stop, baseline, conditional restart,
+and no-auto-open policy; it is not inferred from ordinary app activation.
+Continuing polling through sleep or a switched-out login session was rejected
+because the inactive capture lifecycle must be explicit. Importing the current
+value on wake or session reactivation was rejected because it would
+misrepresent inactivity-period content as a newly observed copy.
+
 If `CopyOriginObservation.lineageHint` names a retained item, the fact loader fetches that item directly by `HistoryItemID`; it does not require the hint to appear in a canonical-signature result. Exact equality with the hinted item's Effective Content is required before the hint can win.
 
 `DEC-CAPTURE-OVERLOAD` is resolved as **active + replaceable latest**. The
@@ -282,6 +310,18 @@ version, single-flight, or cache policy into `ContentPreview`.
   list-owned wall-clock minute cadence supplies the same explicit `now` to
   every row; an item-relative threshold may lag by less than one minute.
   Individual rows do not own timers, and there is no global clock service.
+
+`AppDelegate` is the one owner of screen-parameter lifecycle. On every
+`NSApplication.didChangeScreenParametersNotification`, it re-reads the
+current `NSScreen.screens` and each current `visibleFrame`; neither value is
+cached. If the presented panel still intersects any current visible frame,
+the existing panel session and observation remain unchanged. If it intersects
+none, the delegate closes it through the ordinary panel-close path. A screen
+change never opens or repositions a closed panel and never steals focus; a
+later explicit summon starts a fresh session positioned from then-current
+screen facts. Hosted synthetic-frame evidence may prove this owner transition,
+but it does not prove physical display hot-plug, Spaces, Stage Manager, or a
+real multi-display matrix.
 
 #### Background isolation
 
