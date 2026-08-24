@@ -60,7 +60,6 @@ public struct SearchHeaderView: View {
                 .textFieldStyle(.plain)
                 .focused(searchFieldFocused)
                 .autocorrectionDisabled(true)
-                .textInputAutocapitalization(.never)
                 .accessibilityIdentifier("clipy.search.field")
                 .accessibilityLabel("Search clipboard history")
                 .onSubmit(onSubmitSelection)
