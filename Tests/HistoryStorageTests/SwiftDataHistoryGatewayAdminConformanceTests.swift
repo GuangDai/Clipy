@@ -1,7 +1,6 @@
 /// Public X.4 Gateway administration facade conformance proof.
 /// Owning spec: `V2-05` §3.3 and roadmap X.4/GW3.
 import HistoryCore
-import SwiftData
 import Testing
 import HistoryStorage
 
@@ -46,8 +45,9 @@ struct SwiftDataHistoryGatewayAdminConformanceTests {
             configuration: HistoryConfiguration(persistence: .memory)
         )
         let admin = requireGatewayAdminHistory(history)
-        let container = await history.authority.container
-        let before = try GatewayStoreSnapshot.read(in: ModelContext(container))
+        let beforeConnections = try await admin.connections()
+        let bootstrapped = try #require(beforeConnections.first)
+        let beforeGrants = try await admin.grants(for: bootstrapped.id)
 
         await #expect(throws: ExternalFailure.requestDenied(.invalidInput)) {
             _ = try await admin.enrollConnection(
@@ -56,7 +56,11 @@ struct SwiftDataHistoryGatewayAdminConformanceTests {
             )
         }
 
-        let after = try GatewayStoreSnapshot.read(in: ModelContext(container))
-        #expect(after == before)
+        let afterConnections = try await admin.connections()
+        let afterGrants = try await admin.grants(for: bootstrapped.id)
+        let audit = try await admin.auditLog(since: 1)
+        #expect(afterConnections == beforeConnections)
+        #expect(afterGrants == beforeGrants)
+        #expect(!audit.contains(where: { $0.operationKind == .adminEnroll }))
     }
 }

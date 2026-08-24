@@ -1273,8 +1273,9 @@ test.
 - **Batch 35 generic Local Automation enrollment gate is in progress:** the
   public `GatewayAdminHistory` witness now rejects `.localAutomation` before
   Authority admission, audit, clock use, ID minting, or durable mutation.
-  A real in-memory public-facade test requires the complete Gateway snapshot
-  to remain equal; storage-only kind/rate/recheck fixtures call the internal
-  Authority directly. This closes only the forbidden generic publication
+  A real in-memory public-facade test requires connections/grants to remain
+  equal and the public audit page to contain no `adminEnroll`; storage-only
+  kind/rate/recheck fixtures call the internal Authority directly. This closes
+  only the forbidden generic publication
   route; client file custody, enrollment/revocation coordinator, server
   authentication, ingress, transport, and CLI remain open.
