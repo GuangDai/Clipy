@@ -391,6 +391,14 @@ public struct HistoryPanelView: View {
                         in: viewState.rows,
                         direction: offset < 0 ? .previous : .next
                     )
+                },
+                onSubmitSelection: {
+                    guard let selectedID = surfaceState.selection,
+                          let selected = viewState.rows.first(where: {
+                              $0.item.id == selectedID
+                          })
+                    else { return }
+                    viewState.requestPasteFromDisplayedRow(selected.item)
                 }
             )
             .padding(.horizontal, 12)
