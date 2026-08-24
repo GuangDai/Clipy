@@ -234,13 +234,13 @@ struct SearchWorkerCancellationTests {
         defer { WSSupport.removeStore(storeURL) }
         let history = try await WSSupport.openHistory(
             storeURL: storeURL,
-            maximumUnpinned: 288
+            maximumUnpinned: 64
         )
-        // 288 is the smallest comfortable corpus beyond the 250-row debug
-        // progress event and its next 32-row cancellation checkpoint at 256.
-        // It proves the same early exit without making this functional lane
-        // seed 600 real SwiftData rows beside every MainActor UI test.
-        _ = try await history.seedPerformanceFixture(rowCount: 288) { index in
+        // Two chunks are sufficient: cancel immediately after 32 projected
+        // rows, then require the production checkpoint before row 33 to stop
+        // the operation. A functional cancellation proof must not seed a
+        // scale fixture beside every MainActor UI test in the default lane.
+        _ = try await history.seedPerformanceFixture(rowCount: 64) { index in
             Self.fixtureCapture(index: index)
         }
 
@@ -250,9 +250,10 @@ struct SearchWorkerCancellationTests {
         await history.authority.setSearchDebugProbe(
             SearchDebugProbe(isEnabled: true) { event in
                 _ = continuation.yield(event)
-                guard event.phase == "corpus-projection-progress",
+                guard event.phase
+                        == "corpus-projection-cancellation-checkpoint",
                       event.rowsProcessed
-                        == SearchDebugProbe.progressRowInterval
+                        == SearchWorker.cancellationRowInterval
                 else { return }
                 withUnsafeCurrentTask { task in
                     task?.cancel()
@@ -280,9 +281,12 @@ struct SearchWorkerCancellationTests {
         }
         #expect(
             captured
-                .filter { $0.phase == "corpus-projection-progress" }
+                .filter {
+                    $0.phase
+                        == "corpus-projection-cancellation-checkpoint"
+                }
                 .map(\.rowsProcessed)
-                == [SearchDebugProbe.progressRowInterval]
+                == [SearchWorker.cancellationRowInterval]
         )
         #expect(!captured.contains { $0.phase == "corpus-projection-complete" })
         #expect(!captured.contains { $0.phase == "corpus-sort" })
