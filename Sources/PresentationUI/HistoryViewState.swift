@@ -112,9 +112,8 @@ public final class HistoryViewState {
     /// whitespace is syntax and is never rewritten by presentation state.
     public var searchText: String = "" {
         didSet {
-            if searchText != oldValue {
-                advanceSearchQueryGeneration()
-            }
+            guard searchText != oldValue else { return }
+            advanceSearchQueryGeneration()
             scheduleSearchRestart()
         }
     }
@@ -123,9 +122,8 @@ public final class HistoryViewState {
     /// restarts observation immediately.
     public var searchMode: SearchMode = .fuzzy {
         didSet {
-            if searchMode != oldValue {
-                advanceSearchQueryGeneration()
-            }
+            guard searchMode != oldValue else { return }
+            advanceSearchQueryGeneration()
             replaceObservationImmediately()
         }
     }

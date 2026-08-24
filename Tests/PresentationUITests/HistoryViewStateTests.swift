@@ -651,6 +651,36 @@ struct HistoryViewStateTests {
         await history.finishObservation()
     }
 
+    /// SwiftUI controls may write their current binding value again while
+    /// mounting or taking focus. An equal draft/mode is not a new search
+    /// intent and must not cancel the live observation or arm a debounce.
+    @Test func equalSearchBindingWritesKeepTheCurrentObservation() async {
+        let firstPage = fixturePage(
+            rows: [
+                fixtureRow(
+                    id: "00000000-0000-0000-0000-000000000054",
+                    title: "unchanged-search"
+                ),
+            ],
+            next: nil
+        )
+        let history = ScriptedHistory(observedFirstPage: firstPage)
+        let state = HistoryViewState(history: history)
+        state.activate()
+        #expect(await pollUntil { state.hasAuthoritativeFirstPage })
+
+        state.searchText = state.searchText
+        state.searchMode = state.searchMode
+
+        #expect(state.rows.map(\.title) == ["unchanged-search"])
+        #expect(state.hasAuthoritativeFirstPage)
+        #expect(!state.isLoadingFirstPage)
+        #expect(await history.observeRequests.count == 1)
+
+        state.deactivate()
+        await history.finishObservation()
+    }
+
     /// UI-16/Card 15D: the draft itself is not a result. Only the final
     /// debounced query's authoritative first page announces, exactly once.
     /// The page's cursor is carried with the count so the app shell can say
