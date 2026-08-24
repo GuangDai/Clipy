@@ -12,12 +12,10 @@
 /// boundedness with deliberate CI-variance slack, and eviction counts
 /// (deterministic: the whole-cache reset makes the entry-count evolution
 /// independent of task completion order).
-import CoreGraphics
 import Darwin
 import Foundation
 import HistoryCore
 import HistoryStorage
-import ImageIO
 import PresentationUI
 import Testing
 
@@ -225,13 +223,12 @@ struct SmokeMeasurementTests {
     // MARK: - Preview pane
 
     /// Preview smoke: the dwell-driven pane over the REAL facade — a text
-    /// item resolves to its Effective-Content text, an image item resolves
-    /// to bytes that downsample into a CGImage through the same bounded
-    /// decode the view's `PreviewContentLoader` performs off the MainActor
-    /// (inside PresentationUI's internal `DisplayImageDecoder` — audit
-    /// 2026-08-20 §S-2/§SPEC-IMPL-002; mirrored here by the file-local
-    /// `SmokeImageDecode` twin), and the manual toggle suppresses auto-open
-    /// until the selection changes.
+    /// item resolves to its Effective-Content text and an image item resolves
+    /// through the same bounded eager rendering the view's
+    /// `PreviewContentLoader` performs off the MainActor (inside the
+    /// package-only ContentPreview actor — audit 2026-08-20
+    /// §S-2/§SPEC-IMPL-002). The manual toggle suppresses auto-open until the
+    /// selection changes.
     @Test(
         .enabled(
             if: FixtureCatalog.available,
@@ -271,6 +268,7 @@ struct SmokeMeasurementTests {
         )
 
         let previewState = PreviewPaneState(autoOpenDelay: .milliseconds(20))
+        let renderDriver = PreviewLoaderDebugDriver(history: history)
 
         // Text: dwell opens the pane; the Effective Content resolves to the
         // seeded body through the real details read.
@@ -280,18 +278,14 @@ struct SmokeMeasurementTests {
         }
         #expect(textOpened, "preview smoke: the dwell opens the pane on the text item")
         let textDetails = try await history.details(for: textReference.id)
-        let textContent = PreviewContent.resolve(effective: textDetails.effective)
-        guard case .text(let previewText) = textContent else {
-            Issue.record("preview smoke: expected .text, got \(textContent)")
-            return
-        }
-        #expect(previewText.contains(textBody))
+        let textSnapshot = await renderDriver.load(textReference)
+        #expect(textSnapshot.kind == .text)
+        #expect(textSnapshot.textCharacterCount == textBody.count)
         #expect(textDetails.occurrence.lastSource == "com.example.previewsmoke")
 
-        // Image: retargeting dwell swaps the pane to the image item; the
-        // resolved bytes downsample through the same ImageIO option set the
-        // view's loader applies via `DisplayImageDecoder` (off the MainActor
-        // in the real view).
+        // Image: retargeting dwell swaps the pane to the image item. The
+        // DEBUG driver crosses the production loader and ContentPreview
+        // renderer, but returns only content-free eager-raster dimensions.
         previewState.handleSelectionChange(imageReference)
         let imageOpened = await ComposedSupport.waitFor(timeout: 5) {
             previewState.previewedItem == imageReference
@@ -299,13 +293,11 @@ struct SmokeMeasurementTests {
         #expect(imageOpened, "preview smoke: the pane retargets to the image item")
         #expect(previewState.isOpen)
         let imageDetails = try await history.details(for: imageReference.id)
-        let imageContent = PreviewContent.resolve(effective: imageDetails.effective)
-        guard case .image(let imageBytes) = imageContent else {
-            Issue.record("preview smoke: expected .image, got \(imageContent)")
-            return
-        }
-        let downsampled = SmokeImageDecode.downsampled(imageBytes)
-        #expect(downsampled != nil, "preview smoke: ImageIO decodes the image preview")
+        let imageSnapshot = await renderDriver.load(imageReference)
+        #expect(imageSnapshot.kind == .raster)
+        #expect(imageSnapshot.rasterWidth == 512)
+        #expect(imageSnapshot.rasterHeight == 512)
+        let imageBytes = try #require(imageDetails.effective.first?.bytes)
 
         // Manual toggle closes and suppresses; a selection change re-arms.
         previewState.togglePreview(for: imageReference)
@@ -374,28 +366,5 @@ private enum SmokeMemoryProbe {
         }
         guard status == KERN_SUCCESS else { return 0 }
         return info.resident_size
-    }
-}
-
-/// The file-local ImageIO downsample twin of PresentationUI's internal
-/// `DisplayImageDecoder.previewImage` — the bounded decode the preview
-/// loader performs off the MainActor (audit 2026-08-20 §S-2). The decoder
-/// type is module-internal, so the smoke proves the same decode over the
-/// same option set here, including the primary-image index (03 §7 APL-C-06).
-private enum SmokeImageDecode {
-    static func downsampled(_ bytes: Data) -> CGImage? {
-        guard let source = CGImageSourceCreateWithData(bytes as CFData, nil) else {
-            return nil
-        }
-        let options: [CFString: Any] = [
-            kCGImageSourceThumbnailMaxPixelSize: 640,
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-        ]
-        return CGImageSourceCreateThumbnailAtIndex(
-            source,
-            CGImageSourceGetPrimaryImageIndex(source),
-            options as CFDictionary
-        )
     }
 }

@@ -12,8 +12,8 @@
 > they are cited here, never restated as new semantics.
 
 **Audit baseline:** `8f316c9` (2026-08-02). **Current landed baseline:**
-`master` through [PR #31](https://github.com/GuangDai/Clipy/pull/31) / merge
-`e20c17b` (2026-08-23). Steps 0–9 are
+`master` through [PR #32](https://github.com/GuangDai/Clipy/pull/32) / merge
+`1c221e6` (2026-08-24). Steps 0–9 are
 implemented and CI-green;
 M2/state 2 is complete. Step 9 (product wiring: PasteboardAdapter +
 PresentationUI + ClipyApp composition) is done, including its post-step-9
@@ -24,16 +24,17 @@ cursor/status-item/center/last-position placement, dwell-driven preview pane)
 rather than a SwiftUI `MenuBarExtra`. M3/state 3 (packaging, accessibility,
 localization, product acceptance per Part VI §11) remains open.
 
-**Current CI provenance (2026-08-23):** the PR #31 merge head is green across
+**Current CI provenance (2026-08-24):** the PR #32 merge head is green across
 Lint + source gates, SwiftPM build + test, and XcodeGen generate + app
 build/test at
-[run 32640926461](https://github.com/GuangDai/Clipy/actions/runs/32640926461).
-PR #31 changes the point-in-time REVIEW todo map only; it does not add product
-behavior. The latest bounded normal-path behavior batch is PR #23 / merge
-`96bfb341`, green in PR run
-[32623287645](https://github.com/GuangDai/Clipy/actions/runs/32623287645) and
+[run 32678654503](https://github.com/GuangDai/Clipy/actions/runs/32678654503).
+PR #32 resolves `DEC-RET-READ`, unifies the Settings retention snapshot/edit
+generation, and closes its bounded persistent-readback and awkward-unit
+consumer proofs. Its PR run
+[32678325377](https://github.com/GuangDai/Clipy/actions/runs/32678325377) and
 master push run
-[32623493462](https://github.com/GuangDai/Clipy/actions/runs/32623493462).
+[32678654503](https://github.com/GuangDai/Clipy/actions/runs/32678654503)
+passed all three correctness jobs.
 No HistoryCore public-surface change required a symbol-snapshot run, and no
 performance/AB lane ran. The earlier PR #20 ordinary ad-hoc Release artifact passed the finite
 Card 5D symbol inventory at
@@ -849,14 +850,17 @@ test.
   `PreviewPaneState` (200 ms dwell-to-peek auto-open on selection change with
   cancel-and-reschedule debounce, ⌃Space manual toggle, manual-close
   suppression until the next selection change, panel key-status arming),
-  `HistoryPreviewView` (image-first `PreviewContent.resolve` over Effective
-  Content, ImageIO downsampling to CGImage — PresentationUI stays
-  AppKit-free — UTF-16/UTF-8 frozen-encoding text decode, 50,000-character
-  cap, source/count/timestamp metadata bar), and `PanelGeometry` (the shared
+  `HistoryPreviewView` (image-first Effective Content preview, UTF-16/UTF-8
+  frozen-encoding text decode, 50,000-character cap,
+  source/count/timestamp metadata bar), and `PanelGeometry` (the shared
   400 + 1 + 320 × 560 window-width vocabulary both the SwiftUI frame and the
   AppKit `setFrame` read). The window widens for the preview with a single
   no-animation `setFrame` that pins the anchor edge (Maccy's layout-storm
   lesson); Esc clears an active search, else closes the panel.
+  Batch 31 later moves preview ImageIO/source-selection/resource policy into
+  the concrete package-only `ContentPreview` actor and replaces retained
+  CGImage with a bounded inert eager raster; the loader's History/reference/
+  task/lifecycle ownership is unchanged.
 - **Smoke/measurement hooks (ClipyIntegrationTests,
   `SmokeMeasurementTests`):** thumbnail-cache memory eviction (deterministic
   entry-count proof at an injected ceiling of 3: six inserts leave exactly
@@ -1171,11 +1175,34 @@ test.
   AX/VoiceOver/FKA, multi-screen/Spaces/WindowServer behavior, General
   pasteboard visibility, physical APFS ENOSPC, external surface purge, signed
   Data Protection Keychain, or distribution acceptance.
-- **Batch 30 `DEC-RET-READ` + Card 10A consumer closure is in progress:** the
-  current branch resolves configured retention as a purpose-specific public
+- **Batch 30 `DEC-RET-READ` + Card 10A consumer closure is landed:**
+  [PR #32](https://github.com/GuangDai/Clipy/pull/32), merge `1c221e6`, resolves
+  configured retention as a purpose-specific public
   `ClipboardHistory` read while keeping live retained-byte usage excluded. It
   hoists both Settings tabs onto one panel-owned count+policy snapshot/edit
   generation, adds the awkward-unit Presentation action proof, and adds
   `RET-READ-1A` public persistent owner-release/reopen/read/reapply evidence.
-  No macOS CI evidence exists until the batch PR runs; localization, visual
-  count relocation into one group, AX/FKA, and live usage remain open.
+  PR run 32678325377 and master push run 32678654503 are green. Localization,
+  visual count relocation into one group, AX/FKA, and live usage remain open.
+- **Batch 31 `DEC-PREVIEW-TARGET` deep-module migration is PR-green:**
+  [PR #33](https://github.com/GuangDai/Clipy/pull/33) at head `281582a` passed
+  all three correctness jobs in run
+  [32681818215](https://github.com/GuangDai/Clipy/actions/runs/32681818215). One
+  package-only concrete `ContentPreview` actor now owns exact preview source
+  selection, fixed resource profiles, text codecs, ImageIO decode, and bounded
+  eager raster/text outcomes. PresentationUI owns History/reference/task/
+  lifecycle fences but no longer imports ImageIO or publishes/retains CGImage.
+  The same batch migrates encoded thumbnail display materialization without
+  moving HistoryStorage's source/version/single-flight or ThumbnailStore's
+  surface-local reference/cache policy. Exact UTF-8 and PNG artifact proofs,
+  deterministic A3/A4/A5 late-result tests, the one-native-slot handoff proof,
+  gates, and owning documents are green. Earlier attempts
+  32681250466/32681513849 exposed respectively three missing `try` markers in
+  throwing TaskLocal test scopes and a concrete 12.5-second ImageIO completion
+  under the 962-test parallel runner versus the old 10-second monotone poll;
+  both were fixed before the green run. A later docs-only attempt 32682113026
+  showed that merely widening the timeout made the same-owner concurrent
+  ImageIO window drift to about 23 seconds, so the final branch restores the
+  10-second failure bound and serializes the ThumbnailStore native/display
+  owner suite instead. Merge/master provenance is not yet recorded in this
+  commit.

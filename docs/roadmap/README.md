@@ -23,10 +23,13 @@
 
 ## 1. How this roadmap is organized
 
-- One file per design module. **7 docs cover all 8 Part I §2 targets**; `xxh3`
-  and `Fuse` are co-documented together as dependencies in Module 7. (Part I §2
-  lists both as separate target rows; Part VI §5 lists `xxh3` as a scaffold
-  target but treats `Fuse` as an external SPM dependency, not a created target.)
+- One file per original design module. **7 docs cover the original 8 Part I §2
+  targets**; `xxh3` and `Fuse` are co-documented together as dependencies in
+  Module 7. Post-step-9 package targets `ClipboardFormats` and `ContentPreview`
+  are co-documented with their concrete consumers/owners rather than receiving
+  empty roadmap shells. (Part I §2 lists both dependencies as separate target
+  rows; Part VI §5 lists `xxh3` as a scaffold target but treats `Fuse` as an
+  external SPM dependency, not a created target.)
 - Each module file has the same shape: **Status · Spec references · Dependencies
   · Deliverables · Acceptance · Risks/notes · Test target · Step**.
 - The implementation order (§3) mirrors Part VI §5, grouped into phases, and
@@ -38,11 +41,12 @@
 | # | Module | Spec owner | Roadmap doc | Depends on |
 |---|---|---|---|---|
 | F | `ClipboardFormats` (post-step-9 deepening) | 01 §2/§8; REVIEW 08 | [05-presentationui.md](05-presentationui.md) + [03-historystorage.md](03-historystorage.md) consumer notes | Foundation |
+| P | `ContentPreview` (post-step-9 deepening) | 01 §2/§4/§6; REVIEW 03/08 | [05-presentationui.md](05-presentationui.md) | ClipboardFormats (CoreGraphics, ImageIO) |
 | 1 | `HistoryCore` | 03a + 03b (Part III) | [01-historycore.md](01-historycore.md) | Foundation |
 | 2 | `HistoryDomain` | 02 (Part II) | [02-historydomain.md](02-historydomain.md) | HistoryCore |
 | 3 | `HistoryStorage` | 04 + 05 (Part IV + V) | [03-historystorage.md](03-historystorage.md) | HistoryCore, HistoryDomain, ClipboardFormats, xxh3, Fuse (SwiftData, ImageIO) |
 | 4 | `PasteboardAdapter` | 01 §2/§4; 03a §4 | [04-pasteboardadapter.md](04-pasteboardadapter.md) | HistoryCore (AppKit) |
-| 5 | `PresentationUI` | 01 §2 | [05-presentationui.md](05-presentationui.md) | HistoryCore, ClipboardFormats (SwiftUI) |
+| 5 | `PresentationUI` | 01 §2 | [05-presentationui.md](05-presentationui.md) | HistoryCore, ClipboardFormats, ContentPreview (SwiftUI, CoreGraphics display edge) |
 | 6 | `ClipyApp` | 01 §2; 01 §5.6 | [06-clipyapp.md](06-clipyapp.md) | HistoryCore¹, HistoryStorage, PasteboardAdapter, PresentationUI |
 | 7 | Dependencies (`xxh3` + `Fuse`) | 01 §2/§4 | [07-external-deps.md](07-external-deps.md) | external |
 
@@ -51,7 +55,7 @@ HistoryStorage}; the direct ClipyApp→HistoryCore edge (for `any ClipboardHisto
 `PastePayload`, `HistoryAction`) is implied by type-reference imports and
 is not drawn in the structural graph.
 
-Test targets mirror each owner (`ClipboardFormatsTests`, `HistoryCoreTests`, `HistoryDomainTests`,
+Test targets mirror each owner (`ClipboardFormatsTests`, `ContentPreviewTests`, `HistoryCoreTests`, `HistoryDomainTests`,
 `HistoryStorageTests`, `HistoryPerfTests`, `PasteboardAdapterTests`,
 `PresentationUITests`, `ClipyIntegrationTests`), per Part VI §5. The runner
 test target is cross-cutting proof infrastructure rather than an eighth design
@@ -70,7 +74,7 @@ when the perf/AB helper proofs were split out of the default test lane).
 
 **Steps** (module owner in bold):
 
-0. **scaffold (cross-cutting).** Create the original SwiftPM/XcodeGen target graph and gates. The package-only `ClipboardFormats`/`ClipboardFormatsTests` pair is a later post-step-9 deepening, admitted only after multiple real format-fact callers existed; it is not retroactively claimed as scaffold work and adds no shipped product or plugin surface. HistoryStorage is declared **without** its Fuse target-dependency edge (Fuse is an external SPM package that resolves only once pinned at step 3); `xxh3` is declared with placeholder source (real C/ObjC++ content lands at step 3). Add XcodeGen `project.yml` (Part I §9 item 6), SwiftLint/import-gate config (Part I §8), the public-symbol-no-leak snapshot harness, the no-`@unchecked Sendable` / `nonisolated(unsafe)` / no-service-locator source scan, **and the deterministic concurrency test harness scaffold** (required by WS12/13/15/20; its transaction-injection seam is finished inside `HistoryAuthority` at step 5), **and provision the Part VI §9 performance-runner scaffold** (release-like runner + recorded-fixture/machine-metadata capture; fixtures populate as HistoryStorage matures, §9 closes at step 8). `ClipyIntegrationTests` is XcodeGen-hosted. This step owns the Part VI §6 graph-level proofs: whole-graph Swift 6 build, per-target framework import confinement, public-symbol snapshot, and the global escape-hatch scan.
+0. **scaffold (cross-cutting).** Create the original SwiftPM/XcodeGen target graph and gates. The package-only `ClipboardFormats`/`ClipboardFormatsTests` pair and concrete `ContentPreview`/`ContentPreviewTests` pair are later post-step-9 deepenings, admitted only after real callers and deletion tests existed; neither is retroactively claimed as scaffold work or a shipped/plugin surface. HistoryStorage is declared **without** its Fuse target-dependency edge (Fuse is an external SPM package that resolves only once pinned at step 3); `xxh3` is declared with placeholder source (real C/ObjC++ content lands at step 3). Add XcodeGen `project.yml` (Part I §9 item 6), SwiftLint/import-gate config (Part I §8), the public-symbol-no-leak snapshot harness, the no-`@unchecked Sendable` / `nonisolated(unsafe)` / no-service-locator source scan, **and the deterministic concurrency test harness scaffold** (required by WS12/13/15/20; its transaction-injection seam is finished inside `HistoryAuthority` at step 5), **and provision the Part VI §9 performance-runner scaffold** (release-like runner + recorded-fixture/machine-metadata capture; fixtures populate as HistoryStorage matures, §9 closes at step 8). `ClipyIntegrationTests` is XcodeGen-hosted. This step owns the Part VI §6 graph-level proofs: whole-graph Swift 6 build, per-target framework import confinement, public-symbol snapshot, and the global escape-hatch scan.
 1. **Module 1 — HistoryCore:** compile public values + protocol; lock the symbol surface (Part VI §6).
 2. **Module 2 — HistoryDomain:** compile pure values, facts, planners; invariant tests (D1–D19).
 3. **Module 7 — integrate xxh3 + Fuse:** pin exact resolved revisions; swap the real C/ObjC++ source into the `xxh3` placeholder target; pin the Fuse 1.4.x SPM revision and **add the deferred HistoryStorage→Fuse package-dependency edge**; add the package-only deterministic xxh3 collision double. Both are then resolvable. **xxh3 is first used at step 5** (`IngestPreparationActor`, 05 §6.1); **Fuse is first used at step 7** (the full `SearchWorker` implementation for WS17 — the step-5 `SearchWorker` is a stub with no Fuse field). *(Incremental convention: step 0 declares HistoryStorage without the Fuse edge and xxh3 with placeholder source, so step 4's schema/codec code imports neither; step 3 pins real revisions and adds the Fuse edge; xxh3 is first imported at step 5, Fuse at step 7.)*

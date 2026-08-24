@@ -93,12 +93,17 @@ public struct HistoryRowView: View {
     // MARK: Leading thumbnail
 
     /// 36×36 leading slot. Prefetch is gated by the cheap UTI heuristic so
-    /// text rows never enter the thumbnail pipeline; the cached `CGImage`
-    /// exists only on the main actor (01 §6; 04 §9).
+    /// text rows never enter the thumbnail pipeline; observable state retains
+    /// only a framework-neutral eager raster (01 §6; 04 §9).
     private var thumbnail: some View {
         Group {
-            if let image = thumbnails.image(for: row.item) {
-                Image(image, scale: 2, label: Text("Item thumbnail"))
+            if let raster = thumbnails.raster(for: row.item),
+               let image = PreviewRasterDisplay.image(
+                   raster,
+                   scale: 2,
+                   label: Text("Item thumbnail")
+               ) {
+                image
                     .resizable()
                     .aspectRatio(contentMode: .fill)
             } else {

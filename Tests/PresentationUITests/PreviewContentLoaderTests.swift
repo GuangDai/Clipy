@@ -6,6 +6,7 @@
 /// `PausableDetailsHistory`, which suspends every `details(for:)` read until
 /// the test resumes it, so reverse completion order is deterministic — no
 /// sleeps on the deciding path.
+import ContentPreview
 import CoreGraphics
 import Foundation
 import HistoryCore
@@ -131,6 +132,108 @@ struct PreviewContentLoaderTests {
         _ = await olderLoad.value
         #expect(loader.phase == .content(.text("newer")))
     }
+
+    #if DEBUG
+    /// PLAY-PREVIEW-A3: A has finished its History read and is parked inside
+    /// the real renderer; B enters the reentrant actor and publishes text.
+    /// Releasing A afterwards cannot replace B with the old raster.
+    @Test func slowRasterAAfterFastTextBPublishesOnlyB() async throws {
+        let refA = reference("00000000-0000-0000-0000-0000000001B3", version: 1)
+        let refB = reference("00000000-0000-0000-0000-0000000001B4", version: 1)
+        let history = PausableDetailsHistory()
+        await history.scriptDetails(details(for: refA, imageBytes: fixturePNGData))
+        await history.scriptDetails(details(for: refB, text: "current B"))
+        let loader = PreviewContentLoader(history: history)
+        let gate = PreviewRenderGate()
+        let hook: @Sendable () async -> Void = { await gate.parkFirst() }
+
+        try await ContentPreviewDebugInstrumentation.$renderDidStart.withValue(hook) {
+            let loadA = Task { await loader.load(item: refA) }
+            try #require(await pollUntil { await history.detailRequests.count == 1 })
+            await history.resumeDetails(for: refA.id)
+            await gate.waitUntilParked()
+            let parked = await loader.rendererDebugSnapshot()
+            #expect(parked.activeJobs == 1)
+            #expect(parked.retainedSourceBytes == fixturePNGData.count)
+
+            let loadB = Task { await loader.load(item: refB) }
+            try #require(await pollUntil { await history.detailRequests.count == 2 })
+            await history.resumeDetails(for: refB.id)
+            _ = await loadB.value
+            #expect(loader.phase == .content(.text("current B")))
+
+            await gate.resume()
+            _ = await loadA.value
+            #expect(loader.requestedItem == refB)
+            #expect(loader.phase == .content(.text("current B")))
+            #expect(loader.raster == nil)
+            let settled = await loader.rendererDebugSnapshot()
+            #expect(settled.activeJobs == 0)
+            #expect(settled.retainedSourceBytes == 0)
+        }
+    }
+
+    /// PLAY-PREVIEW-A4: closing the pane while native work is parked clears
+    /// publication immediately; the later old completion remains discarded.
+    @Test func panelCloseFencesParkedRendererCompletion() async throws {
+        let ref = reference("00000000-0000-0000-0000-0000000001B5", version: 1)
+        let history = PausableDetailsHistory()
+        await history.scriptDetails(details(for: ref, imageBytes: fixturePNGData))
+        let loader = PreviewContentLoader(history: history)
+        let gate = PreviewRenderGate()
+        let hook: @Sendable () async -> Void = { await gate.parkFirst() }
+
+        try await ContentPreviewDebugInstrumentation.$renderDidStart.withValue(hook) {
+            let load = Task { await loader.load(item: ref) }
+            try #require(await pollUntil { await history.detailRequests.count == 1 })
+            await history.resumeDetails(for: ref.id)
+            await gate.waitUntilParked()
+
+            await loader.load(item: nil)
+            #expect(loader.requestedItem == nil)
+            #expect(loader.phase == .unsupported)
+            #expect(loader.raster == nil)
+
+            await gate.resume()
+            _ = await load.value
+            #expect(loader.phase == .unsupported)
+            #expect(loader.raster == nil)
+        }
+    }
+
+    /// PLAY-PREVIEW-A5: the same business ID advances from v1 to v2 while
+    /// v1 rasterization is parked. v2 text publishes; v1 never returns under
+    /// the new exact reference.
+    @Test func revisionRetargetFencesParkedOldRaster() async throws {
+        let refV1 = reference("00000000-0000-0000-0000-0000000001B6", version: 1)
+        let refV2 = reference("00000000-0000-0000-0000-0000000001B6", version: 2)
+        let history = PausableDetailsHistory()
+        await history.scriptDetails(details(for: refV1, imageBytes: fixturePNGData))
+        let loader = PreviewContentLoader(history: history)
+        let gate = PreviewRenderGate()
+        let hook: @Sendable () async -> Void = { await gate.parkFirst() }
+
+        try await ContentPreviewDebugInstrumentation.$renderDidStart.withValue(hook) {
+            let oldLoad = Task { await loader.load(item: refV1) }
+            try #require(await pollUntil { await history.detailRequests.count == 1 })
+            await history.resumeDetails(for: refV1.id)
+            await gate.waitUntilParked()
+
+            await history.scriptDetails(details(for: refV2, text: "revision v2"))
+            let newLoad = Task { await loader.load(item: refV2) }
+            try #require(await pollUntil { await history.detailRequests.count == 2 })
+            await history.resumeDetails(for: refV2.id)
+            _ = await newLoad.value
+            #expect(loader.phase == .content(.text("revision v2")))
+
+            await gate.resume()
+            _ = await oldLoad.value
+            #expect(loader.requestedItem == refV2)
+            #expect(loader.phase == .content(.text("revision v2")))
+            #expect(loader.raster == nil)
+        }
+    }
+    #endif
 
     /// A cancelled load publishes nothing: the details read still completes
     /// (the double is not cancellation-aware), but the cancellation check
@@ -364,6 +467,37 @@ struct PreviewContentLoaderTests {
         #expect(loader.requestedItem == nil)
     }
 }
+
+#if DEBUG
+private actor PreviewRenderGate {
+    private var isParked = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var resumeContinuation: CheckedContinuation<Void, Never>?
+
+    func parkFirst() async {
+        guard !isParked else { return }
+        isParked = true
+        let parkedWaiters = waiters
+        waiters.removeAll()
+        for waiter in parkedWaiters { waiter.resume() }
+        await withCheckedContinuation { continuation in
+            resumeContinuation = continuation
+        }
+    }
+
+    func waitUntilParked() async {
+        guard !isParked else { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func resume() {
+        resumeContinuation?.resume()
+        resumeContinuation = nil
+    }
+}
+#endif
 
 /// Allows multiple same-ID detail reads to overlap. Each continuation is
 /// resumed explicitly by request order, making generation ordering observable

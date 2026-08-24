@@ -313,7 +313,7 @@ struct UISmokeJourneyTests {
     /// docs/04-coherence.md §9): a REAL 4K JPEG (images/photo4k-b.jpg,
     /// 189,348 bytes per manifest.json) frozen from a PRIVATE pasteboard by
     /// the real adapter; details expose the stored bytes unchanged; the real
-    /// `ThumbnailStore` materializes a CGImage inside the requested 72 px
+    /// `ThumbnailStore` materializes an eager raster inside the requested 72 px
     /// box; and the reference-exact fence holds — after a byte-changing
     /// revision, the reference at the NEW Content Version never sees the old
     /// pixels, then fetches its own.
@@ -355,20 +355,20 @@ struct UISmokeJourneyTests {
             "image smoke (03b §9): details return the captured bytes unchanged"
         )
 
-        // The UTI heuristic admits the row (04 §9), `image(for:)` never
-        // fetches, and `prefetch` lands a decoded CGImage in the 72 px box.
+        // The UTI heuristic admits the row (04 §9), the size read never
+        // fetches, and `prefetch` lands decoded pixels in the 72 px box.
         let store = ThumbnailStore(history: history)
         #expect(
             ThumbnailStore.likelyThumbnailable(["public.jpeg"]),
             "image smoke: the heuristic admits the JPEG row"
         )
-        #expect(store.image(for: inserted) == nil)
+        #expect(store.imagePixelSize(for: inserted) == nil)
         store.prefetch(inserted)
         let decoded = await ComposedSupport.waitFor(timeout: 15) {
-            store.image(for: inserted) != nil
+            store.imagePixelSize(for: inserted) != nil
         }
         #expect(decoded, "image smoke: the 4K JPEG thumbnail materialized")
-        let image = try #require(store.image(for: inserted))
+        let image = try #require(store.imagePixelSize(for: inserted))
         #expect(image.width > 0 && image.width <= 72)
         #expect(image.height > 0 && image.height <= 72)
 
@@ -391,16 +391,16 @@ struct UISmokeJourneyTests {
         )
         #expect(revised.contentVersion != inserted.contentVersion)
         #expect(
-            store.image(for: revised) == nil,
+            store.imagePixelSize(for: revised) == nil,
             "image smoke (04 §9): a revised reference never inherits stale pixels"
         )
         #expect(
-            store.image(for: inserted) != nil,
+            store.imagePixelSize(for: inserted) != nil,
             "image smoke (04 §9): the old key keeps its own pixels"
         )
         store.prefetch(revised)
         let revisedDecoded = await ComposedSupport.waitFor(timeout: 15) {
-            store.image(for: revised) != nil
+            store.imagePixelSize(for: revised) != nil
         }
         #expect(
             revisedDecoded,

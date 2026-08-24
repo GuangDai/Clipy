@@ -98,7 +98,10 @@ Each requires an approved product specification and a fresh architecture review.
 The original state-2 implementation created these product/library targets plus
 the non-product `HistoryPerfRunner` proof executable. The post-step-9
 `ClipboardFormats` deepening is also admitted below after Projection, Preview,
-Details, and Edit provided independent callers and a deletion test. The V2
+Details, and Edit provided independent callers and a deletion test. The
+post-step-9 `ContentPreview` deep module is admitted after exact text and image
+tracers plus the loader lifecycle supplied a concrete deletion test; it is not
+an empty deferred target, registry, plugin system, or cache. The V2
 X.8 remediation later adds `ClipyCLIContract` as a no-product, Foundation-only
 wire-contract target; it is not the deferred `clipyctl` executable or an
 external transport:
@@ -106,6 +109,7 @@ external transport:
 ```text
 HistoryCore
 ClipboardFormats
+ContentPreview
 ClipyCLIContract
 HistoryDomain
 HistoryStorage
@@ -123,6 +127,7 @@ Test targets mirror the owner target:
 ```text
 HistoryCoreTests
 ClipboardFormatsTests
+ContentPreviewTests
 ClipyCLIContractTests
 HistoryDomainTests
 HistoryStorageTests
@@ -136,6 +141,13 @@ The scaffold must not add an implementation target for a deferred feature.
 `ClipboardFormats` is not a placeholder for future plugins or policies: it is
 a package-only Foundation target containing only open-world exact identifiers
 and declared codec facts. Each behavior owner retains its purpose admission.
+`ContentPreview` is likewise concrete rather than speculative: package-only
+immutable representation inputs plus closed product presets produce bounded
+text or eager tight BGRA8/sRGB raster outcomes. It may import only Foundation,
+ClipboardFormats, CoreGraphics, and ImageIO; it never reads History, owns item/
+reference/lifecycle/cache state, performs external I/O, or exposes framework
+objects. Its direct tests and Presentation lifecycle tracers are functional
+correctness tests in the default lane.
 `HistoryRestartProbe` is likewise a no-product test-evidence executable; it is
 not part of the app or the future `clipyctl` surface. `HistoryPerfTests` imports
 the performance executable target only to prove its pure
@@ -183,15 +195,19 @@ Before “executable specification”:
 - A deliberate forbidden edge fails to compile or fails the import gate.
 - `HistoryCore` imports only Foundation.
 - `ClipboardFormats` imports only Foundation and owns no purpose policy.
+- `ContentPreview` imports only Foundation, ClipboardFormats, CoreGraphics,
+  and ImageIO; it owns no History/reference/lifecycle/cache state, and
+  PresentationUI cannot import ImageIO.
 - `ClipyCLIContract` imports only Foundation and owns no I/O or operation
   dispatch.
 - the F0 shared source imports only Foundation/Darwin and its diagnostic client
   only Foundation/AppKit/Darwin; neither imports the CLI contract or any
   History/SwiftData/AppIntents module.
 - `HistoryDomain` imports only Foundation and `HistoryCore`.
-- `import SwiftData` appears only in `HistoryStorage`; Security appears only in
-  the internal F1 server-credential implementation in `HistoryStorage`; AppKit
-  only in its adapter; SwiftUI only in Presentation. This Security edge does
+- `import SwiftData` appears only in `HistoryStorage`; ImageIO appears only in
+  HistoryStorage and ContentPreview; Security appears only in the internal F1
+  server-credential implementation in `HistoryStorage`; AppKit only in its
+  adapter; SwiftUI only in Presentation. This Security edge does
   not authorize a shared access group or client-side Keychain custody.
 - No public symbol mentions Canonical Content, Domain facts/plans, SwiftData types, AppKit objects, fingerprints, or internal invalidations.
 - No `@unchecked Sendable`, `nonisolated(unsafe)`, mutable service locator, or second writer exists.

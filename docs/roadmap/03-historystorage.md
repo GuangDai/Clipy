@@ -48,7 +48,12 @@ HistoryStorage is built across roadmap steps 4–8 (one sub-section each).
 - **Part VI §9 performance proofs** — all 9 bullets (see ../06-cross-cutting.md §9; measured incrementally — capture/candidate/index at step 5, pin/retention at step 6, browse/search/detail at step 7, thumbnail at step 8; §9 closes as a group at step 8 on the release-like runner): capture commit interval excludes pasteboard/fingerprint/projection/decode; healthy candidate work ∝ incoming bytes; current capped startup index proof is O(retained Canonical bytes + signature metadata) and bounded by 5,000 items; pin reorder O(pinned); retention/clear O(retained scalar); recent browse normally uses `limit+1` scalar rows across lanes on the first page and `limit+2` on either continuation (anchor verification/inclusive anchor, with a hard-bounded UUID-tie fallback); search may scan all bounded projections; detail/paste decode one item; thumbnail one bounded source fetch + one shared decode.
 - **Fact-loader completeness:** each action's fact loader is shown to load every fact the corresponding Domain planner reads (Part V §7); a deliberate fact-omission is caught at the **Storage fact-loading boundary** as `.temporarilyUnavailable(.factProof)` (02 §5.1) before planning, never by a silent default.
 - **Failure-producer test homes:** producers without a dedicated WS path — `.factProof`, `.revisionNotFound`, `.invalidRetentionPolicy` (at `open`), `.persistence(.openStore/.corruptStoredValue/.invariantViolation)` — are covered by §7.4 corruption rejection + the failure-translation unit tests (not by a WS path).
-- **Import confinement (Part VI §6):** `import SwiftData` appears only in this target; `ImageIO` only here; no AppKit/SwiftUI/HistoryDomain-leak; no `@unchecked Sendable` / `nonisolated(unsafe)` / service locator / second writer.
+- **Import confinement (Part VI §6):** `import SwiftData` appears only in this
+  target. HistoryStorage's ImageIO use is confined to thumbnail semantic
+  production; the separate package-only `ContentPreview` owns only transient
+  preview/display rasterization and never imports HistoryStorage. No
+  AppKit/SwiftUI/HistoryDomain leak, `@unchecked Sendable`,
+  `nonisolated(unsafe)`, service locator, or second writer.
 
 ## Risks / notes (resolved proof gates and deferred evidence questions)
 

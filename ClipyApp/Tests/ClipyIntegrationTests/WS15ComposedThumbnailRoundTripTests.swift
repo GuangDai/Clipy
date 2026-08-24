@@ -3,8 +3,7 @@
 /// docs/03b-instruction-set.md §9): capture a REAL PNG (a minimal valid
 /// 1×1 image) through the composed stack, fetch its encoded thumbnail
 /// through the public `ClipboardHistory.thumbnail`, decode it through the
-/// REAL `ThumbnailStore` (ImageIO off the MainActor, via
-/// `DisplayImageDecoder`), and prove the
+/// REAL `ThumbnailStore` (eager rasterization off the MainActor), and prove the
 /// reference-exact fence: after a revision the OLD reference's pixels are
 /// not served under the new one, and a stale-reference request fails typed
 /// (`.staleContent`) rather than returning current bytes under the old key.
@@ -35,7 +34,7 @@ struct WS15ComposedThumbnailRoundTripTests {
     /// `public.png` capture frozen from a private pasteboard, its
     /// thumbnail fetched through the public seam, the encoded PNG decoded
     /// by the real `ThumbnailStore` (decode off the MainActor via
-    /// `DisplayImageDecoder`), and the fence: after
+    /// ContentPreview display rasterizer), and the fence: after
     /// a byte-changing revision the store's OLD key never serves the NEW
     /// pixels and the stale direct request fails `.staleContent`.
     @Test @MainActor
@@ -90,16 +89,16 @@ struct WS15ComposedThumbnailRoundTripTests {
 
         // The REAL ThumbnailStore decodes it and caches under the exact
         // reference; a pure read without prefetch returns nil first
-        // (04 §9: `image(for:)` never fetches).
+        // (04 §9: `imagePixelSize(for:)` never fetches).
         let store = ThumbnailStore(history: history)
-        #expect(store.image(for: inserted) == nil)
+        #expect(store.imagePixelSize(for: inserted) == nil)
         store.prefetch(inserted)
         let decoded = await ComposedSupport.waitFor {
-            store.image(for: inserted) != nil
+            store.imagePixelSize(for: inserted) != nil
         }
         #expect(decoded, "WS15: the store decoded and cached the PNG")
-        #expect(store.image(for: inserted)?.width == 1)
-        #expect(store.image(for: inserted)?.height == 1)
+        #expect(store.imagePixelSize(for: inserted)?.width == 1)
+        #expect(store.imagePixelSize(for: inserted)?.height == 1)
 
         // Revise the item with byte-different image content: a second
         // minimal PNG (1×1 white). The fence: the OLD cached entry stays
@@ -133,19 +132,19 @@ struct WS15ComposedThumbnailRoundTripTests {
         // The old entry remains (reference-exact cache), and the new
         // reference starts uncached — prefetch then lands the NEW pixels.
         #expect(
-            store.image(for: inserted) != nil,
+            store.imagePixelSize(for: inserted) != nil,
             "WS15 (04 §9): the old key keeps its own pixels"
         )
         #expect(
-            store.image(for: revised) == nil,
+            store.imagePixelSize(for: revised) == nil,
             "WS15 (04 §9): a revised reference never inherits stale pixels"
         )
         store.prefetch(revised)
         let newDecoded = await ComposedSupport.waitFor {
-            store.image(for: revised) != nil
+            store.imagePixelSize(for: revised) != nil
         }
         #expect(newDecoded, "WS15: the revised reference fetched its own pixels")
-        #expect(store.image(for: inserted) != nil)
+        #expect(store.imagePixelSize(for: inserted) != nil)
 
         // A stale direct request fails typed rather than returning current
         // bytes under the old key (03b §11 item 7; 04 §9).
@@ -185,7 +184,7 @@ struct WS15ComposedThumbnailRoundTripTests {
             "WS15: a text-only item has no thumbnailable content (03b §9)"
         )
         // The store's negative-cached miss is internal state with no public
-        // observer beyond `image(for:) == nil`; the public seam (nil payload)
+        // observer beyond `imagePixelSize(for:) == nil`; the public seam (nil payload)
         // is what the composed panel relies on.
     }
 }

@@ -6,21 +6,38 @@
   [32319164667](https://github.com/GuangDai/Clipy/actions/runs/32319164667);
   see `../PROGRESS.md` step 9)
 - **Spec references:** ownership `../01-architecture.md` §2 row + §6 (Main actor isolation) + §4 (scripted-preview adapter allowance); browse/search DTOs `../03b-instruction-set.md` §8; detail/paste/thumbnail DTOs `../03b-instruction-set.md` §9; protocol `../03a-instruction-set.md` §3 (`ClipboardHistory`); flows `../01-architecture.md` §5.2, §5.4, §5.5, §5.7.
-- **Dependencies:** `HistoryCore` (DTOs + `any ClipboardHistory`), package-only Foundation facts from `ClipboardFormats`, and `SwiftUI`. Never imports `HistoryDomain`, `HistoryStorage`, SwiftData, or `@Model`; receives value snapshots and an injected `any ClipboardHistory`. Preview/Details/Edit keep separate purpose admission.
-- **Test target:** `PresentationUITests`.
+- **Dependencies:** `HistoryCore` (DTOs + `any ClipboardHistory`), package-only Foundation facts from `ClipboardFormats`, the concrete package-only `ContentPreview`, `SwiftUI`, and a local CoreGraphics display edge. Never imports `HistoryDomain`, `HistoryStorage`, SwiftData, ImageIO, or `@Model`; receives value snapshots and an injected `any ClipboardHistory`. Preview/Details/Edit keep separate purpose admission.
+- **Test targets:** `PresentationUITests` for UI lifecycle/caller behavior and `ContentPreviewTests` for exact renderer behavior.
 - **Step:** 9a.
 
 ## Deliverables
 
-- **View state** built only from `HistoryCore` DTOs (`HistoryRow`, `HistoryPage`, `HistoryDetails`, `PastePayload`, `ThumbnailPayload`, `HistoryItemReference`).
+- **View state** built from `HistoryCore` DTOs (`HistoryRow`, `HistoryPage`,
+  `HistoryDetails`, `PastePayload`, `ThumbnailPayload`,
+  `HistoryItemReference`) plus bounded inert ContentPreview artifacts.
 - **Interactions** that call `browse` / `observe` / `details` / `perform` / `pastePayload` / `thumbnail` through the injected `any ClipboardHistory`.
 - **Selection, window behavior, observable presentation state** on the Main actor (Part I §6).
 - **Scripted preview adapter:** a small `ClipboardHistory` implementation for SwiftUI previews; it must be `Sendable` and must not substitute for storage semantic tests (03a §3, 01 §4).
+- **Preview deep module:** `PreviewContentLoader` alone owns History reads,
+  exact-reference/task/generation/lifecycle fences and publication. It maps one
+  immutable Effective Content snapshot into `ContentPreview`, which owns the
+  image-first/exact-text route, fixed budgets, eager ImageIO work and bounded
+  inert outcomes. The SwiftUI edge constructs and immediately consumes a
+  `CGImage`; no framework object enters observable state or crosses an actor or
+  target signature.
 
 ## Acceptance
 
 - `PresentationUITests`: views render from DTO snapshots; interactions issue correct requests.
 - Import confinement (Part VI §6): `SwiftUI` confined to this target; a deliberate `HistoryDomain`/`HistoryStorage`/`SwiftData` import fails the scan.
+- `ContentPreviewTests` prove exact UTF-8 and native UTF-16 behavior, exact PNG
+  eager BGRA8/sRGB artifacts, malformed/unsupported classification, and
+  content-free active-job/source-byte accounting. Presentation lifecycle tests
+  deterministically prove slow A→fast B, panel close, and same-ID revision
+  retarget late-result fences through the real renderer seam. ContentPreview's
+  production path awaits one bounded off-actor native raster slot, so the A→B
+  test parks at that real native entry and B text completes through production
+  scheduling rather than a DEBUG-only actor suspension.
 - Thumbnail application discipline: a thumbnail result tagged with `HistoryItemReference(id, contentVersion)` is applied only while the row still carries that exact reference (Part I §5.7, Part IV §9).
 - Relative copy time uses the system abbreviated formatter under the owning
   `01` §6 rule. One list-owned wall-clock minute cadence supplies the same
@@ -28,6 +45,9 @@
   threshold by less than one minute. Rows never own timers, and there is no
   process-global clock service.
 - Negative: no `@Model`, Domain state, persistence rules, or change-feed bookkeeping in this target (Part I §2).
+- Negative: PresentationUI never imports ImageIO or retains encoded preview
+  bytes/`CGImage`; ContentPreview never imports HistoryCore/HistoryStorage or
+  owns item/reference/cache semantics.
 
 ## Risks / notes
 

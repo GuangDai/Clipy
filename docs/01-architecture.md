@@ -8,7 +8,7 @@ All library targets live in one Swift package so package-only implementation voc
 
 ```text
 ClipyApp
-├── PresentationUI ────────→ HistoryCore + ClipboardFormats
+├── PresentationUI ────────→ HistoryCore + ClipboardFormats + ContentPreview
 ├── PasteboardAdapter ─────→ HistoryCore
 └── HistoryStorage ────────→ HistoryCore + ClipboardFormats
           │                 → HistoryDomain
@@ -18,6 +18,7 @@ ClipyApp
 HistoryDomain ─────────────→ HistoryCore
 
 ClipboardFormats ────────→ Foundation only
+ContentPreview ──────────→ ClipboardFormats + CoreGraphics + ImageIO
 ClipyCLIContract ────────→ Foundation only
                             (pure wire contract; no shipped product surface)
 
@@ -37,12 +38,13 @@ There is no `DomainCore` target. The few values that must appear in both the cal
 | Target | Surface | Owns | Must not own |
 |---|---|---|---|
 | `ClipboardFormats` | Package-only, Foundation-only | Open-world exact identifiers and declared string-codec facts | Purpose admission, decoders, bytes, registries, caches, plugins, framework objects |
+| `ContentPreview` | Package-only concrete actor and immutable values | Preview source priority, exact text codecs, fixed resource profiles, eager ImageIO decode, and bounded inert text/raster outcomes | History reads, item/reference identity, selection or panel lifecycle, thumbnail request/source/cache policy, external I/O, registries, plugins, or framework objects in its interface |
 | `ClipyCLIContract` | Package-only, Foundation-only, no product | Versioned UTF-8 JSON request/reply values, bounded decoding/encoding, and stable exit classes | File handles or standard-stream side effects, transport, credentials, Gateway/History access, a product CLI, operation dispatch, or fabricated Gateway results |
 | `HistoryCore` | Public, Foundation-only | `ClipboardHistory`, IDs/tokens, History Actions, request/response DTOs, receipts, typed failures | Canonical state, fingerprints, SwiftData, AppKit, concrete storage |
 | `HistoryDomain` | Package-only, Foundation-only | Content lineage, immutable state, complete fact values, pure planners, semantic mutation plans and invariants | Public ports, I/O, actors, clocks, UUID generation, persistence |
 | `HistoryStorage` | Public concrete adapter plus internal implementation | `SwiftDataHistory`, Authority actor, schema/codecs, fact loaders, version minting, ingest preparation, Signature Index, read projections, observation plumbing, thumbnail production, and the internal F1 server-credential Keychain owner | AppKit pasteboard, UI state, service location, client credential files, or transport |
 | `PasteboardAdapter` | Public adapter values used by the app | NSPasteboard observation/writes and translation to/from `HistoryCore` raw values | Deduplication, Canonical Content, fingerprints, persistence |
-| `PresentationUI` | Public UI assembly | View state and interactions over History DTOs | `@Model`, Domain state, persistence rules, change-feed bookkeeping |
+| `PresentationUI` | Public UI assembly | View state and interactions over History DTOs; exact-reference/task/lifecycle fences around ContentPreview | `@Model`, Domain state, persistence rules, change-feed bookkeeping, ImageIO decode |
 | `ClipyApp` | Composition root | Concrete construction, lifecycle, paste orchestration, App Intents entry points, and dependency injection | Domain decisions or duplicate persistence paths |
 | `xxh3` | Package-internal C/ObjC++ sibling | 64-bit representation fingerprints | Item identity or final dedup decisions |
 | `Fuse` | External Swift library used internally | Threshold-based fuzzy matching inside `SearchWorker` | Public search score or cross-actor matcher state |
@@ -55,6 +57,9 @@ There is no `DomainCore` target. The few values that must appear in both the cal
 - `public` is reserved for caller-visible `HistoryCore`, the concrete `HistoryStorage` constructor needed by `ClipyApp`, and adapter/UI entry points.
 - Cross-target implementation declarations use Swift `package` access.
 - `ClipboardFormats` states stable exact facts only. Projection, Preview, Details, and Edit retain separate purpose policy; unknown identifiers remain opaque raw values.
+- `ContentPreview` is one concrete deep module, not a renderer protocol,
+  registry, plugin system, cache, or History reader. Callers select one of its
+  closed product presets and receive only immutable bounded `Sendable` values.
 - `ClipyCLIContract` describes and validates the X.8 wire boundary only. It has
   no executable entry point and neither dispatches operations nor fabricates a
   positive Gateway result.
@@ -103,7 +108,7 @@ The following rejected surfaces are implementation detail, not public abstractio
 | SwiftData | Local-substitutable | Production and tests use the same `SwiftDataHistory`; tests select an in-memory `ModelContainer`. There is no second fake writer implementation. |
 | NSPasteboard/AppKit | Framework | `PasteboardAdapter` translates framework values to raw `HistoryCore` capture values and paste payloads back to AppKit. |
 | SwiftUI | Framework | Confined to `PresentationUI`; views receive value snapshots and an injected `any ClipboardHistory`. |
-| ImageIO | Framework | Internal thumbnail implementation in `HistoryStorage`; one concrete decoder in v1, no hypothetical public port. |
+| ImageIO | Framework | Confined to two concrete behavior owners: `HistoryStorage` produces version-fenced encoded thumbnails; `ContentPreview` eagerly materializes transient display rasters and full-pane preview artifacts. Neither exposes ImageIO/CoreGraphics objects across its actor/module seam, and there is no hypothetical public decoder port. |
 | Security / Data Protection Keychain | True external | The internal `HistoryStorage` `CredentialStore` actor owns only the exact F1 server credential. Production uses `SecRandomCopyBytes` and app-private Data Protection Keychain operations; deterministic correctness tests inject a narrow operations adapter. Client custody, enrollment coordination, and signed/profile evidence remain separate. |
 | xxh3 | In-process C dependency | Internal fingerprint function; a package-only deterministic collision double is permitted in Domain/Storage tests. |
 | Fuse 1.4.x | Local library | Confined to `SearchWorker` for the specified fuzzy mode; its matcher remains inside actor isolation. The scaffold pins an exact resolved revision and fixtures lock behavior. |
@@ -210,6 +215,11 @@ PresentationUI selection
 
 The UI requests a thumbnail using `HistoryItemReference(id, contentVersion)` and pixel dimensions. `HistoryStorage` verifies that exact version before decoding and shares only identical concurrent work. A result is tagged with the same reference; a caller applies it only while its row still carries that reference.
 
+`ThumbnailStore` continues to own surface-local exact-reference retention and
+passes an already selected encoded PNG payload to `ContentPreview` only for
+eager display materialization. This does not move thumbnail request, source,
+version, single-flight, or cache policy into `ContentPreview`.
+
 ### 6. Isolation model
 
 #### Main actor
@@ -228,6 +238,15 @@ The UI requests a thumbnail using `HistoryItemReference(id, contentVersion)` and
   Individual rows do not own timers, and there is no global clock service.
 
 #### Background isolation
+
+- `ContentPreview` owns transient preview source selection and text/image
+  rendering on its actor. Its eager raster is tight premultiplied BGRA8/sRGB
+  bytes with checked dimensions and byte count; no `CGImage`, `CGImageSource`,
+  or encoded source bytes are retained in observable UI state. One native
+  raster slot preserves bounded decode concurrency; the actor awaits that
+  off-actor work, so a newer exact-text render can complete while an older
+  native rasterization is pending. Cancellation remains a publication fence
+  and does not promise immediate native preemption.
 
 All of the following are `actor` types; each is therefore `Sendable`, which is what makes `SwiftDataHistory: Sendable` derivable without `@unchecked Sendable`. `SwiftDataHistory` stores six of them as fields (Part V §2); `ThumbnailWorker` is owned and invoked by `ThumbnailService`, not stored directly.
 
@@ -261,6 +280,9 @@ The Authority does not retain model objects between operations. Each isolated re
 ### 8. Forbidden dependencies and anti-goals
 
 - `ClipboardFormats` may import Foundation only and must not own a purpose-specific behavior policy.
+- `ContentPreview` may import only Foundation, ClipboardFormats, CoreGraphics,
+  and ImageIO. It must not import HistoryCore/HistoryStorage, SwiftUI/AppKit,
+  persistence, or adapters; PresentationUI must not import ImageIO.
 - `ClipyCLIContract` may import Foundation only and must not own standard-stream
   I/O, transport, credential, Gateway, History, or product-CLI behavior.
 - `ClipyUDSF0Shared` may import Foundation and Darwin only;
@@ -295,8 +317,10 @@ The Authority does not retain model objects between operations. Each isolated re
    spellings. They scan SwiftPM sources/tests plus `ClipyApp` sources, hosted
    tests, and diagnostic tools; confine `AppIntents`, reject service-locator declarations, and enforce
    the single framework-owned App Intents dependency registration above.
-   The same gates keep `ClipyCLIContract` Foundation-only and the F0 shared/client
-   sources confined to their Foundation/Darwin/AppKit evidence boundary.
+   The same gates keep `ContentPreview` on its four-module allowlist,
+   PresentationUI free of ImageIO, `ClipyCLIContract` Foundation-only, and the
+   F0 shared/client sources confined to their Foundation/Darwin/AppKit evidence
+   boundary.
 3. Swift 6 complete strict-concurrency compilation succeeds without unchecked escape hatches.
 4. The public `HistoryCore` symbol surface is snapshot-tested so package-only Domain/Storage vocabulary cannot leak accidentally.
 5. App-level tests construct `SwiftDataHistory` with an in-memory store; they do not replace the semantic write path.
