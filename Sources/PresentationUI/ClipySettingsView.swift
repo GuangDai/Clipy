@@ -282,6 +282,7 @@ private struct GeneralSettingsTab: View {
             )
         )
         .disabled(!settings.canToggle)
+        .accessibilityIdentifier("clipy.settings.launch-at-login")
 
         switch settings.state {
         case .off, .on:
@@ -506,6 +507,7 @@ private struct RetentionSettingsTab: View {
                 Section("Item age") {
                     Toggle("Limit item age", isOn: ageEnabled)
                         .accessibilityHint("Retire items whose last copy is older than the entered age.")
+                        .accessibilityIdentifier("clipy.settings.retention.age-enabled")
                     ValueFieldRow(
                         label: "Maximum item age",
                         unit: "days",
@@ -554,6 +556,7 @@ private struct RetentionSettingsTab: View {
                         Button("Apply") {
                             requestApply()
                         }
+                        .accessibilityIdentifier("clipy.settings.retention.apply")
                         .disabled(
                             !draft.inputIsValid || isWorking
                                 || !hasLoadedRetentionConfiguration

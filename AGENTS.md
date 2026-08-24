@@ -30,7 +30,7 @@ thumbnails.
   run on any platform; everything else (including
   `scripts/public_symbol_snapshot.sh`) needs macOS + `xcrun`.
 
-**Current state (2026-08-24, `master` through PR #38):** steps 0–9 are
+**Current state (2026-08-24, `master` through PR #39):** steps 0–9 are
 done and CI-green (scaffold + gates, `HistoryCore` public surface,
 `HistoryDomain` pure core, dependency pins, schema v1 + codecs,
 `HistoryAuthority` capture/mutations/reads/observation/thumbnail, product
@@ -47,6 +47,10 @@ provider registered before store open; it contains the one connection-bound
 facade and joins positive external removal to the existing panel purge owner,
 `supportedModes = [.background]`,
 output-only entities, no `EntityQuery`, confined to `ClipyApp/Sources`).
+The Batch 37 running-app journey also requires the two filtered history rows
+to expose stable per-item identifiers, button roles, and distinguishable
+alpha/beta labels before its keyboard-selection/paste proof (PR #39, merge
+`5ee1963`; final PR/master correctness 32696012215 attempt 2/32696647481).
 `DEC-RET-READ` and its bounded Settings consumer/persistent readback closure
 landed in PR #32 (merge `1c221e6`; master run 32678654503).
 `DEC-PREVIEW-TARGET` and the concrete package-only `ContentPreview` deep

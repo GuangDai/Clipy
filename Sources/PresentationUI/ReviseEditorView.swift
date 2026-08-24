@@ -85,6 +85,7 @@ public struct ReviseEditorView: View {
                 .padding(16)
             }
             Divider()
+            revisionDisclosure
             reloadStatus
             footer
         }
@@ -152,6 +153,25 @@ public struct ReviseEditorView: View {
     }
 
     // MARK: Footer
+
+    /// Editing Effective Content is append-only: the captured Canonical
+    /// Content and prior revisions are not erased by Save. This warning stays
+    /// visible before submission so the editor cannot imply destructive
+    /// redaction of sensitive clipboard bytes (review Card 3D).
+    private var revisionDisclosure: some View {
+        Label(
+            "Save appends an immutable revision. Previous and original "
+                + "content may remain in this item's revision history.",
+            systemImage: "info.circle"
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.top, 10)
+        .accessibilityIdentifier("clipy.editor.revision-disclosure")
+    }
 
     @ViewBuilder
     private var reloadStatus: some View {
@@ -302,6 +322,9 @@ public struct ReviseEditorView: View {
                 .labelsHidden()
                 .fixedSize()
                 .accessibilityLabel("Editing decision for \(typeIdentifier)")
+                .accessibilityIdentifier(
+                    "clipy.editor.decision.\(typeIdentifier)"
+                )
                 .accessibilityHint(
                     "Keep Current preserves the bytes currently used for"
                         + " pasting. Use Original restores the captured bytes."
@@ -331,6 +354,9 @@ public struct ReviseEditorView: View {
                     }
                     .accessibilityLabel(
                         "Replacement text for \(typeIdentifier)"
+                    )
+                    .accessibilityIdentifier(
+                        "clipy.editor.replacement.\(typeIdentifier)"
                     )
             }
         }

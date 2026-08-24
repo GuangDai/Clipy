@@ -1293,8 +1293,10 @@ test.
   revoked/not-granted outcomes. Real V4 Authority tests require all verifier
   paths to leave Gateway state/audit unchanged. No ingress DTO, framing,
   peer-EUID proof, transport, client custody, coordinator, or CLI is added.
-- **Batch 37 running-app row accessibility characterization is in progress:**
-  the existing XCUI process journey now also requires both history rows to
+- **Batch 37 running-app row accessibility characterization is landed:** PR
+  #39 / merge `5ee1963`; final PR correctness 32696012215 attempt 2 and master
+  correctness 32696647481 are green. The existing XCUI process journey now
+  also requires both history rows to
   materialize as stable-ID button accessibility elements and requires their
   labels to contain the distinguishable alpha/beta titles before the Down →
   alpha product-paste proof. A real hosted NSPanel/NSHostingView experiment

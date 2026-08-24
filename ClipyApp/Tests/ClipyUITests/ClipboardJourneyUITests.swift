@@ -112,11 +112,14 @@ final class ClipboardJourneyUITests: XCTestCase {
         XCTAssertTrue(edit.waitForExistence(timeout: 10))
         edit.click()
 
-        let disclosure = app.staticTexts[revisionDisclosure]
+        let disclosure = app.descendants(matching: .any)[
+            "clipy.editor.revision-disclosure"
+        ]
         XCTAssertTrue(disclosure.waitForExistence(timeout: 5))
+        XCTAssertEqual(disclosure.label, revisionDisclosure)
 
-        let decision = app.popUpButtons[
-            "Editing decision for public.utf8-plain-text"
+        let decision = app.descendants(matching: .any)[
+            "clipy.editor.decision.public.utf8-plain-text"
         ]
         XCTAssertTrue(decision.waitForExistence(timeout: 5))
         decision.click()
@@ -124,8 +127,8 @@ final class ClipboardJourneyUITests: XCTestCase {
         XCTAssertTrue(replace.waitForExistence(timeout: 5))
         replace.click()
 
-        let replacement = app.textViews[
-            "Replacement text for public.utf8-plain-text"
+        let replacement = app.descendants(matching: .any)[
+            "clipy.editor.replacement.public.utf8-plain-text"
         ]
         XCTAssertTrue(replacement.waitForExistence(timeout: 5))
         replacement.click()
@@ -152,18 +155,24 @@ final class ClipboardJourneyUITests: XCTestCase {
         defer { app.terminate() }
 
         app.typeKey(",", modifierFlags: .command)
-        let launchAtLogin = app.switches["Launch at Login"]
+        let launchAtLogin = app.descendants(matching: .any)[
+            "clipy.settings.launch-at-login"
+        ]
         XCTAssertTrue(launchAtLogin.waitForExistence(timeout: 10))
 
         let retentionTab = app.buttons["Retention"]
         XCTAssertTrue(retentionTab.waitForExistence(timeout: 5))
         retentionTab.click()
 
-        let ageLimit = app.switches["Limit item age"]
+        let ageLimit = app.descendants(matching: .any)[
+            "clipy.settings.retention.age-enabled"
+        ]
         XCTAssertTrue(ageLimit.waitForExistence(timeout: 5))
         ageLimit.click()
 
-        let apply = app.buttons["Apply"]
+        let apply = app.descendants(matching: .any)[
+            "clipy.settings.retention.apply"
+        ]
         XCTAssertTrue(apply.waitForExistence(timeout: 5))
         XCTAssertTrue(apply.isEnabled)
         apply.click()
