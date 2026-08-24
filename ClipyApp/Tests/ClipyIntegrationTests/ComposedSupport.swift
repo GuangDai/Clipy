@@ -237,6 +237,22 @@ enum ComposedSupport {
         return condition()
     }
 
+    /// Value-producing companion for hosted AppKit/AX materialization. The
+    /// finite suspension slices free MainActor between hierarchy rebuilds;
+    /// callers still assert the returned optional with `#require`.
+    @MainActor
+    static func waitForValue<Value>(
+        timeout: TimeInterval = 2,
+        _ value: () -> Value?
+    ) async -> Value? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let value = value() { return value }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return value()
+    }
+
     // MARK: Search range indexing (docs/03b-instruction-set.md §8)
 
     /// Extracts the substring at `range` from `text` via the UTF-16 view,
