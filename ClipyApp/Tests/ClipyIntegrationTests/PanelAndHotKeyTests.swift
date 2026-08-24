@@ -12,10 +12,41 @@
 /// `@testable import ClipyApp` reaches the internal panel/hotkey machinery
 /// (the same seam AppCompositionTests uses).
 import AppKit
+import Carbon.HIToolbox
 import Foundation
 import PresentationUI
 import Testing
 @testable import ClipyApp
+
+struct PanelSubmitDecisionTests {
+    @Test("Return submits only after marked text settles")
+    func returnSubmissionDefersToIMEAndModifiedCommands() {
+        #expect(PanelSubmitDecision.shouldSubmit(
+            eventType: .keyDown,
+            keyCode: UInt16(kVK_Return),
+            modifierFlags: [],
+            hasMarkedText: false
+        ))
+        #expect(!PanelSubmitDecision.shouldSubmit(
+            eventType: .keyDown,
+            keyCode: UInt16(kVK_Return),
+            modifierFlags: [],
+            hasMarkedText: true
+        ))
+        #expect(!PanelSubmitDecision.shouldSubmit(
+            eventType: .keyDown,
+            keyCode: UInt16(kVK_Return),
+            modifierFlags: .command,
+            hasMarkedText: false
+        ))
+        #expect(!PanelSubmitDecision.shouldSubmit(
+            eventType: .keyUp,
+            keyCode: UInt16(kVK_ANSI_KeypadEnter),
+            modifierFlags: [],
+            hasMarkedText: false
+        ))
+    }
+}
 
 struct PopupPositionGeometryTests {
 

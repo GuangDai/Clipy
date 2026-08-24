@@ -93,6 +93,8 @@ def validate(
         errors.append(f"missing expected executable: {executable}")
     if not (app / "Contents" / "Resources" / "Assets.car").is_file():
         errors.append("archive is missing compiled Assets.car")
+    if (app / "Contents" / "_CodeSignature").exists():
+        errors.append("Card 16A archive must remain unsigned")
 
     nested_products = sorted(
         path.relative_to(archive).as_posix()
@@ -144,6 +146,7 @@ def validate(
         "INFOPLIST_KEY_LSApplicationCategoryType": EXPECTED_CATEGORY,
         "ASSETCATALOG_COMPILER_APPICON_NAME": EXPECTED_ICON,
         "MACOSX_DEPLOYMENT_TARGET": EXPECTED_DEPLOYMENT,
+        "CODE_SIGNING_ALLOWED": "NO",
     }
     for key, expected in expected_settings.items():
         _expect(settings.get(key), expected, f"build setting {key}", errors)

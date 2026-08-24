@@ -249,6 +249,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 onPreviewPlacementChange: { [weak self] placement in
                     self?.previewPlacement = placement
                 },
+                onSubmitSelection: { [weak self] in
+                    self?.submitPanelSelection()
+                },
                 onClosed: { [weak self] in self?.panelDidClose() }
             )
         }
@@ -260,6 +263,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let composition {
             panelSurfaceState?.beginSession(rows: composition.viewState.rows)
         }
+    }
+
+    private func submitPanelSelection() {
+        guard let composition,
+              let reference = panelSurfaceState?.selectedReference(
+                  in: composition.viewState.rows
+              )
+        else { return }
+        composition.viewState.requestPasteFromDisplayedRow(reference)
     }
 
     /// Closes the panel (idempotent; the panel's close fires

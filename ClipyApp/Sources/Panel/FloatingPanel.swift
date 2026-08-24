@@ -10,8 +10,27 @@
 /// resize/preview-split machinery is deliberately not replicated); the only
 /// width change is the preview column, driven by `setPreviewVisible(_:)`.
 import AppKit
+import Carbon.HIToolbox
 import PresentationUI
 import SwiftUI
+
+enum PanelSubmitDecision {
+    static func shouldSubmit(
+        eventType: NSEvent.EventType,
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags,
+        hasMarkedText: Bool
+    ) -> Bool {
+        let disallowedModifiers: NSEvent.ModifierFlags = [
+            .command, .control, .option,
+        ]
+        return eventType == .keyDown
+            && (keyCode == UInt16(kVK_Return)
+                || keyCode == UInt16(kVK_ANSI_KeypadEnter))
+            && modifierFlags.intersection(disallowedModifiers).isEmpty
+            && !hasMarkedText
+    }
+}
 
 /// The panel window. One instance per app run, created lazily on first
 /// open and reused — closing only hides it (Maccy's model: the SwiftUI
@@ -38,6 +57,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// Invoked after every close (AppDelegate bookkeeping: deactivate the
     /// view state, reset the preview pane).
     private let onPanelClosed: () -> Void
+    private let onSubmitSelection: () -> Void
 
     /// Publishes geometry's placement decision to AppDelegate so the hosted
     /// HistoryPanelView orders its columns from the same value.
@@ -51,10 +71,12 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         rootView: PanelRootView,
         previewState: PreviewPaneState,
         onPreviewPlacementChange: @escaping (PreviewPlacement) -> Void,
+        onSubmitSelection: @escaping () -> Void = {},
         onClosed: @escaping () -> Void
     ) {
         self.previewState = previewState
         self.onPreviewPlacementChange = onPreviewPlacementChange
+        self.onSubmitSelection = onSubmitSelection
         self.onPanelClosed = onClosed
         super.init(
             contentRect: NSRect(
@@ -97,6 +119,25 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// `canBecomeKey` override — the whole point of the non-activating
     /// panel technique).
     override var canBecomeKey: Bool { true }
+
+    /// Window-owned Return routing keeps the behavior independent of which
+    /// SwiftUI child currently owns first responder. Marked text always goes
+    /// back to AppKit's field editor; only an unmodified settled Return enters
+    /// the product paste intent (REVIEW Card 14A/15).
+    override func sendEvent(_ event: NSEvent) {
+        let hasMarkedText = (firstResponder as? NSTextInputClient)?
+            .hasMarkedText() ?? false
+        guard PanelSubmitDecision.shouldSubmit(
+            eventType: event.type,
+            keyCode: event.keyCode,
+            modifierFlags: event.modifierFlags,
+            hasMarkedText: hasMarkedText
+        ) else {
+            super.sendEvent(event)
+            return
+        }
+        onSubmitSelection()
+    }
 
     // MARK: - Open / close
 

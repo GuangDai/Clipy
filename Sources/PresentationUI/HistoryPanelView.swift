@@ -230,6 +230,16 @@ public final class HistoryPanelSurfaceState {
             direction: direction
         )
     }
+
+    /// Exact executable selection for the AppKit window's IME-aware Return
+    /// routing. The row must still exist in the authoritative display; the
+    /// ViewState repeats the same fence before publishing the paste intent.
+    public func selectedReference(
+        in rows: [HistoryRow]
+    ) -> HistoryItemReference? {
+        guard let selection else { return nil }
+        return rows.first(where: { $0.item.id == selection })?.item
+    }
 }
 
 /// The composition point ClipyApp hosts inside its floating panel window.
@@ -311,6 +321,9 @@ public struct HistoryPanelView: View {
             guard surfaceState.isSessionActive else { return }
             surfaceState.reconcileSessionSelection(rows: viewState.rows)
             isSearchFieldFocused = true
+        }
+        .onChange(of: surfaceState.isSessionActive) { _, isActive in
+            if !isActive { isSearchFieldFocused = false }
         }
         .onChange(of: surfaceState.selection) { _, newSelection in
             previewState.handleSelectionChange(

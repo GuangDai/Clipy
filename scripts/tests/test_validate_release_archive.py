@@ -61,6 +61,7 @@ class ReleaseArchiveValidationTests(unittest.TestCase):
             "INFOPLIST_KEY_LSApplicationCategoryType": "public.app-category.utilities",
             "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon",
             "MACOSX_DEPLOYMENT_TARGET": "26.0",
+            "CODE_SIGNING_ALLOWED": "NO",
             "ARCHS": "arm64",
             "CODE_SIGN_ENTITLEMENTS": "ClipyApp/Config/ClipyApp.entitlements",
         }
@@ -115,6 +116,20 @@ class ReleaseArchiveValidationTests(unittest.TestCase):
         self.assertTrue(any("Assets.car" in error for error in errors))
         self.assertTrue(any("ARCHS" in error for error in errors))
         self.assertTrue(any("product set" in error for error in errors))
+
+    def test_signature_and_signing_setting_are_rejected(self) -> None:
+        (self.app / "Contents" / "_CodeSignature").mkdir()
+        self._write_settings(CODE_SIGNING_ALLOWED="YES")
+        errors = self._errors()
+        self.assertTrue(any("unsigned" in error for error in errors))
+        self.assertTrue(any("CODE_SIGNING_ALLOWED" in error for error in errors))
+
+    def test_approved_entitlements_source_is_explicitly_empty(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        entitlements = plistlib.loads(
+            (root / "ClipyApp/Config/ClipyApp.entitlements").read_bytes()
+        )
+        self.assertEqual(entitlements, {})
 
 
 class ReleaseArchiveWorkflowContractTests(unittest.TestCase):
