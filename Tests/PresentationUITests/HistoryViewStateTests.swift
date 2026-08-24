@@ -946,6 +946,10 @@ struct HistoryViewStateTests {
             )
         )
         let state = HistoryViewState(history: history)
+        var committedRemovalAnnouncements = 0
+        state.onCommittedUserRemoval = {
+            committedRemovalAnnouncements += 1
+        }
         state.activate()
         try #require(await pollUntil { state.rows.count == 2 })
 
@@ -970,8 +974,32 @@ struct HistoryViewStateTests {
         #expect(state.rows == [survivor])
         #expect(!state.hasNextPage)
         #expect(!state.isLoadingPage)
+        #expect(committedRemovalAnnouncements == 1)
 
         state.deactivate()
+    }
+
+    @Test func unchangedAndFailedRemoveDoNotAnnounceCommit() async throws {
+        let itemID = HistoryItemID(
+            rawValue: UUID(
+                uuidString: "00000000-0000-0000-0000-000000009B12"
+            )!
+        )
+        let history = ScriptedHistory(performReceipt: .unchanged)
+        let state = HistoryViewState(history: history)
+        var committedRemovalAnnouncements = 0
+        state.onCommittedUserRemoval = {
+            committedRemovalAnnouncements += 1
+        }
+
+        _ = try await state.removeAwaitingReceipt(itemID)
+        #expect(committedRemovalAnnouncements == 0)
+
+        await history.setPerformFailure(.temporarilyUnavailable(.storeLocked))
+        await #expect(throws: HistoryFailure.self) {
+            _ = try await state.removeAwaitingReceipt(itemID)
+        }
+        #expect(committedRemovalAnnouncements == 0)
     }
 
     /// Held pin metadata may trail a committed Unpin. Clear Unpinned therefore

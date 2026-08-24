@@ -14,7 +14,7 @@ struct AppIntentFailureTests {
             query: "[private-query",
             mode: .regexp,
             limit: 20,
-            history: support.facade,
+            history: support.ingress,
             dependencyManager: support.manager
         )
 
@@ -32,7 +32,7 @@ struct AppIntentFailureTests {
         try await support.history.revokeConnection(connectionID)
         let intent = GetItemDetailsIntent(
             itemID: support.itemID.description,
-            history: support.facade,
+            history: support.ingress,
             dependencyManager: support.manager
         )
 
@@ -48,7 +48,7 @@ struct AppIntentFailureTests {
             query: "[private-query",
             mode: .regexp,
             limit: 20,
-            history: support.facade,
+            history: support.ingress,
             dependencyManager: support.manager
         )
 
@@ -65,7 +65,7 @@ struct AppIntentFailureTests {
         let absentID = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"
         let intent = GetItemDetailsIntent(
             itemID: absentID,
-            history: support.facade,
+            history: support.ingress,
             dependencyManager: support.manager
         )
 
@@ -90,7 +90,7 @@ struct AppIntentFailureTests {
         )
         let intent = GetItemDetailsIntent(
             itemID: "not-an-identity",
-            history: support.facade,
+            history: support.ingress,
             dependencyManager: support.manager
         )
         let auditBefore = try await support.history.auditLog(since: 1).filter {

@@ -9,7 +9,7 @@ import Testing
 
 struct AppIntentTestSupport {
     let history: SwiftDataHistory
-    let facade: ExternalHistoryFacade
+    let ingress: AppIntentHistoryIngress
     let manager: AppDependencyManager
     let itemID: HistoryItemID
 
@@ -42,11 +42,12 @@ struct AppIntentTestSupport {
         }
 
         let facade = history.makeAppIntentsHistoryFacade()
+        let ingress = AppIntentHistoryIngress(facade: facade)
         let manager = AppDependencyManager()
-        manager.add(dependency: facade)
+        manager.add(dependency: ingress)
         return Self(
             history: history,
-            facade: facade,
+            ingress: ingress,
             manager: manager,
             itemID: reference.id
         )

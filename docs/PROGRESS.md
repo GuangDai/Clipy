@@ -12,8 +12,8 @@
 > they are cited here, never restated as new semantics.
 
 **Audit baseline:** `8f316c9` (2026-08-02). **Current landed baseline:**
-`master` through [PR #33](https://github.com/GuangDai/Clipy/pull/33) / merge
-`ffd0e9f` (2026-08-24). Steps 0–9 are
+`master` through [PR #34](https://github.com/GuangDai/Clipy/pull/34) / merge
+`f48d87f` (2026-08-24). Steps 0–9 are
 implemented and CI-green;
 M2/state 2 is complete. Step 9 (product wiring: PasteboardAdapter +
 PresentationUI + ClipyApp composition) is done, including its post-step-9
@@ -24,18 +24,20 @@ cursor/status-item/center/last-position placement, dwell-driven preview pane)
 rather than a SwiftUI `MenuBarExtra`. M3/state 3 (packaging, accessibility,
 localization, product acceptance per Part VI §11) remains open.
 
-**Current CI provenance (2026-08-24):** the PR #33 merge head is green across
+**Current CI provenance (2026-08-24):** the PR #34 merge head is green across
 Lint + source gates, SwiftPM build + test, and XcodeGen generate + app
 build/test at
-[run 32682682345](https://github.com/GuangDai/Clipy/actions/runs/32682682345).
-PR #33 resolves `DEC-PREVIEW-TARGET`, adds the concrete package-only
-ContentPreview deep module, removes PresentationUI ImageIO/CGImage crossings,
-and closes its bounded exact text/PNG plus lifecycle/native-slot proofs. Its
-final PR run
-[32682438863](https://github.com/GuangDai/Clipy/actions/runs/32682438863) and
+[run 32684916238](https://github.com/GuangDai/Clipy/actions/runs/32684916238).
+PR #34 restores the manual-only exact/scale evidence caller and scale-phase
+liveness contract. Its final PR run
+[32684566664](https://github.com/GuangDai/Clipy/actions/runs/32684566664) and
 master push run
-[32682682345](https://github.com/GuangDai/Clipy/actions/runs/32682682345)
-passed all three correctness jobs.
+[32684916238](https://github.com/GuangDai/Clipy/actions/runs/32684916238)
+passed all three correctness jobs. Manual run 32685185124 attempt 1 was blocked
+by the known `HistoryViewStateTests` runner slow-window cluster; attempt 2's
+same-SHA correctness is green, Exact A/B is green with
+`productionIntegrationEligible == true` and all 13 cases passing, and the
+5,000-row scale sibling remains in progress.
 No HistoryCore public-surface change required a symbol-snapshot run, and no
 performance/AB lane ran. The earlier PR #20 ordinary ad-hoc Release artifact passed the finite
 Card 5D symbol inventory at
@@ -1211,13 +1213,28 @@ test.
   ImageIO window drift to about 23 seconds, so the final branch restores the
   10-second failure bound and serializes the ThumbnailStore native/display
   owner suite instead.
-- **Batch 32 GOV-1 manual evidence caller is in progress:** the branch adds one
+- **Batch 32 GOV-1 manual evidence caller is landed:** PR #34 / merge
+  `f48d87f` adds one
   `workflow_dispatch`-only caller that invokes reusable same-SHA correctness
   before starting the exact-matcher and 5,000-row evidence siblings in
   parallel. The scale script is phase-dispatched again so Actions owns the
   historical 5/10/45/15/90/45-minute liveness guards, preserves the short
   Debug probe after a full-prepare cleanliness failure, skips long canonical
   work in that case, and uploads only an explicit artifact allowlist. A narrow
-  portable contract gate locks those facts. Until the caller exists on
-  `master` and both manual jobs actually run, this is source-only work and
-  supplies no performance evidence.
+  portable contract gate locks those facts. PR run 32684566664 and master run
+  32684916238 are correctness-green. Manual run 32685185124 attempt 2 has the
+  exact sibling green; its schema-v2 artifact reports all 13 decision cases
+  passing and `productionIntegrationEligible == true`. Scale is still running,
+  so GOV-1 remains Partial and no G2/G5/G8 or performance-budget claim exists.
+- **Batch 33 Card 9B + bounded accessibility leaves are in progress:** one
+  internal `AppIntentHistoryIngress` now joins the existing public Gateway
+  facade to `HistoryViewState` only after a positive external remove and
+  before the Intent returns. A real in-memory Authority test holds the
+  post-commit observation and proves exact row retirement at that ordering
+  boundary; a Presentation owner test carries the same purge through a parked
+  thumbnail flight. Panel-initiated committed Remove publishes one
+  content-free medium-priority announcement, while unchanged/failure remain
+  silent; the large image preview label uses literal decoded pixel dimensions.
+  This is unlanded source work until Batch 33 PR/master correctness. It does
+  not prove Siri/Shortcuts system invocation, AX tree, actual VoiceOver/FKA,
+  localization, WindowServer, or signed runtime.

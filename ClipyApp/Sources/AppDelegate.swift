@@ -345,12 +345,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// maps every open/unavailable failure to the content-free X.6 transient
     /// vocabulary; this method therefore keeps the app shell's richer error
     /// untouched while returning only the retained facade on success.
-    private func resolveAppIntentsHistoryFacade() async throws -> ExternalHistoryFacade {
+    private func resolveAppIntentsHistoryFacade() async throws -> AppIntentHistoryIngress {
         let opened = try await openOrAwaitComposition()
-        guard let facade = opened.appIntentsHistoryFacade else {
+        guard let ingress = opened.appIntentHistoryIngress else {
             throw ExternalFailure.temporarilyUnavailable(.storeLocked)
         }
-        return facade
+        return ingress
     }
 
     /// Installs the three one-way production callbacks. Capture health stays
@@ -365,6 +365,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         opened.onPasteFailed = { [weak self] failure in
             self?.pasteFailure = failure
+        }
+        opened.onHistoryItemRemoved = { [weak self] in
+            self?.accessibilityAnnouncement.announceHistoryItemRemoved()
         }
         opened.onCaptureHealthChanged = { [weak self] health in
             self?.receiveCaptureHealth(health)

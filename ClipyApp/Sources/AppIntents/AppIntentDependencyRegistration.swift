@@ -4,14 +4,13 @@
 /// docs/v2/V2-roadmap.md X.7 (`PLAY-PY-B0I`, `X-COMPILE-2/3/4`).
 import AppIntents
 import HistoryCore
-import HistoryStorage
 
-/// Registers the one connection-bound External History facade provider.
+/// Registers the one app-owned External History ingress provider.
 /// The async overload is intentional: App Intents may ask before the store
 /// has finished opening, and Swift 6 requires this provider to have explicit
 /// Sendable isolation rather than inheriting the caller's MainActor.
 enum AppIntentDependencyRegistration {
-    typealias Provider = @Sendable () async throws -> ExternalHistoryFacade
+    typealias Provider = @Sendable () async throws -> AppIntentHistoryIngress
 
     /// Production's only access to AppDependencyManager's global manager.
     /// AppDelegate calls this synchronously before beginning the store open.

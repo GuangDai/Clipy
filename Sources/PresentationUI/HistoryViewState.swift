@@ -123,6 +123,12 @@ public final class HistoryViewState {
     /// previews need no wiring.
     public var onPaste: @MainActor @Sendable (HistoryItemReference) -> Void = { _ in }
 
+    /// App-shell accessibility handoff for one user-initiated remove whose
+    /// committed receipt has already published its exact surface purge.
+    /// External/background mutations use their own ingress and never invoke
+    /// this callback, avoiding unsolicited or duplicate announcements.
+    public var onCommittedUserRemoval: @MainActor @Sendable () -> Void = {}
+
     // MARK: - Pagination/observation bookkeeping (private)
 
     /// The observe loop task; cancelled and replaced on every restart.
@@ -425,6 +431,14 @@ public final class HistoryViewState {
         publishDestructiveRetentionPurge(receipt)
     }
 
+    /// Composition-root handoff for the current external mutation set's only
+    /// content-destructive case. The app-owned ingress calls this after the
+    /// real Gateway has committed a positive remove and before the App Intent
+    /// returns; pin/unpin/no-op/failure never enter this seam (Card 9B).
+    public func acceptCommittedExternalRemoval(_ itemID: HistoryItemID) {
+        publishExactItemPurge(itemID)
+    }
+
     /// The authoritative configured retention state (docs/v2/V2-07-ux.md
     /// §5.2/§6.3) — the settings tabs' panel-open read, so every control
     /// opens at its persisted value instead of a neutral prefill (audit
@@ -619,6 +633,10 @@ public final class HistoryViewState {
             generation: generation,
             scope: scope
         )
+        if case (.remove, .removed(let count)) = (action, commit.outcome),
+           count > 0 {
+            onCommittedUserRemoval()
+        }
         if scope == .unpinned {
             // Pin state in the held page may trail a just-committed Unpin.
             // Clear every executable row and restart this exact query; only
@@ -640,6 +658,16 @@ public final class HistoryViewState {
         }
         let generation = (surfacePurge?.generation ?? 0) + 1
         surfacePurge = HistorySurfacePurge(generation: generation, scope: .all)
+    }
+
+    private func publishExactItemPurge(_ itemID: HistoryItemID) {
+        let scope = HistorySurfacePurge.Scope.item(itemID)
+        applyReceiptConfirmedRowPurge(scope)
+        let generation = (surfacePurge?.generation ?? 0) + 1
+        surfacePurge = HistorySurfacePurge(
+            generation: generation,
+            scope: scope
+        )
     }
 
     /// Retires executable list state for precise destructive scopes. Clear

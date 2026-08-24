@@ -42,13 +42,16 @@ struct AccessibilityAnnouncementOperations {
         self.postNotification = postNotification
     }
 
-    func post(_ message: String) {
+    func post(
+        _ message: String,
+        priority: NSAccessibilityPriorityLevel
+    ) {
         postNotification(
             NSApp as Any,
             .announcementRequested,
             [
                 .announcement: message,
-                .priority: NSAccessibilityPriorityLevel.high.rawValue,
+                .priority: priority.rawValue,
             ]
         )
     }
@@ -75,7 +78,15 @@ struct AccessibilityAnnouncement {
 
     func announceCaptureFailure(_ failure: ClipyCaptureFailure) {
         operations.post(
-            CaptureNoticePresentation.message(for: .failed(failure))
+            CaptureNoticePresentation.message(for: .failed(failure)),
+            priority: .high
+        )
+    }
+
+    func announceHistoryItemRemoved() {
+        operations.post(
+            "Item removed from history.",
+            priority: .medium
         )
     }
 }

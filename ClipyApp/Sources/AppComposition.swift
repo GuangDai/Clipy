@@ -126,13 +126,13 @@ final class AppComposition {
     /// path; never duplicated (01 §8).
     let history: any ClipboardHistory
 
-    /// The App Intents-only X.6 projection of the SAME production History
-    /// graph. Production open creates this immediately after
-    /// `SwiftDataHistory.open` returns; hosted compositions built from a
-    /// scripted `ClipboardHistory` deliberately have no external facade.
-    /// Keeping the value here prevents App Intents dependency resolution
-    /// from opening a second store or constructing a second writer.
-    let appIntentsHistoryFacade: ExternalHistoryFacade?
+    /// The App Intents-only app ingress over the SAME production History
+    /// graph. Production wraps X.6's connection-bound facade with the exact
+    /// committed-remove→surface join; hosted compositions built from a
+    /// scripted `ClipboardHistory` deliberately have no external ingress.
+    /// Keeping the value here prevents dependency resolution from opening a
+    /// second store or constructing a second writer (X.7 / Card 9B).
+    let appIntentHistoryIngress: AppIntentHistoryIngress?
 
     /// The NSPasteboard ↔ HistoryCore translator (01 §5.1/§5.6).
     let adapter: PasteboardAdapter
@@ -159,6 +159,10 @@ final class AppComposition {
     /// or unexpected failure always leaves the panel open. AppDelegate maps
     /// this hook to the panel's content-free failure banner.
     var onPasteFailed: ((ClipyPasteFailure) -> Void)?
+
+    /// One content-free, receipt-settled panel mutation result for the app
+    /// shell's accessibility boundary (REVIEW Card 15D).
+    var onHistoryItemRemoved: (@MainActor () -> Void)?
 
     /// Main-actor push seam for Card 6 capture health. The app shell receives
     /// an immutable, content-free snapshot only when its actual capacity or
@@ -279,13 +283,21 @@ final class AppComposition {
         initialCaptureAccessBehavior: PasteboardAccessBehavior? = nil
     ) {
         self.history = history
-        self.appIntentsHistoryFacade = appIntentsHistoryFacade
         self.adapter = adapter
         observer = PasteboardObserver(
             adapter: adapter,
             pollInterval: observerPollInterval
         )
-        viewState = HistoryViewState(history: history)
+        let viewState = HistoryViewState(history: history)
+        self.viewState = viewState
+        appIntentHistoryIngress = appIntentsHistoryFacade.map { facade in
+            AppIntentHistoryIngress(
+                facade: facade,
+                onCommittedRemoval: { [weak viewState] itemID in
+                    viewState?.acceptCommittedExternalRemoval(itemID)
+                }
+            )
+        }
         let accessBehavior = initialCaptureAccessBehavior
             ?? adapter.captureAccessBehavior
         captureAccessReducer = CaptureAccessReducer(
@@ -372,6 +384,9 @@ final class AppComposition {
         viewState.onPaste = { [weak self] item in
             self?.requestPaste(item)
         }
+        viewState.onCommittedUserRemoval = { [weak self] in
+            self?.onHistoryItemRemoved?()
+        }
 
         isStarted = true
 
@@ -410,6 +425,7 @@ final class AppComposition {
         reconcileCaptureObservation()
         viewState.deactivate()
         viewState.onPaste = { _ in }
+        viewState.onCommittedUserRemoval = {}
         pendingCapture = nil
         captureTask?.cancel()
         captureTask = nil
@@ -449,6 +465,7 @@ final class AppComposition {
     /// boundaries substituted, then drive the same started copy lane.
     static func makeForTesting(
         history: any ClipboardHistory,
+        appIntentsHistoryFacade: ExternalHistoryFacade? = nil,
         adapter: PasteboardAdapter,
         observerPollInterval: TimeInterval = 60,
         captureByteLimit: Int = HistoryLimits.standard.maximumCaptureBytes,
@@ -460,7 +477,7 @@ final class AppComposition {
     ) -> AppComposition {
         let composition = AppComposition(
             history: history,
-            appIntentsHistoryFacade: nil,
+            appIntentsHistoryFacade: appIntentsHistoryFacade,
             adapter: adapter,
             observerPollInterval: observerPollInterval,
             captureByteLimit: captureByteLimit,

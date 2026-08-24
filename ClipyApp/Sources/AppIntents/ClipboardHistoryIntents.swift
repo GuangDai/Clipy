@@ -5,7 +5,6 @@ import AppIntents
 import AppKit
 import Foundation
 import HistoryCore
-import HistoryStorage
 import PasteboardAdapter
 
 struct SearchHistoryIntent: AppIntent {
@@ -29,7 +28,7 @@ struct SearchHistoryIntent: AppIntent {
     )
     var limit: Int
 
-    @Dependency private var history: ExternalHistoryFacade
+    @Dependency private var history: AppIntentHistoryIngress
 
     init() {}
 
@@ -37,7 +36,7 @@ struct SearchHistoryIntent: AppIntent {
         query: String,
         mode: ClipboardSearchMode,
         limit: Int,
-        history: ExternalHistoryFacade,
+        history: AppIntentHistoryIngress,
         dependencyManager: AppDependencyManager
     ) {
         self.query = query
@@ -78,13 +77,13 @@ struct GetItemDetailsIntent: AppIntent {
     @Parameter(title: "Item ID", description: "Clipboard item identifier.")
     var itemID: String
 
-    @Dependency private var history: ExternalHistoryFacade
+    @Dependency private var history: AppIntentHistoryIngress
 
     init() {}
 
     init(
         itemID: String,
-        history: ExternalHistoryFacade,
+        history: AppIntentHistoryIngress,
         dependencyManager: AppDependencyManager
     ) {
         self.itemID = itemID
@@ -118,7 +117,7 @@ struct PasteItemIntent: AppIntent {
     @Parameter(title: "Item ID", description: "Clipboard item identifier.")
     var itemID: String
 
-    @Dependency private var history: ExternalHistoryFacade
+    @Dependency private var history: AppIntentHistoryIngress
 
     /// A Sendable name is the whole deterministic test seam. AppKit objects
     /// are created and consumed only inside the MainActor write below.
@@ -131,7 +130,7 @@ struct PasteItemIntent: AppIntent {
     init(
         itemID: String,
         pasteboardName: String,
-        history: ExternalHistoryFacade,
+        history: AppIntentHistoryIngress,
         dependencyManager: AppDependencyManager
     ) {
         self.itemID = itemID
@@ -169,13 +168,13 @@ struct PinItemIntent: AppIntent {
     @Parameter(title: "Item ID", description: "Clipboard item identifier.")
     var itemID: String
 
-    @Dependency private var history: ExternalHistoryFacade
+    @Dependency private var history: AppIntentHistoryIngress
 
     init() {}
 
     init(
         itemID: String,
-        history: ExternalHistoryFacade,
+        history: AppIntentHistoryIngress,
         dependencyManager: AppDependencyManager
     ) {
         self.itemID = itemID
@@ -210,13 +209,13 @@ struct UnpinItemIntent: AppIntent {
     @Parameter(title: "Item ID", description: "Clipboard item identifier.")
     var itemID: String
 
-    @Dependency private var history: ExternalHistoryFacade
+    @Dependency private var history: AppIntentHistoryIngress
 
     init() {}
 
     init(
         itemID: String,
-        history: ExternalHistoryFacade,
+        history: AppIntentHistoryIngress,
         dependencyManager: AppDependencyManager
     ) {
         self.itemID = itemID
@@ -253,13 +252,13 @@ struct RemoveItemIntent: AppIntent {
     @Parameter(title: "Item ID", description: "Clipboard item identifier.")
     var itemID: String
 
-    @Dependency private var history: ExternalHistoryFacade
+    @Dependency private var history: AppIntentHistoryIngress
 
     init() {}
 
     init(
         itemID: String,
-        history: ExternalHistoryFacade,
+        history: AppIntentHistoryIngress,
         dependencyManager: AppDependencyManager
     ) {
         self.itemID = itemID

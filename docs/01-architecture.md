@@ -45,7 +45,7 @@ There is no `DomainCore` target. The few values that must appear in both the cal
 | `HistoryStorage` | Public concrete adapter plus internal implementation | `SwiftDataHistory`, Authority actor, schema/codecs, fact loaders, version minting, ingest preparation, Signature Index, read projections, observation plumbing, thumbnail production, and the internal F1 server-credential Keychain owner | AppKit pasteboard, UI state, service location, client credential files, or transport |
 | `PasteboardAdapter` | Public adapter values used by the app | NSPasteboard observation/writes and translation to/from `HistoryCore` raw values | Deduplication, Canonical Content, fingerprints, persistence |
 | `PresentationUI` | Public UI assembly | View state and interactions over History DTOs; exact-reference/task/lifecycle fences around ContentPreview | `@Model`, Domain state, persistence rules, change-feed bookkeeping, ImageIO decode |
-| `ClipyApp` | Composition root | Concrete construction, lifecycle, paste orchestration, App Intents entry points, and dependency injection | Domain decisions or duplicate persistence paths |
+| `ClipyApp` | Composition root | Concrete construction, lifecycle, paste orchestration, App Intents entry points, dependency injection, and the app-local external-remove→surface-purge join | Domain decisions, Gateway policy, global event buses, or duplicate persistence paths |
 | `xxh3` | Package-internal C/ObjC++ sibling | 64-bit representation fingerprints | Item identity or final dedup decisions |
 | `Fuse` | External Swift library used internally | Threshold-based fuzzy matching inside `SearchWorker` | Public search score or cross-actor matcher state |
 | `HistoryPerfRunner` | Package executable, no product surface | Part VI §9 release-like workloads, machine metadata, and versioned fixtures | Caller APIs, alternate writers, production state, absolute-latency claims |
@@ -299,6 +299,12 @@ The Authority does not retain model objects between operations. Each isolated re
 - No adapter may import another adapter.
 - `AppIntents` is confined to `ClipyApp/Sources` and the explicitly hosted
   `ClipyIntegrationTests`; it must not enter any SwiftPM target.
+- The one registered App Intents dependency is the internal Sendable
+  `AppIntentHistoryIngress`: it contains the connection-bound public Storage
+  facade, delegates every read/write unchanged, and after only a positive
+  external remove awaits the existing MainActor exact-item surface purge
+  before returning. It owns no authorization, audit, model context, cache, or
+  general event stream.
 - No application-owned `.shared`, `.current`, or other mutable authoritative
   service locator. The sole framework-owned exception is exactly one
   `AppDependencyManager.shared.add(dependency:)` registration in

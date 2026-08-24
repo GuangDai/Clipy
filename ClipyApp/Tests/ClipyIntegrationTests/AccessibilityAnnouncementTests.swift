@@ -3,6 +3,10 @@
 /// records only content-free announcement text; no AX tree or assistive
 /// technology is required by this hosted seam.
 import AppKit
+import Foundation
+import HistoryCore
+import HistoryStorage
+import PasteboardAdapter
 import Testing
 @testable import ClipyApp
 
@@ -12,6 +16,7 @@ private final class AccessibilityAnnouncementRecorder {
         let targetsApplication: Bool
         let notification: NSAccessibility.Notification
         let message: String?
+        let priority: Int?
     }
 
     private(set) var records: [Record] = []
@@ -24,7 +29,8 @@ private final class AccessibilityAnnouncementRecorder {
             self?.records.append(Record(
                 targetsApplication: (element as AnyObject) === NSApp,
                 notification: notification,
-                message: userInfo?[.announcement] as? String
+                message: userInfo?[.announcement] as? String,
+                priority: userInfo?[.priority] as? Int
             ))
         }
     }
@@ -50,6 +56,10 @@ struct AccessibilityAnnouncementTests {
         #expect(recorder.records.count == 1)
         #expect(recorder.records[0].targetsApplication)
         #expect(recorder.records[0].notification == .announcementRequested)
+        #expect(
+            recorder.records[0].priority
+                == NSAccessibilityPriorityLevel.high.rawValue
+        )
         #expect(
             recorder.records[0].message
                 == "A clipboard change wasn't saved. Clipy can't retry it "
@@ -129,6 +139,61 @@ struct AccessibilityAnnouncementTests {
 
         #expect(recorder.records.count == 1)
         #expect(appDelegate.captureNotice == nil)
+    }
+
+    @Test("committed panel remove announces once; later not-found is silent")
+    @MainActor
+    func committedPanelRemovalAnnouncesOnce() async throws {
+        let history = try await SwiftDataHistory.open(
+            configuration: HistoryConfiguration(persistence: .memory)
+        )
+        let receipt = try await history.perform(.capture(ClipboardCapture(
+            representations: [CapturedRepresentation(
+                typeIdentifier: "public.utf8-plain-text",
+                bytes: Data("remove-announcement".utf8)
+            )],
+            origin: CopyOriginObservation(
+                sourceApplication: "ClipyIntegrationTests",
+                lineageHint: nil
+            ),
+            observedAt: Date(timeIntervalSinceReferenceDate: 930_000_100)
+        )))
+        guard case .committed(let commit) = receipt,
+              case .inserted(let inserted) = commit.outcome
+        else {
+            Issue.record("expected inserted announcement target")
+            return
+        }
+        let pasteboard = ComposedSupport.makePasteboard()
+        pasteboard.clearContents()
+        let composition = AppComposition.makeForTesting(
+            history: history,
+            adapter: PasteboardAdapter(pasteboard: pasteboard)
+        )
+        defer { composition.stop() }
+        let recorder = AccessibilityAnnouncementRecorder()
+        let appDelegate = AppDelegate(
+            accessibilityAnnouncementOperations: recorder.operations
+        )
+        appDelegate.installCompositionForTesting(composition)
+
+        _ = try await composition.viewState.removeAwaitingReceipt(inserted.id)
+
+        #expect(recorder.records.count == 1)
+        #expect(recorder.records[0].targetsApplication)
+        #expect(recorder.records[0].notification == .announcementRequested)
+        #expect(recorder.records[0].message == "Item removed from history.")
+        #expect(
+            recorder.records[0].priority
+                == NSAccessibilityPriorityLevel.medium.rawValue
+        )
+
+        await #expect(throws: HistoryFailure.self) {
+            _ = try await composition.viewState.removeAwaitingReceipt(
+                inserted.id
+            )
+        }
+        #expect(recorder.records.count == 1)
     }
 
     private static func health(
