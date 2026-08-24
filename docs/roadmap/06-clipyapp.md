@@ -66,10 +66,11 @@
   controller's production start/stop lifecycle; General Settings receives
   framework-neutral current/unavailable state, the exact Show Colors advisory,
   and Retry/Reset intents. Chord recording remains outside this slice.
-- `ClipyIntegrationTests` + `PresentationUITests`: marked Return/Escape stays
-  with the current text responder; settled list-root Escape clears search then
-  closes, while Details and the editor retain their own dismissal behavior.
-  Synthetic hosted dispatch does not claim a physical CJK input-source matrix.
+- `ClipyIntegrationTests` + `PresentationUITests` + `ClipyUITests`: marked
+  Return/Escape stays with the current text responder; settled list-root
+  Escape clears search then closes, while the running Details/editor journeys
+  retain their own dismissal behavior. Synthetic hosted dispatch does not
+  claim a physical CJK input-source matrix.
 - `PresentationUITests` + `ClipyIntegrationTests`: only the current settled
   search generation's first authoritative page requests one content-free
   result-count announcement. Replacement snapshots, refresh, pagination, and

@@ -815,7 +815,10 @@ private func gatewayAuditCrash(storeURL: URL) async throws -> Never {
 /// this count (`V2-05` §4.5/§5.2).
 private func gatewayAuditVerify(storeURL: URL) async throws {
     let history = try await openHistory(at: storeURL)
-    let matching = try await history.auditLog(since: 0).filter {
+    // Sequence 1 is the retained floor after the seed phase's administration
+    // read. Start at that inclusive floor rather than below it; the frozen
+    // snapshot head, not `since`, is the exclusive bound.
+    let matching = try await history.auditLog(since: 1).filter {
         $0.operationKind == .readRecent
     }
     guard matching.count == 1,

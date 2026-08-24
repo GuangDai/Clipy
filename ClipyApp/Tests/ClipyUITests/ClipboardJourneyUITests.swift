@@ -128,7 +128,7 @@ final class ClipboardJourneyUITests: XCTestCase {
         XCTAssertTrue(shortcutStatus.waitForExistence(timeout: 5))
         XCTAssertTrue(shortcutWarning.waitForExistence(timeout: 5))
         XCTAssertEqual(
-            shortcutWarning.label,
+            accessibilityText(of: shortcutWarning),
             "This shortcut is also the standard Show Colors shortcut."
         )
         XCTAssertTrue(shortcutReset.waitForExistence(timeout: 5))
@@ -215,6 +215,16 @@ final class ClipboardJourneyUITests: XCTestCase {
             "\(context) did not scroll into view\n\(app.debugDescription)"
         )
         return result
+    }
+
+    /// SwiftUI Text commonly exposes its literal through AXValue on macOS;
+    /// explicit labels remain the bridge fallback.
+    @MainActor
+    private func accessibilityText(of element: XCUIElement) -> String {
+        if let value = element.value as? String, !value.isEmpty {
+            return value
+        }
+        return element.label
     }
 
     @MainActor

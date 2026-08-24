@@ -128,6 +128,43 @@ final class DetailsMutationJourneyUITests: XCTestCase {
             message: "Details did not load the target's initial unpinned state."
         ) else { return }
 
+        // UI-7: settled Escape belongs to the rendered Details destination,
+        // not the panel root. It pops back to the same live list session and
+        // leaves both retained rows intact. Re-enter through the same public
+        // row/menu path before continuing the mutation journey.
+        app.typeKey(.escape, modifierFlags: [])
+        guard assertEventually(
+            {
+                !detailsRoot.exists
+                    && panel.exists
+                    && rows.count == 2
+                    && targetRow.exists
+                    && targetRow.isHittable
+            },
+            in: app,
+            message: "Settled Details Escape did not return to the live list."
+        ) else { return }
+        targetRow.rightClick()
+        guard assertEventually(
+            { showDetails.exists && showDetails.isHittable },
+            in: app,
+            message: "The target row did not reopen its Show Details menu action."
+        ) else { return }
+        showDetails.click()
+        guard assertEventually(
+            {
+                detailsRoot.exists
+                    && pinStatus.exists
+                    && self.accessibilityText(of: pinStatus) == "Unpinned"
+                    && pinToggle.exists
+                    && pinToggle.label == "Pin"
+                    && pinToggle.isHittable
+            },
+            in: app,
+            timeout: 10,
+            message: "Details did not reload after its Escape dismissal."
+        ) else { return }
+
         pinToggle.click()
         guard assertEventually(
             {
