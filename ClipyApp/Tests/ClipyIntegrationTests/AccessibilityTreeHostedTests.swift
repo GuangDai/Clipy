@@ -77,8 +77,7 @@ struct AccessibilityTreeHostedTests {
         }
         guard let row else {
             Issue.record(
-                "Row was absent from public AX children:\n"
-                    + accessibilityTreeDescription(hostingView)
+                "Row was absent from public AX children:\n\(accessibilityTreeDescription(hostingView))"
             )
             return
         }
