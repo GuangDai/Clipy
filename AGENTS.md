@@ -30,7 +30,7 @@ thumbnails.
   run on any platform; everything else (including
   `scripts/public_symbol_snapshot.sh`) needs macOS + `xcrun`.
 
-**Current state (2026-08-24, `master` through PR #37):** steps 0–9 are
+**Current state (2026-08-24, `master` through PR #38):** steps 0–9 are
 done and CI-green (scaffold + gates, `HistoryCore` public surface,
 `HistoryDomain` pure core, dependency pins, schema v1 + codecs,
 `HistoryAuthority` capture/mutations/reads/observation/thumbnail, product
@@ -64,8 +64,10 @@ unsigned Release archive identity source contract landed in PR #36 (merge
 XCUI leaf is green; Card 16A remains Partial pending a protected-tag archive.
 Batch 35's generic Local Automation enrollment rejection landed in PR #37
 (merge `dd433d9`; final PR run 32693281604; master run 32693554157). Batch 36
-is implementing the internal credential authentication kernel without
-publishing an ingress or transport.
+implemented the internal credential authentication kernel in PR #38 (merge
+`1834eca`; final PR run 32694144024 attempt 2; master run 32694673199) without
+publishing an ingress or transport. Batch 37 is extending the real XCUI tracer
+with running-app row accessibility role/label characterization.
 Both dispatch-only physical-evidence cells are green on `master` as of
 2026-08-23: the General pasteboard cross-process run 32632263996 and the
 Card 6B APFS ENOSPC capture-transaction run 32636093920 (the latter via
