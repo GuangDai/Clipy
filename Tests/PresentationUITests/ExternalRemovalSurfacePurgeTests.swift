@@ -17,9 +17,10 @@ struct ExternalRemovalSurfacePurgeTests {
             )!
         )
 
-        state.acceptCommittedExternalRemoval(removedID)
+        let published = state.acceptCommittedExternalRemoval(removedID)
 
         let purge = try #require(state.surfacePurge)
+        #expect(purge == published)
         #expect(purge.generation == 1)
         #expect(purge.scope == .item(removedID))
     }

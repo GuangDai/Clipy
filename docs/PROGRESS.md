@@ -38,8 +38,9 @@ by the known `HistoryViewStateTests` runner slow-window cluster; attempt 2's
 same-SHA correctness is green, Exact A/B is green with
 `productionIntegrationEligible == true` and all 13 cases passing, and the
 5,000-row scale sibling remains in progress.
-No HistoryCore public-surface change required a symbol-snapshot run, and no
-performance/AB lane ran. The earlier PR #20 ordinary ad-hoc Release artifact passed the finite
+No HistoryCore public-surface change required a symbol-snapshot run. The Exact
+A/B lane above did run; the separate performance-helper/proof lane did not,
+and scale remains in progress. The earlier PR #20 ordinary ad-hoc Release artifact passed the finite
 Card 5D symbol inventory at
 [release-surface run 32619756885](https://github.com/GuangDai/Clipy/actions/runs/32619756885).
 That dispatch proves zero matches for the 26 reviewed demangled literals in
@@ -1228,9 +1229,11 @@ test.
   so GOV-1 remains Partial and no G2/G5/G8 or performance-budget claim exists.
 - **Batch 33 Card 9B + bounded accessibility leaves are in progress:** one
   internal `AppIntentHistoryIngress` now joins the existing public Gateway
-  facade to `HistoryViewState` only after a positive external remove and
-  before the Intent returns. A real in-memory Authority test holds the
-  post-commit observation and proves exact row retirement at that ordering
+  facade to one AppDelegate-owned `HistoryPanelSurfaceState` through an
+  app-local relay only after a positive external remove and before the Intent
+  returns. A real in-memory Authority test holds the
+  post-commit observation and proves exact row retirement plus real surface
+  application at that ordering
   boundary; a Presentation owner test carries the same purge through a parked
   thumbnail flight. Panel-initiated committed Remove publishes one
   content-free medium-priority announcement, while unchanged/failure remain

@@ -32,7 +32,8 @@ struct AppIntentDependencyTests {
         ) {
             let history = try await openGate.awaitHistory(historyTask)
             return AppIntentHistoryIngress(
-                facade: history.makeAppIntentsHistoryFacade()
+                facade: history.makeAppIntentsHistoryFacade(),
+                onCommittedRemoval: { _ in }
             )
         }
 

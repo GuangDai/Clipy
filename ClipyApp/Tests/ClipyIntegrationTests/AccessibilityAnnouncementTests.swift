@@ -20,12 +20,14 @@ private final class AccessibilityAnnouncementRecorder {
     }
 
     private(set) var records: [Record] = []
+    var onRecord: (() -> Void)?
 
     var operations: AccessibilityAnnouncementOperations {
         AccessibilityAnnouncementOperations {
             [weak self] element,
             notification,
             userInfo in
+            self?.onRecord?()
             self?.records.append(Record(
                 targetsApplication: (element as AnyObject) === NSApp,
                 notification: notification,
@@ -175,6 +177,11 @@ struct AccessibilityAnnouncementTests {
         let appDelegate = AppDelegate(
             accessibilityAnnouncementOperations: recorder.operations
         )
+        var surfaceWasAppliedBeforeAnnouncement = false
+        recorder.onRecord = { [weak appDelegate] in
+            surfaceWasAppliedBeforeAnnouncement =
+                appDelegate?.panelSurfaceState?.appliedPurgeGeneration == 1
+        }
         appDelegate.installCompositionForTesting(composition)
 
         _ = try await composition.viewState.removeAwaitingReceipt(inserted.id)
@@ -183,6 +190,10 @@ struct AccessibilityAnnouncementTests {
         #expect(recorder.records[0].targetsApplication)
         #expect(recorder.records[0].notification == .announcementRequested)
         #expect(recorder.records[0].message == "Item removed from history.")
+        #expect(surfaceWasAppliedBeforeAnnouncement)
+        #expect(
+            appDelegate.panelSurfaceState?.appliedPurgeGeneration == 1
+        )
         #expect(
             recorder.records[0].priority
                 == NSAccessibilityPriorityLevel.medium.rawValue

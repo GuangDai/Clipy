@@ -18,8 +18,8 @@ import SwiftUI
 /// second History event stream: authoritative rows still arrive exclusively
 /// through `observe`; the signal only drops derived presentation state which
 /// must not survive a destructive/effective-content commit.
-package struct HistorySurfacePurge: Equatable {
-    package enum Scope: Equatable {
+public struct HistorySurfacePurge: Equatable, Sendable {
+    public enum Scope: Equatable, Sendable {
         case all
         case unpinned
         case item(HistoryItemID)
@@ -29,8 +29,8 @@ package struct HistorySurfacePurge: Equatable {
         )
     }
 
-    package let generation: Int
-    package let scope: Scope
+    public let generation: Int
+    public let scope: Scope
 
     package init(generation: Int, scope: Scope) {
         self.generation = generation
@@ -127,7 +127,8 @@ public final class HistoryViewState {
     /// committed receipt has already published its exact surface purge.
     /// External/background mutations use their own ingress and never invoke
     /// this callback, avoiding unsolicited or duplicate announcements.
-    public var onCommittedUserRemoval: @MainActor @Sendable () -> Void = {}
+    public var onCommittedUserRemoval:
+        @MainActor @Sendable (HistorySurfacePurge) -> Void = { _ in }
 
     // MARK: - Pagination/observation bookkeeping (private)
 
@@ -435,7 +436,9 @@ public final class HistoryViewState {
     /// content-destructive case. The app-owned ingress calls this after the
     /// real Gateway has committed a positive remove and before the App Intent
     /// returns; pin/unpin/no-op/failure never enter this seam (Card 9B).
-    public func acceptCommittedExternalRemoval(_ itemID: HistoryItemID) {
+    public func acceptCommittedExternalRemoval(
+        _ itemID: HistoryItemID
+    ) -> HistorySurfacePurge {
         publishExactItemPurge(itemID)
     }
 
@@ -629,13 +632,14 @@ public final class HistoryViewState {
             applyReceiptConfirmedRowPurge(scope)
         }
         let generation = (surfacePurge?.generation ?? 0) + 1
-        surfacePurge = HistorySurfacePurge(
+        let purge = HistorySurfacePurge(
             generation: generation,
             scope: scope
         )
+        surfacePurge = purge
         if case (.remove, .removed(let count)) = (action, commit.outcome),
            count > 0 {
-            onCommittedUserRemoval()
+            onCommittedUserRemoval(purge)
         }
         if scope == .unpinned {
             // Pin state in the held page may trail a just-committed Unpin.
@@ -660,14 +664,18 @@ public final class HistoryViewState {
         surfacePurge = HistorySurfacePurge(generation: generation, scope: .all)
     }
 
-    private func publishExactItemPurge(_ itemID: HistoryItemID) {
+    private func publishExactItemPurge(
+        _ itemID: HistoryItemID
+    ) -> HistorySurfacePurge {
         let scope = HistorySurfacePurge.Scope.item(itemID)
         applyReceiptConfirmedRowPurge(scope)
         let generation = (surfacePurge?.generation ?? 0) + 1
-        surfacePurge = HistorySurfacePurge(
+        let purge = HistorySurfacePurge(
             generation: generation,
             scope: scope
         )
+        surfacePurge = purge
+        return purge
     }
 
     /// Retires executable list state for precise destructive scopes. Clear

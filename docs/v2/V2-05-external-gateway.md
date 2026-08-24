@@ -514,7 +514,8 @@ X1 (`V2-00` §3) and X2 (`V2-00` §3) bundle onto one substrate:
    open, `ClipyApp` registers one asynchronous ingress provider into
    `AppDependencyManager.shared`; it awaits the same composition-open work as
    the UI. The ingress contains `makeAppIntentsHistoryFacade()`'s exact value
-   plus one MainActor committed-remove sink owned by the composition root
+   plus one MainActor committed-remove sink owned by the composition root;
+   that sink synchronously applies the one AppDelegate-owned real panel surface
    (§6.5); it owns no grant, audit, or History policy.
    Every write still delegates to `HistoryAuthority`. `@Dependency` is App
    Intents' mandated DI mechanism, NOT
@@ -2043,7 +2044,8 @@ durable read to the Authority, `V2-03` §6.2). The Storage-owned
 `ExternalHistoryFacade` remains the thin public `Sendable` value holding the
 gateway ref + baked-in `connectionID`. `ClipyApp` wraps that exact value in one
 internal `Sendable` `AppIntentHistoryIngress` solely to order a positive
-external remove before the already-existing panel surface purge (§6.5).
+external remove before the already-existing AppDelegate-owned real panel
+surface purge (§6.5).
 
 ### 6.3 Direct authoritative targeted access (no forwarding actor)
 
@@ -2178,7 +2180,8 @@ by four controls:
    `SwiftDataHistory` and never receives an Authority reference (see below).
    What is registered into `AppDependencyManager.shared` is one app-local
    **`AppIntentHistoryIngress`**. It contains the capability-scoped
-   `ExternalHistoryFacade` and a content-free MainActor removal sink. The
+   `ExternalHistoryFacade` and a content-free MainActor removal sink into the
+   one AppDelegate-owned `HistoryPanelSurfaceState`. The
    facade creates no `ModelContext` and routes every write back through
    `HistoryAuthority`; the sink runs only after `.remove(id)` returns
    `.removed(count > 0)` and before the Intent returns. Neither value can

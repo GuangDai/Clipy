@@ -113,6 +113,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// panel window (AppKit) — the single object both sides drive.
     let previewState = PreviewPaneState()
 
+    /// The one concrete surface shared by the AppKit composition boundary and
+    /// its SwiftUI HistoryPanelView. It exists before the composition becomes
+    /// externally resolvable, so committed external removal can purge it
+    /// synchronously even while the panel is closed.
+    private(set) var panelSurfaceState: HistoryPanelSurfaceState?
+
     /// The side selected from the panel's current screen geometry. The hosted
     /// HistoryPanelView reads this same value to order its columns (Card 9C).
     private(set) var previewPlacement: PreviewPlacement = .trailing
@@ -156,7 +162,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // ModelContainer or creates another History writer (V2-05 §6.5).
         AppIntentDependencyRegistration.registerProduction { [weak self] in
             guard let self else { throw CancellationError() }
-            return try await self.resolveAppIntentsHistoryFacade()
+            return try await self.resolveAppIntentHistoryIngress()
         }
 
         installStatusItem()
@@ -344,8 +350,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// App Intents' async dependency provider. The registration boundary
     /// maps every open/unavailable failure to the content-free X.6 transient
     /// vocabulary; this method therefore keeps the app shell's richer error
-    /// untouched while returning only the retained facade on success.
-    private func resolveAppIntentsHistoryFacade() async throws -> AppIntentHistoryIngress {
+    /// untouched while returning only the retained app ingress on success.
+    private func resolveAppIntentHistoryIngress() async throws -> AppIntentHistoryIngress {
         let opened = try await openOrAwaitComposition()
         guard let ingress = opened.appIntentHistoryIngress else {
             throw ExternalFailure.temporarilyUnavailable(.storeLocked)
@@ -353,10 +359,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return ingress
     }
 
-    /// Installs the three one-way production callbacks. Capture health stays
+    /// Installs the production owner-to-shell callbacks. Capture health stays
     /// a direct owner-to-shell push; there is no timer, toast bus, or generic
     /// health registry between the lane and its only UI consumer.
     private func installComposition(_ opened: AppComposition) {
+        let panelSurfaceState = HistoryPanelSurfaceState(
+            viewState: opened.viewState,
+            previewState: previewState
+        )
+        opened.installPanelSurface(panelSurfaceState)
+        self.panelSurfaceState = panelSurfaceState
         // Paste ⇒ close the panel (Maccy's paste-dismiss); the panel never
         // activates the app, so the paste target keeps focus.
         opened.onPasteCompleted = { [weak self] in

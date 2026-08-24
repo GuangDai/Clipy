@@ -19,8 +19,10 @@
 - **Dependency injection:** supplies `any ClipboardHistory` (production = `SwiftDataHistory`, previews = scripted adapter) to the UI without leaking Storage/Domain types (Part I §2, §4).
 - **External surface coherence:** one internal `AppIntentHistoryIngress`
   contains the existing connection-bound `ExternalHistoryFacade`. A positive
-  external remove awaits `HistoryViewState.acceptCommittedExternalRemoval`
-  before the Intent returns; pin/unpin/unchanged/failure do not purge. This is
+  external remove asks `HistoryViewState` to mint the exact purge, then awaits
+  the AppDelegate-owned real `HistoryPanelSurfaceState.apply` through one
+  app-local relay before the Intent returns; pin/unpin/unchanged/failure do not
+  purge. This is
   the composition join between two existing owners, not a second Gateway,
   writer, change feed, or global cache bus (REVIEW Card 9B).
 

@@ -947,7 +947,7 @@ struct HistoryViewStateTests {
         )
         let state = HistoryViewState(history: history)
         var committedRemovalAnnouncements = 0
-        state.onCommittedUserRemoval = {
+        state.onCommittedUserRemoval = { _ in
             committedRemovalAnnouncements += 1
         }
         state.activate()
@@ -988,7 +988,7 @@ struct HistoryViewStateTests {
         let history = ScriptedHistory(performReceipt: .unchanged)
         let state = HistoryViewState(history: history)
         var committedRemovalAnnouncements = 0
-        state.onCommittedUserRemoval = {
+        state.onCommittedUserRemoval = { _ in
             committedRemovalAnnouncements += 1
         }
 

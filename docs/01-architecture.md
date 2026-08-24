@@ -302,9 +302,9 @@ The Authority does not retain model objects between operations. Each isolated re
 - The one registered App Intents dependency is the internal Sendable
   `AppIntentHistoryIngress`: it contains the connection-bound public Storage
   facade, delegates every read/write unchanged, and after only a positive
-  external remove awaits the existing MainActor exact-item surface purge
-  before returning. It owns no authorization, audit, model context, cache, or
-  general event stream.
+  external remove awaits both exact purge publication and synchronous apply on
+  the one AppDelegate-owned `HistoryPanelSurfaceState` before returning. It
+  owns no authorization, audit, model context, cache, or general event stream.
 - No application-owned `.shared`, `.current`, or other mutable authoritative
   service locator. The sole framework-owned exception is exactly one
   `AppDependencyManager.shared.add(dependency:)` registration in

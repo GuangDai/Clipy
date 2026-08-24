@@ -13,7 +13,7 @@ struct AppIntentHistoryIngress: ExternalHistory, Sendable {
     init(
         facade: ExternalHistoryFacade,
         onCommittedRemoval:
-            @escaping @MainActor @Sendable (HistoryItemID) -> Void = { _ in }
+            @escaping @MainActor @Sendable (HistoryItemID) -> Void
     ) {
         self.facade = facade
         self.onCommittedRemoval = onCommittedRemoval

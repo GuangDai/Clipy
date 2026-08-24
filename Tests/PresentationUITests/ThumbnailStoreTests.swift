@@ -323,8 +323,8 @@ struct ThumbnailStoreTests {
         store.prefetch(unrelated)
         try #require(await pollUntil { await history.requestCount == 2 })
 
-        viewState.acceptCommittedExternalRemoval(removed.id)
-        surface.apply(try #require(viewState.surfacePurge))
+        let purge = viewState.acceptCommittedExternalRemoval(removed.id)
+        surface.apply(purge)
         #expect(store.purgeGeneration == 1)
         #expect(store.inFlightCount == 1)
 

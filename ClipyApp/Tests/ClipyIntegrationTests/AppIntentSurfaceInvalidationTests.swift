@@ -6,6 +6,7 @@ import Foundation
 import HistoryCore
 import HistoryStorage
 import PasteboardAdapter
+import PresentationUI
 import Testing
 @testable import ClipyApp
 
@@ -61,6 +62,11 @@ struct AppIntentSurfaceInvalidationTests {
             appIntentsHistoryFacade: base.makeAppIntentsHistoryFacade(),
             adapter: PasteboardAdapter(pasteboard: pasteboard)
         )
+        let panelSurface = HistoryPanelSurfaceState(
+            viewState: composition.viewState,
+            previewState: PreviewPaneState()
+        )
+        composition.installPanelSurface(panelSurface)
         defer {
             Task { await observedHistory.releasePostInitialObservation() }
             composition.stop()
@@ -84,6 +90,7 @@ struct AppIntentSurfaceInvalidationTests {
         #expect(result.value == true)
         await observedHistory.waitUntilPostInitialObservationIsHeld()
         #expect(composition.viewState.rows.map(\.item.id) == [survivor.id])
+        #expect(panelSurface.appliedPurgeGeneration == 1)
 
         // An already-unpinned survivor produces the Gateway's real
         // `.unchanged` shape. It must not disturb the exact removal result.
@@ -94,6 +101,7 @@ struct AppIntentSurfaceInvalidationTests {
         ).perform()
         #expect(unchanged.value == false)
         #expect(composition.viewState.rows.map(\.item.id) == [survivor.id])
+        #expect(panelSurface.appliedPurgeGeneration == 1)
 
         await observedHistory.releasePostInitialObservation()
         try #require(await ComposedSupport.waitFor {

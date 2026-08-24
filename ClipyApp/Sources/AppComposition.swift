@@ -144,6 +144,11 @@ final class AppComposition {
     /// The panel's state holder over HistoryCore DTOs (01 §6).
     let viewState: HistoryViewState
 
+    /// App-local synchronous consumer for the one real panel surface. The
+    /// ingress and user-receipt announcement paths both await/apply here
+    /// instead of relying on a later SwiftUI observation turn.
+    private let panelSurfacePurgeRelay: PanelSurfacePurgeRelay
+
     /// Invoked on the main actor after every SUCCESSFUL paste write —
     /// the composition root's panel-close hook (Maccy's paste-dismiss;
     /// the floating panel never activates the app, so the paste target
@@ -290,11 +295,16 @@ final class AppComposition {
         )
         let viewState = HistoryViewState(history: history)
         self.viewState = viewState
+        let panelSurfacePurgeRelay = PanelSurfacePurgeRelay(
+            viewState: viewState
+        )
+        self.panelSurfacePurgeRelay = panelSurfacePurgeRelay
         appIntentHistoryIngress = appIntentsHistoryFacade.map { facade in
             AppIntentHistoryIngress(
                 facade: facade,
-                onCommittedRemoval: { [weak viewState] itemID in
-                    viewState?.acceptCommittedExternalRemoval(itemID)
+                onCommittedRemoval: { [panelSurfacePurgeRelay] itemID in
+                    panelSurfacePurgeRelay
+                        .acceptCommittedExternalRemoval(itemID)
                 }
             )
         }
@@ -384,7 +394,8 @@ final class AppComposition {
         viewState.onPaste = { [weak self] item in
             self?.requestPaste(item)
         }
-        viewState.onCommittedUserRemoval = { [weak self] in
+        viewState.onCommittedUserRemoval = { [weak self] purge in
+            self?.panelSurfacePurgeRelay.apply(purge)
             self?.onHistoryItemRemoved?()
         }
 
@@ -425,7 +436,7 @@ final class AppComposition {
         reconcileCaptureObservation()
         viewState.deactivate()
         viewState.onPaste = { _ in }
-        viewState.onCommittedUserRemoval = {}
+        viewState.onCommittedUserRemoval = { _ in }
         pendingCapture = nil
         captureTask?.cancel()
         captureTask = nil
@@ -458,6 +469,13 @@ final class AppComposition {
         )
         publishCaptureAccessStateIfChanged()
         reconcileCaptureObservation()
+    }
+
+    /// Installs the AppDelegate-owned surface before App Intents dependency
+    /// resolution can publish a mutation result. Reinstallation is benign and
+    /// used by hosted composition tests with the same concrete owner type.
+    func installPanelSurface(_ surface: HistoryPanelSurfaceState) {
+        panelSurfacePurgeRelay.install(surface)
     }
 
 #if DEBUG
