@@ -64,14 +64,24 @@ struct AccessibilityTreeHostedTests {
         )
         panel.isReleasedWhenClosed = false
         panel.contentView = hostingView
-        panel.orderFront(nil)
+        NSApp.activate()
+        panel.makeKeyAndOrderFront(nil)
+        hostingView.needsLayout = true
         hostingView.layoutSubtreeIfNeeded()
+        hostingView.displayIfNeeded()
         defer { panel.close() }
 
         let identifier = "clipy.history.row.\(reference.id.description)"
-        let row = try #require(await ComposedSupport.waitForValue {
+        let row = await ComposedSupport.waitForValue(timeout: 5) {
             accessibilityElement(in: hostingView, identifier: identifier)
-        })
+        }
+        guard let row else {
+            Issue.record(
+                "Row was absent from public AX children:\n"
+                    + accessibilityTreeDescription(hostingView)
+            )
+            return
+        }
         #expect(row.accessibilityRole() == .button)
         let label = try #require(row.accessibilityLabel())
         #expect(label.contains(expectedText))
@@ -160,4 +170,27 @@ private func accessibilityElement(
         }
     }
     return nil
+}
+
+@MainActor
+private func accessibilityTreeDescription(
+    _ root: Any,
+    remainingDepth: Int = 8,
+    indentation: String = ""
+) -> String {
+    guard remainingDepth > 0,
+          let element = root as? any NSAccessibilityProtocol else {
+        return "\(indentation)<non-AX>\n"
+    }
+    var result = "\(indentation)role=\(String(describing: element.accessibilityRole()))"
+    result += " id=\(element.accessibilityIdentifier() ?? "nil")"
+    result += " label=\(element.accessibilityLabel() ?? "nil")\n"
+    for child in element.accessibilityChildren() ?? [] {
+        result += accessibilityTreeDescription(
+            child,
+            remainingDepth: remainingDepth - 1,
+            indentation: indentation + "  "
+        )
+    }
+    return result
 }
