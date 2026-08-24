@@ -10,6 +10,11 @@ import XCTest
 final class SearchAndAccessibilityJourneyUITests: XCTestCase {
     private var temporaryDirectory: URL?
 
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        continueAfterFailure = false
+    }
+
     override func tearDownWithError() throws {
         if let temporaryDirectory {
             try? FileManager.default.removeItem(at: temporaryDirectory)
@@ -40,8 +45,15 @@ final class SearchAndAccessibilityJourneyUITests: XCTestCase {
         XCTAssertTrue(clear.waitForExistence(timeout: 5))
         XCTAssertEqual(search.value as? String, "no-such-clipy-value")
 
+        XCTAssertTrue(
+            clear.isHittable,
+            "The visible Clear control must expose a hittable frame.\n\(clear.debugDescription)"
+        )
         clear.click()
-        XCTAssertTrue(waitUntil(timeout: 10) { !clear.exists })
+        XCTAssertTrue(
+            waitUntil(timeout: 10) { !clear.exists },
+            "Clear did not mutate the bound query.\n\(app.debugDescription)"
+        )
         XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 1 })
         XCTAssertEqual(search.value as? String, "")
         XCTAssertTrue(rows.element(boundBy: 0).label.contains(captured))
