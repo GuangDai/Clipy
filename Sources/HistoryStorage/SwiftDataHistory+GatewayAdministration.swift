@@ -15,7 +15,7 @@ extension SwiftDataHistory: GatewayAdminHistory {
             // before Authority admission, audit, clock, or ID minting.
             throw ExternalFailure.requestDenied(.invalidInput)
         }
-        try await authority.enrollConnection(
+        return try await authority.enrollConnection(
             kind: kind,
             displayName: displayName,
             credential: credential
