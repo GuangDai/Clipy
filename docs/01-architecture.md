@@ -146,6 +146,16 @@ while paused remain excluded; only a later generation enters capture. This is
 one `PasteboardObserver` implementation with a direct start option, not a
 second capture path (`DEC-OBSERVER-START`).
 
+`DEC-OBSERVER-START` chose import for process startup because an active,
+allowed launch is the beginning of the product's observation session; the
+baseline-only alternative was rejected because it would silently omit the
+complete value already current when that session begins. It chose baseline
+for Pause/inactivity restart because importing there would misrepresent a
+value copied during an explicitly excluded interval as newly observed. An
+explicit access Retry imports because the user has asked the stopped owner to
+re-attempt the current generation; an automatic observer restart never
+changes purpose by itself.
+
 Pause is one fixed five-minute, process-local privacy window (`CLIP-1`).
 `AppComposition` owns its sole `ContinuousClock` deadline together with the
 observer lifecycle; manual Resume, deadline expiry, and app stop

@@ -17,8 +17,11 @@
 /// atomically), §11 D24(a)/(b)/(c) (single commit, victim safety, the
 /// byte-budget failure producer).
 ///
-/// Every fixture crosses the public `SwiftDataHistory.perform` / real
-/// `HistoryAuthority.commitCapture` path, seeds policies by writing the
+/// Product-composition fixtures cross the public `SwiftDataHistory.perform` /
+/// real `HistoryAuthority.commitCapture` path. The DEC-CAPTURE-CLOCK skew
+/// discriminator directly constructs the same real Authority solely to
+/// inject a fixed `StorageClock`, the internal §6.4 test seam, and prove the
+/// capture lane does not consume it. Fixtures seed policies by writing the
 /// `RetentionExpansionConfigRow` through an INDEPENDENT container
 /// (`WSSupport.seedRetentionConfig` — behind the Authority's back, the R.3
 /// corruption-fixture stance, because the production `.setRetentionPolicies`
@@ -71,6 +74,56 @@ import Testing
 struct RetentionCaptureCompositionTests {
 
     // MARK: - Fixtures
+
+    /// A deliberately distinguishable Storage-owned time witness. Capture
+    /// uses this for stamped Storage timestamps, but DEC-CAPTURE-CLOCK keeps
+    /// R1 selection on the capture's finite `observedAt` fact.
+    private struct FixedCaptureClock: StorageClock {
+        let fixed: Date
+        func now() -> Date { fixed }
+    }
+
+    /// Starts the real single-writer Authority with the fixed internal clock;
+    /// no fake persistence writer or second capture implementation is used.
+    private static func makeCaptureAuthority(
+        storeURL: URL,
+        storageNow: Date
+    ) async throws -> HistoryAuthority {
+        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let authority = HistoryAuthority(
+            container: container,
+            storageClock: FixedCaptureClock(fixed: storageNow)
+        )
+        try await authority.performStartup(initialMaximumUnpinnedItems: 200)
+        return authority
+    }
+
+    /// Performs one prepared capture through the real Authority so the clock
+    /// discriminator exercises preparation, facts, Domain planning, stamping,
+    /// transaction, index delta, and publication in their production order.
+    @discardableResult
+    private static func authorityCapture(
+        _ text: String,
+        at seconds: Double,
+        in authority: HistoryAuthority
+    ) async throws -> HistoryItemReference {
+        let prepared = try await IngestPreparationActor().prepare(
+            WSSupport.textCapture(
+                text,
+                observedAt: Date(timeIntervalSinceReferenceDate: seconds),
+                source: "com.example.r4.clock"
+            )
+        )
+        let receipt = try await authority.commitCapture(prepared)
+        guard case let .committed(commit) = receipt,
+              case let .inserted(reference) = commit.outcome else {
+            Issue.record(
+                "R.4 clock setup: expected .committed with .inserted, got \(receipt)"
+            )
+            throw HistoryFailure.notFound(HistoryItemID(rawValue: UUID()))
+        }
+        return reference
+    }
 
     /// Performs one raw text capture and returns the inserted reference.
     @discardableResult
@@ -312,6 +365,60 @@ struct RetentionCaptureCompositionTests {
         let survivors = Set(try Self.retainedIDs(container))
         #expect(survivors == Set([b.id, primary.id]))
         #expect(!survivors.contains(a.id))
+    }
+
+    /// DEC-CAPTURE-CLOCK / DATA-5a discriminator. The Authority's fixed clock
+    /// is t=10,000 and R1 maxAge is 100. A past-skew capture at t=9,800 uses
+    /// cutoff 9,700 and therefore keeps a row exactly on that boundary; if
+    /// Storage admitted time controlled R1, cutoff 9,900 would retire it.
+    /// A later future-skew capture at t=10,200 uses cutoff 10,100 and retires
+    /// every prior unpinned row; if Storage time controlled R1, the row at
+    /// t=9,900 would remain on the strict boundary. Both halves therefore
+    /// distinguish the accepted observedAt rule from the rejected alternative.
+    @Test("capture R1 uses finite observedAt under past and future clock skew")
+    func r1CaptureUsesObservedAtRatherThanStorageClock() async throws {
+        let storeURL = WSSupport.tempStoreURL("r4-r1-capture-clock-skew")
+        defer { WSSupport.removeStore(storeURL) }
+        let storageNow = Date(timeIntervalSinceReferenceDate: 10_000)
+        let authority = try await Self.makeCaptureAuthority(
+            storeURL: storeURL,
+            storageNow: storageNow
+        )
+
+        let boundary = try await Self.authorityCapture(
+            "r4 clock boundary", at: 9_700, in: authority
+        )
+        let newer = try await Self.authorityCapture(
+            "r4 clock newer", at: 9_900, in: authority
+        )
+        try WSSupport.seedRetentionConfig(
+            storeURL: storeURL,
+            age: AgeRetention(maxAge: 100)
+        )
+
+        let pastPrimary = try await Self.authorityCapture(
+            "r4 clock past primary", at: 9_800, in: authority
+        )
+        let verification = try WSSupport.makeContainer(storeURL: storeURL)
+        #expect(
+            Set(try Self.retainedIDs(verification))
+                == Set([boundary.id, newer.id, pastPrimary.id])
+        )
+
+        let futurePrimary = try await Self.authorityCapture(
+            "r4 clock future primary", at: 10_200, in: authority
+        )
+        #expect(Set(try Self.retainedIDs(verification)) == Set([futurePrimary.id]))
+
+        // The same four commits stamp their HCR facts from StorageClock,
+        // proving observedAt controls R1 without taking ownership of
+        // Storage-minted timestamps.
+        let journalContext = ModelContext(verification)
+        let journalRows = try journalContext.fetch(
+            FetchDescriptor<HistoryChangeRecordRow>()
+        )
+        #expect(journalRows.count == 4)
+        #expect(journalRows.allSatisfy { $0.createdAt == storageNow })
     }
 
     // MARK: - R2-only minimal fixture (V2-02 §4.2 R2 bullet)

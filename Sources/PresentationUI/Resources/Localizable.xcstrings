@@ -1,0 +1,40 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "%lld results" : {
+      "comment" : "The exact number of search results.",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld result"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld results"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld+ results" : {
+      "comment" : "A lower-bound search result count; more results are available.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld+ results"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

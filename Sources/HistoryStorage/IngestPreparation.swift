@@ -115,7 +115,9 @@ internal actor IngestPreparationActor {
     /// (docs/06-cross-cutting.md §2); focused tests inject smaller bounds.
     private let limits: HistoryLimits
 
-    /// The configured transient/private framework type set (step 3).
+    /// The configured best-effort transient/private convention-string
+    /// denylist (step 3). It is neither an Apple framework guarantee nor a
+    /// complete inventory of producers' privacy behavior.
     private let transientTypeIdentifiers: Set<String>
 
     /// The representation fingerprint function — xxh3-64 in production.

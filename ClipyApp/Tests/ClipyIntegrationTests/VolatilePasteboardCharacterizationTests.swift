@@ -1,16 +1,20 @@
-/// DATA-9a named-candidate characterization (REVIEW `01-findings.md`
-/// DATA-9; todo map §4.5): private browser/editor pasteboard identifiers have
-/// no Apple stability or semantic contract, so this suite does not classify
-/// any identifier as ignorable. It records the current conservative product
-/// behavior through the composed path: private NSPasteboard -> real
-/// PasteboardAdapter freeze -> real in-memory SwiftDataHistory.
+/// DATA-9a candidate characterization (REVIEW `01-findings.md` DATA-9; todo
+/// map §4.5): unknown pasteboard identifiers have no Apple stability or
+/// semantic contract, so this suite does not classify any identifier as
+/// ignorable. It records the current conservative product behavior through
+/// the composed path: private NSPasteboard -> real PasteboardAdapter freeze ->
+/// real in-memory SwiftDataHistory.
 ///
-/// The names below come from third-party interoperability reports. The bytes
-/// are deliberately synthetic and content-free. Consequently these tests
-/// prove what Clipy does IF only one named candidate changes; they do not
-/// prove that Chrome, Safari, Notes, or any current producer emits that type,
-/// how often its bytes change, or that dropping it would preserve paste
-/// fidelity. DATA-9b remains a separate evidence-gated representation-role
+/// The named candidates below come from third-party interoperability reports;
+/// the four requested cases use explicitly synthetic unknown-UTI labels in a
+/// Clipy-owned test namespace. Every payload is synthetic and content-free.
+/// This proves only Canonical byte sensitivity: A and B remain distinct when
+/// that unknown representation changes, while an exact A replay coalesces.
+/// It does not prove that Chrome, Safari, Notes, a password manager, or any
+/// current producer emits a tested type, nor establish real-world volatility
+/// frequency or that dropping one would preserve paste fidelity. DATA-9a
+/// remains Partial pending authorized real-producer fixtures and frequency
+/// evidence; DATA-9b remains a separate evidence-gated representation-role
 /// decision.
 import AppKit
 import Foundation
@@ -20,46 +24,68 @@ import PasteboardAdapter
 import Testing
 
 private struct VolatilePasteboardCandidate: Sendable {
-    let producerLabel: String
+    let fixtureLabel: String
     let typeIdentifier: String
 }
 
 private let volatilePasteboardCandidates: [VolatilePasteboardCandidate] = [
+    // Explicitly synthetic unknown-UTI labels for the four requested cases.
+    // These are not additions to either product marker set and make no claim
+    // about a real application's current pasteboard declarations or the
+    // frequency with which any real representation changes.
     .init(
-        producerLabel: "Safari LinkPresentation candidate",
+        fixtureLabel: "synthetic unknown-UTI label (Chrome case)",
+        typeIdentifier: "com.clipy.tests.synthetic.chrome.bookkeeping"
+    ),
+    .init(
+        fixtureLabel: "synthetic unknown-UTI label (Safari case)",
+        typeIdentifier: "com.clipy.tests.synthetic.safari.bookkeeping"
+    ),
+    .init(
+        fixtureLabel: "synthetic unknown-UTI label (Notes case)",
+        typeIdentifier: "com.clipy.tests.synthetic.notes.bookkeeping"
+    ),
+    .init(
+        fixtureLabel: "synthetic unknown-UTI label (password-manager case)",
+        typeIdentifier: "com.clipy.tests.synthetic.password-manager.bookkeeping"
+    ),
+    // Named candidates remain characterization inputs only. Their presence
+    // here neither admits an ignore role nor claims current producer use.
+    .init(
+        fixtureLabel: "Safari LinkPresentation candidate",
         typeIdentifier: "com.apple.linkpresentation.metadata"
     ),
     .init(
-        producerLabel: "WebKit custom-data candidate",
+        fixtureLabel: "WebKit custom-data candidate",
         typeIdentifier: "com.apple.WebKit.custom-pasteboard-data"
     ),
     .init(
-        producerLabel: "Chromium custom-data candidate",
+        fixtureLabel: "Chromium custom-data candidate",
         typeIdentifier: "org.chromium.web-custom-data"
     ),
     .init(
-        producerLabel: "Chromium source-URL candidate",
+        fixtureLabel: "Chromium source-URL candidate",
         typeIdentifier: "org.chromium.source-url"
     ),
     .init(
-        producerLabel: "Chromium source-token candidate",
+        fixtureLabel: "Chromium source-token candidate",
         typeIdentifier: "org.chromium.internal.source-rfh-token"
     ),
     .init(
-        producerLabel: "Notes rich-text candidate",
+        fixtureLabel: "Notes rich-text candidate",
         typeIdentifier: "com.apple.notes.richtext"
     ),
 ]
 
 struct VolatilePasteboardCharacterizationTests {
 
-    /// For every named candidate, A and B have byte-identical visible text
-    /// and differ only in the candidate payload. Both therefore insert under
+    /// For every candidate, A and B have byte-identical visible text and
+    /// differ only in the candidate payload. Both therefore insert under
     /// today's all-representations Canonical semantics. Replaying exact A
-    /// then coalesces into A, proving the two-row result is caused by that
-    /// candidate-byte difference rather than observation time or source.
+    /// then coalesces into A. This is a byte-sensitivity proof, not producer-
+    /// emission or volatility-frequency evidence.
     @Test @MainActor
-    func namedCandidateByteChangesRemainDistinctCanonicalContent() async throws {
+    func candidateByteChangesRemainDistinctCanonicalContent() async throws {
         try ComposedSupport.requireUsablePasteboard()
 
         for (index, candidate) in volatilePasteboardCandidates.enumerated() {
@@ -85,7 +111,7 @@ struct VolatilePasteboardCharacterizationTests {
             let insertedA = try #require(
                 ComposedSupport.insertedReference(
                     from: receiptA,
-                    "DATA-9a \(candidate.producerLabel) generation A"
+                    "DATA-9a \(candidate.fixtureLabel) generation A"
                 )
             )
 
@@ -103,12 +129,12 @@ struct VolatilePasteboardCharacterizationTests {
             let insertedB = try #require(
                 ComposedSupport.insertedReference(
                     from: receiptB,
-                    "DATA-9a \(candidate.producerLabel) generation B"
+                    "DATA-9a \(candidate.fixtureLabel) generation B"
                 )
             )
             #expect(
                 insertedB.id != insertedA.id,
-                "\(candidate.producerLabel): changed candidate bytes insert a second item"
+                "\(candidate.fixtureLabel): changed candidate bytes insert a second item"
             )
 
             let replayedA = try Self.freeze(
@@ -125,12 +151,12 @@ struct VolatilePasteboardCharacterizationTests {
             let coalescedA = try #require(
                 ComposedSupport.coalescedReference(
                     from: replayReceipt,
-                    "DATA-9a \(candidate.producerLabel) exact replay"
+                    "DATA-9a \(candidate.fixtureLabel) exact replay"
                 )
             )
             #expect(
                 coalescedA.id == insertedA.id,
-                "\(candidate.producerLabel): exact A bytes still coalesce into A"
+                "\(candidate.fixtureLabel): exact A bytes still coalesce into A"
             )
 
             let page = try await history.browse(
@@ -143,15 +169,15 @@ struct VolatilePasteboardCharacterizationTests {
             )
             #expect(
                 page.rows.count == 2,
-                "\(candidate.producerLabel): A/B remain exactly two retained rows"
+                "\(candidate.fixtureLabel): A/B remain exactly two retained rows"
             )
             #expect(
                 copyCountByID[insertedA.id] == 2,
-                "\(candidate.producerLabel): exact A replay folds into A"
+                "\(candidate.fixtureLabel): exact A replay folds into A"
             )
             #expect(
                 copyCountByID[insertedB.id] == 1,
-                "\(candidate.producerLabel): changed B remains one distinct copy"
+                "\(candidate.fixtureLabel): changed B remains one distinct copy"
             )
         }
     }
@@ -169,41 +195,41 @@ struct VolatilePasteboardCharacterizationTests {
         let item = NSPasteboardItem()
         try #require(
             item.setData(Data(text.utf8), forType: .string),
-            "\(candidate.producerLabel): private pasteboard accepted text"
+            "\(candidate.fixtureLabel): private pasteboard accepted text"
         )
         try #require(
             item.setData(
                 candidateBytes,
                 forType: NSPasteboard.PasteboardType(candidate.typeIdentifier)
             ),
-            "\(candidate.producerLabel): private pasteboard accepted candidate bytes"
+            "\(candidate.fixtureLabel): private pasteboard accepted candidate bytes"
         )
         try #require(
             pasteboard.writeObjects([item]),
-            "\(candidate.producerLabel): private pasteboard accepted one complete item"
+            "\(candidate.fixtureLabel): private pasteboard accepted one complete item"
         )
 
         let capture = try #require(
             adapter.capture(observedAt: observedAt),
-            "\(candidate.producerLabel): adapter produced one complete capture"
+            "\(candidate.fixtureLabel): adapter produced one complete capture"
         )
         #expect(
             capture.representations.count == 2,
-            "\(candidate.producerLabel): text and candidate are both retained"
+            "\(candidate.fixtureLabel): text and candidate are both retained"
         )
         #expect(
             capture.representations.contains {
                 $0.typeIdentifier == ComposedSupport.plainTextTypeIdentifier
                     && $0.bytes == Data(text.utf8)
             },
-            "\(candidate.producerLabel): visible text is byte-exact"
+            "\(candidate.fixtureLabel): visible text is byte-exact"
         )
         #expect(
             capture.representations.contains {
                 $0.typeIdentifier == candidate.typeIdentifier
                     && $0.bytes == candidateBytes
             },
-            "\(candidate.producerLabel): named candidate is byte-exact"
+            "\(candidate.fixtureLabel): candidate is byte-exact"
         )
         return capture
     }

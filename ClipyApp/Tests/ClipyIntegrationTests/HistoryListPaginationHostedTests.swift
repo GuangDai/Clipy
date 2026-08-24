@@ -53,11 +53,14 @@ struct HistoryListPaginationHostedTests {
         )
         #expect(viewState.rows.map(\.item.id) == [expectedIDs[0]])
 
-        let hostedList = HostedHistoryList(
+        // Mount through PresentationUI's caller-visible panel seam. The
+        // concrete list is module implementation, and the panel owns its
+        // ThumbnailStore instead of making the app construct either (GOV-3).
+        let hostedPanel = HistoryPanelView(
             viewState: viewState,
-            thumbnails: ThumbnailStore(history: history)
+            previewState: PreviewPaneState()
         )
-        let hostingView = NSHostingView(rootView: hostedList)
+        let hostingView = NSHostingView(rootView: hostedPanel)
         hostingView.frame = NSRect(x: 0, y: 0, width: 400, height: 560)
         let window = NSWindow(
             contentRect: hostingView.frame,
@@ -82,23 +85,5 @@ struct HistoryListPaginationHostedTests {
         )
         #expect(viewState.rows.map(\.item.id) == expectedIDs)
         #expect(viewState.failure == nil)
-    }
-}
-
-@MainActor
-private struct HostedHistoryList: View {
-    let viewState: HistoryViewState
-    let thumbnails: ThumbnailStore
-
-    @State private var selection: HistoryItemID?
-
-    var body: some View {
-        HistoryListView(
-            viewState: viewState,
-            thumbnails: thumbnails,
-            isSearchFieldFocused: false,
-            selection: $selection,
-            onShowDetails: { _ in }
-        )
     }
 }

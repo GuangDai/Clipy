@@ -107,15 +107,27 @@ package struct SearchHeaderView: View {
     }
 
     /// A page cursor makes `count` a lower bound, not a total (Card 8C).
+    /// The exact-count key varies by plural in PresentationUI's catalog;
+    /// the cursor key stays explicitly plural because even `1+` is not one.
     package static func resultCountText(
         count: Int,
         hasNextPage: Bool,
         locale: Locale = .current
     ) -> String {
-        let number = LocalizedCountPresentation.number(count, locale: locale)
-        let displayedCount = hasNextPage ? "\(number)+" : number
-        let noun = count == 1 && !hasNextPage ? "result" : "results"
-        return "\(displayedCount) \(noun)"
+        if hasNextPage {
+            return String(
+                localized: "\(count)+ results",
+                bundle: .module,
+                locale: locale,
+                comment: "A lower-bound search result count; more results are available."
+            )
+        }
+        return String(
+            localized: "\(count) results",
+            bundle: .module,
+            locale: locale,
+            comment: "The exact number of search results."
+        )
     }
 
     // MARK: Mode picker
