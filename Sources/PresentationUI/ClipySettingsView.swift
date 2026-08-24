@@ -280,10 +280,16 @@ private struct GeneralSettingsTab: View {
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .accessibilityIdentifier(
+                    "clipy.settings.launch-at-login.approval-required"
+                )
                 Spacer(minLength: 8)
                 Button("Open Login Items Settings") {
                     settings.openSystemSettings()
                 }
+                .accessibilityIdentifier(
+                    "clipy.settings.launch-at-login.open-system-settings"
+                )
             }
         case .unavailable:
             Label(
@@ -292,6 +298,9 @@ private struct GeneralSettingsTab: View {
             )
             .font(.caption)
             .foregroundStyle(.secondary)
+            .accessibilityIdentifier(
+                "clipy.settings.launch-at-login.unavailable"
+            )
         }
 
         if settings.operationFailed {
@@ -301,6 +310,9 @@ private struct GeneralSettingsTab: View {
             )
             .font(.caption)
             .foregroundStyle(.red)
+            .accessibilityIdentifier(
+                "clipy.settings.launch-at-login.operation-failed"
+            )
         }
     }
 
@@ -477,6 +489,12 @@ private struct RetentionSettingsTab: View {
                         isValid: draft.ageInputIsValid,
                         range: RetentionSettingsDraft.ageDaysRange
                     )
+                    Text(RetentionSettingsDraft.ageEnforcementExplanation)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier(
+                            "clipy.settings.retention.age-enforcement"
+                        )
                 }
                 Section("Storage") {
                     Toggle("Limit storage budget", isOn: storageEnabled)

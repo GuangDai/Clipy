@@ -7,9 +7,11 @@
 /// private executor.
 ///
 /// Every test drives the normal Authority commit API and asserts the uniform
-/// §16 `.persistence(.transaction)` boundary mapping plus rollback of rows and
-/// Change Position. `PageCursorCodecTests` independently owns the cursor half
-/// of `defensive-transaction-guards-and-cursor-codec-untested-cluster`.
+/// §16 `.persistence(.transaction)` boundary mapping, rollback of rows and
+/// Change Position, and exactly zero publications in the failed operation's
+/// one-publication-maximum window. `PageCursorCodecTests` independently owns
+/// the cursor half of
+/// `defensive-transaction-guards-and-cursor-codec-untested-cluster`.
 import Foundation
 import HistoryCore
 import HistoryDomain
@@ -59,9 +61,14 @@ private static func expectCreateGuardRollback(
     )
 
     await authority.setTransactionFailureInjection(injection)
+    let publicationProbe = await SingleOperationInvalidationPublicationProbe.begin(
+        on: authority
+    )
     await #expect(throws: HistoryFailure.persistence(.transaction)) {
         try await authority.commitCapture(bundle)
     }
+    let publications = try await publicationProbe.finish(on: authority)
+    #expect(publications.count == 0)
 
     let verification = try WSSupport.makeContainer(storeURL: storeURL)
     #expect(try WSSupport.fetchRows(verification).isEmpty)
@@ -112,9 +119,14 @@ private static func expectCreateGuardRollback(
     )
 
     await authority.setTransactionFailureInjection(.missingRow)
+    let publicationProbe = await SingleOperationInvalidationPublicationProbe.begin(
+        on: authority
+    )
     await #expect(throws: HistoryFailure.persistence(.transaction)) {
         try await authority.commitCapture(coalesceBundle)
     }
+    let publications = try await publicationProbe.finish(on: authority)
+    #expect(publications.count == 0)
 
     let verification = try WSSupport.makeContainer(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(verification)
@@ -157,9 +169,14 @@ private static func expectCreateGuardRollback(
     let bundle = try await revisionPreparation.prepare(request, from: snapshot)
 
     await authority.setTransactionFailureInjection(.contentVersionMismatch)
+    let publicationProbe = await SingleOperationInvalidationPublicationProbe.begin(
+        on: authority
+    )
     await #expect(throws: HistoryFailure.persistence(.transaction)) {
         try await authority.commitRevision(request, bundle)
     }
+    let publications = try await publicationProbe.finish(on: authority)
+    #expect(publications.count == 0)
 
     let verification = try WSSupport.makeContainer(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(verification)
@@ -195,9 +212,14 @@ private static func expectCreateGuardRollback(
     )
 
     await authority.setTransactionFailureInjection(.finalPinOrderViolated)
+    let publicationProbe = await SingleOperationInvalidationPublicationProbe.begin(
+        on: authority
+    )
     await #expect(throws: HistoryFailure.persistence(.transaction)) {
         try await authority.commitPinnedPlacement(reference.id, .last)
     }
+    let publications = try await publicationProbe.finish(on: authority)
+    #expect(publications.count == 0)
 
     let verification = try WSSupport.makeContainer(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(verification)

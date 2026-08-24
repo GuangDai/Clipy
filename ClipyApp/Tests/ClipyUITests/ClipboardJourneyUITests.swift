@@ -7,12 +7,19 @@ import XCTest
 
 final class ClipboardJourneyUITests: XCTestCase {
     private var temporaryDirectory: URL?
+    private var loginItemsSettingsMarkerURL: URL?
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        continueAfterFailure = false
+    }
 
     override func tearDownWithError() throws {
         if let temporaryDirectory {
             try? FileManager.default.removeItem(at: temporaryDirectory)
         }
         temporaryDirectory = nil
+        loginItemsSettingsMarkerURL = nil
         try super.tearDownWithError()
     }
 
@@ -104,15 +111,98 @@ final class ClipboardJourneyUITests: XCTestCase {
     }
 
     @MainActor
-    func testSettingsExposeLaunchControlAndConfirmStrictAgeRetention() throws {
-        let app = try launchApp(capturing: "clipy-ui-settings-original")
+    func testSettingsExposeLaunchStatesAndConfirmStrictAgeRetention() throws {
+        let app = try launchApp(
+            capturing: "clipy-ui-settings-original",
+            launchAtLoginRequiresApproval: true
+        )
         defer { app.terminate() }
+        let loginItemsSettingsMarker = try XCTUnwrap(
+            loginItemsSettingsMarkerURL
+        )
 
         app.typeKey(",", modifierFlags: .command)
         let launchAtLogin = app.switches[
             "clipy.settings.launch-at-login"
         ]
         XCTAssertTrue(launchAtLogin.waitForExistence(timeout: 10))
+        XCTAssertTrue(launchAtLogin.isEnabled)
+        XCTAssertTrue(launchAtLogin.isHittable)
+        XCTAssertEqual(launchAtLogin.value as? Int, 1)
+
+        let approvalRequired = app.descendants(matching: .any)[
+            "clipy.settings.launch-at-login.approval-required"
+        ]
+        XCTAssertTrue(approvalRequired.waitForExistence(timeout: 5))
+        XCTAssertEqual(
+            accessibilityText(of: approvalRequired),
+            "Approval is required in System Settings."
+        )
+
+        let openLoginItemsSettings = app.buttons[
+            "clipy.settings.launch-at-login.open-system-settings"
+        ]
+        XCTAssertTrue(openLoginItemsSettings.waitForExistence(timeout: 5))
+        XCTAssertTrue(openLoginItemsSettings.isHittable)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: loginItemsSettingsMarker.path
+        ))
+        openLoginItemsSettings.click()
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            FileManager.default.fileExists(
+                atPath: loginItemsSettingsMarker.path
+            )
+        })
+
+        // Approval is registered-but-not-enabled. The on Toggle must still
+        // let the user unregister through the production controller, after
+        // which the approval copy and recovery action disappear together.
+        launchAtLogin.click()
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            launchAtLogin.exists
+                && launchAtLogin.value as? Int == 0
+                && !approvalRequired.exists
+                && !openLoginItemsSettings.exists
+        })
+
+        // A successful register reaches authoritative enabled without
+        // approval copy. This distinguishes ordinary on from the earlier
+        // registered-but-awaiting-approval presentation in the same process.
+        launchAtLogin.click()
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            launchAtLogin.exists
+                && launchAtLogin.isEnabled
+                && launchAtLogin.value as? Int == 1
+        })
+        XCTAssertFalse(approvalRequired.exists)
+        XCTAssertFalse(openLoginItemsSettings.exists)
+
+        // The injected true-external boundary next reports a failed
+        // unregister and a fresh notFound status. The real Toggle action must
+        // keep unavailable distinct from ordinary off and retain the separate
+        // operation-failure episode; neither may offer approval recovery.
+        launchAtLogin.click()
+        let unavailable = app.descendants(matching: .any)[
+            "clipy.settings.launch-at-login.unavailable"
+        ]
+        let operationFailed = app.descendants(matching: .any)[
+            "clipy.settings.launch-at-login.operation-failed"
+        ]
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            unavailable.exists
+                && operationFailed.exists
+                && !launchAtLogin.isEnabled
+        })
+        XCTAssertEqual(
+            accessibilityText(of: unavailable),
+            "Launch at Login is unavailable for this app."
+        )
+        XCTAssertEqual(
+            accessibilityText(of: operationFailed),
+            "The Launch at Login setting couldn't be changed."
+        )
+        XCTAssertFalse(approvalRequired.exists)
+        XCTAssertFalse(openLoginItemsSettings.exists)
 
         // Card 14B: the real General scene receives the AppDelegate-owned
         // neutral shortcut state. The default's advisory remains visible and
@@ -228,7 +318,10 @@ final class ClipboardJourneyUITests: XCTestCase {
     }
 
     @MainActor
-    private func launchApp(capturing value: String) throws -> XCUIApplication {
+    private func launchApp(
+        capturing value: String,
+        launchAtLoginRequiresApproval: Bool = false
+    ) throws -> XCUIApplication {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         XCTAssertTrue(pasteboard.setString(value, forType: .string))
@@ -246,6 +339,18 @@ final class ClipboardJourneyUITests: XCTestCase {
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory
             .appendingPathComponent("history.store")
             .path
+        if launchAtLoginRequiresApproval {
+            let markerURL = directory.appendingPathComponent(
+                "login-items-settings-opened"
+            )
+            loginItemsSettingsMarkerURL = markerURL
+            app.launchEnvironment[
+                "CLIPY_UI_TEST_LAUNCH_AT_LOGIN_STATUS"
+            ] = "requires-approval"
+            app.launchEnvironment[
+                "CLIPY_UI_TEST_LOGIN_ITEMS_SETTINGS_MARKER_PATH"
+            ] = markerURL.path
+        }
         app.launch()
 
         let panel = app.descendants(matching: .any)["clipy.panel.root"]

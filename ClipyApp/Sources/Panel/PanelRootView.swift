@@ -109,10 +109,10 @@ struct PanelRootView: View {
         return { appDelegate.pauseCapture() }
     }
 
-    /// The launch failure pane (fail-loud, no silent repair): the typed
-    /// message rendered by `FailurePresentation` (03b §10) plus a Quit
-    /// button — a menu-bar agent with no usable store has nothing else to
-    /// offer.
+    /// DATA-14 launch recovery stays non-destructive while open-error
+    /// observability is incomplete: show the stable public failure category,
+    /// Retry the same locator, Reveal its directory, or Quit. There is no
+    /// automatic retry, quarantine, empty-store fallback, or raw error text.
     @ViewBuilder
     private func failurePane(for error: any Error) -> some View {
         VStack(spacing: 12) {
@@ -120,10 +120,36 @@ struct PanelRootView: View {
                 .font(.title2)
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            Text(failureMessage(for: error))
+            Text(Self.failureCategory(for: error))
+                .font(.headline)
+                .accessibilityIdentifier(
+                    "clipy.store.open.failure.category"
+                )
+            Text(Self.failureMessage(for: error))
                 .multilineTextAlignment(.center)
-            Button("Quit") {
-                NSApp.terminate(nil)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier(
+                    "clipy.store.open.failure.message"
+                )
+            HStack(spacing: 8) {
+                Button("Retry") {
+                    appDelegate.retryCompositionOpen()
+                }
+                .accessibilityIdentifier(
+                    "clipy.store.open.failure.retry"
+                )
+                Button("Reveal Store Location") {
+                    appDelegate.revealStoreLocation()
+                }
+                .accessibilityIdentifier(
+                    "clipy.store.open.failure.reveal"
+                )
+                Button("Quit") {
+                    NSApp.terminate(nil)
+                }
+                .accessibilityIdentifier(
+                    "clipy.store.open.failure.quit"
+                )
             }
         }
         .padding(20)
@@ -131,13 +157,39 @@ struct PanelRootView: View {
             width: PanelGeometry.contentWidth,
             height: PanelGeometry.height
         )
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("clipy.store.open.failure")
     }
 
-    /// Maps the open failure to its user-facing message (the
-    /// MenuBarExtra-era mapping, unchanged): `HistoryFailure` renders
-    /// through PresentationUI's shared vocabulary so the pane and the
+    /// A stable, content-free diagnostic category derived only from Clipy's
+    /// public typed failure. `.openStore` deliberately stays generic because
+    /// SwiftData construction does not yet distinguish permission, ENOSPC,
+    /// corruption, future schema, and other I/O failures reliably.
+    static func failureCategory(for error: any Error) -> String {
+        guard let historyFailure = error as? HistoryFailure else {
+            return error is ClipyCompositionError
+                ? "History Store Already Open"
+                : "History Store Open Failed"
+        }
+        guard case .persistence(let persistenceFailure) = historyFailure else {
+            return "History Store Open Failed"
+        }
+        switch persistenceFailure {
+        case .openStore:
+            return "History Store Open Failed"
+        case .corruptStoredValue:
+            return "Stored History Unreadable"
+        case .invariantViolation:
+            return "History Consistency Check Failed"
+        case .transaction:
+            return "History Startup Transaction Failed"
+        }
+    }
+
+    /// Maps the open failure to its user-facing message. `HistoryFailure`
+    /// renders through PresentationUI's shared vocabulary so the pane and the
     /// in-panel banner never disagree (03b §10).
-    private func failureMessage(for error: any Error) -> String {
+    static func failureMessage(for error: any Error) -> String {
         if let historyFailure = error as? HistoryFailure {
             return FailurePresentation.message(for: historyFailure)
         }

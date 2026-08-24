@@ -1654,8 +1654,11 @@ ExternalGateway.read(.search(text, mode, limit), as: connID)   [actor]
        (c) interval 2 (closing audit closure): build `HistoryPage` from the
            SearchWorker result; for App Intents, combine it with the immutable
            revision-count facts captured in interval 1 to form
-           `ExternalHistoryPage`; Local Automation keeps the v1 page and does
-           not load the X.7 facts. AUDIT a read OperationRecord here — reading
+           `ExternalHistoryPage`. Only returned page IDs require valid count
+           facts; a malformed or missing count for a non-result corpus row does
+           not broaden the bounded page's fail-closed scope. Local Automation
+           keeps the v1 page and does not load the X.7 facts. AUDIT a read
+           OperationRecord here — reading
            and incrementing `nextAuditSequence` inside this closure. D36
            continuity for reads follows from the same transaction updating the
            singleton counter and inserting the row; no concurrent append can
@@ -2935,9 +2938,12 @@ Correctness gates run first. Performance claims for V2-05 (proof gates
   §14). App Intents recent additionally performs one scalar-only
   `RetainedBytesRow` fetch bounded by the returned page; search captures one
   scalar revision-count inventory bounded by the same hard retained-item limit
-  as its existing full corpus. Local Automation keeps the v1 page projection
-  and performs neither X.7 enrichment read. The Authority's read interval owns
-  the targeted access gate and read audit. For `.search`, two non-suspending
+  as its existing full corpus, while requiring valid facts only for returned
+  page IDs so unrelated projection corruption cannot fail that bounded page.
+  This capture preserves title/count fidelity across the off-actor evaluation
+  window. Local Automation keeps the v1 page projection and performs neither
+  X.7 enrichment read. The Authority's read interval owns the targeted access
+  gate and read audit. For `.search`, two non-suspending
   Authority intervals bracket the off-actor SearchWorker await (§5.2 step 2),
   while `.recent`/`.details`/`.pastePayload` fit one.
 - **Audit log read is O(batch)** (`X-PERF-4`): bounded by

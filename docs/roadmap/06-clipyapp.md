@@ -69,8 +69,10 @@
 - `ClipyIntegrationTests` + `PresentationUITests` + `ClipyUITests`: marked
   Return/Escape stays with the current text responder; settled list-root
   Escape clears search then closes, while the running Details/editor journeys
-  retain their own dismissal behavior. Synthetic hosted dispatch does not
-  claim a physical CJK input-source matrix.
+  retain their own dismissal behavior. In the real editor, dirty Escape and
+  Cancel share one discard confirmation, confirmed discard closes, and a
+  subsequently reopened clean editor cancels directly without that warning.
+  Synthetic hosted dispatch does not claim a physical CJK input-source matrix.
 - `PresentationUITests` + `ClipyIntegrationTests`: only the current settled
   search generation's first authoritative page requests one content-free
   result-count announcement. Replacement snapshots, refresh, pagination, and

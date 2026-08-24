@@ -381,7 +381,7 @@ private extension HistoryAuthority {
             return (
                 captured.snapshot,
                 captured.continuationAnchor,
-                try allExternalRevisionCounts(
+                try capturedExternalRevisionCounts(
                     for: captured.snapshot.rows.map(\.id),
                     in: context
                 )
@@ -566,13 +566,22 @@ private extension HistoryAuthority {
         )
     }
 
-    func allExternalRevisionCounts(
+    /// Captures the narrow X.7 count facts beside the immutable search corpus
+    /// so a revision landing during SearchWorker evaluation cannot pair an old
+    /// title with a new count. Validation is deliberately deferred to
+    /// `externalPage`: only IDs selected into the bounded result page are
+    /// consumers, so a malformed or missing fact on a non-result row does not
+    /// broaden that page's fail-closed scope.
+    func capturedExternalRevisionCounts(
         for itemIDs: [HistoryItemID],
         in context: ModelContext
     ) throws -> [HistoryItemID: Int] {
-        guard Set(itemIDs).count == itemIDs.count else {
+        let rawItemIDs = itemIDs.map(\.rawValue)
+        guard Set(rawItemIDs).count == rawItemIDs.count else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
+        guard !rawItemIDs.isEmpty else { return [:] }
+        let expectedIDs = Set(itemIDs)
         var descriptor = FetchDescriptor<RetainedBytesRow>()
         descriptor.propertiesToFetch = [
             \.itemID,
@@ -586,12 +595,30 @@ private extension HistoryAuthority {
         } catch {
             throw HistoryFailure.temporarilyUnavailable(.factProof)
         }
-        guard rows.count == itemIDs.count else {
-            throw HistoryFailure.persistence(.invariantViolation)
-        }
-        let counts = try externalRevisionCountMap(rows)
-        guard Set(counts.keys) == Set(itemIDs) else {
-            throw HistoryFailure.persistence(.invariantViolation)
+
+        var counts: [HistoryItemID: Int] = [:]
+        var seenIDs = Set<HistoryItemID>()
+        counts.reserveCapacity(rows.count)
+        for row in rows {
+            let id = HistoryItemID(rawValue: row.itemID)
+            guard expectedIDs.contains(id) else { continue }
+            guard seenIDs.insert(id).inserted else {
+                // `itemID` is unique and the projection is 1:1. A duplicate
+                // row is relational corruption, not one row's deferred X.7
+                // scalar validity, so it remains an immediate invariant
+                // failure.
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
+            guard row.bytesSchemaVersion
+                    == RetainedBytesStamping.bytesSchemaVersion,
+                  row.revisionCount >= 0,
+                  row.revisionCount <= limits.maximumRevisionsPerItem
+            else {
+                // A selected page row will observe the absent fact below and
+                // fail closed. Non-result rows are not X.7 count consumers.
+                continue
+            }
+            counts[id] = row.revisionCount
         }
         return counts
     }

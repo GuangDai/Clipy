@@ -104,11 +104,18 @@ struct HCRTransactionBoundaryTests {
 
         let before = try DurableSnapshot.read(from: storeURL)
         await history.authority.setTransactionFailureInjection(injection)
+        let publicationProbe = await SingleOperationInvalidationPublicationProbe.begin(
+            on: history.authority
+        )
         await #expect(throws: HistoryFailure.persistence(.transaction)) {
             _ = try await history.perform(
                 .placePinned(reference.id, at: .first)
             )
         }
+        let publications = try await publicationProbe.finish(
+            on: history.authority
+        )
+        #expect(publications.count == 0)
         #expect(try DurableSnapshot.read(from: storeURL) == before)
 
         // No re-arm: the identical commit now succeeds only if the matching
