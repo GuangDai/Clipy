@@ -230,6 +230,59 @@ struct SummonShortcutControllerTests {
         ))])
     }
 
+    @Test func mountedRecorderConsumesCommandEquivalentExactlyOnce() throws {
+        var decisions: [SummonShortcutRecordingDecision] = []
+        let input = SummonShortcutRecorderInputView { decisions.append($0) }
+        let otherResponder = ShortcutRecorderOtherResponder(frame: .zero)
+        let container = NSView(
+            frame: NSRect(x: 0, y: 0, width: 420, height: 100)
+        )
+        input.frame = container.bounds
+        container.addSubview(input)
+        container.addSubview(otherResponder)
+        let window = NSWindow(
+            contentRect: container.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = container
+        try #require(window.makeFirstResponder(otherResponder))
+        #expect(window.firstResponder === otherResponder)
+        defer { window.close() }
+
+        let first = try #require(commandShiftCEvent(
+            windowNumber: window.windowNumber,
+            isARepeat: false
+        ))
+        let repeated = try #require(commandShiftCEvent(
+            windowNumber: window.windowNumber,
+            isARepeat: true
+        ))
+
+        #expect(container.performKeyEquivalent(with: first))
+        #expect(container.performKeyEquivalent(with: repeated))
+        #expect(decisions == [.candidate(.defaultSummon)])
+    }
+
+    private func commandShiftCEvent(
+        windowNumber: Int,
+        isARepeat: Bool
+    ) -> NSEvent? {
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.command, .shift],
+            timestamp: 0,
+            windowNumber: windowNumber,
+            context: nil,
+            characters: "c",
+            charactersIgnoringModifiers: "c",
+            isARepeat: isARepeat,
+            keyCode: UInt16(kVK_ANSI_C)
+        )
+    }
+
     private func makeController(
         defaults: UserDefaults,
         probe: ShortcutRegistrationProbe,
@@ -268,6 +321,11 @@ struct SummonShortcutControllerTests {
                 | UInt32(bytes[7])
         )
     }
+}
+
+@MainActor
+private final class ShortcutRecorderOtherResponder: NSView {
+    override var acceptsFirstResponder: Bool { true }
 }
 
 @MainActor

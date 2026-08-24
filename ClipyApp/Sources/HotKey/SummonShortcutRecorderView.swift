@@ -173,6 +173,24 @@ final class SummonShortcutRecorderInputView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
+        record(event)
+    }
+
+    /// AppKit offers Command-modified events to the key-equivalent hierarchy
+    /// before ordinary keyDown delivery. While this view is mounted, the
+    /// recorder sheet owns that chord: consume it here so it is submitted once
+    /// rather than falling through to a menu command or a second dispatch.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard event.type == .keyDown else {
+            return super.performKeyEquivalent(with: event)
+        }
+        record(event)
+        return true
+    }
+
+    /// Both AppKit keyboard routes share one submission point. A repeat is
+    /// still consumed by its caller but cannot apply the same candidate twice.
+    private func record(_ event: NSEvent) {
         guard !event.isARepeat else { return }
         onDecision(.decide(
             keyCode: event.keyCode,
