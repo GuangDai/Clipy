@@ -165,19 +165,19 @@ final class DetailsMutationJourneyUITests: XCTestCase {
         ) else { return }
         remove.click()
 
-        // Anchor to the exact window containing Details before selecting its
-        // native attached confirmation sheet. This avoids matching Touch Bar
-        // mirrors or another app-owned window by a duplicated action label.
-        let detailsWindow = app.windows.containing(
+        // FloatingPanel is exposed as an AX Dialog, not a Window. Anchor to
+        // the exact Dialog containing Details before selecting its attached
+        // sheet, avoiding Touch Bar mirrors and unrelated app-owned sheets.
+        let detailsDialog = app.dialogs.containing(
             .any,
             identifier: "clipy.details.root"
         ).firstMatch
         guard assertEventually(
-            { detailsWindow.exists },
+            { detailsDialog.exists },
             in: app,
-            message: "XCUI could not resolve the window owning Details."
+            message: "XCUI could not resolve the dialog owning Details."
         ) else { return }
-        let confirmationSheet = detailsWindow.sheets.firstMatch
+        let confirmationSheet = detailsDialog.sheets.firstMatch
         guard assertEventually(
             { confirmationSheet.exists },
             in: app,
@@ -193,11 +193,11 @@ final class DetailsMutationJourneyUITests: XCTestCase {
             message: "The destructive confirmation did not disclose its exact scope."
         ) else { return }
 
-        // SwiftUI materializes confirmationDialog as a native macOS alert.
-        // Anchor through the owning sheet, then use the bridge's stable
-        // destructive-action slot; a modifier on the source Button is not
-        // guaranteed to survive that framework translation.
-        let confirmRemove = confirmationSheet.buttons["action-button-1"]
+        // This exact macOS bridge preserves the source Button's stable AX ID;
+        // run 32722331904's public tree records it on the destructive action.
+        let confirmRemove = confirmationSheet.buttons[
+            "clipy.details.confirm-remove"
+        ]
         guard assertEventually(
             {
                 confirmRemove.exists

@@ -64,7 +64,7 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             in: app,
             context: "retention policy scroll view"
         )
-        guard scrollUntilHittable(
+        guard scrollUntilFullyVisible(
             storageEnabled,
             in: retentionScrollView,
             app: app,
@@ -81,7 +81,7 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             in: app,
             context: "storage budget field"
         )
-        guard scrollUntilHittable(
+        guard scrollUntilFullyVisible(
             storageMiB,
             in: retentionScrollView,
             app: app,
@@ -95,7 +95,7 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             waitUntil(timeout: 5) { apply.isEnabled },
             diagnostic(app, context: "loaded changed storage policy")
         )
-        guard scrollUntilHittable(
+        guard scrollUntilFullyVisible(
             apply,
             in: retentionScrollView,
             app: app,
@@ -188,7 +188,7 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             waitUntil(timeout: 5) { apply.isEnabled },
             diagnostic(app, context: "enabled strict age policy")
         )
-        guard scrollUntilHittable(
+        guard scrollUntilFullyVisible(
             apply,
             in: retentionScrollView,
             app: app,
@@ -216,7 +216,7 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             diagnostic(app, context: "strict age zero-effect receipt")
         )
 
-        guard scrollUntilHittable(
+        guard scrollUntilFullyVisible(
             ageDays,
             in: retentionScrollView,
             app: app,
@@ -227,7 +227,7 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             waitUntil(timeout: 5) { !policyStatus.exists && apply.isEnabled },
             diagnostic(app, context: "new age edit clears success")
         )
-        guard scrollUntilHittable(
+        guard scrollUntilFullyVisible(
             apply,
             in: retentionScrollView,
             app: app,
@@ -428,7 +428,7 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
     /// actually visible; no coordinate outside that public view is guessed.
     @MainActor
     @discardableResult
-    private func scrollUntilHittable(
+    private func scrollUntilFullyVisible(
         _ element: XCUIElement,
         in scrollView: XCUIElement,
         app: XCUIApplication,
@@ -437,8 +437,13 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
         let scrollCoordinate = scrollView.coordinate(
             withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
         )
+        func isFullyVisible() -> Bool {
+            element.exists
+                && scrollView.frame.contains(element.frame)
+                && element.isHittable
+        }
         for _ in 0..<8 {
-            if element.exists && element.isHittable {
+            if isFullyVisible() {
                 return true
             }
             let deltaY: CGFloat = element.frame.midY < scrollView.frame.midY
@@ -446,7 +451,7 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
                 : -50
             scrollCoordinate.scroll(byDeltaX: 0, deltaY: deltaY)
         }
-        let result = element.exists && element.isHittable
+        let result = isFullyVisible()
         XCTAssertTrue(
             result,
             diagnostic(app, context: "\(context) did not scroll into view")
