@@ -11,6 +11,7 @@ import PackageDescription
 
 let package = Package(
     name: "Clipy",
+    defaultLocalization: "en",
     platforms: [.macOS(.v26)],
     products: [
         .library(name: "HistoryCore", targets: ["HistoryCore"]),
@@ -52,7 +53,8 @@ let package = Package(
         ),
         .target(
             name: "PresentationUI",
-            dependencies: ["HistoryCore", "ClipboardFormats", "ContentPreview"]
+            dependencies: ["HistoryCore", "ClipboardFormats", "ContentPreview"],
+            resources: [.process("Resources")]
         ),
         .target(
             name: "xxh3",

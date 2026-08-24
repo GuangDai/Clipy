@@ -205,9 +205,9 @@ final class ClipboardJourneyUITests: XCTestCase {
         XCTAssertFalse(openLoginItemsSettings.exists)
 
         // Card 14B: the real General scene receives the AppDelegate-owned
-        // neutral shortcut state. The default's advisory remains visible and
-        // Reset traverses the real Settings action without inventing a chord
-        // recorder or claiming signed Carbon delivery.
+        // neutral shortcut state. The default's advisory remains visible; the
+        // real recorder opens and Escape cancels without changing the binding.
+        // This does not claim signed Carbon delivery or layout behavior.
         let shortcutStatus = app.descendants(matching: .any)[
             "clipy.settings.shortcut.status"
         ]
@@ -215,6 +215,7 @@ final class ClipboardJourneyUITests: XCTestCase {
             "clipy.settings.shortcut.warning"
         ]
         let shortcutReset = app.buttons["clipy.settings.shortcut.reset"]
+        let shortcutChange = app.buttons["clipy.settings.shortcut.change"]
         XCTAssertTrue(shortcutStatus.waitForExistence(timeout: 5))
         XCTAssertTrue(shortcutWarning.waitForExistence(timeout: 5))
         XCTAssertEqual(
@@ -223,6 +224,30 @@ final class ClipboardJourneyUITests: XCTestCase {
         )
         XCTAssertTrue(shortcutReset.waitForExistence(timeout: 5))
         XCTAssertTrue(shortcutReset.isEnabled)
+        XCTAssertTrue(shortcutChange.waitForExistence(timeout: 5))
+        XCTAssertTrue(shortcutChange.isEnabled)
+        shortcutChange.click()
+        let recorderTitle = app.staticTexts["Change Summon Shortcut"]
+        XCTAssertTrue(recorderTitle.waitForExistence(timeout: 5))
+        app.typeKey("k", modifierFlags: [])
+        let recordingError = app.staticTexts[
+            "clipy.settings.shortcut.recording-error"
+        ]
+        XCTAssertTrue(recordingError.waitForExistence(timeout: 5))
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitUntil(timeout: 5) { !recorderTitle.exists })
+        XCTAssertTrue(shortcutStatus.exists)
+        XCTAssertTrue(shortcutWarning.exists)
+
+        // Re-recording the already-active default traverses the accepted
+        // candidate tail without asking the shared CI account for a second
+        // Carbon registration or making an environmental conflict assertion.
+        shortcutChange.click()
+        XCTAssertTrue(recorderTitle.waitForExistence(timeout: 5))
+        app.typeKey("c", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitUntil(timeout: 5) { !recorderTitle.exists })
+        XCTAssertTrue(shortcutStatus.exists)
+        XCTAssertTrue(shortcutWarning.exists)
         shortcutReset.click()
         XCTAssertTrue(shortcutStatus.exists)
         XCTAssertTrue(shortcutWarning.exists)

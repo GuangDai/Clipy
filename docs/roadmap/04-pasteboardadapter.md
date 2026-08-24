@@ -28,6 +28,17 @@
 ## Risks / notes
 
 - The adapter is deliberately dumb: all dedup/coalescing/OCC decisions live behind `ClipboardHistory`. It only translates observations (Part I §5.1).
+- The six concealment/private marker strings are a third-party, best-effort
+  denylist, not an Apple framework guarantee or a complete password-manager
+  matrix. Exact matches exclude the whole capture; every other type remains
+  ordinary raw content. DATA-9a's explicitly synthetic unknown-UTI labels
+  (Chrome/Safari/Notes/password-manager are case names only) and named-
+  candidate fixtures prove only current Canonical byte sensitivity: changing
+  one non-marker payload makes A and B distinct, while an exact A replay
+  coalesces. DATA-9a remains Partial: authorized real-producer fixtures and
+  real-world volatility-frequency evidence are open. These fixtures neither
+  authorize a dedup-ignore role nor establish actual producer emission;
+  DATA-9b remains evidence-gated.
 - The adapter owns neither an overload queue nor retry policy. ClipyApp keeps
   one active and one replaceable latest pending frozen capture, publishes a
   cumulative content-free replacement count, and leaves acquisition/RSS

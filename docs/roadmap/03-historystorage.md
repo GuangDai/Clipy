@@ -64,6 +64,27 @@ HistoryStorage is built across roadmap steps 4–8 (one sub-section each).
 - **§9 performance runner:** provisioned with schema-v2 fixtures and machine/toolchain metadata; all 13 per-PR workloads pass in run 31449682036. A dispatch-only 5,000-row persistent admission lane now has pre-proof code for per-page tie-fallback latency, worst-bound exact-search process RSS, and independent-process warm-open tails. Diagnostic run 31498144173 showed that replaying public capture made setup cumulative O(N²), reached only 1,500/5,000 rows, and emitted 599 missing-external-data diagnostics. The replacement package seam keeps `HistoryAuthority` as sole writer, commits fixed 64-row batches through the real codecs/create/index/position tail, and follows 4,999 seeded rows with public coalesce + insert validation; a same-size 1,000-row smoke fails early on the reproduced CoreData signature. Runs 31527425658 and 31597596383 proved that neither lexical release nor separate seed/validation processes alone prevent an intermittent external `.interim` clone during 5,000-row validation. Startup, capture, and recent-read contexts now have explicit operation-local autorelease pools plus Debug lifecycle checkpoints; preparation records four public phase boundaries, and a failed clean-log gate preserves a short diagnostic while skipping long canonical measurements. The normal WL2 envelope also runs population and every internally timed open in independently terminated child processes instead of relying on same-process `Task.yield()` teardown. Historical supported runs 31795729218 (complete scale lane) and 31806199483 (exact A/B) close the first evidence pass; Batch 32 current-master manual run 32685185124 attempt 2 is green for both exact and every scale mode. The admission stays record-only and cannot substitute for fsync/crash, general external-storage no-fault, approved-minimum-hardware G5, or representative concurrent-call G8 evidence.
 - **Swift 6 compilability of manual-`ModelContext`-on-a-plain-actor** (Part VI §6): proven by strict-concurrency build 31449682036; `@ModelActor` remains only a documented fallback.
 - xxh3 collisions are handled by mandatory byte-confirmation (D7); the index may gain a spurious candidate but never a false confirmed match.
+- **Card 11C regexp engine characterization:** the product grammar remains the
+  exact conservative rejection set in 03b §8; no timeout case or broader parser
+  is inferred from source inspection. Apple's
+  [`NSRegularExpression` performance note](https://developer.apple.com/documentation/foundation/nsregularexpression#Performance)
+  specifically warns that multiple `*`/`+` operators can perform poorly on a
+  failing match. A direct test therefore runs one fixed top-level
+  ambiguous-quantifier chain, plus a safe control, inside the existing
+  `HistoryRestartProbe` child over the actual 1,000-Character regexp prefix.
+  The test independently spells that exact pattern, proves the current product
+  preflight admits it, and requires the child to report the same literal before
+  entering the matcher; without that, neither completion nor watchdog
+  termination is treated as relevant.
+  It separately observes the current `firstMatch` operation and Apple's
+  [`enumerateMatches` + `reportProgress`](https://developer.apple.com/documentation/foundation/nsregularexpression/enumeratematches%28in%3Aoptions%3Arange%3Ausing%3A%29)
+  alternative; Apple documents that only the enumeration operation reports
+  periodic progress and permits `stop` there. The parent has a process watchdog
+  and records whether macOS 26 Foundation completed with or without a progress
+  callback, or had to be terminated.
+  This is bounded engine evidence only: it does not claim arbitrary-regexp
+  safety, does not make Task cancellation interrupt synchronous ICU work, and
+  does not yet authorize a typed product timeout or a new rejection shape.
 
 ## Progress
 

@@ -40,12 +40,16 @@
   and review.
 - `ContentPreviewTests` prove exact UTF-8 and native UTF-16 behavior, exact PNG
   eager BGRA8/sRGB artifacts, malformed/unsupported classification, and
-  content-free active-job/source-byte accounting. Presentation lifecycle tests
-  deterministically prove slow A→fast B, panel close, and same-ID revision
-  retarget late-result fences through the real renderer seam. ContentPreview's
-  production path awaits one bounded off-actor native raster slot, so the A→B
-  test parks at that real native entry and B text completes through production
-  scheduling rather than a DEBUG-only actor suspension.
+  content-free active-job/source-byte accounting. The history-pane profile
+  admits at most 64 MiB across the complete immutable representation snapshot,
+  before source selection or native decode: the exact aggregate boundary may
+  produce a bounded artifact, while one byte over is `.resourceLimit` for
+  declared text, image, and otherwise-unsupported data alike. Presentation
+  lifecycle tests deterministically prove slow A→fast B, panel close, and
+  same-ID revision retarget late-result fences through the real renderer seam.
+  ContentPreview's production path awaits one bounded off-actor native raster
+  slot, so the A→B test parks at that real native entry and B text completes
+  through production scheduling rather than a DEBUG-only actor suspension.
 - Thumbnail application discipline: a thumbnail result tagged with `HistoryItemReference(id, contentVersion)` is applied only while the row still carries that exact reference (Part I §5.7, Part IV §9).
 - Thumbnail capacity is a product-owned policy (500 entries / 64 MiB decoded
   per surface), not caller configuration. Only owner tests may inject smaller

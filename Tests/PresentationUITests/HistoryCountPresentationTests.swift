@@ -37,6 +37,12 @@ struct HistoryCountPresentationTests {
         )
         #expect(
             SearchHeaderView.resultCountText(
+                count: 0,
+                hasNextPage: false
+            ) == "0 results"
+        )
+        #expect(
+            SearchHeaderView.resultCountText(
                 count: 1,
                 hasNextPage: false
             ) == "1 result"
@@ -46,6 +52,21 @@ struct HistoryCountPresentationTests {
                 count: 2,
                 hasNextPage: false
             ) == "2 results"
+        )
+    }
+
+    @Test func incompleteSearchCountsRemainPluralLowerBounds() {
+        #expect(
+            SearchHeaderView.resultCountText(
+                count: 1,
+                hasNextPage: true
+            ) == "1+ results"
+        )
+        #expect(
+            SearchHeaderView.resultCountText(
+                count: 27,
+                hasNextPage: true
+            ) == "27+ results"
         )
     }
 

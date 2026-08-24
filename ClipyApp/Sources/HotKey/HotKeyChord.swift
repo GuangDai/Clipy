@@ -25,9 +25,9 @@ struct HotKeyChord: Hashable, Sendable {
     }
 
     /// Stable Settings text without guessing the person's current keyboard
-    /// layout. The product default has its familiar literal; an externally
-    /// persisted future chord remains inspectable by its exact Carbon facts
-    /// until a recorder/display contract is deliberately specified.
+    /// layout. The product default has its familiar literal; a custom chord
+    /// remains inspectable by its exact Carbon facts because alternate-layout
+    /// rendering remains an explicit signed-runtime gap for this slice.
     var settingsDisplayName: String {
         if self == .defaultSummon { return "⇧⌘C" }
         return "Key code \(keyCode), modifiers \(modifiers)"

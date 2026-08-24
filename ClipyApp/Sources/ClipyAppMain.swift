@@ -47,15 +47,33 @@ private struct SettingsRootView: View {
 
     @AppStorage(AppDelegate.popupPositionDefaultsKey)
     private var panelPosition: PopupPositionMode = .cursor
+    @State private var isRecordingSummonShortcut = false
 
     var body: some View {
         if let composition = appDelegate.composition {
             ClipySettingsView(
                 viewState: composition.viewState,
                 launchAtLogin: appDelegate.launchAtLoginBinding(),
-                summonShortcut: appDelegate.summonShortcutBinding(),
+                summonShortcut: appDelegate.summonShortcutBinding {
+                    isRecordingSummonShortcut = true
+                },
                 popupPosition: $panelPosition
             )
+            .sheet(isPresented: $isRecordingSummonShortcut) {
+                SummonShortcutRecorderView { chord in
+                    appDelegate.endSummonShortcutRecording()
+                    appDelegate.changeSummonShortcut(to: chord)
+                }
+                .onAppear {
+                    appDelegate.beginSummonShortcutRecording { chord in
+                        appDelegate.changeSummonShortcut(to: chord)
+                        isRecordingSummonShortcut = false
+                    }
+                }
+                .onDisappear {
+                    appDelegate.endSummonShortcutRecording()
+                }
+            }
         } else {
             EmptyView()
         }

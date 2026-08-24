@@ -7,7 +7,8 @@
 /// admission must refuse the typed failure before any durable write. These
 /// tests pin the boundary math, the insert-refusal with durable-state
 /// invariance and recovery, the byte-exact coalesce exemption, and the
-/// revise lane's coverage through the same tail.
+/// revise refusal plus remove/clear zero-external-demand paths through the
+/// same tail.
 import Foundation
 import HistoryCore
 import SwiftData
@@ -182,6 +183,79 @@ struct CaptureCapacityAdmissionTests {
             try TransactionStoreSnapshot.read(from: url)
         }
         #expect(after == before)
+        await authority.setVolumeAvailableCapacityOverride(nil)
+    }
+
+    @Test func removeAndBothClearScopesCommitUnderLowCapacity() async throws {
+        let url = WSSupport.tempStoreURL("capacity-admission-delete-only")
+        defer { WSSupport.removeStore(url) }
+
+        let history = try await WSSupport.openHistory(storeURL: url)
+        let authority = history.authority
+        var references: [HistoryItemReference] = []
+        for index in 0 ..< 3 {
+            let receipt = try await history.perform(.capture(
+                WSSupport.textCapture(
+                    "capacity admission delete-only \(index)",
+                    observedAt: Date(
+                        timeIntervalSinceReferenceDate: 4_200 + Double(index)
+                    )
+                )
+            ))
+            guard case .committed(let commit) = receipt,
+                  case .inserted(let reference) = commit.outcome else {
+                Issue.record("delete-only arrange capture did not insert")
+                return
+            }
+            references.append(reference)
+        }
+        for reference in references.prefix(2) {
+            let receipt = try await history.perform(
+                .placePinned(reference.id, at: .last)
+            )
+            guard case .committed(let commit) = receipt,
+                  case .placedPinned(let placedID) = commit.outcome,
+                  placedID == reference.id else {
+                Issue.record("delete-only arrange pin did not commit")
+                return
+            }
+        }
+
+        // Remove and clear plans carry only delete/pin-compaction mutations.
+        // They write no new `.externalStorage` payload and therefore must
+        // remain available even when the fixed capacity witness is one byte
+        // (§16). Removing the first pin also exercises the ordinal rewrite,
+        // rather than only the simplest unpinned-delete plan.
+        await authority.setVolumeAvailableCapacityOverride(1)
+
+        let remove = try await history.perform(.remove(references[0].id))
+        guard case .committed(let removeCommit) = remove,
+              case .removed(count: 1) = removeCommit.outcome else {
+            Issue.record("low-capacity pinned remove did not commit")
+            return
+        }
+        #expect(removeCommit.position.rawValue == 6)
+
+        let clearUnpinned = try await history.perform(.clear(.unpinned))
+        guard case .committed(let unpinnedCommit) = clearUnpinned,
+              case .cleared(count: 1) = unpinnedCommit.outcome else {
+            Issue.record("low-capacity clear-unpinned did not commit")
+            return
+        }
+        #expect(unpinnedCommit.position.rawValue == 7)
+
+        let clearAll = try await history.perform(.clear(.all))
+        guard case .committed(let allCommit) = clearAll,
+              case .cleared(count: 1) = allCommit.outcome else {
+            Issue.record("low-capacity clear-all did not commit")
+            return
+        }
+        #expect(allCommit.position.rawValue == 8)
+
+        let rows = try WSSupport.fetchRows(
+            WSSupport.makeContainer(storeURL: url)
+        )
+        #expect(rows.isEmpty)
         await authority.setVolumeAvailableCapacityOverride(nil)
     }
 }

@@ -1060,6 +1060,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshSummonShortcutPresentation()
     }
 
+    func beginSummonShortcutRecording(
+        onActiveChord: @escaping @MainActor (HotKeyChord) -> Void
+    ) {
+        summonShortcutController.beginRecordingActiveChord(onActiveChord)
+    }
+
+    func endSummonShortcutRecording() {
+        summonShortcutController.endRecordingActiveChord()
+    }
+
+    /// Applies one recorder-produced candidate through the existing Card 14B
+    /// transaction: registration succeeds before persistence and teardown, so
+    /// a conflict leaves the old binding live and makes the candidate visible.
+    func changeSummonShortcut(to chord: HotKeyChord) {
+        summonShortcutController.change(to: chord)
+        refreshSummonShortcutPresentation()
+    }
+
     private func resetSummonShortcut() {
         summonShortcutController.reset()
         refreshSummonShortcutPresentation()
@@ -1091,12 +1109,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
-    /// Immutable neutral status plus the two recovery intents approved by the
-    /// Card 14B decision. Chord recording/editing remains outside this slice.
-    func summonShortcutBinding() -> SummonShortcutSettings {
+    /// Immutable neutral status plus the Settings-owned recording intent and
+    /// the two recovery intents approved by the Card 14B decision. Raw event
+    /// and Carbon facts remain confined to this app target.
+    func summonShortcutBinding(
+        beginChange: @escaping @MainActor @Sendable () -> Void = {}
+    ) -> SummonShortcutSettings {
         SummonShortcutSettings(
             status: summonShortcutPresentation.status,
             warning: summonShortcutPresentation.warning,
+            beginChange: beginChange,
             retry: { [weak self] in self?.retrySummonShortcut() },
             reset: { [weak self] in self?.resetSummonShortcut() }
         )

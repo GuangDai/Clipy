@@ -96,6 +96,38 @@ private func plannedRetirements(
     #expect(retired == [muchOlder.id, justOver.id])
 }
 
+/// DEC-CAPTURE-CLOCK: the pure planner consumes exactly the caller-selected
+/// reference fact. Storage decides which fact is admitted for each lane; the
+/// planner neither samples a clock nor normalizes finite skew.
+@Test func r1PastAndFutureReferenceSkewRemainDeterministic() throws {
+    let item = expansionItem(1, copiedAt: 900, canonicalBytes: 10)
+    let policies = HistoryRetentionPolicies(
+        age: AgeRetention(maxAge: 100),
+        storage: nil,
+        revisions: nil
+    )
+
+    // A past reference makes cutoff 800, so the t=900 item is not aged.
+    let pastReference = try plannedRetirements(
+        inventory: [item],
+        policies: policies,
+        now: Date(timeIntervalSinceReferenceDate: 900)
+    )
+    #expect(pastReference.isEmpty)
+
+    // A future reference makes cutoff 1,000, so the same item is aged.
+    // Repeating identical facts proves the result has no hidden clock read.
+    let futureNow = Date(timeIntervalSinceReferenceDate: 1_100)
+    let futureReference = try plannedRetirements(
+        inventory: [item], policies: policies, now: futureNow
+    )
+    let repeatedFutureReference = try plannedRetirements(
+        inventory: [item], policies: policies, now: futureNow
+    )
+    #expect(futureReference == [item.id])
+    #expect(repeatedFutureReference == futureReference)
+}
+
 @Test func r1RetiresOldestFirstWithTheStableItemIDTieBreaker() throws {
     let smallerID = expansionItem(1, copiedAt: 800, canonicalBytes: 10)
     let largerID = expansionItem(2, copiedAt: 800, canonicalBytes: 10)

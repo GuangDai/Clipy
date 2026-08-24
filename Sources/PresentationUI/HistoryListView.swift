@@ -28,20 +28,21 @@ package enum HistoryListPaginationTrigger {
     }
 }
 
-/// The browsing list. Rows are keyed by `HistoryItemID`; the selection
+/// Module-internal browsing list behind the caller-visible `HistoryPanelView`.
+/// Rows are keyed by `HistoryItemID`; the selection
 /// (hoisted to the panel so the preview pane can dwell on it) drives the
 /// panel shortcuts (⏎ copy, ⌫ remove, ⌘P pin toggle, ⌘I details push).
 /// Additional pages are requested when the last row appears and shown with a
 /// trailing spinner row while `isLoadingPage` (04 §6: observation covers only
 /// the first page; continuations are one-shot browses owned by the view state).
-public struct HistoryListView: View {
+struct HistoryListView: View {
     private let viewState: HistoryViewState
     private let thumbnails: ThumbnailStore
     private let isSearchFieldFocused: Bool
     private let selection: Binding<HistoryItemID?>
     private let onShowDetails: (HistoryItemReference) -> Void
 
-    public init(
+    init(
         viewState: HistoryViewState,
         thumbnails: ThumbnailStore,
         isSearchFieldFocused: Bool,
@@ -55,7 +56,7 @@ public struct HistoryListView: View {
         self.onShowDetails = onShowDetails
     }
 
-    public var body: some View {
+    var body: some View {
         // Minute precision is the owning UX decision for relative metadata.
         // One list-owned timeline supplies the same minute-boundary instant
         // to every visible row. `.everyMinute` performs an immediate render

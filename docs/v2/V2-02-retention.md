@@ -104,7 +104,14 @@ actor** and **no cache**; it is planner/facts/commit-surface only.
   All V2-02 retention runs synchronously inside a History Commit through
   `HistoryAuthority` (decision §16; `00` §3.3). There is no async retention
   worker (contrast V2-01's `EnrichmentWorker`, which is a derivation, not a
-  writer).
+  writer). **DEC-RET-AGE (resolved): age retention is event-triggered.** An
+  eligible row can remain past its age threshold until an R1 trigger named in
+  §7 (`.capture` or `.setRetentionPolicies`) runs; that trigger evaluates the
+  complete admitted state in the same commit. The rejected alternative,
+  wall-clock expiry, would require a new writer/scheduler plus explicit
+  startup, sleep/wake, clock-change, and failure semantics. V2-02 does not
+  imply "delete at the instant the wall clock crosses the threshold," and
+  Settings must not describe it that way.
 - **Changing the v1 hard safety bounds** (`06` §2). R3 thresholds are bounded
   *by* the hard bounds; they do not replace them. A revision append still
   fails `.capacityExceeded(.revisionCount)` / `.revisionBytes` if it would
@@ -557,7 +564,17 @@ Authority.commitCapture:
   count-victims) `protected` = pinned items only.
 - `now` is the capture's `observedAt` (already a Domain input, `02` §4
   `PreparedCapture.observedAt`) — R1 needs no new clock for capture.
-  *(DC-28, accepted 2026-08-15, severity LOW: `observedAt` is
+  **DEC-CAPTURE-CLOCK (resolved; DC-28, accepted 2026-08-15):** capture age
+  selection uses that admitted finite observation fact, not a second
+  Authority `StorageClock.now()` sample. This keeps the age comparison and
+  the same capture's monotone occurrence/recency planning on one time fact.
+  The rejected Authority-admitted-time alternative would make one capture's
+  R1 decision and persisted occurrence use different clocks; the rejected
+  finite-skew clamp has no product-defined tolerance and would silently
+  rewrite an otherwise valid observation. `StorageClock` remains the owner
+  of Storage-minted timestamps and of R1 time for the policy-sweep lane that
+  has no capture observation (§6.4); it is not a substitute capture fact.
+  `observedAt` is
   finiteness-checked at preparation (`03a` §4: NaN/±∞ is
   `.invalidInput(.invalidTimestamp)` before fingerprinting) but is **not**
   clamped for the R1 comparison — a finite, far-future-dated `observedAt`
@@ -565,7 +582,7 @@ Authority.commitCapture:
   commit. The exposure is accepted and recorded rather than clamped: it is
   symmetric to the user's clock simply being wrong, and v1's
   persisted-`lastCopiedAt` `max()` clamp (`PlannersCapture`, `02` §4) governs
-  persisted recency, not R1's reference time. Recorded again in §8.3.)*
+  persisted recency, not R1's reference time. Recorded again in §8.3.
 
 ### 4.3 Revise (append revision) — R2 + R3
 

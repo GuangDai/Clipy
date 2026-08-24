@@ -2,6 +2,7 @@
 /// configurable Carbon binding. The fake is one injected system-call closure,
 /// not a second registrar implementation; real Carbon acceptance remains in
 /// GlobalHotKeyTests.
+import AppKit
 import Carbon.HIToolbox
 import Foundation
 import Testing
@@ -155,9 +156,194 @@ struct SummonShortcutControllerTests {
         controller.stop()
     }
 
+    @Test func activeChordIsRecordedOnceInsteadOfSummoning() throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let probe = ShortcutRegistrationProbe()
+        var summoned = 0
+        var recorded: [HotKeyChord] = []
+        let controller = makeController(defaults: defaults, probe: probe) {
+            summoned += 1
+        }
+
+        #expect(controller.start())
+        controller.beginRecordingActiveChord { recorded.append($0) }
+        #expect(probe.fire(.defaultSummon))
+        #expect(recorded == [.defaultSummon])
+        #expect(summoned == 0)
+
+        #expect(probe.fire(.defaultSummon))
+        #expect(recorded == [.defaultSummon])
+        #expect(summoned == 1, "recording interception is one-shot")
+        controller.stop()
+    }
+
+    @Test func changeAndStopCannotRetainARecordingHandler() throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let probe = ShortcutRegistrationProbe()
+        var summoned = 0
+        var recorded: [HotKeyChord] = []
+        let controller = makeController(defaults: defaults, probe: probe) {
+            summoned += 1
+        }
+
+        #expect(controller.start())
+        controller.beginRecordingActiveChord { recorded.append($0) }
+        #expect(controller.change(to: alternate))
+        #expect(probe.fire(alternate))
+        #expect(recorded.isEmpty)
+        #expect(summoned == 1)
+
+        controller.beginRecordingActiveChord { recorded.append($0) }
+        controller.stop()
+        #expect(controller.start())
+        #expect(probe.fire(alternate))
+        #expect(recorded.isEmpty)
+        #expect(summoned == 2)
+        controller.stop()
+    }
+
     @Test func documentedDefaultColorsShortcutWarnsButIsNotRejected() {
         #expect(HotKeyChord.defaultSummon.warning == .knownColorsShortcut)
         #expect(alternate.warning == nil)
+    }
+
+    @Test func recorderCancelsEscapeAndRejectsBareOrModifierOnlyKeys() {
+        #expect(
+            SummonShortcutRecordingDecision.decide(
+                keyCode: UInt16(kVK_Escape),
+                modifierFlags: [.command]
+            ) == .cancel
+        )
+        #expect(
+            SummonShortcutRecordingDecision.decide(
+                keyCode: UInt16(kVK_ANSI_K),
+                modifierFlags: []
+            ) == .reject
+        )
+        #expect(
+            SummonShortcutRecordingDecision.decide(
+                keyCode: UInt16(kVK_Command),
+                modifierFlags: [.command]
+            ) == .reject
+        )
+    }
+
+    @Test func recorderProducesTheExactCarbonCandidateFromAdmittedFlags() {
+        let decision = SummonShortcutRecordingDecision.decide(
+            keyCode: UInt16(kVK_ANSI_K),
+            modifierFlags: [.capsLock, .command, .option, .numericPad]
+        )
+        #expect(decision == .candidate(HotKeyChord(
+            keyCode: UInt32(kVK_ANSI_K),
+            modifiers: UInt32(cmdKey | optionKey)
+        )))
+    }
+
+    @Test func recorderInputViewDispatchesKeyDownAndIgnoresRepeat() throws {
+        var decisions: [SummonShortcutRecordingDecision] = []
+        let input = SummonShortcutRecorderInputView { decisions.append($0) }
+        let first = try #require(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.control, .shift],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "k",
+            charactersIgnoringModifiers: "k",
+            isARepeat: false,
+            keyCode: UInt16(kVK_ANSI_K)
+        ))
+        let repeated = try #require(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.control, .shift],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "k",
+            charactersIgnoringModifiers: "k",
+            isARepeat: true,
+            keyCode: UInt16(kVK_ANSI_K)
+        ))
+
+        input.keyDown(with: first)
+        input.keyDown(with: repeated)
+
+        #expect(decisions == [.candidate(HotKeyChord(
+            keyCode: UInt32(kVK_ANSI_K),
+            modifiers: UInt32(controlKey | shiftKey)
+        ))])
+    }
+
+    @Test func mountedRecorderMonitorsAppKeyDownExactlyOnce() throws {
+        var decisions: [SummonShortcutRecordingDecision] = []
+        let input = SummonShortcutRecorderInputView { decisions.append($0) }
+        let otherResponder = ShortcutRecorderOtherResponder(frame: .zero)
+        let container = NSView(
+            frame: NSRect(x: 0, y: 0, width: 420, height: 100)
+        )
+        input.frame = container.bounds
+        container.addSubview(input)
+        container.addSubview(otherResponder)
+        let window = NSWindow(
+            contentRect: container.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = container
+        window.orderFront(nil)
+        try #require(window.makeFirstResponder(otherResponder))
+        #expect(window.firstResponder === otherResponder)
+        defer {
+            input.stopMonitoringKeyEvents()
+            window.close()
+        }
+
+        let first = try #require(commandOptionControlKEvent(
+            windowNumber: window.windowNumber,
+            isARepeat: false
+        ))
+        let repeated = try #require(commandOptionControlKEvent(
+            windowNumber: window.windowNumber,
+            isARepeat: true
+        ))
+
+        NSApp.sendEvent(first)
+        NSApp.sendEvent(repeated)
+        #expect(decisions == [.candidate(alternate)])
+
+        // Detach removes the old monitor; remount installs exactly one. If the
+        // first token leaked, this event would submit the candidate twice.
+        input.removeFromSuperview()
+        container.addSubview(input)
+        NSApp.sendEvent(first)
+        #expect(decisions == [
+            .candidate(alternate),
+            .candidate(alternate),
+        ])
+    }
+
+    private func commandOptionControlKEvent(
+        windowNumber: Int,
+        isARepeat: Bool
+    ) -> NSEvent? {
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.command, .control, .option],
+            timestamp: 0,
+            windowNumber: windowNumber,
+            context: nil,
+            characters: "k",
+            charactersIgnoringModifiers: "k",
+            isARepeat: isARepeat,
+            keyCode: UInt16(kVK_ANSI_K)
+        )
     }
 
     private func makeController(
@@ -198,6 +384,11 @@ struct SummonShortcutControllerTests {
                 | UInt32(bytes[7])
         )
     }
+}
+
+@MainActor
+private final class ShortcutRecorderOtherResponder: NSView {
+    override var acceptsFirstResponder: Bool { true }
 }
 
 @MainActor

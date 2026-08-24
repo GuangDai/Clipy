@@ -35,7 +35,11 @@
   registration fails, the old token and preference remain authoritative and
   the same candidate is available to Retry. If a saved chord cannot register
   at startup, report it unavailable and retain it for Retry rather than
-  silently falling back to ⇧⌘C.
+  silently falling back to ⇧⌘C. General Settings opens one app-owned
+  recorder: Escape cancels, and a bare or modifier-only key cannot become a
+  candidate. The recorder submits the exact AppKit virtual key code and
+  conventional modifiers to the same safe replacement operation; it does not
+  add a second registrar or claim alternate-layout runtime behavior.
 - **Capture overload:** one already-started complete capture plus one
   replaceable latest pending value, drained serially. Replacing pending
   publishes the cumulative content-free count; no frozen value queue or
@@ -65,7 +69,10 @@
   cleanup through an injected registration closure. AppDelegate owns that
   controller's production start/stop lifecycle; General Settings receives
   framework-neutral current/unavailable state, the exact Show Colors advisory,
-  and Retry/Reset intents. Chord recording remains outside this slice.
+  and Change/Retry/Reset intents. Direct recorder tests require Escape
+  cancellation, reject bare/modifier-only input, and preserve exact admitted
+  key/modifier facts; the existing running Settings journey opens and cancels
+  the real recorder without adding another app launch.
 - `ClipyIntegrationTests` + `PresentationUITests` + `ClipyUITests`: marked
   Return/Escape stays with the current text responder; settled list-root
   Escape clears search then closes, while the running Details/editor journeys

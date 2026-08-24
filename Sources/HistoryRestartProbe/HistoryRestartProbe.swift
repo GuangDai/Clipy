@@ -1,7 +1,9 @@
 /// A public-API-only restart tracer for Review Evidence Card 1C-1, the bounded
 /// X-HCR post-success crash fixture, and the REVIEW §4.3 Retention-config
-/// restart tail. Each invocation owns one `SwiftDataHistory` for one short
-/// process; no SwiftData object or generated identity crosses a phase boundary.
+/// restart tail. Its separate Card 11C phase is a store-free Foundation regexp
+/// engine child used only for process-bounded characterization. Every storage
+/// invocation owns one `SwiftDataHistory` for one short process; no SwiftData
+/// object or generated identity crosses a phase boundary.
 /// The Retention phases prove exact configured-value persistence across
 /// terminated owners only; they do not prove migration, full-disk behavior,
 /// or crash durability (`11-ai-todo-map-2026-08-23.md` §4.3;
@@ -28,6 +30,7 @@ private enum ProbePhase: String {
     case gatewayAuditVerify
     case largeBlobCrashCommit
     case largeBlobVerify
+    case regexpCharacterize
 }
 
 private enum ProbeFailure: Error {
@@ -53,6 +56,7 @@ private let largeBlobType = "public.data"
 private let largeBlobDate = Date(timeIntervalSinceReferenceDate: 60_000)
 private let largeBlobSource = "restart.large-blob.capture"
 private let largeBlobByteCount = 8 * 1_048_576
+private let regexpCharacterizationInput = String(repeating: "a", count: 1_000)
 private let initialMaximumUnpinnedItems = 73
 private let initialRetentionPolicies = HistoryRetentionPolicies(
     age: AgeRetention(maxAge: 7 * 86_400),
@@ -1057,6 +1061,70 @@ private func verify(storeURL: URL) async throws {
     }
 }
 
+/// REVIEW Card 11C's engine experiment runs only in this disposable helper
+/// process. Foundation matching is synchronous, so the parent test — not a
+/// detached Task in the product — owns the deadline and can terminate the
+/// complete process if ICU does not return. Every named scenario is fixed: no
+/// caller-provided regexp or clipboard text enters this probe.
+private func regexpCharacterize(scenario: String) throws {
+    let pattern: String
+    switch scenario {
+    case "safe-control":
+        pattern = "a+b"
+    case "top-level-chain-current", "top-level-chain-progress":
+        // This repeated ambiguous top-level quantifier shape is outside the
+        // rejected group grammar frozen by 03b §8. Whether macOS 26 ICU
+        // completes it within the parent's bound is the fact under test.
+        pattern = "a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b"
+    default:
+        throw ProbeFailure.unexpectedState
+    }
+
+    FileHandle.standardOutput.write(Data(
+        (
+            "REGEXP_CHARACTERIZATION_CHILD scenario=\(scenario) "
+                + "pattern=\(pattern) started=true\n"
+        ).utf8
+    ))
+    let expression = try NSRegularExpression(pattern: pattern)
+    let range = NSRange(
+        regexpCharacterizationInput.startIndex
+            ..< regexpCharacterizationInput.endIndex,
+        in: regexpCharacterizationInput
+    )
+    if scenario == "top-level-chain-progress" {
+        expression.enumerateMatches(
+            in: regexpCharacterizationInput,
+            options: .reportProgress,
+            range: range
+        ) { result, flags, stop in
+            if result != nil {
+                // Every fixed scenario requires a `b` that the input lacks.
+                // Treat any result as a broken probe, without sharing mutable
+                // state through Foundation's callback.
+                exit(EXIT_FAILURE)
+            }
+            if flags.contains(.progress) {
+                FileHandle.standardOutput.write(Data(
+                    "REGEXP_CHARACTERIZATION_CHILD callback=progress\n".utf8
+                ))
+                stop.pointee = true
+            }
+        }
+    } else {
+        let match = expression.firstMatch(
+            in: regexpCharacterizationInput,
+            range: range
+        )
+        guard match == nil else {
+            throw ProbeFailure.unexpectedState
+        }
+    }
+    FileHandle.standardOutput.write(Data(
+        "REGEXP_CHARACTERIZATION_CHILD operation-returned=true\n".utf8
+    ))
+}
+
 @main
 private struct HistoryRestartProbe {
     static func main() async {
@@ -1111,6 +1179,8 @@ private struct HistoryRestartProbe {
                 try await largeBlobCrashCommit(storeURL: storeURL)
             case .largeBlobVerify:
                 try await largeBlobVerify(storeURL: storeURL)
+            case .regexpCharacterize:
+                try regexpCharacterize(scenario: arguments[1])
             }
             diagnostic("process.phase=\(phase.rawValue) complete")
             FileHandle.standardOutput.write(Data("\(phase.rawValue.uppercased())_OK\n".utf8))

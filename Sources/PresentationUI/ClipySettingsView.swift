@@ -66,7 +66,7 @@ public struct ClipySettingsView: View {
     ///     "Launch at Login" state and controls; `nil` (previews, hosted
     ///     tests) omits the toggle entirely.
     ///   - summonShortcut: when non-`nil`, the General tab shows the current
-    ///     binding or unavailable candidate plus Retry/Reset recovery.
+    ///     binding or unavailable candidate plus Change/Retry/Reset recovery.
     ///   - popupPosition: when non-`nil`, the General tab shows the panel
     ///     position picker bound to it; `nil` omits the picker entirely.
     public init(
@@ -220,6 +220,7 @@ private struct GeneralSettingsTab: View {
             HStack {
                 LabeledContent("Summon shortcut", value: chord)
                     .accessibilityIdentifier("clipy.settings.shortcut.status")
+                shortcutChangeButton(settings)
                 Button("Reset") { settings.reset() }
                     .disabled(!settings.canReset)
                     .accessibilityIdentifier("clipy.settings.shortcut.reset")
@@ -237,6 +238,7 @@ private struct GeneralSettingsTab: View {
                         .foregroundStyle(.secondary)
                 }
                 HStack {
+                    shortcutChangeButton(settings)
                     Button("Retry") { settings.retry() }
                         .disabled(!settings.canRetry)
                         .accessibilityIdentifier("clipy.settings.shortcut.retry")
@@ -253,6 +255,14 @@ private struct GeneralSettingsTab: View {
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("clipy.settings.shortcut.warning")
         }
+    }
+
+    private func shortcutChangeButton(
+        _ settings: SummonShortcutSettings
+    ) -> some View {
+        Button("Change…") { settings.beginChange() }
+            .disabled(!settings.canChange)
+            .accessibilityIdentifier("clipy.settings.shortcut.change")
     }
 
     @ViewBuilder

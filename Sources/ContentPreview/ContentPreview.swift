@@ -129,7 +129,10 @@ package actor ContentPreview {
         operation: RenderOperation
     ) async -> PreviewOutcome {
         #if DEBUG
-        guard let sourceBytes = checkedSourceByteCount(representations) else {
+        guard let sourceBytes = checkedSourceByteCount(
+            representations,
+            maximum: operation.resourceProfile.maximumInputBytes
+        ) else {
             return .failed(.resourceLimit)
         }
         debugActiveJobs += 1
@@ -139,7 +142,10 @@ package actor ContentPreview {
             debugRetainedSourceBytes -= sourceBytes
         }
         #else
-        guard checkedSourceByteCount(representations) != nil else {
+        guard checkedSourceByteCount(
+            representations,
+            maximum: operation.resourceProfile.maximumInputBytes
+        ) != nil else {
             return .failed(.resourceLimit)
         }
         #endif
@@ -151,7 +157,7 @@ package actor ContentPreview {
         case .displayPNG:
             return await renderRasterOffActor(
                 representations[0],
-                profile: .displayPNG
+                profile: operation.resourceProfile
             )
         }
     }
@@ -318,15 +324,19 @@ package actor ContentPreview {
         )))
     }
 
+    /// Admit the complete immutable source snapshot before route selection.
+    /// Opaque siblings still consume the fixed profile; otherwise a tiny
+    /// selected artifact could hide unbounded retained input (REVIEW 08 §6.2).
     private func checkedSourceByteCount(
-        _ representations: [PreviewRepresentation]
+        _ representations: [PreviewRepresentation],
+        maximum: Int
     ) -> Int? {
         var total = 0
         for representation in representations {
             let (next, overflow) = total.addingReportingOverflow(
                 representation.bytes.count
             )
-            guard !overflow else { return nil }
+            guard !overflow, next <= maximum else { return nil }
             total = next
         }
         return total
@@ -342,6 +352,15 @@ private extension ContentPreview {
     enum RenderOperation: Sendable {
         case historyPane
         case displayPNG
+
+        var resourceProfile: ResourceProfile {
+            switch self {
+            case .historyPane:
+                .historyPane
+            case .displayPNG:
+                .displayPNG
+            }
+        }
     }
 
     struct ResourceProfile: Sendable {

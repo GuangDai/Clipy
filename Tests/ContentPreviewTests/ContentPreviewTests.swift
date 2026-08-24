@@ -186,6 +186,58 @@ struct ContentPreviewTests {
         #expect(outcome == .failed(.malformedRepresentation))
     }
 
+    @Test("history-pane aggregate input is admitted through 64 MiB before routing")
+    func historyPaneAggregateInputEnvelope() async {
+        let maximumInputBytes = 64 * 1_048_576
+
+        do {
+            let oversized = Data(repeating: 0x61, count: maximumInputBytes + 1)
+            for identifier in [
+                "public.utf8-plain-text",
+                "public.png",
+                "com.adobe.pdf",
+            ] {
+                let outcome = await renderer.renderHistoryPane([
+                    PreviewRepresentation(
+                        typeIdentifier: identifier,
+                        bytes: oversized
+                    ),
+                ])
+                #expect(outcome == .failed(.resourceLimit))
+            }
+        }
+
+        let boundaryPadding = Data(repeating: 0, count: maximumInputBytes - 1)
+        let aggregateOverBoundary = await renderer.renderHistoryPane([
+            PreviewRepresentation(
+                typeIdentifier: "com.adobe.pdf",
+                bytes: boundaryPadding
+            ),
+            PreviewRepresentation(
+                typeIdentifier: "public.png",
+                bytes: Self.onePixelPNG
+            ),
+        ])
+        #expect(aggregateOverBoundary == .failed(.resourceLimit))
+
+        let exactBoundary = await renderer.renderHistoryPane([
+            PreviewRepresentation(
+                typeIdentifier: "com.adobe.pdf",
+                bytes: boundaryPadding
+            ),
+            PreviewRepresentation(
+                typeIdentifier: "public.utf8-plain-text",
+                bytes: Data("a".utf8)
+            ),
+        ])
+        guard case let .content(.text(text)) = exactBoundary else {
+            Issue.record("expected exact-boundary text, got \(exactBoundary)")
+            return
+        }
+        #expect(text.text == "a")
+        #expect(!text.wasTruncated)
+    }
+
     #if DEBUG
     @Test("parked render reports content-free accounting and returns to zero")
     func debugAccountingTracksOnlyActiveSourceBytes() async {
