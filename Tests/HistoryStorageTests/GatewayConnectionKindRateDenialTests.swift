@@ -161,9 +161,10 @@ struct GatewayConnectionKindRateDenialTests {
         let appIntentsConnection = try #require(
             try await history.connections().first
         ).id
-        let localAutomationConnection = try await history.enrollConnection(
+        let localAutomationConnection = try await authority.enrollConnection(
             kind: .localAutomation,
-            displayName: "Rate kind recheck"
+            displayName: "Rate kind recheck",
+            credential: nil
         )
         _ = try await history.perform(.capture(WSSupport.textCapture(
             "rate-kind-history-sentinel",
