@@ -319,6 +319,11 @@ Storage maps package-only Domain rejections and platform errors to this vocabula
 7. Detail/paste/thumbnail either resolve the requested current item/version semantics or return a typed stale/not-found failure; they never label new bytes with an old Content Version.
 8. All returned collections and byte payloads are bounded by Part VI configuration limits.
 9. The interface exposes no `@Model`, persistence identity, fingerprint, Candidate Rank, Domain state, change journal, or cache key.
+10. `retentionConfiguration()` reads both configured-retention singletons in
+    one Authority interval. A read begun after a committed retention write
+    observes that value; malformed or missing durable state fails typed rather
+    than returning caller defaults. It is configured policy, not live usage or
+    an OCC snapshot (`V2-02` §8.1a).
 
 ### 12. Caller examples
 

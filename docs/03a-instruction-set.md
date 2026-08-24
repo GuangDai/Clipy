@@ -124,10 +124,21 @@ public protocol ClipboardHistory: Sendable {
         for item: HistoryItemReference,
         pixels: PixelSize
     ) async throws -> ThumbnailPayload?
+
+    func retentionConfiguration(
+    ) async throws -> HistoryRetentionConfiguration
 }
 ```
 
 `SwiftDataHistory` is the production implementation. UI previews may use a scripted implementation, which must itself conform to `Sendable` (because `ClipboardHistory: Sendable`) and must not be used as a substitute for storage semantic tests. Persistence semantic tests use `SwiftDataHistory` with an in-memory container, not a behavior-reimplementing fake.
+
+`retentionConfiguration()` is V2-02's purpose-specific configured-state read.
+It returns the validated persisted v1 maximum-unpinned count and the V2 policy
+bundle from one serialized Authority interval. It does not expose live retained
+bytes, model identity, or a freshness/OCC token. Adding this protocol
+requirement is an owned source-compatibility break for conformers; no default
+implementation may fabricate defaults or turn stored corruption into a value
+(`V2-02` §8.1a/§12; decision `DEC-RET-READ`).
 
 ### 4. Raw capture seam
 

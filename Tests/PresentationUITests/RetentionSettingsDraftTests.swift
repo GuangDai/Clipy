@@ -17,6 +17,75 @@ struct RetentionSettingsDraftTests {
         #expect(accepted)
     }
 
+    private func load(
+        _ configuration: HistoryRetentionConfiguration,
+        into draft: inout RetentionSettingsDraft
+    ) {
+        let request = draft.beginLoadRequest()
+        let accepted = draft.acceptLoaded(configuration, requestedAt: request)
+        #expect(accepted)
+    }
+
+    @Test("one configured snapshot preserves a newer count edit and loads untouched policies")
+    func lateUnifiedReadMergesCountAndPoliciesPerField() throws {
+        var draft = RetentionSettingsDraft()
+        let request = draft.beginLoadRequest()
+        draft.setMaximumUnpinnedText("31")
+
+        let accepted = draft.acceptLoaded(
+            HistoryRetentionConfiguration(
+                maximumUnpinnedItems: 42,
+                policies: HistoryRetentionPolicies(
+                    age: AgeRetention(maxAge: 90_001),
+                    storage: StorageRetention(maxTotalBytes: 1_048_577),
+                    revisions: RevisionRetention(
+                        maxRevisionsPerItem: 19,
+                        maxRevisionBytesPerItem: 1_048_577
+                    )
+                )
+            ),
+            requestedAt: request
+        )
+
+        #expect(!accepted)
+        #expect(draft.maximumUnpinnedText == "31")
+        #expect(draft.maximumUnpinnedValueIsDirty)
+        #expect(draft.countSubmission()?.maximumUnpinnedItems == 31)
+        #expect(draft.ageDaysText == "2")
+        #expect(draft.storageMiBText == "2")
+        #expect(draft.revisionCountText == "19")
+        #expect(draft.revisionMiBText == "2")
+        let policies = try #require(draft.submission()?.policies)
+        #expect(policies.age?.maxAge == 90_001)
+        #expect(policies.storage?.maxTotalBytes == 1_048_577)
+        #expect(policies.revisions?.maxRevisionBytesPerItem == 1_048_577)
+    }
+
+    @Test("unedited count readback submits exact configured value")
+    func uneditedCountUsesTheUnifiedConfiguredSnapshot() throws {
+        var draft = RetentionSettingsDraft()
+        load(
+            HistoryRetentionConfiguration(
+                maximumUnpinnedItems: 37,
+                policies: HistoryRetentionPolicies(
+                    age: nil,
+                    storage: nil,
+                    revisions: nil
+                )
+            ),
+            into: &draft
+        )
+
+        let submission = try #require(draft.countSubmission())
+        #expect(submission.maximumUnpinnedItems == 37)
+        #expect(!draft.maximumUnpinnedValueIsDirty)
+        #expect(!draft.maximumUnpinnedRequiresTightening(for: submission))
+
+        draft.setMaximumUnpinnedText("36")
+        let tightened = try #require(draft.countSubmission())
+        #expect(draft.maximumUnpinnedRequiresTightening(for: tightened))
+    }
+
     @Test("late configured-policy read preserves edits and advances strictness baseline")
     func lateConfigurationReadCannotOverwriteNewerDraft() throws {
         var draft = RetentionSettingsDraft()
@@ -213,6 +282,33 @@ struct RetentionSettingsDraftTests {
         #expect(draft.acceptedSuccessMessage == nil)
         #expect(draft.ageValueIsDirty)
         #expect(draft.ageDaysText == "4")
+    }
+
+    @Test("an edit in either retention tab clears count Apply success")
+    func crossTabEditClearsAcceptedCountSuccess() throws {
+        var draft = RetentionSettingsDraft()
+        load(
+            HistoryRetentionConfiguration(
+                maximumUnpinnedItems: 37,
+                policies: HistoryRetentionPolicies(
+                    age: nil,
+                    storage: nil,
+                    revisions: nil
+                )
+            ),
+            into: &draft
+        )
+        let submission = try #require(draft.countSubmission())
+        let accepted = draft.acceptApplied(
+            submission,
+            successMessage: "Done."
+        )
+        #expect(accepted)
+        #expect(draft.acceptedCountSuccessMessage == "Done.")
+
+        draft.setRevisionCountEnabled(true)
+
+        #expect(draft.acceptedCountSuccessMessage == nil)
     }
 
     @Test("binary storage fields identify their units as MiB")

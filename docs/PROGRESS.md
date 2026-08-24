@@ -12,8 +12,8 @@
 > they are cited here, never restated as new semantics.
 
 **Audit baseline:** `8f316c9` (2026-08-02). **Current landed baseline:**
-`master` through [PR #22](https://github.com/GuangDai/Clipy/pull/22) / merge
-`3d09455` (2026-08-23). Steps 0–9 are
+`master` through [PR #31](https://github.com/GuangDai/Clipy/pull/31) / merge
+`e20c17b` (2026-08-23). Steps 0–9 are
 implemented and CI-green;
 M2/state 2 is complete. Step 9 (product wiring: PasteboardAdapter +
 PresentationUI + ClipyApp composition) is done, including its post-step-9
@@ -24,15 +24,18 @@ cursor/status-item/center/last-position placement, dwell-driven preview pane)
 rather than a SwiftUI `MenuBarExtra`. M3/state 3 (packaging, accessibility,
 localization, product acceptance per Part VI §11) remains open.
 
-**Current CI provenance (2026-08-23):** PR #22 is green across Lint + source
-gates, SwiftPM build + test, and XcodeGen generate + app build/test in attempt 2
-of [correctness run 32621391305](https://github.com/GuangDai/Clipy/actions/runs/32621391305);
-the merge commit is also green at
-[run 32621658106](https://github.com/GuangDai/Clipy/actions/runs/32621658106).
-PR #22 changes only the two evidence scripts and proves their ordinary source
-integration, not either intended physical observation. No HistoryCore
-public-surface change required a symbol-snapshot run, and no performance/AB
-lane ran. The earlier PR #20 ordinary ad-hoc Release artifact passed the finite
+**Current CI provenance (2026-08-23):** the PR #31 merge head is green across
+Lint + source gates, SwiftPM build + test, and XcodeGen generate + app
+build/test at
+[run 32640926461](https://github.com/GuangDai/Clipy/actions/runs/32640926461).
+PR #31 changes the point-in-time REVIEW todo map only; it does not add product
+behavior. The latest bounded normal-path behavior batch is PR #23 / merge
+`96bfb341`, green in PR run
+[32623287645](https://github.com/GuangDai/Clipy/actions/runs/32623287645) and
+master push run
+[32623493462](https://github.com/GuangDai/Clipy/actions/runs/32623493462).
+No HistoryCore public-surface change required a symbol-snapshot run, and no
+performance/AB lane ran. The earlier PR #20 ordinary ad-hoc Release artifact passed the finite
 Card 5D symbol inventory at
 [release-surface run 32619756885](https://github.com/GuangDai/Clipy/actions/runs/32619756885).
 That dispatch proves zero matches for the 26 reviewed demangled literals in
@@ -1139,9 +1142,13 @@ test.
   `RetainedBytes` deliberately excludes WAL, staging, thumbnails, resident
   copies, filesystem allocation, and other physical categories, so this is not
   a physical storage, RSS, or capacity-manager result.
-- **Batch 21 non-conflicting Partial closure is in progress:** the current
-  branch contains source and fixtures for seven independently bounded leaves,
-  but none has macOS CI evidence yet. Hosted
+- **Batch 21 bounded closure is landed and correctness-green:**
+  [PR #23](https://github.com/GuangDai/Clipy/pull/23), merge `96bfb341`, passed
+  all three jobs in PR run
+  [32623287645](https://github.com/GuangDai/Clipy/actions/runs/32623287645)
+  and master push run
+  [32623493462](https://github.com/GuangDai/Clipy/actions/runs/32623493462).
+  Hosted
   [`HistoryListPaginationHostedTests`](../ClipyApp/Tests/ClipyIntegrationTests/HistoryListPaginationHostedTests.swift)
   mounts the production list against an all-pinned first page;
   [`FloatingPanelFrameHostedTests`](../ClipyApp/Tests/ClipyIntegrationTests/FloatingPanelFrameHostedTests.swift)
@@ -1156,8 +1163,19 @@ test.
   authoritative capture-failure episode. The same branch also adds bounded,
   content-free APFS owning-boundary diagnostics and explicit pasteboard
   build/process/phase markers to discriminate the two failed workflows. Until
-  macOS CI runs, all remain **In progress**. Even after correctness-green, these
-  leaves do not close localization or the complete unified-retention journey,
+  later dispatches, those two were diagnostic instrumentation only; physical
+  APFS and pasteboard behavior are attributed separately to runs 32636093920
+  and 32632263996. The five normal acceptance leaves are Done only at their
+  specified hosted/pure/admission/notification ceilings. These leaves do not
+  close localization or the complete unified-retention journey,
   AX/VoiceOver/FKA, multi-screen/Spaces/WindowServer behavior, General
   pasteboard visibility, physical APFS ENOSPC, external surface purge, signed
   Data Protection Keychain, or distribution acceptance.
+- **Batch 30 `DEC-RET-READ` + Card 10A consumer closure is in progress:** the
+  current branch resolves configured retention as a purpose-specific public
+  `ClipboardHistory` read while keeping live retained-byte usage excluded. It
+  hoists both Settings tabs onto one panel-owned count+policy snapshot/edit
+  generation, adds the awkward-unit Presentation action proof, and adds
+  `RET-READ-1A` public persistent owner-release/reopen/read/reapply evidence.
+  No macOS CI evidence exists until the batch PR runs; localization, visual
+  count relocation into one group, AX/FKA, and live usage remain open.

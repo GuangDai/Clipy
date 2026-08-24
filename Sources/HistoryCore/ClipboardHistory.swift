@@ -113,11 +113,15 @@ public protocol ClipboardHistory: Sendable {
     /// here is the value a later `.setRetentionPolicy` /
     /// `.setRetentionPolicies` compares against, and the §11 read-after-
     /// commit guarantee applies unchanged. Extension-by-addition to the read
-    /// surface — the same posture as the `V2-00` §8(h) enum-case additions;
-    /// no existing method or v1 caller is affected. Failures are typed
-    /// `HistoryFailure`s exactly as the other reads (a corrupted singleton
-    /// fails closed as `.persistence(...)`, never as a default value).
+    /// surface — the same posture as the `V2-00` §8(h) enum-case additions.
+    /// Ordinary callers are unaffected, but adding a protocol requirement is
+    /// an intentionally owned Swift source break for conformers; every
+    /// repository conformer is kept exhaustive and no default implementation
+    /// may fabricate configured values. Failures are typed `HistoryFailure`s
+    /// exactly as the other reads (a corrupted singleton fails closed as
+    /// `.persistence(...)`, never as a default value).
     ///
+    /// docs/v2/V2-02-retention.md §8.1/§12;
     /// docs/v2/V2-07-ux.md §5.2; audit: docs/reviews/
     /// 2026-08-20-clipy-maccy-audit/02-spec-implementation.md SPEC-IMPL-003.
     func retentionConfiguration() async throws -> HistoryRetentionConfiguration

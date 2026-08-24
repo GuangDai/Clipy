@@ -703,6 +703,19 @@ Both fetch exactly one row and decode/validate its full lineage. Detail maps it 
 
 `ThumbnailService` installs an exact-key source-to-decode task before its first suspension. The creator asks the Authority to fetch and fully hydrate exactly one item, verify the requested Content Version, derive Effective Content, and return immutable source image bytes. An existing-flight caller instead asks the Authority for a scalar-only dimension/existence/version fence before awaiting that task. ImageIO decode occurs only after all SwiftData objects and context have been released; no joiner rehydrates the content blob.
 
+#### 14.6 Configured retention read
+
+`HistoryAuthority.retentionConfiguration()` creates one fresh read context and,
+within one non-suspending Authority interval, loads the position singleton's
+validated `maximumUnpinnedItems` and the retention-expansion singleton's
+validated enabled/value lanes. It returns one immutable
+`HistoryRetentionConfiguration`. Disabled expansion lanes map to `nil`; dormant
+placeholder columns never become configured policy. Missing, duplicate,
+wrong-version, non-finite, or out-of-range singleton state fails closed through
+the existing persistence taxonomy. The read performs no write, emits no
+invalidation, and exposes neither current retained-byte usage nor a
+`ChangePosition`/OCC token (`V2-02` §8.1a; `DEC-RET-READ`).
+
 ### 15. Projection rules
 
 `ContentProjector` produces bounded values from Effective Content:

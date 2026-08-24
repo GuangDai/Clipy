@@ -971,8 +971,10 @@ v1 `.setRetentionPolicy`; it carries no revision/blob rewrite (unlike
 ### 6.1 Module and target placement
 
 - **Public surface** (`HistoryRetentionPolicies`, `AgeRetention`,
-  `StorageRetention`, `RevisionRetention`, and the new `HistoryAction` /
-  `HistoryCommitOutcome` / `CapacityKind` cases) is added to `HistoryCore` as a
+  `StorageRetention`, `RevisionRetention`,
+  `HistoryRetentionConfiguration`, `ClipboardHistory.retentionConfiguration()`,
+  and the new `HistoryAction` / `HistoryCommitOutcome` / `CapacityKind` cases)
+  is added to `HistoryCore` as a
   V2-scoped section, Foundation-only (`01` §8). These types reuse v1 vocabulary
   (`HistoryItemID`, `RevisionID`, `TimeInterval`) verbatim and add no colliding
   name. Adding cases to closed v1 public enums is the sanctioned V2 extension
@@ -1259,6 +1261,39 @@ revision pruning. `prunedRevisions` counts only revisions pruned for
 `.delete` stamping, `05` §9), not pruned, so they are not counted (the stamping
 composer drops the redundant `.pruneRevisions` for retired items, §6.3;
 verified by `RET-STAMP-2`).
+
+### 8.1a Configured-policy read (`DEC-RET-READ`, resolved public)
+
+The existing `ClipboardHistory` interface gains one purpose-specific read:
+
+```swift
+public struct HistoryRetentionConfiguration: Sendable, Hashable {
+    public let maximumUnpinnedItems: Int
+    public let policies: HistoryRetentionPolicies
+}
+
+public protocol ClipboardHistory: Sendable {
+    func retentionConfiguration(
+    ) async throws -> HistoryRetentionConfiguration
+}
+```
+
+One serialized Authority interval loads and validates the persisted v1 count
+singleton and V2-02 expansion singleton, then returns them as one immutable
+value. This is the configured state a later `.setRetentionPolicy` and
+`.setRetentionPolicies` compare against. It is not live retained-byte usage,
+does not expose `ChangePosition`, SwiftData identity, projections, or an OCC
+token, and never substitutes defaults for missing/corrupt durable state.
+
+This extension is intentionally public because the state belongs to the deep
+History module, not to ClipyApp or PresentationUI. A companion protocol or
+app-internal closure would split one durable concern across two interfaces and
+force composition to know storage semantics. Adding a protocol requirement is
+an owned Swift source-compatibility break for conformers, although ordinary v1
+callers that do not invoke it are unaffected. Every repository conformer and
+the HistoryCore symbol snapshot are compile/check gates. No protocol default
+implementation may fabricate a new-store value. `OPEN-2` remains open only for
+the distinct current/live retained-byte usage read.
 
 ### 8.2 Exhaustive-switch impact (owned change)
 
@@ -1584,6 +1619,15 @@ R1/R2/R3 capability IDs and the deleted "R0/R1/R2 as shipped tiers" token
   `HistoryAction`, `HistoryCommitOutcome`, `HistoryMutation`,
   `StampedMutation`, `PlannedOutcome`, and `CapacityKind` handles the new cases
   (§8.2); compile-enforced.
+- **RET-READ-1A (configured-state persistence and consumption).** Through the
+  public seam, set a non-default count plus literal `90,001 s` / `1,048,577 B`
+  policy values, release the first store owner, reopen, and read one exact
+  `HistoryRetentionConfiguration`. Reapplying both returned values is
+  `.unchanged`, with no position or retained-row change. The Presentation
+  consumer performs one read, edits only revision count, and emits a policy
+  action preserving every untouched awkward-unit literal. A late read cannot
+  replace a newer count or policy field. This does not prove localization,
+  hosted controls, or live retained-byte usage.
 - **RET-PLATFORM-1 (schema migration).** `RetentionExpansionConfigRow` (§3.3)
   and `RetainedBytesRow` (§3.3b) are additive to `HistorySchemaV2`; the
   `HistorySchemaV1 → HistorySchemaV2` hop is the **single
@@ -2046,17 +2090,14 @@ V2-02 provides the data hooks V2-07 (UX) consumes; it owns no SwiftUI:
   count/byte fields (R3). Disabling a dimension sends `nil`. The count control
   remains bound to the v1 `.setRetentionPolicy` (separate action). All rendered
   on the main actor from `HistoryCore` DTOs only (`V2-00` §6.6).
-- **Read posture (write-only).** The V2-02 policy surface is write-only:
-  `HistoryConfiguration` is frozen v1 (`persistence` /
-  `initialMaximumUnpinnedItems` only, `05` §2; §6.4), and no public read
-  returns the persisted `HistoryRetentionPolicies`; the settings above
-  render caller-held defaults, not store state. This mirrors v1, where
-  the count policy is also write-only (`03a` §5 `perform` payload
-  only), but widens it from one Int to three dimensions plus UI
-  defaults. Candidate sibling read for DC-08 (`V2-roadmap` DC-08 row
-  currently lists `enrichmentEnabled()`, batch
-  `enrichmentStatuses(for:)`, retained bytes (OPEN-2), and
-  `JournalAdminHistory` only).
+- **Configured read posture (`DEC-RET-READ`).**
+  `retentionConfiguration()` returns the persisted v1 count plus the exact
+  V2-02 policy bundle from one Authority interval (§8.1a). The Settings panel
+  renders this state, never caller-held defaults. `HistoryConfiguration`
+  remains frozen v1 (`persistence` / `initialMaximumUnpinnedItems` only,
+  `05` §2; §6.4): startup configuration and durable configured-policy read are
+  separate concerns. Live/current retained-byte usage remains excluded by
+  OPEN-2.
 - **Receipt feedback.** A `.retentionPoliciesSet(retiredItems:prunedRevisions:)`
   receipt can surface "N items retired, M older revisions pruned" to the user
   (transparent data-minimization feedback). A `.capacityExceeded(.storageBytes)`

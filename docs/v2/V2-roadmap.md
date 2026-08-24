@@ -426,10 +426,10 @@ backfill or the explicit legacy projection-recipe rebuild.
 
 - **Status:** R.1–R.6 landed and CI-green (2026-08-16; evidence per slice in
   `V2-PROGRESS.md` §0 — latest full-scope run 31950153864, 491 tests /
-  58 suites, all four jobs, zero warnings). **R.7 (UX handoff) remains and
-  is gated on v1 step 9** (`PasteboardAdapter`/`PresentationUI` scaffolds),
-  per this roadmap's §2 baseline and `V2-07`'s dependency notes; it opens
-  when step 9 lands. OPEN-2 stays not-admitted (Record 1).
+  58 suites, all four jobs, zero warnings). v1 step 9 has since landed, so
+  **R.7 (UX handoff) is in progress**, with bounded Settings leaves recorded
+  in `V2-PROGRESS.md`; localization and full accessibility/runtime journeys
+  remain open. OPEN-2 stays not-admitted (Record 1).
 - **Spec references:** `V2-02` §2–§12b; D23–D24.
 - **Dependencies:** completed v1 mutations/revision preparation; Foundation +
   HistoryCore-only Domain; existing `HistoryAuthority`.
@@ -440,13 +440,13 @@ backfill or the explicit legacy projection-recipe rebuild.
 
 | Step | Deliverables | Exit proof |
 |---|---|---|
-| R.1 Core contract | Add only the retention policies, action/outcome surface, and capacity cases admitted under DC-23; validate their bounds and normalize a both-nil revision policy when R3 is included. Update all exhaustive switches and the public-symbol snapshot intentionally. | `RET-COMPILE-1/2`; policy-bound and failure-translation fixtures for every admitted dimension. |
+| R.1 Core contract | Add the retention policies, action/outcome surface, capacity cases admitted under DC-23, and `DEC-RET-READ`'s purpose-specific configured count+policy read. Validate bounds, normalize a both-nil revision policy, update exhaustive switches, and snapshot the public surface intentionally. | `RET-COMPILE-1/2`; policy-bound/failure fixtures; every conformer compiles and no default read fabricates state. |
 | R.2 Pure Domain | Add complete expansion facts/summaries, `RetentionExpansionPlan`, `RevisionExpansionTarget`, `planItemRetentionExpansion`, `planRevisionRetentionExpansion`, `HistoryMutation.pruneRevisions`, `HistoryMutation.setRetentionPolicies`, and `PlannedOutcome.retentionPoliciesSet`. Implement deterministic R1 strict-age ordering, R1-before-R2 union, protected victims, checked bytes, and shortest-append-order-prefix R3 pruning (oldest-inactive first, not minimum-cardinality). | `RET-PRUNE-1/2`, `RET-SELECT-1`; deterministic and overflow fixtures; D23/D24 proofs. |
 | R.3 Persistence/projection | Add and validate `RetentionExpansionConfigRow` and the business-ID-consistent `RetainedBytesRow` shape resolved under DC-04; backfill every item before open; maintain the 1:1 scalar projection on create, append, prune, and delete even while policies are disabled; inject the Storage clock internally. | `RET-PLATFORM-1/1b/2`; migration, missing-row-corruption, and projection-lifecycle fixtures. |
 | R.4 Capture composition | Run v1 count planning first; when R1/R2 is active, plan over projected post-primary/post-count state, protect primary/pinned/count victims, and commit one merged plan/position. Coalesce uses the winner’s stored bytes. | `RET-PERF-1/3`; count+age+byte composition, pinned-over-budget hard failure, one-position, and disabled-public-semantics proofs. |
 | R.5 Revise composition | Extend the two-phase revise preparation/recheck. Speculatively and authoritatively recompute R3, validate the hard bound on post-prune/post-append state, run R2 but never R1, and fuse append+prune into one blob write and one `ContentVersion` successor. | `RET-PLATFORM-3/3b/4`, `RET-CONCUR-1`, `RET-STAMP-1`. |
 | R.6 Policy sweep | Persist the policy explicitly; run R3 first, project post-prune bytes, then R1/R2; retirement subsumes prune; same-policy/satisfied state is a true no-op; reject active-revision or pinned-byte impossibility atomically. | `RET-PERF-2`, `RET-STAMP-2`, `RET-SECURITY-1`; receipt-count and no-op proofs. |
-| R.7 UX handoff | Wire unified age/storage/revision settings, receipts, pinned-over-budget guidance, accessibility, and localization. Do not claim a wall-clock sweep; omit live usage unless OPEN-2 is resolved. | Corresponding `UX-*` gates and product tests. |
+| R.7 UX handoff | Wire one panel-owned configured count+policy snapshot, lossless per-field editing, unified retention controls, receipts, pinned-over-budget guidance, accessibility, and localization. Do not claim a wall-clock sweep; omit live usage unless OPEN-2 is resolved. | `RET-READ-1A` persistent public reopen/read/reapply proof, Card 10A consumer proof, corresponding `UX-*` gates and product tests. |
 
 Retention trigger matrix remains exact:
 
@@ -461,8 +461,8 @@ All acceptance gates:
 `RET-PLATFORM-1b`, `RET-PLATFORM-2`, `RET-PLATFORM-3`,
 `RET-PLATFORM-3b`, `RET-PLATFORM-4`, `RET-PRUNE-1`,
 `RET-PRUNE-2`, `RET-SELECT-1`, `RET-CONCUR-1`, `RET-STAMP-1`,
-`RET-STAMP-2`, `RET-PERF-1`, `RET-PERF-2`, `RET-PERF-3`, and
-`RET-SECURITY-1`.
+`RET-STAMP-2`, `RET-PERF-1`, `RET-PERF-2`, `RET-PERF-3`,
+`RET-SECURITY-1`, and `RET-READ-1A`.
 
 ## 7. V2-01 — enrichment pipeline (E1 + enrichment S1)
 
