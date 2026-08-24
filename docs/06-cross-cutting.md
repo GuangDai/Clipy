@@ -355,13 +355,21 @@ Correctness gates run first. Performance claims are accepted only from a release
 - Thumbnail installs one exact-key source-to-decode task, so concurrent identical callers perform one bounded full Authority source fetch and one shared decode; joiners perform scalar dimension/existence/version fences and cannot receive stale bytes. Source-inclusive service tests cover shared success, `nil`, failure, and removal; WS15 proves version semantics and that a failed stale join does not cancel the creator. The release runner's direct-source convenience still prefetches once to isolate decode-sharing timing; it is not an RSS/copy measurement.
 
 The manual performance-admission lane is dispatch-only and never runs on a
-push or pull request. It waits for source gates and SwiftPM correctness tests,
-then runs a fixed 1,000 × 256 KiB preparation smoke before preparing one
+push or pull request. One dedicated manual caller first invokes the reusable
+same-SHA correctness workflow (source gates, SwiftPM functional tests, and app
+build/tests), then starts the exact-matcher and scale evidence siblings in
+parallel. The performance-helper/proof reusable module remains caller-less.
+A portable source contract gate rejects trigger/caller/dependency/liveness
+drift without duplicating either evidence script's result schema. The scale
+lane then runs a fixed 1,000 × 256 KiB preparation smoke before preparing one
 persistent 5,000-row corpus with the same per-row bound. The smoke crosses the
 750-to-1,000-row interval in which supported diagnostic run 31498144173 began
 emitting missing `.externalStorage` interim-file errors; a
-five-minute timeout is a liveness guard, not a product latency budget. Both
-preparations fail on any such CoreData diagnostic.
+five-minute timeout is a liveness guard, not a product latency budget. The
+complete 5,000-row seed+validation stage has its historical ten-minute
+liveness guard; browse, Debug probe, exact search, and warm-open retain their
+45/15/90/45-minute stage guards. Both preparations fail on any such CoreData
+diagnostic.
 
 Preparation uses a package-only, Authority-owned bounded seeder rather than
 replaying 5,000 public captures. Raw values still traverse the production

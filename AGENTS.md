@@ -30,7 +30,7 @@ thumbnails.
   run on any platform; everything else (including
   `scripts/public_symbol_snapshot.sh`) needs macOS + `xcrun`.
 
-**Current state (2026-08-24, `master` through PR #32):** steps 0–9 are
+**Current state (2026-08-24, `master` through PR #33):** steps 0–9 are
 done and CI-green (scaffold + gates, `HistoryCore` public surface,
 `HistoryDomain` pure core, dependency pins, schema v1 + codecs,
 `HistoryAuthority` capture/mutations/reads/observation/thumbnail, product
@@ -47,6 +47,9 @@ provider registered before store open, `supportedModes = [.background]`,
 output-only entities, no `EntityQuery`, confined to `ClipyApp/Sources`).
 `DEC-RET-READ` and its bounded Settings consumer/persistent readback closure
 landed in PR #32 (merge `1c221e6`; master run 32678654503).
+`DEC-PREVIEW-TARGET` and the concrete package-only `ContentPreview` deep
+module landed in PR #33 (merge `ffd0e9f`; final PR run 32682438863; master
+run 32682682345).
 Both dispatch-only physical-evidence cells are green on `master` as of
 2026-08-23: the General pasteboard cross-process run 32632263996 and the
 Card 6B APFS ENOSPC capture-transaction run 32636093920 (the latter via
@@ -140,7 +143,7 @@ ClipyApp/                     XcodeGen spec, app sources, hosted integration tes
 docs/                         the design specification (00–06), AUDIT.md, PROGRESS.md
 docs/roadmap/                 implementation roadmap, one doc per module
 scripts/                      gate scripts (see below)
-.github/workflows/            correctness, dormant reusable performance
+.github/workflows/            correctness, manual/reusable performance
                               evidence, symbol-snapshot workflows
 ```
 
@@ -180,6 +183,11 @@ bash scripts/ci/run_signed_runtime.sh \
 
 **Gate semantics:**
 
+- `scripts/evidence_workflow_gate.py` — protects the GOV-1 CI policy that was
+  lost in the original workflow split: one `workflow_dispatch`-only caller
+  invokes same-SHA reusable correctness before the exact-matcher and scale
+  evidence siblings, never cancels an active evidence run, and retains the
+  Actions-owned 1,000/5,000-row plus measurement-stage liveness guards.
 - `scripts/import_gate.py` — per-target import confinement (Part I §8):
   `ClipboardFormats` and `ClipyCLIContract` → Foundation only;
   `ContentPreview` → Foundation + ClipboardFormats + CoreGraphics + ImageIO;
@@ -284,10 +292,11 @@ logs are not parsed as compiler output. Write warning-free code.
   three jobs: **Lint + source gates**, **SwiftPM build + test**, and
   **XcodeGen generate + app build/test**. Job steps delegate to `scripts/ci/`
   so the same commands are reproducible without copying shell across YAML.
-- The performance helper/proof, exact-matcher, and scale-admission workflows
-  are reusable `workflow_call` modules with no caller in this repository.
-  They do not run on push, pull request, or manual dispatch. Adding a caller is
-  a deliberate CI policy change for resumed performance work.
+- The exact-matcher and scale-admission workflows remain reusable
+  `workflow_call` modules and run only through the dedicated manual
+  `workflow_dispatch` caller after same-SHA correctness succeeds. They never
+  run on push or pull request. The performance helper/proof workflow remains
+  reusable-only with no caller.
 - `scripts/diagnostic_scan.py` owns the narrow log profiles. Every macOS job
   invokes the shared macOS 26/arm64 runner contract.
 - `.github/workflows/symbol-snapshot.yml` is `workflow_dispatch`-only and

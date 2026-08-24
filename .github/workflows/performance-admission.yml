@@ -24,17 +24,173 @@ jobs:
         shell: bash
         run: bash scripts/ci/verify_macos_runner.sh "$LOG_DIR/diagnostics.log"
 
-      - name: Run scale admission evidence
+      - name: Build scale admission runners
+        timeout-minutes: 30
         shell: bash
         run: >-
           bash scripts/ci/run_performance_admission.sh
-          "$LOG_DIR" "$RUNNER_TEMP/clipy-performance-admission"
+          "$LOG_DIR" "$RUNNER_TEMP/clipy-performance-admission" build
+
+      - name: Prepare 1,000-row smoke corpus
+        id: prepare_smoke
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: bash
+        run: >-
+          bash scripts/ci/run_performance_admission.sh
+          "$LOG_DIR" "$RUNNER_TEMP/clipy-performance-admission" prepare-smoke
+
+      - name: Require clean 1,000-row smoke corpus
+        id: prepare_smoke_gate
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.prepare_smoke.outcome }}" != success ]]; then
+            printf '1,000-row prepare did not complete: %s\n' \
+              "${{ steps.prepare_smoke.outcome }}" >&2
+            exit 1
+          fi
+          bash scripts/ci/run_performance_admission.sh \
+            "$LOG_DIR" "$RUNNER_TEMP/clipy-performance-admission" validate-smoke
+
+      - name: Prepare 5,000-row corpus
+        id: prepare
+        continue-on-error: true
+        timeout-minutes: 10
+        shell: bash
+        run: >-
+          bash scripts/ci/run_performance_admission.sh
+          "$LOG_DIR" "$RUNNER_TEMP/clipy-performance-admission" prepare
+
+      - name: Require clean 5,000-row corpus
+        id: prepare_cleanliness
+        if: always() && steps.prepare_smoke_gate.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.prepare.outcome }}" != success ]]; then
+            printf '5,000-row prepare did not complete: %s\n' \
+              "${{ steps.prepare.outcome }}" >&2
+            exit 1
+          fi
+          bash scripts/ci/run_performance_admission.sh \
+            "$LOG_DIR" "$RUNNER_TEMP/clipy-performance-admission" validate-prepare
+
+      - name: Measure tie-heavy browse-page latency
+        id: browse_ties
+        if: always() && steps.prepare_cleanliness.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 45
+        shell: bash
+        run: >-
+          bash scripts/ci/run_performance_admission.sh
+          "$LOG_DIR" "$RUNNER_TEMP/clipy-performance-admission" browse-ties
+
+      - name: Run one Debug exact-search diagnostic probe
+        id: exact_search_probe
+        if: always() && steps.prepare.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 15
+        shell: bash
+        run: >-
+          bash scripts/ci/run_performance_admission.sh
+          "$LOG_DIR" "$RUNNER_TEMP/clipy-performance-admission" exact-search-probe
+
+      - name: Require complete Debug exact-search diagnostics
+        id: exact_search_probe_gate
+        if: always() && steps.prepare.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.exact_search_probe.outcome }}" != success ]]; then
+            printf 'Debug exact-search probe did not complete: %s\n' \
+              "${{ steps.exact_search_probe.outcome }}" >&2
+            exit 1
+          fi
+          bash scripts/ci/run_performance_admission.sh \
+            "$LOG_DIR" "$RUNNER_TEMP/clipy-performance-admission" \
+            validate-exact-search-probe
+
+      - name: Measure worst-bound exact search
+        id: exact_search
+        if: >-
+          always()
+          && steps.prepare_cleanliness.outcome == 'success'
+          && steps.exact_search_probe_gate.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 90
+        shell: bash
+        run: >-
+          bash scripts/ci/run_performance_admission.sh
+          "$LOG_DIR" "$RUNNER_TEMP/clipy-performance-admission" exact-search
+
+      - name: Measure independent-process warm persistent open
+        id: warm_open
+        if: >-
+          always()
+          && steps.prepare_cleanliness.outcome == 'success'
+          && steps.exact_search_probe_gate.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 45
+        shell: bash
+        run: >-
+          bash scripts/ci/run_performance_admission.sh
+          "$LOG_DIR" "$RUNNER_TEMP/clipy-performance-admission" warm-open
+
+      - name: Summarize available scale evidence
+        if: always()
+        shell: bash
+        run: >-
+          bash scripts/ci/run_performance_admission.sh
+          "$LOG_DIR" "$RUNNER_TEMP/clipy-performance-admission" summarize
+
+      - name: Self-scan available scale logs
+        if: always()
+        shell: bash
+        run: >-
+          bash scripts/ci/run_performance_admission.sh
+          "$LOG_DIR" "$RUNNER_TEMP/clipy-performance-admission" scan
 
       - name: Upload admission evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: performance-admission-${{ github.run_id }}-${{ github.run_attempt }}
-          path: admission-logs
+          path: |
+            admission-logs/*.json
+            admission-logs/*.log
+            admission-logs/*.time
+            admission-logs/warm-open-samples/*.json
+            admission-logs/warm-open-samples/*.time
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Require every scale admission mode
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          require_success() {
+            local mode="$1"
+            local outcome="$2"
+            if [[ "$outcome" != success ]]; then
+              printf '%s did not complete: %s\n' "$mode" "$outcome" >&2
+              exit 1
+            fi
+          }
+          require_success prepare-smoke "${{ steps.prepare_smoke.outcome }}"
+          require_success prepare "${{ steps.prepare.outcome }}"
+          require_success prepare-cleanliness \
+            "${{ steps.prepare_cleanliness.outcome }}"
+          require_success exact-search-probe \
+            "${{ steps.exact_search_probe.outcome }}"
+          require_success exact-search-probe-gate \
+            "${{ steps.exact_search_probe_gate.outcome }}"
+          require_success browse-ties "${{ steps.browse_ties.outcome }}"
+          require_success exact-search "${{ steps.exact_search.outcome }}"
+          require_success warm-open "${{ steps.warm_open.outcome }}"
+          bash scripts/ci/run_performance_admission.sh \
+            "$LOG_DIR" "$RUNNER_TEMP/clipy-performance-admission" finalize

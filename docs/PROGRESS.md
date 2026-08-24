@@ -12,8 +12,8 @@
 > they are cited here, never restated as new semantics.
 
 **Audit baseline:** `8f316c9` (2026-08-02). **Current landed baseline:**
-`master` through [PR #32](https://github.com/GuangDai/Clipy/pull/32) / merge
-`1c221e6` (2026-08-24). Steps 0–9 are
+`master` through [PR #33](https://github.com/GuangDai/Clipy/pull/33) / merge
+`ffd0e9f` (2026-08-24). Steps 0–9 are
 implemented and CI-green;
 M2/state 2 is complete. Step 9 (product wiring: PasteboardAdapter +
 PresentationUI + ClipyApp composition) is done, including its post-step-9
@@ -24,16 +24,17 @@ cursor/status-item/center/last-position placement, dwell-driven preview pane)
 rather than a SwiftUI `MenuBarExtra`. M3/state 3 (packaging, accessibility,
 localization, product acceptance per Part VI §11) remains open.
 
-**Current CI provenance (2026-08-24):** the PR #32 merge head is green across
+**Current CI provenance (2026-08-24):** the PR #33 merge head is green across
 Lint + source gates, SwiftPM build + test, and XcodeGen generate + app
 build/test at
-[run 32678654503](https://github.com/GuangDai/Clipy/actions/runs/32678654503).
-PR #32 resolves `DEC-RET-READ`, unifies the Settings retention snapshot/edit
-generation, and closes its bounded persistent-readback and awkward-unit
-consumer proofs. Its PR run
-[32678325377](https://github.com/GuangDai/Clipy/actions/runs/32678325377) and
+[run 32682682345](https://github.com/GuangDai/Clipy/actions/runs/32682682345).
+PR #33 resolves `DEC-PREVIEW-TARGET`, adds the concrete package-only
+ContentPreview deep module, removes PresentationUI ImageIO/CGImage crossings,
+and closes its bounded exact text/PNG plus lifecycle/native-slot proofs. Its
+final PR run
+[32682438863](https://github.com/GuangDai/Clipy/actions/runs/32682438863) and
 master push run
-[32678654503](https://github.com/GuangDai/Clipy/actions/runs/32678654503)
+[32682682345](https://github.com/GuangDai/Clipy/actions/runs/32682682345)
 passed all three correctness jobs.
 No HistoryCore public-surface change required a symbol-snapshot run, and no
 performance/AB lane ran. The earlier PR #20 ordinary ad-hoc Release artifact passed the finite
@@ -829,8 +830,10 @@ test.
   (`Tests/HistoryPerfTests/`). The default `swift test` lane now skips it
   (`--skip 'HistoryPerfTests\.'`) so the standard targets carry functional
   tests only. The current performance helper/proof, 5,000-row admission, and
-  exact-matcher A/B workflows are reusable `workflow_call` modules with no
-  caller; they do not run on push, pull request, or manual dispatch.
+  exact-matcher A/B workflows remain reusable `workflow_call` modules. Batch
+  32 adds one correctness-gated, `workflow_dispatch`-only caller for exact and
+  scale evidence; the performance helper/proof module remains caller-less.
+  None runs on push or pull request.
 - **Panel (Maccy replication):** the browsing surface moved off the SwiftUI
   `MenuBarExtra` (a menu-bar-extra window can be neither summoned nor
   positioned programmatically) onto Maccy's model: an AppDelegate-owned
@@ -888,9 +891,10 @@ test.
   iCloud/ubiquity entitlement negative, and direct process-lifecycle smoke;
   the state-3 distribution and WindowServer-dependent cells remain open.
 - **Workflow state:** `.github/workflows/correctness.yml` is the only push/PR
-  workflow. Performance helper/proof, scale-admission, and exact-matcher
-  evidence are reusable-only with no caller; symbol-snapshot and signed-runtime
-  remain `workflow_dispatch`-only.
+  workflow. Batch 32 gives the reusable scale-admission and exact-matcher
+  evidence modules one manual-only caller that first invokes same-SHA
+  correctness; performance helper/proof remains reusable-only. Symbol-snapshot
+  and signed-runtime remain `workflow_dispatch`-only.
 
 ## External Gateway continuation (2026-08-23)
 
@@ -1184,10 +1188,12 @@ test.
   `RET-READ-1A` public persistent owner-release/reopen/read/reapply evidence.
   PR run 32678325377 and master push run 32678654503 are green. Localization,
   visual count relocation into one group, AX/FKA, and live usage remain open.
-- **Batch 31 `DEC-PREVIEW-TARGET` deep-module migration is PR-green:**
-  [PR #33](https://github.com/GuangDai/Clipy/pull/33) at head `281582a` passed
-  all three correctness jobs in run
-  [32681818215](https://github.com/GuangDai/Clipy/actions/runs/32681818215). One
+- **Batch 31 `DEC-PREVIEW-TARGET` deep-module migration is landed and
+  correctness-green:** [PR #33](https://github.com/GuangDai/Clipy/pull/33),
+  merge `ffd0e9f`, passed all three jobs in final PR run
+  [32682438863](https://github.com/GuangDai/Clipy/actions/runs/32682438863)
+  and master run
+  [32682682345](https://github.com/GuangDai/Clipy/actions/runs/32682682345). One
   package-only concrete `ContentPreview` actor now owns exact preview source
   selection, fixed resource profiles, text codecs, ImageIO decode, and bounded
   eager raster/text outcomes. PresentationUI owns History/reference/task/
@@ -1204,5 +1210,14 @@ test.
   showed that merely widening the timeout made the same-owner concurrent
   ImageIO window drift to about 23 seconds, so the final branch restores the
   10-second failure bound and serializes the ThumbnailStore native/display
-  owner suite instead. Merge/master provenance is not yet recorded in this
-  commit.
+  owner suite instead.
+- **Batch 32 GOV-1 manual evidence caller is in progress:** the branch adds one
+  `workflow_dispatch`-only caller that invokes reusable same-SHA correctness
+  before starting the exact-matcher and 5,000-row evidence siblings in
+  parallel. The scale script is phase-dispatched again so Actions owns the
+  historical 5/10/45/15/90/45-minute liveness guards, preserves the short
+  Debug probe after a full-prepare cleanliness failure, skips long canonical
+  work in that case, and uploads only an explicit artifact allowlist. A narrow
+  portable contract gate locks those facts. Until the caller exists on
+  `master` and both manual jobs actually run, this is source-only work and
+  supplies no performance evidence.
