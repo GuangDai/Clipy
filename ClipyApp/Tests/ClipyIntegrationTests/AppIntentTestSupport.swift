@@ -6,6 +6,7 @@ import Foundation
 import HistoryCore
 import HistoryStorage
 import Testing
+@testable import ClipyApp
 
 struct AppIntentTestSupport {
     let history: SwiftDataHistory
