@@ -37,10 +37,12 @@ passed all three correctness jobs. Manual run 32685185124 attempt 1 was blocked
 by the known `HistoryViewStateTests` runner slow-window cluster; attempt 2's
 same-SHA correctness is green, Exact A/B is green with
 `productionIntegrationEligible == true` and all 13 cases passing, and the
-5,000-row scale sibling remains in progress.
+5,000-row scale sibling is green across preparation, tie-heavy browse, Debug
+exact probe, Release exact search, and independent-process warm open.
 No HistoryCore public-surface change required a symbol-snapshot run. The Exact
 A/B lane above did run; the separate performance-helper/proof lane did not,
-and scale remains in progress. The earlier PR #20 ordinary ad-hoc Release artifact passed the finite
+and the scale artifact remains record-only rather than a budget admission. The
+earlier PR #20 ordinary ad-hoc Release artifact passed the finite
 Card 5D symbol inventory at
 [release-surface run 32619756885](https://github.com/GuangDai/Clipy/actions/runs/32619756885).
 That dispatch proves zero matches for the 26 reviewed demangled literals in
@@ -1225,8 +1227,15 @@ test.
   portable contract gate locks those facts. PR run 32684566664 and master run
   32684916238 are correctness-green. Manual run 32685185124 attempt 2 has the
   exact sibling green; its schema-v2 artifact reports all 13 decision cases
-  passing and `productionIntegrationEligible == true`. Scale is still running,
-  so GOV-1 remains Partial and no G2/G5/G8 or performance-budget claim exists.
+  passing and `productionIntegrationEligible == true`. The scale sibling is
+  also green: 5,000-row setup was 166,473 ms; tie-heavy public browse-page
+  p50/p95/p99 was 1,076/2,148/2,654 ms; the 11-sample exact-search p50 was
+  2,666 ms with p95/p99 intentionally absent below their support floors; and
+  101 independent-process warm opens measured 14,841/22,244/23,136 ms. The
+  recorded worst process high-water marks are ceilings, not attribution or G8
+  proof. GOV-1 is Done at this record-only evidence ceiling; no G2/G5/G8,
+  approved-hardware, positive-RSS-budget, fsync/crash, or general
+  external-storage no-fault claim exists.
 - **Batch 33 Card 9B + bounded accessibility leaves are in progress:** one
   internal `AppIntentHistoryIngress` now joins the existing public Gateway
   facade to one AppDelegate-owned `HistoryPanelSurfaceState` through an

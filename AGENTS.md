@@ -54,8 +54,9 @@ module landed in PR #33 (merge `ffd0e9f`; final PR run 32682438863; master
 run 32682682345).
 GOV-1's manual exact/scale caller landed in PR #34 (merge `f48d87f`; PR run
 32684566664; master run 32684916238). Its same-SHA manual run 32685185124 has
-Exact A/B green with all 13 thresholds passing and scale evidence still in
-progress. Batch 33 is implementing Card 9B external-remove purge plus bounded
+Exact A/B green with all 13 thresholds passing and the full 5,000-row scale
+admission green; both remain record-only evidence. Batch 33 is implementing
+Card 9B external-remove purge plus bounded
 Card 15C/15D accessibility leaves; treat those source changes as unlanded
 until their PR and master correctness runs are recorded.
 Both dispatch-only physical-evidence cells are green on `master` as of
