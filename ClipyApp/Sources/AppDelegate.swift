@@ -271,7 +271,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                   in: composition.viewState.rows
               )
         else { return }
-        composition.viewState.requestPasteFromDisplayedRow(reference)
+        composition.viewState.requestPaste(reference)
     }
 
     /// Closes the panel (idempotent; the panel's close fires

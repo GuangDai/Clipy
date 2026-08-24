@@ -232,8 +232,8 @@ public final class HistoryPanelSurfaceState {
     }
 
     /// Exact executable selection for the AppKit window's IME-aware Return
-    /// routing. The row must still exist in the authoritative display; the
-    /// ViewState repeats the same fence before publishing the paste intent.
+    /// routing. The row must still exist in the authoritative display before
+    /// the composition boundary publishes the product paste intent.
     public func selectedReference(
         in rows: [HistoryRow]
     ) -> HistoryItemReference? {
