@@ -421,7 +421,7 @@ public final class HistoryViewState {
             throw HistoryFailure.temporarilyUnavailable(.factProof)
         }
 #endif
-        try await history.details(for: id)
+        return try await history.details(for: id)
     }
 
     /// Appends an immutable content revision (docs/03a-instruction-set.md §5).
