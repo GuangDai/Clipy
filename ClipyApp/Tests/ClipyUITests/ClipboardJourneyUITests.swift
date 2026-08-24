@@ -6,6 +6,10 @@ import AppKit
 import XCTest
 
 final class ClipboardJourneyUITests: XCTestCase {
+    private let revisionDisclosure =
+        "Save appends an immutable revision. Previous and original content "
+        + "may remain in this item's revision history."
+
     private var temporaryDirectory: URL?
 
     override func tearDownWithError() throws {
@@ -88,6 +92,118 @@ final class ClipboardJourneyUITests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 10) {
             pasteboard.string(forType: .string) == alpha
         })
+    }
+
+    @MainActor
+    func testEditorDisclosesImmutableHistoryAndDirtyEscapeKeepsDraft() throws {
+        let app = try launchApp(capturing: "clipy-ui-editor-original")
+        defer { app.terminate() }
+
+        let row = app.descendants(matching: .any).matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@",
+                "clipy.history.row."
+            )
+        ).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+
+        app.typeKey("i", modifierFlags: .command)
+        let edit = app.buttons["Edit Content"]
+        XCTAssertTrue(edit.waitForExistence(timeout: 10))
+        edit.click()
+
+        let disclosure = app.staticTexts[revisionDisclosure]
+        XCTAssertTrue(disclosure.waitForExistence(timeout: 5))
+
+        let decision = app.popUpButtons[
+            "Editing decision for public.utf8-plain-text"
+        ]
+        XCTAssertTrue(decision.waitForExistence(timeout: 5))
+        decision.click()
+        let replace = app.menuItems["Replace"]
+        XCTAssertTrue(replace.waitForExistence(timeout: 5))
+        replace.click()
+
+        let replacement = app.textViews[
+            "Replacement text for public.utf8-plain-text"
+        ]
+        XCTAssertTrue(replacement.waitForExistence(timeout: 5))
+        replacement.click()
+        replacement.typeKey("a", modifierFlags: .command)
+        replacement.typeText("clipy-ui-editor-draft")
+        replacement.typeKey(.escape, modifierFlags: [])
+
+        let discardAlert = app.alerts["Discard Changes?"]
+        XCTAssertTrue(discardAlert.waitForExistence(timeout: 5))
+        XCTAssertEqual(replacement.value as? String, "clipy-ui-editor-draft")
+        discardAlert.buttons["Keep Editing"].click()
+        XCTAssertTrue(replacement.waitForExistence(timeout: 5))
+        XCTAssertEqual(replacement.value as? String, "clipy-ui-editor-draft")
+
+        app.buttons["Cancel"].click()
+        XCTAssertTrue(discardAlert.waitForExistence(timeout: 5))
+        discardAlert.buttons["Discard Changes"].click()
+        XCTAssertTrue(waitUntil(timeout: 5) { !disclosure.exists })
+    }
+
+    @MainActor
+    func testSettingsExposePlatformStateAndConfirmStrictRetention() throws {
+        let app = try launchApp(capturing: "clipy-ui-settings-original")
+        defer { app.terminate() }
+
+        app.typeKey(",", modifierFlags: .command)
+        let launchAtLogin = app.switches["Launch at Login"]
+        XCTAssertTrue(launchAtLogin.waitForExistence(timeout: 10))
+
+        let retentionTab = app.buttons["Retention"]
+        XCTAssertTrue(retentionTab.waitForExistence(timeout: 5))
+        retentionTab.click()
+
+        let ageLimit = app.switches["Limit item age"]
+        XCTAssertTrue(ageLimit.waitForExistence(timeout: 5))
+        ageLimit.click()
+
+        let apply = app.buttons["Apply"]
+        XCTAssertTrue(apply.waitForExistence(timeout: 5))
+        XCTAssertTrue(apply.isEnabled)
+        apply.click()
+
+        let confirmation = app.dialogs["Apply stricter retention limits?"]
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            confirmation.staticTexts[
+                "Stricter limits can permanently remove items or revisions."
+            ].exists
+        )
+        confirmation.buttons["Cancel"].click()
+        XCTAssertTrue(ageLimit.exists)
+        XCTAssertEqual(ageLimit.value as? String, "1")
+    }
+
+    @MainActor
+    private func launchApp(capturing value: String) throws -> XCUIApplication {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.setString(value, forType: .string))
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        temporaryDirectory = directory
+
+        let app = XCUIApplication()
+        app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
+        app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory
+            .appendingPathComponent("history.store")
+            .path
+        app.launch()
+
+        let panel = app.descendants(matching: .any)["clipy.panel.root"]
+        XCTAssertTrue(panel.waitForExistence(timeout: 20))
+        return app
     }
 
     @MainActor
