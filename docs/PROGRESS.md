@@ -1251,12 +1251,16 @@ test.
   silent; the large image preview label uses literal decoded pixel dimensions.
   It does not prove Siri/Shortcuts system invocation, AX tree, actual VoiceOver/FKA,
   localization, WindowServer, or signed runtime.
-- **Batch 34 panel journey + archive identity source is in progress:** PR #36
+- **Batch 34 panel journey is PR-green; archive identity remains Partial:** PR #36
   adds one XcodeGen `bundle.ui-testing` target and a DEBUG-only launch envelope
   that substitutes only a temp store and allowed pasteboard posture. The
   tracer must still pass actual app launch → hotkey-tail summon → search
   first responder → arrow selection → production General-pasteboard write →
-  exactly one close before this leaf is Done. The same PR makes AppDelegate
+  exactly one close. Final PR run 32691591462 passes all three correctness
+  jobs, including the stronger direction discriminator: replacement search
+  selects newest beta, Down must select alpha, and the final General
+  pasteboard value is byte-exact alpha before the panel disappears. The same
+  PR makes AppDelegate
   the only panel-session observation owner and records pure newest/arrow/
   reopen behavior. Its independent Card 16A leaf freezes bundle
   `com.clipy.ClipyApp`, version `0.1.0` build `1`, utility category, explicit
