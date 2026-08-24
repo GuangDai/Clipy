@@ -19,6 +19,7 @@ internal struct LocalAutomationCredential: Sendable, Equatable {
     internal static let secretByteCount = 32
     internal static let byteCount = connectionByteCount + secretByteCount
 
+    internal let connection: ExternalConnectionID
     internal let exactBytes: Data
 
     internal init(
@@ -31,7 +32,22 @@ internal struct LocalAutomationCredential: Sendable, Equatable {
 
         var bytes = Self.connectionBytes(connection)
         bytes.append(secret)
+        self.connection = connection
         exactBytes = bytes
+    }
+
+    internal init(exactBytes: Data) throws {
+        guard exactBytes.count == Self.byteCount else {
+            throw CredentialStoreFailure.malformedCredential
+        }
+        let bytes = [UInt8](exactBytes.prefix(Self.connectionByteCount))
+        connection = ExternalConnectionID(rawValue: UUID(uuid: (
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11],
+            bytes[12], bytes[13], bytes[14], bytes[15]
+        )))
+        self.exactBytes = exactBytes
     }
 
     internal init(
@@ -43,6 +59,7 @@ internal struct LocalAutomationCredential: Sendable, Equatable {
               exactBytes.starts(with: expectedPrefix) else {
             throw CredentialStoreFailure.malformedCredential
         }
+        self.connection = connection
         self.exactBytes = exactBytes
     }
 

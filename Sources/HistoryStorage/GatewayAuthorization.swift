@@ -408,6 +408,29 @@ extension HistoryAuthority {
             throw ExternalFailure.persistence(.transaction)
         }
     }
+
+    /// Unaudited F1 trust preflight beside the canonical durable-row loader.
+    /// Missing/wrong-kind rows are indistinguishable to credential callers;
+    /// active and revoked identities both continue so the later Gateway owns
+    /// its stable audited result (`V2-05` §3.2).
+    internal func localAutomationCredentialState(
+        for connection: ExternalConnectionID
+    ) throws -> LocalAutomationDurableCredentialState? {
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let config = try Self.loadGatewayConfig(in: context)
+        guard let current = try Self.loadExternalConnection(
+            connection,
+            config: config,
+            in: context
+        ), current.kind == ConnectionEnrollKind.localAutomation else {
+            return nil
+        }
+        switch current.status {
+        case .active: return .active
+        case .revoked: return .revoked
+        }
+    }
 }
 
 private extension HistoryAuthority {
