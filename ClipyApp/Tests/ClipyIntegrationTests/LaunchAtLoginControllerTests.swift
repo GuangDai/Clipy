@@ -106,6 +106,26 @@ struct LaunchAtLoginControllerTests {
         #expect(!controller.presentation.operationFailed)
     }
 
+    @Test("approval-required registration can still be unregistered")
+    @MainActor
+    func approvalRequiredCanUnregister() async {
+        let recorder = LaunchAtLoginOperationRecorder(status: .requiresApproval)
+        recorder.statusAfterUnregister = .notRegistered
+        let controller = LaunchAtLoginController(operations: recorder.operations)
+
+        #expect(controller.presentation.state == .requiresApproval)
+        #expect(controller.presentation.isOn)
+        controller.setEnabled(false)
+
+        let settled = await waitUntil {
+            controller.presentation.state == .off
+        }
+        #expect(settled)
+        #expect(recorder.registerCount == 0)
+        #expect(recorder.unregisterCount == 1)
+        #expect(!controller.presentation.operationFailed)
+    }
+
     @Test("all ServiceManagement statuses remain distinct")
     @MainActor
     func systemStatusesMapWithoutBooleanCollapse() {

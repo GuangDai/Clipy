@@ -439,4 +439,14 @@ struct RetentionSettingsDraftTests {
     func binaryStorageUnitLabelIsMiB() {
         #expect(RetentionSettingsDraft.mebibyteUnitLabel == "MiB")
     }
+
+    @Test("age copy discloses event-triggered enforcement")
+    func ageCopyDoesNotImplyAWallClockSweep() {
+        #expect(
+            RetentionSettingsDraft.ageEnforcementExplanation
+                == "Age limits are checked when Clipy captures a clipboard "
+                + "change or you apply retention settings. Time passing alone "
+                + "doesn't remove items."
+        )
+    }
 }

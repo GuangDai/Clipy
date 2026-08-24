@@ -21,6 +21,8 @@ private enum ProbePhase: String {
     case retentionVerify
     case retentionUpdate
     case retentionVerifyUpdated
+    case retentionRejectMalformed
+    case retentionRejectWrongKey
     case gatewayAuditSeed
     case gatewayAuditCrash
     case gatewayAuditVerify
@@ -575,6 +577,27 @@ private func retentionVerifyUpdated(storeURL: URL) async throws {
     )
 }
 
+/// REVIEW §4.3 Retention-config restart tail: the fixture process must
+/// observe the production public-open classifier itself. The test owner
+/// creates the impossible stored shape before launching this process; this
+/// executable neither imports SwiftData nor repairs/inspects storage.
+private func requireRetentionOpenFailure(
+    at storeURL: URL,
+    expected: HistoryFailure
+) async throws {
+    do {
+        _ = try await openHistory(at: storeURL)
+    } catch let failure as HistoryFailure {
+        guard failure == expected else {
+            throw ProbeFailure.unexpectedState
+        }
+        return
+    } catch {
+        throw ProbeFailure.unexpectedState
+    }
+    throw ProbeFailure.unexpectedState
+}
+
 private func requireInserted(
     _ receipt: HistoryReceipt,
     position: UInt64
@@ -1068,6 +1091,16 @@ private struct HistoryRestartProbe {
                 try await retentionUpdate(storeURL: storeURL)
             case .retentionVerifyUpdated:
                 try await retentionVerifyUpdated(storeURL: storeURL)
+            case .retentionRejectMalformed:
+                try await requireRetentionOpenFailure(
+                    at: storeURL,
+                    expected: .persistence(.corruptStoredValue)
+                )
+            case .retentionRejectWrongKey:
+                try await requireRetentionOpenFailure(
+                    at: storeURL,
+                    expected: .persistence(.invariantViolation)
+                )
             case .gatewayAuditSeed:
                 try await gatewayAuditSeed(storeURL: storeURL)
             case .gatewayAuditCrash:

@@ -170,15 +170,54 @@ struct LocalAutomationCredentialAuthenticatorTests {
             Data(exact.dropLast())
         ))
     }
+
+    @Test("server custody failures stay typed and unaudited")
+    func serverCustodyFailuresNeverBecomeAuthenticationDenials() async throws {
+        let fixture = try await Self.makeFixture()
+        let corrupt = Self.authenticator(
+            fixture,
+            storedBytes: Data(fixture.credential.exactBytes.dropLast())
+        )
+        let unavailable = LocalAutomationCredentialAuthenticator(
+            credentialStore: CredentialStore(
+                operations: AuthenticationMemoryCredentialOperations(
+                    forcedCopyResult: .unavailable
+                )
+            ),
+            authority: fixture.authority
+        )
+        let before = try GatewayStoreSnapshot.read(
+            in: ModelContext(fixture.container)
+        )
+
+        await #expect(throws: CredentialStoreFailure.corruptStoredValue) {
+            _ = try await corrupt.authenticate(
+                fixture.credential.exactBytes
+            )
+        }
+        await #expect(throws: CredentialStoreFailure.unavailable) {
+            _ = try await unavailable.authenticate(
+                fixture.credential.exactBytes
+            )
+        }
+        #expect(try GatewayStoreSnapshot.read(
+            in: ModelContext(fixture.container)
+        ) == before)
+    }
 }
 
 private struct AuthenticationMemoryCredentialOperations:
     CredentialStoreExternalOperations
 {
     private var values: [ExternalConnectionID: Data]
+    private let forcedCopyResult: CredentialStoreCopyResult?
 
-    init(values: [ExternalConnectionID: Data]) {
+    init(
+        values: [ExternalConnectionID: Data] = [:],
+        forcedCopyResult: CredentialStoreCopyResult? = nil
+    ) {
         self.values = values
+        self.forcedCopyResult = forcedCopyResult
     }
 
     mutating func addCredential(
@@ -193,6 +232,7 @@ private struct AuthenticationMemoryCredentialOperations:
     mutating func copyCredential(
         for connection: ExternalConnectionID
     ) -> CredentialStoreCopyResult {
+        if let forcedCopyResult { return forcedCopyResult }
         values[connection].map(CredentialStoreCopyResult.value) ?? .missing
     }
 

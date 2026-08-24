@@ -171,11 +171,14 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
 
     /// Card 3C: Esc and Cancel enter the same dirty-dismiss alert. Keeping
     /// editing preserves the actual TextEditor value; explicit destructive
-    /// confirmation is the only path that leaves the editor.
+    /// confirmation is the only path that leaves a dirty editor. Reopening
+    /// the same real editor and cancelling without a change closes directly,
+    /// fixing the playbook's independent no-dirty control in the same launch.
     @MainActor
-    func testDirtyEscapeAndCancelShareDiscardConfirmation() throws {
+    func testDirtyDismissalConfirmsAndCleanCancelClosesDirectly() throws {
+        let original = "clipy-editor-dirty-original"
         let draft = "clipy-editor-dirty-draft"
-        let app = try launchEditor(capturing: "clipy-editor-dirty-original")
+        let app = try launchEditor(capturing: original)
         defer { app.terminate() }
 
         let replacement = try authorReplacement(draft, in: app)
@@ -219,15 +222,49 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
         let editorDecision = app.descendants(matching: .any)[
             "clipy.editor.decision.\(textType)"
         ]
+        let detailsTitle = app.descendants(matching: .any)[
+            "clipy.details.title"
+        ]
         guard assertEventually(
             {
                 !editorDecision.exists
-                    && app.descendants(matching: .any)[
-                        "clipy.details.root"
-                    ].exists
+                    && detailsTitle.exists
+                    && self.accessibilityText(of: detailsTitle) == original
             },
             in: app,
-            message: "Confirmed Discard did not return to Details."
+            message: "Confirmed Discard changed content or did not return to Details."
+        ) else { return }
+
+        let edit = app.buttons["Edit Content"]
+        guard assertEventually(
+            { edit.exists && edit.isHittable },
+            in: app,
+            message: "Details did not remain editable after confirmed Discard."
+        ) else { return }
+        edit.click()
+
+        let cancel = app.buttons["clipy.editor.cancel"]
+        guard assertEventually(
+            {
+                editorDecision.exists
+                    && cancel.exists
+                    && cancel.isHittable
+                    && !alert.exists
+            },
+            in: app,
+            message: "The clean editor did not reopen without a discard alert."
+        ) else { return }
+        cancel.click()
+
+        guard assertEventually(
+            {
+                !editorDecision.exists
+                    && !alert.exists
+                    && detailsTitle.exists
+                    && self.accessibilityText(of: detailsTitle) == original
+            },
+            in: app,
+            message: "A clean Cancel did not return directly to Details."
         ) else { return }
     }
 

@@ -334,6 +334,9 @@ struct TransactionBoundaryProofTests {
         }
 
         await authority.setTransactionFailureInjection(.insufficientDiskSpace)
+        let publicationProbe = await SingleOperationInvalidationPublicationProbe.begin(
+            on: authority
+        )
         let rejected = try await preparation.prepare(
             WSSupport.textCapture(
                 "tx-boundary disk rejected",
@@ -346,6 +349,8 @@ struct TransactionBoundaryProofTests {
         ) {
             try await authority.commitCapture(rejected)
         }
+        let publications = try await publicationProbe.finish(on: authority)
+        #expect(publications.count == 0)
 
         let after = try autoreleasepool {
             try TransactionStoreSnapshot.read(from: url)

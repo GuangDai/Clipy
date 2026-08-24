@@ -120,9 +120,16 @@ struct PanelSessionSelectionTests {
 
         surface.beginSession(rows: rows)
         surface.moveSelection(in: rows, direction: .next)
-        #expect(surface.selection == rows[1].item.id)
+        let selectedID = rows[1].item.id
+        #expect(surface.selection == selectedID)
+        #expect(surface.selectedReference(in: rows)?.id == selectedID)
 
         let replacement = [rows[0], rows[2]]
+
+        // The displayed rows are already authoritative when SwiftUI schedules
+        // its onChange reconciliation. AppDelegate's Return action target must
+        // therefore disable immediately rather than execute the stale ID.
+        #expect(surface.selectedReference(in: replacement) == nil)
         surface.reconcileSessionSelection(rows: replacement)
 
         #expect(surface.selection == nil)

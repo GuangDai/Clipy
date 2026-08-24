@@ -26,10 +26,14 @@ import SwiftUI
 #if DEBUG
 /// Exact launch envelope for the running-app XCUI journeys. It is compiled
 /// out of Release and accepts only an absolute temp-store path, exact privacy
-/// facts, an exact short-Pause switch, and bounded loader/editor journeys; no
-/// alternate store/writer, capture pump, paste path, panel controller, or
-/// timer owner is constructed.
+/// facts, an exact short-Pause switch, bounded loader/editor journeys, and an
+/// optional content-free StoreRoot-sibling Reveal marker; no alternate
+/// store/writer, capture pump, paste path, panel controller, or timer owner is
+/// constructed.
 struct RunningUITestConfiguration {
+    private static let storeRevealMarkerName =
+        "clipy-store-reveal.marker"
+
     enum EditorJourney: Equatable {
         case none
         case staleThenReloadFailureOnce
@@ -40,6 +44,7 @@ struct RunningUITestConfiguration {
     let currentCaptureAccessBehavior: PasteboardAccessBehavior
     let capturePauseDuration: Duration
     let editorJourney: EditorJourney
+    let storeRevealMarkerURL: URL?
 
     static func current(
         environment: [String: String] = ProcessInfo.processInfo.environment
@@ -48,6 +53,7 @@ struct RunningUITestConfiguration {
               let path = environment["CLIPY_UI_TEST_STORE_PATH"],
               path.hasPrefix("/")
         else { return nil }
+        let storeURL = URL(fileURLWithPath: path).standardizedFileURL
 
         let initialCaptureAccessBehavior: PasteboardAccessBehavior
         let currentCaptureAccessBehavior: PasteboardAccessBehavior
@@ -107,12 +113,35 @@ struct RunningUITestConfiguration {
         default:
             return nil
         }
+        let storeRevealMarkerURL: URL?
+        if let markerPath = environment[
+            "CLIPY_UI_TEST_STORE_REVEAL_MARKER_PATH"
+        ] {
+            guard markerPath.hasPrefix("/") else { return nil }
+            let candidate = URL(fileURLWithPath: markerPath)
+                .standardizedFileURL
+            // The marker is the exact fixed-name sibling of the configured
+            // StoreRoot. It cannot select another absolute file or hide a
+            // second spelling behind `..` in the DEBUG launch envelope.
+            let expected = storeURL
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent(Self.storeRevealMarkerName)
+            guard candidate.lastPathComponent == Self.storeRevealMarkerName,
+                  candidate.path == markerPath,
+                  candidate == expected
+            else { return nil }
+            storeRevealMarkerURL = candidate
+        } else {
+            storeRevealMarkerURL = nil
+        }
         return RunningUITestConfiguration(
-            storeURL: URL(fileURLWithPath: path).standardizedFileURL,
+            storeURL: storeURL,
             initialCaptureAccessBehavior: initialCaptureAccessBehavior,
             currentCaptureAccessBehavior: currentCaptureAccessBehavior,
             capturePauseDuration: capturePauseDuration,
-            editorJourney: editorJourney
+            editorJourney: editorJourney,
+            storeRevealMarkerURL: storeRevealMarkerURL
         )
     }
 }
@@ -133,6 +162,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let summonShortcutDefaults: UserDefaults
     private let summonShortcutRegistrationFactory:
         SummonShortcutController.RegistrationFactory?
+    /// Exact persistent locator this app process attempts to open. Production
+    /// uses `AppComposition.defaultStoreURL`; hosted recovery tests inject a
+    /// disposable URL so Retry exercises the real composition/store path.
+    private let storeURL: URL
+    /// The AppKit boundary for DATA-14's non-destructive Reveal action. It is
+    /// injected only so hosted tests can assert the exact directory without
+    /// opening Finder in the test account.
+    private let revealStoreLocationOperation: @MainActor (URL) -> Void
 
 #if DEBUG
     private let runningUITestConfiguration = RunningUITestConfiguration.current()
@@ -145,6 +182,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         summonShortcutDefaults = .standard
         summonShortcutRegistrationFactory = nil
+        storeURL = AppComposition.defaultStoreURL
+        revealStoreLocationOperation = { directory in
+            NSWorkspace.shared.activateFileViewerSelecting([directory])
+        }
         super.init()
     }
 
@@ -153,7 +194,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             AccessibilityAnnouncementOperations,
         summonShortcutDefaults: UserDefaults = .standard,
         summonShortcutRegistrationFactory:
-            SummonShortcutController.RegistrationFactory? = nil
+            SummonShortcutController.RegistrationFactory? = nil,
+        storeURL: URL = AppComposition.defaultStoreURL,
+        revealStoreLocationOperation:
+            @escaping @MainActor (URL) -> Void = { directory in
+                NSWorkspace.shared.activateFileViewerSelecting([directory])
+            }
     ) {
         accessibilityAnnouncement = AccessibilityAnnouncement(
             operations: accessibilityAnnouncementOperations
@@ -161,6 +207,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.summonShortcutDefaults = summonShortcutDefaults
         self.summonShortcutRegistrationFactory =
             summonShortcutRegistrationFactory
+        self.storeURL = storeURL
+        self.revealStoreLocationOperation = revealStoreLocationOperation
         super.init()
     }
 
@@ -604,6 +652,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// DATA-14 explicit recovery. A genuine failure is terminal until the
+    /// user asks to retry; clearing it here admits exactly one new open flight.
+    /// `AppComposition.open` already releases its same-process reservation on
+    /// failure, so this never creates a second writer or a fallback store.
+    func retryCompositionOpen() {
+        guard composition == nil,
+              compositionOpenAttempt == nil,
+              openFailure != nil else { return }
+        openFailure = nil
+        openCompositionIfNeeded()
+    }
+
+    /// Reveals the directory containing the exact attempted store locator.
+    /// This is intentionally read-only: no file is moved, deleted, repaired,
+    /// or replaced, and no unstable underlying error text selects behavior.
+    func revealStoreLocation() {
+#if DEBUG
+        if let markerURL = runningUITestConfiguration?.storeRevealMarkerURL {
+            // Exact running-app evidence boundary: the control is real, but
+            // Finder is replaced with one content-free, no-overwrite file
+            // publication beside the test StoreRoot. No store path or error
+            // text is written into the marker.
+            try? Data().write(to: markerURL, options: .withoutOverwriting)
+            return
+        }
+#endif
+        revealStoreLocationOperation(
+            compositionStoreURL.deletingLastPathComponent()
+        )
+    }
+
+    private var compositionStoreURL: URL {
+#if DEBUG
+        runningUITestConfiguration?.storeURL ?? storeURL
+#else
+        storeURL
+#endif
+    }
+
     /// Returns the one opened app graph, starting it when neither the app
     /// shell nor App Intents has done so. All waiters join the same Task.
     /// A cancelled attempt clears its slot and remains retryable; a genuine
@@ -620,6 +707,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let current = compositionOpenAttempt {
             attempt = current
         } else {
+            let storeURL = compositionStoreURL
 #if DEBUG
             let runningUITestConfiguration = self.runningUITestConfiguration
 #endif
@@ -648,6 +736,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
 #endif
                 return try await AppComposition.open(
+                    storeURL: storeURL,
                     workspaceActivityProvider: workspaceActivityProvider
                 )
             }
@@ -664,11 +753,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 startUnixSocketF0ListenerIfRequested()
 #endif
 #if DEBUG
-                if runningUITestConfiguration != nil,
-                   isRunningUITestSummonPending {
-                    isRunningUITestSummonPending = false
-                    summonShortcutController.fireActionForTesting()
-                }
+                summonPanelForRunningUITestIfNeeded()
 #endif
             }
             if compositionOpenAttempt === attempt {
@@ -685,10 +770,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if compositionOpenAttempt === attempt {
                 compositionOpenAttempt = nil
                 openFailure = error
+#if DEBUG
+                summonPanelForRunningUITestIfNeeded()
+#endif
             }
             throw error
         }
     }
+
+#if DEBUG
+    /// Running-app journeys need the same real floating panel for both launch
+    /// success and launch failure. The one-shot controller action mirrors the
+    /// existing successful-launch seam and never exists in Release.
+    private func summonPanelForRunningUITestIfNeeded() {
+        guard runningUITestConfiguration != nil,
+              isRunningUITestSummonPending else { return }
+        isRunningUITestSummonPending = false
+        summonShortcutController.fireActionForTesting()
+    }
+#endif
 
     private var isRunningUITest: Bool {
 #if DEBUG
@@ -749,6 +849,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         composition = opened
         opened.updateWorkspaceActivity(workspaceActivity)
+        // A failure panel can already be visible when an explicit Retry
+        // succeeds. Join that existing window to the newly opened composition
+        // just as `openPanel` would, so the History view starts its first
+        // authoritative observation without closing/reopening the panel.
+        if panel?.isPresented == true {
+            opened.viewState.activate()
+            panelSurfaceState.beginSession(rows: opened.viewState.rows)
+        }
     }
 
 #if CLIPY_UDS_F0

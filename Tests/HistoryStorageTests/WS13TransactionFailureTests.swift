@@ -158,11 +158,13 @@ struct WS13TransactionFailureTests {
         )])
         let beforeIndex = await authority.signatureIndex
 
-        // Register before the failed attempt. This stream is closed and
-        // drained immediately after the failure, before any successful write
-        // can yield the same ChangePosition into bufferingNewest(1).
-        let failedAttemptRegistration = await authority.registerInvalidationSubscriber()
+        // The test-only probe wraps exactly one Authority operation. The
+        // shared commit tail can publish at most once per operation, so its
+        // newest-one stream cannot coalesce this count (05-CE22).
         await authority.setTransactionFailureInjection(.beforeSingletonUpdate)
+        let failedAttemptProbe = await SingleOperationInvalidationPublicationProbe.begin(
+            on: authority
+        )
 
         let rejectedObservedAt = Date(timeIntervalSinceReferenceDate: 700_013_200)
         let rejectedBundle = try await preparation.prepare(
@@ -257,14 +259,10 @@ struct WS13TransactionFailureTests {
                 .contains(rejectedBundle.domain.candidateID.rawValue)
         )
 
-        await authority.unregisterInvalidationSubscriber(
-            failedAttemptRegistration.subscription
+        let failedAttemptPublications = try await failedAttemptProbe.finish(
+            on: authority
         )
-        var failedAttemptInvalidations: [HistoryInvalidation] = []
-        for try await invalidation in failedAttemptRegistration.stream {
-            failedAttemptInvalidations.append(invalidation)
-        }
-        #expect(failedAttemptInvalidations.isEmpty)
+        #expect(failedAttemptPublications.count == 0)
 
         // Signature-Index behavioral control, only after every rollback and
         // zero-publish assertion above: retry the exact failed prepared value.
@@ -272,7 +270,9 @@ struct WS13TransactionFailureTests {
         // forced-equal fingerprints with both seeds must not coalesce without
         // byte equality. A dedicated subscription proves this success emits
         // exactly its own position, independently of the failed attempt.
-        let retryRegistration = await authority.registerInvalidationSubscriber()
+        let retryProbe = await SingleOperationInvalidationPublicationProbe.begin(
+            on: authority
+        )
         let retryReceipt = try await authority.commitCapture(rejectedBundle)
         guard case let .committed(retryCommit) = retryReceipt,
               case let .inserted(retryReference) = retryCommit.outcome
@@ -282,12 +282,9 @@ struct WS13TransactionFailureTests {
         }
         #expect(retryCommit.position.rawValue == 3)
         #expect(retryReference.id == rejectedBundle.domain.candidateID)
-        await authority.unregisterInvalidationSubscriber(retryRegistration.subscription)
-        var retryInvalidations: [HistoryInvalidation] = []
-        for try await invalidation in retryRegistration.stream {
-            retryInvalidations.append(invalidation)
-        }
-        #expect(retryInvalidations.map(\.latestPosition.rawValue) == [3])
+        let retryPublications = try await retryProbe.finish(on: authority)
+        #expect(retryPublications.count == 1)
+        #expect(retryPublications.map(\.latestPosition.rawValue) == [3])
 
         // Once the successful insert has legitimately updated the index, a
         // new equal-content capture coalesces the retried row — not either
