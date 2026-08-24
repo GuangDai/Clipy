@@ -21,9 +21,15 @@ targets:
     platform: macOS
     sources:
       - Sources
+      - Resources
       - Tools/ClipyUDSF0Shared
     settings:
       PRODUCT_NAME: Clipy
+      PRODUCT_BUNDLE_IDENTIFIER: com.clipy.ClipyApp
+      MARKETING_VERSION: 0.1.0
+      CURRENT_PROJECT_VERSION: 1
+      CODE_SIGN_ENTITLEMENTS: Config/ClipyApp.entitlements
+      ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
       SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
       GCC_TREAT_WARNINGS_AS_ERRORS: YES
       # Deterministic Swift module name for `@testable import ClipyApp` from
@@ -31,6 +37,7 @@ targets:
       # from PRODUCT_NAME (Clipy), not the target name.
       PRODUCT_MODULE_NAME: ClipyApp
       INFOPLIST_KEY_LSUIElement: YES
+      INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
     dependencies:
       - package: Clipy
         product: HistoryCore
