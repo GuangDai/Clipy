@@ -24,10 +24,10 @@ cursor/status-item/center/last-position placement, dwell-driven preview pane)
 rather than a SwiftUI `MenuBarExtra`. M3/state 3 (packaging, accessibility,
 localization, product acceptance per Part VI §11) remains open.
 
-**Current CI provenance (2026-08-24):** the PR #36 merge head `2bc4a8e` is green across
+**Current CI provenance (2026-08-24):** the PR #37 merge head `dd433d9` is green across
 Lint + source gates, SwiftPM build + test, and XcodeGen generate + app
 build/test at
-[run 32692472789](https://github.com/GuangDai/Clipy/actions/runs/32692472789).
+[run 32693554157](https://github.com/GuangDai/Clipy/actions/runs/32693554157).
 PR #34 restores the manual-only exact/scale evidence caller and scale-phase
 liveness contract. Its final PR run
 [32684566664](https://github.com/GuangDai/Clipy/actions/runs/32684566664) and
@@ -1270,7 +1270,9 @@ test.
   validator and manual-only workflow. It remains Partial until a protected
   release tag exists and the real unsigned archive artifact passes; it proves
   no Developer ID signing, notarization, staple, Gatekeeper, TCC, or release.
-- **Batch 35 generic Local Automation enrollment gate is in progress:** the
+- **Batch 35 generic Local Automation enrollment gate is landed:** PR #37 /
+  merge `dd433d9`; final PR correctness 32693281604 and master correctness
+  32693554157 are green. The
   public `GatewayAdminHistory` witness now rejects `.localAutomation` before
   Authority admission, audit, clock use, ID minting, or durable mutation.
   A real in-memory public-facade test requires connections/grants to remain
@@ -1279,3 +1281,13 @@ test.
   only the forbidden generic publication
   route; client file custody, enrollment/revocation coordinator, server
   authentication, ingress, transport, and CLI remain open.
+- **Batch 36 in-process credential authentication kernel is in progress:** an
+  exact 48-byte presentation parses its embedded UUID, loads the server
+  credential, performs one fixed full-byte traversal comparison, and reuses
+  the canonical durable connection loader through a narrow unaudited scalar
+  preflight. Malformed, missing, wrong-secret, and orphan presentations return
+  no identity; exact active and revoked credentials return only the durable
+  connection ID so a later unique Gateway remains responsible for audited
+  revoked/not-granted outcomes. Real V4 Authority tests require all verifier
+  paths to leave Gateway state/audit unchanged. No ingress DTO, framing,
+  peer-EUID proof, transport, client custody, coordinator, or CLI is added.
