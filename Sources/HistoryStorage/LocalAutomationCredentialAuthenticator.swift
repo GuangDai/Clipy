@@ -7,7 +7,6 @@
 /// revoked/not-granted outcomes.
 import Foundation
 import HistoryCore
-import SwiftData
 
 internal enum LocalAutomationCredentialComparison {
     /// Traverses every byte of the fixed 48-byte shape. Length rejection is
@@ -30,30 +29,6 @@ internal enum LocalAutomationCredentialComparison {
 internal enum LocalAutomationDurableCredentialState: Sendable, Equatable {
     case active
     case revoked
-}
-
-extension HistoryAuthority {
-    /// Unaudited trust preflight. Missing/wrong-kind rows are indistinguishable
-    /// to the credential caller; active and revoked exact identities both
-    /// continue so the later Gateway can own its stable audited result.
-    internal func localAutomationCredentialState(
-        for connection: ExternalConnectionID
-    ) throws -> LocalAutomationDurableCredentialState? {
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
-        let config = try Self.loadGatewayConfig(in: context)
-        guard let current = try Self.loadExternalConnection(
-            connection,
-            config: config,
-            in: context
-        ), current.kind == .localAutomation else {
-            return nil
-        }
-        switch current.status {
-        case .active: return .active
-        case .revoked: return .revoked
-        }
-    }
 }
 
 internal actor LocalAutomationCredentialAuthenticator {
