@@ -221,6 +221,24 @@ public final class HistoryPanelSurfaceState {
         previewState.panelClosed()
     }
 
+    /// Retargets only the currently open exact Details destination after that
+    /// child has crossed an authoritative editor read/receipt boundary. This
+    /// is not a purge: selection, preview, thumbnails, generations, and other
+    /// path entries are untouched. A later revision purge naming `old` then
+    /// cannot pop the already-retargeted `new` destination.
+    @discardableResult
+    package func advanceOpenDetailsReference(
+        from old: HistoryItemReference,
+        to new: HistoryItemReference
+    ) -> Bool {
+        guard old.id == new.id,
+              new.contentVersion >= old.contentVersion,
+              detailsPath.last == old
+        else { return false }
+        detailsPath[detailsPath.count - 1] = new
+        return true
+    }
+
     package func reconcileSessionSelection(
         rows: [HistoryRow],
         hasAuthoritativeFirstPage: Bool = true
@@ -487,7 +505,16 @@ public struct HistoryPanelView: View {
                     onShowDetails: { item in surfaceState.detailsPath.append(item) }
                 )
                 .navigationDestination(for: HistoryItemReference.self) { item in
-                    HistoryDetailsView(viewState: viewState, item: item)
+                    HistoryDetailsView(
+                        viewState: viewState,
+                        item: item,
+                        onReferenceAdvance: { old, new in
+                            surfaceState.advanceOpenDetailsReference(
+                                from: old,
+                                to: new
+                            )
+                        }
+                    )
                 }
             }
             .id(surfaceState.detailsPurgeGeneration)
@@ -679,21 +706,24 @@ public struct HistoryPanelView: View {
 
     // MARK: Hidden shortcuts
 
-    /// Esc clears the search term first; with no search text it asks the
-    /// hosting panel to close (Maccy's KeyChord `.escape` → `close`,
-    /// adapted: a non-empty query keeps its clear-first behavior).
+    /// At the list root, Esc clears the search term first and otherwise asks
+    /// the hosting panel to close (Maccy's KeyChord `.escape` → `close`). A
+    /// pushed Details/editor destination owns Esc itself; retaining this root
+    /// shortcut there would bypass the editor's dirty-discard confirmation.
     /// ⌃Space toggles the preview pane for the current selection (Maccy's
     /// `togglePreview` default chord).
     private var hiddenShortcuts: some View {
         Group {
-            Button("Clear Search or Close") {
-                if viewState.isSearchActive {
-                    viewState.clearSearch()
-                } else {
-                    onRequestClose()
+            if surfaceState.detailsPath.isEmpty {
+                Button("Clear Search or Close") {
+                    if viewState.isSearchActive {
+                        viewState.clearSearch()
+                    } else {
+                        onRequestClose()
+                    }
                 }
+                .keyboardShortcut(.cancelAction)
             }
-            .keyboardShortcut(.cancelAction)
 
             Button("Toggle Preview") {
                 previewState.togglePreview(for: previewSelection.reference)

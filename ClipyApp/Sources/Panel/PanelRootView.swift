@@ -192,6 +192,7 @@ struct PanelRootView: View {
                 .accessibilityHidden(true)
             Text(CaptureNoticePresentation.message(for: notice))
                 .font(.callout)
+                .accessibilityIdentifier("clipy.capture.notice.message")
             Spacer(minLength: 8)
             Button {
                 appDelegate.dismissCaptureNotice()
@@ -200,11 +201,14 @@ struct PanelRootView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Dismiss capture warning")
+            .accessibilityIdentifier("clipy.capture.notice.dismiss")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
         .shadow(radius: 4)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("clipy.capture.notice.banner")
     }
 
     /// Access state is intentionally separate from capture failure state: a

@@ -26,6 +26,37 @@ import Testing
 
 struct AppCompositionTests {
 
+    /// Card 14C launch ordering: the final MainActor provider is sampled
+    /// immediately before `start`, so an app graph opened while its workspace
+    /// is inactive never starts pasteboard observation. Applying the active
+    /// facts later restarts that same owner; named-pasteboard lifecycle tests
+    /// separately prove the baseline/no-import behavior.
+    @Test @MainActor
+    func inactiveWorkspaceProviderGatesTheInitialObserverStart() async throws {
+        let storeURL = ComposedSupport.tempStoreURL(
+            "appcomposition-inactive-workspace"
+        )
+        defer { ComposedSupport.removeStore(storeURL) }
+        let inactive = WorkspaceActivityState(
+            isSystemAwake: false,
+            isLoginSessionActive: true
+        )
+        let composition = try await AppComposition.openForUITesting(
+            storeURL: storeURL,
+            initialCaptureAccessBehavior: .allowed,
+            currentCaptureAccessBehavior: .allowed,
+            workspaceActivityProvider: { inactive }
+        )
+        defer { composition.stop() }
+
+        #expect(composition.workspaceActivityForTesting == inactive)
+        #expect(!composition.isCaptureObservationActiveForTesting)
+
+        composition.updateWorkspaceActivity(.active)
+        #expect(composition.workspaceActivityForTesting == .active)
+        #expect(composition.isCaptureObservationActiveForTesting)
+    }
+
     /// open(storeURL:) (01 §8; roadmap 06): a successful open assembles the
     /// four composed surfaces and wires the paste hand-off; a second open
     /// over the SAME URL throws `ClipyCompositionError.storeAlreadyOpen`

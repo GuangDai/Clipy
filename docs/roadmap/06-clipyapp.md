@@ -15,6 +15,22 @@
 
 - **Concrete construction:** `SwiftDataHistory.open(configuration:)` with `HistoryLimits.standard`; wire it as the `any ClipboardHistory` injected into `PresentationUI` and used by the paste path (Part V §2).
 - **Lifecycle:** process-wide single `SwiftDataHistory`; no `.shared`/`.current` service locator; guard against a second `open` over the same persistent URL — an implementation responsibility inferred from Part I §8's no-second-writer rule (not stated verbatim by any single spec section).
+- **App activation lifecycle (REVIEW Card 14C):**
+  `NSApplication.didResignActiveNotification` closes only the visible panel
+  session and its browsing observation; the app-owned clipboard capture
+  observation continues. `didBecomeActiveNotification` never opens the panel.
+  The next explicit summon starts a fresh panel session/generation. These app
+  focus callbacks are not proxies for `NSWorkspace` login-session switching or
+  system sleep/wake, which remain distinct workspace notification semantics.
+- **Summon shortcut registration (REVIEW Card 14B):** keep the current default
+  ⇧⌘C binding, but expose an advisory warning for Apple's exact documented
+  Shift-Command-C “Show Colors” conflict; this is not a hard rejection or a
+  general registry of standard shortcuts. A replacement chord is registered
+  before the saved preference or active token changes. If candidate
+  registration fails, the old token and preference remain authoritative and
+  the same candidate is available to Retry. If a saved chord cannot register
+  at startup, report it unavailable and retain it for Retry rather than
+  silently falling back to ⇧⌘C.
 - **Capture overload:** one already-started complete capture plus one
   replaceable latest pending value, drained serially. Replacing pending
   publishes the cumulative content-free count; no frozen value queue or
@@ -35,6 +51,14 @@
 - `ClipyIntegrationTests`: **re-run the WS1–WS21 paths through the composed app** (real `SwiftDataHistory` + `PasteboardAdapter` + `PresentationUI`), not just the in-isolation History tests — this is the end-to-end acceptance for the walking skeleton (Part VI §8: "each path crosses the public `ClipboardHistory` interface and real `SwiftDataHistory`").
 - XcodeGen-produced app target builds; the SwiftPM library graph stays package-owned (Part I §9 item 6).
 - `ClipyIntegrationTests`: a second `open()` over an already-open persistent URL is detected and rejected — it does not create a second writer or `ModelContext` (Part I §8).
+- `ClipyIntegrationTests`: app resign closes one active panel/browsing session
+  without stopping capture; app active alone creates no session; the next
+  explicit summon starts exactly one replacement observation with a fresh
+  generation.
+- `ClipyIntegrationTests`: the app-internal summon-shortcut controller proves
+  safe failed swap, Retry, reset, saved-startup failure, and exactly-once token
+  cleanup through an injected registration closure. This slice does not yet
+  connect the controller state to AppDelegate or Settings UI.
 - `ClipyIntegrationTests`: pausing the first real in-memory History capture and
   submitting an already-frozen burst preserves only the active and newest
   pending values, keeps stable owner-retained slot/byte facts bounded, records
@@ -51,3 +75,6 @@
 
 - Paste is intentionally not durable History state — a clipboard side effect happens after `pastePayload` returns, outside the transaction (Part IV §8).
 - This module owns the M3 composition + state-2 re-verification via `ClipyIntegrationTests`; full state-3 acceptance (packaging/notarization, `.app` launch, accessibility, localization, product tests) is deferred to separate acceptance outside this roadmap (Part VI §11).
+- Card 14B runtime coverage across a signed app, alternate keyboard layouts,
+  Secure Input, and a real conflicting process remains open; controller tests
+  and headless Carbon registration do not establish those environments.

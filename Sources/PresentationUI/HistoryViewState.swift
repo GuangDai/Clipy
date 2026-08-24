@@ -9,6 +9,7 @@
 /// pages are one-shot `browse` requests (docs/03a-instruction-set.md §7) whose
 /// `.snapshotExpired` failure is recovered by resuming from the observed
 /// first page's cursor (docs/04-coherence.md §6).
+import ClipboardFormats
 import Foundation
 import HistoryCore
 import SwiftUI
@@ -181,6 +182,17 @@ public final class HistoryViewState {
     }
 
     private var failureSource: FailureSource?
+
+#if DEBUG
+    /// One narrow running-app Card 3B ordering seam. It never substitutes
+    /// History: the real `SwiftDataHistory` remains this state's sole facade,
+    /// and both mutations still reach its sole `HistoryAuthority` writer. The
+    /// first editor revision is preceded by one distinct real revision; the
+    /// next details read then returns one typed transient failure before all
+    /// later reads resume normally.
+    private var injectCompetingEditorRevisionForTesting = false
+    private var failNextEditorDetailsReadForTesting = false
+#endif
 
     /// Search-edit debounce (V2-07 §4 feel: no per-keystroke re-observe).
     private static let searchDebounceInterval: Duration = .milliseconds(250)
@@ -403,16 +415,99 @@ public final class HistoryViewState {
 
     /// Full detail for one item (docs/03b-instruction-set.md §9).
     public func details(for id: HistoryItemID) async throws -> HistoryDetails {
-        try await history.details(for: id)
+#if DEBUG
+        if failNextEditorDetailsReadForTesting {
+            failNextEditorDetailsReadForTesting = false
+            throw HistoryFailure.temporarilyUnavailable(.factProof)
+        }
+#endif
+        return try await history.details(for: id)
     }
 
     /// Appends an immutable content revision (docs/03a-instruction-set.md §5).
     public func revise(_ request: RevisionRequest) async throws -> HistoryReceipt {
+        try await performRevision(request, beforePurge: nil)
+    }
+
+    /// The embedded editor must hand its receipt-minted exact reference to
+    /// the Details owner before this state publishes the corresponding purge.
+    /// That ordering prevents the old-reference surface from being retired in
+    /// the same MainActor turn, while every other revise caller keeps the
+    /// ordinary purge behavior above.
+    package func reviseFromEditor(
+        _ request: RevisionRequest,
+        onCommittedReference:
+            @escaping @MainActor (HistoryItemReference) -> Void
+    ) async throws -> HistoryReceipt {
+        try await performRevision(
+            request,
+            beforePurge: onCommittedReference
+        )
+    }
+
+    private func performRevision(
+        _ request: RevisionRequest,
+        beforePurge:
+            (@MainActor (HistoryItemReference) -> Void)?
+    ) async throws -> HistoryReceipt {
+#if DEBUG
+        if injectCompetingEditorRevisionForTesting,
+           let competing = Self.competingEditorRevisionForRunningUITest(
+               for: request
+           ) {
+            injectCompetingEditorRevisionForTesting = false
+            _ = try await history.perform(.revise(competing))
+            failNextEditorDetailsReadForTesting = true
+        }
+#endif
         let action = HistoryAction.revise(request)
         let receipt = try await history.perform(action)
+        if case .committed(let commit) = receipt,
+           case .revised(let reference) = commit.outcome {
+            beforePurge?(reference)
+        }
         publishSurfacePurge(for: action, receipt: receipt)
         return receipt
     }
+
+#if DEBUG
+    /// ClipyApp's exact running-UI launch configuration arms only the next
+    /// editable-text revision. No scripted `ClipboardHistory`, fake receipt,
+    /// or alternate storage path is installed.
+    public func configureEditorStaleJourneyForRunningUITest() {
+        injectCompetingEditorRevisionForTesting = true
+        failNextEditorDetailsReadForTesting = false
+    }
+
+    package static func competingEditorRevisionForRunningUITest(
+        for request: RevisionRequest
+    ) -> RevisionRequest? {
+        guard case .replace(let draft) = request.intent,
+              draft.decisions.contains(where: {
+                  $0.typeIdentifier
+                      == ClipboardFormatIdentifier.utf8PlainText.rawValue
+              })
+        else { return nil }
+
+        let decisions = draft.decisions.map { decision in
+            guard decision.typeIdentifier
+                == ClipboardFormatIdentifier.utf8PlainText.rawValue else {
+                return decision
+            }
+            return RevisionDecision(
+                typeIdentifier: decision.typeIdentifier,
+                action: .replace(
+                    bytes: Data("clipy-editor-competing-revision".utf8)
+                )
+            )
+        }
+        return RevisionRequest(
+            itemID: request.itemID,
+            expected: request.expected,
+            intent: .replace(RevisionDraft(decisions: decisions))
+        )
+    }
+#endif
 
     /// Applies the v1 count-dimension retention cap.
     public func applyMaximumUnpinnedItems(_ count: Int) async throws -> HistoryReceipt {

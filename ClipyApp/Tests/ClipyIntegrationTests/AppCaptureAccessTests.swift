@@ -297,6 +297,94 @@ struct AppCaptureAccessTests {
         #expect(accessReads.withLock { $0 } == readsAfterResume)
     }
 
+    @Test("a manually resumed Pause cannot end the next Pause")
+    @MainActor
+    func oldDeadlineCannotResumeANewerPause() async throws {
+        let history = try await ComposedSupport.openMemoryHistory()
+        let deadlineSleep = ControlledPauseDeadlineSleep()
+        let composition = AppComposition.makeForTesting(
+            history: history,
+            adapter: PasteboardAdapter(
+                pasteboard: ComposedSupport.makePasteboard()
+            ),
+            initialCaptureAccessBehavior: .allowed,
+            captureAccessBehaviorProvider: { .allowed },
+            capturePauseSleep: { duration in
+                try await deadlineSleep.sleep(for: duration)
+            }
+        )
+        defer { composition.stop() }
+
+        composition.pauseCapture()
+        #expect(await ComposedSupport.waitFor {
+            deadlineSleep.startedCount == 1
+        })
+        composition.resumeCapture()
+        composition.pauseCapture()
+        #expect(await ComposedSupport.waitFor {
+            deadlineSleep.startedCount == 2
+        })
+        #expect(await ComposedSupport.waitFor {
+            deadlineSleep.wasCancelled(0)
+        })
+
+        // If manual Resume only cleared the old slot without cancelling its
+        // task, expiring deadline 0 here would resume the newer Pause.
+        deadlineSleep.expire(0)
+        let staleDeadlineResumed = await ComposedSupport.waitFor(timeout: 0.1) {
+            composition.captureAccessState != .userPaused
+        }
+        #expect(!staleDeadlineResumed)
+        #expect(composition.hasCapturePauseDeadlineForTesting)
+
+        deadlineSleep.expire(1)
+        #expect(await ComposedSupport.waitFor {
+            composition.captureAccessState == .allowed
+        })
+        #expect(!composition.hasCapturePauseDeadlineForTesting)
+    }
+
+    @Test("the real status-item button exposes Pause and Resume presentation")
+    @MainActor
+    func hostedStatusItemPresentationTracksCapturePause() async throws {
+        let history = try await ComposedSupport.openMemoryHistory()
+        let composition = AppComposition.makeForTesting(
+            history: history,
+            adapter: PasteboardAdapter(
+                pasteboard: ComposedSupport.makePasteboard()
+            ),
+            initialCaptureAccessBehavior: .allowed,
+            captureAccessBehaviorProvider: { .allowed }
+        )
+        defer { composition.stop() }
+        let appDelegate = AppDelegate()
+        appDelegate.installStatusItemForTesting()
+        defer { appDelegate.removeStatusItemForTesting() }
+        appDelegate.installCompositionForTesting(composition)
+
+        #expect(appDelegate.statusItemAccessibilityLabelForTesting == "Clipy")
+        #expect(appDelegate.statusItemHasImageForTesting)
+        #expect(
+            appDelegate.statusItemSymbolNameForTesting == "list.clipboard"
+        )
+        composition.pauseCapture()
+        #expect(appDelegate.captureAccessState == .userPaused)
+        #expect(
+            appDelegate.statusItemAccessibilityLabelForTesting
+                == "Clipy, clipboard monitoring paused"
+        )
+        #expect(appDelegate.statusItemHasImageForTesting)
+        #expect(appDelegate.statusItemSymbolNameForTesting == "pause.circle")
+
+        composition.resumeCapture()
+        #expect(appDelegate.captureAccessState == .allowed)
+        #expect(appDelegate.statusItemAccessibilityLabelForTesting == "Clipy")
+        #expect(appDelegate.statusItemHasImageForTesting)
+        #expect(
+            appDelegate.statusItemSymbolNameForTesting == "list.clipboard"
+        )
+    }
+
     @Test("live revocation stops the composed observer")
     @MainActor
     func liveRevocationStopsObservation() async throws {
@@ -349,5 +437,46 @@ struct AppCaptureAccessTests {
             try? await Task.sleep(for: .milliseconds(10))
         }
         return false
+    }
+}
+
+/// A deterministic substitute for only the deadline's suspension. Each
+/// invocation parks independently; cancellation remains the production
+/// task's responsibility, and releasing an uncancelled older invocation
+/// would expose the exact stale-deadline bug this harness targets.
+@MainActor
+private final class ControlledPauseDeadlineSleep {
+    private var nextID = 0
+    private var continuations: [Int: AsyncStream<Void>.Continuation] = [:]
+    private var cancelledIDs: Set<Int> = []
+
+    private(set) var startedCount = 0
+
+    func sleep(for duration: Duration) async throws {
+        _ = duration
+        let id = nextID
+        nextID += 1
+        let (stream, continuation) = AsyncStream<Void>.makeStream()
+        continuations[id] = continuation
+        startedCount += 1
+        for await _ in stream {
+            try Task.checkCancellation()
+            continuations[id] = nil
+            return
+        }
+        continuations[id] = nil
+        if Task.isCancelled {
+            cancelledIDs.insert(id)
+        }
+        throw CancellationError()
+    }
+
+    func expire(_ id: Int) {
+        continuations[id]?.yield()
+        continuations[id]?.finish()
+    }
+
+    func wasCancelled(_ id: Int) -> Bool {
+        cancelledIDs.contains(id)
     }
 }

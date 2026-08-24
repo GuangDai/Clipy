@@ -768,11 +768,11 @@ private final class CaptureHealthProbe {
     }
 }
 
-/// The only History adapter in this suite: pause capture 1 at the process
+/// Shared hosted capture-lifecycle adapter: pause capture 1 at the process
 /// boundary, then forward every operation/read to the same real store. Its
 /// detached forward makes capture 1 intentionally non-cooperative with the
 /// caller's cancellation so the stop fence is observable deterministically.
-private actor FirstCaptureSuspendingHistory: ClipboardHistory {
+actor FirstCaptureSuspendingHistory: ClipboardHistory {
     private let base: SwiftDataHistory
     private var captureCount = 0
     private var didCompleteSecondCapture = false

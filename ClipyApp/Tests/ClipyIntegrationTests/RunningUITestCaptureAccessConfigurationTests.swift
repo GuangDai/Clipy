@@ -90,4 +90,45 @@ struct RunningUITestCaptureAccessConfigurationTests {
             ]) == nil
         )
     }
+
+    @Test("running UI tests admit only the one-shot Preview failure")
+    func selectsPreviewFailureExactly() {
+        #expect(
+            RunningUITestConfiguration.current(environment: [
+                "CLIPY_RUNNING_UI_TEST": "1",
+                "CLIPY_UI_TEST_STORE_PATH": "/tmp/clipy-ui-preview.store",
+                "CLIPY_UI_TEST_PREVIEW_FAILURE": "transient-details-once",
+            ]) != nil
+        )
+        #expect(
+            RunningUITestConfiguration.current(environment: [
+                "CLIPY_RUNNING_UI_TEST": "1",
+                "CLIPY_UI_TEST_STORE_PATH": "/tmp/clipy-ui-preview-invalid.store",
+                "CLIPY_UI_TEST_PREVIEW_FAILURE": "always-fail",
+            ]) == nil
+        )
+    }
+
+    @Test("running UI tests admit only the bounded editor stale journey")
+    func selectsEditorJourneyExactly() throws {
+        let configuration = try #require(
+            RunningUITestConfiguration.current(environment: [
+                "CLIPY_RUNNING_UI_TEST": "1",
+                "CLIPY_UI_TEST_STORE_PATH": "/tmp/clipy-ui-editor.store",
+                "CLIPY_UI_TEST_EDITOR_JOURNEY":
+                    "stale-reload-failure-once",
+            ])
+        )
+        #expect(
+            configuration.editorJourney == .staleThenReloadFailureOnce
+        )
+        #expect(
+            RunningUITestConfiguration.current(environment: [
+                "CLIPY_RUNNING_UI_TEST": "1",
+                "CLIPY_UI_TEST_STORE_PATH":
+                    "/tmp/clipy-ui-editor-invalid.store",
+                "CLIPY_UI_TEST_EDITOR_JOURNEY": "always-stale",
+            ]) == nil
+        )
+    }
 }
