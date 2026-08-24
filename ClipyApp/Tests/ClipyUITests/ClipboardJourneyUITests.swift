@@ -121,7 +121,7 @@ final class ClipboardJourneyUITests: XCTestCase {
         let shortcutStatus = app.descendants(matching: .any)[
             "clipy.settings.shortcut.status"
         ]
-        let shortcutWarning = app.descendants(matching: .any)[
+        let shortcutWarning = app.staticTexts[
             "clipy.settings.shortcut.warning"
         ]
         let shortcutReset = app.buttons["clipy.settings.shortcut.reset"]

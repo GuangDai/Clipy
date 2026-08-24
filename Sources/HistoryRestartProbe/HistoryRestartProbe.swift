@@ -795,11 +795,11 @@ private func gatewayAuditCrash(storeURL: URL) async throws -> Never {
     let facade = history.makeAppIntentsHistoryFacade()
     try await ExternalReadPublicationDebugInstrumentation
         .$afterSynchronousSuccessfulAuditCommit.withValue({
-            withExtendedLifetime(history) {
-                fatalError(
-                    "intentional crash after external read audit commit"
-                )
-            }
+            // The callback's strong capture keeps the owner alive through the
+            // exact post-commit boundary; its declared result remains `Void`
+            // even though this fixture intentionally never returns.
+            _ = history
+            fatalError("intentional crash after external read audit commit")
         }) {
             _ = try await facade.read(.recent(limit: 1))
         }

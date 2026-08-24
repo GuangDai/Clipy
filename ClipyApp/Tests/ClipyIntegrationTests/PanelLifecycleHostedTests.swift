@@ -92,12 +92,38 @@ struct PanelLifecycleHostedTests {
             "The real observed row never became the list selection."
         )
 
-        NSApp.sendEvent(try #require(keyDown(
-            for: panel,
-            keyCode: UInt16(kVK_ANSI_I),
-            characters: "i",
-            modifierFlags: .command
-        )))
+        let selectedReference = try #require(
+            surface.selectedReference(in: composition.viewState.rows)
+        )
+        let rowIdentifier = "clipy.history.row.\(selectedReference.id.description)"
+        let rowRendered = await waitForHostedUI {
+            panel.contentView?.layoutSubtreeIfNeeded()
+            return accessibilityElement(
+                identifiedBy: rowIdentifier,
+                in: panel.contentView
+            ) != nil
+        }
+        try #require(
+            rowRendered,
+            "The selected production row never reached the public AX tree."
+        )
+        let rowElement = try #require(
+            accessibilityElement(
+                identifiedBy: rowIdentifier,
+                in: panel.contentView
+            )
+        )
+        let showDetails = try #require(
+            (rowElement.accessibilityCustomActions() ?? []).first {
+                $0.name == "Show Details"
+            },
+            "The production row did not expose its Show Details action."
+        )
+        let showDetailsHandler = try #require(
+            showDetails.handler,
+            "The production Show Details action had no callable handler."
+        )
+        try #require(showDetailsHandler())
         let detailsRendered = await waitForHostedUI {
             panel.contentView?.layoutSubtreeIfNeeded()
             return containsAccessibilityIdentifier(
@@ -733,15 +759,30 @@ struct PanelLifecycleHostedTests {
         in element: (any NSAccessibilityProtocol)?,
         depth: Int = 0
     ) -> Bool {
-        guard let element, depth < 64 else { return false }
-        if element.accessibilityIdentifier() == expected { return true }
-        return (element.accessibilityChildren() ?? []).contains { child in
-            containsAccessibilityIdentifier(
-                expected,
+        accessibilityElement(
+            identifiedBy: expected,
+            in: element,
+            depth: depth
+        ) != nil
+    }
+
+    private func accessibilityElement(
+        identifiedBy expected: String,
+        in element: (any NSAccessibilityProtocol)?,
+        depth: Int = 0
+    ) -> (any NSAccessibilityProtocol)? {
+        guard let element, depth < 64 else { return nil }
+        if element.accessibilityIdentifier() == expected { return element }
+        for child in element.accessibilityChildren() ?? [] {
+            if let match = accessibilityElement(
+                identifiedBy: expected,
                 in: child as? any NSAccessibilityProtocol,
                 depth: depth + 1
-            )
+            ) {
+                return match
+            }
         }
+        return nil
     }
 
     /// A monotonic hosted-render deadline. Sleeping briefly releases the main
