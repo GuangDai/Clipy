@@ -192,9 +192,11 @@ final class DetailsMutationJourneyUITests: XCTestCase {
             message: "The destructive confirmation did not disclose its exact scope."
         ) else { return }
 
-        let confirmRemove = confirmationSheet.buttons[
-            "clipy.details.confirm-remove"
-        ]
+        // SwiftUI materializes confirmationDialog as a native macOS alert.
+        // Anchor through the owning sheet, then use the bridge's stable
+        // destructive-action slot; a modifier on the source Button is not
+        // guaranteed to survive that framework translation.
+        let confirmRemove = confirmationSheet.buttons["action-button-1"]
         guard assertEventually(
             {
                 confirmRemove.exists
