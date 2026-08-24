@@ -70,8 +70,7 @@ Batch 35's generic Local Automation enrollment rejection landed in PR #37
 (merge `dd433d9`; final PR run 32693281604; master run 32693554157). Batch 36
 implemented the internal credential authentication kernel in PR #38 (merge
 `1834eca`; final PR run 32694144024 attempt 2; master run 32694673199) without
-publishing an ingress or transport. Batch 37 is extending the real XCUI tracer
-with running-app row accessibility role/label characterization.
+publishing an ingress or transport.
 Both dispatch-only physical-evidence cells are green on `master` as of
 2026-08-23: the General pasteboard cross-process run 32632263996 and the
 Card 6B APFS ENOSPC capture-transaction run 32636093920 (the latter via

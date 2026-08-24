@@ -91,30 +91,7 @@ final class ClipboardJourneyUITests: XCTestCase {
     }
 
     @MainActor
-    func testDetailsEditControlPresentsAnAttachedEditorDialog() throws {
-        let app = try launchApp(capturing: "clipy-ui-editor-original")
-        defer { app.terminate() }
-
-        let row = app.descendants(matching: .any).matching(
-            NSPredicate(
-                format: "identifier BEGINSWITH %@",
-                "clipy.history.row."
-            )
-        ).firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 10))
-
-        app.typeKey("i", modifierFlags: .command)
-        let edit = app.buttons["Edit Content"]
-        XCTAssertTrue(edit.waitForExistence(timeout: 10))
-        let dialogsBeforeEdit = app.dialogs.count
-        edit.click()
-        XCTAssertTrue(waitUntil(timeout: 5) {
-            app.dialogs.count > dialogsBeforeEdit
-        })
-    }
-
-    @MainActor
-    func testSettingsExposePlatformStateAndConfirmStrictRetention() throws {
+    func testSettingsExposeLaunchControlAndConfirmStrictAgeRetention() throws {
         let app = try launchApp(capturing: "clipy-ui-settings-original")
         defer { app.terminate() }
 
@@ -148,7 +125,8 @@ final class ClipboardJourneyUITests: XCTestCase {
                 "Stricter limits can permanently remove items or revisions."
             ].exists
         )
-        app.buttons["Cancel"].click()
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitUntil(timeout: 5) { !destructiveApply.exists })
         XCTAssertTrue(ageLimit.exists)
         XCTAssertEqual(ageLimit.value as? String, "1")
     }

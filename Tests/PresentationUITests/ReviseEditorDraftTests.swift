@@ -605,8 +605,10 @@ struct ReviseEditorDraftTests {
 }
     @Test("revision disclosure states the immutable-history boundary")
     func immutableRevisionDisclosureIsExplicit() {
+        let expected =
+            "Save appends an immutable revision. Previous and original "
+            + "content may remain in this item's revision history."
         #expect(
-            ReviseEditorPresentation.revisionDisclosure
-                == "Save appends an immutable revision. Previous and original content may remain in this item's revision history."
+            ReviseEditorPresentation.revisionDisclosure == expected
         )
     }

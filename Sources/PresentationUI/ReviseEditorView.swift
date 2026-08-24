@@ -177,7 +177,6 @@ public struct ReviseEditorView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.top, 10)
-        .accessibilityIdentifier("clipy.editor.revision-disclosure")
     }
 
     @ViewBuilder
@@ -329,9 +328,6 @@ public struct ReviseEditorView: View {
                 .labelsHidden()
                 .fixedSize()
                 .accessibilityLabel("Editing decision for \(typeIdentifier)")
-                .accessibilityIdentifier(
-                    "clipy.editor.decision.\(typeIdentifier)"
-                )
                 .accessibilityHint(
                     "Keep Current preserves the bytes currently used for"
                         + " pasting. Use Original restores the captured bytes."
@@ -361,9 +357,6 @@ public struct ReviseEditorView: View {
                     }
                     .accessibilityLabel(
                         "Replacement text for \(typeIdentifier)"
-                    )
-                    .accessibilityIdentifier(
-                        "clipy.editor.replacement.\(typeIdentifier)"
                     )
             }
         }
