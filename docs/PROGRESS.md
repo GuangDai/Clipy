@@ -24,10 +24,10 @@ cursor/status-item/center/last-position placement, dwell-driven preview pane)
 rather than a SwiftUI `MenuBarExtra`. M3/state 3 (packaging, accessibility,
 localization, product acceptance per Part VI §11) remains open.
 
-**Current CI provenance (2026-08-24):** the PR #37 merge head `dd433d9` is green across
+**Current CI provenance (2026-08-24):** the PR #38 merge head `1834eca` is green across
 Lint + source gates, SwiftPM build + test, and XcodeGen generate + app
 build/test at
-[run 32693554157](https://github.com/GuangDai/Clipy/actions/runs/32693554157).
+[run 32694673199](https://github.com/GuangDai/Clipy/actions/runs/32694673199).
 PR #34 restores the manual-only exact/scale evidence caller and scale-phase
 liveness contract. Its final PR run
 [32684566664](https://github.com/GuangDai/Clipy/actions/runs/32684566664) and
@@ -1281,7 +1281,9 @@ test.
   only the forbidden generic publication
   route; client file custody, enrollment/revocation coordinator, server
   authentication, ingress, transport, and CLI remain open.
-- **Batch 36 in-process credential authentication kernel is in progress:** an
+- **Batch 36 in-process credential authentication kernel is landed:** PR #38 /
+  merge `1834eca`; final PR correctness 32694144024 attempt 2 and master
+  correctness 32694673199 are green. An
   exact 48-byte presentation parses its embedded UUID, loads the server
   credential, performs one fixed full-byte traversal comparison, and reuses
   the canonical durable connection loader through a narrow unaudited scalar
@@ -1291,3 +1293,12 @@ test.
   revoked/not-granted outcomes. Real V4 Authority tests require all verifier
   paths to leave Gateway state/audit unchanged. No ingress DTO, framing,
   peer-EUID proof, transport, client custody, coordinator, or CLI is added.
+- **Batch 37 running-app row accessibility characterization is in progress:**
+  the existing XCUI process journey now also requires both history rows to
+  materialize as stable-ID button accessibility elements and requires their
+  labels to contain the distinguishable alpha/beta titles before the Down →
+  alpha product-paste proof. A real hosted NSPanel/NSHostingView experiment
+  exposed only an empty public `AXGroup` on the CI runner even after becoming
+  active/key, so that experiment was removed rather than replaced by a private
+  or fabricated SwiftUI tree. Card 15B default/named AX action execution,
+  actual VoiceOver/FKA, localization, and signed runtime remain open.
