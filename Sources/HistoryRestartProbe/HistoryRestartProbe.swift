@@ -1,7 +1,11 @@
-/// A public-API-only restart tracer for Review Evidence Card 1C-1 and the
-/// bounded X-HCR post-success crash fixture. Each invocation owns one
-/// `SwiftDataHistory` for one short process; no SwiftData object or generated
-/// identity crosses a phase boundary.
+/// A public-API-only restart tracer for Review Evidence Card 1C-1, the bounded
+/// X-HCR post-success crash fixture, and the REVIEW §4.3 Retention-config
+/// restart tail. Each invocation owns one `SwiftDataHistory` for one short
+/// process; no SwiftData object or generated identity crosses a phase boundary.
+/// The Retention phases prove exact configured-value persistence across
+/// terminated owners only; they do not prove migration, full-disk behavior,
+/// or crash durability (`11-ai-todo-map-2026-08-23.md` §4.3;
+/// `V2-02-retention.md` §8.1/§12).
 import Foundation
 import HistoryCore
 import HistoryStorage
@@ -13,6 +17,10 @@ private enum ProbePhase: String {
     case verify
     case pressureCapture
     case verifySeed
+    case retentionSeed
+    case retentionVerify
+    case retentionUpdate
+    case retentionVerifyUpdated
 }
 
 private enum ProbeFailure: Error {
@@ -31,6 +39,24 @@ private let alphaSecondSource = "restart.operate.alpha"
 private let pressureCaptureDate = Date(timeIntervalSinceReferenceDate: 40_000)
 private let pressureCaptureSource = "restart.pressure.capture"
 private let pressureCaptureByteCount = 8 * 1_048_576
+private let initialMaximumUnpinnedItems = 73
+private let initialRetentionPolicies = HistoryRetentionPolicies(
+    age: AgeRetention(maxAge: 7 * 86_400),
+    storage: StorageRetention(maxTotalBytes: 128 * 1_048_576),
+    revisions: RevisionRetention(
+        maxRevisionsPerItem: 7,
+        maxRevisionBytesPerItem: 32 * 1_048_576
+    )
+)
+private let updatedMaximumUnpinnedItems = 91
+private let updatedRetentionPolicies = HistoryRetentionPolicies(
+    age: nil,
+    storage: StorageRetention(maxTotalBytes: 96 * 1_048_576),
+    revisions: RevisionRetention(
+        maxRevisionsPerItem: nil,
+        maxRevisionBytesPerItem: 24 * 1_048_576
+    )
+)
 private let manifestFileName = "restart-manifest.txt"
 private let diagnosticsEnabled = ProcessInfo.processInfo.environment[
     "CLIPY_APFS_PROBE_DIAGNOSTICS"
@@ -365,6 +391,122 @@ private func openHistory(at storeURL: URL) async throws -> SwiftDataHistory {
         persistence: .persistent(storeURL: storeURL),
         initialMaximumUnpinnedItems: 200
     ))
+}
+
+private func requireEmptyHistory(
+    _ history: SwiftDataHistory,
+    position: UInt64
+) async throws {
+    let page = try await history.browse(HistoryBrowseRequest(
+        kind: .recent,
+        limit: 1
+    ))
+    guard page.position.rawValue == position,
+          page.rows.isEmpty,
+          page.next == nil else {
+        throw ProbeFailure.unexpectedState
+    }
+}
+
+private func requireRetentionConfigurationAndEmptyHistoryPosition(
+    _ history: SwiftDataHistory,
+    maximumUnpinnedItems: Int,
+    policies: HistoryRetentionPolicies,
+    position: UInt64
+) async throws {
+    let configuration = try await history.retentionConfiguration()
+    guard configuration.maximumUnpinnedItems == maximumUnpinnedItems,
+          configuration.policies == policies else {
+        throw ProbeFailure.unexpectedState
+    }
+    try await requireEmptyHistory(history, position: position)
+}
+
+private func setRetentionConfiguration(
+    _ history: SwiftDataHistory,
+    maximumUnpinnedItems: Int,
+    policies: HistoryRetentionPolicies,
+    maximumUnpinnedItemsPosition: UInt64,
+    policiesPosition: UInt64
+) async throws {
+    let countReceipt = try await history.perform(
+        .setRetentionPolicy(maximumUnpinnedItems: maximumUnpinnedItems)
+    )
+    guard case .committed(let countCommit) = countReceipt,
+          countCommit.position.rawValue == maximumUnpinnedItemsPosition,
+          case .retentionPolicySet(removedCount: 0) = countCommit.outcome else {
+        throw ProbeFailure.unexpectedState
+    }
+
+    let policiesReceipt = try await history.perform(
+        .setRetentionPolicies(policies)
+    )
+    guard case .committed(let policiesCommit) = policiesReceipt,
+          policiesCommit.position.rawValue == policiesPosition,
+          case .retentionPoliciesSet(
+              retiredItems: 0,
+              prunedRevisions: 0
+          ) = policiesCommit.outcome else {
+        throw ProbeFailure.unexpectedState
+    }
+}
+
+private func retentionSeed(storeURL: URL) async throws {
+    let history = try await openHistory(at: storeURL)
+    try await requireRetentionConfigurationAndEmptyHistoryPosition(
+        history,
+        maximumUnpinnedItems: 200,
+        policies: HistoryRetentionPolicies(
+            age: nil,
+            storage: nil,
+            revisions: nil
+        ),
+        position: 0
+    )
+    try await setRetentionConfiguration(
+        history,
+        maximumUnpinnedItems: initialMaximumUnpinnedItems,
+        policies: initialRetentionPolicies,
+        maximumUnpinnedItemsPosition: 1,
+        policiesPosition: 2
+    )
+}
+
+private func retentionVerify(storeURL: URL) async throws {
+    let history = try await openHistory(at: storeURL)
+    try await requireRetentionConfigurationAndEmptyHistoryPosition(
+        history,
+        maximumUnpinnedItems: initialMaximumUnpinnedItems,
+        policies: initialRetentionPolicies,
+        position: 2
+    )
+}
+
+private func retentionUpdate(storeURL: URL) async throws {
+    let history = try await openHistory(at: storeURL)
+    try await requireRetentionConfigurationAndEmptyHistoryPosition(
+        history,
+        maximumUnpinnedItems: initialMaximumUnpinnedItems,
+        policies: initialRetentionPolicies,
+        position: 2
+    )
+    try await setRetentionConfiguration(
+        history,
+        maximumUnpinnedItems: updatedMaximumUnpinnedItems,
+        policies: updatedRetentionPolicies,
+        maximumUnpinnedItemsPosition: 3,
+        policiesPosition: 4
+    )
+}
+
+private func retentionVerifyUpdated(storeURL: URL) async throws {
+    let history = try await openHistory(at: storeURL)
+    try await requireRetentionConfigurationAndEmptyHistoryPosition(
+        history,
+        maximumUnpinnedItems: updatedMaximumUnpinnedItems,
+        policies: updatedRetentionPolicies,
+        position: 4
+    )
 }
 
 private func requireInserted(
@@ -710,6 +852,14 @@ private struct HistoryRestartProbe {
                 try await pressureCapture(storeURL: storeURL)
             case .verifySeed:
                 try await verifySeed(storeURL: storeURL)
+            case .retentionSeed:
+                try await retentionSeed(storeURL: storeURL)
+            case .retentionVerify:
+                try await retentionVerify(storeURL: storeURL)
+            case .retentionUpdate:
+                try await retentionUpdate(storeURL: storeURL)
+            case .retentionVerifyUpdated:
+                try await retentionVerifyUpdated(storeURL: storeURL)
             }
             diagnostic("process.phase=\(phase.rawValue) complete")
             FileHandle.standardOutput.write(Data("\(phase.rawValue.uppercased())_OK\n".utf8))

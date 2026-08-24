@@ -31,8 +31,11 @@
 ## Acceptance (shared)
 
 - Fixture tests lock xxh3 and Fuse behavior (above).
-- The production xxh3 wrapper is pinned by known-answer vectors, and the portable vendor-integrity gate checks both vendored source files against independently recorded sha256 values on every CI run.
-- `XXH_INLINE_ALL` confines the upstream implementation to its C translation units; an object-level source gate rejects any global `XXH*` symbol beyond `clipy_xxh3_64bits`.
+- The production xxh3 wrapper is pinned by known-answer vectors. The vendored
+  version remains explicit in `VENDORED.md`; no CI checksum/source-symbol scan
+  is maintained.
+- `XXH_INLINE_ALL` confines the upstream implementation to its C translation
+  units; wrapper behavior is exercised through its owning tests.
 - xxh3 + Fuse never appear in a public signature (Part I §2, §8); no public search score or cross-actor matcher state crosses out; no `@unchecked Sendable` (Fuse confinement handles Swift 6, Part I §6/§8).
 
 ## Risks / notes
@@ -42,6 +45,6 @@
 
 ## Progress
 
-- **Step 3 landed** at [`5446780`](https://github.com/GuangDai/Clipy/commit/5446780990fbd43b8ef1b7b1e0ca5c93c4eabc19): xxHash v0.8.3 vendored into the package-internal `xxh3` C target (`Sources/xxh3`, pin recorded in `Sources/xxh3/VENDORED.md`); package-only deterministic collision double added (`Tests/HistoryStorageTests/Fixtures/ForcedCollisionFingerprint.swift`); Fuse pinned at tag 1.4.0, commit [`26ba868`](https://github.com/krisk/fuse-swift/commit/26ba868691b2d8b7bf2b1322951eb591be70ccca) (SPM revision pin in `Package.swift`) with the deferred HistoryStorage→Fuse edge added; import-confinement gates extended (`scripts/import_gate.py`, `.swiftlint.yml`).
+- **Step 3 landed** at [`5446780`](https://github.com/GuangDai/Clipy/commit/5446780990fbd43b8ef1b7b1e0ca5c93c4eabc19): xxHash v0.8.3 vendored into the package-internal `xxh3` C target (`Sources/xxh3`, pin recorded in `Sources/xxh3/VENDORED.md`); package-only deterministic collision double added (`Tests/HistoryStorageTests/Fixtures/ForcedCollisionFingerprint.swift`); Fuse pinned at tag 1.4.0, commit [`26ba868`](https://github.com/krisk/fuse-swift/commit/26ba868691b2d8b7bf2b1322951eb591be70ccca) (SPM revision pin in `Package.swift`) with the deferred HistoryStorage→Fuse edge added. Historical import-confinement tooling from this step was retired 2026-08-24.
 - **Evidence — green at run [29964640300](https://github.com/GuangDai/Clipy/actions/runs/29964640300) (macos-26 runner):** both dependencies resolve and build; the collision double is exercised in the §7.6 forced-collision proof (`WS3ContainmentCollisionTests`, step 5). Per the sequencing note above, xxh3 is first imported at step 5 and the Fuse result/range fixtures land at step 7 with the full `SearchWorker` (the step-5 stub is Fuse-less).
-- **V1-Verified remediation — complete:** `XXH3FingerprintTests` pins four v0.8.3 known-answer vectors through the exact production C wrapper; `scripts/vendor_integrity_gate.py` verifies the recorded `xxhash.h`/`xxhash.c` hashes in the source-gate job. Both pass in supported run 31449682036.
+- **V1-Verified remediation — complete:** `XXH3FingerprintTests` pins four v0.8.3 known-answer vectors through the exact production C wrapper. The supported run 31449682036 also passed a then-current vendor-integrity scan; that scan was retired 2026-08-24 and is not current evidence.

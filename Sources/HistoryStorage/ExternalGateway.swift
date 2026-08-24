@@ -164,6 +164,43 @@ internal actor ExternalGateway {
         )
     }
 
+    /// The post-authentication Local Automation read entry. The caller cannot
+    /// select a kind or capability: this route is closed over recent/search,
+    /// excludes details/paste payload, and fixes the pair to
+    /// `.localAutomation + .browsePreview`. The Authority
+    /// still rechecks the durable kind, status, and live grant immediately
+    /// before projection, so authentication never becomes authorization.
+    internal func readLocalAutomationBrowsePreview(
+        _ request: LocalAutomationBrowsePreviewRequest,
+        asAuthenticated connection: ExternalConnectionID
+    ) async throws -> HistoryPage {
+        let requestedAt = storageClock.now()
+        let read = request.externalRead
+        let descriptor = try ExternalOperationDescriptor.forRead(
+            read,
+            expectedConnectionKind: .localAutomation
+        )
+        // V2-05's existing bucket is explicitly App-Intents-only. F1 has not
+        // frozen a Local Automation quota, so this unpublished pre-transport
+        // join shares structural admission/cadence but never consumes or
+        // perturbs that bucket.
+        try await beginStructurallyAdmittedOperation(
+            descriptor,
+            expectedConnectionKind: .localAutomation
+        )
+        let result = try await authority.performExternalRead(
+            read,
+            connection: connection,
+            expectedConnectionKind: .localAutomation,
+            requestedAt: requestedAt,
+            searchWorker: searchWorker
+        )
+        guard case .page(let page) = result else {
+            throw ExternalFailure.persistence(.invariantViolation)
+        }
+        return page
+    }
+
     internal func authorize(
         _ descriptor: ExternalOperationDescriptor,
         as connection: ExternalConnectionID
@@ -211,18 +248,10 @@ internal actor ExternalGateway {
         expectedConnectionKind: ConnectionEnrollKind,
         requestedAt: Date
     ) async throws {
-        // The caller has already matched the startup-baked identity. A
-        // forbidden descriptor pair is likewise a pure, unaudited admission
-        // failure and consumes no process quota.
-        guard descriptor.requestMatchesOperation,
-              ExternalAccessPolicy.admits(
-                connectionKind: expectedConnectionKind,
-                capability: descriptor.capability,
-                operation: descriptor.operationKind
-              ) else {
-            throw ExternalFailure.requestDenied(.invalidInput)
-        }
-        try await advanceCompactionCadence()
+        try await beginStructurallyAdmittedOperation(
+            descriptor,
+            expectedConnectionKind: expectedConnectionKind
+        )
 
         guard rateLimiter.admit(
             atUptimeNanoseconds: uptimeNanoseconds()
@@ -235,6 +264,28 @@ internal actor ExternalGateway {
             )
             throw ExternalFailure.requestDenied(.rateLimited)
         }
+    }
+
+    /// Pure pair admission plus the global audit-maintenance cadence. The
+    /// existing App Intents wrapper adds its separately frozen token debit;
+    /// the internal F1 join stops here until its own quota policy is approved.
+    private func beginStructurallyAdmittedOperation(
+        _ descriptor: ExternalOperationDescriptor,
+        expectedConnectionKind: ConnectionEnrollKind
+    ) async throws {
+        // The owning entry has already established identity: App Intents
+        // matched the startup-baked ID, while F1 authenticated exact custody
+        // bytes and a durable Local Automation row. A forbidden descriptor
+        // pair is a pure, unaudited admission failure.
+        guard descriptor.requestMatchesOperation,
+              ExternalAccessPolicy.admits(
+                connectionKind: expectedConnectionKind,
+                capability: descriptor.capability,
+                operation: descriptor.operationKind
+              ) else {
+            throw ExternalFailure.requestDenied(.invalidInput)
+        }
+        try await advanceCompactionCadence()
     }
 
     /// Serializes the cadence barrier across actor reentrancy. The request

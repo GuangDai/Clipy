@@ -130,6 +130,14 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// back to AppKit's field editor; only an unmodified settled Return enters
     /// the product paste intent (REVIEW Card 14A/15).
     override func sendEvent(_ event: NSEvent) {
+        // `keyCode` is valid only for key events. Reading it from a mouse
+        // event raises an AppKit exception before `super` can deliver the
+        // click, which made every SwiftUI control in this panel inert under
+        // real mouse input (observed by the Card 14A running-app tracer).
+        guard event.type == .keyDown else {
+            super.sendEvent(event)
+            return
+        }
         let hasMarkedText = (firstResponder as? NSTextInputClient)?
             .hasMarkedText() ?? false
         guard PanelSubmitDecision.shouldSubmit(

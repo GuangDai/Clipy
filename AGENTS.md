@@ -16,6 +16,18 @@ searches retained history, pins and reorders items, removes or clears items,
 appends immutable content revisions, produces paste payloads, and produces
 thumbnails.
 
+**Implementation policy (user direction, 2026-08-24):** keep work on the
+product and its direct tests. Do not add or reintroduce policy locks/ratchets,
+hash or checksum validation, routing/registry layers, artificial boundary
+machinery, repository rules/scanners, gates, ledgers/snapshots, or certificate,
+signing, notarization, and release-identity machinery. Do not turn a product
+change into governance infrastructure. Older documents describing retired
+examples of those mechanisms are historical records, not instructions to
+recreate them. Existing product code such as module access control, the
+Gateway's admitted operations, and xxh3's clipboard-dedup candidate lookup may
+be maintained when directly required by behavior; this paragraph forbids
+inventing new enforcement or orchestration around them.
+
 **Platform and toolchain:**
 
 - macOS 26+ only (`platforms: [.macOS(.v26)]`), arm64.
@@ -23,15 +35,12 @@ thumbnails.
 - SwiftPM owns the library graph (root `Package.swift`, swift-tools-version 6.2).
 - XcodeGen owns the app target (`ClipyApp/project.yml`); the generated
   `.xcodeproj` is a build artifact — regenerate, never hand-edit.
-- SwiftLint for custom architectural rules (`.swiftlint.yml`), mirrored by
-  portable Python scans in `scripts/` so gates also run without SwiftLint.
-- Building or testing the code requires a Mac with Xcode 26 / Swift 6.2. The
-  Python source gates (`scripts/import_gate.py`, `scripts/escape_hatch_scan.py`)
-  run on any platform; everything else (including
-  `scripts/public_symbol_snapshot.sh`) needs macOS + `xcrun`.
+- Building or testing the code requires a Mac with Xcode 26 / Swift 6.2.
+  Correctness CI intentionally consists of the SwiftPM and generated-app
+  build/test lanes; there is no separate static-source or symbol-snapshot lane.
 
-**Current state (2026-08-24, `master` through PR #39):** steps 0–9 are
-done and CI-green (scaffold + gates, `HistoryCore` public surface,
+**Current state (2026-08-24, `master` through PR #40):** steps 0–9 are
+done and CI-green (scaffold + build/tests, `HistoryCore` public surface,
 `HistoryDomain` pure core, dependency pins, schema v1 + codecs,
 `HistoryAuthority` capture/mutations/reads/observation/thumbnail, product
 wiring: PasteboardAdapter, PresentationUI, ClipyApp composition); the V2
@@ -70,7 +79,14 @@ Batch 35's generic Local Automation enrollment rejection landed in PR #37
 (merge `dd433d9`; final PR run 32693281604; master run 32693554157). Batch 36
 implemented the internal credential authentication kernel in PR #38 (merge
 `1834eca`; final PR run 32694144024 attempt 2; master run 32694673199) without
-publishing an ingress or transport.
+publishing an ingress or transport. Batch 38 adds the approved immutable-
+revision disclosure literal and a running-app Settings safety journey in PR
+#40 (merge `c89f2ba`; master run 32699272489): the real Settings scene exposes
+Launch at Login and requires a destructive confirmation before one newly
+enabled age limit can apply. The editor disclosure remains source/literal
+evidence because the runner's attached SwiftUI sheet exposes only an empty
+public AX dialog; the Settings journey does not establish ServiceManagement's
+signed four-state runtime matrix or the complete unified-retention workflow.
 Both dispatch-only physical-evidence cells are green on `master` as of
 2026-08-23: the General pasteboard cross-process run 32632263996 and the
 Card 6B APFS ENOSPC capture-transaction run 32636093920 (the latter via
@@ -84,7 +100,7 @@ Post-step-9 additions: the perf/AB helper proofs live in the separate
 panel is a Maccy-style AppDelegate-owned floating `NSPanel` (Carbon ⇧⌘C
 summon, cursor/status-item/center/last-position placement, dwell-driven
 preview pane) — no longer a SwiftUI `MenuBarExtra` window.
-Always check `docs/PROGRESS.md` and the REVIEW ledger
+Check `docs/PROGRESS.md` and the REVIEW status document
 (`docs/reviews/2026-08-22-clipy-maccy-deep-review/10-implementation-status.md`)
 for the exact landed state before assuming a feature exists.
 
@@ -127,7 +143,7 @@ HistoryRestartProbe ───────→ HistoryCore + HistoryStorage (test 
 | `HistoryPerfRunner` | Executable | Part VI §9 performance-runner scaffold (fixtures populate at step 8) |
 | `HistoryRestartProbe` | Test evidence executable target | Card 1C-1 three-process public-API restart tracer; no declared package product |
 
-**Load-bearing rules (docs/01-architecture.md §3/§6/§8):**
+**Current implementation shape (docs/01-architecture.md §3/§6/§8):**
 
 - Single write authority: `HistoryAuthority` is the only component that creates
   or uses writable `ModelContext`s; one fresh context per isolated operation,
@@ -140,7 +156,8 @@ HistoryRestartProbe ───────→ HistoryCore + HistoryStorage (test 
 - Accessing a closed `HistoryAction` set: adding an action is an owned source
   change and must make compiler-exhaustive switches fail until handled.
 - No application-owned `.shared`/`.current` service locators, no
-  `@unchecked Sendable`, no `nonisolated(unsafe)` — enforced by gates (§4).
+  `@unchecked Sendable`, no `nonisolated(unsafe)`. Preserve this directly in
+  code; do not build a scanner or policy layer for it.
   The only framework-owned exception is one composition-root
   `AppDependencyManager.shared.add(dependency:)` registration; hosted tests use
   standalone `AppDependencyManager()` instances.
@@ -155,40 +172,27 @@ HistoryRestartProbe ───────→ HistoryCore + HistoryStorage (test 
 
 ```text
 Package.swift                 SwiftPM manifest (the single target-graph truth)
-.swiftlint.yml                custom architectural lint rules (mirror of scripts/)
 Sources/<Target>/             one dir per SwiftPM target
 Sources/xxh3/                 vendored xxHash C source (+ VENDORED.md pin record)
 Tests/<Target>Tests/          SwiftPM test targets mirroring each library
-Tests/HistoryCoreTests/SymbolSurface/HistoryCore.symbols.txt   public symbol snapshot
 ClipyApp/                     XcodeGen spec, app sources, hosted integration tests
 docs/                         the design specification (00–06), AUDIT.md, PROGRESS.md
 docs/roadmap/                 implementation roadmap, one doc per module
-scripts/                      gate scripts (see below)
+scripts/                      CI build/test, evidence, and diagnostic helpers
 .github/workflows/            correctness, manual/reusable performance
-                              evidence, symbol-snapshot workflows
+                              and runtime evidence workflows
 ```
 
-## 4. Build, gate, and test commands
+## 4. Build and test commands
 
 All Swift/Xcode commands require **macOS 26 arm64 with Xcode 26** (the CI
 runner image; enforced in every workflow job).
 
 ```sh
-# Source gates (import confinement, escape hatches, symbol snapshot)
-bash scripts/run_gates.sh               # full local gate set
-bash scripts/run_gates.sh --source-only # CI source lane; avoids a duplicate build
-
-# SwiftLint (macOS, same rules as the gates)
-swiftlint lint --strict --no-cache
-
 # SwiftPM build + test (Swift 6 strict concurrency)
 swift build
 swift test                                    # default lane: functional tests only (skips HistoryPerfTests)
 swift test --filter 'HistoryPerfTests\.'      # local performance helper suite
-
-# HistoryCore public symbol snapshot (macOS only)
-bash scripts/public_symbol_snapshot.sh            # check
-bash scripts/public_symbol_snapshot.sh --update   # regenerate after intentional change
 
 # App project (macOS only)
 xcodegen generate --spec ClipyApp/project.yml     # or bash scripts/generate-xcodeproj.sh
@@ -202,56 +206,29 @@ bash scripts/ci/run_signed_runtime.sh \
   "${TMPDIR:-/tmp}/xcodegen-2.45.4"
 ```
 
-**Gate semantics:**
+**Correctness CI semantics:**
 
-- `scripts/evidence_workflow_gate.py` — protects the GOV-1 CI policy that was
-  lost in the original workflow split: one `workflow_dispatch`-only caller
-  invokes same-SHA reusable correctness before the exact-matcher and scale
-  evidence siblings, never cancels an active evidence run, and retains the
-  Actions-owned 1,000/5,000-row plus measurement-stage liveness guards.
-- `scripts/import_gate.py` — per-target import confinement (Part I §8):
-  `ClipboardFormats` and `ClipyCLIContract` → Foundation only;
-  `ContentPreview` → Foundation + ClipboardFormats + CoreGraphics + ImageIO;
-  `HistoryCore` → Foundation only;
-  `HistoryDomain` → Foundation + HistoryCore;
-  `HistoryStorage` must not import AppKit/SwiftUI/adapters/PresentationUI;
-  `PasteboardAdapter` must not import HistoryDomain/HistoryStorage/SwiftUI/
-  SwiftData; `PresentationUI` must not import HistoryDomain/HistoryStorage/
-  AppKit/SwiftData/ImageIO; `HistoryRestartProbe` → Foundation + HistoryCore +
-  HistoryStorage only; `xxh3` and `Fuse` are confined to `HistoryStorage`;
-  `AppIntents` is confined to `ClipyApp/Sources` and the hosted
-  `ClipyIntegrationTests`. Import attributes such as `@preconcurrency` and
-  access-level imports are parsed and cannot evade the gate. The scan covers
-  SwiftPM sources plus XcodeGen-owned app sources and app test targets.
-  `.swiftlint.yml` mirrors these; keep both in sync when changing rules.
-- `scripts/escape_hatch_scan.py` — rejects `@unchecked Sendable`,
-  `nonisolated(unsafe)`, and `static let/var shared|current` in SwiftPM and
-  `ClipyApp` sources/tests. It also requires exactly one framework-owned
-  `AppDependencyManager.shared.add(dependency:)` call at
-  `ClipyApp/Sources/AppIntents/AppIntentDependencyRegistration.swift` and
-  rejects shared-manager access everywhere else, including hosted tests.
-- `scripts/public_symbol_snapshot.sh` — diffs the extracted public symbol graph
-  of `HistoryCore` against `Tests/HistoryCoreTests/SymbolSurface/
-  HistoryCore.symbols.txt`. Snapshot content is runner-derived: if it drifts
-  unintentionally on CI, regeneration happens via the dispatch-only
-  `.github/workflows/symbol-snapshot.yml` (bot commit), not a local edit.
+- `SwiftPM build + test` runs the strict-concurrency package build and the
+  functional SwiftPM suite.
+- `XcodeGen generate + app build/test` regenerates the project, then builds and
+  tests the app, hosted integration target, and running-app UI target.
+- The two jobs run in parallel. Static regex/import/dependency scans,
+  SwiftLint, vendor/source scans, generated-project comparison, test-selection
+  scans, and HistoryCore symbol generation/comparison are deliberately not
+  correctness jobs. Architectural restrictions in §2/§5 remain design and
+  review obligations; executable behavior is protected by compiler and tests.
 
-**Do not add useless hashes.** CI orchestration, generated-project
-repeatability, change detection, cache coordination, artifact naming, test
-selection, and agent handoff must not introduce SHA/checksum/content-hash
-steps or hash-derived state. Compare the actual files or directories directly
-(`diff`, `cmp`, or the owning tool's native validation), and use explicit
-versions and typed state. A new integrity hash is allowed only when an
-authoritative design document requires that exact security property and the
-user explicitly approves the new boundary. The existing package-internal xxh3
-fingerprint is a product-domain dedup candidate filter only; it is never
-identity and must not be reused as CI or infrastructure machinery.
+**No hash validation.** CI orchestration, generated-project handling, change
+detection, cache coordination, artifact naming, test selection, and handoff
+must not introduce SHA/checksum/content-hash verification or hash-derived
+state. The existing package-internal xxh3 operation is only the product's
+clipboard-dedup candidate filter; it is not identity or infrastructure and
+must not be reused outside that behavior.
 
-**Do not over-design defensively.** Add a guard only for a repository rule, an
-observed failure, or a concrete failing fixture. Do not build speculative
-scanners, protocol layers, state machines, fallback paths, or duplicated gates
-for hypothetical future risks. Prefer the smallest direct check at the owning
-boundary, and delete a guard when the underlying failure mode no longer exists.
+**Do not over-design defensively.** Respond to observed product failures with
+the smallest direct implementation and focused test. Do not build speculative
+scanners, routing/protocol layers, state machines, fallback paths, policy
+documents, or duplicated enforcement infrastructure.
 
 **Compiler warnings are CI failures.** SwiftPM logs are scanned for diagnostics;
 the two XcodeGen-owned app/test targets set Swift and Clang warnings as errors
@@ -274,8 +251,8 @@ logs are not parsed as compiler output. Write warning-free code.
   `DomainRejection`, …) instead of inventing synonyms.
 - Comments in this repo are dense and cite spec sections (e.g. `05 §9`,
   `02 §5.4`). Follow that convention when changing behavior-bearing code.
-- Traceability: commits/PRs cite the roadmap module doc, the spec section, and
-  the WS gate or Part VI proof they serve (`docs/roadmap/README.md` §4).
+- Keep commit/PR descriptions concise and behavior-focused; do not create a
+  tracking ledger or traceability framework for a change.
 
 ## 6. Testing instructions
 
@@ -288,7 +265,7 @@ logs are not parsed as compiler output. Write warning-free code.
   `HistoryPerfTests` (SwiftPM) holds the perf/AB
   measurement-helper proofs for the `HistoryPerfRunner` executable; the
   PR/push correctness lane skips it (`--skip 'HistoryPerfTests\.'`). Its
-  reusable workflow is dormant until a future correctness-gated caller is
+  reusable workflow is dormant until a future explicitly requested caller is
   deliberately added.
 - Persistence tests use the real `SwiftDataHistory` with an **in-memory**
   `ModelContainer` — there is no second fake writer implementation. A scripted
@@ -301,19 +278,17 @@ logs are not parsed as compiler output. Write warning-free code.
   drives ordering proofs.
 - Tests that create temp on-disk stores must create the store directories
   upfront to keep CoreData file-status noise out of CI log scans.
-- Walking-skeleton gates WS1–WS21 (`docs/06-cross-cutting.md` §8) and Part VI
+- Walking-skeleton examples WS1–WS21 (`docs/06-cross-cutting.md` §8) and Part VI
   proofs (§7.x) name the acceptance tests per roadmap step; WS test files are
   named `WS<N>…Tests.swift`. Roadmap steps 5–6 close commit-side clauses;
   read/observation clauses close at step 7.
-- `Tests/HistoryCoreTests/SymbolSurface/` is excluded from compilation via the
-  target `exclude` in `Package.swift` — keep that exclude intact.
 
 ## 7. CI and deployment
 
-- `.github/workflows/correctness.yml` is the only push/PR workflow. It has
-  three jobs: **Lint + source gates**, **SwiftPM build + test**, and
-  **XcodeGen generate + app build/test**. Job steps delegate to `scripts/ci/`
-  so the same commands are reproducible without copying shell across YAML.
+- `.github/workflows/correctness.yml` is the only push/PR workflow. It has two
+  parallel jobs: **SwiftPM build + test** and **XcodeGen generate + app
+  build/test**. Job steps delegate to `scripts/ci/` so the same commands are
+  reproducible without copying shell across YAML.
 - The exact-matcher and scale-admission workflows remain reusable
   `workflow_call` modules and run only through the dedicated manual
   `workflow_dispatch` caller after same-SHA correctness succeeds. They never
@@ -321,29 +296,15 @@ logs are not parsed as compiler output. Write warning-free code.
   reusable-only with no caller.
 - `scripts/diagnostic_scan.py` owns the narrow log profiles. Every macOS job
   invokes the shared macOS 26/arm64 runner contract.
-- `.github/workflows/symbol-snapshot.yml` is `workflow_dispatch`-only and
-  bot-commits a regenerated HistoryCore symbol snapshot. Bot pushes do not
-  re-trigger CI; the snapshot is enforced by the SwiftPM correctness job on
-  subsequent pushes.
-- `.github/workflows/signed-runtime.yml` is `workflow_dispatch`-only. It builds
-  the Release app once, applies and verifies a local ad-hoc signature carrying
-  the Hardened Runtime flag, rejects iCloud/ubiquity entitlements in that exact
-  signed artifact, and runs a direct process-lifecycle smoke. It does **not**
-  prove Developer ID identity, secure timestamp, notarization/stapling,
-  Gatekeeper, TCC, login-item, Carbon/status-item, Space, or WindowServer
-  behavior; those remain state-3 distribution/manual cells.
-- `.github/workflows/release-archive.yml` is a manual-only Card 16A source
-  contract: after same-SHA correctness it requires a protected
-  `release/<marketing>/<build>` tag and validates one unsigned ordinary
-  `.xcarchive`. It does not sign, notarize, staple, or publish the artifact.
-- There is no signed release/deployment pipeline yet. The product-wired app remains
-  short of Part VI §11 "state 3": packaging, accessibility, localization, and
-  the distribution/manual acceptance cells are still open.
+- Do not add, extend, or invoke certificate, signing, notarization, protected-
+  tag, archive-identity, or release-attestation machinery unless the user asks
+  for that exact release operation. Existing manual historical workflows are
+  outside ordinary implementation work.
 
-## 8. Dependencies and pins
+## 8. Existing dependencies
 
-- **xxHash v0.8.3** vendored in `Sources/xxh3/` behind `clipy_xxh3_64bits`;
-  pin recorded in `Sources/xxh3/VENDORED.md`. Package-internal, no product.
+- **xxHash v0.8.3** is vendored in `Sources/xxh3/` behind
+  `clipy_xxh3_64bits`. Package-internal, no product surface.
 - **Fuse 1.4.0** pinned by exact revision
   (`26ba868691b2d8b7bf2b1322951eb591be70ccca`) in `Package.swift` — the
   2.0.0-rc.x pre-release is deliberately **not** used (`docs/AUDIT.md` §4b).
@@ -366,24 +327,25 @@ logs are not parsed as compiler output. Write warning-free code.
   exhaustive checks and **fail closed** (`CodecRejection` → typed persistence
   failure). Preserve that behavior; never silently ignore decode anomalies.
 - No network access, no external services, no telemetry anywhere in v1.
-- The banned-construct scans (§4) are a hard safety boundary — do not weaken
-  them, and do not work around a gate by reformatting code to evade a regex.
+- The architecture restrictions in §2/§5 remain review requirements. Do not
+  reintroduce retired regex/static-source or symbol-snapshot machinery as a
+  substitute for compiler-visible design and focused behavioral tests.
 
 ## 10. Where to look before changing things
 
 - `docs/00-overview.md` — v1 truth: what is included/excluded, load-bearing
   decisions, spec precedence.
 - `docs/01-architecture.md` — target graph, isolation model, forbidden
-  dependencies, build-time gates.
+  dependencies, and build/test checks.
 - `docs/02-domain.md` … `docs/06-cross-cutting.md` — per-part semantics.
 - `docs/roadmap/README.md` §3 — implementation order and step status.
 - `docs/PROGRESS.md` — landed steps, CI evidence, notable deviations, and open
   spec questions (e.g. the pin-ordinal compaction question flagged for step 6).
 - `docs/AUDIT.md` — design audit history; behavior changes may need a §3 entry.
 - `docs/reviews/2026-08-22-clipy-maccy-deep-review/10-implementation-status.md`
-  — the REVIEW implementation ledger. Check it before taking a review card;
-  update the affected row in the same PR so completed leaves are not repeated.
+  — historical REVIEW implementation status. It can help avoid repeating old
+  work, but do not turn new work into ledger maintenance.
 - `docs/reviews/2026-08-22-clipy-maccy-deep-review/11-ai-todo-map-2026-08-23.md`
   — AI-generated point-in-time audit + todo map (2026-08-23, baseline
-  `cda2ba0` → `a3e6774`). Not a live ledger; when it drifts, the ledger and
-  owning specs win.
+  `cda2ba0` → `a3e6774`). It is historical; current product behavior and the
+  owning specifications win when it drifts.

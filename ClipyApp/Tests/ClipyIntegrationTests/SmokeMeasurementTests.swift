@@ -1,6 +1,6 @@
 /// SmokeMeasurementTests — the measurement-hook smoke journeys the perf
-/// work will hang its budgets on: thumbnail-cache MEMORY EVICTION, corpus
-/// MEMORY LOADING, RENDER-SPEED timing capture, and the PREVIEW pane
+/// work will hang its budgets on: corpus MEMORY LOADING, RENDER-SPEED timing
+/// capture, and the PREVIEW pane
 /// end-to-end. Each test proves the behavioral path against the real
 /// composed stack (real `SwiftDataHistory`, real `HistoryViewState`,
 /// `ThumbnailStore`, `PreviewPaneState`) and prints its measurements as
@@ -9,9 +9,9 @@
 ///
 /// Timing discipline follows RenderStormAndMemoryTests: measurements are
 /// RECORDED, never asserted — the only assertions are convergence,
-/// boundedness with deliberate CI-variance slack, and eviction counts
-/// (deterministic: the whole-cache reset makes the entry-count evolution
-/// independent of task completion order).
+/// boundedness with deliberate CI-variance slack. Thumbnail capacity stays
+/// covered through PresentationUI's owner seam rather than a hosted product
+/// configuration knob.
 import Darwin
 import Foundation
 import HistoryCore
@@ -21,81 +21,8 @@ import Testing
 
 /// `.serialized`: the RSS probes read PROCESS-wide resident memory, so
 /// these tests must not overlap each other (or their seeding phases).
-@Suite("Smoke measurement hooks (eviction / loading / render / preview)", .serialized)
+@Suite("Smoke measurement hooks (loading / render / preview)", .serialized)
 struct SmokeMeasurementTests {
-
-    // MARK: - Memory eviction (thumbnail cache)
-
-    /// Memory-eviction smoke (docs/04-coherence.md §9; ThumbnailStore's
-    /// whole-cache reset): with the entry ceiling injected at 3, six image
-    /// prefetches drive exactly four evictions — the insert sequence
-    /// 1,2,3,4→reset→1,2 is order-independent, so completion order of the
-    /// fetch tasks cannot flake the assertion. RSS is recorded around the
-    /// round for the future memory budget.
-    @Test(
-        .enabled(
-            if: FixtureCatalog.available,
-            "requires the clipy-fixtures-v1 tree (CLIPY_FIXTURES_DIR)"
-        )
-    )
-    @MainActor
-    func thumbnailCacheEvictionSmoke() async throws {
-        let history = try await ComposedSupport.openMemoryHistory()
-        let base = Date(timeIntervalSinceReferenceDate: 700_204_000)
-        let imageFixtures: [(path: String, uti: String)] = [
-            ("images/photo4k-a.png", "public.png"),
-            ("images/photo4k-b.jpg", "public.jpeg"),
-            ("images/photo4k-c.tiff", "public.tiff"),
-            ("images/photo-1080.bmp", "com.microsoft.bmp"),
-            ("images/huge-8k.png", "public.png"),
-            ("images/icon-512.png", "public.png"),
-        ]
-        var references: [HistoryItemReference] = []
-        for (offset, fixture) in imageFixtures.enumerated() {
-            let receipt = try await history.perform(.capture(
-                ClipboardCapture(
-                    representations: [CapturedRepresentation(
-                        typeIdentifier: fixture.uti,
-                        bytes: try FixtureCatalog.data(fixture.path)
-                    )],
-                    origin: CopyOriginObservation(
-                        sourceApplication: "com.example.evictionsmoke",
-                        lineageHint: nil
-                    ),
-                    observedAt: base.addingTimeInterval(Double(offset))
-                )
-            ))
-            if let reference = ComposedSupport.insertedReference(
-                from: receipt, "eviction smoke seed \(fixture.path)"
-            ) {
-                references.append(reference)
-            }
-        }
-        #expect(references.count == imageFixtures.count)
-
-        let rssBefore = SmokeMemoryProbe.bytes()
-        let thumbnails = ThumbnailStore(history: history, maximumEntries: 3)
-        for reference in references {
-            thumbnails.prefetch(reference)
-        }
-        let settled = await ComposedSupport.waitFor(timeout: 60) {
-            thumbnails.inFlightCount == 0
-        }
-        #expect(settled, "eviction smoke: every thumbnail fetch settled")
-        #expect(
-            thumbnails.cachedEntryCount == 2,
-            "eviction smoke: 6 inserts against a ceiling of 3 leave exactly 2 entries (4 evicted)"
-        )
-        SmokeMeasurement.record(
-            name: "thumbnailEviction",
-            fields: [
-                "seededItems": Double(references.count),
-                "cacheCeiling": 3,
-                "cachedEntriesAfter": Double(thumbnails.cachedEntryCount),
-                "rssDeltaBytes": Double(SmokeMemoryProbe.bytes()) - Double(rssBefore),
-            ]
-        )
-    }
 
     // MARK: - Memory loading (corpus browse)
 

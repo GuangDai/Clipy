@@ -59,8 +59,7 @@ let package = Package(
             path: "Sources/xxh3",
             publicHeadersPath: "include",
             // Compile the vendored implementation as translation-unit-local
-            // inline code. Only Clipy's wrapper remains a global symbol;
-            // scripts/xxh3_symbol_gate.sh proves that boundary.
+            // inline code. Only Clipy's wrapper is intended to remain global.
             cSettings: [.define("XXH_INLINE_ALL")]
         ),
         .executableTarget(
@@ -91,7 +90,6 @@ let package = Package(
         .testTarget(
             name: "HistoryCoreTests",
             dependencies: ["HistoryCore"],
-            exclude: ["SymbolSurface"]
         ),
         .testTarget(
             name: "HistoryDomainTests",

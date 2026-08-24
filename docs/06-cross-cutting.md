@@ -317,7 +317,9 @@ Set `maximumUnpinnedItems` to a value the current state already satisfies and as
 
 ### 9. Performance proofs
 
-Correctness gates run first. Performance claims are accepted only from a release-like runner workload with recorded fixtures and machine metadata.
+The two correctness build/test jobs run before manual performance evidence.
+Performance claims are accepted only from a release-like runner workload with
+recorded fixtures and machine metadata.
 
 - Capture commit interval excludes pasteboard access, fingerprinting, rich-text projection, and image decode.
 - Healthy capture candidate generation is proportional to incoming bytes plus posting-set/candidate confirmation work, not all Canonical blobs.
@@ -357,12 +359,13 @@ Correctness gates run first. Performance claims are accepted only from a release
 
 The manual performance-admission lane is dispatch-only and never runs on a
 push or pull request. One dedicated manual caller first invokes the reusable
-same-SHA correctness workflow (source gates, SwiftPM functional tests, and app
+same-SHA correctness workflow (SwiftPM functional build/tests and generated-app
 build/tests), then starts the exact-matcher and scale evidence siblings in
 parallel. The performance-helper/proof reusable module remains caller-less.
-A portable source contract gate rejects trigger/caller/dependency/liveness
-drift without duplicating either evidence script's result schema. The scale
-lane then runs a fixed 1,000 × 256 KiB preparation smoke before preparing one
+Workflow/source-shape scans are not part of correctness; Actions dependency
+ordering and the evidence jobs' own executable failures remain the policy and
+result signals. The scale lane then runs a fixed 1,000 × 256 KiB preparation
+smoke before preparing one
 persistent 5,000-row corpus with the same per-row bound. The smoke crosses the
 750-to-1,000-row interval in which supported diagnostic run 31498144173 began
 emitting missing `.externalStorage` interim-file errors; a

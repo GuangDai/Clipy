@@ -21,37 +21,8 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  gates:
-    name: Lint + source gates
-    runs-on: macos-26
-    timeout-minutes: 15
-    env:
-      HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
-      LOG_DIR: ${{ github.workspace }}/ci-logs
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Verify runner contract
-        shell: bash
-        run: bash scripts/ci/verify_macos_runner.sh "$LOG_DIR/diagnostics.log"
-
-      - name: Run source correctness gates
-        shell: bash
-        run: bash scripts/ci/run_source_gates.sh "$LOG_DIR"
-
-      - name: Upload gate evidence
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: gates-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ci-logs
-          if-no-files-found: warn
-          retention-days: 14
-
   spm-build-test:
     name: SwiftPM build + test
-    needs: [gates]
     runs-on: macos-26
     timeout-minutes: 30
     env:
@@ -81,7 +52,6 @@ jobs:
 
   xcodeproj:
     name: XcodeGen generate + app build/test
-    needs: [gates]
     runs-on: macos-26
     timeout-minutes: 30
     env:

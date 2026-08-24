@@ -77,6 +77,26 @@ internal struct RetentionSettingsDraft {
         maximumUnpinnedItems != nil
     }
 
+    /// Apply availability follows the proposed value, not edit history: a
+    /// user who changes a field and then restores the configured count has no
+    /// pending write (`V2-07` §6.3; deep review Card 10A).
+    internal var hasCountChanges: Bool {
+        guard let maximumUnpinnedItems else { return false }
+        return maximumUnpinnedItems != configuredMaximumUnpinnedItems
+    }
+
+    /// Exact policy comparison preserves the raw seconds/bytes baseline kept
+    /// for rounded controls. Dirty flags protect asynchronous editing; they do
+    /// not by themselves mean that Apply has work to perform.
+    internal var hasPolicyChanges: Bool {
+        guard inputIsValid else { return false }
+        return HistoryRetentionPolicies(
+            age: proposedAgePolicy,
+            storage: proposedStoragePolicy,
+            revisions: proposedRevisionPolicy
+        ) != configuredPolicies
+    }
+
     internal var ageInputIsValid: Bool { ageDays != nil }
     internal var storageInputIsValid: Bool { storageMiB != nil }
     internal var revisionCountInputIsValid: Bool { revisionCount != nil }

@@ -63,11 +63,14 @@ extension ExternalOperationDescriptor {
     /// validation so the baked unknown-connection check retains X.5
     /// precedence over malformed parameters.
     internal static func requiredCapability(
-        for read: ExternalRead
+        for read: ExternalRead,
+        expectedConnectionKind: ConnectionEnrollKind = .appIntents
     ) -> ExternalCapability {
         switch read {
         case .recent, .search:
-            .browse
+            expectedConnectionKind == .localAutomation
+                ? .browsePreview
+                : .browse
         case .details, .pastePayload:
             .readContent
         }
@@ -101,12 +104,16 @@ extension ExternalOperationDescriptor {
     /// privacy-safe request-summary classification.
     internal static func forRead(
         _ read: ExternalRead,
+        expectedConnectionKind: ConnectionEnrollKind = .appIntents,
         limits: HistoryLimits = .standard
     ) throws -> Self {
+        let browseCapability = expectedConnectionKind == .localAutomation
+            ? ExternalCapability.browsePreview
+            : .browse
         switch read {
         case .recent(let limit):
             return Self(
-                capability: .browse,
+                capability: browseCapability,
                 operationKind: .readRecent,
                 requestSummary: .recent(
                     limit: try encodedLimit(limit, limits: limits)
@@ -134,7 +141,7 @@ extension ExternalOperationDescriptor {
                 encodedMode = .regexp
             }
             return Self(
-                capability: .browse,
+                capability: browseCapability,
                 operationKind: .readSearch,
                 requestSummary: .search(
                     queryUTF8ByteCount: queryByteCount,

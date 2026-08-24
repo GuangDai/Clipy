@@ -97,24 +97,40 @@ public final class ThumbnailStore {
     private let maximumDecodedBytes: Int
 
     /// The number of retained entries (hits AND recorded misses) — the
-    /// memory-eviction observability hook for the smoke/measurement suites.
-    public var cachedEntryCount: Int { entries.count }
+    /// memory-eviction observability hook for owner tests.
+    package var cachedEntryCount: Int { entries.count }
 
     /// The retained decoded-byte total (misses count zero) — the byte half
     /// of the same observability hook.
-    public var cachedDecodedBytes: Int { retainedDecodedBytes }
+    package var cachedDecodedBytes: Int { retainedDecodedBytes }
 
     /// The number of fetches currently in flight — the quiescence signal
-    /// the smoke suites wait on before asserting retention state.
-    public var inFlightCount: Int { inFlight.count }
+    /// owner tests wait on before asserting retention state.
+    package var inFlightCount: Int { inFlight.count }
 
     // MARK: - Init
 
-    public init(
+    public convenience init(
+        history: any ClipboardHistory,
+        pixels: PixelSize = PixelSize(width: 72, height: 72)
+    ) {
+        self.init(
+            history: history,
+            pixels: pixels,
+            maximumEntries: 500,
+            maximumDecodedBytes: 64 * 1_048_576
+        )
+    }
+
+    /// Owner-test seam for exercising the two admitted retention bounds at a
+    /// small scale. Product callers get one fixed policy through the public
+    /// initializer; cache capacity is not an application configuration knob
+    /// (REVIEW GOV-3; 05 §4.1 rule 4).
+    package init(
         history: any ClipboardHistory,
         pixels: PixelSize = PixelSize(width: 72, height: 72),
-        maximumEntries: Int = 500,
-        maximumDecodedBytes: Int = 64 * 1_048_576
+        maximumEntries: Int,
+        maximumDecodedBytes: Int
     ) {
         self.history = history
         self.pixels = pixels

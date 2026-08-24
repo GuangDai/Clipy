@@ -86,6 +86,125 @@ struct RetentionSettingsDraftTests {
         #expect(draft.maximumUnpinnedRequiresTightening(for: tightened))
     }
 
+    @Test("count Apply is enabled only when the validated value differs from configuration")
+    func countChangesCompareTheCandidateToTheExactBaseline() {
+        var draft = RetentionSettingsDraft()
+        load(
+            HistoryRetentionConfiguration(
+                maximumUnpinnedItems: 37,
+                policies: HistoryRetentionPolicies(
+                    age: nil,
+                    storage: nil,
+                    revisions: nil
+                )
+            ),
+            into: &draft
+        )
+
+        #expect(!draft.hasCountChanges)
+
+        draft.setMaximumUnpinnedText("36")
+        #expect(draft.hasCountChanges)
+
+        // Dirty history is not a semantic change: returning to the exact
+        // configured value must disable Apply again.
+        draft.setMaximumUnpinnedText("37")
+        #expect(!draft.hasCountChanges)
+    }
+
+    @Test("policy Apply is enabled only when the exact candidate differs from configuration")
+    func policyChangesCompareTheCandidateToTheExactBaseline() {
+        var draft = RetentionSettingsDraft()
+        load(
+            HistoryRetentionPolicies(
+                age: AgeRetention(maxAge: 90_001),
+                storage: StorageRetention(maxTotalBytes: 1_048_577),
+                revisions: RevisionRetention(
+                    maxRevisionsPerItem: 20,
+                    maxRevisionBytesPerItem: 1_048_577
+                )
+            ),
+            into: &draft
+        )
+
+        #expect(!draft.hasPolicyChanges)
+
+        draft.setStorageMiBText("3")
+        #expect(draft.hasPolicyChanges)
+
+        // The configured raw value is not exactly representable by this whole-
+        // MiB control. Returning to displayed "2" after an edit is explicit
+        // intent for exactly 2 MiB, not permission to restore hidden bytes.
+        draft.setStorageMiBText("2")
+        #expect(draft.hasPolicyChanges)
+        #expect(draft.submission()?.policies.storage?.maxTotalBytes == 2_097_152)
+
+        draft.setAgeDaysText("3")
+        #expect(draft.hasPolicyChanges)
+        draft.setAgeDaysText("2")
+        #expect(draft.hasPolicyChanges)
+        #expect(draft.submission()?.policies.age?.maxAge == 172_800)
+
+        draft.setRevisionMiBText("3")
+        #expect(draft.hasPolicyChanges)
+        draft.setRevisionMiBText("2")
+        #expect(draft.hasPolicyChanges)
+        #expect(
+            draft.submission()?.policies.revisions?.maxRevisionBytesPerItem
+                == 2_097_152
+        )
+
+        // Isolate the exact whole-number revision-count round trip from the
+        // deliberately changed, non-representable fields above.
+        var countDraft = RetentionSettingsDraft()
+        load(
+            HistoryRetentionPolicies(
+                age: nil,
+                storage: nil,
+                revisions: RevisionRetention(
+                    maxRevisionsPerItem: 20,
+                    maxRevisionBytesPerItem: nil
+                )
+            ),
+            into: &countDraft
+        )
+        countDraft.setRevisionCountEnabled(false)
+        #expect(countDraft.hasPolicyChanges)
+        countDraft.setRevisionCountEnabled(true)
+        #expect(!countDraft.hasPolicyChanges)
+    }
+
+    @Test("representable whole-unit fields disable Apply after edit and restore")
+    func exactWholeUnitBaselinesCanBeRestoredAfterEditing() {
+        var draft = RetentionSettingsDraft()
+        load(
+            HistoryRetentionPolicies(
+                age: AgeRetention(maxAge: 172_800),
+                storage: StorageRetention(maxTotalBytes: 2_097_152),
+                revisions: RevisionRetention(
+                    maxRevisionsPerItem: 20,
+                    maxRevisionBytesPerItem: 2_097_152
+                )
+            ),
+            into: &draft
+        )
+
+        draft.setAgeDaysText("3")
+        #expect(draft.hasPolicyChanges)
+        draft.setAgeDaysText("2")
+        #expect(!draft.hasPolicyChanges)
+
+        draft.setStorageMiBText("3")
+        #expect(draft.hasPolicyChanges)
+        draft.setStorageMiBText("2")
+        #expect(!draft.hasPolicyChanges)
+
+        draft.setRevisionMiBText("3")
+        #expect(draft.hasPolicyChanges)
+        draft.setRevisionMiBText("2")
+        #expect(!draft.hasPolicyChanges)
+    }
+
     @Test("late configured-policy read preserves edits and advances strictness baseline")
     func lateConfigurationReadCannotOverwriteNewerDraft() throws {
         var draft = RetentionSettingsDraft()
@@ -149,6 +268,7 @@ struct RetentionSettingsDraftTests {
         #expect(!draft.ageValueIsDirty)
         #expect(!draft.storageValueIsDirty)
         #expect(!draft.revisionBytesValueIsDirty)
+        #expect(!draft.hasPolicyChanges)
 
         let policies = try #require(draft.submission()?.policies)
         #expect(policies.age?.maxAge == 90_001)
@@ -177,6 +297,7 @@ struct RetentionSettingsDraftTests {
         #expect(policies.storage?.maxTotalBytes == 1_048_576)
         #expect(policies.revisions?.maxRevisionBytesPerItem == 1_048_577)
         #expect(draft.storageValueIsDirty)
+        #expect(draft.hasPolicyChanges)
         #expect(draft.requiresTighteningConfirmation(for: policies))
     }
 
@@ -276,12 +397,14 @@ struct RetentionSettingsDraftTests {
         #expect(accepted)
         #expect(draft.acceptedSuccessMessage == "Done.")
         #expect(!draft.ageValueIsDirty)
+        #expect(!draft.hasPolicyChanges)
 
         draft.setAgeDaysText("4")
 
         #expect(draft.acceptedSuccessMessage == nil)
         #expect(draft.ageValueIsDirty)
         #expect(draft.ageDaysText == "4")
+        #expect(draft.hasPolicyChanges)
     }
 
     @Test("an edit in either retention tab clears count Apply success")
@@ -305,6 +428,7 @@ struct RetentionSettingsDraftTests {
         )
         #expect(accepted)
         #expect(draft.acceptedCountSuccessMessage == "Done.")
+        #expect(!draft.hasCountChanges)
 
         draft.setRevisionCountEnabled(true)
 

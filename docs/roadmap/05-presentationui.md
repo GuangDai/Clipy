@@ -16,6 +16,12 @@
   `HistoryDetails`, `PastePayload`, `ThumbnailPayload`,
   `HistoryItemReference`) plus bounded inert ContentPreview artifacts.
 - **Interactions** that call `browse` / `observe` / `details` / `perform` / `pastePayload` / `thumbnail` through the injected `any ClipboardHistory`.
+- **Unified retention presentation:** maximum-unpinned count and the admitted
+  age/storage/revision policies share one Retention group, configured snapshot,
+  and edit generation. Their distinct v1/V2 actions retain separate Apply
+  controls. An unchanged exact candidate is not an action; display rounding
+  must not rewrite untouched sub-unit raw values, while an edited whole-unit
+  field represents the user's explicit whole-unit value.
 - **Selection, window behavior, observable presentation state** on the Main actor (Part I §6).
 - **Scripted preview adapter:** a small `ClipboardHistory` implementation for SwiftUI previews; it must be `Sendable` and must not substitute for storage semantic tests (03a §3, 01 §4).
 - **Preview deep module:** `PreviewContentLoader` alone owns History reads,
@@ -29,7 +35,9 @@
 ## Acceptance
 
 - `PresentationUITests`: views render from DTO snapshots; interactions issue correct requests.
-- Import confinement (Part VI §6): `SwiftUI` confined to this target; a deliberate `HistoryDomain`/`HistoryStorage`/`SwiftData` import fails the scan.
+- Import confinement (Part VI §6): `SwiftUI` belongs in this target and
+  `HistoryDomain`/`HistoryStorage`/`SwiftData` remain forbidden by architecture
+  and review.
 - `ContentPreviewTests` prove exact UTF-8 and native UTF-16 behavior, exact PNG
   eager BGRA8/sRGB artifacts, malformed/unsupported classification, and
   content-free active-job/source-byte accounting. Presentation lifecycle tests
@@ -39,6 +47,10 @@
   test parks at that real native entry and B text completes through production
   scheduling rather than a DEBUG-only actor suspension.
 - Thumbnail application discipline: a thumbnail result tagged with `HistoryItemReference(id, contentVersion)` is applied only while the row still carries that exact reference (Part I §5.7, Part IV §9).
+- Thumbnail capacity is a product-owned policy (500 entries / 64 MiB decoded
+  per surface), not caller configuration. Only owner tests may inject smaller
+  ceilings or read cache/in-flight counters. This does not admit the deferred shared
+  completed-thumbnail cache or establish an RSS/eviction performance budget.
 - Relative copy time uses the system abbreviated formatter under the owning
   `01` §6 rule. One list-owned wall-clock minute cadence supplies the same
   explicit `now` to every row; a label may therefore lag its item-relative

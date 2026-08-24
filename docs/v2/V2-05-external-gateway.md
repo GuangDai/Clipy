@@ -1,6 +1,6 @@
 # V2-05 - External Gateway & Audit (X1 ExternalGateway + X2 Operation Record auditing)
 
-> **Status (2026-08-23):** X.1 closed vocabulary, X.2 public contract, X.3
+> **Status (2026-08-24):** X.1 closed vocabulary, X.2 public contract, X.3
 > schema/bootstrap, X.4 audit/admin, X.5 internal denial, and **X.6 granted
 > positive paths plus the public facade/factory are landed and
 > correctness-green**. The immutable V4 X-HCR prerequisite and its
@@ -30,7 +30,13 @@
 > subsequently landed the storage-only `expectedKind` authoritative recheck;
 > [PR #20](https://github.com/GuangDai/Clipy/pull/20) added the dedicated
 > wrong-kind rate-denial fixture. Those close a prerequisite needed by a later
-> Local Automation adapter, not authentication or X.9. X.4 owns the complete
+> Local Automation adapter. PR #37 makes the generic administration overload
+> reject `.localAutomation`, and PR #38 lands the internal exact-credential
+> authentication kernel. Batch 39 source adds the preassigned-ID Authority-last
+> publication seam and an internal exact-credential-to-unique-Gateway
+> `browsePreview` vertical route; PR #41 final macOS correctness is pending.
+> None of these publishes a process ingress, transport, CLI, client custody,
+> peer-EUID proof, opaque locator, or signed Keychain evidence. X.4 owns the complete
 > `OperationPayloadBlobV1` codec, public operation-kind additions, central audit
 > store, current-state connection/grant administration, public in-app admin
 > conformance, and startup validation; it does **not** publish an
@@ -556,8 +562,10 @@ V2-05 owns:
 - the F1 credential-store seam (server-side app-private Data Protection
   Keychain `SecItem*` plus the §0.3 client-file custody decision; unused by the
   App Intents path. PR #20 landed only the internal exact-value/server-store
-  leaf; client custody, coordination, authentication, and ingress remain
-  unimplemented);
+  leaf; PR #38 landed only the in-process authenticator; Batch 39 source adds
+  only the preassigned publication and internal recent/search browse route.
+  Client custody, cross-target coordination, peer validation, process ingress,
+  and transport remain unimplemented);
 - new public "distinct concern" protocols in `HistoryCore`
   (`ExternalHistory`, `GatewayAdminHistory`) and DTOs;
 - the six graft-admission records (`V2-00` §4), V2 proof gates, migration
@@ -879,10 +887,11 @@ public enum ConnectionStatus: Int16, Sendable, Hashable, Codable {
   `.localAutomation` is never bootstrapped and is never created through that
   generic overload. Its sole admitted path is the §0.3 concrete coordinator:
   custody succeeds first, then Authority inserts the preassigned ID and
-  successful audit last, still with zero grants. The currently landed generic
-  local-enrollment behavior is transitional test scaffolding and must be closed
-  in the same F1 leaf that introduces the coordinator; it is not a product
-  enrollment contract.
+  successful audit last, still with zero grants. The generic overload now
+  rejects `.localAutomation` before Authority admission (PR #37); Batch 39's
+  internal preassigned-ID publisher is callable only after a future coordinator
+  has established the required custody facts, and does not itself implement
+  that coordinator.
 - **Grant** is per `(connectionID, capability)` (`GrantRow`, §4.2). Granting
   `.manage` implicitly satisfies `.browse` requests (no separate `.browse` row
   required, though the UX may record both for clarity); `.manage` does **not**
@@ -1944,10 +1953,9 @@ is `01` §8 / `06` §6: "`import SwiftData` appears only in `HistoryStorage`"):
   access is invisible there, so both the type and the accessor must be `public`.
   This mirrors how v1 exposes `SwiftDataHistory.open(...)` to `ClipyApp`
   (`01` §2: `public` is reserved for the concrete `HistoryStorage` constructor
-  needed by `ClipyApp`). The existing §9 symbol snapshot remains a
-  `HistoryCore`-only gate. It changes intentionally at X.6 for
-  `ExternalTransientReason.insufficientDiskSpace` and `.cancelled`; it
-  cannot represent a type declared by `HistoryStorage`.
+  needed by `ClipyApp`). Caller-visible contract changes are protected by
+  out-of-package `ClipyIntegrationTests` compile/behavior coverage; generated
+  symbol snapshots are no longer maintained.
   X.6 proves the facade and accessor with an out-of-package
   `ClipyIntegrationTests` compile/behavior test that imports `HistoryStorage`
   normally; package-level tests alone cannot prove `public` rather than

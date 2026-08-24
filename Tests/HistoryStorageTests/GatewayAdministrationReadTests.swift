@@ -64,7 +64,7 @@ struct GatewayAdministrationReadTests {
                 cloudKitDatabase: .none
             )]
         )
-        let idSource = UUIDSource([appIntentsID, enrolledID])
+        let idSource = UUIDSource([appIntentsID])
         let clock = StepClock(epoch: epoch)
         let authority = HistoryAuthority(
             container: container,
@@ -160,10 +160,10 @@ struct GatewayAdministrationReadTests {
                 result: .connections(returnedCount: 1)
             ))
 
-        let id = try await fixture.authority.enrollConnection(
-            kind: .localAutomation,
-            displayName: "Local automation",
-            credential: nil
+        let id = ExternalConnectionID(rawValue: Self.enrolledID)
+        try await fixture.authority.publishVerifiedLocalAutomationEnrollment(
+            id,
+            displayName: "Local automation"
         )
         try await fixture.authority.grantCapability(.organize, to: id)
         let grants = try await fixture.authority.grants(for: id)

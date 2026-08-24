@@ -1,8 +1,8 @@
 # Implementation Roadmap
 
 > **Status:** design-consolidated; M1 (steps 1–2), **M2 (steps 3–8), and
-> M3 (step 9 product wiring) are complete**. Public-symbol workflow
-> 31448087991 and supported macOS run 31449682036 prove the symbol surface,
+> M3 (step 9 product wiring) are complete**. Historical public-symbol workflow
+> 31448087991 and supported macOS run 31449682036 recorded the then-current symbol surface,
 > 314 tests in 41 suites, app build/test, and all 13 release workloads green
 > at the state-2 head; step 9 (modules 4–6: `04-pasteboardadapter.md`,
 > `05-presentationui.md`, `06-clipyapp.md`) landed in `c037a71`/`4c39499`
@@ -66,16 +66,16 @@ when the perf/AB helper proofs were split out of the default test lane).
 ## 3. Implementation order (Part VI §5), grouped into phases
 
 **Phases → Part VI states:**
-- **Phase 0 — scaffold** (step 0): package + build/test gates. No Part VI state.
-- **M1 — pure compile** (steps 1–2): HistoryCore, HistoryDomain. No WS gates; symbol-surface + invariant tests only.
+- **Phase 0 — scaffold** (step 0): package + build/test infrastructure. No Part VI state.
+- **M1 — pure compile** (steps 1–2): HistoryCore, HistoryDomain. No WS gates; compiler + invariant tests only.
 - **M2 — executable specification** (steps 3–8): deps (xxh3+Fuse) → schema → Authority → mutations → reads → thumbnail. **Closes state 2** when WS1–WS21 + Part VI §6/§7/§9 pass via direct `SwiftDataHistory` invocation AND the concurrency harness (step 5) is delivered AND the §9 release-like runner is provisioned (scaffolded step 0, fixtures by step 8).
 - **M3 — product wiring** (step 9): Pasteboard/UI/App; re-runs WS1–WS21 end-to-end through the composed app (this is M3 re-verification, not a state-2 requirement).
 - **State 3 (product complete)** is separate acceptance outside this roadmap (Part VI §11).
 
 **Steps** (module owner in bold):
 
-0. **scaffold (cross-cutting).** Create the original SwiftPM/XcodeGen target graph and gates. The package-only `ClipboardFormats`/`ClipboardFormatsTests` pair and concrete `ContentPreview`/`ContentPreviewTests` pair are later post-step-9 deepenings, admitted only after real callers and deletion tests existed; neither is retroactively claimed as scaffold work or a shipped/plugin surface. HistoryStorage is declared **without** its Fuse target-dependency edge (Fuse is an external SPM package that resolves only once pinned at step 3); `xxh3` is declared with placeholder source (real C/ObjC++ content lands at step 3). Add XcodeGen `project.yml` (Part I §9 item 6), SwiftLint/import-gate config (Part I §8), the public-symbol-no-leak snapshot harness, the no-`@unchecked Sendable` / `nonisolated(unsafe)` / no-service-locator source scan, **and the deterministic concurrency test harness scaffold** (required by WS12/13/15/20; its transaction-injection seam is finished inside `HistoryAuthority` at step 5), **and provision the Part VI §9 performance-runner scaffold** (release-like runner + recorded-fixture/machine-metadata capture; fixtures populate as HistoryStorage matures, §9 closes at step 8). `ClipyIntegrationTests` is XcodeGen-hosted. This step owns the Part VI §6 graph-level proofs: whole-graph Swift 6 build, per-target framework import confinement, public-symbol snapshot, and the global escape-hatch scan.
-1. **Module 1 — HistoryCore:** compile public values + protocol; lock the symbol surface (Part VI §6).
+0. **scaffold (cross-cutting).** Create the original SwiftPM/XcodeGen target graph and build/test infrastructure. The package-only `ClipboardFormats`/`ClipboardFormatsTests` pair and concrete `ContentPreview`/`ContentPreviewTests` pair are later post-step-9 deepenings, admitted only after real callers and deletion tests existed; neither is retroactively claimed as scaffold work or a shipped/plugin surface. HistoryStorage is declared **without** its Fuse target-dependency edge (Fuse is an external SPM package that resolves only once pinned at step 3); `xxh3` is declared with placeholder source (real C/ObjC++ content lands at step 3). Add XcodeGen `project.yml`, **the deterministic concurrency test harness scaffold** (required by WS12/13/15/20; its transaction-injection seam is finished inside `HistoryAuthority` at step 5), and the Part VI §9 performance-runner scaffold (release-like runner + recorded-fixture/machine-metadata capture; fixtures populate as HistoryStorage matures, §9 closes at step 8). `ClipyIntegrationTests` is XcodeGen-hosted. Historical source scans and the public-symbol snapshot were added at this step but were retired by the user-directed 2026-08-24 policy change; current correctness uses only the SwiftPM and generated-app build/test jobs.
+1. **Module 1 — HistoryCore:** compile public values + protocol and lock caller behavior with owner tests (Part VI §6).
 2. **Module 2 — HistoryDomain:** compile pure values, facts, planners; invariant tests (D1–D19).
 3. **Module 7 — integrate xxh3 + Fuse:** pin exact resolved revisions; swap the real C/ObjC++ source into the `xxh3` placeholder target; pin the Fuse 1.4.x SPM revision and **add the deferred HistoryStorage→Fuse package-dependency edge**; add the package-only deterministic xxh3 collision double. Both are then resolvable. **xxh3 is first used at step 5** (`IngestPreparationActor`, 05 §6.1); **Fuse is first used at step 7** (the full `SearchWorker` implementation for WS17 — the step-5 `SearchWorker` is a stub with no Fuse field). *(Incremental convention: step 0 declares HistoryStorage without the Fuse edge and xxh3 with placeholder source, so step 4's schema/codec code imports neither; step 3 pins real revisions and adds the Fuse edge; xxh3 is first imported at step 5, Fuse at step 7.)*
 4. **Module 3 — HistoryStorage (schema + codecs):** round trips + corruption rejection (Part VI §7.3, §7.4).
@@ -120,12 +120,11 @@ spec edit traces forward to its module(s).
 - **Executable specification** ✅ complete (state 2) — Part VI §6
   (compile/dependency), §7 (schema/platform), §9 (performance), and WS1–WS21
   are green on supported run 31449682036:
-  - **Step 0 ✅** — SwiftPM target graph, source gates, XcodeGen app, CI
-    scaffold; Part VI §6 graph-level proofs (whole-graph Swift 6 build,
-    per-target import confinement, public-symbol snapshot, escape-hatch scan)
-    gate-enforced.
+  - **Step 0 ✅** — SwiftPM target graph, XcodeGen app, CI and deterministic
+    test scaffolds. The former static-source/symbol machinery is retired;
+    current correctness is the two parallel build/test jobs.
   - **Step 1 ✅** — HistoryCore public surface (03a §2–§7, 03b §8–§10, 06 §2);
-    public symbol snapshot locked and gate-enforced.
+    Foundation-only compilation and focused surface behavior tests pass.
   - **Step 2 ✅** — HistoryDomain pure functional core (02 §2–§11) landed and
     CI-green. The dedicated per-invariant D1–D19 suite (02 §14;
     acceptance-required) passes all 47 tests in run 31449682036.

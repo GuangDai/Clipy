@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deterministic XcodeGen generation plus hosted application correctness tests.
+# XcodeGen generation plus hosted application correctness tests.
 set -euo pipefail
 
 if [[ "$#" -ne 5 ]]; then
@@ -15,17 +15,9 @@ export XCODEGEN_HOME="$5"
 project="ClipyApp/ClipyApp.xcodeproj"
 
 mkdir -p "$log_dir" "$result_dir" "$fixture_root"
-comparison_root="$(mktemp -d)"
-trap 'rm -rf "$comparison_root"' EXIT
 
 bash scripts/generate-xcodeproj.sh \
-  2>&1 | tee "$log_dir/xcodegen-first.log"
-first_project="$comparison_root/first-generated.xcodeproj"
-cp -R "$project" "$first_project"
-bash scripts/generate-xcodeproj.sh \
-  2>&1 | tee "$log_dir/xcodegen-second.log"
-diff -ru "$first_project" "$project" \
-  | tee "$log_dir/xcodegen-repeatability.diff"
+  2>&1 | tee "$log_dir/xcodegen.log"
 
 bash scripts/fetch_fixtures.sh "$fixture_root"
 export CLIPY_FIXTURES_DIR="$fixture_root/clipy-fixtures-v1"

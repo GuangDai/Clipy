@@ -96,6 +96,31 @@ struct OperationPayloadBlobV1Tests {
         }
     }
 
+    @Test func localEnrollmentAcceptsTruthfulCustodyAndLegacyFalse() throws {
+        for credentialWasProvided in [false, true] {
+            let payload = OperationPayloadBlobV1(
+                request: .enroll(
+                    kind: .localAutomation,
+                    displayNameUTF8ByteCount: 12,
+                    credentialWasProvided: credentialWasProvided
+                ),
+                result: .enrolled(connectionID: connectionID)
+            )
+            let context = adminContext(
+                connectionID: connectionID,
+                operation: .adminEnroll
+            )
+            let blob = try OperationPayloadBlobCodec.encode(
+                payload,
+                context: context
+            )
+            #expect(try OperationPayloadBlobCodec.decode(
+                blob,
+                context: context
+            ) == payload)
+        }
+    }
+
     @Test func privacySentinelsAreNeverPresent() throws {
         let forbidden = [
             Data("PRIVATE_QUERY_SENTINEL".utf8),
