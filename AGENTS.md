@@ -39,7 +39,7 @@ inventing new enforcement or orchestration around them.
   Correctness CI intentionally consists of the SwiftPM and generated-app
   build/test lanes; there is no separate static-source or symbol-snapshot lane.
 
-**Current state (2026-08-24, `master` through PR #41):** steps 0–9 are
+**Current state (2026-08-24, `master` through PR #44):** steps 0–9 are
 done and CI-green (scaffold + build/tests, `HistoryCore` public surface,
 `HistoryDomain` pure core, dependency pins, schema v1 + codecs,
 `HistoryAuthority` capture/mutations/reads/observation/thumbnail, product
@@ -94,6 +94,18 @@ Automation browsePreview leaf and a four-process retention restart tracer are
 green; Search Clear/focus is a running-app proof; and ThumbnailStore product
 knobs/counters are contracted to owner-test scope. The AXPress cell still
 skips without runner Accessibility authorization and remains unproved.
+Batch 40 landed through PRs #42–#44 (merges `cb3de0d`, `00c3fee`,
+`5ea8794`; product-head/final-master correctness 32712455441/32715020428):
+it closes bounded product leaves for item-ID collision recovery, paged count
+and selection reconciliation, typed Preview Retry, mutation pending state,
+32-row cooperative search cancellation, authoritative App Intent entity
+facts, visible Pause/Resume and denied-access recovery, count-retention purge,
+panel geometry/lifecycle, and pasteboard-marker characterization. PR #43 kept
+the Authority cancellation proof functional with a 64-row two-chunk fixture;
+PR #44 made the Settings Clear proof join its real observation boundary before
+starting its publication deadline. Real TCC/VoiceOver/FKA, time-bounded Pause,
+Spaces/sleep-wake, signed runtime, client transport/custody, and synchronous
+native matcher preemption remain open.
 Both dispatch-only physical-evidence cells are green on `master` as of
 2026-08-23: the General pasteboard cross-process run 32632263996 and the
 Card 6B APFS ENOSPC capture-transaction run 32636093920 (the latter via
