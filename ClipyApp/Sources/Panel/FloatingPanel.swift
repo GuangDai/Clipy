@@ -20,7 +20,7 @@ enum PanelSubmitDecision {
         keyCode: UInt16,
         modifierFlags: NSEvent.ModifierFlags,
         hasMarkedText: Bool,
-        isAtListRoot: Bool
+        isSelectionSubmissionEnabled: Bool
     ) -> Bool {
         let disallowedModifiers: NSEvent.ModifierFlags = [
             .command, .control, .option,
@@ -30,7 +30,7 @@ enum PanelSubmitDecision {
                 || keyCode == UInt16(kVK_ANSI_KeypadEnter))
             && modifierFlags.intersection(disallowedModifiers).isEmpty
             && !hasMarkedText
-            && isAtListRoot
+            && isSelectionSubmissionEnabled
     }
 }
 
@@ -69,6 +69,13 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// Set around programmatic `setFrame` calls so `windowDidMove` persists
     /// only USER drag positions as the `.lastPosition` anchor.
     private var isProgrammaticMove = false
+
+    /// AppKit can notify the parent that it resigned key before
+    /// `beginSheetModal` has made `attachedSheet` observable. Defer the close
+    /// decision one MainActor turn, then re-read only public window/modal
+    /// state. The single replaceable task also coalesces duplicate resign
+    /// callbacks without introducing a second lifecycle owner (Card 14D).
+    private var deferredFocusLossCloseTask: Task<Void, Never>?
 
     init(
         rootView: PanelRootView,
@@ -145,7 +152,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
             keyCode: event.keyCode,
             modifierFlags: event.modifierFlags,
             hasMarkedText: hasMarkedText,
-            isAtListRoot: isSelectionSubmissionEnabled()
+            isSelectionSubmissionEnabled: isSelectionSubmissionEnabled()
         ) else {
             super.sendEvent(event)
             return
@@ -160,6 +167,8 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// Maccy's `open(height:at:)`; the user's previously focused app keeps
     /// focus ownership for the paste that follows).
     func open(at mode: PopupPositionMode, statusItemButtonScreenFrame: NSRect?) {
+        deferredFocusLossCloseTask?.cancel()
+        deferredFocusLossCloseTask = nil
         let size = NSSize(
             width: PanelGeometry.totalWidth(previewOpen: isPreviewVisible),
             height: PanelGeometry.height
@@ -181,6 +190,8 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// Closes the panel (hides it; the instance is reused).
     override func close() {
         guard isPresented else { return }
+        deferredFocusLossCloseTask?.cancel()
+        deferredFocusLossCloseTask = nil
         super.close()
         isPresented = false
         if isPreviewVisible {
@@ -196,8 +207,19 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// audit S-5 / APL-C-11).
     override func resignKey() {
         super.resignKey()
-        if !NSApp.isModalAlertPresented {
-            close()
+        deferredFocusLossCloseTask?.cancel()
+        deferredFocusLossCloseTask = Task { @MainActor [weak self] in
+            // `beginSheetModal` completes its public sheet attachment only
+            // after the parent-window resign callback returns. Yielding keeps
+            // outside-click behavior prompt while closing that ordering gap.
+            await Task.yield()
+            guard !Task.isCancelled,
+                  let self,
+                  self.isPresented,
+                  !self.isKeyWindow,
+                  !NSApp.isModalAlertPresented
+            else { return }
+            self.close()
         }
     }
 
@@ -249,6 +271,8 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
 
     /// Arms preview dwell auto-open while the panel is key.
     func windowDidBecomeKey(_ notification: Notification) {
+        deferredFocusLossCloseTask?.cancel()
+        deferredFocusLossCloseTask = nil
         previewState.panelBecameKey()
     }
 
@@ -285,6 +309,14 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         previewPlacement = placement
         onPreviewPlacementChange(placement)
     }
+
+#if DEBUG
+    /// Deterministic hosted-test join for the public-state focus-loss decision.
+    /// Production has no caller-facing lifecycle seam.
+    func waitForDeferredFocusLossCloseForTesting() async {
+        await deferredFocusLossCloseTask?.value
+    }
+#endif
 }
 
 /// Whether the app is currently presenting an alert on top — public-API

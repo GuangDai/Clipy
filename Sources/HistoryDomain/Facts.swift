@@ -192,8 +192,9 @@ package struct RetentionPolicy: Sendable, Hashable {
 /// docs/02-domain.md §6
 ///
 /// Planners throw only this package vocabulary; `HistoryStorage` maps it
-/// exhaustively to the public `HistoryFailure` cases at the boundary
-/// (`corruptLineage` maps to `.persistence(.invariantViolation)`).
+/// exhaustively at the boundary. `candidateItemIDCollision` is intercepted
+/// as an internal remint signal, while `corruptLineage` maps to public
+/// `.persistence(.invariantViolation)`.
 /// Persistence corruption and fact-proof availability are normally caught at
 /// the Storage fact-loading boundary before planning; `corruptLineage` is
 /// only the planner's defensive backstop when a validated fact is internally
@@ -215,6 +216,10 @@ package enum DomainRejection: Error, Sendable, Equatable {
     /// The prepared revision failed Domain-level revalidation.
     /// docs/02-domain.md §6, §11 steps 2 and 4
     case invalidRevisionDraft
+    /// Capture selected the insert lane, but Storage's candidate History Item
+    /// ID already names a retained item. The pure planner rejects; Storage
+    /// owns remint/retry (Card 2B-1/2B-2).
+    case candidateItemIDCollision(HistoryItemID)
     /// A validated fact proved internally inconsistent (e.g. an active
     /// revision ID naming no stored revision). Defensive backstop only.
     /// docs/02-domain.md §6, §11 step 3

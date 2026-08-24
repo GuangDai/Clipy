@@ -56,9 +56,9 @@ package final class PreviewContentLoader {
     }
 
     /// The loader's closed presentation phase (review Card 9D). A valid type
-    /// without a renderer is stable `.unsupported`; History and decoder
-    /// failures are retryable `.failed` episodes and never masquerade as
-    /// unsupported content.
+    /// without a renderer is stable `.unsupported`; load/decoder failures
+    /// are `.failed` episodes and the separate typed recovery fact decides
+    /// whether the real Retry control is admitted.
     package enum Phase: Equatable {
         case loading
         case content(AppliedContent)
@@ -68,6 +68,15 @@ package final class PreviewContentLoader {
 
     /// The current phase — always fenced to `requestedItem`.
     package private(set) var phase: Phase = .unsupported
+
+    /// Whether the current failed episode admits the real Retry control.
+    /// History's public taxonomy grants that only to
+    /// `.temporarilyUnavailable`; stable/invalid failures and deterministic
+    /// malformed/resource rejections must not loop the same exact request.
+    /// ContentPreview's `.renderer` case denotes failure to create the native
+    /// platform rendering resources and remains retryable (03b §10;
+    /// review Card 9D).
+    package private(set) var canRetryFailure = false
 
     /// The metadata-bar facts for the applied item (03b §9).
     package private(set) var occurrence: CopyOccurrenceSummary?
@@ -119,7 +128,10 @@ package final class PreviewContentLoader {
     /// the generation/reference transition, so the view never reconstructs
     /// a request from an ID after a retryable failure (review Card 9D).
     package func retry() async {
-        guard phase == .failed, let requestedItem else { return }
+        guard phase == .failed,
+              canRetryFailure,
+              let requestedItem
+        else { return }
         await load(item: requestedItem)
     }
 
@@ -134,6 +146,7 @@ package final class PreviewContentLoader {
         requestedItem = item
         raster = nil
         occurrence = nil
+        canRetryFailure = false
         phase = item == nil ? .unsupported : .loading
         guard let item else {
             return
@@ -166,18 +179,22 @@ package final class PreviewContentLoader {
             switch outcome {
             case .content(.raster(let artifact)):
                 raster = artifact
+                canRetryFailure = false
                 phase = .content(.image)
                 occurrence = details.occurrence
             case .content(.text(let artifact)):
                 raster = nil
+                canRetryFailure = false
                 phase = .content(.text(artifact.text))
                 occurrence = details.occurrence
             case .unavailable:
                 raster = nil
+                canRetryFailure = false
                 phase = .unsupported
                 occurrence = details.occurrence
-            case .failed:
+            case .failed(let failure):
                 raster = nil
+                canRetryFailure = failure == .renderer
                 phase = .failed
                 occurrence = nil
             }
@@ -186,16 +203,30 @@ package final class PreviewContentLoader {
             // a phase transition or claim that underlying History/native
             // work stopped; a superseding request owns the next phase.
             return
-        } catch {
-            // History keeps its own typed taxonomy. Presentation records only
-            // a retryable failed episode, and only under the still-current
-            // exact reference; no Storage failure is reclassified here.
+        } catch let failure as HistoryFailure {
+            // History keeps its own typed taxonomy. Only its explicit
+            // temporary-unavailability case admits replay of this exact
+            // request; invalid/stale/persistence failures remain terminal.
             guard !Task.isCancelled,
                   requestGeneration == generation,
                   requestedItem == item
             else { return }
             raster = nil
             occurrence = nil
+            if case .temporarilyUnavailable = failure {
+                canRetryFailure = true
+            } else {
+                canRetryFailure = false
+            }
+            phase = .failed
+        } catch {
+            guard !Task.isCancelled,
+                  requestGeneration == generation,
+                  requestedItem == item
+            else { return }
+            raster = nil
+            occurrence = nil
+            canRetryFailure = false
             phase = .failed
         }
     }
@@ -328,9 +359,9 @@ public struct HistoryPreviewView: View {
         }
     }
 
-    /// Retry is offered only for a supported preview whose History read or
-    /// decoder failed. Stable unsupported content uses `unavailableBody` and
-    /// therefore never presents this control (review Card 9D).
+    /// Retry is offered only when the failed episode's typed outcome admits
+    /// replay. Stable unsupported, malformed, resource, invalid, and stale
+    /// outcomes therefore never present this control (review Card 9D).
     private var failedBody: some View {
         VStack(spacing: 8) {
             Image(systemName: "exclamationmark.triangle")
@@ -340,10 +371,13 @@ public struct HistoryPreviewView: View {
             Text("Preview Unavailable")
                 .font(.callout)
                 .foregroundStyle(.secondary)
-            Button("Retry") {
-                Task {
-                    await loader.retry()
+            if loader.canRetryFailure {
+                Button("Retry") {
+                    Task {
+                        await loader.retry()
+                    }
                 }
+                .accessibilityIdentifier("clipy.preview.retry")
             }
         }
     }

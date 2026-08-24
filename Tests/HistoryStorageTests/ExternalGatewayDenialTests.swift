@@ -798,7 +798,7 @@ struct ExternalGatewayDenialTests {
             Issue.record("expected identical retry to return a page")
             return
         }
-        #expect(page.rows.map(\.item.id) == [expectedItemID])
+        #expect(page.rows.map(\.row.item.id) == [expectedItemID])
         let afterRetry = try Self.gatewaySnapshot(in: fixture.container)
         #expect(afterRetry.operations.last?.operationKindRaw
             == ExternalOperationKind.readRecent.rawValue)

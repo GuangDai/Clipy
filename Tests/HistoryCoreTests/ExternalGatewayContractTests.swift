@@ -144,6 +144,62 @@ import Testing
     #expect(globalAdmin.changePosition == nil)
 }
 
+@Test func externalItemProjectionDTOsCarryPurposeSpecificEntityFacts() {
+    let itemID = HistoryItemID(
+        rawValue: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+    )
+    let item = HistoryItemReference(
+        id: itemID,
+        contentVersion: ContentVersion(rawValue: 4)
+    )
+    let copiedAt = Date(timeIntervalSince1970: 1_700_000_000)
+    let historyRow = HistoryRow(
+        item: item,
+        title: "Effective title",
+        typeIdentifiers: ["public.utf8-plain-text"],
+        lastCopiedAt: copiedAt,
+        copyCount: 3,
+        lastSource: "com.example.source",
+        pinnedPosition: 1,
+        search: nil
+    )
+    let row = ExternalHistoryRow(
+        row: historyRow,
+        revisionCount: 2
+    )
+    let page = ExternalHistoryPage(
+        position: ChangePosition(rawValue: 9),
+        rows: [row],
+        next: nil
+    )
+    let occurrence = CopyOccurrenceSummary(
+        firstCopiedAt: copiedAt.addingTimeInterval(-10),
+        lastCopiedAt: copiedAt,
+        count: 3,
+        firstSource: "com.example.first",
+        lastSource: "com.example.source"
+    )
+    let historyDetails = HistoryDetails(
+        item: item,
+        canonical: [],
+        effective: [],
+        revisions: [],
+        occurrence: occurrence,
+        pinnedPosition: 1
+    )
+    let details = ExternalHistoryDetails(
+        details: historyDetails,
+        title: "Effective title"
+    )
+
+    #expect(page.rows == [row])
+    #expect(page.rows[0].row.title == "Effective title")
+    #expect(page.rows[0].revisionCount == 2)
+    #expect(details.title == "Effective title")
+    #expect(details.revisionCount == 0)
+    #expect(details.details.item == item)
+}
+
 @Test func externalRequestValuesPreserveTheFrozenAppIntentsArguments() {
     let itemID = HistoryItemID(
         rawValue: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!

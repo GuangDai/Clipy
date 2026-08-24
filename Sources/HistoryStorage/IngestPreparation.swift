@@ -50,6 +50,25 @@ internal struct PreparedCaptureBundle: Sendable {
     /// The initial content projection from Canonical-as-Effective Content
     /// (§6.1 step 8, §15).
     internal let projection: ContentProjection
+
+    /// Reuses the already validated/fingerprinted capture while Storage
+    /// replaces only an occupied candidate identity. Collision recovery must
+    /// not repeat payload work or let the pure Domain mint identifiers
+    /// (Card 2B-2; docs/05-authority-kernel.md §6.1 step 7).
+    internal func replacingCandidateID(
+        with candidateID: HistoryItemID
+    ) -> PreparedCaptureBundle {
+        PreparedCaptureBundle(
+            domain: PreparedCapture(
+                candidateID: candidateID,
+                canonical: domain.canonical,
+                origin: domain.origin,
+                observedAt: domain.observedAt
+            ),
+            signatureEntries: signatureEntries,
+            projection: projection
+        )
+    }
 }
 
 // MARK: - Preparation actor (docs/05-authority-kernel.md §6.1)
@@ -78,10 +97,11 @@ internal actor IngestPreparationActor {
     /// Pasteboard marker types that exclude the whole capture at steps 1/3.
     /// docs/05-authority-kernel.md §6.1, docs/02-domain.md §2.1
     ///
-    /// V1 recognizes the three NSPasteboard framework markers plus established
-    /// application markers used for private/transient clipboard content. A
-    /// marker is a property of the pasteboard item: its sibling plaintext or
-    /// rich representations must not survive by merely filtering the marker.
+    /// V1 recognizes six third-party convention strings as a best-effort
+    /// private/transient denylist. None is a framework guarantee; a marker is
+    /// one defense-in-depth property of the pasteboard item. Its sibling
+    /// plaintext or rich representations must not survive by merely filtering
+    /// the marker.
     internal static let standardTransientTypeIdentifiers: Set<String> = [
         "com.agilebits.onepassword",
         "com.typeit4me.clipping",
@@ -285,5 +305,15 @@ internal actor IngestPreparationActor {
             signatureEntries: signatureEntries,
             projection: projection
         )
+    }
+
+    /// Mints only a replacement candidate after the Authority proves the
+    /// previous candidate is already occupied. The facade calls this between
+    /// isolated Authority attempts, so no context or stored row crosses the
+    /// actor hop (Card 2B-2; docs/05-authority-kernel.md §5/§6.1).
+    internal func remintCandidateID(
+        in prepared: PreparedCaptureBundle
+    ) -> PreparedCaptureBundle {
+        prepared.replacingCandidateID(with: makeCandidateID())
     }
 }

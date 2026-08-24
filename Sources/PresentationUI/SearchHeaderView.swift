@@ -93,10 +93,24 @@ public struct SearchHeaderView: View {
     /// The count caption shown while a search term is present (03b §8: an
     /// empty term is equivalent to `.recent` and carries no search results).
     private var resultCountCaption: some View {
-        let count = viewState.rows.count
-        return Text(count == 1 ? "1 result" : "\(count) results")
+        Text(
+            Self.resultCountText(
+                count: viewState.rows.count,
+                hasNextPage: viewState.hasNextPage
+            )
+        )
             .font(.caption)
             .foregroundStyle(.secondary)
+    }
+
+    /// A page cursor makes `count` a lower bound, not a total (Card 8C).
+    package static func resultCountText(
+        count: Int,
+        hasNextPage: Bool
+    ) -> String {
+        let displayedCount = hasNextPage ? "\(count)+" : "\(count)"
+        let noun = count == 1 && !hasNextPage ? "result" : "results"
+        return "\(displayedCount) \(noun)"
     }
 
     // MARK: Mode picker

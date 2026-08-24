@@ -106,6 +106,64 @@ func captureFreezesEveryRetainableTypedRepresentation() {
     )
 }
 
+/// DATA-9a characterization: the owning spec has not approved any browser or
+/// editor bookkeeping UTI as ignorable for dedup. This synthetic unknown type
+/// therefore remains ordinary content at the adapter seam. The fixture proves
+/// the present ceiling only: it does not identify a real application's UTI or
+/// authorize adding this identifier to an ignore list.
+@Test @MainActor
+func volatileBookkeepingBytesRemainPartOfTheCaptureInput() throws {
+    let textBytes = Data("same user-visible text".utf8)
+    let bookkeepingType = NSPasteboard.PasteboardType(
+        "com.clipy.tests.synthetic-bookkeeping-token"
+    )
+    let firstBookkeepingBytes = Data("generation-1".utf8)
+    let secondBookkeepingBytes = Data("generation-2".utf8)
+    let observedAt = Date(timeIntervalSince1970: 1_000_000)
+
+    let firstPasteboard = makePasteboard()
+    firstPasteboard.clearContents()
+    let firstItem = NSPasteboardItem()
+    #expect(firstItem.setData(textBytes, forType: .string))
+    #expect(firstItem.setData(firstBookkeepingBytes, forType: bookkeepingType))
+    #expect(firstPasteboard.writeObjects([firstItem]))
+
+    let secondPasteboard = makePasteboard()
+    secondPasteboard.clearContents()
+    let secondItem = NSPasteboardItem()
+    #expect(secondItem.setData(textBytes, forType: .string))
+    #expect(secondItem.setData(secondBookkeepingBytes, forType: bookkeepingType))
+    #expect(secondPasteboard.writeObjects([secondItem]))
+
+    let firstCapture = try #require(
+        PasteboardAdapter(pasteboard: firstPasteboard).capture(observedAt: observedAt)
+    )
+    let secondCapture = try #require(
+        PasteboardAdapter(pasteboard: secondPasteboard).capture(observedAt: observedAt)
+    )
+    let firstByType = Dictionary(
+        uniqueKeysWithValues: firstCapture.representations.map {
+            ($0.typeIdentifier, $0.bytes)
+        }
+    )
+    let secondByType = Dictionary(
+        uniqueKeysWithValues: secondCapture.representations.map {
+            ($0.typeIdentifier, $0.bytes)
+        }
+    )
+
+    #expect(firstByType[NSPasteboard.PasteboardType.string.rawValue] == textBytes)
+    #expect(secondByType[NSPasteboard.PasteboardType.string.rawValue] == textBytes)
+    #expect(firstByType[bookkeepingType.rawValue] == firstBookkeepingBytes)
+    #expect(secondByType[bookkeepingType.rawValue] == secondBookkeepingBytes)
+    #expect(firstCapture.representations != secondCapture.representations)
+
+    // History currently receives every non-marker representation as Canonical
+    // input. Until DATA-9b names and specifies a representation role, these
+    // two captures are intentionally distinguishable rather than coalesced on
+    // user-visible text alone.
+}
+
 #if DEBUG
 @Test @MainActor
 func pasteboardChangeBetweenRepresentationReadsProducesContentFreeRetryOutcome() throws {
@@ -755,6 +813,36 @@ func observerCapturesImmediatelyThenFiresOncePerChangeCountBump() {
     #expect(!deliveredEmptyChange)
 
     observer.stop()
+}
+
+@Test @MainActor
+func observerCanBaselineCurrentGenerationBeforePollingLaterCopies() {
+    let pasteboard = makePasteboard()
+    pasteboard.clearContents()
+    pasteboard.setString("copied-while-paused", forType: .string)
+    let observer = PasteboardObserver(
+        adapter: PasteboardAdapter(pasteboard: pasteboard),
+        pollInterval: 0.05
+    )
+
+    var received: [ClipboardCapture] = []
+    observer.start(captureCurrent: false) { outcome in
+        if case let .complete(complete) = outcome {
+            received.append(complete.capture)
+        }
+    }
+    defer { observer.stop() }
+
+    #expect(received.isEmpty)
+    pasteboard.clearContents()
+    pasteboard.setString("copied-after-resume", forType: .string)
+    #expect(spinMainRunLoop { received.count == 1 })
+    #expect(
+        received[0].representations.contains {
+            $0.typeIdentifier == NSPasteboard.PasteboardType.string.rawValue
+                && $0.bytes == Data("copied-after-resume".utf8)
+        }
+    )
 }
 
 @Test @MainActor

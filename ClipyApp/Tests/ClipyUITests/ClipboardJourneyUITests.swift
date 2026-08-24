@@ -76,18 +76,31 @@ final class ClipboardJourneyUITests: XCTestCase {
         // from merely leaving the initial selection untouched.
         search.typeKey(.downArrow, modifierFlags: [])
         pasteboard.clearContents()
+        let sentinel = NSPasteboardItem()
         XCTAssertTrue(
-            pasteboard.setString(
+            sentinel.setString(
                 "before-product-paste",
                 forType: .string
             )
         )
+        // Keep the assertion sentinel out of History so this proof observes
+        // only selection/paste routing, not a competing third capture commit.
+        XCTAssertTrue(sentinel.setData(
+            Data(),
+            forType: NSPasteboard.PasteboardType(
+                "org.nspasteboard.TransientType"
+            )
+        ))
+        XCTAssertTrue(pasteboard.writeObjects([sentinel]))
         search.typeKey(.return, modifierFlags: [])
 
         XCTAssertTrue(waitUntil(timeout: 10) { !panel.exists })
-        XCTAssertTrue(waitUntil(timeout: 10) {
-            pasteboard.string(forType: .string) == alpha
-        })
+        XCTAssertTrue(
+            waitUntil(timeout: 10) {
+                pasteboard.string(forType: .string) == alpha
+            },
+            "Expected selected alpha, observed \(pasteboard.string(forType: .string) ?? "nil")"
+        )
     }
 
     @MainActor

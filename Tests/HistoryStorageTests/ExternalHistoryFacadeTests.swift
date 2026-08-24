@@ -58,7 +58,7 @@ struct ExternalHistoryFacadeTests {
             Issue.record("expected recent page")
             return
         }
-        #expect(recent.rows.map(\.item.id) == [reference.id])
+        #expect(recent.rows.map(\.row.item.id) == [reference.id])
 
         guard case .page(let search) = try await secondValue.read(
             .search(text: "facade", mode: .exact, limit: 10)
@@ -66,7 +66,7 @@ struct ExternalHistoryFacadeTests {
             Issue.record("expected search page")
             return
         }
-        #expect(search.rows.map(\.item.id) == [reference.id])
+        #expect(search.rows.map(\.row.item.id) == [reference.id])
 
         guard case .details(let details) = try await facade.read(
             .details(reference.id)
@@ -74,9 +74,9 @@ struct ExternalHistoryFacadeTests {
             Issue.record("expected details")
             return
         }
-        #expect(details.item == reference)
+        #expect(details.details.item == reference)
         #expect(
-            details.effective.first?.bytes
+            details.details.effective.first?.bytes
                 == Data("external-facade-journey".utf8)
         )
 

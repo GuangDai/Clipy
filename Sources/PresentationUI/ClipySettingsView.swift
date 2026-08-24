@@ -337,6 +337,9 @@ private struct RetentionSettingsTab: View {
                                 .frame(width: 64)
                                 .multilineTextAlignment(.trailing)
                                 .accessibilityLabel("Maximum unpinned items")
+                                .accessibilityIdentifier(
+                                    "clipy.settings.retention.maximum-unpinned"
+                                )
                             Stepper(
                                 "",
                                 value: maximumUnpinnedStepperValue,
@@ -356,6 +359,9 @@ private struct RetentionSettingsTab: View {
                         Button("Apply Item Limit") {
                             requestMaximumUnpinnedApply()
                         }
+                        .accessibilityIdentifier(
+                            "clipy.settings.retention.apply-item-limit"
+                        )
                         .disabled(
                             !draft.maximumUnpinnedInputIsValid
                                 || !draft.hasCountChanges
@@ -383,8 +389,14 @@ private struct RetentionSettingsTab: View {
                         }
                         if let successMessage = draft.acceptedCountSuccessMessage {
                             SettingStatusView(status: .success(successMessage))
+                                .accessibilityIdentifier(
+                                    "clipy.settings.retention.item-limit-status"
+                                )
                         } else if let countStatus {
                             SettingStatusView(status: countStatus)
+                                .accessibilityIdentifier(
+                                    "clipy.settings.retention.item-limit-status"
+                                )
                         } else if let retentionConfigurationFailure {
                             SettingStatusView(status: .failure(retentionConfigurationFailure))
                         }

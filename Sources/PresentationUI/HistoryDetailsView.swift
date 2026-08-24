@@ -119,6 +119,7 @@ public struct HistoryDetailsView: View {
     @State private var failureNotice: String?
     @State private var showsEditor = false
     @State private var showsRemoveConfirmation = false
+    @State private var isTogglingPin = false
     @State private var isRemoving = false
     @State private var loadFence = HistoryDetailsLoadFence()
 
@@ -256,7 +257,12 @@ public struct HistoryDetailsView: View {
             Button {
                 Task { await togglePin(isPinned: isPinned) }
             } label: {
-                Image(systemName: isPinned ? "pin.slash" : "pin")
+                if isTogglingPin {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: isPinned ? "pin.slash" : "pin")
+                }
             }
             .buttonStyle(.bordered)
             .help(isPinned ? "Unpin" : "Pin")
@@ -265,6 +271,7 @@ public struct HistoryDetailsView: View {
                 "Pinned items stay at the top of the list and are exempt"
                     + " from unpinned retention limits."
             )
+            .disabled(isTogglingPin)
             Button {
                 showsEditor = true
             } label: {
@@ -390,6 +397,9 @@ public struct HistoryDetailsView: View {
     /// existing inline failure presentation.
     @MainActor
     private func togglePin(isPinned: Bool) async {
+        guard !isTogglingPin else { return }
+        isTogglingPin = true
+        defer { isTogglingPin = false }
         do {
             if isPinned {
                 _ = try await viewState.unpinAwaitingReceipt(item.id)

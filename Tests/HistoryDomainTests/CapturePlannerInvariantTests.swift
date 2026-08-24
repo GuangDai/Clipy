@@ -250,6 +250,78 @@ internal func coalescedWinner(
     #expect(created.id == candidateID)
 }
 
+@Test func insertRejectsCandidateItemIDAlreadyInRetainedInventory() throws {
+    let incoming = try captureCanonical([
+        ("public.utf8-plain-text", "new bytes", 101),
+    ])
+    let occupiedID = capturePlannerID(201)
+    let retained = captureItem(
+        id: occupiedID,
+        canonical: try captureCanonical([
+            ("public.utf8-plain-text", "existing bytes", 202),
+        ]),
+        lastCopiedAt: 100
+    )
+
+    #expect(throws: DomainRejection.candidateItemIDCollision(occupiedID)) {
+        try planCapture(
+            preparedCapture(
+                canonical: incoming,
+                observedAt: 200,
+                candidateID: occupiedID
+            ),
+            facts: captureFacts(
+                candidates: [],
+                retained: [retained]
+            ),
+            retention: RetentionPolicy(maximumUnpinnedItems: 10),
+            hardMaximumRetainedItems: 10
+        )
+    }
+}
+
+@Test func coalesceIgnoresUnusedCandidateItemIDCollision() throws {
+    let canonical = try captureCanonical([
+        ("public.utf8-plain-text", "same bytes", 301),
+    ])
+    let existing = captureItem(
+        id: capturePlannerID(202),
+        canonical: canonical,
+        lastCopiedAt: 100
+    )
+    let occupiedCandidate = captureItem(
+        id: capturePlannerID(203),
+        canonical: try captureCanonical([
+            ("public.utf8-plain-text", "unrelated bytes", 302),
+        ]),
+        lastCopiedAt: 50
+    )
+    let result = try planCapture(
+        preparedCapture(
+            canonical: canonical,
+            observedAt: 200,
+            candidateID: occupiedCandidate.id
+        ),
+        facts: captureFacts(
+            candidates: [existing],
+            retained: [existing, occupiedCandidate]
+        ),
+        retention: RetentionPolicy(maximumUnpinnedItems: 10),
+        hardMaximumRetainedItems: 10
+    )
+
+    guard case .commit(let plan) = result,
+          case .coalesced(let winnerID) = plan.outcome,
+          plan.mutations.count == 1,
+          case .recordCopy(let mutatedID, _) = plan.mutations[0]
+    else {
+        Issue.record("An unused colliding candidate changed coalesce behavior")
+        return
+    }
+    #expect(winnerID == existing.id)
+    #expect(mutatedID == existing.id)
+}
+
 @Test func insertionCarriesTheCompleteInitialOccurrencePayload() throws {
     let canonical = try captureCanonical([
         ("public.utf8-plain-text", "new item", 1),
@@ -451,4 +523,3 @@ internal func coalescedWinner(
         ) == exactItem.id
     )
 }
-

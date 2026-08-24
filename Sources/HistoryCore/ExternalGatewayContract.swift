@@ -64,9 +64,67 @@ public enum ExternalResponse: Sendable {
 
 /// Result of one external read request.
 public enum ExternalReadResult: Sendable {
-    case page(HistoryPage)
-    case details(HistoryDetails)
+    case page(ExternalHistoryPage)
+    case details(ExternalHistoryDetails)
     case pastePayload(PastePayload)
+}
+
+/// One browse/search row projected specifically for an external caller.
+///
+/// The V1 row remains unchanged; this value adds the authoritative retained
+/// revision count App Intents needs without exposing retention rows, lineage
+/// blobs, or Storage implementation vocabulary (V2-05 §7.1; X.7).
+public struct ExternalHistoryRow: Sendable, Hashable {
+    public let row: HistoryRow
+    public let revisionCount: Int
+
+    package init(
+        row: HistoryRow,
+        revisionCount: Int
+    ) {
+        self.row = row
+        self.revisionCount = revisionCount
+    }
+}
+
+/// A bounded external browse/search page.
+///
+/// Position and continuation semantics are identical to `HistoryPage`; only
+/// the row projection is purpose-specific (V2-05 §7.1; X.7).
+public struct ExternalHistoryPage: Sendable, Hashable {
+    public let position: ChangePosition
+    public let rows: [ExternalHistoryRow]
+    public let next: HistoryPageCursor?
+
+    package init(
+        position: ChangePosition,
+        rows: [ExternalHistoryRow],
+        next: HistoryPageCursor?
+    ) {
+        self.position = position
+        self.rows = rows
+        self.next = next
+    }
+}
+
+/// Full external details plus the authoritative Effective Content title.
+///
+/// `HistoryDetails` remains the unchanged V1 read DTO. This external value
+/// carries the title projection and explicit revision count needed by the
+/// output-only App Intent entity, with all facts produced by the same gated
+/// Storage read (V2-05 §7.1; X.7).
+public struct ExternalHistoryDetails: Sendable, Hashable {
+    public let details: HistoryDetails
+    public let title: String
+    public var revisionCount: Int { details.revisions.count }
+
+    package init(
+        details: HistoryDetails,
+        title: String
+    ) {
+        self.details = details
+        self.title = title
+    }
 }
 
 // MARK: - In-app Gateway administration concern

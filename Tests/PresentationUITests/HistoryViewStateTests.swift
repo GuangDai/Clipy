@@ -56,6 +56,7 @@ struct HistoryViewStateTests {
         let state = HistoryViewState(history: history, pageLimit: 25)
         state.activate()
         #expect(state.isLoadingFirstPage)
+        #expect(!state.hasAuthoritativeFirstPage)
 
         #expect(await pollUntil { state.rows.count == 4 })
         #expect(state.rows.map(\.title) == firstPage.rows.map(\.title))
@@ -64,6 +65,7 @@ struct HistoryViewStateTests {
         #expect(state.hasNextPage)
         #expect(!state.isLoadingPage)
         #expect(!state.isLoadingFirstPage)
+        #expect(state.hasAuthoritativeFirstPage)
         #expect(state.failure == nil)
         #expect(state.pageLimit == 25)
 
@@ -979,27 +981,44 @@ struct HistoryViewStateTests {
         state.deactivate()
     }
 
-    @Test func unchangedAndFailedRemoveDoNotAnnounceCommit() async throws {
+    @Test func unchangedAndFailedRemoveDoNotOptimisticallyPurge() async throws {
         let itemID = HistoryItemID(
             rawValue: UUID(
                 uuidString: "00000000-0000-0000-0000-000000009B12"
             )!
         )
-        let history = ScriptedHistory(performReceipt: .unchanged)
+        let retained = fixtureRow(
+            id: "00000000-0000-0000-0000-000000009B12",
+            title: "retained-until-remove-receipt"
+        )
+        let page = fixturePage(rows: [retained], next: "retained-next")
+        let history = ScriptedHistory(
+            observedFirstPage: page,
+            performReceipt: .unchanged
+        )
         let state = HistoryViewState(history: history)
         var committedRemovalAnnouncements = 0
         state.onCommittedUserRemoval = { _ in
             committedRemovalAnnouncements += 1
         }
+        state.activate()
+        defer { state.deactivate() }
+        try #require(await pollUntil { state.rows == page.rows })
 
         _ = try await state.removeAwaitingReceipt(itemID)
         #expect(committedRemovalAnnouncements == 0)
+        #expect(state.surfacePurge == nil)
+        #expect(state.rows == page.rows)
+        #expect(state.hasNextPage)
 
         await history.setPerformFailure(.temporarilyUnavailable(.factProof))
         await #expect(throws: HistoryFailure.self) {
             _ = try await state.removeAwaitingReceipt(itemID)
         }
         #expect(committedRemovalAnnouncements == 0)
+        #expect(state.surfacePurge == nil)
+        #expect(state.rows == page.rows)
+        #expect(state.hasNextPage)
     }
 
     /// Held pin metadata may trail a committed Unpin. Clear Unpinned therefore

@@ -76,6 +76,15 @@ internal enum TransactionApplyRejection: Error {
     case finalPinOrderViolated
 }
 
+/// A prepared capture would create a row whose Storage-minted business ID is
+/// already occupied. This is detected before stamping or transaction entry so
+/// the facade can remint through the same package ID source. It is deliberately
+/// internal: callers observe either the recovered commit or the existing typed
+/// invariant failure after bounded exhaustion (Card 2B-2).
+internal struct CaptureCandidateIDCollision: Error, Sendable {
+    internal let itemID: HistoryItemID
+}
+
 /// How a `.create` mutation proves its business ID is absent before insert.
 /// Public behavior always performs the bounded durable lookup required by
 /// Part V §10. The package-only disposable-fixture path may reuse the

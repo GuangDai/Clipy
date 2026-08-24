@@ -226,6 +226,10 @@ final class AppComposition {
     private var lastPublishedCaptureHealth = ClipyCaptureHealth.inactive
     private var captureAccessReducer: CaptureAccessReducer
     private var lastPublishedCaptureAccessState: CaptureAccessState
+    /// Process startup and explicit access Retry import the current complete
+    /// generation. User Resume instead baselines it, preserving the privacy
+    /// meaning of values copied while paused (DEC-OBSERVER-START).
+    private var captureCurrentOnNextObserverStart = true
     private let captureByteLimit: Int
 
     /// One value admitted through the composition owner's memory boundary.
@@ -343,7 +347,8 @@ final class AppComposition {
     static func open(storeURL: URL = defaultStoreURL) async throws -> AppComposition {
         try await openConfigured(
             storeURL: storeURL,
-            forcedCaptureAccessBehavior: nil
+            forcedInitialCaptureAccessBehavior: nil,
+            forcedCurrentCaptureAccessBehavior: nil
         )
     }
 
@@ -352,17 +357,23 @@ final class AppComposition {
     /// posture are substituted. Store open, observer capture, History writes,
     /// paste payload resolution, General pasteboard write, and close callbacks
     /// remain the one production graph (REVIEW Card 15 first tracer).
-    static func openForUITesting(storeURL: URL) async throws -> AppComposition {
+    static func openForUITesting(
+        storeURL: URL,
+        initialCaptureAccessBehavior: PasteboardAccessBehavior = .allowed,
+        currentCaptureAccessBehavior: PasteboardAccessBehavior = .allowed
+    ) async throws -> AppComposition {
         try await openConfigured(
             storeURL: storeURL,
-            forcedCaptureAccessBehavior: .allowed
+            forcedInitialCaptureAccessBehavior: initialCaptureAccessBehavior,
+            forcedCurrentCaptureAccessBehavior: currentCaptureAccessBehavior
         )
     }
 #endif
 
     private static func openConfigured(
         storeURL: URL,
-        forcedCaptureAccessBehavior: PasteboardAccessBehavior?
+        forcedInitialCaptureAccessBehavior: PasteboardAccessBehavior?,
+        forcedCurrentCaptureAccessBehavior: PasteboardAccessBehavior?
     ) async throws -> AppComposition {
         guard !openedStoreURLs.contains(storeURL) else {
             throw ClipyCompositionError.storeAlreadyOpen(storeURL)
@@ -372,7 +383,10 @@ final class AppComposition {
             try Task.checkCancellation()
             let composition = try await openReserved(
                 storeURL: storeURL,
-                forcedCaptureAccessBehavior: forcedCaptureAccessBehavior
+                forcedInitialCaptureAccessBehavior:
+                    forcedInitialCaptureAccessBehavior,
+                forcedCurrentCaptureAccessBehavior:
+                    forcedCurrentCaptureAccessBehavior
             )
             try Task.checkCancellation()
             composition.start()
@@ -386,7 +400,8 @@ final class AppComposition {
     /// The awaited body of `open` under an already-reserved URL.
     private static func openReserved(
         storeURL: URL,
-        forcedCaptureAccessBehavior: PasteboardAccessBehavior?
+        forcedInitialCaptureAccessBehavior: PasteboardAccessBehavior?,
+        forcedCurrentCaptureAccessBehavior: PasteboardAccessBehavior?
     ) async throws -> AppComposition {
         do {
             try FileManager.default.createDirectory(
@@ -408,12 +423,16 @@ final class AppComposition {
             history: history,
             appIntentsHistoryFacade: appIntentsHistoryFacade,
             adapter: adapter,
-            initialCaptureAccessBehavior: forcedCaptureAccessBehavior
+            initialCaptureAccessBehavior:
+                forcedInitialCaptureAccessBehavior
         )
 #if DEBUG
-        if let forcedCaptureAccessBehavior {
+        if let forcedCurrentCaptureAccessBehavior {
+            composition.captureAccessBehaviorForTesting = {
+                forcedCurrentCaptureAccessBehavior
+            }
             composition.observer.setAccessBehaviorProviderForTesting {
-                forcedCaptureAccessBehavior
+                forcedCurrentCaptureAccessBehavior
             }
         }
 #endif
@@ -490,6 +509,7 @@ final class AppComposition {
     func setCapturePaused(_ paused: Bool) {
         captureAccessReducer.setUserPaused(paused)
         if !paused {
+            captureCurrentOnNextObserverStart = false
             captureAccessReducer.updateSystemBehavior(
                 currentCaptureAccessBehavior()
             )
@@ -502,6 +522,7 @@ final class AppComposition {
     /// guesses prompt/TCC behavior or turns a nil payload into an access
     /// diagnosis. The signed clean-profile matrix owns those runtime facts.
     func retryCaptureAccess() {
+        captureCurrentOnNextObserverStart = true
         captureAccessReducer.retry(
             systemBehavior: currentCaptureAccessBehavior()
         )
@@ -738,7 +759,10 @@ final class AppComposition {
             && captureAccessState.permitsBackgroundPolling
         acceptsCaptures = shouldObserve
         if shouldObserve {
+            let captureCurrent = captureCurrentOnNextObserverStart
+            captureCurrentOnNextObserverStart = true
             observer.start(
+                captureCurrent: captureCurrent,
                 onAccessBehaviorChanged: { [weak self] behavior in
                     self?.receiveCaptureAccessBehavior(behavior)
                 },

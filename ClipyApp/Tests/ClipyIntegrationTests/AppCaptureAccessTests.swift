@@ -99,6 +99,43 @@ struct AppCaptureAccessTests {
 
     }
 
+    @Test("user resume baselines pause-period clipboard generations")
+    @MainActor
+    func userResumeExcludesPausedValuesAndCapturesTheNextCopy() async throws {
+        let history = try await ComposedSupport.openMemoryHistory()
+        let pasteboard = ComposedSupport.makePasteboard()
+        pasteboard.clearContents()
+        pasteboard.setString("before-pause", forType: .string)
+        let composition = AppComposition.makeForTesting(
+            history: history,
+            adapter: PasteboardAdapter(pasteboard: pasteboard),
+            observerPollInterval: 0.02,
+            initialCaptureAccessBehavior: .allowed,
+            captureAccessBehaviorProvider: { .allowed }
+        )
+        defer { composition.stop() }
+
+        #expect(await Self.waitForRows(1, in: history))
+        composition.setCapturePaused(true)
+        pasteboard.clearContents()
+        pasteboard.setString("copied-while-paused", forType: .string)
+        composition.setCapturePaused(false)
+
+        var page = try await history.browse(
+            HistoryBrowseRequest(kind: .recent, limit: 10)
+        )
+        #expect(page.rows.map(\.title) == ["before-pause"])
+
+        pasteboard.clearContents()
+        pasteboard.setString("copied-after-resume", forType: .string)
+        #expect(await Self.waitForRows(2, in: history))
+        page = try await history.browse(
+            HistoryBrowseRequest(kind: .recent, limit: 10)
+        )
+        #expect(page.rows.map(\.title).contains("copied-after-resume"))
+        #expect(!page.rows.map(\.title).contains("copied-while-paused"))
+    }
+
     @Test("live revocation stops the composed observer")
     @MainActor
     func liveRevocationStopsObservation() async throws {

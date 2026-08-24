@@ -20,6 +20,12 @@ import SwiftData
 /// Task-local inheritance reaches the producer `Task` without adding stored
 /// state to the six-actor facade; Release builds contain no hook or branch.
 internal enum ObservationDebugInstrumentation {
+    /// Parks immediately before the cancellation fence that guards a public
+    /// stream yield. Card 11B uses it to cancel a producer after search page
+    /// construction without relying on a scheduler turn or wall-clock delay.
+    @TaskLocal internal static var pageWillYield: (
+        @Sendable (HistoryPage) async -> Void
+    )? = nil
     @TaskLocal internal static var pageDidYield: (
         @Sendable (HistoryPage) async -> Void
     )? = nil
@@ -45,6 +51,12 @@ internal enum ObservationDebugInstrumentation {
 /// purpose-specific read paths (§14) and owns the Part IV §5 observation
 /// loop, and lets actor-thrown `HistoryFailure`s propagate.
 public struct SwiftDataHistory: ClipboardHistory, Sendable {
+    /// Total candidate-ID mint attempts admitted for one capture, including
+    /// the initial candidate. UUID collisions should be vanishingly rare in
+    /// production; eight keeps a broken/injected source strictly bounded
+    /// without widening the public limits or failure vocabulary (Card 2B-2).
+    internal static let captureCandidateIDAttemptLimit = 8
+
     /// Sole writer; also serializes source snapshot capture and observer
     /// registration (docs/05-authority-kernel.md §2).
     ///
@@ -154,6 +166,20 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     /// follows §16's uniform `.persistence(.transaction)` mapping.
     public static func open(
         configuration: HistoryConfiguration
+    ) async throws -> SwiftDataHistory {
+        try await open(
+            configuration: configuration,
+            makeCandidateID: { HistoryItemID(rawValue: UUID()) }
+        )
+    }
+
+    /// Package-owned deterministic capture-ID seam. Production always enters
+    /// through the public overload above; storage semantic tests inject fixed
+    /// candidates without exposing entropy configuration to callers
+    /// (docs/01-architecture.md §4; Card 2B-2).
+    internal static func open(
+        configuration: HistoryConfiguration,
+        makeCandidateID: @escaping @Sendable () -> HistoryItemID
     ) async throws -> SwiftDataHistory {
         // §13 step 1: configuration validation against the fixed Part VI
         // safety profile (§2: "always uses the fixed HistoryLimits.standard
@@ -271,7 +297,9 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         )
         return SwiftDataHistory(
             authority: authority,
-            ingestPreparation: IngestPreparationActor(),
+            ingestPreparation: IngestPreparationActor(
+                makeCandidateID: makeCandidateID
+            ),
             revisionPreparation: RevisionPreparationActor(),
             searchWorker: searchWorker,
             thumbnailService: ThumbnailService(),
@@ -307,8 +335,25 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     public func perform(_ action: HistoryAction) async throws -> HistoryReceipt {
         switch action {
         case .capture(let raw):
-            let prepared = try await ingestPreparation.prepare(raw)
-            return try await authority.commitCapture(prepared)
+            var prepared = try await ingestPreparation.prepare(raw)
+            var attempts = 1
+            while true {
+                do {
+                    return try await authority.commitCapture(prepared)
+                } catch is CaptureCandidateIDCollision {
+                    guard attempts < Self.captureCandidateIDAttemptLimit else {
+                        // No new public failure case is needed: an internal ID
+                        // source unable to produce a valid business identity
+                        // is a Storage invariant failure, and every collision
+                        // was rejected before transaction/publish.
+                        throw HistoryFailure.persistence(.invariantViolation)
+                    }
+                    attempts += 1
+                    prepared = await ingestPreparation.remintCandidateID(
+                        in: prepared
+                    )
+                }
+            }
 
         case .placePinned(let id, let placement):
             return try await authority.commitPinnedPlacement(id, placement)
@@ -448,6 +493,10 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
                         page = try await firstPage(for: request)
                     }
                     // §5 step 5.
+#if DEBUG
+                    await ObservationDebugInstrumentation.pageWillYield?(page)
+#endif
+                    try Task.checkCancellation()
                     continuation.yield(page)
 #if DEBUG
                     await ObservationDebugInstrumentation.pageDidYield?(page)
@@ -466,6 +515,10 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
                             continue
                         }
                         page = try await firstPage(for: request)
+#if DEBUG
+                        await ObservationDebugInstrumentation.pageWillYield?(page)
+#endif
+                        try Task.checkCancellation()
                         continuation.yield(page)
 #if DEBUG
                         await ObservationDebugInstrumentation.pageDidYield?(page)

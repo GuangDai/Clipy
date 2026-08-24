@@ -19,7 +19,7 @@ extension SearchWorker {
         term: String,
         in corpus: SearchCorpusSnapshot,
         directive: ScanDirective
-    ) throws -> [EvaluatedRow] {
+    ) async throws -> [EvaluatedRow] {
         // Admission (03b §8), every rejection is
         // `.invalidInput(.invalidRegularExpression)`: a pattern over the
         // Part VI 512-Character limit; a conservative textual guard for
@@ -81,7 +81,11 @@ extension SearchWorker {
             )
         }
 #endif
-        scan: for row in corpus.rows {
+        scan: for (rowOffset, row) in corpus.rows.enumerated() {
+            try await scanCheckpoint(
+                .regexp,
+                beforeRowAt: rowOffset
+            )
 #if DEBUG
             debugProcessedRows += 1
             debugTitleUTF8Bytes += row.debugTitleUTF8Bytes
@@ -192,6 +196,7 @@ extension SearchWorker {
             recordProgressIfNeeded()
 #endif
         }
+        try Task.checkCancellation()
 #if DEBUG
         searchDebugProbe.record(
             traceID: corpus.debugTrace.id,

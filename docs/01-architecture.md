@@ -137,6 +137,14 @@ NSPasteboard
 
 The adapter never constructs `CanonicalContent` and never calls xxh3. Preparation happens before the serialized commit interval. The Authority admits an insert only when candidate coverage is proven complete. Fingerprint candidates are always byte-confirmed.
 
+Observer start semantics are purpose-specific and fixed. Process startup and
+an explicit access-recovery Retry import the current complete pasteboard
+generation before polling. A user Resume after an explicit Pause instead
+baselines the current `changeCount` without importing it, so values copied
+while paused remain excluded; only a later generation enters capture. This is
+one `PasteboardObserver` implementation with a direct start option, not a
+second capture path (`DEC-OBSERVER-START`).
+
 If `CopyOriginObservation.lineageHint` names a retained item, the fact loader fetches that item directly by `HistoryItemID`; it does not require the hint to appear in a canonical-signature result. Exact equality with the hinted item's Effective Content is required before the hint can win.
 
 `ClipyApp` owns a fixed one-active/one-replaceable-latest capture lane. A
