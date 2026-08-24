@@ -14,10 +14,12 @@ import HistoryCore
 import SwiftUI
 
 /// One receipt-confirmed invalidation for state owned by a single panel
-/// surface (deep review Card 9B). This is package-only UI vocabulary, not a
-/// second History event stream: authoritative rows still arrive exclusively
-/// through `observe`; the signal only drops derived presentation state which
-/// must not survive a destructive/effective-content commit.
+/// surface (deep review Card 9B). This narrow public UI coordination value is
+/// visible to the ClipyApp composition boundary, while only PresentationUI
+/// can construct one. It is not a second History event stream: authoritative
+/// rows still arrive exclusively through `observe`; the signal only drops
+/// derived presentation state which must not survive a destructive/effective-
+/// content commit.
 public struct HistorySurfacePurge: Equatable, Sendable {
     public enum Scope: Equatable, Sendable {
         case all
