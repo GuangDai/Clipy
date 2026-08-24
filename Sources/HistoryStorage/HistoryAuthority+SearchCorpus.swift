@@ -260,6 +260,25 @@ extension HistoryAuthority {
             corpusRows.append(corpusRow)
 #if DEBUG
             let debugProcessedRows = corpusRows.count
+            // Card 11B's functional proof cancels after one completed 32-row
+            // chunk, then the production check at the next chunk boundary
+            // must stop projection. Keep this distinct from the coarser
+            // 250-row performance trace so correctness fixtures stay small.
+            if debugProcessedRows.isMultiple(
+                of: SearchWorker.cancellationRowInterval
+            ) {
+                searchDebugProbe.record(
+                    traceID: debugTraceID,
+                    component: "authority",
+                    phase: "corpus-projection-cancellation-checkpoint",
+                    phaseElapsed: debugProjectionStart.duration(to: debugClock.now),
+                    totalElapsed: debugTotalStart.duration(to: debugClock.now),
+                    rowsProcessed: debugProcessedRows,
+                    rowsTotal: rows.count,
+                    titleUTF8Bytes: debugTitleUTF8Bytes,
+                    bodyUTF8Bytes: debugBodyUTF8Bytes
+                )
+            }
             let debugIsProgressBoundary = debugProcessedRows.isMultiple(
                 of: SearchDebugProbe.progressRowInterval
             )
