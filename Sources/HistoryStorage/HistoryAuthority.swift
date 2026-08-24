@@ -102,12 +102,12 @@ internal enum CreateExistenceProof: Sendable {
 /// docs/roadmap/03-historystorage.md step-5 note (concurrency harness);
 /// harness contract: Tests/HistoryStorageTests/ConcurrencyHarness.
 ///
-/// Test seam, compiled in always and harmless in production: the handler is
-/// `nil` unless a test installs one via @testable, so every point is a no-op
-/// outside the harness (no `#if DEBUG`). Every point is placed where an
-/// `await` is legal — never inside a commit/read interval (§5). The WS12
-/// registration/query seams landed at step 7; the WS15 step-8 seam is the
-/// only pending one.
+/// The shared test seam is compiled in always and harmless in production: the
+/// handler is `nil` unless a test installs one via @testable, so every point
+/// is a no-op outside the harness. A narrowly diagnostic case may itself be
+/// `#if DEBUG` and absent from Release. Every point is placed where an `await`
+/// is legal — never inside a commit/read interval (§5). The WS12 registration/
+/// query seams landed at step 7; the WS15 step-8 seam is the only pending one.
 internal enum AuthoritySuspensionPoint: String, Sendable {
     /// On capture-commit entry, before the operation-local `ModelContext` is
     /// created — the last legal suspension before the non-suspending commit
@@ -126,6 +126,16 @@ internal enum AuthoritySuspensionPoint: String, Sendable {
     /// authoritative query (docs/06-cross-cutting.md §8; docs/04-coherence.md
     /// §5).
     case readEntry = "HistoryAuthority.read.entry"
+
+#if DEBUG
+    /// After a cancelled search-corpus capture has completely unwound its
+    /// synchronous local-context interval. Card 11B parks the cancelled
+    /// public operation here to prove a replacement read and capture can use
+    /// the reentrant Authority before that old caller is released. No
+    /// ModelContext or fetched row is live at this suspension point (§5).
+    case searchCancellationExit =
+        "HistoryAuthority.searchCorpus.cancelledExit"
+#endif
 
     /// On `currentPosition` entry, before the operation-local `ModelContext`
     /// is created — the WS12 discard-path seam the observe loop's phase-1

@@ -72,6 +72,13 @@ struct AppCaptureLaneTests {
             appDelegate.captureNotice == .replacedCapture(totalReplaced: 2),
             "a later replacement is a new visible episode after dismiss"
         )
+        let replacementNotice = try #require(appDelegate.captureNotice)
+        #expect(
+            CaptureNoticePresentation.message(for: replacementNotice)
+                == "Clipy replaced 2 pending clipboard changes with newer "
+                    + "ones, so they weren't saved. To try again, copy the "
+                    + "older content again."
+        )
 
         await history.resumeFirstCapture()
         let drained = await ComposedSupport.waitFor {
@@ -87,6 +94,56 @@ struct AppCaptureLaneTests {
         #expect(page.rows.map(\.title) == ["D", "A"])
         #expect(!page.rows.map(\.title).contains("B"))
         #expect(!page.rows.map(\.title).contains("C"))
+    }
+
+    /// DEC-CAPTURE-OVERLOAD stress: after A occupies the active slot, one
+    /// thousand already-frozen values pass synchronously through the same
+    /// production admission method. At every stable callback boundary the
+    /// owner retains only A plus the latest pending value and exact byte
+    /// accounting stays at two four-byte values. This is deliberately not an
+    /// acquisition-peak or process-RSS claim: the incoming value already
+    /// exists when this seam receives it (03 target direction §5.1).
+    @Test @MainActor
+    func thousandCaptureBurstKeepsOnlyActiveAndLatestPendingBytes() async throws {
+        let base = try await ComposedSupport.openMemoryHistory()
+        let history = FirstCaptureSuspendingHistory(base: base)
+        let pasteboard = ComposedSupport.makePasteboard()
+        pasteboard.clearContents()
+        let composition = AppComposition.makeForTesting(
+            history: history,
+            adapter: PasteboardAdapter(pasteboard: pasteboard),
+            captureByteLimit: 4
+        )
+        defer { composition.stop() }
+
+        composition.submitCaptureForTesting(Self.capture("A000", at: 1))
+        await history.waitUntilFirstCaptureIsSuspended()
+
+        for index in 0..<1_000 {
+            let text = String(format: "%04d", index)
+            composition.submitCaptureForTesting(
+                Self.capture(text, at: TimeInterval(index + 2))
+            )
+
+            let health = composition.captureHealth
+            #expect(health.activeCommitCount == 1)
+            #expect(health.pendingCaptureCount == 1)
+            #expect(health.activeCaptureBytes == 4)
+            #expect(health.pendingCaptureBytes == 4)
+            #expect(
+                health.activeCaptureBytes + health.pendingCaptureBytes == 8
+            )
+            #expect(health.replacedCaptureCount == index)
+        }
+
+        await history.resumeFirstCapture()
+        await history.waitUntilSecondCaptureCompletes()
+
+        #expect(composition.captureHealth.replacedCaptureCount == 999)
+        let page = try await base.browse(
+            HistoryBrowseRequest(kind: .recent, limit: 10)
+        )
+        #expect(page.rows.map(\.title) == ["0999", "A000"])
     }
 
     /// A capture receipt carries same-commit retention effects back through
@@ -718,8 +775,10 @@ private final class CaptureHealthProbe {
 private actor FirstCaptureSuspendingHistory: ClipboardHistory {
     private let base: SwiftDataHistory
     private var captureCount = 0
+    private var didCompleteSecondCapture = false
     private var firstCaptureContinuation: CheckedContinuation<Void, Never>?
     private var firstCaptureWaiters: [CheckedContinuation<Void, Never>] = []
+    private var secondCaptureWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(base: SwiftDataHistory) {
         self.base = base
@@ -731,8 +790,18 @@ private actor FirstCaptureSuspendingHistory: ClipboardHistory {
         }
 
         captureCount += 1
-        guard captureCount == 1 else {
-            return try await base.perform(action)
+        let captureOrdinal = captureCount
+        guard captureOrdinal == 1 else {
+            let receipt = try await base.perform(action)
+            if captureOrdinal == 2 {
+                didCompleteSecondCapture = true
+                let waiters = secondCaptureWaiters
+                secondCaptureWaiters.removeAll()
+                for waiter in waiters {
+                    waiter.resume()
+                }
+            }
+            return receipt
         }
 
         let waiters = firstCaptureWaiters
@@ -761,6 +830,13 @@ private actor FirstCaptureSuspendingHistory: ClipboardHistory {
         let continuation = firstCaptureContinuation
         firstCaptureContinuation = nil
         continuation?.resume()
+    }
+
+    func waitUntilSecondCaptureCompletes() async {
+        guard !didCompleteSecondCapture else { return }
+        await withCheckedContinuation { continuation in
+            secondCaptureWaiters.append(continuation)
+        }
     }
 
     func browse(_ request: HistoryBrowseRequest) async throws -> HistoryPage {

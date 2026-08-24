@@ -226,7 +226,9 @@ struct SearchWorkerCancellationTests {
         )
     }
 
-    @Test("cancelled Authority projection exits before completing the corpus")
+    @Test(
+        "cancelled Authority projection lets search B and capture finish before A returns"
+    )
     func authorityProjectionCancellationIsCooperative() async throws {
         let storeURL = WSSupport.tempStoreURL(
             "search-authority-cancellation"
@@ -234,32 +236,43 @@ struct SearchWorkerCancellationTests {
         defer { WSSupport.removeStore(storeURL) }
         let history = try await WSSupport.openHistory(
             storeURL: storeURL,
-            maximumUnpinned: 64
+            maximumUnpinned: 65
         )
         // Two chunks are sufficient: cancel immediately after 32 projected
         // rows, then require the production checkpoint before row 33 to stop
         // the operation. A functional cancellation proof must not seed a
         // scale fixture beside every MainActor UI test in the default lane.
-        _ = try await history.seedPerformanceFixture(rowCount: 64) { index in
+        let seedReceipt = try await history.seedPerformanceFixture(
+            rowCount: 64
+        ) { index in
             Self.fixtureCapture(index: index)
+        }
+
+        let gate = SuspensionGate()
+        let cancellationExitPoint = AuthoritySuspensionPoint
+            .searchCancellationExit
+            .rawValue
+        await history.authority.setSuspensionHandler { point in
+            guard point == .searchCancellationExit else { return }
+            await gate.park(at: point.rawValue)
         }
 
         let (events, continuation) = AsyncStream<SearchDebugEvent>.makeStream(
             bufferingPolicy: .unbounded
         )
-        await history.authority.setSearchDebugProbe(
-            SearchDebugProbe(isEnabled: true) { event in
-                _ = continuation.yield(event)
-                guard event.phase
-                        == "corpus-projection-cancellation-checkpoint",
-                      event.rowsProcessed
-                        == SearchWorker.cancellationRowInterval
-                else { return }
-                withUnsafeCurrentTask { task in
-                    task?.cancel()
-                }
+        let probe = SearchDebugProbe(isEnabled: true) { event in
+            _ = continuation.yield(event)
+            guard event.phase
+                    == "corpus-projection-cancellation-checkpoint",
+                  event.rowsProcessed
+                    == SearchWorker.cancellationRowInterval
+            else { return }
+            withUnsafeCurrentTask { task in
+                task?.cancel()
             }
-        )
+        }
+        await history.authority.setSearchDebugProbe(probe)
+        await history.searchWorker.setSearchDebugProbe(probe)
 
         let cancelled = Task {
             try await history.browse(HistoryBrowseRequest(
@@ -267,13 +280,86 @@ struct SearchWorkerCancellationTests {
                 limit: 10
             ))
         }
-        await #expect(throws: CancellationError.self) {
-            _ = try await cancelled.value
+        await gate.waitForPark(cancellationExitPoint)
+
+        do {
+            // A has unwound its operation-local context after the production
+            // row-33 cancellation check, but its public browse call is still
+            // parked. B must be able to capture and evaluate its own corpus
+            // before A is allowed to return to its caller.
+            await history.authority.setSearchDebugProbe(
+                SearchDebugProbe(isEnabled: false)
+            )
+            await history.searchWorker.setSearchDebugProbe(
+                SearchDebugProbe(isEnabled: false)
+            )
+            let replacement = try await history.browse(HistoryBrowseRequest(
+                kind: .search(text: "cancel-row-0-", mode: .exact),
+                limit: 10
+            ))
+            #expect(replacement.rows.count == 1)
+            #expect(
+                replacement.rows.first?.title.hasPrefix("cancel-row-0-")
+                    == true
+            )
+
+            // Capture uses the same real facade/Authority while cancelled A
+            // remains incomplete. The receipt and readback are the causal
+            // budget: no clock or scheduler-turn guess participates.
+            let capturedText = "capture completed behind cancelled search"
+            let captureReceipt = try await history.perform(.capture(
+                WSSupport.textCapture(
+                    capturedText,
+                    observedAt: Date(
+                        timeIntervalSinceReferenceDate: 730_300_000
+                    ),
+                    source: "com.example.search-cancellation.capture"
+                )
+            ))
+            switch captureReceipt {
+            case .unchanged:
+                Issue.record("expected capture after cancellation to commit")
+            case .committed(let commit):
+                #expect(
+                    commit.position.rawValue
+                        == seedReceipt.position.rawValue + 1
+                )
+                switch commit.outcome {
+                case .inserted:
+                    break
+                default:
+                    Issue.record(
+                        "expected capture after cancellation to insert"
+                    )
+                }
+            }
+            let capturedPage = try await history.browse(HistoryBrowseRequest(
+                kind: .search(text: capturedText, mode: .exact),
+                limit: 10
+            ))
+            #expect(capturedPage.rows.map(\.title) == [capturedText])
+
+            // Only after B and capture have both completed may A finish.
+            await gate.resume(cancellationExitPoint)
+            await #expect(throws: CancellationError.self) {
+                _ = try await cancelled.value
+            }
+            await history.authority.setSuspensionHandler(nil)
+            continuation.finish()
+        } catch {
+            await gate.resume(cancellationExitPoint)
+            cancelled.cancel()
+            _ = try? await cancelled.value
+            await history.authority.setSuspensionHandler(nil)
+            await history.authority.setSearchDebugProbe(
+                SearchDebugProbe(isEnabled: false)
+            )
+            await history.searchWorker.setSearchDebugProbe(
+                SearchDebugProbe(isEnabled: false)
+            )
+            continuation.finish()
+            throw error
         }
-        await history.authority.setSearchDebugProbe(
-            SearchDebugProbe(isEnabled: false)
-        )
-        continuation.finish()
 
         var captured: [SearchDebugEvent] = []
         for await event in events {
@@ -289,7 +375,9 @@ struct SearchWorkerCancellationTests {
                 == [SearchWorker.cancellationRowInterval]
         )
         #expect(!captured.contains { $0.phase == "corpus-projection-complete" })
+        #expect(!captured.contains { $0.phase == "corpus-sort-begin" })
         #expect(!captured.contains { $0.phase == "corpus-sort" })
+        #expect(!captured.contains { $0.component == "worker" })
     }
 
     @Test("cancelled observed search cannot publish a completed stale page")

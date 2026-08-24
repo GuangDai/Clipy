@@ -170,6 +170,8 @@ public struct HistoryDetailsView: View {
                 loadedLayout(for: details)
             }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("clipy.details.root")
         .navigationTitle("Details")
         .task { await load() }
         .sheet(
@@ -193,6 +195,7 @@ public struct HistoryDetailsView: View {
             Button("Remove", role: .destructive) {
                 Task { await remove() }
             }
+            .accessibilityIdentifier("clipy.details.confirm-remove")
             Button("Cancel", role: .cancel) {}
         }
         .onChange(of: viewState.surfacePurge, initial: true) { _, _ in
@@ -271,6 +274,7 @@ public struct HistoryDetailsView: View {
                 "Pinned items stay at the top of the list and are exempt"
                     + " from unpinned retention limits."
             )
+            .accessibilityIdentifier("clipy.details.pin-toggle")
             .disabled(isTogglingPin)
             Button {
                 showsEditor = true
@@ -292,6 +296,7 @@ public struct HistoryDetailsView: View {
             .accessibilityHint(
                 "Removes this item from your clipboard history."
             )
+            .accessibilityIdentifier("clipy.details.remove")
             .disabled(isRemoving)
         }
         .padding(.horizontal, 12)
@@ -559,6 +564,7 @@ private struct DetailsBody: View {
                     in: Capsule()
                 )
                 .accessibilityLabel("Pinned at position \(position + 1)")
+                .accessibilityIdentifier("clipy.details.pin-status")
         } else {
             Text("Unpinned")
                 .font(.caption)
@@ -566,6 +572,7 @@ private struct DetailsBody: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(Color.primary.opacity(0.06), in: Capsule())
+                .accessibilityIdentifier("clipy.details.pin-status")
         }
     }
 

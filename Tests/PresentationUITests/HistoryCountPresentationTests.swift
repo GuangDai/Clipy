@@ -1,6 +1,7 @@
 /// HistoryCountPresentationTests.swift — Card 8C's visible browse/search
 /// count contract. A next-page cursor means the displayed row count is only
 /// a lower bound, so both panel captions must disclose that incompleteness.
+import Foundation
 import PresentationUI
 import Testing
 
@@ -45,6 +46,23 @@ struct HistoryCountPresentationTests {
                 count: 2,
                 hasNextPage: false
             ) == "2 results"
+        )
+    }
+
+    @Test func countTokensUseTheSuppliedLocaleRatherThanTheProcessDefault() {
+        #expect(
+            HistoryPanelView.itemCountText(
+                count: 5_000,
+                hasNextPage: false,
+                locale: Locale(identifier: "en_US")
+            ) == "5,000 items"
+        )
+        #expect(
+            SearchHeaderView.resultCountText(
+                count: 5_000,
+                hasNextPage: true,
+                locale: Locale(identifier: "de_DE")
+            ) == "5.000+ results"
         )
     }
 }

@@ -294,7 +294,7 @@ struct PanelRootView: View {
         case .readFailure:
             return "Clipy couldn't check clipboard access. Try again."
         case .userPaused:
-            return "Clipboard monitoring is paused."
+            return "Clipboard monitoring is paused for up to 5 minutes."
         }
     }
 }

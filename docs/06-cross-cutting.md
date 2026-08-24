@@ -63,6 +63,17 @@ Rules:
 - No arithmetic counter or byte-count calculation may wrap.
 - Changing these values is a reviewed specification/configuration change with boundary tests, not a runtime cache tuning knob.
 
+The app-owned capture delivery lane has a separate, fixed non-configurable
+shape (`DEC-CAPTURE-OVERLOAD`): after admission it retains at most one active
+complete frozen capture and one replaceable latest pending capture. Both values
+individually obey the 128 MiB total-capture limit above. Replacing an occupied
+pending slot increments a content-free cumulative count presented to the user;
+the active value is never replaced, and drain order is active then latest.
+This is not another `HistoryLimits` field or a generic queue. It proves neither
+an aggregate 256 MiB process ceiling nor a pre-freeze acquisition/RSS bound:
+the incoming framework value already exists at the app-owner seam, so provider
+materialization and transient overlap remain separate evidence work.
+
 ### 3. Deferred G1–G8 grafts
 
 None of these types, tables, protocols, or state machines belongs to v1. The trigger opens a new design review; it does not authorize inserting the feature directly.

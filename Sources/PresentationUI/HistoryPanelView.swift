@@ -287,6 +287,8 @@ public final class HistoryPanelSurfaceState {
 /// `isOpen` through `onPreviewVisibilityChange` to resize the window —
 /// PresentationUI itself never touches AppKit (01 §8).
 public struct HistoryPanelView: View {
+    @Environment(\.locale) private var locale
+
     private let viewState: HistoryViewState
     private let previewState: PreviewPaneState
     private let previewPlacement: PreviewPlacement
@@ -566,7 +568,7 @@ public struct HistoryPanelView: View {
                         onPauseCapture()
                     } label: {
                         Label(
-                            "Pause Clipboard Monitoring",
+                            "Pause Clipboard Monitoring for 5 Minutes",
                             systemImage: "pause.circle"
                         )
                     }
@@ -613,16 +615,19 @@ public struct HistoryPanelView: View {
     private var itemCountText: String {
         Self.itemCountText(
             count: viewState.rows.count,
-            hasNextPage: viewState.hasNextPage
+            hasNextPage: viewState.hasNextPage,
+            locale: locale
         )
     }
 
     /// A page cursor makes `count` a lower bound, not a total (Card 8C).
     package static func itemCountText(
         count: Int,
-        hasNextPage: Bool
+        hasNextPage: Bool,
+        locale: Locale = .current
     ) -> String {
-        let displayedCount = hasNextPage ? "\(count)+" : "\(count)"
+        let number = LocalizedCountPresentation.number(count, locale: locale)
+        let displayedCount = hasNextPage ? "\(number)+" : number
         let noun = count == 1 && !hasNextPage ? "item" : "items"
         return "\(displayedCount) \(noun)"
     }

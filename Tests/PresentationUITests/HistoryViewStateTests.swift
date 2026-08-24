@@ -541,6 +541,42 @@ struct HistoryViewStateTests {
         await history.finishObservation()
     }
 
+    /// `HistoryItemReference` equality, not item ID alone, is the list's
+    /// submission fence. An old row closure for v1 cannot submit after the
+    /// authoritative display has replaced that same item with v2; the exact
+    /// displayed v2 reference remains executable. This admission fence does
+    /// not pin the later History read to v2 (`DEC-PASTE-REFERENCE`, 04 §8).
+    @Test func displayedRowPasteAdmissionRequiresTheExactContentVersion() async {
+        let currentRow = fixtureRow(
+            id: "00000000-0000-0000-0000-00000000004E",
+            title: "current-version",
+            contentVersion: 2
+        )
+        let staleReference = HistoryItemReference(
+            id: currentRow.item.id,
+            contentVersion: ContentVersion(rawValue: 1)
+        )
+        let history = ScriptedHistory(
+            observedFirstPage: fixturePage(rows: [currentRow], next: nil)
+        )
+        let state = HistoryViewState(history: history)
+        let recorder = SynchronousPasteCallRecorder()
+        state.onPaste = { item in
+            recorder.record(item)
+        }
+        state.activate()
+        #expect(await pollUntil { state.rows == [currentRow] })
+
+        state.requestPasteFromDisplayedRow(staleReference)
+        #expect(recorder.received.isEmpty)
+
+        state.requestPasteFromDisplayedRow(currentRow.item)
+        #expect(recorder.received == [currentRow.item])
+
+        state.deactivate()
+        await history.finishObservation()
+    }
+
     /// A malformed regexp is an authoritative typed outcome, not an empty
     /// history snapshot. It ends first-page loading and remains available to
     /// the panel's failure banner while the raw search intent stays active.

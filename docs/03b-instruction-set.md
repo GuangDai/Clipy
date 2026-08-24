@@ -243,6 +243,20 @@ public struct ThumbnailPayload: Sendable, Hashable {
 
 Detail is the only general UI query that returns content lineage bytes. Paste returns current Effective Content only. Thumbnail returns encoded, Sendable bytes rather than `NSImage`/`CGImage`.
 
+**`DEC-PASTE-REFERENCE` (v1 decision).** Paste is **current-by-ID**: Copy
+denotes the retained item, not one historical revision state. When a list
+surface supplies a `HistoryItemReference`, it proves which exact displayed row
+admitted the user action, but its Content Version does not pin the later
+`pastePayload(for:)` read. That read resolves the item's current Effective
+Content and returns the Content Version that labels those exact bytes.
+Selection-stable resolution was rejected for v1 because it would turn ordinary
+observation lag into a stale failure even though the selected item remains
+readable; the public read therefore does not accept an expected Content Version
+or turn a newer retained revision into `.staleContent`. Callers must never
+describe the selected row's version as the version copied;
+`PastePayload.item` is the authoritative provenance of the returned
+representations.
+
 ### 10. Typed failures
 
 ```swift

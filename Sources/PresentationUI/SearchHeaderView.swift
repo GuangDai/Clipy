@@ -19,6 +19,8 @@ import SwiftUI
 /// mode-specific admission, including fuzzy's 64-character execution view,
 /// so switching modes never truncates clipboard syntax typed by the user.
 public struct SearchHeaderView: View {
+    @Environment(\.locale) private var locale
+
     private let viewState: HistoryViewState
     private let searchFieldFocused: FocusState<Bool>.Binding
     private let onMoveSelection: (Int) -> Void
@@ -96,7 +98,8 @@ public struct SearchHeaderView: View {
         Text(
             Self.resultCountText(
                 count: viewState.rows.count,
-                hasNextPage: viewState.hasNextPage
+                hasNextPage: viewState.hasNextPage,
+                locale: locale
             )
         )
             .font(.caption)
@@ -106,9 +109,11 @@ public struct SearchHeaderView: View {
     /// A page cursor makes `count` a lower bound, not a total (Card 8C).
     package static func resultCountText(
         count: Int,
-        hasNextPage: Bool
+        hasNextPage: Bool,
+        locale: Locale = .current
     ) -> String {
-        let displayedCount = hasNextPage ? "\(count)+" : "\(count)"
+        let number = LocalizedCountPresentation.number(count, locale: locale)
+        let displayedCount = hasNextPage ? "\(number)+" : number
         let noun = count == 1 && !hasNextPage ? "result" : "results"
         return "\(displayedCount) \(noun)"
     }
