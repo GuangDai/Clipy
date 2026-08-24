@@ -411,6 +411,18 @@ actor PasteCallRecorder {
     }
 }
 
+/// Synchronous probe for MainActor admission guards. Unlike the actor-backed
+/// recorder above, it can prove a rejected call immediately without a timed
+/// negative wait; `HistoryViewState.onPaste` is itself MainActor-isolated.
+@MainActor
+final class SynchronousPasteCallRecorder {
+    private(set) var received: [HistoryItemReference] = []
+
+    func record(_ item: HistoryItemReference) {
+        received.append(item)
+    }
+}
+
 // MARK: - Shared fixtures
 
 /// One canned row at a fixed reference (docs/03b-instruction-set.md §8).
@@ -420,12 +432,13 @@ actor PasteCallRecorder {
 func fixtureRow(
     id rawValue: String,
     title: String,
-    pinned: Int? = nil
+    pinned: Int? = nil,
+    contentVersion: UInt64 = 1
 ) -> HistoryRow {
     HistoryRow(
         item: HistoryItemReference(
             id: HistoryItemID(rawValue: UUID(uuidString: rawValue)!),
-            contentVersion: ContentVersion(rawValue: 1)
+            contentVersion: ContentVersion(rawValue: contentVersion)
         ),
         title: title,
         typeIdentifiers: ["public.utf8-plain-text"],

@@ -226,11 +226,16 @@ final class AppComposition {
     private var lastPublishedCaptureHealth = ClipyCaptureHealth.inactive
     private var captureAccessReducer: CaptureAccessReducer
     private var lastPublishedCaptureAccessState: CaptureAccessState
+    /// The one process-local deadline owner for CLIP-1. Cancellation on
+    /// manual Resume or stop prevents a late timer from
+    /// changing a newer lifecycle state.
+    private var capturePauseTask: Task<Void, Never>?
     /// Process startup and explicit access Retry import the current complete
     /// generation. User Resume instead baselines it, preserving the privacy
     /// meaning of values copied while paused (DEC-OBSERVER-START).
     private var captureCurrentOnNextObserverStart = true
     private let captureByteLimit: Int
+    private let capturePauseDuration: Duration
 
     /// One value admitted through the composition owner's memory boundary.
     /// The stored byte count was computed with checked arithmetic before the
@@ -289,7 +294,8 @@ final class AppComposition {
         adapter: PasteboardAdapter,
         observerPollInterval: TimeInterval = 0.5,
         captureByteLimit: Int = HistoryLimits.standard.maximumCaptureBytes,
-        initialCaptureAccessBehavior: PasteboardAccessBehavior? = nil
+        initialCaptureAccessBehavior: PasteboardAccessBehavior? = nil,
+        capturePauseDuration: Duration = CapturePausePolicy.standardDuration
     ) {
         self.history = history
         self.adapter = adapter
@@ -319,6 +325,7 @@ final class AppComposition {
         )
         lastPublishedCaptureAccessState = captureAccessReducer.state
         self.captureByteLimit = captureByteLimit
+        self.capturePauseDuration = capturePauseDuration
     }
 
     /// Opens the persistent store (creating the store's parent directory
@@ -348,7 +355,8 @@ final class AppComposition {
         try await openConfigured(
             storeURL: storeURL,
             forcedInitialCaptureAccessBehavior: nil,
-            forcedCurrentCaptureAccessBehavior: nil
+            forcedCurrentCaptureAccessBehavior: nil,
+            capturePauseDuration: CapturePausePolicy.standardDuration
         )
     }
 
@@ -360,12 +368,14 @@ final class AppComposition {
     static func openForUITesting(
         storeURL: URL,
         initialCaptureAccessBehavior: PasteboardAccessBehavior = .allowed,
-        currentCaptureAccessBehavior: PasteboardAccessBehavior = .allowed
+        currentCaptureAccessBehavior: PasteboardAccessBehavior = .allowed,
+        capturePauseDuration: Duration = CapturePausePolicy.standardDuration
     ) async throws -> AppComposition {
         try await openConfigured(
             storeURL: storeURL,
             forcedInitialCaptureAccessBehavior: initialCaptureAccessBehavior,
-            forcedCurrentCaptureAccessBehavior: currentCaptureAccessBehavior
+            forcedCurrentCaptureAccessBehavior: currentCaptureAccessBehavior,
+            capturePauseDuration: capturePauseDuration
         )
     }
 #endif
@@ -373,7 +383,8 @@ final class AppComposition {
     private static func openConfigured(
         storeURL: URL,
         forcedInitialCaptureAccessBehavior: PasteboardAccessBehavior?,
-        forcedCurrentCaptureAccessBehavior: PasteboardAccessBehavior?
+        forcedCurrentCaptureAccessBehavior: PasteboardAccessBehavior?,
+        capturePauseDuration: Duration
     ) async throws -> AppComposition {
         guard !openedStoreURLs.contains(storeURL) else {
             throw ClipyCompositionError.storeAlreadyOpen(storeURL)
@@ -386,7 +397,8 @@ final class AppComposition {
                 forcedInitialCaptureAccessBehavior:
                     forcedInitialCaptureAccessBehavior,
                 forcedCurrentCaptureAccessBehavior:
-                    forcedCurrentCaptureAccessBehavior
+                    forcedCurrentCaptureAccessBehavior,
+                capturePauseDuration: capturePauseDuration
             )
             try Task.checkCancellation()
             composition.start()
@@ -401,7 +413,8 @@ final class AppComposition {
     private static func openReserved(
         storeURL: URL,
         forcedInitialCaptureAccessBehavior: PasteboardAccessBehavior?,
-        forcedCurrentCaptureAccessBehavior: PasteboardAccessBehavior?
+        forcedCurrentCaptureAccessBehavior: PasteboardAccessBehavior?,
+        capturePauseDuration: Duration
     ) async throws -> AppComposition {
         do {
             try FileManager.default.createDirectory(
@@ -424,7 +437,8 @@ final class AppComposition {
             appIntentsHistoryFacade: appIntentsHistoryFacade,
             adapter: adapter,
             initialCaptureAccessBehavior:
-                forcedInitialCaptureAccessBehavior
+                forcedInitialCaptureAccessBehavior,
+            capturePauseDuration: capturePauseDuration
         )
 #if DEBUG
         if let forcedCurrentCaptureAccessBehavior {
@@ -490,6 +504,8 @@ final class AppComposition {
     /// publish a late side effect after shutdown.
     func stop() {
         isStarted = false
+        capturePauseTask?.cancel()
+        capturePauseTask = nil
         reconcileCaptureObservation()
         viewState.deactivate()
         viewState.onPaste = { _ in }
@@ -503,17 +519,45 @@ final class AppComposition {
         pasteTask = nil
     }
 
-    /// User-owned pause always wins over system changes and read failures.
-    /// Resuming rechecks the current system value before deciding whether the
-    /// observer may restart.
-    func setCapturePaused(_ paused: Bool) {
-        captureAccessReducer.setUserPaused(paused)
-        if !paused {
-            captureCurrentOnNextObserverStart = false
-            captureAccessReducer.updateSystemBehavior(
-                currentCaptureAccessBehavior()
-            )
+    /// Starts CLIP-1's fixed, process-local five-minute privacy window. The
+    /// composition remains the sole polling-lifecycle owner; no panel or app
+    /// shell timer can race this decision.
+    func pauseCapture() {
+        guard isStarted, captureAccessState == .allowed else { return }
+        capturePauseTask?.cancel()
+        captureAccessReducer.pause()
+        publishCaptureAccessStateIfChanged()
+        reconcileCaptureObservation()
+
+        let duration = capturePauseDuration
+        capturePauseTask = Task { @MainActor [weak self] in
+            do {
+                try await ContinuousClock().sleep(for: duration)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled,
+                  let self,
+                  self.isStarted,
+                  self.captureAccessState == .userPaused
+            else { return }
+            self.capturePauseTask = nil
+            self.resumeCapture()
         }
+    }
+
+    /// Manual and timed Resume share one privacy-preserving path. Re-reading
+    /// access can yield any authoritative posture, while the observer always
+    /// baselines the current generation so pause-period values stay excluded.
+    func resumeCapture() {
+        guard captureAccessState == .userPaused else { return }
+        capturePauseTask?.cancel()
+        capturePauseTask = nil
+        captureAccessReducer.resume()
+        captureCurrentOnNextObserverStart = false
+        captureAccessReducer.updateSystemBehavior(
+            currentCaptureAccessBehavior()
+        )
         publishCaptureAccessStateIfChanged()
         reconcileCaptureObservation()
     }
@@ -549,6 +593,7 @@ final class AppComposition {
         pasteWriteFailure: PasteboardWriteFailure? = nil,
         initialCaptureFailure: ClipyCaptureFailure? = nil,
         initialCaptureAccessBehavior: PasteboardAccessBehavior? = nil,
+        capturePauseDuration: Duration = CapturePausePolicy.standardDuration,
         captureAccessBehaviorProvider:
             (@MainActor () -> PasteboardAccessBehavior)? = nil
     ) -> AppComposition {
@@ -559,7 +604,8 @@ final class AppComposition {
             observerPollInterval: observerPollInterval,
             captureByteLimit: captureByteLimit,
             initialCaptureAccessBehavior: initialCaptureAccessBehavior
-                ?? captureAccessBehaviorProvider?()
+                ?? captureAccessBehaviorProvider?(),
+            capturePauseDuration: capturePauseDuration
         )
         composition.pasteWriteFailureForTesting = pasteWriteFailure
         composition.nextCaptureFailureForTesting = initialCaptureFailure
@@ -572,6 +618,13 @@ final class AppComposition {
         }
         composition.start()
         return composition
+    }
+
+    /// Content-free lifecycle instrumentation for the CLIP-1 owner tests.
+    /// It exposes only whether the one deadline slot is occupied, never an
+    /// instant, clipboard value, or second way to drive expiration.
+    var hasCapturePauseDeadlineForTesting: Bool {
+        capturePauseTask != nil
     }
 
     /// Deterministic Debug entry for the same admission path used by the
@@ -717,9 +770,11 @@ final class AppComposition {
         }
     }
 
-    /// Checked aggregate-byte admission for the two owner-held slots. Storage
-    /// remains the authoritative full input validator; this direct check owns
-    /// only the composition lane's memory bound (Part VI §2 / Card 6).
+    /// Checked representation-byte admission for one already-frozen capture.
+    /// Storage remains the authoritative full input validator. The two stable
+    /// owner slots expose their individual byte facts, but this check neither
+    /// sums acquisition-time overlap nor establishes a process-RSS bound
+    /// (Part VI §2 / Card 6 / DEC-CAPTURE-OVERLOAD).
     private func admittedCapture(_ capture: ClipboardCapture) -> AdmittedCapture? {
         var byteCount = 0
         for representation in capture.representations {

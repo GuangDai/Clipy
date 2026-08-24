@@ -218,6 +218,82 @@ struct AppPasteOrchestrationTests {
         )
     }
 
+    /// `DEC-PASTE-REFERENCE` chooses current-by-ID at the Authority read,
+    /// not a lease through the later AppKit write. Once History has returned
+    /// a self-consistent v1 payload, a v2 revision committed while that
+    /// immutable payload is parked cannot silently replace its bytes. The
+    /// accepted operation writes the tagged v1 exactly once while History
+    /// remains current at v2.
+    @Test @MainActor
+    func revisionAfterPayloadResolutionDoesNotReplaceTheResolvedSnapshot() async throws {
+        try ComposedSupport.requireUsablePasteboard()
+        let history = try await ComposedSupport.openMemoryHistory()
+        let version1Text = "resolved version one"
+        let version2Text = "committed version two"
+        let receipt = try await history.perform(.capture(
+            ComposedSupport.textCapture(
+                version1Text,
+                observedAt: Date(timeIntervalSinceReferenceDate: 700_203_225)
+            )
+        ))
+        let version1 = try #require(
+            ComposedSupport.insertedReference(from: receipt, "race arrange")
+        )
+
+        let pasteboard = ComposedSupport.makePasteboard()
+        let pausingHistory = PausingPastePayloadHistory(base: history)
+        let composition = AppComposition.makeForTesting(
+            history: pausingHistory,
+            adapter: PasteboardAdapter(pasteboard: pasteboard)
+        )
+        var completionCount = 0
+        var failures: [ClipyPasteFailure] = []
+        composition.onPasteCompleted = { completionCount += 1 }
+        composition.onPasteFailed = { failures.append($0) }
+        defer { composition.stop() }
+
+        composition.viewState.requestPaste(version1)
+        await pausingHistory.waitUntilPastePayloadIsPaused()
+        #expect(await pausingHistory.resolvedPastePayloadItem == version1)
+
+        let reviseReceipt = try await history.perform(.revise(
+            RevisionRequest(
+                itemID: version1.id,
+                expected: version1.contentVersion,
+                intent: .replace(RevisionDraft(decisions: [
+                    RevisionDecision(
+                        typeIdentifier: ComposedSupport.plainTextTypeIdentifier,
+                        action: .replace(bytes: Data(version2Text.utf8))
+                    ),
+                ]))
+            )
+        ))
+        let version2 = try #require(
+            ComposedSupport.revisedReference(from: reviseReceipt, "race revise")
+        )
+        let currentDetails = try await history.details(for: version1.id)
+        #expect(currentDetails.item == version2)
+        #expect(
+            currentDetails.effective.first?.bytes == Data(version2Text.utf8)
+        )
+        #expect(pasteboard.pasteboardItems?.isEmpty ?? true)
+
+        await pausingHistory.resumePastePayload()
+        let version1Written = await ComposedSupport.waitFor {
+            pasteboard.pasteboardItems?.first?.data(forType: .string)
+                == Data(version1Text.utf8)
+        }
+        #expect(version1Written)
+        #expect(
+            await ComposedSupport.waitFor { completionCount == 1 }
+        )
+        #expect(failures.isEmpty)
+        #expect(
+            pasteboard.pasteboardItems?.first?.data(forType: .string)
+                != Data(version2Text.utf8)
+        )
+    }
+
     /// App shutdown cancels the owned slot. Even when the underlying History
     /// read ignores cancellation and returns later, it cannot touch the
     /// pasteboard or publish success/failure callbacks.
@@ -449,6 +525,7 @@ private actor PausingPastePayloadHistory: ClipboardHistory {
     private var pauseContinuation: CheckedContinuation<Void, Never>?
     private var observerContinuations: [CheckedContinuation<Void, Never>] = []
     private(set) var completedPastePayloadCount = 0
+    private(set) var resolvedPastePayloadItem: HistoryItemReference?
     private var completionContinuations: [CheckedContinuation<Void, Never>] = []
 
     init(base: SwiftDataHistory) {
@@ -498,6 +575,7 @@ private actor PausingPastePayloadHistory: ClipboardHistory {
         // deliberately non-cooperative, which proves AppComposition's
         // post-await fence rather than relying on storage cancellation.
         let payload = try await base.pastePayload(for: id)
+        resolvedPastePayloadItem = payload.item
         if !didPause {
             didPause = true
             let observers = observerContinuations

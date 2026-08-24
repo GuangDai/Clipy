@@ -134,7 +134,7 @@ protocol、generic bus或第二History boundary。
 对capture，该owner的窄流程是：
 
 ```text
-observe capability/change → freeze one stable result → admit/queue → await History receipt
+observe capability/change → freeze one stable result → admit active/latest → await History receipt
 → publish content-free health
 ```
 
@@ -145,12 +145,18 @@ observe capability/change → freeze one stable result → admit/queue → await
 - 先看access state与declared types；concealed在任何payload read前short-circuit；
 - closed result区分empty、complete、incomplete、changed-during-read、retrieval failure；
 - start/end changeCount fence，不稳定做有界retry；
-- mailbox在freeze前后都有count/byte budget；
+- admission后owner稳定保留状态有固定count/byte facts；freeze前provider
+  materialization与aggregate RSS仍由独立证据界定；
 - 只静默处理明确的excluded outcome；capacity/persistence/permission进入health state；
 - polling文案只承诺best-effort latest state。
 
-Overload语义暂不预设。先测bounded FIFO、active+latest与explicit pause/reject；若已经freeze的
-snapshot丢弃，必须有产品理由和可见计数，不能借口polling本来就会漏。
+`DEC-CAPTURE-OVERLOAD` 已选择 active+replaceable-latest：一个active与一个
+pending的固定稳定保留形状，active不可替换，新的complete/admissible frozen
+snapshot只替换pending，严格按active→latest提交，并把content-free累计
+替换数对用户可见。选择理由是保留已开始工作同时优先当前clipboard
+值；有界FIFO会优先保留过时中间值，explicit reject则同样丢失最新可操作值。
+polling可能漏值不是丢弃已freeze snapshot的理由。该决定不证明freeze前内存、
+transient incoming overlap或aggregate process RSS，这些保持OPEN。
 
 ### 5.2 同一owner内的copy request
 
@@ -794,7 +800,7 @@ settled RSS、CPU/energy、failure rate，不生成综合分数。
 | `DEC-PREVIEW-TARGET` | 01 architecture + V2-07 + roadmap | **RESOLVED (2026-08-24)** — one concrete package-only `ContentPreview` target | — | common-caller closed presets；ClipboardFormats/CoreGraphics/ImageIO allowlist；tight premultiplied BGRA8/sRGB eager artifact；PresentationUI blocks ImageIO and publishes no CGImage/framework object；loader retains History/reference/task/lifecycle ownership；no registry/plugin/cache/external I/O。 |
 | `DEC-THUMB-CACHE` | 06 G1 + V2-07 | OPEN | thumbnail cache cards | completed cache 是否获准；否则退回 visible-state。 |
 | `DEC-THUMBNAIL-REQUEST-OWNER` | 01 target graph + V2-07 | OPEN | format migration/thumbnail request | row DTO neutral eligibility、UI always-request还是双manifest；Storage仍拥有source/version fence。Batch 31仅把已选中、已version-fenced的PNG交给ContentPreview做inert display rasterization，不裁决request/source/cache owner。 |
-| `DEC-CAPTURE-OVERLOAD` | 01/06 cross-cutting + pasteboard roadmap | OPEN | Clipboard flow | bounded FIFO/latest/pause-reject何者成立；已freeze snapshot能否丢。 |
+| `DEC-CAPTURE-OVERLOAD` | 01/06 cross-cutting + pasteboard roadmap | **RESOLVED (2026-08-24)** — one active + one replaceable latest pending | — | active不替换；complete/admissible新值只替换pending；active→latest串行drain；累计content-free replacement count对用户可见；不由polling漏值辩护；pre-freeze acquisition/transient overlap/RSS仍OPEN。 |
 | `DEC-RET-AGE` | V2-02 + V2-07 | OPEN | age UI/maintenance | age 是 event-triggered 还是 wall-clock expiry。 |
 | `DEC-CAPTURE-CLOCK` | 03a + V2-02 | OPEN | capture/retention | untrusted `observedAt` skew与 Authority clock。 |
 | `DEC-REVERT-RACE` | 03a + V2-02 | OPEN | revision planner | target被R3 prune后采用phase-1 snapshot还是phase-2 existence。 |
@@ -803,9 +809,9 @@ settled RSS、CPU/energy、failure rate，不生成综合分数。
 | `DEC-DISTRIBUTION` | 06 cross-cutting + V2-06 release | OPEN | signed gates | Developer ID还是MAS；sandbox migration/entitlements。 |
 | `DEC-AUTO-PASTE` | V2-07 platform/UX | OPEN | AX/paste | 自动粘贴价值是否足以要求Accessibility授权。 |
 | `DEC-SOURCE-LABEL` | presentation/privacy owning docs | OPEN | source UI/filter | frontmost-app弱观察的产品文案与过滤语义。 |
-| `DEC-PASTE-REFERENCE` | 03b/04 read-paste contract | OPEN | Clipboard flow paste | current-by-ID还是selection-stable exact reference。 |
+| `DEC-PASTE-REFERENCE` | 03b/04 read-paste contract | **RESOLVED (2026-08-24)** — current-by-ID at the Authority read | — | displayed exact reference只做submission admission；read前revision返回新payload/reference，read后revision不替换已解析的自洽payload；selection-stable v1 rejected。 |
 | `DEC-PREVIEW-FALLBACK` | V2-07 + Preview manifest | OPEN | PREVIEW fallback | type mismatch/malformed后是否尝试后续representation，以及priority/budget。 |
-| `DEC-OBSERVER-START` | pasteboard/app lifecycle spec | **RESOLVED / BATCH 40 CI PENDING (2026-08-24)** | observer/capture | process startup与explicit access Retry立即导入current complete generation；user Pause后的Resume只baseline current `changeCount`，不导入pause期间值，下一generation才capture。一个observer/direct start option，不造second path。 |
+| `DEC-OBSERVER-START` | pasteboard/app lifecycle spec | **RESOLVED (2026-08-24)** | — | process startup与explicit access Retry立即导入current complete generation；user Pause后的Resume只baseline current `changeCount`，不导入pause期间值，下一generation才capture。一个observer/direct start option，不造second path。 |
 | `DEC-RICH-EDIT` | 03a + V2-07 | OPEN | FORMAT edit | HTML/RTF是raw markup editor、rich serializer还是禁用。 |
 | `DEC-PY-TRANSPORT` | V2-05 amendment | OPEN | Python production adapter | public surface已固定为first-party`clipyctl`；signed/sandbox/TCC后只选择其背后的单一private transport。 |
 | `DEC-PY-AUTHENTICATED-INGRESS` | V2-05 + 01 target graph | **BLOCKED-SPEC** | `PLAY-PY-F1`、`PLAY-PY-B3`、`PLAY-PY-B3A`、`PLAY-PY-B3B`、`PLAY-PY-B3C`、`PLAY-PY-B4`、`PLAY-PY-B5` | ClipyApp不能访问internal Gateway，unknown credential也不能使用App Intent预绑定facade；必须批准一个只携带bounded peer evidence、opaque credential与typed request的受限app-facing ingress及其target/access placement。不得用公开Gateway、公开CredentialStore或transport-side policy绕过。 |

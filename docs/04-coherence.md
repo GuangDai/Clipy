@@ -162,6 +162,20 @@ Search determinism requirements:
 
 `pastePayload(for:)` loads current Effective Content and returns it with the current reference and a lineage hint equal to the item ID. `ClipyApp` then asks `PasteboardAdapter` to write it. The write is intentionally outside the History transaction; a clipboard side effect is not durable History state.
 
+`DEC-PASTE-REFERENCE` chooses current-by-ID and rejects selection-stable paste
+for v1. A list-owned displayed-row submission first requires the exact
+`(ID, ContentVersion)` row to remain in its authoritative displayed page; that
+is an admission fence, not a lease on the later payload read. If a revision
+commits before the Authority's non-suspending payload read, the payload carries
+the new Effective bytes and new reference. If a revision commits after that
+read has produced an immutable payload but before `PasteboardAdapter.write`,
+the already resolved payload remains self-consistent and may be written with
+its older reference; it is not silently replaced at write time. Removal before
+the read returns `.notFound`, writes nothing, and does not publish successful
+completion. In every successful case `PastePayload.item` labels the
+representations that were actually resolved, never the version merely
+displayed when the gesture began.
+
 Neither query caches an item or promises a lease. The caller must use the returned version when starting follow-up work.
 
 ### 9. Thumbnail single-flight

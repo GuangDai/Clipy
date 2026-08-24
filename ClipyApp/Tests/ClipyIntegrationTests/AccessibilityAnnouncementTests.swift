@@ -40,6 +40,26 @@ private final class AccessibilityAnnouncementRecorder {
 
 @Suite("Capture accessibility announcements (Card 15D)")
 struct AccessibilityAnnouncementTests {
+    @Test("replacement warning exposes the cumulative content-free count")
+    func replacementWarningShowsCumulativeCount() {
+        #expect(
+            CaptureNoticePresentation.message(
+                for: .replacedCapture(totalReplaced: 1)
+            )
+                == "Clipy replaced 1 pending clipboard change with a newer "
+                    + "one, so it wasn't saved. To try again, copy the older "
+                    + "content again."
+        )
+        #expect(
+            CaptureNoticePresentation.message(
+                for: .replacedCapture(totalReplaced: 27)
+            )
+                == "Clipy replaced 27 pending clipboard changes with newer "
+                    + "ones, so they weren't saved. To try again, copy the "
+                    + "older content again."
+        )
+    }
+
     @Test("one authoritative capture failure episode announces once")
     @MainActor
     func newFailureEpisodeAnnouncesOnce() {

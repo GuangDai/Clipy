@@ -20,6 +20,10 @@ struct RunningUITestCaptureAccessConfigurationTests {
         #expect(configuration.initialCaptureAccessBehavior == .allowed)
         #expect(configuration.currentCaptureAccessBehavior == .allowed)
         #expect(
+            configuration.capturePauseDuration
+                == CapturePausePolicy.standardDuration
+        )
+        #expect(
             RunningUITestConfiguration.current(environment: [
                 "CLIPY_RUNNING_UI_TEST": "1",
                 "CLIPY_UI_TEST_STORE_PATH": "/tmp/clipy-ui-allowed.store",
@@ -61,5 +65,29 @@ struct RunningUITestCaptureAccessConfigurationTests {
 
         #expect(configuration.initialCaptureAccessBehavior == .denied)
         #expect(configuration.currentCaptureAccessBehavior == .allowed)
+    }
+
+    @Test("running UI tests accept only the exact short-Pause switch")
+    func selectsShortPauseExactly() throws {
+        let configuration = try #require(
+            RunningUITestConfiguration.current(environment: [
+                "CLIPY_RUNNING_UI_TEST": "1",
+                "CLIPY_UI_TEST_STORE_PATH": "/tmp/clipy-ui-pause.store",
+                "CLIPY_UI_TEST_SHORT_PAUSE": "1",
+            ])
+        )
+
+        #expect(
+            configuration.capturePauseDuration
+                == CapturePausePolicy.runningUITestDuration
+        )
+        #expect(configuration.capturePauseDuration == .seconds(8))
+        #expect(
+            RunningUITestConfiguration.current(environment: [
+                "CLIPY_RUNNING_UI_TEST": "1",
+                "CLIPY_UI_TEST_STORE_PATH": "/tmp/clipy-ui-pause-invalid.store",
+                "CLIPY_UI_TEST_SHORT_PAUSE": "true",
+            ]) == nil
+        )
     }
 }

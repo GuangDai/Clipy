@@ -9,10 +9,24 @@ extension HistoryAuthority {
     internal func searchCorpusSnapshot(
         for request: HistoryBrowseRequest
     ) async throws -> (snapshot: SearchCorpusSnapshot, continuationAnchor: StoredOrderingAnchor?) {
-        // WS12 seam: the one legal suspension point of this path — no
-        // context is live yet (§5).
+        // WS12 seam: the one legal pre-read suspension point of this path —
+        // no context is live yet (§5).
         await suspendIfRequested(.readEntry)
+#if DEBUG
+        do {
+            return try searchCorpusSnapshotInLocalContext(for: request)
+        } catch is CancellationError {
+            // Card 11B: the synchronous callee has returned by throwing, so
+            // its operation-local ModelContext, fetched @Model rows, and
+            // partial scalar corpus have all unwound before this deterministic
+            // reentrancy proof is allowed to suspend. CancellationError has no
+            // payload that must be retained across the await.
+            await suspendIfRequested(.searchCancellationExit)
+            throw CancellationError()
+        }
+#else
         return try searchCorpusSnapshotInLocalContext(for: request)
+#endif
     }
 
     /// Synchronous V1 corpus projection used after the caller has crossed its

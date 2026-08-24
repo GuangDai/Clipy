@@ -125,6 +125,7 @@ There are two real implementations of the public seam for different purposes: `S
 ```text
 NSPasteboard
   → PasteboardAdapter freezes raw typed bytes + source/concealment observation
+  → ClipyApp admits one active + one replaceable latest pending capture
   → ClipboardHistory.perform(.capture(ClipboardCapture))
   → IngestPreparationActor rejects whole private/concealed items, then validates, normalizes, fingerprints, projects
   → HistoryAuthority loads complete IngestFacts
@@ -145,10 +146,47 @@ while paused remain excluded; only a later generation enters capture. This is
 one `PasteboardObserver` implementation with a direct start option, not a
 second capture path (`DEC-OBSERVER-START`).
 
+Pause is one fixed five-minute, process-local privacy window (`CLIP-1`).
+`AppComposition` owns its sole `ContinuousClock` deadline together with the
+observer lifecycle; manual Resume, deadline expiry, and app stop
+cancel or consume that same task. The menu and paused presentation disclose
+the five-minute upper bound, and the status item visibly changes while paused.
+Both manual and timed Resume use the baseline behavior above and re-read the
+current access posture, so expiry cannot import a pause-period generation or
+promote denied access. Continuous time includes system sleep: an elapsed
+deadline resumes on wake and first baselines the then-current generation.
+Quitting ends the in-memory Pause early; a deliberate relaunch follows normal
+startup semantics rather than adding durable privacy-preference state.
+
 If `CopyOriginObservation.lineageHint` names a retained item, the fact loader fetches that item directly by `HistoryItemID`; it does not require the hint to appear in a canonical-signature result. Exact equality with the hinted item's Effective Content is required before the hint can win.
 
-`ClipyApp` owns a fixed one-active/one-replaceable-latest capture lane. A
-capture transaction that returns
+`DEC-CAPTURE-OVERLOAD` is resolved as **active + replaceable latest**. The
+fixed app-owner admission shape holds one already-started complete frozen
+capture and at most one complete frozen pending capture. The active capture is
+never displaced. While it runs, the first later capture occupies pending; each
+further complete, individually admissible capture atomically replaces only
+pending and increments a process-lifetime content-free replacement count.
+Drain order is active, then the latest pending value. Clipy presents the
+cumulative count and tells the user to copy an older value again if they still
+need it; replaced bytes are not retained for retry.
+
+This policy preserves work that already crossed the History boundary while
+favoring the current clipboard value over a stale middle value. A bounded FIFO
+was rejected because it would retain the middle value and discard the current
+one under the same fixed capacity. Explicit overload rejection was rejected
+because it would likewise lose the newest actionable value; user Pause remains
+a separate privacy control. Polling's inability to observe every intermediate
+system generation is not a justification for replacing a value that Clipy did
+freeze. Replacement is therefore explicit, counted, and visible.
+
+The two-slot statement is only the stable owner-retained state after an
+already-frozen capture reaches `AppComposition`. It does not bound AppKit
+provider materialization, the incoming value before admission returns,
+copy-on-write behavior, aggregate process RSS, or decoder/Storage workspace;
+those require separate acquisition/RSS evidence and remain open. Each slot's
+capture still obeys Part VI's per-capture byte bound.
+
+A capture transaction that returns
 `.temporarilyUnavailable(.insufficientDiskSpace)` publishes that exact
 content-free health episode and drops the value that was already pending;
 replaying it immediately cannot establish that volume capacity recovered. A

@@ -294,11 +294,128 @@ final class CaptureAccessJourneyUITests: XCTestCase {
         )
     }
 
+    /// The production Pause deadline owns automatic recovery. The DEBUG
+    /// launch envelope shortens only elapsed time to eight seconds; this still
+    /// drives the real access reducer, observer baseline, and capture lane.
+    @MainActor
+    func testTimedPauseAutomaticallyResumesWithoutImportingPausedValue() throws {
+        let original = "clipy-ui-timed-pause-original"
+        let whilePaused = "clipy-ui-timed-pause-excluded"
+        let afterResume = "clipy-ui-timed-pause-after-resume"
+        let app = try launchApp(
+            storeURL: try makeStoreURL(),
+            captureAccess: "allowed",
+            pasteboardValue: original,
+            shortPause: true
+        )
+        defer { app.terminate() }
+        let rows = historyRows(in: app)
+        guard assertEventually(
+            { rows.count == 1 },
+            in: app,
+            timeout: 10,
+            message: "Allowed launch did not capture the timed-Pause fixture."
+        ) else { return }
+
+        let moreActions = app.descendants(matching: .any)[
+            "clipy.panel.more-actions"
+        ]
+        guard assertCondition(
+            moreActions.exists && moreActions.isHittable,
+            in: app,
+            message: "The panel did not expose More Actions for timed Pause."
+        ) else { return }
+        moreActions.click()
+
+        let pause = app.descendants(matching: .any)["clipy.capture.pause"]
+        guard assertEventually(
+            {
+                pause.exists
+                    && pause.isHittable
+                    && pause.label.contains("5 Minutes")
+            },
+            in: app,
+            message: "Pause did not disclose its five-minute product window."
+        ) else { return }
+        pause.click()
+
+        let recovery = app.buttons["clipy.capture.access.recovery"]
+        guard assertEventually(
+            {
+                recovery.exists
+                    && recovery.label == "Resume clipboard capture"
+            },
+            in: app,
+            message: "Timed Pause did not publish its recoverable state."
+        ) else { return }
+        let message = app.descendants(matching: .any)[
+            "clipy.capture.access.message"
+        ]
+        assertCondition(
+            message.label.contains("up to 5 minutes"),
+            in: app,
+            message: "Paused presentation did not disclose its time bound."
+        )
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        assertCondition(
+            pasteboard.setString(whilePaused, forType: .string),
+            in: app,
+            message: "The runner could not stage the timed paused value."
+        )
+        assertRemains(
+            { rows.count == 1 && recovery.exists },
+            in: app,
+            duration: 0.5,
+            message: "Timed Pause ended early or captured while paused."
+        )
+
+        guard assertEventually(
+            { !recovery.exists },
+            in: app,
+            timeout: 20,
+            message: "The Pause deadline did not automatically resume capture."
+        ) else { return }
+        assertRemains(
+            {
+                rows.count == 1
+                    && !rows.allElementsBoundByIndex.contains(where: {
+                        $0.label.contains(whilePaused)
+                    })
+            },
+            in: app,
+            duration: 1.0,
+            message: "Timed Resume imported the pause-period generation."
+        )
+
+        pasteboard.clearContents()
+        assertCondition(
+            pasteboard.setString(afterResume, forType: .string),
+            in: app,
+            message: "The runner could not stage the post-deadline value."
+        )
+        assertEventually(
+            { rows.count == 2 },
+            in: app,
+            timeout: 10,
+            message: "Automatic Resume did not restart production monitoring."
+        )
+        assertCondition(
+            rows.allElementsBoundByIndex.contains(where: {
+                $0.label.contains(afterResume)
+            }),
+            in: app,
+            message: "Automatic Resume captured a row without the new value."
+        )
+    }
+
     @MainActor
     private func launchApp(
         storeURL: URL,
         captureAccess: String,
-        pasteboardValue: String?
+        pasteboardValue: String?,
+        shortPause: Bool = false
     ) throws -> XCUIApplication {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
@@ -312,6 +429,9 @@ final class CaptureAccessJourneyUITests: XCTestCase {
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = storeURL.path
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = captureAccess
+        if shortPause {
+            app.launchEnvironment["CLIPY_UI_TEST_SHORT_PAUSE"] = "1"
+        }
         app.launch()
 
         let panel = app.descendants(matching: .any)["clipy.panel.root"]

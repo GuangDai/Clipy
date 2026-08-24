@@ -3,6 +3,20 @@
 /// PasteboardAdapter and the composition root owns polling lifecycle.
 import PasteboardAdapter
 
+/// CLIP-1's one product-owned Pause choice. A fixed five-minute window keeps
+/// the privacy action obvious and self-ending without adding a settings or
+/// duration-selection surface. Quit may end it earlier; it is intentionally
+/// process-local rather than durable preference state.
+enum CapturePausePolicy {
+    static let standardDuration: Duration = .seconds(300)
+
+#if DEBUG
+    /// Running-app evidence substitutes only elapsed time. The production
+    /// reducer, observer, baseline, and capture lane remain unchanged.
+    static let runningUITestDuration: Duration = .seconds(8)
+#endif
+}
+
 /// The caller-visible, content-free reason background capture is running or
 /// stopped. None of these cases carries pasteboard types, bytes, query text,
 /// source applications, or framework errors.
@@ -90,7 +104,11 @@ struct CaptureAccessReducer: Sendable, Equatable {
         hasReadFailure = systemBehavior == .unavailable
     }
 
-    mutating func setUserPaused(_ paused: Bool) {
-        isUserPaused = paused
+    mutating func pause() {
+        isUserPaused = true
+    }
+
+    mutating func resume() {
+        isUserPaused = false
     }
 }

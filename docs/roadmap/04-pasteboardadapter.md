@@ -13,7 +13,10 @@
 
 - **Capture (NSPasteboard → HistoryCore):** freeze raw typed bytes + the source/lineage observation into `CapturedRepresentation` / `ClipboardCapture` / `CopyOriginObservation` (03a §4); set `ClipboardCapture.isConcealed` for pasteboard items carrying a concealment/private marker; decode the prior paste's lineage hint back into `CopyOriginObservation.lineageHint` when present. A marker is pasteboard-item metadata — the adapter must never strip it and submit its sibling plaintext as an ordinary capture.
 - **Paste (HistoryCore → NSPasteboard):** translate a `PastePayload` (current Effective Content, 03b §9) into framework pasteboard values and write the lineage hint equal to the item ID (Part I §5.6; Part IV §8).
-- **Pasteboard observation** that triggers `history.perform(.capture(...))` (Part I §5.1).
+- **Pasteboard observation** that freezes one complete generation and delivers
+  it synchronously to ClipyApp's fixed active+latest owner; only that owner
+  triggers `history.perform(.capture(...))` (Part I §5.1,
+  `DEC-CAPTURE-OVERLOAD`).
 
 ## Acceptance
 
@@ -25,4 +28,8 @@
 ## Risks / notes
 
 - The adapter is deliberately dumb: all dedup/coalescing/OCC decisions live behind `ClipboardHistory`. It only translates observations (Part I §5.1).
+- The adapter owns neither an overload queue nor retry policy. ClipyApp keeps
+  one active and one replaceable latest pending frozen capture, publishes a
+  cumulative content-free replacement count, and leaves acquisition/RSS
+  characterization outside this adapter.
 - Paste orchestration is owned by **ClipyApp**, not this adapter — `history.pastePayload(for:)` → `ClipyApp` → `adapter.write(payload)` (Part I §5.6, 03b §12), to avoid an adapter-to-adapter dependency and keep the clipboard side effect outside the History transaction.

@@ -25,13 +25,14 @@ import SwiftUI
 
 #if DEBUG
 /// Exact launch envelope for the running-app XCUI journeys. It is compiled
-/// out of Release and accepts only an absolute temp-store path plus exact
-/// allowed, denied, or denied-then-allowed privacy facts; no alternate
-/// History, capture pump, paste path, or panel controller is constructed.
+/// out of Release and accepts only an absolute temp-store path, exact privacy
+/// facts, and an exact short-Pause switch; no alternate History, capture pump,
+/// paste path, panel controller, or timer owner is constructed.
 struct RunningUITestConfiguration {
     let storeURL: URL
     let initialCaptureAccessBehavior: PasteboardAccessBehavior
     let currentCaptureAccessBehavior: PasteboardAccessBehavior
+    let capturePauseDuration: Duration
 
     static func current(
         environment: [String: String] = ProcessInfo.processInfo.environment
@@ -56,10 +57,21 @@ struct RunningUITestConfiguration {
         default:
             return nil
         }
+
+        let capturePauseDuration: Duration
+        switch environment["CLIPY_UI_TEST_SHORT_PAUSE"] {
+        case nil:
+            capturePauseDuration = CapturePausePolicy.standardDuration
+        case "1":
+            capturePauseDuration = CapturePausePolicy.runningUITestDuration
+        default:
+            return nil
+        }
         return RunningUITestConfiguration(
             storeURL: URL(fileURLWithPath: path).standardizedFileURL,
             initialCaptureAccessBehavior: initialCaptureAccessBehavior,
-            currentCaptureAccessBehavior: currentCaptureAccessBehavior
+            currentCaptureAccessBehavior: currentCaptureAccessBehavior,
+            capturePauseDuration: capturePauseDuration
         )
     }
 }
@@ -323,7 +335,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func recoverCaptureAccess() {
         switch captureAccessState.recovery {
         case .resume:
-            composition?.setCapturePaused(false)
+            composition?.resumeCapture()
         case .retry:
             composition?.retryCaptureAccess()
         case nil:
@@ -336,7 +348,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// existing composition capture-access reducer.
     func pauseCapture() {
         guard captureAccessState == .allowed else { return }
-        composition?.setCapturePaused(true)
+        composition?.pauseCapture()
     }
 
     /// The preview column's visibility changed inside the SwiftUI content;
@@ -404,7 +416,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         initialCaptureAccessBehavior:
                             configuration.initialCaptureAccessBehavior,
                         currentCaptureAccessBehavior:
-                            configuration.currentCaptureAccessBehavior
+                            configuration.currentCaptureAccessBehavior,
+                        capturePauseDuration:
+                            configuration.capturePauseDuration
                     )
                 }
 #endif
@@ -495,7 +509,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.receiveCaptureHealth(health)
         }
         opened.onCaptureAccessStateChanged = { [weak self] state in
-            self?.captureAccessState = state
+            self?.receiveCaptureAccessState(state)
         }
         composition = opened
     }
@@ -516,6 +530,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 #endif
+
+    /// Keeps the panel and the always-visible menu-bar affordance on the same
+    /// composition-owned privacy state. This is presentation only; the status
+    /// item never owns or drives the deadline.
+    private func receiveCaptureAccessState(_ state: CaptureAccessState) {
+        captureAccessState = state
+        updateStatusItemImage()
+    }
 
     private func receiveCaptureHealth(_ health: ClipyCaptureHealth) {
         let previous = captureHealth
@@ -571,14 +593,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func installStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
-            button.image = NSImage(
-                systemSymbolName: "list.clipboard",
-                accessibilityDescription: "Clipy"
-            )
             button.action = #selector(statusItemClicked)
             button.target = self
         }
         statusItem = item
+        updateStatusItemImage()
+    }
+
+    private func updateStatusItemImage() {
+        let isPaused = captureAccessState == .userPaused
+        statusItem?.button?.image = NSImage(
+            systemSymbolName: isPaused ? "pause.circle" : "list.clipboard",
+            accessibilityDescription: isPaused
+                ? "Clipy, clipboard monitoring paused"
+                : "Clipy"
+        )
     }
 
     /// The status-item button's frame in screen coordinates (Maccy's

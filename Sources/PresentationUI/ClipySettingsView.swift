@@ -409,6 +409,7 @@ private struct RetentionSettingsTab: View {
                     ValueFieldRow(
                         label: "Maximum item age",
                         unit: "days",
+                        accessibilityIdentifier: "clipy.settings.retention.age-days",
                         text: ageDaysText,
                         isEnabled: draft.ageEnabled,
                         isValid: draft.ageInputIsValid,
@@ -418,9 +419,11 @@ private struct RetentionSettingsTab: View {
                 Section("Storage") {
                     Toggle("Limit storage budget", isOn: storageEnabled)
                         .accessibilityHint("Retire the oldest unpinned items until history fits the budget.")
+                        .accessibilityIdentifier("clipy.settings.retention.storage-enabled")
                     ValueFieldRow(
                         label: "Storage budget",
                         unit: RetentionSettingsDraft.mebibyteUnitLabel,
+                        accessibilityIdentifier: "clipy.settings.retention.storage-mib",
                         text: storageMiBText,
                         isEnabled: draft.storageEnabled,
                         isValid: draft.storageInputIsValid,
@@ -433,6 +436,7 @@ private struct RetentionSettingsTab: View {
                     ValueFieldRow(
                         label: "Revisions per item",
                         unit: "revisions",
+                        accessibilityIdentifier: "clipy.settings.retention.revision-count",
                         text: revisionCountText,
                         isEnabled: draft.revisionCountEnabled,
                         isValid: draft.revisionCountInputIsValid,
@@ -443,6 +447,7 @@ private struct RetentionSettingsTab: View {
                     ValueFieldRow(
                         label: "Revision storage per item",
                         unit: RetentionSettingsDraft.mebibyteUnitLabel,
+                        accessibilityIdentifier: "clipy.settings.retention.revision-mib",
                         text: revisionMiBText,
                         isEnabled: draft.revisionBytesEnabled,
                         isValid: draft.revisionBytesInputIsValid,
@@ -479,8 +484,14 @@ private struct RetentionSettingsTab: View {
                         }
                         if let successMessage = draft.acceptedSuccessMessage {
                             SettingStatusView(status: .success(successMessage))
+                                .accessibilityIdentifier(
+                                    "clipy.settings.retention.policy-status"
+                                )
                         } else if let policyStatus {
                             SettingStatusView(status: policyStatus)
+                                .accessibilityIdentifier(
+                                    "clipy.settings.retention.policy-status"
+                                )
                         } else if let retentionConfigurationFailure {
                             SettingStatusView(status: .failure(retentionConfigurationFailure))
                         }
@@ -769,6 +780,7 @@ private struct ValueFieldRow: View {
 
     let label: String
     let unit: String
+    let accessibilityIdentifier: String
     @Binding var text: String
     let isEnabled: Bool
     let isValid: Bool
@@ -784,6 +796,7 @@ private struct ValueFieldRow: View {
                     .multilineTextAlignment(.trailing)
                     .disabled(!isEnabled)
                     .accessibilityLabel(label)
+                    .accessibilityIdentifier(accessibilityIdentifier)
                 Text(unit)
                     .foregroundStyle(.secondary)
             }

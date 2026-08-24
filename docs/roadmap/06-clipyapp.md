@@ -15,6 +15,10 @@
 
 - **Concrete construction:** `SwiftDataHistory.open(configuration:)` with `HistoryLimits.standard`; wire it as the `any ClipboardHistory` injected into `PresentationUI` and used by the paste path (Part V §2).
 - **Lifecycle:** process-wide single `SwiftDataHistory`; no `.shared`/`.current` service locator; guard against a second `open` over the same persistent URL — an implementation responsibility inferred from Part I §8's no-second-writer rule (not stated verbatim by any single spec section).
+- **Capture overload:** one already-started complete capture plus one
+  replaceable latest pending value, drained serially. Replacing pending
+  publishes the cumulative content-free count; no frozen value queue or
+  automatic retry is introduced (`DEC-CAPTURE-OVERLOAD`).
 - **Paste orchestration:** `history.pastePayload(for:)` → `PasteboardAdapter.write(payload)` — the only History→pasteboard hand-off, kept outside the History transaction (Part I §5.6; Part IV §8; 03b §12).
 - **Dependency injection:** supplies `any ClipboardHistory` (production = `SwiftDataHistory`, previews = scripted adapter) to the UI without leaking Storage/Domain types (Part I §2, §4).
 - **External surface coherence:** one internal `AppIntentHistoryIngress`
@@ -31,6 +35,12 @@
 - `ClipyIntegrationTests`: **re-run the WS1–WS21 paths through the composed app** (real `SwiftDataHistory` + `PasteboardAdapter` + `PresentationUI`), not just the in-isolation History tests — this is the end-to-end acceptance for the walking skeleton (Part VI §8: "each path crosses the public `ClipboardHistory` interface and real `SwiftDataHistory`").
 - XcodeGen-produced app target builds; the SwiftPM library graph stays package-owned (Part I §9 item 6).
 - `ClipyIntegrationTests`: a second `open()` over an already-open persistent URL is detected and rejected — it does not create a second writer or `ModelContext` (Part I §8).
+- `ClipyIntegrationTests`: pausing the first real in-memory History capture and
+  submitting an already-frozen burst preserves only the active and newest
+  pending values, keeps stable owner-retained slot/byte facts bounded, records
+  every pending replacement, and drains active then latest. Presentation tests
+  require the cumulative replacement count in the warning. This does not
+  establish provider acquisition peak or process RSS.
 - Negative (Part I §8): ClipyApp makes no Domain decision and creates no duplicate persistence path; it does not pass a business ID to `registeredModel(for:)`; it holds no second writer or UI-bound `ModelContext`.
 - `ClipyIntegrationTests`: with a real in-memory Authority and post-commit
   observation deliberately held, an authorized `RemoveItemIntent` returns

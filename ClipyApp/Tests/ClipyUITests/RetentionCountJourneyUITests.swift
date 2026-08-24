@@ -1,9 +1,9 @@
 /// RetentionCountJourneyUITests.swift — running-app proof that the unified
-/// Retention surface sends the real v1 count action, renders its exact
-/// receipt-derived removal count, and returns to an authoritative panel with
-/// the retired row gone. The DEBUG launch seam changes only the store path and
-/// privacy posture; both captures, retention mutation, observation, and panel
-/// purge remain production paths.
+/// Retention surface sends the real v1 count action only after destructive
+/// confirmation, clears accepted success on a newer edit, and reads the
+/// committed value back after a same-store process restart. The DEBUG launch
+/// seam changes only the store path and privacy posture; captures, retention
+/// mutation, persistence, observation, and panel purge remain production paths.
 import AppKit
 import XCTest
 
@@ -24,7 +24,7 @@ final class RetentionCountJourneyUITests: XCTestCase {
     }
 
     @MainActor
-    func testCountTighteningReportsOneRemovalAndKeepsOnlyNewestRow() throws {
+    func testCountTighteningCancelCommitDirtyResetAndRestartReadback() throws {
         let oldest = "clipy-retention-count-oldest"
         let newest = "clipy-retention-count-newest"
         let pasteboard = NSPasteboard.general
@@ -39,13 +39,9 @@ final class RetentionCountJourneyUITests: XCTestCase {
         )
         temporaryDirectory = directory
 
-        let app = XCUIApplication()
+        let storeURL = directory.appendingPathComponent("history.store")
+        let app = launchApp(storeURL: storeURL)
         defer { app.terminate() }
-        app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
-        app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory
-            .appendingPathComponent("history.store")
-            .path
-        app.launch()
 
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
         assertExists(panel, timeout: 20, in: app, context: "initial panel")
@@ -143,11 +139,91 @@ final class RetentionCountJourneyUITests: XCTestCase {
             ].exists,
             diagnostic(app, context: "count confirmation disclosure")
         )
-        confirm.click()
 
         let itemLimitStatus = app.descendants(matching: .any)[
             "clipy.settings.retention.item-limit-status"
         ]
+
+        // Card 10D: dismissing the destructive confirmation must send no
+        // History action. The real panel therefore still exposes both rows,
+        // and no receipt-derived success can appear.
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(
+            waitUntil(timeout: 5) { !confirmationSheet.exists },
+            diagnostic(app, context: "cancel count confirmation")
+        )
+        XCTAssertFalse(
+            itemLimitStatus.exists,
+            diagnostic(app, context: "cancel must not publish a receipt")
+        )
+        XCTAssertTrue(
+            applyItemLimit.isEnabled,
+            diagnostic(app, context: "canceled count draft remains applicable")
+        )
+
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(
+            waitUntil(timeout: 5) { !maximumUnpinned.exists },
+            diagnostic(app, context: "Settings close after canceled count")
+        )
+        app.typeKey("c", modifierFlags: [.command, .shift])
+        assertExists(
+            panel,
+            timeout: 10,
+            in: app,
+            context: "panel after canceled count confirmation"
+        )
+        assertRowCount(
+            2,
+            in: rows,
+            app: app,
+            context: "cancel before count mutation"
+        )
+
+        // Re-enter through the real Settings scene and submit the same draft.
+        // A newly materialized view may show either its neutral prefill or the
+        // prior unsaved text until the authoritative read lands, so write the
+        // intended literal again instead of relying on scene retention.
+        app.typeKey(",", modifierFlags: .command)
+        assertExists(
+            retentionTab,
+            timeout: 10,
+            in: app,
+            context: "reopened Settings Retention tab"
+        )
+        retentionTab.click()
+        assertExists(
+            maximumUnpinned,
+            timeout: 5,
+            in: app,
+            context: "reopened maximum unpinned field"
+        )
+        replaceText(in: maximumUnpinned, with: "1")
+        XCTAssertTrue(
+            waitUntil(timeout: 5) { applyItemLimit.isEnabled },
+            diagnostic(app, context: "reopened count configuration")
+        )
+        applyItemLimit.click()
+        assertExists(
+            confirmationSheet,
+            timeout: 5,
+            in: app,
+            context: "reopened count confirmation sheet"
+        )
+        let reopenedConfirm = confirmationSheet.buttons["action-button-1"]
+        assertExists(
+            reopenedConfirm,
+            timeout: 5,
+            in: app,
+            context: "reopened destructive count confirmation"
+        )
+        XCTAssertEqual(
+            reopenedConfirm.label,
+            "Apply Stricter Limit",
+            diagnostic(app, context: "reopened count confirmation copy")
+        )
+        reopenedConfirm.click()
+
         assertExists(
             itemLimitStatus,
             timeout: 10,
@@ -157,6 +233,24 @@ final class RetentionCountJourneyUITests: XCTestCase {
         XCTAssertTrue(
             app.staticTexts["Done. 1 item removed."].exists,
             diagnostic(app, context: "exact count receipt feedback")
+        )
+
+        // Card 10E: an accepted success belongs to exactly one edit
+        // generation. A newer edit clears it immediately; restoring the exact
+        // configured baseline disables Apply without resurrecting old success.
+        replaceText(in: maximumUnpinned, with: "2")
+        XCTAssertTrue(
+            waitUntil(timeout: 5) {
+                !itemLimitStatus.exists && applyItemLimit.isEnabled
+            },
+            diagnostic(app, context: "new count edit clears accepted success")
+        )
+        replaceText(in: maximumUnpinned, with: "1")
+        XCTAssertTrue(
+            waitUntil(timeout: 5) {
+                !itemLimitStatus.exists && !applyItemLimit.isEnabled
+            },
+            diagnostic(app, context: "restored count baseline has no pending save")
         )
 
         app.typeKey("w", modifierFlags: .command)
@@ -182,6 +276,100 @@ final class RetentionCountJourneyUITests: XCTestCase {
             remainingLabel.contains(oldest),
             diagnostic(app, context: "oldest row retired")
         )
+
+        // Card 10A: discard every process-local Settings value and reopen the
+        // same physical store. The new process must render the persisted count
+        // through the public configured-policy read, with no dirty Apply, and
+        // must observe the same retained survivor.
+        app.terminate()
+        let reopenedApp = launchApp(storeURL: storeURL)
+        defer { reopenedApp.terminate() }
+
+        let reopenedPanel = reopenedApp.descendants(matching: .any)[
+            "clipy.panel.root"
+        ]
+        assertExists(
+            reopenedPanel,
+            timeout: 20,
+            in: reopenedApp,
+            context: "same-store restarted panel"
+        )
+        let reopenedRows = historyRows(in: reopenedApp)
+        assertRowCount(
+            1,
+            in: reopenedRows,
+            app: reopenedApp,
+            context: "same-store restarted survivor"
+        )
+        let restartedLabel = reopenedRows.firstMatch.label
+        XCTAssertTrue(
+            restartedLabel.contains(newest),
+            diagnostic(reopenedApp, context: "same-store newest survivor")
+        )
+        XCTAssertFalse(
+            restartedLabel.contains(oldest),
+            diagnostic(reopenedApp, context: "same-store retired row absent")
+        )
+
+        reopenedApp.typeKey(",", modifierFlags: .command)
+        let reopenedRetentionTab = reopenedApp.buttons["Retention"]
+        assertExists(
+            reopenedRetentionTab,
+            timeout: 10,
+            in: reopenedApp,
+            context: "same-store Settings Retention tab"
+        )
+        reopenedRetentionTab.click()
+        let readbackField = reopenedApp.textFields[
+            "clipy.settings.retention.maximum-unpinned"
+        ]
+        assertExists(
+            readbackField,
+            timeout: 5,
+            in: reopenedApp,
+            context: "same-store maximum unpinned readback field"
+        )
+        let readbackApply = reopenedApp.buttons[
+            "clipy.settings.retention.apply-item-limit"
+        ]
+        assertExists(
+            readbackApply,
+            timeout: 5,
+            in: reopenedApp,
+            context: "same-store Apply Item Limit"
+        )
+        XCTAssertTrue(
+            waitUntil(timeout: 10) {
+                readbackField.value as? String == "1"
+                    && !readbackApply.isEnabled
+            },
+            diagnostic(
+                reopenedApp,
+                context: "same-store authoritative count readback"
+            )
+        )
+        XCTAssertFalse(
+            reopenedApp.descendants(matching: .any)[
+                "clipy.settings.retention.item-limit-status"
+            ].exists,
+            diagnostic(reopenedApp, context: "restart carries no stale success")
+        )
+    }
+
+    @MainActor
+    private func launchApp(storeURL: URL) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
+        app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = storeURL.path
+        app.launch()
+        return app
+    }
+
+    @MainActor
+    private func replaceText(in field: XCUIElement, with value: String) {
+        field.click()
+        field.typeKey("a", modifierFlags: .command)
+        field.typeText(value)
     }
 
     @MainActor

@@ -10,9 +10,15 @@ import AppKit
 enum CaptureNoticePresentation {
     static func message(for notice: ClipyCaptureNotice) -> String {
         switch notice {
-        case .replacedCapture:
-            return "A pending clipboard change was replaced by a newer one "
-                + "and wasn't saved. To try again, copy the older content again."
+        case .replacedCapture(let totalReplaced):
+            if totalReplaced == 1 {
+                return "Clipy replaced 1 pending clipboard change with a newer "
+                    + "one, so it wasn't saved. To try again, copy the older "
+                    + "content again."
+            }
+            return "Clipy replaced \(totalReplaced) pending clipboard changes "
+                + "with newer ones, so they weren't saved. To try again, copy "
+                + "the older content again."
         case .failed(.unsupportedClipboardShape):
             return "Clipy can't save multiple clipboard items yet. Copy one item at a time."
         case .failed(.declaredContentUnavailable):

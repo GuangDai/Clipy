@@ -17,6 +17,51 @@ import Testing
 @MainActor
 struct PanelLifecycleHostedTests {
 
+    /// Card 8G-2: the actual focused SwiftUI search field must override an
+    /// inherited AppKit field-editor posture when a new panel session starts.
+    /// This uses only the public NSWindow/NSTextView responder contract: it
+    /// neither traverses NSHostingView internals nor relies on the runner's
+    /// global spelling preferences.
+    @Test("search refocus disables inherited automatic spelling correction")
+    func searchRefocusDisablesInheritedAutomaticSpellingCorrection() async throws {
+        let installed = installedOwner()
+        let appDelegate = installed.appDelegate
+        let composition = installed.composition
+        let history = installed.history
+        defer {
+            appDelegate.closePanel()
+            composition.stop()
+        }
+
+        appDelegate.openPanelForTesting()
+        let panel = try #require(appDelegate.panelForTesting)
+        await history.waitForObservationCount(1)
+        let firstEditor = try #require(
+            await focusedFieldEditor(in: panel),
+            "The production search field never became the panel's public field editor."
+        )
+        #expect(firstEditor.isFieldEditor)
+        #expect(!firstEditor.isAutomaticSpellingCorrectionEnabled)
+
+        // Seed the opposite inherited posture after the first session ends.
+        // Reopening must make the real TextField authoritative again; without
+        // its autocorrection-disabled configuration this remains true and the
+        // test fails even on a CI account whose global default is already off.
+        appDelegate.closePanel()
+        await history.waitForTerminationCount(1)
+        firstEditor.isAutomaticSpellingCorrectionEnabled = true
+        #expect(firstEditor.isAutomaticSpellingCorrectionEnabled)
+
+        appDelegate.openPanelForTesting()
+        await history.waitForObservationCount(2)
+        let reopenedEditor = try #require(
+            await focusedFieldEditor(in: panel),
+            "The reopened production search field never regained focus."
+        )
+        #expect(reopenedEditor === firstEditor)
+        #expect(!reopenedEditor.isAutomaticSpellingCorrectionEnabled)
+    }
+
     @Test("focus loss ends one session; reopen starts one replacement observation")
     func focusLossClosesExactlyOnceAndReopenStartsFreshSession() async throws {
         let installed = installedOwner()
@@ -142,6 +187,23 @@ struct PanelLifecycleHostedTests {
         let appDelegate = AppDelegate()
         appDelegate.installCompositionForTesting(composition)
         return (appDelegate, composition, history)
+    }
+
+    /// SwiftUI applies FocusState after the hosted body is scheduled. A fixed
+    /// scheduler-turn budget detects a missing focus transition without a
+    /// wall-clock sleep or an unbounded hung test.
+    private func focusedFieldEditor(
+        in panel: FloatingPanel,
+        attemptLimit: Int = 2_000
+    ) async -> NSTextView? {
+        for _ in 0..<attemptLimit {
+            if let editor = panel.firstResponder as? NSTextView,
+               editor.isFieldEditor {
+                return editor
+            }
+            await Task.yield()
+        }
+        return nil
     }
 }
 
