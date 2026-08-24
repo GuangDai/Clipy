@@ -107,7 +107,7 @@ package struct SearchHeaderView: View {
     }
 
     /// A page cursor makes `count` a lower bound, not a total (Card 8C).
-    /// The exact-count key varies by plural in PresentationUI's catalog;
+    /// The exact-count key varies by plural in PresentationUI's resources;
     /// the cursor key stays explicitly plural because even `1+` is not one.
     package static func resultCountText(
         count: Int,

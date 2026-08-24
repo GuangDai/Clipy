@@ -2,6 +2,7 @@
 /// configurable Carbon binding. The fake is one injected system-call closure,
 /// not a second registrar implementation; real Carbon acceptance remains in
 /// GlobalHotKeyTests.
+import AppKit
 import Carbon.HIToolbox
 import Foundation
 import Testing
