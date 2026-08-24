@@ -76,8 +76,8 @@ public struct SearchHeaderView: View {
                 } label: {
                     Text("Clear")
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .buttonStyle(.plain)
+                .contentShape(Rectangle())
                 .accessibilityIdentifier("clipy.search.clear")
                 .accessibilityLabel("Clear search")
                 .accessibilityHint(
