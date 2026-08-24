@@ -135,6 +135,90 @@ struct PanelSessionSelectionTests {
         )
     }
 
+    @Test func queryRestartLoadingGapDoesNotMasqueradeAsAuthoritativeRemoval() {
+        let viewState = HistoryViewState(history: ScriptedHistory())
+        let surface = HistoryPanelSurfaceState(
+            viewState: viewState,
+            previewState: PreviewPaneState()
+        )
+
+        surface.beginSession(rows: rows)
+        surface.moveSelection(in: rows, direction: .next)
+        let selectedID = rows[1].item.id
+        #expect(surface.selection == selectedID)
+
+        // HistoryViewState clears rows synchronously while a replacement
+        // observation is loading. This is a generation transition, not an
+        // authoritative statement that the selected item was removed.
+        surface.reconcileSessionSelection(
+            rows: [],
+            hasAuthoritativeFirstPage: false
+        )
+        #expect(surface.selection == selectedID)
+
+        // Once the replacement settles, absence is authoritative. Selection
+        // clears and a later page must not silently jump back to newest.
+        let replacement = [rows[0], rows[2]]
+        surface.reconcileSessionSelection(
+            rows: replacement,
+            hasAuthoritativeFirstPage: true
+        )
+        #expect(surface.selection == nil)
+
+        surface.reconcileSessionSelection(
+            rows: rows,
+            hasAuthoritativeFirstPage: true
+        )
+        #expect(surface.selection == nil)
+    }
+
+    @Test func authoritativeEmptyReplacementClearsAfterLoadingSettles() {
+        let viewState = HistoryViewState(history: ScriptedHistory())
+        let surface = HistoryPanelSurfaceState(
+            viewState: viewState,
+            previewState: PreviewPaneState()
+        )
+
+        surface.beginSession(rows: rows)
+        let selectedID = rows[0].item.id
+        #expect(surface.selection == selectedID)
+
+        surface.reconcileSessionSelection(
+            rows: [],
+            hasAuthoritativeFirstPage: false
+        )
+        #expect(surface.selection == selectedID)
+
+        // `rows` did not change, but an authoritative empty page arrived. The
+        // view's authoritative-page onChange drives this exact owner call.
+        surface.reconcileSessionSelection(
+            rows: [],
+            hasAuthoritativeFirstPage: true
+        )
+        #expect(surface.selection == nil)
+    }
+
+    @Test func failedReplacementDoesNotClaimAuthoritativeRemoval() {
+        let viewState = HistoryViewState(history: ScriptedHistory())
+        let surface = HistoryPanelSurfaceState(
+            viewState: viewState,
+            previewState: PreviewPaneState()
+        )
+
+        surface.beginSession(rows: rows)
+        surface.moveSelection(in: rows, direction: .next)
+        let selectedID = rows[1].item.id
+
+        // A failed first-page request has stopped loading, but it still did
+        // not publish an authoritative page for this generation.
+        surface.reconcileSessionSelection(
+            rows: [],
+            hasAuthoritativeFirstPage: false
+        )
+        #expect(surface.selection == selectedID)
+        #expect(surface.selectedReference(in: []) == nil)
+    }
+
     @Test func firstAuthoritativePageSelectsNewestAfterEmptyOpen() {
         let viewState = HistoryViewState(history: ScriptedHistory())
         let surface = HistoryPanelSurfaceState(

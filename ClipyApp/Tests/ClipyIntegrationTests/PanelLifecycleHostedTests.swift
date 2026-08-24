@@ -43,6 +43,8 @@ struct PanelLifecycleHostedTests {
         // cancellation; a duplicate AppKit notification must be a no-op.
         panel.resignKey()
         panel.resignKey()
+        await panel.waitForDeferredFocusLossCloseForTesting()
+        try #require(!panel.isPresented)
         await history.waitForTerminationCount(1)
 
         #expect(!panel.isPresented)
@@ -90,11 +92,20 @@ struct PanelLifecycleHostedTests {
         }
 
         alert.beginSheetModal(for: panel) { _ in }
+        // AppKit may synchronously deliver the parent resign callback before
+        // publishing `attachedSheet`. Join the production deferred decision so
+        // this assertion covers that exact ordering, not merely the later
+        // already-attached state.
+        await panel.waitForDeferredFocusLossCloseForTesting()
         #expect(panel.attachedSheet === alertWindow)
+        #expect(panel.isPresented)
+        #expect(surface.isSessionActive)
+        #expect(await history.terminationCount == 0)
 
         // AppKit transfers key status to a sheet. The production public-API
         // modal predicate must retain the panel while that sheet is attached.
         panel.resignKey()
+        await panel.waitForDeferredFocusLossCloseForTesting()
         #expect(panel.isPresented)
         #expect(surface.isSessionActive)
         #expect(await history.terminationCount == 0)
@@ -102,6 +113,8 @@ struct PanelLifecycleHostedTests {
         panel.endSheet(alertWindow)
         #expect(panel.attachedSheet == nil)
         panel.resignKey()
+        await panel.waitForDeferredFocusLossCloseForTesting()
+        try #require(!panel.isPresented)
         await history.waitForTerminationCount(1)
         #expect(!panel.isPresented)
         #expect(!surface.isSessionActive)

@@ -210,6 +210,14 @@ public final class HistoryViewState {
         nextPageCursor != nil
     }
 
+    /// Whether the current browse generation has published its authoritative
+    /// first page. Query restart clears this fact before clearing/replacing
+    /// rows; a load failure leaves it false, while an authoritative empty page
+    /// sets it true through its ChangePosition (review Card 8A/8C).
+    package var hasAuthoritativeFirstPage: Bool {
+        observedPosition != nil
+    }
+
     /// Whether the search field holds a query. Only a truly empty raw draft
     /// is `.recent`; whitespace can be meaningful exact/regexp syntax.
     public var isSearchActive: Bool {
@@ -473,10 +481,13 @@ public final class HistoryViewState {
         observationTask = nil
         invalidatePagination()
         observationGeneration += 1
+        // Retire the old generation's authority before publishing its empty
+        // loading placeholder. Selection reconciliation must never observe
+        // `rows == []` while this still describes the prior settled page.
+        observedPosition = nil
         rows = []
         nextPageCursor = nil
         observedCursor = nil
-        observedPosition = nil
         observedRows = []
         clearQueryFailure()
         isLoadingFirstPage = true

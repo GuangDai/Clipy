@@ -105,18 +105,40 @@ final class RetentionCountJourneyUITests: XCTestCase {
         )
         applyItemLimit.click()
 
-        // The destructive copy is itself part of the confirmation contract;
-        // query it by that exact user-visible label as the existing Settings
-        // running-app journey does for the sibling policy confirmation.
-        let confirm = app.buttons["Apply Stricter Limit"]
+        // Anchor to the Settings window that owns the edited field, then its
+        // attached confirmation sheet. A global title query also sees the
+        // Touch Bar mirror on CI and is therefore ambiguous.
+        let settingsWindow = app.windows.containing(
+            .textField,
+            identifier: "clipy.settings.retention.maximum-unpinned"
+        ).firstMatch
+        assertExists(
+            settingsWindow,
+            timeout: 5,
+            in: app,
+            context: "Settings window owning count confirmation"
+        )
+        let confirmationSheet = settingsWindow.sheets.firstMatch
+        assertExists(
+            confirmationSheet,
+            timeout: 5,
+            in: app,
+            context: "attached count confirmation sheet"
+        )
+        let confirm = confirmationSheet.buttons["action-button-1"]
         assertExists(
             confirm,
             timeout: 5,
             in: app,
             context: "destructive count confirmation"
         )
+        XCTAssertEqual(
+            confirm.label,
+            "Apply Stricter Limit",
+            diagnostic(app, context: "destructive count confirmation copy")
+        )
         XCTAssertTrue(
-            app.staticTexts[
+            confirmationSheet.staticTexts[
                 "A stricter limit can immediately remove unpinned items, and they can't be recovered."
             ].exists,
             diagnostic(app, context: "count confirmation disclosure")

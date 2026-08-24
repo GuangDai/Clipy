@@ -221,8 +221,19 @@ public final class HistoryPanelSurfaceState {
         previewState.panelClosed()
     }
 
-    package func reconcileSessionSelection(rows: [HistoryRow]) {
+    package func reconcileSessionSelection(
+        rows: [HistoryRow],
+        hasAuthoritativeFirstPage: Bool = true
+    ) {
         guard isSessionActive else { return }
+        // Query restart synchronously clears `HistoryViewState.rows` before
+        // the replacement observation publishes its first authoritative page.
+        // That loading gap is not evidence that the selected item was removed:
+        // preserve both an existing selection and the one-shot initial-open
+        // intent until a replacement page (including an authoritative empty
+        // page) actually arrives. Merely ending loading with a failure is not
+        // authoritative removal evidence (review Card 8A/8C).
+        guard hasAuthoritativeFirstPage else { return }
         guard let selection else {
             guard isAwaitingInitialSelection else { return }
             self.selection = PanelSessionSelection.preparedSelection(in: rows)
@@ -343,7 +354,11 @@ public struct HistoryPanelView: View {
         .background { hiddenShortcuts }
         .task(id: surfaceState.sessionGeneration) {
             guard surfaceState.isSessionActive else { return }
-            surfaceState.reconcileSessionSelection(rows: viewState.rows)
+            surfaceState.reconcileSessionSelection(
+                rows: viewState.rows,
+                hasAuthoritativeFirstPage:
+                    viewState.hasAuthoritativeFirstPage
+            )
             isSearchFieldFocused = true
         }
         .onChange(of: surfaceState.isSessionActive) { _, isActive in
@@ -372,7 +387,21 @@ public struct HistoryPanelView: View {
             }
         }
         .onChange(of: viewState.rows.map(\.item)) { _, _ in
-            surfaceState.reconcileSessionSelection(rows: viewState.rows)
+            surfaceState.reconcileSessionSelection(
+                rows: viewState.rows,
+                hasAuthoritativeFirstPage:
+                    viewState.hasAuthoritativeFirstPage
+            )
+        }
+        // An authoritative empty replacement can leave `rows == []` across
+        // the whole generation, so rows alone cannot trigger reconciliation.
+        // The first authoritative page fact must be part of the owner signal.
+        .onChange(of: viewState.hasAuthoritativeFirstPage) { _, _ in
+            surfaceState.reconcileSessionSelection(
+                rows: viewState.rows,
+                hasAuthoritativeFirstPage:
+                    viewState.hasAuthoritativeFirstPage
+            )
         }
         .onChange(of: resolvedPreviewTarget) { _, target in
             guard previewState.isOpen, target == nil else { return }
