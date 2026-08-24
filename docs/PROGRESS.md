@@ -1311,4 +1311,5 @@ test.
   age threshold, and requires the strict-retention warning/destructive action
   before Esc cancels while preserving the draft. This is not a hosted editor
   copy/Esc proof, a four-state ServiceManagement runtime proof, or complete
-  unified-retention acceptance; final PR/master CI evidence is pending.
+  unified-retention acceptance. PR-head correctness 32698639889 is green;
+  merge/master evidence is pending.
