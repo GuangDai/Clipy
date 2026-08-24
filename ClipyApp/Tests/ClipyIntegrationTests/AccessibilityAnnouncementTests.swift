@@ -184,7 +184,10 @@ struct AccessibilityAnnouncementTests {
         }
         appDelegate.installCompositionForTesting(composition)
 
-        _ = try await composition.viewState.removeAwaitingReceipt(inserted.id)
+        composition.viewState.remove(inserted.id)
+        try #require(await ComposedSupport.waitFor {
+            recorder.records.count == 1
+        })
 
         #expect(recorder.records.count == 1)
         #expect(recorder.records[0].targetsApplication)
@@ -199,11 +202,10 @@ struct AccessibilityAnnouncementTests {
                 == NSAccessibilityPriorityLevel.medium.rawValue
         )
 
-        await #expect(throws: HistoryFailure.self) {
-            _ = try await composition.viewState.removeAwaitingReceipt(
-                inserted.id
-            )
-        }
+        composition.viewState.remove(inserted.id)
+        try #require(await ComposedSupport.waitFor {
+            composition.viewState.failure != nil
+        })
         #expect(recorder.records.count == 1)
     }
 
