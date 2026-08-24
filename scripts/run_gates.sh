@@ -37,7 +37,8 @@ esac
 echo "== gate 1/7: source-gate fixtures =="
 if ! PYTHONPATH="$REPO_ROOT" python3 -m unittest \
     scripts.tests.test_diagnostic_scan \
-    scripts.tests.test_evidence_workflow_gate; then
+    scripts.tests.test_evidence_workflow_gate \
+    scripts.tests.test_validate_release_archive; then
     status=1
 fi
 

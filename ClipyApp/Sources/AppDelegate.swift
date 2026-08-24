@@ -22,6 +22,27 @@ import Observation
 import PresentationUI
 import SwiftUI
 
+#if DEBUG
+/// Exact launch envelope for the one running-app XCUI tracer. It is compiled
+/// out of Release and accepts only an absolute temp-store path; no alternate
+/// History, capture pump, paste path, or panel controller is constructed.
+private struct RunningUITestConfiguration {
+    let storeURL: URL
+
+    static func current(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> RunningUITestConfiguration? {
+        guard environment["CLIPY_RUNNING_UI_TEST"] == "1",
+              let path = environment["CLIPY_UI_TEST_STORE_PATH"],
+              path.hasPrefix("/")
+        else { return nil }
+        return RunningUITestConfiguration(
+            storeURL: URL(fileURLWithPath: path).standardizedFileURL
+        )
+    }
+}
+#endif
+
 /// The only two capture-health episodes that need panel presentation. Both
 /// are content-free: replacement exposes a cumulative count, and failure
 /// exposes History's typed rejection rather than the clipboard value.
@@ -34,6 +55,11 @@ enum ClipyCaptureNotice: Sendable, Equatable {
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let accessibilityAnnouncement: AccessibilityAnnouncement
+
+#if DEBUG
+    private let runningUITestConfiguration = RunningUITestConfiguration.current()
+    private var isRunningUITestSummonPending = true
+#endif
 
     override init() {
         accessibilityAnnouncement = AccessibilityAnnouncement(
@@ -153,7 +179,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - NSApplicationDelegate
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        guard !Self.isRunningTests else { return }
+        guard !Self.isRunningTests || isRunningUITest else { return }
 
         // App Intents can be invoked immediately after process launch. Install
         // its framework-owned dependency provider before starting any async
@@ -184,7 +210,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        guard !Self.isRunningTests else { return }
+        guard !Self.isRunningTests || isRunningUITest else { return }
         // System Settings may have changed registration/approval while Clipy
         // was inactive. Re-read the authoritative value; no cached Bool is
         // allowed to survive activation (REVIEW Card 10C).
@@ -223,14 +249,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 onPreviewPlacementChange: { [weak self] placement in
                     self?.previewPlacement = placement
                 },
+                isSelectionSubmissionEnabled: { [weak self] in
+                    self?.panelSurfaceState?.isAtListRoot == true
+                },
+                onSubmitSelection: { [weak self] in
+                    self?.submitPanelSelection()
+                },
                 onClosed: { [weak self] in self?.panelDidClose() }
             )
         }
+        composition?.viewState.activate()
         panel?.open(
             at: mode,
             statusItemButtonScreenFrame: statusItemButtonScreenFrame()
         )
-        composition?.viewState.activate()
+        if let composition {
+            panelSurfaceState?.beginSession(rows: composition.viewState.rows)
+        }
+    }
+
+    private func submitPanelSelection() {
+        guard let composition,
+              let reference = panelSurfaceState?.selectedReference(
+                  in: composition.viewState.rows
+              )
+        else { return }
+        composition.viewState.requestPaste(reference)
     }
 
     /// Closes the panel (idempotent; the panel's close fires
@@ -267,7 +311,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Bookkeeping after every panel close: disarm the preview pane and
     /// stop the view-state observation until the next summon.
     private func panelDidClose() {
-        previewState.panelClosed()
+        panelSurfaceState?.endSession()
         composition?.viewState.deactivate()
     }
 
@@ -312,8 +356,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let current = compositionOpenAttempt {
             attempt = current
         } else {
+#if DEBUG
+            let runningUITestConfiguration = self.runningUITestConfiguration
+#endif
             let started = Task { @MainActor in
-                try await AppComposition.open()
+#if DEBUG
+                if let configuration = runningUITestConfiguration {
+                    return try await AppComposition.openForUITesting(
+                        storeURL: configuration.storeURL
+                    )
+                }
+#endif
+                return try await AppComposition.open()
             }
             let newAttempt = CompositionOpenAttempt(task: started)
             compositionOpenAttempt = newAttempt
@@ -326,6 +380,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 installComposition(opened)
 #if CLIPY_UDS_F0
                 startUnixSocketF0ListenerIfRequested()
+#endif
+#if DEBUG
+                if runningUITestConfiguration != nil,
+                   isRunningUITestSummonPending {
+                    isRunningUITestSummonPending = false
+                    hotKey?.fire()
+                }
 #endif
             }
             if compositionOpenAttempt === attempt {
@@ -345,6 +406,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             throw error
         }
+    }
+
+    private var isRunningUITest: Bool {
+#if DEBUG
+        runningUITestConfiguration != nil
+#else
+        false
+#endif
     }
 
     /// App Intents' async dependency provider. The registration boundary

@@ -1,0 +1,75 @@
+name: Unsigned Release archive identity
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-archive-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NSUnbufferedIO: YES
+  OS_ACTIVITY_MODE: disable
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  correctness:
+    name: Same-SHA correctness admission
+    uses: ./.github/workflows/correctness.yml
+
+  archive:
+    name: Protected-ref unsigned archive identity
+    needs: correctness
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      LOG_DIR: ${{ github.workspace }}/release-archive-logs
+      ARCHIVE: ${{ github.workspace }}/release-artifacts/Clipy.xcarchive
+      DERIVED_DATA: ${{ github.workspace }}/DerivedData-ReleaseArchive
+    steps:
+      - name: Checkout exact release commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Verify runner contract
+        shell: bash
+        run: bash scripts/ci/verify_macos_runner.sh "$LOG_DIR/runner.log"
+
+      - name: Require a protected release tag
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then
+            echo "Release archive requires a tag ref" >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_PROTECTED" != "true" ]]; then
+            echo "Release archive requires a protected ref" >&2
+            exit 1
+          fi
+          if [[ ! "$GITHUB_REF" =~ ^refs/tags/release/[^/]+/[1-9][0-9]*$ ]]; then
+            echo "Release tag must match release/<marketing>/<build>" >&2
+            exit 1
+          fi
+
+      - name: Build and validate unsigned ordinary archive
+        shell: bash
+        run: >-
+          bash scripts/ci/run_release_archive.sh
+          "$LOG_DIR" "$ARCHIVE" "$DERIVED_DATA"
+          "$RUNNER_TEMP/xcodegen-2.45.4"
+          "$GITHUB_REF" "$GITHUB_REF_PROTECTED"
+
+      - name: Upload bounded archive evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unsigned-release-archive-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            release-archive-logs
+            release-artifacts/Clipy.xcarchive
+          if-no-files-found: warn
+          retention-days: 14

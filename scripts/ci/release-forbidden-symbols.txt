@@ -3,10 +3,12 @@
 # ordinary Release Clipy.app. This is intentionally a finite inventory, not a
 # claim that every possible test instrument has been audited.
 ClipyApp.AppComposition.makeForTesting
+ClipyApp.AppComposition.openForUITesting
 ClipyApp.AppComposition.nextCaptureFailureForTesting
 ClipyApp.AppComposition.pasteWriteFailureForTesting
 ClipyApp.AppComposition.submitCaptureForTesting
 ClipyApp.AppDelegate.installCompositionForTesting
+ClipyApp.RunningUITestConfiguration
 ClipyApp.UnixSocketF0Listener
 ClipyApp.UnixSocketF0Protocol
 ClipyUDSF0Client

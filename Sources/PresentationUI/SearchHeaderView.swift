@@ -21,13 +21,19 @@ import SwiftUI
 public struct SearchHeaderView: View {
     private let viewState: HistoryViewState
     private let searchFieldFocused: FocusState<Bool>.Binding
+    private let onMoveSelection: (Int) -> Void
+    private let onSubmitSelection: () -> Void
 
     public init(
         viewState: HistoryViewState,
-        searchFieldFocused: FocusState<Bool>.Binding
+        searchFieldFocused: FocusState<Bool>.Binding,
+        onMoveSelection: @escaping (Int) -> Void = { _ in },
+        onSubmitSelection: @escaping () -> Void = {}
     ) {
         self.viewState = viewState
         self.searchFieldFocused = searchFieldFocused
+        self.onMoveSelection = onMoveSelection
+        self.onSubmitSelection = onSubmitSelection
     }
 
     public var body: some View {
@@ -54,6 +60,15 @@ public struct SearchHeaderView: View {
                 .autocorrectionDisabled(true)
                 .accessibilityIdentifier("clipy.search.field")
                 .accessibilityLabel("Search clipboard history")
+                .onSubmit(onSubmitSelection)
+                .onKeyPress(.downArrow) {
+                    onMoveSelection(1)
+                    return .handled
+                }
+                .onKeyPress(.upArrow) {
+                    onMoveSelection(-1)
+                    return .handled
+                }
             if !viewState.searchText.isEmpty {
                 Button {
                     viewState.clearSearch()

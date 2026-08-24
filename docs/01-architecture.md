@@ -299,6 +299,10 @@ The Authority does not retain model objects between operations. Each isolated re
 - No adapter may import another adapter.
 - `AppIntents` is confined to `ClipyApp/Sources` and the explicitly hosted
   `ClipyIntegrationTests`; it must not enter any SwiftPM target.
+- `ClipyUITests` is the XcodeGen-owned running-app tracer target. It may use
+  XCTest/AppKit accessibility and General pasteboard only through a DEBUG
+  launch envelope; it must not import product modules or construct a second
+  History/composition/capture pump (REVIEW Card 15).
 - The one registered App Intents dependency is the internal Sendable
   `AppIntentHistoryIngress`: it contains the connection-bound public Storage
   facade, delegates every read/write unchanged, and after only a positive

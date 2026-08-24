@@ -30,7 +30,7 @@ thumbnails.
   run on any platform; everything else (including
   `scripts/public_symbol_snapshot.sh`) needs macOS + `xcrun`.
 
-**Current state (2026-08-24, `master` through PR #34):** steps 0–9 are
+**Current state (2026-08-24, `master` through PR #35):** steps 0–9 are
 done and CI-green (scaffold + gates, `HistoryCore` public surface,
 `HistoryDomain` pure core, dependency pins, schema v1 + codecs,
 `HistoryAuthority` capture/mutations/reads/observation/thumbnail, product
@@ -55,10 +55,11 @@ run 32682682345).
 GOV-1's manual exact/scale caller landed in PR #34 (merge `f48d87f`; PR run
 32684566664; master run 32684916238). Its same-SHA manual run 32685185124 has
 Exact A/B green with all 13 thresholds passing and the full 5,000-row scale
-admission green; both remain record-only evidence. Batch 33 is implementing
-Card 9B external-remove purge plus bounded
-Card 15C/15D accessibility leaves; treat those source changes as unlanded
-until their PR and master correctness runs are recorded.
+admission green; both remain record-only evidence. Batch 33's Card 9B
+external-remove purge and bounded Card 15C/15D accessibility leaves landed in
+PR #35 (merge `10decae`; final PR run 32688665740; master run 32688965362
+attempt 2). Batch 34 is the current PR work: one running-app XCUI panel tracer
+and an independent unsigned Release archive identity contract.
 Both dispatch-only physical-evidence cells are green on `master` as of
 2026-08-23: the General pasteboard cross-process run 32632263996 and the
 Card 6B APFS ENOSPC capture-transaction run 32636093920 (the latter via
@@ -272,7 +273,8 @@ logs are not parsed as compiler output. Write warning-free code.
   `ContentPreviewTests`,
   `PasteboardAdapterTests`, `PresentationUITests` (SwiftPM), plus
   `ClipyIntegrationTests` hosted by the app (XcodeGen-only, not in
-  `Package.swift`). `HistoryPerfTests` (SwiftPM) holds the perf/AB
+  `Package.swift`) and the XcodeGen-only `ClipyUITests` running-app tracer.
+  `HistoryPerfTests` (SwiftPM) holds the perf/AB
   measurement-helper proofs for the `HistoryPerfRunner` executable; the
   PR/push correctness lane skips it (`--skip 'HistoryPerfTests\.'`). Its
   reusable workflow is dormant until a future correctness-gated caller is
@@ -319,7 +321,11 @@ logs are not parsed as compiler output. Write warning-free code.
   prove Developer ID identity, secure timestamp, notarization/stapling,
   Gatekeeper, TCC, login-item, Carbon/status-item, Space, or WindowServer
   behavior; those remain state-3 distribution/manual cells.
-- There is no release/deployment pipeline yet. The product-wired app remains
+- `.github/workflows/release-archive.yml` is a manual-only Card 16A source
+  contract: after same-SHA correctness it requires a protected
+  `release/<marketing>/<build>` tag and validates one unsigned ordinary
+  `.xcarchive`. It does not sign, notarize, staple, or publish the artifact.
+- There is no signed release/deployment pipeline yet. The product-wired app remains
   short of Part VI §11 "state 3": packaging, accessibility, localization, and
   the distribution/manual acceptance cells are still open.
 

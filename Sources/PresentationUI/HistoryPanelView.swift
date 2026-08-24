@@ -21,6 +21,45 @@ public enum PreviewPlacement: Equatable, Sendable {
     case trailing
 }
 
+/// Pure Card 14A ordering rule shared by panel-open preparation and arrow
+/// commands. `HistoryViewState.rows` is already the authoritative displayed
+/// order, so this value never re-sorts or invents a parallel cursor model.
+package enum PanelSelectionDirection: Equatable {
+    case previous
+    case next
+}
+
+package enum PanelSessionSelection {
+    package static func preparedSelection(
+        in rows: [HistoryRow]
+    ) -> HistoryItemID? {
+        rows.first?.item.id
+    }
+
+    package static func movedSelection(
+        _ selection: HistoryItemID?,
+        in rows: [HistoryRow],
+        direction: PanelSelectionDirection
+    ) -> HistoryItemID? {
+        guard !rows.isEmpty else { return nil }
+        guard let selection,
+              let currentIndex = rows.firstIndex(where: {
+                  $0.item.id == selection
+              })
+        else {
+            return direction == .next
+                ? rows.first?.item.id
+                : rows.last?.item.id
+        }
+        let offset = direction == .next ? 1 : -1
+        let targetIndex = min(
+            max(rows.startIndex, currentIndex + offset),
+            rows.index(before: rows.endIndex)
+        )
+        return rows[targetIndex].item.id
+    }
+}
+
 /// The list selection reconciled against the latest authoritative rows.
 /// The ID remains the list-control identity, while `reference` is the exact
 /// content target consumed by preview. A row removal clears both; a same-ID
@@ -75,6 +114,9 @@ public final class HistoryPanelSurfaceState {
     package var selection: HistoryItemID?
     package let thumbnails: ThumbnailStore
     public private(set) var appliedPurgeGeneration = 0
+    public private(set) var sessionGeneration = 0
+    public private(set) var isSessionActive = false
+    public var isAtListRoot: Bool { detailsPath.isEmpty }
     package private(set) var detailsPurgeGeneration = 0
 
     private let previewState: PreviewPaneState
@@ -146,6 +188,58 @@ public final class HistoryPanelSurfaceState {
         }
         previewState.purge(scope)
         thumbnails.purge(scope)
+    }
+
+    /// Starts one AppDelegate-owned panel session. Selection follows the
+    /// authoritative display order; the view observes `sessionGeneration`
+    /// only to move first responder into search (Card 14A/14D).
+    public func beginSession(rows: [HistoryRow]) {
+        sessionGeneration += 1
+        isSessionActive = true
+        detailsPath.removeAll()
+        selection = PanelSessionSelection.preparedSelection(in: rows)
+    }
+
+    /// Ends one session and retires content-bearing transient UI state. The
+    /// raw search draft intentionally survives reopen; selection/details/
+    /// preview do not (approved Card 14A close policy).
+    public func endSession() {
+        guard isSessionActive else { return }
+        isSessionActive = false
+        detailsPath.removeAll()
+        selection = nil
+        previewState.panelClosed()
+    }
+
+    package func reconcileSessionSelection(rows: [HistoryRow]) {
+        guard isSessionActive else { return }
+        if let selection,
+           rows.contains(where: { $0.item.id == selection }) {
+            return
+        }
+        selection = PanelSessionSelection.preparedSelection(in: rows)
+    }
+
+    package func moveSelection(
+        in rows: [HistoryRow],
+        direction: PanelSelectionDirection
+    ) {
+        guard isSessionActive else { return }
+        selection = PanelSessionSelection.movedSelection(
+            selection,
+            in: rows,
+            direction: direction
+        )
+    }
+
+    /// Exact executable selection for the AppKit window's IME-aware Return
+    /// routing. The row must still exist in the authoritative display before
+    /// the composition boundary publishes the product paste intent.
+    public func selectedReference(
+        in rows: [HistoryRow]
+    ) -> HistoryItemReference? {
+        guard let selection else { return nil }
+        return rows.first(where: { $0.item.id == selection })?.item
     }
 }
 
@@ -221,9 +315,17 @@ public struct HistoryPanelView: View {
             width: PanelGeometry.totalWidth(previewOpen: previewState.isOpen),
             height: PanelGeometry.height
         )
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("clipy.panel.root")
         .background { hiddenShortcuts }
-        .task { viewState.activate() }
-        .onDisappear { viewState.deactivate() }
+        .task(id: surfaceState.sessionGeneration) {
+            guard surfaceState.isSessionActive else { return }
+            surfaceState.reconcileSessionSelection(rows: viewState.rows)
+            isSearchFieldFocused = true
+        }
+        .onChange(of: surfaceState.isSessionActive) { _, isActive in
+            if !isActive { isSearchFieldFocused = false }
+        }
         .onChange(of: surfaceState.selection) { _, newSelection in
             previewState.handleSelectionChange(
                 PreviewSelectionResolution.resolve(
@@ -245,6 +347,9 @@ public struct HistoryPanelView: View {
             if previewState.isOpen, previewState.previewedItem?.id == reference.id {
                 previewState.refreshOpenPreview(reference)
             }
+        }
+        .onChange(of: viewState.rows.map(\.item)) { _, _ in
+            surfaceState.reconcileSessionSelection(rows: viewState.rows)
         }
         .onChange(of: resolvedPreviewTarget) { _, target in
             guard previewState.isOpen, target == nil else { return }
@@ -294,7 +399,21 @@ public struct HistoryPanelView: View {
         VStack(spacing: 0) {
             SearchHeaderView(
                 viewState: viewState,
-                searchFieldFocused: $isSearchFieldFocused
+                searchFieldFocused: $isSearchFieldFocused,
+                onMoveSelection: { offset in
+                    surfaceState.moveSelection(
+                        in: viewState.rows,
+                        direction: offset < 0 ? .previous : .next
+                    )
+                },
+                onSubmitSelection: {
+                    guard let selectedID = surfaceState.selection,
+                          let selected = viewState.rows.first(where: {
+                              $0.item.id == selectedID
+                          })
+                    else { return }
+                    viewState.requestPasteFromDisplayedRow(selected.item)
+                }
             )
             .padding(.horizontal, 12)
             .padding(.top, 10)

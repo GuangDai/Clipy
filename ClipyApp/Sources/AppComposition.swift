@@ -341,13 +341,39 @@ final class AppComposition {
     /// location is part of opening it, and the storage boundary's own
     /// vocabulary already says exactly that (03b §10; 05 §16).
     static func open(storeURL: URL = defaultStoreURL) async throws -> AppComposition {
+        try await openConfigured(
+            storeURL: storeURL,
+            forcedCaptureAccessBehavior: nil
+        )
+    }
+
+#if DEBUG
+    /// Running-app XCUI seam: only the store location and the macOS privacy
+    /// posture are substituted. Store open, observer capture, History writes,
+    /// paste payload resolution, General pasteboard write, and close callbacks
+    /// remain the one production graph (REVIEW Card 15 first tracer).
+    static func openForUITesting(storeURL: URL) async throws -> AppComposition {
+        try await openConfigured(
+            storeURL: storeURL,
+            forcedCaptureAccessBehavior: .allowed
+        )
+    }
+#endif
+
+    private static func openConfigured(
+        storeURL: URL,
+        forcedCaptureAccessBehavior: PasteboardAccessBehavior?
+    ) async throws -> AppComposition {
         guard !openedStoreURLs.contains(storeURL) else {
             throw ClipyCompositionError.storeAlreadyOpen(storeURL)
         }
         openedStoreURLs.insert(storeURL)
         do {
             try Task.checkCancellation()
-            let composition = try await openReserved(storeURL: storeURL)
+            let composition = try await openReserved(
+                storeURL: storeURL,
+                forcedCaptureAccessBehavior: forcedCaptureAccessBehavior
+            )
             try Task.checkCancellation()
             composition.start()
             return composition
@@ -358,7 +384,10 @@ final class AppComposition {
     }
 
     /// The awaited body of `open` under an already-reserved URL.
-    private static func openReserved(storeURL: URL) async throws -> AppComposition {
+    private static func openReserved(
+        storeURL: URL,
+        forcedCaptureAccessBehavior: PasteboardAccessBehavior?
+    ) async throws -> AppComposition {
         do {
             try FileManager.default.createDirectory(
                 at: storeURL.deletingLastPathComponent(),
@@ -375,11 +404,20 @@ final class AppComposition {
         )
         let appIntentsHistoryFacade = history.makeAppIntentsHistoryFacade()
         let adapter = PasteboardAdapter()
-        return AppComposition(
+        let composition = AppComposition(
             history: history,
             appIntentsHistoryFacade: appIntentsHistoryFacade,
-            adapter: adapter
+            adapter: adapter,
+            initialCaptureAccessBehavior: forcedCaptureAccessBehavior
         )
+#if DEBUG
+        if let forcedCaptureAccessBehavior {
+            composition.observer.setAccessBehaviorProviderForTesting {
+                forcedCaptureAccessBehavior
+            }
+        }
+#endif
+        return composition
     }
 
     /// Wires the paste hand-off and starts capture observation. Called
