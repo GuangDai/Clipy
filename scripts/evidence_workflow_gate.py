@@ -18,6 +18,7 @@ CONTRACT_PATHS = {
     "correctness": Path(".github/workflows/correctness.yml"),
     "exact": Path(".github/workflows/exact-matcher.yml"),
     "scale": Path(".github/workflows/performance-admission.yml"),
+    "runner": Path("scripts/ci/run_performance_admission.sh"),
 }
 
 
@@ -75,12 +76,42 @@ def _top_mapping_keys(block: str, indent: int) -> set[str]:
     return keys
 
 
+def _top_mapping_entries(block: str, indent: int) -> dict[str, str]:
+    entries: dict[str, str] = {}
+    prefix = " " * indent
+    for line in block.splitlines():
+        if not line.startswith(prefix) or _indent(line) != indent:
+            continue
+        stripped = line.strip()
+        if ":" in stripped:
+            key, value = stripped.split(":", maxsplit=1)
+            entries[key] = value.strip()
+    return entries
+
+
+def _literal_lines(text: str, key: str, indent: int) -> set[str]:
+    lines = text.splitlines()
+    marker = " " * indent + f"{key}: |"
+    for index, line in enumerate(lines):
+        if line.rstrip() != marker:
+            continue
+        values: set[str] = set()
+        for candidate in lines[index + 1 :]:
+            if candidate.strip() and _indent(candidate) <= indent:
+                break
+            if candidate.strip():
+                values.add(candidate.strip())
+        return values
+    return set()
+
+
 def validate_contract(files: dict[str, str]) -> list[str]:
     violations: list[str] = []
     manual = files.get("manual", "")
     correctness = files.get("correctness", "")
     exact = files.get("exact", "")
     scale = files.get("scale", "")
+    runner = files.get("runner", "")
 
     if _top_mapping_keys(_block(manual, "on", 0), 2) != {"workflow_dispatch"}:
         violations.append("manual caller trigger must be workflow_dispatch only")
@@ -90,7 +121,9 @@ def validate_contract(files: dict[str, str]) -> list[str]:
         violations.append("scale workflow trigger must be workflow_call only")
     if "inputs:" in _block(manual, "workflow_dispatch", 2):
         violations.append("manual evidence caller must not expose dispatch inputs")
-    if _top_mapping_keys(_block(manual, "permissions", 0), 2) != {"contents"}:
+    if _top_mapping_entries(_block(manual, "permissions", 0), 2) != {
+        "contents": "read"
+    }:
         violations.append("manual evidence permissions must be contents: read only")
     concurrency = _block(manual, "concurrency", 0)
     if "group: manual-exact-scale-evidence-${{ github.ref }}" not in concurrency:
@@ -187,12 +220,11 @@ def validate_contract(files: dict[str, str]) -> list[str]:
         "admission-logs/warm-open-samples/*.json",
         "admission-logs/warm-open-samples/*.time",
     )
-    if "if: always()" not in upload or not all(
-        pattern in upload for pattern in artifact_patterns
+    if (
+        "if: always()" not in upload
+        or _literal_lines(upload, "path", 10) != set(artifact_patterns)
     ):
-        violations.append("scale evidence upload must always use the explicit artifact allowlist")
-    if "path: admission-logs\n" in upload:
-        violations.append("scale evidence upload must not recurse over the log root")
+        violations.append("scale evidence upload must always use the exact artifact allowlist")
 
     final_gate = _step(scale_job, "Require every scale admission mode")
     required_outcomes = (
@@ -210,6 +242,16 @@ def validate_contract(files: dict[str, str]) -> list[str]:
         outcome in final_gate for outcome in required_outcomes
     ):
         violations.append("final scale gate must require every mode and fixture cardinality")
+
+    warm_timing_contract = (
+        '[[ -s "$samples_dir/warmup.time" ]]',
+        'for time_file in "${warm_time_files[@]}"; do',
+        '[[ -s "$time_file" ]]',
+    )
+    if not all(fragment in runner for fragment in warm_timing_contract):
+        violations.append(
+            "warm-open completion must require nonempty warmup and sample timing records"
+        )
 
     if "cancel-in-progress: true" in manual:
         violations.append("manual evidence must not cancel an in-progress evidence run")

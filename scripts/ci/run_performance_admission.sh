@@ -253,8 +253,12 @@ finalize_evidence() {
   done
   shopt -s nullglob
   local warm_time_files=("$samples_dir"/[0-9][0-9][0-9].time)
+  [[ -s "$samples_dir/warmup.time" ]]
   [[ "${#warm_time_files[@]}" -eq 101 ]]
-
+  local time_file
+  for time_file in "${warm_time_files[@]}"; do
+    [[ -s "$time_file" ]]
+  done
 }
 
 run_all() {
