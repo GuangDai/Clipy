@@ -190,7 +190,11 @@ final class SummonShortcutRecorderInputView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
-        record(event)
+        record(
+            keyCode: event.keyCode,
+            modifierFlagsRawValue: event.modifierFlags.rawValue,
+            isARepeat: event.isARepeat
+        )
     }
 
     /// AppKit's app-local monitor receives keyDown before menu/key-equivalent
@@ -202,14 +206,22 @@ final class SummonShortcutRecorderInputView: NSView {
         keyEventMonitor = NSEvent.addLocalMonitorForEvents(
             matching: .keyDown
         ) { [weak self] event in
-            MainActor.assumeIsolated {
+            let eventWindowNumber = event.windowNumber
+            let keyCode = event.keyCode
+            let modifierFlagsRawValue = event.modifierFlags.rawValue
+            let isARepeat = event.isARepeat
+            let consumed = MainActor.assumeIsolated {
                 guard let self,
-                      let window = self.window,
-                      event.window === window
-                else { return event }
-                self.record(event)
-                return nil
+                      self.window?.windowNumber == eventWindowNumber
+                else { return false }
+                self.record(
+                    keyCode: keyCode,
+                    modifierFlagsRawValue: modifierFlagsRawValue,
+                    isARepeat: isARepeat
+                )
+                return true
             }
+            return consumed ? nil : event
         }
     }
 
@@ -224,11 +236,17 @@ final class SummonShortcutRecorderInputView: NSView {
 
     /// The local monitor and direct responder fallback share one submission
     /// point. A repeat is consumed by its caller but cannot apply twice.
-    private func record(_ event: NSEvent) {
-        guard !event.isARepeat else { return }
+    private func record(
+        keyCode: UInt16,
+        modifierFlagsRawValue: UInt,
+        isARepeat: Bool
+    ) {
+        guard !isARepeat else { return }
         onDecision(.decide(
-            keyCode: event.keyCode,
-            modifierFlags: event.modifierFlags
+            keyCode: keyCode,
+            modifierFlags: NSEvent.ModifierFlags(
+                rawValue: modifierFlagsRawValue
+            )
         ))
     }
 
