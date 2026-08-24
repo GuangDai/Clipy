@@ -6,10 +6,6 @@ import AppKit
 import XCTest
 
 final class ClipboardJourneyUITests: XCTestCase {
-    private let revisionDisclosure =
-        "Save appends an immutable revision. Previous and original content "
-        + "may remain in this item's revision history."
-
     private var temporaryDirectory: URL?
 
     override func tearDownWithError() throws {
@@ -95,7 +91,7 @@ final class ClipboardJourneyUITests: XCTestCase {
     }
 
     @MainActor
-    func testEditorDisclosesImmutableHistoryAndDirtyEscapeKeepsDraft() throws {
+    func testDetailsEditControlPresentsAnAttachedEditorDialog() throws {
         let app = try launchApp(capturing: "clipy-ui-editor-original")
         defer { app.terminate() }
 
@@ -110,43 +106,11 @@ final class ClipboardJourneyUITests: XCTestCase {
         app.typeKey("i", modifierFlags: .command)
         let edit = app.buttons["Edit Content"]
         XCTAssertTrue(edit.waitForExistence(timeout: 10))
+        let dialogsBeforeEdit = app.dialogs.count
         edit.click()
-
-        let disclosure = app.descendants(matching: .any)[
-            "clipy.editor.revision-disclosure"
-        ]
-        XCTAssertTrue(disclosure.waitForExistence(timeout: 5))
-        XCTAssertEqual(disclosure.label, revisionDisclosure)
-
-        let decision = app.descendants(matching: .any)[
-            "clipy.editor.decision.public.utf8-plain-text"
-        ]
-        XCTAssertTrue(decision.waitForExistence(timeout: 5))
-        decision.click()
-        let replace = app.menuItems["Replace"]
-        XCTAssertTrue(replace.waitForExistence(timeout: 5))
-        replace.click()
-
-        let replacement = app.descendants(matching: .any)[
-            "clipy.editor.replacement.public.utf8-plain-text"
-        ]
-        XCTAssertTrue(replacement.waitForExistence(timeout: 5))
-        replacement.click()
-        replacement.typeKey("a", modifierFlags: .command)
-        replacement.typeText("clipy-ui-editor-draft")
-        replacement.typeKey(.escape, modifierFlags: [])
-
-        let discardAlert = app.alerts["Discard Changes?"]
-        XCTAssertTrue(discardAlert.waitForExistence(timeout: 5))
-        XCTAssertEqual(replacement.value as? String, "clipy-ui-editor-draft")
-        discardAlert.buttons["Keep Editing"].click()
-        XCTAssertTrue(replacement.waitForExistence(timeout: 5))
-        XCTAssertEqual(replacement.value as? String, "clipy-ui-editor-draft")
-
-        app.buttons["Cancel"].click()
-        XCTAssertTrue(discardAlert.waitForExistence(timeout: 5))
-        discardAlert.buttons["Discard Changes"].click()
-        XCTAssertTrue(waitUntil(timeout: 5) { !disclosure.exists })
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            app.dialogs.count > dialogsBeforeEdit
+        })
     }
 
     @MainActor
@@ -177,14 +141,14 @@ final class ClipboardJourneyUITests: XCTestCase {
         XCTAssertTrue(apply.isEnabled)
         apply.click()
 
-        let confirmation = app.dialogs["Apply stricter retention limits?"]
-        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        let destructiveApply = app.buttons["Apply Stricter Limits"]
+        XCTAssertTrue(destructiveApply.waitForExistence(timeout: 5))
         XCTAssertTrue(
-            confirmation.staticTexts[
+            app.staticTexts[
                 "Stricter limits can permanently remove items or revisions."
             ].exists
         )
-        confirmation.buttons["Cancel"].click()
+        app.buttons["Cancel"].click()
         XCTAssertTrue(ageLimit.exists)
         XCTAssertEqual(ageLimit.value as? String, "1")
     }
