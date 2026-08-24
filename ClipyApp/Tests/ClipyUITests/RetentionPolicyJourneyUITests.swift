@@ -53,6 +53,23 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             in: app,
             context: "storage policy toggle"
         )
+        let owningWindow = settingsWindow(
+            in: app,
+            owningTextField: "clipy.settings.retention.storage-mib"
+        )
+        let retentionScrollView = owningWindow.scrollViews.firstMatch
+        assertExists(
+            retentionScrollView,
+            timeout: 5,
+            in: app,
+            context: "retention policy scroll view"
+        )
+        guard scrollUntilHittable(
+            storageEnabled,
+            in: retentionScrollView,
+            app: app,
+            context: "storage policy toggle"
+        ) else { return }
         storageEnabled.click()
 
         let storageMiB = app.textFields[
@@ -64,6 +81,12 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             in: app,
             context: "storage budget field"
         )
+        guard scrollUntilHittable(
+            storageMiB,
+            in: retentionScrollView,
+            app: app,
+            context: "storage budget field"
+        ) else { return }
         replaceText(in: storageMiB, with: "1")
 
         let apply = app.buttons["clipy.settings.retention.apply"]
@@ -72,12 +95,14 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             waitUntil(timeout: 5) { apply.isEnabled },
             diagnostic(app, context: "loaded changed storage policy")
         )
+        guard scrollUntilHittable(
+            apply,
+            in: retentionScrollView,
+            app: app,
+            context: "storage policy Apply"
+        ) else { return }
         apply.click()
 
-        let owningWindow = settingsWindow(
-            in: app,
-            owningTextField: "clipy.settings.retention.storage-mib"
-        )
         confirmStrictPolicy(
             in: owningWindow,
             app: app,
@@ -370,6 +395,32 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
         field.click()
         field.typeKey("a", modifierFlags: .command)
         field.typeText(text)
+    }
+
+    /// SwiftUI's grouped Form exposes offscreen descendants as existing even
+    /// though macOS cannot compute a hit point for them. Move the real owning
+    /// scroll view in bounded wheel increments until the requested control is
+    /// actually visible; no coordinate outside that public view is guessed.
+    @MainActor
+    @discardableResult
+    private func scrollUntilHittable(
+        _ element: XCUIElement,
+        in scrollView: XCUIElement,
+        app: XCUIApplication,
+        context: String
+    ) -> Bool {
+        for _ in 0..<8 {
+            if element.exists && element.isHittable {
+                return true
+            }
+            scrollView.scroll(byDeltaX: 0, deltaY: -50)
+        }
+        let result = element.exists && element.isHittable
+        XCTAssertTrue(
+            result,
+            diagnostic(app, context: "\(context) did not scroll into view")
+        )
+        return result
     }
 
     @MainActor

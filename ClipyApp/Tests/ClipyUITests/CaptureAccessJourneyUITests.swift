@@ -327,12 +327,17 @@ final class CaptureAccessJourneyUITests: XCTestCase {
         ) else { return }
         moreActions.click()
 
-        let pause = app.descendants(matching: .any)["clipy.capture.pause"]
+        let identifiedPause = app.descendants(matching: .any)[
+            "clipy.capture.pause"
+        ]
+        let pause = app.menuItems[
+            "Pause Clipboard Monitoring for 5 Minutes"
+        ]
         guard assertEventually(
             {
-                pause.exists
+                identifiedPause.exists
+                    && pause.exists
                     && pause.isHittable
-                    && pause.label.contains("5 Minutes")
             },
             in: app,
             message: "Pause did not disclose its five-minute product window."

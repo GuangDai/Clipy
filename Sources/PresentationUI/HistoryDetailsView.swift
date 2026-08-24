@@ -572,6 +572,7 @@ private struct DetailsBody: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(Color.primary.opacity(0.06), in: Capsule())
+                .accessibilityLabel("Unpinned")
                 .accessibilityIdentifier("clipy.details.pin-status")
         }
     }
