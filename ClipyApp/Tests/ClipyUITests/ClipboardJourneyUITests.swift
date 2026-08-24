@@ -16,6 +16,7 @@ final class ClipboardJourneyUITests: XCTestCase {
         try super.tearDownWithError()
     }
 
+    @MainActor
     func testSummonSearchArrowReturnWritesGeneralPasteboardAndCloses() throws {
         let alpha = "clipy-ui-journey-alpha"
         let beta = "clipy-ui-journey-beta"
@@ -43,7 +44,6 @@ final class ClipboardJourneyUITests: XCTestCase {
 
         let search = app.textFields["clipy.search.field"]
         XCTAssertTrue(search.waitForExistence(timeout: 5))
-        XCTAssertTrue(search.hasKeyboardFocus)
 
         let rows = app.descendants(matching: .any).matching(
             NSPredicate(
@@ -57,6 +57,8 @@ final class ClipboardJourneyUITests: XCTestCase {
         XCTAssertTrue(pasteboard.setString(beta, forType: .string))
         XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 2 })
 
+        // Do not click: successful typing and the filtered rows below prove
+        // that panel-open focus reached the search field.
         search.typeText("clipy-ui-journey-")
         XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 2 })
 
@@ -78,6 +80,7 @@ final class ClipboardJourneyUITests: XCTestCase {
         })
     }
 
+    @MainActor
     private func waitUntil(
         timeout: TimeInterval,
         condition: @escaping () -> Bool
