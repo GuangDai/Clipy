@@ -706,21 +706,24 @@ public struct HistoryPanelView: View {
 
     // MARK: Hidden shortcuts
 
-    /// Esc clears the search term first; with no search text it asks the
-    /// hosting panel to close (Maccy's KeyChord `.escape` → `close`,
-    /// adapted: a non-empty query keeps its clear-first behavior).
+    /// At the list root, Esc clears the search term first and otherwise asks
+    /// the hosting panel to close (Maccy's KeyChord `.escape` → `close`). A
+    /// pushed Details/editor destination owns Esc itself; retaining this root
+    /// shortcut there would bypass the editor's dirty-discard confirmation.
     /// ⌃Space toggles the preview pane for the current selection (Maccy's
     /// `togglePreview` default chord).
     private var hiddenShortcuts: some View {
         Group {
-            Button("Clear Search or Close") {
-                if viewState.isSearchActive {
-                    viewState.clearSearch()
-                } else {
-                    onRequestClose()
+            if surfaceState.detailsPath.isEmpty {
+                Button("Clear Search or Close") {
+                    if viewState.isSearchActive {
+                        viewState.clearSearch()
+                    } else {
+                        onRequestClose()
+                    }
                 }
+                .keyboardShortcut(.cancelAction)
             }
-            .keyboardShortcut(.cancelAction)
 
             Button("Toggle Preview") {
                 previewState.togglePreview(for: previewSelection.reference)
