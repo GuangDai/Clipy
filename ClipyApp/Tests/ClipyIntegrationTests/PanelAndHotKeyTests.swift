@@ -25,25 +25,36 @@ struct PanelSubmitDecisionTests {
             eventType: .keyDown,
             keyCode: UInt16(kVK_Return),
             modifierFlags: [],
-            hasMarkedText: false
+            hasMarkedText: false,
+            isAtListRoot: true
         ))
         #expect(!PanelSubmitDecision.shouldSubmit(
             eventType: .keyDown,
             keyCode: UInt16(kVK_Return),
             modifierFlags: [],
-            hasMarkedText: true
+            hasMarkedText: true,
+            isAtListRoot: true
         ))
         #expect(!PanelSubmitDecision.shouldSubmit(
             eventType: .keyDown,
             keyCode: UInt16(kVK_Return),
             modifierFlags: .command,
-            hasMarkedText: false
+            hasMarkedText: false,
+            isAtListRoot: true
         ))
         #expect(!PanelSubmitDecision.shouldSubmit(
             eventType: .keyUp,
             keyCode: UInt16(kVK_ANSI_KeypadEnter),
             modifierFlags: [],
-            hasMarkedText: false
+            hasMarkedText: false,
+            isAtListRoot: true
+        ))
+        #expect(!PanelSubmitDecision.shouldSubmit(
+            eventType: .keyDown,
+            keyCode: UInt16(kVK_Return),
+            modifierFlags: [],
+            hasMarkedText: false,
+            isAtListRoot: false
         ))
     }
 }

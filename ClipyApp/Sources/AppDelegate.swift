@@ -249,6 +249,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 onPreviewPlacementChange: { [weak self] placement in
                     self?.previewPlacement = placement
                 },
+                isSelectionSubmissionEnabled: { [weak self] in
+                    self?.panelSurfaceState?.isAtListRoot == true
+                },
                 onSubmitSelection: { [weak self] in
                     self?.submitPanelSelection()
                 },

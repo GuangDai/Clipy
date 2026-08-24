@@ -19,7 +19,8 @@ enum PanelSubmitDecision {
         eventType: NSEvent.EventType,
         keyCode: UInt16,
         modifierFlags: NSEvent.ModifierFlags,
-        hasMarkedText: Bool
+        hasMarkedText: Bool,
+        isAtListRoot: Bool
     ) -> Bool {
         let disallowedModifiers: NSEvent.ModifierFlags = [
             .command, .control, .option,
@@ -29,6 +30,7 @@ enum PanelSubmitDecision {
                 || keyCode == UInt16(kVK_ANSI_KeypadEnter))
             && modifierFlags.intersection(disallowedModifiers).isEmpty
             && !hasMarkedText
+            && isAtListRoot
     }
 }
 
@@ -58,6 +60,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// view state, reset the preview pane).
     private let onPanelClosed: () -> Void
     private let onSubmitSelection: () -> Void
+    private let isSelectionSubmissionEnabled: () -> Bool
 
     /// Publishes geometry's placement decision to AppDelegate so the hosted
     /// HistoryPanelView orders its columns from the same value.
@@ -71,11 +74,13 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         rootView: PanelRootView,
         previewState: PreviewPaneState,
         onPreviewPlacementChange: @escaping (PreviewPlacement) -> Void,
+        isSelectionSubmissionEnabled: @escaping () -> Bool = { true },
         onSubmitSelection: @escaping () -> Void = {},
         onClosed: @escaping () -> Void
     ) {
         self.previewState = previewState
         self.onPreviewPlacementChange = onPreviewPlacementChange
+        self.isSelectionSubmissionEnabled = isSelectionSubmissionEnabled
         self.onSubmitSelection = onSubmitSelection
         self.onPanelClosed = onClosed
         super.init(
@@ -131,7 +136,8 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
             eventType: event.type,
             keyCode: event.keyCode,
             modifierFlags: event.modifierFlags,
-            hasMarkedText: hasMarkedText
+            hasMarkedText: hasMarkedText,
+            isAtListRoot: isSelectionSubmissionEnabled()
         ) else {
             super.sendEvent(event)
             return

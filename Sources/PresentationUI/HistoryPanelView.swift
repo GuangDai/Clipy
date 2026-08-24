@@ -116,6 +116,7 @@ public final class HistoryPanelSurfaceState {
     public private(set) var appliedPurgeGeneration = 0
     public private(set) var sessionGeneration = 0
     public private(set) var isSessionActive = false
+    public var isAtListRoot: Bool { detailsPath.isEmpty }
     package private(set) var detailsPurgeGeneration = 0
 
     private let previewState: PreviewPaneState
