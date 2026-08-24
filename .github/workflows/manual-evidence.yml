@@ -1,0 +1,26 @@
+name: Manual exact and scale evidence
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manual-exact-scale-evidence-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  correctness:
+    name: Same-SHA correctness admission
+    uses: ./.github/workflows/correctness.yml
+
+  exact-matcher:
+    name: Exact matcher Release A/B evidence
+    needs: correctness
+    uses: ./.github/workflows/exact-matcher.yml
+
+  scale-admission:
+    name: 5,000-row scale admission evidence
+    needs: correctness
+    uses: ./.github/workflows/performance-admission.yml
