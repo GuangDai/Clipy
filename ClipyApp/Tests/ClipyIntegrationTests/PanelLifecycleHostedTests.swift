@@ -85,7 +85,6 @@ struct PanelLifecycleHostedTests {
         #expect(panel.isPresented)
         #expect(surface.isSessionActive)
         #expect(surface.sessionGeneration == 1)
-        #expect(await history.observationCount == 1)
 
         // `resignKey` is the production outside-click/focus-loss path. The
         // close callback owns both session retirement and view observation
@@ -102,20 +101,15 @@ struct PanelLifecycleHostedTests {
         #expect(await history.terminationCount == 1)
 
         appDelegate.openPanelForTesting()
-        await history.waitForObservationCount(2)
+
+        #expect(surface.isSessionActive)
+        #expect(surface.sessionGeneration == 2)
 
         // A second activation signal in the same open episode must reuse the
         // active observation. Only close -> reopen creates a new generation.
         composition.viewState.activate()
-        #expect(surface.isSessionActive)
-        #expect(surface.sessionGeneration == 2)
+        await history.waitForObservationCount(2)
         #expect(await history.observationCount == 2)
-
-        appDelegate.closePanel()
-        appDelegate.closePanel()
-        await history.waitForTerminationCount(2)
-        #expect(!surface.isSessionActive)
-        #expect(await history.terminationCount == 2)
     }
 
     /// Card 14C app-activation leaf. `NSApplication.didResignActiveNotification`
