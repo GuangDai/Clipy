@@ -30,7 +30,7 @@ thumbnails.
   run on any platform; everything else (including
   `scripts/public_symbol_snapshot.sh`) needs macOS + `xcrun`.
 
-**Current state (2026-08-24, `master` through PR #35):** steps 0–9 are
+**Current state (2026-08-24, `master` through PR #36):** steps 0–9 are
 done and CI-green (scaffold + gates, `HistoryCore` public surface,
 `HistoryDomain` pure core, dependency pins, schema v1 + codecs,
 `HistoryAuthority` capture/mutations/reads/observation/thumbnail, product
@@ -58,8 +58,11 @@ Exact A/B green with all 13 thresholds passing and the full 5,000-row scale
 admission green; both remain record-only evidence. Batch 33's Card 9B
 external-remove purge and bounded Card 15C/15D accessibility leaves landed in
 PR #35 (merge `10decae`; final PR run 32688665740; master run 32688965362
-attempt 2). Batch 34 is the current PR work: one running-app XCUI panel tracer
-and an independent unsigned Release archive identity contract.
+attempt 2). Batch 34's first running-app XCUI panel tracer and independent
+unsigned Release archive identity source contract landed in PR #36 (merge
+`2bc4a8e`; final PR run 32691964885 attempt 2; master run 32692472789). The
+XCUI leaf is green; Card 16A remains Partial pending a protected-tag archive.
+Batch 35 is closing the generic Local Automation enrollment bypass.
 Both dispatch-only physical-evidence cells are green on `master` as of
 2026-08-23: the General pasteboard cross-process run 32632263996 and the
 Card 6B APFS ENOSPC capture-transaction run 32636093920 (the latter via
