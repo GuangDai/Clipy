@@ -298,6 +298,69 @@ struct ThumbnailStoreTests {
         #expect(store.inFlightCount == 0)
     }
 
+    /// The external-ingress handoff enters the same panel owner used by local
+    /// receipts. An item-scoped remove fences every old-version target flight,
+    /// preserves unrelated work, and immediately permits a same-key refetch.
+    @Test func externalRemovePurgeFencesTargetFlightThroughPanelOwner() async throws {
+        let removed = reference(
+            "00000000-0000-0000-0000-0000000000DA",
+            version: 1
+        )
+        let unrelated = reference(
+            "00000000-0000-0000-0000-0000000000DB",
+            version: 1
+        )
+        let history = PausableThumbnailHistory()
+        let viewState = HistoryViewState(history: history)
+        let previewState = PreviewPaneState(autoOpenDelay: .zero)
+        let surface = HistoryPanelSurfaceState(
+            history: history,
+            previewState: previewState
+        )
+        let store = surface.thumbnails
+
+        store.prefetch(removed)
+        store.prefetch(unrelated)
+        try #require(await pollUntil { await history.requestCount == 2 })
+
+        let purge = viewState.acceptCommittedExternalRemoval(removed.id)
+        surface.apply(purge)
+        #expect(store.purgeGeneration == 1)
+        #expect(store.inFlightCount == 1)
+
+        store.prefetch(removed)
+        try #require(await pollUntil { await history.requestCount == 3 })
+        #expect(
+            await history.completeRequest(
+                for: removed,
+                with: .success(fixturePNGData)
+            )
+        )
+        #expect(
+            await history.completeRequest(
+                for: unrelated,
+                with: .success(fixturePNGData)
+            )
+        )
+        try #require(await pollUntil {
+            store.debugFetchCompletionCount == 2
+                && store.imagePixelSize(for: unrelated) != nil
+        })
+        #expect(store.imagePixelSize(for: removed) == nil)
+        #expect(store.debugDiscardedFetchCompletionCount == 1)
+        #expect(store.inFlightCount == 1)
+
+        #expect(
+            await history.completeRequest(
+                for: removed,
+                occurrence: 1,
+                with: .success(fixturePNGData)
+            )
+        )
+        #expect(await pollUntil { store.imagePixelSize(for: removed) != nil })
+        #expect(store.inFlightCount == 0)
+    }
+
     /// Thumbnail entries intentionally carry no pin metadata. Clear
     /// Unpinned therefore performs an owner-local rebuildable reset: every
     /// flight is fenced instead of guessing which exact references are pinned.

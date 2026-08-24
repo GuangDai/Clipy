@@ -64,17 +64,17 @@ package struct PreviewSelectionResolution: Equatable {
     }
 }
 
-/// State owned by one hosted panel surface and purged only after
+/// State owned by one AppDelegate-hosted panel surface and purged only after
 /// `HistoryViewState` publishes a receipt-confirmed destructive/effective
 /// commit (review Card 9B). Keeping the coordination beside the panel avoids
 /// a global cache bus: navigation, selection, preview, and thumbnail storage
 /// all have the same lifetime and one monotonic applied generation.
 @MainActor @Observable
-package final class HistoryPanelSurfaceState {
+public final class HistoryPanelSurfaceState {
     package var detailsPath: [HistoryItemReference] = []
     package var selection: HistoryItemID?
     package let thumbnails: ThumbnailStore
-    package private(set) var appliedPurgeGeneration = 0
+    public private(set) var appliedPurgeGeneration = 0
     package private(set) var detailsPurgeGeneration = 0
 
     private let previewState: PreviewPaneState
@@ -89,11 +89,26 @@ package final class HistoryPanelSurfaceState {
         appliedPurgeGeneration = baselinePurgeGeneration
     }
 
+    /// Composition-root initializer for the one AppDelegate-owned panel
+    /// surface. PresentationUI reads the current purge baseline internally so
+    /// a surface created after an earlier commit never replays stale work.
+    public convenience init(
+        viewState: HistoryViewState,
+        previewState: PreviewPaneState
+    ) {
+        self.init(
+            history: viewState.history,
+            previewState: previewState,
+            baselinePurgeGeneration:
+                viewState.surfacePurge?.generation ?? 0
+        )
+    }
+
     /// Applies each monotonic purge at most once. Clear All removes all local
     /// state; Clear Unpinned also retires rebuildable derived navigation state
     /// because pre-receipt pin state is not authoritative. Remove scopes to
     /// one item; Revise scopes to the old exact reference.
-    package func apply(_ purge: HistorySurfacePurge) {
+    public func apply(_ purge: HistorySurfacePurge) {
         guard purge.generation > appliedPurgeGeneration else { return }
         let expectedGeneration = appliedPurgeGeneration + 1
         appliedPurgeGeneration = purge.generation
@@ -135,9 +150,10 @@ package final class HistoryPanelSurfaceState {
 }
 
 /// The composition point ClipyApp hosts inside its floating panel window.
-/// Owns the reference-exact `ThumbnailStore` (created from
-/// `viewState.history`; 01 §5.7), the hoisted list selection, and the
-/// panel's details navigation: the stack root is the list and
+/// Receives the one AppDelegate-owned `HistoryPanelSurfaceState` in production
+/// (previews/tests may construct the same type locally). That state owns the
+/// reference-exact `ThumbnailStore`, hoisted list selection, and panel details
+/// navigation: the stack root is the list and
 /// `HistoryItemReference` values push `HistoryDetailsView`.
 ///
 /// The preview pane (`PreviewPaneState`) is INJECTED by the composition
@@ -165,6 +181,7 @@ public struct HistoryPanelView: View {
     public init(
         viewState: HistoryViewState,
         previewState: PreviewPaneState,
+        surfaceState: HistoryPanelSurfaceState? = nil,
         previewPlacement: PreviewPlacement = .trailing,
         onOpenSettings: @escaping () -> Void = {},
         onQuit: @escaping () -> Void = {},
@@ -179,7 +196,7 @@ public struct HistoryPanelView: View {
         self.onRequestClose = onRequestClose
         self.onPreviewVisibilityChange = onPreviewVisibilityChange
         _surfaceState = State(
-            initialValue: HistoryPanelSurfaceState(
+            initialValue: surfaceState ?? HistoryPanelSurfaceState(
                 history: viewState.history,
                 previewState: previewState,
                 baselinePurgeGeneration: viewState.surfacePurge?.generation ?? 0

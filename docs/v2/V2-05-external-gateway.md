@@ -508,12 +508,15 @@ X1 (`V2-00` §3) and X2 (`V2-00` §3) bundle onto one substrate:
    connection is the **App Intents surface** (Siri / Shortcuts / Spotlight); the
    grant is the user's consent, not a cryptographic credential (§3.3).
 3. **App Intents exposure (X1).** A set of `AppIntent` conformances in `ClipyApp`
-   (the composition root) that resolve a capability-scoped `ExternalHistory`
-   facade via `@Dependency` and `await` it in `perform()` (pending verification under `X-COMPILE-2` / `X-SECURITY-1`; `V2-facts.md`
+   (the composition root) that resolve one app-local `AppIntentHistoryIngress`
+   via `@Dependency` and `await` it in `perform()` (pending verification under `X-COMPILE-2` / `X-SECURITY-1`; `V2-facts.md`
    cycle 6, facts 1–4). At the earliest launch entry, before awaiting store
-   open, `ClipyApp` registers one asynchronous facade provider into
+   open, `ClipyApp` registers one asynchronous ingress provider into
    `AppDependencyManager.shared`; it awaits the same composition-open work as
-   the UI and then returns `makeAppIntentsHistoryFacade()`'s value (§6.5).
+   the UI. The ingress contains `makeAppIntentsHistoryFacade()`'s exact value
+   plus one MainActor committed-remove sink owned by the composition root;
+   that sink synchronously applies the one AppDelegate-owned real panel surface
+   (§6.5); it owns no grant, audit, or History policy.
    Every write still delegates to `HistoryAuthority`. `@Dependency` is App
    Intents' mandated DI mechanism, NOT
    a banned `.shared`/`.current` service locator — justification and carve-out
@@ -2037,9 +2040,12 @@ performs validation off-Authority (bounds, ID shape) and delegates the grant
 load + dispatch + audit to the Authority inside one non-suspending interval per
 phase, mirroring V2-01's `EnrichmentScheduler` (coordinates, never creates a
 context, `V2-01` §6.3) and V2-03's `ChangeJournal` reader (delegates every
-durable read to the Authority, `V2-03` §6.2). The `@Dependency`-resolved facade
-the App Intents consume is a thin `Sendable` struct holding the gateway ref +
-the baked-in `connectionID` (§6.5).
+durable read to the Authority, `V2-03` §6.2). The Storage-owned
+`ExternalHistoryFacade` remains the thin public `Sendable` value holding the
+gateway ref + baked-in `connectionID`. `ClipyApp` wraps that exact value in one
+internal `Sendable` `AppIntentHistoryIngress` solely to order a positive
+external remove before the already-existing AppDelegate-owned real panel
+surface purge (§6.5).
 
 ### 6.3 Direct authoritative targeted access (no forwarding actor)
 
@@ -2172,17 +2178,20 @@ by four controls:
    constructs `HistoryAuthority` **inside**
    `SwiftDataHistory.open(configuration:)` (`05` §2); `ClipyApp` constructs
    `SwiftDataHistory` and never receives an Authority reference (see below).
-   What is registered into `AppDependencyManager.shared` is a
-   **capability-scoped `ExternalHistory` facade** — a thin `Sendable` struct
-   that holds a `Sendable` reference to the gateway actor and a baked-in
-   `ExternalConnectionID`. The facade creates no `ModelContext` and routes
-   every write back through `HistoryAuthority`. There is no path from the
-   facade to a writable context except through the single writer (D32).
-2. **The facade provider is registered at the composition root before the
+   What is registered into `AppDependencyManager.shared` is one app-local
+   **`AppIntentHistoryIngress`**. It contains the capability-scoped
+   `ExternalHistoryFacade` and a content-free MainActor removal sink into the
+   one AppDelegate-owned `HistoryPanelSurfaceState`. The
+   facade creates no `ModelContext` and routes every write back through
+   `HistoryAuthority`; the sink runs only after `.remove(id)` returns
+   `.removed(count > 0)` and before the Intent returns. Neither value can
+   reach a writable context except through the single writer (D32).
+2. **The ingress provider is registered at the composition root before the
    first store-opening suspension.** `ClipyApp` (`01` §2 sole composition
    root) installs exactly one asynchronous provider at its earliest launch
    entry. That provider awaits the same single composition-open work used by
-   the UI and returns that open's connection-bound facade; it never calls
+   the UI and returns that open's app-owned ingress over the connection-bound
+   facade; it never calls
    `SwiftDataHistory.open` independently and cannot create a second writer.
    The dependency is not constructed by an App Intent. This preserves the
    composition-root-injection intent of `01` §8 while avoiding a cold-launch
@@ -2214,13 +2223,14 @@ carve-out is the single sanctioned registration under that amended rule, not a
 pending exception. `AppDependencyManager
 .shared` is framework-owned DI infrastructure the app populates once at the
 composition root, not app authority (control 3 above). The exception is scoped to
-exactly **one asynchronous provider registration** (for the
-`ExternalHistoryFacade`) in exactly **one site**
+exactly **one asynchronous provider registration** (for
+`AppIntentHistoryIngress`) in exactly **one site**
 (`ClipyApp`) with no app-owned authoritative locator, no second writer, and no
 bypass. The literal `.shared` spelling of `AppDependencyManager.shared` would
 trip a naive grep for `01` §8 violations; the §9 source gate is amended to
 **permit** the single `AppDependencyManager.shared` registration in `ClipyApp`
-(and only there, only for the `ExternalHistoryFacade`) and to continue rejecting
+(and only there, only for the app-owned ingress containing the one
+`ExternalHistoryFacade`) and to continue rejecting
 every other `.shared`/`.current` spelling. Proof gate `X-COMPILE-2` confirms the
 facade compiles `Sendable` under Swift 6 strict concurrency, delegates every
 write to `HistoryAuthority`, and resolves from the out-of-package `ClipyApp`
@@ -2231,10 +2241,10 @@ target (CRIT-M3 / CRIT-M4).
 let compositionOpen = makeTheSingleCompositionOpenWork()
 AppDependencyManager.shared.add(dependency: {                      // the ONE permitted .shared use
     let composition = try await compositionOpen.value
-    return composition.appIntentsHistoryFacade                     // Sendable; validated connectionID baked in
+    return composition.appIntentHistoryIngress // Sendable facade + exact post-commit UI sink
 })
-// The UI and the provider await the SAME open work. App Intents resolve
-// `@Dependency var history: ExternalHistoryFacade` via this registry.
+// The UI and the provider await the SAME open work. App Intents resolve one
+// `@Dependency var history: AppIntentHistoryIngress` via this registry.
 ```
 
 `makeAppIntentsHistoryFacade()` is a **`public`, synchronous, no-argument**
@@ -2253,8 +2263,12 @@ internal to `HistoryStorage` exactly as v1 requires (`05` §2).
 `ExternalHistoryFacade` is itself a **`public` `Sendable` struct** — a `let`
 gateway (`actor`, hence `Sendable`) + a `let connectionID` (`Sendable`). The
 conformance is derived without `@unchecked Sendable`. It conforms to
-`ExternalHistory` by delegating to the gateway with the baked-in connection ID,
-which is why `@Dependency` is typed `ExternalHistoryFacade` in `ClipyApp`.
+`ExternalHistory` by delegating to the gateway with the baked-in connection ID.
+`ClipyApp`'s internal `AppIntentHistoryIngress` also conforms to
+`ExternalHistory`: reads delegate unchanged; mutations first await the facade,
+then only a positive remove awaits `HistoryViewState`'s exact item purge before
+returning. Pin, unpin, unchanged, and failure publish no purge. This adapter is
+presentation coordination, not another Gateway or writer.
 `SwiftDataHistory` itself does not conform to `ExternalHistory`; callers must
 obtain this explicitly bound facade.
 
@@ -2301,7 +2315,7 @@ struct SearchHistoryIntent: AppIntent {
     )
     var limit: Int   // bounds enforced at the gateway (D35); 1...500 (06 §2).
 
-    @Dependency private var history: ExternalHistoryFacade   // connection-scoped
+    @Dependency private var history: AppIntentHistoryIngress // app-local; contains connection-scoped facade
 
     func perform() async throws -> some IntentResult & ReturnsValue<[ClipboardHistoryItemEntity]> {
         let result = try await history.read(

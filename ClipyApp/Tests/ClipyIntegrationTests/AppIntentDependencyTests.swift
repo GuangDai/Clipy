@@ -31,14 +31,17 @@ struct AppIntentDependencyTests {
             in: manager
         ) {
             let history = try await openGate.awaitHistory(historyTask)
-            return history.makeAppIntentsHistoryFacade()
+            return AppIntentHistoryIngress(
+                facade: history.makeAppIntentsHistoryFacade(),
+                onCommittedRemoval: { _ in }
+            )
         }
 
         // Logical cold path: registration happens after the sole real-store
         // open task exists but before its gate is released. The first
         // resolution enters the async provider and waits on that exact task;
         // no second History/store is constructed.
-        let firstResolution = Task<ExternalHistoryFacade, Error> {
+        let firstResolution = Task<AppIntentHistoryIngress, Error> {
             try await resolve()
         }
         await openGate.waitUntilParked()
@@ -97,7 +100,7 @@ struct AppIntentDependencyTests {
         let manager = AppDependencyManager()
         let resolve = AppIntentDependencyRegistration.register(
             in: manager
-        ) { () async throws -> ExternalHistoryFacade in
+        ) { () async throws -> AppIntentHistoryIngress in
             throw HistoryFailure.persistence(.openStore)
         }
 

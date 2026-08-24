@@ -28,10 +28,12 @@ struct PanelRootView: View {
 
     var body: some View {
         Group {
-            if let composition = appDelegate.composition {
+            if let composition = appDelegate.composition,
+               let surfaceState = appDelegate.panelSurfaceState {
                 HistoryPanelView(
                     viewState: composition.viewState,
                     previewState: appDelegate.previewState,
+                    surfaceState: surfaceState,
                     previewPlacement: appDelegate.previewPlacement,
                     onOpenSettings: {
                         // Activate first (the old `openSettingsWindow`

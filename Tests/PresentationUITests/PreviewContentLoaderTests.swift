@@ -404,6 +404,10 @@ struct PreviewContentLoaderTests {
         _ = await task.value
         #expect(loader.phase == .content(.image))
         #expect(loader.appliedImageSize == CGSize(width: 1, height: 1))
+        #expect(
+            loader.appliedImageAccessibilityLabel
+                == "Image preview, 1 by 1 pixels"
+        )
     }
 
     /// A supported image type whose decoder cannot produce an artifact lands

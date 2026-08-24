@@ -17,6 +17,14 @@
 - **Lifecycle:** process-wide single `SwiftDataHistory`; no `.shared`/`.current` service locator; guard against a second `open` over the same persistent URL — an implementation responsibility inferred from Part I §8's no-second-writer rule (not stated verbatim by any single spec section).
 - **Paste orchestration:** `history.pastePayload(for:)` → `PasteboardAdapter.write(payload)` — the only History→pasteboard hand-off, kept outside the History transaction (Part I §5.6; Part IV §8; 03b §12).
 - **Dependency injection:** supplies `any ClipboardHistory` (production = `SwiftDataHistory`, previews = scripted adapter) to the UI without leaking Storage/Domain types (Part I §2, §4).
+- **External surface coherence:** one internal `AppIntentHistoryIngress`
+  contains the existing connection-bound `ExternalHistoryFacade`. A positive
+  external remove asks `HistoryViewState` to mint the exact purge, then awaits
+  the AppDelegate-owned real `HistoryPanelSurfaceState.apply` through one
+  app-local relay before the Intent returns; pin/unpin/unchanged/failure do not
+  purge. This is
+  the composition join between two existing owners, not a second Gateway,
+  writer, change feed, or global cache bus (REVIEW Card 9B).
 
 ## Acceptance
 
@@ -24,6 +32,10 @@
 - XcodeGen-produced app target builds; the SwiftPM library graph stays package-owned (Part I §9 item 6).
 - `ClipyIntegrationTests`: a second `open()` over an already-open persistent URL is detected and rejected — it does not create a second writer or `ModelContext` (Part I §8).
 - Negative (Part I §8): ClipyApp makes no Domain decision and creates no duplicate persistence path; it does not pass a business ID to `registeredModel(for:)`; it holds no second writer or UI-bound `ModelContext`.
+- `ClipyIntegrationTests`: with a real in-memory Authority and post-commit
+  observation deliberately held, an authorized `RemoveItemIntent` returns
+  only after the exact stale row is removed; an unrelated row survives and a
+  no-op external mutation publishes no purge.
 
 ## Risks / notes
 

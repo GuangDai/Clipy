@@ -91,6 +91,14 @@ package final class PreviewContentLoader {
         raster.map { CGSize(width: $0.width, height: $0.height) }
     }
 
+    /// Literal semantic dimensions for Card 15C. The value comes from the
+    /// bounded eager artifact, never by retaining or introspecting a
+    /// `CGImage`/`NSImage` accessibility object.
+    package var appliedImageAccessibilityLabel: String? {
+        guard let raster else { return nil }
+        return "Image preview, \(raster.width) by \(raster.height) pixels"
+    }
+
     private let history: any ClipboardHistory
 
     private let renderer = ContentPreview()
@@ -277,15 +285,18 @@ public struct HistoryPreviewView: View {
                     .accessibilityLabel("Loading preview")
             case .content(.image):
                 if let raster = loader.raster,
+                   let accessibilityLabel =
+                    loader.appliedImageAccessibilityLabel,
                    let image = PreviewRasterDisplay.image(
                        raster,
                        scale: 1,
-                       label: Text("Item preview")
+                       label: Text(accessibilityLabel)
                    ) {
                     image
                         .resizable()
                         .scaledToFit()
                         .padding(8)
+                        .accessibilityIdentifier("clipy.preview.image")
                 } else {
                     failedBody
                 }

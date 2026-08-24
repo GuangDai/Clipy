@@ -30,7 +30,7 @@ thumbnails.
   run on any platform; everything else (including
   `scripts/public_symbol_snapshot.sh`) needs macOS + `xcrun`.
 
-**Current state (2026-08-24, `master` through PR #33):** steps 0–9 are
+**Current state (2026-08-24, `master` through PR #34):** steps 0–9 are
 done and CI-green (scaffold + gates, `HistoryCore` public surface,
 `HistoryDomain` pure core, dependency pins, schema v1 + codecs,
 `HistoryAuthority` capture/mutations/reads/observation/thumbnail, product
@@ -42,14 +42,23 @@ and the External Gateway ladder X.2–X.7 (public contract, V3 schema +
 deny-by-default bootstrap, X.4 audit/admin substrate, X.5 denial/
 admission, X-HCR V4 substrate + atomic-evidence proofs, X.6 positive
 reads/writes + the public connection-bound `ExternalHistoryFacade`, and
-X.7 App Intents composition — six intents behind one async facade
-provider registered before store open, `supportedModes = [.background]`,
+X.7 App Intents composition — six intents behind one async app-owned ingress
+provider registered before store open; it contains the one connection-bound
+facade and joins positive external removal to the existing panel purge owner,
+`supportedModes = [.background]`,
 output-only entities, no `EntityQuery`, confined to `ClipyApp/Sources`).
 `DEC-RET-READ` and its bounded Settings consumer/persistent readback closure
 landed in PR #32 (merge `1c221e6`; master run 32678654503).
 `DEC-PREVIEW-TARGET` and the concrete package-only `ContentPreview` deep
 module landed in PR #33 (merge `ffd0e9f`; final PR run 32682438863; master
 run 32682682345).
+GOV-1's manual exact/scale caller landed in PR #34 (merge `f48d87f`; PR run
+32684566664; master run 32684916238). Its same-SHA manual run 32685185124 has
+Exact A/B green with all 13 thresholds passing and the full 5,000-row scale
+admission green; both remain record-only evidence. Batch 33 is implementing
+Card 9B external-remove purge plus bounded
+Card 15C/15D accessibility leaves; treat those source changes as unlanded
+until their PR and master correctness runs are recorded.
 Both dispatch-only physical-evidence cells are green on `master` as of
 2026-08-23: the General pasteboard cross-process run 32632263996 and the
 Card 6B APFS ENOSPC capture-transaction run 32636093920 (the latter via

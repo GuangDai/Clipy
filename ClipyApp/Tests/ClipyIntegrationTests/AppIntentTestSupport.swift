@@ -6,10 +6,11 @@ import Foundation
 import HistoryCore
 import HistoryStorage
 import Testing
+@testable import ClipyApp
 
 struct AppIntentTestSupport {
     let history: SwiftDataHistory
-    let facade: ExternalHistoryFacade
+    let ingress: AppIntentHistoryIngress
     let manager: AppDependencyManager
     let itemID: HistoryItemID
 
@@ -42,11 +43,15 @@ struct AppIntentTestSupport {
         }
 
         let facade = history.makeAppIntentsHistoryFacade()
+        let ingress = AppIntentHistoryIngress(
+            facade: facade,
+            onCommittedRemoval: { _ in }
+        )
         let manager = AppDependencyManager()
-        manager.add(dependency: facade)
+        manager.add(dependency: ingress)
         return Self(
             history: history,
-            facade: facade,
+            ingress: ingress,
             manager: manager,
             itemID: reference.id
         )

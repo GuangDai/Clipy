@@ -17,7 +17,7 @@ struct AppIntentBehaviorTests {
             query: "intent-seed",
             mode: .exact,
             limit: 20,
-            history: support.facade,
+            history: support.ingress,
             dependencyManager: support.manager
         )
 
@@ -35,7 +35,7 @@ struct AppIntentBehaviorTests {
         let support = try await AppIntentTestSupport.make(grants: [.readContent])
         let intent = GetItemDetailsIntent(
             itemID: support.itemID.description,
-            history: support.facade,
+            history: support.ingress,
             dependencyManager: support.manager
         )
 
@@ -59,7 +59,7 @@ struct AppIntentBehaviorTests {
         let intent = PasteItemIntent(
             itemID: support.itemID.description,
             pasteboardName: pasteboardName,
-            history: support.facade,
+            history: support.ingress,
             dependencyManager: support.manager
         )
 
@@ -84,7 +84,7 @@ struct AppIntentBehaviorTests {
         let support = try await AppIntentTestSupport.make(grants: [.manage])
         let intent = PinItemIntent(
             itemID: support.itemID.description,
-            history: support.facade,
+            history: support.ingress,
             dependencyManager: support.manager
         )
 
@@ -97,10 +97,10 @@ struct AppIntentBehaviorTests {
     @Test("Unpin returns whether state changed")
     func unpin() async throws {
         let support = try await AppIntentTestSupport.make(grants: [.manage])
-        _ = try await support.facade.perform(.pin(support.itemID))
+        _ = try await support.ingress.perform(.pin(support.itemID))
         let intent = UnpinItemIntent(
             itemID: support.itemID.description,
-            history: support.facade,
+            history: support.ingress,
             dependencyManager: support.manager
         )
 
@@ -115,7 +115,7 @@ struct AppIntentBehaviorTests {
         let support = try await AppIntentTestSupport.make(grants: [.manage])
         let intent = RemoveItemIntent(
             itemID: support.itemID.description,
-            history: support.facade,
+            history: support.ingress,
             dependencyManager: support.manager
         )
 

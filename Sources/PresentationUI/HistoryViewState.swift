@@ -14,12 +14,14 @@ import HistoryCore
 import SwiftUI
 
 /// One receipt-confirmed invalidation for state owned by a single panel
-/// surface (deep review Card 9B). This is package-only UI vocabulary, not a
-/// second History event stream: authoritative rows still arrive exclusively
-/// through `observe`; the signal only drops derived presentation state which
-/// must not survive a destructive/effective-content commit.
-package struct HistorySurfacePurge: Equatable {
-    package enum Scope: Equatable {
+/// surface (deep review Card 9B). This narrow public UI coordination value is
+/// visible to the ClipyApp composition boundary, while only PresentationUI
+/// can construct one. It is not a second History event stream: authoritative
+/// rows still arrive exclusively through `observe`; the signal only drops
+/// derived presentation state which must not survive a destructive/effective-
+/// content commit.
+public struct HistorySurfacePurge: Equatable, Sendable {
+    public enum Scope: Equatable, Sendable {
         case all
         case unpinned
         case item(HistoryItemID)
@@ -29,8 +31,8 @@ package struct HistorySurfacePurge: Equatable {
         )
     }
 
-    package let generation: Int
-    package let scope: Scope
+    public let generation: Int
+    public let scope: Scope
 
     package init(generation: Int, scope: Scope) {
         self.generation = generation
@@ -122,6 +124,13 @@ public final class HistoryViewState {
     /// app, which resolves the payload and writes it. Default no-op so
     /// previews need no wiring.
     public var onPaste: @MainActor @Sendable (HistoryItemReference) -> Void = { _ in }
+
+    /// App-shell accessibility handoff for one user-initiated remove whose
+    /// committed receipt has already published its exact surface purge.
+    /// External/background mutations use their own ingress and never invoke
+    /// this callback, avoiding unsolicited or duplicate announcements.
+    public var onCommittedUserRemoval:
+        @MainActor @Sendable (HistorySurfacePurge) -> Void = { _ in }
 
     // MARK: - Pagination/observation bookkeeping (private)
 
@@ -425,6 +434,16 @@ public final class HistoryViewState {
         publishDestructiveRetentionPurge(receipt)
     }
 
+    /// Composition-root handoff for the current external mutation set's only
+    /// content-destructive case. The app-owned ingress calls this after the
+    /// real Gateway has committed a positive remove and before the App Intent
+    /// returns; pin/unpin/no-op/failure never enter this seam (Card 9B).
+    public func acceptCommittedExternalRemoval(
+        _ itemID: HistoryItemID
+    ) -> HistorySurfacePurge {
+        publishExactItemPurge(itemID)
+    }
+
     /// The authoritative configured retention state (docs/v2/V2-07-ux.md
     /// §5.2/§6.3) — the settings tabs' panel-open read, so every control
     /// opens at its persisted value instead of a neutral prefill (audit
@@ -615,10 +634,15 @@ public final class HistoryViewState {
             applyReceiptConfirmedRowPurge(scope)
         }
         let generation = (surfacePurge?.generation ?? 0) + 1
-        surfacePurge = HistorySurfacePurge(
+        let purge = HistorySurfacePurge(
             generation: generation,
             scope: scope
         )
+        surfacePurge = purge
+        if case (.remove, .removed(let count)) = (action, commit.outcome),
+           count > 0 {
+            onCommittedUserRemoval(purge)
+        }
         if scope == .unpinned {
             // Pin state in the held page may trail a just-committed Unpin.
             // Clear every executable row and restart this exact query; only
@@ -640,6 +664,20 @@ public final class HistoryViewState {
         }
         let generation = (surfacePurge?.generation ?? 0) + 1
         surfacePurge = HistorySurfacePurge(generation: generation, scope: .all)
+    }
+
+    private func publishExactItemPurge(
+        _ itemID: HistoryItemID
+    ) -> HistorySurfacePurge {
+        let scope = HistorySurfacePurge.Scope.item(itemID)
+        applyReceiptConfirmedRowPurge(scope)
+        let generation = (surfacePurge?.generation ?? 0) + 1
+        let purge = HistorySurfacePurge(
+            generation: generation,
+            scope: scope
+        )
+        surfacePurge = purge
+        return purge
     }
 
     /// Retires executable list state for precise destructive scopes. Clear
