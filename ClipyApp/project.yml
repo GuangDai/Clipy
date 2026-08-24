@@ -76,6 +76,16 @@ targets:
         product: PasteboardAdapter
       - package: Clipy
         product: PresentationUI
+  ClipyUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - Tests/ClipyUITests
+    settings:
+      SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+      GCC_TREAT_WARNINGS_AS_ERRORS: YES
+    dependencies:
+      - target: ClipyApp
 schemes:
   ClipyApp:
     build:
@@ -85,6 +95,7 @@ schemes:
     test:
       targets:
         - ClipyIntegrationTests
+        - ClipyUITests
   ClipyUDSF0Evidence:
     build:
       targets:

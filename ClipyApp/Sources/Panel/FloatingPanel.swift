@@ -15,9 +15,9 @@ import SwiftUI
 
 /// The panel window. One instance per app run, created lazily on first
 /// open and reused — closing only hides it (Maccy's model: the SwiftUI
-/// content persists across open/close, so `HistoryPanelView`'s `.task`
-/// activate fires once and the panel controller owns per-open
-/// activate/deactivate of the view state).
+/// content persists across open/close. AppDelegate is the only per-open
+/// session/observation owner; the SwiftUI root observes its session generation
+/// only to reconcile selection and first responder (Card 14D).
 @MainActor
 final class FloatingPanel: NSPanel, NSWindowDelegate {
 
