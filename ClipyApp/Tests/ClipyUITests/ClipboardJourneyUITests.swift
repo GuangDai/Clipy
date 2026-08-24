@@ -62,6 +62,14 @@ final class ClipboardJourneyUITests: XCTestCase {
         // that panel-open focus reached the search field.
         search.typeText("clipy-ui-journey-")
         XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 2 })
+        let renderedRows = rows.allElementsBoundByIndex
+        XCTAssertEqual(renderedRows.count, 2)
+        XCTAssertTrue(renderedRows.allSatisfy {
+            $0.elementType == .button
+        })
+        let labels = renderedRows.map(\.label)
+        XCTAssertTrue(labels.contains(where: { $0.contains(alpha) }))
+        XCTAssertTrue(labels.contains(where: { $0.contains(beta) }))
 
         // The replacement search page selects newest beta. Down must move to
         // alpha, making the final byte-exact paste distinguish arrow routing
