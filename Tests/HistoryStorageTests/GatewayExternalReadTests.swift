@@ -69,6 +69,7 @@ struct GatewayExternalReadTests {
 
     private static func makeFixture(
         seedItem: Bool = true,
+        revisedText: String? = nil,
         storageClock: any StorageClock = FixedClock(fixed: epoch)
     ) async throws
         -> Fixture
@@ -106,7 +107,15 @@ struct GatewayExternalReadTests {
                 Issue.record("expected one inserted fixture item")
                 throw HistoryFailure.persistence(.invariantViolation)
             }
-            item = reference
+            if let revisedText {
+                item = try await revise(
+                    reference,
+                    text: revisedText,
+                    using: authority
+                )
+            } else {
+                item = reference
+            }
         } else {
             item = nil
         }
@@ -140,6 +149,36 @@ struct GatewayExternalReadTests {
             requestedAt: requestedAt,
             searchWorker: fixture.searchWorker
         )
+    }
+
+    private static func revise(
+        _ reference: HistoryItemReference,
+        text: String,
+        using authority: HistoryAuthority
+    ) async throws -> HistoryItemReference {
+        let request = RevisionRequest(
+            itemID: reference.id,
+            expected: reference.contentVersion,
+            intent: .replace(RevisionDraft(decisions: [
+                RevisionDecision(
+                    typeIdentifier: "public.utf8-plain-text",
+                    action: .replace(bytes: Data(text.utf8))
+                ),
+            ]))
+        )
+        let inputs = try await authority.revisionPreparationInputs(request)
+        let bundle = try await RevisionPreparationActor().prepare(
+            request,
+            from: inputs.snapshot,
+            retentionPolicies: inputs.retentionPolicies
+        )
+        let receipt = try await authority.commitRevision(request, bundle)
+        guard case .committed(let commit) = receipt,
+              case .revised(let revisedReference) = commit.outcome else {
+            Issue.record("expected one revised fixture item")
+            throw HistoryFailure.persistence(.invariantViolation)
+        }
+        return revisedReference
     }
 
     private static func snapshot(_ fixture: Fixture) throws
@@ -281,7 +320,9 @@ struct GatewayExternalReadTests {
             Issue.record("expected recent page")
             return
         }
-        #expect(recentPage.rows.map(\.item.id) == [item.id])
+        #expect(recentPage.rows.map(\.row.item.id) == [item.id])
+        #expect(recentPage.rows.map(\.row.title) == [Self.privateText])
+        #expect(recentPage.rows.map(\.revisionCount) == [0])
 
         let search = try await Self.read(
             .search(text: Self.privateText, mode: .exact, limit: 10),
@@ -291,15 +332,22 @@ struct GatewayExternalReadTests {
             Issue.record("expected search page")
             return
         }
-        #expect(searchPage.rows.map(\.item.id) == [item.id])
+        #expect(searchPage.rows.map(\.row.item.id) == [item.id])
+        #expect(searchPage.rows.map(\.row.title) == [Self.privateText])
+        #expect(searchPage.rows.map(\.revisionCount) == [0])
 
         let detailsResult = try await Self.read(.details(item.id), in: fixture)
         guard case .details(let details) = detailsResult else {
             Issue.record("expected details")
             return
         }
-        #expect(details.item == item)
-        #expect(details.effective.first?.bytes == Data(Self.privateText.utf8))
+        #expect(details.details.item == item)
+        #expect(details.title == Self.privateText)
+        #expect(details.revisionCount == 0)
+        #expect(
+            details.details.effective.first?.bytes
+                == Data(Self.privateText.utf8)
+        )
 
         let pasteResult = try await Self.read(
             .pastePayload(item.id),
@@ -361,6 +409,46 @@ struct GatewayExternalReadTests {
         }
         let position = try await fixture.authority.currentPosition()
         #expect(position.rawValue == 1)
+    }
+
+    @Test("entity facts stay faithful after an Effective Content revision")
+    func revisedEntityFacts() async throws {
+        let revisedText = "batch40-authoritative-effective-title"
+        let fixture = try await Self.makeFixture(revisedText: revisedText)
+        let item = try #require(fixture.item)
+        try await Self.grant(.browse, in: fixture)
+        try await Self.grant(.readContent, in: fixture)
+
+        guard case .page(let recent) = try await Self.read(
+            .recent(limit: 10),
+            in: fixture
+        ) else {
+            Issue.record("expected recent page")
+            return
+        }
+        #expect(recent.rows.map(\.row.title) == [revisedText])
+        #expect(recent.rows.map(\.revisionCount) == [1])
+
+        guard case .page(let search) = try await Self.read(
+            .search(text: revisedText, mode: .exact, limit: 10),
+            in: fixture
+        ) else {
+            Issue.record("expected search page")
+            return
+        }
+        #expect(search.rows.map(\.row.title) == [revisedText])
+        #expect(search.rows.map(\.revisionCount) == [1])
+
+        guard case .details(let details) = try await Self.read(
+            .details(item.id),
+            in: fixture
+        ) else {
+            Issue.record("expected details")
+            return
+        }
+        #expect(details.title == revisedText)
+        #expect(details.revisionCount == 1)
+        #expect(details.revisionCount == details.details.revisions.count)
     }
 
     @Test("an empty recent page is a successful audited projection")
@@ -573,6 +661,66 @@ struct GatewayExternalReadTests {
     }
 #endif
 
+    @Test("search entity title and revision count come from one captured state")
+    func searchEntityFactsShareOneSnapshot() async throws {
+        let fixture = try await Self.makeFixture()
+        let item = try #require(fixture.item)
+        try await Self.grant(.browse, in: fixture)
+        let gate = SuspensionGate()
+        let point = SearchWorkerSuspensionPoint.evaluationEntry.rawValue
+        await fixture.searchWorker.setSuspensionHandler { suspension in
+            guard suspension == .evaluationEntry else { return }
+            await gate.park(at: suspension.rawValue)
+        }
+
+        let authority = fixture.authority
+        let connection = fixture.connection
+        let worker = fixture.searchWorker
+        let task = Task {
+            try await authority.performExternalRead(
+                .search(text: Self.privateText, mode: .exact, limit: 10),
+                connection: connection,
+                requestedAt: Self.epoch,
+                searchWorker: worker
+            )
+        }
+        await gate.waitForPark(point)
+
+        let revisedText = "batch40-revised-during-search-evaluation"
+        do {
+            _ = try await Self.revise(
+                item,
+                text: revisedText,
+                using: fixture.authority
+            )
+            await gate.resume(point)
+            let result = try await task.value
+            await fixture.searchWorker.setSuspensionHandler(nil)
+            guard case .page(let page) = result else {
+                Issue.record("expected captured search page")
+                return
+            }
+            #expect(page.rows.map(\.row.title) == [Self.privateText])
+            #expect(page.rows.map(\.revisionCount) == [0])
+        } catch {
+            await gate.resume(point)
+            task.cancel()
+            _ = try? await task.value
+            await fixture.searchWorker.setSuspensionHandler(nil)
+            throw error
+        }
+
+        guard case .page(let current) = try await Self.read(
+            .search(text: revisedText, mode: .exact, limit: 10),
+            in: fixture
+        ) else {
+            Issue.record("expected current search page")
+            return
+        }
+        #expect(current.rows.map(\.row.title) == [revisedText])
+        #expect(current.rows.map(\.revisionCount) == [1])
+    }
+
     @Test("search grant is fixed at capture; revocation affects the next read")
     func searchRevocationWindow() async throws {
         let fixture = try await Self.makeFixture()
@@ -610,7 +758,7 @@ struct GatewayExternalReadTests {
                 Issue.record("expected search page")
                 return
             }
-            #expect(page.rows.map(\.item.id) == [item.id])
+            #expect(page.rows.map(\.row.item.id) == [item.id])
         } catch {
             await gate.resume(point)
             task.cancel()

@@ -70,25 +70,27 @@ struct ClipboardHistoryItemEntity: TransientAppEntity {
         revisionCount = 0
     }
 
-    init(row: HistoryRow) {
-        id = row.item.id.description
-        title = row.title
-        typeIdentifiers = row.typeIdentifiers
-        lastCopiedAt = row.lastCopiedAt
-        copyCount = String(row.copyCount)
-        lastSource = row.lastSource
-        isPinned = row.pinnedPosition != nil
-        revisionCount = 0
+    init(row: ExternalHistoryRow) {
+        let historyRow = row.row
+        id = historyRow.item.id.description
+        title = historyRow.title
+        typeIdentifiers = historyRow.typeIdentifiers
+        lastCopiedAt = historyRow.lastCopiedAt
+        copyCount = String(historyRow.copyCount)
+        lastSource = historyRow.lastSource
+        isPinned = historyRow.pinnedPosition != nil
+        revisionCount = row.revisionCount
     }
 
-    init(details: HistoryDetails) {
-        id = details.item.id.description
-        title = "Clipboard Item"
-        typeIdentifiers = details.effective.map(\.typeIdentifier)
-        lastCopiedAt = details.occurrence.lastCopiedAt
-        copyCount = String(details.occurrence.count)
-        lastSource = details.occurrence.lastSource
-        isPinned = details.pinnedPosition != nil
-        revisionCount = details.revisions.count
+    init(details: ExternalHistoryDetails) {
+        let historyDetails = details.details
+        id = historyDetails.item.id.description
+        title = details.title
+        typeIdentifiers = historyDetails.effective.map(\.typeIdentifier)
+        lastCopiedAt = historyDetails.occurrence.lastCopiedAt
+        copyCount = String(historyDetails.occurrence.count)
+        lastSource = historyDetails.occurrence.lastSource
+        isPinned = historyDetails.pinnedPosition != nil
+        revisionCount = details.revisionCount
     }
 }

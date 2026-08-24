@@ -50,6 +50,6 @@ struct ExternalHistoryFacadePublicTests {
             Issue.record("expected recent page")
             return
         }
-        #expect(page.rows.map(\.item.id) == [reference.id])
+        #expect(page.rows.map(\.row.item.id) == [reference.id])
     }
 }

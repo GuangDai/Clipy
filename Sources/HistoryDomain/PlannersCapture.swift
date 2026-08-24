@@ -160,6 +160,19 @@ package func planCapture(
         outcome = .coalesced(winner.id)
         isInsert = false
     } else {
+        // Card 2B-1: the complete retention inventory is the authoritative
+        // pure fact for business-ID occupancy. Only the insert lane consumes
+        // the prepared candidate; a coalescing winner above deliberately
+        // ignores it. Storage catches this package rejection and remints —
+        // the Domain never generates identity (docs/02-domain.md §1/§4).
+        guard !facts.retention.allItems.contains(where: {
+            $0.id == capture.candidateID
+        }) else {
+            throw DomainRejection.candidateItemIDCollision(
+                capture.candidateID
+            )
+        }
+
         // docs/02-domain.md §3.1: a new item initializes all first/last values
         // from the accepted capture and sets count = 1.
         let occurrence = CopyOccurrence(

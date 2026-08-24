@@ -15,7 +15,8 @@ struct AppIntentTestSupport {
     let itemID: HistoryItemID
 
     static func make(
-        grants: [ExternalCapability] = []
+        grants: [ExternalCapability] = [],
+        revisedText: String? = nil
     ) async throws -> Self {
         let history = try await SwiftDataHistory.open(
             configuration: HistoryConfiguration(persistence: .memory)
@@ -35,6 +36,24 @@ struct AppIntentTestSupport {
               case .inserted(let reference) = commit.outcome
         else {
             throw AppIntentTestSetupFailure.captureDidNotInsert
+        }
+
+        if let revisedText {
+            let reviseReceipt = try await history.perform(.revise(
+                RevisionRequest(
+                    itemID: reference.id,
+                    expected: reference.contentVersion,
+                    intent: .replace(RevisionDraft(decisions: [
+                        RevisionDecision(
+                            typeIdentifier: "public.utf8-plain-text",
+                            action: .replace(bytes: Data(revisedText.utf8))
+                        ),
+                    ]))
+                )
+            ))
+            guard case .committed = reviseReceipt else {
+                throw AppIntentTestSetupFailure.revisionDidNotCommit
+            }
         }
 
         let connection = try #require(try await history.connections().first)
@@ -68,4 +87,5 @@ struct AppIntentTestSupport {
 
 private enum AppIntentTestSetupFailure: Error {
     case captureDidNotInsert
+    case revisionDidNotCommit
 }

@@ -23,11 +23,16 @@ import Fuse
 
 /// Named test-only suspension points for the off-Authority search evaluator.
 /// The handler is always nil in production and is compiled in so `@testable`
-/// observation proofs can place a commit inside the snapshot→evaluation
-/// interval without retaining any SwiftData value across the suspension
-/// (docs/04-coherence.md §5/§7; docs/06-cross-cutting.md §8 WS12).
+/// coherence proofs can place a commit inside the snapshot→evaluation gap or
+/// cancellation at a bounded scan checkpoint without retaining any SwiftData
+/// value across the suspension (docs/04-coherence.md §5/§7; REVIEW Card 11B).
 internal enum SearchWorkerSuspensionPoint: String, Sendable {
     case evaluationEntry = "SearchWorker.page.evaluationEntry"
+#if DEBUG
+    case exactScanChunk = "SearchWorker.page.exactScanChunk"
+    case regexpScanChunk = "SearchWorker.page.regexpScanChunk"
+    case fuzzyScanChunk = "SearchWorker.page.fuzzyScanChunk"
+#endif
 }
 
 /// Search evaluation worker (docs/05-authority-kernel.md §14.2). Roadmap
@@ -40,6 +45,12 @@ internal enum SearchWorkerSuspensionPoint: String, Sendable {
 /// and History Item ID bytes ascending, and matched ranges are UTF-16
 /// offsets into the returned title/snippet, never `String.Index` values.
 internal actor SearchWorker {
+    /// REVIEW Card 11B: expensive mode scans observe cancellation at a fixed,
+    /// small row cadence. One row remains the irreducible unit because the
+    /// frozen Foundation/Fuse match calls are synchronous; no matcher object
+    /// or mutable state leaves this actor (review playbook §16).
+    internal static let cancellationRowInterval = 32
+
     /// The fixed `HistoryLimits.standard` safety profile
     /// (docs/06-cross-cutting.md §2): the common 4,096-UTF-8-byte search-term
     /// bound, the 512-Character regexp-pattern bound, the 64-Character
@@ -63,8 +74,8 @@ internal actor SearchWorker {
     /// allocating a second lowercase string after the alignment proof.
     internal let prelowercasedFuse: Fuse
 
-    /// Deterministic observation-test seam. Nil outside `@testable` tests;
-    /// only immutable corpus/request values are live when it is awaited.
+    /// Deterministic coherence/cancellation-test seam. Nil outside `@testable`
+    /// tests; only immutable corpus/request values are live when it is awaited.
     internal var suspensionHandler: (
         @Sendable (SearchWorkerSuspensionPoint) async -> Void
     )?
@@ -89,12 +100,37 @@ internal actor SearchWorker {
         self.suspensionHandler = nil
     }
 
-    /// Installs or clears the deterministic evaluation-entry handler.
+    /// Installs or clears the deterministic evaluation/checkpoint handler.
     /// Production never installs one, so the seam is a no-op there.
     internal func setSuspensionHandler(
         _ handler: (@Sendable (SearchWorkerSuspensionPoint) async -> Void)?
     ) {
         suspensionHandler = handler
+    }
+
+    /// Cooperative checkpoint shared by the three scan loops. Production's
+    /// handler is nil; tests park the first chunk to prove a cancelled query
+    /// releases this actor before a replacement query waits for a full scan.
+    internal func scanCheckpoint(
+        _ mode: SearchMode,
+        beforeRowAt offset: Int
+    ) async throws {
+        guard offset.isMultiple(of: Self.cancellationRowInterval) else {
+            return
+        }
+#if DEBUG
+        let point: SearchWorkerSuspensionPoint
+        switch mode {
+        case .exact:
+            point = .exactScanChunk
+        case .regexp:
+            point = .regexpScanChunk
+        case .fuzzy:
+            point = .fuzzyScanChunk
+        }
+        await suspensionHandler?(point)
+#endif
+        try Task.checkCancellation()
     }
 
 #if DEBUG
@@ -203,17 +239,22 @@ internal actor SearchWorker {
         } else {
             switch mode {
             case .exact:
-                evaluated = evaluateExact(term: term, in: corpus, directive: directive)
+                evaluated = try await evaluateExact(
+                    term: term,
+                    in: corpus,
+                    directive: directive
+                )
             case .regexp:
-                evaluated = try evaluateRegexp(
+                evaluated = try await evaluateRegexp(
                     term: term,
                     in: corpus,
                     directive: directive
                 )
             case .fuzzy:
-                evaluated = try evaluateFuzzy(term: term, in: corpus)
+                evaluated = try await evaluateFuzzy(term: term, in: corpus)
             }
         }
+        try Task.checkCancellation()
 
 #if DEBUG
         searchDebugProbe.record(
@@ -327,6 +368,7 @@ internal actor SearchWorker {
                 search: search
             )
         }
+        try Task.checkCancellation()
 
         // The next cursor is minted through `PageCursorCodec` (same
         // target); it binds the complete normalized query shape, the corpus
@@ -377,6 +419,7 @@ internal actor SearchWorker {
         )
 #endif
 
+        try Task.checkCancellation()
         return HistoryPage(position: corpus.position, rows: rows, next: next)
     }
 

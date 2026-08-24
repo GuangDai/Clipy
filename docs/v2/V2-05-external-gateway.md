@@ -633,10 +633,14 @@ not a permanent prohibition on the ordered `clipyctl` continuation.
   Spotlight) for V2; the connection/grant model is general (§3.3 admits future
   enrollment kinds).
 - External **metadata reads** (`browse` capability): `read(.recent(limit:))` /
-  `read(.search(text:mode:limit:))` — producing the v1 `HistoryPage` DTO and audited.
+  `read(.search(text:mode:limit:))` — producing an `ExternalHistoryPage` that
+  wraps the unchanged v1 row/page facts plus X.7's authoritative revision
+  counts, and audited.
 - External **content reads** (`readContent` capability): `details(for:)`,
-  `pastePayload(for:)` — producing the v1 `HistoryDetails` / `PastePayload` DTOs
-  (full content; the content-exfiltration surface, §3.2) and audited.
+  `pastePayload(for:)` — producing `ExternalHistoryDetails` (an unchanged v1
+  `HistoryDetails` plus its authoritative Effective title) / the v1
+  `PastePayload` DTO (full content; the content-exfiltration surface, §3.2)
+  and audited.
 - External **writes** (`manage` capability, which implies `browse` but **not**
   `readContent`): `.pin`, `.unpin`, `.remove(itemID)` on individual retained
   items — routed through `HistoryAuthority` as the corresponding v1
@@ -1647,8 +1651,11 @@ ExternalGateway.read(.search(text, mode, limit), as: connID)   [actor]
            OFF-ACTOR (the cross-actor `await` lives here, BETWEEN the two
            non-suspending intervals — never inside either; a non-suspending
            Authority closure cannot host it).
-       (c) interval 2 (closing audit closure): build HistoryPage from the
-           SearchWorker result; AUDIT a read OperationRecord here — reading
+       (c) interval 2 (closing audit closure): build `HistoryPage` from the
+           SearchWorker result; for App Intents, combine it with the immutable
+           revision-count facts captured in interval 1 to form
+           `ExternalHistoryPage`; Local Automation keeps the v1 page and does
+           not load the X.7 facts. AUDIT a read OperationRecord here — reading
            and incrementing `nextAuditSequence` inside this closure. D36
            continuity for reads follows from the same transaction updating the
            singleton counter and inserting the row; no concurrent append can
@@ -1668,8 +1675,8 @@ ExternalGateway.read(.search(text, mode, limit), as: connID)   [actor]
        — there is no history mutation to be atomic with. It is nevertheless a
        fail-closed publication barrier: append must commit before step 5.
   5. Only after the audit commit succeeds, return the already-built immutable
-       HistoryPage. If audit append fails, throw persistence failure and do not
-       return the page or any content-bearing DTO.
+       purpose-specific page. If audit append fails, throw persistence failure
+       and do not return the page or any content-bearing DTO.
 ```
 
 **Failed-read audit path (D34).** If `performExternalRead` throws (e.g.,
@@ -1938,10 +1945,17 @@ is `01` §8 / `06` §6: "`import SwiftData` appears only in `HistoryStorage`"):
   `ExternalReadResult`, `ExternalOperationKind`, `ExternalOutcome`,
   `ExternalFailure`, `ExternalDenialReason`, `ExternalTransientReason`,
   `ExternalFailureKindRaw`, `AuditRebaseReason`, `OperationRecordDTO`,
-  `ConnectionDTO`, `GrantDTO`) is added to `HistoryCore` as a clearly V2-scoped
+  `ConnectionDTO`, `GrantDTO`, `ExternalHistoryRow`, `ExternalHistoryPage`,
+  `ExternalHistoryDetails`) is added to `HistoryCore` as a clearly V2-scoped
   section. These types are Foundation-only (`HistoryCore`'s invariant, `01` §8)
   and reuse v1 vocabulary (`HistoryItemID`, `ContentVersion`, `ChangePosition`,
-  `HistoryPage`, `HistoryDetails`, `PastePayload`) verbatim. New names do not
+  `HistoryRepresentation`, `RevisionSummary`, `CopyOccurrenceSummary`,
+  `PastePayload`) without exposing Storage state. `ExternalHistoryRow` wraps one
+  unchanged `HistoryRow` plus its authoritative retained revision count;
+  `ExternalHistoryDetails` wraps one unchanged `HistoryDetails` plus the
+  authoritative Effective title (its caller-visible `revisionCount` derives
+  from `details.revisions`). The v1 `HistoryRow`, `HistoryPage`, and
+  `HistoryDetails` DTOs remain unchanged. New names do not
   collide with v1 names or with V2-01..V2-04 names (`V2-00` §9). This is the
   "distinct concern protocol" pattern V2-01 (`EnrichmentHistory`) and V2-03
   (`ReconnectHistory`) established. One additional public type —
@@ -2334,7 +2348,9 @@ struct SearchHistoryIntent: AppIntent {
 }
 
 // Output only: no EntityQuery and therefore no hidden capped-history scan.
-struct ClipboardHistoryItemEntity: TransientAppEntity { /* HistoryRow projection */ }
+struct ClipboardHistoryItemEntity: TransientAppEntity {
+    /* ExternalHistoryRow / ExternalHistoryDetails projection */
+}
 
 // PinItemIntent / UnpinItemIntent / RemoveItemIntent: String `itemID`, parsed
 // through HistoryItemID(uuidString:), then the corresponding .manage request.
@@ -2360,7 +2376,11 @@ The item-target parameters deliberately use canonical UUID strings rather than
 identity, after which the Gateway performs the authoritative grant and
 existence checks. Search and details return output-only
 `TransientAppEntity` metadata projections; there is no `EntityQuery` and no
-raw `Data` result. Paste consumes the audited `PastePayload` only to perform
+raw `Data` result. Their `title` and `revisionCount` fields come from the same
+gated Storage projection as the rest of the result: browse/search uses
+`ExternalHistoryRow`, while details uses `ExternalHistoryDetails`. No intent
+performs a second History read to fill entity metadata. Paste consumes the
+audited `PastePayload` only to perform
 the adapter write and returns a content-free success value. All six intents declare
 macOS 26 `supportedModes = [.background]`; they do not use
 `allowedExecutionTargets`, which is a macOS 27 API.
@@ -2438,11 +2458,23 @@ public enum ExternalResponse: Sendable {
 }
 
 public enum ExternalReadResult: Sendable {
-    case page(HistoryPage) // reuses v1 HistoryPage (03b §8)
-    case details(HistoryDetails)       // reuses v1 HistoryDetails (03b)
+    case page(ExternalHistoryPage)
+    case details(ExternalHistoryDetails)
     case pastePayload(PastePayload)    // reuses v1 PastePayload (03b)
 }
 ```
+
+`ExternalHistoryPage` preserves `HistoryPage`'s position, continuation, and
+ordering semantics but contains `ExternalHistoryRow` values. Each row wraps
+the unchanged v1 `HistoryRow` plus the authoritative retained `revisionCount`.
+`ExternalHistoryDetails` wraps the unchanged v1 `HistoryDetails` plus the
+authoritative Effective Content `title`; its `revisionCount` is derived from
+the wrapped `details.revisions` rather than stored as a second count. Storage
+produces these facts within the request's existing live-gate projection
+interval (and search's immutable captured snapshot), so App Intents never
+performs a second read and cannot combine metadata from different content
+versions. Neither DTO exposes `CanonicalContent`, retention rows, SwiftData,
+or a generic projection/registry seam; the v1 DTOs remain unchanged.
 
 `SwiftDataHistory` does **not** conform to `ExternalHistory`: the protocol has
 no connection argument, so such a conformance would be an unbound second entry.
@@ -2898,12 +2930,16 @@ Correctness gates run first. Performance claims for V2-05 (proof gates
   (`maxAffectedItemsPerRecord` = 32; payload never carries query text or
   content). For writes this shares the v1/V2-03 commit closure (no second
   transaction); for reads it is a separate small transaction.
-- **External read perf is consistent with v1** (`X-PERF-3`): the read path is
-  the unchanged v1 `browse`/`details`/`pastePayload` projection (`05` §14); the
-  gateway adds only validation; the Authority's read interval owns the targeted
-  access gate and read audit. For `.search`, two non-suspending Authority
-  intervals bracket the off-actor SearchWorker await (§5.2 step 2), while
-  `.recent`/`.details`/`.pastePayload` fit one.
+- **External read perf stays bounded** (`X-PERF-3`): content and ordering still
+  use the unchanged v1 `browse`/`details`/`pastePayload` projections (`05`
+  §14). App Intents recent additionally performs one scalar-only
+  `RetainedBytesRow` fetch bounded by the returned page; search captures one
+  scalar revision-count inventory bounded by the same hard retained-item limit
+  as its existing full corpus. Local Automation keeps the v1 page projection
+  and performs neither X.7 enrichment read. The Authority's read interval owns
+  the targeted access gate and read audit. For `.search`, two non-suspending
+  Authority intervals bracket the off-actor SearchWorker await (§5.2 step 2),
+  while `.recent`/`.details`/`.pastePayload` fit one.
 - **Audit log read is O(batch)** (`X-PERF-4`): bounded by
   `ExternalLimits.maxAuditReadBatchSize` (500); typed decode and contiguous
   sequence validation are O(batch).

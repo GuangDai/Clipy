@@ -120,6 +120,11 @@ public final class HistoryPanelSurfaceState {
     package private(set) var detailsPurgeGeneration = 0
 
     private let previewState: PreviewPaneState
+    /// A panel can open before its first authoritative page arrives because
+    /// `HistoryViewState.activate()` clears the previous snapshot
+    /// synchronously. This one-shot bit distinguishes that empty bootstrap
+    /// from an intentional nil selection after a selected row is retired.
+    private var isAwaitingInitialSelection = false
 
     package init(
         history: any ClipboardHistory,
@@ -167,10 +172,12 @@ public final class HistoryPanelSurfaceState {
         case .all:
             detailsPurgeGeneration += 1
             detailsPath.removeAll()
+            isAwaitingInitialSelection = false
             selection = nil
         case .unpinned:
             detailsPurgeGeneration += 1
             detailsPath.removeAll()
+            isAwaitingInitialSelection = false
             selection = nil
         case .item(let id):
             if detailsPath.contains(where: { $0.id == id }) {
@@ -178,6 +185,7 @@ public final class HistoryPanelSurfaceState {
             }
             detailsPath.removeAll { $0.id == id }
             if selection == id {
+                isAwaitingInitialSelection = false
                 selection = nil
             }
         case .revision(let old, _):
@@ -198,6 +206,7 @@ public final class HistoryPanelSurfaceState {
         isSessionActive = true
         detailsPath.removeAll()
         selection = PanelSessionSelection.preparedSelection(in: rows)
+        isAwaitingInitialSelection = selection == nil
     }
 
     /// Ends one session and retires content-bearing transient UI state. The
@@ -207,17 +216,27 @@ public final class HistoryPanelSurfaceState {
         guard isSessionActive else { return }
         isSessionActive = false
         detailsPath.removeAll()
+        isAwaitingInitialSelection = false
         selection = nil
         previewState.panelClosed()
     }
 
     package func reconcileSessionSelection(rows: [HistoryRow]) {
         guard isSessionActive else { return }
-        if let selection,
-           rows.contains(where: { $0.item.id == selection }) {
+        guard let selection else {
+            guard isAwaitingInitialSelection else { return }
+            self.selection = PanelSessionSelection.preparedSelection(in: rows)
+            if self.selection != nil {
+                isAwaitingInitialSelection = false
+            }
             return
         }
-        selection = PanelSessionSelection.preparedSelection(in: rows)
+        guard rows.contains(where: { $0.item.id == selection }) else {
+            isAwaitingInitialSelection = false
+            self.selection = nil
+            return
+        }
+        isAwaitingInitialSelection = false
     }
 
     package func moveSelection(
@@ -225,6 +244,7 @@ public final class HistoryPanelSurfaceState {
         direction: PanelSelectionDirection
     ) {
         guard isSessionActive else { return }
+        isAwaitingInitialSelection = false
         selection = PanelSessionSelection.movedSelection(
             selection,
             in: rows,
@@ -259,6 +279,7 @@ public struct HistoryPanelView: View {
     private let viewState: HistoryViewState
     private let previewState: PreviewPaneState
     private let previewPlacement: PreviewPlacement
+    private let onPauseCapture: (() -> Void)?
     private let onOpenSettings: () -> Void
     private let onQuit: () -> Void
     private let onRequestClose: () -> Void
@@ -277,6 +298,7 @@ public struct HistoryPanelView: View {
         previewState: PreviewPaneState,
         surfaceState: HistoryPanelSurfaceState? = nil,
         previewPlacement: PreviewPlacement = .trailing,
+        onPauseCapture: (() -> Void)? = nil,
         onOpenSettings: @escaping () -> Void = {},
         onQuit: @escaping () -> Void = {},
         onRequestClose: @escaping () -> Void = {},
@@ -285,6 +307,7 @@ public struct HistoryPanelView: View {
         self.viewState = viewState
         self.previewState = previewState
         self.previewPlacement = previewPlacement
+        self.onPauseCapture = onPauseCapture
         self.onOpenSettings = onOpenSettings
         self.onQuit = onQuit
         self.onRequestClose = onRequestClose
@@ -504,6 +527,18 @@ public struct HistoryPanelView: View {
                 .foregroundStyle(.secondary)
             Spacer()
             Menu {
+                if let onPauseCapture {
+                    Button {
+                        onPauseCapture()
+                    } label: {
+                        Label(
+                            "Pause Clipboard Monitoring",
+                            systemImage: "pause.circle"
+                        )
+                    }
+                    .accessibilityIdentifier("clipy.capture.pause")
+                    Divider()
+                }
                 Button {
                     pendingClear = .unpinned
                 } label: {
@@ -535,15 +570,27 @@ public struct HistoryPanelView: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .accessibilityLabel("More Actions")
+            .accessibilityIdentifier("clipy.panel.more-actions")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
     }
 
     private var itemCountText: String {
-        let count = viewState.rows.count
-        let noun = count == 1 ? "item" : "items"
-        return viewState.hasNextPage ? "\(count)+ \(noun)" : "\(count) \(noun)"
+        Self.itemCountText(
+            count: viewState.rows.count,
+            hasNextPage: viewState.hasNextPage
+        )
+    }
+
+    /// A page cursor makes `count` a lower bound, not a total (Card 8C).
+    package static func itemCountText(
+        count: Int,
+        hasNextPage: Bool
+    ) -> String {
+        let displayedCount = hasNextPage ? "\(count)+" : "\(count)"
+        let noun = count == 1 && !hasNextPage ? "item" : "items"
+        return "\(displayedCount) \(noun)"
     }
 
     // MARK: Clear confirmation

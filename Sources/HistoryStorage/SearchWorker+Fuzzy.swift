@@ -19,7 +19,7 @@ extension SearchWorker {
     internal func evaluateFuzzy(
         term: String,
         in corpus: SearchCorpusSnapshot
-    ) throws -> [EvaluatedRow] {
+    ) async throws -> [EvaluatedRow] {
         // Fuse 1.4.0 does not enforce its `maxPatternLength` option (the
         // parameter is unread in the pinned revision, so the documented
         // "return nil" never fires). Fuse 1.4.0's bitap stores its pattern
@@ -82,7 +82,11 @@ extension SearchWorker {
             )
         }
 #endif
-        scan: for row in corpus.rows {
+        scan: for (rowOffset, row) in corpus.rows.enumerated() {
+            try await scanCheckpoint(
+                .fuzzy,
+                beforeRowAt: rowOffset
+            )
 #if DEBUG
             debugProcessedRows += 1
             debugTitleUTF8Bytes += row.debugTitleUTF8Bytes
@@ -156,6 +160,7 @@ extension SearchWorker {
                 pinnedHits.append(hit)
             }
         }
+        try Task.checkCancellation()
 #if DEBUG
         searchDebugProbe.record(
             traceID: corpus.debugTrace.id,
@@ -210,6 +215,7 @@ extension SearchWorker {
                     )
                 )
             }
+        try Task.checkCancellation()
         return pinned + unpinned
     }
 

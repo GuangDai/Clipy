@@ -110,4 +110,43 @@ struct PanelSessionSelectionTests {
         #expect(surface.sessionGeneration == 2)
         #expect(surface.selection == rows[0].item.id)
     }
+
+    @Test func authoritativeReplacementClearsRemovedSelectionWithoutJumping() {
+        let viewState = HistoryViewState(history: ScriptedHistory())
+        let surface = HistoryPanelSurfaceState(
+            viewState: viewState,
+            previewState: PreviewPaneState()
+        )
+
+        surface.beginSession(rows: rows)
+        surface.moveSelection(in: rows, direction: .next)
+        #expect(surface.selection == rows[1].item.id)
+
+        let replacement = [rows[0], rows[2]]
+        surface.reconcileSessionSelection(rows: replacement)
+
+        #expect(surface.selection == nil)
+        #expect(surface.selectedReference(in: replacement) == nil)
+
+        surface.reconcileSessionSelection(rows: rows)
+        #expect(
+            surface.selection == nil,
+            "A later page must not turn an intentional clear into a new selection."
+        )
+    }
+
+    @Test func firstAuthoritativePageSelectsNewestAfterEmptyOpen() {
+        let viewState = HistoryViewState(history: ScriptedHistory())
+        let surface = HistoryPanelSurfaceState(
+            viewState: viewState,
+            previewState: PreviewPaneState()
+        )
+
+        surface.beginSession(rows: [])
+        #expect(surface.selection == nil)
+
+        surface.reconcileSessionSelection(rows: rows)
+
+        #expect(surface.selection == rows[0].item.id)
+    }
 }

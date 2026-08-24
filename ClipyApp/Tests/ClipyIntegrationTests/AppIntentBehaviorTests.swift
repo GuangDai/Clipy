@@ -12,9 +12,12 @@ import Testing
 struct AppIntentBehaviorTests {
     @Test("Search returns bounded transient rows through the browse grant")
     func search() async throws {
-        let support = try await AppIntentTestSupport.make(grants: [.browse])
+        let support = try await AppIntentTestSupport.make(
+            grants: [.browse],
+            revisedText: "intent-revised"
+        )
         let intent = SearchHistoryIntent(
-            query: "intent-seed",
+            query: "intent-revised",
             mode: .exact,
             limit: 20,
             history: support.ingress,
@@ -26,13 +29,17 @@ struct AppIntentBehaviorTests {
         let rows = try #require(result.value)
         #expect(rows.count == 1)
         #expect(rows[0].id == support.itemID.description)
-        #expect(rows[0].title == "intent-seed")
+        #expect(rows[0].title == "intent-revised")
+        #expect(rows[0].revisionCount == 1)
         #expect(try await support.lastAuditOperation() == .readSearch)
     }
 
     @Test("Details projects metadata without content bytes")
     func details() async throws {
-        let support = try await AppIntentTestSupport.make(grants: [.readContent])
+        let support = try await AppIntentTestSupport.make(
+            grants: [.readContent],
+            revisedText: "intent-details-revised"
+        )
         let intent = GetItemDetailsIntent(
             itemID: support.itemID.description,
             history: support.ingress,
@@ -43,8 +50,10 @@ struct AppIntentBehaviorTests {
 
         let details = try #require(result.value)
         #expect(details.id == support.itemID.description)
+        #expect(details.title == "intent-details-revised")
         #expect(details.typeIdentifiers == ["public.utf8-plain-text"])
         #expect(details.copyCount == "1")
+        #expect(details.revisionCount == 1)
         #expect(try await support.lastAuditOperation() == .readDetails)
     }
 

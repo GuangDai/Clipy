@@ -19,15 +19,19 @@ import AppKit
 import HistoryCore
 import HistoryStorage
 import Observation
+import PasteboardAdapter
 import PresentationUI
 import SwiftUI
 
 #if DEBUG
-/// Exact launch envelope for the one running-app XCUI tracer. It is compiled
-/// out of Release and accepts only an absolute temp-store path; no alternate
+/// Exact launch envelope for the running-app XCUI journeys. It is compiled
+/// out of Release and accepts only an absolute temp-store path plus exact
+/// allowed, denied, or denied-then-allowed privacy facts; no alternate
 /// History, capture pump, paste path, or panel controller is constructed.
-private struct RunningUITestConfiguration {
+struct RunningUITestConfiguration {
     let storeURL: URL
+    let initialCaptureAccessBehavior: PasteboardAccessBehavior
+    let currentCaptureAccessBehavior: PasteboardAccessBehavior
 
     static func current(
         environment: [String: String] = ProcessInfo.processInfo.environment
@@ -36,8 +40,26 @@ private struct RunningUITestConfiguration {
               let path = environment["CLIPY_UI_TEST_STORE_PATH"],
               path.hasPrefix("/")
         else { return nil }
+
+        let initialCaptureAccessBehavior: PasteboardAccessBehavior
+        let currentCaptureAccessBehavior: PasteboardAccessBehavior
+        switch environment["CLIPY_UI_TEST_CAPTURE_ACCESS"] {
+        case nil, "allowed":
+            initialCaptureAccessBehavior = .allowed
+            currentCaptureAccessBehavior = .allowed
+        case "denied":
+            initialCaptureAccessBehavior = .denied
+            currentCaptureAccessBehavior = .denied
+        case "denied-then-allowed":
+            initialCaptureAccessBehavior = .denied
+            currentCaptureAccessBehavior = .allowed
+        default:
+            return nil
+        }
         return RunningUITestConfiguration(
-            storeURL: URL(fileURLWithPath: path).standardizedFileURL
+            storeURL: URL(fileURLWithPath: path).standardizedFileURL,
+            initialCaptureAccessBehavior: initialCaptureAccessBehavior,
+            currentCaptureAccessBehavior: currentCaptureAccessBehavior
         )
     }
 }
@@ -250,7 +272,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self?.previewPlacement = placement
                 },
                 isSelectionSubmissionEnabled: { [weak self] in
-                    self?.panelSurfaceState?.isAtListRoot == true
+                    guard let self,
+                          let composition = self.composition,
+                          let panelSurfaceState = self.panelSurfaceState,
+                          panelSurfaceState.isAtListRoot
+                    else { return false }
+                    return panelSurfaceState.selectedReference(
+                        in: composition.viewState.rows
+                    ) != nil
                 },
                 onSubmitSelection: { [weak self] in
                     self?.submitPanelSelection()
@@ -300,6 +329,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case nil:
             break
         }
+    }
+
+    /// The panel's explicit user-owned Pause intent. Only the authoritative
+    /// allowed state exposes this action; all transitions remain owned by the
+    /// existing composition capture-access reducer.
+    func pauseCapture() {
+        guard captureAccessState == .allowed else { return }
+        composition?.setCapturePaused(true)
     }
 
     /// The preview column's visibility changed inside the SwiftUI content;
@@ -363,7 +400,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 #if DEBUG
                 if let configuration = runningUITestConfiguration {
                     return try await AppComposition.openForUITesting(
-                        storeURL: configuration.storeURL
+                        storeURL: configuration.storeURL,
+                        initialCaptureAccessBehavior:
+                            configuration.initialCaptureAccessBehavior,
+                        currentCaptureAccessBehavior:
+                            configuration.currentCaptureAccessBehavior
                     )
                 }
 #endif
@@ -508,6 +549,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func installCompositionForTesting(_ composition: AppComposition) {
         installComposition(composition)
     }
+
+    /// Hosted panel-lifecycle entry through the real AppDelegate owner. The
+    /// hook is absent from Release; tests still exercise the production lazy
+    /// panel construction, callbacks, and session/view-state ownership.
+    func openPanelForTesting(at mode: PopupPositionMode = .center) {
+        openPanel(at: mode)
+    }
+
+    var panelForTesting: FloatingPanel? { panel }
 
     /// Hosted Card 15D tests enter through the composition-owned callback
     /// boundary without constructing an AX tree or real assistive client.

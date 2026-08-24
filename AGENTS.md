@@ -39,7 +39,7 @@ inventing new enforcement or orchestration around them.
   Correctness CI intentionally consists of the SwiftPM and generated-app
   build/test lanes; there is no separate static-source or symbol-snapshot lane.
 
-**Current state (2026-08-24, `master` through PR #40):** steps 0–9 are
+**Current state (2026-08-24, `master` through PR #41):** steps 0–9 are
 done and CI-green (scaffold + build/tests, `HistoryCore` public surface,
 `HistoryDomain` pure core, dependency pins, schema v1 + codecs,
 `HistoryAuthority` capture/mutations/reads/observation/thumbnail, product
@@ -87,6 +87,13 @@ enabled age limit can apply. The editor disclosure remains source/literal
 evidence because the runner's attached SwiftUI sheet exposes only an empty
 public AX dialog; the Settings journey does not establish ServiceManagement's
 signed four-state runtime matrix or the complete unified-retention workflow.
+Batch 39 landed in PR #41 (merge `87db3d6`; final PR/master correctness
+32705015919/32705436579): count and V2 retention controls share one Retention
+surface with exact no-change semantics; the internal authenticated Local
+Automation browsePreview leaf and a four-process retention restart tracer are
+green; Search Clear/focus is a running-app proof; and ThumbnailStore product
+knobs/counters are contracted to owner-test scope. The AXPress cell still
+skips without runner Accessibility authorization and remains unproved.
 Both dispatch-only physical-evidence cells are green on `master` as of
 2026-08-23: the General pasteboard cross-process run 32632263996 and the
 Card 6B APFS ENOSPC capture-transaction run 32636093920 (the latter via

@@ -30,25 +30,30 @@ struct PanelRootView: View {
         Group {
             if let composition = appDelegate.composition,
                let surfaceState = appDelegate.panelSurfaceState {
-                HistoryPanelView(
-                    viewState: composition.viewState,
-                    previewState: appDelegate.previewState,
-                    surfaceState: surfaceState,
-                    previewPlacement: appDelegate.previewPlacement,
-                    onOpenSettings: {
-                        // Activate first (the old `openSettingsWindow`
-                        // behavior): an LSUIElement agent never activates
-                        // on its own, so without this the Settings window
-                        // can strand behind the current app.
-                        NSApp.activate()
-                        openSettings()
-                    },
-                    onQuit: { NSApp.terminate(nil) },
-                    onRequestClose: { appDelegate.closePanel() },
-                    onPreviewVisibilityChange: { isOpen in
-                        appDelegate.previewVisibilityDidChange(isOpen)
-                    }
-                )
+                if showsCaptureAccessEmptyState(composition) {
+                    captureAccessEmptyState(appDelegate.captureAccessState)
+                } else {
+                    HistoryPanelView(
+                        viewState: composition.viewState,
+                        previewState: appDelegate.previewState,
+                        surfaceState: surfaceState,
+                        previewPlacement: appDelegate.previewPlacement,
+                        onPauseCapture: pauseCaptureAction,
+                        onOpenSettings: {
+                            // Activate first (the old `openSettingsWindow`
+                            // behavior): an LSUIElement agent never activates
+                            // on its own, so without this the Settings window
+                            // can strand behind the current app.
+                            NSApp.activate()
+                            openSettings()
+                        },
+                        onQuit: { NSApp.terminate(nil) },
+                        onRequestClose: { appDelegate.closePanel() },
+                        onPreviewVisibilityChange: { isOpen in
+                            appDelegate.previewVisibilityDidChange(isOpen)
+                        }
+                    )
+                }
             } else if let openFailure = appDelegate.openFailure {
                 failurePane(for: openFailure)
             } else {
@@ -86,6 +91,22 @@ struct PanelRootView: View {
     private var captureAccessNeedsAttention: Bool {
         appDelegate.composition != nil
             && appDelegate.captureAccessState != .allowed
+            && !showsCaptureAccessEmptyState(appDelegate.composition)
+    }
+
+    private func showsCaptureAccessEmptyState(
+        _ composition: AppComposition?
+    ) -> Bool {
+        guard let composition else { return false }
+        return appDelegate.captureAccessState != .allowed
+            && composition.viewState.rows.isEmpty
+            && !composition.viewState.isLoadingFirstPage
+            && !composition.viewState.isSearchActive
+    }
+
+    private var pauseCaptureAction: (() -> Void)? {
+        guard appDelegate.captureAccessState == .allowed else { return nil }
+        return { appDelegate.pauseCapture() }
     }
 
     /// The launch failure pane (fail-loud, no silent repair): the typed
@@ -197,22 +218,67 @@ struct PanelRootView: View {
                 .accessibilityHidden(true)
             Text(captureAccessMessage(state))
                 .font(.callout)
+                .accessibilityIdentifier("clipy.capture.access.message")
             Spacer(minLength: 8)
             if let recovery = state.recovery {
-                Button(recovery == .resume ? "Resume" : "Try Again") {
-                    appDelegate.recoverCaptureAccess()
-                }
-                .accessibilityLabel(
-                    recovery == .resume
-                        ? "Resume clipboard capture"
-                        : "Retry clipboard access"
-                )
+                captureAccessRecoveryButton(recovery)
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
         .shadow(radius: 4)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("clipy.capture.access.banner")
+    }
+
+    /// When no retained row exists, access failure owns the whole content
+    /// state. The ordinary `No Clipboard History` view is not rendered, so
+    /// assistive clients cannot conflate "nothing copied" with "not allowed
+    /// to monitor". Retained rows continue through HistoryPanelView above.
+    private func captureAccessEmptyState(
+        _ state: CaptureAccessState
+    ) -> some View {
+        ZStack {
+            VStack(spacing: 12) {
+                Image(systemName: "hand.raised.fill")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                Text("Clipboard Monitoring Unavailable")
+                    .font(.headline)
+                    .accessibilityIdentifier("clipy.capture.access.empty")
+                Text(captureAccessMessage(state))
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("clipy.capture.access.message")
+                if let recovery = state.recovery {
+                    captureAccessRecoveryButton(recovery)
+                }
+            }
+            .accessibilityElement(children: .contain)
+        }
+        .padding(20)
+        .frame(
+            width: PanelGeometry.contentWidth,
+            height: PanelGeometry.height
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("clipy.panel.root")
+    }
+
+    private func captureAccessRecoveryButton(
+        _ recovery: CaptureAccessRecovery
+    ) -> some View {
+        Button(recovery == .resume ? "Resume" : "Try Again") {
+            appDelegate.recoverCaptureAccess()
+        }
+        .accessibilityLabel(
+            recovery == .resume
+                ? "Resume clipboard capture"
+                : "Retry clipboard access"
+        )
+        .accessibilityIdentifier("clipy.capture.access.recovery")
     }
 
     private func captureAccessMessage(_ state: CaptureAccessState) -> String {

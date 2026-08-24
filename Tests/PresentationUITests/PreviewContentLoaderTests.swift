@@ -271,6 +271,7 @@ struct PreviewContentLoaderTests {
         await history.resumeDetails(for: refV1.id)
         _ = await task.value
         #expect(loader.phase == .failed)
+        #expect(!loader.canRetryFailure)
         #expect(loader.occurrence == nil)
     }
 
@@ -320,7 +321,9 @@ struct PreviewContentLoaderTests {
             throwing: .temporarilyUnavailable(.dedupIndexRebuild)
         )
         _ = await task.value
+        #expect(loader.requestedItem == refA)
         #expect(loader.phase == .failed)
+        #expect(loader.canRetryFailure)
         #expect(loader.occurrence == nil)
 
         await history.scriptDetails(details(for: refA, text: "recovered"))
@@ -333,11 +336,12 @@ struct PreviewContentLoaderTests {
 
         #expect(loader.requestedItem == refA)
         #expect(loader.phase == .content(.text("recovered")))
+        #expect(!loader.canRetryFailure)
     }
 
     /// A legal representation for which this phase has no renderer is a
-    /// stable unsupported result. It is distinct from a retryable load or
-    /// decode failure and therefore the view does not offer Retry.
+    /// stable unsupported result. It is distinct from a failed load and
+    /// therefore the view does not offer Retry.
     @Test func validNonPreviewableRepresentationIsStableUnsupported() async throws {
         let ref = reference("00000000-0000-0000-0000-0000000001E2", version: 1)
         let representation = HistoryRepresentation(
@@ -355,6 +359,7 @@ struct PreviewContentLoaderTests {
 
         #expect(loader.requestedItem == ref)
         #expect(loader.phase == .unsupported)
+        #expect(!loader.canRetryFailure)
     }
 
     /// RTF/HTML are valid opaque clipboard representations but have no safe
@@ -382,9 +387,51 @@ struct PreviewContentLoaderTests {
         _ = await task.value
 
         #expect(loader.phase == .unsupported)
+        #expect(!loader.canRetryFailure)
         await loader.retry()
         #expect(await history.detailRequests.count == 1)
         #expect(loader.phase == .unsupported)
+    }
+
+    /// Caller-input failures are terminal for this exact preview request.
+    /// They may use the failed copy, but must not expose or execute Retry:
+    /// only `temporarilyUnavailable` says that retrying later is admitted.
+    @Test func invalidHistoryFailureIsNotRetryable() async throws {
+        let ref = reference("00000000-0000-0000-0000-0000000001E4", version: 1)
+        let history = PausableDetailsHistory()
+        let loader = PreviewContentLoader(history: history)
+
+        let task = Task { await loader.load(item: ref) }
+        try #require(await pollUntil { await history.detailRequests.count == 1 })
+        await history.resumeDetails(
+            for: ref.id,
+            throwing: .invalidInput(.unsupportedRepresentationType("public.invalid"))
+        )
+        _ = await task.value
+
+        #expect(loader.phase == .failed)
+        #expect(!loader.canRetryFailure)
+        await loader.retry()
+        #expect(await history.detailRequests.count == 1)
+    }
+
+    @Test func persistenceHistoryFailureIsNotRetryable() async throws {
+        let ref = reference("00000000-0000-0000-0000-0000000001E5", version: 1)
+        let history = PausableDetailsHistory()
+        let loader = PreviewContentLoader(history: history)
+
+        let task = Task { await loader.load(item: ref) }
+        try #require(await pollUntil { await history.detailRequests.count == 1 })
+        await history.resumeDetails(
+            for: ref.id,
+            throwing: .persistence(.corruptStoredValue)
+        )
+        _ = await task.value
+
+        #expect(loader.phase == .failed)
+        #expect(!loader.canRetryFailure)
+        await loader.retry()
+        #expect(await history.detailRequests.count == 1)
     }
 
     // MARK: - Bounded off-MainActor decode (S-2/SPEC-IMPL-002)
@@ -411,8 +458,9 @@ struct PreviewContentLoaderTests {
     }
 
     /// A supported image type whose decoder cannot produce an artifact lands
-    /// on the retryable failed phase, never stable unsupported.
-    @Test func supportedImageDecodeFailureIsRetryable() async throws {
+    /// on failed (not unsupported), but replaying the same malformed bytes is
+    /// not admitted and therefore does not offer Retry.
+    @Test func supportedImageDecodeFailureIsNotRetryable() async throws {
         let ref = reference("00000000-0000-0000-0000-0000000001F2", version: 1)
         let history = PausableDetailsHistory()
         await history.scriptDetails(
@@ -425,13 +473,14 @@ struct PreviewContentLoaderTests {
         await history.resumeDetails(for: ref.id)
         _ = await task.value
         #expect(loader.phase == .failed)
+        #expect(!loader.canRetryFailure)
         #expect(loader.appliedImageSize == nil)
     }
 
     /// The declared text codec is part of preview support. Invalid bytes are
     /// therefore a failed decode episode, not evidence that the UTI itself is
-    /// unsupported.
-    @Test func supportedTextDecodeFailureIsRetryable() async throws {
+    /// unsupported; retrying the same invalid bytes is not admitted.
+    @Test func supportedTextDecodeFailureIsNotRetryable() async throws {
         let ref = reference("00000000-0000-0000-0000-0000000001F3", version: 1)
         let representation = HistoryRepresentation(
             typeIdentifier: "public.utf8-plain-text",
@@ -447,6 +496,7 @@ struct PreviewContentLoaderTests {
         _ = await task.value
 
         #expect(loader.phase == .failed)
+        #expect(!loader.canRetryFailure)
         #expect(loader.occurrence == nil)
     }
 

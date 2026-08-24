@@ -142,6 +142,10 @@ extension HistoryAuthority {
         } catch {
             throw HistoryFailure.temporarilyUnavailable(.factProof)
         }
+        // SwiftData's synchronous fetch itself is not preemptible. Once it
+        // returns, do not begin or continue the O(N) scalar projection for a
+        // superseded query (Card 11B).
+        try Task.checkCancellation()
         guard rows.count <= limits.hardMaximumRetainedItems else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
@@ -174,7 +178,10 @@ extension HistoryAuthority {
         // the default order (§14.2; 03b §8).
         var corpusRows: [SearchCorpusRow] = []
         corpusRows.reserveCapacity(rows.count)
-        for row in rows {
+        for (rowOffset, row) in rows.enumerated() {
+            if rowOffset.isMultiple(of: SearchWorker.cancellationRowInterval) {
+                try Task.checkCancellation()
+            }
             // Bind the row's scalar values first: the non-Sendable @Model
             // row must not be captured by the `mapCodecFailure` closures
             // (actor-isolated context — sending the row risks data races).
@@ -271,6 +278,7 @@ extension HistoryAuthority {
             }
 #endif
         }
+        try Task.checkCancellation()
 #if DEBUG
         searchDebugProbe.record(
             traceID: debugTraceID,
@@ -296,6 +304,10 @@ extension HistoryAuthority {
         corpusRows.sort { lhs, rhs in
             Self.defaultOrderIsOrdered(lhs, rhs)
         }
+        // `sort` is a synchronous Standard Library operation. Fence its
+        // result before cursor anchoring or publication if cancellation
+        // arrived during that irreducible interval.
+        try Task.checkCancellation()
 
 #if DEBUG
         searchDebugProbe.record(

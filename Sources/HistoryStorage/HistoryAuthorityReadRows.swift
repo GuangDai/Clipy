@@ -417,6 +417,10 @@ internal extension DomainRejection {
             return .invalidPinnedPlacement(failure)
         case .invalidRevisionDraft:
             return .invalidInput(.incoherentRevisionDraft)
+        case .candidateItemIDCollision:
+            // Capture Authority intercepts this package-only retry signal.
+            // Any other mapping site seeing it has violated that ownership.
+            return .persistence(.invariantViolation)
         case .corruptLineage:
             return .persistence(.invariantViolation)
         case .capacityExceeded(let kind):

@@ -26,35 +26,35 @@ struct PanelSubmitDecisionTests {
             keyCode: UInt16(kVK_Return),
             modifierFlags: [],
             hasMarkedText: false,
-            isAtListRoot: true
+            isSelectionSubmissionEnabled: true
         ))
         #expect(!PanelSubmitDecision.shouldSubmit(
             eventType: .keyDown,
             keyCode: UInt16(kVK_Return),
             modifierFlags: [],
             hasMarkedText: true,
-            isAtListRoot: true
+            isSelectionSubmissionEnabled: true
         ))
         #expect(!PanelSubmitDecision.shouldSubmit(
             eventType: .keyDown,
             keyCode: UInt16(kVK_Return),
             modifierFlags: .command,
             hasMarkedText: false,
-            isAtListRoot: true
+            isSelectionSubmissionEnabled: true
         ))
         #expect(!PanelSubmitDecision.shouldSubmit(
             eventType: .keyUp,
             keyCode: UInt16(kVK_ANSI_KeypadEnter),
             modifierFlags: [],
             hasMarkedText: false,
-            isAtListRoot: true
+            isSelectionSubmissionEnabled: true
         ))
         #expect(!PanelSubmitDecision.shouldSubmit(
             eventType: .keyDown,
             keyCode: UInt16(kVK_Return),
             modifierFlags: [],
             hasMarkedText: false,
-            isAtListRoot: false
+            isSelectionSubmissionEnabled: false
         ))
     }
 }
@@ -62,9 +62,12 @@ struct PanelSubmitDecisionTests {
 struct PopupPositionGeometryTests {
 
     /// Two synthetic screens: a 1440×875 main visible frame and a
-    /// 1920×1080 display to its right.
+    /// 1920×1080 display to its right. Individual tests add a synthetic
+    /// negative-origin display; these values prove only the pure screen-space
+    /// arithmetic, not WindowServer display or Space lifecycle behavior.
     private let mainFrame = NSRect(x: 0, y: 0, width: 1_440, height: 875)
     private let rightFrame = NSRect(x: 1_440, y: 0, width: 1_920, height: 1_080)
+    private let negativeOriginFrame = NSRect(x: -1_600, y: -200, width: 1_600, height: 1_000)
     private let panelSize = NSSize(width: 400, height: 560)
 
     private func panelOrigin(
@@ -103,6 +106,29 @@ struct PopupPositionGeometryTests {
         let origin = panelOrigin(.cursor, mouse: NSPoint(x: 1_500, y: 900))
         #expect(origin.x == 1_500)
         #expect(origin.y == 340)  // 900 - 560
+    }
+
+    @Test func cursorModeClampsToTheChosenNegativeOriginVisibleFrame() {
+        // The pointer is inside the synthetic left-hand display and near its
+        // bottom-right corner. Both axes clamp against that display's literal
+        // visible-frame edges rather than the primary display's zero origin;
+        // the width is the real expanded panel width, not the 400-point main
+        // surface alone.
+        let expandedPanelSize = NSSize(width: 721, height: 560)
+        let origin = PopupPositionGeometry.origin(
+            for: .cursor,
+            panelSize: expandedPanelSize,
+            statusItemButtonScreenFrame: nil,
+            mouseLocation: NSPoint(x: -5, y: -195),
+            screenVisibleFrames: [mainFrame, negativeOriginFrame],
+            lastPositionAnchor: nil
+        )
+
+        #expect(origin == NSPoint(x: -721, y: -200))
+        #expect(origin.x >= negativeOriginFrame.minX)
+        #expect(origin.x + expandedPanelSize.width <= negativeOriginFrame.maxX)
+        #expect(origin.y >= negativeOriginFrame.minY)
+        #expect(origin.y + expandedPanelSize.height <= negativeOriginFrame.maxY)
     }
 
     @Test func centerModeCentersInThePointerScreen() {
@@ -215,6 +241,52 @@ struct PopupPositionGeometryTests {
                 previewVisible: true
             ) == mainSurface
         )
+    }
+
+    @Test func negativeOriginLeftEdgePreviewCycleUsesTrailingAndKeepsTheMainSurface() {
+        let mainSurface = NSRect(x: -1_600, y: -200, width: 400, height: 560)
+
+        let expansion = PopupPositionGeometry.expandedPreviewFrame(
+            preservingMainSurface: mainSurface,
+            in: negativeOriginFrame
+        )
+
+        #expect(expansion.placement == .trailing)
+        #expect(expansion.panelFrame == NSRect(x: -1_600, y: -200, width: 721, height: 560))
+        #expect(expansion.panelFrame.minX == negativeOriginFrame.minX)
+        #expect(expansion.panelFrame.maxX <= negativeOriginFrame.maxX)
+        #expect(expansion.panelFrame.minY == negativeOriginFrame.minY)
+        #expect(expansion.panelFrame.maxY <= negativeOriginFrame.maxY)
+
+        let collapsedFrame = PopupPositionGeometry.mainSurfaceFrame(
+            in: expansion.panelFrame,
+            previewPlacement: expansion.placement,
+            previewVisible: true
+        )
+        #expect(collapsedFrame == mainSurface)
+    }
+
+    @Test func negativeOriginRightEdgePreviewCycleUsesLeadingAndKeepsTheMainSurface() {
+        let mainSurface = NSRect(x: -400, y: 240, width: 400, height: 560)
+
+        let expansion = PopupPositionGeometry.expandedPreviewFrame(
+            preservingMainSurface: mainSurface,
+            in: negativeOriginFrame
+        )
+
+        #expect(expansion.placement == .leading)
+        #expect(expansion.panelFrame == NSRect(x: -721, y: 240, width: 721, height: 560))
+        #expect(expansion.panelFrame.minX >= negativeOriginFrame.minX)
+        #expect(expansion.panelFrame.maxX == negativeOriginFrame.maxX)
+        #expect(expansion.panelFrame.minY >= negativeOriginFrame.minY)
+        #expect(expansion.panelFrame.maxY == negativeOriginFrame.maxY)
+
+        let collapsedFrame = PopupPositionGeometry.mainSurfaceFrame(
+            in: expansion.panelFrame,
+            previewPlacement: expansion.placement,
+            previewVisible: true
+        )
+        #expect(collapsedFrame == mainSurface)
     }
 
     @Test func previewConservativelyUsesTrailingWithoutAScreen() {

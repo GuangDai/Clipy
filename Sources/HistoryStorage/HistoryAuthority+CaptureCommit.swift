@@ -30,6 +30,8 @@ extension HistoryAuthority {
     ///   `.persistence(...)`); the mapped `DomainRejection` vocabulary
     ///   (docs/02-domain.md §6); `StampingRejection` /
     ///   `CodecRejection.encodingFailed` via their §16 mappings;
+    ///   internal `CaptureCandidateIDCollision` before stamping/transaction
+    ///   so the facade can perform Card 2B-2's bounded remint;
     ///   `.persistence(.invariantViolation)` when the planner's winner is
     ///   absent from the loaded facts (defensive);
     ///   `.persistence(.transaction)` for any transaction-closure failure
@@ -102,6 +104,13 @@ extension HistoryAuthority {
                 hardMaximumRetainedItems: limits.hardMaximumRetainedItems
             )
         } catch let rejection as DomainRejection {
+            if case .candidateItemIDCollision(let itemID) = rejection {
+                // Card 2B-1/2B-2: Domain proves the candidate is occupied from
+                // the complete retained inventory; Storage owns entropy and
+                // turns that package rejection into the facade's bounded
+                // remint signal before stamping or transaction entry.
+                throw CaptureCandidateIDCollision(itemID: itemID)
+            }
             throw rejection.historyFailure
         }
 

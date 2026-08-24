@@ -805,7 +805,7 @@ settled RSS、CPU/energy、failure rate，不生成综合分数。
 | `DEC-SOURCE-LABEL` | presentation/privacy owning docs | OPEN | source UI/filter | frontmost-app弱观察的产品文案与过滤语义。 |
 | `DEC-PASTE-REFERENCE` | 03b/04 read-paste contract | OPEN | Clipboard flow paste | current-by-ID还是selection-stable exact reference。 |
 | `DEC-PREVIEW-FALLBACK` | V2-07 + Preview manifest | OPEN | PREVIEW fallback | type mismatch/malformed后是否尝试后续representation，以及priority/budget。 |
-| `DEC-OBSERVER-START` | pasteboard/app lifecycle spec | OPEN | observer/capture | start立即导入current board，还是baseline + explicit Import Current。 |
+| `DEC-OBSERVER-START` | pasteboard/app lifecycle spec | **RESOLVED / BATCH 40 CI PENDING (2026-08-24)** | observer/capture | process startup与explicit access Retry立即导入current complete generation；user Pause后的Resume只baseline current `changeCount`，不导入pause期间值，下一generation才capture。一个observer/direct start option，不造second path。 |
 | `DEC-RICH-EDIT` | 03a + V2-07 | OPEN | FORMAT edit | HTML/RTF是raw markup editor、rich serializer还是禁用。 |
 | `DEC-PY-TRANSPORT` | V2-05 amendment | OPEN | Python production adapter | public surface已固定为first-party`clipyctl`；signed/sandbox/TCC后只选择其背后的单一private transport。 |
 | `DEC-PY-AUTHENTICATED-INGRESS` | V2-05 + 01 target graph | **BLOCKED-SPEC** | `PLAY-PY-F1`、`PLAY-PY-B3`、`PLAY-PY-B3A`、`PLAY-PY-B3B`、`PLAY-PY-B3C`、`PLAY-PY-B4`、`PLAY-PY-B5` | ClipyApp不能访问internal Gateway，unknown credential也不能使用App Intent预绑定facade；必须批准一个只携带bounded peer evidence、opaque credential与typed request的受限app-facing ingress及其target/access placement。不得用公开Gateway、公开CredentialStore或transport-side policy绕过。 |

@@ -20,7 +20,7 @@ enum PanelSubmitDecision {
         keyCode: UInt16,
         modifierFlags: NSEvent.ModifierFlags,
         hasMarkedText: Bool,
-        isAtListRoot: Bool
+        isSelectionSubmissionEnabled: Bool
     ) -> Bool {
         let disallowedModifiers: NSEvent.ModifierFlags = [
             .command, .control, .option,
@@ -30,7 +30,7 @@ enum PanelSubmitDecision {
                 || keyCode == UInt16(kVK_ANSI_KeypadEnter))
             && modifierFlags.intersection(disallowedModifiers).isEmpty
             && !hasMarkedText
-            && isAtListRoot
+            && isSelectionSubmissionEnabled
     }
 }
 
@@ -145,7 +145,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
             keyCode: event.keyCode,
             modifierFlags: event.modifierFlags,
             hasMarkedText: hasMarkedText,
-            isAtListRoot: isSelectionSubmissionEnabled()
+            isSelectionSubmissionEnabled: isSelectionSubmissionEnabled()
         ) else {
             super.sendEvent(event)
             return

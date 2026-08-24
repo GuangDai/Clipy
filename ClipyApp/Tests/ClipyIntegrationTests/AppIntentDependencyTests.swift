@@ -92,7 +92,7 @@ struct AppIntentDependencyTests {
             Issue.record("expected a recent page")
             return
         }
-        #expect(page.rows.map(\.item.id) == [inserted.id])
+        #expect(page.rows.map(\.row.item.id) == [inserted.id])
     }
 
     @Test("startup failures become a content-free retryable dependency error")

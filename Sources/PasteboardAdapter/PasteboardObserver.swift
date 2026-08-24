@@ -58,8 +58,12 @@ public final class PasteboardObserver {
     }
 #endif
 
-    /// Captures the CURRENT pasteboard immediately, then polls: the handler
-    /// runs on the main actor once per distinct `changeCount` whose outcome
+    /// By default captures the CURRENT pasteboard immediately, then polls.
+    /// `captureCurrent == false` baselines the current generation without
+    /// delivery; the app uses that privacy-preserving form when the user
+    /// explicitly resumes after a pause, so values copied while paused stay
+    /// excluded. The handler runs on the main actor once per later distinct
+    /// `changeCount` whose outcome
     /// is non-nil (a change that clears the pasteboard or yields nothing
     /// retainable is recorded but not delivered; a PARTIAL freeze — a
     /// declared representation's bytes unavailable — IS delivered, marked
@@ -67,6 +71,7 @@ public final class PasteboardObserver {
     /// judge). Calling `start` again while running replaces the handler
     /// without re-capturing.
     public func start(
+        captureCurrent: Bool = true,
         onAccessBehaviorChanged:
             (@MainActor (PasteboardAccessBehavior) -> Void)? = nil,
         handler: @escaping @MainActor (CaptureOutcome) -> Void
@@ -81,7 +86,9 @@ public final class PasteboardObserver {
         guard accessBehavior == .allowed else { return }
 
         lastChangeCount = adapter.pasteboard.changeCount
-        deliverCurrentOutcome(to: handler)
+        if captureCurrent {
+            deliverCurrentOutcome(to: handler)
+        }
 
         // The timer is added to the main run loop's common modes explicitly
         // rather than via `Timer.scheduledTimer` (which would silently bind

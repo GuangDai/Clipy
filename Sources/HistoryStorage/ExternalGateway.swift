@@ -188,17 +188,12 @@ internal actor ExternalGateway {
             descriptor,
             expectedConnectionKind: .localAutomation
         )
-        let result = try await authority.performExternalRead(
+        return try await authority.performLocalAutomationBrowsePreview(
             read,
             connection: connection,
-            expectedConnectionKind: .localAutomation,
             requestedAt: requestedAt,
             searchWorker: searchWorker
         )
-        guard case .page(let page) = result else {
-            throw ExternalFailure.persistence(.invariantViolation)
-        }
-        return page
     }
 
     internal func authorize(

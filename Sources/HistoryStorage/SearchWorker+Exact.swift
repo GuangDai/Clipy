@@ -17,7 +17,7 @@ extension SearchWorker {
         term: String,
         in corpus: SearchCorpusSnapshot,
         directive: ScanDirective
-    ) -> [EvaluatedRow] {
+    ) async throws -> [EvaluatedRow] {
         // Preprocess the eligible-ASCII needle once for this public request.
         // The scalar baseline has a linear worst-case bound and delegates
         // every fallback comparison to Foundation's frozen §8 semantics.
@@ -100,7 +100,11 @@ extension SearchWorker {
             )
         }
 #endif
-        for row in corpus.rows {
+        for (rowOffset, row) in corpus.rows.enumerated() {
+            try await scanCheckpoint(
+                .exact,
+                beforeRowAt: rowOffset
+            )
 #if DEBUG
             debugTitleRows += 1
             debugTitleUTF8Bytes += row.debugTitleUTF8Bytes
@@ -220,6 +224,7 @@ extension SearchWorker {
             recordProgressIfNeeded()
 #endif
         }
+        try Task.checkCancellation()
 #if DEBUG
         recordEarlyStopProgressIfNeeded()
         let debugTotalElapsed = debugStart.duration(to: debugClock.now)

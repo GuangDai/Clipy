@@ -1311,7 +1311,9 @@ test.
   copy/Esc proof, a four-state ServiceManagement runtime proof, or complete
   unified-retention acceptance.
 - **Batch 39 executes five bounded leaves across frozen todo-map areas
-  4.1–4.4/4.7 and is in progress:** [PR #41](https://github.com/GuangDai/Clipy/pull/41)
+  4.1–4.4/4.7 and is landed:** [PR #41](https://github.com/GuangDai/Clipy/pull/41) /
+  merge `87db3d6`; final PR correctness 32705015919 and master correctness
+  32705436579 are green. It
   keeps independent evidence ceilings: (4.1) one visually unified
   count+V2 retention group with semantic no-change Apply gating, untouched
   raw-value preservation, and explicit whole-unit edit intent; (4.2) verified
@@ -1323,7 +1325,31 @@ test.
   contraction. The proposed narrow regex/log gates and the pre-existing
   static-source, SwiftLint, dependency/vendor, generated-project, test-selection,
   and public-symbol machinery were removed at the user's direction. Current
-  correctness is the two parallel SwiftPM and XcodeGen build/test jobs; final
-  macOS evidence is pending. These leaves do not upgrade the signed/TCC/
+  correctness is the two parallel SwiftPM and XcodeGen build/test jobs. The
+  Search Clear/focus journey exposed and then fixed a real AppKit event bug:
+  `FloatingPanel` had read keyboard-only `keyCode` from mouse events before
+  delivering them to `super`, which made panel controls ignore clicks. The
+  public AXPress cell remains an explicit skip on the untrusted CI runner.
+  These leaves do not upgrade the signed/TCC/
   VoiceOver/FKA/Developer-ID/full-disk/migration cells or the client-custody,
   transport, and opaque-locator design blockers.
+- **Batch 40 advances direct product leaves across 4.1–4.5 and is in
+  progress:** Card 8C now presents paged counts as lower bounds and clears a
+  selection removed by authoritative replacement; Preview Retry is admitted
+  only for typed transient/renderer failures; Details Pin/Unpin owns one
+  pending intent; count retention has a running-app receipt/purge journey;
+  capture item-ID collisions are rejected by pure Domain and retried eight
+  bounded times by Storage; Authority corpus projection and all three search
+  modes check cooperative cancellation at a 32-row cadence with a pre-yield
+  publication fence. X.7
+  external row/details wrappers carry authoritative Effective title and
+  revision count into App Intents from one coherent projection. The panel now
+  exposes Pause/Resume with baseline-on-resume privacy semantics, distinguishes
+  denied access from empty History, and has running-app denied/recovery
+  journeys. Additional bounded evidence covers
+  negative-origin panel geometry, focus-loss/modal/reopen lifecycle, and the
+  current treatment of unknown pasteboard bookkeeping UTIs. GitHub macOS
+  correctness is pending; none of these source/test leaves is Done until it is
+  green. They do not prove real TCC/VoiceOver/FKA, Spaces/Stage Manager,
+  signed runtime, client credential custody/transport, or arbitrary native
+  matcher preemption inside one synchronous row evaluation.

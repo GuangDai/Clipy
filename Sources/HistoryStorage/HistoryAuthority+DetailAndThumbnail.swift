@@ -41,6 +41,28 @@ extension HistoryAuthority {
         for id: HistoryItemID,
         in context: ModelContext
     ) throws -> HistoryDetails {
+        try detailsAndTitle(for: id, in: context).details
+    }
+
+    /// X.7's external detail projection. The durable Effective title and the
+    /// complete V1 lineage DTO are read from one fetched row in one gated
+    /// Authority interval; no follow-up History query can observe a different
+    /// content version.
+    internal func externalDetails(
+        for id: HistoryItemID,
+        in context: ModelContext
+    ) throws -> ExternalHistoryDetails {
+        let projection = try detailsAndTitle(for: id, in: context)
+        return ExternalHistoryDetails(
+            details: projection.details,
+            title: projection.title
+        )
+    }
+
+    private func detailsAndTitle(
+        for id: HistoryItemID,
+        in context: ModelContext
+    ) throws -> (details: HistoryDetails, title: String) {
 
         // ── Non-suspending read interval (§5): no `await` past this
         //    line while the context or fetched row is live. ──
@@ -105,16 +127,19 @@ extension HistoryAuthority {
             firstSource: item.occurrence.firstSource,
             lastSource: item.occurrence.lastSource
         )
-        return HistoryDetails(
-            item: HistoryItemReference(
-                id: item.id,
-                contentVersion: item.contentVersion
+        return (
+            HistoryDetails(
+                item: HistoryItemReference(
+                    id: item.id,
+                    contentVersion: item.contentVersion
+                ),
+                canonical: canonicalRepresentations,
+                effective: effectiveRepresentations,
+                revisions: revisionSummaries,
+                occurrence: occurrence,
+                pinnedPosition: item.pinOrdinal?.rawValue
             ),
-            canonical: canonicalRepresentations,
-            effective: effectiveRepresentations,
-            revisions: revisionSummaries,
-            occurrence: occurrence,
-            pinnedPosition: item.pinOrdinal?.rawValue
+            row.title
         )
     }
 
