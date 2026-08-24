@@ -1184,7 +1184,10 @@ test.
   `RET-READ-1A` public persistent owner-release/reopen/read/reapply evidence.
   PR run 32678325377 and master push run 32678654503 are green. Localization,
   visual count relocation into one group, AX/FKA, and live usage remain open.
-- **Batch 31 `DEC-PREVIEW-TARGET` deep-module migration is in progress:** one
+- **Batch 31 `DEC-PREVIEW-TARGET` deep-module migration is PR-green:**
+  [PR #33](https://github.com/GuangDai/Clipy/pull/33) at head `281582a` passed
+  all three correctness jobs in run
+  [32681818215](https://github.com/GuangDai/Clipy/actions/runs/32681818215). One
   package-only concrete `ContentPreview` actor now owns exact preview source
   selection, fixed resource profiles, text codecs, ImageIO decode, and bounded
   eager raster/text outcomes. PresentationUI owns History/reference/task/
@@ -1192,5 +1195,10 @@ test.
   The same batch migrates encoded thumbnail display materialization without
   moving HistoryStorage's source/version/single-flight or ThumbnailStore's
   surface-local reference/cache policy. Exact UTF-8 and PNG artifact proofs,
-  deterministic A3/A4/A5 late-result tests, gates, and owning documents are in
-  the branch; macOS CI evidence is pending.
+  deterministic A3/A4/A5 late-result tests, the one-native-slot handoff proof,
+  gates, and owning documents are green. Earlier attempts
+  32681250466/32681513849 exposed respectively three missing `try` markers in
+  throwing TaskLocal test scopes and a concrete 12.5-second ImageIO completion
+  under the 962-test parallel runner versus the old 10-second monotone poll;
+  both were fixed before the green run. Merge/master provenance is not yet
+  recorded in this commit.
