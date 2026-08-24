@@ -29,7 +29,7 @@ import HistoryCore
 ///   released by the test (docs/03a-instruction-set.md §7; docs/
 ///   04-coherence.md §6).
 /// - `perform` records every action and either throws `performFailure` or
-///   returns `.unchanged`.
+///   returns the scripted receipt (`.unchanged` by default).
 /// - `details`/`pastePayload` throw `.notFound`; `thumbnail` returns `nil`.
 /// - `retentionConfiguration` returns the scripted configured-policy value
 ///   and records the request count (V2-07 §6.3's panel-open read).
@@ -59,8 +59,11 @@ actor ScriptedHistory: ClipboardHistory {
     /// an empty page.
     private let browseScript: [HistoryPageCursor: BrowseOutcome]
 
-    /// Thrown by every `perform`; `nil` answers `.unchanged`.
+    /// Thrown by every `perform`; `nil` answers `performReceipt`.
     private var performFailure: HistoryFailure?
+
+    /// Deterministic mutation receipt returned when `performFailure` is nil.
+    private let performReceipt: HistoryReceipt
 
     /// The configured-policy value `retentionConfiguration` returns.
     private let scriptedRetentionConfiguration: HistoryRetentionConfiguration
@@ -103,12 +106,14 @@ actor ScriptedHistory: ClipboardHistory {
         repeatsObservedFirstPage: Bool = true,
         browseScript: [HistoryPageCursor: BrowseOutcome] = [:],
         performFailure: HistoryFailure? = nil,
+        performReceipt: HistoryReceipt = .unchanged,
         scriptedRetentionConfiguration: HistoryRetentionConfiguration = .newStoreDefaults
     ) {
         self.observedFirstPage = observedFirstPage
         self.repeatsObservedFirstPage = repeatsObservedFirstPage
         self.browseScript = browseScript
         self.performFailure = performFailure
+        self.performReceipt = performReceipt
         self.scriptedRetentionConfiguration = scriptedRetentionConfiguration
     }
 
@@ -160,7 +165,7 @@ actor ScriptedHistory: ClipboardHistory {
         if let performFailure {
             throw performFailure
         }
-        return .unchanged
+        return performReceipt
     }
 
     func browse(_ request: HistoryBrowseRequest) async throws -> HistoryPage {

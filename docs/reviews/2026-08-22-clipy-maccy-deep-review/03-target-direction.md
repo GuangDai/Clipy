@@ -790,7 +790,7 @@ settled RSS、CPU/energy、failure rate，不生成综合分数。
 
 | Decision | Owner | Status | Blocks | 必须冻结的问题 |
 |---|---|---|---|---|
-| `DEC-RET-READ` | V2-02 + V2-07 + HistoryCore surface | OPEN | retention UI/readback | retention readback 是 public requirement 还是 app-internal UI seam？ |
+| `DEC-RET-READ` | V2-02 + V2-07 + HistoryCore surface | RESOLVED — existing `ClipboardHistory.retentionConfiguration()` purpose-specific public read | — | one validated count+policy snapshot; no live usage/OCC/model identity; owned conformer source break; no fabricated default implementation |
 | `DEC-PREVIEW-TARGET` | 01 architecture + V2-07 + roadmap | OPEN | FORMAT/PREVIEW | `ContentPreview` target、Apple imports、eager pixel artifact 与 gates；移除 PresentationUI CGImage例外。 |
 | `DEC-THUMB-CACHE` | 06 G1 + V2-07 | OPEN | thumbnail cache cards | completed cache 是否获准；否则退回 visible-state。 |
 | `DEC-THUMBNAIL-REQUEST-OWNER` | 01 target graph + V2-07 | OPEN | format migration/thumbnail request | row DTO neutral eligibility、UI always-request还是双manifest；Storage仍拥有source/version fence。 |

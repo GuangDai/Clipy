@@ -47,6 +47,15 @@ public struct ClipySettingsView: View {
     /// PresentationUI carries the mode value only).
     private let popupPosition: Binding<PopupPositionMode>?
 
+    /// One panel-owned configured snapshot and edit generation shared by the
+    /// v1 count control and all V2 dimensions (DEC-RET-READ / Card 10A).
+    /// Hoisting this state prevents two tab-local reads from rendering
+    /// different durable configurations and gives the count field the same
+    /// late-read fence as the expansion fields.
+    @State private var retentionDraft = RetentionSettingsDraft()
+    @State private var hasLoadedRetentionConfiguration = false
+    @State private var retentionConfigurationFailure: String?
+
     /// - Parameters:
     ///   - viewState: the shared interaction-state object (contract §3).
     ///   - launchAtLogin: when non-`nil`, the General tab shows the
@@ -69,13 +78,40 @@ public struct ClipySettingsView: View {
             GeneralSettingsTab(
                 viewState: viewState,
                 launchAtLogin: launchAtLogin,
-                popupPosition: popupPosition
+                popupPosition: popupPosition,
+                retentionDraft: $retentionDraft,
+                hasLoadedRetentionConfiguration: hasLoadedRetentionConfiguration,
+                retentionConfigurationFailure: retentionConfigurationFailure
             )
                 .tabItem { Label("General", systemImage: "gear") }
-            RetentionSettingsTab(viewState: viewState)
+            RetentionSettingsTab(
+                viewState: viewState,
+                draft: $retentionDraft,
+                hasLoadedRetentionConfiguration: hasLoadedRetentionConfiguration,
+                retentionConfigurationFailure: retentionConfigurationFailure
+            )
                 .tabItem { Label("Retention", systemImage: "clock.arrow.circlepath") }
         }
         .frame(width: 480, height: 320)
+        .task { await loadRetentionConfiguration() }
+    }
+
+    /// One public read supplies both tabs. A response racing a user edit is
+    /// merged per field by `RetentionSettingsDraft`; the fact that the read
+    /// completed still unlocks Apply because the authoritative comparison
+    /// baseline arrived even when newer text wins the display merge.
+    private func loadRetentionConfiguration() async {
+        let request = retentionDraft.beginLoadRequest()
+        do {
+            let configuration = try await viewState.retentionConfiguration()
+            retentionDraft.acceptLoaded(configuration, requestedAt: request)
+            hasLoadedRetentionConfiguration = true
+            retentionConfigurationFailure = nil
+        } catch let failure as HistoryFailure {
+            retentionConfigurationFailure = FailurePresentation.message(for: failure)
+        } catch {
+            retentionConfigurationFailure = "The current retention settings could not be read."
+        }
     }
 }
 
@@ -98,31 +134,32 @@ private struct GeneralSettingsTab: View {
     private let viewState: HistoryViewState
     private let launchAtLogin: LaunchAtLoginSettings?
     private let popupPosition: Binding<PopupPositionMode>?
-
-    /// Text backing the count field; parsed and range-checked on every use
-    /// (Apply is disabled while invalid — contract §4.4 "numeric
-    /// TextField + Stepper"). Opens at the §2 default as a placeholder;
-    /// `loadConfiguredCount()` replaces it with the persisted value.
-    @State private var maximumUnpinnedText: String =
-        String(HistoryLimits.standard.defaultMaximumUnpinnedItems)
-
-    /// False until the authoritative configured-policy read has landed on
-    /// this tab; gates Apply (SPEC-IMPL-003).
-    @State private var hasLoadedConfiguration = false
+    @Binding private var retentionDraft: RetentionSettingsDraft
+    private let hasLoadedRetentionConfiguration: Bool
+    private let retentionConfigurationFailure: String?
 
     @State private var status: SettingStatus?
     @State private var isWorking = false
+    @State private var pendingCountSubmission:
+        RetentionSettingsDraft.CountSubmission?
+    @State private var isConfirmingCountTightening = false
     @State private var isConfirmingClearUnpinned = false
     @State private var isConfirmingClearAll = false
 
     init(
         viewState: HistoryViewState,
         launchAtLogin: LaunchAtLoginSettings?,
-        popupPosition: Binding<PopupPositionMode>?
+        popupPosition: Binding<PopupPositionMode>?,
+        retentionDraft: Binding<RetentionSettingsDraft>,
+        hasLoadedRetentionConfiguration: Bool,
+        retentionConfigurationFailure: String?
     ) {
         self.viewState = viewState
         self.launchAtLogin = launchAtLogin
         self.popupPosition = popupPosition
+        _retentionDraft = retentionDraft
+        self.hasLoadedRetentionConfiguration = hasLoadedRetentionConfiguration
+        self.retentionConfigurationFailure = retentionConfigurationFailure
     }
 
     var body: some View {
@@ -130,7 +167,7 @@ private struct GeneralSettingsTab: View {
             Section {
                 LabeledContent("Keep at most") {
                     HStack {
-                        TextField("200", text: $maximumUnpinnedText)
+                        TextField("200", text: maximumUnpinnedText)
                             .frame(width: 64)
                             .multilineTextAlignment(.trailing)
                             .accessibilityLabel("Maximum unpinned items")
@@ -151,14 +188,37 @@ private struct GeneralSettingsTab: View {
                 }
                 HStack {
                     Button("Apply") {
-                        Task { await applyMaximumUnpinned() }
+                        requestMaximumUnpinnedApply()
                     }
                     .disabled(
-                        maximumUnpinnedValue == nil || isWorking
-                            || !hasLoadedConfiguration
+                        !retentionDraft.maximumUnpinnedInputIsValid || isWorking
+                            || !hasLoadedRetentionConfiguration
                     )
-                    if let status {
+                    .confirmationDialog(
+                        "Apply a stricter item limit?",
+                        isPresented: $isConfirmingCountTightening,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Apply Stricter Limit", role: .destructive) {
+                            guard let submission = pendingCountSubmission else {
+                                return
+                            }
+                            Task { await applyMaximumUnpinned(submission) }
+                        }
+                        Button("Cancel", role: .cancel) {
+                            pendingCountSubmission = nil
+                        }
+                    } message: {
+                        Text(
+                            "A stricter limit can immediately remove unpinned items, and they can't be recovered."
+                        )
+                    }
+                    if let successMessage = retentionDraft.acceptedCountSuccessMessage {
+                        SettingStatusView(status: .success(successMessage))
+                    } else if let status {
                         SettingStatusView(status: status)
+                    } else if let retentionConfigurationFailure {
+                        SettingStatusView(status: .failure(retentionConfigurationFailure))
                     }
                 }
                 if let launchAtLogin {
@@ -208,7 +268,6 @@ private struct GeneralSettingsTab: View {
         }
         .formStyle(.grouped)
         .onAppear { launchAtLogin?.refresh() }
-        .task { await loadConfiguredCount() }
     }
 
     @ViewBuilder
@@ -262,9 +321,16 @@ private struct GeneralSettingsTab: View {
     /// The parsed count, or `nil` when the text is not a whole number
     /// inside `userMaximumUnpinnedRange` (06 §2).
     private var maximumUnpinnedValue: Int? {
-        validatedSettingsWholeNumber(
-            maximumUnpinnedText,
-            in: HistoryLimits.standard.userMaximumUnpinnedRange
+        retentionDraft.countSubmission()?.maximumUnpinnedItems
+    }
+
+    private var maximumUnpinnedText: Binding<String> {
+        Binding(
+            get: { retentionDraft.maximumUnpinnedText },
+            set: {
+                retentionDraft.setMaximumUnpinnedText($0)
+                status = nil
+            }
         )
     }
 
@@ -275,14 +341,18 @@ private struct GeneralSettingsTab: View {
         Binding<Int>(
             get: {
                 guard let typed = Int(
-                    maximumUnpinnedText.trimmingCharacters(in: .whitespaces)
+                    retentionDraft.maximumUnpinnedText
+                        .trimmingCharacters(in: .whitespaces)
                 ) else {
                     return HistoryLimits.standard.defaultMaximumUnpinnedItems
                 }
                 let range = HistoryLimits.standard.userMaximumUnpinnedRange
                 return min(max(typed, range.lowerBound), range.upperBound)
             },
-            set: { maximumUnpinnedText = String($0) }
+            set: {
+                retentionDraft.setMaximumUnpinnedText(String($0))
+                status = nil
+            }
         )
     }
 
@@ -291,41 +361,49 @@ private struct GeneralSettingsTab: View {
         return "Enter a whole number from \(range.lowerBound) to \(range.upperBound)."
     }
 
-    /// Loads the persisted configured count so the field opens at the
-    /// authoritative value (`V2-07` §6.3's panel-open one-shot read; audit
-    /// SPEC-IMPL-003). Until the read lands, Apply stays disabled: a failed
-    /// read leaves the placeholder visible but can never be applied over a
-    /// real persisted policy. The V2-02 dimensions ride the same read but
-    /// belong to the Retention tab (`V2-02` §1's count/expansion split).
-    private func loadConfiguredCount() async {
-        do {
-            let configuration = try await viewState.retentionConfiguration()
-            maximumUnpinnedText = String(configuration.maximumUnpinnedItems)
-            hasLoadedConfiguration = true
-        } catch let failure as HistoryFailure {
-            status = .failure(FailurePresentation.message(for: failure))
-        } catch {
-            status = .failure("The current setting could not be read.")
+    /// Count is part of the same destructive-retention family as the V2
+    /// thresholds: lowering the configured value requires confirmation;
+    /// equal or looser values apply directly (`04` Red 10D).
+    private func requestMaximumUnpinnedApply() {
+        guard let submission = retentionDraft.countSubmission() else { return }
+        if retentionDraft.maximumUnpinnedRequiresTightening(for: submission) {
+            pendingCountSubmission = submission
+            isConfirmingCountTightening = true
+        } else {
+            Task { await applyMaximumUnpinned(submission) }
         }
     }
 
     /// Applies the count policy and reports the receipt inline
     /// (`.retentionPolicySet(removedCount:)`, 03a §6; V2-07 §5.2).
-    private func applyMaximumUnpinned() async {
-        guard let count = maximumUnpinnedValue else { return }
+    private func applyMaximumUnpinned(
+        _ submission: RetentionSettingsDraft.CountSubmission
+    ) async {
+        guard retentionDraft.isCurrent(submission) else { return }
+        pendingCountSubmission = nil
         isWorking = true
         defer { isWorking = false }
         do {
-            let receipt = try await viewState.applyMaximumUnpinnedItems(count)
+            let receipt = try await viewState.applyMaximumUnpinnedItems(
+                submission.maximumUnpinnedItems
+            )
+            let successMessage: String
             if case .committed(let commit) = receipt,
                case .retentionPolicySet(removedCount: let removed) = commit.outcome {
-                status = .success(Self.maximumUnpinnedFeedback(removed))
+                successMessage = Self.maximumUnpinnedFeedback(removed)
             } else {
-                status = .success("Done.")
+                successMessage = "Done."
             }
+            guard retentionDraft.acceptApplied(
+                submission,
+                successMessage: successMessage
+            ) else { return }
+            status = nil
         } catch let failure as HistoryFailure {
+            guard retentionDraft.isCurrent(submission) else { return }
             status = .failure(FailurePresentation.message(for: failure))
         } catch {
+            guard retentionDraft.isCurrent(submission) else { return }
             status = .failure("The setting could not be saved.")
         }
     }
@@ -402,15 +480,24 @@ private struct RetentionSettingsTab: View {
     /// Exact configured values plus whole-unit display text and edit
     /// generations. Keeping this as one value prevents one field from being
     /// rounded merely because another field was edited.
-    @State private var draft = RetentionSettingsDraft()
-    @State private var hasLoadedConfiguration = false
+    @Binding private var draft: RetentionSettingsDraft
+    private let hasLoadedRetentionConfiguration: Bool
+    private let retentionConfigurationFailure: String?
     @State private var status: SettingStatus?
     @State private var isWorking = false
     @State private var pendingSubmission: RetentionSettingsDraft.Submission?
     @State private var isConfirmingTightening = false
 
-    init(viewState: HistoryViewState) {
+    init(
+        viewState: HistoryViewState,
+        draft: Binding<RetentionSettingsDraft>,
+        hasLoadedRetentionConfiguration: Bool,
+        retentionConfigurationFailure: String?
+    ) {
         self.viewState = viewState
+        _draft = draft
+        self.hasLoadedRetentionConfiguration = hasLoadedRetentionConfiguration
+        self.retentionConfigurationFailure = retentionConfigurationFailure
     }
 
     var body: some View {
@@ -469,7 +556,7 @@ private struct RetentionSettingsTab: View {
                         }
                         .disabled(
                             !draft.inputIsValid || isWorking
-                                || !hasLoadedConfiguration
+                                || !hasLoadedRetentionConfiguration
                         )
                         .confirmationDialog(
                             "Apply stricter retention limits?",
@@ -493,6 +580,8 @@ private struct RetentionSettingsTab: View {
                             SettingStatusView(status: .success(successMessage))
                         } else if let status {
                             SettingStatusView(status: status)
+                        } else if let retentionConfigurationFailure {
+                            SettingStatusView(status: .failure(retentionConfigurationFailure))
                         }
                     }
                     Text("Changes apply to new and existing items at once.")
@@ -503,7 +592,6 @@ private struct RetentionSettingsTab: View {
             .formStyle(.grouped)
             .padding([.horizontal, .bottom])
         }
-        .task { await loadConfiguredPolicies() }
     }
 
     private var ageEnabled: Binding<Bool> {
@@ -584,29 +672,6 @@ private struct RetentionSettingsTab: View {
                 status = nil
             }
         )
-    }
-
-    /// Loads the persisted configured policies so every control opens at
-    /// its authoritative value (`V2-07` §6.3's panel-open one-shot read;
-    /// audit SPEC-IMPL-003). Until the read lands, Apply stays disabled: a
-    /// set replaces the WHOLE policy value (`V2-02` §8.1), so applying the
-    /// neutral prefill would silently disable every persisted dimension.
-    private func loadConfiguredPolicies() async {
-        let request = draft.beginLoadRequest()
-        do {
-            let configuration = try await viewState.retentionConfiguration()
-            // Deep review `04` Red 10A: a read started before a user edit may
-            // update the strictness baseline, but never replace newer fields.
-            draft.acceptLoaded(
-                configuration.policies,
-                requestedAt: request
-            )
-            hasLoadedConfiguration = true
-        } catch let failure as HistoryFailure {
-            status = .failure(Self.retentionFailureMessage(failure))
-        } catch {
-            status = .failure("The current policies could not be read.")
-        }
     }
 
     private func requestApply() {

@@ -3,11 +3,12 @@
 ///
 /// The controls are intentionally whole-day / whole-MiB fields while the
 /// configured History values are seconds / bytes. Loading therefore keeps the
-/// exact configured policy beside each displayed ceiling-rounded value. Until
-/// a field is actually edited, submission reuses that exact raw value instead
-/// of silently loosening it through the display conversion. An edit generation
-/// also fences asynchronous Apply completion from a newer draft (deep review
-/// `04` Red 10A/10D/10E).
+/// exact configured count/policy beside each displayed ceiling-rounded value.
+/// Until a field is actually edited, submission reuses that exact raw value
+/// instead of silently loosening it through the display conversion. One edit
+/// generation covers the count and all V2 dimensions, so a single panel-open
+/// read can merge around newer edits and fence asynchronous Apply completion
+/// (deep review `04` Red 10A/10D/10E).
 import Foundation
 import HistoryCore
 
@@ -21,11 +22,19 @@ internal struct RetentionSettingsDraft {
         fileprivate let editGeneration: UInt64
     }
 
+    internal struct CountSubmission: Sendable {
+        internal let maximumUnpinnedItems: Int
+        fileprivate let editGeneration: UInt64
+    }
+
     internal static let ageDaysRange: ClosedRange<Int> = 1...3_650
     internal static let storageMiBRange: ClosedRange<Int> = 1...1_920_000
     internal static let revisionCountRange: ClosedRange<Int> = 1...100
     internal static let revisionMiBRange: ClosedRange<Int> = 1...256
     internal static let mebibyteUnitLabel = "MiB"
+
+    internal private(set) var maximumUnpinnedText =
+        String(HistoryLimits.standard.defaultMaximumUnpinnedItems)
 
     internal private(set) var ageEnabled = false
     internal private(set) var ageDaysText = "30"
@@ -36,6 +45,7 @@ internal struct RetentionSettingsDraft {
     internal private(set) var revisionBytesEnabled = false
     internal private(set) var revisionMiBText = "64"
 
+    internal private(set) var maximumUnpinnedValueIsDirty = false
     internal private(set) var ageValueIsDirty = false
     internal private(set) var storageValueIsDirty = false
     internal private(set) var revisionCountValueIsDirty = false
@@ -45,6 +55,8 @@ internal struct RetentionSettingsDraft {
     internal private(set) var revisionCountToggleIsDirty = false
     internal private(set) var revisionBytesToggleIsDirty = false
 
+    private var configuredMaximumUnpinnedItems =
+        HistoryLimits.standard.defaultMaximumUnpinnedItems
     private var configuredPolicies = HistoryRetentionPolicies(
         age: nil,
         storage: nil,
@@ -52,12 +64,17 @@ internal struct RetentionSettingsDraft {
     )
     private var editGeneration: UInt64 = 0
     internal private(set) var acceptedSuccessMessage: String?
+    internal private(set) var acceptedCountSuccessMessage: String?
 
     internal var inputIsValid: Bool {
         (!ageEnabled || ageInputIsValid)
             && (!storageEnabled || storageInputIsValid)
             && (!revisionCountEnabled || revisionCountInputIsValid)
             && (!revisionBytesEnabled || revisionBytesInputIsValid)
+    }
+
+    internal var maximumUnpinnedInputIsValid: Bool {
+        maximumUnpinnedItems != nil
     }
 
     internal var ageInputIsValid: Bool { ageDays != nil }
@@ -67,6 +84,31 @@ internal struct RetentionSettingsDraft {
 
     internal func beginLoadRequest() -> LoadRequest {
         LoadRequest(editGeneration: editGeneration)
+    }
+
+    /// Accepts the complete configured snapshot used by both Settings tabs.
+    /// A late read refreshes the count baseline but preserves a newer count
+    /// edit, then applies the same per-field merge to the V2 policy bundle.
+    /// This is one History read and one edit generation, so count and policy
+    /// controls cannot render values from different persisted snapshots.
+    @discardableResult
+    internal mutating func acceptLoaded(
+        _ configuration: HistoryRetentionConfiguration,
+        requestedAt request: LoadRequest
+    ) -> Bool {
+        let generationIsCurrent = request.editGeneration == editGeneration
+        configuredMaximumUnpinnedItems = configuration.maximumUnpinnedItems
+        if generationIsCurrent || !maximumUnpinnedValueIsDirty {
+            maximumUnpinnedText = String(configuration.maximumUnpinnedItems)
+        }
+        let accepted = acceptLoaded(
+            configuration.policies,
+            requestedAt: request
+        )
+        if accepted {
+            maximumUnpinnedValueIsDirty = false
+        }
+        return accepted
     }
 
     /// Accepts a configured-policy read against the edit generation at which
@@ -126,6 +168,7 @@ internal struct RetentionSettingsDraft {
         revisionCountToggleIsDirty = false
         revisionBytesToggleIsDirty = false
         acceptedSuccessMessage = nil
+        acceptedCountSuccessMessage = nil
         return true
     }
 
@@ -133,6 +176,13 @@ internal struct RetentionSettingsDraft {
         guard ageEnabled != enabled else { return }
         ageEnabled = enabled
         ageToggleIsDirty = true
+        recordEdit()
+    }
+
+    internal mutating func setMaximumUnpinnedText(_ text: String) {
+        guard maximumUnpinnedText != text else { return }
+        maximumUnpinnedText = text
+        maximumUnpinnedValueIsDirty = true
         recordEdit()
     }
 
@@ -197,8 +247,26 @@ internal struct RetentionSettingsDraft {
         )
     }
 
+    internal func countSubmission() -> CountSubmission? {
+        guard let maximumUnpinnedItems else { return nil }
+        return CountSubmission(
+            maximumUnpinnedItems: maximumUnpinnedItems,
+            editGeneration: editGeneration
+        )
+    }
+
     internal func isCurrent(_ submission: Submission) -> Bool {
         submission.editGeneration == editGeneration
+    }
+
+    internal func isCurrent(_ submission: CountSubmission) -> Bool {
+        submission.editGeneration == editGeneration
+    }
+
+    internal func maximumUnpinnedRequiresTightening(
+        for submission: CountSubmission
+    ) -> Bool {
+        submission.maximumUnpinnedItems < configuredMaximumUnpinnedItems
     }
 
     /// Returns true when any enabled candidate threshold is stricter than
@@ -247,6 +315,25 @@ internal struct RetentionSettingsDraft {
         revisionBytesToggleIsDirty = false
         acceptedSuccessMessage = successMessage
         return true
+    }
+
+    @discardableResult
+    internal mutating func acceptApplied(
+        _ submission: CountSubmission,
+        successMessage: String
+    ) -> Bool {
+        configuredMaximumUnpinnedItems = submission.maximumUnpinnedItems
+        guard isCurrent(submission) else { return false }
+        maximumUnpinnedValueIsDirty = false
+        acceptedCountSuccessMessage = successMessage
+        return true
+    }
+
+    private var maximumUnpinnedItems: Int? {
+        validatedSettingsWholeNumber(
+            maximumUnpinnedText,
+            in: HistoryLimits.standard.userMaximumUnpinnedRange
+        )
     }
 
     private var ageDays: Int? {
@@ -318,6 +405,7 @@ internal struct RetentionSettingsDraft {
     private mutating func recordEdit() {
         editGeneration += 1
         acceptedSuccessMessage = nil
+        acceptedCountSuccessMessage = nil
     }
 
     private static func tightens<T: Comparable>(
