@@ -96,7 +96,7 @@ final class ClipboardJourneyUITests: XCTestCase {
         defer { app.terminate() }
 
         app.typeKey(",", modifierFlags: .command)
-        let launchAtLogin = app.descendants(matching: .any)[
+        let launchAtLogin = app.switches[
             "clipy.settings.launch-at-login"
         ]
         XCTAssertTrue(launchAtLogin.waitForExistence(timeout: 10))
@@ -105,13 +105,13 @@ final class ClipboardJourneyUITests: XCTestCase {
         XCTAssertTrue(retentionTab.waitForExistence(timeout: 5))
         retentionTab.click()
 
-        let ageLimit = app.descendants(matching: .any)[
+        let ageLimit = app.switches[
             "clipy.settings.retention.age-enabled"
         ]
         XCTAssertTrue(ageLimit.waitForExistence(timeout: 5))
         ageLimit.click()
 
-        let apply = app.descendants(matching: .any)[
+        let apply = app.buttons[
             "clipy.settings.retention.apply"
         ]
         XCTAssertTrue(apply.waitForExistence(timeout: 5))
@@ -128,7 +128,7 @@ final class ClipboardJourneyUITests: XCTestCase {
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitUntil(timeout: 5) { !destructiveApply.exists })
         XCTAssertTrue(ageLimit.exists)
-        XCTAssertEqual(ageLimit.value as? String, "1")
+        XCTAssertEqual(ageLimit.value as? Int, 1)
     }
 
     @MainActor
