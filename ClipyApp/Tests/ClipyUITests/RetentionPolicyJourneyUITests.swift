@@ -162,8 +162,19 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
         let ageDays = app.textFields[
             "clipy.settings.retention.age-days"
         ]
+        let owningWindow = settingsWindow(
+            in: app,
+            owningTextField: "clipy.settings.retention.age-days"
+        )
+        let retentionScrollView = owningWindow.scrollViews.firstMatch
         assertExists(ageEnabled, timeout: 5, in: app, context: "age toggle")
         assertExists(ageDays, timeout: 5, in: app, context: "age field")
+        assertExists(
+            retentionScrollView,
+            timeout: 5,
+            in: app,
+            context: "age policy scroll view"
+        )
         XCTAssertEqual(
             ageDays.value as? String,
             "30",
@@ -177,12 +188,14 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             waitUntil(timeout: 5) { apply.isEnabled },
             diagnostic(app, context: "enabled strict age policy")
         )
+        guard scrollUntilHittable(
+            apply,
+            in: retentionScrollView,
+            app: app,
+            context: "strict age policy Apply"
+        ) else { return }
         apply.click()
 
-        let owningWindow = settingsWindow(
-            in: app,
-            owningTextField: "clipy.settings.retention.age-days"
-        )
         confirmStrictPolicy(
             in: owningWindow,
             app: app,
@@ -203,11 +216,23 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             diagnostic(app, context: "strict age zero-effect receipt")
         )
 
+        guard scrollUntilHittable(
+            ageDays,
+            in: retentionScrollView,
+            app: app,
+            context: "age field after strict receipt"
+        ) else { return }
         replaceText(in: ageDays, with: "31")
         XCTAssertTrue(
             waitUntil(timeout: 5) { !policyStatus.exists && apply.isEnabled },
             diagnostic(app, context: "new age edit clears success")
         )
+        guard scrollUntilHittable(
+            apply,
+            in: retentionScrollView,
+            app: app,
+            context: "looser age policy Apply"
+        ) else { return }
         apply.click()
 
         // A strict path would be waiting in the attached sheet and could not
@@ -393,12 +418,6 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
     @MainActor
     private func replaceText(in field: XCUIElement, with text: String) {
         field.click()
-        if !waitUntil(timeout: 2, condition: { field.hasFocus }) {
-            field.click()
-        }
-        let focused = waitUntil(timeout: 5) { field.hasFocus }
-        XCTAssertTrue(focused, "The retention text field did not gain focus.")
-        guard focused else { return }
         field.typeKey("a", modifierFlags: .command)
         field.typeText(text)
     }
@@ -422,7 +441,10 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             if element.exists && element.isHittable {
                 return true
             }
-            scrollCoordinate.scroll(byDeltaX: 0, deltaY: -50)
+            let deltaY: CGFloat = element.frame.midY < scrollView.frame.midY
+                ? 50
+                : -50
+            scrollCoordinate.scroll(byDeltaX: 0, deltaY: deltaY)
         }
         let result = element.exists && element.isHittable
         XCTAssertTrue(

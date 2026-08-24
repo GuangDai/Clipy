@@ -118,7 +118,7 @@ final class DetailsMutationJourneyUITests: XCTestCase {
             {
                 detailsRoot.exists
                     && pinStatus.exists
-                    && accessibilityText(of: pinStatus) == "Unpinned"
+                    && self.accessibilityText(of: pinStatus) == "Unpinned"
                     && pinToggle.exists
                     && pinToggle.label == "Pin"
                     && pinToggle.isHittable
@@ -132,7 +132,7 @@ final class DetailsMutationJourneyUITests: XCTestCase {
         guard assertEventually(
             {
                 pinStatus.exists
-                    && accessibilityText(of: pinStatus)
+                    && self.accessibilityText(of: pinStatus)
                         == "Pinned at position 1"
                     && pinToggle.exists
                     && pinToggle.label == "Unpin"
@@ -147,7 +147,7 @@ final class DetailsMutationJourneyUITests: XCTestCase {
         guard assertEventually(
             {
                 pinStatus.exists
-                    && accessibilityText(of: pinStatus) == "Unpinned"
+                    && self.accessibilityText(of: pinStatus) == "Unpinned"
                     && pinToggle.exists
                     && pinToggle.label == "Pin"
                     && pinToggle.isHittable
