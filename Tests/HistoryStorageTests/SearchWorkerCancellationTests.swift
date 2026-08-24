@@ -377,7 +377,8 @@ struct SearchWorkerCancellationTests {
                 bytes: bytes
             )],
             origin: CopyOriginObservation(
-                sourceApplication: "search-cancellation-fixture"
+                sourceApplication: "search-cancellation-fixture",
+                lineageHint: nil
             ),
             observedAt: Date(timeIntervalSinceReferenceDate: 730_200_000)
         )
