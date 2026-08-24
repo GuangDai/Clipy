@@ -18,44 +18,152 @@ import PresentationUI
 import Testing
 @testable import ClipyApp
 
-struct PanelSubmitDecisionTests {
-    @Test("Return submits only after marked text settles")
-    func returnSubmissionDefersToIMEAndModifiedCommands() {
-        #expect(PanelSubmitDecision.shouldSubmit(
-            eventType: .keyDown,
-            keyCode: UInt16(kVK_Return),
-            modifierFlags: [],
-            hasMarkedText: false,
-            isSelectionSubmissionEnabled: true
-        ))
-        #expect(!PanelSubmitDecision.shouldSubmit(
+struct PanelKeyEventDecisionTests {
+    @Test("marked Return and Escape stay with the text responder")
+    func markedTextDefersReturnAndEscapeToIME() {
+        #expect(PanelKeyEventDecision.disposition(
             eventType: .keyDown,
             keyCode: UInt16(kVK_Return),
             modifierFlags: [],
             hasMarkedText: true,
             isSelectionSubmissionEnabled: true
-        ))
-        #expect(!PanelSubmitDecision.shouldSubmit(
+        ) == .deliverToMarkedTextResponder)
+        #expect(PanelKeyEventDecision.disposition(
+            eventType: .keyDown,
+            keyCode: UInt16(kVK_Escape),
+            modifierFlags: [],
+            hasMarkedText: true,
+            isSelectionSubmissionEnabled: true
+        ) == .deliverToMarkedTextResponder)
+    }
+
+    @Test("settled list-root keys retain their existing product routes")
+    func settledKeysRouteToSubmitOrWindowEscape() {
+        #expect(PanelKeyEventDecision.disposition(
+            eventType: .keyDown,
+            keyCode: UInt16(kVK_Return),
+            modifierFlags: [],
+            hasMarkedText: false,
+            isSelectionSubmissionEnabled: true
+        ) == .submitSelection)
+        #expect(PanelKeyEventDecision.disposition(
+            eventType: .keyDown,
+            keyCode: UInt16(kVK_Escape),
+            modifierFlags: [],
+            hasMarkedText: false,
+            isSelectionSubmissionEnabled: true
+        ) == .forwardToWindow)
+        #expect(PanelKeyEventDecision.disposition(
+            eventType: .keyDown,
+            keyCode: UInt16(kVK_Return),
+            modifierFlags: [],
+            hasMarkedText: true,
+            isSelectionSubmissionEnabled: true
+        ) == .deliverToMarkedTextResponder)
+        #expect(PanelKeyEventDecision.disposition(
             eventType: .keyDown,
             keyCode: UInt16(kVK_Return),
             modifierFlags: .command,
             hasMarkedText: false,
             isSelectionSubmissionEnabled: true
-        ))
-        #expect(!PanelSubmitDecision.shouldSubmit(
+        ) == .forwardToWindow)
+        #expect(PanelKeyEventDecision.disposition(
             eventType: .keyUp,
             keyCode: UInt16(kVK_ANSI_KeypadEnter),
             modifierFlags: [],
             hasMarkedText: false,
             isSelectionSubmissionEnabled: true
-        ))
-        #expect(!PanelSubmitDecision.shouldSubmit(
+        ) == .forwardToWindow)
+        #expect(PanelKeyEventDecision.disposition(
             eventType: .keyDown,
             keyCode: UInt16(kVK_Return),
             modifierFlags: [],
             hasMarkedText: false,
             isSelectionSubmissionEnabled: false
+        ) == .forwardToWindow)
+    }
+}
+
+@Suite("Hosted marked-text panel events", .serialized)
+@MainActor
+struct FloatingPanelMarkedTextEventTests {
+    /// Same-process AppKit evidence for the window's event boundary. The
+    /// responder is an NSTextView with an explicit marked range, not a fake
+    /// boolean supplied straight to the decision helper. It proves direct
+    /// responder delivery and deliberately does not claim a physical CJK
+    /// input source, InputMethodKit process, or WindowServer key sequence.
+    @Test("marked Escape and Return bypass window-level product actions")
+    func markedKeysAreDeliveredDirectlyToTheTextResponder() throws {
+        let appDelegate = AppDelegate()
+        var submissionCount = 0
+        let panel = FloatingPanel(
+            rootView: PanelRootView(appDelegate: appDelegate),
+            previewState: appDelegate.previewState,
+            onPreviewPlacementChange: { _ in },
+            isSelectionSubmissionEnabled: { true },
+            onSubmitSelection: { submissionCount += 1 },
+            onClosed: {}
+        )
+        defer { panel.close() }
+        panel.open(at: .center, statusItemButtonScreenFrame: nil)
+
+        let responder = RecordingMarkedTextView(
+            frame: NSRect(x: 0, y: 0, width: 100, height: 30)
+        )
+        panel.contentView?.addSubview(responder)
+        try #require(panel.makeFirstResponder(responder))
+        responder.setMarkedText(
+            NSAttributedString(string: "ni"),
+            selectedRange: NSRange(location: 2, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0)
+        )
+        try #require(responder.hasMarkedText())
+
+        let escape = try #require(keyDown(
+            keyCode: UInt16(kVK_Escape),
+            characters: "\u{1B}",
+            windowNumber: panel.windowNumber
         ))
+        let returnKey = try #require(keyDown(
+            keyCode: UInt16(kVK_Return),
+            characters: "\r",
+            windowNumber: panel.windowNumber
+        ))
+        NSApp.sendEvent(escape)
+        NSApp.sendEvent(returnKey)
+
+        #expect(responder.receivedKeyCodes == [
+            UInt16(kVK_Escape), UInt16(kVK_Return),
+        ])
+        #expect(submissionCount == 0)
+    }
+
+    private func keyDown(
+        keyCode: UInt16,
+        characters: String,
+        windowNumber: Int
+    ) -> NSEvent? {
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: windowNumber,
+            context: nil,
+            characters: characters,
+            charactersIgnoringModifiers: characters,
+            isARepeat: false,
+            keyCode: keyCode
+        )
+    }
+}
+
+@MainActor
+private final class RecordingMarkedTextView: NSTextView {
+    private(set) var receivedKeyCodes: [UInt16] = []
+
+    override func keyDown(with event: NSEvent) {
+        receivedKeyCodes.append(event.keyCode)
     }
 }
 

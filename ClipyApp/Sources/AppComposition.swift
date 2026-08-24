@@ -296,12 +296,22 @@ final class AppComposition {
         captureAccessReducer.state
     }
 
-    /// Store URLs this process has opened. The process-side half of the
-    /// no-second-writer rule (01 §8): `open(storeURL:)` consults and
-    /// reserves here so a second facade over one store file is rejected
-    /// with `ClipyCompositionError.storeAlreadyOpen` before any
-    /// `ModelContainer` exists (roadmap 06 acceptance).
-    private static var openedStoreURLs: Set<URL> = []
+    /// Canonical store identities this process has opened. The process-side
+    /// half of the no-second-writer rule (01 §8): `open(storeURL:)`
+    /// standardizes the path and resolves filesystem symlinks before it
+    /// consults and reserves here. Thus `..` and symlink spellings of one
+    /// StoreRoot cannot create a second facade/`ModelContainer` (REVIEW
+    /// PLAY-DISK-0A; roadmap 06 acceptance).
+    private static var openedStoreIdentities: Set<URL> = []
+
+    /// The identity used only by the same-process pre-open reservation.
+    /// SwiftData still receives the caller's URL; this does not relocate the
+    /// production store or claim a cross-process lease (V2-00 §3.1).
+    private static func canonicalStoreIdentity(for storeURL: URL) -> URL {
+        storeURL.standardizedFileURL
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+    }
 
     /// The production store location:
     /// `~/Library/Application Support/Clipy/history.store` (roadmap 06).
@@ -366,11 +376,11 @@ final class AppComposition {
     ///
     /// Sequence (roadmap 06; Part V §13 for the storage half):
     ///
-    /// 1. second-open guard: reserve `storeURL` BEFORE the first `await` —
-    ///    MainActor confinement serializes the check-and-insert pair, so no
-    ///    later resumption can slip a second facade past it (01 §8). A
-    ///    failed open releases the reservation so a launch-time retry
-    ///    remains possible;
+    /// 1. second-open guard: resolve and reserve the canonical store identity
+    ///    BEFORE the first `await` — MainActor confinement serializes the
+    ///    check-and-insert pair, so no later resumption or path alias can slip
+    ///    a second facade past it (01 §8). A failed open releases the
+    ///    reservation so a launch-time retry remains possible;
     /// 2. create the store's parent directory
     ///    (`~/Library/Application Support/Clipy` for the default URL);
     /// 3. `SwiftDataHistory.open(configuration:)` with the persistent
@@ -437,10 +447,11 @@ final class AppComposition {
         workspaceActivityProvider:
             @escaping @MainActor @Sendable () -> WorkspaceActivityState
     ) async throws -> AppComposition {
-        guard !openedStoreURLs.contains(storeURL) else {
+        let storeIdentity = canonicalStoreIdentity(for: storeURL)
+        guard !openedStoreIdentities.contains(storeIdentity) else {
             throw ClipyCompositionError.storeAlreadyOpen(storeURL)
         }
-        openedStoreURLs.insert(storeURL)
+        openedStoreIdentities.insert(storeIdentity)
         do {
             try Task.checkCancellation()
             let composition = try await openReserved(
@@ -458,7 +469,7 @@ final class AppComposition {
             )
             return composition
         } catch {
-            openedStoreURLs.remove(storeURL)
+            openedStoreIdentities.remove(storeIdentity)
             throw error
         }
     }

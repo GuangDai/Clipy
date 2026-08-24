@@ -30,6 +30,16 @@ enum CaptureNoticePresentation {
     }
 }
 
+/// Content-free settled-search count copy. A continuation cursor makes the
+/// first-page count a lower bound, so `+` is preserved instead of presenting
+/// it as an exact total (REVIEW UI-16 / Card 15D).
+enum SearchResultCountAnnouncementPresentation {
+    static func message(count: Int, hasNextPage: Bool) -> String {
+        if hasNextPage { return "\(count)+ results" }
+        return count == 1 ? "1 result" : "\(count) results"
+    }
+}
+
 @MainActor
 struct AccessibilityAnnouncementOperations {
     private let postNotification: @MainActor (
@@ -92,6 +102,19 @@ struct AccessibilityAnnouncement {
     func announceHistoryItemRemoved() {
         operations.post(
             "Item removed from history.",
+            priority: .medium
+        )
+    }
+
+    func announceSettledSearchResultCount(
+        _ count: Int,
+        hasNextPage: Bool
+    ) {
+        operations.post(
+            SearchResultCountAnnouncementPresentation.message(
+                count: count,
+                hasNextPage: hasNextPage
+            ),
             priority: .medium
         )
     }

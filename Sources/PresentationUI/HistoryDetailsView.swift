@@ -120,8 +120,9 @@ package struct HistoryDetailsLoadFence {
 /// action set. A `.staleContent` typed failure from any revise/revert (03b
 /// §10) reloads the details and surfaces an inline notice instead of
 /// discarding the user's place.
-public struct HistoryDetailsView: View {
+struct HistoryDetailsView: View {
 
+    @Environment(\.dismiss) private var dismiss
     private let viewState: HistoryViewState
     private let onReferenceAdvance:
         (@MainActor (HistoryItemReference, HistoryItemReference) -> Bool)?
@@ -143,7 +144,7 @@ public struct HistoryDetailsView: View {
     @State private var isRemoving = false
     @State private var loadFence = HistoryDetailsLoadFence()
 
-    public init(viewState: HistoryViewState, item: HistoryItemReference) {
+    init(viewState: HistoryViewState, item: HistoryItemReference) {
         self.viewState = viewState
         self.onReferenceAdvance = nil
         self._currentItem = State(initialValue: item)
@@ -185,7 +186,7 @@ public struct HistoryDetailsView: View {
         )
     }
 
-    public var body: some View {
+    var body: some View {
         VStack(spacing: 0) {
             if showsEditor, case .loaded(let details) = phase {
                 ReviseEditorView(
@@ -231,6 +232,7 @@ public struct HistoryDetailsView: View {
         .accessibilityIdentifier("clipy.details.root")
         .navigationTitle("Details")
         .navigationBarBackButtonHidden(showsEditor)
+        .overlay { detailsEscapeShortcut }
         .task { await load() }
         .confirmationDialog(
             "Remove this item from your clipboard history?",
@@ -245,6 +247,23 @@ public struct HistoryDetailsView: View {
         }
         .onChange(of: viewState.surfacePurge, initial: true) { _, _ in
             _ = reconcileSurfacePurge(viewState.surfacePurge)
+        }
+    }
+
+    /// Details owns settled Esc as a navigation dismissal. While its inline
+    /// editor or remove confirmation is visible, that child/modal's own
+    /// `.cancelAction` remains the only Esc owner so a dirty draft or pending
+    /// destructive choice cannot be bypassed (review UI-7 / Card 3C / 14A).
+    @ViewBuilder
+    private var detailsEscapeShortcut: some View {
+        if !showsEditor, !showsRemoveConfirmation {
+            Button("Back to History") {
+                dismiss()
+            }
+            .keyboardShortcut(.cancelAction)
+            .opacity(0)
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
         }
     }
 

@@ -21,6 +21,89 @@ final class CaptureAccessJourneyUITests: XCTestCase {
         try super.tearDownWithError()
     }
 
+    /// CLIP-1's not-yet-approved default posture is a first-class stopped
+    /// state. The fixed DEBUG system fact proves that Retry re-reads rather
+    /// than manufacturing approval; this is not a real TCC prompt journey.
+    @MainActor
+    func testSystemDefaultIsDistinctAndRetryStaysFailClosed() throws {
+        try assertFixedFailClosedPosture(
+            captureAccess: "system-default",
+            pasteboardValue: "clipy-ui-system-default-must-not-capture",
+            expectedMessage:
+                "Clipy needs permission before it can monitor clipboard changes."
+        )
+    }
+
+    /// The ask posture has its own explanation and can leave that surface
+    /// only after the configured boundary reports allowed on explicit Retry.
+    @MainActor
+    func testAskIsDistinctAndRetryTransitionsOnlyToAllowed() throws {
+        let captured = "clipy-ui-ask-recovery"
+        let app = try launchApp(
+            storeURL: try makeStoreURL(),
+            captureAccess: "ask-then-allowed",
+            pasteboardValue: captured
+        )
+        defer { app.terminate() }
+
+        guard assertFailClosedSurface(
+            in: app,
+            expectedMessage:
+                "Clipboard access needs your approval before monitoring can continue."
+        ) else { return }
+        let retry = app.buttons["clipy.capture.access.recovery"]
+        retry.click()
+
+        let rows = historyRows(in: app)
+        guard assertEventually(
+            {
+                !app.descendants(matching: .any)[
+                    "clipy.capture.access.empty"
+                ].exists && rows.count == 1
+            },
+            in: app,
+            timeout: 10,
+            message: "Ask Retry did not require the configured allowed fact."
+        ) else { return }
+        assertCondition(
+            rows.element(boundBy: 0).label.contains(captured),
+            in: app,
+            message: "Ask recovery retained a value other than the staged generation."
+        )
+
+        let moreActions = app.descendants(matching: .any)[
+            "clipy.panel.more-actions"
+        ]
+        guard assertCondition(
+            moreActions.exists && moreActions.isHittable,
+            in: app,
+            message: "Allowed Ask recovery did not restore More Actions."
+        ) else { return }
+        moreActions.click()
+        assertEventually(
+            {
+                let pause = app.descendants(matching: .any)[
+                    "clipy.capture.pause"
+                ]
+                return pause.exists && pause.isHittable
+            },
+            in: app,
+            message: "Allowed Ask recovery did not restore Pause."
+        )
+    }
+
+    /// An unavailable framework projection is presented as a read failure,
+    /// not as denial/default/empty History. A repeated unavailable read stays
+    /// stopped and cannot expose the allowed-only Pause action.
+    @MainActor
+    func testReadFailureIsDistinctAndRetryStaysFailClosed() throws {
+        try assertFixedFailClosedPosture(
+            captureAccess: "read-failure",
+            pasteboardValue: "clipy-ui-read-failure-must-not-capture",
+            expectedMessage: "Clipy couldn't check clipboard access. Try again."
+        )
+    }
+
     /// CLIP-1: an access denial is not presented as ordinary empty History.
     /// Retrying re-reads the fixed denied posture and must not manufacture an
     /// approval that the system did not report.
@@ -449,6 +532,98 @@ final class CaptureAccessJourneyUITests: XCTestCase {
             throw CaptureAccessJourneyError.panelUnavailable
         }
         return app
+    }
+
+    @MainActor
+    private func assertFixedFailClosedPosture(
+        captureAccess: String,
+        pasteboardValue: String,
+        expectedMessage: String
+    ) throws {
+        let app = try launchApp(
+            storeURL: try makeStoreURL(),
+            captureAccess: captureAccess,
+            pasteboardValue: pasteboardValue
+        )
+        defer { app.terminate() }
+
+        guard assertFailClosedSurface(
+            in: app,
+            expectedMessage: expectedMessage
+        ) else { return }
+        let retry = app.buttons["clipy.capture.access.recovery"]
+        retry.click()
+        let message = app.descendants(matching: .any)[
+            "clipy.capture.access.message"
+        ]
+        let rows = historyRows(in: app)
+        assertRemains(
+            {
+                self.matchesText(message, expected: expectedMessage)
+                    && retry.exists
+                    && rows.count == 0
+                    && !app.descendants(matching: .any)[
+                        "clipy.capture.pause"
+                    ].exists
+            },
+            in: app,
+            duration: 1.5,
+            message:
+                "Retry promoted a fixed \(captureAccess) posture without allowed access."
+        )
+    }
+
+    @MainActor
+    @discardableResult
+    private func assertFailClosedSurface(
+        in app: XCUIApplication,
+        expectedMessage: String
+    ) -> Bool {
+        let empty = app.descendants(matching: .any)[
+            "clipy.capture.access.empty"
+        ]
+        let message = app.descendants(matching: .any)[
+            "clipy.capture.access.message"
+        ]
+        let retry = app.buttons["clipy.capture.access.recovery"]
+        let rows = historyRows(in: app)
+        guard assertEventually(
+            {
+                empty.exists
+                    && self.matchesText(message, expected: expectedMessage)
+                    && retry.exists
+                    && retry.isHittable
+                    && rows.count == 0
+                    && !app.staticTexts["No Clipboard History"].exists
+                    && !app.descendants(matching: .any)[
+                        "clipy.capture.pause"
+                    ].exists
+            },
+            in: app,
+            message:
+                "Capture access did not expose its exact stopped-state surface."
+        ) else { return false }
+        return assertRemains(
+            {
+                empty.exists
+                    && self.matchesText(message, expected: expectedMessage)
+                    && rows.count == 0
+                    && !app.descendants(matching: .any)[
+                        "clipy.capture.pause"
+                    ].exists
+            },
+            in: app,
+            duration: 0.5,
+            message: "A fail-closed access posture started polling."
+        )
+    }
+
+    @MainActor
+    private func matchesText(
+        _ element: XCUIElement,
+        expected: String
+    ) -> Bool {
+        element.label == expected || (element.value as? String) == expected
     }
 
     private func makeStoreURL() throws -> URL {

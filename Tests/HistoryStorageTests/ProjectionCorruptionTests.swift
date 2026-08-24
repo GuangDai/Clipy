@@ -119,6 +119,15 @@ private static func seedRow(
     return bundle.domain.candidateID
 }
 
+/// Shared only with Card 11A's public-facade admission proof. Keeping the
+/// malformed row construction here ensures its corpus poison is the same real
+/// durable scalar already used by the owning Part VI §7.4 read-boundary test.
+static func seedOverBoundSearchBodyRow(
+    at storeURL: URL
+) async throws -> HistoryItemID {
+    try await seedRow(at: storeURL, corruption: .searchBody)
+}
+
 /// Startup consumes the projection schema tag while rebuilding scalar
 /// metadata, so an unknown tag prevents the facade from being published.
 @Test func startupRejectsUnknownProjectionSchemaVersion() async throws {

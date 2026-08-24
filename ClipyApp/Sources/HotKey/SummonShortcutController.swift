@@ -30,8 +30,10 @@ enum SummonShortcutState: Equatable {
         switch self {
         case .stopped:
             nil
-        case .active(let chord), .unavailable(let chord, _):
+        case .active(let chord):
             chord.warning
+        case .unavailable(let requested, let retainedActive):
+            requested.warning ?? retainedActive?.warning
         }
     }
 }
@@ -138,6 +140,15 @@ final class SummonShortcutController {
         pendingAttempt = nil
         state = .stopped
     }
+
+#if DEBUG
+    /// Running-app tests drive the registered action's exact tail without
+    /// synthesizing a Carbon event. Real Carbon delivery remains outside this
+    /// hook's evidence scope.
+    func fireActionForTesting() {
+        action()
+    }
+#endif
 
     private func attempt(_ pending: PendingAttempt) -> Bool {
         if pending.chord == activeChord, activeRegistration != nil {

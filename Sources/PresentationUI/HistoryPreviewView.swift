@@ -263,7 +263,7 @@ package final class PreviewContentLoader {
 /// the resolved content, and a metadata bar (source, copy count, last
 /// copied time — Maccy's preview footer replicated without AppKit app
 /// icons, which PresentationUI's confinement forbids).
-public struct HistoryPreviewView: View {
+struct HistoryPreviewView: View {
     private let viewState: HistoryViewState
     private let previewState: PreviewPaneState
     private let selectionSource: SelectionSource
@@ -271,7 +271,7 @@ public struct HistoryPreviewView: View {
     @State private var loader: PreviewContentLoader
 
     /// Standalone entry point: PreviewPaneState owns the exact target.
-    public init(viewState: HistoryViewState, previewState: PreviewPaneState) {
+    init(viewState: HistoryViewState, previewState: PreviewPaneState) {
         self.viewState = viewState
         self.previewState = previewState
         selectionSource = .paneState
@@ -310,7 +310,7 @@ public struct HistoryPreviewView: View {
         }
     }
 
-    public var body: some View {
+    var body: some View {
         VStack(spacing: 0) {
             previewBody
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

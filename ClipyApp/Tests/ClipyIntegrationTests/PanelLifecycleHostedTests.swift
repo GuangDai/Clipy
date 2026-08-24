@@ -9,6 +9,7 @@
 /// behavior. Its sleep/wake leaves prove the documented NSWorkspace names,
 /// object, registration center, and the product response to their delivery.
 import AppKit
+import Carbon.HIToolbox
 import HistoryCore
 import HistoryStorage
 import PasteboardAdapter
@@ -20,6 +21,39 @@ import Testing
 @Suite("Hosted panel lifecycle", .serialized)
 @MainActor
 struct PanelLifecycleHostedTests {
+
+    /// UI-7 settled-Escape contract through the actual AppDelegate-owned
+    /// panel and SwiftUI list root. The first event clears the current query
+    /// without retiring the session; the next closes it. Editor/Details are
+    /// covered separately because their navigation destination owns Esc.
+    @Test("settled list-root Escape clears search, then closes")
+    func settledListRootEscapePreservesTheTwoStepIntent() async throws {
+        let installed = installedOwner()
+        let appDelegate = installed.appDelegate
+        let composition = installed.composition
+        let history = installed.history
+        defer {
+            appDelegate.closePanel()
+            composition.stop()
+        }
+
+        appDelegate.openPanelForTesting()
+        let panel = try #require(appDelegate.panelForTesting)
+        await history.waitForObservationCount(1)
+        _ = try #require(
+            await focusedFieldEditor(in: panel),
+            "The production search field never became first responder."
+        )
+        composition.viewState.searchText = "settled-escape-query"
+
+        NSApp.sendEvent(try #require(escapeKeyDown(for: panel)))
+        #expect(composition.viewState.searchText.isEmpty)
+        #expect(panel.isPresented)
+
+        NSApp.sendEvent(try #require(escapeKeyDown(for: panel)))
+        #expect(!panel.isPresented)
+        #expect(!(appDelegate.panelSurfaceState?.isSessionActive ?? true))
+    }
 
     /// Card 8G-2: the actual focused SwiftUI search field must override an
     /// inherited AppKit field-editor posture when a new panel session starts.
@@ -586,6 +620,36 @@ struct PanelLifecycleHostedTests {
         }
         return nil
     }
+
+    private func escapeKeyDown(for panel: FloatingPanel) -> NSEvent? {
+        keyDown(
+            for: panel,
+            keyCode: UInt16(kVK_Escape),
+            characters: "\u{1B}",
+            modifierFlags: []
+        )
+    }
+
+    private func keyDown(
+        for panel: FloatingPanel,
+        keyCode: UInt16,
+        characters: String,
+        modifierFlags: NSEvent.ModifierFlags
+    ) -> NSEvent? {
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: modifierFlags,
+            timestamp: 0,
+            windowNumber: panel.windowNumber,
+            context: nil,
+            characters: characters,
+            charactersIgnoringModifiers: characters,
+            isARepeat: false,
+            keyCode: keyCode
+        )
+    }
+
 }
 
 /// Records only lifecycle-facing observation registrations. Its streams stay

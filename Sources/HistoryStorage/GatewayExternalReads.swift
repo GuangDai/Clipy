@@ -11,6 +11,18 @@ import Foundation
 import HistoryCore
 import SwiftData
 
+#if DEBUG
+/// Process-crash evidence seam for V2-05 §5.2 / PLAY-PY-D5. The callback
+/// runs only after a succeeded read audit transaction has committed and before
+/// the immutable result crosses the Authority method boundary. It is package-
+/// visible solely so `HistoryRestartProbe` can terminate its short-lived
+/// process at that exact boundary; ordinary product calls leave it nil.
+package enum ExternalReadPublicationDebugInstrumentation {
+    @TaskLocal package static var afterSynchronousSuccessfulAuditCommit:
+        (@Sendable () -> Void)?
+}
+#endif
+
 extension HistoryAuthority {
     internal func performExternalRead(
         _ request: ExternalRead,
@@ -321,6 +333,10 @@ private extension HistoryAuthority {
                 config: config,
                 in: context
             )
+#if DEBUG
+            ExternalReadPublicationDebugInstrumentation
+                .afterSynchronousSuccessfulAuditCommit?()
+#endif
             return result
         } catch let failure as HistoryFailure {
             try publishExternalReadFailure(

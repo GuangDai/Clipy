@@ -13,14 +13,14 @@ import SwiftUI
 /// Builds a highlighted `AttributedString` — bold plus the accent foreground
 /// color over each matched range, plain elsewhere (docs/
 /// 03b-instruction-set.md §8).
-public enum MatchHighlighting {
+package enum MatchHighlighting {
 
     /// - Parameters:
     ///   - text: The base string (title or snippet excerpt).
     ///   - ranges: UTF-16 ranges into `text`; out-of-bounds, zero-length,
     ///     surrogate-splitting, and overlapping (after sorting) ranges are
     ///     ignored.
-    public static func highlighted(
+    package static func highlighted(
         _ text: String,
         ranges: [UTF16TextRange]
     ) -> AttributedString {

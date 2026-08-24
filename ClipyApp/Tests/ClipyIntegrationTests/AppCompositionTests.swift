@@ -2,14 +2,16 @@
 /// (docs/roadmap/06-clipyapp.md "Acceptance"; docs/01-architecture.md §8
 /// no-second-writer, §5.6 paste orchestration; AppComposition.swift):
 ///
-/// - `AppComposition.open(storeURL:)` rejects a second open over a URL the
-///   process already opened with `ClipyCompositionError.storeAlreadyOpen`
-///   BEFORE any `ModelContainer` exists (01 §8);
+/// - `AppComposition.open(storeURL:)` rejects a second open over the same
+///   canonical StoreRoot, including standardized/`..` and symlink aliases,
+///   with `ClipyCompositionError.storeAlreadyOpen` BEFORE any second
+///   `ModelContainer` exists (01 §8; REVIEW PLAY-DISK-0A);
 /// - a distinct URL still opens (the guard is per-store, not global);
 /// - a FAILED open releases its reservation so a launch-time retry remains
 ///   possible (AppComposition.open);
-/// - the returned composition exposes exactly the assembled surfaces
-///   (history/adapter/observer/viewState) wired once at launch.
+/// - the returned composition exposes its app-owned History/view state
+///   wired once at launch. Adapter behavior is proved through the real
+///   copy lane instead of inspecting its raw AppKit dependency.
 ///
 /// `@testable import ClipyApp` reaches the internal `AppComposition` and
 /// `ClipyCompositionError` (roadmap 06 acceptance targets them). Every
@@ -67,11 +69,11 @@ struct AppCompositionTests {
         defer { ComposedSupport.removeStore(storeURL) }
 
         let composition = try await AppComposition.open(storeURL: storeURL)
-        // The assembled surfaces (roadmap 06; 01 §2 composition-root row):
-        // the production adapter targets the GENERAL pasteboard and the
-        // panel view state rides the same opened history; the paste
-        // hand-off's behavior is proven by the orchestration suite below.
-        #expect(composition.adapter.pasteboard == .general)
+        // The assembled surface (roadmap 06; 01 §2 composition-root row):
+        // the panel view state rides the opened History. The real adapter
+        // behavior is covered by AppPasteOrchestrationTests' byte/lineage
+        // round trip and ClipboardJourneyUITests' production General-board
+        // write; this test does not expose or inspect the raw AppKit object.
         #expect(composition.viewState.pageLimit == 50)
 
         // A DIFFERENT URL still opens — the guard is per-store (01 §8),
@@ -91,6 +93,60 @@ struct AppCompositionTests {
                 error == .storeAlreadyOpen(storeURL),
                 "AppComposition (01 §8): the rejection carries the contested URL"
             )
+        }
+    }
+
+    /// DATA-7a / PLAY-DISK-0A: path spelling is evidence, not writer
+    /// identity. A lexical `..` alias and a filesystem symlink alias that
+    /// reach the already-open store must both hit the same pre-open
+    /// reservation. The error keeps the requested URL so launch diagnostics
+    /// describe the caller's contested path.
+    @Test @MainActor
+    func standardizedAndSymlinkAliasesCannotBypassSecondOpenGuard() async throws {
+        let fixtureRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "clipy-composed-store-identity-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        let physicalRoot = fixtureRoot.appendingPathComponent(
+            "physical",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: physicalRoot,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: fixtureRoot) }
+
+        let storeURL = physicalRoot.appendingPathComponent("history.store")
+        _ = try await AppComposition.open(storeURL: storeURL)
+
+        let standardizedAlias = URL(
+            fileURLWithPath:
+                physicalRoot.path + "/unused/../history.store"
+        )
+        let symbolicRoot = fixtureRoot.appendingPathComponent(
+            "symbolic",
+            isDirectory: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: symbolicRoot,
+            withDestinationURL: physicalRoot
+        )
+        let symlinkAlias = symbolicRoot.appendingPathComponent("history.store")
+
+        for alias in [standardizedAlias, symlinkAlias] {
+            do {
+                _ = try await AppComposition.open(storeURL: alias)
+                Issue.record(
+                    "AppComposition: expected canonical storeAlreadyOpen for \(alias.path)"
+                )
+            } catch let error as ClipyCompositionError {
+                #expect(
+                    error == .storeAlreadyOpen(alias),
+                    "AppComposition: canonical identity rejection carries the requested alias"
+                )
+            }
         }
     }
 
@@ -128,9 +184,14 @@ struct AppCompositionTests {
             )
         }
 
-        // The reservation was released: clearing the obstacle lets the SAME
-        // URL open on the retry (roadmap 06: no poisoned second-open state).
+        // The canonical reservation was released: clearing the obstacle lets
+        // a standardized alias of the SAME URL open on retry (roadmap 06: no
+        // poisoned second-open state).
         try FileManager.default.removeItem(at: obstacle)
-        _ = try await AppComposition.open(storeURL: blockedURL)
+        let retryAlias = URL(
+            fileURLWithPath:
+                obstacle.path + "/unused/../history.store"
+        )
+        _ = try await AppComposition.open(storeURL: retryAlias)
     }
 }

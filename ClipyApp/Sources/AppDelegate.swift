@@ -55,11 +55,29 @@ struct RunningUITestConfiguration {
         case nil, "allowed":
             initialCaptureAccessBehavior = .allowed
             currentCaptureAccessBehavior = .allowed
+        case "system-default":
+            initialCaptureAccessBehavior = .systemDefault
+            currentCaptureAccessBehavior = .systemDefault
+        case "system-default-then-allowed":
+            initialCaptureAccessBehavior = .systemDefault
+            currentCaptureAccessBehavior = .allowed
+        case "ask":
+            initialCaptureAccessBehavior = .ask
+            currentCaptureAccessBehavior = .ask
+        case "ask-then-allowed":
+            initialCaptureAccessBehavior = .ask
+            currentCaptureAccessBehavior = .allowed
         case "denied":
             initialCaptureAccessBehavior = .denied
             currentCaptureAccessBehavior = .denied
         case "denied-then-allowed":
             initialCaptureAccessBehavior = .denied
+            currentCaptureAccessBehavior = .allowed
+        case "read-failure":
+            initialCaptureAccessBehavior = .unavailable
+            currentCaptureAccessBehavior = .unavailable
+        case "read-failure-then-allowed":
+            initialCaptureAccessBehavior = .unavailable
             currentCaptureAccessBehavior = .allowed
         default:
             return nil
@@ -112,6 +130,9 @@ enum ClipyCaptureNotice: Sendable, Equatable {
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let accessibilityAnnouncement: AccessibilityAnnouncement
+    private let summonShortcutDefaults: UserDefaults
+    private let summonShortcutRegistrationFactory:
+        SummonShortcutController.RegistrationFactory?
 
 #if DEBUG
     private let runningUITestConfiguration = RunningUITestConfiguration.current()
@@ -122,16 +143,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         accessibilityAnnouncement = AccessibilityAnnouncement(
             operations: .live
         )
+        summonShortcutDefaults = .standard
+        summonShortcutRegistrationFactory = nil
         super.init()
     }
 
     init(
         accessibilityAnnouncementOperations:
-            AccessibilityAnnouncementOperations
+            AccessibilityAnnouncementOperations,
+        summonShortcutDefaults: UserDefaults = .standard,
+        summonShortcutRegistrationFactory:
+            SummonShortcutController.RegistrationFactory? = nil
     ) {
         accessibilityAnnouncement = AccessibilityAnnouncement(
             operations: accessibilityAnnouncementOperations
         )
+        self.summonShortcutDefaults = summonShortcutDefaults
+        self.summonShortcutRegistrationFactory =
+            summonShortcutRegistrationFactory
         super.init()
     }
 
@@ -178,6 +207,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return controller
     }()
 
+    /// Neutral Card 14B status observed by General Settings. The one concrete
+    /// controller below remains the sole owner of Carbon registration and the
+    /// persisted chord.
+    private(set) var summonShortcutPresentation = SummonShortcutSettings(
+        status: .stopped
+    )
+    @ObservationIgnored
+    private lazy var summonShortcutController = SummonShortcutController(
+        defaults: summonShortcutDefaults,
+        action: { [weak self] in self?.togglePanelFromHotKey() },
+        registrationFactory: summonShortcutRegistrationFactory
+    )
+
     /// The one production store-open flight shared by the app shell and the
     /// App Intents dependency provider. Reference identity fences a late
     /// completion from an older cancelled attempt so it cannot clear a later
@@ -216,7 +258,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var appliedStatusItemSymbolNameForTesting: String?
 #endif
     private var panel: FloatingPanel?
-    private var hotKey: GlobalHotKey?
     /// AppDelegate owns the only NSWorkspace lifecycle registrations. Tokens
     /// are retained only to remove those exact registrations at termination;
     /// no generic notification router or second lifecycle object is created.
@@ -273,15 +314,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         installStatusItem()
-        hotKey = GlobalHotKey.summonPanelHotKey { [weak self] in
-            self?.togglePanelFromHotKey()
-        }
-        hotKey?.register()
+        startSummonShortcut()
         openCompositionIfNeeded()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        hotKey?.unregister()
+        stopSummonShortcut()
         removeWorkspaceLifecycleObservation()
         compositionOpenAttempt?.task.cancel()
 #if CLIPY_UDS_F0
@@ -629,7 +667,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if runningUITestConfiguration != nil,
                    isRunningUITestSummonPending {
                     isRunningUITestSummonPending = false
-                    hotKey?.fire()
+                    summonShortcutController.fireActionForTesting()
                 }
 #endif
             }
@@ -693,6 +731,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         opened.onHistoryItemRemoved = { [weak self] in
             self?.accessibilityAnnouncement.announceHistoryItemRemoved()
+        }
+        opened.viewState.onSettledSearchResultCount = {
+            [weak self] count,
+            hasNextPage in
+            self?.accessibilityAnnouncement
+                .announceSettledSearchResultCount(
+                    count,
+                    hasNextPage: hasNextPage
+                )
         }
         opened.onCaptureHealthChanged = { [weak self] health in
             self?.receiveCaptureHealth(health)
@@ -883,6 +930,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return .cursor
         }
         return PopupPositionMode(rawValue: raw) ?? .cursor
+    }
+
+    /// Production launch and hosted integration tests enter the same app-owned
+    /// registration lifecycle. A saved conflict remains unavailable: the
+    /// controller does not silently fall back to the default chord.
+    @discardableResult
+    func startSummonShortcut() -> Bool {
+        let registered = summonShortcutController.start()
+        refreshSummonShortcutPresentation()
+        return registered
+    }
+
+    private func stopSummonShortcut() {
+        summonShortcutController.stop()
+        refreshSummonShortcutPresentation()
+    }
+
+    private func retrySummonShortcut() {
+        summonShortcutController.retry()
+        refreshSummonShortcutPresentation()
+    }
+
+    private func resetSummonShortcut() {
+        summonShortcutController.reset()
+        refreshSummonShortcutPresentation()
+    }
+
+    private func refreshSummonShortcutPresentation() {
+        let status: SummonShortcutStatus
+        switch summonShortcutController.state {
+        case .stopped:
+            status = .stopped
+        case .active(let chord):
+            status = .current(chord.settingsDisplayName)
+        case .unavailable(let requested, let retainedActive):
+            status = .unavailable(
+                requested: requested.settingsDisplayName,
+                retainedCurrent: retainedActive?.settingsDisplayName
+            )
+        }
+        let warning: SummonShortcutWarning?
+        switch summonShortcutController.state.warning {
+        case .knownColorsShortcut:
+            warning = .showColorsConflict
+        case nil:
+            warning = nil
+        }
+        summonShortcutPresentation = SummonShortcutSettings(
+            status: status,
+            warning: warning
+        )
+    }
+
+    /// Immutable neutral status plus the two recovery intents approved by the
+    /// Card 14B decision. Chord recording/editing remains outside this slice.
+    func summonShortcutBinding() -> SummonShortcutSettings {
+        SummonShortcutSettings(
+            status: summonShortcutPresentation.status,
+            warning: summonShortcutPresentation.warning,
+            retry: { [weak self] in self?.retrySummonShortcut() },
+            reset: { [weak self] in self?.resetSummonShortcut() }
+        )
     }
 
     /// Immutable neutral state plus narrow intents. Keeping the historical

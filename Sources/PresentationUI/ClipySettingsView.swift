@@ -42,6 +42,10 @@ public struct ClipySettingsView: View {
     /// ServiceManagement controller. This target never imports that framework.
     private let launchAtLogin: LaunchAtLoginSettings?
 
+    /// Framework-neutral Card 14B registration status and recovery intents.
+    /// Carbon and persisted key facts remain owned by ClipyApp.
+    private let summonShortcut: SummonShortcutSettings?
+
     /// Non-`nil` only when the composition root owns a floating panel whose
     /// placement the user can configure (the geometry lives in ClipyApp —
     /// PresentationUI carries the mode value only).
@@ -61,15 +65,19 @@ public struct ClipySettingsView: View {
     ///   - launchAtLogin: when non-`nil`, the General tab shows the
     ///     "Launch at Login" state and controls; `nil` (previews, hosted
     ///     tests) omits the toggle entirely.
+    ///   - summonShortcut: when non-`nil`, the General tab shows the current
+    ///     binding or unavailable candidate plus Retry/Reset recovery.
     ///   - popupPosition: when non-`nil`, the General tab shows the panel
     ///     position picker bound to it; `nil` omits the picker entirely.
     public init(
         viewState: HistoryViewState,
         launchAtLogin: LaunchAtLoginSettings? = nil,
+        summonShortcut: SummonShortcutSettings? = nil,
         popupPosition: Binding<PopupPositionMode>? = nil
     ) {
         self.viewState = viewState
         self.launchAtLogin = launchAtLogin
+        self.summonShortcut = summonShortcut
         self.popupPosition = popupPosition
     }
 
@@ -78,6 +86,7 @@ public struct ClipySettingsView: View {
             GeneralSettingsTab(
                 viewState: viewState,
                 launchAtLogin: launchAtLogin,
+                summonShortcut: summonShortcut,
                 popupPosition: popupPosition
             )
                 .tabItem { Label("General", systemImage: "gear") }
@@ -121,6 +130,7 @@ private struct GeneralSettingsTab: View {
 
     private let viewState: HistoryViewState
     private let launchAtLogin: LaunchAtLoginSettings?
+    private let summonShortcut: SummonShortcutSettings?
     private let popupPosition: Binding<PopupPositionMode>?
 
     @State private var status: SettingStatus?
@@ -131,10 +141,12 @@ private struct GeneralSettingsTab: View {
     init(
         viewState: HistoryViewState,
         launchAtLogin: LaunchAtLoginSettings?,
+        summonShortcut: SummonShortcutSettings?,
         popupPosition: Binding<PopupPositionMode>?
     ) {
         self.viewState = viewState
         self.launchAtLogin = launchAtLogin
+        self.summonShortcut = summonShortcut
         self.popupPosition = popupPosition
     }
 
@@ -143,6 +155,9 @@ private struct GeneralSettingsTab: View {
             Section {
                 if let launchAtLogin {
                     launchAtLoginControl(launchAtLogin)
+                }
+                if let summonShortcut {
+                    summonShortcutControl(summonShortcut)
                 }
                 if let popupPosition {
                     Picker("Panel position", selection: popupPosition) {
@@ -191,6 +206,53 @@ private struct GeneralSettingsTab: View {
         }
         .formStyle(.grouped)
         .onAppear { launchAtLogin?.refresh() }
+    }
+
+    @ViewBuilder
+    private func summonShortcutControl(
+        _ settings: SummonShortcutSettings
+    ) -> some View {
+        switch settings.status {
+        case .stopped:
+            LabeledContent("Summon shortcut", value: "Not registered")
+                .accessibilityIdentifier("clipy.settings.shortcut.status")
+        case .current(let chord):
+            HStack {
+                LabeledContent("Summon shortcut", value: chord)
+                    .accessibilityIdentifier("clipy.settings.shortcut.status")
+                Button("Reset") { settings.reset() }
+                    .disabled(!settings.canReset)
+                    .accessibilityIdentifier("clipy.settings.shortcut.reset")
+            }
+        case .unavailable(let requested, let retainedCurrent):
+            VStack(alignment: .leading, spacing: 6) {
+                Label(
+                    "\(requested) is unavailable.",
+                    systemImage: "exclamationmark.triangle"
+                )
+                .accessibilityIdentifier("clipy.settings.shortcut.status")
+                if let retainedCurrent {
+                    Text("The current \(retainedCurrent) shortcut still works.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                HStack {
+                    Button("Retry") { settings.retry() }
+                        .disabled(!settings.canRetry)
+                        .accessibilityIdentifier("clipy.settings.shortcut.retry")
+                    Button("Reset") { settings.reset() }
+                        .disabled(!settings.canReset)
+                        .accessibilityIdentifier("clipy.settings.shortcut.reset")
+                }
+            }
+        }
+
+        if settings.warning == .showColorsConflict {
+            Text("This shortcut is also the standard Show Colors shortcut.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("clipy.settings.shortcut.warning")
+        }
     }
 
     @ViewBuilder

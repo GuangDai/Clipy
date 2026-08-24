@@ -16,7 +16,7 @@ import SwiftUI
 /// `HistoryRow` DTO plus the reference-exact thumbnail already cached for
 /// `row.item`; mutations are expressed only through the injected callbacks so
 /// the row never talks to storage itself (01 §6).
-public struct HistoryRowView: View {
+struct HistoryRowView: View {
     private let row: HistoryRow
     private let rendering: HistoryRowRenderingModel
     private let pinnedOrdinal: Int?
@@ -27,7 +27,7 @@ public struct HistoryRowView: View {
     private let onRemove: (HistoryItemID) -> Void
     private let onShowDetails: (HistoryItemReference) -> Void
 
-    public init(
+    init(
         row: HistoryRow,
         now: Date,
         pinnedOrdinal: Int?,
@@ -49,7 +49,7 @@ public struct HistoryRowView: View {
         self.onShowDetails = onShowDetails
     }
 
-    public var body: some View {
+    var body: some View {
         HStack(alignment: .center, spacing: 10) {
             thumbnail
             VStack(alignment: .leading, spacing: 2) {

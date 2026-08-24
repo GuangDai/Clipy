@@ -78,6 +78,52 @@ struct SearchAdmissionBeforeIOTests {
         expectNoSearchStorageTouch(observation)
     }
 
+    @Test("stored corpus poison distinguishes admission from corpus access")
+    func storedCorpusPoisonProvesInvalidRequestsDoNotReachCorpus() async throws {
+        let storeURL = WSSupport.tempStoreURL("search-admission-corpus-poison")
+        defer { WSSupport.removeStore(storeURL) }
+        _ = try await ProjectionCorruptionTests.seedOverBoundSearchBodyRow(
+            at: storeURL
+        )
+        let history = try await WSSupport.openHistory(storeURL: storeURL)
+
+        // Positive control: a valid non-empty search traverses the real public
+        // facade into corpus projection, consumes the stored over-bound body,
+        // and fails closed at the durable scalar boundary (05 §4/§14.2).
+        await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+            _ = try await history.browse(HistoryBrowseRequest(
+                kind: .search(text: "projection", mode: .exact),
+                limit: 10
+            ))
+        }
+
+        // REVIEW Card 11A: these values fit the common 4,096-byte envelope but
+        // exceed their mode-specific Character bounds. If either request
+        // reached corpus projection, the poison above would win as
+        // `.corruptStoredValue`; the caller-input failures therefore prove
+        // admission happened before the stored searchBody was consumed.
+        await #expect(throws: HistoryFailure.invalidInput(.invalidSearchTerm)) {
+            _ = try await history.browse(HistoryBrowseRequest(
+                kind: .search(
+                    text: String(repeating: "e", count: 65),
+                    mode: .fuzzy
+                ),
+                limit: 10
+            ))
+        }
+        await #expect(
+            throws: HistoryFailure.invalidInput(.invalidRegularExpression)
+        ) {
+            _ = try await history.browse(HistoryBrowseRequest(
+                kind: .search(
+                    text: String(repeating: "r", count: 513),
+                    mode: .regexp
+                ),
+                limit: 10
+            ))
+        }
+    }
+
     @Test("an empty search remains a recent-equivalent scalar read")
     func emptySearchStillReadsRecentEquivalentCorpus() async throws {
         let request = HistoryBrowseRequest(

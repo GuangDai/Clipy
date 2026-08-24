@@ -21,6 +21,11 @@ private enum ProbePhase: String {
     case retentionVerify
     case retentionUpdate
     case retentionVerifyUpdated
+    case gatewayAuditSeed
+    case gatewayAuditCrash
+    case gatewayAuditVerify
+    case largeBlobCrashCommit
+    case largeBlobVerify
 }
 
 private enum ProbeFailure: Error {
@@ -39,6 +44,13 @@ private let alphaSecondSource = "restart.operate.alpha"
 private let pressureCaptureDate = Date(timeIntervalSinceReferenceDate: 40_000)
 private let pressureCaptureSource = "restart.pressure.capture"
 private let pressureCaptureByteCount = 8 * 1_048_576
+private let gatewayAuditText = "gateway audit crash publication fixture"
+private let gatewayAuditDate = Date(timeIntervalSinceReferenceDate: 50_000)
+private let gatewayAuditSource = "restart.gateway.audit"
+private let largeBlobType = "public.data"
+private let largeBlobDate = Date(timeIntervalSinceReferenceDate: 60_000)
+private let largeBlobSource = "restart.large-blob.capture"
+private let largeBlobByteCount = 8 * 1_048_576
 private let initialMaximumUnpinnedItems = 73
 private let initialRetentionPolicies = HistoryRetentionPolicies(
     age: AgeRetention(maxAge: 7 * 86_400),
@@ -58,6 +70,7 @@ private let updatedRetentionPolicies = HistoryRetentionPolicies(
     )
 )
 private let manifestFileName = "restart-manifest.txt"
+private let largeBlobManifestFileName = "large-blob-manifest.txt"
 private let diagnosticsEnabled = ProcessInfo.processInfo.environment[
     "CLIPY_APFS_PROBE_DIAGNOSTICS"
 ] == "1"
@@ -363,6 +376,34 @@ private struct ProbeManifest {
     }
 }
 
+private struct LargeBlobManifest {
+    let itemID: UUID
+
+    static func read(siblingOf storeURL: URL) throws -> Self {
+        let data = try Data(contentsOf: Self.manifestURL(siblingOf: storeURL))
+        guard let text = String(data: data, encoding: .utf8),
+              text.last == "\n",
+              text.dropLast().hasPrefix("item="),
+              let itemID = UUID(
+                uuidString: String(text.dropLast().dropFirst(5))
+              ) else {
+            throw ProbeFailure.unexpectedState
+        }
+        return Self(itemID: itemID)
+    }
+
+    func write(siblingOf storeURL: URL) throws {
+        try Data("item=\(itemID.uuidString)\n".utf8).write(
+            to: Self.manifestURL(siblingOf: storeURL)
+        )
+    }
+
+    private static func manifestURL(siblingOf storeURL: URL) -> URL {
+        storeURL.deletingLastPathComponent()
+            .appendingPathComponent(largeBlobManifestFileName)
+    }
+}
+
 private func manifestURL(siblingOf storeURL: URL) -> URL {
     storeURL.deletingLastPathComponent()
         .appendingPathComponent(manifestFileName)
@@ -383,6 +424,31 @@ private func capture(
             lineageHint: nil
         ),
         observedAt: date
+    )
+}
+
+private func largeBlobBytes() -> Data {
+    let pattern = Data((0..<4_096).map { index in
+        UInt8(truncatingIfNeeded: index &* 31 &+ 17)
+    })
+    var bytes = Data(capacity: largeBlobByteCount)
+    for _ in 0..<(largeBlobByteCount / pattern.count) {
+        bytes.append(pattern)
+    }
+    return bytes
+}
+
+private func largeBlobCapture() -> ClipboardCapture {
+    ClipboardCapture(
+        representations: [CapturedRepresentation(
+            typeIdentifier: largeBlobType,
+            bytes: largeBlobBytes()
+        )],
+        origin: CopyOriginObservation(
+            sourceApplication: largeBlobSource,
+            lineageHint: nil
+        ),
+        observedAt: largeBlobDate
     )
 }
 
@@ -694,6 +760,148 @@ private func crashCommit(storeURL: URL) async throws -> Never {
     fatalError("crash phase unexpectedly returned")
 }
 
+/// Prepares one ordinary App Intents browse grant and one retained row. The
+/// following crash phase can therefore exercise the production public facade
+/// without test-only model setup or an empty-result shortcut.
+private func gatewayAuditSeed(storeURL: URL) async throws {
+    let history = try await openHistory(at: storeURL)
+    _ = try requireInserted(
+        try await history.perform(.capture(capture(
+            gatewayAuditText,
+            at: gatewayAuditDate,
+            source: gatewayAuditSource
+        ))),
+        position: 1
+    )
+    let appIntentsConnections = try await history.connections().filter {
+        $0.enrollKind == .appIntents && $0.status == .active
+    }
+    guard appIntentsConnections.count == 1 else {
+        throw ProbeFailure.unexpectedState
+    }
+    try await history.grantCapability(
+        .browse,
+        to: appIntentsConnections[0].id
+    )
+}
+
+/// V2-05 §5.2 / PLAY-PY-D5: terminate after the succeeded read audit save
+/// boundary but before `ExternalReadResult` crosses the Authority boundary.
+/// The DEBUG TaskLocal hook is process-local and absent from Release builds;
+/// the actual read still enters through the public connection-bound facade.
+private func gatewayAuditCrash(storeURL: URL) async throws -> Never {
+#if DEBUG
+    let history = try await openHistory(at: storeURL)
+    let facade = history.makeAppIntentsHistoryFacade()
+    try await ExternalReadPublicationDebugInstrumentation
+        .$afterSynchronousSuccessfulAuditCommit.withValue({
+            // The callback's strong capture keeps the owner alive through the
+            // exact post-commit boundary; its declared result remains `Void`
+            // even though this fixture intentionally never returns.
+            _ = history
+            fatalError("intentional crash after external read audit commit")
+        }) {
+            _ = try await facade.read(.recent(limit: 1))
+        }
+    fatalError("gateway audit crash phase unexpectedly returned")
+#else
+    fatalError("gateway audit crash phase requires a Debug build")
+#endif
+}
+
+/// Fresh public administration read proves that the crashed call left exactly
+/// one durable succeeded read audit. `auditLog` appends its own raw-19 record
+/// only after freezing the returned page, so that record cannot contaminate
+/// this count (`V2-05` §4.5/§5.2).
+private func gatewayAuditVerify(storeURL: URL) async throws {
+    let history = try await openHistory(at: storeURL)
+    // Sequence 1 is the retained floor after the seed phase's administration
+    // read. Start at that inclusive floor rather than below it; the frozen
+    // snapshot head, not `since`, is the exclusive bound.
+    let matching = try await history.auditLog(since: 1).filter {
+        $0.operationKind == .readRecent
+    }
+    guard matching.count == 1,
+          matching[0].outcome == .succeeded,
+          matching[0].capability == .browse,
+          matching[0].connectionID != nil,
+          matching[0].changePosition == nil,
+          matching[0].failureKind == nil,
+          matching[0].denialReason == nil else {
+        throw ProbeFailure.unexpectedState
+    }
+}
+
+/// Commits one payload large enough for the schema's opaque
+/// `@Attribute(.externalStorage)` placement hint, records only its public
+/// business identity, then terminates abnormally with the facade/container
+/// owner kept alive. This is process-crash evidence, not a file-layout, fsync,
+/// sudden-power-loss, or permanent external-placement claim.
+private func largeBlobCrashCommit(storeURL: URL) async throws -> Never {
+    let history = try await openHistory(at: storeURL)
+    let reference = try requireInserted(
+        try await history.perform(.capture(largeBlobCapture())),
+        position: 1
+    )
+    try LargeBlobManifest(itemID: reference.id.rawValue)
+        .write(siblingOf: storeURL)
+    withExtendedLifetime(history) {
+        fatalError("intentional crash after committed large payload")
+    }
+}
+
+/// A new process forces the large value through each public V1 projection and
+/// compares the hydrated bytes directly with the independent deterministic
+/// fixture. No SwiftData model or sidecar path crosses the process boundary.
+private func largeBlobVerify(storeURL: URL) async throws {
+    let manifest = try LargeBlobManifest.read(siblingOf: storeURL)
+    let history = try await openHistory(at: storeURL)
+    let page = try await history.browse(HistoryBrowseRequest(
+        kind: .recent,
+        limit: 10
+    ))
+    guard page.position.rawValue == 1,
+          page.next == nil,
+          page.rows.count == 1,
+          page.rows[0].item.id.rawValue == manifest.itemID,
+          page.rows[0].item.contentVersion.rawValue == 1,
+          page.rows[0].typeIdentifiers == [largeBlobType],
+          page.rows[0].lastCopiedAt == largeBlobDate,
+          page.rows[0].copyCount == 1,
+          page.rows[0].lastSource == largeBlobSource,
+          page.rows[0].pinnedPosition == nil,
+          page.rows[0].search == nil else {
+        throw ProbeFailure.unexpectedState
+    }
+
+    let expected = largeBlobBytes()
+    let itemID = page.rows[0].item.id
+    let details = try await history.details(for: itemID)
+    guard details.item == page.rows[0].item,
+          details.canonical.count == 1,
+          details.canonical[0].typeIdentifier == largeBlobType,
+          details.canonical[0].bytes == expected,
+          details.effective == details.canonical,
+          details.revisions.isEmpty,
+          details.occurrence.firstCopiedAt == largeBlobDate,
+          details.occurrence.lastCopiedAt == largeBlobDate,
+          details.occurrence.count == 1,
+          details.occurrence.firstSource == largeBlobSource,
+          details.occurrence.lastSource == largeBlobSource,
+          details.pinnedPosition == nil else {
+        throw ProbeFailure.unexpectedState
+    }
+
+    let paste = try await history.pastePayload(for: itemID)
+    guard paste.item == details.item,
+          paste.lineageHint == itemID,
+          paste.representations.count == 1,
+          paste.representations[0].typeIdentifier == largeBlobType,
+          paste.representations[0].bytes == expected else {
+        throw ProbeFailure.unexpectedState
+    }
+}
+
 private func readExactStandardInput(byteCount: Int) throws -> Data {
     var result = Data()
     while result.count < byteCount {
@@ -860,6 +1068,16 @@ private struct HistoryRestartProbe {
                 try await retentionUpdate(storeURL: storeURL)
             case .retentionVerifyUpdated:
                 try await retentionVerifyUpdated(storeURL: storeURL)
+            case .gatewayAuditSeed:
+                try await gatewayAuditSeed(storeURL: storeURL)
+            case .gatewayAuditCrash:
+                try await gatewayAuditCrash(storeURL: storeURL)
+            case .gatewayAuditVerify:
+                try await gatewayAuditVerify(storeURL: storeURL)
+            case .largeBlobCrashCommit:
+                try await largeBlobCrashCommit(storeURL: storeURL)
+            case .largeBlobVerify:
+                try await largeBlobVerify(storeURL: storeURL)
             }
             diagnostic("process.phase=\(phase.rawValue) complete")
             FileHandle.standardOutput.write(Data("\(phase.rawValue.uppercased())_OK\n".utf8))
