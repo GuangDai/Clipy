@@ -147,7 +147,7 @@ struct PreviewContentLoaderTests {
         let gate = PreviewRenderGate()
         let hook: @Sendable () async -> Void = { await gate.parkFirst() }
 
-        await ContentPreviewDebugInstrumentation.$renderDidStart.withValue(hook) {
+        try await ContentPreviewDebugInstrumentation.$renderDidStart.withValue(hook) {
             let loadA = Task { await loader.load(item: refA) }
             try #require(await pollUntil { await history.detailRequests.count == 1 })
             await history.resumeDetails(for: refA.id)
@@ -183,7 +183,7 @@ struct PreviewContentLoaderTests {
         let gate = PreviewRenderGate()
         let hook: @Sendable () async -> Void = { await gate.parkFirst() }
 
-        await ContentPreviewDebugInstrumentation.$renderDidStart.withValue(hook) {
+        try await ContentPreviewDebugInstrumentation.$renderDidStart.withValue(hook) {
             let load = Task { await loader.load(item: ref) }
             try #require(await pollUntil { await history.detailRequests.count == 1 })
             await history.resumeDetails(for: ref.id)
@@ -213,7 +213,7 @@ struct PreviewContentLoaderTests {
         let gate = PreviewRenderGate()
         let hook: @Sendable () async -> Void = { await gate.parkFirst() }
 
-        await ContentPreviewDebugInstrumentation.$renderDidStart.withValue(hook) {
+        try await ContentPreviewDebugInstrumentation.$renderDidStart.withValue(hook) {
             let oldLoad = Task { await loader.load(item: refV1) }
             try #require(await pollUntil { await history.detailRequests.count == 1 })
             await history.resumeDetails(for: refV1.id)
