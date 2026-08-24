@@ -70,15 +70,15 @@ final class PreviewRecoveryJourneyUITests: XCTestCase {
         assertRecoveredPreview(expected, in: app)
     }
 
-    /// A valid opaque RTF is stable unsupported, while malformed bytes for a
-    /// supported UTF-8 type are terminal failed. Neither exact request admits
-    /// replay, so neither running surface may manufacture Retry.
+    /// An opaque private representation is stable unsupported, while malformed
+    /// bytes for a supported UTF-8 type are terminal failed. Neither exact
+    /// request admits replay, so neither running surface may manufacture Retry.
     @MainActor
     func testUnsupportedAndMalformedPreviewNeverExposeRetry() throws {
         do {
             let unsupportedApp = try launchApp(
-                representation: Data(#"{\rtf1\ansi opaque}"#.utf8),
-                typeIdentifier: "public.rtf"
+                representation: Data("opaque".utf8),
+                typeIdentifier: "com.example.clipy.preview-opaque"
             )
             defer { unsupportedApp.terminate() }
             let unsupported = unsupportedApp.descendants(matching: .any)[
@@ -86,7 +86,7 @@ final class PreviewRecoveryJourneyUITests: XCTestCase {
             ]
             XCTAssertTrue(
                 unsupported.waitForExistence(timeout: 10),
-                diagnostic(unsupportedApp, context: "unsupported RTF preview")
+                diagnostic(unsupportedApp, context: "unsupported opaque preview")
             )
             XCTAssertFalse(unsupportedApp.buttons["clipy.preview.retry"].exists)
             XCTAssertFalse(

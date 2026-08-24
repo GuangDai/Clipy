@@ -133,8 +133,6 @@ public struct ReviseEditorView: View {
             minHeight: layout == .standaloneSheet ? 440 : nil,
             maxHeight: layout == .embeddedInDetails ? .infinity : 440
         )
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("clipy.editor.root")
         .alert(
             alertTitle,
             isPresented: Binding(

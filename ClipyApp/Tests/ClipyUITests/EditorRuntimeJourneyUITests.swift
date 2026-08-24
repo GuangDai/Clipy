@@ -103,13 +103,15 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
         ) else { return }
         alert.buttons["clipy.editor.confirm-discard"].click()
 
-        let editor = app.descendants(matching: .any)["clipy.editor.root"]
+        let editorDecision = app.descendants(matching: .any)[
+            "clipy.editor.decision.\(textType)"
+        ]
         let detailsTitle = app.descendants(matching: .any)[
             "clipy.details.title"
         ]
         guard assertEventually(
             {
-                !editor.exists
+                !editorDecision.exists
                     && detailsTitle.exists
                     && self.accessibilityText(of: detailsTitle)
                         == self.competingRevision
@@ -134,7 +136,7 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
 
         guard assertEventually(
             {
-                !editor.exists
+                !editorDecision.exists
                     && detailsTitle.exists
                     && self.accessibilityText(of: detailsTitle) == draft
                     && !app.staticTexts["Item Removed"].exists
@@ -192,10 +194,12 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
         ) else { return }
         alert.buttons["clipy.editor.confirm-discard"].click()
 
-        let editor = app.descendants(matching: .any)["clipy.editor.root"]
+        let editorDecision = app.descendants(matching: .any)[
+            "clipy.editor.decision.\(textType)"
+        ]
         guard assertEventually(
             {
-                !editor.exists
+                !editorDecision.exists
                     && app.descendants(matching: .any)[
                         "clipy.details.root"
                     ].exists
@@ -276,9 +280,15 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
         ) else { return app }
         edit.click()
 
-        let editor = app.descendants(matching: .any)["clipy.editor.root"]
+        let editorDecision = app.descendants(matching: .any)[
+            "clipy.editor.decision.\(textType)"
+        ]
         _ = assertEventually(
-            { editor.exists },
+            {
+                editorDecision.exists
+                    && app.buttons["clipy.editor.cancel"].exists
+                    && app.buttons["clipy.editor.save"].exists
+            },
             in: app,
             message: "The Details-owned editor controls were absent from public AX."
         )

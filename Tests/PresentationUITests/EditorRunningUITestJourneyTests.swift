@@ -11,6 +11,7 @@ import PresentationUI
 import Testing
 
 @Test("editor stale journey builds a distinct coherent competing revision")
+@MainActor
 func editorStaleJourneyBuildsDistinctCompetingRevision() throws {
     let itemID = HistoryItemID(rawValue: UUID())
     let expected = ContentVersion(rawValue: 7)

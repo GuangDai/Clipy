@@ -386,9 +386,8 @@ public struct HistoryPreviewView: View {
             Text("No Preview")
                 .font(.callout)
                 .foregroundStyle(.secondary)
+                .accessibilityIdentifier("clipy.preview.unsupported")
         }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("clipy.preview.unsupported")
     }
 
     /// Retry is offered only when the failed episode's typed outcome admits
@@ -403,6 +402,7 @@ public struct HistoryPreviewView: View {
             Text("Preview Unavailable")
                 .font(.callout)
                 .foregroundStyle(.secondary)
+                .accessibilityIdentifier("clipy.preview.failed")
             if loader.canRetryFailure {
                 Button("Retry") {
                     Task {
@@ -413,8 +413,6 @@ public struct HistoryPreviewView: View {
                 .accessibilityIdentifier("clipy.preview.retry")
             }
         }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("clipy.preview.failed")
     }
 
     // MARK: - Metadata bar

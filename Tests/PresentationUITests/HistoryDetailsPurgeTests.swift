@@ -304,7 +304,8 @@ struct HistoryDetailsPurgeTests {
         let oldToken = fence.begin()
         #expect(oldToken != nil)
 
-        #expect(fence.advanceReference(from: original, to: latest))
+        let didAdvance = fence.advanceReference(from: original, to: latest)
+        #expect(didAdvance)
         if let oldToken {
             #expect(!fence.owns(oldToken))
         }
@@ -352,10 +353,25 @@ struct HistoryDetailsPurgeTests {
         )
         var fence = HistoryDetailsLoadFence()
 
-        #expect(!fence.advanceReference(from: original, to: foreign))
-        #expect(!fence.advanceReference(from: original, to: older))
-        #expect(fence.purge(.item(original.id), item: original))
-        #expect(!fence.advanceReference(from: original, to: newer))
-        #expect(fence.begin() == nil)
+        let acceptedForeign = fence.advanceReference(
+            from: original,
+            to: foreign
+        )
+        let acceptedRegression = fence.advanceReference(
+            from: original,
+            to: older
+        )
+        let didPurge = fence.purge(.item(original.id), item: original)
+        let acceptedAfterPurge = fence.advanceReference(
+            from: original,
+            to: newer
+        )
+        let tokenAfterPurge = fence.begin()
+
+        #expect(!acceptedForeign)
+        #expect(!acceptedRegression)
+        #expect(didPurge)
+        #expect(!acceptedAfterPurge)
+        #expect(tokenAfterPurge == nil)
     }
 }
