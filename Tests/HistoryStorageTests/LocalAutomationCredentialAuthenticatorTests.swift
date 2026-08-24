@@ -233,7 +233,8 @@ private struct AuthenticationMemoryCredentialOperations:
         for connection: ExternalConnectionID
     ) -> CredentialStoreCopyResult {
         if let forcedCopyResult { return forcedCopyResult }
-        values[connection].map(CredentialStoreCopyResult.value) ?? .missing
+        return values[connection].map(CredentialStoreCopyResult.value)
+            ?? .missing
     }
 
     mutating func deleteCredential(
