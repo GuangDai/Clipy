@@ -18,6 +18,11 @@ struct GatewayConnectionKindRecheckTests {
     private static let absentItemID = HistoryItemID(rawValue: UUID(
         uuidString: "00000000-0000-0000-0000-000000001701"
     )!)
+    private static let localAutomationConnection = ExternalConnectionID(
+        rawValue: UUID(
+            uuidString: "00000000-0000-0000-0000-000000001702"
+        )!
+    )
 
     private static let localRecentDescriptor = ExternalOperationDescriptor(
         capability: .browsePreview,
@@ -308,10 +313,10 @@ struct GatewayConnectionKindRecheckTests {
         let appIntentsConnection = try #require(
             try await history.connections().first
         ).id
-        let localAutomationConnection = try await authority.enrollConnection(
-            kind: .localAutomation,
-            displayName: "Batch 17 local kind recheck",
-            credential: nil
+        let localAutomationConnection = Self.localAutomationConnection
+        try await authority.publishVerifiedLocalAutomationEnrollment(
+            localAutomationConnection,
+            displayName: "Batch 17 local kind recheck"
         )
         try await history.grantCapability(
             .browse,

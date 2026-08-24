@@ -1,4 +1,5 @@
-/// Evidence Card 1C-1 — a real three-process V2 restart tracer.
+/// Evidence Card 1C-1 plus the REVIEW §4.3 Retention-config restart tail —
+/// public-API-only, normally terminated process tracers over one StoreRoot.
 ///
 /// The test process owns no `ModelContainer`, context, model, facade, item ID,
 /// or content manifest. It creates only the temporary StoreRoot; child A owns
@@ -47,14 +48,17 @@ struct TrueRestartChildTests {
         }
     }
 
+    private static func probeURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent(".build/debug/HistoryRestartProbe")
+    }
+
     @Test("seed, operate, and verify use three terminated owners")
     func seedOperateVerifyAcrossThreeProcesses() throws {
-        let packageRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let probeURL = packageRoot
-            .appendingPathComponent(".build/debug/HistoryRestartProbe")
+        let probeURL = Self.probeURL()
         let storeRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent(
                 "clipy-true-restart-\(UUID().uuidString)",
@@ -82,5 +86,41 @@ struct TrueRestartChildTests {
             storeURL: storeURL,
             probeURL: probeURL
         )
+    }
+
+    /// Four sequential owners close the true-restart half of the frozen §4.3
+    /// Retention singleton tail: A writes exact count + R1/R2/R3 values, B
+    /// fresh-opens and reads them, C fresh-opens, rechecks, and updates them,
+    /// and D fresh-opens and reads the updated values. Every child has
+    /// normally terminated before the next starts; this proves reopen
+    /// persistence, not migration, full-disk, SIGKILL, crash/power-loss, or
+    /// external-storage durability.
+    @Test("retention write, read, update, and read use four terminated owners")
+    func retentionWriteReadUpdateReadAcrossFourProcesses() throws {
+        let storeRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "clipy-retention-restart-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: storeRoot,
+            withIntermediateDirectories: false
+        )
+        defer { try? FileManager.default.removeItem(at: storeRoot) }
+
+        let storeURL = storeRoot.appendingPathComponent("history.store")
+        let probeURL = Self.probeURL()
+        for phase in [
+            "retentionSeed",
+            "retentionVerify",
+            "retentionUpdate",
+            "retentionVerifyUpdated",
+        ] {
+            try Self.runChild(
+                phase: phase,
+                storeURL: storeURL,
+                probeURL: probeURL
+            )
+        }
     }
 }

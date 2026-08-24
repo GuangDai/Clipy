@@ -3,8 +3,8 @@
 > **Status:** living record; one section per landed roadmap step, newest last.
 > Maps each step of `roadmap/README.md` §3 to its commits and its CI evidence
 > on the `macOS 26 ARM CI` workflow (github.com/GuangDai/Clipy; macos-26 arm64
-> runners; jobs *Lint + source gates*, *SwiftPM build + test*, *XcodeGen
-> generate + app build/test*). Run IDs cite
+> runners; jobs *SwiftPM build + test* and *XcodeGen generate + app
+> build/test*). Run IDs cite
 > `github.com/GuangDai/Clipy/actions/runs/<id>`.
 >
 > This file records progress only. Deliverable definitions and acceptance
@@ -12,8 +12,8 @@
 > they are cited here, never restated as new semantics.
 
 **Audit baseline:** `8f316c9` (2026-08-02). **Current landed baseline:**
-`master` through [PR #34](https://github.com/GuangDai/Clipy/pull/34) / merge
-`f48d87f` (2026-08-24). Steps 0–9 are
+`master` through [PR #40](https://github.com/GuangDai/Clipy/pull/40) / merge
+`c89f2ba` (2026-08-24). Steps 0–9 are
 implemented and CI-green;
 M2/state 2 is complete. Step 9 (product wiring: PasteboardAdapter +
 PresentationUI + ClipyApp composition) is done, including its post-step-9
@@ -24,10 +24,9 @@ cursor/status-item/center/last-position placement, dwell-driven preview pane)
 rather than a SwiftUI `MenuBarExtra`. M3/state 3 (packaging, accessibility,
 localization, product acceptance per Part VI §11) remains open.
 
-**Current CI provenance (2026-08-24):** the PR #38 merge head `1834eca` is green across
-Lint + source gates, SwiftPM build + test, and XcodeGen generate + app
-build/test at
-[run 32694673199](https://github.com/GuangDai/Clipy/actions/runs/32694673199).
+**Current CI provenance (2026-08-24):** the PR #40 merge head `c89f2ba` was
+green across the then-current source-gate, SwiftPM, and XcodeGen jobs at
+[run 32699272489](https://github.com/GuangDai/Clipy/actions/runs/32699272489).
 PR #34 restores the manual-only exact/scale evidence caller and scale-phase
 liveness contract. Its final PR run
 [32684566664](https://github.com/GuangDai/Clipy/actions/runs/32684566664) and
@@ -39,8 +38,7 @@ same-SHA correctness is green, Exact A/B is green with
 `productionIntegrationEligible == true` and all 13 cases passing, and the
 5,000-row scale sibling is green across preparation, tie-heavy browse, Debug
 exact probe, Release exact search, and independent-process warm open.
-No HistoryCore public-surface change required a symbol-snapshot run. The Exact
-A/B lane above did run; the separate performance-helper/proof lane did not,
+The Exact A/B lane above did run; the separate performance-helper/proof lane did not,
 and the scale artifact remains record-only rather than a budget admission. The
 earlier PR #20 ordinary ad-hoc Release artifact passed the finite
 Card 5D symbol inventory at
@@ -50,7 +48,7 @@ that exact PR #20 artifact, not a complete instrumentation or
 distribution/runtime audit. The latest signed UDS discriminator evidence
 remains bounded to run
 [32615713100](https://github.com/GuangDai/Clipy/actions/runs/32615713100).
-Neither ordinary correctness nor the release-surface run proves production
+Neither ordinary correctness nor that retired finite-symbol run proves production
 Data Protection Keychain persistence/reopen/delete or authenticated ingress,
 Developer ID identity, secure timestamp, notarization/stapling, Gatekeeper,
 App Sandbox, Keychain sharing, different-EUID callers, TCC, fresh login-item,
@@ -1011,16 +1009,14 @@ test.
   calls remain unaudited and correct-kind local denial appends one bounded
   audit without changing History/HCR/position. Both suites passed in
   [correctness run 32619384577](https://github.com/GuangDai/Clipy/actions/runs/32619384577).
-  The dispatch-only
-  [`release-surface`](../.github/workflows/release-surface.yml) workflow,
-  [`run_release_surface.sh`](../scripts/ci/run_release_surface.sh), and finite
-  [`release-forbidden-symbols.txt`](../scripts/ci/release-forbidden-symbols.txt)
-  inventory produced 0 matches across 26 reviewed literals in the exact
+  The now-retired dispatch-only finite-symbol mechanism produced 0 matches
+  across 26 reviewed literals in the exact
   ordinary ad-hoc Release artifact at
   [run 32619756885](https://github.com/GuangDai/Clipy/actions/runs/32619756885).
   The symbol result is not a complete instrumentation audit and proves no
   Developer ID, timestamp, notarization, Gatekeeper, TCC, UI, or other runtime
-  behavior.
+  behavior. Its workflow, script, and literal inventory were deleted on
+  2026-08-24 and are not current correctness machinery.
 - **Card 5A mapping/live-revoke leaf landed:**
   [`PasteboardAccess`](../Sources/PasteboardAdapter/PasteboardAccess.swift)
   maps the documented AppKit access cases to a neutral Sendable value, while
@@ -1304,12 +1300,30 @@ test.
   active/key, so that experiment was removed rather than replaced by a private
   or fabricated SwiftUI tree. Card 15B default/named AX action execution,
   actual VoiceOver/FKA, localization, and signed runtime remain open.
-- **Batch 38 Editor/Settings bounded controls are in progress:** the revision
+- **Batch 38 Editor/Settings bounded controls are landed:** PR #40 / merge
+  `c89f2ba`; PR-head correctness 32698639889 and master correctness
+  32699272489 are green. The revision
   editor now carries the approved pre-Save immutable-history disclosure with
   one literal Presentation proof. The running-app Settings journey opens the
   real Settings scene, materializes the Launch at Login control, enables the
   age threshold, and requires the strict-retention warning/destructive action
   before Esc cancels while preserving the draft. This is not a hosted editor
   copy/Esc proof, a four-state ServiceManagement runtime proof, or complete
-  unified-retention acceptance. PR-head correctness 32698639889 is green;
-  merge/master evidence is pending.
+  unified-retention acceptance.
+- **Batch 39 executes five bounded leaves across frozen todo-map areas
+  4.1–4.4/4.7 and is in progress:** [PR #41](https://github.com/GuangDai/Clipy/pull/41)
+  keeps independent evidence ceilings: (4.1) one visually unified
+  count+V2 retention group with semantic no-change Apply gating, untouched
+  raw-value preservation, and explicit whole-unit edit intent; (4.2) verified
+  preassigned Local Automation
+  publication plus an internal exact-credential-to-unique-Gateway
+  `browsePreview` route; (4.3) a four-terminated-process retention
+  write/read/update/read tracer; (4.4) running-app Search Clear/focus plus a
+  public AXPress default-Copy cell; and (4.7) ThumbnailStore test-knob/counter
+  contraction. The proposed narrow regex/log gates and the pre-existing
+  static-source, SwiftLint, dependency/vendor, generated-project, test-selection,
+  and public-symbol machinery were removed at the user's direction. Current
+  correctness is the two parallel SwiftPM and XcodeGen build/test jobs; final
+  macOS evidence is pending. These leaves do not upgrade the signed/TCC/
+  VoiceOver/FKA/Developer-ID/full-disk/migration cells or the client-custody,
+  transport, and opaque-locator design blockers.

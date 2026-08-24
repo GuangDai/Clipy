@@ -27,8 +27,10 @@ The complete public, Foundation-only surface between callers and retained Histor
 ## Acceptance
 
 - Part VI §6: compiles with only `import Foundation`; Swift 6 complete strict-concurrency; no `@unchecked Sendable` / `nonisolated(unsafe)` / service locator / second writer.
-- Part VI §6: public symbol surface is snapshot-tested so package-only Domain/Storage vocabulary cannot leak. The expected surface is derived mechanically from the 03a §2–§7 + 03b §8–§9 public declarations (public structs/enums/protocols and their public members); these public types appear, but their `package init` members — and `ContentVersion.initial`/`successor()`, `ChangePosition.zero`/`successor()` — must NOT appear in the snapshot (package-only minters, not public API).
-- Part VI §6 build-time gate: a deliberate forbidden import fails the import scan.
+- Part VI §6: focused owner tests compile the caller-visible initializers,
+  conformances, raw vocabulary, and behavior. Package-only Domain/Storage
+  vocabulary remains excluded by access control and review; no generated
+  symbol snapshot is maintained.
 - Every public struct with caller construction has a real public initializer (03a/03b); every declared conformance compiles.
 
 ## Risks / notes
@@ -38,5 +40,5 @@ The complete public, Foundation-only surface between callers and retained Histor
 
 ## Progress
 
-- **Step 1 landed** at [`4e3e4fd`](https://github.com/GuangDai/Clipy/commit/4e3e4fd3e403c0e3f1050f74e3eb7b9d0efdb4bb) (03a §2–§7, 03b §8–§10, 06 §2); follow-ups [`e07a34a`](https://github.com/GuangDai/Clipy/commit/e07a34a8518ff9477d1dd6efd472e6e650813e7d) (CI `XCODEGEN_HOME` step env), [`6b50d2e`](https://github.com/GuangDai/Clipy/commit/6b50d2ec7d6fd4d1dd979a34cb2860cb7855833e) (symbolgraph-extract macOS SDK), [`1cf1715`](https://github.com/GuangDai/Clipy/commit/1cf1715d39fb54c6c18ca959a32921a7d74e1128) (snapshot lock; bot, workflow `symbol-snapshot.yml`).
-- **Evidence — green at run [29964640300](https://github.com/GuangDai/Clipy/actions/runs/29964640300) (macos-26 runner, HEAD `7994844`):** compiles Swift 6 complete strict-concurrency importing only Foundation; `HistoryCoreSurfaceTests` green; public symbol surface locked at `1cf1715` (`Tests/HistoryCoreTests/SymbolSurface/HistoryCore.symbols.txt`) and gate-enforced (`scripts/public_symbol_snapshot.sh`, workflow `symbol-snapshot.yml`); forbidden-import scan in force (Part VI §6).
+- **Step 1 landed** at [`4e3e4fd`](https://github.com/GuangDai/Clipy/commit/4e3e4fd3e403c0e3f1050f74e3eb7b9d0efdb4bb) (03a §2–§7, 03b §8–§10, 06 §2); follow-ups [`e07a34a`](https://github.com/GuangDai/Clipy/commit/e07a34a8518ff9477d1dd6efd472e6e650813e7d) (CI `XCODEGEN_HOME` step env), [`6b50d2e`](https://github.com/GuangDai/Clipy/commit/6b50d2ec7d6fd4d1dd979a34cb2860cb7855833e) and [`1cf1715`](https://github.com/GuangDai/Clipy/commit/1cf1715d39fb54c6c18ca959a32921a7d74e1128) (historical symbol-snapshot tooling, retired 2026-08-24).
+- **Evidence — green at run [29964640300](https://github.com/GuangDai/Clipy/actions/runs/29964640300) (macos-26 runner, HEAD `7994844`):** compiles Swift 6 complete strict-concurrency importing only Foundation; `HistoryCoreSurfaceTests` green. The run also carried the now-retired scan/snapshot checks; they are historical evidence, not current CI requirements.

@@ -19,7 +19,10 @@ extension HistoryAuthority {
         requestedAt: Date,
         searchWorker: SearchWorker
     ) async throws -> ExternalReadResult {
-        let facts = try externalReadFacts(for: request)
+        let facts = try externalReadFacts(
+            for: request,
+            expectedConnectionKind: expectedConnectionKind
+        )
 
         switch request {
         case .recent(let limit):
@@ -151,11 +154,15 @@ private extension HistoryAuthority {
         let searchRequest: HistoryBrowseRequest?
     }
 
-    func externalReadFacts(for request: ExternalRead) throws
+    func externalReadFacts(
+        for request: ExternalRead,
+        expectedConnectionKind: ConnectionEnrollKind
+    ) throws
         -> ExternalReadFacts
     {
         let descriptor = try ExternalOperationDescriptor.forRead(
             request,
+            expectedConnectionKind: expectedConnectionKind,
             limits: limits
         )
         if case .search(let text, let mode, let limit) = request {

@@ -109,18 +109,18 @@ struct GatewayAdministrationMutationTests {
         ).rawValue
     }
 
-    @Test("enrollment mints the injected ID and atomically audits no History commit")
-    func enrollmentIsAtomicAndDoesNotAdvanceHistory() async throws {
+    @Test("verified local publication uses its preassigned ID and truthful audit")
+    func verifiedLocalPublicationIsAtomicAndDoesNotAdvanceHistory() async throws {
         let fixture = try await Self.makeFixture()
         let maximumDisplayName = String(repeating: "x", count: 256)
-        let id = try await fixture.authority.enrollConnection(
-            kind: .localAutomation,
-            displayName: maximumDisplayName,
-            credential: nil
+        let id = ExternalConnectionID(rawValue: Self.enrolledID)
+        try await fixture.authority.publishVerifiedLocalAutomationEnrollment(
+            id,
+            displayName: maximumDisplayName
         )
 
         #expect(id.rawValue == Self.enrolledID)
-        #expect(fixture.idSource.remainingCount == 0)
+        #expect(fixture.idSource.remainingCount == 1)
         #expect(fixture.clock.callCount == 3)
 
         let snapshot = try Self.snapshot(fixture)
@@ -145,6 +145,27 @@ struct GatewayAdministrationMutationTests {
         #expect(operation.requestedAt == Self.epoch.addingTimeInterval(1))
         #expect(operation.committedAt == connection.enrolledAt)
         #expect(operation.changePositionRaw == nil)
+        let decoded = try OperationPayloadBlobCodec.decode(
+            operation.payloadBlob,
+            context: OperationPayloadRecordContextV1(
+                connectionID: operation.connectionIDRaw,
+                capability: nil,
+                operationKind: .adminEnroll,
+                outcome: .succeeded,
+                failureKind: nil,
+                denialReason: nil,
+                changePosition: nil,
+                auditSequence: operation.auditSequence,
+                compactionFloor: snapshot.configs.first?.compactionFloor,
+                nextAuditSequence: snapshot.configs.first?.nextAuditSequence
+            )
+        )
+        #expect(decoded.request == .enroll(
+            kind: .localAutomation,
+            displayNameUTF8ByteCount: 256,
+            credentialWasProvided: true
+        ))
+        #expect(decoded.result == .enrolled(connectionID: Self.enrolledID))
         #expect(snapshot.configs.first?.nextAuditSequence == 2)
         let payloadBytes = try #require(
             UInt64(exactly: operation.payloadBlob.count)
@@ -156,7 +177,7 @@ struct GatewayAdministrationMutationTests {
         #expect(try Self.historyPosition(fixture) == 0)
     }
 
-    @Test("invalid shape is unaudited, while admitted credential and capacity denials audit")
+    @Test("generic Authority cannot bypass verified local publication")
     func enrollmentAdmissionAndPolicyDenialsAreDistinct() async throws {
         let fixture = try await Self.makeFixture()
         let oversized = String(repeating: "é", count: 129)
@@ -164,7 +185,7 @@ struct GatewayAdministrationMutationTests {
         await #expect(throws: ExternalFailure.requestDenied(.invalidInput)) {
             _ = try await fixture.authority.enrollConnection(
                 kind: .localAutomation,
-                displayName: oversized,
+                displayName: "Generic bypass",
                 credential: nil
             )
         }
@@ -173,21 +194,15 @@ struct GatewayAdministrationMutationTests {
         #expect(fixture.idSource.remainingCount == 1)
 
         await #expect(throws: ExternalFailure.requestDenied(.invalidInput)) {
-            _ = try await fixture.authority.enrollConnection(
-                kind: .localAutomation,
-                displayName: "Credential-bearing",
-                credential: Data([0x01])
+            try await fixture.authority.publishVerifiedLocalAutomationEnrollment(
+                ExternalConnectionID(rawValue: Self.enrolledID),
+                displayName: oversized
             )
         }
         var snapshot = try Self.snapshot(fixture)
         #expect(snapshot.connections.count == 1)
-        #expect(snapshot.operations.count == 1)
-        #expect(snapshot.operations[0].connectionIDRaw == nil)
-        #expect(snapshot.operations[0].outcomeRaw == ExternalOutcome.denied.rawValue)
-        #expect(snapshot.operations[0].failureKindRaw
-            == ExternalFailureKindRaw.requestDenied.rawValue)
-        #expect(snapshot.operations[0].denialReasonRaw
-            == ExternalDenialReason.invalidInput.rawValue)
+        #expect(snapshot.operations.isEmpty)
+        #expect(fixture.clock.callCount == 1)
         #expect(fixture.idSource.remainingCount == 1)
 
         let context = ModelContext(fixture.container)
@@ -210,17 +225,36 @@ struct GatewayAdministrationMutationTests {
         try context.save()
 
         await #expect(throws: ExternalFailure.requestDenied(.invalidInput)) {
-            _ = try await fixture.authority.enrollConnection(
-                kind: .localAutomation,
-                displayName: "Connection 501",
-                credential: nil
+            try await fixture.authority.publishVerifiedLocalAutomationEnrollment(
+                ExternalConnectionID(rawValue: Self.enrolledID),
+                displayName: "Connection 501"
             )
         }
         snapshot = try Self.snapshot(fixture)
         #expect(snapshot.connections.count == 500)
-        #expect(snapshot.operations.count == 2)
-        #expect(snapshot.operations[1].connectionIDRaw == nil)
-        #expect(snapshot.operations[1].outcomeRaw == ExternalOutcome.denied.rawValue)
+        #expect(snapshot.operations.count == 1)
+        #expect(snapshot.operations[0].connectionIDRaw == nil)
+        #expect(snapshot.operations[0].outcomeRaw == ExternalOutcome.denied.rawValue)
+        let denial = try OperationPayloadBlobCodec.decode(
+            snapshot.operations[0].payloadBlob,
+            context: OperationPayloadRecordContextV1(
+                connectionID: nil,
+                capability: nil,
+                operationKind: .adminEnroll,
+                outcome: .denied,
+                failureKind: .requestDenied,
+                denialReason: .invalidInput,
+                changePosition: nil,
+                auditSequence: snapshot.operations[0].auditSequence,
+                compactionFloor: snapshot.configs.first?.compactionFloor,
+                nextAuditSequence: snapshot.configs.first?.nextAuditSequence
+            )
+        )
+        #expect(denial.request == .enroll(
+            kind: .localAutomation,
+            displayNameUTF8ByteCount: 14,
+            credentialWasProvided: true
+        ))
         #expect(fixture.idSource.remainingCount == 1)
         #expect(try Self.historyPosition(fixture) == 0)
     }
@@ -228,10 +262,10 @@ struct GatewayAdministrationMutationTests {
     @Test("grant, revoke, and re-grant keep one canonical current-state row")
     func grantLifecycleUsesOneCurrentRowAndAuditsNoOps() async throws {
         let fixture = try await Self.makeFixture()
-        let id = try await fixture.authority.enrollConnection(
-            kind: .localAutomation,
-            displayName: "Local automation",
-            credential: nil
+        let id = ExternalConnectionID(rawValue: Self.enrolledID)
+        try await fixture.authority.publishVerifiedLocalAutomationEnrollment(
+            id,
+            displayName: "Local automation"
         )
 
         try await fixture.authority.grantCapability(.organize, to: id)
@@ -275,10 +309,10 @@ struct GatewayAdministrationMutationTests {
     @Test("connection revoke closes every live grant and repeated revoke is audited noOp")
     func connectionRevokeClosesLiveGrants() async throws {
         let fixture = try await Self.makeFixture()
-        let id = try await fixture.authority.enrollConnection(
-            kind: .localAutomation,
-            displayName: "Local automation",
-            credential: nil
+        let id = ExternalConnectionID(rawValue: Self.enrolledID)
+        try await fixture.authority.publishVerifiedLocalAutomationEnrollment(
+            id,
+            displayName: "Local automation"
         )
         try await fixture.authority.grantCapability(.organize, to: id)
         try await fixture.authority.grantCapability(.deleteItem, to: id)
@@ -317,10 +351,10 @@ struct GatewayAdministrationMutationTests {
             try await fixture.authority.grantCapability(.browse, to: missing)
         }
 
-        let id = try await fixture.authority.enrollConnection(
-            kind: .localAutomation,
-            displayName: "Local automation",
-            credential: nil
+        let id = ExternalConnectionID(rawValue: Self.enrolledID)
+        try await fixture.authority.publishVerifiedLocalAutomationEnrollment(
+            id,
+            displayName: "Local automation"
         )
         await #expect(throws: ExternalFailure.requestDenied(.invalidInput)) {
             try await fixture.authority.grantCapability(.browse, to: id)
@@ -342,10 +376,10 @@ struct GatewayAdministrationMutationTests {
     @Test("a failure after audit staging rolls back state, audit, and counters")
     func transactionFailureRollsBackAdminAndAuditTogether() async throws {
         let fixture = try await Self.makeFixture()
-        let id = try await fixture.authority.enrollConnection(
-            kind: .localAutomation,
-            displayName: "Local automation",
-            credential: nil
+        let id = ExternalConnectionID(rawValue: Self.enrolledID)
+        try await fixture.authority.publishVerifiedLocalAutomationEnrollment(
+            id,
+            displayName: "Local automation"
         )
         let before = try Self.snapshot(fixture)
         await fixture.authority.setTransactionFailureInjection(
@@ -357,6 +391,26 @@ struct GatewayAdministrationMutationTests {
         }
 
         #expect(try Self.snapshot(fixture) == before)
+        #expect(try Self.historyPosition(fixture) == 0)
+    }
+
+    @Test("verified local publication rolls back row, audit, and counters")
+    func verifiedLocalPublicationRollsBackAtomically() async throws {
+        let fixture = try await Self.makeFixture()
+        let before = try Self.snapshot(fixture)
+        await fixture.authority.setTransactionFailureInjection(
+            .beforeSingletonUpdate
+        )
+
+        await #expect(throws: ExternalFailure.persistence(.transaction)) {
+            try await fixture.authority.publishVerifiedLocalAutomationEnrollment(
+                ExternalConnectionID(rawValue: Self.enrolledID),
+                displayName: "Local automation"
+            )
+        }
+
+        #expect(try Self.snapshot(fixture) == before)
+        #expect(fixture.idSource.remainingCount == 1)
         #expect(try Self.historyPosition(fixture) == 0)
     }
 }

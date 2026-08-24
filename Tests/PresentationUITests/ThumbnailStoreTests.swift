@@ -424,7 +424,11 @@ struct ThumbnailStoreTests {
                 uniqueKeysWithValues: items.map { ($0, fixturePNGData) }
             )
         )
-        let store = ThumbnailStore(history: history, maximumEntries: 3)
+        let store = ThumbnailStore(
+            history: history,
+            maximumEntries: 3,
+            maximumDecodedBytes: 64 * 1_048_576
+        )
 
         for item in items {
             store.prefetch(item)
@@ -458,7 +462,11 @@ struct ThumbnailStoreTests {
             version: 1
         )
         let history = PausableThumbnailHistory()
-        let store = ThumbnailStore(history: history, maximumEntries: 1)
+        let store = ThumbnailStore(
+            history: history,
+            maximumEntries: 1,
+            maximumDecodedBytes: 64 * 1_048_576
+        )
 
         store.prefetch(first)
         store.prefetch(second)
@@ -503,7 +511,11 @@ struct ThumbnailStoreTests {
     @Test func byteBudgetResetsTheWholeStore() async {
         let item = reference("00000000-0000-0000-0000-0000000000F1", version: 1)
         let history = ThumbnailScriptHistory(pngByReference: [item: fixturePNGData])
-        let store = ThumbnailStore(history: history, maximumDecodedBytes: 1)
+        let store = ThumbnailStore(
+            history: history,
+            maximumEntries: 500,
+            maximumDecodedBytes: 1
+        )
 
         store.prefetch(item)
         let settled = await pollUntil {
@@ -522,7 +534,11 @@ struct ThumbnailStoreTests {
     @Test func missesCarryNoDecodedBytes() async {
         let item = reference("00000000-0000-0000-0000-0000000000F2", version: 1)
         let history = ThumbnailScriptHistory()  // unscripted: nil payload → miss
-        let store = ThumbnailStore(history: history, maximumDecodedBytes: 1)
+        let store = ThumbnailStore(
+            history: history,
+            maximumEntries: 500,
+            maximumDecodedBytes: 1
+        )
 
         store.prefetch(item)
         let settled = await pollUntil {

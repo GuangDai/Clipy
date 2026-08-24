@@ -48,19 +48,17 @@ struct LocalAutomationCredentialAuthenticatorTests {
                 cloudKitDatabase: .none
             )]
         )
-        let identifiers = UUIDSource([appIntentsID, connection.rawValue])
+        let identifiers = UUIDSource([appIntentsID])
         let authority = HistoryAuthority(
             container: container,
             gatewayConnectionIDSource: { identifiers.next() }
         )
         try await authority.performStartup(initialMaximumUnpinnedItems: 200)
         if enroll {
-            let enrolled = try await authority.enrollConnection(
-                kind: .localAutomation,
-                displayName: "Authentication fixture",
-                credential: nil
+            try await authority.publishVerifiedLocalAutomationEnrollment(
+                connection,
+                displayName: "Authentication fixture"
             )
-            #expect(enrolled == connection)
         }
         return Fixture(
             authority: authority,

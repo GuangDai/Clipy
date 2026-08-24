@@ -18,7 +18,8 @@
 ## Acceptance
 
 - `PasteboardAdapterTests`: capture freezes all relevant types; a sibling `org.nspasteboard.ConcealedType` (and the configured private/transient marker set) marks the whole `ClipboardCapture` concealed; paste writes the lineage hint equal to the item ID; the adapter decodes a prior-paste lineage hint back into `CopyOriginObservation.lineageHint`. Storage's defense-in-depth regression asserts such a capture is rejected before fingerprinting and retains no row. (End-to-end coalescing via the hint is exercised by WS4 through History, not by this target.)
-- Import confinement (Part VI §6): `AppKit` is confined to this target; a deliberate `HistoryDomain`/`HistoryStorage` import fails the scan.
+- Import confinement (Part VI §6): `AppKit` belongs in this target and
+  `HistoryDomain`/`HistoryStorage` remain forbidden by architecture and review.
 - Negative: the adapter never builds `CanonicalContent`, never fingerprints, never touches persistence (Part I §2 "Must not own").
 
 ## Risks / notes

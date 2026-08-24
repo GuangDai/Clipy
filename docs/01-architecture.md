@@ -260,7 +260,7 @@ All of the following are `actor` types; each is therefore `Sendable`, which is w
   SwiftData value and delegates each durable authorization/audit to the sole
   `HistoryAuthority`. Its public connection-bound facade waits for X.6.
 
-The `ModelContext(container)` used by `HistoryAuthority` is created manually — it is **not** the SwiftUI-environment context (which Apple documents as main-actor-bound). Off-main use of a manually created context is the documented SwiftData pattern (`@ModelActor` / `ConcurrencySupport`); v1 uses a plain `actor` with a fresh context per operation, and Swift 6 compilability of that choice is a Part VI §6 compile-and-dependency proof gate. Adopting SwiftData's `@ModelActor`/`ModelExecutor` model instead is an open implementation option the current design does not require; if adopted it would replace the manual-context rule in Part V §5 without changing the public surface.
+The `ModelContext(container)` used by `HistoryAuthority` is created manually — it is **not** the SwiftUI-environment context (which Apple documents as main-actor-bound). Off-main use of a manually created context is the documented SwiftData pattern (`@ModelActor` / `ConcurrencySupport`); v1 uses a plain `actor` with a fresh context per operation, and Swift 6 compilation plus the owning tests provide the Part VI §6 evidence for that choice. Adopting SwiftData's `@ModelActor`/`ModelExecutor` model instead is an open implementation option the current design does not require; if adopted it would replace the manual-context rule in Part V §5 without changing the public surface.
 
 #### Boundary rule
 
@@ -319,23 +319,26 @@ The Authority does not retain model objects between operations. Each isolated re
 - No public protocol whose only implementation simply forwards to SwiftData.
 - No `@unchecked Sendable` or `nonisolated(unsafe)` escape hatch in the greenfield targets.
 
-### 9. Build-time gates
+### 9. Build and test checks
 
-1. A single Swift package expresses exactly the target edges above and fails on a deliberate back-edge.
-2. SwiftLint and portable source scans reject forbidden framework imports
-   outside their owner targets, including attributed/access-level import
-   spellings. They scan SwiftPM sources/tests plus `ClipyApp` sources, hosted
-   tests, and diagnostic tools; confine `AppIntents`, reject service-locator declarations, and enforce
-   the single framework-owned App Intents dependency registration above.
-   The same gates keep `ContentPreview` on its four-module allowlist,
-   PresentationUI free of ImageIO, `ClipyCLIContract` Foundation-only, and the
-   F0 shared/client sources confined to their Foundation/Darwin/AppKit evidence
-   boundary.
-3. Swift 6 complete strict-concurrency compilation succeeds without unchecked escape hatches.
-4. The public `HistoryCore` symbol surface is snapshot-tested so package-only Domain/Storage vocabulary cannot leak accidentally.
-5. App-level tests construct `SwiftDataHistory` with an in-memory store; they do not replace the semantic write path.
-6. XcodeGen deterministically produces the application project while the library graph remains SwiftPM-owned.
-7. Portable dependency gates reject byte drift in the pinned vendored xxHash sources and prove that only Clipy's wrapper is a global C symbol; production-wrapper known-answer tests pin digest behavior on macOS arm64.
+1. A single Swift package expresses the library target edges above; SwiftPM
+   compilation is the executable graph check.
+2. Swift 6 complete strict-concurrency compilation succeeds without unchecked
+   escape hatches in the implemented sources.
+3. Focused owner tests protect caller-visible `HistoryCore` behavior and
+   initializer/conformance availability. There is no generated public-symbol
+   snapshot or symbol comparison workflow.
+4. App-level tests construct `SwiftDataHistory` with an in-memory store; they do
+   not replace the semantic write path.
+5. XcodeGen produces the application project while the library graph remains
+   SwiftPM-owned; generated-project byte comparison is not a correctness step.
+6. Production-wrapper known-answer tests pin xxh3 behavior on macOS arm64.
+
+The forbidden dependencies and anti-goals in §8 remain architectural review
+requirements. Per the 2026-08-24 user-directed CI simplification, the former
+SwiftLint, regex/import/escape-hatch/dependency/vendor/generated-project/test-
+selection scans and HistoryCore symbol snapshot machinery are retired rather
+than treated as release or correctness evidence.
 
 ### 10. Platform facts versus design choices
 

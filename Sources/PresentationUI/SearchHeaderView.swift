@@ -74,10 +74,10 @@ public struct SearchHeaderView: View {
                     viewState.clearSearch()
                     searchFieldFocused.wrappedValue = true
                 } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
+                    Text("Clear")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
                 .accessibilityIdentifier("clipy.search.clear")
                 .accessibilityLabel("Clear search")
                 .accessibilityHint(

@@ -11,6 +11,11 @@ struct GatewayConnectionKindRateDenialTests {
     private static let epoch = Date(
         timeIntervalSinceReferenceDate: 916_000_000
     )
+    private static let localAutomationConnection = ExternalConnectionID(
+        rawValue: UUID(
+            uuidString: "00000000-0000-0000-0000-000000001703"
+        )!
+    )
 
     private static let appRecentDescriptor = ExternalOperationDescriptor(
         capability: .browse,
@@ -161,10 +166,10 @@ struct GatewayConnectionKindRateDenialTests {
         let appIntentsConnection = try #require(
             try await history.connections().first
         ).id
-        let localAutomationConnection = try await authority.enrollConnection(
-            kind: .localAutomation,
-            displayName: "Rate kind recheck",
-            credential: nil
+        let localAutomationConnection = Self.localAutomationConnection
+        try await authority.publishVerifiedLocalAutomationEnrollment(
+            localAutomationConnection,
+            displayName: "Rate kind recheck"
         )
         _ = try await history.perform(.capture(WSSupport.textCapture(
             "rate-kind-history-sentinel",

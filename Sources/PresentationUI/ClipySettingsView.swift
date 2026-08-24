@@ -1,7 +1,7 @@
 /// ClipySettingsView.swift — the Settings scene body (⌘,): a General tab
-/// (the v1 maximum-unpinned count policy, the optional Launch-at-Login
-/// toggle, and the Danger Zone clears) and a Retention tab (the unified
-/// V2-02 group; the first release is M1 + V2-02, so this is the ONLY V2
+/// (the optional Launch-at-Login toggle and Danger Zone clears) and a
+/// Retention tab (the unified v1 count + V2-02 policy group; the first
+/// release is M1 + V2-02, so this is the ONLY V2
 /// settings surface — V2-07 §5 intro, §6.3).
 /// Owning spec: docs/01-architecture.md §2 (PresentationUI responsibilities)
 /// and §8 (target confinement); count policy: docs/03a-instruction-set.md
@@ -22,9 +22,9 @@ import SwiftUI
 /// The Settings window content: a fixed 480×320 `TabView` with a General
 /// and a Retention tab (step-9 design contract §4.4).
 ///
-/// Both tabs open from the authoritative configured-policy read
-/// (`V2-07` §6.3 — Apply is gated on it, audit SPEC-IMPL-003) and mutate
-/// History through `HistoryViewState`, reporting the outcome inline —
+/// The Retention tab opens from the authoritative configured-policy read
+/// (`V2-07` §6.3 — Apply is gated on it, audit SPEC-IMPL-003), and both
+/// tabs mutate History through `HistoryViewState`, reporting outcomes inline —
 /// success text derived from the action's
 /// `HistoryCommitOutcome` (03a §6), failures mapped by
 /// `FailurePresentation.message(for:)` (03b §10) or by the retention
@@ -78,10 +78,7 @@ public struct ClipySettingsView: View {
             GeneralSettingsTab(
                 viewState: viewState,
                 launchAtLogin: launchAtLogin,
-                popupPosition: popupPosition,
-                retentionDraft: $retentionDraft,
-                hasLoadedRetentionConfiguration: hasLoadedRetentionConfiguration,
-                retentionConfigurationFailure: retentionConfigurationFailure
+                popupPosition: popupPosition
             )
                 .tabItem { Label("General", systemImage: "gear") }
             RetentionSettingsTab(
@@ -117,110 +114,33 @@ public struct ClipySettingsView: View {
 
 // MARK: General
 
-/// General tab (contract §4.4): the v1 count policy, the optional
-/// Launch-at-Login toggle, and the Danger Zone clears.
-///
-/// The count control stays on the v1 `.setRetentionPolicy` action — the
-/// count dimension deliberately did not move to V2-02 (`V2-02` §1;
-/// `V2-07` §5.2) — bounded by `HistoryLimits.standard
-/// .userMaximumUnpinnedRange` (06 §2). The field opens at the persisted
-/// configured count loaded on appear (`V2-07` §6.3's panel-open read;
-/// audit SPEC-IMPL-003) — the §2 default (200) is only the pre-read
-/// placeholder — and Apply stays disabled until that read lands, so a
-/// failed load can never overwrite a real persisted policy with the
-/// placeholder. Apply always sends the complete value.
+/// General tab (contract §4.4): the optional Launch-at-Login toggle,
+/// panel placement, and Danger Zone clears. Retention controls are grouped
+/// together in `RetentionSettingsTab` as required by `V2-07` §6.3.
 private struct GeneralSettingsTab: View {
 
     private let viewState: HistoryViewState
     private let launchAtLogin: LaunchAtLoginSettings?
     private let popupPosition: Binding<PopupPositionMode>?
-    @Binding private var retentionDraft: RetentionSettingsDraft
-    private let hasLoadedRetentionConfiguration: Bool
-    private let retentionConfigurationFailure: String?
 
     @State private var status: SettingStatus?
     @State private var isWorking = false
-    @State private var pendingCountSubmission:
-        RetentionSettingsDraft.CountSubmission?
-    @State private var isConfirmingCountTightening = false
     @State private var isConfirmingClearUnpinned = false
     @State private var isConfirmingClearAll = false
 
     init(
         viewState: HistoryViewState,
         launchAtLogin: LaunchAtLoginSettings?,
-        popupPosition: Binding<PopupPositionMode>?,
-        retentionDraft: Binding<RetentionSettingsDraft>,
-        hasLoadedRetentionConfiguration: Bool,
-        retentionConfigurationFailure: String?
+        popupPosition: Binding<PopupPositionMode>?
     ) {
         self.viewState = viewState
         self.launchAtLogin = launchAtLogin
         self.popupPosition = popupPosition
-        _retentionDraft = retentionDraft
-        self.hasLoadedRetentionConfiguration = hasLoadedRetentionConfiguration
-        self.retentionConfigurationFailure = retentionConfigurationFailure
     }
 
     var body: some View {
         Form {
             Section {
-                LabeledContent("Keep at most") {
-                    HStack {
-                        TextField("200", text: maximumUnpinnedText)
-                            .frame(width: 64)
-                            .multilineTextAlignment(.trailing)
-                            .accessibilityLabel("Maximum unpinned items")
-                        Stepper(
-                            "",
-                            value: maximumUnpinnedStepperValue,
-                            in: HistoryLimits.standard.userMaximumUnpinnedRange
-                        )
-                        .labelsHidden()
-                        .accessibilityLabel("Maximum unpinned items")
-                        Text("unpinned items")
-                    }
-                }
-                if maximumUnpinnedValue == nil {
-                    Text(unpinnedRangeHint)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-                HStack {
-                    Button("Apply") {
-                        requestMaximumUnpinnedApply()
-                    }
-                    .disabled(
-                        !retentionDraft.maximumUnpinnedInputIsValid || isWorking
-                            || !hasLoadedRetentionConfiguration
-                    )
-                    .confirmationDialog(
-                        "Apply a stricter item limit?",
-                        isPresented: $isConfirmingCountTightening,
-                        titleVisibility: .visible
-                    ) {
-                        Button("Apply Stricter Limit", role: .destructive) {
-                            guard let submission = pendingCountSubmission else {
-                                return
-                            }
-                            Task { await applyMaximumUnpinned(submission) }
-                        }
-                        Button("Cancel", role: .cancel) {
-                            pendingCountSubmission = nil
-                        }
-                    } message: {
-                        Text(
-                            "A stricter limit can immediately remove unpinned items, and they can't be recovered."
-                        )
-                    }
-                    if let successMessage = retentionDraft.acceptedCountSuccessMessage {
-                        SettingStatusView(status: .success(successMessage))
-                    } else if let status {
-                        SettingStatusView(status: status)
-                    } else if let retentionConfigurationFailure {
-                        SettingStatusView(status: .failure(retentionConfigurationFailure))
-                    }
-                }
                 if let launchAtLogin {
                     launchAtLoginControl(launchAtLogin)
                 }
@@ -261,6 +181,9 @@ private struct GeneralSettingsTab: View {
                             Task { await performClear(.all) }
                         }
                         Button("Cancel", role: .cancel) {}
+                    }
+                    if let status {
+                        SettingStatusView(status: status)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -319,96 +242,6 @@ private struct GeneralSettingsTab: View {
         }
     }
 
-    /// The parsed count, or `nil` when the text is not a whole number
-    /// inside `userMaximumUnpinnedRange` (06 §2).
-    private var maximumUnpinnedValue: Int? {
-        retentionDraft.countSubmission()?.maximumUnpinnedItems
-    }
-
-    private var maximumUnpinnedText: Binding<String> {
-        Binding(
-            get: { retentionDraft.maximumUnpinnedText },
-            set: {
-                retentionDraft.setMaximumUnpinnedText($0)
-                status = nil
-            }
-        )
-    }
-
-    /// Stepper binding: reads the typed value clamped into the §2 range
-    /// (an out-of-range or unparseable field steps from the nearest legal
-    /// state instead of refusing), writes back plain decimal text.
-    private var maximumUnpinnedStepperValue: Binding<Int> {
-        Binding<Int>(
-            get: {
-                guard let typed = Int(
-                    retentionDraft.maximumUnpinnedText
-                        .trimmingCharacters(in: .whitespaces)
-                ) else {
-                    return HistoryLimits.standard.defaultMaximumUnpinnedItems
-                }
-                let range = HistoryLimits.standard.userMaximumUnpinnedRange
-                return min(max(typed, range.lowerBound), range.upperBound)
-            },
-            set: {
-                retentionDraft.setMaximumUnpinnedText(String($0))
-                status = nil
-            }
-        )
-    }
-
-    private var unpinnedRangeHint: String {
-        let range = HistoryLimits.standard.userMaximumUnpinnedRange
-        return "Enter a whole number from \(range.lowerBound) to \(range.upperBound)."
-    }
-
-    /// Count is part of the same destructive-retention family as the V2
-    /// thresholds: lowering the configured value requires confirmation;
-    /// equal or looser values apply directly (`04` Red 10D).
-    private func requestMaximumUnpinnedApply() {
-        guard let submission = retentionDraft.countSubmission() else { return }
-        if retentionDraft.maximumUnpinnedRequiresTightening(for: submission) {
-            pendingCountSubmission = submission
-            isConfirmingCountTightening = true
-        } else {
-            Task { await applyMaximumUnpinned(submission) }
-        }
-    }
-
-    /// Applies the count policy and reports the receipt inline
-    /// (`.retentionPolicySet(removedCount:)`, 03a §6; V2-07 §5.2).
-    private func applyMaximumUnpinned(
-        _ submission: RetentionSettingsDraft.CountSubmission
-    ) async {
-        guard retentionDraft.isCurrent(submission) else { return }
-        pendingCountSubmission = nil
-        isWorking = true
-        defer { isWorking = false }
-        do {
-            let receipt = try await viewState.applyMaximumUnpinnedItems(
-                submission.maximumUnpinnedItems
-            )
-            let successMessage: String
-            if case .committed(let commit) = receipt,
-               case .retentionPolicySet(removedCount: let removed) = commit.outcome {
-                successMessage = Self.maximumUnpinnedFeedback(removed)
-            } else {
-                successMessage = "Done."
-            }
-            guard retentionDraft.acceptApplied(
-                submission,
-                successMessage: successMessage
-            ) else { return }
-            status = nil
-        } catch let failure as HistoryFailure {
-            guard retentionDraft.isCurrent(submission) else { return }
-            status = .failure(FailurePresentation.message(for: failure))
-        } catch {
-            guard retentionDraft.isCurrent(submission) else { return }
-            status = .failure("The setting could not be saved.")
-        }
-    }
-
     /// Performs one Danger Zone clear (03a §5 `clear`/`ClearScope`).
     ///
     /// The awaitable view-state intent preserves the receipt needed for the
@@ -432,18 +265,6 @@ private struct GeneralSettingsTab: View {
         }
     }
 
-    /// "Done. N items removed." / "Done." — plural-aware (contract §4.4).
-    private static func maximumUnpinnedFeedback(_ removedCount: Int) -> String {
-        switch removedCount {
-        case 0:
-            return "Done."
-        case 1:
-            return "Done. 1 item removed."
-        default:
-            return "Done. \(removedCount) items removed."
-        }
-    }
-
     /// "Removed N items." — plural-aware; a no-op clear reports "Done."
     /// (contract §4.4).
     private static func clearFeedback(_ removedCount: Int) -> String {
@@ -460,8 +281,9 @@ private struct GeneralSettingsTab: View {
 
 // MARK: Retention
 
-/// Retention tab — the unified V2-02 group (V2-07 §5.2/§6.3; DC-23): one
-/// enable toggle + value field per dimension, all applied together via
+/// Retention tab — the unified count + V2-02 group (V2-07 §5.2/§6.3;
+/// DC-23). The count remains its separate v1 `.setRetentionPolicy` action,
+/// while age/storage/revision apply together through
 /// `HistoryViewState.applyRetentionPolicies` (`.setRetentionPolicies`,
 /// `V2-02` §8.1 — a set replaces the whole policy value).
 ///
@@ -484,8 +306,12 @@ private struct RetentionSettingsTab: View {
     @Binding private var draft: RetentionSettingsDraft
     private let hasLoadedRetentionConfiguration: Bool
     private let retentionConfigurationFailure: String?
-    @State private var status: SettingStatus?
+    @State private var countStatus: SettingStatus?
+    @State private var policyStatus: SettingStatus?
     @State private var isWorking = false
+    @State private var pendingCountSubmission:
+        RetentionSettingsDraft.CountSubmission?
+    @State private var isConfirmingCountTightening = false
     @State private var pendingSubmission: RetentionSettingsDraft.Submission?
     @State private var isConfirmingTightening = false
 
@@ -504,6 +330,66 @@ private struct RetentionSettingsTab: View {
     var body: some View {
         ScrollView {
             Form {
+                Section("Items") {
+                    LabeledContent("Keep at most") {
+                        HStack {
+                            TextField("200", text: maximumUnpinnedText)
+                                .frame(width: 64)
+                                .multilineTextAlignment(.trailing)
+                                .accessibilityLabel("Maximum unpinned items")
+                            Stepper(
+                                "",
+                                value: maximumUnpinnedStepperValue,
+                                in: HistoryLimits.standard.userMaximumUnpinnedRange
+                            )
+                            .labelsHidden()
+                            .accessibilityLabel("Maximum unpinned items")
+                            Text("unpinned items")
+                        }
+                    }
+                    if maximumUnpinnedValue == nil {
+                        Text(unpinnedRangeHint)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                    HStack {
+                        Button("Apply Item Limit") {
+                            requestMaximumUnpinnedApply()
+                        }
+                        .disabled(
+                            !draft.maximumUnpinnedInputIsValid
+                                || !draft.hasCountChanges
+                                || isWorking
+                                || !hasLoadedRetentionConfiguration
+                        )
+                        .confirmationDialog(
+                            "Apply a stricter item limit?",
+                            isPresented: $isConfirmingCountTightening,
+                            titleVisibility: .visible
+                        ) {
+                            Button("Apply Stricter Limit", role: .destructive) {
+                                guard let submission = pendingCountSubmission else {
+                                    return
+                                }
+                                Task { await applyMaximumUnpinned(submission) }
+                            }
+                            Button("Cancel", role: .cancel) {
+                                pendingCountSubmission = nil
+                            }
+                        } message: {
+                            Text(
+                                "A stricter limit can immediately remove unpinned items, and they can't be recovered."
+                            )
+                        }
+                        if let successMessage = draft.acceptedCountSuccessMessage {
+                            SettingStatusView(status: .success(successMessage))
+                        } else if let countStatus {
+                            SettingStatusView(status: countStatus)
+                        } else if let retentionConfigurationFailure {
+                            SettingStatusView(status: .failure(retentionConfigurationFailure))
+                        }
+                    }
+                }
                 Section("Item age") {
                     Toggle("Limit item age", isOn: ageEnabled)
                         .accessibilityHint("Retire items whose last copy is older than the entered age.")
@@ -558,7 +444,7 @@ private struct RetentionSettingsTab: View {
                         }
                         .accessibilityIdentifier("clipy.settings.retention.apply")
                         .disabled(
-                            !draft.inputIsValid || isWorking
+                            !draft.inputIsValid || !draft.hasPolicyChanges || isWorking
                                 || !hasLoadedRetentionConfiguration
                         )
                         .confirmationDialog(
@@ -581,8 +467,8 @@ private struct RetentionSettingsTab: View {
                         }
                         if let successMessage = draft.acceptedSuccessMessage {
                             SettingStatusView(status: .success(successMessage))
-                        } else if let status {
-                            SettingStatusView(status: status)
+                        } else if let policyStatus {
+                            SettingStatusView(status: policyStatus)
                         } else if let retentionConfigurationFailure {
                             SettingStatusView(status: .failure(retentionConfigurationFailure))
                         }
@@ -597,12 +483,115 @@ private struct RetentionSettingsTab: View {
         }
     }
 
+    /// The parsed count, or `nil` when the text is not a whole number
+    /// inside `userMaximumUnpinnedRange` (06 §2).
+    private var maximumUnpinnedValue: Int? {
+        draft.countSubmission()?.maximumUnpinnedItems
+    }
+
+    private var maximumUnpinnedText: Binding<String> {
+        Binding(
+            get: { draft.maximumUnpinnedText },
+            set: {
+                draft.setMaximumUnpinnedText($0)
+                countStatus = nil
+            }
+        )
+    }
+
+    /// Stepper binding: reads the typed value clamped into the §2 range
+    /// (an out-of-range or unparseable field steps from the nearest legal
+    /// state instead of refusing), writes back plain decimal text.
+    private var maximumUnpinnedStepperValue: Binding<Int> {
+        Binding<Int>(
+            get: {
+                guard let typed = Int(
+                    draft.maximumUnpinnedText
+                        .trimmingCharacters(in: .whitespaces)
+                ) else {
+                    return HistoryLimits.standard.defaultMaximumUnpinnedItems
+                }
+                let range = HistoryLimits.standard.userMaximumUnpinnedRange
+                return min(max(typed, range.lowerBound), range.upperBound)
+            },
+            set: {
+                draft.setMaximumUnpinnedText(String($0))
+                countStatus = nil
+            }
+        )
+    }
+
+    private var unpinnedRangeHint: String {
+        let range = HistoryLimits.standard.userMaximumUnpinnedRange
+        return "Enter a whole number from \(range.lowerBound) to \(range.upperBound)."
+    }
+
+    /// Count is part of the same destructive-retention family as the V2
+    /// thresholds: lowering the configured value requires confirmation;
+    /// equal or looser values apply directly (`04` Red 10D).
+    private func requestMaximumUnpinnedApply() {
+        guard draft.hasCountChanges,
+              let submission = draft.countSubmission() else { return }
+        if draft.maximumUnpinnedRequiresTightening(for: submission) {
+            pendingCountSubmission = submission
+            isConfirmingCountTightening = true
+        } else {
+            Task { await applyMaximumUnpinned(submission) }
+        }
+    }
+
+    /// Applies the count policy and reports the receipt inline
+    /// (`.retentionPolicySet(removedCount:)`, 03a §6; V2-07 §5.2).
+    private func applyMaximumUnpinned(
+        _ submission: RetentionSettingsDraft.CountSubmission
+    ) async {
+        guard draft.isCurrent(submission) else { return }
+        pendingCountSubmission = nil
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            let receipt = try await viewState.applyMaximumUnpinnedItems(
+                submission.maximumUnpinnedItems
+            )
+            let successMessage: String
+            if case .committed(let commit) = receipt,
+               case .retentionPolicySet(removedCount: let removed) = commit.outcome {
+                successMessage = Self.maximumUnpinnedFeedback(removed)
+            } else {
+                successMessage = "Done."
+            }
+            guard draft.acceptApplied(
+                submission,
+                successMessage: successMessage
+            ) else { return }
+            countStatus = nil
+        } catch let failure as HistoryFailure {
+            guard draft.isCurrent(submission) else { return }
+            countStatus = .failure(FailurePresentation.message(for: failure))
+        } catch {
+            guard draft.isCurrent(submission) else { return }
+            countStatus = .failure("The setting could not be saved.")
+        }
+    }
+
+    /// "Done. N items removed." / "Done." — plural-aware (contract §4.4).
+    private static func maximumUnpinnedFeedback(_ removedCount: Int) -> String {
+        switch removedCount {
+        case 0:
+            return "Done."
+        case 1:
+            return "Done. 1 item removed."
+        default:
+            return "Done. \(removedCount) items removed."
+        }
+    }
+
     private var ageEnabled: Binding<Bool> {
         Binding(
             get: { draft.ageEnabled },
             set: {
                 draft.setAgeEnabled($0)
-                status = nil
+                policyStatus = nil
             }
         )
     }
@@ -612,7 +601,7 @@ private struct RetentionSettingsTab: View {
             get: { draft.ageDaysText },
             set: {
                 draft.setAgeDaysText($0)
-                status = nil
+                policyStatus = nil
             }
         )
     }
@@ -622,7 +611,7 @@ private struct RetentionSettingsTab: View {
             get: { draft.storageEnabled },
             set: {
                 draft.setStorageEnabled($0)
-                status = nil
+                policyStatus = nil
             }
         )
     }
@@ -632,7 +621,7 @@ private struct RetentionSettingsTab: View {
             get: { draft.storageMiBText },
             set: {
                 draft.setStorageMiBText($0)
-                status = nil
+                policyStatus = nil
             }
         )
     }
@@ -642,7 +631,7 @@ private struct RetentionSettingsTab: View {
             get: { draft.revisionCountEnabled },
             set: {
                 draft.setRevisionCountEnabled($0)
-                status = nil
+                policyStatus = nil
             }
         )
     }
@@ -652,7 +641,7 @@ private struct RetentionSettingsTab: View {
             get: { draft.revisionCountText },
             set: {
                 draft.setRevisionCountText($0)
-                status = nil
+                policyStatus = nil
             }
         )
     }
@@ -662,7 +651,7 @@ private struct RetentionSettingsTab: View {
             get: { draft.revisionBytesEnabled },
             set: {
                 draft.setRevisionBytesEnabled($0)
-                status = nil
+                policyStatus = nil
             }
         )
     }
@@ -672,13 +661,14 @@ private struct RetentionSettingsTab: View {
             get: { draft.revisionMiBText },
             set: {
                 draft.setRevisionMiBText($0)
-                status = nil
+                policyStatus = nil
             }
         )
     }
 
     private func requestApply() {
-        guard let submission = draft.submission() else { return }
+        guard draft.hasPolicyChanges,
+              let submission = draft.submission() else { return }
         if draft.requiresTighteningConfirmation(for: submission.policies) {
             pendingSubmission = submission
             isConfirmingTightening = true
@@ -716,13 +706,13 @@ private struct RetentionSettingsTab: View {
                 submission,
                 successMessage: successMessage
             ) else { return }
-            status = nil
+            policyStatus = nil
         } catch let failure as HistoryFailure {
             guard draft.isCurrent(submission) else { return }
-            status = .failure(Self.retentionFailureMessage(failure))
+            policyStatus = .failure(Self.retentionFailureMessage(failure))
         } catch {
             guard draft.isCurrent(submission) else { return }
-            status = .failure("The policies could not be saved.")
+            policyStatus = .failure("The policies could not be saved.")
         }
     }
 

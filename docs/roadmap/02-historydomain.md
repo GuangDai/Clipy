@@ -21,10 +21,10 @@
 
 ## Acceptance
 
-- Part VI §6: compiles importing only Foundation + HistoryCore; no `@unchecked Sendable` / `nonisolated(unsafe)` / service locator / second writer; forbidden-import scan passes.
+- Part VI §6: compiles importing only Foundation + HistoryCore; no `@unchecked Sendable` / `nonisolated(unsafe)` / service locator / second writer.
 - Domain unit tests demonstrating each of D1–D19 (Part VI §8: "Domain unit tests supplement these paths but do not replace them").
 - Planner determinism (D16): identical prepared inputs + facts ⇒ identical `PlanningResult`.
-- Purity: no `UUID()`/`Date()`/`ContentVersion.initial`/`successor()`/`ChangePosition.successor()` calls in Domain (02 §4) — verified by build/scan.
+- Purity: no `UUID()`/`Date()`/`ContentVersion.initial`/`successor()`/`ChangePosition.successor()` calls in Domain (02 §4) — protected by owner tests and review.
 - `RetentionPolicy.maximumUnpinnedItems` is ≥1 (D19); `PinOrdinal.rawValue` non-negative; `CanonicalContent` rejects empty/duplicate-type/empty-bytes input.
 
 ## Risks / notes
@@ -35,7 +35,7 @@
 ## Progress
 
 - **Step 2 landed** at [`99dedab`](https://github.com/GuangDai/Clipy/commit/99dedab88db1296dfe57743cd9254dfedad4c7a3) (02 §2–§11): content values, retained state, prepared-input types, complete facts, `DomainRejection`, the mutation plan, the pure planners, `canonicalContains`.
-- **Evidence — green at run [29964640300](https://github.com/GuangDai/Clipy/actions/runs/29964640300) (macos-26 runner):** compiles importing only Foundation + HistoryCore under Swift 6 strict concurrency; `DomainSmokeTests` green; purity holds — no `UUID()`/`Date()`/token-minting calls in Domain (02 §4), scan-clean.
+- **Evidence — green at run [29964640300](https://github.com/GuangDai/Clipy/actions/runs/29964640300) (macos-26 runner):** compiles importing only Foundation + HistoryCore under Swift 6 strict concurrency; `DomainSmokeTests` green. The historical source scan also passed but is no longer a current CI requirement.
 - **Acceptance remediation — complete:** the
   dedicated per-invariant Domain unit suite now demonstrates D1–D19 in 47
   tests (02 §14; Part VI §8 — "Domain unit tests supplement these paths but do

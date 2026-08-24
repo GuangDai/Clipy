@@ -681,8 +681,16 @@ internal enum OperationPayloadBlobCodec {
              (.readAudit, .auditPage), (.rebase, .rebased),
              (.compact, .compacted):
             return true
-        case (.enroll(_, _, false), .enrolled):
-            return true
+        case (.enroll(let kind, _, let credentialWasProvided), .enrolled):
+            switch kind {
+            case .appIntents:
+                return !credentialWasProvided
+            case .localAutomation:
+                // Transitional pre-F1 rows encoded false; retain decode/open
+                // compatibility while the dedicated Authority-last publisher
+                // now emits truthful true (`V2-05` §0.3).
+                return true
+            }
         case (.grant, .grantChanged(true)),
              (.revokeCapability, .capabilityRevoked(true)):
             return true

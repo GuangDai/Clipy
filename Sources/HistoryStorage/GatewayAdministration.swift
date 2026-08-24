@@ -276,15 +276,53 @@ internal enum GatewayAdministration {
 // MARK: - Authority-internal admin mutations
 
 extension HistoryAuthority {
-    /// Enrolls one active connection with no implicit grants. Oversized names
-    /// are rejected before audit admission because the frozen codec cannot
-    /// truthfully encode their out-of-bound byte count. Credential-bearing
-    /// requests and the 501st connection are admitted denials and therefore
-    /// cross the mandatory audit barrier before their typed failure returns.
+    /// Enrolls one non-Local-Automation connection with no implicit grants.
+    /// Local Automation can publish only through the custody-verified,
+    /// preassigned-ID method below; reject the generic Authority bypass before
+    /// clock, audit, state reads, or connection-ID minting (`V2-05` §0.3).
     internal func enrollConnection(
         kind: ConnectionEnrollKind,
         displayName: String,
         credential: Data?
+    ) async throws -> ExternalConnectionID {
+        guard kind != .localAutomation else {
+            throw ExternalFailure.requestDenied(.invalidInput)
+        }
+        return try await publishConnectionEnrollment(
+            kind: kind,
+            displayName: displayName,
+            credentialWasProvided: credential != nil,
+            preassignedConnectionID: nil
+        )
+    }
+
+    /// Authority-last F1 publication after the coordinator has verified exact
+    /// client and server custody readbacks. Secret bytes do not cross this
+    /// seam. The preassigned Local Automation row and its truthful successful
+    /// audit are one transaction and the new connection receives zero grants
+    /// (`V2-05` §0.3).
+    internal func publishVerifiedLocalAutomationEnrollment(
+        _ id: ExternalConnectionID,
+        displayName: String
+    ) async throws {
+        _ = try await publishConnectionEnrollment(
+            kind: .localAutomation,
+            displayName: displayName,
+            credentialWasProvided: true,
+            preassignedConnectionID: id
+        )
+    }
+
+    /// Shared atomic connection+audit publisher. Oversized names are rejected
+    /// before audit admission because the frozen codec cannot truthfully encode
+    /// their out-of-bound byte count. Unverified credential-bearing requests
+    /// and the 501st connection are admitted denials and cross the audit barrier
+    /// (`V2-05` §0.3/§4.4).
+    private func publishConnectionEnrollment(
+        kind: ConnectionEnrollKind,
+        displayName: String,
+        credentialWasProvided: Bool,
+        preassignedConnectionID: ExternalConnectionID?
     ) async throws -> ExternalConnectionID {
         let displayNameByteCount = displayName.utf8.count
         guard displayNameByteCount
@@ -304,10 +342,10 @@ extension HistoryAuthority {
         let request = RequestSummaryV1.enroll(
             kind: kind,
             displayNameUTF8ByteCount: UInt16(displayNameByteCount),
-            credentialWasProvided: credential != nil
+            credentialWasProvided: credentialWasProvided
         )
 
-        guard credential == nil else {
+        guard !credentialWasProvided || preassignedConnectionID != nil else {
             try commitGatewayAudit(
                 Self.deniedAdminPayload(
                     connectionID: nil,
@@ -341,7 +379,7 @@ extension HistoryAuthority {
             throw ExternalFailure.requestDenied(.invalidInput)
         }
 
-        let connectionID = ExternalConnectionID(
+        let connectionID = preassignedConnectionID ?? ExternalConnectionID(
             rawValue: gatewayConnectionIDSource()
         )
         guard !state.connections.contains(where: {
