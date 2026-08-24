@@ -56,6 +56,7 @@ struct HistoryViewStateTests {
         let state = HistoryViewState(history: history, pageLimit: 25)
         state.activate()
         #expect(state.isLoadingFirstPage)
+        #expect(!state.hasAuthoritativeFirstPage)
 
         #expect(await pollUntil { state.rows.count == 4 })
         #expect(state.rows.map(\.title) == firstPage.rows.map(\.title))
@@ -64,6 +65,7 @@ struct HistoryViewStateTests {
         #expect(state.hasNextPage)
         #expect(!state.isLoadingPage)
         #expect(!state.isLoadingFirstPage)
+        #expect(state.hasAuthoritativeFirstPage)
         #expect(state.failure == nil)
         #expect(state.pageLimit == 25)
 

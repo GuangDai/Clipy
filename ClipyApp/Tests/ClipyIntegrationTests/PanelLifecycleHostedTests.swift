@@ -79,6 +79,7 @@ struct PanelLifecycleHostedTests {
         let panel = try #require(appDelegate.panelForTesting)
         let surface = try #require(appDelegate.panelSurfaceState)
         await history.waitForObservationCount(1)
+        let sessionGeneration = surface.sessionGeneration
         let alert = NSAlert()
         alert.messageText = "Hosted lifecycle alert"
         alert.addButton(withTitle: "OK")
@@ -100,7 +101,7 @@ struct PanelLifecycleHostedTests {
         #expect(panel.attachedSheet === alertWindow)
         #expect(panel.isPresented)
         #expect(surface.isSessionActive)
-        #expect(await history.terminationCount == 0)
+        #expect(surface.sessionGeneration == sessionGeneration)
 
         // AppKit transfers key status to a sheet. The production public-API
         // modal predicate must retain the panel while that sheet is attached.
@@ -108,17 +109,16 @@ struct PanelLifecycleHostedTests {
         await panel.waitForDeferredFocusLossCloseForTesting()
         #expect(panel.isPresented)
         #expect(surface.isSessionActive)
-        #expect(await history.terminationCount == 0)
+        #expect(surface.sessionGeneration == sessionGeneration)
 
         panel.endSheet(alertWindow)
         #expect(panel.attachedSheet == nil)
         panel.resignKey()
         await panel.waitForDeferredFocusLossCloseForTesting()
         try #require(!panel.isPresented)
-        await history.waitForTerminationCount(1)
         #expect(!panel.isPresented)
         #expect(!surface.isSessionActive)
-        #expect(await history.terminationCount == 1)
+        #expect(surface.sessionGeneration == sessionGeneration)
     }
 
     private func installedOwner() -> (

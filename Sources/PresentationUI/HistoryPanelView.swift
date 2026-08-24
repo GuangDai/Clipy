@@ -376,6 +376,11 @@ public struct HistoryPanelView: View {
         // while the ID-only list selection stays fixed (Card 9A).
         .onChange(of: previewSelection.reference) { _, reference in
             guard let reference else {
+                // A query restart temporarily empties rows before its first
+                // replacement page. That loading placeholder cannot retire
+                // an otherwise valid selection; Return remains disabled by
+                // the exact-reference check until authoritative rows return.
+                guard viewState.hasAuthoritativeFirstPage else { return }
                 surfaceState.selection = nil
                 previewState.handleSelectionChange(nil)
                 return

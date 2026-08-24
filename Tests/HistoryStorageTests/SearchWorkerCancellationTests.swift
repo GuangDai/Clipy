@@ -234,9 +234,13 @@ struct SearchWorkerCancellationTests {
         defer { WSSupport.removeStore(storeURL) }
         let history = try await WSSupport.openHistory(
             storeURL: storeURL,
-            maximumUnpinned: 600
+            maximumUnpinned: 288
         )
-        _ = try await history.seedPerformanceFixture(rowCount: 600) { index in
+        // 288 is the smallest comfortable corpus beyond the 250-row debug
+        // progress event and its next 32-row cancellation checkpoint at 256.
+        // It proves the same early exit without making this functional lane
+        // seed 600 real SwiftData rows beside every MainActor UI test.
+        _ = try await history.seedPerformanceFixture(rowCount: 288) { index in
             Self.fixtureCapture(index: index)
         }
 
