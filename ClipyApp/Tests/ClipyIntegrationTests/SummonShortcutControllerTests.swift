@@ -156,6 +156,54 @@ struct SummonShortcutControllerTests {
         controller.stop()
     }
 
+    @Test func activeChordIsRecordedOnceInsteadOfSummoning() throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let probe = ShortcutRegistrationProbe()
+        var summoned = 0
+        var recorded: [HotKeyChord] = []
+        let controller = makeController(defaults: defaults, probe: probe) {
+            summoned += 1
+        }
+
+        #expect(controller.start())
+        controller.beginRecordingActiveChord { recorded.append($0) }
+        #expect(probe.fire(.defaultSummon))
+        #expect(recorded == [.defaultSummon])
+        #expect(summoned == 0)
+
+        #expect(probe.fire(.defaultSummon))
+        #expect(recorded == [.defaultSummon])
+        #expect(summoned == 1, "recording interception is one-shot")
+        controller.stop()
+    }
+
+    @Test func changeAndStopCannotRetainARecordingHandler() throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let probe = ShortcutRegistrationProbe()
+        var summoned = 0
+        var recorded: [HotKeyChord] = []
+        let controller = makeController(defaults: defaults, probe: probe) {
+            summoned += 1
+        }
+
+        #expect(controller.start())
+        controller.beginRecordingActiveChord { recorded.append($0) }
+        #expect(controller.change(to: alternate))
+        #expect(probe.fire(alternate))
+        #expect(recorded.isEmpty)
+        #expect(summoned == 1)
+
+        controller.beginRecordingActiveChord { recorded.append($0) }
+        controller.stop()
+        #expect(controller.start())
+        #expect(probe.fire(alternate))
+        #expect(recorded.isEmpty)
+        #expect(summoned == 2)
+        controller.stop()
+    }
+
     @Test func documentedDefaultColorsShortcutWarnsButIsNotRejected() {
         #expect(HotKeyChord.defaultSummon.warning == .knownColorsShortcut)
         #expect(alternate.warning == nil)
@@ -230,7 +278,7 @@ struct SummonShortcutControllerTests {
         ))])
     }
 
-    @Test func mountedRecorderConsumesCommandEquivalentExactlyOnce() throws {
+    @Test func mountedRecorderMonitorsAppKeyDownExactlyOnce() throws {
         var decisions: [SummonShortcutRecordingDecision] = []
         let input = SummonShortcutRecorderInputView { decisions.append($0) }
         let otherResponder = ShortcutRecorderOtherResponder(frame: .zero)
@@ -246,40 +294,55 @@ struct SummonShortcutControllerTests {
             backing: .buffered,
             defer: false
         )
+        window.isReleasedWhenClosed = false
         window.contentView = container
+        window.orderFront(nil)
         try #require(window.makeFirstResponder(otherResponder))
         #expect(window.firstResponder === otherResponder)
-        defer { window.close() }
+        defer {
+            input.stopMonitoringKeyEvents()
+            window.close()
+        }
 
-        let first = try #require(commandShiftCEvent(
+        let first = try #require(commandOptionControlKEvent(
             windowNumber: window.windowNumber,
             isARepeat: false
         ))
-        let repeated = try #require(commandShiftCEvent(
+        let repeated = try #require(commandOptionControlKEvent(
             windowNumber: window.windowNumber,
             isARepeat: true
         ))
 
-        #expect(container.performKeyEquivalent(with: first))
-        #expect(container.performKeyEquivalent(with: repeated))
-        #expect(decisions == [.candidate(.defaultSummon)])
+        NSApp.sendEvent(first)
+        NSApp.sendEvent(repeated)
+        #expect(decisions == [.candidate(alternate)])
+
+        // Detach removes the old monitor; remount installs exactly one. If the
+        // first token leaked, this event would submit the candidate twice.
+        input.removeFromSuperview()
+        container.addSubview(input)
+        NSApp.sendEvent(first)
+        #expect(decisions == [
+            .candidate(alternate),
+            .candidate(alternate),
+        ])
     }
 
-    private func commandShiftCEvent(
+    private func commandOptionControlKEvent(
         windowNumber: Int,
         isARepeat: Bool
     ) -> NSEvent? {
         NSEvent.keyEvent(
             with: .keyDown,
             location: .zero,
-            modifierFlags: [.command, .shift],
+            modifierFlags: [.command, .control, .option],
             timestamp: 0,
             windowNumber: windowNumber,
             context: nil,
-            characters: "c",
-            charactersIgnoringModifiers: "c",
+            characters: "k",
+            charactersIgnoringModifiers: "k",
             isARepeat: isARepeat,
-            keyCode: UInt16(kVK_ANSI_C)
+            keyCode: UInt16(kVK_ANSI_K)
         )
     }
 

@@ -72,6 +72,7 @@ final class SummonShortcutController {
     private var activeRegistration: SummonHotKeyRegistration?
     private var activeChord: HotKeyChord?
     private var pendingAttempt: PendingAttempt?
+    private var recordingActiveChord: (@MainActor (HotKeyChord) -> Void)?
     private var nextRegistrationID: UInt32 = 1
 
     private(set) var state: SummonShortcutState = .stopped
@@ -131,9 +132,23 @@ final class SummonShortcutController {
         attempt(PendingAttempt(chord: defaultChord, persistence: .remove))
     }
 
+    /// While the recorder sheet is mounted, the already-registered chord is
+    /// delivered as input instead of summoning the panel. Its Carbon token
+    /// stays active, preserving the old binding until a candidate succeeds.
+    func beginRecordingActiveChord(
+        _ completion: @escaping @MainActor (HotKeyChord) -> Void
+    ) {
+        recordingActiveChord = completion
+    }
+
+    func endRecordingActiveChord() {
+        recordingActiveChord = nil
+    }
+
     /// Ends the owned registration exactly once. A later start re-reads the
     /// authoritative preference instead of reviving an unpersisted candidate.
     func stop() {
+        endRecordingActiveChord()
         activeRegistration?.unregister()
         activeRegistration = nil
         activeChord = nil
@@ -146,11 +161,12 @@ final class SummonShortcutController {
     /// synthesizing a Carbon event. Real Carbon delivery remains outside this
     /// hook's evidence scope.
     func fireActionForTesting() {
-        action()
+        registeredHotKeyDidFire(activeChord ?? defaultChord)
     }
 #endif
 
     private func attempt(_ pending: PendingAttempt) -> Bool {
+        endRecordingActiveChord()
         if pending.chord == activeChord, activeRegistration != nil {
             persist(pending.persistence, chord: pending.chord)
             pendingAttempt = nil
@@ -159,7 +175,12 @@ final class SummonShortcutController {
         }
 
         let id = takeRegistrationID()
-        guard let candidate = registrationFactory(pending.chord, id, action) else {
+        let chord = pending.chord
+        guard let candidate = registrationFactory(
+            chord,
+            id,
+            { [weak self] in self?.registeredHotKeyDidFire(chord) }
+        ) else {
             pendingAttempt = pending
             state = .unavailable(
                 requested: pending.chord,
@@ -176,6 +197,18 @@ final class SummonShortcutController {
         state = .active(pending.chord)
         previous?.unregister()
         return true
+    }
+
+    /// Carbon may consume the active global chord before AppKit can publish an
+    /// NSEvent. The owned registration callback therefore joins the recorder
+    /// here. Completion is one-shot and cleared before it can call change().
+    private func registeredHotKeyDidFire(_ chord: HotKeyChord) {
+        guard let recordingActiveChord else {
+            action()
+            return
+        }
+        self.recordingActiveChord = nil
+        recordingActiveChord(chord)
     }
 
     private func persist(

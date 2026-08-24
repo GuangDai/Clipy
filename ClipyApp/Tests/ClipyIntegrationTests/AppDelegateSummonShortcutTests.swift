@@ -178,6 +178,30 @@ struct AppDelegateSummonShortcutTests {
         )
     }
 
+    @Test func activeCarbonChordCompletesTheAppOwnedRecordingOnce() throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let probe = AppDelegateShortcutProbe()
+        let appDelegate = makeAppDelegate(defaults: defaults, probe: probe)
+        var recorded: [HotKeyChord] = []
+
+        #expect(appDelegate.startSummonShortcut())
+        appDelegate.beginSummonShortcutRecording { recorded.append($0) }
+        #expect(probe.fire(.defaultSummon))
+        #expect(recorded == [.defaultSummon])
+        #expect(probe.attemptChords == [.defaultSummon])
+        #expect(
+            appDelegate.summonShortcutPresentation.status
+                == .current(HotKeyChord.defaultSummon.settingsDisplayName)
+        )
+
+        appDelegate.endSummonShortcutRecording()
+        appDelegate.endSummonShortcutRecording()
+        appDelegate.applicationWillTerminate(
+            Notification(name: NSApplication.willTerminateNotification)
+        )
+    }
+
     private func makeAppDelegate(
         defaults: UserDefaults,
         probe: AppDelegateShortcutProbe
@@ -221,7 +245,9 @@ private final class AppDelegateShortcutIntentProbe {
 @MainActor
 private final class AppDelegateShortcutProbe {
     private var failuresRemaining: [HotKeyChord: Int] = [:]
-    private var registrations: [UInt32: HotKeyChord] = [:]
+    private var registrations: [
+        UInt32: (chord: HotKeyChord, action: () -> Void)
+    ] = [:]
 
     private(set) var attemptChords: [HotKeyChord] = []
     private(set) var cleanupChords: [HotKeyChord] = []
@@ -235,18 +261,26 @@ private final class AppDelegateShortcutProbe {
         id: UInt32,
         action: @escaping () -> Void
     ) -> SummonHotKeyRegistration? {
-        _ = action
         attemptChords.append(chord)
         if let remaining = failuresRemaining[chord], remaining > 0 {
             failuresRemaining[chord] = remaining - 1
             return nil
         }
-        registrations[id] = chord
+        registrations[id] = (chord, action)
         return SummonHotKeyRegistration { [weak self] in
             guard let self,
-                  let chord = self.registrations.removeValue(forKey: id)
+                  let registration = self.registrations.removeValue(forKey: id)
             else { return }
-            self.cleanupChords.append(chord)
+            self.cleanupChords.append(registration.chord)
         }
+    }
+
+    @discardableResult
+    func fire(_ chord: HotKeyChord) -> Bool {
+        guard let registration = registrations.values.first(
+            where: { $0.chord == chord }
+        ) else { return false }
+        registration.action()
+        return true
     }
 }

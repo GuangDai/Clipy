@@ -136,11 +136,19 @@ private struct SummonShortcutRecorderInput: NSViewRepresentable {
         nsView.onDecision = onDecision
         nsView.focusForRecording()
     }
+
+    static func dismantleNSView(
+        _ nsView: SummonShortcutRecorderInputView,
+        coordinator _: ()
+    ) {
+        nsView.stopMonitoringKeyEvents()
+    }
 }
 
 @MainActor
 final class SummonShortcutRecorderInputView: NSView {
     var onDecision: @MainActor (SummonShortcutRecordingDecision) -> Void
+    private var keyEventMonitor: Any?
 
     init(
         onDecision: @escaping @MainActor (SummonShortcutRecordingDecision) -> Void
@@ -159,8 +167,17 @@ final class SummonShortcutRecorderInputView: NSView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow !== window {
+            stopMonitoringKeyEvents()
+        }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        guard window != nil else { return }
+        startMonitoringKeyEvents()
         focusForRecording()
     }
 
@@ -176,20 +193,37 @@ final class SummonShortcutRecorderInputView: NSView {
         record(event)
     }
 
-    /// AppKit offers Command-modified events to the key-equivalent hierarchy
-    /// before ordinary keyDown delivery. While this view is mounted, the
-    /// recorder sheet owns that chord: consume it here so it is submitted once
-    /// rather than falling through to a menu command or a second dispatch.
-    override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard event.type == .keyDown else {
-            return super.performKeyEquivalent(with: event)
+    /// AppKit's app-local monitor receives keyDown before menu/key-equivalent
+    /// dispatch. It exists only while this recorder is mounted, accepts only
+    /// events for that exact sheet window, and returns nil so one physical key
+    /// cannot reach a second product route.
+    private func startMonitoringKeyEvents() {
+        guard keyEventMonitor == nil, window != nil else { return }
+        keyEventMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: .keyDown
+        ) { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self,
+                      let window = self.window,
+                      event.window === window
+                else { return event }
+                self.record(event)
+                return nil
+            }
         }
-        record(event)
-        return true
     }
 
-    /// Both AppKit keyboard routes share one submission point. A repeat is
-    /// still consumed by its caller but cannot apply the same candidate twice.
+    /// Apple requires one removal per returned monitor token. Clear ownership
+    /// before calling the framework so both SwiftUI dismantle and view detach
+    /// are safe when they occur for the same sheet teardown.
+    func stopMonitoringKeyEvents() {
+        guard let keyEventMonitor else { return }
+        self.keyEventMonitor = nil
+        NSEvent.removeMonitor(keyEventMonitor)
+    }
+
+    /// The local monitor and direct responder fallback share one submission
+    /// point. A repeat is consumed by its caller but cannot apply twice.
     private func record(_ event: NSEvent) {
         guard !event.isARepeat else { return }
         onDecision(.decide(

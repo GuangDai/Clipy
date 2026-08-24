@@ -1060,6 +1060,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshSummonShortcutPresentation()
     }
 
+    func beginSummonShortcutRecording(
+        onActiveChord: @escaping @MainActor (HotKeyChord) -> Void
+    ) {
+        summonShortcutController.beginRecordingActiveChord(onActiveChord)
+    }
+
+    func endSummonShortcutRecording() {
+        summonShortcutController.endRecordingActiveChord()
+    }
+
     /// Applies one recorder-produced candidate through the existing Card 14B
     /// transaction: registration succeeds before persistence and teardown, so
     /// a conflict leaves the old binding live and makes the candidate visible.

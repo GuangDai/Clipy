@@ -61,7 +61,17 @@ private struct SettingsRootView: View {
             )
             .sheet(isPresented: $isRecordingSummonShortcut) {
                 SummonShortcutRecorderView { chord in
+                    appDelegate.endSummonShortcutRecording()
                     appDelegate.changeSummonShortcut(to: chord)
+                }
+                .onAppear {
+                    appDelegate.beginSummonShortcutRecording { chord in
+                        appDelegate.changeSummonShortcut(to: chord)
+                        isRecordingSummonShortcut = false
+                    }
+                }
+                .onDisappear {
+                    appDelegate.endSummonShortcutRecording()
                 }
             }
         } else {
