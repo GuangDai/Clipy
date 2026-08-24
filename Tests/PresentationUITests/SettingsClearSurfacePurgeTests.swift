@@ -47,6 +47,11 @@ struct SettingsClearSurfacePurgeTests {
         preview.togglePreview(for: row.item)
 
         state.activate()
+        // Join the scripted public boundary before starting the wall-clock
+        // state poll. SwiftPM runs 64 MiB admission work concurrently; a
+        // correct MainActor observation task can otherwise spend the entire
+        // poll budget waiting for its first executor slot.
+        await history.waitForObservationStart()
         try #require(await pollUntil { state.rows == page.rows })
 
         let unchanged = try await state.clearAwaitingReceipt(.all)
@@ -121,6 +126,9 @@ private actor SettingsClearReceiptHistory: ClipboardHistory {
     private var actions: [HistoryAction] = []
     private var observationContinuation:
         AsyncThrowingStream<HistoryPage, Error>.Continuation?
+    private var observationStartWaiters: [
+        CheckedContinuation<Void, Never>
+    ] = []
 
     init(observedFirstPage: HistoryPage, completions: [Completion]) {
         self.observedFirstPage = observedFirstPage
@@ -128,6 +136,13 @@ private actor SettingsClearReceiptHistory: ClipboardHistory {
     }
 
     var recordedActions: [HistoryAction] { actions }
+
+    func waitForObservationStart() async {
+        guard observationContinuation == nil else { return }
+        await withCheckedContinuation { continuation in
+            observationStartWaiters.append(continuation)
+        }
+    }
 
     func finishObservation() {
         observationContinuation?.finish()
@@ -156,6 +171,11 @@ private actor SettingsClearReceiptHistory: ClipboardHistory {
             AsyncThrowingStream<HistoryPage, Error>.makeStream()
         observationContinuation = continuation
         continuation.yield(observedFirstPage)
+        let waiters = observationStartWaiters
+        observationStartWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
         return stream
     }
 
