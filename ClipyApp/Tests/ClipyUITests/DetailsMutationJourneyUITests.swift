@@ -118,7 +118,7 @@ final class DetailsMutationJourneyUITests: XCTestCase {
             {
                 detailsRoot.exists
                     && pinStatus.exists
-                    && pinStatus.label == "Unpinned"
+                    && accessibilityText(of: pinStatus) == "Unpinned"
                     && pinToggle.exists
                     && pinToggle.label == "Pin"
                     && pinToggle.isHittable
@@ -132,7 +132,8 @@ final class DetailsMutationJourneyUITests: XCTestCase {
         guard assertEventually(
             {
                 pinStatus.exists
-                    && pinStatus.label == "Pinned at position 1"
+                    && accessibilityText(of: pinStatus)
+                        == "Pinned at position 1"
                     && pinToggle.exists
                     && pinToggle.label == "Unpin"
                     && pinToggle.isHittable
@@ -146,7 +147,7 @@ final class DetailsMutationJourneyUITests: XCTestCase {
         guard assertEventually(
             {
                 pinStatus.exists
-                    && pinStatus.label == "Unpinned"
+                    && accessibilityText(of: pinStatus) == "Unpinned"
                     && pinToggle.exists
                     && pinToggle.label == "Pin"
                     && pinToggle.isHittable
@@ -232,6 +233,17 @@ final class DetailsMutationJourneyUITests: XCTestCase {
                 "clipy.history.row."
             )
         )
+    }
+
+    /// macOS exposes ordinary `Text` content as AX value, while an explicit
+    /// accessibility label (the pinned-position branch) occupies AX label.
+    /// Both are public text attributes of the same stable status element.
+    @MainActor
+    private func accessibilityText(of element: XCUIElement) -> String {
+        if !element.label.isEmpty {
+            return element.label
+        }
+        return element.value as? String ?? ""
     }
 
     @MainActor

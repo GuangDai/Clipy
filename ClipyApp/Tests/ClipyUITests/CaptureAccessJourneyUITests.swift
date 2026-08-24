@@ -357,7 +357,7 @@ final class CaptureAccessJourneyUITests: XCTestCase {
             "clipy.capture.access.message"
         ]
         assertCondition(
-            message.label.contains("up to 5 minutes"),
+            (message.value as? String)?.contains("up to 5 minutes") == true,
             in: app,
             message: "Paused presentation did not disclose its time bound."
         )

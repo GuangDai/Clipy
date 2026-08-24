@@ -393,6 +393,12 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
     @MainActor
     private func replaceText(in field: XCUIElement, with text: String) {
         field.click()
+        if !waitUntil(timeout: 2, condition: { field.hasFocus }) {
+            field.click()
+        }
+        let focused = waitUntil(timeout: 5) { field.hasFocus }
+        XCTAssertTrue(focused, "The retention text field did not gain focus.")
+        guard focused else { return }
         field.typeKey("a", modifierFlags: .command)
         field.typeText(text)
     }
@@ -409,11 +415,14 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
         app: XCUIApplication,
         context: String
     ) -> Bool {
+        let scrollCoordinate = scrollView.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
+        )
         for _ in 0..<8 {
             if element.exists && element.isHittable {
                 return true
             }
-            scrollView.scroll(byDeltaX: 0, deltaY: -50)
+            scrollCoordinate.scroll(byDeltaX: 0, deltaY: -50)
         }
         let result = element.exists && element.isHittable
         XCTAssertTrue(
