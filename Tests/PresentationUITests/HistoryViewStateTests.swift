@@ -995,7 +995,7 @@ struct HistoryViewStateTests {
         _ = try await state.removeAwaitingReceipt(itemID)
         #expect(committedRemovalAnnouncements == 0)
 
-        await history.setPerformFailure(.temporarilyUnavailable(.storeLocked))
+        await history.setPerformFailure(.temporarilyUnavailable(.factProof))
         await #expect(throws: HistoryFailure.self) {
             _ = try await state.removeAwaitingReceipt(itemID)
         }
