@@ -24,10 +24,10 @@ cursor/status-item/center/last-position placement, dwell-driven preview pane)
 rather than a SwiftUI `MenuBarExtra`. M3/state 3 (packaging, accessibility,
 localization, product acceptance per Part VI §11) remains open.
 
-**Current CI provenance (2026-08-24):** the PR #34 merge head is green across
+**Current CI provenance (2026-08-24):** the PR #35 merge head `10decae` is green across
 Lint + source gates, SwiftPM build + test, and XcodeGen generate + app
 build/test at
-[run 32684916238](https://github.com/GuangDai/Clipy/actions/runs/32684916238).
+[run 32688965362 attempt 2](https://github.com/GuangDai/Clipy/actions/runs/32688965362).
 PR #34 restores the manual-only exact/scale evidence caller and scale-phase
 liveness contract. Its final PR run
 [32684566664](https://github.com/GuangDai/Clipy/actions/runs/32684566664) and
@@ -1236,7 +1236,9 @@ test.
   proof. GOV-1 is Done at this record-only evidence ceiling; no G2/G5/G8,
   approved-hardware, positive-RSS-budget, fsync/crash, or general
   external-storage no-fault claim exists.
-- **Batch 33 Card 9B + bounded accessibility leaves are in progress:** one
+- **Batch 33 Card 9B + bounded accessibility leaves are landed:** PR #35 /
+  merge `10decae`; final PR correctness 32688665740 and master correctness
+  32688965362 attempt 2 are green. One
   internal `AppIntentHistoryIngress` now joins the existing public Gateway
   facade to one AppDelegate-owned `HistoryPanelSurfaceState` through an
   app-local relay only after a positive external remove and before the Intent
@@ -1247,6 +1249,18 @@ test.
   thumbnail flight. Panel-initiated committed Remove publishes one
   content-free medium-priority announcement, while unchanged/failure remain
   silent; the large image preview label uses literal decoded pixel dimensions.
-  This is unlanded source work until Batch 33 PR/master correctness. It does
-  not prove Siri/Shortcuts system invocation, AX tree, actual VoiceOver/FKA,
+  It does not prove Siri/Shortcuts system invocation, AX tree, actual VoiceOver/FKA,
   localization, WindowServer, or signed runtime.
+- **Batch 34 panel journey + archive identity source is in progress:** PR #36
+  adds one XcodeGen `bundle.ui-testing` target and a DEBUG-only launch envelope
+  that substitutes only a temp store and allowed pasteboard posture. The
+  tracer must still pass actual app launch → hotkey-tail summon → search
+  first responder → arrow selection → production General-pasteboard write →
+  exactly one close before this leaf is Done. The same PR makes AppDelegate
+  the only panel-session observation owner and records pure newest/arrow/
+  reopen behavior. Its independent Card 16A leaf freezes bundle
+  `com.clipy.ClipyApp`, version `0.1.0` build `1`, utility category, explicit
+  empty entitlements and an original AppIcon, plus a portable archive
+  validator and manual-only workflow. It remains Partial until a protected
+  release tag exists and the real unsigned archive artifact passes; it proves
+  no Developer ID signing, notarization, staple, Gatekeeper, TCC, or release.

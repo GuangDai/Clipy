@@ -135,6 +135,7 @@ HistoryPerfTests
 PasteboardAdapterTests
 PresentationUITests
 ClipyIntegrationTests
+ClipyUITests
 ```
 
 The scaffold must not add an implementation target for a deferred feature.

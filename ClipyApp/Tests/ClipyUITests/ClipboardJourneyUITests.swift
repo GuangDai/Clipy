@@ -63,9 +63,10 @@ final class ClipboardJourneyUITests: XCTestCase {
         search.typeText("clipy-ui-journey-")
         XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 2 })
 
-        // Open selected alpha. Beta arrived later and is now one row above it
-        // in authoritative recent order, so Up chooses beta.
-        search.typeKey(.upArrow, modifierFlags: [])
+        // The replacement search page selects newest beta. Down must move to
+        // alpha, making the final byte-exact paste distinguish arrow routing
+        // from merely leaving the initial selection untouched.
+        search.typeKey(.downArrow, modifierFlags: [])
         pasteboard.clearContents()
         XCTAssertTrue(
             pasteboard.setString(
@@ -77,7 +78,7 @@ final class ClipboardJourneyUITests: XCTestCase {
 
         XCTAssertTrue(waitUntil(timeout: 10) { !panel.exists })
         XCTAssertTrue(waitUntil(timeout: 10) {
-            pasteboard.string(forType: .string) == beta
+            pasteboard.string(forType: .string) == alpha
         })
     }
 
