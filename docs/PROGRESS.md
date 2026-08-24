@@ -24,10 +24,10 @@ cursor/status-item/center/last-position placement, dwell-driven preview pane)
 rather than a SwiftUI `MenuBarExtra`. M3/state 3 (packaging, accessibility,
 localization, product acceptance per Part VI §11) remains open.
 
-**Current CI provenance (2026-08-24):** the PR #35 merge head `10decae` is green across
+**Current CI provenance (2026-08-24):** the PR #36 merge head `2bc4a8e` is green across
 Lint + source gates, SwiftPM build + test, and XcodeGen generate + app
 build/test at
-[run 32688965362 attempt 2](https://github.com/GuangDai/Clipy/actions/runs/32688965362).
+[run 32692472789](https://github.com/GuangDai/Clipy/actions/runs/32692472789).
 PR #34 restores the manual-only exact/scale evidence caller and scale-phase
 liveness contract. Its final PR run
 [32684566664](https://github.com/GuangDai/Clipy/actions/runs/32684566664) and
@@ -1251,7 +1251,9 @@ test.
   silent; the large image preview label uses literal decoded pixel dimensions.
   It does not prove Siri/Shortcuts system invocation, AX tree, actual VoiceOver/FKA,
   localization, WindowServer, or signed runtime.
-- **Batch 34 panel journey is PR-green; archive identity remains Partial:** PR #36
+- **Batch 34 panel journey is landed; archive identity remains Partial:** PR #36 /
+  merge `2bc4a8e`; final PR correctness 32691964885 attempt 2 and master
+  correctness 32692472789 are green. PR #36
   adds one XcodeGen `bundle.ui-testing` target and a DEBUG-only launch envelope
   that substitutes only a temp store and allowed pasteboard posture. The
   tracer must still pass actual app launch → hotkey-tail summon → search
@@ -1268,3 +1270,12 @@ test.
   validator and manual-only workflow. It remains Partial until a protected
   release tag exists and the real unsigned archive artifact passes; it proves
   no Developer ID signing, notarization, staple, Gatekeeper, TCC, or release.
+- **Batch 35 generic Local Automation enrollment gate is in progress:** the
+  public `GatewayAdminHistory` witness now rejects `.localAutomation` before
+  Authority admission, audit, clock use, ID minting, or durable mutation.
+  A real in-memory public-facade test requires connections/grants to remain
+  equal and the public audit page to contain no `adminEnroll`; storage-only
+  kind/rate/recheck fixtures call the internal Authority directly. This closes
+  only the forbidden generic publication
+  route; client file custody, enrollment/revocation coordinator, server
+  authentication, ingress, transport, and CLI remain open.

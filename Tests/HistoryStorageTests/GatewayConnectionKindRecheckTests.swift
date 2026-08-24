@@ -308,9 +308,10 @@ struct GatewayConnectionKindRecheckTests {
         let appIntentsConnection = try #require(
             try await history.connections().first
         ).id
-        let localAutomationConnection = try await history.enrollConnection(
+        let localAutomationConnection = try await authority.enrollConnection(
             kind: .localAutomation,
-            displayName: "Batch 17 local kind recheck"
+            displayName: "Batch 17 local kind recheck",
+            credential: nil
         )
         try await history.grantCapability(
             .browse,

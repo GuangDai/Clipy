@@ -9,7 +9,13 @@ extension SwiftDataHistory: GatewayAdminHistory {
         displayName: String,
         credential: Data?
     ) async throws -> ExternalConnectionID {
-        try await authority.enrollConnection(
+        guard kind != .localAutomation else {
+            // V2-05 §3.2 F1: the generic public admin shape cannot carry a
+            // preassigned ID or prove client/server custody readbacks. Reject
+            // before Authority admission, audit, clock, or ID minting.
+            throw ExternalFailure.requestDenied(.invalidInput)
+        }
+        return try await authority.enrollConnection(
             kind: kind,
             displayName: displayName,
             credential: credential

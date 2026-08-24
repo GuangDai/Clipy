@@ -25,15 +25,11 @@ struct SwiftDataHistoryGatewayAdminConformanceTests {
         let initialGrants = try await admin.grants(for: appIntents.id)
         #expect(initialGrants.isEmpty)
 
-        let enrolled = try await admin.enrollConnection(
-            kind: .localAutomation,
-            displayName: "Public facade"
-        )
-        try await admin.grantCapability(.organize, to: enrolled)
-        let enrolledGrants = try await admin.grants(for: enrolled)
-        #expect(enrolledGrants.map(\.capability) == [.organize])
-        try await admin.revokeCapability(.organize, of: enrolled)
-        try await admin.revokeConnection(enrolled)
+        try await admin.grantCapability(.manage, to: appIntents.id)
+        let enrolledGrants = try await admin.grants(for: appIntents.id)
+        #expect(enrolledGrants.map(\.capability) == [.manage])
+        try await admin.revokeCapability(.manage, of: appIntents.id)
+        try await admin.revokeConnection(appIntents.id)
 
         let audit = try await admin.auditLog(since: 1)
         #expect(!audit.isEmpty)
@@ -41,5 +37,30 @@ struct SwiftDataHistoryGatewayAdminConformanceTests {
             try await admin.rebaseAuditLog(reason: .corruptionDetected)
         }
         try await admin.rebaseAuditLog(reason: .adminForced)
+    }
+
+    @Test("generic facade rejects Local Automation before durable state")
+    func genericFacadeCannotPublishLocalAutomationEnrollment() async throws {
+        let history = try await SwiftDataHistory.open(
+            configuration: HistoryConfiguration(persistence: .memory)
+        )
+        let admin = requireGatewayAdminHistory(history)
+        let beforeConnections = try await admin.connections()
+        let bootstrapped = try #require(beforeConnections.first)
+        let beforeGrants = try await admin.grants(for: bootstrapped.id)
+
+        await #expect(throws: ExternalFailure.requestDenied(.invalidInput)) {
+            _ = try await admin.enrollConnection(
+                kind: .localAutomation,
+                displayName: "Must use F1 coordinator"
+            )
+        }
+
+        let afterConnections = try await admin.connections()
+        let afterGrants = try await admin.grants(for: bootstrapped.id)
+        let audit = try await admin.auditLog(since: 1)
+        #expect(afterConnections == beforeConnections)
+        #expect(afterGrants == beforeGrants)
+        #expect(!audit.contains(where: { $0.operationKind == .adminEnroll }))
     }
 }
