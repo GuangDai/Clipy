@@ -253,13 +253,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         }
         composition?.viewState.activate()
-        if let composition {
-            panelSurfaceState?.beginSession(rows: composition.viewState.rows)
-        }
         panel?.open(
             at: mode,
             statusItemButtonScreenFrame: statusItemButtonScreenFrame()
         )
+        if let composition {
+            panelSurfaceState?.beginSession(rows: composition.viewState.rows)
+        }
     }
 
     /// Closes the panel (idempotent; the panel's close fires

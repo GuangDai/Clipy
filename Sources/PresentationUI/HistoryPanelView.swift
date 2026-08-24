@@ -304,6 +304,7 @@ public struct HistoryPanelView: View {
             width: PanelGeometry.totalWidth(previewOpen: previewState.isOpen),
             height: PanelGeometry.height
         )
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.panel.root")
         .background { hiddenShortcuts }
         .task(id: surfaceState.sessionGeneration) {
