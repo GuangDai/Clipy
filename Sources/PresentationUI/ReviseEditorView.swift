@@ -15,6 +15,14 @@ import Foundation
 import HistoryCore
 import SwiftUI
 
+package enum ReviseEditorPresentation {
+    /// Product decision 3D: Save never claims to redact Canonical Content or
+    /// previously committed revisions.
+    package static let revisionDisclosure =
+        "Save appends an immutable revision. Previous and original content "
+        + "may remain in this item's revision history."
+}
+
 /// The "Edit Content…" sheet (contract §4.3): 520×440, one decision row per
 /// Canonical representation, and a footer with the coherence hint, Cancel,
 /// and Save Revision. Saving maps every row onto one `RevisionDecision` and
@@ -85,6 +93,7 @@ public struct ReviseEditorView: View {
                 .padding(16)
             }
             Divider()
+            revisionDisclosure
             reloadStatus
             footer
         }
@@ -152,6 +161,23 @@ public struct ReviseEditorView: View {
     }
 
     // MARK: Footer
+
+    /// Editing Effective Content is append-only: the captured Canonical
+    /// Content and prior revisions are not erased by Save. This warning stays
+    /// visible before submission so the editor cannot imply destructive
+    /// redaction of sensitive clipboard bytes (review Card 3D).
+    private var revisionDisclosure: some View {
+        Label(
+            ReviseEditorPresentation.revisionDisclosure,
+            systemImage: "info.circle"
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.top, 10)
+    }
 
     @ViewBuilder
     private var reloadStatus: some View {

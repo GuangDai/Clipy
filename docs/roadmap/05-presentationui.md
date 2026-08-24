@@ -53,3 +53,7 @@
 
 - The UI owns the latest returned page as ordinary caller state, not a History cache tier (Part IV §11).
 - Observation emits complete replacement pages, not deltas; the UI replaces, never applies event deltas (Part I §5.5, Part IV §5).
+- Edit Content is append-only. Before Save, the editor explicitly states that
+  Save appends an immutable revision and that previous/original content may
+  remain in revision history; it must never imply that editing redacts retained
+  Canonical Content or older revisions (REVIEW Card 3D).

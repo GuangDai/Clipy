@@ -1293,8 +1293,10 @@ test.
   revoked/not-granted outcomes. Real V4 Authority tests require all verifier
   paths to leave Gateway state/audit unchanged. No ingress DTO, framing,
   peer-EUID proof, transport, client custody, coordinator, or CLI is added.
-- **Batch 37 running-app row accessibility characterization is in progress:**
-  the existing XCUI process journey now also requires both history rows to
+- **Batch 37 running-app row accessibility characterization is landed:** PR
+  #39 / merge `5ee1963`; final PR correctness 32696012215 attempt 2 and master
+  correctness 32696647481 are green. The existing XCUI process journey now
+  also requires both history rows to
   materialize as stable-ID button accessibility elements and requires their
   labels to contain the distinguishable alpha/beta titles before the Down →
   alpha product-paste proof. A real hosted NSPanel/NSHostingView experiment
@@ -1302,3 +1304,12 @@ test.
   active/key, so that experiment was removed rather than replaced by a private
   or fabricated SwiftUI tree. Card 15B default/named AX action execution,
   actual VoiceOver/FKA, localization, and signed runtime remain open.
+- **Batch 38 Editor/Settings bounded controls are in progress:** the revision
+  editor now carries the approved pre-Save immutable-history disclosure with
+  one literal Presentation proof. The running-app Settings journey opens the
+  real Settings scene, materializes the Launch at Login control, enables the
+  age threshold, and requires the strict-retention warning/destructive action
+  before Esc cancels while preserving the draft. This is not a hosted editor
+  copy/Esc proof, a four-state ServiceManagement runtime proof, or complete
+  unified-retention acceptance. PR-head correctness 32698639889 is green;
+  merge/master evidence is pending.

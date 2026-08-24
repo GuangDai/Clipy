@@ -91,6 +91,73 @@ final class ClipboardJourneyUITests: XCTestCase {
     }
 
     @MainActor
+    func testSettingsExposeLaunchControlAndConfirmStrictAgeRetention() throws {
+        let app = try launchApp(capturing: "clipy-ui-settings-original")
+        defer { app.terminate() }
+
+        app.typeKey(",", modifierFlags: .command)
+        let launchAtLogin = app.switches[
+            "clipy.settings.launch-at-login"
+        ]
+        XCTAssertTrue(launchAtLogin.waitForExistence(timeout: 10))
+
+        let retentionTab = app.buttons["Retention"]
+        XCTAssertTrue(retentionTab.waitForExistence(timeout: 5))
+        retentionTab.click()
+
+        let ageLimit = app.switches[
+            "clipy.settings.retention.age-enabled"
+        ]
+        XCTAssertTrue(ageLimit.waitForExistence(timeout: 5))
+        ageLimit.click()
+
+        let apply = app.buttons[
+            "clipy.settings.retention.apply"
+        ]
+        XCTAssertTrue(apply.waitForExistence(timeout: 5))
+        XCTAssertTrue(apply.isEnabled)
+        apply.click()
+
+        let destructiveApply = app.buttons["Apply Stricter Limits"]
+        XCTAssertTrue(destructiveApply.waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.staticTexts[
+                "Stricter limits can permanently remove items or revisions."
+            ].exists
+        )
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitUntil(timeout: 5) { !destructiveApply.exists })
+        XCTAssertTrue(ageLimit.exists)
+        XCTAssertEqual(ageLimit.value as? Int, 1)
+    }
+
+    @MainActor
+    private func launchApp(capturing value: String) throws -> XCUIApplication {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.setString(value, forType: .string))
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        temporaryDirectory = directory
+
+        let app = XCUIApplication()
+        app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
+        app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory
+            .appendingPathComponent("history.store")
+            .path
+        app.launch()
+
+        let panel = app.descendants(matching: .any)["clipy.panel.root"]
+        XCTAssertTrue(panel.waitForExistence(timeout: 20))
+        return app
+    }
+
+    @MainActor
     private func waitUntil(
         timeout: TimeInterval,
         condition: @escaping () -> Bool
