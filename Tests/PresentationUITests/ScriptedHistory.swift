@@ -475,31 +475,37 @@ var fixturePNGData: Data {
 
 // MARK: - Polling helper
 
-/// Spins in short slices until `condition` holds or `timeout` elapses,
-/// yielding the main actor between checks so `HistoryViewState` observation
-/// tasks and `ThumbnailStore` fetch tasks can make progress. Returns whether
-/// the condition was met. Tests poll only on stable (monotone) conditions —
-/// a state that stays true once true — never on transient windows.
+/// Spins for a fixed number of scheduled short slices until `condition`
+/// holds, yielding the main actor between checks so `HistoryViewState`
+/// observation tasks and `ThumbnailStore` fetch tasks can make progress.
+/// Returns whether the condition was met. Tests poll only on stable
+/// (monotone) conditions — a state that stays true once true — never on
+/// transient windows.
 ///
-/// The default budget is 10 s, not because a correct run needs it (a quiet
-/// machine satisfies these conditions in milliseconds) but because CI runs
-/// the heavy real-scale suites in parallel with this target: under runner
-/// saturation a 2 s wall-clock deadline can expire before the observation
-/// task gets its first MainActor slot (CI run 32267167679). A generous
-/// deadline costs nothing on the passing path — the poll returns the moment
-/// the condition holds.
+/// There is deliberately no per-condition wall-clock deadline. CI runs the
+/// 64 MiB admission and real-scale suites concurrently with these MainActor
+/// tests, so a correct child task can wait more than ten seconds for its first
+/// executor slot (runs 32712977843, 32714004651, and 32715770763). Every
+/// caller here waits on a stable condition driven by a scripted actor. The
+/// fixed attempt budget preserves ten seconds of ACTUAL scheduled polling,
+/// but executor starvation consumes no attempts. A real missing condition
+/// still returns false locally; cancellation performs one final check. Real
+/// AppKit/XCUI boundaries keep their own finite wall-clock deadlines.
 @MainActor
 func pollUntil(
-    timeout: Duration = .seconds(10),
+    attemptLimit: Int = 2_000,
     interval: Duration = .milliseconds(5),
     _ condition: @MainActor () async -> Bool
 ) async -> Bool {
-    let deadline = ContinuousClock.now + timeout
-    while ContinuousClock.now < deadline {
+    for _ in 0..<attemptLimit {
         if await condition() {
             return true
         }
-        try? await Task.sleep(for: interval)
+        do {
+            try await Task.sleep(for: interval)
+        } catch {
+            return await condition()
+        }
     }
     return await condition()
 }
