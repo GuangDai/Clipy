@@ -160,6 +160,75 @@ struct SummonShortcutControllerTests {
         #expect(alternate.warning == nil)
     }
 
+    @Test func recorderCancelsEscapeAndRejectsBareOrModifierOnlyKeys() {
+        #expect(
+            SummonShortcutRecordingDecision.decide(
+                keyCode: UInt16(kVK_Escape),
+                modifierFlags: [.command]
+            ) == .cancel
+        )
+        #expect(
+            SummonShortcutRecordingDecision.decide(
+                keyCode: UInt16(kVK_ANSI_K),
+                modifierFlags: []
+            ) == .reject
+        )
+        #expect(
+            SummonShortcutRecordingDecision.decide(
+                keyCode: UInt16(kVK_Command),
+                modifierFlags: [.command]
+            ) == .reject
+        )
+    }
+
+    @Test func recorderProducesTheExactCarbonCandidateFromAdmittedFlags() {
+        let decision = SummonShortcutRecordingDecision.decide(
+            keyCode: UInt16(kVK_ANSI_K),
+            modifierFlags: [.capsLock, .command, .option, .numericPad]
+        )
+        #expect(decision == .candidate(HotKeyChord(
+            keyCode: UInt32(kVK_ANSI_K),
+            modifiers: UInt32(cmdKey | optionKey)
+        )))
+    }
+
+    @Test func recorderInputViewDispatchesKeyDownAndIgnoresRepeat() throws {
+        var decisions: [SummonShortcutRecordingDecision] = []
+        let input = SummonShortcutRecorderInputView { decisions.append($0) }
+        let first = try #require(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.control, .shift],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "k",
+            charactersIgnoringModifiers: "k",
+            isARepeat: false,
+            keyCode: UInt16(kVK_ANSI_K)
+        ))
+        let repeated = try #require(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.control, .shift],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "k",
+            charactersIgnoringModifiers: "k",
+            isARepeat: true,
+            keyCode: UInt16(kVK_ANSI_K)
+        ))
+
+        input.keyDown(with: first)
+        input.keyDown(with: repeated)
+
+        #expect(decisions == [.candidate(HotKeyChord(
+            keyCode: UInt32(kVK_ANSI_K),
+            modifiers: UInt32(controlKey | shiftKey)
+        ))])
+    }
+
     private func makeController(
         defaults: UserDefaults,
         probe: ShortcutRegistrationProbe,

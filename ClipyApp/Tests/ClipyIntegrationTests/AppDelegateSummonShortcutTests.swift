@@ -99,6 +99,85 @@ struct AppDelegateSummonShortcutTests {
         #expect(appDelegate.summonShortcutPresentation.status == .stopped)
     }
 
+    @Test func failedRecordedChangeKeepsOldBindingAndPublishesRecovery() throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let probe = AppDelegateShortcutProbe()
+        let appDelegate = makeAppDelegate(defaults: defaults, probe: probe)
+
+        #expect(appDelegate.startSummonShortcut())
+        probe.failNext(alternate)
+        appDelegate.changeSummonShortcut(to: alternate)
+
+        #expect(probe.attemptChords == [.defaultSummon, alternate])
+        #expect(probe.cleanupChords.isEmpty)
+        #expect(defaults.data(forKey: SummonShortcutController.defaultsKey) == nil)
+        #expect(
+            appDelegate.summonShortcutPresentation.status
+                == .unavailable(
+                    requested: alternate.settingsDisplayName,
+                    retainedCurrent: HotKeyChord.defaultSummon.settingsDisplayName
+                )
+        )
+
+        appDelegate.summonShortcutBinding().retry()
+        #expect(probe.cleanupChords == [.defaultSummon])
+        #expect(
+            appDelegate.summonShortcutPresentation.status
+                == .current(alternate.settingsDisplayName)
+        )
+
+        appDelegate.applicationWillTerminate(
+            Notification(name: NSApplication.willTerminateNotification)
+        )
+    }
+
+    @Test func successfulRecordedChangePublishesAndPersistsTheCandidate() throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let probe = AppDelegateShortcutProbe()
+        let appDelegate = makeAppDelegate(defaults: defaults, probe: probe)
+
+        #expect(appDelegate.startSummonShortcut())
+        appDelegate.changeSummonShortcut(to: alternate)
+
+        #expect(probe.attemptChords == [.defaultSummon, alternate])
+        #expect(probe.cleanupChords == [.defaultSummon])
+        #expect(
+            appDelegate.summonShortcutPresentation.status
+                == .current(alternate.settingsDisplayName)
+        )
+        #expect(
+            defaults.data(forKey: SummonShortcutController.defaultsKey)
+                == encode(alternate)
+        )
+
+        appDelegate.applicationWillTerminate(
+            Notification(name: NSApplication.willTerminateNotification)
+        )
+    }
+
+    @Test func changeIntentIsOwnedByTheSettingsPresentation() throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let probe = AppDelegateShortcutProbe()
+        let appDelegate = makeAppDelegate(defaults: defaults, probe: probe)
+        let intentProbe = AppDelegateShortcutIntentProbe()
+
+        #expect(appDelegate.startSummonShortcut())
+        let settings = appDelegate.summonShortcutBinding {
+            intentProbe.beginChangeCount += 1
+        }
+        #expect(settings.canChange)
+        settings.beginChange()
+        #expect(intentProbe.beginChangeCount == 1)
+        #expect(probe.attemptChords == [.defaultSummon])
+
+        appDelegate.applicationWillTerminate(
+            Notification(name: NSApplication.willTerminateNotification)
+        )
+    }
+
     private func makeAppDelegate(
         defaults: UserDefaults,
         probe: AppDelegateShortcutProbe
@@ -131,6 +210,12 @@ struct AppDelegateSummonShortcutTests {
             UInt8(truncatingIfNeeded: chord.modifiers),
         ])
     }
+
+}
+
+@MainActor
+private final class AppDelegateShortcutIntentProbe {
+    var beginChangeCount = 0
 }
 
 @MainActor
