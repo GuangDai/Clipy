@@ -19,6 +19,12 @@ import HistoryCore
 import PresentationUI
 import Testing
 
+/// Real ImageIO materialization shares one owner-local native slot. Running
+/// this suite's independent stores concurrently under the full 962-test lane
+/// starved their MainActor completions past a moving timeout (runs
+/// 32681513849/32682113026); serialize the owner suite instead of weakening
+/// its monotone-condition deadline.
+@Suite("ThumbnailStore native/display ownership", .serialized)
 @MainActor
 struct ThumbnailStoreTests {
 

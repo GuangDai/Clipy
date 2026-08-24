@@ -1200,5 +1200,9 @@ test.
   32681250466/32681513849 exposed respectively three missing `try` markers in
   throwing TaskLocal test scopes and a concrete 12.5-second ImageIO completion
   under the 962-test parallel runner versus the old 10-second monotone poll;
-  both were fixed before the green run. Merge/master provenance is not yet
-  recorded in this commit.
+  both were fixed before the green run. A later docs-only attempt 32682113026
+  showed that merely widening the timeout made the same-owner concurrent
+  ImageIO window drift to about 23 seconds, so the final branch restores the
+  10-second failure bound and serializes the ThumbnailStore native/display
+  owner suite instead. Merge/master provenance is not yet recorded in this
+  commit.

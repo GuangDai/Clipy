@@ -481,17 +481,16 @@ var fixturePNGData: Data {
 /// the condition was met. Tests poll only on stable (monotone) conditions —
 /// a state that stays true once true — never on transient windows.
 ///
-/// The default budget is 20 s, not because a correct run needs it (a quiet
+/// The default budget is 10 s, not because a correct run needs it (a quiet
 /// machine satisfies these conditions in milliseconds) but because CI runs
 /// the heavy real-scale suites in parallel with this target: under runner
 /// saturation a 2 s wall-clock deadline can expire before the observation
-/// task gets its first MainActor slot (CI run 32267167679), and the first
-/// ContentPreview/native-raster run completed its valid ImageIO work at about
-/// 12.5 s (CI run 32681513849). A generous deadline costs nothing on the
-/// passing path — the poll returns the moment the condition holds.
+/// task gets its first MainActor slot (CI run 32267167679). A generous
+/// deadline costs nothing on the passing path — the poll returns the moment
+/// the condition holds.
 @MainActor
 func pollUntil(
-    timeout: Duration = .seconds(20),
+    timeout: Duration = .seconds(10),
     interval: Duration = .milliseconds(5),
     _ condition: @MainActor () async -> Bool
 ) async -> Bool {
