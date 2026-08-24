@@ -26,6 +26,10 @@ let package = Package(
     ],
     targets: [
         .target(name: "ClipboardFormats"),
+        .target(
+            name: "ContentPreview",
+            dependencies: ["ClipboardFormats"]
+        ),
         .target(name: "ClipyCLIContract"),
         .target(name: "HistoryCore"),
         .target(
@@ -48,7 +52,7 @@ let package = Package(
         ),
         .target(
             name: "PresentationUI",
-            dependencies: ["HistoryCore", "ClipboardFormats"]
+            dependencies: ["HistoryCore", "ClipboardFormats", "ContentPreview"]
         ),
         .target(
             name: "xxh3",
@@ -75,6 +79,10 @@ let package = Package(
         .testTarget(
             name: "ClipboardFormatsTests",
             dependencies: ["ClipboardFormats"]
+        ),
+        .testTarget(
+            name: "ContentPreviewTests",
+            dependencies: ["ContentPreview"]
         ),
         .testTarget(
             name: "ClipyCLIContractTests",
@@ -122,7 +130,7 @@ let package = Package(
         ),
         .testTarget(
             name: "PresentationUITests",
-            dependencies: ["PresentationUI", "HistoryCore"]
+            dependencies: ["PresentationUI", "HistoryCore", "ContentPreview"]
         ),
     ],
     swiftLanguageModes: [.v6]

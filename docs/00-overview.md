@@ -17,8 +17,12 @@ The repository outside `docs/` may inform product behavior, terminology, and kno
 - `HistoryCore`: the public caller interface, public identity/coherence values, closed `HistoryAction` instruction set, purpose-specific read DTOs, receipts, and typed failures.
 - `HistoryDomain`: package-only, Foundation-only content lineage, complete action facts, pure planners, and strongly typed mutation plans.
 - `HistoryStorage`: the sole SwiftData authority, schema, fact loaders, ingest preparation, xxh3-backed candidate index, scalar read projections, transient observation plumbing, and thumbnail single-flight.
+- `ContentPreview`: one package-only concrete preview renderer owning exact
+  source selection, fixed resource profiles, and bounded inert text/raster
+  artifacts; it never reads History or owns UI lifecycle/thumbnail semantics.
 - `PasteboardAdapter`: AppKit pasteboard values to and from `HistoryCore` values. It never constructs Domain state or fingerprints.
-- `PresentationUI`: SwiftUI state built only from `HistoryCore` DTOs.
+- `PresentationUI`: SwiftUI state built from `HistoryCore` DTOs plus bounded
+  inert artifacts from ContentPreview; it owns caller lifecycle, not decoding.
 - `ClipyApp`: the sole composition root and the only place that coordinates History with outbound pasteboard writes.
 - One persistent source of truth, no semantic read cache, and one transient thumbnail single-flight coordinator.
 

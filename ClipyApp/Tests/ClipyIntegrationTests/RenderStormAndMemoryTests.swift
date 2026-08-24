@@ -349,8 +349,8 @@ struct RenderStormAndMemoryTests {
             _ = try await viewState.details(for: imageIDs[3])
             _ = try await viewState.details(for: imageIDs[4])
 
-            // Thumbnail prefetch → ImageIO decode OFF the MainActor
-            // (PresentationUI's internal `DisplayImageDecoder` actor —
+            // Thumbnail prefetch → eager rasterization OFF the MainActor
+            // (the ContentPreview native renderer —
             // audit 2026-08-20 §S-2/§SPEC-IMPL-002) → bounded-store reset
             // (04 §9; the byte/entry admission bound of audit §S-3); the
             // reset releases the round's retained decoded images so the
@@ -363,7 +363,7 @@ struct RenderStormAndMemoryTests {
                 thumbnails.prefetch(row.item)
             }
             let decoded = await ComposedSupport.waitFor(timeout: 30) {
-                imageRows.allSatisfy { thumbnails.image(for: $0.item) != nil }
+                imageRows.allSatisfy { thumbnails.imagePixelSize(for: $0.item) != nil }
             }
             #expect(
                 decoded,

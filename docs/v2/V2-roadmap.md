@@ -712,8 +712,9 @@ track.
 - **Status:** blocked on v1 step 9 and DC-08/DC-20; otherwise ships with each
   admitted user-facing backend.
 - **Spec references:** `V2-07` §2–§17.
-- **Dependencies:** HistoryCore DTOs/protocols only in PresentationUI; concrete
-  protocol casts and composition in ClipyApp.
+- **Dependencies:** HistoryCore DTOs/protocols plus package-only
+  ClipboardFormats/ContentPreview in PresentationUI; concrete protocol casts
+  and composition in ClipyApp.
 - **Owns:** no graft, invariant, schema, codec, actor, durable state, or public
   DTO.
 
@@ -732,8 +733,9 @@ track.
 | UX.9 Accessibility/localization/previews | Label/value/hint, VoiceOver phrases, no color-only state, Dynamic Type/contrast, String Catalog, plural/date/duration/byte formatting, and scripted preview updates. | Every shipped UX slice. |
 
 PresentationUI never imports SwiftData, HistoryStorage, HistoryDomain, AppKit,
-Vision, PDFKit, ImageIO, CryptoKit, or AppIntents, and never decodes a content or
-audit blob.
+Vision, PDFKit, ImageIO, CryptoKit, or AppIntents. It maps one immutable
+Effective Content snapshot into ContentPreview and retains only the bounded
+returned artifact; it never decodes a content or audit blob itself.
 
 Acceptance: `UX-COMPILE-1`, `UX-COMPILE-2`, `UX-PLATFORM-1`,
 `UX-PLATFORM-2`, and `UX-PERF-1`, plus hosted integration, VoiceOver,

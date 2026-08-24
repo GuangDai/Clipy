@@ -30,7 +30,7 @@ thumbnails.
   run on any platform; everything else (including
   `scripts/public_symbol_snapshot.sh`) needs macOS + `xcrun`.
 
-**Current state (2026-08-23, `master` through PR #29):** steps 0–9 are
+**Current state (2026-08-24, `master` through PR #32):** steps 0–9 are
 done and CI-green (scaffold + gates, `HistoryCore` public surface,
 `HistoryDomain` pure core, dependency pins, schema v1 + codecs,
 `HistoryAuthority` capture/mutations/reads/observation/thumbnail, product
@@ -45,6 +45,8 @@ reads/writes + the public connection-bound `ExternalHistoryFacade`, and
 X.7 App Intents composition — six intents behind one async facade
 provider registered before store open, `supportedModes = [.background]`,
 output-only entities, no `EntityQuery`, confined to `ClipyApp/Sources`).
+`DEC-RET-READ` and its bounded Settings consumer/persistent readback closure
+landed in PR #32 (merge `1c221e6`; master run 32678654503).
 Both dispatch-only physical-evidence cells are green on `master` as of
 2026-08-23: the General pasteboard cross-process run 32632263996 and the
 Card 6B APFS ENOSPC capture-transaction run 32636093920 (the latter via
@@ -72,7 +74,7 @@ canonical content internals.
 
 ```text
 ClipyApp (XcodeGen app, composition root)
-├── PresentationUI ────────→ HistoryCore + ClipboardFormats
+├── PresentationUI ────────→ HistoryCore + ClipboardFormats + ContentPreview
 ├── PasteboardAdapter ─────→ HistoryCore
 └── HistoryStorage ────────→ HistoryCore + ClipboardFormats
           │                → HistoryDomain
@@ -80,6 +82,8 @@ ClipyApp (XcodeGen app, composition root)
           └───────────────→ Fuse (external SPM, fuzzy search)
 HistoryDomain ─────────────→ HistoryCore
 ClipboardFormats ──────────→ Foundation only (package-only stable facts)
+ContentPreview ────────────→ ClipboardFormats + CoreGraphics + ImageIO
+                             (package-only bounded transient renderer)
 ClipyCLIContract ──────────→ Foundation only (package-only pure wire contract)
 HistoryRestartProbe ───────→ HistoryCore + HistoryStorage (test evidence only)
 ```
@@ -87,12 +91,13 @@ HistoryRestartProbe ───────→ HistoryCore + HistoryStorage (test 
 | Target | Surface | Role |
 |---|---|---|
 | `ClipboardFormats` | Package-only, Foundation-only | Open-world exact identifiers and declared string-codec facts; no purpose policy, registry, plugin, cache, or decoder |
+| `ContentPreview` | Package-only concrete actor/values | Exact preview source selection, fixed resource profiles, text codecs, eager ImageIO decode, bounded inert text/BGRA8 artifacts; no History/reference/lifecycle/cache/plugin ownership |
 | `ClipyCLIContract` | Package-only, Foundation-only, no product | X.8 bounded UTF-8 JSON request/reply codec and stable exit classes; no executable, standard-stream I/O, transport, credential, Gateway/History access, or fabricated result |
 | `HistoryCore` | Public, Foundation-only | `ClipboardHistory` protocol, IDs/tokens, closed `HistoryAction` set, request/response DTOs, receipts, typed failures, `HistoryLimits.standard` |
 | `HistoryDomain` | `package` access, Foundation-only, pure | Content lineage, complete action facts, seven pure planners, typed mutation plans. No I/O, actors, clocks, UUID/Date generation, or async |
 | `HistoryStorage` | Public concrete `SwiftDataHistory` + internal implementation | Sole SwiftData authority, schema/codecs, `HistoryAuthority` actor (single writer), fact loaders, Signature Index, read projections, observation plumbing, thumbnail single-flight |
 | `PasteboardAdapter` | Public adapter | NSPasteboard observation/writes ↔ `HistoryCore` raw values. No Domain state, no fingerprints |
-| `PresentationUI` | Public UI | SwiftUI view state over `HistoryCore` DTOs only |
+| `PresentationUI` | Public UI | SwiftUI view state over `HistoryCore` DTOs plus ContentPreview artifacts; owns exact-reference/task/lifecycle fences, never ImageIO decode |
 | `ClipyApp` | Composition root | Concrete construction, lifecycle, paste orchestration, App Intents entry points, DI |
 | `xxh3` | Package-internal C | 64-bit representation fingerprints (vendored xxHash v0.8.3) |
 | `HistoryPerfRunner` | Executable | Part VI §9 performance-runner scaffold (fixtures populate at step 8) |
@@ -177,12 +182,13 @@ bash scripts/ci/run_signed_runtime.sh \
 
 - `scripts/import_gate.py` — per-target import confinement (Part I §8):
   `ClipboardFormats` and `ClipyCLIContract` → Foundation only;
+  `ContentPreview` → Foundation + ClipboardFormats + CoreGraphics + ImageIO;
   `HistoryCore` → Foundation only;
   `HistoryDomain` → Foundation + HistoryCore;
   `HistoryStorage` must not import AppKit/SwiftUI/adapters/PresentationUI;
   `PasteboardAdapter` must not import HistoryDomain/HistoryStorage/SwiftUI/
   SwiftData; `PresentationUI` must not import HistoryDomain/HistoryStorage/
-  AppKit/SwiftData; `HistoryRestartProbe` → Foundation + HistoryCore +
+  AppKit/SwiftData/ImageIO; `HistoryRestartProbe` → Foundation + HistoryCore +
   HistoryStorage only; `xxh3` and `Fuse` are confined to `HistoryStorage`;
   `AppIntents` is confined to `ClipyApp/Sources` and the hosted
   `ClipyIntegrationTests`. Import attributes such as `@preconcurrency` and
@@ -246,6 +252,7 @@ logs are not parsed as compiler output. Write warning-free code.
 
 - Test framework: Swift Testing (`swift test`), test targets mirror owners:
   `HistoryCoreTests`, `HistoryDomainTests`, `HistoryStorageTests`,
+  `ContentPreviewTests`,
   `PasteboardAdapterTests`, `PresentationUITests` (SwiftPM), plus
   `ClipyIntegrationTests` hosted by the app (XcodeGen-only, not in
   `Package.swift`). `HistoryPerfTests` (SwiftPM) holds the perf/AB

@@ -791,9 +791,9 @@ settled RSS、CPU/energy、failure rate，不生成综合分数。
 | Decision | Owner | Status | Blocks | 必须冻结的问题 |
 |---|---|---|---|---|
 | `DEC-RET-READ` | V2-02 + V2-07 + HistoryCore surface | RESOLVED — existing `ClipboardHistory.retentionConfiguration()` purpose-specific public read | — | one validated count+policy snapshot; no live usage/OCC/model identity; owned conformer source break; no fabricated default implementation |
-| `DEC-PREVIEW-TARGET` | 01 architecture + V2-07 + roadmap | OPEN | FORMAT/PREVIEW | `ContentPreview` target、Apple imports、eager pixel artifact 与 gates；移除 PresentationUI CGImage例外。 |
+| `DEC-PREVIEW-TARGET` | 01 architecture + V2-07 + roadmap | **RESOLVED (2026-08-24)** — one concrete package-only `ContentPreview` target | — | common-caller closed presets；ClipboardFormats/CoreGraphics/ImageIO allowlist；tight premultiplied BGRA8/sRGB eager artifact；PresentationUI blocks ImageIO and publishes no CGImage/framework object；loader retains History/reference/task/lifecycle ownership；no registry/plugin/cache/external I/O。 |
 | `DEC-THUMB-CACHE` | 06 G1 + V2-07 | OPEN | thumbnail cache cards | completed cache 是否获准；否则退回 visible-state。 |
-| `DEC-THUMBNAIL-REQUEST-OWNER` | 01 target graph + V2-07 | OPEN | format migration/thumbnail request | row DTO neutral eligibility、UI always-request还是双manifest；Storage仍拥有source/version fence。 |
+| `DEC-THUMBNAIL-REQUEST-OWNER` | 01 target graph + V2-07 | OPEN | format migration/thumbnail request | row DTO neutral eligibility、UI always-request还是双manifest；Storage仍拥有source/version fence。Batch 31仅把已选中、已version-fenced的PNG交给ContentPreview做inert display rasterization，不裁决request/source/cache owner。 |
 | `DEC-CAPTURE-OVERLOAD` | 01/06 cross-cutting + pasteboard roadmap | OPEN | Clipboard flow | bounded FIFO/latest/pause-reject何者成立；已freeze snapshot能否丢。 |
 | `DEC-RET-AGE` | V2-02 + V2-07 | OPEN | age UI/maintenance | age 是 event-triggered 还是 wall-clock expiry。 |
 | `DEC-CAPTURE-CLOCK` | 03a + V2-02 | OPEN | capture/retention | untrusted `observedAt` skew与 Authority clock。 |

@@ -8,6 +8,7 @@ compile-time-isolated F0 diagnostic tool/shared sources for
 rules:
 
   ClipboardFormats  allowlist: Foundation (incl. submodules)
+  ContentPreview    allowlist: Foundation, ClipboardFormats, CoreGraphics, ImageIO
   ClipyCLIContract  allowlist: Foundation (incl. submodules)
   HistoryCore        allowlist: Foundation (incl. submodules, e.g. FoundationNetworking)
   HistoryDomain      allowlist: Foundation, HistoryCore
@@ -19,13 +20,15 @@ rules:
                      and other adapters (PasteboardAdapter is the only adapter target
                      today, so that set is currently empty; AppKit is allowed)
   PresentationUI     blocklist: HistoryDomain, HistoryStorage, AppKit, SwiftData
-                     (SwiftUI is allowed)
+                     (SwiftUI/CoreGraphics are allowed; the global rule below
+                     rejects ImageIO)
   HistoryPerfRunner  allowlist: Foundation, HistoryCore, HistoryStorage
   HistoryRestartProbe allowlist: Foundation, HistoryCore, HistoryStorage
   ClipyUDSF0Shared    allowlist: Foundation, Darwin
   ClipyUDSF0Client    allowlist: Foundation, AppKit, Darwin
 
-Global rules: ``import xxh3``, ``import Fuse``, and the F1 server-custody
+Global rules: ``import ImageIO`` is confined to HistoryStorage and
+ContentPreview. ``import xxh3``, ``import Fuse``, and the F1 server-custody
 ``import Security`` are forbidden outside HistoryStorage. ``import AppIntents``
 is forbidden outside the XcodeGen-owned ClipyApp product and its explicitly
 hosted integration-test target.
@@ -62,11 +65,19 @@ SECURITY_MODULE = "Security"
 SECURITY_OWNER = "HistoryStorage"
 APPINTENTS_MODULE = "AppIntents"
 APPINTENTS_OWNERS = frozenset({"ClipyApp", "ClipyIntegrationTests"})
+IMAGEIO_MODULE = "ImageIO"
+IMAGEIO_OWNERS = frozenset({"ContentPreview", "HistoryStorage"})
 
 # Allowlist targets: every import must be in this set (Foundation prefix matches
 # submodules wherever Foundation is listed).
 ALLOWLIST: dict[str, frozenset[str]] = {
     "ClipboardFormats": frozenset({FOUNDATION}),
+    "ContentPreview": frozenset({
+        FOUNDATION,
+        "ClipboardFormats",
+        "CoreGraphics",
+        "ImageIO",
+    }),
     "ClipyCLIContract": frozenset({FOUNDATION}),
     "HistoryCore": frozenset({FOUNDATION}),
     "HistoryDomain": frozenset({FOUNDATION, "HistoryCore"}),
@@ -80,7 +91,12 @@ ALLOWLIST: dict[str, frozenset[str]] = {
 BLOCKLIST: dict[str, frozenset[str]] = {
     "HistoryStorage": frozenset({"AppKit", "SwiftUI", "PasteboardAdapter", "PresentationUI"}),
     "PasteboardAdapter": frozenset({"HistoryDomain", "HistoryStorage", "SwiftUI", "SwiftData"}),
-    "PresentationUI": frozenset({"HistoryDomain", "HistoryStorage", "AppKit", "SwiftData"}),
+    "PresentationUI": frozenset({
+        "HistoryDomain",
+        "HistoryStorage",
+        "AppKit",
+        "SwiftData",
+    }),
 }
 
 # Matches `import Foo`, `@_exported import Foo`, `@preconcurrency import Foo`,
@@ -114,6 +130,11 @@ class Violation:
 
 def check_import(target: str, module: str) -> str | None:
     """Return a violation message for `target` importing `module`, or None if allowed."""
+    if module == IMAGEIO_MODULE and target not in IMAGEIO_OWNERS:
+        return (
+            f"target '{target}' must not import '{IMAGEIO_MODULE}' "
+            "(ImageIO is confined to ContentPreview and HistoryStorage; Part I §8)"
+        )
     if module == XXH3_MODULE and target != XXH3_OWNER:
         return (
             f"target '{target}' must not import '{XXH3_MODULE}' "
@@ -224,6 +245,13 @@ def scan(root: Path) -> tuple[list[Violation], dict[str, int]]:
 
 GOOD_FIXTURES: dict[str, str] = {
     "Sources/ClipboardFormats/Good.swift": "import Foundation\n",
+    "Sources/ContentPreview/Good.swift": (
+        "import Foundation\n"
+        "import FoundationNetworking\n"
+        "import ClipboardFormats\n"
+        "import CoreGraphics\n"
+        "import ImageIO\n"
+    ),
     "Sources/ClipyCLIContract/Good.swift": (
         "import Foundation\n"
         "import FoundationEssentials\n"
@@ -246,7 +274,13 @@ GOOD_FIXTURES: dict[str, str] = {
         "import Security\n"                      # F1 server custody only
     ),
     "Sources/PasteboardAdapter/Good.swift": "import Foundation\nimport HistoryCore\nimport AppKit\n",
-    "Sources/PresentationUI/Good.swift": "import Foundation\nimport HistoryCore\nimport SwiftUI\n",
+    "Sources/PresentationUI/Good.swift": (
+        "import Foundation\n"
+        "import HistoryCore\n"
+        "import ContentPreview\n"
+        "import CoreGraphics\n"
+        "import SwiftUI\n"
+    ),
     "Sources/HistoryPerfRunner/Good.swift": "import Foundation\nimport HistoryCore\nimport HistoryStorage\n",
     "Sources/HistoryRestartProbe/Good.swift": "import Foundation\nimport HistoryCore\nimport HistoryStorage\n",
     "ClipyApp/Tools/ClipyUDSF0Shared/Good.swift": "import Foundation\nimport Darwin\n",
@@ -264,6 +298,7 @@ GOOD_FIXTURES: dict[str, str] = {
 
 BAD_FIXTURES: dict[str, str] = {
     "Sources/ClipboardFormats/Bad.swift": "import SwiftUI\n",
+    "Sources/ContentPreview/Bad.swift": "import HistoryCore\n",
     "Sources/ClipyCLIContract/Bad.swift": "private import HistoryCore\n",
     "Sources/HistoryCore/Bad.swift": "import AppKit\n",
     "Sources/HistoryCore/BadFuse.swift": "import Fuse\n",  # global Fuse rule
@@ -273,6 +308,8 @@ BAD_FIXTURES: dict[str, str] = {
     "Sources/PasteboardAdapter/BadDomain.swift": "import HistoryDomain\n",
     "Sources/PasteboardAdapter/BadSwiftData.swift": "import SwiftData\n",
     "Sources/PresentationUI/Bad.swift": "import AppKit\n",
+    "Sources/PresentationUI/BadImageIO.swift": "import ImageIO\n",
+    "Sources/UnknownClient/BadImageIO.swift": "import ImageIO\n",
     "Sources/PresentationUI/BadXxh3.swift": "import xxh3\n",  # global xxh3 rule
     "Sources/PresentationUI/BadFuse.swift": "import Fuse\n",  # global Fuse rule
     "Sources/PresentationUI/BadSecurity.swift": "import Security\n",
@@ -288,6 +325,7 @@ BAD_FIXTURES: dict[str, str] = {
 
 EXPECTED_SELF_TEST_VIOLATIONS = {
     ("ClipboardFormats", "SwiftUI"),
+    ("ContentPreview", "HistoryCore"),
     ("ClipyCLIContract", "HistoryCore"),
     ("HistoryCore", "AppKit"),
     ("HistoryCore", "Fuse"),
@@ -297,6 +335,8 @@ EXPECTED_SELF_TEST_VIOLATIONS = {
     ("PasteboardAdapter", "HistoryDomain"),
     ("PasteboardAdapter", "SwiftData"),
     ("PresentationUI", "AppKit"),
+    ("PresentationUI", "ImageIO"),
+    ("UnknownClient", "ImageIO"),
     ("PresentationUI", "xxh3"),
     ("PresentationUI", "Fuse"),
     ("PresentationUI", "Security"),

@@ -31,6 +31,15 @@ custom_rules:
     message: "ClipboardFormats may import Foundation (and its submodules) only (Part I §8)."
     severity: error
 
+  contentpreview_import_confinement:
+    name: "ContentPreview import confinement"
+    included: "Sources/ContentPreview/"
+    # Allowlist: immutable inputs/artifacts plus the approved local decode
+    # implementation; no History, UI, persistence, or adapter dependency.
+    regex: '^\s*(?:@[A-Za-z_][A-Za-z0-9_]*(?:\([^\n)]*\))?\s+)*(?:(?:public|package|internal|fileprivate|private)\s+)?import\s+(?!(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:Foundation\w*|ClipboardFormats|CoreGraphics|ImageIO)\b)\w'
+    message: "ContentPreview may import Foundation, ClipboardFormats, CoreGraphics, and ImageIO only (Part I §8)."
+    severity: error
+
   clipycli_contract_import_confinement:
     name: "ClipyCLIContract import confinement"
     included: "Sources/ClipyCLIContract/"
@@ -112,6 +121,14 @@ custom_rules:
     # Blocklist target: SwiftUI is allowed.
     regex: '^\s*(?:@[A-Za-z_][A-Za-z0-9_]*(?:\([^\n)]*\))?\s+)*(?:(?:public|package|internal|fileprivate|private)\s+)?import\s+(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?(?:HistoryDomain|HistoryStorage|AppKit|SwiftData)\b'
     message: "PresentationUI must not import HistoryDomain, HistoryStorage, AppKit, or SwiftData (Part I §8)."
+    severity: error
+
+  imageio_confinement:
+    name: "ImageIO confinement"
+    included: "(Sources|Tests|ClipyApp)/"
+    excluded: "Sources/(ContentPreview|HistoryStorage)/"
+    regex: '^\s*(?:@[A-Za-z_][A-Za-z0-9_]*(?:\([^\n)]*\))?\s+)*(?:(?:public|package|internal|fileprivate|private)\s+)?import\s+(?:(?:struct|class|enum|protocol|func|typealias|var|let)\s+)?ImageIO\b'
+    message: "ImageIO is confined to ContentPreview and HistoryStorage (Part I §8)."
     severity: error
 
   xxh3_confinement:

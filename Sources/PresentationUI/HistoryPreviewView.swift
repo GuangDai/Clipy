@@ -1,8 +1,7 @@
 /// HistoryPreviewView.swift — the preview column shown beside the history
 /// list (Maccy's `PreviewItemView` replicated onto HistoryCore DTOs): the
 /// selected item's Effective Content rendered large — image representations
-/// downsampled OFF the MainActor through `DisplayImageDecoder`, exact
-/// plain-text representations decoded only through their declared codec —
+/// rendered OFF the MainActor into bounded ContentPreview values —
 /// plus a compact metadata bar.
 ///
 /// Owning spec: docs/01-architecture.md §5.2/§6 (main-actor UI over
@@ -14,132 +13,16 @@
 /// docs/reviews/2026-08-20-clipy-maccy-audit/02-spec-implementation.md
 /// §SPEC-IMPL-007 and 05-recommended-target-design.md §4.1 PREVIEW-FENCE-1
 /// (exact-reference fence; late results never publish).
+import ContentPreview
 import CoreGraphics
-import ClipboardFormats
 import Foundation
 import HistoryCore
 import SwiftUI
 
-/// What the preview column renders for one item, resolved from its
-/// Effective Content representations. Image representations win over text
-/// (Maccy's image-first preview); the loader deepens its coarse unavailable
-/// result into unsupported versus failed without widening this public DTO.
-public enum PreviewContent: Equatable, Sendable {
-    /// Decoded body text, capped at `textCharacterCap` characters.
-    case text(String)
-    /// Encoded image bytes (the frozen v1 ImageIO-decodable UTIs).
-    case image(Data)
-    /// No preview body resolved at this public presentation seam.
-    case unavailable
-
-    /// Long-body cap for the preview column: SwiftUI `Text` lays out its
-    /// whole string, so the body is cut here (Maccy solves this with an
-    /// NSTextView, which PresentationUI's no-AppKit rule forbids — 01 §8).
-    /// `package` so the in-package resolver tests can size fixtures to it.
-    package static let textCharacterCap = 50_000
-
-    /// Resolves the preview content for one item's Effective Content.
-    /// Image representations win; otherwise the first exact plain-text
-    /// representation with a declared codec is decoded and truncated to
-    /// `textCharacterCap` with a marker. Structured (`public.rtf` /
-    /// `public.html`) and abstract or encoding-unspecified text is never
-    /// presented as UTF-8 source. Public so app-hosted smoke suites (outside
-    /// the SwiftPM package) can drive the same resolution the view renders.
-    public static func resolve(
-        effective representations: [HistoryRepresentation]
-    ) -> PreviewContent {
-        if let image = representations.first(where: {
-            previewImageTypeIdentifiers.contains($0.typeIdentifier)
-        }) {
-            return .image(image.bytes)
-        }
-        for text in representations where PreviewTextCodec(
-            typeIdentifier: text.typeIdentifier
-        ) != nil {
-            guard let decoded = decodedPreviewText(of: text), !decoded.isEmpty else {
-                continue
-            }
-            if decoded.count > textCharacterCap {
-                return .text(String(decoded.prefix(textCharacterCap)) + "\n\n…")
-            }
-            return .text(decoded)
-        }
-        return .unavailable
-    }
-
-    /// Decodes only an exact type with an explicit codec. There is no
-    /// conformance-based or fallback encoding guess (review TYPE-2).
-    private static func decodedPreviewText(
-        of representation: HistoryRepresentation
-    ) -> String? {
-        guard let codec = PreviewTextCodec(
-            typeIdentifier: representation.typeIdentifier
-        ) else {
-            return nil
-        }
-        return codec.decode(representation.bytes)
-    }
-}
-
-/// Exact plain-text types admitted by this preview owner and the codec each
-/// declares. External UTF-16 is intentionally not admitted until its distinct
-/// big-endian rule has an owned fixture (review TYPE-2 / PLAY-FORMAT-B).
-private enum PreviewTextCodec: Sendable {
-    case declared(DeclaredStringCodec)
-
-    init?(typeIdentifier: String) {
-        let identifier = ClipboardFormatIdentifier(rawValue: typeIdentifier)
-        guard previewTextIdentifiers.contains(identifier),
-              let codec = identifier.declaredStringCodec
-        else {
-            return nil
-        }
-        self = .declared(codec)
-    }
-
-    func decode(_ bytes: Data) -> String? {
-        switch self {
-        case .declared(.utf8):
-            return String(data: bytes, encoding: .utf8)
-        case .declared(.nativeUTF16):
-            // UTType.utf16PlainText is native byte order with an optional
-            // BOM. Clipy's only platform is arm64 macOS, so BOM-less input is
-            // UTF-16LE; an explicit BOM overrides that default.
-            if bytes.starts(with: [0xFE, 0xFF]) {
-                return String(data: bytes.dropFirst(2), encoding: .utf16BigEndian)
-            }
-            if bytes.starts(with: [0xFF, 0xFE]) {
-                return String(data: bytes.dropFirst(2), encoding: .utf16LittleEndian)
-            }
-            return String(data: bytes, encoding: .utf16LittleEndian)
-        }
-    }
-}
-
-/// Preview owns this admission choice. The shared module contributes only the
-/// exact identifiers and their declared codec facts; external UTF-8 remains a
-/// separate product decision even though its wire encoding is known.
-private let previewTextIdentifiers: Set<ClipboardFormatIdentifier> = [
-    .utf8PlainText,
-    .utf16PlainText,
-]
-
-/// Mirror of storage's frozen v1 ImageIO-decodable set (04 §9), duplicated
-/// for display-only heuristics (same convention as HistoryDetailsView and
-/// `ThumbnailStore.thumbnailableTypeIdentifiers`).
-private let previewImageTypeIdentifiers: Set<String> = [
-    "public.png",
-    "public.jpeg",
-    "public.tiff",
-    "public.heic",
-    "public.heif",
-    "com.compuserve.gif",
-    "com.microsoft.bmp",
-]
-
 /// The preview column's content loader (audit 02 §SPEC-IMPL-007; 05 §4.1
-/// PREVIEW-FENCE-1): owns the async details read, the off-MainActor bounded
-/// image decode, and the exact-reference fence.
+/// PREVIEW-FENCE-1): owns the async details read, renderer invocation, and
+/// exact-reference fence. ContentPreview owns the off-MainActor bounded
+/// decode itself.
 ///
 /// Fence law: a load captures its `HistoryItemReference` at start; after
 /// EVERY await it re-checks cancellation AND that its reference is still
@@ -163,12 +46,10 @@ private let previewImageTypeIdentifiers: Set<String> = [
 @MainActor @Observable
 package final class PreviewContentLoader {
 
-    /// What the preview column renders for the requested item. Carries no
-    /// image pixels: the decoded `CGImage` stays on the internal `image`
-    /// property, so no `CGImage` appears on a package/public signature
-    /// (05 §4.1 rule 3).
+    /// What the preview column renders for the requested item. Raster pixels
+    /// stay in the framework-neutral `raster` value below.
     package enum AppliedContent: Equatable {
-        /// Body text, capped at `PreviewContent.textCharacterCap`.
+        /// Body text, capped by ContentPreview's history-pane profile.
         case text(String)
         /// A bounded decoded image is published on `image`.
         case image
@@ -200,29 +81,31 @@ package final class PreviewContentLoader {
     /// retry from the current request (review Card 9A).
     private var requestGeneration = 0
 
-    /// The decoded, bounded preview pixels — valid while `content` is
-    /// `.image`. Internal: a `CGImage` never appears on a package/public
-    /// signature (05 §4.1 rule 3).
-    private(set) var image: CGImage?
+    /// Eager bounded pixels; no ImageIO/CoreGraphics object is retained in
+    /// observable state or crosses the renderer actor seam.
+    package private(set) var raster: PreviewRaster?
 
     /// The applied image's pixel dimensions — the package-observable proof
     /// of a decode without exposing the image itself.
     package var appliedImageSize: CGSize? {
-        image.map { CGSize(width: $0.width, height: $0.height) }
+        raster.map { CGSize(width: $0.width, height: $0.height) }
     }
 
     private let history: any ClipboardHistory
 
-    /// The off-MainActor decode hop (S-2/SPEC-IMPL-002); stateless.
-    private let decoder = DisplayImageDecoder()
-
-    /// The ImageIO thumbnail bound for the preview column — generous versus
-    /// the 320 pt column so retina renders stay crisp.
-    private static let previewMaxPixelSize = 640
+    private let renderer = ContentPreview()
 
     package init(history: any ClipboardHistory) {
         self.history = history
     }
+
+    #if DEBUG
+    /// Content-free renderer accounting for deterministic lifecycle proofs.
+    /// The concrete renderer remains private and Release exposes no hook.
+    package func rendererDebugSnapshot() async -> ContentPreviewDebugSnapshot {
+        await renderer.debugSnapshot()
+    }
+    #endif
 
     /// Starts a fresh episode for the same exact reference. The loader owns
     /// the generation/reference transition, so the view never reconstructs
@@ -241,7 +124,7 @@ package final class PreviewContentLoader {
         requestGeneration += 1
         let generation = requestGeneration
         requestedItem = item
-        image = nil
+        raster = nil
         occurrence = nil
         phase = item == nil ? .unsupported : .loading
         guard let item else {
@@ -260,42 +143,35 @@ package final class PreviewContentLoader {
                 phase = .failed
                 return
             }
-            switch PreviewContent.resolve(effective: details.effective) {
-            case .image(let bytes):
-                // Bounded decode OFF the MainActor (S-2/SPEC-IMPL-002): only
-                // the downsampled image is published; the full encoded bytes
-                // drop with this scope.
-                let decoded = await decoder.previewImage(
-                    from: bytes,
-                    maxPixelSize: Self.previewMaxPixelSize
-                )
-                try Task.checkCancellation()
-                guard requestGeneration == generation,
-                      requestedItem == item
-                else { return }
-                image = decoded
-                if decoded == nil {
-                    phase = .failed
-                    occurrence = nil
-                } else {
-                    phase = .content(.image)
-                    occurrence = details.occurrence
+            let outcome = await renderer.renderHistoryPane(
+                details.effective.map {
+                    PreviewRepresentation(
+                        typeIdentifier: $0.typeIdentifier,
+                        bytes: $0.bytes
+                    )
                 }
-            case .text(let text):
-                image = nil
-                phase = .content(.text(text))
+            )
+            try Task.checkCancellation()
+            guard requestGeneration == generation,
+                  requestedItem == item
+            else { return }
+            switch outcome {
+            case .content(.raster(let artifact)):
+                raster = artifact
+                phase = .content(.image)
+                occurrence = details.occurrence
+            case .content(.text(let artifact)):
+                raster = nil
+                phase = .content(.text(artifact.text))
                 occurrence = details.occurrence
             case .unavailable:
-                image = nil
-                if details.effective.contains(where: {
-                    PreviewTextCodec(typeIdentifier: $0.typeIdentifier) != nil
-                }) {
-                    phase = .failed
-                    occurrence = nil
-                } else {
-                    phase = .unsupported
-                    occurrence = details.occurrence
-                }
+                raster = nil
+                phase = .unsupported
+                occurrence = details.occurrence
+            case .failed:
+                raster = nil
+                phase = .failed
+                occurrence = nil
             }
         } catch is CancellationError {
             // Cancellation is only a publication fence. It does not publish
@@ -310,7 +186,7 @@ package final class PreviewContentLoader {
                   requestGeneration == generation,
                   requestedItem == item
             else { return }
-            image = nil
+            raster = nil
             occurrence = nil
             phase = .failed
         }
@@ -400,8 +276,13 @@ public struct HistoryPreviewView: View {
                 ProgressView()
                     .accessibilityLabel("Loading preview")
             case .content(.image):
-                if let image = loader.image {
-                    Image(decorative: image, scale: 1)
+                if let raster = loader.raster,
+                   let image = PreviewRasterDisplay.image(
+                       raster,
+                       scale: 1,
+                       label: Text("Item preview")
+                   ) {
+                    image
                         .resizable()
                         .scaledToFit()
                         .padding(8)

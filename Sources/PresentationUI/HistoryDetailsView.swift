@@ -506,8 +506,13 @@ private struct DetailsBody: View {
 
     @ViewBuilder
     private var thumbnail: some View {
-        if let image = thumbnails.image(for: details.item) {
-            Image(image, scale: 2, label: Text("Item thumbnail"))
+        if let raster = thumbnails.raster(for: details.item),
+           let image = PreviewRasterDisplay.image(
+               raster,
+               scale: 2,
+               label: Text("Item thumbnail")
+           ) {
+            image
                 .resizable()
                 .scaledToFill()
                 .frame(width: 64, height: 64)
@@ -741,9 +746,14 @@ private struct RepresentationRow: View {
                     )
             }
             if isImageType(representation.typeIdentifier),
-                let image = thumbnails.image(for: item)
+               let raster = thumbnails.raster(for: item),
+               let image = PreviewRasterDisplay.image(
+                   raster,
+                   scale: 2,
+                   label: Text("Item thumbnail")
+               )
             {
-                Image(image, scale: 2, label: Text("Item thumbnail"))
+                image
                     .resizable()
                     .scaledToFit()
                     .frame(maxWidth: 120, maxHeight: 90)

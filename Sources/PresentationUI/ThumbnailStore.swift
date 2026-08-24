@@ -2,15 +2,11 @@
 /// reference-exact decoded-image retention (docs/01-architecture.md §5.7;
 /// docs/04-coherence.md §9; roadmap 05).
 ///
-/// History returns encoded, `Sendable` PNG bytes (docs/
-/// 03b-instruction-set.md §9); this store hands them to
-/// `DisplayImageDecoder` — PresentationUI's single, non-MainActor ImageIO
-/// decode point (audit docs/reviews/2026-08-20-clipy-maccy-audit/
-/// 01-standards.md §S-2 / 02-spec-implementation.md §SPEC-IMPL-002;
-/// 05-recommended-target-design.md §4.1 rule 2) — and applies the decoded
-/// `CGImage` only under the exact `HistoryItemReference` (item ID + Content
-/// Version) that requested it, so a revised item never receives stale
-/// pixels (04 §9's caller-side fence convention).
+/// History returns encoded, `Sendable` PNG bytes (03b §9); this store retains
+/// ContentPreview's eager, framework-neutral raster only under the exact
+/// `HistoryItemReference` that requested it. HistoryStorage remains the
+/// thumbnail source/version/single-flight owner; ContentPreview performs only
+/// PNG display materialization and knows no item/reference/cache semantics.
 ///
 /// ADMISSION RECORD (audit 01 §S-3 / 02 §SPEC-IMPL-001; 05 §4.1 rule 4):
 /// the retained dictionary below is per-surface DISPLAY STATE, explicitly
@@ -28,7 +24,7 @@
 /// retention — additionally requires row-view ownership changes and the
 /// G1 evidence/spec admission; that follow-up stays open, and this bounded
 /// store is the recorded intermediate state, not a silently grown cache.
-import CoreGraphics
+import ContentPreview
 import Foundation
 import HistoryCore
 import SwiftUI
@@ -45,7 +41,7 @@ public final class ThumbnailStore {
     /// reference — zero decoded bytes).
     private enum Entry {
         case miss
-        case hit(CGImage, decodedBytes: Int)
+        case hit(PreviewRaster, decodedBytes: Int)
     }
 
     // MARK: - Injected state
@@ -53,10 +49,9 @@ public final class ThumbnailStore {
     private let history: any ClipboardHistory
     private let pixels: PixelSize
 
-    /// The off-MainActor decode hop (S-2/SPEC-IMPL-002); stateless, one per
-    /// store — deliberately injected per instance, never a process-wide
-    /// singleton (Part I §8's banned service-locator spelling).
-    private let decoder = DisplayImageDecoder()
+    /// Concrete off-MainActor eager rasterizer. It owns no History or cache
+    /// policy and is injected per surface, never process-global.
+    private let renderer = ContentPreview()
 
     // MARK: - Bounded retention (admission record in the file header)
 
@@ -113,21 +108,6 @@ public final class ThumbnailStore {
     /// the smoke suites wait on before asserting retention state.
     public var inFlightCount: Int { inFlight.count }
 
-    /// The frozen v1 ImageIO-decodable image type set, mirroring
-    /// `HistoryAuthority.thumbnailImageTypeIdentifiers` in
-    /// Sources/HistoryStorage/HistoryAuthority+DetailAndThumbnail.swift
-    /// (docs/04-coherence.md §9: v1 freezes the concrete decodable UTIs).
-    /// Keep the two sets in sync.
-    private static let thumbnailableTypeIdentifiers: Set<String> = [
-        "public.png",
-        "public.jpeg",
-        "public.tiff",
-        "public.heic",
-        "public.heif",
-        "com.compuserve.gif",
-        "com.microsoft.bmp",
-    ]
-
     // MARK: - Init
 
     public init(
@@ -144,18 +124,28 @@ public final class ThumbnailStore {
 
     // MARK: - Public surface
 
-    /// The retained image for one exact reference — a pure read that never
-    /// fetches; call `prefetch(_:)` first.
-    public func image(for item: HistoryItemReference) -> CGImage? {
-        guard let entry = entries[item], case .hit(let image, _) = entry else {
+    /// Content-free public observation used by hosted product journeys. Pixel
+    /// bytes stay package-only; callers outside SwiftPM see dimensions only.
+    public func imagePixelSize(for item: HistoryItemReference) -> PixelSize? {
+        guard let entry = entries[item], case .hit(let raster, _) = entry else {
             return nil
         }
-        return image
+        return PixelSize(width: raster.width, height: raster.height)
+    }
+
+    /// Package render edge. The returned value is immutable Sendable pixels,
+    /// never a framework object, and this pure read never fetches.
+    package func raster(for item: HistoryItemReference) -> PreviewRaster? {
+        guard let entry = entries[item], case .hit(let raster, _) = entry else {
+            return nil
+        }
+        return raster
     }
 
     /// Starts one fetch for the exact reference if none is retained or in
     /// flight (idempotent). The encoded payload is decoded OFF the MainActor
-    /// by `DisplayImageDecoder` and retained under the requesting key only:
+    /// by ContentPreview's display rasterizer and retained under the
+    /// requesting key only:
     /// - a `nil` payload (no thumbnailable content) is recorded as a miss,
     ///   so the row's fallback icon stops re-asking;
     /// - a thrown failure is NOT retained — transient unavailability may
@@ -168,27 +158,31 @@ public final class ThumbnailStore {
 
         let history = self.history
         let pixels = self.pixels
-        let decoder = self.decoder
+        let renderer = self.renderer
 
         Task { [weak self] in
             do {
                 let payload = try await history.thumbnail(for: item, pixels: pixels)
-                // The decode hop leaves the MainActor; the decoded CGImage
-                // crosses back as an immutable Sendable value (audit 02
-                // §SPEC-IMPL-002's Apple-docs check). Nothing cancels these
-                // unstructured tasks. A reset does not rely on cooperative
-                // cancellation: it releases visible bookkeeping immediately,
-                // and the request token rejects any late result.
-                let image: CGImage?
+                // A reset does not rely on native cancellation: it releases
+                // visible bookkeeping immediately and the request token
+                // rejects any late eager-raster result.
+                let raster: PreviewRaster?
                 if let payload {
-                    image = await decoder.thumbnailImage(fromPNG: payload.encodedBytes)
+                    let outcome = await renderer.rasterizePNGForDisplay(
+                        payload.encodedBytes
+                    )
+                    if case let .content(.raster(value)) = outcome {
+                        raster = value
+                    } else {
+                        raster = nil
+                    }
                 } else {
-                    image = nil
+                    raster = nil
                 }
                 guard let self else { return }
                 self.store(
                     item: item,
-                    image: image,
+                    raster: raster,
                     requestToken: requestToken
                 )
             } catch {
@@ -246,13 +240,26 @@ public final class ThumbnailStore {
         typeIdentifiers.contains { thumbnailableTypeIdentifiers.contains($0) }
     }
 
+    /// Thumbnail request eligibility remains local pending
+    /// DEC-THUMBNAIL-REQUEST-OWNER. This frozen set mirrors Storage's current
+    /// semantic manifest; ContentPreview sees only a selected PNG payload.
+    private static let thumbnailableTypeIdentifiers: Set<String> = [
+        "public.png",
+        "public.jpeg",
+        "public.tiff",
+        "public.heic",
+        "public.heif",
+        "com.compuserve.gif",
+        "com.microsoft.bmp",
+    ]
+
     // MARK: - Retention bookkeeping (private, MainActor-only)
 
     /// The decoded-byte cost of one decoded image: the backing bitmap's
     /// `bytesPerRow × height` — an honest allocation size (row padding
     /// included), not the display point size.
-    private static func decodedByteCost(of image: CGImage) -> Int {
-        image.bytesPerRow * image.height
+    private static func decodedByteCost(of raster: PreviewRaster) -> Int {
+        raster.pixels.count
     }
 
     /// Records a completed fetch under its exact requesting key, resetting
@@ -265,7 +272,7 @@ public final class ThumbnailStore {
     /// at every quiescent point.
     private func store(
         item: HistoryItemReference,
-        image: CGImage?,
+        raster: PreviewRaster?,
         requestToken: Int
     ) {
         guard acceptCompletion(item: item, requestToken: requestToken) else {
@@ -276,9 +283,9 @@ public final class ThumbnailStore {
         if case .hit(_, let replacedCost) = entries[item] {
             retainedDecodedBytes -= replacedCost
         }
-        if let image {
-            let cost = Self.decodedByteCost(of: image)
-            entries[item] = .hit(image, decodedBytes: cost)
+        if let raster {
+            let cost = Self.decodedByteCost(of: raster)
+            entries[item] = .hit(raster, decodedBytes: cost)
             retainedDecodedBytes += cost
         } else {
             entries[item] = .miss

@@ -3,10 +3,9 @@
 /// roadmap/05-presentationui.md), driven by a scripted `ClipboardHistory`
 /// double that answers one fixed encoded 1×1 PNG per exact reference.
 ///
-/// Pinned semantics: `image(for:)` is a pure read that never fetches;
-/// `prefetch(_:)` is idempotent per reference and decodes the encoded bytes
-/// OFF the MainActor (through the internal `DisplayImageDecoder` actor —
-/// audit 2026-08-20 §S-2/§SPEC-IMPL-002) into a `CGImage` retained under the
+/// Pinned semantics: `imagePixelSize(for:)` is a pure read that never fetches;
+/// `prefetch(_:)` is idempotent per reference and materializes the encoded
+/// bytes OFF the MainActor into an eager Sendable raster retained under the
 /// EXACT requesting reference (id + Content Version — a revised item never
 /// sees stale pixels); a `nil` payload is negative-retained while a thrown
 /// failure is NOT (transient unavailability may recover); `reset()` clears
@@ -15,7 +14,6 @@
 /// (audit 2026-08-20 §S-3/§SPEC-IMPL-001 — the admission record lives in
 /// ThumbnailStore.swift's header). `likelyThumbnailable` mirrors the frozen
 /// v1 ImageIO-decodable UTI set that gates prefetch.
-import CoreGraphics
 import Foundation
 import HistoryCore
 import PresentationUI
@@ -39,9 +37,9 @@ struct ThumbnailStoreTests {
 
     // MARK: - Prefetch round-trip (04 §9)
 
-    /// `prefetch` decodes the scripted PNG into a `CGImage` retained under
+    /// `prefetch` decodes the scripted PNG into an eager raster retained under
     /// the exact reference, and is idempotent: two prefetches start one
-    /// fetch. Before any prefetch, `image(for:)` is `nil` — the pure read
+    /// fetch. Before any prefetch, `imagePixelSize(for:)` is `nil` — the pure read
     /// never fetches.
     @Test func prefetchRoundTripsDecodedImageAndIsIdempotent() async throws {
         let item = reference(
@@ -51,22 +49,21 @@ struct ThumbnailStoreTests {
         let history = ThumbnailScriptHistory(pngByReference: [item: fixturePNGData])
         let store = ThumbnailStore(history: history)
 
-        #expect(store.image(for: item) == nil)
+        #expect(store.imagePixelSize(for: item) == nil)
         #expect(store.cachedDecodedBytes == 0)
         #expect(await history.requestCount(for: item) == 0)
 
         store.prefetch(item)
         store.prefetch(item)
 
-        #expect(await pollUntil { store.image(for: item) != nil })
-        let image = store.image(for: item)
+        #expect(await pollUntil { store.imagePixelSize(for: item) != nil })
+        let image = store.imagePixelSize(for: item)
         #expect(image?.width == 1)
         #expect(image?.height == 1)
         #expect(await history.requestCount(for: item) == 1)
 
-        // The byte half of the admission bound accounts the backing bitmap
-        // exactly (bytesPerRow × height, padding included).
-        let cost = try #require(image.map { $0.bytesPerRow * $0.height })
+        // ContentPreview's fixed BGRA8 artifact uses tight width×4 rows.
+        let cost = try #require(image.map { $0.width * $0.height * 4 })
         #expect(store.cachedDecodedBytes == cost)
     }
 
@@ -89,15 +86,15 @@ struct ThumbnailStoreTests {
         let store = ThumbnailStore(history: history)
 
         store.prefetch(original)
-        #expect(await pollUntil { store.image(for: original) != nil })
+        #expect(await pollUntil { store.imagePixelSize(for: original) != nil })
 
         // The revised reference fetches its own answer: nil, no image.
         store.prefetch(revised)
         #expect(await pollUntil { await history.requestCount(for: revised) == 1 })
         try? await Task.sleep(for: .milliseconds(150))
-        #expect(store.image(for: revised) == nil)
+        #expect(store.imagePixelSize(for: revised) == nil)
         // The original's decoded pixels are untouched.
-        #expect(store.image(for: original) != nil)
+        #expect(store.imagePixelSize(for: original) != nil)
 
         // Negative caching of nil: a second prefetch of the revised
         // reference does not re-ask (stable negative — the .miss entry
@@ -130,7 +127,7 @@ struct ThumbnailStoreTests {
 
         store.prefetch(item)
         #expect(await pollUntil { await history.requestCount(for: item) == 2 })
-        #expect(store.image(for: item) == nil)
+        #expect(store.imagePixelSize(for: item) == nil)
     }
 
     // MARK: - Reset (04 §9)
@@ -146,14 +143,14 @@ struct ThumbnailStoreTests {
         let store = ThumbnailStore(history: history)
 
         store.prefetch(item)
-        #expect(await pollUntil { store.image(for: item) != nil })
+        #expect(await pollUntil { store.imagePixelSize(for: item) != nil })
         #expect(await history.requestCount(for: item) == 1)
 
         store.reset()
-        #expect(store.image(for: item) == nil)
+        #expect(store.imagePixelSize(for: item) == nil)
 
         store.prefetch(item)
-        #expect(await pollUntil { store.image(for: item) != nil })
+        #expect(await pollUntil { store.imagePixelSize(for: item) != nil })
         #expect(await history.requestCount(for: item) == 2)
     }
 
@@ -218,7 +215,7 @@ struct ThumbnailStoreTests {
 
         try #require(await pollUntil { store.debugFetchCompletionCount == 3 })
         #expect(store.debugDiscardedFetchCompletionCount == 3)
-        #expect(store.image(for: successfulItem) == nil)
+        #expect(store.imagePixelSize(for: successfulItem) == nil)
         #expect(store.cachedEntryCount == 0)
         #expect(store.cachedDecodedBytes == 0)
         #expect(store.inFlightCount == 1)
@@ -230,7 +227,7 @@ struct ThumbnailStoreTests {
                 with: .success(fixturePNGData)
             )
         )
-        #expect(await pollUntil { store.image(for: successfulItem) != nil })
+        #expect(await pollUntil { store.imagePixelSize(for: successfulItem) != nil })
         #expect(store.cachedEntryCount == 1)
         #expect(store.inFlightCount == 0)
     }
@@ -278,9 +275,9 @@ struct ThumbnailStoreTests {
         )
         try #require(await pollUntil {
             store.debugFetchCompletionCount == 2
-                && store.image(for: unrelated) != nil
+                && store.imagePixelSize(for: unrelated) != nil
         })
-        #expect(store.image(for: old) == nil)
+        #expect(store.imagePixelSize(for: old) == nil)
         #expect(store.debugDiscardedFetchCompletionCount == 1)
         #expect(store.inFlightCount == 1)
 
@@ -291,7 +288,7 @@ struct ThumbnailStoreTests {
                 with: .success(fixturePNGData)
             )
         )
-        #expect(await pollUntil { store.image(for: old) != nil })
+        #expect(await pollUntil { store.imagePixelSize(for: old) != nil })
         #expect(store.inFlightCount == 0)
     }
 
@@ -405,7 +402,7 @@ struct ThumbnailStoreTests {
                 with: .success(fixturePNGData)
             )
         )
-        try #require(await pollUntil { store.image(for: first) != nil })
+        try #require(await pollUntil { store.imagePixelSize(for: first) != nil })
         #expect(store.inFlightCount == 2)
 
         #expect(
@@ -423,7 +420,7 @@ struct ThumbnailStoreTests {
                 with: .success(fixturePNGData)
             )
         )
-        #expect(await pollUntil { store.image(for: stillVisible) != nil })
+        #expect(await pollUntil { store.imagePixelSize(for: stillVisible) != nil })
         #expect(store.inFlightCount == 0)
     }
 
@@ -445,7 +442,7 @@ struct ThumbnailStoreTests {
             return await history.requestCount(for: item) == 1
         }
         #expect(settled)
-        #expect(store.image(for: item) == nil)
+        #expect(store.imagePixelSize(for: item) == nil)
         #expect(store.cachedEntryCount == 0)
         #expect(store.cachedDecodedBytes == 0)
     }
