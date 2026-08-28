@@ -91,7 +91,7 @@ struct ReviseEditorView: View {
     }
 
     /// The production floating panel's main column is user-resizable within
-    /// PanelGeometry's 360…640-point range. Its editor fills the available
+    /// PanelGeometry's 360…720-point range. Its editor fills the available
     /// Details surface rather than retaining the standalone sheet's
     /// 520-point ideal width and being visibly clipped at narrower widths.
     package init(

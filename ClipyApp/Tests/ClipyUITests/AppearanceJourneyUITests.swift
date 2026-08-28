@@ -4,9 +4,9 @@
 /// dwell, the search filter menu narrowing the loaded rows, and the preview
 /// divider's free drag and double-click reset. The DEBUG launch seam changes
 /// only the store path and capture-access posture; the `clipy.appearance.*`
-/// preferences live in the app's real UserDefaults domain, and the divider
-/// journey resets the persisted width in-test to keep the suite
-/// order-independent.
+/// preferences live in the app's real UserDefaults domain, and every journey
+/// that edits one (density, auto-open, divider width) resets it in-test to
+/// keep the suite order-independent.
 ///
 /// Row-density points (`PanelTheme` metrics) and the preview column's width
 /// are not published through the public accessibility tree. These journeys
@@ -65,6 +65,26 @@ final class AppearanceJourneyUITests: XCTestCase {
             rows.firstMatch.label.contains(captured),
             diagnostic(app, context: "density journey row title")
         )
+
+        // Restore Comfortable so later journeys sharing the runner's real
+        // defaults domain are not left on compact metrics.
+        openAppearanceTab(in: app)
+        let restoreDensity = app.descendants(matching: .any)[
+            "clipy.settings.appearance.row-density"
+        ]
+        assertExists(
+            restoreDensity,
+            timeout: 5,
+            in: app,
+            context: "row density restore control"
+        )
+        chooseOption(
+            "Comfortable",
+            in: restoreDensity,
+            app: app,
+            context: "row density restore"
+        )
+        app.typeKey("w", modifierFlags: .command)
     }
 
     /// With the auto-open preference off, selecting a row and outwaiting the
@@ -127,6 +147,27 @@ final class AppearanceJourneyUITests: XCTestCase {
 
         app.typeKey(.space, modifierFlags: .control)
         assertExists(preview, timeout: 5, in: app, context: "manual preview toggle")
+
+        // Restore the default-on preference so later journeys relying on the
+        // production dwell are not left with auto-open disabled.
+        openAppearanceTab(in: app)
+        let restoreToggle = app.switches[
+            "clipy.settings.appearance.preview-auto-open"
+        ]
+        assertExists(
+            restoreToggle,
+            timeout: 5,
+            in: app,
+            context: "auto-open restore toggle"
+        )
+        if (restoreToggle.value as? Int) == 0 {
+            restoreToggle.click()
+        }
+        XCTAssertTrue(
+            waitUntil(timeout: 5) { (restoreToggle.value as? Int) == 1 },
+            diagnostic(app, context: "auto-open preference restored")
+        )
+        app.typeKey("w", modifierFlags: .command)
     }
 
     /// The type filter is client-side over the loaded rows: with one

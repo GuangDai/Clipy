@@ -142,10 +142,12 @@ struct HistoryListView: View {
         )
         .tag(row.item.id)
         // Drag-out loads its bytes lazily from the History paste read
-        // (`HistoryViewState.dragItemProvider`), never from row state. The
-        // modifier attaches no AX surface, so the row's combined-element
+        // (`HistoryViewState.dragItemProvider`), never from row state.
+        // `onDrag(_:)` is the NSItemProvider-based drag API on macOS (the
+        // `draggable(_:)` NSItemProvider overload is iOS/Catalyst-only);
+        // the modifier attaches no AX surface, so the row's combined-element
         // contract is unchanged.
-        .draggable(viewState.dragItemProvider(for: row.item))
+        .onDrag { viewState.dragItemProvider(for: row.item) }
         .onAppear {
             prefetchNextPageIfNeeded(appearingRowID: row.item.id)
         }
@@ -195,15 +197,23 @@ struct HistoryListView: View {
         }
     }
 
-    /// Filtered-to-empty reuses the search miss state (the pinned "No
-    /// Results" strings stay byte-identical); only the "no items at all"
-    /// copy above stays distinct.
+    /// Filtered-to-empty keeps the pinned "No Results" title so the
+    /// running-app journey's headline assertion stays byte-identical, but
+    /// the description must not render an empty search literal: a pure
+    /// filter (no query) gets filter-specific copy, and a query plus filter
+    /// still names the query.
     private var filteredEmptyState: some View {
         ContentUnavailableView(
             "No Results",
             systemImage: "magnifyingglass",
-            description: Text("No items match “\(viewState.searchText)”.")
+            description: Text(filteredEmptyDescription)
         )
+    }
+
+    private var filteredEmptyDescription: String {
+        viewState.searchText.isEmpty
+            ? "No items match the current filter."
+            : "No items match “\(viewState.searchText)”."
     }
 
     // MARK: Selection + keyboard surface

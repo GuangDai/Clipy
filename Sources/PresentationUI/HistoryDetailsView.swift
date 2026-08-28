@@ -880,7 +880,7 @@ private struct RepresentationRow: View {
                         )
                 }
                 // The preview box tracks the resizable main column's width
-                // (PanelGeometry 360…640); its height cap grew 120 → 160.
+                // (PanelGeometry 360…720); its height cap grew 120 → 160.
                 .frame(
                     maxWidth: .infinity,
                     maxHeight: 160,
