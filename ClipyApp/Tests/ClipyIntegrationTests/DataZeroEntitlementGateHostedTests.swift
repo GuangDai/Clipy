@@ -62,7 +62,10 @@ struct DataZeroEntitlementGateHostedTests {
     /// The runtime probe set: every iCloud/CloudKit/ubiquity entitlement key
     /// the system defines for the two forbidden namespaces. Resolution of
     /// any single one through the running process is presence evidence.
-    let runtimeProbeKeys: [CFString] = [
+    /// Plain `String` storage; the Sec* call site bridges with the
+    /// documented `as CFString` cast (array literals do not convert to
+    /// `CFString` elements implicitly).
+    let runtimeProbeKeys: [String] = [
         "com.apple.developer.icloud-container-identifiers",
         "com.apple.developer.icloud-container-development-container-identifiers",
         "com.apple.developer.icloud-container-environment",
@@ -185,14 +188,14 @@ struct DataZeroEntitlementGateHostedTests {
             return
         }
         for key in runtimeProbeKeys {
-            let value = SecTaskCopyValueForEntitlement(task, key, nil)
+            let value = SecTaskCopyValueForEntitlement(task, key as CFString, nil)
             // "An empty return value may indicate an error, or it may
             // indicate that the entitlement is simply not present" — only a
             // non-nil value is presence evidence, so nil is the passing
             // outcome for every probe key.
             #expect(
                 value == nil,
-                "DATA-0: runtime entitlement resolved for \(key as String)"
+                "DATA-0: runtime entitlement resolved for \(key)"
             )
         }
     }
