@@ -117,8 +117,9 @@ final class StatusItemMenu: NSObject, NSMenuDelegate {
 
     /// Recomputes the one state-dependent item from the owner's live facts.
     /// Called at build time and by AppKit on every `menuNeedsUpdate`
-    /// (before each display and on `update()`), so a stale title can never
-    /// be presented.
+    /// (before each presentation), so a stale title can never be shown.
+    /// `NSMenu.update()` is NOT a refresh entry: it only applies
+    /// NSMenuValidation enable/disable state.
     func refresh() {
         pauseResumeItem.title = isCapturePaused()
             ? "Resume Clipboard Monitoring"

@@ -96,19 +96,27 @@ struct PanelKeepOpenAndStatusMenuHostedTests {
         let menu = appDelegate.statusItemMenuForTesting
         let pauseItem = menu.items.filter { !$0.isSeparatorItem }[1]
 
-        menu.update()
+        // `NSMenu.update()` only runs NSMenuValidation enable/disable — it
+        // never invokes the delegate's `menuNeedsUpdate`. The production
+        // display-time refresh entry is the delegate callback AppKit fires
+        // before each presentation, so drive that seam directly.
+        func refreshThroughDelegate() {
+            menu.delegate?.menuNeedsUpdate?(menu)
+        }
+
+        refreshThroughDelegate()
         #expect(pauseItem.title == "Pause Clipboard Monitoring")
         #expect(pauseItem.isEnabled)
 
         appDelegate.pauseCapture()
         #expect(appDelegate.captureAccessState == .userPaused)
-        menu.update()
+        refreshThroughDelegate()
         #expect(pauseItem.title == "Resume Clipboard Monitoring")
         #expect(pauseItem.isEnabled)
 
         appDelegate.recoverCaptureAccess()
         #expect(appDelegate.captureAccessState == .allowed)
-        menu.update()
+        refreshThroughDelegate()
         #expect(pauseItem.title == "Pause Clipboard Monitoring")
         #expect(pauseItem.isEnabled)
     }

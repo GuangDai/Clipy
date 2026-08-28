@@ -84,6 +84,12 @@ final class AppearanceJourneyUITests: XCTestCase {
             app: app,
             context: "row density restore"
         )
+        // Leave the Settings window on the default tab: the window restores
+        // its selected tab across launches, and later journeys must not
+        // inherit the Appearance tab.
+        let generalTab = app.buttons["General"]
+        assertExists(generalTab, timeout: 5, in: app, context: "General tab")
+        generalTab.click()
         app.typeKey("w", modifierFlags: .command)
     }
 
@@ -167,6 +173,10 @@ final class AppearanceJourneyUITests: XCTestCase {
             waitUntil(timeout: 5) { (restoreToggle.value as? Int) == 1 },
             diagnostic(app, context: "auto-open preference restored")
         )
+        // Same tab-neutral finish as the density restore above.
+        let generalTab = app.buttons["General"]
+        assertExists(generalTab, timeout: 5, in: app, context: "General tab")
+        generalTab.click()
         app.typeKey("w", modifierFlags: .command)
     }
 
