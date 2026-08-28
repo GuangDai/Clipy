@@ -1101,9 +1101,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.target = self
             // The default mask is `.leftMouseUp` alone; adding
             // `.rightMouseUp` lets the same action route a secondary click
-            // to the status menu. The primary-click path is unchanged —
-            // the routing decision lives in `statusItemClicked`.
-            button.sendActions(on: [.leftMouseUp, .rightMouseUp])
+            // to the status menu (the canonical NSStatusItem right-click
+            // pattern: `sendAction(on:)` — singular — plus an
+            // `NSApp.currentEvent` branch in `statusItemClicked`; the menu
+            // is attached only while popped). The primary-click path is
+            // unchanged — the routing decision lives in `statusItemClicked`.
+            _ = button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
         statusItem = item
         updateStatusItemImage()
