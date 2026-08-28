@@ -15,11 +15,36 @@ import Foundation
 import HistoryCore
 import SwiftUI
 
+/// The row's accessibility activation vocabulary (docs/v2/V2-07-ux.md §9):
+/// the default activation and the named Actions-rotor entries the combined
+/// row element exposes. Default activation is the paste hand-off
+/// (docs/01-architecture.md §5.6 — the UI hands a reference to the
+/// composition root and never touches the pasteboard itself), while the
+/// named actions mirror the mutating caller examples of
+/// docs/03b-instruction-set.md §12 (`.placePinned`/`.unpin`/`.remove`)
+/// plus the details push. One enum so the four `accessibilityAction`
+/// modifiers, the single dispatch method beneath them, and the direct
+/// route/intent tests all share one routing table.
+package enum HistoryRowAccessibilityAction {
+    /// Default activation: copy to clipboard through `onCopy` (01 §5.6).
+    case paste
+    /// The rotor's one state-changing pin operation — `Pin` while the row
+    /// is unpinned, `Unpin` while pinned — never the context menu's two
+    /// placement variants (V2-07 §9).
+    case togglePin
+    /// The details push, the same intent as ⌘I (03b §12; V2-07 §9).
+    case showDetails
+    /// The destructive removal, the same intent as ⌫ (03b §12; V2-07 §9).
+    case remove
+}
+
 /// A single row of the panel list. Rendering is a pure function of the
 /// `HistoryRow` DTO plus the reference-exact thumbnail and bundle-ID-keyed
 /// source icon already cached for it; mutations are expressed only through
 /// the injected callbacks so the row never talks to storage itself (01 §6).
-struct HistoryRowView: View {
+/// `package` (like `HistoryRowRenderingModel` below, never `public`) so the
+/// accessibility routing table is directly testable within the package.
+package struct HistoryRowView: View {
     private let row: HistoryRow
     private let rendering: HistoryRowRenderingModel
     private let pinnedOrdinal: Int?
@@ -32,7 +57,7 @@ struct HistoryRowView: View {
     private let onRemove: (HistoryItemID) -> Void
     private let onShowDetails: (HistoryItemReference) -> Void
 
-    init(
+    package init(
         row: HistoryRow,
         now: Date,
         pinnedOrdinal: Int?,
@@ -81,22 +106,48 @@ struct HistoryRowView: View {
         .accessibilityIdentifier("clipy.history.row.\(row.item.id.description)")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction {
-            onCopy(row.item)
+            performAccessibilityAction(.paste)
         }
         .accessibilityAction(named: Text(pinAccessibilityActionName)) {
+            performAccessibilityAction(.togglePin)
+        }
+        .accessibilityAction(named: Text("Show Details")) {
+            performAccessibilityAction(.showDetails)
+        }
+        .accessibilityAction(named: Text("Remove")) {
+            performAccessibilityAction(.remove)
+        }
+        .accessibilityHint("Copies this item to the clipboard.")
+    }
+
+    // MARK: Accessibility action dispatch (V2-07 §9)
+
+    /// The single routing table behind the row's accessibility activations:
+    /// default activation is the paste hand-off (01 §5.6; 03b §12), and the
+    /// named rotor actions carry the same intents the list's selection
+    /// shortcuts already route through `HistoryViewState` (⏎ copy, ⌘P pin
+    /// toggle, ⌫ remove, ⌘I details). The four `accessibilityAction`
+    /// modifiers above are thin shells over this method so assistive
+    /// activation and the direct tests share one path; the context menu,
+    /// double-click, and the menu's `.last` placement variants keep their
+    /// own call sites (zero behavior change).
+    package func performAccessibilityAction(
+        _ action: HistoryRowAccessibilityAction
+    ) {
+        switch action {
+        case .paste:
+            onCopy(row.item)
+        case .togglePin:
             if row.pinnedPosition == nil {
                 onPin(row.item.id, .first)
             } else {
                 onUnpin(row.item.id)
             }
-        }
-        .accessibilityAction(named: Text("Show Details")) {
+        case .showDetails:
             onShowDetails(row.item)
-        }
-        .accessibilityAction(named: Text("Remove")) {
+        case .remove:
             onRemove(row.item.id)
         }
-        .accessibilityHint("Copies this item to the clipboard.")
     }
 
     // MARK: Leading thumbnail
