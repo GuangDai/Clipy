@@ -8,6 +8,18 @@
 /// terminated owners only; they do not prove migration, full-disk behavior,
 /// or crash durability (`11-ai-todo-map-2026-08-23.md` §4.3;
 /// `V2-02-retention.md` §8.1/§12).
+/// The validateSeed/validateAll pair closes doc 11 §4.3's "External-clone
+/// 验证子进程" row and the 05 blind spot
+/// (`05-evidence-and-open-questions.md`:165, "未证明逐个 hydrate 所有
+/// external-backed canonical/revision payload"): a terminated seed child
+/// commits the fixed six-fixture table, then a fresh validator child
+/// hydrates every canonical, effective, and revision payload through the
+/// public browse/details/pastePayload reads and compares full bytes —
+/// never digests — with the deterministic fixtures. As with largeBlob, the
+/// schema's `@Attribute(.externalStorage)` is only an opaque placement
+/// hint (Apple documents that a value *may* be externalized, with no
+/// threshold or locator contract), so this evidence asserts neither an
+/// external file nor any sidecar on disk.
 import Foundation
 import HistoryCore
 import HistoryStorage
@@ -25,11 +37,15 @@ private enum ProbePhase: String {
     case retentionVerifyUpdated
     case retentionRejectMalformed
     case retentionRejectWrongKey
+    case openRejectFutureSchema
+    case openRejectCorruptBytes
     case gatewayAuditSeed
     case gatewayAuditCrash
     case gatewayAuditVerify
     case largeBlobCrashCommit
     case largeBlobVerify
+    case validateSeed
+    case validateAll
     case regexpCharacterize
 }
 
@@ -56,6 +72,33 @@ private let largeBlobType = "public.data"
 private let largeBlobDate = Date(timeIntervalSinceReferenceDate: 60_000)
 private let largeBlobSource = "restart.large-blob.capture"
 private let largeBlobByteCount = 8 * 1_048_576
+private let validationManifestFileName = "validation-manifest.txt"
+private let validationFixtureCount = 6
+private let validationRevisedFixtureIndex = 4
+private let validationPNGType = "public.png"
+private let validationPNGByteCount = 70
+/// A real minimal 1×1 8-bit grayscale PNG as one fixed 140-character
+/// lowercase-hex literal, kept verbatim from the reviewed design: PNG
+/// signature, IHDR (width 1, height 1, bit depth 8, color type 0), one
+/// stored zlib block covering the single filtered gray pixel, and IEND —
+/// exactly 70 bytes (`validationPNGByteCount` pins the decoded length).
+private let validationPNGHex = "89504e470d0a1a0a0000000d49484452000000010000000108000000003a7e9b550000000d494441547801010200fdff008000820081c36e25e00000000049454e44ae426082"
+private let validationAlphaText = "validation alpha text"
+private let validationBravoText = "validation bravo 文字📋"
+private let validationDeltaText = "validation delta text"
+private let validationFoxtrotText = "validation foxtrot text"
+private let validationAlphaSource = "restart.validate.alpha"
+private let validationBravoSource = "restart.validate.bravo"
+private let validationPNGSource = "restart.validate.png"
+private let validationDeltaSource = "restart.validate.delta"
+private let validationBlobSource = "restart.validate.data"
+private let validationFoxtrotSource = "restart.validate.foxtrot"
+private let validationAlphaDate = Date(timeIntervalSinceReferenceDate: 70_000)
+private let validationBravoDate = Date(timeIntervalSinceReferenceDate: 80_000)
+private let validationPNGDate = Date(timeIntervalSinceReferenceDate: 90_000)
+private let validationDeltaDate = Date(timeIntervalSinceReferenceDate: 100_000)
+private let validationBlobDate = Date(timeIntervalSinceReferenceDate: 110_000)
+private let validationFoxtrotDate = Date(timeIntervalSinceReferenceDate: 120_000)
 private let regexpCharacterizationInput = String(repeating: "a", count: 1_000)
 private let initialMaximumUnpinnedItems = 73
 private let initialRetentionPolicies = HistoryRetentionPolicies(
@@ -410,6 +453,75 @@ private struct LargeBlobManifest {
     }
 }
 
+/// Cross-process identity manifest for the external-clone validation pair:
+/// the seed child's six inserted item IDs (seed order) plus the revised
+/// item's ID. Strictly line-parsed like `LargeBlobManifest`; only public
+/// item identity crosses the process boundary — never content, byte
+/// counts, or digests — so the validator's byte comparisons stay fully
+/// independent of what the seed child wrote.
+private struct ValidationManifest {
+    let itemIDs: [UUID]
+    let revisedItemID: UUID
+
+    static func read(siblingOf storeURL: URL) throws -> Self {
+        let data = try Data(contentsOf: Self.manifestURL(siblingOf: storeURL))
+        guard let text = String(data: data, encoding: .utf8),
+              text.last == "\n" else {
+            throw ProbeFailure.unexpectedState
+        }
+        let lines = text.dropLast()
+            .split(separator: "\n", omittingEmptySubsequences: false)
+        guard lines.count == validationFixtureCount + 2,
+              lines[0] == "count=\(validationFixtureCount)" else {
+            throw ProbeFailure.unexpectedState
+        }
+        var itemIDs: [UUID] = []
+        for line in lines[1...validationFixtureCount] {
+            guard line.hasPrefix("item=") else {
+                throw ProbeFailure.unexpectedState
+            }
+            itemIDs.append(try validationUUID(String(line.dropFirst(5))))
+        }
+        guard Set(itemIDs).count == validationFixtureCount,
+              lines[validationFixtureCount + 1].hasPrefix("revised=") else {
+            throw ProbeFailure.unexpectedState
+        }
+        let revisedItemID = try validationUUID(
+            String(lines[validationFixtureCount + 1].dropFirst(8))
+        )
+        guard revisedItemID == itemIDs[validationRevisedFixtureIndex] else {
+            throw ProbeFailure.unexpectedState
+        }
+        return Self(itemIDs: itemIDs, revisedItemID: revisedItemID)
+    }
+
+    func write(siblingOf storeURL: URL) throws {
+        var text = "count=\(itemIDs.count)\n"
+        for itemID in itemIDs {
+            text += "item=\(itemID.uuidString)\n"
+        }
+        text += "revised=\(revisedItemID.uuidString)\n"
+        try Data(text.utf8).write(
+            to: Self.manifestURL(siblingOf: storeURL)
+        )
+    }
+
+    private static func manifestURL(siblingOf storeURL: URL) -> URL {
+        storeURL.deletingLastPathComponent()
+            .appendingPathComponent(validationManifestFileName)
+    }
+}
+
+/// Parses one manifest UUID in canonical uppercase form, mirroring the
+/// strictness of `HistoryItemID(uuidString:)`.
+private func validationUUID(_ payload: String) throws -> UUID {
+    guard let id = UUID(uuidString: payload),
+          id.uuidString == payload else {
+        throw ProbeFailure.unexpectedState
+    }
+    return id
+}
+
 private func manifestURL(siblingOf storeURL: URL) -> URL {
     storeURL.deletingLastPathComponent()
         .appendingPathComponent(manifestFileName)
@@ -456,6 +568,280 @@ private func largeBlobCapture() -> ClipboardCapture {
         ),
         observedAt: largeBlobDate
     )
+}
+
+/// Expected bytes for one projection slot of the validation table.
+/// `HistoryRepresentation`'s initializer is package-only, so the probe
+/// compares field-by-field (`map(\.typeIdentifier)` / `map(\.bytes)`)
+/// instead of constructing the public DTO — the same stance as
+/// `largeBlobVerify`.
+private struct ValidationRepresentation {
+    let typeIdentifier: String
+    let bytes: Data
+
+    init(typeIdentifier: String, bytes: Data) {
+        self.typeIdentifier = typeIdentifier
+        self.bytes = bytes
+    }
+}
+
+/// One fixed row of the external-clone validation table: the capture the
+/// seed child commits, plus every public-projection expectation a fresh
+/// validator owner must reproduce byte exactly.
+private struct ValidationFixture {
+    let capture: ClipboardCapture
+    let title: String
+    let canonical: [ValidationRepresentation]
+    let effective: [ValidationRepresentation]
+    let expectedContentVersion: UInt64
+    let expectedRevisionCount: Int
+    let expectedRevisionByteCount: Int?
+}
+
+/// Decodes one reviewed lowercase-hex literal, failing closed on an odd
+/// length, a non-hex pair, or a byte count that misses the fixture
+/// contract. The probe never hashes; expected bytes are compared directly.
+private func validationHexBytes(
+    _ hex: String,
+    expectedByteCount: Int
+) throws -> Data {
+    var bytes = Data()
+    bytes.reserveCapacity(hex.count / 2)
+    var start = hex.startIndex
+    while start < hex.endIndex {
+        let end = hex.index(after: start)
+        guard end < hex.endIndex,
+              let byte = UInt8(hex[start...end], radix: 16) else {
+            throw ProbeFailure.unexpectedState
+        }
+        bytes.append(byte)
+        start = hex.index(after: end)
+    }
+    guard bytes.count == expectedByteCount else {
+        throw ProbeFailure.unexpectedState
+    }
+    return bytes
+}
+
+/// patternB for fixture 4's `.replace` revision: byte i is
+/// `UInt8(truncatingIfNeeded: i &* 59 &+ 23)`. Repeating a 4_096-byte
+/// pattern is byte-identical to the per-index formula because
+/// 59 &* 4_096 ≡ 0 (mod 256). It differs from `largeBlobBytes()`'s
+/// patternA at EVERY index: 31·i + 17 ≡ 59·i + 23 (mod 256) would require
+/// 28·i ≡ 250 (mod 256), which has no solution since gcd(28, 256) = 4 does
+/// not divide 250 — so the canonical-versus-effective comparison is a
+/// per-byte distinction, not same-bytes aliasing.
+private func validationRevisedBlobBytes() -> Data {
+    let pattern = Data((0..<4_096).map { index in
+        UInt8(truncatingIfNeeded: index &* 59 &+ 23)
+    })
+    var bytes = Data(capacity: largeBlobByteCount)
+    for _ in 0..<(largeBlobByteCount / pattern.count) {
+        bytes.append(pattern)
+    }
+    return bytes
+}
+
+private func validationCapture(
+    _ representations: [CapturedRepresentation],
+    at date: Date,
+    source: String
+) -> ClipboardCapture {
+    ClipboardCapture(
+        representations: representations,
+        origin: CopyOriginObservation(
+            sourceApplication: source,
+            lineageHint: nil
+        ),
+        observedAt: date
+    )
+}
+
+/// The fixed external-clone validation fixture table. Every value is a
+/// reviewed literal (plus the two deterministic 8 MiB pattern builders);
+/// content differs across all six entries so ingest can never coalesce
+/// them, and every observedAt/source is distinct so row order and
+/// occurrence facts stay fully determined.
+private func validationFixtureTable() throws -> [ValidationFixture] {
+    let pngBytes = try validationHexBytes(
+        validationPNGHex,
+        expectedByteCount: validationPNGByteCount
+    )
+    let alphaTextBytes = Data(validationAlphaText.utf8)
+    let bravoTextBytes = Data(validationBravoText.utf8)
+    let deltaTextBytes = Data(validationDeltaText.utf8)
+    let foxtrotTextBytes = Data(validationFoxtrotText.utf8)
+    let canonicalBlobBytes = largeBlobBytes()
+    let revisedBlobBytes = validationRevisedBlobBytes()
+    return [
+        // 0 — one plain-text representation.
+        ValidationFixture(
+            capture: validationCapture(
+                [CapturedRepresentation(
+                    typeIdentifier: textType,
+                    bytes: alphaTextBytes
+                )],
+                at: validationAlphaDate,
+                source: validationAlphaSource
+            ),
+            title: validationAlphaText,
+            canonical: [ValidationRepresentation(
+                typeIdentifier: textType,
+                bytes: alphaTextBytes
+            )],
+            effective: [ValidationRepresentation(
+                typeIdentifier: textType,
+                bytes: alphaTextBytes
+            )],
+            expectedContentVersion: 1,
+            expectedRevisionCount: 0,
+            expectedRevisionByteCount: nil
+        ),
+        // 1 — non-ASCII text; identical shape, distinct bytes and title.
+        ValidationFixture(
+            capture: validationCapture(
+                [CapturedRepresentation(
+                    typeIdentifier: textType,
+                    bytes: bravoTextBytes
+                )],
+                at: validationBravoDate,
+                source: validationBravoSource
+            ),
+            title: validationBravoText,
+            canonical: [ValidationRepresentation(
+                typeIdentifier: textType,
+                bytes: bravoTextBytes
+            )],
+            effective: [ValidationRepresentation(
+                typeIdentifier: textType,
+                bytes: bravoTextBytes
+            )],
+            expectedContentVersion: 1,
+            expectedRevisionCount: 0,
+            expectedRevisionByteCount: nil
+        ),
+        // 2 — a real 1×1 grayscale PNG; no textual representation, so the
+        // row title is the frozen type-based fallback "Image".
+        ValidationFixture(
+            capture: validationCapture(
+                [CapturedRepresentation(
+                    typeIdentifier: validationPNGType,
+                    bytes: pngBytes
+                )],
+                at: validationPNGDate,
+                source: validationPNGSource
+            ),
+            title: "Image",
+            canonical: [ValidationRepresentation(
+                typeIdentifier: validationPNGType,
+                bytes: pngBytes
+            )],
+            effective: [ValidationRepresentation(
+                typeIdentifier: validationPNGType,
+                bytes: pngBytes
+            )],
+            expectedContentVersion: 1,
+            expectedRevisionCount: 0,
+            expectedRevisionByteCount: nil
+        ),
+        // 3 — one capture carrying two representations: the same PNG plus
+        // text. Canonical/effective order follows the stable Unicode
+        // scalar sort (docs/02-domain.md §2.1) — "public.png" sorts before
+        // "public.utf8-plain-text" — even though the capture input listed
+        // the text first; the textual representation still owns the title.
+        ValidationFixture(
+            capture: validationCapture(
+                [
+                    CapturedRepresentation(
+                        typeIdentifier: textType,
+                        bytes: deltaTextBytes
+                    ),
+                    CapturedRepresentation(
+                        typeIdentifier: validationPNGType,
+                        bytes: pngBytes
+                    ),
+                ],
+                at: validationDeltaDate,
+                source: validationDeltaSource
+            ),
+            title: validationDeltaText,
+            canonical: [
+                ValidationRepresentation(
+                    typeIdentifier: validationPNGType,
+                    bytes: pngBytes
+                ),
+                ValidationRepresentation(
+                    typeIdentifier: textType,
+                    bytes: deltaTextBytes
+                ),
+            ],
+            effective: [
+                ValidationRepresentation(
+                    typeIdentifier: validationPNGType,
+                    bytes: pngBytes
+                ),
+                ValidationRepresentation(
+                    typeIdentifier: textType,
+                    bytes: deltaTextBytes
+                ),
+            ],
+            expectedContentVersion: 1,
+            expectedRevisionCount: 0,
+            expectedRevisionByteCount: nil
+        ),
+        // 4 — the 8 MiB patternA blob (same generator as the largeBlob
+        // phases); validateSeed then revises it to the byte-distinct 8 MiB
+        // patternB. Canonical keeps patternA, effective becomes patternB,
+        // the content version is 2, and exactly one active 8 MiB revision
+        // exists. No textual representation, so the fallback title is the
+        // sole type identifier itself.
+        ValidationFixture(
+            capture: validationCapture(
+                [CapturedRepresentation(
+                    typeIdentifier: largeBlobType,
+                    bytes: canonicalBlobBytes
+                )],
+                at: validationBlobDate,
+                source: validationBlobSource
+            ),
+            title: largeBlobType,
+            canonical: [ValidationRepresentation(
+                typeIdentifier: largeBlobType,
+                bytes: canonicalBlobBytes
+            )],
+            effective: [ValidationRepresentation(
+                typeIdentifier: largeBlobType,
+                bytes: revisedBlobBytes
+            )],
+            expectedContentVersion: 2,
+            expectedRevisionCount: 1,
+            expectedRevisionByteCount: largeBlobByteCount
+        ),
+        // 5 — plain text again, newest observedAt, so recent-browse lists
+        // it first.
+        ValidationFixture(
+            capture: validationCapture(
+                [CapturedRepresentation(
+                    typeIdentifier: textType,
+                    bytes: foxtrotTextBytes
+                )],
+                at: validationFoxtrotDate,
+                source: validationFoxtrotSource
+            ),
+            title: validationFoxtrotText,
+            canonical: [ValidationRepresentation(
+                typeIdentifier: textType,
+                bytes: foxtrotTextBytes
+            )],
+            effective: [ValidationRepresentation(
+                typeIdentifier: textType,
+                bytes: foxtrotTextBytes
+            )],
+            expectedContentVersion: 1,
+            expectedRevisionCount: 0,
+            expectedRevisionByteCount: nil
+        ),
+    ]
 }
 
 private func openHistory(at storeURL: URL) async throws -> SwiftDataHistory {
@@ -581,11 +967,17 @@ private func retentionVerifyUpdated(storeURL: URL) async throws {
     )
 }
 
-/// REVIEW §4.3 Retention-config restart tail: the fixture process must
-/// observe the production public-open classifier itself. The test owner
-/// creates the impossible stored shape before launching this process; this
-/// executable neither imports SwiftData nor repairs/inspects storage.
-private func requireRetentionOpenFailure(
+/// REVIEW §4.3 Retention-config restart tail, extended to the DATA-14
+/// open-failure fixtures (REVIEW 05 §7 Q13): the fixture process must
+/// observe the production public-open classifier itself. Every
+/// `ModelContainer` construction failure — an impossible stored shape, a
+/// future schema, non-SQLite bytes — currently surfaces as one
+/// `.persistence(.openStore)` (03b §10); until a classification proof
+/// exists, no caller may auto-quarantine or silently recreate a store on
+/// that single outcome. The test owner creates the impossible on-disk shape
+/// before launching this process; this executable neither imports SwiftData
+/// nor repairs/inspects storage.
+private func requirePublicOpenFailure(
     at storeURL: URL,
     expected: HistoryFailure
 ) async throws {
@@ -929,6 +1321,138 @@ private func largeBlobVerify(storeURL: URL) async throws {
     }
 }
 
+/// External-clone validation, seed half: one fresh owner commits the fixed
+/// six-fixture table (positions 1–6, each `.inserted`), then revises
+/// fixture 4's 8 MiB blob from patternA to patternB (position 7, content
+/// version 2) and records the six public item identities in the manifest.
+/// The process then exits normally, so the validator half proves a
+/// terminated owner's payloads, not a shared in-process container.
+private func validateSeed(storeURL: URL) async throws {
+    let fixtures = try validationFixtureTable()
+    guard fixtures.count == validationFixtureCount else {
+        throw ProbeFailure.unexpectedState
+    }
+    let history = try await openHistory(at: storeURL)
+    var references: [HistoryItemReference] = []
+    references.reserveCapacity(fixtures.count)
+    for (index, fixture) in fixtures.enumerated() {
+        let reference = try requireInserted(
+            try await history.perform(.capture(fixture.capture)),
+            position: UInt64(index + 1)
+        )
+        references.append(reference)
+    }
+    let revisedReference = references[validationRevisedFixtureIndex]
+    let reviseReceipt = try await history.perform(.revise(RevisionRequest(
+        itemID: revisedReference.id,
+        expected: revisedReference.contentVersion,
+        intent: .replace(RevisionDraft(decisions: [RevisionDecision(
+            typeIdentifier: largeBlobType,
+            action: .replace(bytes: validationRevisedBlobBytes())
+        )]))
+    )))
+    guard case .committed(let commit) = reviseReceipt,
+          commit.position.rawValue == UInt64(validationFixtureCount + 1),
+          case .revised(let revised) = commit.outcome,
+          revised.id == revisedReference.id,
+          revised.contentVersion.rawValue == 2 else {
+        throw ProbeFailure.unexpectedState
+    }
+    try ValidationManifest(
+        itemIDs: references.map { $0.id.rawValue },
+        revisedItemID: revisedReference.id.rawValue
+    ).write(siblingOf: storeURL)
+}
+
+/// External-clone validation, validator half: a fresh process reopens the
+/// store, walks the public browse/details/pastePayload surface for every
+/// fixture, and compares each hydrated canonical, effective, and revision
+/// payload byte-for-byte with the deterministic fixtures — no digest
+/// anywhere in the chain. Rows come back lastCopiedAt-descending (fixture
+/// 5 first, fixture 0 last); the position-7 revise never changes
+/// lastCopiedAt (`RetentionReviseComposition.swift` §7).
+private func validateAll(storeURL: URL) async throws {
+    let fixtures = try validationFixtureTable()
+    guard fixtures.count == validationFixtureCount else {
+        throw ProbeFailure.unexpectedState
+    }
+    let manifest = try ValidationManifest.read(siblingOf: storeURL)
+    let history = try await openHistory(at: storeURL)
+    let page = try await history.browse(HistoryBrowseRequest(
+        kind: .recent,
+        limit: 10
+    ))
+    guard page.position.rawValue == UInt64(validationFixtureCount + 1),
+          page.next == nil,
+          page.rows.count == validationFixtureCount else {
+        throw ProbeFailure.unexpectedState
+    }
+
+    for rowIndex in 0..<validationFixtureCount {
+        let fixtureIndex = validationFixtureCount - 1 - rowIndex
+        let fixture = fixtures[fixtureIndex]
+        let row = page.rows[rowIndex]
+        guard row.item.id.rawValue == manifest.itemIDs[fixtureIndex],
+              row.item.contentVersion.rawValue == fixture.expectedContentVersion,
+              row.title == fixture.title,
+              row.typeIdentifiers == fixture.effective.map(\.typeIdentifier),
+              row.lastCopiedAt == fixture.capture.observedAt,
+              row.copyCount == 1,
+              row.lastSource == fixture.capture.origin.sourceApplication,
+              row.pinnedPosition == nil,
+              row.search == nil else {
+            throw ProbeFailure.unexpectedState
+        }
+    }
+
+    for fixtureIndex in 0..<validationFixtureCount {
+        let fixture = fixtures[fixtureIndex]
+        let row = page.rows[validationFixtureCount - 1 - fixtureIndex]
+        let itemID = row.item.id
+        let details = try await history.details(for: itemID)
+        guard details.item == row.item,
+              details.item.id.rawValue == manifest.itemIDs[fixtureIndex],
+              details.canonical.map(\.typeIdentifier)
+                  == fixture.canonical.map(\.typeIdentifier),
+              details.canonical.map(\.bytes) == fixture.canonical.map(\.bytes),
+              details.effective.map(\.typeIdentifier)
+                  == fixture.effective.map(\.typeIdentifier),
+              details.effective.map(\.bytes) == fixture.effective.map(\.bytes),
+              details.revisions.count == fixture.expectedRevisionCount,
+              details.occurrence.firstCopiedAt == fixture.capture.observedAt,
+              details.occurrence.lastCopiedAt == fixture.capture.observedAt,
+              details.occurrence.count == 1,
+              details.occurrence.firstSource
+                  == fixture.capture.origin.sourceApplication,
+              details.occurrence.lastSource
+                  == fixture.capture.origin.sourceApplication,
+              details.pinnedPosition == nil else {
+            throw ProbeFailure.unexpectedState
+        }
+        if let expectedRevisionByteCount = fixture.expectedRevisionByteCount {
+            // The minted revision ID and createdAt stay unasserted; only
+            // the public byte facts are this evidence's concern.
+            guard details.revisions[0].isActive,
+                  details.revisions[0].byteCount == expectedRevisionByteCount
+            else {
+                throw ProbeFailure.unexpectedState
+            }
+        }
+
+        let paste = try await history.pastePayload(for: itemID)
+        guard paste.item == details.item,
+              paste.lineageHint == itemID,
+              paste.representations == details.effective,
+              paste.representations.count == fixture.effective.count,
+              paste.representations.map(\.typeIdentifier)
+                  == fixture.effective.map(\.typeIdentifier),
+              paste.representations.map(\.bytes)
+                  == fixture.effective.map(\.bytes) else {
+            throw ProbeFailure.unexpectedState
+        }
+    }
+}
+
 private func readExactStandardInput(byteCount: Int) throws -> Data {
     var result = Data()
     while result.count < byteCount {
@@ -1160,14 +1684,24 @@ private struct HistoryRestartProbe {
             case .retentionVerifyUpdated:
                 try await retentionVerifyUpdated(storeURL: storeURL)
             case .retentionRejectMalformed:
-                try await requireRetentionOpenFailure(
+                try await requirePublicOpenFailure(
                     at: storeURL,
                     expected: .persistence(.corruptStoredValue)
                 )
             case .retentionRejectWrongKey:
-                try await requireRetentionOpenFailure(
+                try await requirePublicOpenFailure(
                     at: storeURL,
                     expected: .persistence(.invariantViolation)
+                )
+            case .openRejectFutureSchema:
+                try await requirePublicOpenFailure(
+                    at: storeURL,
+                    expected: .persistence(.openStore)
+                )
+            case .openRejectCorruptBytes:
+                try await requirePublicOpenFailure(
+                    at: storeURL,
+                    expected: .persistence(.openStore)
                 )
             case .gatewayAuditSeed:
                 try await gatewayAuditSeed(storeURL: storeURL)
@@ -1179,6 +1713,10 @@ private struct HistoryRestartProbe {
                 try await largeBlobCrashCommit(storeURL: storeURL)
             case .largeBlobVerify:
                 try await largeBlobVerify(storeURL: storeURL)
+            case .validateSeed:
+                try await validateSeed(storeURL: storeURL)
+            case .validateAll:
+                try await validateAll(storeURL: storeURL)
             case .regexpCharacterize:
                 try regexpCharacterize(scenario: arguments[1])
             }
