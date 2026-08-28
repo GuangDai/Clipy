@@ -83,7 +83,9 @@ package struct HistoryRowView: View {
         self.onShowDetails = onShowDetails
     }
 
-    var body: some View {
+    /// `package` to match the (package) enclosing type — the `View`
+    /// conformance witness must be at least as accessible as the type.
+    package var body: some View {
         HStack(alignment: .center, spacing: PanelTheme.spacingMedium) {
             thumbnail
             VStack(alignment: .leading, spacing: PanelTheme.spacingXXXSmall) {
