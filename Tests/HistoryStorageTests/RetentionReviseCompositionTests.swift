@@ -2096,7 +2096,9 @@ struct RetentionReviseCompositionTests {
         // The v1 count trigger at 1 — itself a count-only commit (B11): the
         // only unpinned item O already satisfies it, so `removedCount == 0`
         // (position 6).
-        let policyReceipt = try await history.perform(.setRetentionPolicy(1))
+        let policyReceipt = try await history.perform(
+            .setRetentionPolicy(maximumUnpinnedItems: 1)
+        )
         guard case let .committed(policyCommit) = policyReceipt,
               case let .retentionPolicySet(removedCount) = policyCommit.outcome else {
             Issue.record("R.5 arrange: expected a committed policy set, got \(policyReceipt)")
