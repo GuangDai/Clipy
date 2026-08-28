@@ -7,16 +7,21 @@
 /// not policy: every UserDefaults read fails open to the default value, so
 /// a missing or unrecognized persisted entry can never break the panel.
 ///
-/// The types are public because they are the configuration vocabulary of the
-/// public `HistoryPanelView` seam: the ClipyApp composition root loads one
-/// snapshot from UserDefaults and passes it to the panel, and the Settings
-/// appearance tab reads and stores the same values.
+/// Access split (GOV-3 contraction; docs/v2/V2-07-ux.md §6): the snapshot
+/// type, its `load(from:)` seam, `previewSide`, and the default `init()` the
+/// public `HistoryPanelView` initializer's default argument evaluates in the
+/// caller's module are public — that is exactly the configuration vocabulary
+/// the ClipyApp composition root names. The density/auto-open half of the
+/// vocabulary is package: the Settings appearance tab that reads, edits, and
+/// stores it lives in this module.
 import Foundation
 
 /// The history-row density: `compact` trades the second snippet line and
 /// thumbnail size for more rows per panel height; `comfortable` is the
-/// product default (today's row layout).
-public enum HistoryRowDensity: String, CaseIterable, Sendable {
+/// product default (today's row layout). Package (GOV-3): the density
+/// consumers — the Settings appearance tab, the list/row views, the theme
+/// metrics — are all in-package.
+package enum HistoryRowDensity: String, CaseIterable, Sendable {
     case compact
     case comfortable
 }
@@ -39,16 +44,36 @@ public enum PreviewSidePreference: String, CaseIterable, Sendable {
 /// `PanelGeometry.previewColumnWidthDefaultsKey`. A leftover value in an
 /// upgraded user's defaults is simply never read, so no migration is needed.
 public struct PanelAppearanceSettings: Equatable, Sendable {
-    public static let rowDensityDefaultsKey = "clipy.appearance.rowDensity"
-    public static let previewAutoOpenDefaultsKey =
+    /// Package (GOV-3): `load(from:)` below is the only cross-module reader
+    /// of these keys and the Settings tab stores through the same module —
+    /// ClipyApp never names a raw key.
+    package static let rowDensityDefaultsKey = "clipy.appearance.rowDensity"
+    package static let previewAutoOpenDefaultsKey =
         "clipy.appearance.previewAutoOpen"
-    public static let previewSideDefaultsKey = "clipy.appearance.previewSide"
+    package static let previewSideDefaultsKey = "clipy.appearance.previewSide"
 
-    public var rowDensity: HistoryRowDensity
-    public var isPreviewAutoOpenEnabled: Bool
+    package var rowDensity: HistoryRowDensity
+    package var isPreviewAutoOpenEnabled: Bool
     public var previewSide: PreviewSidePreference
 
-    public init(
+    /// The public default snapshot. The public `HistoryPanelView`
+    /// initializer's `appearance: PanelAppearanceSettings = ...` default
+    /// argument is evaluated in the caller's module, so the seam ClipyApp
+    /// resolves through must be public even though the full vocabulary init
+    /// below is package (the split-init precedent of
+    /// `HistoryPanelView.swift`'s public/package initializers).
+    public init() {
+        self.init(
+            rowDensity: .comfortable,
+            isPreviewAutoOpenEnabled: true,
+            previewSide: .automatic
+        )
+    }
+
+    /// The full vocabulary init. Package (GOV-3): density and auto-open are
+    /// Settings-tab vocabulary; the literals mirror the package defaults and
+    /// the public `init()` above.
+    package init(
         rowDensity: HistoryRowDensity = .comfortable,
         isPreviewAutoOpenEnabled: Bool = true,
         previewSide: PreviewSidePreference = .automatic
@@ -81,8 +106,10 @@ public struct PanelAppearanceSettings: Equatable, Sendable {
         return settings
     }
 
-    /// Persists the snapshot under the three keys above.
-    public func store(to defaults: UserDefaults) {
+    /// Persists the snapshot under the three keys above. Package (GOV-3):
+    /// the Settings appearance tab owns the store; the composition root only
+    /// `load(from:)`s.
+    package func store(to defaults: UserDefaults) {
         defaults.set(rowDensity.rawValue, forKey: Self.rowDensityDefaultsKey)
         defaults.set(
             isPreviewAutoOpenEnabled,

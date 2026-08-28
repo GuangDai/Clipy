@@ -34,6 +34,24 @@ extension HistoryAuthority {
         in context: ModelContext,
         createExistenceProof: CreateExistenceProof
     ) throws {
+#if DEBUG
+        // 05-OQ9/05-CE26 kill window B (docs/05-authority-kernel.md §10;
+        // Card 1C-2): anchor a process kill at the START of this
+        // transaction's save interval — the `ModelContext.willSave`
+        // notification of exactly this operation-local context, delivered
+        // synchronously on the saving thread while the transaction call
+        // frame is still live. The closure below runs entirely BEFORE that
+        // save; death inside the interval leaves old-or-new only, because
+        // Apple publishes no externalStorage write-time contract. Inert
+        // unless the package TaskLocal is armed by `HistoryRestartProbe`;
+        // Release compiles the registration out entirely.
+        let saveKillObserver = TransactionKillDebugInstrumentation
+            .armSaveAttemptKillObserver(for: context)
+        defer {
+            TransactionKillDebugInstrumentation
+                .disarmSaveAttemptKillObserver(saveKillObserver)
+        }
+#endif
         do {
             try context.transaction {
                 let meta = try Self.fetchExactlyOnePositionRow(in: context)
@@ -140,6 +158,21 @@ extension HistoryAuthority {
                 if self.consumeTransactionFailureInjection(.beforeSingletonUpdate) {
                     throw InjectedTransactionFailure.beforeSingletonUpdate
                 }
+#if DEBUG
+                // 05-OQ9/05-CE26 kill window A (docs/05-authority-kernel.md
+                // §10; Card 1C-2): process death at this same WS-J1-5
+                // window (b) interleave, so the closure-throw rollback
+                // evidence above and the process-death evidence are pinned
+                // to one coordinate. At this point every mutation, HCR, and
+                // audit row is applied but exists only as in-memory pending
+                // changes — the singleton position is still unwritten and
+                // the implicit save has not been attempted — so death here
+                // deterministically leaves complete-OLD. Inert unless the
+                // package TaskLocal is armed by `HistoryRestartProbe`;
+                // Release compiles the call out entirely.
+                TransactionKillDebugInstrumentation
+                    .terminateIfClosureKillPointArmed()
+#endif
                 if self.consumeTransactionFailureInjection(.insufficientDiskSpace) {
                     throw NSError(
                         domain: NSCocoaErrorDomain,

@@ -5,9 +5,23 @@
 /// invocation owns one `SwiftDataHistory` for one short process; no SwiftData
 /// object or generated identity crosses a phase boundary.
 /// The Retention phases prove exact configured-value persistence across
-/// terminated owners only; they do not prove migration, full-disk behavior,
-/// or crash durability (`11-ai-todo-map-2026-08-23.md` §4.3;
-/// `V2-02-retention.md` §8.1/§12).
+/// terminated owners only; they do not prove migration or crash durability
+/// (`11-ai-todo-map-2026-08-23.md` §4.3; `V2-02-retention.md` §8.1/§12).
+/// The full-disk cells (pressureCapture plus the Card 6B pressureRevise
+/// trio and the openFullVolume/openSeededFullVolume pair) run only on the
+/// dispatch-only APFS ENOSPC lane (`docs/05-authority-kernel.md` §16): a
+/// filled volume must refuse a positive-demand capture and an 8 MiB
+/// `.replace` revision through the stamped-plan admission —
+/// `.temporarilyUnavailable(.insufficientDiskSpace)` with every seed byte
+/// unchanged — must then commit the identical revision once space returns,
+/// and must prove that commit from a fresh owner. Open on a full volume
+/// writes only SQLite/WAL scalar files that never pass admission, so the
+/// open cells record the observed branch of a closed typed-or-opened
+/// disjunction instead of a single outcome. Nowhere proven here:
+/// post-admission mid-transaction exhaustion (the Apple framework crash
+/// ceiling), remove/clear full-disk tails (zero-demand plans are never
+/// admission-refused), and V1→V2 migration on a full volume (no public
+/// API path mints a V1 store).
 /// The validateSeed/validateAll pair closes doc 11 §4.3's "External-clone
 /// 验证子进程" row and the 05 blind spot
 /// (`05-evidence-and-open-questions.md`:165, "未证明逐个 hydrate 所有
@@ -20,6 +34,15 @@
 /// hint (Apple documents that a value *may* be externalized, with no
 /// threshold or locator contract), so this evidence asserts neither an
 /// external file nor any sidecar on disk.
+/// The largeBlobMidTransactionKill*/largeBlobMidTransactionVerify trio
+/// closes 05-OQ9/05-CE26 (Card 1C-2): the two kill children terminate
+/// strictly INSIDE the in-flight capture commit transaction — window A in
+/// the transaction closure after staging (deterministic complete-OLD),
+/// window B anchored at the save interval's start via `ModelContext.willSave`
+/// (old-or-new binary) — and the fresh verify child accepts only a complete
+/// old or complete new state, then proves the reopened store still writes
+/// (DATA-13). Process-kill evidence only, with largeBlobCrashCommit's same
+/// ceiling: no fsync, sudden-power-loss, or sidecar-layout claim.
 import Foundation
 import HistoryCore
 import HistoryStorage
@@ -31,6 +54,11 @@ private enum ProbePhase: String {
     case verify
     case pressureCapture
     case verifySeed
+    case openFullVolume
+    case openSeededFullVolume
+    case pressureRevise
+    case pressureReviseCommit
+    case pressureReviseVerify
     case retentionSeed
     case retentionVerify
     case retentionUpdate
@@ -45,6 +73,9 @@ private enum ProbePhase: String {
     case gatewayAuditVerify
     case largeBlobCrashCommit
     case largeBlobVerify
+    case largeBlobMidTransactionKillClosure
+    case largeBlobMidTransactionKillSave
+    case largeBlobMidTransactionVerify
     case validateSeed
     case validateAll
     case regexpCharacterize
@@ -66,6 +97,8 @@ private let alphaSecondSource = "restart.operate.alpha"
 private let pressureCaptureDate = Date(timeIntervalSinceReferenceDate: 40_000)
 private let pressureCaptureSource = "restart.pressure.capture"
 private let pressureCaptureByteCount = 8 * 1_048_576
+private let pressureReviseDate = Date(timeIntervalSinceReferenceDate: 130_000)
+private let pressureReviseSource = "restart.pressure.revise"
 private let gatewayAuditText = "gateway audit crash publication fixture"
 private let gatewayAuditDate = Date(timeIntervalSinceReferenceDate: 50_000)
 private let gatewayAuditSource = "restart.gateway.audit"
@@ -73,6 +106,9 @@ private let largeBlobType = "public.data"
 private let largeBlobDate = Date(timeIntervalSinceReferenceDate: 60_000)
 private let largeBlobSource = "restart.large-blob.capture"
 private let largeBlobByteCount = 8 * 1_048_576
+private let midTransactionWritabilityText = "restart mid-transaction writability capture"
+private let midTransactionWritabilityDate = Date(timeIntervalSinceReferenceDate: 130_000)
+private let midTransactionWritabilitySource = "restart.mid-transaction.writability"
 private let validationManifestFileName = "validation-manifest.txt"
 private let validationFixtureCount = 6
 private let validationRevisedFixtureIndex = 4
@@ -569,6 +605,44 @@ private func largeBlobCapture() -> ClipboardCapture {
         ),
         observedAt: largeBlobDate
     )
+}
+
+/// This lane's dedicated 8 MiB patternA blob capture (`largeBlobBytes`):
+/// byte-distinct from the patternB revision payload, with its own
+/// observedAt/source so row order and occurrence facts stay determined.
+private func pressureReviseCapture() -> ClipboardCapture {
+    ClipboardCapture(
+        representations: [CapturedRepresentation(
+            typeIdentifier: largeBlobType,
+            bytes: largeBlobBytes()
+        )],
+        origin: CopyOriginObservation(
+            sourceApplication: pressureReviseSource,
+            lineageHint: nil
+        ),
+        observedAt: pressureReviseDate
+    )
+}
+
+/// The revise cell's single request, replayed byte-identically by the commit
+/// half: `.replace` the 8 MiB patternA blob with the byte-distinct 8 MiB
+/// patternB (`validationRevisedBlobBytes`). The §16 stamped-plan admission
+/// counts the revision's wire bytes (≈ 4/3 × the raw payload) against the
+/// store volume's spare capacity, so this ~11 MiB positive demand
+/// deterministically exceeds the post-fill slack plus the 1 MiB margin —
+/// the reason the cell revises a blob instead of a small text payload.
+private func pressureReviseRequest(
+    itemID: HistoryItemID,
+    expected: ContentVersion
+) -> HistoryAction {
+    .revise(RevisionRequest(
+        itemID: itemID,
+        expected: expected,
+        intent: .replace(RevisionDraft(decisions: [RevisionDecision(
+            typeIdentifier: largeBlobType,
+            action: .replace(bytes: validationRevisedBlobBytes())
+        )]))
+    ))
 }
 
 /// Expected bytes for one projection slot of the validation table.
@@ -1114,6 +1188,142 @@ private func requireSeedState(
     }
 }
 
+/// One alpha/bravo seed row of the full-disk revise cells — the exact
+/// field-for-field facts `requireSeedState` pins, factored so the
+/// position-3 and position-4 tables can assert the untouched seed rows
+/// without re-stating the whole table shape.
+private func requireSeedTextRow(
+    _ row: HistoryRow,
+    id: UUID,
+    text: String,
+    date: Date,
+    source: String
+) throws {
+    guard row.item.id.rawValue == id,
+          row.item.contentVersion.rawValue == 1,
+          row.title == text,
+          row.typeIdentifiers == [textType],
+          row.lastCopiedAt == date,
+          row.copyCount == 1,
+          row.lastSource == source,
+          row.pinnedPosition == nil,
+          row.search == nil else {
+        throw ProbeFailure.unexpectedState
+    }
+}
+
+/// The matching alpha/bravo detail projection: hydrated canonical bytes
+/// compared directly (`Data ==`, never a digest), effective identical to
+/// canonical, no revisions, occurrence facts and pin state unchanged.
+private func requireSeedTextDetails(
+    _ details: HistoryDetails,
+    row: HistoryRow,
+    id: UUID,
+    text: String,
+    date: Date,
+    source: String
+) throws {
+    guard details.item.id.rawValue == id,
+          details.item == row.item,
+          details.canonical.map(\.typeIdentifier) == [textType],
+          details.canonical.map(\.bytes) == [Data(text.utf8)],
+          details.effective == details.canonical,
+          details.revisions.isEmpty,
+          details.occurrence.firstCopiedAt == date,
+          details.occurrence.lastCopiedAt == date,
+          details.occurrence.count == 1,
+          details.occurrence.firstSource == source,
+          details.occurrence.lastSource == source,
+          details.pinnedPosition == nil else {
+        throw ProbeFailure.unexpectedState
+    }
+}
+
+/// Position-3 seed table of the full-disk revise cell: the seed's
+/// alpha/bravo rows plus this lane's dedicated 8 MiB patternA blob row,
+/// asserted byte-for-byte unchanged after the §16 admission refusal.
+/// Returns the blob row's public reference so the commit half replays the
+/// identical revision request against the exact identity and Content
+/// Version the rejection left behind.
+@discardableResult
+private func requireBlobSeedState(
+    _ history: SwiftDataHistory,
+    manifest: ProbeManifest,
+    blobItemID: UUID
+) async throws -> HistoryItemReference {
+    let page = try await history.browse(HistoryBrowseRequest(
+        kind: .recent,
+        limit: 10
+    ))
+    guard page.position.rawValue == 3,
+          page.next == nil,
+          page.rows.count == 3 else {
+        throw ProbeFailure.unexpectedState
+    }
+    try requireSeedTextRow(
+        page.rows[1],
+        id: manifest.bravo,
+        text: bravoText,
+        date: bravoDate,
+        source: bravoSource
+    )
+    try requireSeedTextRow(
+        page.rows[2],
+        id: manifest.alpha,
+        text: alphaText,
+        date: alphaFirstDate,
+        source: alphaFirstSource
+    )
+    guard page.rows[0].item.id.rawValue == blobItemID,
+          page.rows[0].item.contentVersion.rawValue == 1,
+          page.rows[0].title == largeBlobType,
+          page.rows[0].typeIdentifiers == [largeBlobType],
+          page.rows[0].lastCopiedAt == pressureReviseDate,
+          page.rows[0].copyCount == 1,
+          page.rows[0].lastSource == pressureReviseSource,
+          page.rows[0].pinnedPosition == nil,
+          page.rows[0].search == nil else {
+        throw ProbeFailure.unexpectedState
+    }
+
+    let expected = largeBlobBytes()
+    let blobDetails = try await history.details(for: page.rows[0].item.id)
+    guard blobDetails.item == page.rows[0].item,
+          blobDetails.canonical.count == 1,
+          blobDetails.canonical[0].typeIdentifier == largeBlobType,
+          blobDetails.canonical[0].bytes == expected,
+          blobDetails.effective == blobDetails.canonical,
+          blobDetails.revisions.isEmpty,
+          blobDetails.occurrence.firstCopiedAt == pressureReviseDate,
+          blobDetails.occurrence.lastCopiedAt == pressureReviseDate,
+          blobDetails.occurrence.count == 1,
+          blobDetails.occurrence.firstSource == pressureReviseSource,
+          blobDetails.occurrence.lastSource == pressureReviseSource,
+          blobDetails.pinnedPosition == nil else {
+        throw ProbeFailure.unexpectedState
+    }
+
+    let bravoDetails = try await history.details(for: page.rows[1].item.id)
+    try requireSeedTextDetails(
+        bravoDetails,
+        row: page.rows[1],
+        id: manifest.bravo,
+        text: bravoText,
+        date: bravoDate,
+        source: bravoSource
+    )
+    let alphaDetails = try await history.details(for: page.rows[2].item.id)
+    try requireSeedTextDetails(
+        alphaDetails,
+        row: page.rows[2],
+        id: manifest.alpha,
+        text: alphaText,
+        date: alphaFirstDate,
+        source: alphaFirstSource
+    )
+    return page.rows[0].item
+}
+
 private func seed(storeURL: URL) async throws {
     diagnostic("seed.phase-start")
     let history = try await openHistory(at: storeURL)
@@ -1323,6 +1533,193 @@ private func largeBlobVerify(storeURL: URL) async throws {
     }
 }
 
+#if DEBUG
+/// Shared kill half of the 05-OQ9/05-CE26 mid-transaction cell (Card 1C-2):
+/// prove the store healthy through the public surface first, then terminate
+/// strictly INSIDE the in-flight commit transaction of one 8 MiB capture
+/// (the seed's positions 1–2 mean the capture would commit as position 3).
+/// The TaskLocal wrapper propagates across the `perform` → `commitCapture`
+/// actor hop within this task — the same shape `gatewayAuditCrash` already
+/// proves for this path.
+///
+/// Lifetime fence argument (the `crashCommit`/`largeBlobCrashCommit`
+/// precedents): no explicit `withExtendedLifetime` is needed because the
+/// kill fires synchronously inside the pending `history.perform(...)`
+/// call — window A inside the Authority actor's own method (the actor, and
+/// with it the container owner, is necessarily live), window B inside the
+/// `willSave` notification callback before `perform` can return (the live
+/// call frame keeps the facade owner retained). The optimizer cannot
+/// release the owner out from under a call it is executing in.
+private func largeBlobMidTransactionKill(
+    storeURL: URL,
+    at killPoint: TransactionKillDebugInstrumentation.KillPoint
+) async throws -> Never {
+    let manifest = try ProbeManifest.read(siblingOf: storeURL)
+    let history = try await openHistory(at: storeURL)
+    try await requireInitialProjection(history, manifest: manifest)
+    try await TransactionKillDebugInstrumentation.$killPoint.withValue(
+        killPoint
+    ) {
+        _ = try await history.perform(.capture(largeBlobCapture()))
+    }
+    // The armed seam must have terminated the process inside `perform`;
+    // reaching here means the kill point never fired. The signal this
+    // produces carries no seam marker, so the parent fixture fails closed.
+    fatalError("kill phase unexpectedly returned")
+}
+#endif
+
+/// Window A of the mid-transaction kill cell: death inside the
+/// `ModelContext.transaction` closure at the X-HCR.2 WS-J1-5 window (b)
+/// interleave — after all staging, before the singleton write, with the
+/// save not yet attempted — so the following verify child must observe the
+/// deterministic complete-OLD outcome. DEBUG TaskLocal seam, absent from
+/// Release builds.
+private func largeBlobMidTransactionKillClosure(
+    storeURL: URL
+) async throws -> Never {
+#if DEBUG
+    return try await largeBlobMidTransactionKill(
+        storeURL: storeURL,
+        at: .inClosurePreSave
+    )
+#else
+    fatalError("mid-transaction kill phase requires a Debug build")
+#endif
+}
+
+/// Window B of the mid-transaction kill cell: death anchored at the save
+/// interval's start through the `ModelContext.willSave` notification of the
+/// capture's operation-local context — the closest public anchor to the
+/// SQLite commit and any externalStorage write-out. Only an old-or-new
+/// verdict is admissible afterwards (Apple publishes no write-time
+/// contract), so the verify child adjudicates the binary. DEBUG TaskLocal
+/// seam, absent from Release builds.
+private func largeBlobMidTransactionKillSave(
+    storeURL: URL
+) async throws -> Never {
+#if DEBUG
+    return try await largeBlobMidTransactionKill(
+        storeURL: storeURL,
+        at: .saveAttemptWillSave
+    )
+#else
+    fatalError("mid-transaction kill phase requires a Debug build")
+#endif
+}
+
+/// Adjudication half of the mid-transaction kill cell (Card 1C-2: "fresh
+/// child重开只能看到完整old或完整new state，不能有orphan、duplicate或半个
+/// external blob"). A fresh child reopens the store and accepts exactly one
+/// of the two complete outcomes; every torn residue — a third row under the
+/// seed position, a short or overlong table under position 3, a row whose
+/// fields or hydrated bytes miss the deterministic fixture — fails closed.
+/// The durable Change Position is the adjudication input; the large blob's
+/// item identity is taken from this browse (the fixture bytes are the
+/// oracle — no ID crosses the process boundary, the validateAll stance).
+/// The tail capture then proves the reopened store still commits new writes
+/// at exactly the next position (DATA-13's recovery concern).
+private func largeBlobMidTransactionVerify(storeURL: URL) async throws {
+    let manifest = try ProbeManifest.read(siblingOf: storeURL)
+    let history = try await openHistory(at: storeURL)
+    let page = try await history.browse(HistoryBrowseRequest(
+        kind: .recent,
+        limit: 10
+    ))
+    guard page.next == nil else {
+        throw ProbeFailure.unexpectedState
+    }
+
+    // complete-OLD = position 2 (the seed's last commit, capture absent);
+    // complete-NEW = position 3 (the killed child's capture landed whole).
+    let captureCommitted: Bool
+    switch page.position.rawValue {
+    case 2:
+        captureCommitted = false
+    case 3:
+        captureCommitted = true
+    default:
+        throw ProbeFailure.unexpectedState
+    }
+
+    if !captureCommitted {
+        // complete-OLD, field-for-field the seed projection — including
+        // that exactly two rows remain, so the blob row is provably absent
+        // (no orphan survived the in-flight death).
+        try await requireInitialProjection(history, manifest: manifest)
+    } else {
+        // complete-NEW: the blob row first, then the untouched seed rows.
+        guard page.rows.count == 3,
+              page.rows[0].item.contentVersion.rawValue == 1,
+              page.rows[0].title == largeBlobType,
+              page.rows[0].typeIdentifiers == [largeBlobType],
+              page.rows[0].lastCopiedAt == largeBlobDate,
+              page.rows[0].copyCount == 1,
+              page.rows[0].lastSource == largeBlobSource,
+              page.rows[0].pinnedPosition == nil,
+              page.rows[0].search == nil,
+              page.rows[1].item.id.rawValue == manifest.bravo,
+              page.rows[1].title == bravoText,
+              page.rows[1].typeIdentifiers == [textType],
+              page.rows[1].lastCopiedAt == bravoDate,
+              page.rows[1].copyCount == 1,
+              page.rows[1].lastSource == bravoSource,
+              page.rows[1].pinnedPosition == nil,
+              page.rows[1].search == nil,
+              page.rows[2].item.id.rawValue == manifest.alpha,
+              page.rows[2].title == alphaText,
+              page.rows[2].typeIdentifiers == [textType],
+              page.rows[2].lastCopiedAt == alphaFirstDate,
+              page.rows[2].copyCount == 1,
+              page.rows[2].lastSource == alphaFirstSource,
+              page.rows[2].pinnedPosition == nil,
+              page.rows[2].search == nil else {
+            throw ProbeFailure.unexpectedState
+        }
+
+        // Byte-level oracle: regenerate the deterministic fixture and
+        // compare directly — never a digest.
+        let blobItemID = page.rows[0].item.id
+        let expected = largeBlobBytes()
+        let details = try await history.details(for: blobItemID)
+        guard details.item == page.rows[0].item,
+              details.canonical.count == 1,
+              details.canonical[0].typeIdentifier == largeBlobType,
+              details.canonical[0].bytes == expected,
+              details.effective == details.canonical,
+              details.revisions.isEmpty,
+              details.occurrence.firstCopiedAt == largeBlobDate,
+              details.occurrence.lastCopiedAt == largeBlobDate,
+              details.occurrence.count == 1,
+              details.occurrence.firstSource == largeBlobSource,
+              details.occurrence.lastSource == largeBlobSource,
+              details.pinnedPosition == nil else {
+            throw ProbeFailure.unexpectedState
+        }
+
+        let paste = try await history.pastePayload(for: blobItemID)
+        guard paste.item == details.item,
+              paste.lineageHint == blobItemID,
+              paste.representations.count == 1,
+              paste.representations[0].typeIdentifier == largeBlobType,
+              paste.representations[0].bytes == expected else {
+            throw ProbeFailure.unexpectedState
+        }
+    }
+
+    // DATA-13 writability tail: one distinct small capture must commit at
+    // exactly the next position — OLD → 3, NEW → 4 — proving the reopened
+    // store accepts new writes after the mid-transaction death.
+    _ = try requireInserted(
+        try await history.perform(.capture(capture(
+            midTransactionWritabilityText,
+            at: midTransactionWritabilityDate,
+            source: midTransactionWritabilitySource
+        ))),
+        position: captureCommitted ? 4 : 3
+    )
+}
+
 /// External-clone validation, seed half: one fresh owner commits the fixed
 /// six-fixture table (positions 1–6, each `.inserted`), then revises
 /// fixture 4's 8 MiB blob from patternA to patternB (position 7, content
@@ -1523,6 +1920,269 @@ private func verifySeed(storeURL: URL) async throws {
     diagnostic("verify-seed.projection-verified")
 }
 
+/// Full-disk revise cell (doc 11 §4.3 Card 6B; `docs/05-authority-kernel.md`
+/// §16), under-pressure half. Before publishing readiness this child commits
+/// the lane's dedicated 8 MiB patternA blob (position 3) and records its
+/// public identity, so the parent's fill starts only with the seed table
+/// durable. After `GO` the `.replace` request — byte-identical to the one
+/// the commit half replays — must be refused by the stamped-plan admission
+/// as exactly `.temporarilyUnavailable(.insufficientDiskSpace)` (mirroring
+/// the pressureCapture refusal shape), and the refusal must leave every
+/// byte of the seed table and the blob row unchanged.
+private func pressureRevise(storeURL: URL) async throws {
+    diagnostic("revise.phase-start")
+    let manifest = try ProbeManifest.read(siblingOf: storeURL)
+    diagnostic("revise.manifest-read")
+    let history = try await openHistory(at: storeURL)
+    diagnostic("revise.store-opened")
+    try await requireSeedState(history, manifest: manifest)
+    diagnostic("revise.seed-before-verified")
+
+    let blobReference = try requireInserted(
+        try await history.perform(.capture(pressureReviseCapture())),
+        position: 3
+    )
+    diagnostic("revise.blob-capture-committed")
+    try LargeBlobManifest(itemID: blobReference.id.rawValue)
+        .write(siblingOf: storeURL)
+    diagnostic("revise.blob-manifest-written")
+
+    FileHandle.standardOutput.write(Data("APFS_PRESSURE_READY\n".utf8))
+    diagnostic("revise.ready-published")
+    guard try readExactStandardInput(byteCount: 3) == Data("GO\n".utf8) else {
+        throw ProbeFailure.unexpectedState
+    }
+    diagnostic("revise.go-received")
+
+    do {
+        _ = try await history.perform(pressureReviseRequest(
+            itemID: blobReference.id,
+            expected: blobReference.contentVersion
+        ))
+        diagnostic("revise.unexpectedly-committed")
+        throw ProbeFailure.unexpectedState
+    } catch {
+        diagnostic(error: error)
+        guard let failure = error as? HistoryFailure,
+              failure == .temporarilyUnavailable(.insufficientDiskSpace) else {
+            throw ProbeFailure.unexpectedState
+        }
+    }
+    diagnostic("revise.rejected-as-insufficient-disk-space")
+
+    try await requireBlobSeedState(
+        history,
+        manifest: manifest,
+        blobItemID: blobReference.id.rawValue
+    )
+    diagnostic("revise.seed-after-verified")
+}
+
+/// Full-disk revise cell, commit half: with the competitor filler removed,
+/// a fresh owner re-verifies the unchanged position-3 table, then replays
+/// the byte-identical `.replace` request. The under-pressure refusal was a
+/// capacity fact, not a durable state change, so the same request must now
+/// commit at exactly position 4 with the blob's Content Version 2.
+private func pressureReviseCommit(storeURL: URL) async throws {
+    diagnostic("revise-commit.phase-start")
+    let manifest = try ProbeManifest.read(siblingOf: storeURL)
+    let blobManifest = try LargeBlobManifest.read(siblingOf: storeURL)
+    diagnostic("revise-commit.manifest-read")
+    let history = try await openHistory(at: storeURL)
+    diagnostic("revise-commit.store-opened")
+    let blobReference = try await requireBlobSeedState(
+        history,
+        manifest: manifest,
+        blobItemID: blobManifest.itemID
+    )
+    diagnostic("revise-commit.seed-verified")
+
+    let receipt = try await history.perform(pressureReviseRequest(
+        itemID: blobReference.id,
+        expected: blobReference.contentVersion
+    ))
+    guard case .committed(let commit) = receipt,
+          commit.position.rawValue == 4,
+          case .revised(let revised) = commit.outcome,
+          revised.id == blobReference.id,
+          revised.contentVersion.rawValue == 2 else {
+        throw ProbeFailure.unexpectedState
+    }
+    diagnostic("revise-commit.revision-committed")
+}
+
+/// Full-disk revise cell, durable-verify half: a fresh process proves the
+/// post-release commit survived its owner's termination — position 4, the
+/// blob's canonical still patternA while effective is now patternB, exactly
+/// one active revision of `largeBlobByteCount` bytes, occurrence facts
+/// untouched (a revise never moves lastCopiedAt,
+/// `RetentionReviseComposition.swift` §7), and the alpha/bravo seed rows
+/// byte-for-byte as `requireSeedState` pins them. All payload comparisons
+/// are direct `Data ==` — never digests.
+private func pressureReviseVerify(storeURL: URL) async throws {
+    diagnostic("revise-verify.phase-start")
+    let manifest = try ProbeManifest.read(siblingOf: storeURL)
+    let blobManifest = try LargeBlobManifest.read(siblingOf: storeURL)
+    diagnostic("revise-verify.manifest-read")
+    let history = try await openHistory(at: storeURL)
+    diagnostic("revise-verify.store-opened")
+    let page = try await history.browse(HistoryBrowseRequest(
+        kind: .recent,
+        limit: 10
+    ))
+    guard page.position.rawValue == 4,
+          page.next == nil,
+          page.rows.count == 3 else {
+        throw ProbeFailure.unexpectedState
+    }
+    try requireSeedTextRow(
+        page.rows[1],
+        id: manifest.bravo,
+        text: bravoText,
+        date: bravoDate,
+        source: bravoSource
+    )
+    try requireSeedTextRow(
+        page.rows[2],
+        id: manifest.alpha,
+        text: alphaText,
+        date: alphaFirstDate,
+        source: alphaFirstSource
+    )
+    guard page.rows[0].item.id.rawValue == blobManifest.itemID,
+          page.rows[0].item.contentVersion.rawValue == 2,
+          page.rows[0].title == largeBlobType,
+          page.rows[0].typeIdentifiers == [largeBlobType],
+          page.rows[0].lastCopiedAt == pressureReviseDate,
+          page.rows[0].copyCount == 1,
+          page.rows[0].lastSource == pressureReviseSource,
+          page.rows[0].pinnedPosition == nil,
+          page.rows[0].search == nil else {
+        throw ProbeFailure.unexpectedState
+    }
+
+    let canonicalBytes = largeBlobBytes()
+    let revisedBytes = validationRevisedBlobBytes()
+    let blobItemID = page.rows[0].item.id
+    let blobDetails = try await history.details(for: blobItemID)
+    guard blobDetails.item == page.rows[0].item,
+          blobDetails.canonical.count == 1,
+          blobDetails.canonical[0].typeIdentifier == largeBlobType,
+          blobDetails.canonical[0].bytes == canonicalBytes,
+          blobDetails.effective.count == 1,
+          blobDetails.effective[0].typeIdentifier == largeBlobType,
+          blobDetails.effective[0].bytes == revisedBytes,
+          blobDetails.revisions.count == 1,
+          blobDetails.revisions[0].isActive,
+          blobDetails.revisions[0].byteCount == largeBlobByteCount,
+          blobDetails.occurrence.firstCopiedAt == pressureReviseDate,
+          blobDetails.occurrence.lastCopiedAt == pressureReviseDate,
+          blobDetails.occurrence.count == 1,
+          blobDetails.occurrence.firstSource == pressureReviseSource,
+          blobDetails.occurrence.lastSource == pressureReviseSource,
+          blobDetails.pinnedPosition == nil else {
+        throw ProbeFailure.unexpectedState
+    }
+
+    let bravoDetails = try await history.details(for: page.rows[1].item.id)
+    try requireSeedTextDetails(
+        bravoDetails,
+        row: page.rows[1],
+        id: manifest.bravo,
+        text: bravoText,
+        date: bravoDate,
+        source: bravoSource
+    )
+    let alphaDetails = try await history.details(for: page.rows[2].item.id)
+    try requireSeedTextDetails(
+        alphaDetails,
+        row: page.rows[2],
+        id: manifest.alpha,
+        text: alphaText,
+        date: alphaFirstDate,
+        source: alphaFirstSource
+    )
+    diagnostic("revise-verify.durable-state-verified")
+}
+
+/// Prints one closed-set characterization token and terminates the child
+/// successfully: the observed branch — not this process's exit status — is
+/// the recorded evidence. Self-managed termination precedent: the crash and
+/// regexp characterization phases own their exits.
+private func publishOpenCharacterizationToken(_ token: String) -> Never {
+    FileHandle.standardOutput.write(Data("\(token)\n".utf8))
+    exit(EXIT_SUCCESS)
+}
+
+/// Maps one caught open failure onto the closed typed-or-opened
+/// disjunction: `.persistence(.openStore)` (ModelContainer construction,
+/// DATA-14's flat exit) and `.persistence(.transaction)` (the startup
+/// singleton transaction failing on ENOSPC) are the only accepted typed
+/// branches on a full volume. Any other typed failure is a closed-set
+/// violation and fails the cell rather than silently widening the set.
+private func fullVolumeOpenToken(
+    for failure: HistoryFailure,
+    refusedOpenStore: String,
+    refusedTransaction: String
+) throws -> String {
+    switch failure {
+    case .persistence(.openStore):
+        return refusedOpenStore
+    case .persistence(.transaction):
+        return refusedTransaction
+    default:
+        throw ProbeFailure.unexpectedState
+    }
+}
+
+/// Full-disk fresh-open characterization (Card 6B; doc 11 §4.3): a fresh
+/// store's `open` writes only SQLite/WAL scalar files, which never pass the
+/// §16 stamped-plan admission (`externalDemandBytes` counts only
+/// create/revise/prune plans), so the honest assertion on a filled volume
+/// is the closed disjunction of typed outcomes — each branch a recorded
+/// empirical fact, never a failure. Success stays possible because dd's
+/// fixed-block fill can leave more slack than SQLite's first allocations
+/// need. A crash, any other typed failure, or a non-HistoryFailure throw
+/// fails the cell with the throw site preserved on stderr.
+private func openFullVolume(storeURL: URL) async throws -> Never {
+    do {
+        _ = try await openHistory(at: storeURL)
+    } catch let failure as HistoryFailure {
+        publishOpenCharacterizationToken(try fullVolumeOpenToken(
+            for: failure,
+            refusedOpenStore: "OPENFULLVOLUME_OPENSTORE_REFUSED",
+            refusedTransaction: "OPENFULLVOLUME_TRANSACTION_REFUSED"
+        ))
+    } catch {
+        throw ProbeFailure.unexpectedState
+    }
+    publishOpenCharacterizationToken("OPENFULLVOLUME_OPENED")
+}
+
+/// Full-disk reopen characterization of the already-seeded main store: the
+/// same closed typed-or-opened disjunction, with one stronger success
+/// criterion — "readable" requires the position-2 seed projection to
+/// hydrate through the public browse/details reads, not merely the
+/// container to construct. WAL/shm creation on a full volume can itself
+/// hit ENOSPC, so both refusal branches are equally legal recorded facts.
+private func openSeededFullVolume(storeURL: URL) async throws -> Never {
+    let manifest = try ProbeManifest.read(siblingOf: storeURL)
+    let history: SwiftDataHistory
+    do {
+        history = try await openHistory(at: storeURL)
+    } catch let failure as HistoryFailure {
+        publishOpenCharacterizationToken(try fullVolumeOpenToken(
+            for: failure,
+            refusedOpenStore: "OPENSEEDEDONFULLVOLUME_OPENSTORE_REFUSED",
+            refusedTransaction: "OPENSEEDEDONFULLVOLUME_TRANSACTION_REFUSED"
+        ))
+    } catch {
+        throw ProbeFailure.unexpectedState
+    }
+    try await requireSeedState(history, manifest: manifest)
+    publishOpenCharacterizationToken("OPENSEEDEDONFULLVOLUME_OK")
+}
+
 private func verify(storeURL: URL) async throws {
     let manifest = try ProbeManifest.read(siblingOf: storeURL)
     let history = try await openHistory(at: storeURL)
@@ -1677,6 +2337,16 @@ private struct HistoryRestartProbe {
                 try await pressureCapture(storeURL: storeURL)
             case .verifySeed:
                 try await verifySeed(storeURL: storeURL)
+            case .openFullVolume:
+                try await openFullVolume(storeURL: storeURL)
+            case .openSeededFullVolume:
+                try await openSeededFullVolume(storeURL: storeURL)
+            case .pressureRevise:
+                try await pressureRevise(storeURL: storeURL)
+            case .pressureReviseCommit:
+                try await pressureReviseCommit(storeURL: storeURL)
+            case .pressureReviseVerify:
+                try await pressureReviseVerify(storeURL: storeURL)
             case .retentionSeed:
                 try await retentionSeed(storeURL: storeURL)
             case .retentionVerify:
@@ -1720,6 +2390,12 @@ private struct HistoryRestartProbe {
                 try await largeBlobCrashCommit(storeURL: storeURL)
             case .largeBlobVerify:
                 try await largeBlobVerify(storeURL: storeURL)
+            case .largeBlobMidTransactionKillClosure:
+                try await largeBlobMidTransactionKillClosure(storeURL: storeURL)
+            case .largeBlobMidTransactionKillSave:
+                try await largeBlobMidTransactionKillSave(storeURL: storeURL)
+            case .largeBlobMidTransactionVerify:
+                try await largeBlobMidTransactionVerify(storeURL: storeURL)
             case .validateSeed:
                 try await validateSeed(storeURL: storeURL)
             case .validateAll:

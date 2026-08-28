@@ -52,7 +52,9 @@ public struct SummonShortcutSettings: Sendable {
         return false
     }
 
-    public var canReset: Bool {
+    /// Package (GOV-3): the Reset button is this module's Settings view;
+    /// `reset()` guards on this the same way, in-module.
+    package var canReset: Bool {
         status != .stopped
     }
 

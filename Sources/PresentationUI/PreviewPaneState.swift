@@ -40,13 +40,16 @@ public final class PreviewPaneState {
     public private(set) var previewedItem: HistoryItemReference?
 
     /// The dwell delay before a selection change auto-opens or retargets
-    /// the preview (Maccy's `previewDelay` default: 200 ms).
-    public let autoOpenDelay: Duration
+    /// the preview (Maccy's `previewDelay` default: 200 ms). The property is
+    /// package (GOV-3): only this module schedules the dwell; the public
+    /// `init(autoOpenDelay:)` parameter remains the seam.
+    package let autoOpenDelay: Duration
 
     /// Whether dwell auto-open is armed. The panel's key status drives this
     /// (`panelBecameKey`/`panelResignedKey`) so a background panel never
-    /// grows a preview.
-    public private(set) var isAutoOpenEnabled = true
+    /// grows a preview. Package (GOV-3): arming is driven only by the
+    /// in-module panel lifecycle methods.
+    package private(set) var isAutoOpenEnabled = true
 
     /// The user-preference half of the auto-open gate
     /// (`PanelAppearanceSettings.isPreviewAutoOpenEnabled`, pushed in by
@@ -56,7 +59,9 @@ public final class PreviewPaneState {
     /// flight never fires; the manual ⌃Space toggle and the manual-close
     /// suppression are unaffected. Re-enabling restores auto-open on the
     /// NEXT selection change (it never opens the pane by itself).
-    public var isAutoOpenPreferenceEnabled = true
+    /// Package (GOV-3): `HistoryPanelView` pushes the preference from the
+    /// injected appearance snapshot inside this module.
+    package var isAutoOpenPreferenceEnabled = true
 
     /// The pending dwell task; cancelled by every selection change, manual
     /// toggle, or panel transition.
@@ -143,8 +148,11 @@ public final class PreviewPaneState {
     /// The panel closed: clear the pane and keep automatic opening disarmed
     /// until AppKit reports that the panel became key again. Selection
     /// changes published while the panel is hidden therefore cannot leak
-    /// into the next visible session (review Card 9E).
-    public func panelClosed() {
+    /// into the next visible session (review Card 9E). Package (GOV-3): the
+    /// panel-close path that resets this state is this module's
+    /// `HistoryPanelView`; `panelBecameKey`/`panelResignedKey` above remain
+    /// the ClipyApp panel seam.
+    package func panelClosed() {
         cancelPendingAutoOpen()
         isOpen = false
         previewedItem = nil
