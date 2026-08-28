@@ -1,5 +1,7 @@
 /// PLAY-PY-GW0 pure connection-kind allow matrix.
 /// Owning spec: docs/v2/V2-05-external-gateway.md §0.2.
+/// The raw-value ceiling below also guards the 47-4 adjudication that no
+/// external retention operation spelling exists (V2-05 §2.2/§3.2; V2-02 §9).
 import Testing
 @testable import HistoryCore
 @testable import HistoryStorage
@@ -95,4 +97,22 @@ import Testing
     #expect(ExternalCapability(rawValue: 999) == nil)
     #expect(ExternalOperationKind(rawValue: 20) == nil)
     #expect(ExternalOperationKind(rawValue: 999) == nil)
+
+    // Task 47-4 adjudication guard: the external operation vocabulary is
+    // closed at exactly 19 cases (highest raw 19, `adminReadAudit`) because
+    // V2-05 §2.2/§3.2 and V2-02 §9 exclude any external retention spelling.
+    // A raw 20+ decoding to a case — e.g. a future retention operation — is
+    // a deliberate red, not a bug: adding one requires a V2-05 amendment
+    // that also updates this ceiling. The sweep runs to the same 999 anchor
+    // as the literal checks above, so a future case at ANY raw beyond 19
+    // (not just 20...40) trips this boundary.
+    for raw in Int16(20)...999 {
+        #expect(
+            ExternalOperationKind(rawValue: raw) == nil,
+            "new ExternalOperationKind requires a V2-05 amendment (§2.2 excludes external retention)"
+        )
+    }
+    for raw in Int16(1)...19 {
+        #expect(ExternalOperationKind(rawValue: raw) != nil)
+    }
 }

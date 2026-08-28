@@ -114,6 +114,10 @@ public enum UnavailableReason: Sendable, Equatable {
     /// before any write because its external payload provably cannot fit
     /// (docs/05-authority-kernel.md §16).
     case insufficientDiskSpace
+    /// A regexp scan was stopped at its fixed engine deadline, or the
+    /// engine abandoned the match internally without examining the whole
+    /// search range; retryable (docs/03b-instruction-set.md §8/§10).
+    case searchEngineDeadline
 }
 
 /// Persistence-layer failures, mapped at the storage boundary.

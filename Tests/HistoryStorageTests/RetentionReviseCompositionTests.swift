@@ -48,6 +48,14 @@
 /// over (the mirror of the R.6 sweep's corrupted-blob survivor fixture and
 /// the R.4 capture twin).
 ///
+/// The suite also pins the two resolved retention DEC discriminators:
+/// `DEC-REVERT-RACE` (§4.3 — a revert target resolved from the phase-1
+/// snapshot survives an interleaving same-item R3 prune that preserved
+/// `ContentVersion`, D5; target absence stays a preparation-time check) and
+/// `DEC-UNPIN-SWEEP` (§7 — `.unpin` loads no retention facts and retires
+/// nothing, and the just-unpinned item keeps its `lastCopiedAt` and is
+/// immediately the next count victim).
+///
 /// Hand-worked fixture values (single-representation ASCII text: one
 /// `public.utf8-plain-text` representation, so a revision's representation
 /// bytes equal its UTF-8 length, and an item's `canonicalBytes` equals the
@@ -1808,6 +1816,366 @@ struct RetentionReviseCompositionTests {
         let config = try #require(configRows.first)
         #expect(config.revisionPolicyEnabled == true)
         #expect(config.revisionMaxCount == 2)
+    }
+
+    // MARK: - Revert-target race between the phases (DEC-REVERT-RACE)
+
+    /// `DEC-REVERT-RACE` (V2-02 §4.3, the decision paragraph after the
+    /// phase-2 policy re-read bullet): a revert-to-revision proposal carries
+    /// the bytes resolved from the PHASE-1 SNAPSHOT; phase 2 rechecks only
+    /// the `02` §11 OCC contract and never re-verifies the target revision's
+    /// existence in the reloaded lineage. An interleaving
+    /// `.setRetentionPolicies` R3 prune that removed the target preserves
+    /// `ContentVersion` (D5 — R3 pruning mints no version), so the parked
+    /// revert still commits and mints a NEW revision from the cached bytes;
+    /// it never repoints or resurrects a revision ID (`02` §14 D1/D4).
+    ///
+    /// Arithmetic: target canonical 20 bytes; seeded lineage
+    /// [rev1(8), rev2(9), rev3(10)] at version 4 / position 4; the seeded R3
+    /// config is `maxRevisionsPerItem = 1`. The parked revert proposes
+    /// rev1's 8 bytes at `expected` 4. The interleaving PUBLIC sweep (the
+    /// same policies) prunes the inactive prefix [rev1, rev2] — the stored
+    /// active rev3 survives (D3) — at the PRESERVED version 4 (D5),
+    /// position 5, receipt `.retentionPoliciesSet(retiredItems: 0,
+    /// prunedRevisions: 2)`. The resumed phase 2 reloads [rev3], passes OCC
+    /// (4 == 4, no target-existence recheck), and recomputes its OWN prune
+    /// over [rev3] + the appended revert revision (count 2 > 1 → prune
+    /// rev3), landing lineage [appended] at version 5 / position 6 with the
+    /// projection row at 1 revision / 8 bytes. The rejected
+    /// phase-2-existence alternative would fail the resumed commit
+    /// `.revisionNotFound`; the discriminator leg re-prepares the SAME
+    /// `.revert(to: .revision(rev1))` request against the post-commit store
+    /// and pins that target absence is a PREPARATION-time check only —
+    /// phase 1 now throws `.revisionNotFound` because the snapshot no
+    /// longer carries rev1 (`05` §6.2), so the snapshot semantics is
+    /// snapshot-scoped, not an unconditional admit of absent targets.
+    @Test("revert target pruned between phases: phase 2 commits the snapshot bytes (DEC-REVERT-RACE)")
+    func revertTargetPrunedBetweenPhasesCommitsSnapshotBytes() async throws {
+        let storeURL = WSSupport.tempStoreURL("r5-dec-revert-race")
+        defer { WSSupport.removeStore(storeURL) }
+        let authority = try await WSSupport.makeAuthority(storeURL: storeURL)
+        let revisionPreparation = RevisionPreparationActor()
+
+        // Arrange: one item — canonical 20 bytes — version 1, position 1;
+        // seeded lineage [rev1(8), rev2(9), rev3(10)] — version 4, position
+        // 4 — with the config still all-disabled during seeding.
+        let targetText = "r5 revert race base!"
+        let insert = try await IngestPreparationActor().prepare(
+            WSSupport.textCapture(
+                targetText,
+                observedAt: Date(timeIntervalSinceReferenceDate: 700_414_000),
+                source: "com.example.r5.decrr"
+            )
+        )
+        let insertReceipt = try await authority.commitCapture(insert)
+        guard case let .committed(insertCommit) = insertReceipt,
+              case let .inserted(target) = insertCommit.outcome else {
+            Issue.record("R.5 arrange: expected a committed insert, got \(insertReceipt)")
+            return
+        }
+        #expect(insertCommit.position.rawValue == 1)
+        try await Self.seedStorageRevisions(
+            target.id,
+            byteCounts: [8, 9, 10],
+            authority: authority,
+            preparation: revisionPreparation
+        )
+        // The R3 view both phases and the sweep share: threshold 1 (behind
+        // the Authority's back; every commit re-reads the singleton).
+        try WSSupport.seedRetentionConfig(
+            storeURL: storeURL,
+            revisions: RevisionRetention(
+                maxRevisionsPerItem: 1,
+                maxRevisionBytesPerItem: nil
+            )
+        )
+
+        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let seeded = try Self.lineage(of: target.id, in: container)
+        #expect(seeded.item.revisions.count == 3)
+        #expect(seeded.item.contentVersion.rawValue == 4)
+        #expect(try WSSupport.fetchPosition(container).rawValue == 4)
+        let rev1ID = seeded.item.revisions[0].id
+        let rev2ID = seeded.item.revisions[1].id
+        let rev3ID = seeded.item.revisions[2].id
+        let targetContent = seeded.item.revisions[0].content
+
+        // Phase one of the parked revert: resolve rev1's bytes FROM THE
+        // SNAPSHOT (`05` §6.2) at expected version 4.
+        let parkedRequest = RevisionRequest(
+            itemID: target.id,
+            expected: ContentVersion(rawValue: 4),
+            intent: .revert(to: .revision(rev1ID))
+        )
+        let parkedInputs = try await authority.revisionPreparationInputs(parkedRequest)
+        let parkedBundle = try await revisionPreparation.prepare(
+            parkedRequest,
+            from: parkedInputs.snapshot,
+            retentionPolicies: parkedInputs.retentionPolicies
+        )
+        let appendedID = parkedBundle.domain.candidateRevisionID
+
+        // Park the revert at its commit-entry seam; the PUBLIC same-item
+        // sweep commits in between (pruning [rev1, rev2] at the preserved
+        // version 4, D5); the parked revert resumes into the OCC recheck.
+        let gate = SuspensionGate()
+        let latch = FirstParkLatch()
+        await authority.setSuspensionHandler { point in
+            guard point == .revisionCommitEntry else { return }
+            let first = await latch.consume()
+            guard first else { return }
+            await gate.park(at: point.rawValue)
+        }
+        let sweep = HistoryRetentionPolicies(
+            age: nil,
+            storage: nil,
+            revisions: RevisionRetention(
+                maxRevisionsPerItem: 1,
+                maxRevisionBytesPerItem: nil
+            )
+        )
+        let results = try await gate.runParked(
+            at: AuthoritySuspensionPoint.revisionCommitEntry.rawValue,
+            operation: { () async throws -> HistoryReceipt in
+                try await authority.commitRevision(parkedRequest, parkedBundle)
+            },
+            whileCommitting: { () async throws -> HistoryReceipt in
+                try await authority.commitRetentionPolicies(sweep)
+            }
+        )
+
+        // The interference: the sweep pruned the inactive prefix
+        // [rev1, rev2] (2 revisions), retired no items, one commit at
+        // position 5.
+        guard case let .committed(sweepCommit) = results.interfering,
+              case let .retentionPoliciesSet(sweepRetired, sweepPruned) =
+                  sweepCommit.outcome else {
+            Issue.record(
+                "R.5: expected a committed .retentionPoliciesSet sweep, got \(results.interfering)"
+            )
+            return
+        }
+        #expect(sweepRetired == 0)
+        #expect(sweepPruned == 2)
+        #expect(sweepCommit.position.rawValue == 5)
+
+        // DEC-REVERT-RACE: the revert still COMMITS. The sweep's R3 prune
+        // preserved the OCC token (D5) and phase 2 never re-verifies rev1's
+        // existence — `.revised` at version 5, one commit at position 6.
+        guard case let .committed(revertCommit) = results.paused,
+              case let .revised(revertReference) = revertCommit.outcome else {
+            Issue.record(
+                "R.5: expected a committed .revised revert, got \(results.paused)"
+            )
+            return
+        }
+        #expect(revertReference.id == target.id)
+        #expect(revertReference.contentVersion.rawValue == 5)
+        #expect(revertCommit.position.rawValue == 6)
+
+        // The final durable state through the INDEPENDENT container and the
+        // production codec: lineage [appended] alone — phase 2 recomputed
+        // its own prune over the RELOADED [rev3] + [appended] (count 2 > 1)
+        // — the appended revision active carrying EXACTLY rev1's snapshot
+        // bytes, and no pruned ID resurrected.
+        let verification = try WSSupport.makeContainer(storeURL: storeURL)
+        let rows = try WSSupport.fetchRows(verification)
+        #expect(rows.count == 1)
+        let row = try #require(rows.first)
+        #expect(row.id == target.id.rawValue)
+        #expect(row.contentVersionRaw == 5)
+        let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
+        #expect(canonical.representations.map(\.content.bytes) == [Data(targetText.utf8)])
+        let decoded = try RevisionStateBlobCodec.decode(
+            row.revisionStateBlob,
+            canonical: canonical
+        )
+        #expect(decoded.revisions.map(\.id) == [appendedID])
+        #expect(decoded.activeRevisionID == appendedID)
+        #expect(decoded.revisions.first?.content == targetContent)
+        for prunedID in [rev1ID, rev2ID, rev3ID] {
+            #expect(!decoded.revisions.map(\.id).contains(prunedID))
+        }
+        #expect(try WSSupport.fetchPosition(verification).rawValue == 6)
+
+        // The projection row restamped in the same transaction: post-prune
+        // post-append scalars 1 revision / 8 bytes (rev1's snapshot bytes),
+        // canonical bytes untouched (20).
+        let bytesRow = try #require(
+            try Self.fetchBytesRow(for: target.id, in: verification)
+        )
+        #expect(bytesRow.canonicalBytes == 20)
+        #expect(bytesRow.revisionCount == 1)
+        #expect(bytesRow.revisionBytes == 8)
+
+        // Discriminator leg — target absence is a PREPARATION-time check
+        // only (`05` §6.2): the SAME revert request re-prepared against the
+        // post-commit store throws `.revisionNotFound` because the phase-1
+        // snapshot no longer carries rev1. The snapshot tolerance is
+        // snapshot-scoped, not an unconditional admit of absent targets.
+        let postCommitRequest = RevisionRequest(
+            itemID: target.id,
+            expected: ContentVersion(rawValue: 5),
+            intent: .revert(to: .revision(rev1ID))
+        )
+        let postCommitInputs = try await authority.revisionPreparationInputs(
+            postCommitRequest
+        )
+        await #expect(throws: HistoryFailure.revisionNotFound(rev1ID)) {
+            _ = try await revisionPreparation.prepare(
+                postCommitRequest,
+                from: postCommitInputs.snapshot,
+                retentionPolicies: postCommitInputs.retentionPolicies
+            )
+        }
+    }
+
+    // MARK: - Unpin is not a retention trigger (DEC-UNPIN-SWEEP, §7)
+
+    /// `DEC-UNPIN-SWEEP` (V2-02 §7, the decision paragraph after the B11
+    /// asymmetry; the trigger-matrix `.unpin` row): `.unpin` is not a
+    /// retention trigger and carries no grace window. The unpin commit
+    /// performs only the pinned-lane shift (`02` §10) — it loads no
+    /// retention/expansion facts and retires nothing — so a store may
+    /// legitimately hold more unpinned items than `maximumUnpinnedItems`
+    /// until the next count trigger evaluates the complete admitted state,
+    /// and a just-unpinned item keeps its original `lastCopiedAt` and is
+    /// immediately a fully eligible victim in the deterministic
+    /// oldest-first order (D16; `02` §12).
+    ///
+    /// Fixture (the v1 count lane through the public facade): O captured at
+    /// t=…100 (unpinned), P captured at t=…000 then pinned `.first` (OLDER
+    /// than O — the eviction order is `lastCopiedAt`, not insertion), Q
+    /// captured at t=…200 then pinned `.last`; `.setRetentionPolicy(1)`
+    /// commits at position 6 with `removedCount == 0` (the only unpinned
+    /// item O already satisfies the count). ACT — `.unpin(P)`: the receipt
+    /// is `.unpinned(P)` with NO destructive retention effect, O and P both
+    /// retained (unpinned count 2 > policy 1 and nobody retires), P's
+    /// `pinOrdinal == nil` with its original `lastCopiedAt` intact, and
+    /// exactly ONE ChangePosition advance (the unpin commit itself). ACT 2
+    /// — capture N at t=…300: count enforcement fires INSIDE N's capture
+    /// commit (`02` §12 — the primary is never its own victim; pinned Q is
+    /// exempt, D13) and retires exactly the two oldest non-primary unpinned
+    /// items in `lastCopiedAt` order — P and O (the just-unpinned P is
+    /// immediately a fully eligible victim; the victim SET, not its internal
+    /// order, is what the assertions pin). The rejected sweep-on-unpin
+    /// alternative would have retired inside the unpin commit (failing the
+    /// first leg); any protection window would have kept P alive past N's
+    /// capture (failing the second).
+    @Test("unpin does not sweep and the just-unpinned item is the next victim (DEC-UNPIN-SWEEP)")
+    func unpinDoesNotSweepAndJustUnpinnedItemIsNextVictim() async throws {
+        let storeURL = WSSupport.tempStoreURL("r5-dec-unpin-sweep")
+        defer { WSSupport.removeStore(storeURL) }
+        let history = try await WSSupport.openHistory(storeURL: storeURL)
+
+        // Arrange: O (t=…100, unpinned), P (t=…000, pinned `.first`),
+        // Q (t=…200, pinned `.last`) — positions 1–5.
+        let o = try await Self.capture(
+            "r5 dec unpinned o", at: 700_460_100,
+            source: "com.example.r5.decus", in: history
+        )
+        let p = try await Self.capture(
+            "r5 dec unpinned p", at: 700_460_000,
+            source: "com.example.r5.decus", in: history
+        )
+        let pinPReceipt = try await history.perform(.placePinned(p.id, at: .first))
+        guard case .committed = pinPReceipt else {
+            Issue.record("R.5 arrange: expected the P pin to commit, got \(pinPReceipt)")
+            return
+        }
+        let q = try await Self.capture(
+            "r5 dec unpinned q", at: 700_460_200,
+            source: "com.example.r5.decus", in: history
+        )
+        let pinQReceipt = try await history.perform(.placePinned(q.id, at: .last))
+        guard case .committed = pinQReceipt else {
+            Issue.record("R.5 arrange: expected the Q pin to commit, got \(pinQReceipt)")
+            return
+        }
+
+        // The v1 count trigger at 1 — itself a count-only commit (B11): the
+        // only unpinned item O already satisfies it, so `removedCount == 0`
+        // (position 6).
+        let policyReceipt = try await history.perform(
+            .setRetentionPolicy(maximumUnpinnedItems: 1)
+        )
+        guard case let .committed(policyCommit) = policyReceipt,
+              case let .retentionPolicySet(removedCount) = policyCommit.outcome else {
+            Issue.record("R.5 arrange: expected a committed policy set, got \(policyReceipt)")
+            return
+        }
+        #expect(removedCount == 0)
+        #expect(policyCommit.position.rawValue == 6)
+
+        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let positionAfterArrange = try WSSupport.fetchPosition(container).rawValue
+        #expect(positionAfterArrange == 6)
+
+        // ACT — `.unpin(P)`: the receipt stays `.unpinned(P)` (not a
+        // removal), ONE position advance, no destructive retention effect.
+        let unpinReceipt = try await history.perform(.unpin(p.id))
+        guard case let .committed(unpinCommit) = unpinReceipt,
+              case let .unpinned(unpinnedID) = unpinCommit.outcome else {
+            Issue.record("R.5: expected a committed .unpinned, got \(unpinReceipt)")
+            return
+        }
+        #expect(unpinnedID == p.id)
+        #expect(!unpinCommit.hasDestructiveRetentionEffects)
+        #expect(unpinCommit.position.rawValue == 7)
+
+        // No sweep (§7 / DEC-UNPIN-SWEEP): O and P both retained with P
+        // genuinely unpinned — the over-policy state (unpinned count 2 >
+        // policy 1) is legal — and P keeps its original `lastCopiedAt`.
+        let afterUnpin = Set(
+            try WSSupport.fetchRows(container).map { HistoryItemID(rawValue: $0.id) }
+        )
+        #expect(afterUnpin == Set([o.id, p.id, q.id]))
+        let pRow = try #require(
+            try WSSupport.fetchRows(container).first { $0.id == p.id.rawValue }
+        )
+        #expect(pRow.pinOrdinal == nil)
+        #expect(pRow.lastCopiedAt == Date(timeIntervalSinceReferenceDate: 700_460_000))
+        let qRow = try #require(
+            try WSSupport.fetchRows(container).first { $0.id == q.id.rawValue }
+        )
+        #expect(qRow.pinOrdinal != nil)
+        #expect(try WSSupport.fetchPosition(container).rawValue == 7)
+
+        // ACT 2 — the trigger leg: capture N (t=…300, the protected
+        // primary, plan invariant 7) lets count enforcement fire inside the
+        // SAME commit.
+        let captureReceipt = try await history.perform(.capture(
+            WSSupport.textCapture(
+                "r5 dec unpinned n",
+                observedAt: Date(timeIntervalSinceReferenceDate: 700_460_300),
+                source: "com.example.r5.decus"
+            )
+        ))
+        guard case let .committed(nCommit) = captureReceipt,
+              case let .inserted(n) = nCommit.outcome else {
+            Issue.record("R.5: expected a committed .inserted capture, got \(captureReceipt)")
+            return
+        }
+
+        // No grace window: count enforcement retired exactly the two oldest
+        // non-primary unpinned items in `lastCopiedAt` order — P and O (the
+        // victim set, not its internal order, is what is asserted) —
+        // inside N's capture commit (the capture receipt carries no retired
+        // count, §12; the stamped retention-effect flag is the destructive
+        // fact), leaving N plus the still-pinned Q and ONE position advance.
+        #expect(nCommit.hasDestructiveRetentionEffects)
+        #expect(nCommit.position.rawValue == 8)
+        let survivors = Set(
+            try WSSupport.fetchRows(container).map { HistoryItemID(rawValue: $0.id) }
+        )
+        #expect(survivors == Set([n.id, q.id]))
+        #expect(!survivors.contains(o.id))
+        #expect(!survivors.contains(p.id))
+        let qSurvivorRow = try #require(
+            try WSSupport.fetchRows(container).first { $0.id == q.id.rawValue }
+        )
+        #expect(qSurvivorRow.pinOrdinal != nil)
+        #expect(try WSSupport.fetchPosition(container).rawValue == 8)
     }
 
     // MARK: - Zero blob decodes on the planning path (RET-PLATFORM-2, RET-PERF-3)

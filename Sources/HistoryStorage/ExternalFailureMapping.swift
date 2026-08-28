@@ -81,6 +81,26 @@ internal func mapExternalHistoryFailure(
             case .readRecent, .readSearch, .readDetails, .readPastePayload:
                 return invariantMapping()
             }
+        case .searchEngineDeadline:
+            // The engine-deadline failure can only originate inside a
+            // started regexp scan (03b §8); the original typed failure rides
+            // the existing `.history(source)` carrier so the external wire
+            // vocabulary stays unchanged.
+            switch operation {
+            case .readSearch:
+                return ExternalHistoryFailureMapping(
+                    failure: .history(source),
+                    auditFailureKind: .temporarilyUnavailable,
+                    auditDenialReason: nil
+                )
+            case .readRecent,
+                 .readDetails,
+                 .readPastePayload,
+                 .managePin,
+                 .manageUnpin,
+                 .manageRemove:
+                return invariantMapping()
+            }
         }
 
     case .invalidInput(let reason):

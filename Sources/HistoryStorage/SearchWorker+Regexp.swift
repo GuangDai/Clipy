@@ -1,5 +1,12 @@
 /// Regexp-mode evaluation and pattern-shape screening (03b §8).
 /// Split out of SearchWorker.swift (file-size hygiene); same target, unchanged semantics.
+///
+/// REVIEW Card 11C adjudication (03b §8): the frozen rejection grammar is
+/// unchanged — a top-level ambiguous-quantifier chain stays admissible — and
+/// the scan operation is instead Apple's documented interruptible iterator
+/// (`enumerateMatches` with `.reportProgress`/`.reportCompletion`) under a
+/// fixed per-request engine deadline, so an admitted slow pattern can no
+/// longer run uninterruptibly on this actor.
 import Foundation
 import HistoryCore
 import HistoryDomain
@@ -15,6 +22,13 @@ extension SearchWorker {
     /// the first match wins; the default row order is preserved. The body
     /// excerpt windows only that bounded prefix, while its trailing ellipsis
     /// still records when the stored body continues beyond the scan bound.
+    ///
+    /// - Throws: `.invalidInput(.invalidRegularExpression)` at admission
+    ///   (03b §8); `.temporarilyUnavailable(.searchEngineDeadline)` when the
+    ///   request's fixed engine deadline elapses or the engine abandons the
+    ///   match internally mid-scan (03b §8 Card 11C — the whole request
+    ///   fails, no partial results); `CancellationError` when cooperative
+    ///   cancellation is observed inside the engine's progress callback.
     internal func evaluateRegexp(
         term: String,
         in corpus: SearchCorpusSnapshot,
@@ -37,6 +51,12 @@ extension SearchWorker {
         } catch {
             throw HistoryFailure.invalidInput(.invalidRegularExpression)
         }
+
+        // One engine deadline per evaluateRegexp request (03b §8 Card 11C):
+        // both bounded-prefix scans below observe the same monotonic instant.
+        let engineDeadline = ContinuousClock().now.advanced(
+            by: regexpEngineDeadline
+        )
 
         var evaluated: [EvaluatedRow] = []
         var scanTracker = OrderPreservingScanTracker(directive: directive)
@@ -93,12 +113,10 @@ extension SearchWorker {
             let titlePrefix = String(
                 row.title.prefix(limits.maximumRegexpTitleBodyPrefixCharacters)
             )
-            if let match = regex.firstMatch(
+            if let match = try Self.firstInterruptibleMatch(
+                of: regex,
                 in: titlePrefix,
-                range: NSRange(
-                    titlePrefix.startIndex..<titlePrefix.endIndex,
-                    in: titlePrefix
-                )
+                deadline: engineDeadline
             ) {
                 // Title match: `NSRegularExpression` already reports
                 // UTF-16 offsets, and the prefix's offsets index the title
@@ -140,12 +158,10 @@ extension SearchWorker {
                 maximumCharacters: limits.maximumRegexpTitleBodyPrefixCharacters
             )
             let bodyPrefix = String(bodyScan.text)
-            guard let match = regex.firstMatch(
+            guard let match = try Self.firstInterruptibleMatch(
+                of: regex,
                 in: bodyPrefix,
-                range: NSRange(
-                    bodyPrefix.startIndex..<bodyPrefix.endIndex,
-                    in: bodyPrefix
-                )
+                deadline: engineDeadline
             ) else {
 #if DEBUG
                 recordProgressIfNeeded()
@@ -214,6 +230,84 @@ extension SearchWorker {
         )
 #endif
         return evaluated
+    }
+
+    /// Why an interruptible scan ended without a first match (03b §8
+    /// Card 11C): the request's engine deadline elapsed, cooperative
+    /// cancellation was observed inside the engine's periodic progress
+    /// callback, or the engine abandoned the match internally.
+    private enum RegexpEngineStop {
+        case deadline
+        case cancellation
+        case internalError
+    }
+
+    /// The first-match scan operation behind both bounded prefixes
+    /// (03b §8 Card 11C adjudication): Apple's documented interruptible
+    /// iterator instead of the never-interruptible `firstMatch` (progress
+    /// and completion flags have no effect for that method). The first
+    /// reported result wins and stops the enumeration, so the returned
+    /// result and its UTF-16 offsets are exactly `firstMatch`'s over the
+    /// same full-string range. Only the engine's periodic `.progress`
+    /// callback — its sole interruptible moment — observes the request
+    /// deadline and cooperative cancellation; `stop` is out-only and is
+    /// set only inside the block. A `.reportCompletion`
+    /// `.internalError` abandonment (e.g. an expression requiring
+    /// exponential memory) is an explicit failure, never a silent
+    /// no-match. After the call returns, a deadline or internal-error stop
+    /// throws the typed `.temporarilyUnavailable(.searchEngineDeadline)`
+    /// — the caller discards every partially collected row — and a
+    /// cancellation stop surfaces as `CancellationError`.
+    private static func firstInterruptibleMatch(
+        of regex: NSRegularExpression,
+        in text: String,
+        deadline: ContinuousClock.Instant
+    ) throws -> NSTextCheckingResult? {
+        var match: NSTextCheckingResult?
+        var stopReason: RegexpEngineStop?
+        let clock = ContinuousClock()
+        regex.enumerateMatches(
+            in: text,
+            options: [.reportProgress, .reportCompletion],
+            range: NSRange(text.startIndex..<text.endIndex, in: text)
+        ) { result, flags, stop in
+            if let result {
+                match = result
+                stop.pointee = true
+                return
+            }
+            // Engine-internal abandonment is checked BEFORE the progress
+            // branch and only while no first match exists: a hypothetical
+            // callback carrying both flags must still surface the
+            // abandonment, and an internalError reported after a found
+            // first match must not rewrite it (Apple documents
+            // internalError on completion callbacks only; both orderings
+            // are defensive).
+            if flags.contains(.internalError), match == nil {
+                stopReason = .internalError
+                stop.pointee = true
+                return
+            }
+            if flags.contains(.progress) {
+                if clock.now >= deadline {
+                    stopReason = .deadline
+                    stop.pointee = true
+                } else if Task.isCancelled {
+                    stopReason = .cancellation
+                    stop.pointee = true
+                }
+                return
+            }
+        }
+        if let stopReason {
+            switch stopReason {
+            case .deadline, .internalError:
+                throw HistoryFailure.temporarilyUnavailable(.searchEngineDeadline)
+            case .cancellation:
+                throw CancellationError()
+            }
+        }
+        return match
     }
 
     /// Conservative textual guards for the rejected unsafe-regexp shapes

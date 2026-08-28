@@ -51,6 +51,17 @@ internal actor SearchWorker {
     /// or mutable state leaves this actor (review playbook §16).
     internal static let cancellationRowInterval = 32
 
+    /// REVIEW Card 11C: the fixed per-request regexp engine deadline — the
+    /// same bound as the two-run master watchdog evidence that proved the
+    /// former `firstMatch` operation runs uninterruptibly past it on an
+    /// admitted pattern. Measured on the monotonic `ContinuousClock` and
+    /// enforced only inside the engine's periodic progress callback
+    /// (03b §8 adjudication). This bounds the demonstrated non-preemptible
+    /// hazard family; it is not a general preemption or total-time guarantee
+    /// (total scan cost remains the Part VI §9 envelope), so it deliberately
+    /// stays out of the `HistoryLimits` public profile.
+    internal static let defaultRegexpEngineDeadline: Duration = .milliseconds(2_000)
+
     /// The fixed `HistoryLimits.standard` safety profile
     /// (docs/06-cross-cutting.md §2): the common 4,096-UTF-8-byte search-term
     /// bound, the 512-Character regexp-pattern bound, the 64-Character
@@ -80,6 +91,11 @@ internal actor SearchWorker {
         @Sendable (SearchWorkerSuspensionPoint) async -> Void
     )?
 
+    /// The live per-request regexp engine deadline (03b §8 Card 11C). Kept at
+    /// `defaultRegexpEngineDeadline` in production; `@testable` tests inject a
+    /// zero or distant value along the `suspensionHandler` seam precedent.
+    internal var regexpEngineDeadline: Duration
+
 #if DEBUG
     /// Opt-in aggregate tracing for the off-Authority half of the search
     /// pipeline. The probe and all event work are absent from Release builds.
@@ -98,6 +114,7 @@ internal actor SearchWorker {
             isCaseSensitive: true
         )
         self.suspensionHandler = nil
+        self.regexpEngineDeadline = Self.defaultRegexpEngineDeadline
     }
 
     /// Installs or clears the deterministic evaluation/checkpoint handler.
@@ -106,6 +123,12 @@ internal actor SearchWorker {
         _ handler: (@Sendable (SearchWorkerSuspensionPoint) async -> Void)?
     ) {
         suspensionHandler = handler
+    }
+
+    /// Installs the deterministic regexp engine-deadline seam. Production
+    /// never calls it, so the fixed default stays in force there.
+    internal func setRegexpEngineDeadline(_ deadline: Duration) {
+        regexpEngineDeadline = deadline
     }
 
     /// Cooperative checkpoint shared by the three scan loops. Production's
@@ -186,6 +209,10 @@ internal actor SearchWorker {
     ///   `.invalidInput(.invalidRegularExpression)` for a rejected regexp
     ///   pattern after the shared byte bound passes (before any scanning,
     ///   03b §8);
+    ///   `.temporarilyUnavailable(.searchEngineDeadline)` when an admitted
+    ///   regexp scan is stopped at its fixed engine deadline or the engine
+    ///   abandons the match internally (03b §8 Card 11C — the whole search
+    ///   fails, no partial page);
     ///   `.snapshotExpired(current:)` when the continuation anchor names
     ///   no row in the computed order (04 §6).
     internal func page(

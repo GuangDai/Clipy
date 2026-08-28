@@ -82,9 +82,21 @@ HistoryStorage is built across roadmap steps 4–8 (one sub-section each).
   periodic progress and permits `stop` there. The parent has a process watchdog
   and records whether macOS 26 Foundation completed with or without a progress
   callback, or had to be terminated.
-  This is bounded engine evidence only: it does not claim arbitrary-regexp
-  safety, does not make Task cancellation interrupt synchronous ICU work, and
-  does not yet authorize a typed product timeout or a new rejection shape.
+  **Adjudicated and implemented (Card 11C, 03b §8):** two independent master CI
+  runs (32757784066 at PR #50 merge; 33177236846 at master f123410) proved the
+  discriminating fact — the then-current `firstMatch` operation ran
+  uninterruptibly past the 2-second watchdog on an admitted top-level
+  ambiguous-quantifier chain over the product's own 1,000-Character prefix,
+  while the same pattern completed through `enumerateMatches` +
+  `.reportProgress` + `stop`. The rejection grammar stays frozen; the scan
+  operation is now Apple's documented interruptible iterator with first-result
+  stop (identical UTF-16 ranges), a fixed 2,000 ms per-request engine deadline
+  and cooperative cancellation enforced inside the periodic progress callback,
+  and an explicit `.temporarilyUnavailable(.searchEngineDeadline)` failure —
+  no partial results — for deadline and engine-`internalError` stops. The
+  watchdog child remains only as this platform-regression observation, with
+  the progress scenario promoted to a hard completion assertion (not bound to
+  `sawProgress`).
 
 ## Progress
 

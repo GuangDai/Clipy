@@ -67,7 +67,12 @@ struct FailurePresentationTests {
 
     /// Every `UnavailableReason` case.
     private var unavailableReasons: [UnavailableReason] {
-        [.factProof, .dedupIndexRebuild, .insufficientDiskSpace]
+        [
+            .factProof,
+            .dedupIndexRebuild,
+            .insufficientDiskSpace,
+            .searchEngineDeadline,
+        ]
     }
 
     /// Every `PersistenceFailure` case.
@@ -161,6 +166,17 @@ struct FailurePresentationTests {
                 for: .temporarilyUnavailable(.insufficientDiskSpace)
             )
                 == "Not enough disk space. Free some space and try again."
+        )
+    }
+
+    /// REVIEW Card 11C (docs/03b-instruction-set.md §8/§10): the engine
+    /// deadline is retryable, so the message says so.
+    @Test func searchEngineDeadlineMessageSaysSearchIsSlowAndRetryable() {
+        #expect(
+            FailurePresentation.message(
+                for: .temporarilyUnavailable(.searchEngineDeadline)
+            )
+                == "Search is taking too long. Try again."
         )
     }
 }

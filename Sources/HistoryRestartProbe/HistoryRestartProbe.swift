@@ -39,6 +39,7 @@ private enum ProbePhase: String {
     case retentionRejectWrongKey
     case openRejectFutureSchema
     case openRejectCorruptBytes
+    case openRejectReadOnlyDirectory
     case gatewayAuditSeed
     case gatewayAuditCrash
     case gatewayAuditVerify
@@ -971,7 +972,8 @@ private func retentionVerifyUpdated(storeURL: URL) async throws {
 /// open-failure fixtures (REVIEW 05 §7 Q13): the fixture process must
 /// observe the production public-open classifier itself. Every
 /// `ModelContainer` construction failure — an impossible stored shape, a
-/// future schema, non-SQLite bytes — currently surfaces as one
+/// future schema, non-SQLite bytes, an existing read-only store
+/// directory — currently surfaces as one
 /// `.persistence(.openStore)` (03b §10); until a classification proof
 /// exists, no caller may auto-quarantine or silently recreate a store on
 /// that single outcome. The test owner creates the impossible on-disk shape
@@ -1699,6 +1701,11 @@ private struct HistoryRestartProbe {
                     expected: .persistence(.openStore)
                 )
             case .openRejectCorruptBytes:
+                try await requirePublicOpenFailure(
+                    at: storeURL,
+                    expected: .persistence(.openStore)
+                )
+            case .openRejectReadOnlyDirectory:
                 try await requirePublicOpenFailure(
                     at: storeURL,
                     expected: .persistence(.openStore)
