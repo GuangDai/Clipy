@@ -436,8 +436,10 @@ public final class ThumbnailStore {
     private static func elapsedMilliseconds(
         since start: ContinuousClock.Instant
     ) -> Double {
-        let components = ContinuousClock.Instant.now
-            .duration(since: start)
+        // `Instant.duration(to:)` — the earlier instant is the receiver
+        // (the repo's `SearchWorker+Exact.swift` precedent).
+        let components = start
+            .duration(to: ContinuousClock.Instant.now)
             .components
         return Double(components.seconds) * 1_000
             + Double(components.attoseconds) / 1_000_000_000_000_000
@@ -672,7 +674,8 @@ package final class ThumbnailMeasurement {
     }
 
     private var elapsedMilliseconds: Int64 {
-        let components = clock.now.duration(since: start).components
+        // Same `duration(to:)` receiver rule as the static helper above.
+        let components = start.duration(to: clock.now).components
         return Int64(components.seconds) * 1_000
             + Int64(components.attoseconds / 1_000_000_000_000_000)
     }
