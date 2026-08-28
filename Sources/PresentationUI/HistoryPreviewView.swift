@@ -296,9 +296,28 @@ struct HistoryPreviewView: View {
         )
     }
 
+    /// The quick-look overlay pins its exact reference at trigger time and
+    /// owns dismissal itself, so its target is independent of the preview
+    /// pane's dwell/visibility state. Content still flows through the same
+    /// fenced loader, typed failure taxonomy, and `clipy.preview.*`
+    /// identifiers as the side pane (SPEC-IMPL-007 / PREVIEW-FENCE-1).
+    package init(
+        viewState: HistoryViewState,
+        previewState: PreviewPaneState,
+        item: HistoryItemReference
+    ) {
+        self.viewState = viewState
+        self.previewState = previewState
+        selectionSource = .exactItem(item)
+        _loader = State(
+            initialValue: PreviewContentLoader(history: viewState.history)
+        )
+    }
+
     private enum SelectionSource {
         case paneState
         case observedRows(PreviewSelectionResolution)
+        case exactItem(HistoryItemReference)
     }
 
     private var targetItem: HistoryItemReference? {
@@ -307,6 +326,8 @@ struct HistoryPreviewView: View {
             previewState.previewedItem
         case .observedRows(let selection):
             selection.previewTarget(previewedItem: previewState.previewedItem)
+        case .exactItem(let item):
+            item
         }
     }
 
@@ -316,8 +337,8 @@ struct HistoryPreviewView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
             metadataBar
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
+                .padding(.horizontal, PanelTheme.spacingMedium)
+                .padding(.vertical, PanelTheme.spacingSmall)
         }
         // One load per exact observed reference; the loader's fence
         // discards a late result, so a superseded selection never renders
@@ -355,6 +376,10 @@ struct HistoryPreviewView: View {
                     image
                         .resizable()
                         .scaledToFit()
+                        // Fill the (window-sized) content area so a taller
+                        // panel shows a proportionally larger preview; the
+                        // image itself stays aspect-fit and centered.
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(8)
                         .accessibilityIdentifier("clipy.preview.image")
                 } else {
@@ -369,6 +394,9 @@ struct HistoryPreviewView: View {
                         .padding(10)
                         .accessibilityIdentifier("clipy.preview.text")
                 }
+                // The column is window-sized; the scroll view fills it so a
+                // taller panel reveals more of the body per page.
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .failed:
                 failedBody
             case .unsupported:

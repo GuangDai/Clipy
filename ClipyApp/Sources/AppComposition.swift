@@ -753,6 +753,15 @@ final class AppComposition {
     /// creates an independent task (REVIEW Card 6).
     private func admitCapture(_ capture: ClipboardCapture) {
         guard isStarted, acceptsCaptures else { return }
+        // The Settings ▸ Privacy ignore list is re-read on EVERY admission
+        // (a cheap immutable-struct load; no cached copy can go stale, so a
+        // Settings edit applies to the very next copy). An ignored source
+        // application is an expected do-not-retain decision with the same
+        // quiet stance as the concealed outcome (05 §6.1): it occupies no
+        // lane slot, publishes no health episode, and never reaches History.
+        guard !CaptureIgnoreList.load(from: .standard)
+            .ignores(capture.origin.sourceApplication)
+        else { return }
         guard let admitted = admittedCapture(capture) else {
             recordCaptureFailure(.invalidInput)
             return

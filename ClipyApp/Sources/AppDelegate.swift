@@ -187,6 +187,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSWorkspace.shared.activateFileViewerSelecting([directory])
         }
         super.init()
+        installPanelAppearanceObservation()
     }
 
     init(
@@ -210,6 +211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.storeURL = storeURL
         self.revealStoreLocationOperation = revealStoreLocationOperation
         super.init()
+        installPanelAppearanceObservation()
     }
 
     // MARK: - Observable state for the scenes (Settings)
@@ -296,9 +298,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// HistoryPanelView reads this same value to order its columns (Card 9C).
     private(set) var previewPlacement: PreviewPlacement = .trailing
 
+    /// Live panel appearance snapshot (row density, preview auto-open, side,
+    /// and width stop). Seeded once from defaults, then refreshed from
+    /// `UserDefaults.didChangeNotification` so an Appearance-tab edit reaches
+    /// an ALREADY-OPEN panel instead of only the next summon. The load is a
+    /// cheap immutable-struct read, so no change filtering is applied; the
+    /// equality gate in `reloadPanelAppearance` keeps unrelated defaults
+    /// writes from invalidating SwiftUI.
+    private(set) var panelAppearance = PanelAppearanceSettings.load(
+        from: .standard
+    )
+
+    /// The footer keep-open pin. Session state, not a persisted preference:
+    /// while active, FloatingPanel skips ONLY its focus-loss close; every
+    /// explicit close path still retires the panel, and `panelDidClose`
+    /// resets the pin so the next summon starts unpinned.
+    private(set) var isPanelKeepOpenActive = false
+
+    /// The documented public `OpenSettingsAction` captured from the panel's
+    /// live SwiftUI tree by PanelRootView (audit S-5 / SPEC-IMPL-010: no
+    /// private `showSettingsWindow:` responder selector). The status-item
+    /// menu's "Settings…" invokes it. It is nil only until the panel content
+    /// first appears; `openSettingsFromStatusMenu` keeps that bounded
+    /// pre-first-summon gap to app activation alone rather than inventing a
+    /// synthetic scene call. `@ObservationIgnored`: pure wiring bookkeeping,
+    /// never render state.
+    @ObservationIgnored
+    private var settingsOpenOperation: (@MainActor () -> Void)?
+
     // MARK: - AppKit-owned surfaces
 
     private var statusItem: NSStatusItem?
+    /// The right-click menu controller. Lazily built on first use (or first
+    /// hosted-test read); the menu is attached to the status item only for
+    /// the duration of one pop-up (see `presentStatusItemMenu`).
+    @ObservationIgnored
+    private lazy var statusItemMenu: StatusItemMenu = StatusItemMenu(
+        isCapturePaused: { [weak self] in
+            self?.captureAccessState == .userPaused
+        },
+        canToggleCapturePause: { [weak self] in
+            guard let self else { return false }
+            return self.captureAccessState == .allowed
+                || self.captureAccessState == .userPaused
+        },
+        onShowHistory: { [weak self] in
+            self?.togglePanelFromStatusItem()
+        },
+        onToggleCapturePause: { [weak self] in
+            self?.toggleCapturePauseFromMenu()
+        },
+        onOpenSettings: { [weak self] in
+            self?.openSettingsFromStatusMenu()
+        },
+        onQuit: {
+            NSApp.terminate(nil)
+        },
+        onMenuDidClose: { [weak self] in
+            self?.statusItem?.menu = nil
+        }
+    )
 #if DEBUG
     /// Set only after the production updater assigns the requested symbol to
     /// the real status-bar button. Hosted evidence can therefore distinguish
@@ -314,6 +373,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @ObservationIgnored
     private var workspaceLifecycleObserverTokens: [NSObjectProtocol] = []
     private var workspaceActivity = WorkspaceActivityState.active
+    /// The single `UserDefaults.didChangeNotification` registration feeding
+    /// `panelAppearance`. One token, installed by both initializers, removed
+    /// at termination — the same ownership pattern as the workspace
+    /// lifecycle registrations above.
+    @ObservationIgnored
+    private var defaultsObserverToken: NSObjectProtocol?
 #if CLIPY_UDS_F0
     /// PLAY-PY-F0 signed discriminator only. The compile flag is absent from
     /// every normal app build, which therefore has no listener behavior.
@@ -369,6 +434,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         stopSummonShortcut()
         removeWorkspaceLifecycleObservation()
+        if let defaultsObserverToken {
+            NotificationCenter.default.removeObserver(defaultsObserverToken)
+            self.defaultsObserverToken = nil
+        }
         compositionOpenAttempt?.task.cancel()
 #if CLIPY_UDS_F0
         unixSocketF0Listener?.stop()
@@ -526,8 +595,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Status-item clicks always anchor at the status item (Maccy's
-    /// `performStatusItemClick`), regardless of the configured mode.
+    /// `performStatusItemClick`), regardless of the configured mode. The
+    /// button is registered for BOTH mouse buttons; only an actual
+    /// right-mouse-up diverts to the secondary-click menu, and every other
+    /// activation is today's primary-click toggle byte-identically.
     @objc private func statusItemClicked() {
+        switch StatusItemClickDecision.disposition(
+            eventType: NSApp.currentEvent?.type
+        ) {
+        case .togglePanel:
+            togglePanelFromStatusItem()
+        case .showMenu:
+            presentStatusItemMenu()
+        }
+    }
+
+    /// The primary-click (and menu "Show Clipboard History") action:
+    /// summon at the status item, or dismiss when already presented.
+    private func togglePanelFromStatusItem() {
         if panel?.isPresented == true {
             closePanel()
         } else {
@@ -535,9 +620,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Secondary click: pop the menu AT the status item. The menu is
+    /// assigned only around this synthetic click and cleared from the
+    /// menu's did-close callback (StatusItemMenu's `onMenuDidClose`),
+    /// because a permanently assigned `statusItem.menu` would hijack EVERY
+    /// click — AppKit suppresses the button action whenever a menu is
+    /// attached — and the primary click must keep summoning the panel.
+    /// Clearing in did-close (rather than immediately after
+    /// `performClick`) is correct whether or not AppKit's menu tracking
+    /// returns synchronously: the property is restored exactly when the
+    /// pop-up ends.
+    private func presentStatusItemMenu() {
+        guard let statusItem, let button = statusItem.button else { return }
+        statusItem.menu = statusItemMenu.menu
+        button.performClick(nil)
+    }
+
+    /// The menu's Pause/Resume entry routes through the SAME
+    /// composition-owned transitions as the panel's `clipy.capture.pause`
+    /// row and the access banner's Resume recovery; the menu owns no pause
+    /// state of its own.
+    private func toggleCapturePauseFromMenu() {
+        if captureAccessState == .userPaused {
+            recoverCaptureAccess()
+        } else {
+            pauseCapture()
+        }
+    }
+
+    /// The status menu's Settings entry: activate first (an LSUIElement
+    /// agent never activates on its own — the same reason the panel
+    /// footer's Settings row activates), then invoke the captured public
+    /// OpenSettingsAction. Before the panel content's first appearance no
+    /// action has been captured yet; activation is then the entire bounded
+    /// effect rather than a synthetic or private-selector scene call.
+    private func openSettingsFromStatusMenu() {
+        NSApp.activate()
+        settingsOpenOperation?()
+    }
+
+    /// Installed by PanelRootView from its live SwiftUI environment.
+    /// Re-installation with a fresh capture of the same scene action is
+    /// idempotent.
+    func installSettingsOpenOperation(
+        _ operation: @escaping @MainActor () -> Void
+    ) {
+        settingsOpenOperation = operation
+    }
+
+    /// The keep-open pin toggle driven by the panel footer. Explicitly
+    /// user-owned: focus loss consults the flag, and `panelDidClose`
+    /// clears it.
+    func togglePanelKeepOpen() {
+        isPanelKeepOpenActive.toggle()
+    }
+
     /// Creates the panel lazily, positions it, and orders it front as key
     /// window. The view state's observation is re-activated per open (the
     /// panel's close deactivates it — browsing state is fresh per summon).
+    /// The preview-side preference is read from the live appearance
+    /// snapshot at open, so an Appearance-tab change applies to the next
+    /// summon (`.automatic` keeps geometry's screen-fit choice).
     private func openPanel(at mode: PopupPositionMode) {
         guard workspaceActivity.permitsProductActivity else { return }
         if panel == nil {
@@ -560,13 +703,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 onSubmitSelection: { [weak self] in
                     self?.submitPanelSelection()
                 },
+                isKeepOpenActive: { [weak self] in
+                    self?.isPanelKeepOpenActive ?? false
+                },
                 onClosed: { [weak self] in self?.panelDidClose() }
             )
         }
         composition?.viewState.activate()
         panel?.open(
             at: mode,
-            statusItemButtonScreenFrame: statusItemButtonScreenFrame()
+            statusItemButtonScreenFrame: statusItemButtonScreenFrame(),
+            previewSide: panelAppearance.previewSide
         )
         if let composition {
             panelSurfaceState?.beginSession(rows: composition.viewState.rows)
@@ -621,9 +768,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel?.setPreviewVisible(isOpen)
     }
 
-    /// Bookkeeping after every panel close: disarm the preview pane and
+    /// Bookkeeping after every panel close: reset the keep-open pin (it is
+    /// per-session state, never a preference), disarm the preview pane, and
     /// stop the view-state observation until the next summon.
     private func panelDidClose() {
+        isPanelKeepOpenActive = false
         panelSurfaceState?.endSession()
         composition?.viewState.deactivate()
     }
@@ -950,6 +1099,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let button = item.button {
             button.action = #selector(statusItemClicked)
             button.target = self
+            // The default mask is `.leftMouseUp` alone; adding
+            // `.rightMouseUp` lets the same action route a secondary click
+            // to the status menu. The primary-click path is unchanged —
+            // the routing decision lives in `statusItemClicked`.
+            button.sendActions(on: [.leftMouseUp, .rightMouseUp])
         }
         statusItem = item
         updateStatusItemImage()
@@ -1009,6 +1163,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItemSymbolNameForTesting: String? {
         appliedStatusItemSymbolNameForTesting
     }
+
+    /// Hosted evidence reads the lazily built secondary-click menu WITHOUT
+    /// performing the pop-up — menu tracking itself is not a same-process
+    /// assertable surface, but the item content (titles, and the enabled
+    /// state refreshed by `NSMenu.update()`) is.
+    var statusItemMenuForTesting: NSMenu {
+        statusItemMenu.menu
+    }
+
+    /// Drives the exact status-item action. Outside event dispatch
+    /// `NSApp.currentEvent` is nil, so the routing decision deterministically
+    /// takes the primary-click (summon/dismiss) path.
+    func performStatusItemClickForTesting() {
+        statusItemClicked()
+    }
 #endif
 
     /// The status-item button's frame in screen coordinates (Maccy's
@@ -1038,6 +1207,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return .cursor
         }
         return PopupPositionMode(rawValue: raw) ?? .cursor
+    }
+
+    /// One defaults-change observation for the live `panelAppearance`
+    /// snapshot. Registered once per delegate (both initializers) with
+    /// main-queue delivery, so the callback can synchronously enter this
+    /// MainActor owner — the same entry idiom as the NSWorkspace lifecycle
+    /// observers.
+    private func installPanelAppearanceObservation() {
+        guard defaultsObserverToken == nil else { return }
+        defaultsObserverToken = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.reloadPanelAppearance()
+            }
+        }
+    }
+
+    /// Republishes the appearance snapshot after any defaults write. The
+    /// struct load is cheap, so no key filtering; the equality gate keeps
+    /// unrelated writes (panel size, position, retention) from
+    /// invalidating the panel content.
+    private func reloadPanelAppearance() {
+        let loaded = PanelAppearanceSettings.load(from: .standard)
+        guard loaded != panelAppearance else { return }
+        panelAppearance = loaded
     }
 
     /// Production launch and hosted integration tests enter the same app-owned

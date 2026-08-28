@@ -118,7 +118,16 @@ Post-step-9 additions: the perf/AB helper proofs live in the separate
 `HistoryPerfTests` target/lane (the default `swift test` skips them), and the
 panel is a Maccy-style AppDelegate-owned floating `NSPanel` (Carbon ⇧⌘C
 summon, cursor/status-item/center/last-position placement, dwell-driven
-preview pane) — no longer a SwiftUI `MenuBarExtra` window.
+preview pane; user-resizable within `PanelGeometry`'s min/max bounds with
+the settled size persisted across opens, and row density / preview
+auto-open / preview side are user preferences under Settings ▸
+Appearance; plus a header type/pinned row filter, row drag-out via
+`HistoryViewState.dragItemProvider`, a Space quick-look overlay, a footer
+keep-open pin, a status-item right-click menu (`StatusItemMenu`),
+source-app icons injected through the public `SourceIconProvider` seam,
+a Settings ▸ Privacy capture ignore list (`CaptureIgnoreList`), and a
+freely draggable preview column (persisted width, double-click resets)) —
+no longer a SwiftUI `MenuBarExtra` window.
 Check `docs/PROGRESS.md` and the REVIEW status document
 (`docs/reviews/2026-08-22-clipy-maccy-deep-review/10-implementation-status.md`)
 for the exact landed state before assuming a feature exists.

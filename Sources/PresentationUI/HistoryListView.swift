@@ -1,6 +1,8 @@
 /// HistoryListView.swift — the panel's two-section list (Pinned, Recent)
 /// with single selection, last-row pagination prefetch, the panel keyboard
-/// surface, and both empty states.
+/// surface, and the empty states. Rows render the view state's DISPLAYED
+/// lanes: the client-side type/pinned filter narrows them in memory while
+/// pagination keeps walking the unfiltered stream.
 /// Owning spec: docs/01-architecture.md §5.2 (gesture → action), §5.4
 /// (browse/observe), §6 (main-actor selection);
 /// docs/03b-instruction-set.md §8 (default ordering: pinned rows by ordinal
@@ -31,28 +33,37 @@ package enum HistoryListPaginationTrigger {
 /// Module-internal browsing list behind the caller-visible `HistoryPanelView`.
 /// Rows are keyed by `HistoryItemID`; the selection
 /// (hoisted to the panel so the preview pane can dwell on it) drives the
-/// panel shortcuts (⏎ copy, ⌫ remove, ⌘P pin toggle, ⌘I details push).
+/// panel shortcuts (⏎ copy, ⌫ remove, ⌘P pin toggle, ⌥⌘↑/⌥⌘↓ pin to
+/// top/bottom, ⌘I details push).
 /// Additional pages are requested when the last row appears and shown with a
 /// trailing spinner row while `isLoadingPage` (04 §6: observation covers only
 /// the first page; continuations are one-shot browses owned by the view state).
+/// `density` is the panel's row-density preference, threaded unchanged into
+/// every row; `.comfortable` reproduces the shipped row metrics exactly.
 struct HistoryListView: View {
     private let viewState: HistoryViewState
     private let thumbnails: ThumbnailStore
+    private let density: HistoryRowDensity
     private let isSearchFieldFocused: Bool
     private let selection: Binding<HistoryItemID?>
+    private let sourceIcons: SourceIconStore?
     private let onShowDetails: (HistoryItemReference) -> Void
 
     init(
         viewState: HistoryViewState,
         thumbnails: ThumbnailStore,
+        density: HistoryRowDensity = .comfortable,
         isSearchFieldFocused: Bool,
         selection: Binding<HistoryItemID?>,
+        sourceIcons: SourceIconStore? = nil,
         onShowDetails: @escaping (HistoryItemReference) -> Void
     ) {
         self.viewState = viewState
         self.thumbnails = thumbnails
+        self.density = density
         self.isSearchFieldFocused = isSearchFieldFocused
         self.selection = selection
+        self.sourceIcons = sourceIcons
         self.onShowDetails = onShowDetails
     }
 
@@ -72,6 +83,12 @@ struct HistoryListView: View {
     private func content(now: Date) -> some View {
         if viewState.rows.isEmpty {
             emptyState
+        } else if viewState.displayedPinnedRows.isEmpty,
+                  viewState.displayedUnpinnedRows.isEmpty {
+            // Rows exist but the client-side filter hides every one of them:
+            // reuse the search miss state byte-identically rather than
+            // gaining filter-specific copy.
+            filteredEmptyState
         } else {
             list(now: now)
         }
@@ -81,9 +98,9 @@ struct HistoryListView: View {
 
     private func list(now: Date) -> some View {
         List(selection: selection) {
-            if !viewState.pinnedRows.isEmpty {
+            if !viewState.displayedPinnedRows.isEmpty {
                 Section("Pinned") {
-                    ForEach(viewState.pinnedRows, id: \.item.id) { row in
+                    ForEach(viewState.displayedPinnedRows, id: \.item.id) { row in
                         rowContent(
                             row,
                             now: now,
@@ -93,7 +110,7 @@ struct HistoryListView: View {
                 }
             }
             Section("Recent") {
-                ForEach(viewState.unpinnedRows, id: \.item.id) { row in
+                ForEach(viewState.displayedUnpinnedRows, id: \.item.id) { row in
                     rowContent(row, now: now, pinnedOrdinal: nil)
                 }
                 if viewState.isLoadingPage {
@@ -114,7 +131,9 @@ struct HistoryListView: View {
             row: row,
             now: now,
             pinnedOrdinal: pinnedOrdinal,
+            density: density,
             thumbnails: thumbnails,
+            sourceIcons: sourceIcons,
             onCopy: { viewState.requestPasteFromDisplayedRow($0) },
             onPin: { id, placement in viewState.pin(id, at: placement) },
             onUnpin: { id in viewState.unpin(id) },
@@ -122,6 +141,11 @@ struct HistoryListView: View {
             onShowDetails: onShowDetails
         )
         .tag(row.item.id)
+        // Drag-out loads its bytes lazily from the History paste read
+        // (`HistoryViewState.dragItemProvider`), never from row state. The
+        // modifier attaches no AX surface, so the row's combined-element
+        // contract is unchanged.
+        .draggable(viewState.dragItemProvider(for: row.item))
         .onAppear {
             prefetchNextPageIfNeeded(appearingRowID: row.item.id)
         }
@@ -171,6 +195,17 @@ struct HistoryListView: View {
         }
     }
 
+    /// Filtered-to-empty reuses the search miss state (the pinned "No
+    /// Results" strings stay byte-identical); only the "no items at all"
+    /// copy above stays distinct.
+    private var filteredEmptyState: some View {
+        ContentUnavailableView(
+            "No Results",
+            systemImage: "magnifyingglass",
+            description: Text("No items match “\(viewState.searchText)”.")
+        )
+    }
+
     // MARK: Selection + keyboard surface
 
     private var selectedRow: HistoryRow? {
@@ -209,6 +244,23 @@ struct HistoryListView: View {
                 }
             }
             .keyboardShortcut("p", modifiers: .command)
+            .disabled(selectedRow == nil)
+
+            // Context-menu semantics: placePinned reorders an already-pinned item.
+            Button("Pin to Top") {
+                if let row = selectedRow {
+                    viewState.pin(row.item.id, at: .first)
+                }
+            }
+            .keyboardShortcut(.upArrow, modifiers: [.option, .command])
+            .disabled(selectedRow == nil)
+
+            Button("Pin to Bottom") {
+                if let row = selectedRow {
+                    viewState.pin(row.item.id, at: .last)
+                }
+            }
+            .keyboardShortcut(.downArrow, modifiers: [.option, .command])
             .disabled(selectedRow == nil)
 
             Button("Show Details") {

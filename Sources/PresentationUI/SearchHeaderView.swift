@@ -1,6 +1,6 @@
 /// SearchHeaderView.swift — the panel's query surface: the rounded search
-/// field, the three-mode search picker (⌘1/⌘2/⌘3), and the active-search
-/// result-count caption.
+/// field, the three-mode search picker (⌘1/⌘2/⌘3), the client-side row
+/// filter menu, and the active-search result-count caption.
 /// Owning spec: docs/01-architecture.md §5.4 (browse/search flow);
 /// docs/03a-instruction-set.md §7 (search modes);
 /// docs/06-cross-cutting.md §2 (fuzzy 64-Character query bound);
@@ -39,12 +39,13 @@ package struct SearchHeaderView: View {
     }
 
     package var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: PanelTheme.spacingSmall) {
             searchField
             if viewState.isSearchActive {
                 resultCountCaption
             }
             modeMenu
+            filterMenu
         }
         .background { modeShortcuts }
     }
@@ -52,7 +53,7 @@ package struct SearchHeaderView: View {
     // MARK: Search field
 
     private var searchField: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: PanelTheme.spacingXSmall) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
@@ -87,9 +88,12 @@ package struct SearchHeaderView: View {
                 )
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, PanelTheme.spacingSmall)
+        .padding(.vertical, PanelTheme.spacingXSmall)
+        .background(
+            .quaternary,
+            in: RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium)
+        )
     }
 
     /// The count caption shown while a search term is present (03b §8: an
@@ -158,6 +162,29 @@ package struct SearchHeaderView: View {
         }
     }
 
+    // MARK: Row filter menu
+
+    /// The client-side type/pinned filter over the already-loaded rows. It
+    /// narrows what the list renders in memory only — a change never
+    /// restarts the History query (see `HistoryViewState.typeFilter`).
+    private var filterMenu: some View {
+        Menu {
+            Picker("Filter", selection: typeFilterBinding) {
+                Text("All").tag(HistoryTypeFilter.all)
+                Text("Text").tag(HistoryTypeFilter.text)
+                Text("Images").tag(HistoryTypeFilter.images)
+                Text("Links").tag(HistoryTypeFilter.links)
+            }
+            Divider()
+            Toggle("Pinned Only", isOn: pinnedOnlyBinding)
+        } label: {
+            Image(systemName: "line.3.horizontal.decrease.circle")
+        }
+        .fixedSize()
+        .accessibilityIdentifier("clipy.search.filter")
+        .accessibilityLabel("Filter results")
+    }
+
     // MARK: Bindings
 
     private var searchTextBinding: Binding<String> {
@@ -171,6 +198,20 @@ package struct SearchHeaderView: View {
         Binding<SearchMode>(
             get: { viewState.searchMode },
             set: { viewState.searchMode = $0 }
+        )
+    }
+
+    private var typeFilterBinding: Binding<HistoryTypeFilter> {
+        Binding<HistoryTypeFilter>(
+            get: { viewState.typeFilter },
+            set: { viewState.typeFilter = $0 }
+        )
+    }
+
+    private var pinnedOnlyBinding: Binding<Bool> {
+        Binding<Bool>(
+            get: { viewState.showsPinnedOnly },
+            set: { viewState.showsPinnedOnly = $0 }
         )
     }
 

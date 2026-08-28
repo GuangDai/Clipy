@@ -125,6 +125,65 @@ struct PreviewPaneStateTests {
         #expect(state.previewedItem == item)
     }
 
+    @Test func disabledAutoOpenPreferenceNeverSchedulesTheDwell() async {
+        let state = makeState()
+        let item = reference()
+
+        state.isAutoOpenPreferenceEnabled = false
+        state.handleSelectionChange(item)
+        // Give a (wrongly) scheduled zero-delay dwell every chance to fire:
+        // the scheduling guard must have skipped it, so no task exists.
+        await Task.yield()
+        await Task.yield()
+
+        #expect(!state.isOpen)
+        #expect(
+            state.previewedItem == nil,
+            "with the preference off, selection changes never open the pane"
+        )
+    }
+
+    @Test func manualToggleStillOpensWhileAutoOpenPreferenceIsDisabled() {
+        let state = makeState()
+        let item = reference()
+
+        state.isAutoOpenPreferenceEnabled = false
+        state.togglePreview(for: item)
+
+        #expect(state.isOpen)
+        #expect(state.previewedItem == item)
+
+        // The manual close keeps its suppression semantics under the
+        // disabled preference: a same-item re-selection must not reopen.
+        state.togglePreview(for: item)
+        #expect(!state.isOpen)
+        state.handleSelectionChange(item)
+        #expect(!state.isOpen)
+    }
+
+    @Test func reenabledAutoOpenPreferenceAppliesOnTheNextSelectionChange() async {
+        let state = makeState()
+        let first = reference()
+        let second = reference()
+
+        state.isAutoOpenPreferenceEnabled = false
+        state.handleSelectionChange(first)
+        await Task.yield()
+        #expect(!state.isOpen)
+
+        // Re-enabling alone must not open the pane; the NEXT selection
+        // change schedules and fires the dwell again.
+        state.isAutoOpenPreferenceEnabled = true
+        #expect(!state.isOpen)
+
+        state.handleSelectionChange(second)
+        await waitForScheduledDwell {
+            state.isOpen && state.previewedItem == second
+        }
+        #expect(state.isOpen)
+        #expect(state.previewedItem == second)
+    }
+
     @Test func panelClosedDisarmsAutoOpenUntilThePanelBecomesKeyAgain() {
         let state = makeState()
         let first = reference()

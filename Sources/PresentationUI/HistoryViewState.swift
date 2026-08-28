@@ -248,6 +248,29 @@ public final class HistoryViewState {
         rows.filter { $0.pinnedPosition == nil }
     }
 
+    /// The in-memory type filter over the already-loaded rows. A plain
+    /// observable var with no `didSet`: a filter change must NOT restart
+    /// search or observation — it narrows the rendered rows in memory only.
+    public var typeFilter: HistoryTypeFilter = .all
+
+    /// When true, the Recent lane renders empty and only pinned rows remain.
+    /// Same client-side posture as `typeFilter`.
+    public var showsPinnedOnly = false
+
+    /// The pinned lane after the client-side filter. Filtering is over the
+    /// loaded pages by design; pagination still walks the unfiltered stream
+    /// (`rows`/`nextPageCursor` are untouched by both filters).
+    package var displayedPinnedRows: [HistoryRow] {
+        pinnedRows.filter { typeFilter.admits($0) }
+    }
+
+    /// The recency lane after the client-side filter; empty while
+    /// `showsPinnedOnly` is set.
+    package var displayedUnpinnedRows: [HistoryRow] {
+        guard !showsPinnedOnly else { return [] }
+        return unpinnedRows.filter { typeFilter.admits($0) }
+    }
+
     /// Whether a further one-shot page exists after the displayed rows.
     public var hasNextPage: Bool {
         nextPageCursor != nil
@@ -388,6 +411,60 @@ public final class HistoryViewState {
     package func requestPasteFromDisplayedRow(_ item: HistoryItemReference) {
         guard rows.contains(where: { $0.item == item }) else { return }
         onPaste(item)
+    }
+
+    // MARK: - Drag-out (01 §5.6; 03b §9)
+
+    /// One lazily-loading drag provider for a displayed row. The bytes
+    /// resolve on drop through the same `pastePayload(for:)` Effective
+    /// Content read that backs the composition root's paste hand-off
+    /// (docs/01-architecture.md §5.6; docs/03b-instruction-set.md §9) —
+    /// never from row display state — and the registered representation is
+    /// the row's best advertised type in the paste preference order (plain
+    /// text, then the frozen v1 decodable image formats). A typed read
+    /// failure completes with `nil` rather than surfacing panel failure
+    /// vocabulary onto an external drop. `NSItemProvider` is Foundation, so
+    /// PresentationUI's no-AppKit rule (01 §6) is preserved.
+    package func dragItemProvider(
+        for reference: HistoryItemReference
+    ) -> NSItemProvider {
+        let provider = NSItemProvider()
+        let advertised = rows.first { $0.item == reference }?.typeIdentifiers ?? []
+        let typeIdentifier = Self.dragTypeIdentifier(advertised: advertised)
+        let history = self.history
+        let itemID = reference.id
+        provider.registerDataRepresentation(
+            forTypeIdentifier: typeIdentifier,
+            visibility: .all
+        ) { completion in
+            Task {
+                let payload = try? await history.pastePayload(for: itemID)
+                let representations = payload?.representations ?? []
+                let bytes = representations
+                    .first { $0.typeIdentifier == typeIdentifier }?
+                    .bytes
+                completion(bytes, nil)
+            }
+            return nil
+        }
+        return provider
+    }
+
+    /// Drag/paste representation preference: plain text first, then the
+    /// frozen v1 decodable image formats. A row advertising none of them
+    /// still offers best-effort plain text; the payload read is the
+    /// authority on what actually completes.
+    private static let dragTypePreference: [String] = [
+        "public.utf8-plain-text",
+        "public.png",
+        "public.tiff",
+    ]
+
+    private static func dragTypeIdentifier(advertised: [String]) -> String {
+        for candidate in dragTypePreference where advertised.contains(candidate) {
+            return candidate
+        }
+        return dragTypePreference[0]
     }
 
     /// Pins or reorders; typed failures land in `failure`.

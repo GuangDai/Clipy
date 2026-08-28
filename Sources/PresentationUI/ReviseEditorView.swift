@@ -90,9 +90,10 @@ struct ReviseEditorView: View {
         _draft = State(initialValue: ReviseEditorDraft(details: details))
     }
 
-    /// The production floating panel has a fixed 400-point main column. Its
-    /// editor uses that available Details surface rather than retaining the
-    /// standalone sheet's 520-point ideal width and being visibly clipped.
+    /// The production floating panel's main column is user-resizable within
+    /// PanelGeometry's 360…640-point range. Its editor fills the available
+    /// Details surface rather than retaining the standalone sheet's
+    /// 520-point ideal width and being visibly clipped at narrower widths.
     package init(
         viewState: HistoryViewState,
         details: HistoryDetails,
@@ -111,7 +112,7 @@ struct ReviseEditorView: View {
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
-                VStack(spacing: 12) {
+                VStack(spacing: PanelTheme.spacingLarge) {
                     ForEach(
                         draft.canonicalRepresentations,
                         id: \.typeIdentifier
@@ -120,7 +121,7 @@ struct ReviseEditorView: View {
                         decisionRow(for: representation)
                     }
                 }
-                .padding(16)
+                .padding(PanelTheme.spacingXLarge)
             }
             Divider()
             revisionDisclosure
@@ -213,15 +214,15 @@ struct ReviseEditorView: View {
         .foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12)
-        .padding(.top, 10)
+        .padding(.horizontal, PanelTheme.spacingLarge)
+        .padding(.top, PanelTheme.spacingMedium)
         .accessibilityIdentifier("clipy.editor.revision-disclosure")
     }
 
     @ViewBuilder
     private var reloadStatus: some View {
         if draft.isAwaitingLatestContent {
-            HStack(spacing: 12) {
+            HStack(spacing: PanelTheme.spacingLarge) {
                 Label(
                     "Reload latest content before saving again.",
                     systemImage: "arrow.clockwise"
@@ -229,28 +230,28 @@ struct ReviseEditorView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("clipy.editor.awaiting-reload")
-                Spacer(minLength: 8)
+                Spacer(minLength: PanelTheme.spacingSmall)
                 Button(isReloading ? "Reloading…" : "Reload Latest") {
                     Task { await reloadLatest() }
                 }
                 .disabled(isReloading)
                 .accessibilityIdentifier("clipy.editor.reload-latest")
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 10)
+            .padding(.horizontal, PanelTheme.spacingLarge)
+            .padding(.top, PanelTheme.spacingMedium)
         } else if let reloadNotice {
             Label(reloadNotice, systemImage: "checkmark.circle")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12)
-                .padding(.top, 10)
+                .padding(.horizontal, PanelTheme.spacingLarge)
+                .padding(.top, PanelTheme.spacingMedium)
                 .accessibilityIdentifier("clipy.editor.reload-notice")
         }
     }
 
     private var footer: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: PanelTheme.spacingLarge) {
             if let validationMessage {
                 Label(
                     validationMessage,
@@ -263,7 +264,7 @@ struct ReviseEditorView: View {
                     "Validation hint: \(validationMessage)"
                 )
             }
-            Spacer(minLength: 8)
+            Spacer(minLength: PanelTheme.spacingSmall)
             Button("Cancel") {
                 requestDismissal()
             }
@@ -291,7 +292,7 @@ struct ReviseEditorView: View {
                 "Applies these decisions as a new revision of the item."
             )
         }
-        .padding(12)
+        .padding(PanelTheme.spacingLarge)
     }
 
     /// The draft must leave at least one representation effective. An
@@ -338,9 +339,12 @@ struct ReviseEditorView: View {
             ? " Replace substitutes literal UTF-8 plain text."
             : " Replace is unavailable because Clipy cannot safely decode"
                 + " and re-encode this format yet."
-        return VStack(alignment: .leading, spacing: 6) {
+        return VStack(alignment: .leading, spacing: PanelTheme.spacingXSmall) {
             HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(
+                    alignment: .leading,
+                    spacing: PanelTheme.spacingXXXSmall
+                ) {
                     Text(typeIdentifier)
                         .font(.system(.callout, design: .monospaced))
                         .lineLimit(1)
@@ -354,7 +358,7 @@ struct ReviseEditorView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 }
-                Spacer(minLength: 12)
+                Spacer(minLength: PanelTheme.spacingLarge)
                 Picker(
                     "Decision",
                     selection: choiceBinding(for: typeIdentifier)
@@ -396,11 +400,15 @@ struct ReviseEditorView: View {
             if draft.choice(for: typeIdentifier) == .replace {
                 TextEditor(text: textBinding(for: typeIdentifier))
                     .font(.system(.body, design: .monospaced))
+                    // Grows vertically with the draft; the 96-point minimum
+                    // keeps the one-line Replace state compact.
                     .frame(minHeight: 96)
-                    .padding(4)
+                    .padding(PanelTheme.spacingXXSmall)
                     .overlay {
-                        RoundedRectangle(cornerRadius: 6)
-                            .strokeBorder(Color.primary.opacity(0.15))
+                        RoundedRectangle(
+                            cornerRadius: PanelTheme.cornerRadiusSmall
+                        )
+                        .strokeBorder(Color.primary.opacity(0.15))
                     }
                     .accessibilityLabel(
                         "Replacement text for \(typeIdentifier)"
@@ -410,10 +418,12 @@ struct ReviseEditorView: View {
                     )
             }
         }
-        .padding(12)
+        .padding(PanelTheme.spacingLarge)
         .background(
             Color.primary.opacity(0.04),
-            in: RoundedRectangle(cornerRadius: 8)
+            in: RoundedRectangle(
+                cornerRadius: PanelTheme.cornerRadiusMedium
+            )
         )
     }
 
