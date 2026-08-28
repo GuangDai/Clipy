@@ -6,23 +6,32 @@
 /// open path (03b §10 typed-failure vocabulary) for (a) a store created at a
 /// strictly future schema — one additive model beyond the shipped immutable
 /// V4 (`HistorySchemaV4`, DC-25), unreachable by `HistoryMigrationPlan`
-/// (`V2-02` §3.3 stage topology tops out at V4) — and (b) a fixed non-SQLite
-/// byte literal at the store path. `SwiftDataHistory.open` maps every
-/// `ModelContainer` construction failure to one `.persistence(.openStore)`;
-/// whether those root causes are separable is exactly the open question, so
-/// both children assert the SAME typed outcome and freeze today's flattened
-/// behavior as evidence. DATA-14's constraint stays in force: on an
-/// unclassified `.openStore` a recovery surface may offer Retry/Reveal and
-/// user-confirmed recovery only — never automatic quarantine or silent
-/// empty-store recreation.
+/// (`V2-02` §3.3 stage topology tops out at V4) — (b) a fixed non-SQLite
+/// byte literal at the store path, and (c) an EXISTING store directory whose
+/// owner write permission was removed (0500), so `ModelContainer` cannot
+/// create the SQLite file inside it: the permission dimension, staged at
+/// the storage layer because the directory already exists.
+/// `SwiftDataHistory.open` maps every `ModelContainer` construction failure
+/// to one `.persistence(.openStore)`; whether those root causes are
+/// separable is exactly the open question, so all three children assert the
+/// SAME typed outcome and freeze today's flattened behavior as evidence.
+/// DATA-14's constraint stays in force: on an unclassified `.openStore` a
+/// recovery surface may offer Retry/Reveal and user-confirmed recovery only
+/// — never automatic quarantine or silent empty-store recreation.
 ///
-/// What this does NOT prove: no claim that the two root causes are, or must
-/// remain, distinguishable; no permission, ENOSPC, transient-I/O, WAL,
-/// sidecar, or partial-corruption coverage; no migration-stage error or
-/// downgrade characterization beyond "construction refuses"; no recovery-UX,
-/// quarantine, or StoreRoot-move decision (REVIEW 05 §7 Q14 gates those on a
-/// classification proof); no crash or durability claim. The children assert
-/// only the public typed outcome, never an underlying platform error chain.
+/// What this does NOT prove: no claim that the three root causes are, or
+/// must remain, distinguishable; permission is characterized ONLY as the
+/// read-only-existing-store-directory dimension through the storage-layer
+/// `ModelContainer` construction — no ENOSPC, transient-I/O, WAL, sidecar,
+/// or partial-corruption coverage (ENOSPC stays with the full-disk lane;
+/// the app-layer half of the same open — `FileManager` refusing to CREATE
+/// the store directory — is characterized by the hosted ClipyApp suite,
+/// keeping this process free of any in-host CoreData open); no
+/// migration-stage error or downgrade characterization beyond "construction
+/// refuses"; no recovery-UX, quarantine, or StoreRoot-move decision (REVIEW
+/// 05 §7 Q14 gates those on a classification proof); no crash or durability
+/// claim. The children assert only the public typed outcome, never an
+/// underlying platform error chain.
 ///
 /// The future-schema fixture briefly owns a `ModelContainer` inside the TEST
 /// process — the same temporary-fixture stance as the REVIEW §4.3 retention
@@ -192,6 +201,67 @@ struct StoreOpenFailureCharacterizationTests {
 
         try Self.runChild(
             phase: "openRejectCorruptBytes",
+            storeURL: storeURL,
+            probeURL: probeURL
+        )
+    }
+
+    @Test("fresh owner maps a read-only store directory to the public open failure")
+    func readOnlyDirectoryStoreFailsOpenInFreshChild() throws {
+        let probeURL = Self.probeURL()
+        let storeRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "clipy-open-reject-read-only-dir-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: storeRoot,
+            withIntermediateDirectories: false
+        )
+        // Cleanup is registered as soon as the root exists (the sibling
+        // cells' discipline) so even a failed permission staging below
+        // cannot leak the fixture directory.
+        defer { try? FileManager.default.removeItem(at: storeRoot) }
+        // The store directory EXISTS but its owner write bit is removed, so
+        // `ModelContainer` cannot create the SQLite file inside it — the
+        // storage-layer permission shape. 0500 keeps read+execute: the
+        // refusal is "cannot write", not an unstatable path (0000 would make
+        // EACCES and ENOENT indistinguishable). Teardown restores write
+        // permission BEFORE the root removal above runs, or the cleanup
+        // itself is refused and leaves a 0500 directory behind in TMP.
+        let historyStoreDirectory = storeRoot.appendingPathComponent(
+            "HistoryStore",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: historyStoreDirectory,
+            withIntermediateDirectories: false
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: 0o500)],
+            ofItemAtPath: historyStoreDirectory.path
+        )
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: NSNumber(value: 0o700)],
+                ofItemAtPath: historyStoreDirectory.path
+            )
+        }
+        let storeURL = historyStoreDirectory
+            .appendingPathComponent("history.store")
+
+        // Fixture self-check, symmetric with the two cells above: if the
+        // runner cannot stage the permission shape, the characterization
+        // would silently prove nothing, so the staging fact is asserted in
+        // the test process before the child launches.
+        let stagedPermissions = try FileManager.default.attributesOfItem(
+            atPath: historyStoreDirectory.path
+        )[.posixPermissions] as? NSNumber
+        #expect(stagedPermissions?.int16Value == 0o500)
+        #expect(!FileManager.default.fileExists(atPath: storeURL.path))
+
+        try Self.runChild(
+            phase: "openRejectReadOnlyDirectory",
             storeURL: storeURL,
             probeURL: probeURL
         )

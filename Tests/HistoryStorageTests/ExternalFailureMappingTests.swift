@@ -255,6 +255,13 @@ struct ExternalFailureMappingTests {
                 ]
             ),
             MatrixRow(
+                source: .temporarilyUnavailable(.searchEngineDeadline),
+                expected: [
+                    .invariant, .searchEngineDeadline, .invariant, .invariant,
+                    .invariant, .invariant, .invariant,
+                ]
+            ),
+            MatrixRow(
                 source: .persistence(.openStore),
                 expected: [
                     .invariant, .invariant, .invariant, .invariant,
@@ -368,6 +375,13 @@ struct ExternalFailureMappingTests {
                 kind: .requestDenied,
                 denialReason: .invalidInput
             )
+        case .searchEngineDeadline:
+            expectMapping(
+                source,
+                for: operation,
+                failure: .history(source),
+                kind: .temporarilyUnavailable
+            )
         }
     }
 
@@ -397,5 +411,6 @@ struct ExternalFailureMappingTests {
         case storeLocked
         case insufficientDiskSpace
         case searchInvalid
+        case searchEngineDeadline
     }
 }

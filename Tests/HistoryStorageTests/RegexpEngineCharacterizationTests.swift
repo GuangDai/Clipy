@@ -1,8 +1,11 @@
-/// REVIEW Card 11C / PERF-3 characterization for the macOS 26 Foundation
-/// regexp engine. This suite deliberately does not add a product timeout or
-/// broaden 03b §8's frozen rejection grammar. The risky matcher runs in the
-/// existing disposable probe executable so a synchronous ICU call cannot
-/// wedge the SwiftPM test process or the actor used by product searches.
+/// REVIEW Card 11C / PERF-3 platform-regression observation for the macOS 26
+/// Foundation regexp engine. The 03b §8 adjudication has landed: the product
+/// scan now runs Apple's interruptible `enumerateMatches` iterator under a
+/// fixed typed engine deadline, and this suite keeps watching the platform
+/// facts that mechanism depends on — it still does not broaden the frozen
+/// rejection grammar. The risky matcher runs in the existing disposable probe
+/// executable so a synchronous ICU call cannot wedge the SwiftPM test process
+/// or the actor used by product searches.
 import Darwin
 import Foundation
 import Testing
@@ -26,10 +29,11 @@ struct RegexpEngineCharacterizationTests {
         case childCouldNotBeTerminated
     }
 
-    /// Pure admission fixtures stay inside the currently authoritative
-    /// grammar. They pin known nested/quantified-alternation rejections; the
-    /// top-level engine experiment below is intentionally not promoted into a
-    /// rejection until its platform result and product semantics are decided.
+    /// Pure admission fixtures stay inside the authoritative frozen grammar.
+    /// They pin known nested/quantified-alternation rejections; the 03b §8
+    /// Card 11C adjudication keeps the top-level ambiguous-quantifier chain
+    /// admissible and bounds it with the interruptible scan plus the typed
+    /// engine deadline instead of a new rejection shape.
     @Test("contracted ambiguous group shapes remain rejected purely")
     func contractedAmbiguousGroupShapesRemainRejected() {
         for pattern in [
@@ -65,6 +69,9 @@ struct RegexpEngineCharacterizationTests {
             throw FixtureError.childFailed
         }
 
+        // `firstMatch` is no longer the product operation after the
+        // adjudication; this scenario stays as report-only historical
+        // evidence that it runs uninterruptibly past the watchdog bound.
         let currentOutcome = try Self.runProbe(
             scenario: "top-level-chain-current",
             expectedPattern: Self.riskyPattern,
@@ -76,13 +83,22 @@ struct RegexpEngineCharacterizationTests {
         )
 
         // Apple's documented progress callback is meaningful only for
-        // enumerateMatches. Characterize that alternate operation separately
-        // instead of inferring that it can interrupt the current firstMatch.
+        // enumerateMatches — now the product's scan operation. The product
+        // mechanism depends on this platform fact: the fixed chain completes
+        // through the progress+stop interruptible iterator, so the outcome is
+        // a hard completion assertion. It deliberately does NOT bind
+        // `sawProgress`: a future engine that turns this pattern fast also
+        // completes safely, while an OS that loses progress reporting
+        // entirely (regressing the product toward an unbounded scan) turns
+        // this red instead of silently degrading.
         let progressOutcome = try Self.runProbe(
             scenario: "top-level-chain-progress",
             expectedPattern: Self.riskyPattern,
             probeURL: probeURL
         )
+        guard case .completed = progressOutcome else {
+            throw FixtureError.childFailed
+        }
         Self.report(
             progressOutcome,
             operation: "enumerate-report-progress"

@@ -642,6 +642,24 @@ prune mutation is built.
   (post-interleave-prune) lineage in phase 2, and the active revision survives
   (D3; `RET-CONCUR-1` third case, Record 3).
 
+- **DEC-REVERT-RACE (resolved, accepted 2026-08-28):** a revert-to-revision
+  proposal carries the bytes resolved from the **phase-1 snapshot**; phase 2
+  rechecks only the `02` §11 OCC contract and never re-verifies the target
+  revision's existence in the reloaded lineage. An interleaving
+  `.setRetentionPolicies` R3 prune that removed the target preserves
+  `ContentVersion` (D5), so the revert still commits and mints a NEW revision
+  from the cached bytes — it never repoints or resurrects a revision ID
+  (`02` §11; D1/D4, `02` §14). The rejected phase-2-existence alternative
+  (fail `.revisionNotFound` at commit when the target is gone) would add a
+  failure mode the ContentVersion-keyed OCC contract cannot express and would
+  make a revert's outcome depend on retention interleavings that change no
+  OCC-visible fact. Recorded exposure: a revert may re-append bytes R3 just
+  removed, and a pruned target whose cached bytes equal current Effective
+  Content lands as the `02` §11 step-5 `.unchanged` no-op — callers must not
+  read a committed revert as proof the target still exists in lineage. Target
+  absence remains a preparation-time check only (`05` §6.2,
+  `.revisionNotFound`).
+
 - **R3 on revise** prunes the item's oldest inactive revisions so the
   post-append revision count/bytes respect the user thresholds. It reuses the
   revision lineage already loaded in `RevisionFacts` (`02` §5.3; `05` §7.3
@@ -1201,7 +1219,7 @@ on the V2-extended preparation path and fails `.capacityExceeded(.revisionBytes)
 | `.revise` (append revision) | R2, R3 | A revision append grows that item's revision count/bytes (R3) and total retained bytes (R2). R1 does not fire (a revision does not change `lastCopiedAt`). |
 | `.setRetentionPolicies` | R1, R2, R3 | Lowering any threshold retires/prunes to satisfy the new policy in one commit (analog of v1 WS21 for count). |
 | `.setRetentionPolicy` (v1 count) | none (V2-02) | Count enforcement is v1; it does not trigger V2-02 expansion. (A count retirement removes items, which trivially reduces bytes/age exposure, but V2-02 does not *re-evaluate* on the count action — the next capture/revise/setRetentionPolicies will.) |
-| `.placePinned` / `.unpin` / `.remove` / `.clear` | none | These do not add retained bytes/items; v1 semantics are unchanged. (`.remove`/`.clear` reduce exposure; no expansion needed.) |
+| `.placePinned` / `.unpin` / `.remove` / `.clear` | none | These do not add retained bytes/items; v1 semantics are unchanged. (`.remove`/`.clear` reduce exposure; no expansion needed; `.unpin` — `DEC-UNPIN-SWEEP` below.) |
 
 When no V2-02 policy is active (`age == nil && storage == nil && revisions ==
 nil`, or `RetentionExpansionConfigRow` all-disabled), every action's public
@@ -1221,6 +1239,26 @@ bytes/items (capture/revise) or *lower a V2 threshold* (setRetentionPolicies),
 mirroring v1's per-action retention model (a count action enforces count only).
 A user who lowers count and stops copying sees no R2 restoration; the recovery
 is to issue a `.setRetentionPolicies` (which sweeps R1/R2/R3) or copy again. This is a stated semantic, not an oversight.
+
+**DEC-UNPIN-SWEEP (resolved, accepted 2026-08-28):** `.unpin` is not a
+retention trigger and carries no grace window. The unpin commit performs only
+the pinned-lane shift (`02` §10): it loads no retention/expansion facts and
+retires nothing, so a store may legitimately hold more unpinned items than
+`maximumUnpinnedItems` — and stay over the R2 budget or past the R1 age
+threshold — until the next trigger named in §7 (`.capture`,
+`.setRetentionPolicies`) or the v1 count trigger (`.setRetentionPolicy`)
+evaluates the complete admitted state; the posture is the same
+event-triggered contract as DEC-RET-AGE (§2.2). A just-unpinned item keeps
+its original `lastCopiedAt` and is immediately a fully eligible victim in the
+deterministic oldest-first order (D16). The rejected sweep-on-unpin
+alternative would turn a user unpin gesture into a destructive retention
+commit (potentially deleting the just-unpinned item itself) and force the
+unpin lane onto the full-inventory fact path the COUNT work removes; the
+rejected protection-window alternative has no product-defined window and
+silently re-orders D16 victim selection. Settings/help must describe count
+and age enforcement as event-triggered (the `ageEnforcementExplanation`
+wording extended to the count lane, §12), never as continuously held
+invariants.
 
 ## 8. Public surface and code interaction
 

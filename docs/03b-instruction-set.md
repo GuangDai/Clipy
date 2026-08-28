@@ -104,6 +104,8 @@ UTF-16 offset storage are bounded by the retained excerpt window.
 
 Regexp admission rejects, returning `invalidInput(.invalidRegularExpression)` in every case: a pattern over the Part VI 512-Character limit; a pattern that fails Foundation `NSRegularExpression` compilation; a quantified group that itself contains a quantifier and is quantified (e.g. `(a+)+`); **any quantified group containing alternation** (including `(a+|b)+`, `(a|a)+`, and `(a|ab)+`); any backreference; and any inline flag clause that enables ICU comments/free-spacing mode (`x`). Comments mode is conservatively excluded because ignored whitespace and `#` line comments would otherwise require a second complete lexical grammar before the nested-quantifier proof. Plain non-capturing groups `(?:…)`, anchors, unquantified alternation, comments-mode-disabled flag clauses, and character-class constructs are permitted *unless* they participate in a rejected nested-quantifier/alternation form. The scanner recognizes nested ICU/POSIX sets plus `\Q…\E` quoted literals both outside and inside sets. These conservative guards intentionally reject some valid but risky patterns; regexp search never executes a rejected pattern.
 
+Adjudicated (REVIEW Card 11C): the frozen rejection grammar above is unchanged — a top-level ambiguous-quantifier chain (e.g. `a*a*a*…*b`) stays admissible, because recognizing it conservatively requires an operand-overlap grammar that §8 refuses to add. The scan operation is instead Apple's documented interruptible iterator `enumerateMatches(…, .reportProgress, .reportCompletion)`: the first result wins with identical UTF-16 ranges; a fixed per-request engine deadline (2,000 ms, internal to HistoryStorage) and cooperative cancellation are enforced inside the periodic progress callback via `stop`; a deadline stop or the engine's own `internalError` abandonment fails the whole search `temporarilyUnavailable(.searchEngineDeadline)` (§10) with no partial results. This bounds the demonstrated non-preemptible hazard family; it is not a general preemption or total-time guarantee (total scan cost remains the Part VI §9 envelope).
+
 Search scores and Fuse objects remain internal. Fixture tests own Unicode conversion, unsafe-regexp rejection, title-before-body behavior, tie-breakers, and excerpt/range stability.
 
 ### 9. Detail, paste, and thumbnail DTOs
@@ -310,6 +312,7 @@ public enum UnavailableReason: Sendable, Equatable {
     case factProof
     case dedupIndexRebuild
     case insufficientDiskSpace
+    case searchEngineDeadline   // A regexp scan was stopped at its fixed engine deadline or engine-internal abandonment (§8); retryable.
 }
 
 public enum PersistenceFailure: Sendable, Equatable {

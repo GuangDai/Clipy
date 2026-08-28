@@ -89,6 +89,8 @@ public enum FailurePresentation {
             return "History is reindexing. Try again shortly."
         case .insufficientDiskSpace:
             return "Not enough disk space. Free some space and try again."
+        case .searchEngineDeadline:
+            return "Search is taking too long. Try again."
         }
     }
 }

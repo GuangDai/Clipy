@@ -280,6 +280,8 @@ Decision resolution into the proposed Effective Content (performed by `RevisionP
 - `.replace(bytes:)` substitutes the supplied bytes for that type in Effective;
 - `.hide` omits that representation from Effective Content entirely. The Canonical representation is retained for lineage and general-lane dedup, so hiding never changes Canonical Content or its signature. Hiding does change Effective Content (it carries fewer representations), which is exactly why a hide-bearing revision is a real revision with a non-nil active ID.
 
+A `.revert(to: .revision(id))` target absent from the phase-1 snapshot is rejected at preparation (Part V §6.2, `.revisionNotFound`) — the only existence check. A target removed between the two phases by an interleaving R3 prune does not fail the commit: phase 2 rechecks only the `02` §11 OCC contract and commits the snapshot-resolved bytes (decision `DEC-REVERT-RACE`, `V2-02` §4.3).
+
 The proposed Effective Content must remain non-empty — a draft that hides every Canonical type is rejected as `invalidInput(.incoherentRevisionDraft)`. Hidden types do not appear in `HistoryDetails.effective` or `PastePayload`; a later revision's `.inheritCanonical` or `.replace` restores them.
 
 ### 6. Receipts and History Commit outcomes

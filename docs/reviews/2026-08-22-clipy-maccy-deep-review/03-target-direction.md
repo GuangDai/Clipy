@@ -803,8 +803,8 @@ settled RSS、CPU/energy、failure rate，不生成综合分数。
 | `DEC-CAPTURE-OVERLOAD` | 01/06 cross-cutting + pasteboard roadmap | **RESOLVED (2026-08-24)** — one active + one replaceable latest pending | — | active不替换；complete/admissible新值只替换pending；active→latest串行drain；累计content-free replacement count对用户可见；不由polling漏值辩护；pre-freeze acquisition/transient overlap/RSS仍OPEN。 |
 | `DEC-RET-AGE` | V2-02 + V2-07 | OPEN | age UI/maintenance | age 是 event-triggered 还是 wall-clock expiry。 |
 | `DEC-CAPTURE-CLOCK` | 03a + V2-02 | OPEN | capture/retention | untrusted `observedAt` skew与 Authority clock。 |
-| `DEC-REVERT-RACE` | 03a + V2-02 | OPEN | revision planner | target被R3 prune后采用phase-1 snapshot还是phase-2 existence。 |
-| `DEC-UNPIN-SWEEP` | V2-02 | OPEN | unpin/retention | unpin是否立即sweep，以及是否保护刚unpin item。 |
+| `DEC-REVERT-RACE` | 03a + V2-02 | **RESOLVED (2026-08-28)** — phase-1 snapshot | — | revert target在preparation解析为bytes；interleaving R3 prune不改ContentVersion（V2-02 D5），phase 2只重查02 §11 OCC、不重查target存在性，append缓存bytes并mint新revision（不复活revision ID）。rejected phase-2 existence会引入OCC合同外的`.revisionNotFound`失败模式。exposure：revert可复活刚被R3删除的bytes；target bytes等于当前Effective时落地为§11 step-5 `.unchanged`。 |
+| `DEC-UNPIN-SWEEP` | V2-02 | **RESOLVED (2026-08-28)** — unpin非trigger、无grace | — | unpin commit仅做pin-lane shift（02 §10），不加载retention facts、不retire；over-policy状态合法存活到下一`.capture`/`.setRetentionPolicy(-ies)`；刚unpin item保留原`lastCopiedAt`、按D16序立即成为完全合格victim。rejected立即sweep会把unpin手势变成destructive commit并复活O(N)全量facts路径（故playbook L1781的unpin-victim leaf不铸）；rejected保护窗无产品定义。Settings须按event-triggered措辞（count lane补`ageEnforcementExplanation`式脚注）。 |
 | `DEC-MULTI-ITEM` | overview + domain + schema/roadmap | OPEN | PB-MULTI | multi-item是否进入首发；否则可见unsupported state。 |
 | `DEC-DISTRIBUTION` | 06 cross-cutting + V2-06 release | OPEN | signed gates | Developer ID还是MAS；sandbox migration/entitlements。 |
 | `DEC-AUTO-PASTE` | V2-07 platform/UX | OPEN | AX/paste | 自动粘贴价值是否足以要求Accessibility授权。 |
