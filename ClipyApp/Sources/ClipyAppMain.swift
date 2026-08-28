@@ -34,6 +34,9 @@ struct ClipyAppMain: App {
         Settings {
             SettingsRootView(appDelegate: appDelegate)
         }
+        // The per-tab frames stay the content's MINIMUM sizes; the window
+        // itself is freely resizable beyond them.
+        .windowResizability(.contentMinSize)
     }
 }
 

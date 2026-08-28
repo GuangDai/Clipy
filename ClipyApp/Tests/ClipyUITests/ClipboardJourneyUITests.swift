@@ -122,6 +122,13 @@ final class ClipboardJourneyUITests: XCTestCase {
         )
 
         app.typeKey(",", modifierFlags: .command)
+        // The Settings window restores its previously selected tab across
+        // app launches (an earlier journey in this run leaves it on
+        // Appearance). Select the tab under test explicitly instead of
+        // relying on the fresh-launch default.
+        let generalTab = app.buttons["General"]
+        XCTAssertTrue(generalTab.waitForExistence(timeout: 10))
+        generalTab.click()
         let launchAtLogin = app.switches[
             "clipy.settings.launch-at-login"
         ]

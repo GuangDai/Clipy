@@ -14,7 +14,12 @@
 ///   the user's cursor;
 /// - the panel's key status arms/disarms auto-open
 ///   (`panelBecameKey`/`panelResignedKey`); panel close leaves auto-open
-///   disarmed until the next key-window activation.
+///   disarmed until the next key-window activation;
+/// - the user's preview auto-open preference
+///   (`isAutoOpenPreferenceEnabled`, default on) gates dwell scheduling
+///   independently of key status: while off, selection changes never open
+///   the pane, but the manual ⌃Space toggle still works, and the next
+///   selection change after re-enabling auto-opens again.
 ///
 /// Pure Foundation + HistoryCore: no AppKit, no SwiftData (01 §8); the view
 /// layer renders `previewedItem` and ClipyApp's panel observes `isOpen`.
@@ -43,6 +48,16 @@ public final class PreviewPaneState {
     /// grows a preview.
     public private(set) var isAutoOpenEnabled = true
 
+    /// The user-preference half of the auto-open gate
+    /// (`PanelAppearanceSettings.isPreviewAutoOpenEnabled`, pushed in by
+    /// `HistoryPanelView`). Unlike `isAutoOpenEnabled` — the transient
+    /// key-status arming — this is a durable preference: while false, a
+    /// selection change never schedules the dwell and a dwell already in
+    /// flight never fires; the manual ⌃Space toggle and the manual-close
+    /// suppression are unaffected. Re-enabling restores auto-open on the
+    /// NEXT selection change (it never opens the pane by itself).
+    public var isAutoOpenPreferenceEnabled = true
+
     /// The pending dwell task; cancelled by every selection change, manual
     /// toggle, or panel transition.
     private var autoOpenTask: Task<Void, Never>?
@@ -67,8 +82,9 @@ public final class PreviewPaneState {
     // MARK: - Selection dwell (Maccy `scheduleRetarget(lead:)`)
 
     /// The list selection changed. Cancels any pending dwell, clears the
-    /// manual-close suppression, and — when auto-open is armed — schedules
-    /// the dwell that retargets/opens the preview. A `nil` selection closes
+    /// manual-close suppression, and — when auto-open is armed by both the
+    /// panel's key status and the user preference — schedules the dwell that
+    /// retargets/opens the preview. A `nil` selection closes
     /// an open preview immediately (nothing to preview).
     public func handleSelectionChange(_ item: HistoryItemReference?) {
         cancelPendingAutoOpen()
@@ -77,7 +93,10 @@ public final class PreviewPaneState {
             if isOpen { closePreview() }
             return
         }
-        guard isAutoOpenEnabled, !isAutoOpenSuppressed else { return }
+        guard isAutoOpenEnabled,
+              isAutoOpenPreferenceEnabled,
+              !isAutoOpenSuppressed
+        else { return }
         scheduleAutoOpen(for: item)
     }
 
@@ -195,6 +214,7 @@ public final class PreviewPaneState {
                   self.purgeGeneration == generation,
                   self.pendingAutoOpenItem == item,
                   self.isAutoOpenEnabled,
+                  self.isAutoOpenPreferenceEnabled,
                   !self.isAutoOpenSuppressed
             else {
                 return

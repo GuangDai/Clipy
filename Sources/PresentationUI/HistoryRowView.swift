@@ -1,6 +1,9 @@
-/// HistoryRowView.swift — one rich history row: a 36×36 thumbnail (or an
-/// SF Symbol type fallback), the highlighted title/snippet, the trailing
-/// metadata column, and the row context menu.
+/// HistoryRowView.swift — one rich history row: a density-sized thumbnail
+/// (or the retained source-app icon, or an SF Symbol type fallback), the
+/// highlighted title/snippet, the trailing metadata column, and the row
+/// context menu. Row metrics come from `PanelTheme`'s density mappings; the
+/// `comfortable` default is the shipped 36pt-thumbnail, 4pt-padding,
+/// two-line-snippet layout exactly.
 /// Owning spec: docs/01-architecture.md §5.2 (gesture actions), §5.7
 /// (thumbnail is requested by exact `HistoryItemReference`);
 /// docs/03b-instruction-set.md §8 (row fields, search presentation, 1-based
@@ -13,14 +16,16 @@ import HistoryCore
 import SwiftUI
 
 /// A single row of the panel list. Rendering is a pure function of the
-/// `HistoryRow` DTO plus the reference-exact thumbnail already cached for
-/// `row.item`; mutations are expressed only through the injected callbacks so
-/// the row never talks to storage itself (01 §6).
+/// `HistoryRow` DTO plus the reference-exact thumbnail and bundle-ID-keyed
+/// source icon already cached for it; mutations are expressed only through
+/// the injected callbacks so the row never talks to storage itself (01 §6).
 struct HistoryRowView: View {
     private let row: HistoryRow
     private let rendering: HistoryRowRenderingModel
     private let pinnedOrdinal: Int?
+    private let density: HistoryRowDensity
     private let thumbnails: ThumbnailStore
+    private let sourceIcons: SourceIconStore?
     private let onCopy: (HistoryItemReference) -> Void
     private let onPin: (HistoryItemID, PinnedPlacement) -> Void
     private let onUnpin: (HistoryItemID) -> Void
@@ -31,7 +36,9 @@ struct HistoryRowView: View {
         row: HistoryRow,
         now: Date,
         pinnedOrdinal: Int?,
+        density: HistoryRowDensity = .comfortable,
         thumbnails: ThumbnailStore,
+        sourceIcons: SourceIconStore? = nil,
         onCopy: @escaping (HistoryItemReference) -> Void,
         onPin: @escaping (HistoryItemID, PinnedPlacement) -> Void,
         onUnpin: @escaping (HistoryItemID) -> Void,
@@ -41,7 +48,9 @@ struct HistoryRowView: View {
         self.row = row
         rendering = HistoryRowRenderingModel(row: row, now: now)
         self.pinnedOrdinal = pinnedOrdinal
+        self.density = density
         self.thumbnails = thumbnails
+        self.sourceIcons = sourceIcons
         self.onCopy = onCopy
         self.onPin = onPin
         self.onUnpin = onUnpin
@@ -50,21 +59,21 @@ struct HistoryRowView: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .center, spacing: PanelTheme.spacingMedium) {
             thumbnail
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: PanelTheme.spacingXXXSmall) {
                 title
                 if let search = row.search, let snippet = search.snippet {
                     Text(MatchHighlighting.highlighted(snippet, ranges: search.matchedRanges))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .lineLimit(PanelTheme.snippetLineLimit(for: density))
                 }
             }
-            Spacer(minLength: 8)
+            Spacer(minLength: PanelTheme.spacingSmall)
             metadataColumn
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, PanelTheme.rowVerticalPadding(for: density))
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { onCopy(row.item) }
         .contextMenu { contextMenu }
@@ -92,9 +101,12 @@ struct HistoryRowView: View {
 
     // MARK: Leading thumbnail
 
-    /// 36×36 leading slot. Prefetch is gated by the cheap UTI heuristic so
-    /// text rows never enter the thumbnail pipeline; observable state retains
-    /// only a framework-neutral eager raster (01 §6; 04 §9).
+    /// Density-sized leading slot (36pt comfortable / 28pt compact via
+    /// `PanelTheme.thumbnailSize(for:)`). Prefetch is gated by the cheap UTI
+    /// heuristic so text rows never enter the thumbnail pipeline; observable
+    /// state retains only a framework-neutral eager raster (01 §6; 04 §9).
+    /// While no raster is retained, the slot shows the source-app icon when
+    /// the surface's icon store has one cached, else the type-family symbol.
     private var thumbnail: some View {
         Group {
             if let raster = thumbnails.raster(for: row.item),
@@ -106,29 +118,53 @@ struct HistoryRowView: View {
                 image
                     .resizable()
                     .aspectRatio(contentMode: .fill)
+            } else if let sourceIcon {
+                Image(decorative: sourceIcon, scale: 2)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .accessibilityHidden(true)
             } else {
                 Image(systemName: Self.typeSymbol(for: row.typeIdentifiers))
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(width: 36, height: 36)
+        .frame(
+            width: PanelTheme.thumbnailSize(for: density),
+            height: PanelTheme.thumbnailSize(for: density)
+        )
         .background {
-            RoundedRectangle(cornerRadius: 8).fill(.quaternary)
+            RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium)
+                .fill(.quaternary)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium))
         .overlay(alignment: .bottomLeading) { pinBadge }
         .task(id: row.item) {
             if ThumbnailStore.likelyThumbnailable(row.typeIdentifiers) {
                 thumbnails.prefetch(row.item)
             }
+            if let lastSource = row.lastSource {
+                // Resolution mutates the store, so it runs here rather than
+                // in body evaluation; the row reads `cachedIcon` only.
+                sourceIcons?.icon(forBundleID: lastSource)
+            }
         }
         .accessibilityHidden(true)
     }
 
-    /// pin.fill accent badge plus the 1-based display ordinal —
+    /// The retained source-app icon for the row's observed bundle identifier,
+    /// consulted only while the slot has no thumbnail raster. A pure read:
+    /// provider resolution runs in the slot's `.task` above.
+    private var sourceIcon: CGImage? {
+        guard let lastSource = row.lastSource else { return nil }
+        return sourceIcons?.cachedIcon(forBundleID: lastSource)
+    }
+
+    /// pin.fill badge plus the 1-based display ordinal —
     /// `HistoryRow.pinnedPosition` is 0-based and the UI adds one itself
-    /// (03b §8).
+    /// (03b §8). `.primary` on thin material keeps the badge legible against
+    /// any accent color (white-on-tint failed contrast with light accents);
+    /// the badge's size and accessibility label are unchanged.
     @ViewBuilder
     private var pinBadge: some View {
         if let ordinal = pinnedOrdinal {
@@ -137,10 +173,10 @@ struct HistoryRowView: View {
                 Text("\(ordinal)")
             }
             .font(.system(size: 8, weight: .bold))
-            .foregroundStyle(.white)
+            .foregroundStyle(.primary)
             .padding(.horizontal, 3)
             .padding(.vertical, 1)
-            .background { Capsule().fill(.tint) }
+            .background { Capsule().fill(.thinMaterial) }
             .accessibilityLabel("Pinned at position \(ordinal)")
         }
     }
@@ -166,10 +202,11 @@ struct HistoryRowView: View {
     // MARK: Trailing metadata column
 
     private var metadataColumn: some View {
-        VStack(alignment: .trailing, spacing: 2) {
+        VStack(alignment: .trailing, spacing: PanelTheme.spacingXXXSmall) {
             Text(rendering.relativeTimeText)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .monospacedDigit()
             if let source = sourceDisplayName {
                 Text(source)
                     .font(.caption2)
@@ -215,24 +252,27 @@ struct HistoryRowView: View {
         return parts.last.map { String($0) }
     }
 
-    /// SF Symbol fallback by representation type family; anything not
+    /// SF Symbol fallback by representation type family, classified through
+    /// the shared `HistoryRowKind` UTI vocabulary so the panel's type filter
+    /// always agrees with the displayed family; anything not
     /// image/URL/rich-text falls back to the generic clipboard document.
     private static func typeSymbol(for typeIdentifiers: [String]) -> String {
-        func matches(_ prefixes: [String]) -> Bool {
-            typeIdentifiers.contains { identifier in
-                prefixes.contains { identifier.hasPrefix($0) }
-            }
-        }
-        if matches([
-            "public.image", "public.png", "public.jpeg",
-            "public.tiff", "public.heic", "com.compuserve.gif"
-        ]) {
+        if HistoryRowKind.matchesAny(
+            typeIdentifiers,
+            prefixes: HistoryRowKind.imageTypePrefixes
+        ) {
             return "photo"
         }
-        if matches(["public.url", "public.file-url"]) {
+        if HistoryRowKind.matchesAny(
+            typeIdentifiers,
+            prefixes: HistoryRowKind.linkTypePrefixes
+        ) {
             return "link"
         }
-        if matches(["public.html", "public.rtf", "com.apple.flat-rtfd"]) {
+        if HistoryRowKind.matchesAny(
+            typeIdentifiers,
+            prefixes: HistoryRowKind.richTextTypePrefixes
+        ) {
             return "doc.text"
         }
         return "doc.on.clipboard"

@@ -343,10 +343,14 @@ struct HistoryDetailsView: View {
     }
 
     /// The per-item action set (contract §4.2 "toolbar"): rendered as a
-    /// persistent bottom bar because a MenuBarExtra window has no window
+    /// persistent bottom bar because the floating NSPanel has no window
     /// toolbar surface for `.toolbar` items — the four actions are identical.
+    /// The secondary actions wear their accessibility labels as visible text
+    /// at the small control size so the bar still fits the resizable panel's
+    /// narrowest (360-point) main column; only "Copy to Clipboard" stays
+    /// prominent.
     private func actionBar(isPinned: Bool) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: PanelTheme.spacingSmall) {
             Button {
                 // The only History→pasteboard hand-off (01 §5.6); the view
                 // state routes it to the composition root's paste closure.
@@ -355,7 +359,7 @@ struct HistoryDetailsView: View {
                 Label("Copy to Clipboard", systemImage: "doc.on.doc")
             }
             .buttonStyle(.borderedProminent)
-            Spacer(minLength: 8)
+            Spacer(minLength: PanelTheme.spacingSmall)
             Button {
                 Task { await togglePin(isPinned: isPinned) }
             } label: {
@@ -363,10 +367,14 @@ struct HistoryDetailsView: View {
                     ProgressView()
                         .controlSize(.small)
                 } else {
-                    Image(systemName: isPinned ? "pin.slash" : "pin")
+                    Label(
+                        isPinned ? "Unpin" : "Pin",
+                        systemImage: isPinned ? "pin.slash" : "pin"
+                    )
                 }
             }
             .buttonStyle(.bordered)
+            .controlSize(.small)
             .help(isPinned ? "Unpin" : "Pin")
             .accessibilityLabel(isPinned ? "Unpin" : "Pin")
             .accessibilityHint(
@@ -378,18 +386,20 @@ struct HistoryDetailsView: View {
             Button {
                 showsEditor = true
             } label: {
-                Image(systemName: "square.and.pencil")
+                Label("Edit Content", systemImage: "square.and.pencil")
             }
             .buttonStyle(.bordered)
+            .controlSize(.small)
             .help("Edit Content…")
             .accessibilityLabel("Edit Content")
             .accessibilityHint("Opens the revision editor for this item.")
             Button {
                 showsRemoveConfirmation = true
             } label: {
-                Image(systemName: "trash")
+                Label("Remove", systemImage: "trash")
             }
             .buttonStyle(.bordered)
+            .controlSize(.small)
             .help("Remove")
             .accessibilityLabel("Remove")
             .accessibilityHint(
@@ -398,8 +408,8 @@ struct HistoryDetailsView: View {
             .accessibilityIdentifier("clipy.details.remove")
             .disabled(isRemoving)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, PanelTheme.spacingLarge)
+        .padding(.vertical, PanelTheme.spacingSmall)
         .background(.bar)
     }
 
@@ -409,13 +419,13 @@ struct HistoryDetailsView: View {
         systemImage: String,
         onDismiss: @escaping () -> Void
     ) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: PanelTheme.spacingSmall) {
             Image(systemName: systemImage)
                 .foregroundStyle(.secondary)
             Text(text)
                 .font(.caption)
                 .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 8)
+            Spacer(minLength: PanelTheme.spacingSmall)
             Button(action: onDismiss) {
                 Image(systemName: "xmark")
             }
@@ -423,8 +433,8 @@ struct HistoryDetailsView: View {
             .controlSize(.small)
             .accessibilityLabel("Dismiss")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, PanelTheme.spacingLarge)
+        .padding(.vertical, PanelTheme.spacingXSmall)
         .background(Color.primary.opacity(0.05))
     }
 
@@ -597,7 +607,7 @@ private struct DetailsBody: View {
 
     private var headerSection: some View {
         Section {
-            HStack(alignment: .top, spacing: 12) {
+            HStack(alignment: .top, spacing: PanelTheme.spacingLarge) {
                 thumbnail
                     .frame(width: 64, height: 64)
                     .task(id: details.item) {
@@ -610,7 +620,10 @@ private struct DetailsBody: View {
                             thumbnails.prefetch(details.item)
                         }
                     }
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(
+                    alignment: .leading,
+                    spacing: PanelTheme.spacingXXSmall
+                ) {
                     Text(detailTitle(for: details))
                         .font(.headline)
                         .lineLimit(2)
@@ -619,7 +632,7 @@ private struct DetailsBody: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, PanelTheme.spacingXXSmall)
         }
     }
 
@@ -635,7 +648,11 @@ private struct DetailsBody: View {
                 .resizable()
                 .scaledToFill()
                 .frame(width: 64, height: 64)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .clipShape(
+                    RoundedRectangle(
+                        cornerRadius: PanelTheme.cornerRadiusMedium
+                    )
+                )
                 .accessibilityLabel("Item thumbnail")
         } else {
             Image(
@@ -648,7 +665,9 @@ private struct DetailsBody: View {
             .frame(width: 64, height: 64)
             .background(
                 Color.primary.opacity(0.06),
-                in: RoundedRectangle(cornerRadius: 8)
+                in: RoundedRectangle(
+                    cornerRadius: PanelTheme.cornerRadiusMedium
+                )
             )
             .accessibilityLabel("Content type icon")
         }
@@ -661,8 +680,8 @@ private struct DetailsBody: View {
             Label("Pinned #\(position + 1)", systemImage: "pin.fill")
                 .font(.caption)
                 .foregroundStyle(Color.accentColor)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
+                .padding(.horizontal, PanelTheme.spacingXSmall)
+                .padding(.vertical, PanelTheme.spacingXXXSmall)
                 .background(
                     Color.accentColor.opacity(0.12),
                     in: Capsule()
@@ -673,8 +692,8 @@ private struct DetailsBody: View {
             Text("Unpinned")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
+                .padding(.horizontal, PanelTheme.spacingXSmall)
+                .padding(.vertical, PanelTheme.spacingXXXSmall)
                 .background(Color.primary.opacity(0.06), in: Capsule())
                 .accessibilityIdentifier("clipy.details.pin-status")
         }
@@ -769,6 +788,11 @@ private struct DetailsBody: View {
                     )
                 }
                 .controlSize(.small)
+                // A canonical revert whose proposed Effective Content is
+                // byte-identical to the current Effective Content commits an
+                // `.unchanged` no-op (docs/02-domain.md §11 step 5; WS7 (b)),
+                // so the action is disabled exactly in that state.
+                .disabled(!canRevertToOriginal)
                 .accessibilityLabel("Revert to Original")
                 .accessibilityHint(
                     "Restores the canonical content as this item's current"
@@ -776,6 +800,15 @@ private struct DetailsBody: View {
                 )
             }
         }
+    }
+
+    /// Whether Revert to Original would change the item: at least one
+    /// revision exists AND the current Effective Content differs from the
+    /// Canonical original. With no revisions, Effective is canonical by
+    /// construction; storage's no-op rule (02 §11 step 5) compares proposed
+    /// content byte-for-byte, mirrored here by the representation lists.
+    private var canRevertToOriginal: Bool {
+        !details.revisions.isEmpty && details.effective != details.canonical
     }
 
     private var representations: [HistoryRepresentation] {
@@ -805,7 +838,7 @@ private struct RepresentationRow: View {
         let presentation = DetailsRepresentationPresentation.resolve(
             representation
         )
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: PanelTheme.spacingXSmall) {
             HStack(alignment: .firstTextBaseline) {
                 Text(representation.typeIdentifier)
                     .font(.system(.caption, design: .monospaced))
@@ -813,13 +846,13 @@ private struct RepresentationRow: View {
                     .textSelection(.enabled)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Spacer(minLength: 8)
+                Spacer(minLength: PanelTheme.spacingSmall)
                 if isHiddenFromEffective {
                     Label("Hidden", systemImage: "eye.slash")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
+                        .padding(.horizontal, PanelTheme.spacingXSmall)
+                        .padding(.vertical, PanelTheme.spacingXXXSmall)
                         .background(
                             Color.primary.opacity(0.06),
                             in: Capsule()
@@ -846,15 +879,25 @@ private struct RepresentationRow: View {
                                 + representation.typeIdentifier
                         )
                 }
-                .frame(maxHeight: 120)
-                .padding(8)
+                // The preview box tracks the resizable main column's width
+                // (PanelGeometry 360…720); its height cap grew 120 → 160.
+                .frame(
+                    maxWidth: .infinity,
+                    maxHeight: 160,
+                    alignment: .leading
+                )
+                .padding(PanelTheme.spacingSmall)
                 .background(
                     Color.primary.opacity(0.04),
-                    in: RoundedRectangle(cornerRadius: 6)
+                    in: RoundedRectangle(
+                        cornerRadius: PanelTheme.cornerRadiusSmall
+                    )
                 )
                 .overlay {
-                    RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(Color.primary.opacity(0.12))
+                    RoundedRectangle(
+                        cornerRadius: PanelTheme.cornerRadiusSmall
+                    )
+                    .strokeBorder(Color.primary.opacity(0.12))
                 }
                 .accessibilityLabel(
                     "Text preview of \(representation.typeIdentifier)"
@@ -881,14 +924,24 @@ private struct RepresentationRow: View {
                 image
                     .resizable()
                     .scaledToFit()
-                    .frame(maxWidth: 120, maxHeight: 90)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    // Widen with the resizable main column; the height cap
+                    // grew 90 → 160 (was maxWidth 120 / maxHeight 90).
+                    .frame(
+                        maxWidth: .infinity,
+                        maxHeight: 160,
+                        alignment: .leading
+                    )
+                    .clipShape(
+                        RoundedRectangle(
+                            cornerRadius: PanelTheme.cornerRadiusSmall
+                        )
+                    )
                     .accessibilityLabel(
                         "Image preview of \(representation.typeIdentifier)"
                     )
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, PanelTheme.spacingXXXSmall)
     }
 }
 
@@ -902,7 +955,7 @@ private struct RevisionRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: PanelTheme.spacingXXXSmall) {
                 Text(revision.title)
                     .font(
                         .subheadline.weight(
@@ -922,7 +975,7 @@ private struct RevisionRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
-            Spacer(minLength: 8)
+            Spacer(minLength: PanelTheme.spacingSmall)
             if revision.isActive {
                 Label("Active", systemImage: "checkmark.circle")
                     .font(.caption)
@@ -938,7 +991,7 @@ private struct RevisionRow: View {
                     "Restores this revision as the item's current content."
                 )
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, PanelTheme.spacingXXXSmall)
     }
 }
 

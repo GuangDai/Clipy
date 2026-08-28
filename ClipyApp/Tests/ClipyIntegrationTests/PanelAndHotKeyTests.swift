@@ -409,6 +409,142 @@ struct PopupPositionGeometryTests {
         #expect(expansion.panelFrame.origin == mainSurface.origin)
     }
 
+    @Test func previewSideLeadingIsHonoredWhenTheLeftSideHasSpace() {
+        // The x 520...920 main surface from
+        // `lastPositionUsesActualMainSurfaceWhenExpandedWindowShiftedLeft`:
+        // an explicit leading preference pins the pane left (x 199...519)
+        // while preserving the main surface exactly.
+        let mainSurface = NSRect(x: 520, y: 200, width: 400, height: 560)
+
+        let expansion = PopupPositionGeometry.expandedPreviewFrame(
+            preservingMainSurface: mainSurface,
+            in: mainFrame,
+            previewSide: .leading
+        )
+
+        #expect(expansion.placement == .leading)
+        #expect(expansion.panelFrame == NSRect(x: 199, y: 200, width: 721, height: 560))
+        #expect(
+            PopupPositionGeometry.mainSurfaceFrame(
+                in: expansion.panelFrame,
+                previewPlacement: expansion.placement,
+                previewVisible: true
+            ) == mainSurface
+        )
+    }
+
+    @Test func previewSideTrailingIsHonoredWhenTheRightSideHasSpace() {
+        let mainSurface = NSRect(x: 100, y: 200, width: 400, height: 560)
+
+        let expansion = PopupPositionGeometry.expandedPreviewFrame(
+            preservingMainSurface: mainSurface,
+            in: mainFrame,
+            previewSide: .trailing
+        )
+
+        #expect(expansion.placement == .trailing)
+        #expect(expansion.panelFrame == NSRect(x: 100, y: 200, width: 721, height: 560))
+        #expect(
+            PopupPositionGeometry.mainSurfaceFrame(
+                in: expansion.panelFrame,
+                previewPlacement: expansion.placement,
+                previewVisible: true
+            ) == mainSurface
+        )
+    }
+
+    @Test func previewSideLeadingFallsBackToTrailingAtTheLeftEdge() {
+        // Leading expansion would cross the screen's left edge
+        // (100 - 321 < 0), so the preference falls back to trailing — the
+        // mirror of the automatic right-edge rule.
+        let mainSurface = NSRect(x: 100, y: 200, width: 400, height: 560)
+
+        let expansion = PopupPositionGeometry.expandedPreviewFrame(
+            preservingMainSurface: mainSurface,
+            in: mainFrame,
+            previewSide: .leading
+        )
+
+        #expect(expansion.placement == .trailing)
+        #expect(expansion.panelFrame == NSRect(x: 100, y: 200, width: 721, height: 560))
+        #expect(
+            PopupPositionGeometry.mainSurfaceFrame(
+                in: expansion.panelFrame,
+                previewPlacement: expansion.placement,
+                previewVisible: true
+            ) == mainSurface
+        )
+    }
+
+    @Test func previewSideTrailingFallsBackToLeadingAtTheRightEdge() {
+        // Same overflow as `previewAtRightEdgeOpensLeadingWithoutMovingTheMainSurface`,
+        // but pinned by an explicit preference instead of `.automatic`.
+        let mainSurface = NSRect(x: 1_000, y: 200, width: 400, height: 560)
+
+        let expansion = PopupPositionGeometry.expandedPreviewFrame(
+            preservingMainSurface: mainSurface,
+            in: mainFrame,
+            previewSide: .trailing
+        )
+
+        #expect(expansion.placement == .leading)
+        #expect(expansion.panelFrame == NSRect(x: 679, y: 200, width: 721, height: 560))
+        #expect(
+            PopupPositionGeometry.mainSurfaceFrame(
+                in: expansion.panelFrame,
+                previewPlacement: expansion.placement,
+                previewVisible: true
+            ) == mainSurface
+        )
+    }
+
+    @Test func previewExpansionExtendsAUserResizedMainSurfaceByTheFixedExtension() {
+        // The expansion is the fixed 321-point preview extension over the
+        // CURRENT main width — a user-resized column is never squashed back
+        // to the default 400+321.
+        let mainSurface = NSRect(x: 100, y: 200, width: 480, height: 640)
+
+        let expansion = PopupPositionGeometry.expandedPreviewFrame(
+            preservingMainSurface: mainSurface,
+            in: mainFrame
+        )
+
+        #expect(expansion.placement == .trailing)
+        #expect(expansion.panelFrame == NSRect(x: 100, y: 200, width: 801, height: 640))
+        #expect(
+            PopupPositionGeometry.mainSurfaceFrame(
+                in: expansion.panelFrame,
+                previewPlacement: expansion.placement,
+                previewVisible: true,
+                mainSurfaceWidth: 480
+            ) == mainSurface
+        )
+    }
+
+    @Test func previewExpansionUsesAnExplicitFreeFormPreviewColumnWidth() {
+        // The same expansion rule with the divider's persisted free-form
+        // width instead of the 320 default: the panel grows by
+        // dividerWidth + previewColumnWidth and the main surface is
+        // preserved exactly.
+        let mainSurface = NSRect(x: 100, y: 200, width: 400, height: 560)
+
+        let expansion = PopupPositionGeometry.expandedPreviewFrame(
+            preservingMainSurface: mainSurface,
+            in: mainFrame,
+            previewColumnWidth: 400
+        )
+
+        #expect(expansion.placement == .trailing)
+        #expect(expansion.panelFrame == NSRect(x: 100, y: 200, width: 801, height: 560))
+        #expect(
+            PopupPositionGeometry.mainSurfaceFrame(
+                in: expansion.panelFrame,
+                previewPlacement: expansion.placement,
+                previewVisible: true
+            ) == mainSurface
+        )
+    }
+
     @Test func lastPositionUsesActualMainSurfaceWhenExpandedWindowShiftedLeft() {
         // Leading preview: preview x 199...519, main x 520...920. The
         // persisted anchor follows the actual main surface, not panel.minX.

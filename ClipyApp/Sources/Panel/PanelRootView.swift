@@ -51,17 +51,25 @@ struct PanelRootView: View {
                         onRequestClose: { appDelegate.closePanel() },
                         onPreviewVisibilityChange: { isOpen in
                             appDelegate.previewVisibilityDidChange(isOpen)
-                        }
+                        },
+                        appearance: appDelegate.panelAppearance,
+                        keepPanelOpenIsActive: appDelegate.isPanelKeepOpenActive,
+                        onToggleKeepPanelOpen: {
+                            appDelegate.togglePanelKeepOpen()
+                        },
+                        // The row-icon loader is built at this AppKit
+                        // boundary (PresentationUI never sees AppKit,
+                        // 01 §8); the view owns the per-surface store it
+                        // builds from this public provider.
+                        sourceIconProvider:
+                            SourceIconProviderFactory.makeProvider()
                     )
                 }
             } else if let openFailure = appDelegate.openFailure {
                 failurePane(for: openFailure)
             } else {
                 ProgressView("Opening Clipy…")
-                    .frame(
-                        width: PanelGeometry.contentWidth,
-                        height: PanelGeometry.height
-                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .overlay(alignment: .top) {
@@ -86,6 +94,16 @@ struct PanelRootView: View {
         // material so the rounded corners (FloatingPanel's content layer)
         // show material, not the desktop behind it.
         .background(.regularMaterial)
+        .onAppear {
+            // Republish the documented public OpenSettingsAction to the
+            // delegate so the pure-AppKit status-item menu can open the
+            // same Settings scene through the same action. Idempotent:
+            // every appearance installs an equivalent fresh capture.
+            appDelegate.installSettingsOpenOperation {
+                NSApp.activate()
+                openSettings()
+            }
+        }
     }
 
     private var captureAccessNeedsAttention: Bool {
@@ -153,10 +171,9 @@ struct PanelRootView: View {
             }
         }
         .padding(20)
-        .frame(
-            width: PanelGeometry.contentWidth,
-            height: PanelGeometry.height
-        )
+        // Fill the hosting panel: the pane must track the user-resizable
+        // window rather than pin the default 400×560 frame.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.store.open.failure")
     }
@@ -315,10 +332,9 @@ struct PanelRootView: View {
             .accessibilityElement(children: .contain)
         }
         .padding(20)
-        .frame(
-            width: PanelGeometry.contentWidth,
-            height: PanelGeometry.height
-        )
+        // Fill the hosting panel: the empty state must track the
+        // user-resizable window rather than pin the default 400×560 frame.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.panel.root")
     }

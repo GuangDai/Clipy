@@ -1,6 +1,9 @@
 /// ClipySettingsView.swift — the Settings scene body (⌘,): a General tab
-/// (the optional Launch-at-Login toggle and Danger Zone clears) and a
-/// Retention tab (the unified v1 count + V2-02 policy group; the first
+/// (the optional Launch-at-Login toggle, the summon-shortcut block, the
+/// capture ignore list, and the Danger Zone clears), an Appearance tab
+/// (panel placement, preview behavior, row density, and the
+/// panel-size reset), and a Retention tab (the unified
+/// v1 count + V2-02 policy group; the first
 /// release is M1 + V2-02, so this is the ONLY V2
 /// settings surface — V2-07 §5 intro, §6.3).
 /// Owning spec: docs/01-architecture.md §2 (PresentationUI responsibilities)
@@ -19,12 +22,16 @@ import Foundation
 import HistoryCore
 import SwiftUI
 
-/// The Settings window content: a fixed 480×320 `TabView` with a General
-/// and a Retention tab (step-9 design contract §4.4).
+/// The Settings window content: a `TabView` with General, Appearance, and
+/// Retention tabs (step-9 design contract §4.4). The container carries no
+/// fixed frame; each tab declares its own ideal size (General 480×440,
+/// Appearance 480×320, Retention 480×560) so the window takes the standard
+/// per-tab resizing behavior when the selection changes.
 ///
 /// The Retention tab opens from the authoritative configured-policy read
-/// (`V2-07` §6.3 — Apply is gated on it, audit SPEC-IMPL-003), and both
-/// tabs mutate History through `HistoryViewState`, reporting outcomes inline —
+/// (`V2-07` §6.3 — Apply is gated on it, audit SPEC-IMPL-003), and the
+/// General and Retention tabs mutate History through `HistoryViewState`,
+/// reporting outcomes inline —
 /// success text derived from the action's
 /// `HistoryCommitOutcome` (03a §6), failures mapped by
 /// `FailurePresentation.message(for:)` (03b §10) or by the retention
@@ -67,7 +74,7 @@ public struct ClipySettingsView: View {
     ///     tests) omits the toggle entirely.
     ///   - summonShortcut: when non-`nil`, the General tab shows the current
     ///     binding or unavailable candidate plus Change/Retry/Reset recovery.
-    ///   - popupPosition: when non-`nil`, the General tab shows the panel
+    ///   - popupPosition: when non-`nil`, the Appearance tab shows the panel
     ///     position picker bound to it; `nil` omits the picker entirely.
     public init(
         viewState: HistoryViewState,
@@ -86,10 +93,13 @@ public struct ClipySettingsView: View {
             GeneralSettingsTab(
                 viewState: viewState,
                 launchAtLogin: launchAtLogin,
-                summonShortcut: summonShortcut,
-                popupPosition: popupPosition
+                summonShortcut: summonShortcut
             )
                 .tabItem { Label("General", systemImage: "gear") }
+                .frame(width: 480, height: 440)
+            AppearanceSettingsTab(popupPosition: popupPosition)
+                .tabItem { Label("Appearance", systemImage: "paintbrush") }
+                .frame(width: 480, height: 320)
             RetentionSettingsTab(
                 viewState: viewState,
                 draft: $retentionDraft,
@@ -97,8 +107,8 @@ public struct ClipySettingsView: View {
                 retentionConfigurationFailure: retentionConfigurationFailure
             )
                 .tabItem { Label("Retention", systemImage: "clock.arrow.circlepath") }
+                .frame(width: 480, height: 560)
         }
-        .frame(width: 480, height: 320)
         .task { await loadRetentionConfiguration() }
     }
 
@@ -123,55 +133,91 @@ public struct ClipySettingsView: View {
 
 // MARK: General
 
-/// General tab (contract §4.4): the optional Launch-at-Login toggle,
-/// panel placement, and Danger Zone clears. Retention controls are grouped
-/// together in `RetentionSettingsTab` as required by `V2-07` §6.3.
+/// General tab (contract §4.4): the optional Launch-at-Login toggle
+/// ("Startup"), the summon-shortcut block with its Show-Colors advisory
+/// ("Keyboard Shortcut"), the capture ignore list ("Privacy"), and the
+/// Danger Zone clears. Panel placement lives
+/// on the Appearance tab; retention controls are grouped together in
+/// `RetentionSettingsTab` as required by `V2-07` §6.3.
 private struct GeneralSettingsTab: View {
 
     private let viewState: HistoryViewState
     private let launchAtLogin: LaunchAtLoginSettings?
     private let summonShortcut: SummonShortcutSettings?
-    private let popupPosition: Binding<PopupPositionMode>?
 
     @State private var status: SettingStatus?
     @State private var isWorking = false
     @State private var isConfirmingClearUnpinned = false
     @State private var isConfirmingClearAll = false
 
+    /// The capture ignore list, edited as one immutable value: loaded from
+    /// UserDefaults on appear and re-stored after every accepted mutation.
+    /// `@AppStorage` has no validated-value array story, and the
+    /// composition root re-reads the key per capture event, so explicit
+    /// load/store calls are both the simplest and the correct pattern.
+    @State private var captureIgnoreList = CaptureIgnoreList()
+    @State private var ignoredBundleIDDraft = ""
+
     init(
         viewState: HistoryViewState,
         launchAtLogin: LaunchAtLoginSettings?,
-        summonShortcut: SummonShortcutSettings?,
-        popupPosition: Binding<PopupPositionMode>?
+        summonShortcut: SummonShortcutSettings?
     ) {
         self.viewState = viewState
         self.launchAtLogin = launchAtLogin
         self.summonShortcut = summonShortcut
-        self.popupPosition = popupPosition
     }
 
     var body: some View {
         Form {
-            Section {
-                if let launchAtLogin {
+            if let launchAtLogin {
+                Section("Startup") {
                     launchAtLoginControl(launchAtLogin)
                 }
-                if let summonShortcut {
+            }
+            if let summonShortcut {
+                Section("Keyboard Shortcut") {
                     summonShortcutControl(summonShortcut)
                 }
-                if let popupPosition {
-                    Picker("Panel position", selection: popupPosition) {
-                        ForEach(PopupPositionMode.allCases, id: \.self) { mode in
-                            Text(mode.displayName).tag(mode)
+            }
+            Section {
+                ForEach(captureIgnoreList.bundleIDs, id: \.self) { bundleID in
+                    HStack {
+                        Text(bundleID)
+                            .font(.system(.caption, design: .monospaced))
+                        Spacer(minLength: 8)
+                        Button(role: .destructive) {
+                            removeIgnoredBundleID(bundleID)
+                        } label: {
+                            Image(systemName: "minus.circle.fill")
                         }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Remove \(bundleID)")
                     }
                 }
+                HStack {
+                    TextField(
+                        "Bundle identifier, e.g. com.1password.1password",
+                        text: $ignoredBundleIDDraft
+                    )
+                    Button("Add") { addIgnoredBundleID() }
+                        .accessibilityIdentifier(
+                            "clipy.settings.privacy.add-ignore"
+                        )
+                        .disabled(!canAddIgnoredBundleID)
+                }
+            } header: {
+                Text("Privacy")
+            } footer: {
+                Text("Clipboard contents from these apps are never recorded.")
             }
+            .accessibilityIdentifier("clipy.settings.privacy.ignored-list")
             GroupBox("Danger Zone") {
                 VStack(alignment: .leading, spacing: 8) {
                     Button("Clear Unpinned Items…") {
                         isConfirmingClearUnpinned = true
                     }
+                    .foregroundStyle(.red)
                     .disabled(isWorking)
                     .confirmationDialog(
                         "Remove all unpinned items?",
@@ -186,6 +232,7 @@ private struct GeneralSettingsTab: View {
                     Button("Clear All History…") {
                         isConfirmingClearAll = true
                     }
+                    .foregroundStyle(.red)
                     .disabled(isWorking)
                     .confirmationDialog(
                         "Remove every item, including pinned items?",
@@ -205,7 +252,10 @@ private struct GeneralSettingsTab: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear { launchAtLogin?.refresh() }
+        .onAppear {
+            launchAtLogin?.refresh()
+            captureIgnoreList = CaptureIgnoreList.load(from: .standard)
+        }
     }
 
     @ViewBuilder
@@ -361,6 +411,143 @@ private struct GeneralSettingsTab: View {
             return "Removed \(removedCount) items."
         }
     }
+
+    /// Whether the current draft would be accepted: probes a copy with
+    /// `CaptureIgnoreList.add` so the Add button is enabled exactly when a
+    /// click can succeed (valid reverse-domain shape, not already listed).
+    private var canAddIgnoredBundleID: Bool {
+        var probe = captureIgnoreList
+        return probe.add(ignoredBundleIDDraft)
+    }
+
+    /// Accepts the draft, persists the mutation, and clears the field; an
+    /// invalid or duplicate draft leaves the list and the field unchanged.
+    private func addIgnoredBundleID() {
+        guard captureIgnoreList.add(ignoredBundleIDDraft) else { return }
+        captureIgnoreList.store(to: .standard)
+        ignoredBundleIDDraft = ""
+    }
+
+    /// Removes one entry and persists the mutation.
+    private func removeIgnoredBundleID(_ bundleID: String) {
+        captureIgnoreList.remove(bundleID)
+        captureIgnoreList.store(to: .standard)
+    }
+}
+
+// MARK: Appearance
+
+/// Appearance tab: the panel-chrome half of the Settings consolidation
+/// surface (`V2-07` §6). Placement rides the composition root's optional
+/// `PopupPositionMode` binding; row density, preview auto-open, and preview
+/// side persist through `@AppStorage` under the
+/// `PanelAppearanceSettings` keys with the same product defaults its
+/// `load(from:)` fails open to, so an untouched control and an absent
+/// defaults entry always agree. The preview and row-density preferences
+/// apply live; only panel position and the panel-size reset apply the next
+/// time the panel opens, which the Panel section footer discloses. The
+/// preview column's width has no control here — the panel's own divider
+/// drag owns it (`PanelGeometry.previewColumnWidthDefaultsKey`).
+private struct AppearanceSettingsTab: View {
+
+    private let popupPosition: Binding<PopupPositionMode>?
+
+    /// `@AppStorage` reads and writes the persisted raw values; the enum
+    /// conversion happens at the control's tag, keeping this view a pure
+    /// projection of the same UserDefaults keys `PanelAppearanceSettings`
+    /// owns. The wrapped defaults below are the documented product defaults.
+    @AppStorage(PanelAppearanceSettings.rowDensityDefaultsKey)
+    private var rowDensity: HistoryRowDensity = .comfortable
+    @AppStorage(PanelAppearanceSettings.previewAutoOpenDefaultsKey)
+    private var isPreviewAutoOpenEnabled = true
+    @AppStorage(PanelAppearanceSettings.previewSideDefaultsKey)
+    private var previewSide: PreviewSidePreference = .automatic
+
+    init(popupPosition: Binding<PopupPositionMode>?) {
+        self.popupPosition = popupPosition
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                if let popupPosition {
+                    Picker("Panel position", selection: popupPosition) {
+                        ForEach(PopupPositionMode.allCases, id: \.self) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                    .accessibilityIdentifier(
+                        "clipy.settings.appearance.panel-position"
+                    )
+                }
+                Picker("Preview side", selection: $previewSide) {
+                    ForEach(PreviewSidePreference.allCases, id: \.self) { side in
+                        Text(previewSideLabel(side)).tag(side)
+                    }
+                }
+                .accessibilityIdentifier(
+                    "clipy.settings.appearance.preview-side"
+                )
+                Toggle(
+                    "Open preview automatically",
+                    isOn: $isPreviewAutoOpenEnabled
+                )
+                .accessibilityIdentifier(
+                    "clipy.settings.appearance.preview-auto-open"
+                )
+                Button("Reset Panel Size to Default") {
+                    Self.resetPersistedPanelSize()
+                }
+                .accessibilityIdentifier(
+                    "clipy.settings.appearance.reset-panel-size"
+                )
+            } header: {
+                Text("Panel")
+            } footer: {
+                Text("Panel position and size changes apply the next time the panel opens.")
+            }
+            Section("List") {
+                Picker("Row density", selection: $rowDensity) {
+                    ForEach(HistoryRowDensity.allCases, id: \.self) { density in
+                        Text(rowDensityLabel(density)).tag(density)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier(
+                    "clipy.settings.appearance.row-density"
+                )
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    /// The settings-picker labels. They stay view-local so the persisted
+    /// raw values remain the only cross-module vocabulary.
+    private func previewSideLabel(_ side: PreviewSidePreference) -> String {
+        switch side {
+        case .automatic: return "Automatic"
+        case .leading: return "Left"
+        case .trailing: return "Right"
+        }
+    }
+
+    private func rowDensityLabel(_ density: HistoryRowDensity) -> String {
+        switch density {
+        case .compact: return "Compact"
+        case .comfortable: return "Comfortable"
+        }
+    }
+
+    /// Removing both keys returns the next panel open to the geometry
+    /// defaults: `PanelGeometry.persistedSize(from:)` falls back per key,
+    /// so a deleted entry is indistinguishable from a fresh install.
+    private static func resetPersistedPanelSize() {
+        let defaults = UserDefaults.standard
+        defaults.removeObject(
+            forKey: PanelGeometry.panelContentWidthDefaultsKey
+        )
+        defaults.removeObject(forKey: PanelGeometry.panelHeightDefaultsKey)
+    }
 }
 
 // MARK: Retention
@@ -418,7 +605,7 @@ private struct RetentionSettingsTab: View {
                     LabeledContent("Keep at most") {
                         HStack {
                             TextField("200", text: maximumUnpinnedText)
-                                .frame(width: 64)
+                                .frame(width: 88)
                                 .multilineTextAlignment(.trailing)
                                 .accessibilityLabel("Maximum unpinned items")
                                 .accessibilityIdentifier(
@@ -439,51 +626,52 @@ private struct RetentionSettingsTab: View {
                             .font(.caption)
                             .foregroundStyle(.red)
                     }
-                    HStack {
-                        Button("Apply Item Limit") {
-                            requestMaximumUnpinnedApply()
+                    Button("Apply Item Limit") {
+                        requestMaximumUnpinnedApply()
+                    }
+                    .accessibilityIdentifier(
+                        "clipy.settings.retention.apply-item-limit"
+                    )
+                    .disabled(
+                        !draft.maximumUnpinnedInputIsValid
+                            || !draft.hasCountChanges
+                            || isWorking
+                            || !hasLoadedRetentionConfiguration
+                    )
+                    .confirmationDialog(
+                        "Apply a stricter item limit?",
+                        isPresented: $isConfirmingCountTightening,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Apply Stricter Limit", role: .destructive) {
+                            guard let submission = pendingCountSubmission else {
+                                return
+                            }
+                            Task { await applyMaximumUnpinned(submission) }
                         }
-                        .accessibilityIdentifier(
-                            "clipy.settings.retention.apply-item-limit"
+                        Button("Cancel", role: .cancel) {
+                            pendingCountSubmission = nil
+                        }
+                    } message: {
+                        Text(
+                            "A stricter limit can immediately remove unpinned items, and they can't be recovered."
                         )
-                        .disabled(
-                            !draft.maximumUnpinnedInputIsValid
-                                || !draft.hasCountChanges
-                                || isWorking
-                                || !hasLoadedRetentionConfiguration
-                        )
-                        .confirmationDialog(
-                            "Apply a stricter item limit?",
-                            isPresented: $isConfirmingCountTightening,
-                            titleVisibility: .visible
-                        ) {
-                            Button("Apply Stricter Limit", role: .destructive) {
-                                guard let submission = pendingCountSubmission else {
-                                    return
-                                }
-                                Task { await applyMaximumUnpinned(submission) }
-                            }
-                            Button("Cancel", role: .cancel) {
-                                pendingCountSubmission = nil
-                            }
-                        } message: {
-                            Text(
-                                "A stricter limit can immediately remove unpinned items, and they can't be recovered."
+                    }
+                    // The status sits on its own row below the button so a
+                    // long receipt or failure message can never squeeze the
+                    // Apply button (V2-07 §9 inline feedback).
+                    if let successMessage = draft.acceptedCountSuccessMessage {
+                        SettingStatusView(status: .success(successMessage))
+                            .accessibilityIdentifier(
+                                "clipy.settings.retention.item-limit-status"
                             )
-                        }
-                        if let successMessage = draft.acceptedCountSuccessMessage {
-                            SettingStatusView(status: .success(successMessage))
-                                .accessibilityIdentifier(
-                                    "clipy.settings.retention.item-limit-status"
-                                )
-                        } else if let countStatus {
-                            SettingStatusView(status: countStatus)
-                                .accessibilityIdentifier(
-                                    "clipy.settings.retention.item-limit-status"
-                                )
-                        } else if let retentionConfigurationFailure {
-                            SettingStatusView(status: .failure(retentionConfigurationFailure))
-                        }
+                    } else if let countStatus {
+                        SettingStatusView(status: countStatus)
+                            .accessibilityIdentifier(
+                                "clipy.settings.retention.item-limit-status"
+                            )
+                    } else if let retentionConfigurationFailure {
+                        SettingStatusView(status: .failure(retentionConfigurationFailure))
                     }
                 }
                 Section("Item age") {
@@ -545,46 +733,47 @@ private struct RetentionSettingsTab: View {
                     )
                 }
                 Section {
-                    HStack {
-                        Button("Apply") {
-                            requestApply()
+                    Button("Apply") {
+                        requestApply()
+                    }
+                    .accessibilityIdentifier("clipy.settings.retention.apply")
+                    .disabled(
+                        !draft.inputIsValid || !draft.hasPolicyChanges || isWorking
+                            || !hasLoadedRetentionConfiguration
+                    )
+                    .confirmationDialog(
+                        "Apply stricter retention limits?",
+                        isPresented: $isConfirmingTightening,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Apply Stricter Limits", role: .destructive) {
+                            guard let submission = pendingSubmission else { return }
+                            Task { await applyRetention(submission) }
                         }
-                        .accessibilityIdentifier("clipy.settings.retention.apply")
-                        .disabled(
-                            !draft.inputIsValid || !draft.hasPolicyChanges || isWorking
-                                || !hasLoadedRetentionConfiguration
-                        )
-                        .confirmationDialog(
-                            "Apply stricter retention limits?",
-                            isPresented: $isConfirmingTightening,
-                            titleVisibility: .visible
-                        ) {
-                            Button("Apply Stricter Limits", role: .destructive) {
-                                guard let submission = pendingSubmission else { return }
-                                Task { await applyRetention(submission) }
-                            }
-                            Button("Cancel", role: .cancel) {
-                                pendingSubmission = nil
-                            }
-                        } message: {
-                            // Deep review `04` Red 10D: only a strict local
-                            // tightening is destructive-confirmed; equal or
-                            // looser policy values apply directly.
-                            Text("Stricter limits can permanently remove items or revisions.")
+                        Button("Cancel", role: .cancel) {
+                            pendingSubmission = nil
                         }
-                        if let successMessage = draft.acceptedSuccessMessage {
-                            SettingStatusView(status: .success(successMessage))
-                                .accessibilityIdentifier(
-                                    "clipy.settings.retention.policy-status"
-                                )
-                        } else if let policyStatus {
-                            SettingStatusView(status: policyStatus)
-                                .accessibilityIdentifier(
-                                    "clipy.settings.retention.policy-status"
-                                )
-                        } else if let retentionConfigurationFailure {
-                            SettingStatusView(status: .failure(retentionConfigurationFailure))
-                        }
+                    } message: {
+                        // Deep review `04` Red 10D: only a strict local
+                        // tightening is destructive-confirmed; equal or
+                        // looser policy values apply directly.
+                        Text("Stricter limits can permanently remove items or revisions.")
+                    }
+                    // Same own-row treatment as the item-limit status above:
+                    // a long receipt or failure message must not squeeze the
+                    // Apply button.
+                    if let successMessage = draft.acceptedSuccessMessage {
+                        SettingStatusView(status: .success(successMessage))
+                            .accessibilityIdentifier(
+                                "clipy.settings.retention.policy-status"
+                            )
+                    } else if let policyStatus {
+                        SettingStatusView(status: policyStatus)
+                            .accessibilityIdentifier(
+                                "clipy.settings.retention.policy-status"
+                            )
+                    } else if let retentionConfigurationFailure {
+                        SettingStatusView(status: .failure(retentionConfigurationFailure))
                     }
                     Text("Changes apply to new and existing items at once.")
                         .font(.footnote)
@@ -929,6 +1118,11 @@ private struct SettingStatusView: View {
 #Preview("Settings") {
     ClipySettingsView(
         viewState: HistoryViewState(history: PreviewClipboardHistory.populated),
-        launchAtLogin: LaunchAtLoginSettings(state: .on)
+        launchAtLogin: LaunchAtLoginSettings(state: .on),
+        summonShortcut: SummonShortcutSettings(
+            status: .current("⇧⌘C"),
+            warning: .showColorsConflict
+        ),
+        popupPosition: .constant(.cursor)
     )
 }

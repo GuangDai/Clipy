@@ -13,27 +13,55 @@ import PresentationUI
 /// no mode can spill the panel off the active screen).
 enum PopupPositionGeometry {
 
-    /// Expands around the stable main surface. Prefer the trailing side;
-    /// when that would cross the current screen's right edge, put the preview
-    /// on the leading side. Without a screen, trailing is the conservative
-    /// layout because it does not move the window origin.
+    /// Expands around the stable main surface by the preview extension
+    /// (`dividerWidth + previewColumnWidth`), so a
+    /// user-resized main column keeps its exact width. `.automatic` keeps
+    /// the original rule: prefer the trailing side; when that would cross
+    /// the current screen's right edge, put the preview on the leading
+    /// side. An explicit `previewSide` pins the preferred side whenever the
+    /// expanded frame still fits the screen there, falling back to the
+    /// other side when it does not. Without a screen there is no overflow
+    /// evidence, so the preferred side stands — trailing remains the
+    /// conservative `.automatic` layout because it does not move the window
+    /// origin. The column width is an explicit INPUT (this type stays a pure
+    /// function over caller-supplied facts); FloatingPanel loads the
+    /// divider's persisted width fresh from defaults per call. The
+    /// `previewWidth` default reproduces the pinned pre-preference
+    /// geometry.
     static func expandedPreviewFrame(
         preservingMainSurface mainSurfaceFrame: NSRect,
-        in screenVisibleFrame: NSRect?
+        in screenVisibleFrame: NSRect?,
+        previewSide: PreviewSidePreference = .automatic,
+        previewColumnWidth: CGFloat = PanelGeometry.previewWidth
     ) -> (panelFrame: NSRect, placement: PreviewPlacement) {
-        let expandedWidth = PanelGeometry.totalWidth(previewOpen: true)
-        let leadingWidth = expandedWidth - PanelGeometry.contentWidth
+        let previewExtension = PanelGeometry.dividerWidth
+            + previewColumnWidth
         var expandedFrame = mainSurfaceFrame
-        expandedFrame.size.width = expandedWidth
+        expandedFrame.size.width += previewExtension
 
-        guard let screenVisibleFrame,
-              expandedFrame.maxX > screenVisibleFrame.maxX
-        else {
-            return (expandedFrame, .trailing)
+        let trailingFits: Bool
+        let leadingFits: Bool
+        if let screenVisibleFrame {
+            trailingFits = expandedFrame.maxX <= screenVisibleFrame.maxX
+            leadingFits = mainSurfaceFrame.minX - previewExtension
+                >= screenVisibleFrame.minX
+        } else {
+            trailingFits = true
+            leadingFits = true
         }
 
-        expandedFrame.origin.x -= leadingWidth
-        return (expandedFrame, .leading)
+        let placement: PreviewPlacement
+        switch previewSide {
+        case .automatic, .trailing:
+            placement = trailingFits ? .trailing : .leading
+        case .leading:
+            placement = leadingFits ? .leading : .trailing
+        }
+
+        if placement == .leading {
+            expandedFrame.origin.x -= previewExtension
+        }
+        return (expandedFrame, placement)
     }
 
     /// Resolves the stable history column's real screen frame from the panel
@@ -137,9 +165,11 @@ enum PopupPositionGeometry {
     }
 
     /// The normalized (0…1) anchor persisted for `.lastPosition` — the
-    /// main 400-point surface's top-middle point within its screen's visible
-    /// frame. The expanded window may shift at a screen edge, but transient
-    /// preview width must not move a later main-only reopen (review Card 9F).
+    /// stable main surface's top-middle point within its screen's visible
+    /// frame (`mainSurfaceWidth` carries the live, possibly user-resized
+    /// browsing-column width). The expanded window may shift at a screen
+    /// edge, but transient preview width must not move a later main-only
+    /// reopen (review Card 9F).
     static func normalizedAnchor(
         forPanelFrame panelFrame: NSRect,
         previewPlacement: PreviewPlacement,
