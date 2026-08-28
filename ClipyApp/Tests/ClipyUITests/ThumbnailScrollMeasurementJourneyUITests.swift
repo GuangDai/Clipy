@@ -18,7 +18,6 @@
 /// threshold is adjudicated by this test: G1's dual-threshold decision
 /// stays with docs/06 §3 G1 and docs/v2/V2-07.
 import AppKit
-import UniformTypeIdentifiers
 import XCTest
 
 final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
@@ -561,13 +560,14 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
 
     /// Raw and summary payloads both persist into the result bundle even
     /// when the test passes (`.keepAlways`), riding the existing
-    /// `-resultBundlePath app.xcresult` → ci-result-bundles artifact.
+    /// `-resultBundlePath app.xcresult` → ci-result-bundles artifact. The
+    /// `.jsonl`/`.json` name suffixes carry the format — the attachment's
+    /// uniform type stays the default (the modern SDK exposes it read-only).
     @MainActor
     private func attach(_ payload: String, name: String) {
         let attachment = XCTAttachment(string: payload)
         attachment.name = name
         attachment.lifetime = .keepAlways
-        attachment.uniformTypeIdentifier = .json
         add(attachment)
     }
 
