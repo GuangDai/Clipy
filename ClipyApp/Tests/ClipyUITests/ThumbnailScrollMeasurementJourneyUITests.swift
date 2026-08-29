@@ -98,8 +98,14 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
         //    page boundary, where `rows.count` saturates at the page limit.
         try seedThumbnailItems(Self.itemCount, app: app, rows: rows)
 
-        // —— Scrolling: the panel's history list scroll view, driven with the
-        //    same bounded wheel increments as the Settings journeys.
+        // —— Scrolling: the panel's history list scroll view. The wheel
+        //    increments are deliberately SMALL with real dwell between
+        //    them: the list is lazy, and a row only materializes (fires
+        //    its onAppear pagination trigger and its thumbnail prefetch)
+        //    while it passes through the viewport slowly enough to render.
+        //    A single large fling bottomed out page one without ever
+        //    materializing the page-two tail (observed on CI: exactly the
+        //    50 first-page rows).
         let scrollView = panel.scrollViews.firstMatch
         XCTAssertTrue(
             scrollView.waitForExistence(timeout: 10),
@@ -109,25 +115,33 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
             withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
         )
 
-        // First full descent materializes page two (50 + 10 rows).
-        scroll(listCenter, deltaY: -400, steps: 30)
+        // Sanity only — the AX row count is the MATERIALIZED window, not
+        // the loaded pages (off-screen rows unmaterialize), so the real
+        // pagination + full-traversal proof is the measurement records'
+        // 60-distinct-reference coverage asserted after the journey: the
+        // ten page-two rows are the FIRST-seeded (oldest) items, which
+        // are unreachable without both pagination and a full descent.
         XCTAssertTrue(
-            waitUntil(timeout: 20) { rows.count == Self.itemCount },
+            waitUntil(timeout: 20) { rows.count >= 30 },
             diagnostic(
                 app,
-                context: "both pages loaded after descent; observed \(rows.count) rows"
+                context: "history rows materialized; observed \(rows.count) rows"
             )
         )
 
-        // Repeated down/up round trips until the >= 60 s window is covered
-        // (bounded by a pass cap as the CI job-budget backstop).
+        // Slow full traversals. One pass ≈ 40 small wheel steps ≈ the full
+        // 60-row content height (60 × ~52 pt plus viewport); repeated
+        // down-up round trips cover the >= 60 s window (bounded by a pass
+        // cap as the CI job-budget backstop).
         let scrollStart = Date()
         var passes = 0
         while Date().timeIntervalSince(scrollStart) < Self.scrollWindowSeconds
-            && passes < 12
+            && passes < 8
         {
-            scroll(listCenter, deltaY: -400, steps: 30)
-            scroll(listCenter, deltaY: 400, steps: 30)
+            scroll(listCenter, deltaY: -120, steps: 40, dwellSeconds: 0.2)
+            dwell(0.5)
+            scroll(listCenter, deltaY: 120, steps: 40, dwellSeconds: 0.2)
+            dwell(0.5)
             passes += 1
         }
         let scrollSeconds = Date().timeIntervalSince(scrollStart)
@@ -351,11 +365,12 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
     private func scroll(
         _ coordinate: XCUICoordinate,
         deltaY: CGFloat,
-        steps: Int
+        steps: Int,
+        dwellSeconds: TimeInterval = 0.15
     ) {
         for _ in 0..<steps {
             coordinate.scroll(byDeltaX: 0, deltaY: deltaY)
-            dwell(0.15)
+            dwell(dwellSeconds)
         }
     }
 
