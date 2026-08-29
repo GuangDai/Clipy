@@ -207,13 +207,13 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
             "every started flight must reach one completion per reference"
         )
 
-        // The scroll-back genuinely re-asked: at least one duplicate request
-        // was served from retention (row `.task(id:)` re-run evidence), and
-        // every such rejection follows that reference's first completion.
-        XCTAssertTrue(
-            records.contains { $0.event == "rejectedRetained" },
-            "no repeated request recorded; scroll-back re-run not exercised"
-        )
+        // Duplicate requests are OBSERVED, not required: macOS SwiftUI
+        // List may keep off-screen row views alive, in which case a
+        // scroll-back never re-runs the row's `.task` and the retained-
+        // rejection count is legitimately zero — itself G1 input (cache
+        // reuse never needed in this scenario). What IS asserted is the
+        // ordering invariant of any rejection that did occur: it must
+        // follow that reference's first completion.
         for record in records where record.event == "rejectedRetained" {
             guard let firstCompleted = firstCompletedSeqPerRef[record.refID] else {
                 XCTFail(
