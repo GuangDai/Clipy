@@ -579,8 +579,9 @@ struct ThumbnailStoreTests {
 /// tests. Each request parks until the test chooses one semantically distinct
 /// outcome; reference + occurrence selection permits an old and a new
 /// generation of the same exact reference to coexist without depending on
-/// unstructured-task scheduling order.
-private actor PausableThumbnailHistory: ClipboardHistory {
+/// unstructured-task scheduling order. Target-internal (not file-private) so
+/// the ThumbnailMeasurement suite can drive the same parked boundary.
+actor PausableThumbnailHistory: ClipboardHistory {
     enum Completion: Sendable {
         case success(Data?)
         case failure(HistoryFailure)

@@ -42,26 +42,37 @@ public struct LaunchAtLoginSettings: Sendable {
         state == .on || state == .requiresApproval
     }
 
-    public var canToggle: Bool {
+    /// Package (GOV-3): the Settings toggle's enabled state; ClipyApp drives
+    /// the controller, not the value.
+    package var canToggle: Bool {
         state != .unavailable
     }
 
-    public var canOpenSystemSettings: Bool {
+    /// Package (GOV-3): read by this module's Settings button and by
+    /// `openSystemSettings()` below.
+    package var canOpenSystemSettings: Bool {
         state == .requiresApproval
     }
 
+    /// Package (GOV-3): Settings-toggle intent; the cross-module seam is the
+    /// `setEnabled:` closure injected through the public init, invoked by
+    /// ClipyApp's `LaunchAtLoginController`.
     @MainActor
-    public func setEnabled(_ enabled: Bool) {
+    package func setEnabled(_ enabled: Bool) {
         setEnabledAction(enabled)
     }
 
+    /// Package (GOV-3): Settings-surface intent; ClipyApp refreshes through
+    /// `LaunchAtLoginController.refresh()`.
     @MainActor
-    public func refresh() {
+    package func refresh() {
         refreshAction()
     }
 
+    /// Package (GOV-3): Settings-surface intent; ClipyApp opens System
+    /// Settings through `LaunchAtLoginController`.
     @MainActor
-    public func openSystemSettings() {
+    package func openSystemSettings() {
         guard canOpenSystemSettings else { return }
         openSystemSettingsAction()
     }

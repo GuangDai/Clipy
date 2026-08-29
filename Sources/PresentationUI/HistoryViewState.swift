@@ -16,13 +16,15 @@ import SwiftUI
 
 /// One receipt-confirmed invalidation for state owned by a single panel
 /// surface (deep review Card 9B). This narrow public UI coordination value is
-/// visible to the ClipyApp composition boundary, while only PresentationUI
-/// can construct one. It is not a second History event stream: authoritative
-/// rows still arrive exclusively through `observe`; the signal only drops
-/// derived presentation state which must not survive a destructive/effective-
-/// content commit.
+/// visible to the ClipyApp composition boundary, which only forwards the
+/// opaque value (GOV-3 contraction; 01 §8 module boundary): the scope
+/// vocabulary and the payload members below are package, so only
+/// PresentationUI constructs or inspects one. It is not a second History
+/// event stream: authoritative rows still arrive exclusively through
+/// `observe`; the signal only drops derived presentation state which must
+/// not survive a destructive/effective-content commit.
 public struct HistorySurfacePurge: Equatable, Sendable {
-    public enum Scope: Equatable, Sendable {
+    package enum Scope: Equatable, Sendable {
         case all
         case unpinned
         case item(HistoryItemID)
@@ -32,8 +34,8 @@ public struct HistorySurfacePurge: Equatable, Sendable {
         )
     }
 
-    public let generation: Int
-    public let scope: Scope
+    package let generation: Int
+    package let scope: Scope
 
     package init(generation: Int, scope: Scope) {
         self.generation = generation
@@ -72,7 +74,9 @@ public final class HistoryViewState {
     public private(set) var rows: [HistoryRow] = []
 
     /// True while a one-shot `browse` pagination request is in flight.
-    public private(set) var isLoadingPage = false
+    /// Package (GOV-3): the pagination footer and owner tests read it;
+    /// ClipyApp observes loading only through the first-page seam below.
+    package private(set) var isLoadingPage = false
 
     /// True after a browse intent has invalidated its prior rows and before
     /// the replacement observation produces its first authoritative page (or
@@ -251,11 +255,13 @@ public final class HistoryViewState {
     /// The in-memory type filter over the already-loaded rows. A plain
     /// observable var with no `didSet`: a filter change must NOT restart
     /// search or observation — it narrows the rendered rows in memory only.
-    public var typeFilter: HistoryTypeFilter = .all
+    /// Package (GOV-3): panel-header vocabulary only; ClipyApp never names
+    /// the filter.
+    package var typeFilter: HistoryTypeFilter = .all
 
     /// When true, the Recent lane renders empty and only pinned rows remain.
     /// Same client-side posture as `typeFilter`.
-    public var showsPinnedOnly = false
+    package var showsPinnedOnly = false
 
     /// The pinned lane after the client-side filter. Filtering is over the
     /// loaded pages by design; pagination still walks the unfiltered stream
@@ -334,7 +340,9 @@ public final class HistoryViewState {
     /// Clears the raw query as one immediate intent. The TextField's ordinary
     /// edits remain debounced, while its explicit Clear control invalidates
     /// the old generation and starts `.recent` without a stale-results window.
-    public func clearSearch() {
+    /// Package (GOV-3): the Clear control lives in this module's search
+    /// header; composition-root search restarts go through `searchText`.
+    package func clearSearch() {
         guard !searchText.isEmpty else { return }
         searchText = ""
         debounceTask?.cancel()

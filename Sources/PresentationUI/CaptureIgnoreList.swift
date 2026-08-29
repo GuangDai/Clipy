@@ -25,12 +25,15 @@ public struct CaptureIgnoreList: Equatable, Sendable {
     public static let defaultsKey = "clipy.capture.ignoredBundleIDs"
 
     /// The normalized bundle identifiers: lowercase, sorted,
-    /// de-duplicated.
-    public private(set) var bundleIDs: [String]
+    /// de-duplicated. Package (GOV-3): only the in-package Settings editor
+    /// reads the collection; ClipyApp consumes the list through `ignores(_:)`.
+    package private(set) var bundleIDs: [String]
 
     /// Builds a list from raw entries; entries that fail validation are
-    /// dropped rather than carried into the gate.
-    public init(bundleIDs: [String] = []) {
+    /// dropped rather than carried into the gate. Package (GOV-3): the
+    /// composition root loads the value via `load(from:)`, never by naming
+    /// entries.
+    package init(bundleIDs: [String] = []) {
         self.bundleIDs = Self.normalized(bundleIDs)
     }
 
@@ -43,8 +46,9 @@ public struct CaptureIgnoreList: Equatable, Sendable {
         )
     }
 
-    /// Persists the normalized list under `defaultsKey`.
-    public func store(to defaults: UserDefaults) {
+    /// Persists the normalized list under `defaultsKey`. Package (GOV-3):
+    /// the Settings capture tab owns the editing-and-storing loop.
+    package func store(to defaults: UserDefaults) {
         defaults.set(bundleIDs, forKey: Self.defaultsKey)
     }
 
@@ -60,8 +64,8 @@ public struct CaptureIgnoreList: Equatable, Sendable {
     /// `false` — with the list unchanged — when the value is not a
     /// reverse-domain identifier (at least one dot; alphanumerics,
     /// hyphens, and dots only, compared after lowercase normalization) or
-    /// is already listed.
-    public mutating func add(_ bundleID: String) -> Bool {
+    /// is already listed. Package (GOV-3): Settings-editor intents only.
+    package mutating func add(_ bundleID: String) -> Bool {
         let normalized = Self.normalize(bundleID)
         guard Self.isValid(normalized), !bundleIDs.contains(normalized) else {
             return false
@@ -72,8 +76,9 @@ public struct CaptureIgnoreList: Equatable, Sendable {
     }
 
     /// Removes one bundle identifier (case-insensitive); removing an
-    /// identifier that is not listed is a no-op.
-    public mutating func remove(_ bundleID: String) {
+    /// identifier that is not listed is a no-op. Package (GOV-3):
+    /// Settings-editor intents only.
+    package mutating func remove(_ bundleID: String) {
         bundleIDs.removeAll { $0 == Self.normalize(bundleID) }
     }
 

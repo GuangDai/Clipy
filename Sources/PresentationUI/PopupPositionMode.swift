@@ -19,8 +19,10 @@ public enum PopupPositionMode: String, CaseIterable, Sendable {
     /// The last dragged-to position, persisted as a normalized anchor.
     case lastPosition
 
-    /// The settings-picker label.
-    public var displayName: String {
+    /// The settings-picker label. Package (GOV-3): the picker lives in this
+    /// module's Settings view; ClipyApp and hosted tests name the enum and
+    /// its cases, never the label.
+    package var displayName: String {
         switch self {
         case .cursor: return "At Mouse Cursor"
         case .statusItem: return "Under Menu Bar Icon"

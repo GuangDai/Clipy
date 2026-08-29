@@ -2,6 +2,11 @@
 # Exercise the capture-transaction ENOSPC leaf on one disposable fixed-size
 # APFS image. The evidence is intentionally limited to seed integrity, a real
 # competing allocation failure, the pressure capture result, and fresh reopen.
+# The added Card 6B full-disk cells repeat the same fill discipline for the
+# §16 admission-refused revise leaf and for open-on-full-volume
+# characterization: the two open children report one branch of a closed
+# typed-or-opened disjunction, and the observed branch is a recorded fact,
+# never a failure.
 set -euo pipefail
 
 if [[ "$#" -ne 2 ]]; then
@@ -22,6 +27,11 @@ filler=""
 pressure_pid=""
 pressure_input_open=0
 pressure_output_open=0
+open_full_pid=""
+open_seeded_full_pid=""
+matched_literal=""
+open_full_volume_branch=""
+open_seeded_full_volume_branch=""
 attached=0
 current_phase="bootstrap"
 last_command_status=0
@@ -231,6 +241,20 @@ publish_known_raw_diagnostics() {
     "$temp_root/pressure.stderr.raw.log"
   publish_bounded_diagnostic "verify-child-stderr" \
     "$temp_root/verify.stderr.raw.log"
+  publish_bounded_diagnostic "open-full-child-stderr" \
+    "$temp_root/open-full.stderr.raw.log"
+  publish_bounded_diagnostic "open-seeded-full-child-stderr" \
+    "$temp_root/open-seeded-full.stderr.raw.log"
+  publish_bounded_diagnostic "revise-child-stderr" \
+    "$temp_root/revise.stderr.raw.log"
+  publish_bounded_diagnostic "revise-commit-child-stderr" \
+    "$temp_root/revise-commit.stderr.raw.log"
+  publish_bounded_diagnostic "revise-verify-child-stderr" \
+    "$temp_root/revise-verify.stderr.raw.log"
+  publish_bounded_diagnostic "competitor-dd-under-pressure-open" \
+    "$temp_root/competitor-dd-under-pressure-open.stderr.raw.log"
+  publish_bounded_diagnostic "competitor-dd-revise-under-pressure" \
+    "$temp_root/competitor-dd-revise-under-pressure.stderr.raw.log"
   publish_bounded_diagnostic "hdiutil-detach" \
     "$temp_root/detach.raw.log"
   publish_bounded_diagnostic "hdiutil-force-detach" \
@@ -517,12 +541,40 @@ cleanup_resources() {
     fi
     pressure_pid=""
   fi
+  # The open/open-seeded children are reaped inline right after their
+  # bounded_wait; this loop only guards the unreachable window between a
+  # background start and that reap (same posture as pressure_pid above).
+  for early_pid in "$open_full_pid" "$open_seeded_full_pid"; do
+    if [[ -n "$early_pid" ]] && kill -0 "$early_pid" 2>/dev/null; then
+      if kill -TERM "$early_pid" 2>/dev/null; then
+        record_command_status "terminate-early-open-child" 0
+      else
+        record_command_status "terminate-early-open-child" 1
+        cleanup_status=1
+      fi
+    fi
+  done
+  open_full_pid=""
+  open_seeded_full_pid=""
   collect_probe_diagnostics \
     "$temp_root/seed.stderr.raw.log" "$log_dir/seed-diagnostics.log"
   collect_probe_diagnostics \
     "$temp_root/pressure.stderr.raw.log" "$log_dir/pressure-diagnostics.log"
   collect_probe_diagnostics \
     "$temp_root/verify.stderr.raw.log" "$log_dir/verify-diagnostics.log"
+  collect_probe_diagnostics \
+    "$temp_root/open-full.stderr.raw.log" "$log_dir/open-full-diagnostics.log"
+  collect_probe_diagnostics \
+    "$temp_root/open-seeded-full.stderr.raw.log" \
+    "$log_dir/open-seeded-full-diagnostics.log"
+  collect_probe_diagnostics \
+    "$temp_root/revise.stderr.raw.log" "$log_dir/revise-diagnostics.log"
+  collect_probe_diagnostics \
+    "$temp_root/revise-commit.stderr.raw.log" \
+    "$log_dir/revise-commit-diagnostics.log"
+  collect_probe_diagnostics \
+    "$temp_root/revise-verify.stderr.raw.log" \
+    "$log_dir/revise-verify-diagnostics.log"
   if [[ -n "$filler" && -e "$filler" ]]; then
     if rm -f -- "$filler"; then
       record_command_status "remove-competitor" 0
@@ -650,6 +702,107 @@ require_literal_file() {
   fi
   printf 'phase=%s assertion=%s result=matched\n' \
     "$current_phase" "$label" >> "$runtime_facts_log"
+}
+
+# One full-disk fill cycle for the added Card 6B cells: the same fixed-block
+# dd + ENOSPC + volume-facts discipline as the inline fill-volume block, kept
+# as a helper because these cells repeat the cycle. Bash 3.2 safe: staged
+# files, no process substitution, no arrays. `filler` is re-assigned so each
+# cycle owns the competitor path even after an earlier release cleared it.
+require_competitor_enospc() {
+  local checkpoint="$1"
+  local dd_log="$temp_root/competitor-dd-$checkpoint.stderr.raw.log"
+  local dd_status=0
+
+  filler="$mountpoint/competitor.fill"
+  record_volume_facts "before-$checkpoint"
+  set +e
+  LC_ALL=C dd if=/dev/zero of="$filler" \
+    bs=1048576 count="$competitor_size_mib" \
+    > /dev/null 2>"$dd_log"
+  dd_status=$?
+  set -e
+  record_command_status "competitor-dd-$checkpoint" "$dd_status"
+  if [[ "$dd_status" -eq 0 ]]; then
+    printf 'competitor.%s.result=unexpected-success\n' "$checkpoint" \
+      >> "$runtime_facts_log"
+    record_event "unexpected-success"
+    return 1
+  fi
+  if ! grep -Fq "No space left on device" "$dd_log"; then
+    classify_failure "competitor-dd-$checkpoint" "$dd_log"
+    printf 'competitor.%s.result=non-enospc-failure\n' "$checkpoint" \
+      >> "$runtime_facts_log"
+    record_event "non-enospc-failure"
+    return 1
+  fi
+  printf 'competitor.%s.request_bytes=%s\n' \
+    "$checkpoint" "$((competitor_size_mib * 1048576))" >> "$runtime_facts_log"
+  printf 'competitor.%s.result=enospc\n' "$checkpoint" >> "$runtime_facts_log"
+  record_volume_facts "$checkpoint"
+  return 0
+}
+
+# Closed-set disjunction assertion for the full-disk open characterization
+# children: stdout must be exactly one line carrying one of the enumerated
+# literal tokens; the matched token is the recorded evidence. Bash 3.2 safe:
+# a staged file read, `[[ ]]` equality, and a plain for-loop over the
+# remaining positional parameters — no arrays, no process substitution. The
+# matched literal is published through the global `matched_literal` for the
+# caller's branch mapping.
+require_one_of_literals() {
+  local path="$1"
+  local label="$2"
+  local copy_path="$3"
+  local observed=""
+  local line_count=0
+  local literal=""
+
+  shift 3
+  if ! IFS= read -r observed < "$path"; then
+    printf 'phase=%s assertion=%s result=no-output\n' \
+      "$current_phase" "$label" >> "$runtime_facts_log"
+    exit 1
+  fi
+  line_count="$(wc -l < "$path" | tr -d ' ')"
+  if [[ "$line_count" -ne 1 ]]; then
+    printf 'phase=%s assertion=%s result=unexpected-output\n' \
+      "$current_phase" "$label" >> "$runtime_facts_log"
+    exit 1
+  fi
+  # `wc -l` counts newlines only, so a trailing line without its newline
+  # would slip past the count above. The staged-file byte comparison (the
+  # `require_literal_file` discipline) closes that gap: every observed
+  # candidate is re-emitted with exactly one trailing newline and compared
+  # against the captured output byte-for-byte.
+  for literal in "$@"; do
+    printf '%s\n' "$literal" > "$copy_path.staged"
+    if cmp -s "$path" "$copy_path.staged"; then
+      break
+    fi
+    rm -f "$copy_path.staged"
+  done
+  if [[ ! -f "$copy_path.staged" ]]; then
+    printf 'phase=%s assertion=%s result=unexpected-output\n' \
+      "$current_phase" "$label" >> "$runtime_facts_log"
+    exit 1
+  fi
+  rm -f "$copy_path.staged"
+  matched_literal=""
+  for literal in "$@"; do
+    if [[ "$observed" == "$literal" ]]; then
+      matched_literal="$literal"
+      break
+    fi
+  done
+  if [[ -z "$matched_literal" ]]; then
+    printf 'phase=%s assertion=%s result=unexpected-output\n' \
+      "$current_phase" "$label" >> "$runtime_facts_log"
+    exit 1
+  fi
+  printf 'phase=%s assertion=%s result=matched literal=%s\n' \
+    "$current_phase" "$label" "$matched_literal" >> "$runtime_facts_log"
+  printf '%s\n' "$matched_literal" > "$copy_path"
 }
 
 begin_phase "build-probe"
@@ -855,6 +1008,129 @@ printf 'SEED_OK\n' > "$log_dir/seed.stdout.log"
 record_volume_facts "seeded"
 record_event "complete"
 
+# Card 6B full-disk open cells: a fresh-store open and a seeded-store reopen
+# on the filled volume. Open writes only SQLite/WAL scalar files that never
+# pass the §16 stamped-plan admission, so each child reports the observed
+# branch of a closed typed-or-opened disjunction; the branch is a recorded
+# fact, never a failure. The dedicated subdirectory is created before the
+# fill and isolates any "opened" residue from the main store's later seed
+# verification. Both children are reaped with bounded_wait before their
+# stdout files are read, so a hung open cannot stall the lane.
+begin_phase "open-full-volume"
+if mkdir "$mountpoint/open-full"; then
+  record_command_status "create-open-full-directory" 0
+else
+  record_command_status "create-open-full-directory" 1
+  record_event "open-full-directory-creation-failed"
+  exit 1
+fi
+if ! require_competitor_enospc "under-pressure-open"; then
+  exit 1
+fi
+
+open_full_store="$mountpoint/open-full/history.store"
+open_full_status=0
+set +e
+CLIPY_APFS_PROBE_DIAGNOSTICS=1 \
+CLIPY_RUNTIME_DIAGNOSTICS=1 \
+"$probe" openFullVolume "$open_full_store" \
+  > "$temp_root/open-full.stdout.raw.log" \
+  2> "$temp_root/open-full.stderr.raw.log" &
+open_full_pid=$!
+set -e
+record_event "open-full-child-started"
+if bounded_wait "$open_full_pid" 30 "open-full-exit"; then
+  open_full_status=0
+else
+  open_full_status=$?
+fi
+open_full_pid=""
+record_command_status "open-full-child" "$open_full_status"
+collect_probe_diagnostics \
+  "$temp_root/open-full.stderr.raw.log" "$log_dir/open-full-diagnostics.log"
+if [[ "$open_full_status" -ne 0 ]]; then
+  record_event "child-failed"
+  exit 1
+fi
+require_one_of_literals \
+  "$temp_root/open-full.stdout.raw.log" \
+  "open-full-token" \
+  "$log_dir/open-full.stdout.log" \
+  "OPENFULLVOLUME_OPENSTORE_REFUSED" \
+  "OPENFULLVOLUME_TRANSACTION_REFUSED" \
+  "OPENFULLVOLUME_OPENED"
+case "$matched_literal" in
+  OPENFULLVOLUME_OPENSTORE_REFUSED)
+    open_full_volume_branch="refused-openstore"
+    ;;
+  OPENFULLVOLUME_TRANSACTION_REFUSED)
+    open_full_volume_branch="refused-transaction"
+    ;;
+  OPENFULLVOLUME_OPENED)
+    open_full_volume_branch="opened"
+    ;;
+  *)
+    record_event "open-full-branch-mapping-unexpected"
+    exit 1
+    ;;
+esac
+record_event "open-full-branch-recorded"
+
+open_seeded_full_status=0
+set +e
+CLIPY_APFS_PROBE_DIAGNOSTICS=1 \
+CLIPY_RUNTIME_DIAGNOSTICS=1 \
+"$probe" openSeededFullVolume "$store" \
+  > "$temp_root/open-seeded-full.stdout.raw.log" \
+  2> "$temp_root/open-seeded-full.stderr.raw.log" &
+open_seeded_full_pid=$!
+set -e
+record_event "open-seeded-full-child-started"
+if bounded_wait "$open_seeded_full_pid" 30 "open-seeded-full-exit"; then
+  open_seeded_full_status=0
+else
+  open_seeded_full_status=$?
+fi
+open_seeded_full_pid=""
+record_command_status "open-seeded-full-child" "$open_seeded_full_status"
+collect_probe_diagnostics \
+  "$temp_root/open-seeded-full.stderr.raw.log" \
+  "$log_dir/open-seeded-full-diagnostics.log"
+if [[ "$open_seeded_full_status" -ne 0 ]]; then
+  record_event "child-failed"
+  exit 1
+fi
+require_one_of_literals \
+  "$temp_root/open-seeded-full.stdout.raw.log" \
+  "open-seeded-full-token" \
+  "$log_dir/open-seeded-full.stdout.log" \
+  "OPENSEEDEDONFULLVOLUME_OPENSTORE_REFUSED" \
+  "OPENSEEDEDONFULLVOLUME_TRANSACTION_REFUSED" \
+  "OPENSEEDEDONFULLVOLUME_OK"
+case "$matched_literal" in
+  OPENSEEDEDONFULLVOLUME_OPENSTORE_REFUSED)
+    open_seeded_full_volume_branch="refused-openstore"
+    ;;
+  OPENSEEDEDONFULLVOLUME_TRANSACTION_REFUSED)
+    open_seeded_full_volume_branch="refused-transaction"
+    ;;
+  OPENSEEDEDONFULLVOLUME_OK)
+    open_seeded_full_volume_branch="readable"
+    ;;
+  *)
+    record_event "open-seeded-full-branch-mapping-unexpected"
+    exit 1
+    ;;
+esac
+record_event "open-seeded-full-branch-recorded"
+
+# The filler is removed as soon as the two open cells are recorded, so the
+# volume regains capacity before the capture handshake below.
+rm -f -- "$filler"
+filler=""
+record_volume_facts "after-open-full-release"
+record_event "complete"
+
 pressure_input_fifo="$temp_root/pressure.stdin"
 pressure_output_fifo="$temp_root/pressure.stdout"
 begin_phase "prepare-pressure-handshake"
@@ -1035,6 +1311,194 @@ require_literal_file \
 printf 'VERIFYSEED_OK\n' > "$log_dir/verify.stdout.log"
 record_event "complete"
 
+# Card 6B full-disk revise cell: the same FIFO handshake shape as the
+# capture cell — the child commits its dedicated 8 MiB blob and verifies the
+# seed table before READY, the fill happens only after READY, and the child
+# proves both the typed §16 admission refusal and the byte-for-byte
+# unchanged seed table before exiting. Cycle 1 closed fds 7/8 on the green
+# path, so the pressure_*_open cleanup flags and pressure_pid are reused.
+revise_input_fifo="$temp_root/revise.stdin"
+revise_output_fifo="$temp_root/revise.stdout"
+begin_phase "prepare-revise-handshake"
+if mkfifo "$revise_input_fifo" "$revise_output_fifo"; then
+  record_command_status "create-revise-fifos" 0
+else
+  record_command_status "create-revise-fifos" 1
+  record_event "fifo-creation-failed"
+  exit 1
+fi
+
+# RDWR opens keep FIFO setup nonblocking for the host; the child closes the
+# inherited host descriptors and opens only its redirected stdin/stdout ends.
+if exec 7<>"$revise_output_fifo"; then
+  record_command_status "open-revise-output-fifo" 0
+else
+  record_command_status "open-revise-output-fifo" 1
+  record_event "output-fifo-open-failed"
+  exit 1
+fi
+pressure_output_open=1
+if exec 8<>"$revise_input_fifo"; then
+  record_command_status "open-revise-input-fifo" 0
+else
+  record_command_status "open-revise-input-fifo" 1
+  record_event "input-fifo-open-failed"
+  exit 1
+fi
+pressure_input_open=1
+record_event "complete"
+begin_phase "start-revise-child"
+CLIPY_APFS_PROBE_DIAGNOSTICS=1 \
+CLIPY_RUNTIME_DIAGNOSTICS=1 \
+"$probe" pressureRevise "$store" \
+  <"$revise_input_fifo" >"$revise_output_fifo" \
+  2>"$temp_root/revise.stderr.raw.log" 7>&- 8>&- &
+pressure_pid=$!
+record_event "child-started"
+
+# 60s, not cycle 1's 30: this child commits an 8 MiB blob and writes its
+# manifest before publishing READY.
+revise_ready_line=""
+if IFS= read -r -t 60 revise_ready_line <&7; then
+  record_command_status "read-revise-ready" 0
+else
+  revise_ready_status=$?
+  record_command_status "read-revise-ready" "$revise_ready_status"
+  record_event "readiness-timeout-or-eof"
+  exit 1
+fi
+printf '%s\n' "$revise_ready_line" > "$temp_root/revise-ready.stdout.raw.log"
+require_literal_file \
+  "$temp_root/revise-ready.stdout.raw.log" "APFS_PRESSURE_READY" \
+  "revise-ready-token"
+printf 'APFS_PRESSURE_READY\n' > "$log_dir/revise-ready.stdout.log"
+record_event "ready"
+
+begin_phase "revise-fill-volume"
+if ! require_competitor_enospc "revise-under-pressure"; then
+  exit 1
+fi
+record_event "complete"
+
+begin_phase "revise-under-pressure"
+if printf 'GO\n' >&8; then
+  record_command_status "write-revise-go" 0
+else
+  record_command_status "write-revise-go" 1
+  record_event "go-write-failed"
+  exit 1
+fi
+if exec 8>&-; then
+  record_command_status "close-revise-input" 0
+else
+  record_command_status "close-revise-input" 1
+  record_event "revise-input-close-failed"
+  exit 1
+fi
+pressure_input_open=0
+record_event "go-sent"
+
+revise_result_line=""
+if IFS= read -r -t 30 revise_result_line <&7; then
+  record_command_status "read-revise-result" 0
+else
+  revise_result_status=$?
+  record_command_status "read-revise-result" "$revise_result_status"
+  collect_probe_diagnostics \
+    "$temp_root/revise.stderr.raw.log" "$log_dir/revise-diagnostics.log"
+  record_event "result-timeout-or-eof"
+  exit 1
+fi
+printf '%s\n' "$revise_result_line" > "$temp_root/revise-result.stdout.raw.log"
+require_literal_file \
+  "$temp_root/revise-result.stdout.raw.log" "PRESSUREREVISE_OK" \
+  "revise-result-token"
+printf 'PRESSUREREVISE_OK\n' > "$log_dir/revise-result.stdout.log"
+
+if bounded_wait "$pressure_pid" 15 "revise-exit"; then
+  revise_child_status=0
+else
+  revise_child_status=$?
+fi
+pressure_pid=""
+record_command_status "revise-child" "$revise_child_status"
+collect_probe_diagnostics \
+  "$temp_root/revise.stderr.raw.log" "$log_dir/revise-diagnostics.log"
+if [[ "$revise_child_status" -ne 0 ]]; then
+  record_event "child-failed"
+  exit 1
+fi
+
+revise_extra_line=""
+if IFS= read -r -t 1 revise_extra_line <&7 || [[ -n "$revise_extra_line" ]]; then
+  record_command_status "read-revise-extra-output" 0
+  record_event "unexpected-extra-output"
+  exit 1
+fi
+record_command_status "read-revise-extra-output" 1
+if exec 7>&-; then
+  record_command_status "close-revise-output" 0
+else
+  record_command_status "close-revise-output" 1
+  record_event "revise-output-close-failed"
+  exit 1
+fi
+pressure_output_open=0
+record_volume_facts "revise-after-rejected-revision"
+record_event "complete"
+
+begin_phase "release-revise-pressure"
+rm -f -- "$filler"
+filler=""
+record_volume_facts "revise-after-competitor-removal"
+record_event "complete"
+
+begin_phase "revise-commit-after-release"
+set +e
+CLIPY_APFS_PROBE_DIAGNOSTICS=1 \
+CLIPY_RUNTIME_DIAGNOSTICS=1 \
+"$probe" pressureReviseCommit "$store" \
+  > "$temp_root/revise-commit.stdout.raw.log" \
+  2> "$temp_root/revise-commit.stderr.raw.log"
+revise_commit_status=$?
+set -e
+record_command_status "revise-commit-child" "$revise_commit_status"
+collect_probe_diagnostics \
+  "$temp_root/revise-commit.stderr.raw.log" \
+  "$log_dir/revise-commit-diagnostics.log"
+if [[ "$revise_commit_status" -ne 0 ]]; then
+  record_event "child-failed"
+  exit 1
+fi
+require_literal_file \
+  "$temp_root/revise-commit.stdout.raw.log" "PRESSUREREVISECOMMIT_OK" \
+  "revise-commit-token"
+printf 'PRESSUREREVISECOMMIT_OK\n' > "$log_dir/revise-commit.stdout.log"
+record_event "complete"
+
+begin_phase "revise-verify-fresh-process"
+set +e
+CLIPY_APFS_PROBE_DIAGNOSTICS=1 \
+CLIPY_RUNTIME_DIAGNOSTICS=1 \
+"$probe" pressureReviseVerify "$store" \
+  > "$temp_root/revise-verify.stdout.raw.log" \
+  2> "$temp_root/revise-verify.stderr.raw.log"
+revise_verify_status=$?
+set -e
+record_command_status "revise-verify-child" "$revise_verify_status"
+collect_probe_diagnostics \
+  "$temp_root/revise-verify.stderr.raw.log" \
+  "$log_dir/revise-verify-diagnostics.log"
+if [[ "$revise_verify_status" -ne 0 ]]; then
+  record_event "child-failed"
+  exit 1
+fi
+require_literal_file \
+  "$temp_root/revise-verify.stdout.raw.log" "PRESSUREREVISEVERIFY_OK" \
+  "revise-verify-token"
+printf 'PRESSUREREVISEVERIFY_OK\n' > "$log_dir/revise-verify.stdout.log"
+record_event "complete"
+
 begin_phase "detach-image"
 detach_volume
 record_event "complete"
@@ -1060,8 +1524,14 @@ set +e
   printf 'seed=%s\n' "complete"
   printf 'pressure_capture=%s\n' "transaction rejected with seed preserved"
   printf 'fresh_verify=%s\n' "seed state readable"
+  printf 'open_full_volume=%s\n' "$open_full_volume_branch"
+  printf 'open_seeded_full_volume=%s\n' "$open_seeded_full_volume_branch"
+  printf 'pressure_revise=%s\n' "revision rejected with seed preserved"
+  printf 'pressure_revise_commit=%s\n' \
+    "same revision committed after space release"
+  printf 'pressure_revise_verify=%s\n' "durable revised state readable"
   printf '%s\n' \
-    "evidence_ceiling=Card 6B exact capture transaction physical ENOSPC leaf only"
+    "evidence_ceiling=Card 6B admission-refusal leaves only; post-admission mid-transaction exhaustion remains the Apple framework crash ceiling (docs/05 §16); remove/clear full-disk tails uncharacterized (zero-demand plans are never admission-refused); V1->V2 migration-on-full-disk is not triggerable through the public API"
 } | tee "$log_dir/apfs-enospc-summary.log"
 success_summary_status=$?
 set -e

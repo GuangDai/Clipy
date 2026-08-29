@@ -83,6 +83,15 @@ public final class ThumbnailStore {
     package private(set) var debugDiscardedFetchCompletionCount = 0
     #endif
 
+    #if DEBUG
+    /// DEC-THUMB-CACHE G1 evidence sink (see `ThumbnailMeasurement` at the
+    /// bottom of this file): nil in Release, in every ordinary DEBUG run,
+    /// and in owner tests that do not inject one. Batch 39's owner-test
+    /// package counter posture is unchanged — the sink adds no public
+    /// surface and no capacity knob (REVIEW GOV-3; 05 §4.1 rule 4).
+    private let measurement: ThumbnailMeasurement?
+    #endif
+
     /// Entry-count half of the admission bound (default 500). Injectable so
     /// the memory-eviction smoke suites can drive the reset at a small
     /// scale instead of seeding 500+ thumbnails.
@@ -114,18 +123,51 @@ public final class ThumbnailStore {
         history: any ClipboardHistory,
         pixels: PixelSize = PixelSize(width: 72, height: 72)
     ) {
+        #if DEBUG
+        // A DEBUG running-app journey activates the per-surface evidence
+        // sink through its own envelope key (the HistoryPreviewView
+        // CLIPY_UI_TEST_PREVIEW_FAILURE precedent); every other DEBUG
+        // context — including the details view's 128 px store, whose records
+        // would still be distinguishable by `pixelsWidth/Height` — and all
+        // Release builds construct a sink-free store.
+        self.init(
+            history: history,
+            pixels: pixels,
+            maximumEntries: 500,
+            maximumDecodedBytes: 64 * 1_048_576,
+            measurement: ThumbnailMeasurement.makeIfRequested()
+        )
+        #else
         self.init(
             history: history,
             pixels: pixels,
             maximumEntries: 500,
             maximumDecodedBytes: 64 * 1_048_576
         )
+        #endif
     }
 
     /// Owner-test seam for exercising the two admitted retention bounds at a
     /// small scale. Product callers get one fixed policy through the public
     /// initializer; cache capacity is not an application configuration knob
-    /// (REVIEW GOV-3; 05 §4.1 rule 4).
+    /// (REVIEW GOV-3; 05 §4.1 rule 4). Under DEBUG the same seam injects the
+    /// measurement sink; the parameter compiles away entirely in Release, so
+    /// existing call sites are untouched in both configurations.
+    #if DEBUG
+    package init(
+        history: any ClipboardHistory,
+        pixels: PixelSize = PixelSize(width: 72, height: 72),
+        maximumEntries: Int,
+        maximumDecodedBytes: Int,
+        measurement: ThumbnailMeasurement? = nil
+    ) {
+        self.history = history
+        self.pixels = pixels
+        self.maximumEntries = maximumEntries
+        self.maximumDecodedBytes = maximumDecodedBytes
+        self.measurement = measurement
+    }
+    #else
     package init(
         history: any ClipboardHistory,
         pixels: PixelSize = PixelSize(width: 72, height: 72),
@@ -137,6 +179,7 @@ public final class ThumbnailStore {
         self.maximumEntries = maximumEntries
         self.maximumDecodedBytes = maximumDecodedBytes
     }
+    #endif
 
     // MARK: - Public surface
 
@@ -167,26 +210,61 @@ public final class ThumbnailStore {
     /// - a thrown failure is NOT retained — transient unavailability may
     ///   recover, so the reference stays eligible for a later prefetch.
     public func prefetch(_ item: HistoryItemReference) {
-        guard entries[item] == nil, inFlight[item] == nil else { return }
+        guard entries[item] == nil, inFlight[item] == nil else {
+            #if DEBUG
+            // The duplicate-request signal of DEC-THUMB-CACHE G1's
+            // "identical requests" numerator (docs/06-cross-cutting.md §3):
+            // the row asked again while an answer was already retained
+            // (`.rejectedRetained`) or a flight was still pending
+            // (`.rejectedInFlight`).
+            recordMeasurement(
+                entries[item] != nil ? .rejectedRetained : .rejectedInFlight,
+                item: item
+            )
+            #endif
+            return
+        }
         nextRequestToken += 1
         let requestToken = nextRequestToken
         inFlight[item] = requestToken
+        #if DEBUG
+        recordMeasurement(.started, item: item)
+        #endif
 
         let history = self.history
         let pixels = self.pixels
         let renderer = self.renderer
 
         Task { [weak self] in
+            #if DEBUG
+            // Timing windows wrap ONLY the awaited segments; the sink's file
+            // write happens after the windows close, so a slow append can
+            // never pollute the measured wall clock.
+            let fetchStart = ContinuousClock.Instant.now
+            var fetchMs: Double?
+            #endif
             do {
                 let payload = try await history.thumbnail(for: item, pixels: pixels)
+                #if DEBUG
+                fetchMs = Self.elapsedMilliseconds(since: fetchStart)
+                #endif
                 // A reset does not rely on native cancellation: it releases
                 // visible bookkeeping immediately and the request token
                 // rejects any late eager-raster result.
                 let raster: PreviewRaster?
+                #if DEBUG
+                var rasterMs: Double?
+                #endif
                 if let payload {
+                    #if DEBUG
+                    let rasterStart = ContinuousClock.Instant.now
+                    #endif
                     let outcome = await renderer.rasterizePNGForDisplay(
                         payload.encodedBytes
                     )
+                    #if DEBUG
+                    rasterMs = Self.elapsedMilliseconds(since: rasterStart)
+                    #endif
                     if case let .content(.raster(value)) = outcome {
                         raster = value
                     } else {
@@ -196,18 +274,53 @@ public final class ThumbnailStore {
                     raster = nil
                 }
                 guard let self else { return }
+                #if DEBUG
+                let boundary = self.store(
+                    item: item,
+                    raster: raster,
+                    requestToken: requestToken
+                )
+                self.recordMeasurement(
+                    .completed,
+                    item: item,
+                    fetchMs: fetchMs,
+                    rasterMs: rasterMs,
+                    raster: raster,
+                    outcome: Self.measurementOutcome(
+                        boundary: boundary,
+                        raster: raster
+                    )
+                )
+                #else
                 self.store(
                     item: item,
                     raster: raster,
                     requestToken: requestToken
                 )
+                #endif
             } catch {
+                #if DEBUG
+                fetchMs = Self.elapsedMilliseconds(since: fetchStart)
+                #endif
                 // Not retained: see `prefetch(_:)`.
                 guard let self else { return }
+                #if DEBUG
+                let boundary = self.finishWithoutEntry(
+                    item: item,
+                    requestToken: requestToken
+                )
+                self.recordMeasurement(
+                    .completed,
+                    item: item,
+                    fetchMs: fetchMs,
+                    outcome: boundary == .discarded ? .discarded : .failure
+                )
+                #else
                 self.finishWithoutEntry(
                     item: item,
                     requestToken: requestToken
                 )
+                #endif
             }
         }
     }
@@ -278,6 +391,76 @@ public final class ThumbnailStore {
         raster.pixels.count
     }
 
+    /// What the completion fence did with one flight's result. Consumed only
+    /// by the DEBUG measurement sink's outcome classification;
+    /// `@discardableResult` keeps the Release call sites in `prefetch(_:)`
+    /// identical to their pre-sink form.
+    private enum FlightBoundary: Equatable {
+        /// The fence accepted the flight and consumed its bookkeeping.
+        case accepted
+        /// A late or old-generation flight was rejected by its request token
+        /// (deep review Card 9B).
+        case discarded
+    }
+
+    #if DEBUG
+    /// Emits one content-free event through the injected sink: reference
+    /// identity, requested pixel size, measured segment durations, and the
+    /// completion outcome kind — never clipboard bytes or titles.
+    private func recordMeasurement(
+        _ event: ThumbnailMeasurement.Event,
+        item: HistoryItemReference,
+        fetchMs: Double? = nil,
+        rasterMs: Double? = nil,
+        raster: PreviewRaster? = nil,
+        outcome: ThumbnailMeasurement.Outcome? = nil
+    ) {
+        guard let measurement else { return }
+        var record = ThumbnailMeasurement.Record(
+            event: event,
+            refID: item.id.rawValue.uuidString,
+            contentVersion: item.contentVersion.rawValue,
+            pixelsWidth: pixels.width,
+            pixelsHeight: pixels.height
+        )
+        record.fetchMs = fetchMs
+        record.rasterMs = rasterMs
+        record.rasterWidth = raster.map(\.width)
+        record.rasterHeight = raster.map(\.height)
+        record.outcome = outcome
+        measurement.record(&record)
+    }
+
+    /// Milliseconds on the continuous clock between `start` and now — the
+    /// elapsed-ms half of the sink's monotone timestamp.
+    private static func elapsedMilliseconds(
+        since start: ContinuousClock.Instant
+    ) -> Double {
+        // `Instant.duration(to:)` — the earlier instant is the receiver
+        // (the repo's `SearchWorker+Exact.swift` precedent).
+        let components = start
+            .duration(to: ContinuousClock.Instant.now)
+            .components
+        return Double(components.seconds) * 1_000
+            + Double(components.attoseconds) / 1_000_000_000_000_000
+    }
+
+    /// Maps a fetch-flight completion to the sink's outcome kind: `.miss`
+    /// mirrors this store's negative entry (a nil payload OR an undecodable
+    /// payload are both negative-cached), `.discarded` is the Card 9B fence.
+    private static func measurementOutcome(
+        boundary: FlightBoundary,
+        raster: PreviewRaster?
+    ) -> ThumbnailMeasurement.Outcome {
+        switch boundary {
+        case .discarded:
+            return .discarded
+        case .accepted:
+            return raster != nil ? .hit : .miss
+        }
+    }
+    #endif
+
     /// Records a completed fetch under its exact requesting key, resetting
     /// the whole store when EITHER admission bound is exceeded.
     /// Insert-then-evict: checking BEFORE insertion would let retention
@@ -286,13 +469,14 @@ public final class ThumbnailStore {
     /// `cachedEntryCount <= maximumEntries` AND
     /// `cachedDecodedBytes <= maximumDecodedBytes` an observable invariant
     /// at every quiescent point.
+    @discardableResult
     private func store(
         item: HistoryItemReference,
         raster: PreviewRaster?,
         requestToken: Int
-    ) {
+    ) -> FlightBoundary {
         guard acceptCompletion(item: item, requestToken: requestToken) else {
-            return
+            return .discarded
         }
         // A same-key overwrite cannot happen (`prefetch` refuses to start
         // when an entry exists), but keep the byte total exact even so.
@@ -309,6 +493,7 @@ public final class ThumbnailStore {
         if entries.count > maximumEntries || retainedDecodedBytes > maximumDecodedBytes {
             evictRetainedEntries()
         }
+        return .accepted
     }
 
     /// Capacity eviction only drops rebuildable completed entries. It must
@@ -322,11 +507,14 @@ public final class ThumbnailStore {
 
     /// Finishes a thrown/cancelled request without negative-retaining it.
     /// An old request token must not remove a newer same-reference flight.
+    @discardableResult
     private func finishWithoutEntry(
         item: HistoryItemReference,
         requestToken: Int
-    ) {
-        _ = acceptCompletion(item: item, requestToken: requestToken)
+    ) -> FlightBoundary {
+        acceptCompletion(item: item, requestToken: requestToken)
+            ? .accepted
+            : .discarded
     }
 
     /// The single completion fence shared by success, failure and
@@ -364,3 +552,148 @@ public final class ThumbnailStore {
         }
     }
 }
+
+#if DEBUG
+/// DEC-THUMB-CACHE G1 evidence sink (docs/06-cross-cutting.md §3 G1;
+/// docs/reviews/2026-08-22-clipy-maccy-deep-review/
+/// 05-evidence-and-open-questions.md §6 "Completed thumbnail cache" row and
+/// §5.5's reporting floors; 11 §4.7). Batch 39 contracted the store's
+/// counters to owner-test package scope; this sink keeps exactly that
+/// posture — package-only, DEBUG-only, never a product knob — while making
+/// the same facts observable from a real scrolling panel, which the
+/// owner-test counters cannot cross the process boundary to reach.
+///
+/// Content-free: reference identity, requested pixel size, segment
+/// durations, and outcome kind. Appends one JSON line per event to the
+/// exact absolute path named by `CLIPY_UI_TEST_THUMB_MEASUREMENT_PATH` when
+/// the running-app journey envelope (`CLIPY_RUNNING_UI_TEST`) is active;
+/// compiles out of Release entirely.
+///
+/// NOT a ratchet: nothing here evaluates a threshold or fails anything —
+/// G1's dual-threshold adjudication stays with docs/06 §3 G1 and
+/// docs/v2/V2-07. The two segments are reported exactly as measured:
+/// `fetchMs` wraps the awaited `history.thumbnail` call, and `rasterMs`
+/// wraps the awaited `rasterizePNGForDisplay`, whose single native decode
+/// slot means the raster segment includes queueing behind an earlier
+/// decode — recorded honestly, never corrected here.
+@MainActor
+package final class ThumbnailMeasurement {
+
+    /// One sink event: a flight started, a duplicate request was refused
+    /// because an answer was retained or a flight was pending, or a flight
+    /// reached its completion boundary.
+    package enum Event: String, Codable, Sendable {
+        case started
+        case rejectedRetained
+        case rejectedInFlight
+        case completed
+    }
+
+    /// What the completion boundary did with the flight's result. `.miss`
+    /// mirrors the store's negative entry (nil payload OR undecodable
+    /// payload); `.discarded` is the Card 9B request-token fence rejecting a
+    /// late old-generation result.
+    package enum Outcome: String, Codable, Sendable {
+        case hit
+        case miss
+        case failure
+        case discarded
+    }
+
+    /// One JSONL line. `seq` and `monotonicMs` are sink-assigned; the
+    /// segment fields are present only where they were measured.
+    package struct Record: Codable, Sendable, Equatable {
+        package var seq = 0
+        /// Milliseconds on the continuous clock since sink creation —
+        /// monotone ordering evidence, not a wall-clock timestamp.
+        package var monotonicMs: Int64 = 0
+        package var event: Event
+        /// HistoryItemID raw UUID string — content-free reference identity.
+        package var refID: String
+        package var contentVersion: UInt64
+        package var pixelsWidth: Int
+        package var pixelsHeight: Int
+        /// Awaited `history.thumbnail(for:pixels:)` wall clock.
+        package var fetchMs: Double?
+        /// Awaited `rasterizePNGForDisplay` wall clock (includes the single
+        /// decode slot's queueing).
+        package var rasterMs: Double?
+        /// Display-side sampling of the produced raster's dimensions (the
+        /// `imagePixelSize(for:)` precedent — dimensions only, no pixels).
+        package var rasterWidth: Int?
+        package var rasterHeight: Int?
+        package var outcome: Outcome?
+    }
+
+    private let fileURL: URL
+    private let clock = ContinuousClock()
+    private let start = ContinuousClock.Instant.now
+    private let encoder: JSONEncoder
+    private var handle: FileHandle?
+    private var nextSeq = 0
+
+    /// Owner-test seam: a sink pointed at one explicit file. Nothing is
+    /// touched on disk until the first `record`.
+    package init(fileURL: URL) {
+        self.fileURL = fileURL
+        let encoder = JSONEncoder()
+        // Stable field order keeps the journey's JSONL diff-friendly.
+        encoder.outputFormatting = [.sortedKeys]
+        self.encoder = encoder
+    }
+
+    /// Activates the sink only under the DEBUG running-app journey envelope
+    /// and only for an absolute path — the same two gates ClipyApp's
+    /// `RunningUITestConfiguration` applies to the store path. The key is
+    /// PresentationUI-local and self-read (the HistoryPreviewView
+    /// `CLIPY_UI_TEST_PREVIEW_FAILURE` precedent); the launch envelope
+    /// deliberately ignores unknown extra environment keys.
+    package static func makeIfRequested(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> ThumbnailMeasurement? {
+        guard environment["CLIPY_RUNNING_UI_TEST"] == "1",
+              let path = environment["CLIPY_UI_TEST_THUMB_MEASUREMENT_PATH"],
+              path.hasPrefix("/")
+        else { return nil }
+        return ThumbnailMeasurement(
+            fileURL: URL(fileURLWithPath: path).standardizedFileURL
+        )
+    }
+
+    /// Assigns `seq`/`monotonicMs` and appends exactly one JSON line. File
+    /// failures are observed-and-dropped (`try?`, the AppDelegate
+    /// store-reveal marker precedent): measurement must never take down a
+    /// running app, and a lost record surfaces as the journey's own
+    /// sampling-integrity assertion rather than as a crash here.
+    package func record(_ record: inout Record) {
+        nextSeq += 1
+        record.seq = nextSeq
+        record.monotonicMs = elapsedMilliseconds
+        guard let line = try? encoder.encode(record) else { return }
+        append(line + Data([0x0A]))
+    }
+
+    private var elapsedMilliseconds: Int64 {
+        // Same `duration(to:)` receiver rule as the static helper above.
+        let components = start.duration(to: clock.now).components
+        return Int64(components.seconds) * 1_000
+            + Int64(components.attoseconds / 1_000_000_000_000_000)
+    }
+
+    private func append(_ data: Data) {
+        if handle == nil {
+            // Create-on-first-use: the journey's measurement path lives in
+            // a directory the test process created before launch.
+            if !FileManager.default.fileExists(atPath: fileURL.path) {
+                try? Data().write(to: fileURL)
+            }
+            handle = try? FileHandle(forWritingTo: fileURL)
+        }
+        guard let handle else { return }
+        // Unbuffered appends: the journey test polls this file while the
+        // app runs, so every completed line is visible without a flush.
+        handle.seekToEndOfFile()
+        try? handle.write(contentsOf: data)
+    }
+}
+#endif

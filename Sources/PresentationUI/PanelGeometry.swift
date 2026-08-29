@@ -39,25 +39,32 @@ public enum PanelGeometry {
 
     /// The total window width at the default content width for a given
     /// preview visibility — the single source of truth for both the SwiftUI
-    /// frame and the AppKit `setFrame` width.
-    public static func totalWidth(previewOpen: Bool) -> CGFloat {
+    /// frame and the AppKit `setFrame` width. Package (GOV-3): the AppKit
+    /// frame math composes the persisted dimensions instead (`persistedSize`
+    /// / `persistedPreviewColumnWidth`); only this module's content frame
+    /// needs the default-width shortcut.
+    package static func totalWidth(previewOpen: Bool) -> CGFloat {
         contentWidth + (previewOpen ? dividerWidth + previewWidth : 0)
     }
 
     // MARK: Preview column width
 
-    /// The narrowest preview column the divider drag admits.
-    public static let minimumPreviewColumnWidth: CGFloat = 240
+    /// The narrowest preview column the divider drag admits. Package
+    /// (GOV-3): the bounds are divider-drag vocabulary; cross-module reads
+    /// go through the clamped persisted helpers.
+    package static let minimumPreviewColumnWidth: CGFloat = 240
 
-    /// The widest preview column the divider drag admits.
-    public static let maximumPreviewColumnWidth: CGFloat = 480
+    /// The widest preview column the divider drag admits. Package (GOV-3).
+    package static let maximumPreviewColumnWidth: CGFloat = 480
 
     /// The UserDefaults key for the persisted preview column width.
     public static let previewColumnWidthDefaultsKey =
         "clipy.panel.previewColumnWidth"
 
     /// Clamps a requested preview column width into the draggable bounds.
-    public static func clampedPreviewColumnWidth(_ width: CGFloat) -> CGFloat {
+    /// Package (GOV-3): the persisted helpers below are the seam; the raw
+    /// clamp serves this module's divider drag and their internal chain.
+    package static func clampedPreviewColumnWidth(_ width: CGFloat) -> CGFloat {
         min(max(width, minimumPreviewColumnWidth), maximumPreviewColumnWidth)
     }
 

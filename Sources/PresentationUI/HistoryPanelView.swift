@@ -352,7 +352,8 @@ public final class HistoryPanelSurfaceState {
 ///
 /// The preview pane (`PreviewPaneState`) is INJECTED by the composition
 /// root so the AppKit panel can drive its lifecycle hooks
-/// (`panelBecameKey`/`panelResignedKey`/`panelClosed`) and observe
+/// (`panelBecameKey`/`panelResignedKey` — `panelClosed` is a module-internal
+/// hook the panel surface itself calls) and observe
 /// `isOpen` through `onPreviewVisibilityChange` to resize the window —
 /// PresentationUI itself never touches AppKit (01 §8).
 ///

@@ -17,8 +17,10 @@ import HistoryCore
 /// The user-facing type filter in the panel header (All/Text/Images/Links).
 /// Front-end only: it narrows which loaded rows render without touching the
 /// History query. Raw values are stable strings so a future preference can
-/// persist the selection without a migration.
-public enum HistoryTypeFilter: String, CaseIterable, Sendable {
+/// persist the selection without a migration. Package (GOV-3): panel-header
+/// vocabulary only — the header control, the view state it binds, and owner
+/// tests are all in-package; ClipyApp never names the filter.
+package enum HistoryTypeFilter: String, CaseIterable, Sendable {
     case all
     case text
     case images

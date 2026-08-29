@@ -1,4 +1,4 @@
-name: APFS ENOSPC capture evidence
+name: APFS ENOSPC evidence
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ env:
 
 jobs:
   apfs-enospc:
-    name: Card 6B capture transaction leaf
+    name: Card 6B full-disk cells
     runs-on: macos-26
     timeout-minutes: 25
     env:
