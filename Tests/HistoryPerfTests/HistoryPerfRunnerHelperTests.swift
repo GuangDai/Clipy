@@ -240,12 +240,19 @@ struct HistoryPerfRunnerHelperTests {
     }
 
     @Test func exactSearchAdmissionUsesReducedSampleBudget() {
-        // IND-07 measurement-budget freeze: the absent-term worst-bound scan
-        // costs ~125 s per request against the 5,000 × 256 KiB corpus, so the
-        // 101-sample profile budget cannot complete inside the dispatch lane's
-        // 90-minute step ceiling. exact-search carries its own reduced budget;
-        // at n = 11 the nearest-rank p95/p99 both select the sample maximum,
-        // which the fixture notes must state.
+        // IND-07 measurement-budget freeze. Original basis: the absent-term
+        // worst-bound scan cost ~125 s per request against the 5,000 × 256
+        // KiB corpus (the Foundation-oracle diagnostic that opened IND-07),
+        // so the 101-sample profile budget could not finish inside the
+        // dispatch lane's 90-minute step ceiling. Re-baselined by
+        // measurement: GOV-1 run 32685185124 recorded p50 2,666 ms per
+        // request (11 samples, range 1,810–3,827 ms), at which 101 samples
+        // would fit (103 × 3.8 s ≈ 7 min). The freeze stays at 11: the
+        // fixture is record-only p50-trend evidence, and 13 requests still
+        // fit in ≈27 min at the historical ~125 s Foundation-path cost if a
+        // matcher regression restores it. At n = 11 the nearest-rank
+        // p95/p99 fall below their 20/100-sample support floors and encode
+        // as JSON null, which the fixture notes must state.
         #expect(admissionExactSearchWarmupCount == 1)
         #expect(admissionExactSearchSampleCount == 11)
     }
