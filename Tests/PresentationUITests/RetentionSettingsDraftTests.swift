@@ -449,4 +449,146 @@ struct RetentionSettingsDraftTests {
                 + "doesn't remove items."
         )
     }
+
+    @Test("a freshly loaded draft offers no write on either Apply")
+    func uneditedConfigurationHasNoPendingWrite() {
+        var draft = RetentionSettingsDraft()
+        load(
+            HistoryRetentionConfiguration(
+                maximumUnpinnedItems: 37,
+                policies: HistoryRetentionPolicies(
+                    age: AgeRetention(maxAge: 90_001),
+                    storage: StorageRetention(maxTotalBytes: 1_048_577),
+                    revisions: RevisionRetention(
+                        maxRevisionsPerItem: 19,
+                        maxRevisionBytesPerItem: 1_048_577
+                    )
+                )
+            ),
+            into: &draft
+        )
+
+        // Equal to the persisted configuration: no field is dirty, neither
+        // Apply enables, and nothing would be written (Card 10D/10E).
+        #expect(!draft.maximumUnpinnedValueIsDirty)
+        #expect(!draft.ageValueIsDirty)
+        #expect(!draft.storageValueIsDirty)
+        #expect(!draft.revisionCountValueIsDirty)
+        #expect(!draft.revisionBytesValueIsDirty)
+        #expect(!draft.ageToggleIsDirty)
+        #expect(!draft.storageToggleIsDirty)
+        #expect(!draft.revisionCountToggleIsDirty)
+        #expect(!draft.revisionBytesToggleIsDirty)
+        #expect(!draft.hasCountChanges)
+        #expect(!draft.hasPolicyChanges)
+    }
+
+    @Test("each control dirties only its own edit state")
+    func fieldEditsAreIndependentlyDirty() {
+        // A count edit never dirties the policy dimensions (Card 10A).
+        var countDraft = RetentionSettingsDraft()
+        countDraft.setMaximumUnpinnedText("31")
+        #expect(countDraft.maximumUnpinnedValueIsDirty)
+        #expect(countDraft.hasCountChanges)
+        #expect(!countDraft.ageValueIsDirty)
+        #expect(!countDraft.storageValueIsDirty)
+        #expect(!countDraft.revisionCountValueIsDirty)
+        #expect(!countDraft.revisionBytesValueIsDirty)
+        #expect(!countDraft.ageToggleIsDirty)
+        #expect(!countDraft.storageToggleIsDirty)
+        #expect(!countDraft.revisionCountToggleIsDirty)
+        #expect(!countDraft.revisionBytesToggleIsDirty)
+        #expect(!countDraft.hasPolicyChanges)
+
+        // A toggle dirties its own toggle state only, never its value.
+        var toggleDraft = RetentionSettingsDraft()
+        toggleDraft.setStorageEnabled(true)
+        #expect(toggleDraft.storageToggleIsDirty)
+        #expect(!toggleDraft.storageValueIsDirty)
+        #expect(!toggleDraft.ageToggleIsDirty)
+        #expect(!toggleDraft.revisionCountToggleIsDirty)
+        #expect(!toggleDraft.revisionBytesToggleIsDirty)
+        #expect(toggleDraft.hasPolicyChanges)
+
+        // Text in a disabled dimension dirties its value only; with the
+        // toggle off, the proposed bundle still matches the all-disabled
+        // baseline, so there is nothing to write.
+        var valueDraft = RetentionSettingsDraft()
+        valueDraft.setRevisionCountText("7")
+        #expect(valueDraft.revisionCountValueIsDirty)
+        #expect(!valueDraft.revisionCountToggleIsDirty)
+        #expect(!valueDraft.revisionBytesValueIsDirty)
+        #expect(!valueDraft.ageValueIsDirty)
+        #expect(!valueDraft.storageValueIsDirty)
+        #expect(!valueDraft.hasPolicyChanges)
+        #expect(!valueDraft.hasCountChanges)
+    }
+
+    @Test("loosening the count applies without destructive confirmation")
+    func loosenedCountDoesNotRequireTighteningConfirmation() throws {
+        var draft = RetentionSettingsDraft()
+        load(
+            HistoryRetentionConfiguration(
+                maximumUnpinnedItems: 37,
+                policies: HistoryRetentionPolicies(
+                    age: nil,
+                    storage: nil,
+                    revisions: nil
+                )
+            ),
+            into: &draft
+        )
+
+        // Raising the configured count can retire nothing, so the direct
+        // Apply path is taken without the strict confirmation (Card 10D).
+        draft.setMaximumUnpinnedText("38")
+        let submission = try #require(draft.countSubmission())
+        #expect(draft.hasCountChanges)
+        #expect(!draft.maximumUnpinnedRequiresTightening(for: submission))
+    }
+
+    @Test("loosening any single dimension applies without confirmation")
+    func perDimensionLooseningDoesNotRequireConfirmation() throws {
+        // Card 10D's one-dimension-at-a-time table: loosening or disabling
+        // any configured dimension can retire nothing new, so every one
+        // takes the direct Apply path.
+        func draftWithOneEdit(
+            _ edit: (inout RetentionSettingsDraft) -> Void
+        ) -> RetentionSettingsDraft {
+            var draft = RetentionSettingsDraft()
+            load(
+                HistoryRetentionPolicies(
+                    age: AgeRetention(maxAge: 172_800),
+                    storage: StorageRetention(maxTotalBytes: 2_097_152),
+                    revisions: RevisionRetention(
+                        maxRevisionsPerItem: 20,
+                        maxRevisionBytesPerItem: 2_097_152
+                    )
+                ),
+                into: &draft
+            )
+            edit(&draft)
+            return draft
+        }
+
+        let edits: [(String, (inout RetentionSettingsDraft) -> Void)] = [
+            ("age", { $0.setAgeDaysText("3") }),
+            ("storage", { $0.setStorageMiBText("3") }),
+            ("revision count", { $0.setRevisionCountText("21") }),
+            ("revision bytes", { $0.setRevisionMiBText("3") }),
+            ("age disable", { $0.setAgeEnabled(false) }),
+        ]
+        for (dimension, edit) in edits {
+            let draft = draftWithOneEdit(edit)
+            #expect(
+                draft.hasPolicyChanges,
+                "\(dimension): the edit is a pending change"
+            )
+            let submission = try #require(draft.submission())
+            #expect(
+                !draft.requiresTighteningConfirmation(for: submission.policies),
+                "\(dimension): loosening applies without the strict confirmation"
+            )
+        }
+    }
 }
