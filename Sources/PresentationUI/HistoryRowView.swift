@@ -439,7 +439,13 @@ package struct HistoryRowView: View {
 @MainActor
 package struct HistoryRowRenderingModel {
     package let relativeTimeText: String
-    package let absoluteTimeText: String
+    /// The absolute half's inputs, held so the DateFormatter is built only
+    /// when a wide row actually reads `absoluteTimeText` — a per-row
+    /// formatter allocation on every model init is cost the narrow default
+    /// presentation never needs.
+    private let lastCopiedAt: Date
+    private let absoluteLocale: Locale
+    private let absoluteTimeZone: TimeZone
 
     package init(
         row: HistoryRow,
@@ -454,12 +460,20 @@ package struct HistoryRowRenderingModel {
             for: row.lastCopiedAt,
             relativeTo: now
         )
-        let absoluteFormatter = DateFormatter()
-        absoluteFormatter.dateStyle = .none
-        absoluteFormatter.timeStyle = .short
-        absoluteFormatter.locale = locale
-        absoluteFormatter.timeZone = timeZone
-        absoluteTimeText = absoluteFormatter.string(from: row.lastCopiedAt)
+        lastCopiedAt = row.lastCopiedAt
+        absoluteLocale = locale
+        absoluteTimeZone = timeZone
+    }
+
+    /// The item's fixed time of day ("8:00 AM") for the wide presentation.
+    /// Computed per read: only wide rows pay for the formatter.
+    package var absoluteTimeText: String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        formatter.locale = absoluteLocale
+        formatter.timeZone = absoluteTimeZone
+        return formatter.string(from: lastCopiedAt)
     }
 }
 

@@ -46,7 +46,16 @@ struct HistoryRowRenderingTests {
             timeZone: TimeZone(identifier: "UTC")!
         )
 
-        #expect(rendering.absoluteTimeText == "8:00 AM")
+        // ICU renders the day-period separator as a narrow no-break space
+        // (U+202F) on current macOS (the literal below would pin a regular
+        // space and fail); normalize both no-break variants so the pin
+        // asserts the readable shape, not the platform's byte choice.
+        #expect(
+            rendering.absoluteTimeText
+                .replacingOccurrences(of: "\u{202F}", with: " ")
+                .replacingOccurrences(of: "\u{00A0}", with: " ")
+                == "8:00 AM"
+        )
         #expect(rendering.relativeTimeText == "59s ago")
     }
 
