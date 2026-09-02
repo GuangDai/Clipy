@@ -222,7 +222,10 @@ package struct LocalAutomationClientCredentialCustody: Sendable {
                     credentialFileURL,
                     withItemAt: temporaryURL,
                     backupItemName: nil,
-                    options: [.usingNewMetadataOnly, .withoutCreatingBackup]
+                    // `.withoutCreatingBackup` does not exist in the macOS 26
+                    // SDK's ItemReplacementOptions (CI build error); a nil
+                    // backup name already means no backup is written.
+                    options: [.usingNewMetadataOnly]
                 )
             } else {
                 try fileManager.moveItem(at: temporaryURL, to: credentialFileURL)
