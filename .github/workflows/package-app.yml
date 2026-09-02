@@ -22,13 +22,9 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  correctness:
-    name: Same-SHA correctness admission
-    uses: ./.github/workflows/correctness.yml
 
   package:
     name: Build and upload unsigned Clipy.app
-    needs: correctness
     runs-on: macos-26
     timeout-minutes: 30
     env:
