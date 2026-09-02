@@ -1,7 +1,7 @@
 /// ClipySettingsView.swift — the Settings scene body (⌘,): a General tab
 /// (the optional Launch-at-Login toggle, the summon-shortcut block, the
 /// capture ignore list, and the Danger Zone clears), an Appearance tab
-/// (panel placement, preview behavior, row density, and the
+/// (panel placement, preview behavior, row density and typography, and the
 /// panel-size reset), and a Retention tab (the unified
 /// v1 count + V2-02 policy group; the first
 /// release is M1 + V2-02, so this is the ONLY V2
@@ -25,7 +25,7 @@ import SwiftUI
 /// The Settings window content: a `TabView` with General, Appearance, and
 /// Retention tabs (step-9 design contract §4.4). The container carries no
 /// fixed frame; each tab declares its own ideal size (General 480×440,
-/// Appearance 480×320, Retention 480×560) so the window takes the standard
+/// Appearance 480×400, Retention 480×560) so the window takes the standard
 /// per-tab resizing behavior when the selection changes.
 ///
 /// The Retention tab opens from the authoritative configured-policy read
@@ -99,7 +99,9 @@ public struct ClipySettingsView: View {
                 .frame(width: 480, height: 440)
             AppearanceSettingsTab(popupPosition: popupPosition)
                 .tabItem { Label("Appearance", systemImage: "paintbrush") }
-                .frame(width: 480, height: 320)
+                // The two added typography pickers (snippet lines, font
+                // size) grew the tab beyond the shipped 320pt ideal height.
+                .frame(width: 480, height: 400)
             RetentionSettingsTab(
                 viewState: viewState,
                 draft: $retentionDraft,
@@ -439,13 +441,14 @@ private struct GeneralSettingsTab: View {
 
 /// Appearance tab: the panel-chrome half of the Settings consolidation
 /// surface (`V2-07` §6). Placement rides the composition root's optional
-/// `PopupPositionMode` binding; row density, preview auto-open, and preview
-/// side persist through `@AppStorage` under the
-/// `PanelAppearanceSettings` keys with the same product defaults its
+/// `PopupPositionMode` binding; row density, snippet line count, font size,
+/// preview auto-open, and preview side persist through `@AppStorage` under
+/// the `PanelAppearanceSettings` keys with the same product defaults its
 /// `load(from:)` fails open to, so an untouched control and an absent
-/// defaults entry always agree. The preview and row-density preferences
-/// apply live; only panel position and the panel-size reset apply the next
-/// time the panel opens, which the Panel section footer discloses. The
+/// defaults entry always agree. The preview, row-density, and typography
+/// preferences apply live; only panel position and the panel-size reset
+/// apply the next time the panel opens, which the Panel section footer
+/// discloses. The
 /// preview column's width has no control here — the panel's own divider
 /// drag owns it (`PanelGeometry.previewColumnWidthDefaultsKey`).
 private struct AppearanceSettingsTab: View {
@@ -458,6 +461,10 @@ private struct AppearanceSettingsTab: View {
     /// owns. The wrapped defaults below are the documented product defaults.
     @AppStorage(PanelAppearanceSettings.rowDensityDefaultsKey)
     private var rowDensity: HistoryRowDensity = .comfortable
+    @AppStorage(PanelAppearanceSettings.snippetLineCountDefaultsKey)
+    private var snippetLineCount: HistorySnippetLineCount = .automatic
+    @AppStorage(PanelAppearanceSettings.rowFontSizeDefaultsKey)
+    private var rowFontSize: HistoryRowFontSize = .medium
     @AppStorage(PanelAppearanceSettings.previewAutoOpenDefaultsKey)
     private var isPreviewAutoOpenEnabled = true
     @AppStorage(PanelAppearanceSettings.previewSideDefaultsKey)
@@ -516,6 +523,24 @@ private struct AppearanceSettingsTab: View {
                 .accessibilityIdentifier(
                     "clipy.settings.appearance.row-density"
                 )
+                Picker("Snippet lines", selection: $snippetLineCount) {
+                    ForEach(HistorySnippetLineCount.allCases, id: \.self) { count in
+                        Text(snippetLineCountLabel(count)).tag(count)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier(
+                    "clipy.settings.appearance.snippet-lines"
+                )
+                Picker("Font size", selection: $rowFontSize) {
+                    ForEach(HistoryRowFontSize.allCases, id: \.self) { size in
+                        Text(rowFontSizeLabel(size)).tag(size)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier(
+                    "clipy.settings.appearance.font-size"
+                )
             }
         }
         .formStyle(.grouped)
@@ -535,6 +560,25 @@ private struct AppearanceSettingsTab: View {
         switch density {
         case .compact: return "Compact"
         case .comfortable: return "Comfortable"
+        }
+    }
+
+    /// Auto stays short — a four-segment "Automatic" risks truncation; the
+    /// explicit cases label with their raw counts.
+    private func snippetLineCountLabel(_ count: HistorySnippetLineCount) -> String {
+        switch count {
+        case .automatic: return "Auto"
+        case .one: return "1"
+        case .two: return "2"
+        case .three: return "3"
+        }
+    }
+
+    private func rowFontSizeLabel(_ size: HistoryRowFontSize) -> String {
+        switch size {
+        case .small: return "Small"
+        case .medium: return "Medium"
+        case .large: return "Large"
         }
     }
 

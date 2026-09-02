@@ -2,7 +2,10 @@
 /// with single selection, last-row pagination prefetch, the panel keyboard
 /// surface, and the empty states. Rows render the view state's DISPLAYED
 /// lanes: the client-side type/pinned filter narrows them in memory while
-/// pagination keeps walking the unfiltered stream.
+/// pagination keeps walking the unfiltered stream. One list-level width
+/// measurement (`onGeometryChange`, the `HistoryPanelView` body's idiom)
+/// drives every row's wide-presentation decision — rows carry no geometry
+/// observers of their own.
 /// Owning spec: docs/01-architecture.md §5.2 (gesture → action), §5.4
 /// (browse/observe), §6 (main-actor selection);
 /// docs/03b-instruction-set.md §8 (default ordering: pinned rows by ordinal
@@ -40,19 +43,32 @@ package enum HistoryListPaginationTrigger {
 /// the first page; continuations are one-shot browses owned by the view state).
 /// `density` is the panel's row-density preference, threaded unchanged into
 /// every row; `.comfortable` reproduces the shipped row metrics exactly.
+/// `snippetLineCount`/`fontSize` are the row-typography preferences,
+/// likewise threaded unchanged; the wide-presentation boolean is derived
+/// here from the one list-level width measurement
+/// (`HistoryRowLayout.usesWidePresentation`), never measured per row.
 struct HistoryListView: View {
     private let viewState: HistoryViewState
     private let thumbnails: ThumbnailStore
     private let density: HistoryRowDensity
+    private let snippetLineCount: HistorySnippetLineCount
+    private let fontSize: HistoryRowFontSize
     private let isSearchFieldFocused: Bool
     private let selection: Binding<HistoryItemID?>
     private let sourceIcons: SourceIconStore?
     private let onShowDetails: (HistoryItemReference) -> Void
 
+    /// The browsing column's live width — the single wide/narrow signal
+    /// every row's presentation derives from. Zero before the first layout
+    /// pass, which reads narrow (the shipped default look).
+    @State private var listWidth: CGFloat = 0
+
     init(
         viewState: HistoryViewState,
         thumbnails: ThumbnailStore,
         density: HistoryRowDensity = .comfortable,
+        snippetLineCount: HistorySnippetLineCount = .automatic,
+        fontSize: HistoryRowFontSize = .medium,
         isSearchFieldFocused: Bool,
         selection: Binding<HistoryItemID?>,
         sourceIcons: SourceIconStore? = nil,
@@ -61,6 +77,8 @@ struct HistoryListView: View {
         self.viewState = viewState
         self.thumbnails = thumbnails
         self.density = density
+        self.snippetLineCount = snippetLineCount
+        self.fontSize = fontSize
         self.isSearchFieldFocused = isSearchFieldFocused
         self.selection = selection
         self.sourceIcons = sourceIcons
@@ -120,6 +138,16 @@ struct HistoryListView: View {
         }
         .listStyle(.inset)
         .scrollContentBackground(.hidden)
+        // One list-level width signal drives every row's wide/narrow
+        // presentation (`HistoryRowLayout.usesWidePresentation`) — no
+        // per-row geometry observers. The modifier only reports; it
+        // imposes no layout of its own (the `HistoryPanelView` body's
+        // idiom), and nothing animates off `listWidth`.
+        .onGeometryChange(for: CGSize.self) { proxy in
+            proxy.size
+        } action: { newSize in
+            listWidth = newSize.width
+        }
     }
 
     private func rowContent(
@@ -132,6 +160,11 @@ struct HistoryListView: View {
             now: now,
             pinnedOrdinal: pinnedOrdinal,
             density: density,
+            snippetLineCount: snippetLineCount,
+            fontSize: fontSize,
+            isWidePresentation: HistoryRowLayout.usesWidePresentation(
+                width: listWidth
+            ),
             thumbnails: thumbnails,
             sourceIcons: sourceIcons,
             onCopy: { viewState.requestPasteFromDisplayedRow($0) },

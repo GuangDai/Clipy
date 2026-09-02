@@ -298,8 +298,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// HistoryPanelView reads this same value to order its columns (Card 9C).
     private(set) var previewPlacement: PreviewPlacement = .trailing
 
-    /// Live panel appearance snapshot (row density, preview auto-open, and
-    /// side). Seeded once from defaults, then refreshed from
+    /// Live panel appearance snapshot (row density, row typography —
+    /// snippet line count and font size — preview auto-open, and side).
+    /// Seeded once from defaults, then refreshed from
     /// `UserDefaults.didChangeNotification` so an Appearance-tab edit reaches
     /// an ALREADY-OPEN panel instead of only the next summon. The load is a
     /// cheap immutable-struct read, so no change filtering is applied; the

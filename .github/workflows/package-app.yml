@@ -1,0 +1,63 @@
+name: Package unsigned Clipy.app
+
+# Manual packaging lane: builds one unsigned Release Clipy.app and uploads it
+# as a downloadable artifact. Manual-only like the other evidence lanes —
+# correctness.yml stays the only push/PR workflow. Unsigned by policy
+# (CODE_SIGNING_ALLOWED=NO, the run_release_archive.sh convention): no
+# certificate, signing, or notarization machinery.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-app-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NSUnbufferedIO: YES
+  OS_ACTIVITY_MODE: disable
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  correctness:
+    name: Same-SHA correctness admission
+    uses: ./.github/workflows/correctness.yml
+
+  package:
+    name: Build and upload unsigned Clipy.app
+    needs: correctness
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      LOG_DIR: ${{ github.workspace }}/package-logs
+      DERIVED_DATA: ${{ github.workspace }}/DerivedData-Package
+      ARTIFACTS: ${{ github.workspace }}/package-artifacts
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Verify runner contract
+        shell: bash
+        run: bash scripts/ci/verify_macos_runner.sh
+
+      - name: Build and zip unsigned Clipy.app
+        shell: bash
+        run: >-
+          bash scripts/ci/package_app.sh
+          "$LOG_DIR" "$DERIVED_DATA"
+          "$RUNNER_TEMP/xcodegen-2.45.4"
+          "$ARTIFACTS"
+
+      - name: Upload package
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: clipy-app-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            package-logs
+            package-artifacts
+          if-no-files-found: warn
+          retention-days: 14

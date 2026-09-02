@@ -1,9 +1,16 @@
 /// HistoryRowView.swift — one rich history row: a density-sized thumbnail
 /// (or the retained source-app icon, or an SF Symbol type fallback), the
 /// highlighted title/snippet, the trailing metadata column, and the row
-/// context menu. Row metrics come from `PanelTheme`'s density mappings; the
-/// `comfortable` default is the shipped 36pt-thumbnail, 4pt-padding,
-/// two-line-snippet layout exactly.
+/// context menu. Thumbnail size and vertical padding come from `PanelTheme`'s
+/// density mappings; the snippet line count and the fonts come from the
+/// row-typography preferences (`HistorySnippetLineCount`/
+/// `HistoryRowFontSize`), whose product defaults reproduce the shipped
+/// 36pt-thumbnail, 4pt-padding, two-line-snippet layout exactly. At
+/// browsing-column widths of 560pt and up the row breathes
+/// (`HistoryRowLayout.usesWidePresentation`): the trailing timestamp
+/// switches from relative to the absolute time of day, the snippet gains
+/// one line above the configured base (hard cap 3), and the source line
+/// carries the full bundle identifier instead of its last component.
 /// Owning spec: docs/01-architecture.md §5.2 (gesture actions), §5.7
 /// (thumbnail is requested by exact `HistoryItemReference`);
 /// docs/03b-instruction-set.md §8 (row fields, search presentation, 1-based
@@ -49,6 +56,9 @@ package struct HistoryRowView: View {
     private let rendering: HistoryRowRenderingModel
     private let pinnedOrdinal: Int?
     private let density: HistoryRowDensity
+    private let snippetLineCount: HistorySnippetLineCount
+    private let fontSize: HistoryRowFontSize
+    private let isWidePresentation: Bool
     private let thumbnails: ThumbnailStore
     private let sourceIcons: SourceIconStore?
     private let onCopy: (HistoryItemReference) -> Void
@@ -57,11 +67,17 @@ package struct HistoryRowView: View {
     private let onRemove: (HistoryItemID) -> Void
     private let onShowDetails: (HistoryItemReference) -> Void
 
+    /// The typography/width parameters default to the product's narrow
+    /// presentation, so existing callers (and below-560pt rendering) keep
+    /// the shipped row byte-identically.
     package init(
         row: HistoryRow,
         now: Date,
         pinnedOrdinal: Int?,
         density: HistoryRowDensity = .comfortable,
+        snippetLineCount: HistorySnippetLineCount = .automatic,
+        fontSize: HistoryRowFontSize = .medium,
+        isWidePresentation: Bool = false,
         thumbnails: ThumbnailStore,
         sourceIcons: SourceIconStore? = nil,
         onCopy: @escaping (HistoryItemReference) -> Void,
@@ -74,6 +90,9 @@ package struct HistoryRowView: View {
         rendering = HistoryRowRenderingModel(row: row, now: now)
         self.pinnedOrdinal = pinnedOrdinal
         self.density = density
+        self.snippetLineCount = snippetLineCount
+        self.fontSize = fontSize
+        self.isWidePresentation = isWidePresentation
         self.thumbnails = thumbnails
         self.sourceIcons = sourceIcons
         self.onCopy = onCopy
@@ -92,9 +111,15 @@ package struct HistoryRowView: View {
                 title
                 if let search = row.search, let snippet = search.snippet {
                     Text(MatchHighlighting.highlighted(snippet, ranges: search.matchedRanges))
-                        .font(.subheadline)
+                        .font(PanelTheme.snippetFont(for: fontSize))
                         .foregroundStyle(.secondary)
-                        .lineLimit(PanelTheme.snippetLineLimit(for: density))
+                        .lineLimit(
+                            HistoryRowLayout.effectiveSnippetLineLimit(
+                                setting: snippetLineCount,
+                                density: density,
+                                isWide: isWidePresentation
+                            )
+                        )
                 }
             }
             Spacer(minLength: PanelTheme.spacingSmall)
@@ -241,7 +266,7 @@ package struct HistoryRowView: View {
     /// the title renders unhighlighted (03b §8).
     private var title: some View {
         Text(displayedTitle)
-            .font(.headline)
+            .font(PanelTheme.titleFont(for: fontSize))
             .lineLimit(1)
     }
 
@@ -256,19 +281,30 @@ package struct HistoryRowView: View {
 
     private var metadataColumn: some View {
         VStack(alignment: .trailing, spacing: PanelTheme.spacingXXXSmall) {
-            Text(rendering.relativeTimeText)
-                .font(.caption)
+            // Wide presentation (≥560pt browsing column) swaps the relative
+            // stamp for the absolute time of day; below the threshold the
+            // relative text is byte-identical to the shipped row.
+            Text(
+                isWidePresentation
+                    ? rendering.absoluteTimeText
+                    : rendering.relativeTimeText
+            )
+                .font(PanelTheme.timestampFont(for: fontSize))
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
             if let source = sourceDisplayName {
                 Text(source)
-                    .font(.caption2)
+                    .font(PanelTheme.metadataFont(for: fontSize))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    // Wide rows carry the FULL bundle identifier; fixedSize
+                    // keeps it unellipsized inside the wide column. Narrow
+                    // rows keep the shipped single-line behavior untouched.
+                    .fixedSize(horizontal: isWidePresentation, vertical: false)
             }
             if row.copyCount > 1 {
                 Text(copyCountText)
-                    .font(.caption2)
+                    .font(PanelTheme.metadataFont(for: fontSize))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                     .accessibilityLabel(copyAccessibilityLabel)
@@ -297,10 +333,14 @@ package struct HistoryRowView: View {
         row.pinnedPosition == nil ? "Pin" : "Unpin"
     }
 
-    /// Last path component of the observed source bundle identifier
-    /// (`com.example.DocumentEditor` → `DocumentEditor`).
+    /// Narrow presentation keeps the shipped compact form: the last path
+    /// component of the observed source bundle identifier
+    /// (`com.example.DocumentEditor` → `DocumentEditor`). Wide presentation
+    /// (≥560pt browsing column) carries the full identifier instead — the
+    /// `fixedSize` at the call site keeps it unellipsized.
     private var sourceDisplayName: String? {
         guard let lastSource = row.lastSource else { return nil }
+        if isWidePresentation { return lastSource }
         let parts = lastSource.split(separator: ".")
         return parts.last.map { String($0) }
     }
@@ -392,14 +432,20 @@ package struct HistoryRowView: View {
 /// owns the clock cadence and supplies one shared `now` to all rows; the row
 /// owns only formatting, so it never creates a timer or reaches for a global
 /// time service (review relative-time refresh leaf; 01 §6).
+/// `absoluteTimeText` backs the wide presentation (≥560pt browsing column,
+/// `HistoryRowLayout.usesWidePresentation`): it formats the item's fixed
+/// time of day, so it needs no cadence. `timeZone` is injected for the same
+/// determinism reason as `locale`; production callers keep both defaults.
 @MainActor
 package struct HistoryRowRenderingModel {
     package let relativeTimeText: String
+    package let absoluteTimeText: String
 
     package init(
         row: HistoryRow,
         now: Date,
-        locale: Locale = .current
+        locale: Locale = .current,
+        timeZone: TimeZone = .current
     ) {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
@@ -408,6 +454,12 @@ package struct HistoryRowRenderingModel {
             for: row.lastCopiedAt,
             relativeTo: now
         )
+        let absoluteFormatter = DateFormatter()
+        absoluteFormatter.dateStyle = .none
+        absoluteFormatter.timeStyle = .short
+        absoluteFormatter.locale = locale
+        absoluteFormatter.timeZone = timeZone
+        absoluteTimeText = absoluteFormatter.string(from: row.lastCopiedAt)
     }
 }
 

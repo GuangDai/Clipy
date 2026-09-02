@@ -8,7 +8,9 @@
 /// persisted/clamped size, so this view carries NO fixed root frame — the
 /// browsing column flexes with the window and the preview column keeps its
 /// persisted free-drag width (an invisible divider handle resizes it inside
-/// the fixed window) and fills the window's height. A Space-triggered
+/// the fixed window — with magnetic soft stops, a drag-to-collapse below the
+/// persisted floor, and a closed-pane edge pull that reopens it) and fills
+/// the window's height. A Space-triggered
 /// quick-look overlay (`HistoryQuickLookOverlay`) can cover the whole
 /// surface.
 /// Owning spec: docs/01-architecture.md §5.2/§5.4/§5.6/§5.7 (gesture →
@@ -109,6 +111,21 @@ package struct PreviewSelectionResolution: Equatable {
               availableItemIDs.contains(previewedItem.id)
         else { return nil }
         return reference.id == previewedItem.id ? reference : previewedItem
+    }
+}
+
+/// The footer's context-keyed shortcut cheat-sheet (V2-07 §9): one pure
+/// mapping owns the hint literals so the panel can never advertise a chord
+/// its shortcut surfaces do not implement. Chords verified against
+/// `hiddenShortcuts` (Esc clears an active search before closing the panel)
+/// and HistoryListView's selection shortcuts (⏎ paste, ⌘I details); the
+/// arrows move the selection through SearchHeaderView's arrow-key seam and
+/// bare Space is the quick-look toggle.
+package enum PanelFooterShortcutHints {
+    package static func text(isSearchActive: Bool) -> String {
+        isSearchActive
+            ? "↑↓ Select · Esc Clear"
+            : "⏎ Paste · Space Quick Look · ⌘I Details"
     }
 }
 
@@ -358,8 +375,8 @@ public final class HistoryPanelSurfaceState {
 /// PresentationUI itself never touches AppKit (01 §8).
 ///
 /// `appearance` is the loaded `PanelAppearanceSettings` snapshot (row
-/// density threaded to the list, preview auto-open pushed into
-/// `PreviewPaneState`'s preference gate); the default keeps the shipped
+/// density and typography threaded to the list, preview auto-open pushed
+/// into `PreviewPaneState`'s preference gate); the default keeps the shipped
 /// look and behavior. The preview column's width is NOT part of that
 /// snapshot: the divider handle owns it through `PanelGeometry`'s
 /// persisted preview-width key.
@@ -515,6 +532,19 @@ public struct HistoryPanelView: View {
             } action: { newSize in
                 panelTotalWidth = newSize.width
             }
+            // The closed-pane edge opener (V2-07 §3): a thin invisible
+            // strip pinned to the preview-side content edge admits an
+            // inward pull-to-open drag. It exists only while the pane is
+            // closed — the open pane's divider handle owns that region.
+            .overlay(
+                alignment: previewPlacement == .trailing
+                    ? .trailing
+                    : .leading
+            ) {
+                if !previewState.isOpen {
+                    previewEdgeOpener
+                }
+            }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("clipy.panel.root")
             .background { hiddenShortcuts }
@@ -654,19 +684,51 @@ public struct HistoryPanelView: View {
     private var previewDivider: some View {
         Divider()
             .overlay { previewDividerHitStrip }
+            // Live drag readout (V2-07 §3): a composited pill while a drag
+            // is active. Overlay-only — it joins no layout pass, and the
+            // width it displays is never animated (the layout-storm lesson
+            // at `previewColumn`).
+            .overlay {
+                if previewDragStartWidth != nil {
+                    previewDragWidthBadge
+                }
+            }
             .zIndex(1)
+    }
+
+    /// The width readout floated at the divider while a drag is active
+    /// ("342 pt", Int-rounded). `fixedSize` keeps the pill at its
+    /// intrinsic size inside the 1 pt divider's overlay proposal. AX-hidden:
+    /// a transient drag readout is noise to VoiceOver, so the AX tree
+    /// stays byte-identical whether or not a drag is in flight.
+    private var previewDragWidthBadge: some View {
+        Text("\(Int(previewColumnWidth.rounded())) pt")
+            .font(.caption2)
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, PanelTheme.spacingXSmall)
+            .padding(.vertical, PanelTheme.spacingXXXSmall)
+            .background(.regularMaterial, in: Capsule())
+            .fixedSize()
+            .accessibilityHidden(true)
     }
 
     /// The free-drag preview-width handle (V2-07 §3/§9: the strip keeps an
     /// AX identity for the running-app journey). A zero-distance DragGesture
-    /// resizes the column LIVE — clamped to PanelGeometry's preview bounds
-    /// AND to the width that keeps the browsing column at its minimum
-    /// inside the measured root — and persists the settled width on drag
-    /// end; a simultaneous double click restores and persists the default
-    /// `PanelGeometry.previewWidth`. The trade happens entirely inside the
-    /// window (the browsing column flexes), so no AppKit `setFrame` runs;
-    /// the next preview open/close re-syncs the window's extension to the
-    /// persisted width (FloatingPanel reads it fresh per computation).
+    /// resizes the column LIVE: the raw proposal follows the pointer past
+    /// the persisted 240 floor down to `previewDragVisualFloor` so the
+    /// drag-to-collapse affordance reads, while the 480 ceiling and the
+    /// browsing-column guard still bind, with the magnetic snap applied
+    /// last. On drag end `PanelGeometry.previewDragOutcome` decides: a raw
+    /// or fling-predicted width below `previewCollapseThreshold` closes the
+    /// pane through the manual-toggle path (a width below the floor is
+    /// never persisted); anything else settles at the clamped, guarded,
+    /// snapped width and persists. A simultaneous double click restores and
+    /// persists the default `PanelGeometry.previewWidth`. The trade happens
+    /// entirely inside the window (the browsing column flexes), so no
+    /// AppKit `setFrame` runs; the next preview open/close re-syncs the
+    /// window's extension to the persisted width (FloatingPanel reads it
+    /// fresh per computation).
     private var previewDividerHitStrip: some View {
         Color.clear
             .frame(width: 9)
@@ -683,12 +745,43 @@ public struct HistoryPanelView: View {
                             translation: value.translation.width
                         )
                     }
-                    .onEnded { _ in
+                    .onEnded { value in
+                        let startWidth = previewDragStartWidth
+                            ?? previewColumnWidth
                         previewDragStartWidth = nil
-                        PanelGeometry.persistPreviewColumnWidth(
-                            previewColumnWidth,
-                            to: .standard
-                        )
+                        switch PanelGeometry.previewDragOutcome(
+                            startWidth: startWidth,
+                            translation: value.translation.width,
+                            predictedEndTranslation:
+                                value.predictedEndTranslation.width,
+                            placement: previewPlacement
+                        ) {
+                        case .collapse:
+                            // The dragged width was never persisted:
+                            // restore the persisted width for the next
+                            // open, then close through the same manual
+                            // toggle ⌃Space uses (a manual close suppresses
+                            // auto-open until the selection changes).
+                            previewColumnWidth =
+                                PanelGeometry.persistedPreviewColumnWidth(
+                                    from: .standard
+                                )
+                            previewState.togglePreview(
+                                for: previewSelection.reference
+                            )
+                        case .settle:
+                            // The live band below the 240 floor is visual
+                            // only: clamp before persisting so state and
+                            // the defaults key agree.
+                            previewColumnWidth =
+                                PanelGeometry.clampedPreviewColumnWidth(
+                                    previewColumnWidth
+                                )
+                            PanelGeometry.persistPreviewColumnWidth(
+                                previewColumnWidth,
+                                to: .standard
+                            )
+                        }
                     }
             )
             .simultaneousGesture(
@@ -705,32 +798,76 @@ public struct HistoryPanelView: View {
             .accessibilityIdentifier("clipy.panel.previewDivider")
     }
 
-    /// The width a divider drag lands on: `translation` is the gesture's
-    /// cumulative horizontal delta, signed so the column follows the
-    /// pointer (a trailing preview NARROWS as the pointer moves right, a
-    /// leading preview widens). Beyond the fixed 240…480 bounds, the drag
-    /// must leave the browsing column at least `minimumContentWidth` inside
-    /// the measured root width; before the first layout pass (unknown
-    /// total) the fixed bounds alone apply.
+    /// The closed-pane edge opener (V2-07 §3): a thin invisible strip on
+    /// the preview-side content edge. An inward pull ending past
+    /// `previewEdgeOpenDistance` opens the pane through the same manual
+    /// toggle as ⌃Space (a nil selection is a no-op); shorter pulls,
+    /// outward drags, and plain clicks do nothing. The strip sits at the
+    /// very edge of the content and is only 6 pt wide, so the list's own
+    /// scroll region is never captured.
+    private var previewEdgeOpener: some View {
+        Color.clear
+            .frame(width: PanelGeometry.previewEdgeOpenerWidth)
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .pointerStyle(.columnResize)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onEnded { value in
+                        guard PanelGeometry.previewEdgeDragOpens(
+                            translation: value.translation.width,
+                            placement: previewPlacement
+                        ) else { return }
+                        previewState.togglePreview(
+                            for: previewSelection.reference
+                        )
+                    }
+            )
+            .accessibilityLabel("Show preview")
+            .accessibilityIdentifier("clipy.panel.previewEdgeOpener")
+    }
+
+    /// The width a divider drag lands on LIVE: `translation` is the
+    /// gesture's cumulative horizontal delta, placement-signed so the
+    /// column follows the pointer (a trailing preview NARROWS as the
+    /// pointer moves right, a leading preview widens). The lower bound
+    /// drops to `previewDragVisualFloor` so the drag-to-collapse affordance
+    /// reads — a width below `minimumPreviewColumnWidth` is visual only
+    /// and never persists (`previewDragOutcome` turns that drag into a
+    /// collapse). The drag must still leave the browsing column at least
+    /// `minimumContentWidth` inside the measured root width; before the
+    /// first layout pass (unknown total) the fixed bounds alone apply. The
+    /// magnetic snap runs last, after clamping and the guard, and a snap
+    /// that would exceed the guard's ceiling keeps the guarded width.
     private func draggedPreviewColumnWidth(
         from startWidth: CGFloat,
         translation: CGFloat
     ) -> CGFloat {
-        let signed = previewPlacement == .trailing ? -translation : translation
-        let proposed = PanelGeometry.clampedPreviewColumnWidth(
-            startWidth + signed
+        let raw = PanelGeometry.rawPreviewDragWidth(
+            startWidth: startWidth,
+            translation: translation,
+            placement: previewPlacement
         )
-        guard let panelTotalWidth else { return proposed }
-        let widthKeepingMainMinimum = panelTotalWidth
-            - PanelGeometry.dividerWidth
-            - PanelGeometry.minimumContentWidth
-        return min(
-            proposed,
-            max(
-                widthKeepingMainMinimum,
-                PanelGeometry.minimumPreviewColumnWidth
-            )
+        let proposed = min(
+            max(raw, PanelGeometry.previewDragVisualFloor),
+            PanelGeometry.maximumPreviewColumnWidth
         )
+        // The browsing column keeps at least `minimumContentWidth` inside
+        // the measured root. The floor under the guard only caps how far
+        // the collapse affordance follows; a narrower window never widens
+        // the preview past it.
+        guard let panelTotalWidth else {
+            return PanelGeometry.snappedPreviewColumnWidth(proposed)
+        }
+        let cap = max(
+            panelTotalWidth
+                - PanelGeometry.dividerWidth
+                - PanelGeometry.minimumContentWidth,
+            PanelGeometry.previewDragVisualFloor
+        )
+        let guarded = min(proposed, cap)
+        let snapped = PanelGeometry.snappedPreviewColumnWidth(guarded)
+        return snapped > cap ? guarded : snapped
     }
 
     /// The browsing column: search header, the list in its details
@@ -767,6 +904,8 @@ public struct HistoryPanelView: View {
                     viewState: viewState,
                     thumbnails: surfaceState.thumbnails,
                     density: appearance.rowDensity,
+                    snippetLineCount: appearance.snippetLineCount,
+                    fontSize: appearance.rowFontSize,
                     isSearchFieldFocused: isSearchFieldFocused,
                     selection: $surfaceState.selection,
                     sourceIcons: sourceIcons,
@@ -915,6 +1054,21 @@ public struct HistoryPanelView: View {
                     "Shows the loaded portion of your history. Search to narrow results."
                 )
             Spacer()
+            // The context-keyed shortcut cheat-sheet (V2-07 §9): tertiary
+            // and non-interactive. The pure mapping owns the literals so
+            // the footer never advertises a chord the hidden shortcut
+            // surfaces do not implement.
+            Text(
+                PanelFooterShortcutHints.text(
+                    isSearchActive: viewState.isSearchActive
+                )
+            )
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+            // One line only — a wrapped hint would grow the footer's
+            // height; at the minimum width it ellipsizes instead.
+            .lineLimit(1)
+            .accessibilityIdentifier("clipy.panel.shortcut-hints")
             // Visible twin of the hidden ⌃Space shortcut button: same
             // manual-toggle semantics on the same selection target.
             Button {
