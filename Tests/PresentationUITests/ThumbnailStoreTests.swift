@@ -550,6 +550,54 @@ struct ThumbnailStoreTests {
         #expect(store.cachedDecodedBytes == 0)
     }
 
+    // MARK: - Product seam retention policy (GOV-3 tail)
+
+    /// The public product initializer fixes the retention policy (500
+    /// entries / 64 MiB — the literals live in that one convenience
+    /// initializer; the owner-test package initializer exists precisely so
+    /// the eviction proofs above need no 500-row fixture). Through that
+    /// fixed policy a panel-scale working set of distinct references is
+    /// retained whole: every hit stays readable, the entry and decoded-byte
+    /// ledgers sum exactly, and no bound-driven reset fires.
+    @Test func productSeamRetainsAPanelScaleWorkingSet() async {
+        let items = [
+            reference("00000000-0000-0000-0000-000000000101", version: 1),
+            reference("00000000-0000-0000-0000-000000000102", version: 1),
+            reference("00000000-0000-0000-0000-000000000103", version: 1),
+            reference("00000000-0000-0000-0000-000000000104", version: 1),
+            reference("00000000-0000-0000-0000-000000000105", version: 1),
+            reference("00000000-0000-0000-0000-000000000106", version: 1),
+            reference("00000000-0000-0000-0000-000000000107", version: 1),
+            reference("00000000-0000-0000-0000-000000000108", version: 1),
+        ]
+        let history = ThumbnailScriptHistory(
+            pngByReference: Dictionary(
+                uniqueKeysWithValues: items.map { ($0, fixturePNGData) }
+            )
+        )
+        let store = ThumbnailStore(history: history)
+
+        for item in items {
+            store.prefetch(item)
+        }
+
+        // Quiescence: every scripted fetch answered and every completion
+        // landed (the same monotone condition the ceiling proofs wait on).
+        #expect(await pollUntil {
+            for item in items where await history.requestCount(for: item) != 1 {
+                return false
+            }
+            return store.inFlightCount == 0
+        })
+        // Every 1×1 BGRA8 hit costs exactly 4 decoded bytes; nothing crossed
+        // either fixed bound, so both ledgers reflect the whole working set.
+        #expect(store.cachedEntryCount == items.count)
+        #expect(store.cachedDecodedBytes == 4 * items.count)
+        for item in items {
+            #expect(store.imagePixelSize(for: item) != nil)
+        }
+    }
+
     // MARK: - Prefetch gate (04 §9)
 
     /// The cheap UTI heuristic answers true exactly when some type is in
