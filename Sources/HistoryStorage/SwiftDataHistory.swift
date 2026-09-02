@@ -279,10 +279,19 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         // space a typed, retryable refusal already governs. An in-memory
         // store (or any unreadable fact) keeps the reader nil and
         // admission fail-open.
+        // The read must bypass URL's resource-value cache: the values are
+        // cached on the shared NSURL at first read, so a process that
+        // admitted one write while the volume had room would keep seeing
+        // that stale capacity after the volume filled — observed on the
+        // Card 6B revise cell (dispatch run 33687222086): the child's
+        // pre-fill capture read 254 MiB, the post-fill revise then passed
+        // admission on the cached value and died on the uncatchable
+        // external-storage NSException. A fresh URL per read has no cache.
         let volumeAvailableCapacityReader: @Sendable () -> Int64?
         if case .persistent(let storeURL) = configuration.persistence {
             volumeAvailableCapacityReader = {
-                guard let values = try? storeURL.resourceValues(
+                let freshURL = URL(fileURLWithPath: storeURL.path)
+                guard let values = try? freshURL.resourceValues(
                     forKeys: [.volumeAvailableCapacityKey]
                 ), let capacity = values.volumeAvailableCapacity else {
                     return nil
