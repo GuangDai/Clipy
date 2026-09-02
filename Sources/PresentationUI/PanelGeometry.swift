@@ -15,6 +15,15 @@
 import CoreGraphics
 import Foundation
 
+/// The drag-end verdict for the preview divider (V2-07 §3): settle at the
+/// dragged width through the existing clamp/guard/persist chain, or
+/// collapse the pane when the raw — or fling-predicted — proposed width
+/// falls below `PanelGeometry.previewCollapseThreshold`.
+package enum PreviewDragOutcome: Equatable {
+    case settle
+    case collapse
+}
+
 /// The panel's default dimensions (the pre-preview contract was a hard-coded
 /// 400×560 frame on `HistoryPanelView`; the preview column adds
 /// `dividerWidth` plus its persisted width — default `previewWidth` — on the
@@ -95,6 +104,104 @@ public enum PanelGeometry {
             Double(clampedPreviewColumnWidth(width)),
             forKey: previewColumnWidthDefaultsKey
         )
+    }
+
+    // MARK: Preview divider interactions
+
+    /// The raw (pre-clamp) proposed width below which a divider drag-end
+    /// collapses the preview pane instead of settling (V2-07 §3
+    /// drag-to-dismiss). Deliberately below `minimumPreviewColumnWidth`:
+    /// the band between the two is the collapse affordance the live drag
+    /// renders down to `previewDragVisualFloor`, and it never persists.
+    package static let previewCollapseThreshold: CGFloat = 200
+
+    /// The narrowest width the column renders mid-drag so the collapse
+    /// affordance reads. Visual only: a settled width still clamps to
+    /// `minimumPreviewColumnWidth`, and a drag ending below
+    /// `previewCollapseThreshold` collapses rather than persisting.
+    package static let previewDragVisualFloor: CGFloat = 160
+
+    /// The soft stops a live divider drag snaps to within
+    /// `previewSnapTolerance`; the default `previewWidth` (320) is one.
+    package static let previewSnapStops: [CGFloat] = [280, 320, 400]
+
+    /// The ± distance around a soft stop that snaps (V2-07 §3).
+    package static let previewSnapTolerance: CGFloat = 8
+
+    /// The closed-pane edge opener: an invisible strip this wide sits on
+    /// the preview-side content edge (V2-07 §3).
+    package static let previewEdgeOpenerWidth: CGFloat = 6
+
+    /// The placement-signed inward pull distance that opens the closed
+    /// preview from the edge strip; shorter pulls and outward drags are
+    /// ignored so the strip never fires on a click or a brush.
+    package static let previewEdgeOpenDistance: CGFloat = 48
+
+    /// The raw width a divider drag proposes BEFORE any clamping: the
+    /// start width plus the placement-signed translation (a trailing
+    /// preview narrows as the pointer moves right, a leading preview
+    /// widens — the same sign rule the live drag applies).
+    package static func rawPreviewDragWidth(
+        startWidth: CGFloat,
+        translation: CGFloat,
+        placement: PreviewPlacement
+    ) -> CGFloat {
+        startWidth + (placement == .trailing ? -translation : translation)
+    }
+
+    /// Drag-to-collapse (V2-07 §3): the raw end width OR the fling's raw
+    /// predicted-end width below `previewCollapseThreshold` collapses the
+    /// pane (the view routes the verdict through the manual-toggle close
+    /// path); anything at or above the threshold settles through the
+    /// existing clamp/guard/persist chain.
+    package static func previewDragOutcome(
+        startWidth: CGFloat,
+        translation: CGFloat,
+        predictedEndTranslation: CGFloat,
+        placement: PreviewPlacement
+    ) -> PreviewDragOutcome {
+        let rawEnd = rawPreviewDragWidth(
+            startWidth: startWidth,
+            translation: translation,
+            placement: placement
+        )
+        let rawPredictedEnd = rawPreviewDragWidth(
+            startWidth: startWidth,
+            translation: predictedEndTranslation,
+            placement: placement
+        )
+        return rawEnd < previewCollapseThreshold
+            || rawPredictedEnd < previewCollapseThreshold
+            ? .collapse
+            : .settle
+    }
+
+    /// The magnetic snap (V2-07 §3): a width within
+    /// `previewSnapTolerance` of a soft stop lands on the stop. The live
+    /// drag applies it after clamping and after the browsing-column guard
+    /// and keeps the guarded width whenever the snap would exceed the
+    /// guard's ceiling, so a snap can never squeeze the browsing column
+    /// below `minimumContentWidth`.
+    package static func snappedPreviewColumnWidth(
+        _ width: CGFloat
+    ) -> CGFloat {
+        for stop in previewSnapStops
+        where abs(width - stop) <= previewSnapTolerance {
+            return stop
+        }
+        return width
+    }
+
+    /// Whether a closed-pane edge pull opens the preview: the
+    /// placement-signed inward component of the drag's translation must
+    /// reach `previewEdgeOpenDistance` (a trailing edge opens on a
+    /// LEFTWARD pull, a leading edge on a rightward one).
+    package static func previewEdgeDragOpens(
+        translation: CGFloat,
+        placement: PreviewPlacement
+    ) -> Bool {
+        let inward = placement == .trailing ? -translation : translation
+        return inward >= previewEdgeOpenDistance
     }
 
     // MARK: User resizing

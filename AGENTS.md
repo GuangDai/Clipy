@@ -322,6 +322,10 @@ logs are not parsed as compiler output. Write warning-free code.
   `workflow_dispatch` caller after same-SHA correctness succeeds. They never
   run on push or pull request. The performance helper/proof workflow remains
   reusable-only with no caller.
+- `.github/workflows/package-app.yml` is the manual packaging lane: after the
+  same-SHA correctness admission it builds one unsigned Release `Clipy.app`
+  (`CODE_SIGNING_ALLOWED=NO`) via `scripts/ci/package_app.sh` and uploads the
+  zipped bundle as an artifact. It runs only on `workflow_dispatch`.
 - `scripts/diagnostic_scan.py` owns the narrow log profiles. Every macOS job
   invokes the shared macOS 26/arm64 runner contract.
 - Do not add, extend, or invoke certificate, signing, notarization, protected-

@@ -2,10 +2,12 @@
 /// appearance preferences fail open to their product defaults and round-trip
 /// through UserDefaults per case, `PanelGeometry` clamps and persists the
 /// user-resizable size and the divider's free-drag preview column width
-/// inside their bounds, and the `PanelTheme` density mappings stay pinned
-/// to their compact/comfortable literals.
+/// inside their bounds, and the `PanelTheme` density and typography
+/// mappings stay pinned to their literals (Medium reproduces the shipped
+/// row fonts exactly).
 import Foundation
 import PresentationUI
+import SwiftUI
 import Testing
 
 @Suite("Panel presentation vocabulary")
@@ -19,11 +21,13 @@ struct PanelAppearanceSettingsTests {
 
         #expect(settings == PanelAppearanceSettings())
         #expect(settings.rowDensity == .comfortable)
+        #expect(settings.snippetLineCount == .automatic)
+        #expect(settings.rowFontSize == .medium)
         #expect(settings.isPreviewAutoOpenEnabled)
         #expect(settings.previewSide == .automatic)
     }
 
-    @Test("store→load round-trips every density, side, and toggle")
+    @Test("store→load round-trips every density, side, toggle, and typography value")
     func storeLoadRoundTripsEveryCombination() throws {
         let (defaults, suiteName) = try makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -31,16 +35,22 @@ struct PanelAppearanceSettingsTests {
         for density in HistoryRowDensity.allCases {
             for side in PreviewSidePreference.allCases {
                 for autoOpen in [true, false] {
-                    let settings = PanelAppearanceSettings(
-                        rowDensity: density,
-                        isPreviewAutoOpenEnabled: autoOpen,
-                        previewSide: side
-                    )
-                    settings.store(to: defaults)
-                    #expect(
-                        PanelAppearanceSettings.load(from: defaults)
-                            == settings
-                    )
+                    for lineCount in HistorySnippetLineCount.allCases {
+                        for fontSize in HistoryRowFontSize.allCases {
+                            let settings = PanelAppearanceSettings(
+                                rowDensity: density,
+                                snippetLineCount: lineCount,
+                                rowFontSize: fontSize,
+                                isPreviewAutoOpenEnabled: autoOpen,
+                                previewSide: side
+                            )
+                            settings.store(to: defaults)
+                            #expect(
+                                PanelAppearanceSettings.load(from: defaults)
+                                    == settings
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -54,6 +64,14 @@ struct PanelAppearanceSettingsTests {
         defaults.set(
             "dense",
             forKey: PanelAppearanceSettings.rowDensityDefaultsKey
+        )
+        defaults.set(
+            "4",
+            forKey: PanelAppearanceSettings.snippetLineCountDefaultsKey
+        )
+        defaults.set(
+            "huge",
+            forKey: PanelAppearanceSettings.rowFontSizeDefaultsKey
         )
         defaults.set(
             "yes",
@@ -142,8 +160,28 @@ struct PanelAppearanceSettingsTests {
         #expect(PanelTheme.thumbnailSize(for: .comfortable) == 36)
         #expect(PanelTheme.rowVerticalPadding(for: .compact) == 2)
         #expect(PanelTheme.rowVerticalPadding(for: .comfortable) == 4)
-        #expect(PanelTheme.snippetLineLimit(for: .compact) == 1)
-        #expect(PanelTheme.snippetLineLimit(for: .comfortable) == 2)
+    }
+
+    @Test("typography mappings pin Medium to the shipped row fonts")
+    func typographyMappingsStayPinned() {
+        // Medium reproduces the shipped row fonts exactly.
+        #expect(PanelTheme.titleFont(for: .medium) == .headline)
+        #expect(PanelTheme.snippetFont(for: .medium) == .subheadline)
+        #expect(PanelTheme.timestampFont(for: .medium) == .caption)
+        #expect(PanelTheme.metadataFont(for: .medium) == .caption2)
+
+        // Small steps one text-style rung down; the metadata line already
+        // sits at the ladder floor (.caption2), so it holds there.
+        #expect(PanelTheme.titleFont(for: .small) == .subheadline)
+        #expect(PanelTheme.snippetFont(for: .small) == .footnote)
+        #expect(PanelTheme.timestampFont(for: .small) == .caption2)
+        #expect(PanelTheme.metadataFont(for: .small) == .caption2)
+
+        // Large steps one text-style rung up.
+        #expect(PanelTheme.titleFont(for: .large) == .title3)
+        #expect(PanelTheme.snippetFont(for: .large) == .callout)
+        #expect(PanelTheme.timestampFont(for: .large) == .footnote)
+        #expect(PanelTheme.metadataFont(for: .large) == .caption)
     }
 
     @Test("preview column width reads the default when the key is absent")

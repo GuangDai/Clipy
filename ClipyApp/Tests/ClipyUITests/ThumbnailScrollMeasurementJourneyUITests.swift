@@ -267,14 +267,20 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
     // MARK: - Seeding
 
     /// Writes one distinct PNG per index to the general pasteboard and waits
-    /// for its capture to surface as a new first-page row.
+    /// for its capture to surface as a new first-page row. The unpinned lane
+    /// is newest-first (lastCopiedAt descending), so every capture replaces
+    /// the FIRST row's identifier — one bounded-element read per poll. The
+    /// previous poll snapshotted every materialized row
+    /// (`allElementsBoundByIndex` over 50+ rows) per evaluation: an O(n) AX
+    /// round-trip each, slow enough on a loaded CI runner that a mid-seeding
+    /// capture outlasted its timeout (observed: capture 46/60 stall).
     @MainActor
     private func seedThumbnailItems(
         _ count: Int,
         app: XCUIApplication,
         rows: XCUIElementQuery
     ) throws {
-        var seenIdentifiers: Set<String> = []
+        var lastFirstRowIdentifier = rows.element(boundBy: 0).identifier
         for index in 0..<count {
             let png = try encodedPNG(index: index, totalCount: count)
             let pasteboard = NSPasteboard.general
@@ -289,20 +295,16 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
                 diagnostic(app, context: "write pasteboard item \(index)")
             )
             XCTAssertTrue(
-                waitUntil(timeout: 10) {
-                    let identifiers = Set(
-                        rows.allElementsBoundByIndex.map(\.identifier)
-                    )
-                    return !identifiers.subtracting(seenIdentifiers).isEmpty
+                waitUntil(timeout: 20) {
+                    rows.element(boundBy: 0).identifier
+                        != lastFirstRowIdentifier
                 },
                 diagnostic(
                     app,
                     context: "capture \(index + 1)/\(count) surfaced a new row"
                 )
             )
-            seenIdentifiers.formUnion(
-                rows.allElementsBoundByIndex.map(\.identifier)
-            )
+            lastFirstRowIdentifier = rows.element(boundBy: 0).identifier
         }
     }
 

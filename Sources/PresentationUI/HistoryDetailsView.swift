@@ -114,6 +114,23 @@ package struct HistoryDetailsLoadFence {
     }
 }
 
+/// The loaded Details presentation's pure width branch. The panel's browsing
+/// column is user-resizable across `PanelGeometry`'s 360…720 points
+/// (`minimumContentWidth`/`maximumContentWidth`), so the details surface's own
+/// measured width decides between the original single-column Form and a
+/// two-column metadata/content layout. The decision is pure presentation:
+/// identical sections, data, actions, and reading order either way.
+package enum DetailsLayout {
+    /// Measured rendered width at which the two-column layout engages;
+    /// anything below renders the unchanged single-column Form.
+    package static let twoColumnMinimumWidth: CGFloat = 640
+
+    /// True when `width` admits the two-column metadata/content layout.
+    package static func usesTwoColumnLayout(width: CGFloat) -> Bool {
+        width >= twoColumnMinimumWidth
+    }
+}
+
 /// Detail screen for one retained item (roadmap 05). Loads `HistoryDetails`
 /// via the view state, renders the Effective/Canonical content with
 /// per-representation previews, offers revision revert, and the per-item
@@ -143,6 +160,11 @@ struct HistoryDetailsView: View {
     @State private var isTogglingPin = false
     @State private var isRemoving = false
     @State private var loadFence = HistoryDetailsLoadFence()
+
+    /// The details surface's live measured width — the signal for
+    /// `DetailsLayout`'s two-column branch. Zero before the first geometry
+    /// report, which keeps the initial render on the single-column Form.
+    @State private var detailsWidth: CGFloat = 0
 
     init(viewState: HistoryViewState, item: HistoryItemReference) {
         self.viewState = viewState
@@ -248,6 +270,14 @@ struct HistoryDetailsView: View {
         .onChange(of: viewState.surfacePurge, initial: true) { _, _ in
             _ = reconcileSurfacePurge(viewState.surfacePurge)
         }
+        // The browsing column's user resize (PanelGeometry 360…720) is this
+        // view's live width signal; `onGeometryChange` reports it without
+        // imposing a layout of its own — no GeometryReader.
+        .onGeometryChange(for: CGSize.self) { proxy in
+            proxy.size
+        } action: { newSize in
+            detailsWidth = newSize.width
+        }
     }
 
     /// Details owns settled Esc as a navigation dismissal. While its inline
@@ -328,6 +358,9 @@ struct HistoryDetailsView: View {
                 details: details,
                 thumbnails: thumbnails,
                 basis: $basis,
+                usesTwoColumnLayout: DetailsLayout.usesTwoColumnLayout(
+                    width: detailsWidth
+                ),
                 onRevise: { intent in
                     Task {
                         await revise(
@@ -587,15 +620,34 @@ struct HistoryDetailsView: View {
 // MARK: - Loaded body (private, previewable with canned DTOs)
 
 /// The loaded-details layout: header, occurrence facts, the Effective/
-/// Canonical content section, and the revision list.
+/// Canonical content section, and the revision list. The presentation is a
+/// pure width branch (`DetailsLayout`): below the two-column threshold the
+/// original single-column Form renders unchanged; at or above it the same
+/// sections split into a metadata column (left) and the content payload
+/// (right).
 private struct DetailsBody: View {
+
+    /// The fixed width of the two-column layout's metadata column; the
+    /// content payload column flexes with the rest of the measured width.
+    private static let metadataColumnWidth: CGFloat = 280
 
     let details: HistoryDetails
     let thumbnails: ThumbnailStore
     @Binding var basis: ContentBasis
+    let usesTwoColumnLayout: Bool
     let onRevise: (RevisionIntent) -> Void
 
     var body: some View {
+        if usesTwoColumnLayout {
+            twoColumnForm
+        } else {
+            singleColumnForm
+        }
+    }
+
+    /// The original narrow presentation (measured width below the
+    /// threshold): one grouped Form, unchanged.
+    private var singleColumnForm: some View {
         Form {
             headerSection
             infoSection
@@ -603,6 +655,30 @@ private struct DetailsBody: View {
             revisionsSection
         }
         .formStyle(.grouped)
+    }
+
+    /// The wide presentation (measured width at or above the threshold): the
+    /// metadata sections in a fixed-width left Form, the content payload and
+    /// its revision lineage in the flexible right Form. Both columns render
+    /// the SAME section views as the single-column Form — identical data,
+    /// actions, identifiers, and reading order (header → info → content →
+    /// revisions); two Forms keep each column's grouped style and let a tall
+    /// payload scroll without moving the metadata column.
+    private var twoColumnForm: some View {
+        HStack(alignment: .top, spacing: 0) {
+            Form {
+                headerSection
+                infoSection
+            }
+            .formStyle(.grouped)
+            .frame(width: Self.metadataColumnWidth)
+            Divider()
+            Form {
+                contentSection
+                revisionsSection
+            }
+            .formStyle(.grouped)
+        }
     }
 
     private var headerSection: some View {
@@ -1147,9 +1223,21 @@ private func detailTitle(for details: HistoryDetails) -> String {
         details: detailsPreviewDetails(),
         thumbnails: ThumbnailStore(history: PreviewClipboardHistory.empty),
         basis: .constant(.effective),
+        usesTwoColumnLayout: false,
         onRevise: { _ in }
     )
     .frame(width: 400, height: 560)
+}
+
+#Preview("Content (Two-Column)") {
+    DetailsBody(
+        details: detailsPreviewDetails(),
+        thumbnails: ThumbnailStore(history: PreviewClipboardHistory.empty),
+        basis: .constant(.effective),
+        usesTwoColumnLayout: true,
+        onRevise: { _ in }
+    )
+    .frame(width: 720, height: 560)
 }
 
 private func detailsPreviewDetails() -> HistoryDetails {
