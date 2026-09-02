@@ -2,9 +2,9 @@
   "images" : [
     {
       "filename" : "AppIcon.png",
-      "idiom" : "universal",
-      "platform" : "macOS",
-      "size" : "1024x1024"
+      "idiom" : "mac",
+      "scale" : "2x",
+      "size" : "512x512"
     }
   ],
   "info" : {
