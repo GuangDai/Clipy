@@ -269,6 +269,19 @@ struct StoreOpenRecoveryTests {
         )
         #expect(
             PanelRootView.failureCategory(
+                for: HistoryFailure.persistence(.storeAlreadyOpen)
+            ) == "History Store Already Open"
+        )
+        // DATA-7a: the cross-process lease denial carries the finding's
+        // "in use by another instance" wording, not the generic storage
+        // error the flat `.openStore` dimensions share.
+        #expect(
+            PanelRootView.failureMessage(
+                for: HistoryFailure.persistence(.storeAlreadyOpen)
+            ) == "Clipy's history store is already open in another instance. Quit that instance and try again."
+        )
+        #expect(
+            PanelRootView.failureCategory(
                 for: ClipyCompositionError.storeAlreadyOpen(
                     URL(fileURLWithPath: "/tmp/clipy-store")
                 )

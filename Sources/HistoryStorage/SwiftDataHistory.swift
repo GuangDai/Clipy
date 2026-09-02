@@ -8,8 +8,10 @@
 /// sequence: docs/roadmap/03-historystorage.md (steps 5–8).
 ///
 /// `SwiftDataHistory` is a value of six actor references plus the immutable,
-/// `Sendable` App Intents connection identity accepted during startup. Its
-/// `Sendable` conformance is fully derived from those fields, so no unsafe
+/// `Sendable` App Intents connection identity accepted during startup and,
+/// for a persistent store, the held cross-process StoreRoot lease
+/// (`StoreRootLease`, REVIEW DATA-7). Its `Sendable`
+/// conformance is fully derived from those fields, so no unsafe
 /// conformance or other escape hatch appears here (Part V §2; Part VI §6).
 import Foundation
 import HistoryCore
@@ -96,6 +98,12 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     /// copies it into the public connection-bound facade and never re-mints it.
     private let appIntentsConnectionID: ExternalConnectionID
 
+    /// The cross-process single-writer lease held for a persistent store's
+    /// whole facade lifetime (REVIEW DATA-7 / PLAY-DISK-0B); `nil` for the
+    /// `.memory` medium, which has no StoreRoot to lease. The facade's last
+    /// release closes the descriptor and with it the record lock.
+    private let storeRootLease: StoreRootLease?
+
     /// Assembles the facade from its six actors and startup-validated external
     /// identity. Construction is internal to
     /// `open(configuration:)` — there is no other way to obtain a
@@ -107,7 +115,8 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         searchWorker: SearchWorker,
         thumbnailService: ThumbnailService,
         externalGateway: ExternalGateway,
-        appIntentsConnectionID: ExternalConnectionID
+        appIntentsConnectionID: ExternalConnectionID,
+        storeRootLease: StoreRootLease?
     ) {
         self.authority = authority
         self.ingestPreparation = ingestPreparation
@@ -116,6 +125,7 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         self.thumbnailService = thumbnailService
         self.externalGateway = externalGateway
         self.appIntentsConnectionID = appIntentsConnectionID
+        self.storeRootLease = storeRootLease
     }
 
     // MARK: Open (docs/05-authority-kernel.md §2, §13)
@@ -127,7 +137,9 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     ///
     /// 1. validates `configuration.initialMaximumUnpinnedItems` against the
     ///    fixed Part VI user range (`HistoryLimits.standard`, §2);
-    /// 2. opens/creates the `ModelContainer` over the current immutable V4
+    /// 2. acquires the StoreRoot's cross-process single-writer lease for a
+    ///    persistent store (`StoreRootLease`; REVIEW DATA-7 / PLAY-DISK-0B)
+    ///    and only then opens/creates the `ModelContainer` over the current immutable V4
     ///    schema (`Schema(versionedSchema: HistorySchemaV4.self)`) through
     ///    `HistoryMigrationPlan`: the custom `V1 → V2` stage (DC-02;
     ///    `V2-02` §3.3 / Record 5), the additive lightweight `V2 → V3`
@@ -157,6 +169,8 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     ///
     /// Failure translation at this boundary (§16, §2): an out-of-range
     /// initial retention value throws `.invalidInput(.invalidRetentionPolicy)`;
+    /// a StoreRoot already leased by another live owner process throws
+    /// `.persistence(.storeAlreadyOpen)` (DATA-7);
     /// a store that cannot be opened or migrated throws
     /// `.persistence(.openStore)`; startup corruption surfaced by the
     /// Authority propagates already typed as
@@ -215,6 +229,18 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
                 isStoredInMemoryOnly: true,
                 cloudKitDatabase: .none
             )
+        }
+        // §13 step 2's DATA-7 lease half: a persistent store's StoreRoot is
+        // leased nonblocking BEFORE any `ModelContainer` exists
+        // (PLAY-DISK-0B). A contending live owner process fails the open here
+        // with `.persistence(.storeAlreadyOpen)`; a later startup failure
+        // releases the lease with the throwing scope. The `.memory` medium
+        // has no StoreRoot and leases nothing.
+        let storeRootLease: StoreRootLease?
+        if case .persistent(let storeURL) = configuration.persistence {
+            storeRootLease = try StoreRootLease.acquire(storeURL: storeURL)
+        } else {
+            storeRootLease = nil
         }
         let container: ModelContainer
         do {
@@ -304,7 +330,8 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
             searchWorker: searchWorker,
             thumbnailService: ThumbnailService(),
             externalGateway: externalGateway,
-            appIntentsConnectionID: appIntentsConnectionID
+            appIntentsConnectionID: appIntentsConnectionID,
+            storeRootLease: storeRootLease
         )
     }
 

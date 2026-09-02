@@ -194,6 +194,10 @@ struct PanelRootView: View {
         switch persistenceFailure {
         case .openStore:
             return "History Store Open Failed"
+        case .storeAlreadyOpen:
+            // DATA-7's cross-process lease denial is distinguishable from a
+            // flat open failure and names the other live instance.
+            return "History Store Already Open"
         case .corruptStoredValue:
             return "Stored History Unreadable"
         case .invariantViolation:
@@ -208,6 +212,12 @@ struct PanelRootView: View {
     /// in-panel banner never disagree (03b §10).
     static func failureMessage(for error: any Error) -> String {
         if let historyFailure = error as? HistoryFailure {
+            // DATA-7: a live owner in ANOTHER process holds the StoreRoot
+            // lease — the finding's "in use by another instance" wording,
+            // not the generic storage error.
+            if case .persistence(.storeAlreadyOpen) = historyFailure {
+                return "Clipy's history store is already open in another instance. Quit that instance and try again."
+            }
             return FailurePresentation.message(for: historyFailure)
         }
         if error is ClipyCompositionError {

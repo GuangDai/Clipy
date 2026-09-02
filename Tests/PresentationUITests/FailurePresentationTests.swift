@@ -77,7 +77,13 @@ struct FailurePresentationTests {
 
     /// Every `PersistenceFailure` case.
     private var persistenceFailures: [PersistenceFailure] {
-        [.openStore, .corruptStoredValue, .invariantViolation, .transaction]
+        [
+            .openStore,
+            .storeAlreadyOpen,
+            .corruptStoredValue,
+            .invariantViolation,
+            .transaction,
+        ]
     }
 
     /// One payload for every `HistoryFailure` case — the full closed
