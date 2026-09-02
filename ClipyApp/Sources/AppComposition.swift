@@ -22,7 +22,9 @@ import PresentationUI
 /// existing over one store file (01 §8; roadmap 06 acceptance).
 enum ClipyCompositionError: Error, Equatable {
     /// `AppComposition.open` was asked to open a store URL this process has
-    /// already opened.
+    /// already opened. A second PROCESS opening the same StoreRoot instead
+    /// fails one layer down in `SwiftDataHistory.open` with
+    /// `HistoryFailure.persistence(.storeAlreadyOpen)` (REVIEW DATA-7).
     case storeAlreadyOpen(URL)
 }
 
@@ -301,12 +303,18 @@ final class AppComposition {
     /// standardizes the path and resolves filesystem symlinks before it
     /// consults and reserves here. Thus `..` and symlink spellings of one
     /// StoreRoot cannot create a second facade/`ModelContainer` (REVIEW
-    /// PLAY-DISK-0A; roadmap 06 acceptance).
+    /// PLAY-DISK-0A; roadmap 06 acceptance). The cross-process half lives
+    /// one layer down: `SwiftDataHistory.open` holds the StoreRoot's
+    /// single-writer lease for the facade's lifetime and refuses a second
+    /// owner process with `.persistence(.storeAlreadyOpen)` (REVIEW DATA-7 /
+    /// PLAY-DISK-0B).
     private static var openedStoreIdentities: Set<URL> = []
 
     /// The identity used only by the same-process pre-open reservation.
     /// SwiftData still receives the caller's URL; this does not relocate the
-    /// production store or claim a cross-process lease (V2-00 §3.1).
+    /// production store (V2-00 §3.1). The cross-process lease needs no path
+    /// normalization here: it locks the lease artifact's inode, where
+    /// spelling aliases already converge.
     private static func canonicalStoreIdentity(for storeURL: URL) -> URL {
         storeURL.standardizedFileURL
             .resolvingSymlinksInPath()

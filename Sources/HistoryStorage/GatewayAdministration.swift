@@ -830,7 +830,7 @@ extension HistoryAuthority {
             switch failure {
             case .persistence(let persistence):
                 switch persistence {
-                case .openStore:
+                case .openStore, .storeAlreadyOpen:
                     // The facade is already published; an operation-local
                     // fetch failure is a transaction/read failure, never a
                     // second open failure (`V2-05` §7.3.1).

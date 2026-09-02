@@ -43,6 +43,12 @@
 /// old or complete new state, then proves the reopened store still writes
 /// (DATA-13). Process-kill evidence only, with largeBlobCrashCommit's same
 /// ceiling: no fsync, sudden-power-loss, or sidecar-layout claim.
+/// The leaseHold/openRejectLeasedStore pair closes DATA-7a's cross-process
+/// single-writer lease (REVIEW 01-findings.md DATA-7; PLAY-DISK-0B): a live
+/// owner child parked on stdin holds the StoreRoot lease, a second process's
+/// open of the same root must fail `.persistence(.storeAlreadyOpen)` before
+/// any `ModelContainer` exists, and after the owner's clean exit a fresh
+/// child reacquires.
 import Foundation
 import HistoryCore
 import HistoryStorage
@@ -68,6 +74,8 @@ private enum ProbePhase: String {
     case openRejectFutureSchema
     case openRejectCorruptBytes
     case openRejectReadOnlyDirectory
+    case openRejectLeasedStore
+    case leaseHold
     case gatewayAuditSeed
     case gatewayAuditCrash
     case gatewayAuditVerify
@@ -1070,6 +1078,26 @@ private func requirePublicOpenFailure(
     throw ProbeFailure.unexpectedState
 }
 
+/// DATA-7a cross-process lease owner (REVIEW 01-findings.md DATA-7;
+/// PLAY-DISK-0B): opens the store through the public facade — acquiring the
+/// StoreRoot's single-writer lease — reports the held lease with one fixed
+/// marker line, then parks until this process's stdin reaches EOF, the
+/// parent's deterministic clean-release signal. Reused for both cells of the
+/// lease proof: with the parent holding the write end open this child is the
+/// live owner a second process must fail against; with a null stdin it is
+/// the fresh reacquire child, returning immediately. The trailing read pins
+/// the leased store's healthy empty projection at position 0 on both paths.
+private func leaseHold(storeURL: URL) async throws {
+    let history = try await openHistory(at: storeURL)
+    FileHandle.standardOutput.write(Data("LEASEHOLD_READY\n".utf8))
+    // The facade (and so the lease) is fenced across the park, mirroring
+    // crashCommit's explicit lifetime discipline.
+    withExtendedLifetime(history) {
+        _ = FileHandle.standardInput.readDataToEndOfFile()
+    }
+    try await requireEmptyHistory(history, position: 0)
+}
+
 private func requireInserted(
     _ receipt: HistoryReceipt,
     position: UInt64
@@ -1880,6 +1908,15 @@ private func pressureCapture(storeURL: URL) async throws {
         throw ProbeFailure.unexpectedState
     }
     diagnostic("pressure.go-received")
+    // Evidence-only control for the revise cell's capacity line: the same
+    // fresh-URL read at GO time (this child's first capacity read is already
+    // post-fill, which is why the capture admission was never stale).
+    let captureAdmissionCapacity = try? URL(fileURLWithPath: storeURL.path)
+        .resourceValues(forKeys: [.volumeAvailableCapacityKey])
+        .volumeAvailableCapacity
+    diagnostic(
+        "pressure.admission-capacity-bytes=\(captureAdmissionCapacity.map(String.init) ?? "unavailable")"
+    )
 
     let pressureCapture = ClipboardCapture(
         representations: [CapturedRepresentation(
@@ -1953,6 +1990,16 @@ private func pressureRevise(storeURL: URL) async throws {
         throw ProbeFailure.unexpectedState
     }
     diagnostic("revise.go-received")
+    // Evidence-only: the capacity fact the §16 admission must see from this
+    // child at GO time, read through a fresh URL (no resource-value cache).
+    // Run 33687222086 crashed here when the store URL's cached pre-fill
+    // capacity let admission pass; this line records what a fresh read saw.
+    let reviseAdmissionCapacity = try? URL(fileURLWithPath: storeURL.path)
+        .resourceValues(forKeys: [.volumeAvailableCapacityKey])
+        .volumeAvailableCapacity
+    diagnostic(
+        "revise.admission-capacity-bytes=\(reviseAdmissionCapacity.map(String.init) ?? "unavailable")"
+    )
 
     do {
         _ = try await history.perform(pressureReviseRequest(
@@ -2380,6 +2427,13 @@ private struct HistoryRestartProbe {
                     at: storeURL,
                     expected: .persistence(.openStore)
                 )
+            case .openRejectLeasedStore:
+                try await requirePublicOpenFailure(
+                    at: storeURL,
+                    expected: .persistence(.storeAlreadyOpen)
+                )
+            case .leaseHold:
+                try await leaseHold(storeURL: storeURL)
             case .gatewayAuditSeed:
                 try await gatewayAuditSeed(storeURL: storeURL)
             case .gatewayAuditCrash:

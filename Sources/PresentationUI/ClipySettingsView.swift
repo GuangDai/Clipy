@@ -382,35 +382,19 @@ private struct GeneralSettingsTab: View {
     ///
     /// The awaitable view-state intent preserves the receipt needed for the
     /// mandated "Removed N items." feedback while keeping receipt-confirmed
-    /// Card 9B surface purge publication at the shared mutation owner.
+    /// Card 9B surface purge publication at the shared mutation owner. Every
+    /// receipt state maps to deliberate feedback in `clearStatusFeedback` —
+    /// no blanket "Done." catch-all (deep review Card 10).
     private func performClear(_ scope: ClearScope) async {
         isWorking = true
         defer { isWorking = false }
         do {
             let receipt = try await viewState.clearAwaitingReceipt(scope)
-            if case .committed(let commit) = receipt,
-               case .cleared(count: let removed) = commit.outcome {
-                status = .success(Self.clearFeedback(removed))
-            } else {
-                status = .success("Done.")
-            }
+            status = clearStatusFeedback(receipt)
         } catch let failure as HistoryFailure {
             status = .failure(FailurePresentation.message(for: failure))
         } catch {
             status = .failure("The history could not be cleared.")
-        }
-    }
-
-    /// "Removed N items." — plural-aware; a no-op clear reports "Done."
-    /// (contract §4.4).
-    private static func clearFeedback(_ removedCount: Int) -> String {
-        switch removedCount {
-        case 0:
-            return "Done."
-        case 1:
-            return "Removed 1 item."
-        default:
-            return "Removed \(removedCount) items."
         }
     }
 
@@ -887,7 +871,10 @@ private struct RetentionSettingsTab: View {
     }
 
     /// Applies the count policy and reports the receipt inline
-    /// (`.retentionPolicySet(removedCount:)`, 03a §6; V2-07 §5.2).
+    /// (`.retentionPolicySet(removedCount:)`, 03a §6; V2-07 §5.2). Every
+    /// receipt state maps to deliberate feedback in
+    /// `maximumUnpinnedStatusFeedback` — no blanket "Done." catch-all
+    /// (deep review Card 10).
     private func applyMaximumUnpinned(
         _ submission: RetentionSettingsDraft.CountSubmission
     ) async {
@@ -899,36 +886,27 @@ private struct RetentionSettingsTab: View {
             let receipt = try await viewState.applyMaximumUnpinnedItems(
                 submission.maximumUnpinnedItems
             )
-            let successMessage: String
-            if case .committed(let commit) = receipt,
-               case .retentionPolicySet(removedCount: let removed) = commit.outcome {
-                successMessage = Self.maximumUnpinnedFeedback(removed)
-            } else {
-                successMessage = "Done."
+            switch maximumUnpinnedStatusFeedback(receipt) {
+            case .success(let successMessage):
+                guard draft.acceptApplied(
+                    submission,
+                    successMessage: successMessage
+                ) else { return }
+                countStatus = nil
+            case .failure(let message):
+                // A committed receipt without `.retentionPolicySet` cannot
+                // confirm this submission; the configured comparison
+                // baseline stays put so the next Apply still compares
+                // against the last known configuration.
+                guard draft.isCurrent(submission) else { return }
+                countStatus = .failure(message)
             }
-            guard draft.acceptApplied(
-                submission,
-                successMessage: successMessage
-            ) else { return }
-            countStatus = nil
         } catch let failure as HistoryFailure {
             guard draft.isCurrent(submission) else { return }
             countStatus = .failure(FailurePresentation.message(for: failure))
         } catch {
             guard draft.isCurrent(submission) else { return }
             countStatus = .failure("The setting could not be saved.")
-        }
-    }
-
-    /// "Done. N items removed." / "Done." — plural-aware (contract §4.4).
-    private static func maximumUnpinnedFeedback(_ removedCount: Int) -> String {
-        switch removedCount {
-        case 0:
-            return "Done."
-        case 1:
-            return "Done. 1 item removed."
-        default:
-            return "Done. \(removedCount) items removed."
         }
     }
 
@@ -1025,7 +1003,9 @@ private struct RetentionSettingsTab: View {
 
     /// Applies all dimensions as one policy value and reports the receipt
     /// inline (`.retentionPoliciesSet(retiredItems:prunedRevisions:)`,
-    /// 03a §6 / `V2-02` §8.1; feedback per V2-07 §5.2).
+    /// 03a §6 / `V2-02` §8.1; feedback per V2-07 §5.2). Every receipt state
+    /// maps to deliberate feedback in `retentionPoliciesStatusFeedback` —
+    /// no blanket "Done." catch-all (deep review Card 10).
     private func applyRetention(
         _ submission: RetentionSettingsDraft.Submission
     ) async {
@@ -1035,24 +1015,21 @@ private struct RetentionSettingsTab: View {
         defer { isWorking = false }
         do {
             let receipt = try await viewState.applyRetentionPolicies(submission.policies)
-            let successMessage: String
-            if case .committed(let commit) = receipt,
-               case .retentionPoliciesSet(
-                   retiredItems: let retired,
-                   prunedRevisions: let pruned
-               ) = commit.outcome {
-                successMessage = Self.retentionFeedback(
-                    retiredItems: retired,
-                    prunedRevisions: pruned
-                )
-            } else {
-                successMessage = "Done."
+            switch retentionPoliciesStatusFeedback(receipt) {
+            case .success(let successMessage):
+                guard draft.acceptApplied(
+                    submission,
+                    successMessage: successMessage
+                ) else { return }
+                policyStatus = nil
+            case .failure(let message):
+                // A committed receipt without `.retentionPoliciesSet`
+                // cannot confirm this submission; the configured
+                // comparison baseline stays put so the next Apply still
+                // compares against the last known configuration.
+                guard draft.isCurrent(submission) else { return }
+                policyStatus = .failure(message)
             }
-            guard draft.acceptApplied(
-                submission,
-                successMessage: successMessage
-            ) else { return }
-            policyStatus = nil
         } catch let failure as HistoryFailure {
             guard draft.isCurrent(submission) else { return }
             policyStatus = .failure(Self.retentionFailureMessage(failure))
@@ -1060,20 +1037,6 @@ private struct RetentionSettingsTab: View {
             guard draft.isCurrent(submission) else { return }
             policyStatus = .failure("The policies could not be saved.")
         }
-    }
-
-    /// "Done. N items retired, M revisions pruned." — plural-aware; a
-    /// nothing-happened set reports plain "Done." (contract §4.4;
-    /// transparent data-minimization feedback, `V2-02` §12).
-    private static func retentionFeedback(retiredItems: Int, prunedRevisions: Int) -> String {
-        if retiredItems == 0 && prunedRevisions == 0 {
-            return "Done."
-        }
-        let retiredPhrase = retiredItems == 1 ? "1 item retired" : "\(retiredItems) items retired"
-        let prunedPhrase = prunedRevisions == 1
-            ? "1 revision pruned"
-            : "\(prunedRevisions) revisions pruned"
-        return "Done. \(retiredPhrase), \(prunedPhrase)."
     }
 
     /// Retention-specific recovery guidance (V2-07 §5.2): the set-time
@@ -1133,8 +1096,10 @@ private struct ValueFieldRow: View {
 }
 
 /// Inline outcome of one settings mutation: success carries receipt-derived
-/// text, failure carries the already-mapped user-facing message.
-private enum SettingStatus {
+/// text, failure carries the already-mapped user-facing message. Internal
+/// (not private) so the SwiftPM suites pin the receipt-feedback mapping
+/// directly through `@testable`, like `validatedSettingsWholeNumber`.
+internal enum SettingStatus: Equatable {
     case success(String)
     case failure(String)
 }
@@ -1156,6 +1121,96 @@ private struct SettingStatusView: View {
                 .font(.callout)
                 .foregroundStyle(.red)
         }
+    }
+}
+
+// MARK: Receipt feedback
+
+/// Exact per-receipt feedback for one Danger Zone clear (deep review Card
+/// 10): a committed clear reports its removed count ("Removed N items." —
+/// plural-aware, 03a §6); `.unchanged` means the scope matched nothing, so
+/// no History Commit exists and no removal is implied (02 §8); a commit
+/// carrying another action's outcome is a boundary violation, rendered as a
+/// failure rather than a blanket success.
+internal func clearStatusFeedback(_ receipt: HistoryReceipt) -> SettingStatus {
+    switch receipt {
+    case .committed(let commit):
+        guard case .cleared(count: let removed) = commit.outcome else {
+            return .failure("The history could not be cleared.")
+        }
+        switch removed {
+        case 0:
+            return .success("Done.")
+        case 1:
+            return .success("Removed 1 item.")
+        default:
+            return .success("Removed \(removed) items.")
+        }
+    case .unchanged:
+        return .success("Nothing to clear.")
+    }
+}
+
+/// Exact per-receipt feedback for one item-count apply (deep review Card
+/// 10): a committed `.setRetentionPolicy` reports its removed count
+/// ("Done. N items removed." — plural-aware, 03a §6; V2-07 §5.2);
+/// `.unchanged` means the submitted count already equals the persisted
+/// value and nothing was written (02 §8/§12); a commit carrying another
+/// action's outcome is a boundary violation, rendered as a failure rather
+/// than a blanket success.
+internal func maximumUnpinnedStatusFeedback(
+    _ receipt: HistoryReceipt
+) -> SettingStatus {
+    switch receipt {
+    case .committed(let commit):
+        guard case .retentionPolicySet(removedCount: let removed)
+                = commit.outcome else {
+            return .failure("The setting could not be saved.")
+        }
+        switch removed {
+        case 0:
+            return .success("Done.")
+        case 1:
+            return .success("Done. 1 item removed.")
+        default:
+            return .success("Done. \(removed) items removed.")
+        }
+    case .unchanged:
+        return .success("No change.")
+    }
+}
+
+/// Exact per-receipt feedback for one V2-02 policy apply (deep review Card
+/// 10): a committed `.setRetentionPolicies` reports retired items and
+/// pruned revisions separately ("Done. N items retired, M revisions
+/// pruned." — plural-aware; transparent data-minimization feedback,
+/// `V2-02` §12); `.unchanged` means the submitted bundle already equals
+/// the persisted policy and nothing was written (`V2-02` §4.4/§5.6); a
+/// commit carrying another action's outcome is a boundary violation,
+/// rendered as a failure rather than a blanket success.
+internal func retentionPoliciesStatusFeedback(
+    _ receipt: HistoryReceipt
+) -> SettingStatus {
+    switch receipt {
+    case .committed(let commit):
+        guard case .retentionPoliciesSet(
+            retiredItems: let retired,
+            prunedRevisions: let pruned
+        ) = commit.outcome else {
+            return .failure("The policies could not be saved.")
+        }
+        if retired == 0 && pruned == 0 {
+            return .success("Done.")
+        }
+        let retiredPhrase = retired == 1
+            ? "1 item retired"
+            : "\(retired) items retired"
+        let prunedPhrase = pruned == 1
+            ? "1 revision pruned"
+            : "\(pruned) revisions pruned"
+        return .success("Done. \(retiredPhrase), \(prunedPhrase).")
+    case .unchanged:
+        return .success("No change.")
     }
 }
 

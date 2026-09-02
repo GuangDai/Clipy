@@ -1189,7 +1189,11 @@ record_event "ready"
 # The requested write exceeds the entire image capacity. Require dd both to
 # fail and to report ENOSPC under a fixed C locale. Its expected failure text
 # stays in the disposable temp root because BSD dd prefixes it with a path.
+# `filler` is re-assigned for the same reason as in require_competitor_enospc:
+# the open cells' release above cleared it, and each fill cycle must own the
+# competitor path again (dispatch run 33637018304 died here on `of=""`).
 begin_phase "fill-volume"
+filler="$mountpoint/competitor.fill"
 record_volume_facts "before-competitor"
 set +e
 LC_ALL=C dd if=/dev/zero of="$filler" \

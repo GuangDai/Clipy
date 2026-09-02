@@ -317,6 +317,7 @@ public enum UnavailableReason: Sendable, Equatable {
 
 public enum PersistenceFailure: Sendable, Equatable {
     case openStore
+    case storeAlreadyOpen     // StoreRoot leased by another live owner process (REVIEW DATA-7 / PLAY-DISK-0B); deterministic refusal, distinct from platform-cause .openStore (DATA-14).
     case corruptStoredValue
     case invariantViolation
     case transaction

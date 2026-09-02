@@ -183,8 +183,9 @@ public final class ThumbnailStore {
 
     // MARK: - Public surface
 
-    /// Content-free public observation used by hosted product journeys. Pixel
-    /// bytes stay package-only; callers outside SwiftPM see dimensions only.
+    /// Content-free public observation used by hosted product journeys.
+    /// Pixel bytes stay internal to this module (`raster(for:)` below);
+    /// callers outside SwiftPM see dimensions only.
     public func imagePixelSize(for item: HistoryItemReference) -> PixelSize? {
         guard let entry = entries[item], case .hit(let raster, _) = entry else {
             return nil
@@ -192,9 +193,12 @@ public final class ThumbnailStore {
         return PixelSize(width: raster.width, height: raster.height)
     }
 
-    /// Package render edge. The returned value is immutable Sendable pixels,
-    /// never a framework object, and this pure read never fetches.
-    package func raster(for item: HistoryItemReference) -> PreviewRaster? {
+    /// Internal render edge (GOV-3 tail: only this module's row and details
+    /// views read retained pixels; hosted journeys and owner tests observe
+    /// the content-free `imagePixelSize(for:)` above). The returned value is
+    /// immutable Sendable pixels, never a framework object, and this pure
+    /// read never fetches.
+    internal func raster(for item: HistoryItemReference) -> PreviewRaster? {
         guard let entry = entries[item], case .hit(let raster, _) = entry else {
             return nil
         }
@@ -664,8 +668,10 @@ package final class ThumbnailMeasurement {
     /// failures are observed-and-dropped (`try?`, the AppDelegate
     /// store-reveal marker precedent): measurement must never take down a
     /// running app, and a lost record surfaces as the journey's own
-    /// sampling-integrity assertion rather than as a crash here.
-    package func record(_ record: inout Record) {
+    /// sampling-integrity assertion rather than as a crash here. Internal
+    /// (GOV-3 tail): the owning store is the only writer; owner tests drive
+    /// recording through the store and read the JSONL back.
+    internal func record(_ record: inout Record) {
         nextSeq += 1
         record.seq = nextSeq
         record.monotonicMs = elapsedMilliseconds
