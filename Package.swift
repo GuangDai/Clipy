@@ -77,13 +77,33 @@ let package = Package(
             name: "HistoryRestartProbe",
             dependencies: ["HistoryCore", "HistoryStorage"]
         ),
+        .executableTarget(
+            // PLAY-TIER-1A decoder access-mode probe runner (docs/v2/
+            // V2-08-decoder-access-modes.md): one short-lived child per
+            // fixture runs the DEBUG-only package `PreviewAccessProbe` so
+            // decoder diagnostics on deliberately truncated prefixes
+            // (libpng partial-decode error lines — the CI run 32259544566
+            // lesson) and any partial-data decoder crash stay out of the
+            // test process and its CI log self-scan. Test evidence only;
+            // no declared package product.
+            name: "PreviewAccessProbeRunner",
+            dependencies: ["ContentPreview"]
+        ),
         .testTarget(
             name: "ClipboardFormatsTests",
             dependencies: ["ClipboardFormats"]
         ),
         .testTarget(
             name: "ContentPreviewTests",
-            dependencies: ["ContentPreview"]
+            dependencies: [
+                "ContentPreview",
+                // The owner suites launch the probe runner directly from
+                // `.build/debug`; this build edge guarantees the executable
+                // exists under a bare `swift test` (the HistoryRestartProbe
+                // precedent) — never nest a second SwiftPM process inside
+                // `swift test`.
+                .target(name: "PreviewAccessProbeRunner"),
+            ]
         ),
         .testTarget(
             name: "ClipyCLIContractTests",

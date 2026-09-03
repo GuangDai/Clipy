@@ -154,6 +154,7 @@ ContentPreview ────────────→ ClipboardFormats + CoreGr
                              (package-only bounded transient renderer)
 ClipyCLIContract ──────────→ Foundation only (package-only pure wire contract)
 HistoryRestartProbe ───────→ HistoryCore + HistoryStorage (test evidence only)
+PreviewAccessProbeRunner ──→ ContentPreview (DEBUG-only test evidence only)
 ```
 
 | Target | Surface | Role |
@@ -170,6 +171,7 @@ HistoryRestartProbe ───────→ HistoryCore + HistoryStorage (test 
 | `xxh3` | Package-internal C | 64-bit representation fingerprints (vendored xxHash v0.8.3) |
 | `HistoryPerfRunner` | Executable | Part VI §9 performance-runner scaffold (fixtures populate at step 8) |
 | `HistoryRestartProbe` | Test evidence executable target | Card 1C-1 three-process public-API restart tracer; no declared package product |
+| `PreviewAccessProbeRunner` | Test evidence executable target | PLAY-TIER-1A decoder access-mode probe child (docs/v2/V2-08-decoder-access-modes.md); DEBUG-only, no declared package product |
 
 **Current implementation shape (docs/01-architecture.md §3/§6/§8):**
 
