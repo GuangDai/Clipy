@@ -1,0 +1,582 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "%lld items retired" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld item retired"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld items retired"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld revisions pruned" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld revision pruned"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld revisions pruned"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Done. %lld items removed." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Done. %lld item removed."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Done. %lld items removed."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Removed %lld items." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Removed %lld item."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Removed %lld items."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "settings.retention.age.enforcement-note" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Age limits are checked when Clipy captures a clipboard change or you apply retention settings. Time passing alone doesn't remove items."
+          }
+        }
+      }
+    },
+    "settings.retention.age.field-label" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Maximum item age"
+          }
+        }
+      }
+    },
+    "settings.retention.age.section" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Item age"
+          }
+        }
+      }
+    },
+    "settings.retention.age.toggle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limit item age"
+          }
+        }
+      }
+    },
+    "settings.retention.age.toggle-hint" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retire items whose last copy is older than the entered age."
+          }
+        }
+      }
+    },
+    "settings.retention.age.unit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "days"
+          }
+        }
+      }
+    },
+    "settings.retention.apply" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apply"
+          }
+        }
+      }
+    },
+    "settings.retention.apply-note" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Changes apply to new and existing items at once."
+          }
+        }
+      }
+    },
+    "settings.retention.budget-unsatisfiable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This budget can't be satisfied with the current history."
+          }
+        }
+      }
+    },
+    "settings.retention.confirm-apply" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apply Stricter Limits"
+          }
+        }
+      }
+    },
+    "settings.retention.confirm-cancel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancel"
+          }
+        }
+      }
+    },
+    "settings.retention.confirm-message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stricter limits can permanently remove items or revisions."
+          }
+        }
+      }
+    },
+    "settings.retention.confirm-title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apply stricter retention limits?"
+          }
+        }
+      }
+    },
+    "settings.retention.count-save-failure" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The setting could not be saved."
+          }
+        }
+      }
+    },
+    "Done. %@, %@." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Done. %1$@, %2$@."
+          }
+        }
+      }
+    },
+    "settings.retention.feedback.clear-failure" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The history could not be cleared."
+          }
+        }
+      }
+    },
+    "settings.retention.feedback.done" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Done."
+          }
+        }
+      }
+    },
+    "settings.retention.feedback.no-change" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No change."
+          }
+        }
+      }
+    },
+    "settings.retention.feedback.nothing-to-clear" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing to clear."
+          }
+        }
+      }
+    },
+    "settings.retention.items.apply" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apply Item Limit"
+          }
+        }
+      }
+    },
+    "settings.retention.items.confirm-apply" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apply Stricter Limit"
+          }
+        }
+      }
+    },
+    "settings.retention.items.confirm-message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A stricter limit can immediately remove unpinned items, and they can't be recovered."
+          }
+        }
+      }
+    },
+    "settings.retention.items.confirm-title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apply a stricter item limit?"
+          }
+        }
+      }
+    },
+    "settings.retention.items.field-accessibility-label" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Maximum unpinned items"
+          }
+        }
+      }
+    },
+    "settings.retention.items.keep-at-most" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep at most"
+          }
+        }
+      }
+    },
+    "settings.retention.items.section" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Items"
+          }
+        }
+      }
+    },
+    "settings.retention.items.unit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "unpinned items"
+          }
+        }
+      }
+    },
+    "settings.retention.pinned-over-budget" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pinned items exceed this budget. Unpin items or raise the budget."
+          }
+        }
+      }
+    },
+    "settings.retention.policies-save-failure" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The policies could not be saved."
+          }
+        }
+      }
+    },
+    "Enter a whole number from %lld to %lld." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enter a whole number from %1$lld to %2$lld."
+          }
+        }
+      }
+    },
+    "settings.retention.read-failure" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The current retention settings could not be read."
+          }
+        }
+      }
+    },
+    "settings.retention.revisions.bytes-field-label" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Revision storage per item"
+          }
+        }
+      }
+    },
+    "settings.retention.revisions.bytes-toggle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limit revision storage"
+          }
+        }
+      }
+    },
+    "settings.retention.revisions.bytes-toggle-hint" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prune the oldest inactive revisions until they fit this budget."
+          }
+        }
+      }
+    },
+    "settings.retention.revisions.count-field-label" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Revisions per item"
+          }
+        }
+      }
+    },
+    "settings.retention.revisions.count-toggle-hint" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prune the oldest inactive revisions beyond this count."
+          }
+        }
+      }
+    },
+    "settings.retention.revisions.count-unit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "revisions"
+          }
+        }
+      }
+    },
+    "settings.retention.revisions.keep-at-most" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep at most"
+          }
+        }
+      }
+    },
+    "settings.retention.revisions.section" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Revision limits"
+          }
+        }
+      }
+    },
+    "settings.retention.storage.field-label" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Storage budget"
+          }
+        }
+      }
+    },
+    "settings.retention.storage.section" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Storage"
+          }
+        }
+      }
+    },
+    "settings.retention.storage.toggle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limit storage budget"
+          }
+        }
+      }
+    },
+    "settings.retention.storage.toggle-hint" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retire the oldest unpinned items until history fits the budget."
+          }
+        }
+      }
+    },
+    "settings.retention.tab-title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retention"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

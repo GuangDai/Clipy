@@ -21,6 +21,12 @@ targets:
     platform: macOS
     sources:
       - Sources
+      # The app target carries no catalogs of its own: user-facing copy
+      # localizes in the owning SwiftPM targets (PresentationUI's
+      # Resources/RetentionSettings.xcstrings — compiled into the package
+      # resource bundle by xcodebuild — plus its legacy en.lproj tables for
+      # the search result counts; see RetentionSettingsCopy.swift's header
+      # for the native-`swift test` boundary).
       - Resources
       - Tools/ClipyUDSF0Shared
     settings:

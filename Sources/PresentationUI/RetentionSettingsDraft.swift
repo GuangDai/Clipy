@@ -34,10 +34,11 @@ internal struct RetentionSettingsDraft {
     internal static let mebibyteUnitLabel = "MiB"
 
     /// R1 runs on capture and `.setRetentionPolicies`; it has no wall-clock
-    /// worker or background reaper (`V2-02` §2.2/§7; review Card 10B).
+    /// worker or background reaper (`V2-02` §2.2/§7; review Card 10B). The
+    /// copy resolves through the package String Catalog
+    /// (`RetentionSettingsCopy.ageEnforcementNote`; V2-07 §10).
     internal static let ageEnforcementExplanation =
-        "Age limits are checked when Clipy captures a clipboard change or "
-        + "you apply retention settings. Time passing alone doesn't remove items."
+        RetentionSettingsCopy.ageEnforcementNote
 
     internal private(set) var maximumUnpinnedText =
         String(HistoryLimits.standard.defaultMaximumUnpinnedItems)

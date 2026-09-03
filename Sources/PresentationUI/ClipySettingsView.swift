@@ -108,7 +108,7 @@ public struct ClipySettingsView: View {
                 hasLoadedRetentionConfiguration: hasLoadedRetentionConfiguration,
                 retentionConfigurationFailure: retentionConfigurationFailure
             )
-                .tabItem { Label("Retention", systemImage: "clock.arrow.circlepath") }
+                .tabItem { Label(RetentionSettingsCopy.tabTitle, systemImage: "clock.arrow.circlepath") }
                 .frame(width: 480, height: 560)
         }
         .task { await loadRetentionConfiguration() }
@@ -128,7 +128,7 @@ public struct ClipySettingsView: View {
         } catch let failure as HistoryFailure {
             retentionConfigurationFailure = FailurePresentation.message(for: failure)
         } catch {
-            retentionConfigurationFailure = "The current retention settings could not be read."
+            retentionConfigurationFailure = RetentionSettingsCopy.readFailure
         }
     }
 }
@@ -394,7 +394,7 @@ private struct GeneralSettingsTab: View {
         } catch let failure as HistoryFailure {
             status = .failure(FailurePresentation.message(for: failure))
         } catch {
-            status = .failure("The history could not be cleared.")
+            status = .failure(RetentionSettingsCopy.clearFailure)
         }
     }
 
@@ -629,13 +629,15 @@ private struct RetentionSettingsTab: View {
     var body: some View {
         ScrollView {
             Form {
-                Section("Items") {
-                    LabeledContent("Keep at most") {
+                Section {
+                    LabeledContent {
                         HStack {
                             TextField("200", text: maximumUnpinnedText)
                                 .frame(width: 88)
                                 .multilineTextAlignment(.trailing)
-                                .accessibilityLabel("Maximum unpinned items")
+                                .accessibilityLabel(
+                                    RetentionSettingsCopy.maximumUnpinnedAccessibilityLabel
+                                )
                                 .accessibilityIdentifier(
                                     "clipy.settings.retention.maximum-unpinned"
                                 )
@@ -645,16 +647,20 @@ private struct RetentionSettingsTab: View {
                                 in: HistoryLimits.standard.userMaximumUnpinnedRange
                             )
                             .labelsHidden()
-                            .accessibilityLabel("Maximum unpinned items")
-                            Text("unpinned items")
+                            .accessibilityLabel(
+                                RetentionSettingsCopy.maximumUnpinnedAccessibilityLabel
+                            )
+                            Text(RetentionSettingsCopy.unpinnedItemsUnit)
                         }
+                    } label: {
+                        Text(RetentionSettingsCopy.itemsKeepAtMost)
                     }
                     if maximumUnpinnedValue == nil {
                         Text(unpinnedRangeHint)
                             .font(.caption)
                             .foregroundStyle(.red)
                     }
-                    Button("Apply Item Limit") {
+                    Button(RetentionSettingsCopy.applyItemLimit) {
                         requestMaximumUnpinnedApply()
                     }
                     .accessibilityIdentifier(
@@ -667,23 +673,24 @@ private struct RetentionSettingsTab: View {
                             || !hasLoadedRetentionConfiguration
                     )
                     .confirmationDialog(
-                        "Apply a stricter item limit?",
+                        RetentionSettingsCopy.confirmItemLimitTitle,
                         isPresented: $isConfirmingCountTightening,
                         titleVisibility: .visible
                     ) {
-                        Button("Apply Stricter Limit", role: .destructive) {
+                        Button(
+                            RetentionSettingsCopy.confirmItemLimitApply,
+                            role: .destructive
+                        ) {
                             guard let submission = pendingCountSubmission else {
                                 return
                             }
                             Task { await applyMaximumUnpinned(submission) }
                         }
-                        Button("Cancel", role: .cancel) {
+                        Button(RetentionSettingsCopy.confirmCancel, role: .cancel) {
                             pendingCountSubmission = nil
                         }
                     } message: {
-                        Text(
-                            "A stricter limit can immediately remove unpinned items, and they can't be recovered."
-                        )
+                        Text(RetentionSettingsCopy.confirmItemLimitMessage)
                     }
                     // The status sits on its own row below the button so a
                     // long receipt or failure message can never squeeze the
@@ -701,14 +708,16 @@ private struct RetentionSettingsTab: View {
                     } else if let retentionConfigurationFailure {
                         SettingStatusView(status: .failure(retentionConfigurationFailure))
                     }
+                } header: {
+                    Text(RetentionSettingsCopy.itemsSection)
                 }
-                Section("Item age") {
-                    Toggle("Limit item age", isOn: ageEnabled)
-                        .accessibilityHint("Retire items whose last copy is older than the entered age.")
+                Section {
+                    Toggle(RetentionSettingsCopy.ageToggle, isOn: ageEnabled)
+                        .accessibilityHint(RetentionSettingsCopy.ageToggleHint)
                         .accessibilityIdentifier("clipy.settings.retention.age-enabled")
                     ValueFieldRow(
-                        label: "Maximum item age",
-                        unit: "days",
+                        label: RetentionSettingsCopy.ageFieldLabel,
+                        unit: RetentionSettingsCopy.ageUnit,
                         accessibilityIdentifier: "clipy.settings.retention.age-days",
                         text: ageDaysText,
                         isEnabled: draft.ageEnabled,
@@ -721,13 +730,15 @@ private struct RetentionSettingsTab: View {
                         .accessibilityIdentifier(
                             "clipy.settings.retention.age-enforcement"
                         )
+                } header: {
+                    Text(RetentionSettingsCopy.ageSection)
                 }
-                Section("Storage") {
-                    Toggle("Limit storage budget", isOn: storageEnabled)
-                        .accessibilityHint("Retire the oldest unpinned items until history fits the budget.")
+                Section {
+                    Toggle(RetentionSettingsCopy.storageToggle, isOn: storageEnabled)
+                        .accessibilityHint(RetentionSettingsCopy.storageToggleHint)
                         .accessibilityIdentifier("clipy.settings.retention.storage-enabled")
                     ValueFieldRow(
-                        label: "Storage budget",
+                        label: RetentionSettingsCopy.storageFieldLabel,
                         unit: RetentionSettingsDraft.mebibyteUnitLabel,
                         accessibilityIdentifier: "clipy.settings.retention.storage-mib",
                         text: storageMiBText,
@@ -735,23 +746,35 @@ private struct RetentionSettingsTab: View {
                         isValid: draft.storageInputIsValid,
                         range: RetentionSettingsDraft.storageMiBRange
                     )
+                } header: {
+                    Text(RetentionSettingsCopy.storageSection)
                 }
-                Section("Revision limits") {
-                    Toggle("Keep at most", isOn: revisionCountEnabled)
-                        .accessibilityHint("Prune the oldest inactive revisions beyond this count.")
+                Section {
+                    Toggle(
+                        RetentionSettingsCopy.revisionCountKeepAtMost,
+                        isOn: revisionCountEnabled
+                    )
+                        .accessibilityHint(
+                            RetentionSettingsCopy.revisionCountToggleHint
+                        )
                     ValueFieldRow(
-                        label: "Revisions per item",
-                        unit: "revisions",
+                        label: RetentionSettingsCopy.revisionCountFieldLabel,
+                        unit: RetentionSettingsCopy.revisionCountUnit,
                         accessibilityIdentifier: "clipy.settings.retention.revision-count",
                         text: revisionCountText,
                         isEnabled: draft.revisionCountEnabled,
                         isValid: draft.revisionCountInputIsValid,
                         range: RetentionSettingsDraft.revisionCountRange
                     )
-                    Toggle("Limit revision storage", isOn: revisionBytesEnabled)
-                        .accessibilityHint("Prune the oldest inactive revisions until they fit this budget.")
+                    Toggle(
+                        RetentionSettingsCopy.revisionBytesToggle,
+                        isOn: revisionBytesEnabled
+                    )
+                        .accessibilityHint(
+                            RetentionSettingsCopy.revisionBytesToggleHint
+                        )
                     ValueFieldRow(
-                        label: "Revision storage per item",
+                        label: RetentionSettingsCopy.revisionBytesFieldLabel,
                         unit: RetentionSettingsDraft.mebibyteUnitLabel,
                         accessibilityIdentifier: "clipy.settings.retention.revision-mib",
                         text: revisionMiBText,
@@ -759,9 +782,11 @@ private struct RetentionSettingsTab: View {
                         isValid: draft.revisionBytesInputIsValid,
                         range: RetentionSettingsDraft.revisionMiBRange
                     )
+                } header: {
+                    Text(RetentionSettingsCopy.revisionsSection)
                 }
                 Section {
-                    Button("Apply") {
+                    Button(RetentionSettingsCopy.applyPolicies) {
                         requestApply()
                     }
                     .accessibilityIdentifier("clipy.settings.retention.apply")
@@ -770,22 +795,25 @@ private struct RetentionSettingsTab: View {
                             || !hasLoadedRetentionConfiguration
                     )
                     .confirmationDialog(
-                        "Apply stricter retention limits?",
+                        RetentionSettingsCopy.confirmPoliciesTitle,
                         isPresented: $isConfirmingTightening,
                         titleVisibility: .visible
                     ) {
-                        Button("Apply Stricter Limits", role: .destructive) {
+                        Button(
+                            RetentionSettingsCopy.confirmPoliciesApply,
+                            role: .destructive
+                        ) {
                             guard let submission = pendingSubmission else { return }
                             Task { await applyRetention(submission) }
                         }
-                        Button("Cancel", role: .cancel) {
+                        Button(RetentionSettingsCopy.confirmCancel, role: .cancel) {
                             pendingSubmission = nil
                         }
                     } message: {
                         // Deep review `04` Red 10D: only a strict local
                         // tightening is destructive-confirmed; equal or
                         // looser policy values apply directly.
-                        Text("Stricter limits can permanently remove items or revisions.")
+                        Text(RetentionSettingsCopy.confirmPoliciesMessage)
                     }
                     // Same own-row treatment as the item-limit status above:
                     // a long receipt or failure message must not squeeze the
@@ -803,7 +831,7 @@ private struct RetentionSettingsTab: View {
                     } else if let retentionConfigurationFailure {
                         SettingStatusView(status: .failure(retentionConfigurationFailure))
                     }
-                    Text("Changes apply to new and existing items at once.")
+                    Text(RetentionSettingsCopy.applyNote)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -853,7 +881,10 @@ private struct RetentionSettingsTab: View {
 
     private var unpinnedRangeHint: String {
         let range = HistoryLimits.standard.userMaximumUnpinnedRange
-        return "Enter a whole number from \(range.lowerBound) to \(range.upperBound)."
+        return RetentionSettingsCopy.rangeHint(
+            from: range.lowerBound,
+            to: range.upperBound
+        )
     }
 
     /// Count is part of the same destructive-retention family as the V2
@@ -906,7 +937,7 @@ private struct RetentionSettingsTab: View {
             countStatus = .failure(FailurePresentation.message(for: failure))
         } catch {
             guard draft.isCurrent(submission) else { return }
-            countStatus = .failure("The setting could not be saved.")
+            countStatus = .failure(RetentionSettingsCopy.countSaveFailure)
         }
     }
 
@@ -1035,7 +1066,7 @@ private struct RetentionSettingsTab: View {
             policyStatus = .failure(Self.retentionFailureMessage(failure))
         } catch {
             guard draft.isCurrent(submission) else { return }
-            policyStatus = .failure("The policies could not be saved.")
+            policyStatus = .failure(RetentionSettingsCopy.policiesSaveFailure)
         }
     }
 
@@ -1046,9 +1077,9 @@ private struct RetentionSettingsTab: View {
     private static func retentionFailureMessage(_ failure: HistoryFailure) -> String {
         switch failure {
         case .invalidInput(.invalidRetentionPolicy):
-            return "Pinned items exceed this budget. Unpin items or raise the budget."
+            return RetentionSettingsCopy.pinnedOverBudget
         case .capacityExceeded(.storageBytes):
-            return "This budget can't be satisfied with the current history."
+            return RetentionSettingsCopy.budgetUnsatisfiable
         default:
             return FailurePresentation.message(for: failure)
         }
@@ -1087,7 +1118,12 @@ private struct ValueFieldRow: View {
                     .foregroundStyle(.secondary)
             }
             if isEnabled && !isValid {
-                Text("Enter a whole number from \(range.lowerBound) to \(range.upperBound).")
+                Text(
+                    RetentionSettingsCopy.rangeHint(
+                        from: range.lowerBound,
+                        to: range.upperBound
+                    )
+                )
                     .font(.caption)
                     .foregroundStyle(.red)
             }
@@ -1131,23 +1167,23 @@ private struct SettingStatusView: View {
 /// plural-aware, 03a §6); `.unchanged` means the scope matched nothing, so
 /// no History Commit exists and no removal is implied (02 §8); a commit
 /// carrying another action's outcome is a boundary violation, rendered as a
-/// failure rather than a blanket success.
+/// failure rather than a blanket success. Copy resolves through
+/// `RetentionSettingsCopy` (V2-07 §10; the count phrase varies by plural in
+/// the package String Catalog per §10.4).
 internal func clearStatusFeedback(_ receipt: HistoryReceipt) -> SettingStatus {
     switch receipt {
     case .committed(let commit):
         guard case .cleared(count: let removed) = commit.outcome else {
-            return .failure("The history could not be cleared.")
+            return .failure(RetentionSettingsCopy.clearFailure)
         }
         switch removed {
         case 0:
-            return .success("Done.")
-        case 1:
-            return .success("Removed 1 item.")
+            return .success(RetentionSettingsCopy.feedbackDone)
         default:
-            return .success("Removed \(removed) items.")
+            return .success(RetentionSettingsCopy.clearedItemsRemoved(removed))
         }
     case .unchanged:
-        return .success("Nothing to clear.")
+        return .success(RetentionSettingsCopy.feedbackNothingToClear)
     }
 }
 
@@ -1157,7 +1193,9 @@ internal func clearStatusFeedback(_ receipt: HistoryReceipt) -> SettingStatus {
 /// `.unchanged` means the submitted count already equals the persisted
 /// value and nothing was written (02 §8/§12); a commit carrying another
 /// action's outcome is a boundary violation, rendered as a failure rather
-/// than a blanket success.
+/// than a blanket success. Copy resolves through `RetentionSettingsCopy`
+/// (V2-07 §10; the count phrase varies by plural in the package String
+/// Catalog per §10.4).
 internal func maximumUnpinnedStatusFeedback(
     _ receipt: HistoryReceipt
 ) -> SettingStatus {
@@ -1165,18 +1203,16 @@ internal func maximumUnpinnedStatusFeedback(
     case .committed(let commit):
         guard case .retentionPolicySet(removedCount: let removed)
                 = commit.outcome else {
-            return .failure("The setting could not be saved.")
+            return .failure(RetentionSettingsCopy.countSaveFailure)
         }
         switch removed {
         case 0:
-            return .success("Done.")
-        case 1:
-            return .success("Done. 1 item removed.")
+            return .success(RetentionSettingsCopy.feedbackDone)
         default:
-            return .success("Done. \(removed) items removed.")
+            return .success(RetentionSettingsCopy.countLimitItemsRemoved(removed))
         }
     case .unchanged:
-        return .success("No change.")
+        return .success(RetentionSettingsCopy.feedbackNoChange)
     }
 }
 
@@ -1187,7 +1223,9 @@ internal func maximumUnpinnedStatusFeedback(
 /// `V2-02` §12); `.unchanged` means the submitted bundle already equals
 /// the persisted policy and nothing was written (`V2-02` §4.4/§5.6); a
 /// commit carrying another action's outcome is a boundary violation,
-/// rendered as a failure rather than a blanket success.
+/// rendered as a failure rather than a blanket success. Copy resolves
+/// through `RetentionSettingsCopy` (V2-07 §10; both phrases vary by plural
+/// in the package String Catalog per §10.4).
 internal func retentionPoliciesStatusFeedback(
     _ receipt: HistoryReceipt
 ) -> SettingStatus {
@@ -1197,20 +1235,17 @@ internal func retentionPoliciesStatusFeedback(
             retiredItems: let retired,
             prunedRevisions: let pruned
         ) = commit.outcome else {
-            return .failure("The policies could not be saved.")
+            return .failure(RetentionSettingsCopy.policiesSaveFailure)
         }
         if retired == 0 && pruned == 0 {
-            return .success("Done.")
+            return .success(RetentionSettingsCopy.feedbackDone)
         }
-        let retiredPhrase = retired == 1
-            ? "1 item retired"
-            : "\(retired) items retired"
-        let prunedPhrase = pruned == 1
-            ? "1 revision pruned"
-            : "\(pruned) revisions pruned"
-        return .success("Done. \(retiredPhrase), \(prunedPhrase).")
+        return .success(RetentionSettingsCopy.appliedSummary(
+            retiredPhrase: RetentionSettingsCopy.itemsRetired(retired),
+            prunedPhrase: RetentionSettingsCopy.revisionsPruned(pruned)
+        ))
     case .unchanged:
-        return .success("No change.")
+        return .success(RetentionSettingsCopy.feedbackNoChange)
     }
 }
 
