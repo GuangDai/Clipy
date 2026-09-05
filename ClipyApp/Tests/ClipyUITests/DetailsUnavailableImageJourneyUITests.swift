@@ -36,9 +36,10 @@ final class DetailsUnavailableImageJourneyUITests: XCTestCase {
         let app = XCUIApplication()
         defer { app.terminate() }
         let details = try launchAndOpenCapturedDetails(in: app)
+        // Header evidence precedes scrolling to the lower Content section.
+        assertVisibleText("Content type icon", in: details, app: app)
         assertVisibleText("public.png", in: details, app: app)
         assertVisibleText("4 bytes", in: details, app: app)
-        assertVisibleText("Content type icon", in: details, app: app)
         assertNoRepresentationImage("public.png", in: details, app: app)
         XCTAssertFalse(details.descendants(matching: .any).matching(
             NSPredicate(format: "label == %@", "Preview unavailable for public.png")
@@ -82,14 +83,14 @@ final class DetailsUnavailableImageJourneyUITests: XCTestCase {
         let app = XCUIApplication()
         defer { app.terminate() }
         let details = try launchAndOpenCapturedDetails(in: app)
+        // This positive completion boundary makes the absence checks below
+        // non-vacuous: the real item's PNG has decoded, not merely remained
+        // in flight. Observe it before scrolling the header out of view.
+        assertVisibleText("Item thumbnail", in: details, app: app)
         assertVisibleText("public.png", in: details, app: app)
         assertVisibleText("70 bytes", in: details, app: app)
         assertVisibleText("public.tiff", in: details, app: app)
         assertVisibleText("13 bytes", in: details, app: app)
-        // This positive completion boundary makes the absence checks below
-        // non-vacuous: the real item's PNG has decoded, not merely remained
-        // in flight. Only the header may display that item-level thumbnail.
-        assertVisibleText("Item thumbnail", in: details, app: app)
         assertNoRepresentationImage("public.png", in: details, app: app)
         assertNoRepresentationImage("public.tiff", in: details, app: app)
         XCTAssertEqual(pasteboard.data(forType: .png), png)
@@ -145,11 +146,36 @@ final class DetailsUnavailableImageJourneyUITests: XCTestCase {
 
     @MainActor
     private func assertVisibleText(_ value: String, in details: XCUIElement, app: XCUIApplication) {
-        let element = details.descendants(matching: .any).matching(
-            NSPredicate(format: "label == %@ OR value == %@", value, value)
-        ).firstMatch
+        let predicate = NSPredicate(format: "label == %@ OR value == %@", value, value)
+        let element = details.descendants(matching: .any).matching(predicate).firstMatch
+        guard waitUntil(timeout: 10, condition: { element.exists }) else {
+            XCTFail(diagnostic(app, context: "missing Details metadata: \(value)"))
+            return
+        }
+        // Grouped Form exposes offscreen children as existing. The observed
+        // narrow Details viewport ended at y629 while Content began at y653.
+        // Find the owning Form rather than scrolling a sibling preview or
+        // the other column of the wide Details layout.
+        guard let scrollView = details.scrollViews.allElementsBoundByIndex.first(where: {
+            $0.descendants(matching: .any).matching(predicate).firstMatch.exists
+        }) else {
+            XCTFail(diagnostic(app, context: "owning Details scroll view: \(value)"))
+            return
+        }
+        let scrollCoordinate = scrollView.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
+        )
+        func isFullyVisible() -> Bool {
+            element.exists && scrollView.frame.contains(element.frame) && element.isHittable
+        }
+        // Same bounded native wheel steps used by the Settings Form journeys.
+        for _ in 0..<8 {
+            if isFullyVisible() { return }
+            let deltaY: CGFloat = element.frame.midY < scrollView.frame.midY ? 50 : -50
+            scrollCoordinate.scroll(byDeltaX: 0, deltaY: deltaY)
+        }
         XCTAssertTrue(
-            waitUntil(timeout: 10) { element.exists && element.isHittable },
+            isFullyVisible(),
             diagnostic(app, context: "visible Details metadata: \(value)")
         )
     }

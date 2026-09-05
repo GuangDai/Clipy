@@ -13,7 +13,7 @@ struct RevisionPreparationNoChangeCapacityTests {
     @Test(arguments: [CapacityKind.revisionCount, .revisionBytes])
     func unchangedProposalNeedsNoAppendCapacity(_ capacity: CapacityKind) async throws {
         let source = try await snapshot()
-        let preparation = RevisionPreparationActor(limits: limits(
+        let preparation = RevisionPreparationActor(limits: try limits(
             count: capacity == .revisionCount ? 1 : 10,
             bytes: capacity == .revisionBytes ? 4 : 64
         ))
@@ -34,7 +34,7 @@ struct RevisionPreparationNoChangeCapacityTests {
 
     @Test func r3StillAllowsAChangedAppendByPruningItsOldRevision() async throws {
         let source = try await snapshot()
-        let preparation = RevisionPreparationActor(limits: limits(count: 1, bytes: 4))
+        let preparation = RevisionPreparationActor(limits: try limits(count: 1, bytes: 4))
         let policies = HistoryRetentionPolicies(
             age: nil, storage: nil,
             revisions: RevisionRetention(maxRevisionsPerItem: 1, maxRevisionBytesPerItem: 4)
@@ -79,14 +79,18 @@ struct RevisionPreparationNoChangeCapacityTests {
         )
     }
 
-    private func limits(count: Int, bytes: Int) -> HistoryLimits {
+    private func limits(count: Int, bytes: Int) throws -> HistoryLimits {
         let standard = HistoryLimits.standard
-        return HistoryLimits(
+        // Each proposal is four bytes. Keep the single-representation and
+        // proposed-revision bounds inside the small cumulative bound, so a
+        // changed proposal reaches append capacity rather than input rejection.
+        let representationBytes = currentBytes.count
+        let limits = HistoryLimits(
             maximumRepresentationsPerCaptureOrRevision: standard.maximumRepresentationsPerCaptureOrRevision,
             maximumTypeIdentifierUTF8Bytes: standard.maximumTypeIdentifierUTF8Bytes,
-            maximumRepresentationBytes: standard.maximumRepresentationBytes,
-            maximumCaptureBytes: standard.maximumCaptureBytes,
-            maximumProposedRevisionBytes: standard.maximumProposedRevisionBytes,
+            maximumRepresentationBytes: representationBytes,
+            maximumCaptureBytes: representationBytes,
+            maximumProposedRevisionBytes: representationBytes,
             maximumRevisionsPerItem: count,
             maximumTotalRevisionBytesPerItem: bytes,
             hardMaximumRetainedItems: standard.hardMaximumRetainedItems,
@@ -107,6 +111,7 @@ struct RevisionPreparationNoChangeCapacityTests {
             thumbnailDimensionLowerBound: standard.thumbnailDimensionRange.lowerBound,
             thumbnailDimensionUpperBound: standard.thumbnailDimensionRange.upperBound,
             maximumEncodedThumbnailBytes: standard.maximumEncodedThumbnailBytes
-        )!
+        )
+        return try #require(limits, "the four-byte capacity fixture must satisfy every HistoryLimits constraint")
     }
 }
