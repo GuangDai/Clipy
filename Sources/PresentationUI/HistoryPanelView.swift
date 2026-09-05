@@ -385,13 +385,13 @@ public final class HistoryPanelSurfaceState {
         return quickLookReference
     }
 
-    /// Exact executable selection for the AppKit window's IME-aware Return
-    /// routing. The row must still exist in the authoritative display before
-    /// the composition boundary publishes the product paste intent.
+    /// Exact executable list-root selection for both the AppKit Return path
+    /// and the search field's submit callback. A pushed Details/editor owns
+    /// keyboard input; its retained background selection cannot be pasted.
     public func selectedReference(
         in rows: [HistoryRow]
     ) -> HistoryItemReference? {
-        guard let selection else { return nil }
+        guard isAtListRoot, let selection else { return nil }
         return rows.first(where: { $0.item.id == selection })?.item
     }
 }
@@ -929,12 +929,11 @@ public struct HistoryPanelView: View {
                     )
                 },
                 onSubmitSelection: {
-                    guard let selectedID = surfaceState.selection,
-                          let selected = viewState.displayedRows.first(where: {
-                              $0.item.id == selectedID
-                          })
+                    guard let selected = surfaceState.selectedReference(
+                        in: viewState.displayedRows
+                    )
                     else { return }
-                    viewState.requestPasteFromDisplayedRow(selected.item)
+                    viewState.requestPasteFromDisplayedRow(selected)
                 }
             )
             .padding(.horizontal, PanelTheme.headerHorizontalPadding)
@@ -1112,6 +1111,8 @@ public struct HistoryPanelView: View {
             // height; at the minimum width it ellipsizes instead.
             .lineLimit(1)
             .accessibilityIdentifier("clipy.panel.shortcut-hints")
+            .opacity(surfaceState.isAtListRoot ? 1 : 0)
+            .accessibilityHidden(!surfaceState.isAtListRoot)
             // Visible twin of the hidden ⌃Space shortcut button: same
             // manual-toggle semantics on the same selection target.
             Button {
@@ -1121,7 +1122,9 @@ public struct HistoryPanelView: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
-            .help(PanelFooterCopy.text("Toggle Preview (⌃Space)"))
+            .help(PanelFooterCopy.text(
+                surfaceState.isAtListRoot ? "Toggle Preview (⌃Space)" : "Toggle Preview"
+            ))
             .accessibilityLabel(PanelFooterCopy.text("Toggle Preview"))
             .accessibilityIdentifier("clipy.panel.preview-toggle")
             Menu {
@@ -1261,9 +1264,10 @@ public struct HistoryPanelView: View {
     /// (Maccy's KeyChord `.escape` → `close`). A pushed Details/editor
     /// destination owns Esc itself; retaining this root shortcut there would
     /// bypass the editor's dirty-discard confirmation.
-    /// ⌃Space toggles the preview pane for the current selection (Maccy's
-    /// `togglePreview` default chord). Space toggles the quick-look overlay
-    /// (Maccy's Quick Look chord): gated exactly like the list's ⌫ shortcut
+    /// At the list root, ⌃Space toggles the preview pane for the current
+    /// selection (Maccy's `togglePreview` default chord). A Details/editor
+    /// destination keeps that chord for its own text input. Space toggles the
+    /// quick-look overlay (Maccy's Quick Look chord): gated like the list's ⌫ shortcut
     /// — disabled while the search field has focus, so Space keeps editing
     /// the query — and admitted only at the list root with a resolvable
     /// selection; while the overlay is open Space stays enabled so the same
@@ -1281,12 +1285,12 @@ public struct HistoryPanelView: View {
                     }
                 }
                 .keyboardShortcut(.cancelAction)
-            }
 
-            Button(PanelFooterCopy.text("Toggle Preview")) {
-                previewState.togglePreview(for: previewSelection.reference)
+                Button(PanelFooterCopy.text("Toggle Preview")) {
+                    previewState.togglePreview(for: previewSelection.reference)
+                }
+                .keyboardShortcut(.space, modifiers: .control)
             }
-            .keyboardShortcut(.space, modifiers: .control)
 
             Button(PanelFooterCopy.text("Quick Look")) {
                 if surfaceState.quickLookReference != nil {

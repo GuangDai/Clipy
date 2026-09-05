@@ -27,6 +27,26 @@ struct PanelSessionSelectionTests {
         #expect(PanelSessionSelection.preparedSelection(in: []) == nil)
     }
 
+    @Test func detailsAndItsInlineEditorCannotSubmitTheRetainedListSelection() {
+        let surface = HistoryPanelSurfaceState(
+            viewState: HistoryViewState(history: ScriptedHistory()),
+            previewState: PreviewPaneState()
+        )
+        surface.beginSession(rows: rows)
+        #expect(surface.selectedReference(in: rows) == rows[0].item)
+
+        // The search header remains above a pushed Details destination. Its
+        // Return callback must not paste the list's old selection, including
+        // while Details switches its own content to the inline editor.
+        surface.detailsPath = [rows[1].item]
+        #expect(surface.selection == rows[0].item.id)
+        #expect(surface.selectedReference(in: rows) == nil)
+
+        surface.detailsPath = []
+        #expect(surface.selectedReference(in: rows) == rows[0].item)
+        surface.endSession()
+    }
+
     @Test func arrowsMoveAndClampInAuthoritativeDisplayOrder() {
         let newest = rows[0].item.id
         let middle = rows[1].item.id
