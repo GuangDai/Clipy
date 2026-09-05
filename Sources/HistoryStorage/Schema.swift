@@ -38,9 +38,6 @@ internal enum HistorySchemaV1: VersionedSchema {
     static var models: [any PersistentModel.Type] {
         [HistorySchemaV1.HistoryItemRow.self, LastChangePositionRow.self]
     }
-}
-
-extension HistorySchemaV1 {
 
     /// Durable row for one retained History Item (docs/05-authority-kernel.md §3.1).
     ///
