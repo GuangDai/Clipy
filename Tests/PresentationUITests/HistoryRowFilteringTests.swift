@@ -254,11 +254,9 @@ struct HistoryRowFilteringTests {
 
     // MARK: - Drag-out provider (01 §5.6; 03b §9)
 
-    /// The registered representation is the row's best advertised type in the
-    /// paste preference order (plain text, then PNG/TIFF); a row advertising
-    /// none of them — and an unknown reference alike — still offers
-    /// best-effort plain text.
-    @Test func dragProviderRegistersBestAdvertisedPasteType() async {
+    /// Register the actual row types without inventing UTF-8 for a URL or
+    /// UTF-16 representation; references absent from the display offer none.
+    @Test func dragProviderRegistersActualAdvertisedTypes() async {
         let (state, history) = activatedMixedState()
         #expect(await pollUntil { state.rows.count == 5 })
 
@@ -268,15 +266,15 @@ struct HistoryRowFilteringTests {
             state.dragItemProvider(for: state.rows[0].item)
                 .registeredTypeIdentifiers == ["public.utf8-plain-text"]
         )
-        // The pinned link advertises no paste-preferred type: fallback.
+        // A URL remains a URL; it is not a guessed UTF-8 representation.
         #expect(
             state.dragItemProvider(for: state.rows[1].item)
-                .registeredTypeIdentifiers == ["public.utf8-plain-text"]
+                .registeredTypeIdentifiers == ["public.url"]
         )
-        // UTF-16-only text: same best-effort fallback.
+        // UTF-16 is offered with its exact encoding identifier.
         #expect(
             state.dragItemProvider(for: state.rows[2].item)
-                .registeredTypeIdentifiers == ["public.utf8-plain-text"]
+                .registeredTypeIdentifiers == ["public.utf16-plain-text"]
         )
         #expect(
             state.dragItemProvider(for: state.rows[3].item)
@@ -290,7 +288,7 @@ struct HistoryRowFilteringTests {
         )
         #expect(
             state.dragItemProvider(for: stranger)
-                .registeredTypeIdentifiers == ["public.utf8-plain-text"]
+                .registeredTypeIdentifiers.isEmpty
         )
 
         state.deactivate()

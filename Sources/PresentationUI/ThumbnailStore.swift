@@ -252,6 +252,21 @@ public final class ThumbnailStore {
                 #if DEBUG
                 fetchMs = Self.elapsedMilliseconds(since: fetchStart)
                 #endif
+                // Deletion/reset can retire this request while History is
+                // suspended. Discard its encoded bytes before allocating a
+                // display raster; the final completion fence still covers a
+                // purge that happens during the renderer's own suspension.
+                guard self?.inFlight[item] == requestToken else {
+                    if let self {
+                        self.finishWithoutEntry(item: item, requestToken: requestToken)
+                        #if DEBUG
+                        self.recordMeasurement(
+                            .completed, item: item, fetchMs: fetchMs, outcome: .discarded
+                        )
+                        #endif
+                    }
+                    return
+                }
                 // A reset does not rely on native cancellation: it releases
                 // visible bookkeeping immediately and the request token
                 // rejects any late eager-raster result.

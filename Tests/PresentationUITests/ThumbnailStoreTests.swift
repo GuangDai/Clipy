@@ -14,10 +14,19 @@
 /// (audit 2026-08-20 §S-3/§SPEC-IMPL-001 — the admission record lives in
 /// ThumbnailStore.swift's header). `likelyThumbnailable` mirrors the frozen
 /// v1 ImageIO-decodable UTI set that gates prefetch.
+import ContentPreview
 import Foundation
 import HistoryCore
 import PresentationUI
 import Testing
+
+#if DEBUG
+private actor ThumbnailDisplayDecodeProbe {
+    private(set) var count = 0
+
+    func record() { count += 1 }
+}
+#endif
 
 /// Real ImageIO materialization shares one owner-local native slot. Running
 /// this suite's independent stores concurrently under the full 962-test lane
@@ -96,8 +105,8 @@ struct ThumbnailStoreTests {
 
         // The revised reference fetches its own answer: nil, no image.
         store.prefetch(revised)
-        #expect(await pollUntil { await history.requestCount(for: revised) == 1 })
-        try? await Task.sleep(for: .milliseconds(150))
+        #expect(await pollUntil { store.inFlightCount == 0 })
+        #expect(await history.requestCount(for: revised) == 1)
         #expect(store.imagePixelSize(for: revised) == nil)
         // The original's decoded pixels are untouched.
         #expect(store.imagePixelSize(for: original) != nil)
@@ -106,7 +115,7 @@ struct ThumbnailStoreTests {
         // reference does not re-ask (stable negative — the .miss entry
         // blocks the fetch synchronously).
         store.prefetch(revised)
-        try? await Task.sleep(for: .milliseconds(150))
+        #expect(store.inFlightCount == 0)
         #expect(await history.requestCount(for: revised) == 1)
     }
 
@@ -126,10 +135,8 @@ struct ThumbnailStoreTests {
         let store = ThumbnailStore(history: history)
 
         store.prefetch(item)
-        #expect(await pollUntil { await history.requestCount(for: item) == 1 })
-        // Let the failure path finish (it removes the in-flight marker
-        // without recording an entry).
-        try? await Task.sleep(for: .milliseconds(150))
+        #expect(await pollUntil { store.inFlightCount == 0 })
+        #expect(await history.requestCount(for: item) == 1)
 
         store.prefetch(item)
         #expect(await pollUntil { await history.requestCount(for: item) == 2 })
@@ -161,6 +168,36 @@ struct ThumbnailStoreTests {
     }
 
     #if DEBUG
+    @Test func purgedLatePayloadSkipsDisplayDecodingAndNewRequestStillRenders() async throws {
+        let item = reference("00000000-0000-0000-0000-0000000000DC", version: 1)
+        let history = PausableThumbnailHistory()
+        let store = ThumbnailStore(history: history)
+        let probe = ThumbnailDisplayDecodeProbe()
+
+        try await ContentPreviewDebugInstrumentation.$renderDidStart.withValue({
+            await probe.record()
+        }) {
+            store.prefetch(item)
+            try #require(await pollUntil { await history.requestCount == 1 })
+            store.purge(.item(item.id))
+            store.prefetch(item)
+            try #require(await pollUntil { await history.requestCount == 2 })
+
+            #expect(await history.completeRequest(for: item, with: .success(fixturePNGData)))
+            try #require(await pollUntil { store.debugDiscardedFetchCompletionCount == 1 })
+            #expect(await probe.count == 0)
+            #expect(store.cachedEntryCount == 0)
+            #expect(store.inFlightCount == 1)
+
+            #expect(await history.completeRequest(
+                for: item, occurrence: 1, with: .success(fixturePNGData)
+            ))
+            try #require(await pollUntil { store.imagePixelSize(for: item) != nil })
+            #expect(await probe.count == 1)
+            #expect(store.inFlightCount == 0)
+        }
+    }
+
     /// Reset is a privacy purge boundary, not merely an entries dictionary
     /// clear (deep review Card 9B). Every old-generation flight is released
     /// from visible bookkeeping immediately; whether it later returns a hit,

@@ -220,27 +220,27 @@ struct HistoryDetailsView: View {
             } else {
                 switch phase {
                 case .loading:
-                    ProgressView("Loading…")
+                    ProgressView(PanelActionsCopy.text("Loading…"))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .removed:
                     ContentUnavailableView(
-                        "Item Removed",
+                        PanelActionsCopy.text("Item Removed"),
                         systemImage: "trash",
                         description: Text(
-                            "This item is no longer in your clipboard history."
+                            PanelActionsCopy.text("This item is no longer in your clipboard history.")
                         )
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .failed(let message):
                     ContentUnavailableView {
                         Label(
-                            "Couldn't Load Item",
+                            PanelActionsCopy.text("Couldn't Load Item"),
                             systemImage: "exclamationmark.triangle"
                         )
                     } description: {
                         Text(message)
                     } actions: {
-                        Button("Retry") {
+                        Button(PanelActionsCopy.text("Retry")) {
                             Task { await load() }
                         }
                     }
@@ -252,20 +252,20 @@ struct HistoryDetailsView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.details.root")
-        .navigationTitle("Details")
+        .navigationTitle(PanelActionsCopy.text("Details"))
         .navigationBarBackButtonHidden(showsEditor)
         .overlay { detailsEscapeShortcut }
         .task { await load() }
         .confirmationDialog(
-            "Remove this item from your clipboard history?",
+            PanelActionsCopy.text("Remove this item from your clipboard history?"),
             isPresented: $showsRemoveConfirmation,
             titleVisibility: .visible
         ) {
-            Button("Remove", role: .destructive) {
+            Button(PanelActionsCopy.text("Remove"), role: .destructive) {
                 Task { await remove() }
             }
             .accessibilityIdentifier("clipy.details.confirm-remove")
-            Button("Cancel", role: .cancel) {}
+            Button(PanelActionsCopy.text("Cancel"), role: .cancel) {}
         }
         .onChange(of: viewState.surfacePurge, initial: true) { _, _ in
             _ = reconcileSurfacePurge(viewState.surfacePurge)
@@ -287,7 +287,7 @@ struct HistoryDetailsView: View {
     @ViewBuilder
     private var detailsEscapeShortcut: some View {
         if !showsEditor, !showsRemoveConfirmation {
-            Button("Back to History") {
+            Button(PanelActionsCopy.text("Back to History")) {
                 dismiss()
             }
             .keyboardShortcut(.cancelAction)
@@ -389,7 +389,7 @@ struct HistoryDetailsView: View {
                 // state routes it to the composition root's paste closure.
                 viewState.requestPaste(currentItem)
             } label: {
-                Label("Copy to Clipboard", systemImage: "doc.on.doc")
+                Label(PanelActionsCopy.text("Copy to Clipboard"), systemImage: "doc.on.doc")
             }
             .buttonStyle(.borderedProminent)
             Spacer(minLength: PanelTheme.spacingSmall)
@@ -401,42 +401,41 @@ struct HistoryDetailsView: View {
                         .controlSize(.small)
                 } else {
                     Label(
-                        isPinned ? "Unpin" : "Pin",
+                        isPinned ? PanelActionsCopy.text("Unpin") : PanelActionsCopy.text("Pin"),
                         systemImage: isPinned ? "pin.slash" : "pin"
                     )
                 }
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .help(isPinned ? "Unpin" : "Pin")
-            .accessibilityLabel(isPinned ? "Unpin" : "Pin")
+            .help(isPinned ? PanelActionsCopy.text("Unpin") : PanelActionsCopy.text("Pin"))
+            .accessibilityLabel(isPinned ? PanelActionsCopy.text("Unpin") : PanelActionsCopy.text("Pin"))
             .accessibilityHint(
-                "Pinned items stay at the top of the list and are exempt"
-                    + " from unpinned retention limits."
+                PanelActionsCopy.text("Pinned items stay at the top of the list and are exempt from unpinned retention limits.")
             )
             .accessibilityIdentifier("clipy.details.pin-toggle")
             .disabled(isTogglingPin)
             Button {
                 showsEditor = true
             } label: {
-                Label("Edit Content", systemImage: "square.and.pencil")
+                Label(PanelActionsCopy.text("Edit Content"), systemImage: "square.and.pencil")
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .help("Edit Content…")
-            .accessibilityLabel("Edit Content")
-            .accessibilityHint("Opens the revision editor for this item.")
+            .help(PanelActionsCopy.text("Edit Content…"))
+            .accessibilityLabel(PanelActionsCopy.text("Edit Content"))
+            .accessibilityHint(PanelActionsCopy.text("Opens the revision editor for this item."))
             Button {
                 showsRemoveConfirmation = true
             } label: {
-                Label("Remove", systemImage: "trash")
+                Label(PanelActionsCopy.text("Remove"), systemImage: "trash")
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .help("Remove")
-            .accessibilityLabel("Remove")
+            .help(PanelActionsCopy.text("Remove"))
+            .accessibilityLabel(PanelActionsCopy.text("Remove"))
             .accessibilityHint(
-                "Removes this item from your clipboard history."
+                PanelActionsCopy.text("Removes this item from your clipboard history.")
             )
             .accessibilityIdentifier("clipy.details.remove")
             .disabled(isRemoving)
@@ -464,7 +463,7 @@ struct HistoryDetailsView: View {
             }
             .buttonStyle(.borderless)
             .controlSize(.small)
-            .accessibilityLabel("Dismiss")
+            .accessibilityLabel(PanelActionsCopy.text("Dismiss"))
         }
         .padding(.horizontal, PanelTheme.spacingLarge)
         .padding(.vertical, PanelTheme.spacingXSmall)
@@ -718,7 +717,7 @@ private struct DetailsBody: View {
            let image = PreviewRasterDisplay.image(
                raster,
                scale: 2,
-               label: Text("Item thumbnail")
+               label: Text(PanelActionsCopy.text("Item thumbnail"))
            ) {
             image
                 .resizable()
@@ -729,7 +728,7 @@ private struct DetailsBody: View {
                         cornerRadius: PanelTheme.cornerRadiusMedium
                     )
                 )
-                .accessibilityLabel("Item thumbnail")
+                .accessibilityLabel(PanelActionsCopy.text("Item thumbnail"))
         } else {
             Image(
                 systemName: typeSymbol(
@@ -745,7 +744,7 @@ private struct DetailsBody: View {
                     cornerRadius: PanelTheme.cornerRadiusMedium
                 )
             )
-            .accessibilityLabel("Content type icon")
+            .accessibilityLabel(PanelActionsCopy.text("Content type icon"))
         }
     }
 
@@ -753,7 +752,7 @@ private struct DetailsBody: View {
     private var pinBadge: some View {
         if let position = details.pinnedPosition {
             // `pinnedPosition` is 0-based (03b §8); display is 1-based.
-            Label("Pinned #\(position + 1)", systemImage: "pin.fill")
+            Label(PanelActionsCopy.pinnedPosition(position + 1, compact: true), systemImage: "pin.fill")
                 .font(.caption)
                 .foregroundStyle(Color.accentColor)
                 .padding(.horizontal, PanelTheme.spacingXSmall)
@@ -762,10 +761,10 @@ private struct DetailsBody: View {
                     Color.accentColor.opacity(0.12),
                     in: Capsule()
                 )
-                .accessibilityLabel("Pinned at position \(position + 1)")
+                .accessibilityLabel(PanelActionsCopy.pinnedPosition(position + 1))
                 .accessibilityIdentifier("clipy.details.pin-status")
         } else {
-            Text("Unpinned")
+            Text(PanelActionsCopy.text("Unpinned"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, PanelTheme.spacingXSmall)
@@ -808,16 +807,15 @@ private struct DetailsBody: View {
 
     private var contentSection: some View {
         Section {
-            Picker("Content", selection: $basis) {
-                Text("Effective").tag(ContentBasis.effective)
-                Text("Canonical").tag(ContentBasis.canonical)
+            Picker(PanelActionsCopy.text("Content"), selection: $basis) {
+                Text(PanelActionsCopy.text("Effective")).tag(ContentBasis.effective)
+                Text(PanelActionsCopy.text("Canonical")).tag(ContentBasis.canonical)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .accessibilityLabel("Content view")
+            .accessibilityLabel(PanelActionsCopy.text("Content view"))
             .accessibilityHint(
-                "Effective lists what pasting produces now; Canonical lists"
-                    + " every retained original type."
+                PanelActionsCopy.text("Effective lists what pasting produces now; Canonical lists every retained original type.")
             )
 
             ForEach(representations, id: \.typeIdentifier) { representation in
@@ -835,14 +833,14 @@ private struct DetailsBody: View {
                 )
             }
         } header: {
-            Text("Content")
+            Text(PanelActionsCopy.text("Content"))
         }
     }
 
     private var revisionsSection: some View {
         Section {
             if details.revisions.isEmpty {
-                Text("No revisions")
+                Text(PanelActionsCopy.text("No revisions"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -853,13 +851,13 @@ private struct DetailsBody: View {
             }
         } header: {
             HStack {
-                Text("Revisions")
+                Text(PanelActionsCopy.text("Revisions"))
                 Spacer()
                 Button {
                     onRevise(.revert(to: .canonical))
                 } label: {
                     Label(
-                        "Revert to Original",
+                        PanelActionsCopy.text("Revert to Original"),
                         systemImage: "arrow.uturn.backward"
                     )
                 }
@@ -869,10 +867,9 @@ private struct DetailsBody: View {
                 // `.unchanged` no-op (docs/02-domain.md §11 step 5; WS7 (b)),
                 // so the action is disabled exactly in that state.
                 .disabled(!canRevertToOriginal)
-                .accessibilityLabel("Revert to Original")
+                .accessibilityLabel(PanelActionsCopy.text("Revert to Original"))
                 .accessibilityHint(
-                    "Restores the canonical content as this item's current"
-                        + " content."
+                    PanelActionsCopy.text("Restores the canonical content as this item's current content.")
                 )
             }
         }
@@ -924,7 +921,7 @@ private struct RepresentationRow: View {
                     .truncationMode(.middle)
                 Spacer(minLength: PanelTheme.spacingSmall)
                 if isHiddenFromEffective {
-                    Label("Hidden", systemImage: "eye.slash")
+                    Label(PanelActionsCopy.text("Hidden"), systemImage: "eye.slash")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, PanelTheme.spacingXSmall)
@@ -933,7 +930,7 @@ private struct RepresentationRow: View {
                             Color.primary.opacity(0.06),
                             in: Capsule()
                         )
-                        .accessibilityLabel("Hidden from effective content")
+                        .accessibilityLabel(PanelActionsCopy.text("Hidden from effective content"))
                 }
                 Text(
                     DetailsFormat.bytes.string(
@@ -976,17 +973,17 @@ private struct RepresentationRow: View {
                     .strokeBorder(Color.primary.opacity(0.12))
                 }
                 .accessibilityLabel(
-                    "Text preview of \(representation.typeIdentifier)"
+                    PanelActionsCopy.format("Text preview of %@", representation.typeIdentifier)
                 )
             }
             if presentation == .metadataOnly,
                 !isImageType(representation.typeIdentifier)
             {
-                Label("Preview unavailable", systemImage: "doc")
+                Label(PanelActionsCopy.text("Preview unavailable"), systemImage: "doc")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(
-                        "Preview unavailable for \(representation.typeIdentifier)"
+                        PanelActionsCopy.format("Preview unavailable for %@", representation.typeIdentifier)
                     )
             }
             if isImageType(representation.typeIdentifier),
@@ -994,7 +991,7 @@ private struct RepresentationRow: View {
                let image = PreviewRasterDisplay.image(
                    raster,
                    scale: 2,
-                   label: Text("Item thumbnail")
+                   label: Text(PanelActionsCopy.text("Item thumbnail"))
                )
             {
                 image
@@ -1013,7 +1010,7 @@ private struct RepresentationRow: View {
                         )
                     )
                     .accessibilityLabel(
-                        "Image preview of \(representation.typeIdentifier)"
+                        PanelActionsCopy.format("Image preview of %@", representation.typeIdentifier)
                     )
             }
         }
@@ -1053,18 +1050,18 @@ private struct RevisionRow: View {
             }
             Spacer(minLength: PanelTheme.spacingSmall)
             if revision.isActive {
-                Label("Active", systemImage: "checkmark.circle")
+                Label(PanelActionsCopy.text("Active"), systemImage: "checkmark.circle")
                     .font(.caption)
                     .foregroundStyle(Color.accentColor)
-                    .accessibilityLabel("Active revision")
+                    .accessibilityLabel(PanelActionsCopy.text("Active revision"))
             }
-            Button("Revert", action: onRevert)
+            Button(PanelActionsCopy.text("Revert"), action: onRevert)
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(revision.isActive)
-                .accessibilityLabel("Revert to \(revision.title)")
+                .accessibilityLabel(PanelActionsCopy.format("Revert to %@", revision.title))
                 .accessibilityHint(
-                    "Restores this revision as the item's current content."
+                    PanelActionsCopy.text("Restores this revision as the item's current content.")
                 )
         }
         .padding(.vertical, PanelTheme.spacingXXXSmall)

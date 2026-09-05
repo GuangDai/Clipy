@@ -138,13 +138,13 @@ package struct HistoryRowView: View {
         .accessibilityAction(named: Text(pinAccessibilityActionName)) {
             performAccessibilityAction(.togglePin)
         }
-        .accessibilityAction(named: Text("Show Details")) {
+        .accessibilityAction(named: Text(PanelActionsCopy.text("Show Details"))) {
             performAccessibilityAction(.showDetails)
         }
-        .accessibilityAction(named: Text("Remove")) {
+        .accessibilityAction(named: Text(PanelActionsCopy.text("Remove"))) {
             performAccessibilityAction(.remove)
         }
-        .accessibilityHint("Copies this item to the clipboard.")
+        .accessibilityHint(PanelActionsCopy.text("Copies this item to the clipboard."))
     }
 
     // MARK: Accessibility action dispatch (V2-07 §9)
@@ -191,7 +191,7 @@ package struct HistoryRowView: View {
                let image = PreviewRasterDisplay.image(
                    raster,
                    scale: 2,
-                   label: Text("Item thumbnail")
+                   label: Text(PanelActionsCopy.text("Item thumbnail"))
                ) {
                 image
                     .resizable()
@@ -218,12 +218,17 @@ package struct HistoryRowView: View {
         .clipShape(RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium))
         .overlay(alignment: .bottomLeading) { pinBadge }
         .task(id: row.item) {
+            guard !Task.isCancelled else { return }
             if ThumbnailStore.likelyThumbnailable(row.typeIdentifiers) {
                 thumbnails.prefetch(row.item)
             }
+        }
+        .task(id: row.lastSource) {
+            guard !Task.isCancelled else { return }
             if let lastSource = row.lastSource {
                 // Resolution mutates the store, so it runs here rather than
-                // in body evaluation; the row reads `cachedIcon` only.
+                // in body evaluation. Coalescing can change lastSource while
+                // preserving row.item, so this task follows the source itself.
                 sourceIcons?.icon(forBundleID: lastSource)
             }
         }
@@ -255,7 +260,7 @@ package struct HistoryRowView: View {
             .padding(.horizontal, 3)
             .padding(.vertical, 1)
             .background { Capsule().fill(.thinMaterial) }
-            .accessibilityLabel("Pinned at position \(ordinal)")
+            .accessibilityLabel(PanelActionsCopy.pinnedPosition(ordinal))
         }
     }
 
@@ -330,7 +335,7 @@ package struct HistoryRowView: View {
     /// explicit pointer/keyboard-menu choice while assistive technology gets
     /// one unambiguous Pin or Unpin action (V2-07 §9).
     private var pinAccessibilityActionName: String {
-        row.pinnedPosition == nil ? "Pin" : "Unpin"
+        row.pinnedPosition == nil ? PanelActionsCopy.text("Pin") : PanelActionsCopy.text("Unpin")
     }
 
     /// Narrow presentation keeps the shipped compact form: the last path
@@ -378,42 +383,42 @@ package struct HistoryRowView: View {
         Button {
             onCopy(row.item)
         } label: {
-            Label("Copy to Clipboard", systemImage: "doc.on.clipboard")
+            Label(PanelActionsCopy.text("Copy to Clipboard"), systemImage: "doc.on.clipboard")
         }
 
         if row.pinnedPosition != nil {
             Button {
                 onPin(row.item.id, .first)
             } label: {
-                Label("Move to Top", systemImage: "arrow.up.to.line")
+                Label(PanelActionsCopy.text("Move to Top"), systemImage: "arrow.up.to.line")
             }
             Button {
                 onPin(row.item.id, .last)
             } label: {
-                Label("Move to Bottom", systemImage: "arrow.down.to.line")
+                Label(PanelActionsCopy.text("Move to Bottom"), systemImage: "arrow.down.to.line")
             }
             Button {
                 onUnpin(row.item.id)
             } label: {
-                Label("Unpin", systemImage: "pin.slash")
+                Label(PanelActionsCopy.text("Unpin"), systemImage: "pin.slash")
             }
         } else {
             Button {
                 onPin(row.item.id, .first)
             } label: {
-                Label("Pin to Top", systemImage: "pin")
+                Label(PanelActionsCopy.text("Pin to Top"), systemImage: "pin")
             }
             Button {
                 onPin(row.item.id, .last)
             } label: {
-                Label("Pin to Bottom", systemImage: "pin")
+                Label(PanelActionsCopy.text("Pin to Bottom"), systemImage: "pin")
             }
         }
 
         Button {
             onShowDetails(row.item)
         } label: {
-            Label("Show Details", systemImage: "info.circle")
+            Label(PanelActionsCopy.text("Show Details"), systemImage: "info.circle")
         }
         .keyboardShortcut("i", modifiers: .command)
 
@@ -422,7 +427,7 @@ package struct HistoryRowView: View {
         Button(role: .destructive) {
             onRemove(row.item.id)
         } label: {
-            Label("Remove", systemImage: "trash")
+            Label(PanelActionsCopy.text("Remove"), systemImage: "trash")
         }
         .keyboardShortcut(.delete, modifiers: [])
     }

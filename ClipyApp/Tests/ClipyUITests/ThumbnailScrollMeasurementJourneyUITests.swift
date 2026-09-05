@@ -70,6 +70,14 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
         let measurementURL = directory
             .appendingPathComponent("thumb-measure.jsonl")
 
+        // Startup deliberately captures the current General pasteboard.
+        // Remove the previous journey's value before launching, so a late
+        // startup text capture cannot acknowledge the first PNG below.
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        XCTAssertTrue((pasteboard.pasteboardItems ?? []).isEmpty)
+        defer { pasteboard.clearContents() }
+
         let app = XCUIApplication()
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory
@@ -90,6 +98,11 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
             diagnostic(app, context: "measurement journey panel")
         )
         let rows = historyRows(in: app)
+        XCTAssertTrue(
+            app.staticTexts["No Clipboard History"].waitForExistence(timeout: 20),
+            diagnostic(app, context: "fresh History observation completed empty")
+        )
+        XCTAssertEqual(rows.count, 0, diagnostic(app, context: "empty capture baseline"))
 
         // —— Seeding: 60 mutually distinct real PNG captures. The unpinned
         //    lane is newest-first (lastCopiedAt descending), so every capture
@@ -106,7 +119,9 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
         //    A single large fling bottomed out page one without ever
         //    materializing the page-two tail (observed on CI: exactly the
         //    50 first-page rows).
-        let scrollView = panel.scrollViews.firstMatch
+        // A left-side text preview also has a scroll view. Select the one
+        // containing the History outline, independent of preview placement.
+        let scrollView = panel.scrollViews.containing(.outline, identifier: nil).firstMatch
         XCTAssertTrue(
             scrollView.waitForExistence(timeout: 10),
             diagnostic(app, context: "history list scroll view")
@@ -280,7 +295,9 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
         app: XCUIApplication,
         rows: XCUIElementQuery
     ) throws {
-        var lastFirstRowIdentifier = rows.element(boundBy: 0).identifier
+        // The caller joined the authoritative empty-state presentation.
+        // There is no row to query until the first PNG capture arrives.
+        var lastFirstRowIdentifier = ""
         for index in 0..<count {
             let png = try encodedPNG(index: index, totalCount: count)
             let pasteboard = NSPasteboard.general
@@ -296,8 +313,11 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
             )
             XCTAssertTrue(
                 waitUntil(timeout: 20) {
-                    rows.element(boundBy: 0).identifier
-                        != lastFirstRowIdentifier
+                    let firstRow = rows.element(boundBy: 0)
+                    guard firstRow.exists else { return false }
+                    let identifier = firstRow.identifier
+                    return !identifier.isEmpty
+                        && identifier != lastFirstRowIdentifier
                 },
                 diagnostic(
                     app,

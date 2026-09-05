@@ -70,13 +70,13 @@ struct HistoryListView: View {
     }
 
     var body: some View {
-        // Minute precision is the owning UX decision for relative metadata.
-        // One list-owned timeline supplies the same minute-boundary instant
-        // to every visible row. `.everyMinute` performs an immediate render
-        // and then advances at wall-clock minute boundaries; rows do not own
-        // timers, and no process-global clock service is introduced.
-        TimelineView(.everyMinute) { timeline in
-            content(now: timeline.date)
+        // One list-owned timeline refreshes idle relative metadata each
+        // minute. Its scheduled date may predate newly captured rows, so
+        // sample the actual redraw time once for the whole list; otherwise
+        // a copy made during this minute can read "in 23s" until the next
+        // tick (01 §6). Individual rows still own no clocks or timers.
+        TimelineView(.everyMinute) { _ in
+            content(now: Date())
                 .background { selectionShortcuts }
         }
     }
@@ -245,7 +245,7 @@ struct HistoryListView: View {
 
     private var selectedRow: HistoryRow? {
         guard let id = selection.wrappedValue else { return nil }
-        return viewState.rows.first { $0.item.id == id }
+        return viewState.displayedRows.first { $0.item.id == id }
     }
 
     /// Invisible buttons carrying the selection-keyed shortcuts. The ⌫

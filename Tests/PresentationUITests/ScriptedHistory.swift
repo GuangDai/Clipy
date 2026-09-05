@@ -30,7 +30,8 @@ import HistoryCore
 ///   04-coherence.md §6).
 /// - `perform` records every action and either throws `performFailure` or
 ///   returns the scripted receipt (`.unchanged` by default).
-/// - `details`/`pastePayload` throw `.notFound`; `thumbnail` returns `nil`.
+/// - `details` throws `.notFound`; `pastePayload` uses an optional scripted
+///   read for drag-provider UI tests, otherwise `.notFound`; thumbnail is nil.
 /// - `retentionConfiguration` returns the scripted configured-policy value
 ///   and records the request count (V2-07 §6.3's panel-open read).
 actor ScriptedHistory: ClipboardHistory {
@@ -67,6 +68,9 @@ actor ScriptedHistory: ClipboardHistory {
 
     /// The configured-policy value `retentionConfiguration` returns.
     private let scriptedRetentionConfiguration: HistoryRetentionConfiguration
+
+    private let pastePayloadRead:
+        (@Sendable (HistoryItemID) async throws -> PastePayload)?
 
     /// Recorded `observe` requests, in order.
     private(set) var observeRequests: [HistoryObservationRequest] = []
@@ -114,7 +118,8 @@ actor ScriptedHistory: ClipboardHistory {
         browseScript: [HistoryPageCursor: BrowseOutcome] = [:],
         performFailure: HistoryFailure? = nil,
         performReceipt: HistoryReceipt = .unchanged,
-        scriptedRetentionConfiguration: HistoryRetentionConfiguration = .newStoreDefaults
+        scriptedRetentionConfiguration: HistoryRetentionConfiguration = .newStoreDefaults,
+        pastePayloadRead: (@Sendable (HistoryItemID) async throws -> PastePayload)? = nil
     ) {
         self.observedFirstPage = observedFirstPage
         self.repeatsObservedFirstPage = repeatsObservedFirstPage
@@ -122,6 +127,7 @@ actor ScriptedHistory: ClipboardHistory {
         self.performFailure = performFailure
         self.performReceipt = performReceipt
         self.scriptedRetentionConfiguration = scriptedRetentionConfiguration
+        self.pastePayloadRead = pastePayloadRead
     }
 
     // MARK: Test control
@@ -232,6 +238,9 @@ actor ScriptedHistory: ClipboardHistory {
     }
 
     func pastePayload(for id: HistoryItemID) async throws -> PastePayload {
+        if let pastePayloadRead {
+            return try await pastePayloadRead(id)
+        }
         throw HistoryFailure.notFound(id)
     }
 

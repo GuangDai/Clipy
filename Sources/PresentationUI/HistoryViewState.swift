@@ -277,6 +277,14 @@ public final class HistoryViewState {
         return unpinnedRows.filter { typeFilter.admits($0) }
     }
 
+    /// The list's visible order after its type and pinned-only filters.
+    /// AppKit's Return handler reads this same order synchronously, so an
+    /// old selection cannot paste a hidden row while SwiftUI is still
+    /// reconciling the filter change (01 §5.6; review Card 14A).
+    public var displayedRows: [HistoryRow] {
+        displayedPinnedRows + displayedUnpinnedRows
+    }
+
     /// Whether a further one-shot page exists after the displayed rows.
     public var hasNextPage: Bool {
         nextPageCursor != nil
@@ -424,11 +432,11 @@ public final class HistoryViewState {
     }
 
     /// List-owned paste requests are accepted only while the exact row is
-    /// still in the authoritative display. This closes the short render gap
-    /// in which a stale row closure could otherwise fire after query intent
-    /// has synchronously cleared `rows`.
+    /// still in the filtered authoritative display. This closes the render
+    /// gap after a filter hides a row or a query intent clears `rows`, while
+    /// the old row closure or selection may still be reachable.
     package func requestPasteFromDisplayedRow(_ item: HistoryItemReference) {
-        guard rows.contains(where: { $0.item == item }) else { return }
+        guard displayedRows.contains(where: { $0.item == item }) else { return }
         onPaste(item)
     }
 
@@ -438,53 +446,53 @@ public final class HistoryViewState {
     /// resolve on drop through the same `pastePayload(for:)` Effective
     /// Content read that backs the composition root's paste hand-off
     /// (docs/01-architecture.md §5.6; docs/03b-instruction-set.md §9) —
-    /// never from row display state — and the registered representation is
-    /// the row's best advertised type in the paste preference order (plain
-    /// text, then the frozen v1 decodable image formats). A typed read
-    /// failure completes with `nil` rather than surfacing panel failure
-    /// vocabulary onto an external drop. `NSItemProvider` is Foundation, so
+    /// never from row display state. Every advertised type is available to
+    /// the receiver, including opaque bytes; plain text and the preferred
+    /// raster types are offered first. The read returns current Effective
+    /// Content by ID (03b §9 / 04 §8 DEC-PASTE-REFERENCE); an advertised type
+    /// hidden by a later revision completes without bytes. Failures go
+    /// to the drop completion, without changing the panel banner.
+    /// `NSItemProvider` is Foundation, so
     /// PresentationUI's no-AppKit rule (01 §6) is preserved.
     package func dragItemProvider(
         for reference: HistoryItemReference
     ) -> NSItemProvider {
         let provider = NSItemProvider()
-        let advertised = rows.first { $0.item == reference }?.typeIdentifiers ?? []
-        let typeIdentifier = Self.dragTypeIdentifier(advertised: advertised)
+        guard let row = displayedRows.first(where: { $0.item == reference }) else {
+            return provider
+        }
+        let advertised = row.typeIdentifiers
+        let preferred = Self.dragTypePreference.filter { advertised.contains($0) }
+        let remaining = advertised.filter { !Self.dragTypePreference.contains($0) }
         let history = self.history
-        let itemID = reference.id
-        provider.registerDataRepresentation(
-            forTypeIdentifier: typeIdentifier,
-            visibility: .all
-        ) { completion in
-            Task {
-                let payload = try? await history.pastePayload(for: itemID)
-                let representations = payload?.representations ?? []
-                let bytes = representations
-                    .first { $0.typeIdentifier == typeIdentifier }?
-                    .bytes
-                completion(bytes, nil)
+        for typeIdentifier in preferred + remaining {
+            provider.registerDataRepresentation(
+                forTypeIdentifier: typeIdentifier,
+                visibility: .all
+            ) { completion in
+                Task {
+                    do {
+                        let payload = try await history.pastePayload(for: reference.id)
+                        let bytes = payload.representations
+                            .first { $0.typeIdentifier == typeIdentifier }?.bytes
+                        completion(bytes, nil)
+                    } catch {
+                        completion(nil, error)
+                    }
+                }
+                return nil
             }
-            return nil
         }
         return provider
     }
 
-    /// Drag/paste representation preference: plain text first, then the
-    /// frozen v1 decodable image formats. A row advertising none of them
-    /// still offers best-effort plain text; the payload read is the
-    /// authority on what actually completes.
+    /// Registration preference only; other representations remain available
+    /// as their exact identifiers and bytes, without guessed text semantics.
     private static let dragTypePreference: [String] = [
         "public.utf8-plain-text",
         "public.png",
         "public.tiff",
     ]
-
-    private static func dragTypeIdentifier(advertised: [String]) -> String {
-        for candidate in dragTypePreference where advertised.contains(candidate) {
-            return candidate
-        }
-        return dragTypePreference[0]
-    }
 
     /// Pins or reorders; typed failures land in `failure`.
     public func pin(_ id: HistoryItemID, at placement: PinnedPlacement = .first) {

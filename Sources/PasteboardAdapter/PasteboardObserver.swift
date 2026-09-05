@@ -160,7 +160,9 @@ public final class PasteboardObserver {
         to handler: @MainActor (CaptureOutcome) -> Void
     ) {
         guard let outcome = captureOutcomeWithOneOwnershipRetry() else {
-            lastChangeCount = adapter.pasteboard.changeCount
+            // Keep the generation sampled before this read. Another process
+            // may write after the adapter found a stable empty pasteboard;
+            // resampling here would mark that unread value as already seen.
             return
         }
         switch outcome {

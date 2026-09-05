@@ -63,6 +63,50 @@ private func effectiveTextContent(
     )
 }
 
+@Test func titleOnlyProjectionMatchesNewlineAndWhitespaceSemantics() {
+    let fixtures: [(String, String)] = [
+        (" \r\n\t\r\n First title \rignored", "First title"),
+        ("\r\n\r\n\n\r First title \nignored", "First title"),
+        ("\u{00A0}\r e\u{301} 👩‍💻 \r\nignored", "e\u{301} 👩‍💻"),
+        ("First\u{2028}Second\u{0085}Third\rignored", "First\u{2028}Second\u{0085}Third"),
+        (" \r\n\t\r\u{00A0}\n", "public.utf8-plain-text"),
+    ]
+    for (text, expected) in fixtures {
+        let content = effectiveTextContent([
+            ("public.utf8-plain-text", text),
+        ])
+        let title = ContentProjector.projectTitle(content)
+        // String equality alone would hide a change to Unicode normalization.
+        #expect(Data(title.utf8) == Data(expected.utf8))
+        #expect(Data(title.utf8) == Data(ContentProjector.project(content).title.utf8))
+    }
+}
+
+@Test func titleOnlyProjectionKeepsGraphemesAtTheByteLimitBeforeALargeBody() {
+    let prefix = String(
+        repeating: "a",
+        count: HistoryLimits.standard.maximumStoredTitleUTF8Bytes - 1
+    )
+    let text = "\r\n " + prefix + "e\u{301} \r\n"
+        + String(repeating: "large body\r\n", count: 50_000)
+    for identifier in ["public.utf8-plain-text", "public.utf16-external-plain-text"] {
+        let content = effectiveTextContent([(identifier, text)])
+        let title = ContentProjector.projectTitle(content)
+        // The decomposed grapheme needs three bytes and cannot fit in the
+        // final one-byte slot. Neither its base nor its accent may be split.
+        #expect(Data(title.utf8) == Data(prefix.utf8))
+        #expect(Data(title.utf8) == Data(ContentProjector.project(content).title.utf8))
+    }
+}
+
+@Test func titleOnlyProjectionStillRejectsMalformedBytesAfterAValidFirstLine() {
+    let content = EffectiveContent(representations: [ContentRepresentation(
+        typeIdentifier: "public.utf8-plain-text",
+        bytes: Data("Valid first line\r\n".utf8) + Data([0xC3, 0x28])
+    )])
+    #expect(ContentProjector.projectTitle(content) == "public.utf8-plain-text")
+}
+
 @Test func projectionSkipsLaterDecodesOnceTitleAndBodyBudgetsComplete() {
     let bound = HistoryLimits.standard.maximumStoredSearchBodyUTF8Bytes
     let exactFill = String(repeating: "b", count: bound)

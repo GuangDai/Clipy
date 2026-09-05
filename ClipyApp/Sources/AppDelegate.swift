@@ -698,7 +698,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                           panelSurfaceState.isAtListRoot
                     else { return false }
                     return panelSurfaceState.selectedReference(
-                        in: composition.viewState.rows
+                        in: composition.viewState.displayedRows
                     ) != nil
                 },
                 onSubmitSelection: { [weak self] in
@@ -724,7 +724,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func submitPanelSelection() {
         guard let composition,
               let reference = panelSurfaceState?.selectedReference(
-                  in: composition.viewState.rows
+                  in: composition.viewState.displayedRows
               )
         else { return }
         composition.viewState.requestPaste(reference)

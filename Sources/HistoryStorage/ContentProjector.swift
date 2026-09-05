@@ -232,7 +232,7 @@ internal enum ContentProjector {
         for representation in content.representations {
             guard
                 let text = decodedText(of: representation),
-                let title = firstContentLine(of: normalizingNewlines(text))
+                let title = firstContentLine(of: text)
             else {
                 continue
             }
@@ -317,17 +317,22 @@ internal enum ContentProjector {
 
     /// The first line whose whitespace-trimmed form is non-empty, trimmed;
     /// `nil` when the text has no such line (§15: "first eligible textual
-    /// line after normalization").
-    private static func firstContentLine(of normalizedText: String) -> String? {
-        var start = normalizedText.startIndex
+    /// line after normalization"). CRLF, CR, and LF delimit the same lines
+    /// before or after normalization. A title-only read therefore scans only
+    /// through its selected line without allocating a normalized copy of the
+    /// whole decoded representation. Other Unicode newline scalars retain
+    /// the existing trim-only behavior; they do not become line delimiters.
+    private static func firstContentLine(of text: String) -> String? {
+        var start = text.startIndex
         while true {
-            let end = normalizedText[start...].firstIndex(of: "\n")
-                ?? normalizedText.endIndex
-            let trimmed = normalizedText[start..<end]
+            let end = text[start...].firstIndex {
+                $0 == "\n" || $0 == "\r" || $0 == "\r\n"
+            } ?? text.endIndex
+            let trimmed = text[start..<end]
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty { return trimmed }
-            guard end != normalizedText.endIndex else { return nil }
-            start = normalizedText.index(after: end)
+            guard end != text.endIndex else { return nil }
+            start = text.index(after: end)
         }
     }
 

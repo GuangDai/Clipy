@@ -591,7 +591,10 @@ public struct HistoryPanelView: View {
                     previewState.refreshOpenPreview(reference)
                 }
             }
-            .onChange(of: viewState.rows.map(\.item)) { _, _ in
+            // Pin-only membership can change without changing any item
+            // reference or raw ordering. Reconcile the rows actually shown
+            // so an observed Unpin also retires a now-hidden selection.
+            .onChange(of: viewState.displayedRows.map(\.item)) { _, _ in
                 reconcileSelectionWithDisplayedDefault()
             }
             // An authoritative empty replacement can leave `rows == []` across
@@ -888,7 +891,7 @@ public struct HistoryPanelView: View {
                 },
                 onSubmitSelection: {
                     guard let selectedID = surfaceState.selection,
-                          let selected = viewState.rows.first(where: {
+                          let selected = viewState.displayedRows.first(where: {
                               $0.item.id == selectedID
                           })
                     else { return }
@@ -964,7 +967,7 @@ public struct HistoryPanelView: View {
     /// with an active filter, arrows can never land on an invisible row and
     /// Return can never paste one blindly.
     private var displayedSelectionRows: [HistoryRow] {
-        viewState.displayedPinnedRows + viewState.displayedUnpinnedRows
+        viewState.displayedRows
     }
 
     /// Authoritative reconciliation plus the wave-2 displayed-default

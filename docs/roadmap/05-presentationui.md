@@ -23,6 +23,13 @@
   must not rewrite untouched sub-unit raw values, while an edited whole-unit
   field represents the user's explicit whole-unit value.
 - **Selection, window behavior, observable presentation state** on the Main actor (Part I §6).
+- **Drag-out:** register each displayed row's actual Effective type, including
+  opaque representations, with plain text and preferred raster types first.
+  Require the displayed exact reference when the drag begins, then resolve
+  current Effective Content lazily through `pastePayload(for:)` by ID
+  (`03b` §9 / `04` §8 `DEC-PASTE-REFERENCE`). A drag already started can
+  finish after the panel closes. A removed item fails the read; an advertised
+  type hidden by a later revision completes without bytes.
 - **Scripted preview adapter:** a small `ClipboardHistory` implementation for SwiftUI previews; it must be `Sendable` and must not substitute for storage semantic tests (03a §3, 01 §4).
 - **Preview deep module:** `PreviewContentLoader` alone owns History reads,
   exact-reference/task/generation/lifecycle fences and publication. It maps one

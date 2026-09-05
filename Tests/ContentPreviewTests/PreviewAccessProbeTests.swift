@@ -490,7 +490,7 @@ struct PreviewAccessProfileTests {
         #expect(header.intrinsicWidth == fixture.intrinsicWidth)
         #expect(header.intrinsicHeight == fixture.intrinsicHeight)
         let dimensionsAvailable = try #require(
-            header.dimensionsAvailableUnfinalizedAtFullLength
+            header.dimensionsAvailableUnfinalizedAtFullLength as Bool?
         )
         if dimensionsAvailable {
             let headerPrefix = try #require(header.satisfiedPrefixBytes)

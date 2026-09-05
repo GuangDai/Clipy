@@ -179,7 +179,7 @@ extension HistoryAuthority {
 
         // ── PHASE A — R3 first (§4.4/§3.2): prunes per exceeding item,
         //    planned WITHOUT the veto (the veto is PHASE C, post-PHASE-B). ──
-        // The loaded lineage of every exceeding item — the stamping inputs
+        // The loaded lineage of every item with prunes — the stamping inputs
         // the per-case `.pruneRevisions` rows re-encode from (§5.3/§6.3).
         var lineagesByItem: [HistoryItemID: PruneLineage] = [:]
         // Non-empty prune sets only (§5.3: a no-op prune never reaches a plan).
@@ -248,35 +248,32 @@ extension HistoryAuthority {
                         revisions: revisionPolicy
                     )
                 )
-                lineagesByItem[summary.id] = PruneLineage(
-                    revisions: facts.item.revisions,
-                    activeRevisionID: facts.item.activeRevisionID
-                )
                 // §3.2 post-R3-prune projection: the item's revision scalars
                 // over `loadedRevisions \ pruneSet` — computed in-commit over
                 // the loaded lineage, never a second fact load. An empty
                 // prune set (an active-only lineage that still exceeds the
                 // byte threshold) projects to the loaded scalars themselves,
                 // which is exactly the PHASE-C subject.
-                let removedIDs = Set(pruneSet)
-                var survivors: [ContentRevision] = []
-                survivors.reserveCapacity(facts.item.revisions.count)
-                for revision in facts.item.revisions
-                where !removedIDs.contains(revision.id) {
-                    survivors.append(revision)
+                let survivorScalars: RetainedRevisionScalars
+                if pruneSet.isEmpty {
+                    survivorScalars = hydratedRevisionScalars
+                } else {
+                    let removedIDs = Set(pruneSet)
+                    survivorScalars = RetainedBytesStamping.revisionScalars(
+                        of: facts.item.revisions.lazy.filter { !removedIDs.contains($0.id) }
+                    )
+                    lineagesByItem[summary.id] = PruneLineage(
+                        revisions: facts.item.revisions,
+                        activeRevisionID: facts.item.activeRevisionID
+                    )
+                    pruneIDsByItem[summary.id] = pruneSet
                 }
-                let survivorScalars = RetainedBytesStamping.revisionScalars(
-                    of: survivors
-                )
                 projectedByItem[summary.id] = RetentionConfigLoading
                     .ProjectedItemScalars(
                         canonicalBytes: scalars.canonicalBytes,
                         revisionCount: survivorScalars.count,
                         revisionBytes: survivorScalars.bytes
                     )
-                if !pruneSet.isEmpty {
-                    pruneIDsByItem[summary.id] = pruneSet
-                }
             }
         }
 
@@ -380,10 +377,9 @@ extension HistoryAuthority {
         // bytes are bounded by its (already-compliant) total. The count
         // dimension is always satisfiable (§8.3) and is not checked.
         if let maxRevisionBytes = newPolicies.revisions?.maxRevisionBytesPerItem {
-            for itemID in projectedByItem.keys.sorted()
+            for (itemID, projected) in projectedByItem
             where !retiredIDs.contains(itemID) {
-                if let projected = projectedByItem[itemID],
-                   projected.revisionBytes > maxRevisionBytes {
+                if projected.revisionBytes > maxRevisionBytes {
                     throw HistoryFailure.invalidInput(.invalidRetentionPolicy)
                 }
             }
