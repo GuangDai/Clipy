@@ -754,11 +754,7 @@ private struct DetailsBody: View {
                 )
                 .accessibilityLabel(PanelActionsCopy.text("Item thumbnail"))
         } else {
-            Image(
-                systemName: typeSymbol(
-                    for: details.effective.map(\.typeIdentifier)
-                )
-            )
+            Image(systemName: content.symbolName)
             .font(.system(size: 28))
             .foregroundStyle(.secondary)
             .frame(width: 64, height: 64)
@@ -999,7 +995,7 @@ private struct RepresentationRow: View {
                 )
             }
             if presentation == .metadataOnly,
-                !isImageType(representation.typeIdentifier)
+                !representation.isImage
             {
                 Label(PanelActionsCopy.text("Preview unavailable"), systemImage: "doc")
                     .font(.caption)
@@ -1008,7 +1004,7 @@ private struct RepresentationRow: View {
                         PanelActionsCopy.format("Preview unavailable for %@", representation.typeIdentifier)
                     )
             }
-            if isImageType(representation.typeIdentifier),
+            if representation.isImage,
                let raster = thumbnails.raster(for: item),
                let image = PreviewRasterDisplay.image(
                    raster,
@@ -1168,11 +1164,13 @@ package struct DetailsContentPresentation: Sendable {
         package let typeIdentifier: String
         package let byteCount: Int
         package let presentation: DetailsRepresentationPresentation
+        package let isImage: Bool
     }
 
     package let canonical: [Representation]
     package let effective: [Representation]
     package let effectiveMatchesCanonical: Bool
+    package let symbolName: String
     /// Literal active-revision or first text title; the view localizes only
     /// its absent-title fallback, not user content or durable revision titles.
     package let title: String?
@@ -1181,11 +1179,18 @@ package struct DetailsContentPresentation: Sendable {
         canonical = try Self.prepare(details.canonical)
         try Task.checkCancellation()
         effectiveMatchesCanonical = details.effective == details.canonical
-        if effectiveMatchesCanonical {
+        // Domain equality deliberately accepts canonically equivalent type
+        // identifiers (02 §2.1), but display rows retain each DTO's spelling.
+        // Only share prepared rows when that spelling is byte-identical too.
+        if effectiveMatchesCanonical,
+           zip(details.canonical, details.effective).allSatisfy({ pair in
+               pair.0.typeIdentifier.utf8.elementsEqual(pair.1.typeIdentifier.utf8)
+           }) {
             effective = canonical
         } else {
             effective = try Self.prepare(details.effective)
         }
+        symbolName = typeSymbol(for: details.effective.map(\.typeIdentifier))
         if let active = details.revisions.first(where: \.isActive) {
             title = active.title
         } else {
@@ -1207,7 +1212,8 @@ package struct DetailsContentPresentation: Sendable {
             return Representation(
                 typeIdentifier: representation.typeIdentifier,
                 byteCount: representation.bytes.count,
-                presentation: DetailsRepresentationPresentation.resolve(representation)
+                presentation: DetailsRepresentationPresentation.resolve(representation),
+                isImage: isImageType(representation.typeIdentifier)
             )
         }
     }
@@ -1244,22 +1250,23 @@ private let textualTypeIdentifiers: Set<String> = [
     ClipboardFormatIdentifier.html.rawValue,
 ]
 
-/// Mirror of storage's frozen v1 ImageIO-decodable set (docs/04-coherence.md
-/// §9; `HistoryAuthority+DetailAndThumbnail.thumbnailImageTypeIdentifiers`).
+/// Exact image family for Details presentation, including the abstract image
+/// identifier. This is a display classification, not a decoder contract.
 private let imageTypeIdentifiers: Set<String> = [
-    "public.png",
-    "public.jpeg",
-    "public.tiff",
-    "public.heic",
-    "public.heif",
-    "com.compuserve.gif",
-    "com.microsoft.bmp",
+    ClipboardFormatIdentifier.image.rawValue,
+    ClipboardFormatIdentifier.png.rawValue,
+    ClipboardFormatIdentifier.jpeg.rawValue,
+    ClipboardFormatIdentifier.tiff.rawValue,
+    ClipboardFormatIdentifier.heic.rawValue,
+    ClipboardFormatIdentifier.heif.rawValue,
+    ClipboardFormatIdentifier.gif.rawValue,
+    ClipboardFormatIdentifier.bmp.rawValue,
 ]
 
-/// Image-type display heuristic (thumbnail row in the Content section).
+/// A similar prefix does not establish that an unknown representation is an
+/// image; opaque formats retain their unavailable-preview label (01 §2).
 private func isImageType(_ typeIdentifier: String) -> Bool {
     imageTypeIdentifiers.contains(typeIdentifier)
-        || typeIdentifier.hasPrefix("public.image")
 }
 
 /// SF Symbol fallback by dominant representation type.
@@ -1267,7 +1274,8 @@ private func typeSymbol(for typeIdentifiers: [String]) -> String {
     if typeIdentifiers.contains(where: isImageType) {
         return "photo"
     }
-    if typeIdentifiers.contains(where: { $0.contains("url") }) {
+    if typeIdentifiers.contains(ClipboardFormatIdentifier.url.rawValue)
+        || typeIdentifiers.contains(ClipboardFormatIdentifier.fileURL.rawValue) {
         return "link"
     }
     if typeIdentifiers.contains(where: textualTypeIdentifiers.contains) {

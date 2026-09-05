@@ -7,6 +7,62 @@ import Testing
 
 struct HistoryDetailsFormatSafetyTests {
 
+    @Test(arguments: [
+        "public.image.private", "public.image-url", "public.png.private",
+        "public.url.private", "public.file-url.private", "com.example.curl-data", "dyn.example.url",
+    ])
+    func similarImageAndURLNamesRemainOpaque(_ identifier: String) throws {
+        let representation = HistoryRepresentation(typeIdentifier: identifier, bytes: Data([0xFF, 0x00, 0x41]))
+        let prepared = try DetailsContentPresentation(details: details(
+            canonical: [representation], effective: [representation]
+        ))
+        #expect(prepared.symbolName == "doc.on.clipboard")
+        #expect(prepared.effective[0].typeIdentifier == identifier)
+        #expect(prepared.effective[0].byteCount == 3)
+        #expect(!prepared.effective[0].isImage)
+        #expect(prepared.effective[0].presentation == .metadataOnly)
+    }
+
+    @Test(arguments: [
+        "public.image", "public.png", "public.jpeg", "public.tiff",
+        "public.heic", "public.heif", "com.compuserve.gif", "com.microsoft.bmp",
+    ])
+    func exactImageFamiliesKeepTheirPhotoPresentation(_ identifier: String) throws {
+        let representation = HistoryRepresentation(typeIdentifier: identifier, bytes: Data([0x41]))
+        let prepared = try DetailsContentPresentation(details: details(
+            canonical: [representation], effective: [representation]
+        ))
+        #expect(prepared.symbolName == "photo")
+        #expect(prepared.effective[0].isImage)
+        #expect(prepared.effective[0].presentation == .metadataOnly)
+    }
+
+    @Test(arguments: ["public.url", "public.file-url"])
+    func exactURLsKeepTheirLinkIconWithoutTextDecoding(_ identifier: String) throws {
+        let representation = HistoryRepresentation(typeIdentifier: identifier, bytes: Data("https://example.invalid".utf8))
+        let prepared = try DetailsContentPresentation(details: details(
+            canonical: [representation], effective: [representation]
+        ))
+        #expect(prepared.symbolName == "link")
+        #expect(!prepared.effective[0].isImage)
+        #expect(prepared.effective[0].presentation == .metadataOnly)
+    }
+
+    @Test func anImageSiblingDoesNotTurnAnUnknownRepresentationIntoAnImagePreview() throws {
+        let representations = [
+            HistoryRepresentation(typeIdentifier: "public.image.private", bytes: Data([0x01])),
+            HistoryRepresentation(typeIdentifier: "public.png", bytes: Data([0x89, 0x50, 0x4E, 0x47])),
+        ]
+        let prepared = try DetailsContentPresentation(details: details(
+            canonical: representations, effective: representations
+        ))
+        #expect(prepared.symbolName == "photo")
+        // RepresentationRow uses this flag to show the unknown format's
+        // unavailable-preview label and exclude the item's image thumbnail.
+        #expect(prepared.effective.map(\.isImage) == [false, true])
+        #expect(prepared.effective[0].presentation == .metadataOnly)
+    }
+
     @Test func preparedDetailsKeepBothBasesAndTextSiblingsIndependent() throws {
         let canonical = [
             HistoryRepresentation(typeIdentifier: "public.html", bytes: Data("<p>original</p>".utf8)),
@@ -44,6 +100,32 @@ struct HistoryDetailsFormatSafetyTests {
         #expect(prepared.canonical[0].presentation == .metadataOnly)
         #expect(prepared.effective[0].presentation == .metadataOnly)
         #expect(prepared.title == nil)
+    }
+
+    @Test(arguments: [false, true])
+    func equivalentIdentifiersKeepEachBasesOriginalSpelling(reverse: Bool) throws {
+        let composed = "com.example.\u{00E9}"
+        let decomposed = "com.example.e\u{0301}"
+        let canonicalType = reverse ? decomposed : composed
+        let effectiveType = reverse ? composed : decomposed
+        let sibling = HistoryRepresentation(typeIdentifier: "com.example.a", bytes: Data([0x00]))
+        let canonical = [sibling, HistoryRepresentation(typeIdentifier: canonicalType, bytes: Data([0xFF]))]
+        let effective = [sibling, HistoryRepresentation(typeIdentifier: effectiveType, bytes: Data([0xFF]))]
+        #expect(canonical == effective, "Domain equality uses Unicode canonical equivalence")
+        #expect(Array(canonicalType.utf8) != Array(effectiveType.utf8))
+
+        let prepared = try DetailsContentPresentation(details: details(
+            canonical: canonical, effective: effective
+        ))
+        #expect(prepared.effectiveMatchesCanonical, "Display reuse must not redefine Domain equality")
+        // String equality would hide this regression; compare the original
+        // UTF-8 spelling of every returned type, including the equal sibling.
+        #expect(prepared.canonical.map { Array($0.typeIdentifier.utf8) }
+            == canonical.map { Array($0.typeIdentifier.utf8) })
+        #expect(prepared.effective.map { Array($0.typeIdentifier.utf8) }
+            == effective.map { Array($0.typeIdentifier.utf8) })
+        #expect(prepared.canonical.map(\.presentation) == [.metadataOnly, .metadataOnly])
+        #expect(prepared.effective.map(\.presentation) == [.metadataOnly, .metadataOnly])
     }
 
     @Test @MainActor

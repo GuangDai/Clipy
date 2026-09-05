@@ -91,14 +91,18 @@ extension HistoryAuthority {
                 bytes: representation.content.bytes
             )
         }
-        // Map Effective representations.
-        let effectiveRepresentations = effective.representations.map {
-            representation in
-            HistoryRepresentation(
-                typeIdentifier: representation.typeIdentifier,
-                bytes: representation.bytes
-            )
-        }
+        // `effectiveContent` above has already validated D3. A Canonical-state
+        // item therefore has exactly these Effective representations (02 §2.6):
+        // share the immutable DTO array instead of mapping it a second time.
+        // Revision-state items still map their own complete content snapshot.
+        let effectiveRepresentations = item.activeRevisionID == nil
+            ? canonicalRepresentations
+            : effective.representations.map { representation in
+                HistoryRepresentation(
+                    typeIdentifier: representation.typeIdentifier,
+                    bytes: representation.bytes
+                )
+            }
         // Map every stored revision.
         let revisionSummaries = item.revisions.map { revision -> RevisionSummary in
             let revisionTypeIdentifiers = revision.content.representations.map(
