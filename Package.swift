@@ -150,7 +150,7 @@ let package = Package(
         ),
         .testTarget(
             name: "PresentationUITests",
-            dependencies: ["PresentationUI", "HistoryCore", "ContentPreview"]
+            dependencies: ["PresentationUI", "HistoryCore", "ContentPreview", "HistoryStorage"]
         ),
     ],
     swiftLanguageModes: [.v6]

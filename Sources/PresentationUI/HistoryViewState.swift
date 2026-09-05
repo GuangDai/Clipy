@@ -116,7 +116,10 @@ public final class HistoryViewState {
     /// whitespace is syntax and is never rewritten by presentation state.
     public var searchText: String = "" {
         didSet {
-            guard searchText != oldValue else { return }
+            // Swift String equality merges canonically equivalent spellings,
+            // but exact/regexp searches can distinguish their literal scalars.
+            // Such an edit must retire the old results and highlight ranges.
+            guard !searchText.utf8.elementsEqual(oldValue.utf8) else { return }
             advanceSearchQueryGeneration()
             scheduleSearchRestart()
         }

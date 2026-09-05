@@ -1,8 +1,8 @@
 /// ScriptedHistory.swift — the scripted `ClipboardHistory` doubles and shared
 /// helpers for the PresentationUI suites (docs/01-architecture.md §4; docs/
-/// roadmap/05-presentationui.md). The test target cannot import
-/// HistoryStorage, so view-state and thumbnail semantics are driven through
-/// the public seam exactly as SwiftUI previews do — but, per
+/// roadmap/05-presentationui.md). These doubles exercise view-state and
+/// thumbnail responses through the public seam exactly as SwiftUI previews
+/// do; integration tests use the real HistoryStorage implementation. Per
 /// docs/01-architecture.md §4, a scripted double is legitimate here because
 /// these are VIEW-STATE tests (what `HistoryViewState`/`ThumbnailStore` do
 /// with pages, cursors, and failures), never storage semantic tests.
