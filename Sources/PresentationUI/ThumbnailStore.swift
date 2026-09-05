@@ -205,6 +205,13 @@ public final class ThumbnailStore {
         return raster
     }
 
+    /// A completed unavailable result for this exact reference. Unrequested
+    /// and pending work are not failures; the read never starts a request.
+    internal func isUnavailable(for item: HistoryItemReference) -> Bool {
+        guard case .miss? = entries[item] else { return false }
+        return true
+    }
+
     /// Starts one fetch for the exact reference if none is retained or in
     /// flight (idempotent). The encoded payload is decoded OFF the MainActor
     /// by ContentPreview's display rasterizer and retained under the

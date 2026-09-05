@@ -17,8 +17,8 @@
 import ContentPreview
 import Foundation
 import HistoryCore
-import PresentationUI
 import Testing
+@testable import PresentationUI
 
 #if DEBUG
 private actor ThumbnailDisplayDecodeProbe {
@@ -146,6 +146,7 @@ struct ThumbnailStoreTests {
         store.prefetch(item)
         #expect(await pollUntil { await history.requestCount(for: item) == 2 })
         #expect(store.imagePixelSize(for: item) == nil)
+        #expect(!store.isUnavailable(for: item))
     }
 
     // MARK: - Reset (04 §9)
@@ -158,10 +159,14 @@ struct ThumbnailStoreTests {
             failureByReference: [original: .thumbnailUnavailable]
         )
         let store = ThumbnailStore(history: history)
+        #expect(!store.isUnavailable(for: original))
         store.prefetch(original)
+        #expect(store.inFlightCount == 1)
+        #expect(!store.isUnavailable(for: original))
         try #require(await pollUntil { store.inFlightCount == 0 })
         #expect(store.cachedEntryCount == 1)
         #expect(store.cachedDecodedBytes == 0)
+        #expect(store.isUnavailable(for: original))
 
         // Reappearance on scrolling uses the completed miss synchronously;
         // no second History request can enter its ImageIO decode pipeline.
@@ -170,10 +175,19 @@ struct ThumbnailStoreTests {
         #expect(store.inFlightCount == 0)
         #expect(await history.requestCount(for: original) == 1)
 
+        #expect(!store.isUnavailable(for: revised))
         store.prefetch(revised)
+        #expect(!store.isUnavailable(for: revised))
         try #require(await pollUntil { store.imagePixelSize(for: revised) != nil })
         #expect(await history.requestCount(for: revised) == 1)
         #expect(store.imagePixelSize(for: original) == nil)
+        #expect(store.isUnavailable(for: original))
+        #expect(!store.isUnavailable(for: revised))
+
+        store.purge(.revision(old: original, new: revised))
+        #expect(!store.isUnavailable(for: original))
+        #expect(!store.isUnavailable(for: revised))
+        #expect(store.imagePixelSize(for: revised) != nil)
     }
 
     enum MissPurge: Sendable {
@@ -188,6 +202,7 @@ struct ThumbnailStoreTests {
         store.prefetch(item)
         try #require(await pollUntil { store.inFlightCount == 0 })
         try #require(store.cachedEntryCount == 1)
+        #expect(store.isUnavailable(for: item))
 
         switch purge {
         case .reset: store.reset()
@@ -200,9 +215,12 @@ struct ThumbnailStoreTests {
             )))
         }
         #expect(store.cachedEntryCount == 0)
+        #expect(!store.isUnavailable(for: item))
         store.prefetch(item)
+        #expect(!store.isUnavailable(for: item))
         try #require(await pollUntil { store.inFlightCount == 0 })
         #expect(await history.requestCount(for: item) == 2)
+        #expect(store.isUnavailable(for: item))
     }
 
     @Test func undecodableReferencesShareTheExistingEntryBound() async throws {

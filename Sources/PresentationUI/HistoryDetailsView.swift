@@ -995,7 +995,7 @@ private struct RepresentationRow: View {
                 )
             }
             if presentation == .metadataOnly,
-                !representation.isImage
+                !representation.isImage || thumbnails.isUnavailable(for: item)
             {
                 Label(PanelActionsCopy.text("Preview unavailable"), systemImage: "doc")
                     .font(.caption)
