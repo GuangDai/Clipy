@@ -1,7 +1,8 @@
 /// A file URL travels through the real pasteboard observer and History into
-/// the dwell preview. Its synthetic destination exists while macOS brokers
-/// the pasteboard reference, then is removed after capture. Preview and
-/// search must still show the reference, never the file's marker contents.
+/// the dwell and Space Quick Look previews. Its synthetic destination exists
+/// while macOS brokers the pasteboard reference, then is removed after
+/// capture. Preview and search must still show the reference, never the
+/// file's marker contents.
 import AppKit
 import XCTest
 
@@ -131,6 +132,56 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         // The empty result retired selection. Select the recovered row using
         // the real search-field arrow command and let preview dwell again.
         search.typeKey(.downArrow, modifierFlags: [])
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            title.exists && path.exists && address.exists && disclosure.exists
+                && self.text(of: title) == "File Reference"
+                && self.text(of: path) == expectedPath
+                && self.text(of: address) == originalAddress
+                && self.text(of: disclosure)
+                    == "Only the reference is shown. Its destination has not been opened."
+        }, app.debugDescription)
+        XCTAssertFalse(preview.descendants(matching: .any).matching(
+            NSPredicate(format: "label == %@ OR value == %@", fileContentMarker, fileContentMarker)
+        ).firstMatch.exists, app.debugDescription)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: expectedPath))
+
+        // Transfer focus out of Search with a real row click. Space opens
+        // Clipy's overlay for the same retained reference, not system Quick
+        // Look and not the target that was removed before preview began.
+        let row = rows.matching(NSPredicate(
+            format: "identifier == %@", capturedRowIdentifier
+        )).firstMatch
+        XCTAssertTrue(row.exists && row.isHittable, app.debugDescription)
+        row.click()
+        let quickLook = app.descendants(matching: .any)["clipy.panel.quicklook"]
+        XCTAssertFalse(quickLook.exists, app.debugDescription)
+        app.typeKey(.space, modifierFlags: [])
+        XCTAssertTrue(quickLook.waitForExistence(timeout: 10), app.debugDescription)
+        // Both surfaces expose the same field IDs. Scope every assertion
+        // below the overlay so the already-open side pane cannot satisfy it.
+        let quickReference = quickLook.descendants(matching: .any)["clipy.preview.reference"]
+        let quickTitle = quickReference.descendants(matching: .any)["clipy.preview.reference.title"]
+        let quickPath = quickReference.descendants(matching: .any)["clipy.preview.reference.path"]
+        let quickAddress = quickReference.descendants(matching: .any)["clipy.preview.reference.address"]
+        let quickDisclosure = quickReference.descendants(matching: .any)["clipy.preview.reference.disclosure"]
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            quickTitle.exists && quickPath.exists && quickAddress.exists && quickDisclosure.exists
+                && self.text(of: quickTitle) == "File Reference"
+                && self.text(of: quickPath) == expectedPath
+                && self.text(of: quickAddress) == originalAddress
+                && self.text(of: quickDisclosure)
+                    == "Only the reference is shown. Its destination has not been opened."
+        }, app.debugDescription)
+        XCTAssertEqual(search.value as? String, "draft", app.debugDescription)
+        XCTAssertFalse(quickLook.descendants(matching: .any).matching(
+            NSPredicate(format: "label == %@ OR value == %@", fileContentMarker, fileContentMarker)
+        ).firstMatch.exists, app.debugDescription)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: expectedPath))
+
+        let dismiss = quickLook.buttons["clipy.panel.quicklook.dismiss"]
+        XCTAssertTrue(dismiss.exists && dismiss.isHittable, app.debugDescription)
+        dismiss.click()
+        XCTAssertTrue(waitUntil(timeout: 10) { !quickLook.exists }, app.debugDescription)
         XCTAssertTrue(waitUntil(timeout: 10) {
             title.exists && path.exists && address.exists && disclosure.exists
                 && self.text(of: title) == "File Reference"
