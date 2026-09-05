@@ -1000,6 +1000,7 @@ private struct RepresentationRow: View {
                 Label(PanelActionsCopy.text("Preview unavailable"), systemImage: "doc")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .accessibilityElement(children: .ignore)
                     .accessibilityLabel(
                         PanelActionsCopy.format("Preview unavailable for %@", representation.typeIdentifier)
                     )
