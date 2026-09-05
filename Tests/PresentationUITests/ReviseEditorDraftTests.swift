@@ -528,12 +528,13 @@ struct ReviseEditorDraftTests {
 
         for version in [UInt64(3), UInt64(4)] {
             draft.markStale()
-            #expect(draft.reloadLatest(details: utf16Details(
+            let reloaded = draft.reloadLatest(details: utf16Details(
                 type: type,
                 canonical: original,
                 effective: Data([0xFE, 0xFF, 0x00, 0x43]),
                 version: version
-            )))
+            ))
+            #expect(reloaded)
             #expect(draft.revisionRequest().expected == ContentVersion(rawValue: version))
             #expect(draft.replacementText(for: type) == "B🌿")
             #expect(decisions(from: draft.revisionRequest())[type] == .replace(
@@ -552,9 +553,10 @@ struct ReviseEditorDraftTests {
             type: type, canonical: original, effective: original
         ))
         draft.markStale()
-        #expect(draft.reloadLatest(details: utf16Details(
+        let reloaded = draft.reloadLatest(details: utf16Details(
             type: type, canonical: original, effective: latest, version: 3
-        )))
+        ))
+        #expect(reloaded)
         #expect(!draft.isDirty)
         #expect(draft.replacementText(for: type) == "A")
         draft.setChoice(.replace, for: type)
@@ -588,12 +590,13 @@ struct ReviseEditorDraftTests {
         draft.setReplacementText("B", for: type)
         draft.markStale()
 
-        #expect(!draft.reloadLatest(details: utf16Details(
+        let reloaded = draft.reloadLatest(details: utf16Details(
             type: type,
             canonical: original,
             effective: Data([0xFF, 0xFE, 0x00, 0xD8]), // unpaired high surrogate
             version: 3
-        )))
+        ))
+        #expect(!reloaded)
         #expect(draft.isAwaitingLatestContent)
         #expect(!draft.canSubmit)
         #expect(draft.revisionRequest().expected == ContentVersion(rawValue: 2))

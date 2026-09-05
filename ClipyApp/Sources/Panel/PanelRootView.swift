@@ -279,7 +279,7 @@ struct PanelRootView: View {
                 Image(systemName: "xmark")
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Dismiss capture warning")
+            .accessibilityLabel(AppCaptureCopy.text("Dismiss capture warning"))
             .accessibilityIdentifier("clipy.capture.notice.dismiss")
         }
         .padding(.horizontal, 10)
@@ -299,7 +299,7 @@ struct PanelRootView: View {
             Image(systemName: "hand.raised.fill")
                 .foregroundStyle(.yellow)
                 .accessibilityHidden(true)
-            Text(captureAccessMessage(state))
+            Text(AppCaptureCopy.accessMessage(state))
                 .font(.callout)
                 .accessibilityIdentifier("clipy.capture.access.message")
             Spacer(minLength: 8)
@@ -328,10 +328,10 @@ struct PanelRootView: View {
                     .font(.title2)
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
-                Text("Clipboard Monitoring Unavailable")
+                Text(AppCaptureCopy.text("Clipboard Monitoring Unavailable"))
                     .font(.headline)
                     .accessibilityIdentifier("clipy.capture.access.empty")
-                Text(captureAccessMessage(state))
+                Text(AppCaptureCopy.accessMessage(state))
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("clipy.capture.access.message")
@@ -352,31 +352,11 @@ struct PanelRootView: View {
     private func captureAccessRecoveryButton(
         _ recovery: CaptureAccessRecovery
     ) -> some View {
-        Button(recovery == .resume ? "Resume" : "Try Again") {
+        Button(AppCaptureCopy.recoveryTitle(recovery)) {
             appDelegate.recoverCaptureAccess()
         }
-        .accessibilityLabel(
-            recovery == .resume
-                ? "Resume clipboard capture"
-                : "Retry clipboard access"
-        )
+        .accessibilityLabel(AppCaptureCopy.recoveryLabel(recovery))
         .accessibilityIdentifier("clipy.capture.access.recovery")
     }
 
-    private func captureAccessMessage(_ state: CaptureAccessState) -> String {
-        switch state {
-        case .systemDefault:
-            return "Clipy needs permission before it can monitor clipboard changes."
-        case .ask:
-            return "Clipboard access needs your approval before monitoring can continue."
-        case .allowed:
-            return "Clipboard monitoring is allowed."
-        case .denied:
-            return "Clipboard access is denied, so monitoring is stopped."
-        case .readFailure:
-            return "Clipy couldn't check clipboard access. Try again."
-        case .userPaused:
-            return "Clipboard monitoring is paused for up to 5 minutes."
-        }
-    }
 }

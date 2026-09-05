@@ -339,8 +339,9 @@ struct HistoryDetailsView: View {
         VStack(spacing: 0) {
             if showsStaleNotice {
                 noticeBanner(
-                    text: "This item changed while you were viewing it."
-                        + " Details reloaded.",
+                    text: PanelActionsCopy.text(
+                        "This item changed while you were viewing it. Details reloaded."
+                    ),
                     systemImage: "arrow.triangle.2.circlepath"
                 ) {
                     showsStaleNotice = false
@@ -517,7 +518,7 @@ struct HistoryDetailsView: View {
             guard reconcileSurfacePurge(viewState.surfacePurge) else { return }
             guard !Task.isCancelled, loadFence.owns(generation) else { return }
             guard error is CancellationError else {
-                phase = .failed(message: "Clipy couldn't load this item.")
+                phase = .failed(message: PanelActionsCopy.text("Clipy couldn't load this item."))
                 return
             }
         }
@@ -557,7 +558,7 @@ struct HistoryDetailsView: View {
             failureNotice = FailurePresentation.message(for: failure)
         } catch {
             guard error is CancellationError else {
-                failureNotice = "Clipy couldn't update this item."
+                failureNotice = PanelActionsCopy.text("Clipy couldn't update this item.")
                 return
             }
         }
@@ -586,7 +587,7 @@ struct HistoryDetailsView: View {
             }
         } catch {
             guard error is CancellationError else {
-                failureNotice = "Clipy couldn't update this item."
+                failureNotice = PanelActionsCopy.text("Clipy couldn't update this item.")
                 return
             }
         }
@@ -609,7 +610,7 @@ struct HistoryDetailsView: View {
             failureNotice = FailurePresentation.message(for: failure)
         } catch {
             guard error is CancellationError else {
-                failureNotice = "Clipy couldn't remove this item."
+                failureNotice = PanelActionsCopy.text("Clipy couldn't remove this item.")
                 return
             }
         }
@@ -775,32 +776,32 @@ private struct DetailsBody: View {
     }
 
     private var infoSection: some View {
-        Section("Info") {
+        Section(PanelActionsCopy.text("Info")) {
             LabeledContent(
-                "First Copied",
+                PanelActionsCopy.text("First Copied"),
                 value: DetailsFormat.mediumDateTime.string(
                     from: details.occurrence.firstCopiedAt
                 )
             )
             LabeledContent(
-                "Last Copied",
+                PanelActionsCopy.text("Last Copied"),
                 value: DetailsFormat.mediumDateTime.string(
                     from: details.occurrence.lastCopiedAt
                 )
             )
             LabeledContent(
-                "Copy Count",
-                value: String(details.occurrence.count)
+                PanelActionsCopy.text("Copy Count"),
+                value: details.occurrence.count.formatted(.number)
             )
             LabeledContent(
-                "Source",
+                PanelActionsCopy.text("Source"),
                 value: details.occurrence.lastSource.map {
                     ($0 as NSString).lastPathComponent
-                } ?? "Unknown"
+                } ?? PanelActionsCopy.text("Unknown")
             )
             LabeledContent(
-                "Content Version",
-                value: String(details.item.contentVersion.rawValue)
+                PanelActionsCopy.text("Content Version"),
+                value: details.item.contentVersion.rawValue.formatted(.number)
             )
         }
     }
@@ -1218,7 +1219,7 @@ private func detailTitle(for details: HistoryDetails) -> String {
             return String(firstLine.prefix(100))
         }
     }
-    return "Clipboard Item"
+    return PanelActionsCopy.text("Clipboard Item")
 }
 
 #if DEBUG

@@ -115,11 +115,16 @@ struct WS16ComposedRemoveAndNotFoundTests {
             "WS16: unpin on the absent ID surfaces .notFound"
         )
 
-        // The user-facing message for the banner (03b §10 →
-        // FailurePresentation), as the panel renders it.
+        // Render the actual composed failure using the panel's vocabulary;
+        // language comes from the resource bundle, never an English fixture.
+        // Even though the typed failure carries the ID, the banner must not.
+        let bannerFailure = try #require(viewState.failure)
+        let bannerMessage = FailurePresentation.message(for: bannerFailure)
         #expect(
-            FailurePresentation.message(for: .notFound(inserted.id)) == "Item was removed"
+            bannerMessage == FailurePresentation.message(for: .notFound(inserted.id))
         )
+        #expect(!bannerMessage.contains(inserted.id.description))
+        #expect(!bannerMessage.contains("ws16 composed doomed item"))
 
         // Position proof: insert(1) + removal(2), and every failed follow-up
         // above advanced NOTHING — the next healthy commit lands at 3.

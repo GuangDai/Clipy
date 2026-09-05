@@ -103,3 +103,15 @@
 "Latest content can't be safely rebased onto this draft. Your edits are intact; keep editing or try again after the item changes." = "无法将最新内容用作此草稿的编辑基准。您的修改仍完整保留；请继续编辑，或在项目更改后重试。";
 "Latest content loaded. Your draft was kept for formats that remain editable." = "已加载最新内容。仍可编辑格式的草稿已保留。";
 "Clipy couldn't load the latest content." = "Clipy 无法加载最新内容。";
+"Info" = "信息";
+"First Copied" = "首次复制";
+"Last Copied" = "最近复制";
+"Copy Count" = "复制次数";
+"Source" = "来源";
+"Unknown" = "未知";
+"Content Version" = "内容版本";
+"Clipboard Item" = "剪贴板项目";
+"This item changed while you were viewing it. Details reloaded." = "查看期间此项目已更改，详情已重新加载。";
+"Clipy couldn't load this item." = "Clipy 无法加载此项目。";
+"Clipy couldn't update this item." = "Clipy 无法更新此项目。";
+"Clipy couldn't remove this item." = "Clipy 无法移除此项目。";

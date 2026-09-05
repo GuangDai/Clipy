@@ -21,9 +21,8 @@ targets:
     platform: macOS
     sources:
       - Sources
-      # User-facing copy localizes in the owning SwiftPM targets.
-      # PresentationUI uses native .strings/.stringsdict resources so the
-      # package and generated-app builds resolve the same translations.
+      # App-owned copy (including StatusMenu) lives in this bundle;
+      # SwiftPM targets retain their own localized resources.
       - Resources
       - Tools/ClipyUDSF0Shared
     settings:

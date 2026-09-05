@@ -1116,9 +1116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateStatusItemImage() {
         let isPaused = captureAccessState == .userPaused
         let symbolName = statusItemSymbolName
-        let accessibilityLabel = isPaused
-            ? "Clipy, clipboard monitoring paused"
-            : "Clipy"
+        let accessibilityLabel = AppCaptureCopy.statusLabel(isPaused: isPaused)
         let image = NSImage(
             systemSymbolName: symbolName,
             accessibilityDescription: accessibilityLabel

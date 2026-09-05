@@ -1,0 +1,23 @@
+// Panel footer actions and clear confirmation.
+"↑↓ Select · Esc Clear" = "↑↓ 选择 · Esc 清除";
+"⏎ Paste · Space Quick Look · ⌘I Details" = "⏎ 粘贴 · Space 快速查看 · ⌘I 详情";
+"Shows the loaded portion of your history. Search to narrow results." = "显示已加载的历史记录。可通过搜索缩小结果范围。";
+"Toggle Preview (⌃Space)" = "切换预览（⌃Space）";
+"Toggle Preview" = "切换预览";
+"Keep Panel Open" = "保持面板打开";
+"Pause Clipboard Monitoring for 5 Minutes" = "暂停剪贴板监测 5 分钟";
+"Clear Unpinned Items…" = "清空未置顶项目…";
+"Clear All History…" = "清空全部历史记录…";
+"Settings…" = "设置…";
+"Quit Clipy" = "退出 Clipy";
+"More Actions" = "更多操作";
+"Clear All History?" = "清空全部历史记录？";
+"Clear Unpinned Items?" = "清空未置顶项目？";
+"All clipboard history, including pinned items, will be removed." = "全部剪贴板历史记录（包括置顶项目）都将被移除。";
+"All unpinned items will be removed. Pinned items are kept." = "所有未置顶项目都将被移除，置顶项目将被保留。";
+"Clear" = "清空";
+"Cancel" = "取消";
+"Clear Search or Close" = "清除搜索或关闭";
+"Quick Look" = "快速查看";
+"Resize preview" = "调整预览大小";
+"Show preview" = "显示预览";

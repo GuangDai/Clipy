@@ -4,6 +4,29 @@ import Testing
 
 @Suite("Panel action and revision safety localization")
 struct PanelActionsCopyTests {
+    @Test("details metadata and recovery copy use native resources")
+    func detailsMetadataAndRecovery() throws {
+        let english = try bundle("en")
+        let chinese = try bundle("zh-Hans")
+        for (key, translation) in [
+            ("Info", "信息"),
+            ("First Copied", "首次复制"),
+            ("Last Copied", "最近复制"),
+            ("Copy Count", "复制次数"),
+            ("Source", "来源"),
+            ("Unknown", "未知"),
+            ("Content Version", "内容版本"),
+            ("Clipboard Item", "剪贴板项目"),
+            ("This item changed while you were viewing it. Details reloaded.", "查看期间此项目已更改，详情已重新加载。"),
+            ("Clipy couldn't load this item.", "Clipy 无法加载此项目。"),
+            ("Clipy couldn't update this item.", "Clipy 无法更新此项目。"),
+            ("Clipy couldn't remove this item.", "Clipy 无法移除此项目。"),
+        ] {
+            #expect(PanelActionsCopy.text(key, bundle: english) == key)
+            #expect(PanelActionsCopy.text(key, bundle: chinese) == translation)
+        }
+    }
+
     private func bundle(_ language: String) throws -> Bundle {
         let localization = try #require(PanelActionsCopy.bundle.localizations.first {
             $0.caseInsensitiveCompare(language) == .orderedSame

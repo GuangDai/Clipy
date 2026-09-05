@@ -202,10 +202,13 @@ struct StoreOpenRecoveryTests {
             PanelRootView.failureCategory(for: failure)
                 == "History Store Open Failed"
         )
+        let failureMessage = PanelRootView.failureMessage(for: failure)
         #expect(
-            FailurePresentation.message(for: failure)
-                == "History storage error"
+            failureMessage
+                == FailurePresentation.message(for: .persistence(.openStore))
         )
+        #expect(!failureMessage.contains(guardedRoot.path))
+        #expect(!failureMessage.contains(storeURL.path))
 
         // Reveal names the CONFIGURED store directory even though the failed
         // open never created it. Finder is a no-op for a missing directory —

@@ -53,7 +53,7 @@ package enum HistoryRowAccessibilityAction {
 /// accessibility routing table is directly testable within the package.
 package struct HistoryRowView: View {
     private let row: HistoryRow
-    private let rendering: HistoryRowRenderingModel
+    private let now: Date
     private let pinnedOrdinal: Int?
     private let density: HistoryRowDensity
     private let snippetLineCount: HistorySnippetLineCount
@@ -66,6 +66,9 @@ package struct HistoryRowView: View {
     private let onUnpin: (HistoryItemID) -> Void
     private let onRemove: (HistoryItemID) -> Void
     private let onShowDetails: (HistoryItemReference) -> Void
+
+    @Environment(\.locale) private var locale
+    @Environment(\.timeZone) private var timeZone
 
     /// The typography/width parameters default to the product's narrow
     /// presentation, so existing callers (and below-560pt rendering) keep
@@ -87,7 +90,7 @@ package struct HistoryRowView: View {
         onShowDetails: @escaping (HistoryItemReference) -> Void
     ) {
         self.row = row
-        rendering = HistoryRowRenderingModel(row: row, now: now)
+        self.now = now
         self.pinnedOrdinal = pinnedOrdinal
         self.density = density
         self.snippetLineCount = snippetLineCount
@@ -253,14 +256,14 @@ package struct HistoryRowView: View {
         if let ordinal = pinnedOrdinal {
             HStack(spacing: 1) {
                 Image(systemName: "pin.fill")
-                Text("\(ordinal)")
+                Text(LocalizedCountPresentation.number(ordinal, locale: locale))
             }
             .font(.system(size: 8, weight: .bold))
             .foregroundStyle(.primary)
             .padding(.horizontal, 3)
             .padding(.vertical, 1)
             .background { Capsule().fill(.thinMaterial) }
-            .accessibilityLabel(PanelActionsCopy.pinnedPosition(ordinal))
+            .accessibilityLabel(PanelActionsCopy.pinnedPosition(ordinal, locale: locale))
         }
     }
 
@@ -285,7 +288,10 @@ package struct HistoryRowView: View {
     // MARK: Trailing metadata column
 
     private var metadataColumn: some View {
-        VStack(alignment: .trailing, spacing: PanelTheme.spacingXXXSmall) {
+        let rendering = HistoryRowRenderingModel(
+            row: row, now: now, locale: locale, timeZone: timeZone
+        )
+        return VStack(alignment: .trailing, spacing: PanelTheme.spacingXXXSmall) {
             // Wide presentation (≥560pt browsing column) swaps the relative
             // stamp for the absolute time of day; below the threshold the
             // relative text is byte-identical to the shipped row.
@@ -317,17 +323,15 @@ package struct HistoryRowView: View {
         }
     }
 
-    /// Plain-`String` rendering of the ×N count: `Text(_:)`'s
-    /// `LocalizedStringKey` interpolation has no `UInt64` overload, so the
-    /// count is formatted before reaching the view.
+    /// Keep the full UInt64 occurrence range while honoring locale grouping
+    /// and digits; row count presentation never changes the stored value.
     private var copyCountText: String {
-        "×\(row.copyCount)"
+        HistoryRowCopy.copyCount(row.copyCount, locale: locale)
     }
 
-    /// Accessibility rendering of the same count, precomputed for the same
-    /// `UInt64`-interpolation reason (docs/v2/V2-07-ux.md §9 point 1).
+    /// The same count with translated plural-aware VoiceOver copy (§9/§10).
     private var copyAccessibilityLabel: String {
-        "Copied \(row.copyCount) times"
+        HistoryRowCopy.copiedCount(row.copyCount, locale: locale)
     }
 
     /// The compact Actions rotor exposes the state-changing pin operation,
@@ -440,7 +444,8 @@ package struct HistoryRowView: View {
 /// `absoluteTimeText` backs the wide presentation (≥560pt browsing column,
 /// `HistoryRowLayout.usesWidePresentation`): it formats the item's fixed
 /// time of day, so it needs no cadence. `timeZone` is injected for the same
-/// determinism reason as `locale`; production callers keep both defaults.
+/// determinism reason as `locale`; the row supplies both from its SwiftUI
+/// environment so region or time-zone changes update visible metadata.
 @MainActor
 package struct HistoryRowRenderingModel {
     package let relativeTimeText: String

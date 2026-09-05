@@ -101,8 +101,7 @@ package struct SearchHeaderView: View {
     private var resultCountCaption: some View {
         Text(
             Self.resultCountText(
-                count: viewState.rows.count,
-                hasNextPage: viewState.hasNextPage,
+                for: viewState,
                 locale: locale
             )
         )
@@ -110,27 +109,18 @@ package struct SearchHeaderView: View {
             .foregroundStyle(.secondary)
     }
 
-    /// A page cursor makes `count` a lower bound, not a total (Card 8C).
-    /// The exact-count key varies by plural in PresentationUI's resources;
-    /// the cursor key stays explicitly plural because even `1+` is not one.
-    package static func resultCountText(
-        count: Int,
-        hasNextPage: Bool,
-        locale: Locale = .current
+    /// Match the list's client-side type/pinned filter. A cursor still makes
+    /// this a lower bound, since later pages may contain more visible matches.
+    internal static func resultCountText(
+        for viewState: HistoryViewState,
+        locale: Locale = .current,
+        bundle: Bundle = .module
     ) -> String {
-        if hasNextPage {
-            return String(
-                localized: "\(count)+ results",
-                bundle: .module,
-                locale: locale,
-                comment: "A lower-bound search result count; more results are available."
-            )
-        }
-        return String(
-            localized: "\(count) results",
-            bundle: .module,
+        HistoryCountCopy.results(
+            count: viewState.displayedRows.count,
+            hasNextPage: viewState.hasNextPage,
             locale: locale,
-            comment: "The exact number of search results."
+            bundle: bundle
         )
     }
 

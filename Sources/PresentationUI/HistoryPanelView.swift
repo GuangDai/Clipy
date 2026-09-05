@@ -122,10 +122,16 @@ package struct PreviewSelectionResolution: Equatable {
 /// arrows move the selection through SearchHeaderView's arrow-key seam and
 /// bare Space is the quick-look toggle.
 package enum PanelFooterShortcutHints {
-    package static func text(isSearchActive: Bool) -> String {
-        isSearchActive
-            ? "↑↓ Select · Esc Clear"
-            : "⏎ Paste · Space Quick Look · ⌘I Details"
+    package static func text(
+        isSearchActive: Bool,
+        bundle: Bundle? = nil
+    ) -> String {
+        PanelFooterCopy.text(
+            isSearchActive
+                ? "↑↓ Select · Esc Clear"
+                : "⏎ Paste · Space Quick Look · ⌘I Details",
+            bundle: bundle ?? .module
+        )
     }
 }
 
@@ -797,7 +803,7 @@ public struct HistoryPanelView: View {
                         )
                     }
             )
-            .accessibilityLabel("Resize preview")
+            .accessibilityLabel(PanelFooterCopy.text("Resize preview"))
             .accessibilityIdentifier("clipy.panel.previewDivider")
     }
 
@@ -826,7 +832,7 @@ public struct HistoryPanelView: View {
                         )
                     }
             )
-            .accessibilityLabel("Show preview")
+            .accessibilityLabel(PanelFooterCopy.text("Show preview"))
             .accessibilityIdentifier("clipy.panel.previewEdgeOpener")
     }
 
@@ -1054,7 +1060,7 @@ public struct HistoryPanelView: View {
                 // (Card 8C); the tooltip discloses that without touching the
                 // pinned count formats.
                 .help(
-                    "Shows the loaded portion of your history. Search to narrow results."
+                    PanelFooterCopy.text("Shows the loaded portion of your history. Search to narrow results.")
                 )
             Spacer()
             // The context-keyed shortcut cheat-sheet (V2-07 §9): tertiary
@@ -1081,8 +1087,8 @@ public struct HistoryPanelView: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
-            .help("Toggle Preview (⌃Space)")
-            .accessibilityLabel("Toggle Preview")
+            .help(PanelFooterCopy.text("Toggle Preview (⌃Space)"))
+            .accessibilityLabel(PanelFooterCopy.text("Toggle Preview"))
             .accessibilityIdentifier("clipy.panel.preview-toggle")
             Menu {
                 // Opt-in keep-open affordance: the composition root admits it
@@ -1090,7 +1096,7 @@ public struct HistoryPanelView: View {
                 // shipped item set below byte-identical.
                 if let onToggleKeepPanelOpen {
                     Toggle(
-                        "Keep Panel Open",
+                        PanelFooterCopy.text("Keep Panel Open"),
                         isOn: Binding(
                             get: { keepPanelOpenIsActive },
                             set: { _ in onToggleKeepPanelOpen() }
@@ -1104,7 +1110,7 @@ public struct HistoryPanelView: View {
                         onPauseCapture()
                     } label: {
                         Label(
-                            "Pause Clipboard Monitoring for 5 Minutes",
+                            PanelFooterCopy.text("Pause Clipboard Monitoring for 5 Minutes"),
                             systemImage: "pause.circle"
                         )
                     }
@@ -1114,25 +1120,25 @@ public struct HistoryPanelView: View {
                 Button {
                     pendingClear = .unpinned
                 } label: {
-                    Label("Clear Unpinned Items…", systemImage: "trash")
+                    Label(PanelFooterCopy.text("Clear Unpinned Items…"), systemImage: "trash")
                 }
                 Button {
                     pendingClear = .all
                 } label: {
-                    Label("Clear All History…", systemImage: "trash.fill")
+                    Label(PanelFooterCopy.text("Clear All History…"), systemImage: "trash.fill")
                 }
                 Divider()
                 Button {
                     onOpenSettings()
                 } label: {
-                    Label("Settings…", systemImage: "gearshape")
+                    Label(PanelFooterCopy.text("Settings…"), systemImage: "gearshape")
                 }
                 .keyboardShortcut(",", modifiers: .command)
                 Divider()
                 Button {
                     onQuit()
                 } label: {
-                    Label("Quit Clipy", systemImage: "power")
+                    Label(PanelFooterCopy.text("Quit Clipy"), systemImage: "power")
                 }
                 .keyboardShortcut("q", modifiers: .command)
             } label: {
@@ -1141,7 +1147,7 @@ public struct HistoryPanelView: View {
             }
             .menuIndicator(.hidden)
             .fixedSize()
-            .accessibilityLabel("More Actions")
+            .accessibilityLabel(PanelFooterCopy.text("More Actions"))
             .accessibilityIdentifier("clipy.panel.more-actions")
         }
         .padding(.horizontal, PanelTheme.footerHorizontalPadding)
@@ -1150,30 +1156,31 @@ public struct HistoryPanelView: View {
 
     private var itemCountText: String {
         Self.itemCountText(
-            count: viewState.rows.count,
-            hasNextPage: viewState.hasNextPage,
+            for: viewState,
             locale: locale
         )
     }
 
-    /// A page cursor makes `count` a lower bound, not a total (Card 8C).
-    package static func itemCountText(
-        count: Int,
-        hasNextPage: Bool,
-        locale: Locale = .current
+    /// Count the same filtered rows as the list and keep cursor uncertainty.
+    internal static func itemCountText(
+        for viewState: HistoryViewState,
+        locale: Locale = .current,
+        bundle: Bundle = .module
     ) -> String {
-        let number = LocalizedCountPresentation.number(count, locale: locale)
-        let displayedCount = hasNextPage ? "\(number)+" : number
-        let noun = count == 1 && !hasNextPage ? "item" : "items"
-        return "\(displayedCount) \(noun)"
+        HistoryCountCopy.items(
+            count: viewState.displayedRows.count,
+            hasNextPage: viewState.hasNextPage,
+            locale: locale,
+            bundle: bundle
+        )
     }
 
     // MARK: Clear confirmation
 
     private var clearConfirmationTitle: String {
         switch pendingClear {
-        case .all: return "Clear All History?"
-        case .unpinned: return "Clear Unpinned Items?"
+        case .all: return PanelFooterCopy.text("Clear All History?")
+        case .unpinned: return PanelFooterCopy.text("Clear Unpinned Items?")
         case nil: return ""
         }
     }
@@ -1181,9 +1188,9 @@ public struct HistoryPanelView: View {
     private var clearConfirmationMessage: String {
         switch pendingClear {
         case .all:
-            return "All clipboard history, including pinned items, will be removed."
+            return PanelFooterCopy.text("All clipboard history, including pinned items, will be removed.")
         case .unpinned:
-            return "All unpinned items will be removed. Pinned items are kept."
+            return PanelFooterCopy.text("All unpinned items will be removed. Pinned items are kept.")
         case nil:
             return ""
         }
@@ -1192,14 +1199,14 @@ public struct HistoryPanelView: View {
     @ViewBuilder
     private var clearConfirmationActions: some View {
         if let scope = pendingClear {
-            Button("Clear", role: .destructive) {
+            Button(PanelFooterCopy.text("Clear"), role: .destructive) {
                 pendingClear = nil
                 Task {
                     _ = try? await viewState.clearAwaitingReceipt(scope)
                 }
             }
         }
-        Button("Cancel", role: .cancel) {
+        Button(PanelFooterCopy.text("Cancel"), role: .cancel) {
             pendingClear = nil
         }
     }
@@ -1230,7 +1237,7 @@ public struct HistoryPanelView: View {
     private var hiddenShortcuts: some View {
         Group {
             if surfaceState.detailsPath.isEmpty {
-                Button("Clear Search or Close") {
+                Button(PanelFooterCopy.text("Clear Search or Close")) {
                     if surfaceState.quickLookReference != nil {
                         surfaceState.quickLookReference = nil
                     } else if viewState.isSearchActive {
@@ -1242,12 +1249,12 @@ public struct HistoryPanelView: View {
                 .keyboardShortcut(.cancelAction)
             }
 
-            Button("Toggle Preview") {
+            Button(PanelFooterCopy.text("Toggle Preview")) {
                 previewState.togglePreview(for: previewSelection.reference)
             }
             .keyboardShortcut(.space, modifiers: .control)
 
-            Button("Quick Look") {
+            Button(PanelFooterCopy.text("Quick Look")) {
                 if surfaceState.quickLookReference != nil {
                     surfaceState.quickLookReference = nil
                 } else {

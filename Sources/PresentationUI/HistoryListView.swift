@@ -101,7 +101,7 @@ struct HistoryListView: View {
     private func list(now: Date) -> some View {
         List(selection: selection) {
             if !viewState.displayedPinnedRows.isEmpty {
-                Section("Pinned") {
+                Section(HistoryListCopy.text("Pinned")) {
                     ForEach(viewState.displayedPinnedRows, id: \.item.id) { row in
                         rowContent(
                             row,
@@ -111,7 +111,7 @@ struct HistoryListView: View {
                     }
                 }
             }
-            Section("Recent") {
+            Section(HistoryListCopy.text("Recent")) {
                 ForEach(viewState.displayedUnpinnedRows, id: \.item.id) { row in
                     rowContent(row, now: now, pinnedOrdinal: nil)
                 }
@@ -176,7 +176,7 @@ struct HistoryListView: View {
             Spacer()
         }
         .padding(.vertical, 6)
-        .accessibilityLabel("Loading more items")
+        .accessibilityLabel(HistoryListCopy.text("Loading more items"))
     }
 
     /// A page can add only filtered-out rows, leaving the last rendered row
@@ -187,7 +187,7 @@ struct HistoryListView: View {
         if viewState.isLoadingPage {
             loadingRow
         } else if viewState.hasNextPage {
-            Button("Load More") {
+            Button(HistoryListCopy.text("Load More")) {
                 viewState.loadNextPage()
             }
             .frame(maxWidth: .infinity)
@@ -202,18 +202,18 @@ struct HistoryListView: View {
         if viewState.isLoadingFirstPage {
             ProgressView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .accessibilityLabel("Loading clipboard history")
+                .accessibilityLabel(HistoryListCopy.text("Loading clipboard history"))
         } else if viewState.isSearchActive {
             ContentUnavailableView(
-                "No Results",
+                HistoryListCopy.text("No Results"),
                 systemImage: "magnifyingglass",
-                description: Text("No items match “\(viewState.searchText)”.")
+                description: Text(HistoryListCopy.searchMiss(viewState.searchText))
             )
         } else {
             ContentUnavailableView(
-                "No Clipboard History",
+                HistoryListCopy.text("No Clipboard History"),
                 systemImage: "doc.on.clipboard",
-                description: Text("Copy something and it will appear here.")
+                description: Text(HistoryListCopy.text("Copy something and it will appear here."))
             )
         }
     }
@@ -226,7 +226,7 @@ struct HistoryListView: View {
     private var filteredEmptyState: some View {
         VStack {
             ContentUnavailableView(
-                "No Results",
+                HistoryListCopy.text("No Results"),
                 systemImage: "magnifyingglass",
                 description: Text(filteredEmptyDescription)
             )
@@ -237,8 +237,8 @@ struct HistoryListView: View {
 
     private var filteredEmptyDescription: String {
         viewState.searchText.isEmpty
-            ? "No items match the current filter."
-            : "No items match “\(viewState.searchText)”."
+            ? HistoryListCopy.text("No items match the current filter.")
+            : HistoryListCopy.searchMiss(viewState.searchText)
     }
 
     // MARK: Selection + keyboard surface
@@ -253,7 +253,7 @@ struct HistoryListView: View {
     /// keeps editing the query instead of removing the selected item.
     private var selectionShortcuts: some View {
         Group {
-            Button("Copy to Clipboard") {
+            Button(PanelActionsCopy.text("Copy to Clipboard")) {
                 if let row = selectedRow {
                     viewState.requestPasteFromDisplayedRow(row.item)
                 }
@@ -261,7 +261,7 @@ struct HistoryListView: View {
             .keyboardShortcut(.return, modifiers: [])
             .disabled(selectedRow == nil)
 
-            Button("Remove") {
+            Button(PanelActionsCopy.text("Remove")) {
                 if let row = selectedRow {
                     viewState.remove(row.item.id)
                 }
@@ -269,7 +269,7 @@ struct HistoryListView: View {
             .keyboardShortcut(.delete, modifiers: [])
             .disabled(selectedRow == nil || isSearchFieldFocused)
 
-            Button("Toggle Pin") {
+            Button(HistoryListCopy.text("Toggle Pin")) {
                 if let row = selectedRow {
                     if row.pinnedPosition != nil {
                         viewState.unpin(row.item.id)
@@ -282,7 +282,7 @@ struct HistoryListView: View {
             .disabled(selectedRow == nil)
 
             // Context-menu semantics: placePinned reorders an already-pinned item.
-            Button("Pin to Top") {
+            Button(PanelActionsCopy.text("Pin to Top")) {
                 if let row = selectedRow {
                     viewState.pin(row.item.id, at: .first)
                 }
@@ -290,7 +290,7 @@ struct HistoryListView: View {
             .keyboardShortcut(.upArrow, modifiers: [.option, .command])
             .disabled(selectedRow == nil)
 
-            Button("Pin to Bottom") {
+            Button(PanelActionsCopy.text("Pin to Bottom")) {
                 if let row = selectedRow {
                     viewState.pin(row.item.id, at: .last)
                 }
@@ -298,7 +298,7 @@ struct HistoryListView: View {
             .keyboardShortcut(.downArrow, modifiers: [.option, .command])
             .disabled(selectedRow == nil)
 
-            Button("Show Details") {
+            Button(PanelActionsCopy.text("Show Details")) {
                 if let row = selectedRow {
                     onShowDetails(row.item)
                 }

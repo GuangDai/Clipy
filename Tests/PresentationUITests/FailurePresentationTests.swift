@@ -7,10 +7,27 @@
 /// payloads, paths, or type identifiers into the strings.
 import Foundation
 import HistoryCore
-import PresentationUI
 import Testing
+@testable import PresentationUI
 
 struct FailurePresentationTests {
+
+    private func localizedBundle(_ language: String) throws -> Bundle {
+        let localization = try #require(FailureCopy.bundle.localizations.first {
+            $0.caseInsensitiveCompare(language) == .orderedSame
+        })
+        let root = try #require(FailureCopy.bundle.resourceURL)
+        return try #require(Bundle(url: root.appendingPathComponent(
+            "\(localization).lproj", isDirectory: true
+        )))
+    }
+
+    private func message(
+        for failure: HistoryFailure,
+        language: String = "en"
+    ) throws -> String {
+        FailurePresentation.message(for: failure, bundle: try localizedBundle(language))
+    }
 
     // MARK: - Fixtures
 
@@ -116,17 +133,36 @@ struct FailurePresentationTests {
     /// Every case of the closed vocabulary answers a non-empty message — a
     /// new failure case is an owned source change that must be answered
     /// here (docs/03b-instruction-set.md §10).
-    @Test func everyFailureCaseYieldsANonEmptyMessage() {
+    @Test func everyFailureCaseYieldsANonEmptyLocalizedMessage() throws {
+        let englishBundle = try localizedBundle("en")
+        let chineseBundle = try localizedBundle("zh-Hans")
         for failure in allFailures {
-            #expect(!FailurePresentation.message(for: failure).isEmpty)
+            let english = FailurePresentation.message(for: failure, bundle: englishBundle)
+            let chinese = FailurePresentation.message(for: failure, bundle: chineseBundle)
+            #expect(!english.isEmpty)
+            #expect(!chinese.isEmpty)
+            #expect(chinese != english)
+            #expect(englishBundle.localizedString(
+                forKey: english, value: "Missing English failure message", table: "Failure"
+            ) == english)
+            for text in [english, chinese] {
+                #expect(!text.contains(itemID.rawValue.uuidString))
+                #expect(!text.contains(revisionID.rawValue.uuidString))
+                #expect(!text.contains("public.utf8-plain-text"))
+                #expect(!text.contains("com.example.unknown"))
+            }
         }
     }
 
-    @Test func undecodableThumbnailDoesNotImplyHistoryStorageFailure() {
-        #expect(FailurePresentation.message(for: .thumbnailUnavailable)
+    @Test func undecodableThumbnailDoesNotImplyHistoryStorageFailure() throws {
+        #expect(try message(for: .thumbnailUnavailable)
             == "A thumbnail isn't available for this image")
-        #expect(FailurePresentation.message(for: .persistence(.corruptStoredValue))
+        #expect(try message(for: .persistence(.corruptStoredValue))
             == "History storage error")
+        #expect(try message(for: .thumbnailUnavailable, language: "zh-Hans")
+            == "此图像没有可用的缩略图")
+        #expect(try message(for: .persistence(.corruptStoredValue), language: "zh-Hans")
+            == "历史记录存储出错")
     }
 
     // MARK: - Contract-pinned strings
@@ -134,23 +170,23 @@ struct FailurePresentationTests {
     /// The four contract-specified spot checks: the regex-rejection and
     /// reindexing-retry wording, and the not-found / stale-content banner
     /// strings (docs/roadmap/05-presentationui.md).
-    @Test func contractSpecifiedStringsMatchExactly() {
+    @Test func contractSpecifiedStringsMatchExactly() throws {
         #expect(
-            FailurePresentation.message(for: .invalidInput(.invalidRegularExpression))
+            try message(for: .invalidInput(.invalidRegularExpression))
                 == "Invalid regular expression"
         )
         #expect(
-            FailurePresentation.message(
+            try message(
                 for: .temporarilyUnavailable(.dedupIndexRebuild)
             )
                 == "History is reindexing. Try again shortly."
         )
         #expect(
-            FailurePresentation.message(for: .notFound(itemID))
+            try message(for: .notFound(itemID))
                 == "Item was removed"
         )
         #expect(
-            FailurePresentation.message(
+            try message(
                 for: .staleContent(
                     expected: ContentVersion(rawValue: 2),
                     current: ContentVersion(rawValue: 3)
@@ -163,20 +199,20 @@ struct FailurePresentationTests {
     /// The settings-surface retention wordings carry the V2-07 §5 strings:
     /// the unsatisfiable-budget (R2) message and the pinned-exceeds-budget
     /// validation message.
-    @Test func retentionSurfaceStringsMatchExactly() {
+    @Test func retentionSurfaceStringsMatchExactly() throws {
         #expect(
-            FailurePresentation.message(for: .invalidInput(.invalidRetentionPolicy))
+            try message(for: .invalidInput(.invalidRetentionPolicy))
                 == "Pinned items exceed this budget. Unpin items or raise the budget."
         )
         #expect(
-            FailurePresentation.message(for: .capacityExceeded(.storageBytes))
+            try message(for: .capacityExceeded(.storageBytes))
                 == "This budget can't be satisfied with the current history."
         )
     }
 
-    @Test func insufficientDiskSpaceMessageExplainsTheRetryableAction() {
+    @Test func insufficientDiskSpaceMessageExplainsTheRetryableAction() throws {
         #expect(
-            FailurePresentation.message(
+            try message(
                 for: .temporarilyUnavailable(.insufficientDiskSpace)
             )
                 == "Not enough disk space. Free some space and try again."
@@ -185,12 +221,30 @@ struct FailurePresentationTests {
 
     /// REVIEW Card 11C (docs/03b-instruction-set.md §8/§10): the engine
     /// deadline is retryable, so the message says so.
-    @Test func searchEngineDeadlineMessageSaysSearchIsSlowAndRetryable() {
+    @Test func searchEngineDeadlineMessageSaysSearchIsSlowAndRetryable() throws {
         #expect(
-            FailurePresentation.message(
+            try message(
                 for: .temporarilyUnavailable(.searchEngineDeadline)
             )
                 == "Search is taking too long. Try again."
         )
+    }
+
+    @Test func chineseRecoveryMessagesPreserveTheSpecificRemedy() throws {
+        #expect(try message(
+            for: .temporarilyUnavailable(.insufficientDiskSpace), language: "zh-Hans"
+        ) == "磁盘空间不足，请释放部分空间后重试。")
+        #expect(try message(
+            for: .temporarilyUnavailable(.searchEngineDeadline), language: "zh-Hans"
+        ) == "搜索耗时过长，请重试。")
+        #expect(try message(
+            for: .temporarilyUnavailable(.dedupIndexRebuild), language: "zh-Hans"
+        ) == "正在重建历史记录索引，请稍后重试。")
+        #expect(try message(
+            for: .invalidInput(.invalidRetentionPolicy), language: "zh-Hans"
+        ) == "置顶项目已超出此限额。请取消部分项目的置顶，或提高限额。")
+        #expect(try message(
+            for: .invalidInput(.incoherentRevisionDraft), language: "zh-Hans"
+        ) == "不能隐藏所有内容格式")
     }
 }

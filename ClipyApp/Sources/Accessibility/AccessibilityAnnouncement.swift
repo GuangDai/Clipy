@@ -8,24 +8,30 @@
 import AppKit
 
 enum CaptureNoticePresentation {
-    static func message(for notice: ClipyCaptureNotice) -> String {
+    static func message(
+        for notice: ClipyCaptureNotice,
+        bundle: Bundle = .main,
+        locale: Locale = .current
+    ) -> String {
         switch notice {
         case .replacedCapture(let totalReplaced):
             if totalReplaced == 1 {
-                return "Clipy replaced 1 pending clipboard change with a newer "
+                return AppCaptureCopy.text("Clipy replaced 1 pending clipboard change with a newer "
                     + "one, so it wasn't saved. To try again, copy the older "
-                    + "content again."
+                    + "content again.", bundle: bundle)
             }
-            return "Clipy replaced \(totalReplaced) pending clipboard changes "
+            let format = AppCaptureCopy.text("Clipy replaced %@ pending clipboard changes "
                 + "with newer ones, so they weren't saved. To try again, copy "
-                + "the older content again."
+                + "the older content again.", bundle: bundle)
+            return String(format: format, locale: locale,
+                          totalReplaced.formatted(.number.locale(locale)))
         case .failed(.unsupportedClipboardShape):
-            return "Clipy can't save multiple clipboard items yet. Copy one item at a time."
+            return AppCaptureCopy.text("Clipy can't save multiple clipboard items yet. Copy one item at a time.", bundle: bundle)
         case .failed(.declaredContentUnavailable):
-            return "Clipy couldn't read the complete clipboard change. Copy the content again to make a new attempt."
+            return AppCaptureCopy.text("Clipy couldn't read the complete clipboard change. Copy the content again to make a new attempt.", bundle: bundle)
         case .failed:
-            return "A clipboard change wasn't saved. Clipy can't retry it "
-                + "automatically; copy the content again to make a new attempt."
+            return AppCaptureCopy.text("A clipboard change wasn't saved. Clipy can't retry it "
+                + "automatically; copy the content again to make a new attempt.", bundle: bundle)
         }
     }
 }

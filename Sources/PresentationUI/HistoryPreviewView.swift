@@ -105,7 +105,7 @@ package final class PreviewContentLoader {
     /// `CGImage`/`NSImage` accessibility object.
     package var appliedImageAccessibilityLabel: String? {
         guard let raster else { return nil }
-        return "Image preview, \(raster.width) by \(raster.height) pixels"
+        return PreviewCopy.imageDimensions(width: raster.width, height: raster.height)
     }
 
     private let history: any ClipboardHistory
@@ -285,6 +285,7 @@ struct HistoryPreviewView: View {
 
     @State private var loader: PreviewContentLoader
     @State private var retryGeneration = 0
+    @Environment(\.locale) private var locale
 
     /// Retargets and retries share SwiftUI's view-owned task, so either a
     /// new reference or disappearance cancels the active load (Card 9D).
@@ -384,12 +385,12 @@ struct HistoryPreviewView: View {
             unavailableBody
         } else if loader.requestedItem != targetItem {
             ProgressView()
-                .accessibilityLabel("Loading preview")
+                .accessibilityLabel(PreviewCopy.text("Loading preview"))
         } else {
             switch loader.phase {
             case .loading:
                 ProgressView()
-                    .accessibilityLabel("Loading preview")
+                    .accessibilityLabel(PreviewCopy.text("Loading preview"))
             case .content(.image):
                 if let raster = loader.raster,
                    let accessibilityLabel =
@@ -437,7 +438,7 @@ struct HistoryPreviewView: View {
                 .font(.title2)
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            Text("No Preview")
+            Text(PreviewCopy.text("No Preview"))
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("clipy.preview.unsupported")
@@ -453,12 +454,12 @@ struct HistoryPreviewView: View {
                 .font(.title2)
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            Text("Preview Unavailable")
+            Text(PreviewCopy.text("Preview Unavailable"))
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("clipy.preview.failed")
             if loader.canRetryFailure {
-                Button("Retry") {
+                Button(PreviewCopy.text("Retry")) {
                     if loader.phase == .failed, loader.canRetryFailure {
                         retryGeneration += 1
                     }
@@ -480,7 +481,7 @@ struct HistoryPreviewView: View {
                     Text(source)
                         .lineLimit(1)
                 }
-                Text("Copied \(occurrence.count)×")
+                Text(PreviewCopy.copyCount(occurrence.count, locale: locale))
                 Spacer(minLength: 4)
                 Text(occurrence.lastCopiedAt, style: .date)
                 Text(occurrence.lastCopiedAt, style: .time)

@@ -57,7 +57,7 @@ struct HistoryQuickLookOverlay: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Close")
+            .accessibilityLabel(PreviewCopy.text("Close"))
             // Esc dismisses the overlay; the panel's list-root Esc shortcut
             // checks the overlay first, so both paths agree.
             .keyboardShortcut(.cancelAction)
@@ -68,6 +68,6 @@ struct HistoryQuickLookOverlay: View {
         .background(.regularMaterial)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.panel.quicklook")
-        .accessibilityLabel("Quick Look preview")
+        .accessibilityLabel(PreviewCopy.text("Quick Look preview"))
     }
 }

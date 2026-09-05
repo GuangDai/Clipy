@@ -1,4 +1,16 @@
 // Panel actions and revision safety copy (V2-07 §10 / UI17).
+"Info" = "Info";
+"First Copied" = "First Copied";
+"Last Copied" = "Last Copied";
+"Copy Count" = "Copy Count";
+"Source" = "Source";
+"Unknown" = "Unknown";
+"Content Version" = "Content Version";
+"Clipboard Item" = "Clipboard Item";
+"This item changed while you were viewing it. Details reloaded." = "This item changed while you were viewing it. Details reloaded.";
+"Clipy couldn't load this item." = "Clipy couldn't load this item.";
+"Clipy couldn't update this item." = "Clipy couldn't update this item.";
+"Clipy couldn't remove this item." = "Clipy couldn't remove this item.";
 "Search clipboard…" = "Search clipboard…";
 "Search clipboard history" = "Search clipboard history";
 "Clear" = "Clear";
