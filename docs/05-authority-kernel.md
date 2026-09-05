@@ -229,7 +229,7 @@ Decode is not a blind memberwise conversion. It reconstructs Domain values throu
   copy count ≥1, monotone first/last copy time, and bounded source values;
 - a non-negative pin ordinal (negative is corruption);
 - the `effectiveTypeIdentifiersBlob` decodes to a sorted, unique, non-empty list of type identifiers at format version 1;
-- `projectionSchemaVersion` is exactly the current value (v4), and the stored `title` (≤ 1,024 UTF-8 bytes) and `searchBody` (≤ 256 KiB) obey their Part VI bounds. Tags v1/v2/v3 are accepted only by the bounded startup rebuild below; ordinary reads never consume v1/v2/v3 projection scalars.
+- `projectionSchemaVersion` is exactly the current value (v5), and the stored `title` (≤ 1,024 UTF-8 bytes) and `searchBody` (≤ 256 KiB) obey their Part VI bounds. Tags v1/v2/v3/v4 are accepted only by the bounded startup rebuild below; ordinary reads never consume legacy projection scalars.
 
 Projection checks live at the scalar boundary rather than inside a blob codec:
 startup validates every row's schema tag; recent browse validates the fetched
@@ -293,7 +293,7 @@ internal struct PreparedCaptureBundle: Sendable {
 }
 
 internal struct ContentProjection: Sendable {
-    let schemaVersion: UInt16       // projection recipe v4 = 4
+    let schemaVersion: UInt16       // projection recipe v5 = 5
     let title: String
     let searchBody: String
     let effectiveTypeIdentifiers: [String]
@@ -618,7 +618,7 @@ same-interval proof, rather than an otherwise unread generation counter.
 3. enter `HistoryAuthority` and create the singleton at position 0 if this is a new store;
 4. validate exactly one singleton;
 5. bootstrap/validate the retention-expansion config singleton;
-6. derive every projection-schema-v1/v2/v3 replacement from validated Canonical/revision blobs, then stamp them as recipe v4 in one bounded transaction; an unknown tag, invalid source blob, or failed transaction fails open without publishing a partial rebuild;
+6. derive every projection-schema-v1/v2/v3/v4 replacement from validated Canonical/revision blobs, then stamp them as recipe v5 in one bounded transaction; an unknown tag, invalid source blob, or failed transaction fails open without publishing a partial rebuild;
 7. validate retained row count does not exceed the hard bound and fetch each row's business ID, nonzero Content Version, current projection schema version, pin ordinal, Canonical bytes, and signature metadata;
 8. require projection schema version 4;
 9. decode Canonical and signature metadata, recompute Canonical signature
@@ -743,9 +743,9 @@ invalidation, and exposes neither current retained-byte usage nor a
 
 `ContentProjector` produces bounded values from Effective Content:
 
-- title: first eligible textual line after normalization, otherwise a stable type-based fallback;
-- search body: eligible textual representations in deterministic type order, normalized and truncated to the hard search-body bound;
-- textual decoding is type-strict under projection recipe v4: only
+- title: first eligible textual line after normalization; otherwise, when no known image is present, a valid copied reference supplies its decoded filename or original URL address before the stable type-based fallback;
+- search body: eligible textual representations in deterministic type order, normalized and truncated to the hard search-body bound; a reference supplying the title instead contributes its original address and non-empty decoded path, separated by a newline under the same normalization and byte bound;
+- plain-text decoding retains the recipe-v4 type-strict rules in recipe v5: only
   `public.utf8-plain-text` uses UTF-8. `public.utf16-plain-text` uses native
   UTF-16 (little-endian on arm64); `public.utf16-external-plain-text` uses
   external UTF-16 (big-endian without a BOM). Both honor a leading byte-order
@@ -761,6 +761,20 @@ invalidation, and exposes neither current retained-byte usage nor a
 - effective type identifiers: sorted unique list;
 - image bytes are not decoded for title/search.
 
+Reference metadata is parsed locally from the first exact `public.url` or
+`public.file-url` representation, only after plain text supplies no title and
+only when no known image is present. Its selected source is limited to 16 KiB,
+strictly decoded as UTF-8 without discarding a BOM, and validated as an absolute
+URL without repairing invalid characters. File references must have an absolute
+path; their title is the decoded last path component (or path if that component
+is empty). Other URLs retain the original address as the title. Both contribute
+the original address and non-empty decoded URL path to search. No file existence,
+resource attributes, symlinks, bookmarks, or network destination is consulted.
+An invalid or oversized first reference keeps the old opaque fallback rather
+than selecting a later reference. A textual title that merely truncates to an
+empty display prefix still owns the projection; reference metadata cannot
+replace it. `projectTitle` computes the same title without assembling a corpus.
+
 Capture projection uses initial Effective Content. Revision projection uses the prepared proposed Effective Content. Copy Coalescing, pin, unpin, clear, removal, and retention do not recompute content projection.
 
 The projector constructs the joined search body directly under that hard
@@ -775,19 +789,20 @@ Projection schema changes require an explicit schema version and migration/rebui
 Projection recipe v2 removed guessed text decoding. Recipe v3 corrects the
 external UTF-16 identifier and the native no-BOM byte order. Recipe v4 rejects
 odd-byte UTF-16 instead of accepting a decodable prefix and discarding the
-trailing byte. `HistoryItemRow` already carries the consistency fence, so this
+trailing byte. Recipe v5 adds inert reference metadata to previously generic
+File/URL projections. `HistoryItemRow` already carries the consistency fence, so this
 is not a SwiftData schema change and does not add a schema-migration stage.
 During `SwiftDataHistory.open`, after
 singleton bootstrap and before Signature Index publication or capture, the
 Authority fetches at most the hard retained-item bound plus one, accepts only
-projection tags 1, 2, 3, and 4, then derives every v1/v2/v3 replacement from
+projection tags 1, 2, 3, 4, and 5, then derives every v1/v2/v3/v4 replacement from
 validated Canonical/revision bytes before entering one `ModelContext.transaction` that
 updates only the derived title, search body, effective-type blob, and tag.
 Raw Canonical/revision bytes, Content Version, Change Position, and signature
 state remain unchanged. Malformed text is skipped by the projector while its
 raw representation stays retained. Source blob decode failure, an unknown tag,
-or transaction failure leaves no partially published v4 set and fails the open.
-Ordinary reads accept only v4. The rebuild preserves unknown representation
+or transaction failure leaves no partially published v5 set and fails the open.
+Ordinary reads accept only v5. The rebuild preserves unknown representation
 bytes even when their old guessed title/search text is removed.
 
 Future changes to textual decoding, normalization, title, or body derivation

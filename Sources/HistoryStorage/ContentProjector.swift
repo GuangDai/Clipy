@@ -33,10 +33,10 @@ import HistoryDomain
 /// unique, non-empty type summary of the projected content.
 internal struct ContentProjection: Sendable {
     /// Projection schema version; exactly `ContentProjector.schemaVersion`
-    /// (projection recipe v4 = 4) for every newly projected value.
+    /// (projection recipe v5 = 5) for every newly projected value.
     internal let schemaVersion: UInt16
-    /// First eligible textual line after normalization, otherwise a stable
-    /// type-based fallback (§15).
+    /// First eligible textual line, otherwise eligible reference metadata or
+    /// a stable type-based fallback (§15).
     internal let title: String
     /// Eligible textual representations in deterministic type order,
     /// normalized and truncated to the hard search-body bound (§15).
@@ -58,20 +58,19 @@ internal struct StoredProjectionSize: Equatable, Sendable {
 /// Pure, deterministic projection from Effective Content to its bounded
 /// durable `ContentProjection`. docs/05-authority-kernel.md §15
 ///
-/// The projector is a namespace of pure functions — no actor, clock, I/O, or
-/// framework decode. Image bytes are never decoded for title/search (§15):
-/// only representations whose exact type identifier declares the frozen v4
-/// plain-text encoding are decoded, so identical content always projects
-/// identically. Encoding-unspecified, abstract, and structured text formats
-/// remain opaque.
+/// The projector is a namespace of pure functions — no actor, clock, or I/O.
+/// Image bytes are never decoded for title/search (§15). Recipe-v4 exact
+/// plain-text codecs keep priority; recipe 5 additionally projects bounded
+/// URL/file reference metadata without following the reference. Other
+/// encoding-unspecified, abstract, and structured text formats remain opaque.
 internal enum ContentProjector {
-    /// Recipe 4 rejects incomplete UTF-16 code units before Foundation can
-    /// discard the trailing byte. Startup rebuilds recipes 1–3 before reads
+    /// Recipe 5 adds inert reference metadata when neither a textual title
+    /// nor a known image owns the projection. Startup rebuilds recipes 1–4
     /// using their unchanged Canonical/revision bytes (§15).
-    internal static let schemaVersion: UInt16 = 4
+    internal static let schemaVersion: UInt16 = 5
 
     /// The original recipe used by legacy migration fixtures. Startup also
-    /// accepts recipes 2 and 3; ordinary reads accept only recipe 4 (§13, §15).
+    /// accepts recipes 2–4; ordinary reads accept only recipe 5 (§13, §15).
     internal static let legacySchemaVersion: UInt16 = 1
 
     // MARK: Stored projection validation (docs/05-authority-kernel.md §4)
@@ -147,13 +146,15 @@ internal enum ContentProjector {
     /// - Title: the first line (in deterministic representation order, then
     ///   line order) whose whitespace-trimmed form is non-empty, trimmed and
     ///   truncated to `limits.maximumStoredTitleUTF8Bytes`; when no textual
-    ///   representation yields such a line, a stable type-based fallback.
+    ///   representation yields such a line and no known image is present,
+    ///   a valid reference supplies its filename/address before type fallback.
     /// - Search body: the newline-normalized text of every eligible textual
     ///   representation, in the content's normalized type-identifier order,
     ///   joined by `\n` and truncated to
     ///   `limits.maximumStoredSearchBodyUTF8Bytes`. Whitespace-only texts
-    ///   contribute nothing. The body may be empty (image-only content);
-    ///   the §4 decode bounds permit that.
+    ///   contribute nothing. A reference owning the title instead contributes
+    ///   its original address and non-empty decoded path under the same join
+    ///   and byte budget. The body may be empty (image-only/opaque content).
     /// - Effective type identifiers: the content's type identifiers, already
     ///   sorted, unique, and non-empty by the normalized-set invariant
     ///   (docs/02-domain.md §2.1).
@@ -210,6 +211,28 @@ internal enum ContentProjector {
                 break
             }
         }
+        if title == nil, let reference = referenceProjection(in: content) {
+            title = reference.title
+            var parts = [reference.address]
+            if !reference.path.isEmpty {
+                parts.append(reference.path)
+            }
+            for part in parts {
+                if hasSearchBodyPart {
+                    guard appendNormalizedUTF8Prefix(
+                        "\n",
+                        to: &searchBody,
+                        remainingByteCount: &remainingSearchBodyBytes
+                    ) else { break }
+                }
+                hasSearchBodyPart = true
+                guard appendNormalizedUTF8Prefix(
+                    part,
+                    to: &searchBody,
+                    remainingByteCount: &remainingSearchBodyBytes
+                ) else { break }
+            }
+        }
         return ContentProjection(
             schemaVersion: schemaVersion,
             title: truncatedToUTF8ByteLimit(
@@ -242,10 +265,54 @@ internal enum ContentProjector {
             )
         }
         return truncatedToUTF8ByteLimit(
-            typeBasedFallbackTitle(
+            referenceProjection(in: content)?.title ?? typeBasedFallbackTitle(
                 typeIdentifiers: content.representations.map(\.typeIdentifier)
             ),
             limit: limits.maximumStoredTitleUTF8Bytes
+        )
+    }
+
+    // MARK: Inert reference metadata (recipe 5, §15)
+
+    private static let maximumReferenceSourceBytes = 16 * 1_024
+
+    /// Called only after plain text failed to supply a title. The first exact
+    /// reference owns this attempt; invalid/oversized input never advances to
+    /// another candidate. Known images retain their existing opaque projection.
+    /// The tuple contains fields, not a joined search body, so title-only reads
+    /// perform no body normalization or assembly.
+    private static func referenceProjection(
+        in content: EffectiveContent
+    ) -> (title: String, address: String, path: String)? {
+        guard !content.representations.contains(where: {
+            imageTypeIdentifiers.contains($0.typeIdentifier)
+        }), let representation = content.representations.first(where: {
+            let identifier = ClipboardFormatIdentifier(rawValue: $0.typeIdentifier)
+            return identifier == .url || identifier == .fileURL
+        }) else { return nil }
+
+        guard representation.bytes.count <= maximumReferenceSourceBytes,
+              let address = String(validating: representation.bytes, as: UTF8.self),
+              !address.isEmpty,
+              let url = URL(string: address, encodingInvalidCharacters: false),
+              let scheme = url.scheme,
+              !scheme.isEmpty else { return nil }
+        let identifier = ClipboardFormatIdentifier(rawValue: representation.typeIdentifier)
+        guard identifier != .fileURL || url.isFileURL else { return nil }
+
+        // These are lexical URL components, never filesystem resource reads.
+        // Host spelling is retained in address; remote file references are
+        // neither rejected nor presented as evidence of a local file.
+        let path = url.path(percentEncoded: false)
+        guard url.isFileURL else {
+            return (title: address, address: address, path: path)
+        }
+        guard path.hasPrefix("/") else { return nil }
+        let filename = url.lastPathComponent
+        return (
+            title: filename.isEmpty ? path : filename,
+            address: address,
+            path: path
         )
     }
 

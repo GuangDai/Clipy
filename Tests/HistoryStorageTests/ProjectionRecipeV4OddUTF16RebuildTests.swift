@@ -135,7 +135,7 @@ struct ProjectionRecipeV4OddUTF16RebuildTests {
         let context = ModelContext(container)
         let rows = try context.fetch(FetchDescriptor<HistoryItemRow>())
         let row = try #require(rows.count == 1 ? rows.first : nil)
-        #expect(row.projectionSchemaVersion == 4)
+        #expect(row.projectionSchemaVersion == 5)
         #expect(row.title == fixture.typeIdentifier)
         #expect(row.searchBody.isEmpty)
         #expect(row.canonicalBlob == bytes.canonicalBlob)

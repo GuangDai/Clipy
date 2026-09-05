@@ -11,7 +11,7 @@ import Testing
 @MainActor
 struct RealHistoryReferencePreviewTests {
     @Test(arguments: [false, true])
-    func previewPreservesStoredReferenceBytesAndFallbackTitle(isFile: Bool) async throws {
+    func previewPreservesStoredReferenceBytesAndReadableTitle(isFile: Bool) async throws {
         let history = try await SwiftDataHistory.open(
             configuration: HistoryConfiguration(persistence: .memory)
         )
@@ -40,7 +40,7 @@ struct RealHistoryReferencePreviewTests {
         let page = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 10))
         #expect(page.position.rawValue == 1)
         #expect(page.rows.map(\.item) == [item])
-        #expect(page.rows.map(\.title) == [isFile ? "File" : "URL"])
+        #expect(page.rows.map(\.title) == [isFile ? "Report café.txt" : address])
         #expect(page.rows.map(\.typeIdentifiers) == [[identifier]])
         let details = try await history.details(for: item.id)
         #expect(details.canonical.map(\.bytes) == [bytes])
@@ -57,7 +57,8 @@ struct RealHistoryReferencePreviewTests {
             configuration: HistoryConfiguration(persistence: .memory)
         )
         let originalBytes = Data("https://example.invalid/old%20address?x=%2F".utf8)
-        let revisedBytes = Data("https://EXAMPLE.invalid/new%20address?x=%25#new".utf8)
+        let revisedAddress = "https://EXAMPLE.invalid/new%20address?x=%25#new"
+        let revisedBytes = Data(revisedAddress.utf8)
         let original = try await capture(originalBytes, type: "public.url", in: history)
         let loader = PreviewContentLoader(history: history)
         await loader.load(item: original)
@@ -100,13 +101,13 @@ struct RealHistoryReferencePreviewTests {
         #expect(details.item == revised)
         #expect(details.canonical.map(\.bytes) == [originalBytes])
         #expect(details.effective.map(\.bytes) == [revisedBytes])
-        #expect(details.revisions.map(\.title) == ["URL"])
+        #expect(details.revisions.map(\.title) == [revisedAddress])
         let paste = try await history.pastePayload(for: original.id)
         #expect(paste.item == revised)
         #expect(paste.representations.map(\.bytes) == [revisedBytes])
         let page = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 10))
         #expect(page.position == commit.position)
-        #expect(page.rows.map(\.title) == ["URL"])
+        #expect(page.rows.map(\.title) == [revisedAddress])
     }
 
     private func reference(in loader: PreviewContentLoader) -> PreviewReference? {

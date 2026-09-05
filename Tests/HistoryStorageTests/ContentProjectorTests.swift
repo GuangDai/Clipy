@@ -166,7 +166,7 @@ private func effectiveTextContent(
 
     let projection = ContentProjector.project(content)
 
-    #expect(projection.schemaVersion == 4)
+    #expect(projection.schemaVersion == 5)
     #expect(projection.title == "Visible sibling")
     #expect(projection.searchBody == "Visible sibling")
     #expect(
@@ -240,14 +240,16 @@ func externalUTF16ProjectionHonorsByteOrder(bytes: Data) {
     #expect(size.searchBodyUTF8Bytes == body.utf8.count)
 }
 
-@Test func ordinaryReadsRequireRecipeFourAfterStartupRebuild() throws {
-    #expect(throws: CodecRejection.unknownProjectionSchemaVersion(found: 3)) {
-        try ContentProjector.validateStoredProjection(
-            schemaVersion: 3, title: "A", searchBody: "A", limits: .standard
-        )
+@Test func ordinaryReadsRequireRecipeFiveAfterStartupRebuild() throws {
+    for rejectedVersion in [UInt16(1), 2, 3, 4, 9] {
+        #expect(throws: CodecRejection.unknownProjectionSchemaVersion(found: rejectedVersion)) {
+            try ContentProjector.validateStoredProjection(
+                schemaVersion: rejectedVersion, title: "A", searchBody: "A", limits: .standard
+            )
+        }
     }
     let current = try ContentProjector.validateStoredProjection(
-        schemaVersion: 4, title: "A", searchBody: "A", limits: .standard
+        schemaVersion: 5, title: "A", searchBody: "A", limits: .standard
     )
     #expect(current.titleUTF8Bytes == 1)
     #expect(current.searchBodyUTF8Bytes == 1)

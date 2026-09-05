@@ -74,7 +74,7 @@ struct ContentProjectorStreamingEquivalenceTests {
             let expected = oracle(sources, titleBytes: titleBytes, bodyBytes: bodyBytes)
             let content = EffectiveContent(representations: sources.map(\.representation))
             let actual = ContentProjector.project(content, limits: limits)
-            #expect(actual.schemaVersion == 4)
+            #expect(actual.schemaVersion == 5)
             #expect(actual.effectiveTypeIdentifiers == sources.map(\.representation.typeIdentifier))
             #expect(Data(actual.title.utf8) == Data(expected.title.utf8))
             #expect(Data(actual.searchBody.utf8) == Data(expected.body.utf8))
@@ -129,7 +129,7 @@ struct ContentProjectorStreamingEquivalenceTests {
             )
             #expect(actual.title == "valid")
             #expect(actual.searchBody == "valid")
-            #expect(actual.schemaVersion == 4)
+            #expect(actual.schemaVersion == 5)
         }
     }
 

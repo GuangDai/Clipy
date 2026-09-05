@@ -176,7 +176,9 @@ values, open files, request network resources, or provide an Open action.
 The UI presents selectable literal text and explains that the destination
 has not been opened. Invalid/oversized selected references return the existing
 malformed/resource-limit outcomes rather than silently trying another URL.
-This changes neither persisted projections nor capture, revision, or paste bytes.
+Previewing the reference does not mutate History or the retained/paste bytes.
+Its separate stored filename/address search projection is owned by
+`ContentProjector` (Part V §15), not by the preview renderer.
 
 `HistoryRestartProbe` is likewise a no-product test-evidence executable; it is
 not part of the app or the future `clipyctl` surface. `HistoryPerfTests` imports
