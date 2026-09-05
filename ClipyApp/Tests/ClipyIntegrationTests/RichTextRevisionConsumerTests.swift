@@ -86,9 +86,16 @@ struct RichTextRevisionConsumerTests {
         let richConsumer = NSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 100))
         richConsumer.isRichText = true
         let availableTypes = try #require(destination.types)
-        #expect(richConsumer.preferredPasteboardType(
+        let preferred = try #require(richConsumer.preferredPasteboardType(
             from: availableTypes, restrictedToTypesFrom: nil
-        ) == .rtf)
+        ))
+        // NSTextView's native API can name RTF with its legacy pasteboard
+        // spelling. That API vocabulary is distinct from History's captured
+        // public.rtf identifier; neither accepted value admits plain text.
+        #expect([
+            "public.rtf",
+            "NeXT Rich Text Format v1.0 pasteboard type",
+        ].contains(preferred.rawValue))
         // Do not force readSelection(from:type:): readSelection(from:) must
         // run AppKit's real preferred-type selection before native decoding.
         try #require(richConsumer.readSelection(from: destination))
