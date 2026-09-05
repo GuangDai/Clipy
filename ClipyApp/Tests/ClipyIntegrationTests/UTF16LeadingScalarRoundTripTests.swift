@@ -1,6 +1,6 @@
 /// Leading UTF-16 text scalars that resemble byte-order markers survive
-/// immutable revision storage, the real preview loader, and paste. Titles
-/// retain their separate whitespace-trimming projection semantics (05 §15).
+/// immutable revision storage, byte-backed titles, the real preview loader,
+/// and paste. An encoding marker is consumed once, not again from content.
 import Foundation
 import HistoryCore
 import HistoryStorage
@@ -20,13 +20,13 @@ struct UTF16LeadingScalarRoundTripTests {
     static let fixtures = [
         Fixture(type: "public.utf16-plain-text", canonical: Data([0x41, 0x00]),
                 replacement: Data([0xFF, 0xFE, 0xFF, 0xFE, 0x42, 0x00, 0x3E, 0xD8, 0x8A, 0xDD]),
-                expectedTitleScalars: [0x42, 0x1F98A]),
+                expectedTitleScalars: [0xFEFF, 0x42, 0x1F98A]),
         Fixture(type: "public.utf16-plain-text", canonical: Data([0x41, 0x00]),
                 replacement: Data([0xFF, 0xFE, 0xFE, 0xFF, 0x42, 0x00, 0x3E, 0xD8, 0x8A, 0xDD]),
                 expectedTitleScalars: [0xFFFE, 0x42, 0x1F98A]),
         Fixture(type: "public.utf16-external-plain-text", canonical: Data([0x00, 0x41]),
                 replacement: Data([0xFE, 0xFF, 0xFE, 0xFF, 0x00, 0x42, 0xD8, 0x3E, 0xDD, 0x8A]),
-                expectedTitleScalars: [0x42, 0x1F98A]),
+                expectedTitleScalars: [0xFEFF, 0x42, 0x1F98A]),
         Fixture(type: "public.utf16-external-plain-text", canonical: Data([0x00, 0x41]),
                 replacement: Data([0xFE, 0xFF, 0xFF, 0xFE, 0x00, 0x42, 0xD8, 0x3E, 0xDD, 0x8A]),
                 expectedTitleScalars: [0xFFFE, 0x42, 0x1F98A]),
@@ -34,7 +34,7 @@ struct UTF16LeadingScalarRoundTripTests {
 
     @Test(arguments: UTF16LeadingScalarRoundTripTests.fixtures)
     @MainActor
-    func rawTextScalarsSurviveWhileTitlesKeepTheirNormalization(_ fixture: Fixture) async throws {
+    func leadingTextScalarsSurviveTitleStoragePreviewAndPaste(_ fixture: Fixture) async throws {
         let history = try await ComposedSupport.openMemoryHistory()
         let captured = try await history.perform(.capture(ClipboardCapture(
             representations: [CapturedRepresentation(
@@ -52,9 +52,9 @@ struct UTF16LeadingScalarRoundTripTests {
             )]))
         )))
         let revised = try #require(ComposedSupport.revisedReference(from: receipt, "UTF-16 leading scalar"))
-        // The existing first-content-line projection trims leading FEFF on
-        // macOS; FFFE remains in the title. These literal title expectations
-        // are independent of the raw-byte and preview assertions below.
+        // Neither scalar is leading whitespace. Recipe 6's byte-backed
+        // title preserves both; the old String storage path lost FEFF only
+        // when a new context materialized the projection.
         let page = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 10))
         #expect(page.rows.map(\.item) == [revised])
         #expect(page.rows.first?.title.unicodeScalars.map(\.value) == fixture.expectedTitleScalars)
