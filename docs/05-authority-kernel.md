@@ -700,6 +700,12 @@ the full corpus snapshot or change the frozen score/date/ID ordering.
 
 Both fetch exactly one row and decode/validate its full lineage. Detail maps it to Canonical/effective/revision/occurrence DTOs. Paste maps only current Effective Content plus the current reference and lineage hint.
 
+The Settings `usage()` read joins existing validated retained-byte projections
+to item-ID and pin-ordinal scalars in one operation-local context, alongside
+the current position. It returns item/pinned counts and Canonical/revision
+byte sums. Missing or orphan projections fail the read instead of displaying
+a partial total. Content blobs are not decoded, and the read writes no state.
+
 #### 14.4 Observation registration
 
 `HistoryAuthority` stores `AsyncThrowingStream` continuations keyed by an internal subscription token. Registration and invalidation yield are synchronous actor operations. Cancellation removes the token. `SwiftDataHistory.observe` implements the Part IV subscribe-before-query algorithm and owns any SearchWorker task.

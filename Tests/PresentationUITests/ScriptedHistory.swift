@@ -255,6 +255,11 @@ actor ScriptedHistory: ClipboardHistory {
         retentionConfigurationRequestCount += 1
         return scriptedRetentionConfiguration
     }
+
+    func usage() async throws -> HistoryUsage {
+        // No retained-byte snapshot is configured by this read/receipt script.
+        throw HistoryFailure.temporarilyUnavailable(.factProof)
+    }
 }
 
 // MARK: - ThumbnailScriptHistory (thumbnail double)
@@ -338,6 +343,11 @@ actor ThumbnailScriptHistory: ClipboardHistory {
     func retentionConfiguration() async throws -> HistoryRetentionConfiguration {
         .newStoreDefaults
     }
+
+    func usage() async throws -> HistoryUsage {
+        // Encoded thumbnails are not retained Canonical/revision bytes.
+        throw HistoryFailure.temporarilyUnavailable(.factProof)
+    }
 }
 
 // MARK: - PausableDetailsHistory (preview fence double)
@@ -354,6 +364,11 @@ actor ThumbnailScriptHistory: ClipboardHistory {
 /// already suspended would replace the first continuation (leaking it), so
 /// tests keep one selection per ID.
 actor PausableDetailsHistory: ClipboardHistory {
+
+    func usage() async throws -> HistoryUsage {
+        // Individual scripted details do not establish a whole-store total.
+        throw HistoryFailure.temporarilyUnavailable(.factProof)
+    }
 
     /// Scripted detail answers by item ID.
     private var detailsByID: [HistoryItemID: HistoryDetails] = [:]

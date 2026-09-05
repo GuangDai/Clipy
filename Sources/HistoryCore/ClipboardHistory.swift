@@ -102,15 +102,20 @@ public protocol ClipboardHistory: Sendable {
         pixels: PixelSize
     ) async throws -> ThumbnailPayload?
 
+    /// Current retained counts and logical content bytes from one coherent
+    /// snapshot. Counts include pinned items; revision bytes include every
+    /// retained revision. These are content totals, not physical disk usage.
+    /// The read-after-commit guarantee applies as for other History reads.
+    func usage() async throws -> HistoryUsage
+
     /// The authoritative configured retention state: the v1 maximum-unpinned
     /// count plus the V2-02 age/storage/revision dimensions, exactly as
     /// persisted.
     ///
     /// This is the settings surface's panel-open read (docs/v2/V2-07-ux.md
-    /// §6.3 — a one-shot read per §4.2.2): it returns the CONFIGURED policy,
-    /// never a live current-retained-bytes usage value, which the public
-    /// surface deliberately does not expose (V2-07 §2.2 OPEN-2; `V2-02`
-    /// §8.1). It reads the same durable singletons the mutation paths write
+    /// §6.3 — a one-shot read per §4.2.2): it returns the configured policy.
+    /// The separate `usage()` read returns retained counts and content bytes.
+    /// Configuration reads the same durable singletons the mutation paths write
     /// (docs/05-authority-kernel.md §3.2; `V2-02` §3.3), so the value read
     /// here is the value a later `.setRetentionPolicy` /
     /// `.setRetentionPolicies` compares against, and the §11 read-after-

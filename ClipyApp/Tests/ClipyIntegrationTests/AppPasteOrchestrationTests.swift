@@ -603,6 +603,10 @@ private actor PausingPastePayloadHistory: ClipboardHistory {
         try await base.thumbnail(for: item, pixels: pixels)
     }
 
+    func usage() async throws -> HistoryUsage {
+        try await base.usage()
+    }
+
     func retentionConfiguration() async throws -> HistoryRetentionConfiguration {
         try await base.retentionConfiguration()
     }

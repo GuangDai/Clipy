@@ -598,6 +598,11 @@ private actor PreviewRenderGate {
 /// resumed explicitly by request order, making generation ordering observable
 /// without sleeps or a second storage implementation.
 private actor OverlappingDetailsHistory: ClipboardHistory {
+    func usage() async throws -> HistoryUsage {
+        // Overlapping detail completions do not establish a store total.
+        throw HistoryFailure.temporarilyUnavailable(.factProof)
+    }
+
     private var continuations: [CheckedContinuation<HistoryDetails, Error>?] = []
 
     var requestCount: Int { continuations.count }

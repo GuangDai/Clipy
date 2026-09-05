@@ -90,6 +90,22 @@ package struct PreviewClipboardHistory: ClipboardHistory, Sendable {
         )
     }
 
+    package func usage() async throws -> HistoryUsage {
+        // The populated preview scripts row metadata only, with no original
+        // or revision byte fixtures. It cannot infer retained bytes from
+        // titles, types, or thumbnail names.
+        guard page == nil else {
+            throw HistoryFailure.temporarilyUnavailable(.factProof)
+        }
+        return HistoryUsage(
+            position: .zero,
+            itemCount: 0,
+            pinnedItemCount: 0,
+            canonicalBytes: 0,
+            revisionBytes: 0
+        )
+    }
+
     // MARK: - Canned dataset (fixed literals; no clock or ID source)
 
     /// Anchor timestamp 2026-08-18 09:41:00 UTC; every row's

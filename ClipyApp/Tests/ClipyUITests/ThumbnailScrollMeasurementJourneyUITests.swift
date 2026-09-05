@@ -376,9 +376,11 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
 
     // MARK: - Scrolling
 
-    /// Bounded wheel increments in one direction, clamped by the scroll
-    /// view's own bounds; stop when the actual endpoint enters the viewport.
-    /// A short dwell lets lazy rows publish before the next small gesture.
+    /// Move toward the endpoint's current frame once it materializes. Lazy
+    /// List row estimates can move that frame during scrolling; continuing
+    /// the initial fixed direction cannot correct an overshoot. Before the
+    /// endpoint exists, keep the caller's traversal direction so pagination
+    /// can materialize it. The step/pass limits remain unchanged.
     @MainActor
     private func scroll(
         _ coordinate: XCUICoordinate,
@@ -387,17 +389,29 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
         untilVisible row: XCUIElement,
         in scrollView: XCUIElement
     ) -> Bool {
-        func endpointIsVisible() -> Bool {
-            guard row.exists else { return false }
-            let rowFrame = row.frame
-            return !rowFrame.isEmpty && scrollView.frame.intersects(rowFrame)
-        }
         for _ in 0..<steps {
-            if endpointIsVisible() { return true }
-            coordinate.scroll(byDeltaX: 0, deltaY: deltaY)
+            var nextDeltaY = deltaY
+            if row.exists {
+                let rowFrame = row.frame
+                let viewport = scrollView.frame
+                if !rowFrame.isEmpty && viewport.contains(rowFrame) {
+                    return true
+                }
+                // Same frame-directed wheel behavior as the Settings
+                // journeys: smaller corrections once AX knows the target.
+                nextDeltaY = rowFrame.midY < viewport.midY ? 50 : -50
+            }
+            coordinate.scroll(byDeltaX: 0, deltaY: nextDeltaY)
             dwell(0.2)
         }
-        return endpointIsVisible()
+        guard row.exists else { return false }
+        let rowFrame = row.frame
+        let viewport = scrollView.frame
+        let visible = !rowFrame.isEmpty && viewport.contains(rowFrame)
+        if !visible {
+            print("CLIPY_THUMB_SCROLL target=\(row.identifier) frame=\(rowFrame) viewport=\(viewport)")
+        }
+        return visible
     }
 
     /// Spins the run loop for `seconds` without a condition (the wait helper

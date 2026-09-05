@@ -750,6 +750,10 @@ actor LifecycleObservationHistory: ClipboardHistory {
         nil
     }
 
+    func usage() async throws -> HistoryUsage {
+        throw CancellationError()
+    }
+
     func retentionConfiguration() async throws -> HistoryRetentionConfiguration {
         throw CancellationError()
     }

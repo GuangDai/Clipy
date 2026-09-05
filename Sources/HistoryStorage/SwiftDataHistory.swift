@@ -606,13 +606,19 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         try await authority.pastePayload(for: id)
     }
 
+    /// One authoritative snapshot of retained counts and logical content
+    /// bytes. The Authority owns aggregation and snapshot coherence.
+    public func usage() async throws -> HistoryUsage {
+        try await authority.usage()
+    }
+
     /// The authoritative configured retention state (docs/v2/V2-07-ux.md
     /// §5.2/§6.3 — the settings panel-open read; audit SPEC-IMPL-003): the
     /// Authority reads both durable singletons inside one serialized,
     /// non-suspending interval — the v1 count from the position singleton
     /// (§3.2) and the V2-02 dimensions through the shared config→policy
-    /// loader (`V2-02` §3.3). Configured policy only; no retained-byte usage
-    /// rides this value (V2-07 §2.2 OPEN-2).
+    /// loader (`V2-02` §3.3). Retained counts and content bytes are read
+    /// separately through `usage()`.
     public func retentionConfiguration() async throws -> HistoryRetentionConfiguration {
         try await authority.retentionConfiguration()
     }

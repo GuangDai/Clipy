@@ -1,0 +1,10 @@
+// Retained logical content usage (V2-07 §6/§10).
+"Retained History" = "保留的历史记录";
+"Items" = "项目数";
+"Pinned Items" = "置顶项目数";
+"Content Size" = "内容用量";
+"Content size includes originals and retained revisions. Actual disk usage may differ." = "内容用量包括原始内容和保留的修订版本，可能与实际磁盘占用不同。";
+"Loading usage…" = "正在加载用量…";
+"Usage unavailable." = "用量暂不可用。";
+"Refresh" = "刷新";
+"Retry" = "重试";

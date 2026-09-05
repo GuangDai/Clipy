@@ -592,9 +592,9 @@ private struct AppearanceSettingsTab: View {
 /// persisted configured policy loaded on appear (`V2-07` §6.3's panel-open
 /// read; audit SPEC-IMPL-003), and Apply stays disabled until that read
 /// lands — an unexamined Apply against the neutral prefill could otherwise
-/// silently wipe a real persisted policy. The read is the configured
-/// policy only: no live usage readout exists on the public surface (the
-/// OPEN-2 exclusion — V2-07 §5.2 "live storage indicator not available").
+/// silently wipe a real persisted policy. Retained counts and logical
+/// content size load separately on opening or explicit refresh, and after
+/// applying a policy; they do not start another observation subscription.
 private struct RetentionSettingsTab: View {
 
     private let viewState: HistoryViewState
@@ -607,6 +607,9 @@ private struct RetentionSettingsTab: View {
     private let retentionConfigurationFailure: String?
     @State private var countStatus: SettingStatus?
     @State private var policyStatus: SettingStatus?
+    @State private var usageRefreshGeneration = 0
+    @State private var usage: HistoryUsage?
+    @State private var usageFailed = false
     @State private var isWorking = false
     @State private var pendingCountSubmission:
         RetentionSettingsDraft.CountSubmission?
@@ -629,6 +632,11 @@ private struct RetentionSettingsTab: View {
     var body: some View {
         ScrollView {
             Form {
+                HistoryUsageView(
+                    usage: usage,
+                    failed: usageFailed,
+                    onRefresh: { usageRefreshGeneration += 1 }
+                )
                 Section {
                     LabeledContent {
                         HStack {
@@ -839,6 +847,32 @@ private struct RetentionSettingsTab: View {
             .formStyle(.grouped)
             .padding([.horizontal, .bottom])
         }
+        // The tab owns this task, so scrolling the usage section offscreen
+        // cannot start another read. Refresh and successful policy changes
+        // replace the task; tab/window disappearance cancels it.
+        .task(id: usageRefreshGeneration) {
+            await refreshUsage()
+        }
+        .onDisappear {
+            usageRefreshGeneration += 1
+            usage = nil
+            usageFailed = false
+        }
+    }
+
+    private func refreshUsage() async {
+        guard !Task.isCancelled else { return }
+        let requestGeneration = usageRefreshGeneration
+        usage = nil
+        usageFailed = false
+        do {
+            let result = try await viewState.history.usage()
+            guard !Task.isCancelled, requestGeneration == usageRefreshGeneration else { return }
+            usage = result
+        } catch {
+            guard !Task.isCancelled, requestGeneration == usageRefreshGeneration else { return }
+            usageFailed = true
+        }
     }
 
     /// The parsed count, or `nil` when the text is not a whole number
@@ -908,6 +942,7 @@ private struct RetentionSettingsTab: View {
             )
             switch maximumUnpinnedStatusFeedback(receipt) {
             case .success(let successMessage):
+                usageRefreshGeneration += 1
                 guard draft.acceptApplied(
                     submission,
                     successMessage: successMessage
@@ -1037,6 +1072,7 @@ private struct RetentionSettingsTab: View {
             let receipt = try await viewState.applyRetentionPolicies(submission.policies)
             switch retentionPoliciesStatusFeedback(receipt) {
             case .success(let successMessage):
+                usageRefreshGeneration += 1
                 guard draft.acceptApplied(
                     submission,
                     successMessage: successMessage

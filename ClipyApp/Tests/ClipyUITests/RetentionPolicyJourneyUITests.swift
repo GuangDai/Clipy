@@ -64,6 +64,11 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             in: app,
             context: "retention policy scroll view"
         )
+        // This real UTF-8 capture is a little over 1.1 MB in the .file
+        // display's decimal units. Exact content-byte accounting is proved
+        // by the storage owner tests; the running UI must show the actual
+        // nonempty store, including zero pinned items, before retirement.
+        assertUsage(itemCount: "1", contentSize: "1.1 MB", in: app)
         guard scrollUntilFullyVisible(
             storageEnabled,
             in: retentionScrollView,
@@ -125,6 +130,17 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             diagnostic(app, context: "exact storage retirement receipt")
         )
 
+        let refreshUsage = app.buttons["clipy.settings.usage.refresh"]
+        assertExists(refreshUsage, timeout: 10, in: app, context: "retained usage Refresh")
+        guard scrollUntilFullyVisible(
+            refreshUsage,
+            in: retentionScrollView,
+            app: app,
+            context: "retained usage Refresh after R2"
+        ) else { return }
+        refreshUsage.click()
+        assertUsage(itemCount: "0", contentSize: "0 bytes", in: app)
+
         closeSettingsAndSummonPanel(
             field: storageMiB,
             panel: panel,
@@ -180,6 +196,12 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             "30",
             diagnostic(app, context: "default age draft")
         )
+        guard scrollUntilFullyVisible(
+            ageEnabled,
+            in: retentionScrollView,
+            app: app,
+            context: "age toggle below retained usage"
+        ) else { return }
         ageEnabled.click()
 
         let apply = app.buttons["clipy.settings.retention.apply"]
@@ -351,6 +373,29 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             context: "Settings Retention tab"
         )
         retentionTab.click()
+    }
+
+    @MainActor
+    private func assertUsage(itemCount: String, contentSize: String, in app: XCUIApplication) {
+        let items = app.staticTexts["clipy.settings.usage.item-count"]
+        let pinned = app.staticTexts["clipy.settings.usage.pinned-count"]
+        let bytes = app.staticTexts["clipy.settings.usage.content-bytes"]
+        // Foundation can use a nonbreaking space between quantity and unit;
+        // compare the user-visible words without pinning that typography.
+        func text(of element: XCUIElement) -> String {
+            (element.value as? String ?? element.label)
+                .split(whereSeparator: { $0.isWhitespace })
+                .joined(separator: " ")
+        }
+        XCTAssertTrue(
+            waitUntil(timeout: 10) {
+                items.exists && pinned.exists && bytes.exists
+                    && text(of: items) == itemCount
+                    && text(of: pinned) == "0"
+                    && text(of: bytes) == contentSize
+            },
+            diagnostic(app, context: "retained usage: \(itemCount) items, 0 pinned, \(contentSize)")
+        )
     }
 
     @MainActor

@@ -1780,6 +1780,11 @@ struct HistoryViewStateTests {
 /// One-operation-at-a-time public History boundary used to place the Card 9B
 /// assertion exactly before or after the real receipt, without timing sleeps.
 private actor PausableMutationHistory: ClipboardHistory {
+    func usage() async throws -> HistoryUsage {
+        // This mutation script does not configure retained-byte snapshots.
+        throw HistoryFailure.temporarilyUnavailable(.factProof)
+    }
+
     enum Completion: Sendable {
         case success(HistoryReceipt)
         case failure(HistoryFailure)
