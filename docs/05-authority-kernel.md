@@ -91,11 +91,11 @@ internal let v1Schema = Schema(HistorySchemaV1.HistoryItemRow.self, LastChangePo
 
 V2–V4 retain that same item shape while adding retention, Gateway and journal
 tables. Current `open` targets `HistorySchemaV5` through the ordered migration
-plan. Its item model adds `titleUTF8: Data` with an empty migration default;
-the old String `title` column remains a legacy migration field, not a second
-title authority. New items write only the UTF-8 title bytes and leave the
-legacy String empty. The V4→V5 lightweight stage preserves every existing
-column; the following startup projection rebuild derives the new title bytes
+plan. Its item model adds `titleUTF8: Data` and `searchBodyUTF8: Data` with
+empty migration defaults. The old String columns remain legacy migration
+fields, not second authorities. New items write the UTF-8 projection bytes
+and leave both legacy Strings empty. The V4→V5 lightweight stage preserves
+every existing column; the following startup rebuild derives both byte fields
 from validated retained content before publishing the facade (§15).
 
 #### 3.1 History Item row
@@ -142,16 +142,16 @@ Semantic mapping:
 | `canonicalBlob` | Immutable Canonical representations including per-representation fingerprint evidence. |
 | `revisionStateBlob` | Full revision list plus active Revision ID. The active revision's bytes are present whenever `activeRevisionID` is non-nil; for a Canonical-state item (`activeRevisionID == nil`) the revision list is empty and there are no revision bytes — Effective Content equals Canonical Content. |
 | `canonicalSignatureBlob` | Durable signature metadata used with authoritative Canonical bytes to rebuild the complete Signature Index in the current hard-capped profile. |
-| projection fields | Durable bounded projection of current Effective Content for list/search. In V5 the authoritative title is `titleUTF8`; the legacy String `title` is not read by product operations. |
-
-Current title reads check the UTF-8 byte bound before strictly decoding
-`titleUTF8`, preserving every scalar including a leading U+FEFF. Invalid UTF-8
-fails as `.persistence(.corruptStoredValue)` through the existing codec mapping.
-Empty title bytes remain valid under the existing title contract. Scalar list
-and search reads fetch these bounded bytes, not the full Canonical/revision
-blobs. They do not fall back to the legacy String or rebuild per read.
+| projection fields | Durable bounded projection of current Effective Content for list/search. In V5 the authoritative fields are `titleUTF8` and `searchBodyUTF8`; product operations do not read either legacy String column. |
 | occurrence fields | Full first/last time and source summary. |
 | `pinOrdinal` | Internal encoding of pinned order; `nil` is unpinned. |
+
+Current projection reads check each UTF-8 byte bound before strictly decoding,
+preserving every scalar including a leading U+FEFF. Invalid UTF-8
+fails as `.persistence(.corruptStoredValue)` through the existing codec mapping.
+Empty title/body bytes remain valid. Scalar list reads fetch title bytes only;
+search also fetches body bytes, not the full Canonical/revision blobs. Neither
+falls back to a legacy String or rebuilds per read.
 
 `@Attribute(.externalStorage)` is an implementation hint. Correctness, byte limits, and read isolation do not depend on whether SwiftData stores a blob inline or externally.
 
@@ -246,7 +246,7 @@ Decode is not a blind memberwise conversion. It reconstructs Domain values throu
   copy count ≥1, monotone first/last copy time, and bounded source values;
 - a non-negative pin ordinal (negative is corruption);
 - the `effectiveTypeIdentifiersBlob` decodes to a sorted, unique, non-empty list of type identifiers at format version 1;
-- `projectionSchemaVersion` is exactly the current value (v5), and the stored `title` (≤ 1,024 UTF-8 bytes) and `searchBody` (≤ 256 KiB) obey their Part VI bounds. Tags v1/v2/v3/v4 are accepted only by the bounded startup rebuild below; ordinary reads never consume legacy projection scalars.
+- `projectionSchemaVersion` is exactly the current value (v6), and `titleUTF8` (≤ 1,024 bytes) and `searchBodyUTF8` (≤ 256 KiB) are valid UTF-8 within their Part VI bounds. Tags v1–v5 are accepted only by the bounded startup rebuild below; ordinary reads never consume legacy projection scalars.
 
 Projection checks live at the scalar boundary rather than inside a blob codec:
 startup validates every row's schema tag; recent browse validates the fetched
@@ -809,17 +809,18 @@ external UTF-16 identifier and the native no-BOM byte order. Recipe v4 rejects
 odd-byte UTF-16 instead of accepting a decodable prefix and discarding the
 trailing byte. Recipe v5 adds inert reference metadata to previously generic
 File/URL projections. Recipe v6 retains those projection algorithms and changes
-durable title storage to UTF-8 bytes in schema V5: fresh-context materialization
-of the old String field lost a leading U+FEFF in the real storage journey.
+durable title/body storage to UTF-8 bytes in schema V5: fresh-context
+materialization of both old String fields lost a leading U+FEFF in real
+storage journeys, including a body-only search term longer than the title.
 The schema migration is additive, and the existing projection version makes
 every recipe 1–5 row eligible for source-based rebuild, including recipe 5
-rows whose legacy title already lost that character.
+rows whose legacy projection already lost that character.
 During `SwiftDataHistory.open`, after
 singleton bootstrap and before Signature Index publication or capture, the
 Authority fetches at most the hard retained-item bound plus one, accepts only
 projection tags 1, 2, 3, 4, 5, and 6, then derives every v1–v5 replacement from
 validated Canonical/revision bytes before entering one `ModelContext.transaction` that
-updates only the derived `titleUTF8`, search body, effective-type blob, and tag.
+updates only the derived `titleUTF8`, `searchBodyUTF8`, effective-type blob, and tag.
 Raw Canonical/revision bytes, Content Version, Change Position, and signature
 state remain unchanged. Malformed text is skipped by the projector while its
 raw representation stays retained. Source blob decode failure, an unknown tag,

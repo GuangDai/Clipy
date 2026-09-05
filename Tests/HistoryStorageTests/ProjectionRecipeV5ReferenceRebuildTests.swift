@@ -149,7 +149,7 @@ struct ProjectionRecipeV5ReferenceRebuildTests {
         try context.transaction {
             row.projectionSchemaVersion = 4
             row.titleUTF8 = Data(title.utf8)
-            row.searchBody = ""
+            row.searchBodyUTF8 = Data()
         }
         return original
     }
@@ -161,7 +161,7 @@ struct ProjectionRecipeV5ReferenceRebuildTests {
         let row = try #require(rows.count == 1 ? rows.first : nil)
         #expect(row.projectionSchemaVersion == 6)
         #expect(row.titleUTF8 == Data(fixture.title.utf8))
-        #expect(Data(row.searchBody.utf8) == Data(fixture.body.utf8))
+        #expect(row.searchBodyUTF8 == Data(fixture.body.utf8))
         #expect(row.canonicalBlob == original.canonicalBlob)
         #expect(row.revisionStateBlob == original.revisionStateBlob)
     }

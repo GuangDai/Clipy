@@ -172,7 +172,6 @@ struct RetentionConfigSingletonStartupValidationTests {
         // RetainedBytesRow. Reaching the later startup projection bootstrap
         // would repair that missing derived row, so its continued absence
         // after config rejection is non-vacuous ordering evidence.
-        try FileHandle.standardError.write(contentsOf: Data("[DEBUG-v2-seed-20260906] before-model\n".utf8))
         let item = HistorySchemaV1.HistoryItemRow(
             id: prepared.domain.candidateID.rawValue,
             contentVersionRaw: 1,
@@ -190,11 +189,8 @@ struct RetentionConfigSingletonStartupValidationTests {
             lastSource: source,
             pinOrdinal: nil
         )
-        try FileHandle.standardError.write(contentsOf: Data("[DEBUG-v2-seed-20260906] after-model\n".utf8))
         context.insert(item)
-        try FileHandle.standardError.write(contentsOf: Data("[DEBUG-v2-seed-20260906] after-insert\n".utf8))
         try context.save()
-        try FileHandle.standardError.write(contentsOf: Data("[DEBUG-v2-seed-20260906] after-save\n".utf8))
         return SeededState(config: ConfigScalars(config), itemID: item.id)
     }
 

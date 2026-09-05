@@ -28,7 +28,7 @@ import Testing
 
 struct ScalarReadIsolationProofTests {
 
-/// Builds a fully valid v1 `HistoryItemRow` from a real prepared capture:
+/// Builds a fully valid current `HistoryItemRow` from a real prepared capture:
 /// every blob comes from the production codecs over the bundle's validated
 /// values (Canonical Content, signature entries, empty revision lineage for a
 /// Canonical-state item, and the §15 projection). The row id is the bundle's
@@ -67,7 +67,7 @@ private static func makeRow(
     let storeURL = WSSupport.tempStoreURL("scalar-read-isolation")
     defer { WSSupport.removeStore(storeURL) }
 
-    // ── Arrange: one fully valid v1 row written directly into the store ──
+    // ── Arrange: one fully valid current row written directly into the store ──
     let observedAt = Date(timeIntervalSinceReferenceDate: 700_020_000)
     let text = "scalar isolation proof row"
     let source = "com.example.scalar"
@@ -80,7 +80,8 @@ private static func makeRow(
     let seedContainer = try WSSupport.makeContainer(storeURL: storeURL)
     let seedContext = ModelContext(seedContainer)
     let row = try Self.makeRow(from: bundle, observedAt: observedAt, source: source)
-    // The hand-crafted row belongs to a raw V2 store, so supply its valid
+    #expect(row.searchBodyUTF8 == Data(text.utf8))
+    // The hand-crafted row belongs to a raw current store, so supply its valid
     // authoritative singleton rather than relying on fresh-store repair. The
     // revision blob below remains the fixture's only corruption (05 §13;
     // DATA-1).
@@ -123,6 +124,7 @@ private static func makeRow(
     let corruptContext = ModelContext(corruptContainer)
     let fetchedRows = try corruptContext.fetch(FetchDescriptor<HistoryItemRow>())
     let targetRow = try #require(fetchedRows.first)
+    #expect(targetRow.searchBodyUTF8 == Data(text.utf8))
     targetRow.revisionStateBlob = Data([0x01])
     try corruptContext.save()
 

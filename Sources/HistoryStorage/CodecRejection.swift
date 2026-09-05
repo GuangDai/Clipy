@@ -83,6 +83,7 @@ internal enum CodecRejection: Error, Sendable, Equatable {
     /// The bounded title bytes are not strictly valid UTF-8. No replacement
     /// characters or legacy String fallback may repair this projection (§4).
     case invalidStoredTitleUTF8
+    case invalidStoredSearchBodyUTF8
 
     /// A stored search body exceeds the Part VI UTF-8 byte bound, under the
     /// same fail-closed scalar-projection rule as `storedTitleExceedsBound`.
@@ -163,6 +164,7 @@ extension CodecRejection {
              .unknownProjectionSchemaVersion,
              .storedTitleExceedsBound,
              .invalidStoredTitleUTF8,
+             .invalidStoredSearchBodyUTF8,
              .storedSearchBodyExceedsBound,
              .nonPositiveSignatureByteCount,
              .signatureByteCountExceedsBound,

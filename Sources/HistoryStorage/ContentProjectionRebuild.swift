@@ -119,7 +119,7 @@ internal enum ContentProjectionRebuild {
                 for (mutationIndex, replacement) in replacements.enumerated() {
                     let row = rows[replacement.rowIndex]
                     row.titleUTF8 = Data(replacement.projection.title.utf8)
-                    row.searchBody = replacement.projection.searchBody
+                    row.searchBodyUTF8 = Data(replacement.projection.searchBody.utf8)
                     row.effectiveTypeIdentifiersBlob = replacement.identifiersBlob
                     row.projectionSchemaVersion = replacement.projection.schemaVersion
 

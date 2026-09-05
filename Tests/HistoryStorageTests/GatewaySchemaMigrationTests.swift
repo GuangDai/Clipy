@@ -27,6 +27,10 @@ struct GatewaySchemaMigrationTests {
             )
             let migratedContext = ModelContext(migratedContainer)
             #expect(try ExistingV2RowsSnapshot.read(migratedContext) == expected)
+            for row in try migratedContext.fetch(FetchDescriptor<HistoryItemRow>()) {
+                #expect(row.titleUTF8.isEmpty)
+                #expect(row.searchBodyUTF8.isEmpty)
+            }
             try Self.expectGatewayTablesEmpty(migratedContext)
         }
 
@@ -59,7 +63,7 @@ struct GatewaySchemaMigrationTests {
                 == Set(expected.items.map { $0.id })
         )
 
-        // Startup advances the derived recipe and initializes titleUTF8;
+        // Startup advances the derived recipe and initializes title/body bytes;
         // every other existing V2 field remains unchanged. Exact Gateway
         // bootstrap values are covered by GatewayBootstrapTests.
         let assertionContext = ModelContext(
@@ -73,8 +77,12 @@ struct GatewaySchemaMigrationTests {
         let expectedTitles = Dictionary(uniqueKeysWithValues:
             expected.items.map { ($0.id, Data($0.title.utf8)) }
         )
+        let expectedBodies = Dictionary(uniqueKeysWithValues:
+            expected.items.map { ($0.id, Data($0.searchBody.utf8)) }
+        )
         for row in try assertionContext.fetch(FetchDescriptor<HistoryItemRow>()) {
             #expect(row.titleUTF8 == expectedTitles[row.id])
+            #expect(row.searchBodyUTF8 == expectedBodies[row.id])
         }
         try GatewayStoreSnapshot.read(in: assertionContext)
             .expectX3DenyByDefaultBootstrap()
@@ -184,6 +192,7 @@ private struct ExistingItemSnapshot: Equatable {
     let revisionStateBlob: Data
     let canonicalSignatureBlob: Data
     var projectionSchemaVersion: UInt16
+    // Frozen V2 columns, compared independently of the new projection bytes.
     let title: String
     let searchBody: String
     let effectiveTypeIdentifiersBlob: Data

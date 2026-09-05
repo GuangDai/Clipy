@@ -98,7 +98,7 @@ struct WS13TransactionFailureTests {
         ])
         #expect(Set(before.items.map(\.contentVersionRaw)) == [1])
         #expect(Set(before.items.map(\.titleUTF8)) == [Data(firstText.utf8), Data(secondText.utf8)])
-        #expect(Set(before.items.map(\.searchBody)) == [firstText, secondText])
+        #expect(Set(before.items.map(\.searchBodyUTF8)) == [Data(firstText.utf8), Data(secondText.utf8)])
         #expect(Set(before.items.map(\.firstCopiedAt)) == [firstObservedAt, secondObservedAt])
         #expect(Set(before.items.map(\.lastCopiedAt)) == [firstObservedAt, secondObservedAt])
         #expect(Set(before.items.map(\.copyCount)) == [1])

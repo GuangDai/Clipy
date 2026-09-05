@@ -64,9 +64,9 @@ internal struct StoredProjectionSize: Equatable, Sendable {
 /// URL/file reference metadata without following the reference. Other
 /// encoding-unspecified, abstract, and structured text formats remain opaque.
 internal enum ContentProjector {
-    /// Recipe 6 stores the unchanged projected title as literal UTF-8 bytes.
+    /// Recipe 6 stores unchanged projected titles and bodies as UTF-8 bytes.
     /// Startup rebuilds recipes 1–5 from their validated Canonical/revision
-    /// bytes, never from a potentially lossy legacy String title (§15).
+    /// bytes, never from potentially lossy legacy String columns (§15).
     internal static let schemaVersion: UInt16 = 6
 
     /// The original recipe used by legacy migration fixtures. Startup also
@@ -102,6 +102,24 @@ internal enum ContentProjector {
             throw CodecRejection.invalidStoredTitleUTF8
         }
         return title
+    }
+
+    /// Search bodies share the literal UTF-8 contract of titles, with their
+    /// own bound. A content FEFF is not an encoding marker to remove (§15).
+    internal static func decodeStoredSearchBody(
+        _ bytes: Data,
+        limits: HistoryLimits
+    ) throws -> String {
+        guard bytes.count <= limits.maximumStoredSearchBodyUTF8Bytes else {
+            throw CodecRejection.storedSearchBodyExceedsBound(
+                found: bytes.count,
+                bound: limits.maximumStoredSearchBodyUTF8Bytes
+            )
+        }
+        guard let body = String(validating: bytes, as: UTF8.self) else {
+            throw CodecRejection.invalidStoredSearchBodyUTF8
+        }
+        return body
     }
 
     /// Re-validates a durable title at its read boundary. The write-side

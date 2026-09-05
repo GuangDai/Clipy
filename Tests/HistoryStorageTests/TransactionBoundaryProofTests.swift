@@ -379,6 +379,7 @@ struct TransactionItemSnapshot: Equatable, Sendable {
     let title: String
     let titleUTF8: Data
     let searchBody: String
+    let searchBodyUTF8: Data
     let effectiveTypeIdentifiersBlob: Data
     let firstCopiedAt: Date
     let lastCopiedAt: Date
@@ -397,6 +398,7 @@ struct TransactionItemSnapshot: Equatable, Sendable {
         title = row.title
         titleUTF8 = row.titleUTF8
         searchBody = row.searchBody
+        searchBodyUTF8 = row.searchBodyUTF8
         effectiveTypeIdentifiersBlob = row.effectiveTypeIdentifiersBlob
         firstCopiedAt = row.firstCopiedAt
         lastCopiedAt = row.lastCopiedAt

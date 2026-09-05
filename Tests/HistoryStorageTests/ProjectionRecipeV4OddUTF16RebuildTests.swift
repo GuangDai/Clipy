@@ -125,7 +125,7 @@ struct ProjectionRecipeV4OddUTF16RebuildTests {
         try context.transaction {
             row.projectionSchemaVersion = 3
             row.titleUTF8 = Data("QZ".utf8)
-            row.searchBody = "QZ"
+            row.searchBodyUTF8 = Data("QZ".utf8)
         }
         return bytes
     }
@@ -137,7 +137,7 @@ struct ProjectionRecipeV4OddUTF16RebuildTests {
         let row = try #require(rows.count == 1 ? rows.first : nil)
         #expect(row.projectionSchemaVersion == 6)
         #expect(row.titleUTF8 == Data(fixture.typeIdentifier.utf8))
-        #expect(row.searchBody.isEmpty)
+        #expect(row.searchBodyUTF8.isEmpty)
         #expect(row.canonicalBlob == bytes.canonicalBlob)
         #expect(row.revisionStateBlob == bytes.revisionStateBlob)
     }

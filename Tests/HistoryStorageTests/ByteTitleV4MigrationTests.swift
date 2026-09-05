@@ -1,5 +1,5 @@
 /// A genuine V4 file with recipe-5 String title damage migrates to byte-backed
-/// titles. Frozen models seed the old schema; only the current public facade
+/// title/body projections. Frozen models seed the old schema; only the current public facade
 /// opens/migrates and revises it. Raw History and journal facts stay intact.
 import Foundation
 import HistoryCore
@@ -52,7 +52,7 @@ struct ByteTitleV4MigrationTests {
         let firstDetails = try await verifyFirstPublicOpen(at: storeURL, seeded: seeded)
         let reopened = try await WSSupport.openHistory(storeURL: storeURL)
         #expect(try await reopened.details(for: seeded.item.id) == firstDetails)
-        try await expectTitle("\u{FEFF}after.txt", item: seeded.item, in: reopened)
+        try await expectTitle("\u{FEFF}after.txt", address: activeAddress, item: seeded.item, in: reopened)
         try expectPreservedRows(at: storeURL, seeded: seeded)
 
         let newestAddress = "file:///%EF%BB%BFnewest.txt"
@@ -71,7 +71,7 @@ struct ByteTitleV4MigrationTests {
         #expect(commit.position.rawValue == 5)
         #expect(revised.id == seeded.item.id)
         #expect(revised.contentVersion.rawValue == 3)
-        try await expectTitle("\u{FEFF}newest.txt", item: revised, in: reopened)
+        try await expectTitle("\u{FEFF}newest.txt", address: newestAddress, item: revised, in: reopened)
         let details = try await reopened.details(for: revised.id)
         #expect(details.canonical.map(\.bytes) == [Data(canonicalAddress.utf8)])
         #expect(details.effective.map(\.bytes) == [Data(newestAddress.utf8)])
@@ -175,6 +175,7 @@ struct ByteTitleV4MigrationTests {
         let oldRow = try #require(fresh.fetch(FetchDescriptor<HistorySchemaV1.HistoryItemRow>()).first)
         #expect(oldRow.projectionSchemaVersion == 5)
         #expect(Data(oldRow.title.utf8) == Data("after.txt".utf8))
+        #expect(Data(oldRow.searchBody.utf8) == Data((activeAddress + "\n/\u{FEFF}after.txt").utf8))
         #expect(oldRow.canonicalBlob == canonicalBlob)
         #expect(oldRow.revisionStateBlob == revisionBlob)
         return Seeded(
@@ -192,7 +193,7 @@ struct ByteTitleV4MigrationTests {
 
     private func verifyFirstPublicOpen(at url: URL, seeded: Seeded) async throws -> HistoryDetails {
         let history = try await WSSupport.openHistory(storeURL: url)
-        try await expectTitle("\u{FEFF}after.txt", item: seeded.item, in: history)
+        try await expectTitle("\u{FEFF}after.txt", address: activeAddress, item: seeded.item, in: history)
         let details = try await history.details(for: seeded.item.id)
         #expect(details.item == seeded.item)
         #expect(details.canonical.map(\.bytes) == [Data(canonicalAddress.utf8)])
@@ -221,7 +222,12 @@ struct ByteTitleV4MigrationTests {
         return details
     }
 
-    private func expectTitle(_ title: String, item: HistoryItemReference, in history: SwiftDataHistory) async throws {
+    private func expectTitle(
+        _ title: String,
+        address: String,
+        item: HistoryItemReference,
+        in history: SwiftDataHistory
+    ) async throws {
         let recent = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 10))
         #expect(recent.rows.map(\.item) == [item])
         #expect(recent.rows.map { Data($0.title.utf8) } == [Data(title.utf8)])
@@ -231,6 +237,24 @@ struct ByteTitleV4MigrationTests {
         #expect(Data(hit.title.utf8) == Data(title.utf8))
         let presentation = try #require(hit.search)
         #expect(presentation.snippet == nil, "the repaired title itself must match, not the intact body")
+
+        // The complete address/path query cannot match the shorter title;
+        // each migrated/reopened/revised facade must consume the byte-backed
+        // body as well. Keep the expected reference text independent of the
+        // production projector and decoder.
+        let body = address + "\n/" + title
+        let bodyPage = try await history.browse(HistoryBrowseRequest(
+            kind: .search(text: body, mode: .exact), limit: 10
+        ))
+        #expect(bodyPage.rows.map(\.item) == [item])
+        #expect(bodyPage.next == nil)
+        let bodyHit = try #require(bodyPage.rows.first)
+        let bodyPresentation = try #require(bodyHit.search)
+        let snippet = try #require(bodyPresentation.snippet)
+        #expect(Data(snippet.utf8) == Data(body.utf8))
+        #expect(bodyPresentation.matchedRanges == [
+            UTF16TextRange(location: 0, length: body.utf16.count),
+        ])
     }
 
     private func expectPreservedRows(at url: URL, seeded: Seeded) throws {
@@ -243,6 +267,9 @@ struct ByteTitleV4MigrationTests {
         #expect(row.revisionStateBlob == seeded.revisionBlob)
         #expect(row.canonicalSignatureBlob == seeded.signatureBlob)
         #expect(row.effectiveTypeIdentifiersBlob == seeded.typeBlob)
+        #expect(row.searchBodyUTF8 == Data((activeAddress + "\n/\u{FEFF}after.txt").utf8))
+        // Lightweight migration preserves the historical columns; ordinary
+        // reads use the separately rebuilt byte-backed projection instead.
         #expect(Data(row.searchBody.utf8) == Data((activeAddress + "\n/\u{FEFF}after.txt").utf8))
         #expect(row.firstCopiedAt == seeded.occurrence.firstCopiedAt)
         #expect(row.lastCopiedAt == seeded.occurrence.lastCopiedAt)
@@ -276,6 +303,8 @@ struct ByteTitleV4MigrationTests {
         let row = try #require(context.fetch(FetchDescriptor<HistoryItemRow>()).first)
         #expect(row.id == seeded.item.id.rawValue && row.contentVersionRaw == 3)
         #expect(row.titleUTF8 == Data("\u{FEFF}newest.txt".utf8))
+        #expect(row.searchBodyUTF8 == Data((newestAddress + "\n/\u{FEFF}newest.txt").utf8))
+        #expect(Data(row.searchBody.utf8) == Data((activeAddress + "\n/\u{FEFF}after.txt").utf8))
         #expect(row.canonicalBlob == seeded.canonicalBlob)
         #expect(row.canonicalSignatureBlob == seeded.signatureBlob)
         let bytes = try #require(context.fetch(FetchDescriptor<RetainedBytesRow>()).first)

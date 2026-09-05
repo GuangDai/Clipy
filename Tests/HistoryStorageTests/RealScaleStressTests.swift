@@ -303,7 +303,7 @@ private static func captureText(
     let row = try #require(
         try WSSupport.fetchRows(container).first { $0.id == reference.id.rawValue }
     )
-    #expect(row.searchBody.utf8.count == bound)
+    #expect(row.searchBodyUTF8.count == bound)
     #expect(row.titleUTF8.count <= HistoryLimits.standard.maximumStoredTitleUTF8Bytes)
     let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
     #expect(canonical.representations.map(\.content.bytes) == [Data(fullText.utf8)])

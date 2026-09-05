@@ -284,7 +284,7 @@ extension HistoryAuthority {
             row.revisionStateBlob = update.revisionStateBlob
             row.projectionSchemaVersion = update.projection.schemaVersion
             row.titleUTF8 = Data(update.projection.title.utf8)
-            row.searchBody = update.projection.searchBody
+            row.searchBodyUTF8 = Data(update.projection.searchBody.utf8)
             row.effectiveTypeIdentifiersBlob = update.effectiveTypeIdentifiersBlob
             // V2-02 §3.3b/§6.3 (roadmap R.3): the revise restamp — the
             // revision scalars move to the post-append value stamped from

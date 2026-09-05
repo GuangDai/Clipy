@@ -239,7 +239,7 @@ struct ProjectionRecipeV2RebuildTests {
         let row = try Self.fetchRow(id: fixture.id, in: context)
         try #require(row.projectionSchemaVersion == version, "independent stored projection tag")
         try #require(row.titleUTF8 == Data(title.utf8), "independent stored title bytes")
-        try #require(Data(row.searchBody.utf8) == Data(searchBody.utf8), "independent stored body bytes")
+        try #require(row.searchBodyUTF8 == Data(searchBody.utf8), "independent stored body bytes")
         let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
         try #require(canonical.representations.map(\.content.typeIdentifier)
             == ["public.html", "public.rtf", "public.utf8-external-plain-text"])
@@ -311,7 +311,7 @@ struct ProjectionRecipeV2RebuildTests {
         let stored = try Self.fetchRow(id: fixture.id, in: inspectionContext)
         #expect(stored.projectionSchemaVersion == 6)
         #expect(stored.titleUTF8 == Data(fixture.visibleText.utf8))
-        #expect(stored.searchBody == fixture.visibleText)
+        #expect(stored.searchBodyUTF8 == Data(fixture.visibleText.utf8))
     }
 
     @Test("recipe v2 guessed text becomes opaque without changing paste or coalescing")
@@ -330,7 +330,7 @@ struct ProjectionRecipeV2RebuildTests {
         // actual derived scalars instead of the helper's recipe-1 markup.
         try Self.mutateStoredProjection(id: fixture.id, at: storeURL) { row in
             row.titleUTF8 = Data(fixture.visibleText.utf8)
-            row.searchBody = fixture.visibleText
+            row.searchBodyUTF8 = Data(fixture.visibleText.utf8)
         }
         try Self.requireOpaqueStoredProjection(
             fixture: fixture, at: storeURL, version: 2,
@@ -411,7 +411,7 @@ struct ProjectionRecipeV2RebuildTests {
                     == ContentProjector.legacySchemaVersion
             )
             #expect(stored.titleUTF8 == Data(fixture.staleTitle.utf8))
-            #expect(stored.searchBody == fixture.staleSearchBody)
+            #expect(stored.searchBodyUTF8 == Data(fixture.staleSearchBody.utf8))
         }
     }
 
@@ -424,7 +424,7 @@ struct ProjectionRecipeV2RebuildTests {
         try Self.mutateStoredProjection(id: existingCurrent.id, at: storeURL) { row in
             row.projectionSchemaVersion = ContentProjector.schemaVersion
             row.titleUTF8 = Data("Existing current title".utf8)
-            row.searchBody = "Existing current body"
+            row.searchBodyUTF8 = Data("Existing current body".utf8)
         }
 
         _ = try await SwiftDataHistory.open(configuration:
@@ -439,7 +439,7 @@ struct ProjectionRecipeV2RebuildTests {
         let untouched = try Self.fetchRow(id: existingCurrent.id, in: inspectionContext)
         #expect(untouched.projectionSchemaVersion == ContentProjector.schemaVersion)
         #expect(untouched.titleUTF8 == Data("Existing current title".utf8))
-        #expect(untouched.searchBody == "Existing current body")
+        #expect(untouched.searchBodyUTF8 == Data("Existing current body".utf8))
     }
 
     @Test("public open rejects an unknown projection tag without replacement")
@@ -463,7 +463,7 @@ struct ProjectionRecipeV2RebuildTests {
         let stored = try Self.fetchRow(id: fixture.id, in: inspectionContext)
         #expect(stored.projectionSchemaVersion == 9)
         #expect(stored.titleUTF8 == Data(fixture.staleTitle.utf8))
-        #expect(stored.searchBody == fixture.staleSearchBody)
+        #expect(stored.searchBodyUTF8 == Data(fixture.staleSearchBody.utf8))
     }
 
     @Test("transaction interruption rolls back every projection replacement")
@@ -497,7 +497,7 @@ struct ProjectionRecipeV2RebuildTests {
                     == ContentProjector.legacySchemaVersion
             )
             #expect(stored.titleUTF8 == Data(fixture.staleTitle.utf8))
-            #expect(stored.searchBody == fixture.staleSearchBody)
+            #expect(stored.searchBodyUTF8 == Data(fixture.staleSearchBody.utf8))
         }
     }
 }

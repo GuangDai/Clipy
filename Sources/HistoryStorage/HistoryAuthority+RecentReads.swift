@@ -14,7 +14,7 @@ extension HistoryAuthority {
     // `await` is the WS12 test seam at entry, before the context exists (§5).
 
     /// One owner for the projection scalars fetched by recent/search reads
-    /// and the unpinned exactness fallback. Search adds only `searchBody`;
+    /// and the unpinned exactness fallback. Search adds only `searchBodyUTF8`;
     /// keeping the common list here prevents one read path silently omitting
     /// a field that `ScalarReadRow`/`SearchCorpusRow` consumes (§14.1–§14.2).
     internal static func scalarProjectionProperties(
@@ -32,7 +32,7 @@ extension HistoryAuthority {
             \.pinOrdinal,
         ]
         if includingSearchBody {
-            properties.append(\.searchBody)
+            properties.append(\.searchBodyUTF8)
         }
         return properties
     }

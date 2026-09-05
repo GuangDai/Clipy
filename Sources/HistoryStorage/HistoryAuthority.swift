@@ -461,7 +461,7 @@ internal actor HistoryAuthority {
                 historyLimits: limits
             )
 
-            // §13 step 6 / §15: projection recipes v1/v2/v3/v4 → v5 rebuild is an
+            // §13 step 6 / §15: projection recipes v1–v5 → v6 rebuild is an
             // Authority-owned, bounded, atomic startup operation. It finishes
             // before the Signature Index is declared ready or capture exists.
             try ContentProjectionRebuild.rebuildIfNeeded(

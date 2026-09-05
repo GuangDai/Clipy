@@ -87,7 +87,7 @@ struct WS1CaptureInsertTests {
     // and the item starts unpinned (`nil` ordinal, §3.1).
     #expect(row.projectionSchemaVersion == ContentProjector.schemaVersion)
     #expect(row.titleUTF8 == Data(text.utf8))
-    #expect(row.searchBody == text)
+    #expect(row.searchBodyUTF8 == Data(text.utf8))
     #expect(
         try EffectiveTypeIdentifiersBlobCodec.decode(row.effectiveTypeIdentifiersBlob)
             == ["public.utf8-plain-text"]

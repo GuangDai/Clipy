@@ -185,7 +185,7 @@ extension WS14RestartReconstructionTests {
         "WS14 (projections): A's title projects the active Effective Content"
     )
     #expect(
-        rowA.searchBody == replacementTwo,
+        rowA.searchBodyUTF8 == Data(replacementTwo.utf8),
         "WS14 (projections): A's search body projects the active Effective Content"
     )
     #expect(
@@ -201,7 +201,7 @@ extension WS14RestartReconstructionTests {
         "WS14 (projections): B's title keeps the capture-time projection"
     )
     #expect(
-        rowB.searchBody == textB,
+        rowB.searchBodyUTF8 == Data(textB.utf8),
         "WS14 (projections): B's search body keeps the capture-time projection"
     )
     #expect(
@@ -217,7 +217,7 @@ extension WS14RestartReconstructionTests {
         "WS14 (projections): C's title keeps the capture-time projection"
     )
     #expect(
-        rowC.searchBody == textC,
+        rowC.searchBodyUTF8 == Data(textC.utf8),
         "WS14 (projections): C's search body keeps the capture-time projection"
     )
     #expect(

@@ -25,7 +25,6 @@ import Testing
     // item, first/last occurrence summary, and no pin (`nil` is unpinned,
     // §3.1). Blob columns hold opaque versioned payload bytes (§4); the smoke
     // test does not interpret them.
-    try FileHandle.standardError.write(contentsOf: Data("[DEBUG-v1-schema-20260905] before-model\n".utf8))
     let item = HistorySchemaV1.HistoryItemRow(
         id: itemID,
         contentVersionRaw: 1,
@@ -43,9 +42,7 @@ import Testing
         lastSource: nil,
         pinOrdinal: nil
     )
-    try FileHandle.standardError.write(contentsOf: Data("[DEBUG-v1-schema-20260905] before-insert\n".utf8))
     context.insert(item)
-    try FileHandle.standardError.write(contentsOf: Data("[DEBUG-v1-schema-20260905] after-insert\n".utf8))
 
     // §3.2: the singleton sits at position 0 before the first History Commit
     // and owns the current v1 retention policy.
@@ -55,12 +52,9 @@ import Testing
         maximumUnpinnedItems: 200
     )
     context.insert(singleton)
-    try FileHandle.standardError.write(contentsOf: Data("[DEBUG-v1-schema-20260905] before-save\n".utf8))
     try context.save()
-    try FileHandle.standardError.write(contentsOf: Data("[DEBUG-v1-schema-20260905] after-save\n".utf8))
 
     let items = try context.fetch(FetchDescriptor<HistorySchemaV1.HistoryItemRow>())
-    try FileHandle.standardError.write(contentsOf: Data("[DEBUG-v1-schema-20260905] after-fetch\n".utf8))
     #expect(items.count == 1)
     let fetchedItem = try #require(items.first)
     #expect(fetchedItem.id == itemID)

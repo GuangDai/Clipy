@@ -109,6 +109,8 @@ struct HCRSchemaMigrationTests {
         // title bytes remain empty until the separate public startup rebuild.
         #expect(try context.fetch(FetchDescriptor<HistoryItemRow>())
             .allSatisfy { $0.titleUTF8.isEmpty })
+        #expect(try context.fetch(FetchDescriptor<HistoryItemRow>())
+            .allSatisfy { $0.searchBodyUTF8.isEmpty })
         #expect(try context.fetchCount(
             FetchDescriptor<HistoryChangeRecordRow>()
         ) == 0)
@@ -245,6 +247,7 @@ private struct LiteralItem: Equatable {
     let revisionStateBlob: Data
     let canonicalSignatureBlob: Data
     let projectionSchemaVersion: UInt16
+    // Frozen V3 columns; lightweight migration must not rewrite these strings.
     let title: String
     let searchBody: String
     let effectiveTypeIdentifiersBlob: Data

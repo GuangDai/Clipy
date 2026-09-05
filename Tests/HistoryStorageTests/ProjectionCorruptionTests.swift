@@ -15,6 +15,7 @@ private enum Corruption: Equatable {
     case title
     case malformedTitleUTF8
     case searchBody
+    case malformedSearchBodyUTF8
     case lastCopiedAt
     case copyCount
     case lastSource
@@ -43,12 +44,12 @@ private static func seedRow(
             count: HistoryLimits.standard.maximumStoredTitleUTF8Bytes + 1
         )
         : bundle.projection.title
-    let searchBody = corruption == .searchBody
-        ? String(
-            repeating: "b",
+    let searchBodyUTF8 = corruption == .searchBody
+        ? Data(
+            repeating: 0x62,
             count: HistoryLimits.standard.maximumStoredSearchBodyUTF8Bytes + 1
         )
-        : bundle.projection.searchBody
+        : Data(bundle.projection.searchBody.utf8)
     // SQLite binds NaN as SQL NULL, which would fail this non-optional column
     // before the read-path validator is exercised. Infinity remains a REAL and
     // therefore reaches the exact durable-scalar boundary under test; NaN is
@@ -76,7 +77,7 @@ private static func seedRow(
         canonicalSignatureBlob: SignatureBlobCodec.encode(bundle.signatureEntries),
         projectionSchemaVersion: schemaVersion,
         title: title,
-        searchBody: searchBody,
+        searchBody: bundle.projection.searchBody,
         effectiveTypeIdentifiersBlob: EffectiveTypeIdentifiersBlobCodec.encode(
             bundle.projection.effectiveTypeIdentifiers
         ),
@@ -87,11 +88,18 @@ private static func seedRow(
         lastSource: lastSource,
         pinOrdinal: nil
     )
+    row.searchBodyUTF8 = searchBodyUTF8
     if corruption == .malformedTitleUTF8 {
         row.titleUTF8 = Data([0xEF, 0xBB, 0xBF, 0xFF])
         // A plausible legacy String must not become a fallback for damaged
         // current title bytes; current reads fail closed instead.
         row.title = bundle.projection.title
+    }
+    if corruption == .malformedSearchBodyUTF8 {
+        row.searchBodyUTF8 = Data("projection corruption control".utf8) + Data([0xFF])
+        // Search must reject malformed current bytes rather than accepting a
+        // valid prefix or falling back to this plausible legacy String.
+        row.searchBody = bundle.projection.searchBody
     }
     let container = try WSSupport.makeContainer(storeURL: storeURL)
     let context = ModelContext(container)
@@ -191,7 +199,7 @@ static func seedOverBoundSearchBodyRow(
     }
 }
 
-/// Recent browse deliberately does not fetch searchBody, while search and
+/// Recent browse deliberately does not fetch searchBodyUTF8, while search and
 /// lineage hydration do. This pins both fail-closed validation and the scalar
 /// isolation boundary: an unrelated recent read remains available.
 @Test func overBoundStoredSearchBodyFailsOnlyBodyConsumingReads() async throws {
@@ -214,6 +222,29 @@ static func seedOverBoundSearchBodyRow(
     await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
         _ = try await authority.details(for: itemID)
     }
+}
+
+@Test func malformedStoredSearchBodyRejectsPublicSearchButLeavesRecentAvailable() async throws {
+    let storeURL = WSSupport.tempStoreURL("projection-invalid-body-utf8")
+    defer { WSSupport.removeStore(storeURL) }
+    let itemID = try await Self.seedRow(at: storeURL, corruption: .malformedSearchBodyUTF8)
+    let history = try await WSSupport.openHistory(storeURL: storeURL)
+
+    let recent = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 10))
+    #expect(recent.rows.map(\.item.id) == [itemID])
+    #expect(recent.rows.map(\.title) == ["projection corruption control"])
+    for mode in [SearchMode.exact, .fuzzy, .regexp] {
+        await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+            _ = try await history.browse(HistoryBrowseRequest(
+                kind: .search(text: "projection", mode: mode), limit: 10
+            ))
+        }
+    }
+    await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+        _ = try await history.details(for: itemID)
+    }
+    let afterFailure = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 10))
+    #expect(afterFailure == recent)
 }
 
 /// Occurrence scalars are consumed without full lineage hydration by recent,

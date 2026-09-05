@@ -132,7 +132,7 @@ private static func replaceTextRequest(
     // WS6: "Effective-derived title/search … updated" — the §15 durable
     // projection now derives from the revised Effective Content.
     #expect(reviseRow.titleUTF8 == Data(revisedText.utf8))
-    #expect(reviseRow.searchBody == revisedText)
+    #expect(reviseRow.searchBodyUTF8 == Data(revisedText.utf8))
     #expect(
         try EffectiveTypeIdentifiersBlobCodec.decode(reviseRow.effectiveTypeIdentifiersBlob)
             == ["public.utf8-plain-text"]
@@ -166,7 +166,7 @@ private static func replaceTextRequest(
     let staleRow = try #require(staleRows.first)
     #expect(staleRow.contentVersionRaw == 2)
     #expect(staleRow.titleUTF8 == Data(revisedText.utf8))
-    #expect(staleRow.searchBody == revisedText)
+    #expect(staleRow.searchBodyUTF8 == Data(revisedText.utf8))
     let staleCanonical = try CanonicalBlobCodec.decode(staleRow.canonicalBlob)
     let staleState = try RevisionStateBlobCodec.decode(
         staleRow.revisionStateBlob,
@@ -230,7 +230,7 @@ private static func replaceTextRequest(
     // WS6: "Effective-derived title/search … updated" — the §15 projection is
     // back to the Canonical text.
     #expect(revertRow.titleUTF8 == Data(canonicalText.utf8))
-    #expect(revertRow.searchBody == canonicalText)
+    #expect(revertRow.searchBodyUTF8 == Data(canonicalText.utf8))
     #expect(
         try EffectiveTypeIdentifiersBlobCodec.decode(revertRow.effectiveTypeIdentifiersBlob)
             == ["public.utf8-plain-text"]

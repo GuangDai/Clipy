@@ -1,6 +1,6 @@
-/// V5 adds byte-preserving title storage without changing the frozen V1–V4
+/// V5 adds byte-preserving projection storage without changing the frozen V1–V4
 /// model shapes. The legacy String column remains for additive migration;
-/// startup rebuilds the title from content lineage before ordinary reads.
+/// startup rebuilds both fields from content lineage before ordinary reads.
 /// Owning spec: docs/05-authority-kernel.md §3, §13, §15.
 import Foundation
 import SwiftData
@@ -24,7 +24,7 @@ internal enum HistorySchemaV5: VersionedSchema {
     }
 
     /// The current retained item model. Every pre-existing persisted field
-    /// retains its name, type and attributes; only titleUTF8 is additive.
+    /// retains its name, type and attributes; both UTF-8 fields are additive.
     @Model
     internal final class HistoryItemRow {
         @Attribute(.unique)
@@ -47,7 +47,10 @@ internal enum HistorySchemaV5: VersionedSchema {
         /// The empty migration default is replaced by the startup projection
         /// rebuild for every older recipe; new rows initialize the real bytes.
         var titleUTF8: Data = Data()
+        /// Legacy V1–V4 migration column, not the current search authority.
         var searchBody: String
+        /// Literal content bytes, decoded strictly only by body-reading paths.
+        var searchBodyUTF8: Data = Data()
         var effectiveTypeIdentifiersBlob: Data
 
         var firstCopiedAt: Date
@@ -83,7 +86,8 @@ internal enum HistorySchemaV5: VersionedSchema {
             self.projectionSchemaVersion = projectionSchemaVersion
             self.title = ""
             self.titleUTF8 = Data(title.utf8)
-            self.searchBody = searchBody
+            self.searchBody = ""
+            self.searchBodyUTF8 = Data(searchBody.utf8)
             self.effectiveTypeIdentifiersBlob = effectiveTypeIdentifiersBlob
             self.firstCopiedAt = firstCopiedAt
             self.lastCopiedAt = lastCopiedAt
