@@ -324,14 +324,14 @@ final class AppearanceJourneyUITests: XCTestCase {
         )
         XCTAssertTrue(
             waitUntil(timeout: 5) {
-                divider.frame.midX - panel.frame.minX >= baselineDividerOffset + 20
+                abs(divider.frame.midX - panel.frame.minX - baselineDividerOffset - 60) <= 3
             },
             diagnostic(app, context: "slow drag moves divider right from offset \(baselineDividerOffset)")
         )
         let draggedPanelFrame = panel.frame
         let draggedPreviewSpan = draggedPanelFrame.maxX - divider.frame.midX
-        XCTAssertLessThanOrEqual(draggedPreviewSpan, baselinePreviewSpan - 20,
-                                 diagnostic(app, context: "drag actually narrows preview"))
+        XCTAssertEqual(draggedPreviewSpan, baselinePreviewSpan - 60, accuracy: 3,
+                       diagnostic(app, context: "preview follows the complete pointer displacement"))
         // The drag must settle above the 240-point floor; its observed AX
         // displacement, not the requested pointer distance, is the proof.
         XCTAssertGreaterThanOrEqual(draggedPreviewSpan, 237.5,
@@ -387,15 +387,15 @@ final class AppearanceJourneyUITests: XCTestCase {
             XCTAssertTrue(
                 waitUntil(timeout: 5) {
                     panel.exists && divider.exists
-                        && divider.frame.midX - panel.frame.minX >= sideDividerOffset + 20
+                        && abs(divider.frame.midX - panel.frame.minX - sideDividerOffset - 60) <= 3
                 },
                 diagnostic(app, context: "divider moves from hit offset \(hitOffset)")
             )
             let sideDraggedFrame = panel.frame
             let sideDraggedSpan = sideDraggedFrame.maxX - divider.frame.midX
-            XCTAssertLessThanOrEqual(
-                sideDraggedSpan, sidePreviewSpan - 20,
-                diagnostic(app, context: "side hit \(hitOffset) narrows preview")
+            XCTAssertEqual(
+                sideDraggedSpan, sidePreviewSpan - 60, accuracy: 3,
+                diagnostic(app, context: "side hit \(hitOffset) follows the complete pointer displacement")
             )
             XCTAssertGreaterThanOrEqual(sideDraggedSpan, 237.5)
             XCTAssertEqual(sideDraggedFrame.minX, sidePanelFrame.minX, accuracy: 3)

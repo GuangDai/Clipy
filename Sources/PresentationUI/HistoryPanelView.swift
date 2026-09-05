@@ -779,7 +779,10 @@ public struct HistoryPanelView: View {
             .contentShape(Rectangle())
             .pointerStyle(.columnResize)
             .gesture(
-                DragGesture(minimumDistance: 0)
+                // The handle moves while it resizes the columns. Measure
+                // from the stationary content space, not its moving local
+                // origin, including the velocity used for fling-to-collapse.
+                DragGesture(minimumDistance: 0, coordinateSpace: .global)
                     .onChanged { value in
                         let startWidth = previewDragStartWidth
                             ?? previewColumnWidth
