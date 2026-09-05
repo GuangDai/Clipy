@@ -307,10 +307,25 @@ internal enum ContentProjector {
         guard url.isFileURL else {
             return (title: address, address: address, path: path)
         }
-        guard path.hasPrefix("/") else { return nil }
-        let filename = url.lastPathComponent
+        let scalars = path.unicodeScalars
+        guard scalars.first?.value == 0x2F else { return nil }
+        // Foundation's lastPathComponent can strip a leading BOM while
+        // decoding the filename. The path is already decoded: slice its
+        // scalars directly, including when '/' shares a Character with a
+        // combining mark. Ignore trailing separators; an all-slash root
+        // keeps its original path instead of inventing an empty filename.
+        let filename: String
+        if let last = scalars.lastIndex(where: { $0 != "/" }) {
+            let end = scalars.index(after: last)
+            let start = scalars[..<end].lastIndex(of: "/").map {
+                scalars.index(after: $0)
+            } ?? scalars.startIndex
+            filename = String(scalars[start..<end])
+        } else {
+            filename = path
+        }
         return (
-            title: filename.isEmpty ? path : filename,
+            title: filename,
             address: address,
             path: path
         )

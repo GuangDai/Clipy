@@ -48,6 +48,24 @@ struct ReferencePreviewTests {
         }
     }
 
+    @Test("a combining mark after the root slash does not make a file path relative",
+          arguments: ["public.url", "public.file-url"])
+    func rootSlashFollowedByCombiningMark(_ identifier: String) async throws {
+        let address = "file:///%CC%81name.txt"
+        let outcome = await ContentPreview().renderHistoryPane([
+            PreviewRepresentation(typeIdentifier: identifier, bytes: Data(address.utf8)),
+        ])
+        guard case let .content(.reference(reference)) = outcome else {
+            Issue.record("expected absolute file reference, got \(outcome)")
+            return
+        }
+        #expect(reference.kind == .file)
+        #expect(Data(reference.address.utf8) == Data(address.utf8))
+        let path = try #require(reference.filePath)
+        // U+002F and U+0301 share a Character but remain separate scalars.
+        #expect(Data(path.utf8) == Data("/\u{301}name.txt".utf8))
+    }
+
     @Test("a leading UTF-8 BOM is not silently stripped from a reference",
           arguments: ["public.url", "public.file-url"])
     func leadingBOMIsMalformed(_ identifier: String) async {

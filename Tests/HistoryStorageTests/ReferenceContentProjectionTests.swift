@@ -35,6 +35,27 @@ struct ReferenceContentProjectionTests {
         }
     }
 
+    @Test func fileNamesUseScalarSlashBoundariesInTheDecodedPath() {
+        let fixtures = [
+            // Slash and the following combining mark form one Character;
+            // the separator is still only the U+002F scalar.
+            ("file:///%CC%81name.txt", "\u{301}name.txt",
+             "file:///%CC%81name.txt\n/\u{301}name.txt"),
+            ("file:///prefix/%CC%81/", "\u{301}",
+             "file:///prefix/%CC%81/\n/prefix/\u{301}/"),
+            // Components are defined after decoding: an encoded slash is
+            // a separator here, not part of the resulting display filename.
+            ("file:///prefix%2Fname.txt", "name.txt",
+             "file:///prefix%2Fname.txt\n/prefix/name.txt"),
+            ("file:///folder///", "folder", "file:///folder///\n/folder///"),
+            ("file:///folder%2F%2F", "folder", "file:///folder%2F%2F\n/folder//"),
+            ("file:///", "/", "file:///\n/"),
+        ]
+        for (address, title, body) in fixtures {
+            expectProjection([("public.file-url", Data(address.utf8))], title: title, body: body)
+        }
+    }
+
     @Test func characterBoundariesApplyIndependentlyToTitleAndBody() {
         let fixtures = [
             ("file:///e%CC%81.txt", "e\u{301}.txt", "file:///e%CC%81.txt\n/e\u{301}.txt"),

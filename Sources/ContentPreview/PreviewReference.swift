@@ -59,7 +59,7 @@ package struct PreviewReference: Equatable, Sendable {
         let filePath = isFile ? url.path(percentEncoded: false) : nil
         // A scheme alone does not make `file:relative` an absolute file
         // reference. Validate only its path shape, never filesystem state.
-        if let filePath, !filePath.hasPrefix("/") {
+        if let filePath, filePath.unicodeScalars.first?.value != 0x2F {
             return .failed(.malformedRepresentation)
         }
         return .content(.reference(PreviewReference(

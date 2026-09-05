@@ -766,8 +766,9 @@ Reference metadata is parsed locally from the first exact `public.url` or
 only when no known image is present. Its selected source is limited to 16 KiB,
 strictly decoded as UTF-8 without discarding a BOM, and validated as an absolute
 URL without repairing invalid characters. File references must have an absolute
-path; their title is the decoded last path component (or path if that component
-is empty). Other URLs retain the original address as the title. Both contribute
+path; their title is the last non-empty component of the decoded path, split
+at U+002F scalar boundaries without re-decoding (or the path for an all-slash
+root). Other URLs retain the original address as the title. Both contribute
 the original address and non-empty decoded URL path to search. No file existence,
 resource attributes, symlinks, bookmarks, or network destination is consulted.
 An invalid or oversized first reference keeps the old opaque fallback rather
