@@ -54,6 +54,7 @@ package struct PreviewRaster: Equatable, Sendable {
 package enum PreviewArtifact: Equatable, Sendable {
     case text(PreviewText)
     case raster(PreviewRaster)
+    case reference(PreviewReference)
 }
 
 package enum PreviewUnavailability: Equatable, Sendable {
@@ -110,7 +111,7 @@ package actor ContentPreview {
     package init() {}
 
     /// Common-caller preset: history-owned Effective Content bytes, the
-    /// current image-first/exact-text route, and the fixed history-pane
+    /// image-first/exact-text-then-reference selection and fixed history-pane
     /// resource profile. No History identity or lifecycle enters this actor.
     package func renderHistoryPane(
         _ representations: [PreviewRepresentation]
@@ -211,6 +212,14 @@ package actor ContentPreview {
                 text: body,
                 wasTruncated: wasTruncated
             )))
+        }
+        // A reference is useful when no existing image/text preview applies.
+        // Parsing the first exact URL candidate never opens its destination;
+        // its bounded address/path artifact carries no loading capability.
+        for representation in representations {
+            if let reference = PreviewReference.resolve(representation) {
+                return reference
+            }
         }
         return sawTextCandidate
             ? .failed(.malformedRepresentation)

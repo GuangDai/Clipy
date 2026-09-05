@@ -38,6 +38,24 @@ struct PreviewCopyTests {
         #expect(PreviewCopy.copyCount(UInt64.max, bundle: english, locale: Locale(identifier: "en_US")) == "Copied 18,446,744,073,709,551,615×")
     }
 
+    @Test func referencePreviewsDistinguishCopiedAddressesFromDestinationContent() throws {
+        let english = try bundle("en")
+        let chinese = try bundle("zh-Hans")
+        for (label, translated) in [
+            ("URL Reference", "网址引用"),
+            ("File Reference", "文件引用"),
+            ("Address", "地址"),
+            ("File Path", "文件路径"),
+        ] {
+            #expect(PreviewCopy.text(label, bundle: english) == label)
+            #expect(PreviewCopy.text(label, bundle: chinese) == translated)
+        }
+        #expect(PreviewCopy.referenceDisclosure(bundle: english) ==
+            "Only the reference is shown. Its destination has not been opened.")
+        #expect(PreviewCopy.referenceDisclosure(bundle: chinese) ==
+            "仅显示引用信息，未打开其指向的目标。")
+    }
+
     @Test func imageAccessibilityMetadataKeepsWidthAndHeightInTheirTranslatedPositions() throws {
         #expect(PreviewCopy.imageDimensions(
             width: 1, height: 1, bundle: try bundle("en"), locale: Locale(identifier: "en_US")

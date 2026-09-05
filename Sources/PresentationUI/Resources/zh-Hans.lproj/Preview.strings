@@ -6,3 +6,8 @@
 "Quick Look preview" = "快速查看预览";
 "Copied %@×" = "已复制 %@ 次";
 "Image preview, %@ by %@ pixels" = "图像预览，宽 %@ 像素，高 %@ 像素";
+"URL Reference" = "网址引用";
+"File Reference" = "文件引用";
+"Address" = "地址";
+"File Path" = "文件路径";
+"Only the reference is shown. Its destination has not been opened." = "仅显示引用信息，未打开其指向的目标。";

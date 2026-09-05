@@ -53,6 +53,8 @@ package final class PreviewContentLoader {
         case text(String)
         /// A bounded decoded image is published on `image`.
         case image
+        /// An inert copied address; rendering never follows its destination.
+        case reference(PreviewReference)
     }
 
     /// The loader's closed presentation phase (review Card 9D). A valid type
@@ -214,6 +216,11 @@ package final class PreviewContentLoader {
                 raster = nil
                 canRetryFailure = false
                 phase = .content(.text(artifact.text))
+                occurrence = details.occurrence
+            case .content(.reference(let artifact)):
+                raster = nil
+                canRetryFailure = false
+                phase = .content(.reference(artifact))
                 occurrence = details.occurrence
             case .unavailable:
                 raster = nil
@@ -424,6 +431,8 @@ struct HistoryPreviewView: View {
                 // The column is window-sized; the scroll view fills it so a
                 // taller panel reveals more of the body per page.
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .content(.reference(let reference)):
+                ReferencePreviewView(reference: reference)
             case .failed:
                 failedBody
             case .unsupported:

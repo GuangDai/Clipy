@@ -157,11 +157,27 @@ a package-only Foundation target containing only open-world exact identifiers
 and declared codec facts. Each behavior owner retains its purpose admission.
 `ContentPreview` is likewise concrete rather than speculative: package-only
 immutable representation inputs plus closed product presets produce bounded
-text or eager tight BGRA8/sRGB raster outcomes. It may import only Foundation,
+text, eager tight BGRA8/sRGB rasters, or copied-address metadata. It may import only Foundation,
 ClipboardFormats, CoreGraphics, and ImageIO; it never reads History, owns item/
 reference/lifecycle/cache state, performs external I/O, or exposes framework
 objects. Its direct tests and Presentation lifecycle tracers are functional
 correctness tests in the default lane.
+
+The history-pane preview keeps image-first and valid exact-text precedence.
+When neither applies, the first exact `public.url` or `public.file-url`
+representation can produce an inert reference artifact. That selected input
+is limited to 16 KiB and must be strict UTF-8 with an absolute URL scheme;
+file references additionally require an absolute path. Parsing uses
+[Foundation's non-repairing URL initializer](https://developer.apple.com/documentation/foundation/url/init(string:encodinginvalidcharacters:))
+and [syntactic path extraction](https://developer.apple.com/documentation/foundation/url/path(percentencoded:)).
+The artifact retains the complete original address spelling and, for files,
+its decoded path. It does not resolve bookmarks or symlinks, query resource
+values, open files, request network resources, or provide an Open action.
+The UI presents selectable literal text and explains that the destination
+has not been opened. Invalid/oversized selected references return the existing
+malformed/resource-limit outcomes rather than silently trying another URL.
+This changes neither persisted projections nor capture, revision, or paste bytes.
+
 `HistoryRestartProbe` is likewise a no-product test-evidence executable; it is
 not part of the app or the future `clipyctl` surface. `HistoryPerfTests` imports
 the performance executable target only to prove its pure

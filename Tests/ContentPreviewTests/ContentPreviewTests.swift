@@ -190,7 +190,7 @@ struct ContentPreviewTests {
 
     @Test("structured and unknown representations remain unsupported")
     func unsupportedRepresentationsStayOpaque() async {
-        for identifier in ["public.rtf", "public.html", "public.url", "dyn.example"] {
+        for identifier in ["public.rtf", "public.html", "public.url.private", "dyn.example"] {
             let outcome = await renderer.renderHistoryPane([
                 PreviewRepresentation(
                     typeIdentifier: identifier,

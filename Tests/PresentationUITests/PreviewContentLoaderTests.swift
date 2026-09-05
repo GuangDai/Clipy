@@ -474,8 +474,8 @@ struct PreviewContentLoaderTests {
     @Test func validNonPreviewableRepresentationIsStableUnsupported() async throws {
         let ref = reference("00000000-0000-0000-0000-0000000001E2", version: 1)
         let representation = HistoryRepresentation(
-            typeIdentifier: "public.url",
-            bytes: Data("https://example.com".utf8)
+            typeIdentifier: "com.example.unsupported-preview",
+            bytes: Data("opaque clipboard bytes".utf8)
         )
         let history = PausableDetailsHistory()
         await history.scriptDetails(details(for: ref, effective: [representation]))

@@ -10,6 +10,12 @@ internal enum PreviewCopy {
         bundle.localizedString(forKey: english, value: english, table: "Preview")
     }
 
+    /// The reference preview shows copied address/path data. This describes
+    /// that preview's behavior, not a guarantee about other apps or processes.
+    static func referenceDisclosure(bundle: Bundle = .module) -> String {
+        text("Only the reference is shown. Its destination has not been opened.", bundle: bundle)
+    }
+
     static func copyCount(
         _ count: UInt64,
         bundle: Bundle = .module,

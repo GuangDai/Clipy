@@ -6,3 +6,8 @@
 "Quick Look preview" = "Quick Look preview";
 "Copied %@×" = "Copied %@×";
 "Image preview, %@ by %@ pixels" = "Image preview, %@ by %@ pixels";
+"URL Reference" = "URL Reference";
+"File Reference" = "File Reference";
+"Address" = "Address";
+"File Path" = "File Path";
+"Only the reference is shown. Its destination has not been opened." = "Only the reference is shown. Its destination has not been opened.";

@@ -38,7 +38,7 @@ There is no `DomainCore` target. The few values that must appear in both the cal
 | Target | Surface | Owns | Must not own |
 |---|---|---|---|
 | `ClipboardFormats` | Package-only, Foundation-only | Open-world exact identifiers and declared string-codec facts | Purpose admission, decoders, bytes, registries, caches, plugins, framework objects |
-| `ContentPreview` | Package-only concrete actor and immutable values | Preview source priority, exact text codecs, fixed resource profiles, eager ImageIO decode, and bounded inert text/raster outcomes | History reads, item/reference identity, selection or panel lifecycle, thumbnail request/source/cache policy, external I/O, registries, plugins, or framework objects in its interface |
+| `ContentPreview` | Package-only concrete actor and immutable values | Preview source priority, exact text codecs, fixed resource profiles, eager ImageIO decode, and bounded inert text/raster/copied-address outcomes | History reads, item/reference identity, selection or panel lifecycle, thumbnail request/source/cache policy, external I/O, registries, plugins, or framework objects in its interface |
 | `ClipyCLIContract` | Package-only, Foundation-only, no product | Versioned UTF-8 JSON request/reply values, bounded decoding/encoding, and stable exit classes | File handles or standard-stream side effects, transport, credentials, Gateway/History access, a product CLI, operation dispatch, or fabricated Gateway results |
 | `HistoryCore` | Public, Foundation-only | `ClipboardHistory`, IDs/tokens, History Actions, request/response DTOs, receipts, typed failures | Canonical state, fingerprints, SwiftData, AppKit, concrete storage |
 | `HistoryDomain` | Package-only, Foundation-only | Content lineage, immutable state, complete fact values, pure planners, semantic mutation plans and invariants | Public ports, I/O, actors, clocks, UUID generation, persistence |
@@ -335,8 +335,11 @@ real multi-display matrix.
 
 #### Background isolation
 
-- `ContentPreview` owns transient preview source selection and text/image
-  rendering on its actor. Its eager raster is tight premultiplied BGRA8/sRGB
+- `ContentPreview` owns transient preview source selection, text/image
+  rendering, and inert URL-reference parsing on its actor. Copied addresses
+  and decoded file-URL paths are immutable strings, not filesystem handles or
+  loading capabilities; displaying them never follows the destination.
+  Its eager raster is tight premultiplied BGRA8/sRGB
   bytes with checked dimensions and byte count; no `CGImage`, `CGImageSource`,
   or encoded source bytes are retained in observable UI state. One native
   raster slot preserves bounded decode concurrency; the actor awaits that
