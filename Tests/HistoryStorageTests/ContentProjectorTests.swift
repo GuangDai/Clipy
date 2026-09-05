@@ -51,18 +51,6 @@ private func effectiveTextContent(
     #expect(projection.searchBody.utf8.count == bound)
 }
 
-@Test func titleOnlyProjectionMatchesFullProjection() {
-    let content = effectiveTextContent([
-        ("public.utf8-plain-text", " \n First title \nbody"),
-        ("public.utf16-external-plain-text", String(repeating: "later", count: 80_000)),
-    ])
-
-    #expect(
-        ContentProjector.projectTitle(content)
-            == ContentProjector.project(content).title
-    )
-}
-
 @Test func titleOnlyProjectionMatchesNewlineAndWhitespaceSemantics() {
     let fixtures: [(String, String)] = [
         (" \r\n\t\r\n First title \rignored", "First title"),
@@ -107,7 +95,7 @@ private func effectiveTextContent(
     #expect(ContentProjector.projectTitle(content) == "public.utf8-plain-text")
 }
 
-@Test func projectionSkipsLaterDecodesOnceTitleAndBodyBudgetsComplete() {
+@Test func completedTitleAndBodyBudgetsExcludeLaterText() {
     let bound = HistoryLimits.standard.maximumStoredSearchBodyUTF8Bytes
     let exactFill = String(repeating: "b", count: bound)
     // The budget filler's first line IS the whole text, so the durable
@@ -118,8 +106,8 @@ private func effectiveTextContent(
     )
 
     // The first representation fills the body budget exactly and yields
-    // the title; the second textual representation can contribute neither
-    // (its decode is skipped entirely) and the projection is unchanged.
+    // the title; later text contributes neither. These output assertions
+    // establish the budgets, not how many decoder calls were made.
     let content = effectiveTextContent([
         ("public.utf8-plain-text", exactFill),
         ("public.utf16-external-plain-text", "decoded but contributes nothing"),
@@ -132,9 +120,8 @@ private func effectiveTextContent(
             == ["public.utf8-plain-text", "public.utf16-external-plain-text"]
     )
 
-    // Boundary lock for the skip itself: a whitespace-only leading
-    // representation contributes neither title nor body, so the budget
-    // filler still owns the title and the trailing text still adds nothing.
+    // An encoding-unspecified leading representation remains opaque, so
+    // the budget filler still owns the title and body.
     let trailing = effectiveTextContent([
         ("public.plain-text", " \n "),
         ("public.utf8-plain-text", exactFill),
@@ -168,7 +155,7 @@ private func effectiveTextContent(
     #expect(projection.searchBody.isEmpty)
 }
 
-@Test func projectionV2KeepsStructuredAndAbstractTextOpaque() {
+@Test func projectionKeepsStructuredAndAbstractTextOpaque() {
     let content = effectiveTextContent([
         ("public.html", "<h1>markup</h1>"),
         ("public.plain-text", "encoding unspecified"),
@@ -193,18 +180,24 @@ private func effectiveTextContent(
     )
 }
 
-@Test(arguments: [String.Encoding.utf16, .utf16LittleEndian])
-func explicitUTF16TypeDecodesUTF16WithoutUTF8Fallback(encoding: String.Encoding) {
-    let text = "UTF-16 title"
+@Test(arguments: [
+    Data([0x41, 0x00, 0x2D, 0x4E, 0x3E, 0xD8, 0x8A, 0xDD]),
+    Data([0xFF, 0xFE, 0x41, 0x00, 0x2D, 0x4E, 0x3E, 0xD8, 0x8A, 0xDD]),
+    Data([0xFE, 0xFF, 0x00, 0x41, 0x4E, 0x2D, 0xD8, 0x3E, 0xDD, 0x8A]),
+])
+func nativeUTF16ProjectionHonorsByteOrder(bytes: Data) {
+    // Literal bytes distinguish native no-BOM order from both BOM overrides
+    // without using Foundation's encoder as the decoder's test oracle.
     let content = EffectiveContent(representations: [ContentRepresentation(
         typeIdentifier: "public.utf16-plain-text",
-        bytes: text.data(using: encoding)!
+        bytes: bytes
     )])
 
     let projection = ContentProjector.project(content)
 
-    #expect(projection.title == text)
-    #expect(projection.searchBody == text)
+    #expect(projection.title == "A中🦊")
+    #expect(projection.searchBody == "A中🦊")
+    #expect(ContentProjector.projectTitle(content) == "A中🦊")
 }
 
 @Test(arguments: [

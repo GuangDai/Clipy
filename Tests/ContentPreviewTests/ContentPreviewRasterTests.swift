@@ -137,10 +137,13 @@ struct ContentPreviewRasterTests {
             data, format as CFString, frameCount, nil
         ))
         for frame in 0..<frameCount {
-            context.setFillColor(CGColor(
-                red: frame == 0 ? 1 : 0, green: 0,
-                blue: frame == 0 ? 0 : 1, alpha: 1
+            // The convenience RGB initializer uses a generic RGB space.
+            // Match the fixture's sRGB context so literal red stays [255,0,0].
+            let color = try #require(CGColor(
+                colorSpace: colorSpace,
+                components: [frame == 0 ? 1 : 0, 0, frame == 0 ? 0 : 1, 1]
             ))
+            context.setFillColor(color)
             context.fill(CGRect(x: 0, y: 0, width: 32, height: 16))
             let image = try #require(context.makeImage())
             let properties = orientation.map { [kCGImagePropertyOrientation: $0] as CFDictionary }

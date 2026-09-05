@@ -4,6 +4,8 @@
 /// counts (03a §6; `V2-02` §12), `.unchanged` reports the no-op exactly
 /// (02 §8/§12; `V2-02` §4.4/§5.6), and a commit carrying another action's
 /// outcome renders as a failure — never a blanket "Done.".
+/// These tests own receipt selection and count forwarding; literal translations
+/// and plural forms are exercised by RetentionSettingsCopyTests.
 import Foundation
 import HistoryCore
 import Testing
@@ -25,26 +27,27 @@ struct SettingsReceiptFeedbackTests {
     func clearFeedbackIsExactPerReceiptState() {
         #expect(
             clearStatusFeedback(committedReceipt(.cleared(count: 3)))
-                == .success("Removed 3 items.")
+                == .success(RetentionSettingsCopy.clearedItemsRemoved(3))
         )
         #expect(
             clearStatusFeedback(committedReceipt(.cleared(count: 1)))
-                == .success("Removed 1 item.")
+                == .success(RetentionSettingsCopy.clearedItemsRemoved(1))
         )
         #expect(
             clearStatusFeedback(committedReceipt(.cleared(count: 0)))
-                == .success("Done.")
+                == .success(RetentionSettingsCopy.feedbackDone)
         )
         // An empty affected set never commits (02 §8) — the feedback says
         // nothing matched instead of implying a removal.
         #expect(
-            clearStatusFeedback(.unchanged) == .success("Nothing to clear.")
+            clearStatusFeedback(.unchanged)
+                == .success(RetentionSettingsCopy.feedbackNothingToClear)
         )
         // A clear commit never carries another action's outcome; the
         // boundary violation is a failure, not a blanket success.
         #expect(
             clearStatusFeedback(committedReceipt(.removed(count: 1)))
-                == .failure("The history could not be cleared.")
+                == .failure(RetentionSettingsCopy.clearFailure)
         )
     }
 
@@ -53,26 +56,27 @@ struct SettingsReceiptFeedbackTests {
         #expect(
             maximumUnpinnedStatusFeedback(
                 committedReceipt(.retentionPolicySet(removedCount: 2))
-            ) == .success("Done. 2 items removed.")
+            ) == .success(RetentionSettingsCopy.countLimitItemsRemoved(2))
         )
         #expect(
             maximumUnpinnedStatusFeedback(
                 committedReceipt(.retentionPolicySet(removedCount: 1))
-            ) == .success("Done. 1 item removed.")
+            ) == .success(RetentionSettingsCopy.countLimitItemsRemoved(1))
         )
         #expect(
             maximumUnpinnedStatusFeedback(
                 committedReceipt(.retentionPolicySet(removedCount: 0))
-            ) == .success("Done.")
+            ) == .success(RetentionSettingsCopy.feedbackDone)
         )
         // The submitted count already equals the persisted value (02 §8/§12).
         #expect(
-            maximumUnpinnedStatusFeedback(.unchanged) == .success("No change.")
+            maximumUnpinnedStatusFeedback(.unchanged)
+                == .success(RetentionSettingsCopy.feedbackNoChange)
         )
         #expect(
             maximumUnpinnedStatusFeedback(
                 committedReceipt(.cleared(count: 1))
-            ) == .failure("The setting could not be saved.")
+            ) == .failure(RetentionSettingsCopy.countSaveFailure)
         )
     }
 
@@ -84,7 +88,10 @@ struct SettingsReceiptFeedbackTests {
                     retiredItems: 1,
                     prunedRevisions: 0
                 ))
-            ) == .success("Done. 1 item retired, 0 revisions pruned.")
+            ) == .success(RetentionSettingsCopy.appliedSummary(
+                retiredPhrase: RetentionSettingsCopy.itemsRetired(1),
+                prunedPhrase: RetentionSettingsCopy.revisionsPruned(0)
+            ))
         )
         #expect(
             retentionPoliciesStatusFeedback(
@@ -92,7 +99,10 @@ struct SettingsReceiptFeedbackTests {
                     retiredItems: 2,
                     prunedRevisions: 3
                 ))
-            ) == .success("Done. 2 items retired, 3 revisions pruned.")
+            ) == .success(RetentionSettingsCopy.appliedSummary(
+                retiredPhrase: RetentionSettingsCopy.itemsRetired(2),
+                prunedPhrase: RetentionSettingsCopy.revisionsPruned(3)
+            ))
         )
         #expect(
             retentionPoliciesStatusFeedback(
@@ -100,7 +110,10 @@ struct SettingsReceiptFeedbackTests {
                     retiredItems: 0,
                     prunedRevisions: 1
                 ))
-            ) == .success("Done. 0 items retired, 1 revision pruned.")
+            ) == .success(RetentionSettingsCopy.appliedSummary(
+                retiredPhrase: RetentionSettingsCopy.itemsRetired(0),
+                prunedPhrase: RetentionSettingsCopy.revisionsPruned(1)
+            ))
         )
         // A nothing-happened set reports plain "Done." (`V2-02` §12).
         #expect(
@@ -109,17 +122,18 @@ struct SettingsReceiptFeedbackTests {
                     retiredItems: 0,
                     prunedRevisions: 0
                 ))
-            ) == .success("Done.")
+            ) == .success(RetentionSettingsCopy.feedbackDone)
         )
         // The submitted bundle already equals the persisted policy
         // (`V2-02` §4.4/§5.6).
         #expect(
-            retentionPoliciesStatusFeedback(.unchanged) == .success("No change.")
+            retentionPoliciesStatusFeedback(.unchanged)
+                == .success(RetentionSettingsCopy.feedbackNoChange)
         )
         #expect(
             retentionPoliciesStatusFeedback(
                 committedReceipt(.cleared(count: 2))
-            ) == .failure("The policies could not be saved.")
+            ) == .failure(RetentionSettingsCopy.policiesSaveFailure)
         )
     }
 }

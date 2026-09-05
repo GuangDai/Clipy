@@ -9,6 +9,73 @@ import Testing
 
 @MainActor
 struct DragItemProviderTests {
+    @Test(arguments: [false, true])
+    func oneDragRetainsItsFirstPayloadResultAcrossFormatRequests(fails: Bool) async throws {
+        let original = Self.reference(version: 1)
+        let revised = Self.reference(version: 2)
+        let read = PausedDragRead()
+        let originalPayload = Self.twoFormatPayload(original, value: "original")
+        await read.finish(fails ? .failure(.notFound(original.id)) : .success(originalPayload))
+        let history = ScriptedHistory(
+            observedFirstPage: fixturePage(rows: [Self.row(
+                original, types: originalPayload.representations.map(\.typeIdentifier)
+            )], next: nil),
+            pastePayloadRead: { _ in try await read.value() }
+        )
+        let state = HistoryViewState(history: history)
+        state.activate()
+        defer { state.deactivate() }
+        try #require(await pollUntil { state.rows.count == 1 })
+        let provider = state.dragItemProvider(for: original)
+        #expect(await read.requestCount == 0, "provider registration stays lazy")
+
+        let text = await Self.load(provider)
+        #expect(text.bytes == (fails ? nil : Data("original".utf8)))
+        #expect(text.failed == fails)
+
+        // A later revision (or recovery from failure) must not start a
+        // second read for another format belonging to this same gesture.
+        await read.finish(.success(Self.twoFormatPayload(revised, value: "revised")))
+        await history.emitObservedPage(fixturePage(rows: [Self.row(revised)], next: nil))
+        state.deactivate()
+        let url = await Self.load(provider, type: "public.url")
+        #expect(url.bytes == (fails ? nil : Data("https://example.invalid/original".utf8)))
+        #expect(url.failed == fails)
+        #expect(await read.requestCount == 1)
+        #expect(state.failure == nil)
+        await history.finishObservation()
+    }
+
+    @Test
+    func concurrentFormatRequestsShareThePendingHistoryRead() async throws {
+        let reference = Self.reference(version: 1)
+        let payload = Self.twoFormatPayload(reference, value: "concurrent")
+        let read = PausedDragRead()
+        let history = ScriptedHistory(
+            observedFirstPage: fixturePage(rows: [Self.row(
+                reference, types: payload.representations.map(\.typeIdentifier)
+            )], next: nil),
+            pastePayloadRead: { _ in try await read.value() }
+        )
+        let state = HistoryViewState(history: history)
+        state.activate()
+        defer { state.deactivate() }
+        try #require(await pollUntil { state.rows.count == 1 })
+        let provider = state.dragItemProvider(for: reference)
+        let textLoad = Task { await Self.load(provider) }
+        let urlLoad = Task { await Self.load(provider, type: "public.url") }
+        try #require(await pollUntil { await read.isWaiting })
+        await read.finish(.success(payload))
+        let text = await textLoad.value
+        let url = await urlLoad.value
+
+        #expect(text.bytes == Data("concurrent".utf8))
+        #expect(url.bytes == Data("https://example.invalid/concurrent".utf8))
+        #expect(!text.failed && !url.failed)
+        #expect(await read.requestCount == 1)
+        await history.finishObservation()
+    }
+
     @Test
     func everyAdvertisedRepresentationLoadsItsExactBytes() async throws {
         let reference = Self.reference(version: 1)
@@ -163,6 +230,20 @@ struct DragItemProviderTests {
             lineageHint: reference.id
         )
     }
+
+    private static func twoFormatPayload(
+        _ reference: HistoryItemReference,
+        value: String
+    ) -> PastePayload {
+        PastePayload(
+            item: reference,
+            representations: [
+                HistoryRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data(value.utf8)),
+                HistoryRepresentation(typeIdentifier: "public.url", bytes: Data("https://example.invalid/\(value)".utf8)),
+            ],
+            lineageHint: reference.id
+        )
+    }
 }
 
 private struct DragLoadResult: Sendable {
@@ -171,22 +252,26 @@ private struct DragLoadResult: Sendable {
 }
 
 private actor PausedDragRead {
-    private var continuation: CheckedContinuation<PastePayload, Error>?
+    private var continuations: [CheckedContinuation<PastePayload, Error>] = []
     private var result: Result<PastePayload, HistoryFailure>?
-    var isWaiting: Bool { continuation != nil }
+    private(set) var requestCount = 0
+    var isWaiting: Bool { !continuations.isEmpty }
 
     func value() async throws -> PastePayload {
+        requestCount += 1
         if let result { return try result.get() }
-        return try await withCheckedThrowingContinuation { continuation = $0 }
+        return try await withCheckedThrowingContinuation { continuations.append($0) }
     }
 
     func finish(_ result: Result<PastePayload, HistoryFailure>) {
         self.result = result
-        let waiting = continuation
-        continuation = nil
-        switch result {
-        case .success(let payload): waiting?.resume(returning: payload)
-        case .failure(let failure): waiting?.resume(throwing: failure)
+        let waiting = continuations
+        continuations = []
+        for continuation in waiting {
+            switch result {
+            case .success(let payload): continuation.resume(returning: payload)
+            case .failure(let failure): continuation.resume(throwing: failure)
+            }
         }
     }
 }

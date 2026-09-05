@@ -450,8 +450,12 @@ public final class HistoryViewState {
     /// the receiver, including opaque bytes; plain text and the preferred
     /// raster types are offered first. The read returns current Effective
     /// Content by ID (03b §9 / 04 §8 DEC-PASTE-REFERENCE); an advertised type
-    /// hidden by a later revision completes without bytes. Failures go
+    /// hidden before that first read completes without bytes. Failures go
     /// to the drop completion, without changing the panel banner.
+    /// The first representation request resolves one immutable payload for
+    /// the entire drag. Other formats share that result even if History
+    /// changes between receiver requests; constructing the provider does
+    /// not read or retain clipboard bytes.
     /// `NSItemProvider` is Foundation, so
     /// PresentationUI's no-AppKit rule (01 §6) is preserved.
     package func dragItemProvider(
@@ -464,7 +468,7 @@ public final class HistoryViewState {
         let advertised = row.typeIdentifiers
         let preferred = Self.dragTypePreference.filter { advertised.contains($0) }
         let remaining = advertised.filter { !Self.dragTypePreference.contains($0) }
-        let history = self.history
+        let payloadRead = DragPayloadRead(history: history, itemID: reference.id)
         for typeIdentifier in preferred + remaining {
             provider.registerDataRepresentation(
                 forTypeIdentifier: typeIdentifier,
@@ -472,7 +476,7 @@ public final class HistoryViewState {
             ) { completion in
                 Task {
                     do {
-                        let payload = try await history.pastePayload(for: reference.id)
+                        let payload = try await payloadRead.value()
                         let bytes = payload.representations
                             .first { $0.typeIdentifier == typeIdentifier }?.bytes
                         completion(bytes, nil)
@@ -998,5 +1002,28 @@ public final class HistoryViewState {
         case .mutation, nil:
             break
         }
+    }
+}
+
+/// One lazy History read for one drag gesture. Its provider's format
+/// callbacks share both the in-flight task and its immutable success/failure;
+/// a receiver cannot combine representations from different revisions.
+private actor DragPayloadRead {
+    private let history: any ClipboardHistory
+    private let itemID: HistoryItemID
+    private var task: Task<PastePayload, Error>?
+
+    init(history: any ClipboardHistory, itemID: HistoryItemID) {
+        self.history = history
+        self.itemID = itemID
+    }
+
+    func value() async throws -> PastePayload {
+        if let task { return try await task.value }
+        let history = history
+        let itemID = itemID
+        let task = Task { try await history.pastePayload(for: itemID) }
+        self.task = task
+        return try await task.value
     }
 }
