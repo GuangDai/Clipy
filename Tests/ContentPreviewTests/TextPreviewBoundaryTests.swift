@@ -4,7 +4,7 @@ import Testing
 
 struct TextPreviewBoundaryTests {
     @Test(arguments: [49_999, 50_000, 50_001])
-    func textAtTheDisplayLimitAddsAnEllipsisOnlyForOmittedContent(count: Int) async {
+    func textAtTheDisplayLimitPreservesOnlyTheSourcePrefix(count: Int) async {
         let source = String(repeating: "x", count: count)
         let outcome = await ContentPreview().renderHistoryPane([
             PreviewRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data(source.utf8)),
@@ -15,10 +15,10 @@ struct TextPreviewBoundaryTests {
         }
         if count == 50_001 {
             #expect(text.wasTruncated)
-            #expect(text.text == String(repeating: "x", count: 50_000) + "\n\n…")
+            #expect(Data(text.text.utf8) == Data(String(repeating: "x", count: 50_000).utf8))
         } else {
             #expect(!text.wasTruncated)
-            #expect(text.text == source)
+            #expect(Data(text.text.utf8) == Data(source.utf8))
         }
     }
 
@@ -36,10 +36,23 @@ struct TextPreviewBoundaryTests {
             Issue.record("Expected a Unicode text preview, got \(outcome)")
             return
         }
-        let expected = prefix + (tail.isEmpty ? "" : "\n\n…")
         #expect(text.wasTruncated == !tail.isEmpty)
         // Byte equality additionally rejects normalization of combining text.
-        #expect(Data(text.text.utf8) == Data(expected.utf8))
+        #expect(Data(text.text.utf8) == Data(prefix.utf8))
+    }
+
+    @Test(arguments: [0, 49_997])
+    func originalEllipsisSuffixIsNotATruncationNotice(prefixCount: Int) async {
+        let source = String(repeating: "x", count: prefixCount) + "\n\n…"
+        let outcome = await ContentPreview().renderHistoryPane([
+            PreviewRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data(source.utf8)),
+        ])
+        guard case .content(.text(let text)) = outcome else {
+            Issue.record("Expected unmodified source text, got \(outcome)")
+            return
+        }
+        #expect(!text.wasTruncated)
+        #expect(Data(text.text.utf8) == Data(source.utf8))
     }
 
     @Test func emptyDeclaredTextKeepsItsExistingFailureOutcome() async {

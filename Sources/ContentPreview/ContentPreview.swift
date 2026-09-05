@@ -205,8 +205,10 @@ package actor ContentPreview {
                 limitedBy: decoded.endIndex
             ) ?? decoded.endIndex
             let wasTruncated = end != decoded.endIndex
+            // Keep selectable text an exact source prefix. Presentation owns
+            // a separate truncation notice; it must not become copied text.
             let body = wasTruncated
-                ? String(decoded[..<end]) + "\n\n…"
+                ? String(decoded[..<end])
                 : decoded
             return .content(.text(PreviewText(
                 text: body,

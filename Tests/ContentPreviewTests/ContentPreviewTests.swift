@@ -24,9 +24,8 @@ struct ContentPreviewTests {
             return
         }
         #expect(text.wasTruncated)
-        #expect(text.text.count == PreviewText.maximumCharacters + 3)
-        #expect(text.text.hasPrefix(String(repeating: "a", count: 50_000)))
-        #expect(text.text.hasSuffix("…"))
+        #expect(text.text.count == 50_000)
+        #expect(Data(text.text.utf8) == Data(String(repeating: "a", count: 50_000).utf8))
     }
 
     @Test("native UTF-16 honors BOM and BOM-less arm64 little endian")

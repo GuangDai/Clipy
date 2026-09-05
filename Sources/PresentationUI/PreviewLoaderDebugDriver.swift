@@ -45,7 +45,7 @@ public final class PreviewLoaderDebugDriver {
     ) async -> PreviewLoaderDebugSnapshot {
         await loader.load(item: item)
         switch loader.phase {
-        case .content(.text(let text)):
+        case .content(.text(let text, _)):
             return PreviewLoaderDebugSnapshot(
                 kind: .text,
                 textCharacterCount: text.count

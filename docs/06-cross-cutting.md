@@ -164,6 +164,10 @@ objects. Its direct tests and Presentation lifecycle tracers are functional
 correctness tests in the default lane.
 
 The history-pane preview keeps image-first and valid exact-text precedence.
+Text artifacts contain at most 50,000 complete Swift `Character`s as an exact
+source prefix. A separate truncation fact drives a visible UI notice outside
+the selectable body; no synthetic ellipsis is appended to copied source text.
+The preview limit never truncates History's retained values or paste payloads.
 When neither applies, the first exact `public.url` or `public.file-url`
 representation can produce an inert reference artifact. That selected input
 is limited to 16 KiB and must be strict UTF-8 with an absolute URL scheme;

@@ -49,8 +49,9 @@ package final class PreviewContentLoader {
     /// What the preview column renders for the requested item. Raster pixels
     /// stay in the framework-neutral `raster` value below.
     package enum AppliedContent: Equatable {
-        /// Body text, capped by ContentPreview's history-pane profile.
-        case text(String)
+        /// Body text, capped by ContentPreview's history-pane profile, with
+        /// truncation kept separate from the literal preview body.
+        case text(String, wasTruncated: Bool = false)
         /// A bounded decoded image is published on `image`.
         case image
         /// An inert copied address; rendering never follows its destination.
@@ -215,7 +216,9 @@ package final class PreviewContentLoader {
             case .content(.text(let artifact)):
                 raster = nil
                 canRetryFailure = false
-                phase = .content(.text(artifact.text))
+                phase = .content(.text(
+                    artifact.text, wasTruncated: artifact.wasTruncated
+                ))
                 occurrence = details.occurrence
             case .content(.reference(let artifact)):
                 raster = nil
@@ -419,17 +422,31 @@ struct HistoryPreviewView: View {
                 } else {
                     failedBody
                 }
-            case .content(.text(let text)):
-                ScrollView(.vertical) {
-                    Text(text)
-                        .font(.body)
-                        .textSelection(.enabled)
+            case .content(.text(let text, let wasTruncated)):
+                VStack(spacing: 0) {
+                    ScrollView(.vertical) {
+                        Text(verbatim: text)
+                            .font(.body)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
+                            .accessibilityIdentifier("clipy.preview.text")
+                    }
+                    // The body scrolls independently; the disclosure stays
+                    // visible and never becomes part of selectable content.
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    if wasTruncated {
+                        Text(PreviewCopy.text(
+                            "Preview truncated. Copy keeps the complete content."
+                        ))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(10)
-                        .accessibilityIdentifier("clipy.preview.text")
+                        .accessibilityIdentifier("clipy.preview.truncation-notice")
+                    }
                 }
-                // The column is window-sized; the scroll view fills it so a
-                // taller panel reveals more of the body per page.
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .content(.reference(let reference)):
                 ReferencePreviewView(reference: reference)

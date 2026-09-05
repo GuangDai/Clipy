@@ -11,3 +11,4 @@
 "Address" = "地址";
 "File Path" = "文件路径";
 "Only the reference is shown. Its destination has not been opened." = "仅显示引用信息，未打开其指向的目标。";
+"Preview truncated. Copy keeps the complete content." = "预览已截断，复制仍保留完整内容。";
