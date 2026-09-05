@@ -1,4 +1,4 @@
-/// Projection recipe-v5 public reopen and atomic startup-rebuild proofs.
+/// Projection recipe-v6 public reopen and atomic startup-rebuild proofs.
 /// Owning spec: docs/05-authority-kernel.md §13, §15.
 import Foundation
 import HistoryCore
@@ -7,7 +7,7 @@ import SwiftData
 import Testing
 @testable import HistoryStorage
 
-@Suite("Projection recipe v5 startup rebuild")
+@Suite("Projection recipe v6 startup rebuild")
 struct ProjectionRecipeV2RebuildTests {
     private struct LegacyFixture: Sendable {
         let id: HistoryItemID
@@ -225,7 +225,7 @@ struct ProjectionRecipeV2RebuildTests {
     }
 
     @Test("public reopen rebuilds legacy projection before browse/search/details",
-          arguments: [UInt16(1), 2, 3, 4], ["public.utf8-plain-text", "public.utf16-external-plain-text"])
+          arguments: [UInt16(1), 2, 3, 4, 5], ["public.utf8-plain-text", "public.utf16-external-plain-text"])
     func publicReopenRebuildsLegacyProjection(
         projectionVersion: UInt16, textTypeIdentifier: String
     ) async throws {
@@ -285,8 +285,8 @@ struct ProjectionRecipeV2RebuildTests {
         let inspection = try WSSupport.makeContainer(storeURL: storeURL)
         let inspectionContext = ModelContext(inspection)
         let stored = try Self.fetchRow(id: fixture.id, in: inspectionContext)
-        #expect(stored.projectionSchemaVersion == 5)
-        #expect(stored.title == fixture.visibleText)
+        #expect(stored.projectionSchemaVersion == 6)
+        #expect(stored.titleUTF8 == Data(fixture.visibleText.utf8))
         #expect(stored.searchBody == fixture.visibleText)
     }
 
@@ -305,7 +305,7 @@ struct ProjectionRecipeV2RebuildTests {
         // Recipe 2 incorrectly decoded this identifier as UTF-8. Seed its
         // actual derived scalars instead of the helper's recipe-1 markup.
         try Self.mutateStoredProjection(id: fixture.id, at: storeURL) { row in
-            row.title = fixture.visibleText
+            row.titleUTF8 = Data(fixture.visibleText.utf8)
             row.searchBody = fixture.visibleText
         }
         let history = try await SwiftDataHistory.open(configuration:
@@ -378,7 +378,7 @@ struct ProjectionRecipeV2RebuildTests {
                 stored.projectionSchemaVersion
                     == ContentProjector.legacySchemaVersion
             )
-            #expect(stored.title == fixture.staleTitle)
+            #expect(stored.titleUTF8 == Data(fixture.staleTitle.utf8))
             #expect(stored.searchBody == fixture.staleSearchBody)
         }
     }
@@ -388,11 +388,11 @@ struct ProjectionRecipeV2RebuildTests {
         let storeURL = WSSupport.tempStoreURL("projection-recipe-v2-mixed")
         defer { WSSupport.removeStore(storeURL) }
         let fixtures = try await Self.seedLegacyRows(at: storeURL, count: 2)
-        let existingV2 = fixtures[1]
-        try Self.mutateStoredProjection(id: existingV2.id, at: storeURL) { row in
+        let existingCurrent = fixtures[1]
+        try Self.mutateStoredProjection(id: existingCurrent.id, at: storeURL) { row in
             row.projectionSchemaVersion = ContentProjector.schemaVersion
-            row.title = "Existing v2 title"
-            row.searchBody = "Existing v2 body"
+            row.titleUTF8 = Data("Existing current title".utf8)
+            row.searchBody = "Existing current body"
         }
 
         _ = try await SwiftDataHistory.open(configuration:
@@ -403,11 +403,11 @@ struct ProjectionRecipeV2RebuildTests {
         let inspectionContext = ModelContext(inspection)
         let rebuilt = try Self.fetchRow(id: fixtures[0].id, in: inspectionContext)
         #expect(rebuilt.projectionSchemaVersion == ContentProjector.schemaVersion)
-        #expect(rebuilt.title == fixtures[0].visibleText)
-        let untouched = try Self.fetchRow(id: existingV2.id, in: inspectionContext)
+        #expect(rebuilt.titleUTF8 == Data(fixtures[0].visibleText.utf8))
+        let untouched = try Self.fetchRow(id: existingCurrent.id, in: inspectionContext)
         #expect(untouched.projectionSchemaVersion == ContentProjector.schemaVersion)
-        #expect(untouched.title == "Existing v2 title")
-        #expect(untouched.searchBody == "Existing v2 body")
+        #expect(untouched.titleUTF8 == Data("Existing current title".utf8))
+        #expect(untouched.searchBody == "Existing current body")
     }
 
     @Test("public open rejects an unknown projection tag without replacement")
@@ -430,7 +430,7 @@ struct ProjectionRecipeV2RebuildTests {
         let inspectionContext = ModelContext(inspection)
         let stored = try Self.fetchRow(id: fixture.id, in: inspectionContext)
         #expect(stored.projectionSchemaVersion == 9)
-        #expect(stored.title == fixture.staleTitle)
+        #expect(stored.titleUTF8 == Data(fixture.staleTitle.utf8))
         #expect(stored.searchBody == fixture.staleSearchBody)
     }
 
@@ -464,7 +464,7 @@ struct ProjectionRecipeV2RebuildTests {
                 stored.projectionSchemaVersion
                     == ContentProjector.legacySchemaVersion
             )
-            #expect(stored.title == fixture.staleTitle)
+            #expect(stored.titleUTF8 == Data(fixture.staleTitle.utf8))
             #expect(stored.searchBody == fixture.staleSearchBody)
         }
     }

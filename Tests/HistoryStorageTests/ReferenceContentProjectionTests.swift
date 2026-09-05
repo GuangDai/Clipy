@@ -188,7 +188,7 @@ struct ReferenceContentProjectionTests {
             ContentRepresentation(typeIdentifier: $0.0, bytes: $0.1)
         })
         let actual = ContentProjector.project(content, limits: limits)
-        #expect(actual.schemaVersion == 5)
+        #expect(actual.schemaVersion == 6)
         #expect(actual.effectiveTypeIdentifiers == ordered.map { $0.0 })
         #expect(Data(actual.title.utf8) == Data(title.utf8))
         #expect(Data(actual.searchBody.utf8) == Data(body.utf8))

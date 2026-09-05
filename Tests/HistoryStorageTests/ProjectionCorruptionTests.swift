@@ -13,6 +13,7 @@ struct ProjectionCorruptionTests {
 private enum Corruption: Equatable {
     case schemaVersion
     case title
+    case malformedTitleUTF8
     case searchBody
     case lastCopiedAt
     case copyCount
@@ -86,9 +87,15 @@ private static func seedRow(
         lastSource: lastSource,
         pinOrdinal: nil
     )
+    if corruption == .malformedTitleUTF8 {
+        row.titleUTF8 = Data([0xEF, 0xBB, 0xBF, 0xFF])
+        // A plausible legacy String must not become a fallback for damaged
+        // current title bytes; current reads fail closed instead.
+        row.title = bundle.projection.title
+    }
     let container = try WSSupport.makeContainer(storeURL: storeURL)
     let context = ModelContext(container)
-    // This is a raw V2 store fixture, not a fresh-store bootstrap. Keep its
+    // This is a raw current store fixture, not a fresh-store bootstrap. Keep its
     // authoritative singleton shape valid so only `corruption` selects the
     // startup/read failure under test (05 §13; DATA-1).
     context.insert(LastChangePositionRow(
@@ -162,6 +169,25 @@ static func seedOverBoundSearchBodyRow(
     }
     await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
         _ = try await authority.details(for: itemID)
+    }
+}
+
+@Test func malformedStoredTitleFailsClosedThroughPublicReads() async throws {
+    let storeURL = WSSupport.tempStoreURL("projection-invalid-title-utf8")
+    defer { WSSupport.removeStore(storeURL) }
+    let itemID = try await Self.seedRow(at: storeURL, corruption: .malformedTitleUTF8)
+    let history = try await WSSupport.openHistory(storeURL: storeURL)
+
+    await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+        _ = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 10))
+    }
+    await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+        _ = try await history.browse(HistoryBrowseRequest(
+            kind: .search(text: "projection", mode: .exact), limit: 10
+        ))
+    }
+    await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+        _ = try await history.details(for: itemID)
     }
 }
 

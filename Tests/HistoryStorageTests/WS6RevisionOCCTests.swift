@@ -131,7 +131,7 @@ private static func replaceTextRequest(
     #expect(reviseState.activeRevisionID == firstRevision.id)
     // WS6: "Effective-derived title/search … updated" — the §15 durable
     // projection now derives from the revised Effective Content.
-    #expect(reviseRow.title == revisedText)
+    #expect(reviseRow.titleUTF8 == Data(revisedText.utf8))
     #expect(reviseRow.searchBody == revisedText)
     #expect(
         try EffectiveTypeIdentifiersBlobCodec.decode(reviseRow.effectiveTypeIdentifiersBlob)
@@ -165,7 +165,7 @@ private static func replaceTextRequest(
     #expect(staleRows.count == 1)
     let staleRow = try #require(staleRows.first)
     #expect(staleRow.contentVersionRaw == 2)
-    #expect(staleRow.title == revisedText)
+    #expect(staleRow.titleUTF8 == Data(revisedText.utf8))
     #expect(staleRow.searchBody == revisedText)
     let staleCanonical = try CanonicalBlobCodec.decode(staleRow.canonicalBlob)
     let staleState = try RevisionStateBlobCodec.decode(
@@ -229,7 +229,7 @@ private static func replaceTextRequest(
     #expect(revertState.activeRevisionID == appendedRevision.id)
     // WS6: "Effective-derived title/search … updated" — the §15 projection is
     // back to the Canonical text.
-    #expect(revertRow.title == canonicalText)
+    #expect(revertRow.titleUTF8 == Data(canonicalText.utf8))
     #expect(revertRow.searchBody == canonicalText)
     #expect(
         try EffectiveTypeIdentifiersBlobCodec.decode(revertRow.effectiveTypeIdentifiersBlob)

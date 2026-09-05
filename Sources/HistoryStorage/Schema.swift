@@ -19,7 +19,7 @@ import SwiftData
 /// `HistorySchemaV1` is also the conceptual version label referenced by the
 /// §17 migration stance: a future schema change increments it and adds a
 /// migration plan.
-internal let v1Schema = Schema(HistoryItemRow.self, LastChangePositionRow.self)
+internal let v1Schema = Schema(HistorySchemaV1.HistoryItemRow.self, LastChangePositionRow.self)
 
 /// M1-owned `VersionedSchema` anchor naming the shipped v1 schema
 /// (`V2-roadmap` §5 M1.1; `V2-02` §3.3 "Stage topology"). Behavior-preserving
@@ -36,97 +36,100 @@ internal enum HistorySchemaV1: VersionedSchema {
     static let versionIdentifier = Schema.Version(1, 0, 0)
 
     static var models: [any PersistentModel.Type] {
-        [HistoryItemRow.self, LastChangePositionRow.self]
+        [HistorySchemaV1.HistoryItemRow.self, LastChangePositionRow.self]
     }
 }
 
-/// Durable row for one retained History Item (docs/05-authority-kernel.md §3.1).
-///
-/// Semantic mapping (§3.1):
-///
-/// - `id` is the stable business ID; `PersistentIdentifier` is never exposed.
-/// - `contentVersionRaw` is the current Effective Content version, always at
-///   least 1.
-/// - `canonicalBlob` holds the immutable Canonical representations including
-///   per-representation fingerprint evidence (`CanonicalBlobV1`, §4).
-/// - `revisionStateBlob` holds the full revision list plus the active Revision
-///   ID (`RevisionStateBlobV1`, §4). The active revision's bytes are present
-///   whenever `activeRevisionID` is non-nil; for a Canonical-state item
-///   (`activeRevisionID == nil`) the revision list is empty and there are no
-///   revision bytes — Effective Content equals Canonical Content.
-/// - `canonicalSignatureBlob` holds durable signature metadata
-///   (`SignatureBlobV1`, §4). Current hard-capped index builds validate it
-///   against recomputed Canonical fingerprints before publishing readiness.
-/// - The projection fields are the durable bounded projection of the current
-///   Effective Content for list/search (§15).
-/// - The occurrence fields hold the full first/last time and source summary.
-/// - `pinOrdinal` is the internal encoding of pinned order; `nil` is unpinned.
-///
-/// `@Attribute(.externalStorage)` is an implementation hint: correctness, byte
-/// limits, and read isolation do not depend on whether SwiftData stores a blob
-/// inline or externally (§3.1). There is no `pinned: Bool`, inactive-only
-/// revision list, single `application` column, enrichment field, tombstone,
-/// cache payload, durable change record, or SwiftData identity map.
-@Model
-internal final class HistoryItemRow {
-    @Attribute(.unique)
-    var id: UUID
+extension HistorySchemaV1 {
 
-    var contentVersionRaw: UInt64
+    /// Durable row for one retained History Item (docs/05-authority-kernel.md §3.1).
+    ///
+    /// Semantic mapping (§3.1):
+    ///
+    /// - `id` is the stable business ID; `PersistentIdentifier` is never exposed.
+    /// - `contentVersionRaw` is the current Effective Content version, always at
+    ///   least 1.
+    /// - `canonicalBlob` holds the immutable Canonical representations including
+    ///   per-representation fingerprint evidence (`CanonicalBlobV1`, §4).
+    /// - `revisionStateBlob` holds the full revision list plus the active Revision
+    ///   ID (`RevisionStateBlobV1`, §4). The active revision's bytes are present
+    ///   whenever `activeRevisionID` is non-nil; for a Canonical-state item
+    ///   (`activeRevisionID == nil`) the revision list is empty and there are no
+    ///   revision bytes — Effective Content equals Canonical Content.
+    /// - `canonicalSignatureBlob` holds durable signature metadata
+    ///   (`SignatureBlobV1`, §4). Current hard-capped index builds validate it
+    ///   against recomputed Canonical fingerprints before publishing readiness.
+    /// - The projection fields are the durable bounded projection of the current
+    ///   Effective Content for list/search (§15).
+    /// - The occurrence fields hold the full first/last time and source summary.
+    /// - `pinOrdinal` is the internal encoding of pinned order; `nil` is unpinned.
+    ///
+    /// `@Attribute(.externalStorage)` is an implementation hint: correctness, byte
+    /// limits, and read isolation do not depend on whether SwiftData stores a blob
+    /// inline or externally (§3.1). There is no `pinned: Bool`, inactive-only
+    /// revision list, single `application` column, enrichment field, tombstone,
+    /// cache payload, durable change record, or SwiftData identity map.
+    @Model
+    internal final class HistoryItemRow {
+        @Attribute(.unique)
+        var id: UUID
 
-    @Attribute(.externalStorage)
-    var canonicalBlob: Data
+        var contentVersionRaw: UInt64
 
-    @Attribute(.externalStorage)
-    var revisionStateBlob: Data
+        @Attribute(.externalStorage)
+        var canonicalBlob: Data
 
-    var canonicalSignatureBlob: Data
+        @Attribute(.externalStorage)
+        var revisionStateBlob: Data
 
-    var projectionSchemaVersion: UInt16
-    var title: String
-    var searchBody: String
-    var effectiveTypeIdentifiersBlob: Data
+        var canonicalSignatureBlob: Data
 
-    var firstCopiedAt: Date
-    var lastCopiedAt: Date
-    var copyCount: UInt64
-    var firstSource: String?
-    var lastSource: String?
+        var projectionSchemaVersion: UInt16
+        var title: String
+        var searchBody: String
+        var effectiveTypeIdentifiersBlob: Data
 
-    var pinOrdinal: Int?
+        var firstCopiedAt: Date
+        var lastCopiedAt: Date
+        var copyCount: UInt64
+        var firstSource: String?
+        var lastSource: String?
 
-    init(
-        id: UUID,
-        contentVersionRaw: UInt64,
-        canonicalBlob: Data,
-        revisionStateBlob: Data,
-        canonicalSignatureBlob: Data,
-        projectionSchemaVersion: UInt16,
-        title: String,
-        searchBody: String,
-        effectiveTypeIdentifiersBlob: Data,
-        firstCopiedAt: Date,
-        lastCopiedAt: Date,
-        copyCount: UInt64,
-        firstSource: String?,
-        lastSource: String?,
-        pinOrdinal: Int?
-    ) {
-        self.id = id
-        self.contentVersionRaw = contentVersionRaw
-        self.canonicalBlob = canonicalBlob
-        self.revisionStateBlob = revisionStateBlob
-        self.canonicalSignatureBlob = canonicalSignatureBlob
-        self.projectionSchemaVersion = projectionSchemaVersion
-        self.title = title
-        self.searchBody = searchBody
-        self.effectiveTypeIdentifiersBlob = effectiveTypeIdentifiersBlob
-        self.firstCopiedAt = firstCopiedAt
-        self.lastCopiedAt = lastCopiedAt
-        self.copyCount = copyCount
-        self.firstSource = firstSource
-        self.lastSource = lastSource
-        self.pinOrdinal = pinOrdinal
+        var pinOrdinal: Int?
+
+        init(
+            id: UUID,
+            contentVersionRaw: UInt64,
+            canonicalBlob: Data,
+            revisionStateBlob: Data,
+            canonicalSignatureBlob: Data,
+            projectionSchemaVersion: UInt16,
+            title: String,
+            searchBody: String,
+            effectiveTypeIdentifiersBlob: Data,
+            firstCopiedAt: Date,
+            lastCopiedAt: Date,
+            copyCount: UInt64,
+            firstSource: String?,
+            lastSource: String?,
+            pinOrdinal: Int?
+        ) {
+            self.id = id
+            self.contentVersionRaw = contentVersionRaw
+            self.canonicalBlob = canonicalBlob
+            self.revisionStateBlob = revisionStateBlob
+            self.canonicalSignatureBlob = canonicalSignatureBlob
+            self.projectionSchemaVersion = projectionSchemaVersion
+            self.title = title
+            self.searchBody = searchBody
+            self.effectiveTypeIdentifiersBlob = effectiveTypeIdentifiersBlob
+            self.firstCopiedAt = firstCopiedAt
+            self.lastCopiedAt = lastCopiedAt
+            self.copyCount = copyCount
+            self.firstSource = firstSource
+            self.lastSource = lastSource
+            self.pinOrdinal = pinOrdinal
+        }
     }
 }
 

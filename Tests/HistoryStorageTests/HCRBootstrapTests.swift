@@ -389,7 +389,7 @@ struct HCRBootstrapTests {
     }
 
     private static func makeContainer() throws -> ModelContainer {
-        let schema = Schema(versionedSchema: HistorySchemaV4.self)
+        let schema = Schema(versionedSchema: HistorySchemaV5.self)
         return try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(

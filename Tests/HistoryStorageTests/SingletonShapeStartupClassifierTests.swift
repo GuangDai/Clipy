@@ -121,7 +121,7 @@ struct SingletonShapeStartupClassifierTests {
     }
 
     private static func makeContainer(at storeURL: URL) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: HistorySchemaV4.self)
+        let schema = Schema(versionedSchema: HistorySchemaV5.self)
         return try ModelContainer(
             for: schema,
             migrationPlan: HistoryMigrationPlan.self,

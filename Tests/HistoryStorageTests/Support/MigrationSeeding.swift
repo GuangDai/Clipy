@@ -30,7 +30,7 @@ enum MigrationSeeding {
     /// One seeded v1 item: the insertable durable row plus the pre-migration
     /// copies and expected byte-projection scalars.
     struct SeededItem {
-        let row: HistoryItemRow
+        let row: HistorySchemaV1.HistoryItemRow
         let id: UUID
         let contentVersionRaw: UInt64
         let canonicalBlob: Data
@@ -57,7 +57,7 @@ enum MigrationSeeding {
         let alphaBundle = try await ingest.prepare(
             WSSupport.textCapture(textAlpha, observedAt: observedAt, source: source)
         )
-        let alphaRow = try HistoryItemRow(
+        let alphaRow = try HistorySchemaV1.HistoryItemRow(
             id: alphaBundle.domain.candidateID.rawValue,
             contentVersionRaw: 1,
             canonicalBlob: CanonicalBlobCodec.encode(alphaBundle.domain.canonical),
@@ -117,7 +117,7 @@ enum MigrationSeeding {
             activeRevisionID: betaRevisionTwo.id
         )
         // Two appends over the initial version: Content Version 3.
-        let betaRow = try HistoryItemRow(
+        let betaRow = try HistorySchemaV1.HistoryItemRow(
             id: betaBundle.domain.candidateID.rawValue,
             contentVersionRaw: 3,
             canonicalBlob: CanonicalBlobCodec.encode(betaBundle.domain.canonical),
@@ -141,7 +141,7 @@ enum MigrationSeeding {
         let gammaBundle = try await ingest.prepare(
             WSSupport.textCapture(textGamma, observedAt: observedAt, source: source)
         )
-        let gammaRow = try HistoryItemRow(
+        let gammaRow = try HistorySchemaV1.HistoryItemRow(
             id: gammaBundle.domain.candidateID.rawValue,
             contentVersionRaw: 1,
             canonicalBlob: CanonicalBlobCodec.encode(gammaBundle.domain.canonical),
@@ -229,11 +229,11 @@ enum MigrationSeeding {
         )
     }
 
-    /// A migration-plan container over the same URL: the current V4 schema plus
+    /// A migration-plan container over the same URL: the current V5 schema plus
     /// `HistoryMigrationPlan` — the exact construction `SwiftDataHistory.open`
     /// step 2 performs.
     static func makeMigrationContainer(storeURL: URL) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: HistorySchemaV4.self)
+        let schema = Schema(versionedSchema: HistorySchemaV5.self)
         return try ModelContainer(
             for: schema,
             migrationPlan: HistoryMigrationPlan.self,

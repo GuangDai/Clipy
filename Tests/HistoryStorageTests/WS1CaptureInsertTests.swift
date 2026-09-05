@@ -83,10 +83,10 @@ struct WS1CaptureInsertTests {
     #expect(row.lastSource == source)
 
     // WS1: "correct initial … projection" — the §15 durable projection of the
-    // Canonical-as-Effective content, written with projection recipe v2,
+    // Canonical-as-Effective content, written with projection recipe v6,
     // and the item starts unpinned (`nil` ordinal, §3.1).
     #expect(row.projectionSchemaVersion == ContentProjector.schemaVersion)
-    #expect(row.title == text)
+    #expect(row.titleUTF8 == Data(text.utf8))
     #expect(row.searchBody == text)
     #expect(
         try EffectiveTypeIdentifiersBlobCodec.decode(row.effectiveTypeIdentifiersBlob)

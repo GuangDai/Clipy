@@ -24,7 +24,7 @@ extension HistoryAuthority {
             \.id,
             \.contentVersionRaw,
             \.projectionSchemaVersion,
-            \.title,
+            \.titleUTF8,
             \.effectiveTypeIdentifiersBlob,
             \.lastCopiedAt,
             \.copyCount,

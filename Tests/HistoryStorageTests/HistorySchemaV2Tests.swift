@@ -22,7 +22,7 @@ struct HistorySchemaV2Tests {
     func modelSetIsV1PlusRetentionRows() {
         let v2Models = Set(HistorySchemaV2.models.map { "\($0)" })
         let expected: Set<String> = [
-            "\(HistoryItemRow.self)",
+            "\(HistorySchemaV1.HistoryItemRow.self)",
             "\(LastChangePositionRow.self)",
             "\(RetentionExpansionConfigRow.self)",
             "\(RetainedBytesRow.self)"

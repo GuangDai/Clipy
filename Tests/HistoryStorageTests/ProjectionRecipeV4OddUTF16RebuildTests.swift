@@ -124,7 +124,7 @@ struct ProjectionRecipeV4OddUTF16RebuildTests {
                                  revisionStateBlob: row.revisionStateBlob)
         try context.transaction {
             row.projectionSchemaVersion = 3
-            row.title = "QZ"
+            row.titleUTF8 = Data("QZ".utf8)
             row.searchBody = "QZ"
         }
         return bytes
@@ -135,8 +135,8 @@ struct ProjectionRecipeV4OddUTF16RebuildTests {
         let context = ModelContext(container)
         let rows = try context.fetch(FetchDescriptor<HistoryItemRow>())
         let row = try #require(rows.count == 1 ? rows.first : nil)
-        #expect(row.projectionSchemaVersion == 5)
-        #expect(row.title == fixture.typeIdentifier)
+        #expect(row.projectionSchemaVersion == 6)
+        #expect(row.titleUTF8 == Data(fixture.typeIdentifier.utf8))
         #expect(row.searchBody.isEmpty)
         #expect(row.canonicalBlob == bytes.canonicalBlob)
         #expect(row.revisionStateBlob == bytes.revisionStateBlob)

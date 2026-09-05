@@ -15,7 +15,7 @@ struct LocalAutomationCredentialKindIsolationTests {
 
     @Test("exact App Intents bytes cannot authenticate as Local Automation")
     func appIntentsCredentialRejectsWithoutGatewayEffects() async throws {
-        let schema = Schema(versionedSchema: HistorySchemaV4.self)
+        let schema = Schema(versionedSchema: HistorySchemaV5.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(

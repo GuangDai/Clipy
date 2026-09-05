@@ -61,7 +61,7 @@ struct GatewayAuthorizationTests {
     )
 
     private static func makeFixture() async throws -> Fixture {
-        let schema = Schema(versionedSchema: HistorySchemaV4.self)
+        let schema = Schema(versionedSchema: HistorySchemaV5.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(

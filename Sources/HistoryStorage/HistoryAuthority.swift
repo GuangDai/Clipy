@@ -574,7 +574,7 @@ internal actor HistoryAuthority {
 
     /// The only currently distinguishable write authorization for an absent
     /// position singleton.
-    /// Current `HistorySchemaV4` contains the history/retention siblings
+    /// Current `HistorySchemaV5` contains the history/retention siblings
     /// queried here plus the Gateway and HCR tables queried by their bounded
     /// absence classifiers; zero rows in every sibling table is the
     /// fresh-compatible shape. It is not causal proof: an existing V4 store

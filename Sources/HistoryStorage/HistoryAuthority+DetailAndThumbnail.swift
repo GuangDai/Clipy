@@ -73,7 +73,7 @@ extension HistoryAuthority {
         ) else {
             throw HistoryFailure.notFound(id)
         }
-        let item = try HistoryItemRowHydration.hydrate(row, limits: limits)
+        let (item, title) = try HistoryItemRowHydration.hydrateWithTitle(row, limits: limits)
 
         // Derive current Effective Content (docs/02-domain.md §2.6).
         let effective: EffectiveContent
@@ -117,7 +117,7 @@ extension HistoryAuthority {
             // active summary instead of decoding its text again on read.
             // Inactive revisions still need their own title projection.
             let revisionTitle = isActive
-                ? row.title
+                ? title
                 : ContentProjector.projectTitle(revision.content, limits: limits)
             return RevisionSummary(
                 id: revision.id,
@@ -147,7 +147,7 @@ extension HistoryAuthority {
                 occurrence: occurrence,
                 pinnedPosition: item.pinOrdinal?.rawValue
             ),
-            row.title
+            title
         )
     }
 

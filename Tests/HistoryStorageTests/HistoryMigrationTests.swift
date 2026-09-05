@@ -187,13 +187,13 @@ struct HistoryMigrationTests {
     // MARK: - (c) Re-open idempotence through the full open path
 
     /// After the current migration plan has taken the SAME URL through its
-    /// ordered V1 → V2 custom hop and additive V2 → V3 hop, full
-    /// `SwiftDataHistory.open` succeeds on that already-V3 store and runs no
+    /// ordered V1 → V2 custom hop and additive hops through V5, full
+    /// `SwiftDataHistory.open` succeeds on that already-V5 store and runs no
     /// stage. The retention config now exists all-disabled (created by
     /// Authority bootstrap, not migration), while item/RetainedBytes scalars
     /// remain unchanged.
-    @Test("(c) re-opened V3 store runs no stage and bootstraps the all-disabled config")
-    func reopenedV3StoreRunsNoStageAndBootstrapsConfig() async throws {
+    @Test("(c) re-opened V5 store runs no stage and bootstraps the all-disabled config")
+    func reopenedV5StoreRunsNoStageAndBootstrapsConfig() async throws {
         let storeURL = WSSupport.tempStoreURL("v2-migration-reopen")
         defer { WSSupport.removeStore(storeURL) }
 
@@ -235,7 +235,7 @@ struct HistoryMigrationTests {
         #expect(config.revisionMaxBytes == nil)
         #expect(config.configSchemaVersion == 1)
 
-        // Counts and scalars unchanged: no stage re-runs on an already-V3
+        // Counts and scalars unchanged: no stage re-runs on an already-V5
         // store (the earlier hops are idempotent by construction either way).
         #expect(try context.fetchCount(FetchDescriptor<HistoryItemRow>()) == seeded.count)
         let reopenedBytes = try MigrationSeeding.bytesSnapshots(context)
@@ -248,7 +248,7 @@ struct HistoryMigrationTests {
     // MARK: - (d) Direct backfill idempotence (RET-PLATFORM-1b(e) model)
 
     /// On a V2-schema in-memory container with items, running
-    /// `RetainedBytesBackfill.backfill` twice yields identical rows with no
+    /// `RetainedBytesBackfill.backfillLegacy` twice yields identical rows with no
     /// duplicates and unchanged scalars; rows already present with WRONG
     /// scalars (and a wrong `bytesSchemaVersion`) are corrected — full
     /// recompute, never a resumed partial write.
@@ -264,11 +264,11 @@ struct HistoryMigrationTests {
         let seeded = try await MigrationSeeding.seedV1Store(into: context)
         #expect(seeded.count == 3)
 
-        try RetainedBytesBackfill.backfill(in: context)
+        try RetainedBytesBackfill.backfillLegacy(in: context)
         let firstPass = try MigrationSeeding.bytesSnapshots(context)
         #expect(firstPass.count == seeded.count)
 
-        try RetainedBytesBackfill.backfill(in: context)
+        try RetainedBytesBackfill.backfillLegacy(in: context)
         let secondPass = try MigrationSeeding.bytesSnapshots(context)
         #expect(secondPass == firstPass)
         #expect(secondPass.count == seeded.count)
@@ -281,7 +281,7 @@ struct HistoryMigrationTests {
             row.bytesSchemaVersion = 99
         }
         try context.save()
-        try RetainedBytesBackfill.backfill(in: context)
+        try RetainedBytesBackfill.backfillLegacy(in: context)
         let thirdPass = try MigrationSeeding.bytesSnapshots(context)
         #expect(thirdPass == firstPass)
     }

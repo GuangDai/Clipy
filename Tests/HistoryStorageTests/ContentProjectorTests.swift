@@ -166,7 +166,7 @@ private func effectiveTextContent(
 
     let projection = ContentProjector.project(content)
 
-    #expect(projection.schemaVersion == 5)
+    #expect(projection.schemaVersion == 6)
     #expect(projection.title == "Visible sibling")
     #expect(projection.searchBody == "Visible sibling")
     #expect(
@@ -240,8 +240,8 @@ func externalUTF16ProjectionHonorsByteOrder(bytes: Data) {
     #expect(size.searchBodyUTF8Bytes == body.utf8.count)
 }
 
-@Test func ordinaryReadsRequireRecipeFiveAfterStartupRebuild() throws {
-    for rejectedVersion in [UInt16(1), 2, 3, 4, 9] {
+@Test func ordinaryReadsRequireRecipeSixAfterStartupRebuild() throws {
+    for rejectedVersion in [UInt16(1), 2, 3, 4, 5, 9] {
         #expect(throws: CodecRejection.unknownProjectionSchemaVersion(found: rejectedVersion)) {
             try ContentProjector.validateStoredProjection(
                 schemaVersion: rejectedVersion, title: "A", searchBody: "A", limits: .standard
@@ -249,8 +249,38 @@ func externalUTF16ProjectionHonorsByteOrder(bytes: Data) {
         }
     }
     let current = try ContentProjector.validateStoredProjection(
-        schemaVersion: 5, title: "A", searchBody: "A", limits: .standard
+        schemaVersion: 6, title: "A", searchBody: "A", limits: .standard
     )
     #expect(current.titleUTF8Bytes == 1)
     #expect(current.searchBodyUTF8Bytes == 1)
+}
+
+@Test(arguments: [Data(), Data([0xEF, 0xBB, 0xBF, 0x41]), Data("中🙂".utf8)])
+func storedTitleStrictDecodePreservesLiteralBytes(bytes: Data) throws {
+    let title = try ContentProjector.decodeStoredTitle(bytes, limits: .standard)
+    #expect(Data(title.utf8) == bytes)
+}
+
+@Test(arguments: [Data([0xFF]), Data([0xC3]), Data([0xED, 0xA0, 0x80])])
+func storedTitleStrictDecodeRejectsMalformedUTF8(bytes: Data) {
+    #expect(throws: CodecRejection.invalidStoredTitleUTF8) {
+        try ContentProjector.decodeStoredTitle(bytes, limits: .standard)
+    }
+}
+
+@Test func storedTitleByteBoundPrecedesUTF8Decoding() throws {
+    let bound = HistoryLimits.standard.maximumStoredTitleUTF8Bytes
+    let validAtBound = Data(repeating: 0x61, count: bound)
+    let title = try ContentProjector.decodeStoredTitle(validAtBound, limits: .standard)
+    #expect(Data(title.utf8) == validAtBound)
+
+    // Both valid and malformed over-bound storage must fail on the byte
+    // bound first, without repair, truncation or attempted string decoding.
+    for byte in [UInt8(0x61), 0xFF] {
+        #expect(throws: CodecRejection.storedTitleExceedsBound(found: bound + 1, bound: bound)) {
+            try ContentProjector.decodeStoredTitle(
+                Data(repeating: byte, count: bound + 1), limits: .standard
+            )
+        }
+    }
 }

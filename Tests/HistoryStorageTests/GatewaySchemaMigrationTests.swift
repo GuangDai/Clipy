@@ -48,7 +48,7 @@ struct GatewaySchemaMigrationTests {
                 == Set(expected.items.map { $0.id })
         )
 
-        // A second public reopen proves an already-V3 store runs no stage.
+        // A second public reopen proves an already-V5 store runs no stage.
         let reopened = try await WSSupport.openHistory(storeURL: storeURL)
         let reopenedPage = try await reopened.browse(HistoryBrowseRequest(
             kind: .recent,
@@ -59,13 +59,23 @@ struct GatewaySchemaMigrationTests {
                 == Set(expected.items.map { $0.id })
         )
 
-        // Independent row-level verification: neither migration nor either
-        // public startup/reopen rewrote any pre-existing V2 field. Exact
-        // Gateway bootstrap values are covered by GatewayBootstrapTests.
+        // Startup advances the derived recipe and initializes titleUTF8;
+        // every other existing V2 field remains unchanged. Exact Gateway
+        // bootstrap values are covered by GatewayBootstrapTests.
         let assertionContext = ModelContext(
             try WSSupport.makeContainer(storeURL: storeURL)
         )
-        #expect(try ExistingV2RowsSnapshot.read(assertionContext) == expected)
+        var expectedAfterStartup = expected
+        for index in expectedAfterStartup.items.indices {
+            expectedAfterStartup.items[index].projectionSchemaVersion = 6
+        }
+        #expect(try ExistingV2RowsSnapshot.read(assertionContext) == expectedAfterStartup)
+        let expectedTitles = Dictionary(uniqueKeysWithValues:
+            expected.items.map { ($0.id, Data($0.title.utf8)) }
+        )
+        for row in try assertionContext.fetch(FetchDescriptor<HistoryItemRow>()) {
+            #expect(row.titleUTF8 == expectedTitles[row.id])
+        }
         try GatewayStoreSnapshot.read(in: assertionContext)
             .expectX3DenyByDefaultBootstrap()
     }
@@ -85,15 +95,22 @@ struct GatewaySchemaMigrationTests {
         let context = ModelContext(container)
         context.autosaveEnabled = false
 
-        _ = try await MigrationSeeding.seedV1Store(into: context)
-        try RetainedBytesBackfill.backfill(in: context)
-        // Seed a true current V2 production shape. The V2 → V3 migration
-        // proof must not be confounded by the separate startup recipe-v1 →
-        // recipe-v2 projection rebuild that public open intentionally owns.
-        try ContentProjectionRebuild.rebuildIfNeeded(
-            in: context,
-            limits: .standard
-        )
+        let seeded = try await MigrationSeeding.seedV1Store(into: context)
+        try RetainedBytesBackfill.backfillLegacy(in: context)
+        // Literal recipe-2 projections of these three ASCII fixtures. Beta's
+        // active revision, not its Canonical text+PNG, supplies its metadata.
+        // Do not invoke the current V5-row rebuild in an immutable V2 context.
+        let effectiveTexts = [
+            "migration item alpha", "beta revision two body", "migration item gamma"
+        ]
+        for (item, effectiveText) in zip(seeded, effectiveTexts) {
+            item.row.projectionSchemaVersion = 2
+            item.row.title = effectiveText
+            item.row.searchBody = effectiveText
+            item.row.effectiveTypeIdentifiersBlob = try EffectiveTypeIdentifiersBlobCodec.encode(
+                ["public.utf8-plain-text"]
+            )
+        }
         context.insert(RetentionExpansionConfigRow(
             key: "retention-expansion",
             agePolicyEnabled: false,
@@ -106,7 +123,7 @@ struct GatewaySchemaMigrationTests {
             configSchemaVersion: 1
         ))
         try context.save()
-        return try ExistingV2RowsSnapshot.read(context)
+        return try ExistingV2RowsSnapshot.readLegacy(context)
     }
 
     private static func expectGatewayTablesEmpty(
@@ -122,18 +139,29 @@ struct GatewaySchemaMigrationTests {
 /// Value-only migration oracle. Raw `Data` fields are copied and compared
 /// directly; no checksum or codec-derived surrogate stands in for the bytes.
 private struct ExistingV2RowsSnapshot: Equatable {
-    let items: [ExistingItemSnapshot]
+    var items: [ExistingItemSnapshot]
     let positions: [ExistingPositionSnapshot]
     let retentionConfigs: [ExistingRetentionConfigSnapshot]
     let retainedBytes: [ExistingRetainedBytesSnapshot]
 
     static func read(_ context: ModelContext) throws -> ExistingV2RowsSnapshot {
         let items = try context.fetch(FetchDescriptor<HistoryItemRow>())
+        return try read(context, items: items.map(ExistingItemSnapshot.init))
+    }
+
+    static func readLegacy(_ context: ModelContext) throws -> ExistingV2RowsSnapshot {
+        let items = try context.fetch(FetchDescriptor<HistorySchemaV1.HistoryItemRow>())
+        return try read(context, items: items.map(ExistingItemSnapshot.init))
+    }
+
+    private static func read(
+        _ context: ModelContext, items: [ExistingItemSnapshot]
+    ) throws -> ExistingV2RowsSnapshot {
         let positions = try context.fetch(FetchDescriptor<LastChangePositionRow>())
         let configs = try context.fetch(FetchDescriptor<RetentionExpansionConfigRow>())
         let retainedBytes = try context.fetch(FetchDescriptor<RetainedBytesRow>())
         return ExistingV2RowsSnapshot(
-            items: items.map(ExistingItemSnapshot.init).sorted {
+            items: items.sorted {
                 $0.id.uuidString < $1.id.uuidString
             },
             positions: positions.map(ExistingPositionSnapshot.init).sorted {
@@ -155,7 +183,7 @@ private struct ExistingItemSnapshot: Equatable {
     let canonicalBlob: Data
     let revisionStateBlob: Data
     let canonicalSignatureBlob: Data
-    let projectionSchemaVersion: UInt16
+    var projectionSchemaVersion: UInt16
     let title: String
     let searchBody: String
     let effectiveTypeIdentifiersBlob: Data
@@ -167,6 +195,24 @@ private struct ExistingItemSnapshot: Equatable {
     let pinOrdinal: Int?
 
     init(_ row: HistoryItemRow) {
+        id = row.id
+        contentVersionRaw = row.contentVersionRaw
+        canonicalBlob = row.canonicalBlob
+        revisionStateBlob = row.revisionStateBlob
+        canonicalSignatureBlob = row.canonicalSignatureBlob
+        projectionSchemaVersion = row.projectionSchemaVersion
+        title = row.title
+        searchBody = row.searchBody
+        effectiveTypeIdentifiersBlob = row.effectiveTypeIdentifiersBlob
+        firstCopiedAt = row.firstCopiedAt
+        lastCopiedAt = row.lastCopiedAt
+        copyCount = row.copyCount
+        firstSource = row.firstSource
+        lastSource = row.lastSource
+        pinOrdinal = row.pinOrdinal
+    }
+
+    init(_ row: HistorySchemaV1.HistoryItemRow) {
         id = row.id
         contentVersionRaw = row.contentVersionRaw
         canonicalBlob = row.canonicalBlob

@@ -81,7 +81,7 @@ struct TrueRestartChildTests {
         _ damage: RetentionConfigDamage,
         at storeURL: URL
     ) throws {
-        let schema = Schema(versionedSchema: HistorySchemaV4.self)
+        let schema = Schema(versionedSchema: HistorySchemaV5.self)
         let container = try ModelContainer(
             for: schema,
             migrationPlan: HistoryMigrationPlan.self,

@@ -33,7 +33,7 @@ import HistoryDomain
 /// unique, non-empty type summary of the projected content.
 internal struct ContentProjection: Sendable {
     /// Projection schema version; exactly `ContentProjector.schemaVersion`
-    /// (projection recipe v5 = 5) for every newly projected value.
+    /// (projection recipe v6 = 6) for every newly projected value.
     internal let schemaVersion: UInt16
     /// First eligible textual line, otherwise eligible reference metadata or
     /// a stable type-based fallback (§15).
@@ -64,13 +64,13 @@ internal struct StoredProjectionSize: Equatable, Sendable {
 /// URL/file reference metadata without following the reference. Other
 /// encoding-unspecified, abstract, and structured text formats remain opaque.
 internal enum ContentProjector {
-    /// Recipe 5 adds inert reference metadata when neither a textual title
-    /// nor a known image owns the projection. Startup rebuilds recipes 1–4
-    /// using their unchanged Canonical/revision bytes (§15).
-    internal static let schemaVersion: UInt16 = 5
+    /// Recipe 6 stores the unchanged projected title as literal UTF-8 bytes.
+    /// Startup rebuilds recipes 1–5 from their validated Canonical/revision
+    /// bytes, never from a potentially lossy legacy String title (§15).
+    internal static let schemaVersion: UInt16 = 6
 
     /// The original recipe used by legacy migration fixtures. Startup also
-    /// accepts recipes 2–4; ordinary reads accept only recipe 5 (§13, §15).
+    /// accepts recipes 2–5; ordinary reads accept only recipe 6 (§13, §15).
     internal static let legacySchemaVersion: UInt16 = 1
 
     // MARK: Stored projection validation (docs/05-authority-kernel.md §4)
@@ -82,6 +82,26 @@ internal enum ContentProjector {
         guard found == schemaVersion else {
             throw CodecRejection.unknownProjectionSchemaVersion(found: found)
         }
+    }
+
+    /// Decodes the bounded literal title bytes without Foundation's encoding
+    /// interpretation. Empty bytes are a valid empty title; a leading U+FEFF
+    /// is content, not a byte-order marker to strip. Reject oversize input
+    /// before decoding, and never repair malformed UTF-8 (§4, §15).
+    internal static func decodeStoredTitle(
+        _ bytes: Data,
+        limits: HistoryLimits
+    ) throws -> String {
+        guard bytes.count <= limits.maximumStoredTitleUTF8Bytes else {
+            throw CodecRejection.storedTitleExceedsBound(
+                found: bytes.count,
+                bound: limits.maximumStoredTitleUTF8Bytes
+            )
+        }
+        guard let title = String(validating: bytes, as: UTF8.self) else {
+            throw CodecRejection.invalidStoredTitleUTF8
+        }
+        return title
     }
 
     /// Re-validates a durable title at its read boundary. The write-side

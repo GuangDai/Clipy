@@ -1,6 +1,6 @@
-/// Projection recipes v1/v2/v3/v4 → v5 startup rebuild.
+/// Projection recipes v1/v2/v3/v4/v5 → v6 startup rebuild.
 /// Owning spec: docs/05-authority-kernel.md §13 (startup order), §15
-/// (recipe v5 and the projection-only rebuild boundary).
+/// (recipe v6 and the projection-only rebuild boundary).
 import Foundation
 import HistoryCore
 import HistoryDomain
@@ -19,8 +19,8 @@ internal enum ContentProjectionRebuild {
 
     /// Rebuilds every legacy projection row before the facade is published.
     ///
-    /// The complete row set is bounded before any write. Only tags 1–5
-    /// are understood: v5 rows are left untouched, while each v1/v2/v3/v4 row is
+    /// The complete row set is bounded before any write. Only tags 1–6
+    /// are understood: v6 rows are left untouched, while each v1–v5 row is
     /// derived again from validated Canonical/revision bytes. All legacy scalar
     /// replacements share one transaction, so a later invalid source or a
     /// transaction interruption publishes none of them. Source rejection
@@ -49,7 +49,7 @@ internal enum ContentProjectionRebuild {
 
         for row in rows {
             switch row.projectionSchemaVersion {
-            case ContentProjector.legacySchemaVersion, 2, 3, 4:
+            case ContentProjector.legacySchemaVersion, 2, 3, 4, 5:
                 continue
             case ContentProjector.schemaVersion:
                 continue
@@ -118,7 +118,7 @@ internal enum ContentProjectionRebuild {
             try context.transaction {
                 for (mutationIndex, replacement) in replacements.enumerated() {
                     let row = rows[replacement.rowIndex]
-                    row.title = replacement.projection.title
+                    row.titleUTF8 = Data(replacement.projection.title.utf8)
                     row.searchBody = replacement.projection.searchBody
                     row.effectiveTypeIdentifiersBlob = replacement.identifiersBlob
                     row.projectionSchemaVersion = replacement.projection.schemaVersion

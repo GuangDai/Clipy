@@ -25,7 +25,7 @@ import Testing
     // item, first/last occurrence summary, and no pin (`nil` is unpinned,
     // §3.1). Blob columns hold opaque versioned payload bytes (§4); the smoke
     // test does not interpret them.
-    let item = HistoryItemRow(
+    let item = HistorySchemaV1.HistoryItemRow(
         id: itemID,
         contentVersionRaw: 1,
         canonicalBlob: Data([0x01, 0x02]),
@@ -54,7 +54,7 @@ import Testing
     context.insert(singleton)
     try context.save()
 
-    let items = try context.fetch(FetchDescriptor<HistoryItemRow>())
+    let items = try context.fetch(FetchDescriptor<HistorySchemaV1.HistoryItemRow>())
     #expect(items.count == 1)
     let fetchedItem = try #require(items.first)
     #expect(fetchedItem.id == itemID)

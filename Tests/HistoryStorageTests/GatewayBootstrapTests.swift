@@ -68,7 +68,7 @@ struct GatewayBootstrapTests {
     private static func makePersistentContainer(
         at storeURL: URL
     ) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: HistorySchemaV4.self)
+        let schema = Schema(versionedSchema: HistorySchemaV5.self)
         return try ModelContainer(
             for: schema,
             migrationPlan: HistoryMigrationPlan.self,
@@ -206,7 +206,7 @@ struct GatewayBootstrapTests {
     @Test("internal UUID source makes the one-time durable identity deterministic")
     func internalUUIDSourceIsDeterministic() async throws {
         let expectedConnectionID = Self.injectedConnectionID
-        let schema = Schema(versionedSchema: HistorySchemaV4.self)
+        let schema = Schema(versionedSchema: HistorySchemaV5.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(

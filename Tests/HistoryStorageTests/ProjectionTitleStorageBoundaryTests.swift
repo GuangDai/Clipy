@@ -37,12 +37,12 @@ struct ProjectionTitleStorageBoundaryTests {
         )
         #expect(Data(encoded.stored.projection.title.utf8) == expectedTitle, "after real capture encoding")
         let row = HistoryAuthority.makeRow(for: encoded.stored)
-        #expect(Data(row.title.utf8) == expectedTitle, "after production model initialization, before insertion")
+        #expect(row.titleUTF8 == expectedTitle, "after production model initialization, before insertion")
 
         // This isolated schema round trip distinguishes an accessor/insert
         // change from a transaction-save or fresh-context materialization
         // change. Public capture/revise/search remain covered by the journey.
-        let schema = Schema(versionedSchema: HistorySchemaV4.self)
+        let schema = Schema(versionedSchema: HistorySchemaV5.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -51,16 +51,20 @@ struct ProjectionTitleStorageBoundaryTests {
         context.autosaveEnabled = false
         try context.transaction {
             context.insert(row)
-            #expect(Data(row.title.utf8) == expectedTitle, "after insertion, before transaction save")
+            #expect(row.titleUTF8 == expectedTitle, "after insertion, before transaction save")
         }
-        #expect(Data(row.title.utf8) == expectedTitle, "same model after transaction save")
+        #expect(row.titleUTF8 == expectedTitle, "same model after transaction save")
         #expect(Data(row.searchBody.utf8) == expectedBody)
 
         let freshContext = ModelContext(container)
         freshContext.autosaveEnabled = false
         let rows = try freshContext.fetch(FetchDescriptor<HistoryItemRow>())
         let reloaded = try #require(rows.count == 1 ? rows.first : nil)
-        #expect(Data(reloaded.title.utf8) == expectedTitle, "fresh context materialization")
+        #expect(reloaded.titleUTF8 == expectedTitle, "fresh context materialization")
+        let decodedTitle = try ContentProjector.decodeStoredTitle(
+            reloaded.titleUTF8, limits: .standard
+        )
+        #expect(Data(decodedTitle.utf8) == expectedTitle, "strict title decode preserves every scalar")
         #expect(Data(reloaded.searchBody.utf8) == expectedBody)
         #expect(reloaded.canonicalBlob == encoded.stored.canonicalBlob)
         #expect(reloaded.revisionStateBlob == encoded.stored.revisionStateBlob)

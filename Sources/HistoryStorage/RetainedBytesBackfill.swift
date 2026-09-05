@@ -143,11 +143,60 @@ internal enum RetainedBytesBackfill {
             throw HistoryFailure.persistence(.invariantViolation)
         }
 
-        var itemIDs = Set<UUID>(minimumCapacity: items.count)
+        let existingByItemID = try existingRows(
+            for: Set(items.map(\.id)), in: context
+        )
+        var computed: [ComputedBytes] = []
+        computed.reserveCapacity(items.count)
         for item in items {
-            itemIDs.insert(item.id)
+            try appendComputed(
+                itemID: item.id,
+                signatureBlob: item.canonicalSignatureBlob,
+                canonicalBlob: item.canonicalBlob,
+                revisionBlob: item.revisionStateBlob,
+                to: &computed
+            )
+        }
+        try rewrite(computed, replacing: existingByItemID, in: context)
+    }
+
+    /// The V1→V2 custom hop still owns the historical item model. Current
+    /// runtime recovery uses `backfill(in:)`; changing either fetch to the
+    /// other schema's model would leave one caller without its retained rows.
+    internal static func backfillLegacy(in context: ModelContext) throws {
+        let limits = HistoryLimits.standard
+        var itemDescriptor = FetchDescriptor<HistorySchemaV1.HistoryItemRow>()
+        itemDescriptor.fetchLimit = limits.hardMaximumRetainedItems + 1
+        let items: [HistorySchemaV1.HistoryItemRow]
+        do {
+            items = try context.fetch(itemDescriptor)
+        } catch {
+            throw HistoryFailure.persistence(.openStore)
+        }
+        guard items.count <= limits.hardMaximumRetainedItems else {
+            throw HistoryFailure.persistence(.invariantViolation)
         }
 
+        let existingByItemID = try existingRows(
+            for: Set(items.map(\.id)), in: context
+        )
+        var computed: [ComputedBytes] = []
+        computed.reserveCapacity(items.count)
+        for item in items {
+            try appendComputed(
+                itemID: item.id,
+                signatureBlob: item.canonicalSignatureBlob,
+                canonicalBlob: item.canonicalBlob,
+                revisionBlob: item.revisionStateBlob,
+                to: &computed
+            )
+        }
+        try rewrite(computed, replacing: existingByItemID, in: context)
+    }
+
+    private static func existingRows(
+        for itemIDs: Set<UUID>, in context: ModelContext
+    ) throws -> [UUID: RetainedBytesRow] {
         // Existing projection rows, keyed by the 1:1 business ID. A
         // duplicate ID cannot occur through the `.unique` attribute and the
         // single-writer rule; an overwrite in the dictionary would itself
@@ -173,67 +222,80 @@ internal enum RetainedBytesBackfill {
             }
             existingByItemID[row.itemID] = row
         }
+        return existingByItemID
+    }
 
+    /// Decode only the current item's sources. The accumulated array holds
+    /// scalars, never raw blobs or decoded content from earlier items.
+    private static func appendComputed(
+        itemID: UUID,
+        signatureBlob: Data,
+        canonicalBlob: Data,
+        revisionBlob: Data,
+        to computed: inout [ComputedBytes]
+    ) throws {
         // Compute every projection from the blobs BEFORE any write, so a
         // codec rejection leaves the store untouched. The codec bounds
         // (Canonical <= 128 MiB per capture, revision bytes <= 256 MiB per
         // item, 06 §2) keep every sum far below Int overflow.
-        var computed: [ComputedBytes] = []
-        computed.reserveCapacity(items.count)
-        for item in items {
-            // Decode both durable copies before deriving a scalar. The
-            // Canonical decode is also required by revision containment, so
-            // DATA-11's coverage proof adds no blob read or second decode.
-            let signatureEntries = try mapCodecFailure {
-                try SignatureBlobCodec.decode(item.canonicalSignatureBlob)
-            }
-            let canonical = try mapCodecFailure {
-                try CanonicalBlobCodec.decode(item.canonicalBlob)
-            }
-            try mapCodecFailure {
-                try SignatureBlobCodec.validateCoverage(
-                    canonical: canonical,
-                    entries: signatureEntries
-                )
-            }
-
-            // canonicalBytes: coverage-validated stored per-entry byte
-            // counts, never the JSON framing of either blob.
-            var canonicalBytes = 0
-            for entry in signatureEntries {
-                canonicalBytes += entry.byteCount
-            }
-
-            // The revision decode requires the Canonical type set for its
-            // §4 containment check (one decode per blob, Record 5).
-            let revisionState = try mapCodecFailure {
-                try RevisionStateBlobCodec.decode(
-                    item.revisionStateBlob,
-                    canonical: canonical
-                )
-            }
-            var revisionBytes = 0
-            for revision in revisionState.revisions {
-                for representation in revision.content.representations {
-                    revisionBytes += representation.bytes.count
-                }
-            }
-            computed.append(ComputedBytes(
-                itemID: item.id,
-                canonicalBytes: canonicalBytes,
-                revisionCount: revisionState.revisions.count,
-                revisionBytes: revisionBytes
-            ))
-#if DEBUG
-            // RET-PLATFORM-1b(e) seam call: a no-op unless the environment
-            // armed it (see `MigrationBackfillAbortProbe` above); compiled
-            // out of release builds entirely.
-            MigrationBackfillAbortProbe.abortIfArmed(
-                afterComputedRows: computed.count
+        // Decode both durable copies before deriving a scalar. The
+        // Canonical decode is also required by revision containment, so
+        // DATA-11's coverage proof adds no blob read or second decode.
+        let signatureEntries = try mapCodecFailure {
+            try SignatureBlobCodec.decode(signatureBlob)
+        }
+        let canonical = try mapCodecFailure {
+            try CanonicalBlobCodec.decode(canonicalBlob)
+        }
+        try mapCodecFailure {
+            try SignatureBlobCodec.validateCoverage(
+                canonical: canonical,
+                entries: signatureEntries
             )
-#endif
         }
 
+        // canonicalBytes: coverage-validated stored per-entry byte
+        // counts, never the JSON framing of either blob.
+        var canonicalBytes = 0
+        for entry in signatureEntries {
+            canonicalBytes += entry.byteCount
+        }
+
+        // The revision decode requires the Canonical type set for its
+        // §4 containment check (one decode per blob, Record 5).
+        let revisionState = try mapCodecFailure {
+            try RevisionStateBlobCodec.decode(
+                revisionBlob,
+                canonical: canonical
+            )
+        }
+        var revisionBytes = 0
+        for revision in revisionState.revisions {
+            for representation in revision.content.representations {
+                revisionBytes += representation.bytes.count
+            }
+        }
+        computed.append(ComputedBytes(
+            itemID: itemID,
+            canonicalBytes: canonicalBytes,
+            revisionCount: revisionState.revisions.count,
+            revisionBytes: revisionBytes
+        ))
+#if DEBUG
+        // RET-PLATFORM-1b(e) seam call: a no-op unless the environment
+        // armed it (see `MigrationBackfillAbortProbe` above); compiled
+        // out of release builds entirely.
+        MigrationBackfillAbortProbe.abortIfArmed(
+            afterComputedRows: computed.count
+        )
+#endif
+    }
+
+    private static func rewrite(
+        _ computed: [ComputedBytes],
+        replacing existingByItemID: [UUID: RetainedBytesRow],
+        in context: ModelContext
+    ) throws {
         // The rewrite: one ModelContext.transaction owns every delete+insert
         // (the §10 atomicity discipline; closure success is the durable
         // boundary), exactly like the v1 singleton create's transaction.

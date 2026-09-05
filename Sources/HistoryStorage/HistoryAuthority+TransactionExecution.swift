@@ -283,7 +283,7 @@ extension HistoryAuthority {
             row.contentVersionRaw = update.nextVersion.rawValue
             row.revisionStateBlob = update.revisionStateBlob
             row.projectionSchemaVersion = update.projection.schemaVersion
-            row.title = update.projection.title
+            row.titleUTF8 = Data(update.projection.title.utf8)
             row.searchBody = update.projection.searchBody
             row.effectiveTypeIdentifiersBlob = update.effectiveTypeIdentifiersBlob
             // V2-02 §3.3b/§6.3 (roadmap R.3): the revise restamp — the
@@ -369,6 +369,7 @@ extension HistoryAuthority {
     /// The single mapping from an encoded create payload to the SwiftData
     /// model. Both durable-lookup and trusted fixture creates use it, so the
     /// performance seam cannot drift into a second row representation.
+    /// The current model stores the supplied title as exact UTF-8 bytes.
     internal static func makeRow(for item: StoredNewItem) -> HistoryItemRow {
         HistoryItemRow(
             id: item.id.rawValue,

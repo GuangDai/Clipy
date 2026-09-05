@@ -20,7 +20,7 @@ internal enum HistorySchemaV2: VersionedSchema {
 
     static var models: [any PersistentModel.Type] {
         [
-            HistoryItemRow.self,
+            HistorySchemaV1.HistoryItemRow.self,
             LastChangePositionRow.self,
             RetentionExpansionConfigRow.self,
             RetainedBytesRow.self

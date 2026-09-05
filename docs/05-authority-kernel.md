@@ -78,19 +78,29 @@ durable check/audit to `HistoryAuthority`; it never creates a `ModelContext`.
 X.5 stores this internal denial module only after startup succeeds. The public
 connection-bound facade remains absent until X.6 completes granted dispatch.
 
-### 3. SwiftData schema v1
+### 3. SwiftData schema
 
 All model types are internal to `HistoryStorage`.
 
-The v1 schema (`HistorySchemaV1`) is the `Schema` containing exactly `HistoryItemRow` and `LastChangePositionRow`, registered with the `ModelContainer` at `open` time:
+The frozen v1 schema (`HistorySchemaV1`) contains exactly its original
+`HistoryItemRow` and `LastChangePositionRow`:
 
 ```swift
-internal let v1Schema = Schema(HistoryItemRow.self, LastChangePositionRow.self)
+internal let v1Schema = Schema(HistorySchemaV1.HistoryItemRow.self, LastChangePositionRow.self)
 ```
 
-`HistorySchemaV1` is also the conceptual version label referenced by the Part V §17 migration stance; a future schema change increments it and adds a migration plan.
+V2–V4 retain that same item shape while adding retention, Gateway and journal
+tables. Current `open` targets `HistorySchemaV5` through the ordered migration
+plan. Its item model adds `titleUTF8: Data` with an empty migration default;
+the old String `title` column remains a legacy migration field, not a second
+title authority. New items write only the UTF-8 title bytes and leave the
+legacy String empty. The V4→V5 lightweight stage preserves every existing
+column; the following startup projection rebuild derives the new title bytes
+from validated retained content before publishing the facade (§15).
 
 #### 3.1 History Item row
+
+The frozen V1–V4 item shape is:
 
 ```swift
 @Model
@@ -132,7 +142,14 @@ Semantic mapping:
 | `canonicalBlob` | Immutable Canonical representations including per-representation fingerprint evidence. |
 | `revisionStateBlob` | Full revision list plus active Revision ID. The active revision's bytes are present whenever `activeRevisionID` is non-nil; for a Canonical-state item (`activeRevisionID == nil`) the revision list is empty and there are no revision bytes — Effective Content equals Canonical Content. |
 | `canonicalSignatureBlob` | Durable signature metadata used with authoritative Canonical bytes to rebuild the complete Signature Index in the current hard-capped profile. |
-| projection fields | Durable bounded projection of current Effective Content for list/search. |
+| projection fields | Durable bounded projection of current Effective Content for list/search. In V5 the authoritative title is `titleUTF8`; the legacy String `title` is not read by product operations. |
+
+Current title reads check the UTF-8 byte bound before strictly decoding
+`titleUTF8`, preserving every scalar including a leading U+FEFF. Invalid UTF-8
+fails as `.persistence(.corruptStoredValue)` through the existing codec mapping.
+Empty title bytes remain valid under the existing title contract. Scalar list
+and search reads fetch these bounded bytes, not the full Canonical/revision
+blobs. They do not fall back to the legacy String or rebuild per read.
 | occurrence fields | Full first/last time and source summary. |
 | `pinOrdinal` | Internal encoding of pinned order; `nil` is unpinned. |
 
@@ -745,7 +762,7 @@ invalidation, and exposes neither current retained-byte usage nor a
 
 - title: first eligible textual line after normalization; otherwise, when no known image is present, a valid copied reference supplies its decoded filename or original URL address before the stable type-based fallback;
 - search body: eligible textual representations in deterministic type order, normalized and truncated to the hard search-body bound; a reference supplying the title instead contributes its original address and non-empty decoded path, separated by a newline under the same normalization and byte bound;
-- plain-text decoding retains the recipe-v4 type-strict rules in recipe v5: only
+- plain-text decoding retains the recipe-v4 type-strict rules in recipe v6: only
   `public.utf8-plain-text` uses UTF-8. `public.utf16-plain-text` uses native
   UTF-16 (little-endian on arm64); `public.utf16-external-plain-text` uses
   external UTF-16 (big-endian without a BOM). Both honor a leading byte-order
@@ -791,19 +808,23 @@ Projection recipe v2 removed guessed text decoding. Recipe v3 corrects the
 external UTF-16 identifier and the native no-BOM byte order. Recipe v4 rejects
 odd-byte UTF-16 instead of accepting a decodable prefix and discarding the
 trailing byte. Recipe v5 adds inert reference metadata to previously generic
-File/URL projections. `HistoryItemRow` already carries the consistency fence, so this
-is not a SwiftData schema change and does not add a schema-migration stage.
+File/URL projections. Recipe v6 retains those projection algorithms and changes
+durable title storage to UTF-8 bytes in schema V5: fresh-context materialization
+of the old String field lost a leading U+FEFF in the real storage journey.
+The schema migration is additive, and the existing projection version makes
+every recipe 1–5 row eligible for source-based rebuild, including recipe 5
+rows whose legacy title already lost that character.
 During `SwiftDataHistory.open`, after
 singleton bootstrap and before Signature Index publication or capture, the
 Authority fetches at most the hard retained-item bound plus one, accepts only
-projection tags 1, 2, 3, 4, and 5, then derives every v1/v2/v3/v4 replacement from
+projection tags 1, 2, 3, 4, 5, and 6, then derives every v1–v5 replacement from
 validated Canonical/revision bytes before entering one `ModelContext.transaction` that
-updates only the derived title, search body, effective-type blob, and tag.
+updates only the derived `titleUTF8`, search body, effective-type blob, and tag.
 Raw Canonical/revision bytes, Content Version, Change Position, and signature
 state remain unchanged. Malformed text is skipped by the projector while its
 raw representation stays retained. Source blob decode failure, an unknown tag,
-or transaction failure leaves no partially published v5 set and fails the open.
-Ordinary reads accept only v5. The rebuild preserves unknown representation
+or transaction failure leaves no partially published v6 set and fails the open.
+Ordinary reads accept only v6. The rebuild preserves unknown representation
 bytes even when their old guessed title/search text is removed.
 
 Future changes to textual decoding, normalization, title, or body derivation

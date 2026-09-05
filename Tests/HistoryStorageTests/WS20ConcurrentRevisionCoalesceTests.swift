@@ -226,7 +226,7 @@ private static func replaceRequest(
     #expect(activeRevision.content.representations.map(\.bytes) == [Data(revisedText.utf8)])
     // The §15 durable projection was restamped from the revised Effective
     // Content (single-line text: title == body == text, as in WS1).
-    #expect(row.title == revisedText)
+    #expect(row.titleUTF8 == Data(revisedText.utf8))
     #expect(row.searchBody == revisedText)
 
     // WS20: the durable singleton matches the three commits (06 §7.1: one
@@ -343,7 +343,7 @@ private static func replaceRequest(
     #expect(activeRevision.content.representations.map(\.bytes) == [Data(secondRevisedText.utf8)])
     // The §15 durable projection reflects the SECOND revision's Effective
     // Content.
-    #expect(row.title == secondRevisedText)
+    #expect(row.titleUTF8 == Data(secondRevisedText.utf8))
     #expect(row.searchBody == secondRevisedText)
 
     // WS20: exactly two History Commits happened (insert + the second

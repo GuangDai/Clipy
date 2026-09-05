@@ -35,9 +35,9 @@ import SwiftData
 ///
 /// These are the hydration entry points the step-6 loaders (pin/unpin,
 /// revision, remove, clear, retention) reuse; the projection fields
-/// (`title`, `searchBody`, `effectiveTypeIdentifiersBlob`) are deliberately
-/// not decoded here — they belong to the read paths (§14), not to fact
-/// loading.
+/// (`titleUTF8`, `searchBody`) are validated before lineage hydration;
+/// presentation of these fields and the effective-type projection belongs
+/// to the read paths (§14), not to Domain action facts.
 internal enum HistoryItemRowHydration {
     /// Selects the §16 availability vocabulary for the one complete retained
     /// inventory fetch. Most mutation loaders need the inventory as an action
@@ -105,10 +105,23 @@ internal enum HistoryItemRowHydration {
         _ row: HistoryItemRow,
         limits: HistoryLimits = .standard
     ) throws -> HistoryItemState {
+        try hydrateWithTitle(row, limits: limits).item
+    }
+
+    /// Details also needs the current projection. Return the title decoded
+    /// during the same validation interval, without hydrating lineage twice.
+    internal static func hydrateWithTitle(
+        _ row: HistoryItemRow,
+        limits: HistoryLimits = .standard
+    ) throws -> (item: HistoryItemState, title: String) {
+        let titleUTF8 = row.titleUTF8
+        let title = try mapCodecFailure {
+            try ContentProjector.decodeStoredTitle(titleUTF8, limits: limits)
+        }
         _ = try mapCodecFailure {
             try ContentProjector.validateStoredProjection(
                 schemaVersion: row.projectionSchemaVersion,
-                title: row.title,
+                title: title,
                 searchBody: row.searchBody,
                 limits: limits
             )
@@ -148,7 +161,7 @@ internal enum HistoryItemRowHydration {
         let pinOrdinal = try mapCodecFailure {
             try RevisionStateBlobCodec.decodePinOrdinal(row.pinOrdinal)
         }
-        return HistoryItemState(
+        let item = HistoryItemState(
             id: HistoryItemID(rawValue: row.id),
             contentVersion: contentVersion,
             canonical: canonical,
@@ -157,6 +170,7 @@ internal enum HistoryItemRowHydration {
             occurrence: occurrence,
             pinOrdinal: pinOrdinal
         )
+        return (item, title)
     }
 
     /// Projects one already-fetched row to its retention-relevant scalar

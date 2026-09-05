@@ -21,7 +21,7 @@ struct HistorySchemaAnchorTests {
     func modelSetMatchesV1Rows() {
         let anchored = Set(HistorySchemaV1.models.map { "\($0)" })
         let v1Rows: Set<String> = [
-            "\(HistoryItemRow.self)",
+            "\(HistorySchemaV1.HistoryItemRow.self)",
             "\(LastChangePositionRow.self)"
         ]
         #expect(anchored == v1Rows)
@@ -61,7 +61,7 @@ struct HistorySchemaAnchorTests {
             key: "retained-history", rawValue: 0, maximumUnpinnedItems: 100
         )
         anchorContext.insert(row)
-        let item = HistoryItemRow(
+        let item = HistorySchemaV1.HistoryItemRow(
             id: UUID(), contentVersionRaw: 1,
             canonicalBlob: Data([0]), revisionStateBlob: Data([0]),
             canonicalSignatureBlob: Data([0]),
@@ -76,7 +76,7 @@ struct HistorySchemaAnchorTests {
         try v1Context.save()
 
         #expect(try anchorContext.fetchCount(FetchDescriptor<LastChangePositionRow>()) == 1)
-        #expect(try v1Context.fetchCount(FetchDescriptor<HistoryItemRow>()) == 1)
+        #expect(try v1Context.fetchCount(FetchDescriptor<HistorySchemaV1.HistoryItemRow>()) == 1)
         #expect(row.maximumUnpinnedItems == 100)
         #expect(item.contentVersionRaw == 1)
     }

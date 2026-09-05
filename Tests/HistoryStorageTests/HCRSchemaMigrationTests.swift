@@ -19,7 +19,7 @@ struct HCRSchemaMigrationTests {
         #expect(HistorySchemaV4.models.count == 10)
         let currentSchema = HistoryMigrationPlan.schemas.last
         #expect(currentSchema.map { ObjectIdentifier($0) }
-            == ObjectIdentifier(HistorySchemaV4.self))
+            == ObjectIdentifier(HistorySchemaV5.self))
     }
 
     @Test("V4 round-trips the exact journal row surfaces")
@@ -90,10 +90,10 @@ struct HCRSchemaMigrationTests {
             context.autosaveEnabled = false
             Self.insertLiteralV3Rows(in: context)
             try context.save()
-            expected = try LiteralV3Snapshot.read(context)
+            expected = try LiteralV3Snapshot.readLegacy(context)
         }
 
-        let schema = Schema(versionedSchema: HistorySchemaV4.self)
+        let schema = Schema(versionedSchema: HistorySchemaV5.self)
         let migrated = try ModelContainer(
             for: schema,
             migrationPlan: HistoryMigrationPlan.self,
@@ -105,6 +105,10 @@ struct HCRSchemaMigrationTests {
         )
         let context = ModelContext(migrated)
         #expect(try LiteralV3Snapshot.read(context) == expected)
+        // Container migration preserves the opaque legacy fields. The new
+        // title bytes remain empty until the separate public startup rebuild.
+        #expect(try context.fetch(FetchDescriptor<HistoryItemRow>())
+            .allSatisfy { $0.titleUTF8.isEmpty })
         #expect(try context.fetchCount(
             FetchDescriptor<HistoryChangeRecordRow>()
         ) == 0)
@@ -120,7 +124,7 @@ struct HCRSchemaMigrationTests {
         )!
         let first = Date(timeIntervalSinceReferenceDate: 902_100_001)
         let last = Date(timeIntervalSinceReferenceDate: 902_100_002)
-        context.insert(HistoryItemRow(
+        context.insert(HistorySchemaV1.HistoryItemRow(
             id: itemID,
             contentVersionRaw: 7,
             canonicalBlob: Data([0x11, 0x12]),
@@ -210,9 +214,18 @@ private struct LiteralV3Snapshot: Equatable {
     let gateway: GatewayStoreSnapshot
 
     static func read(_ context: ModelContext) throws -> Self {
+        try read(context, items: context.fetch(FetchDescriptor<HistoryItemRow>())
+            .map(LiteralItem.init))
+    }
+
+    static func readLegacy(_ context: ModelContext) throws -> Self {
+        try read(context, items: context.fetch(FetchDescriptor<HistorySchemaV1.HistoryItemRow>())
+            .map(LiteralItem.init))
+    }
+
+    private static func read(_ context: ModelContext, items: [LiteralItem]) throws -> Self {
         Self(
-            items: try context.fetch(FetchDescriptor<HistoryItemRow>())
-                .map(LiteralItem.init),
+            items: items,
             positions: try context.fetch(FetchDescriptor<LastChangePositionRow>())
                 .map(LiteralPosition.init),
             retention: try context.fetch(
@@ -243,6 +256,24 @@ private struct LiteralItem: Equatable {
     let pinOrdinal: Int?
 
     init(_ row: HistoryItemRow) {
+        id = row.id
+        contentVersionRaw = row.contentVersionRaw
+        canonicalBlob = row.canonicalBlob
+        revisionStateBlob = row.revisionStateBlob
+        canonicalSignatureBlob = row.canonicalSignatureBlob
+        projectionSchemaVersion = row.projectionSchemaVersion
+        title = row.title
+        searchBody = row.searchBody
+        effectiveTypeIdentifiersBlob = row.effectiveTypeIdentifiersBlob
+        firstCopiedAt = row.firstCopiedAt
+        lastCopiedAt = row.lastCopiedAt
+        copyCount = row.copyCount
+        firstSource = row.firstSource
+        lastSource = row.lastSource
+        pinOrdinal = row.pinOrdinal
+    }
+
+    init(_ row: HistorySchemaV1.HistoryItemRow) {
         id = row.id
         contentVersionRaw = row.contentVersionRaw
         canonicalBlob = row.canonicalBlob

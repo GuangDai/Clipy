@@ -72,7 +72,7 @@ struct ProjectionRecipeV5ReferenceRebuildTests {
         #expect(page.position == seeded.position)
         #expect(page.rows.map(\.item) == [seeded.details.item])
         let row = try #require(page.rows.first)
-        #expect(Data(row.title.utf8) == Data(fixture.title.utf8))
+        #expect(row.titleUTF8 == Data(fixture.title.utf8))
         #expect(row.typeIdentifiers == [fixture.typeIdentifier])
         let search = try await reopened.browse(HistoryBrowseRequest(
             kind: .search(text: fixture.searchNeedle, mode: .exact), limit: 10
@@ -148,7 +148,7 @@ struct ProjectionRecipeV5ReferenceRebuildTests {
         let original = ContentBytes(canonicalBlob: row.canonicalBlob, revisionStateBlob: row.revisionStateBlob)
         try context.transaction {
             row.projectionSchemaVersion = 4
-            row.title = title
+            row.titleUTF8 = Data(title.utf8)
             row.searchBody = ""
         }
         return original
@@ -159,8 +159,8 @@ struct ProjectionRecipeV5ReferenceRebuildTests {
         let context = ModelContext(container)
         let rows = try context.fetch(FetchDescriptor<HistoryItemRow>())
         let row = try #require(rows.count == 1 ? rows.first : nil)
-        #expect(row.projectionSchemaVersion == 5)
-        #expect(Data(row.title.utf8) == Data(fixture.title.utf8))
+        #expect(row.projectionSchemaVersion == 6)
+        #expect(row.titleUTF8 == Data(fixture.title.utf8))
         #expect(Data(row.searchBody.utf8) == Data(fixture.body.utf8))
         #expect(row.canonicalBlob == original.canonicalBlob)
         #expect(row.revisionStateBlob == original.revisionStateBlob)

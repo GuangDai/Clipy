@@ -67,7 +67,7 @@ struct TransactionBoundaryProofTests {
         let row = try #require(rows.first)
         #expect(row.id == reference.id.rawValue)
         #expect(row.contentVersionRaw == 1)
-        #expect(row.title == text)
+        #expect(row.titleUTF8 == Data(text.utf8))
         #expect(row.copyCount == 1)
         #expect(row.firstCopiedAt == observedAt)
         #expect(row.lastCopiedAt == observedAt)
@@ -121,7 +121,7 @@ struct TransactionBoundaryProofTests {
         }
         #expect(before.items.count == 1)
         #expect(before.items.map(\.id) == [firstReference.id.rawValue])
-        #expect(before.items.map(\.title) == [firstText])
+        #expect(before.items.map(\.titleUTF8) == [Data(firstText.utf8)])
         #expect(before.items.map(\.contentVersionRaw) == [1])
         #expect(before.items.map(\.copyCount) == [1])
         #expect(before.retainedBytes == [TransactionRetainedBytesSnapshot(
@@ -305,7 +305,7 @@ struct TransactionBoundaryProofTests {
         let verification = try WSSupport.makeContainer(storeURL: url)
         let rows = try WSSupport.fetchRows(verification)
         #expect(rows.count == 2)
-        #expect(Set(rows.map(\.title)) == [firstText, secondText])
+        #expect(Set(rows.map(\.titleUTF8)) == [Data(firstText.utf8), Data(secondText.utf8)])
 
         let position = try WSSupport.fetchPosition(verification)
         #expect(position.rawValue == 2)
@@ -377,6 +377,7 @@ struct TransactionItemSnapshot: Equatable, Sendable {
     let canonicalSignatureBlob: Data
     let projectionSchemaVersion: UInt16
     let title: String
+    let titleUTF8: Data
     let searchBody: String
     let effectiveTypeIdentifiersBlob: Data
     let firstCopiedAt: Date
@@ -394,6 +395,7 @@ struct TransactionItemSnapshot: Equatable, Sendable {
         canonicalSignatureBlob = row.canonicalSignatureBlob
         projectionSchemaVersion = row.projectionSchemaVersion
         title = row.title
+        titleUTF8 = row.titleUTF8
         searchBody = row.searchBody
         effectiveTypeIdentifiersBlob = row.effectiveTypeIdentifiersBlob
         firstCopiedAt = row.firstCopiedAt

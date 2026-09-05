@@ -77,7 +77,7 @@ struct RetainedBytesBackfillTests {
         context.insert(row)
         try context.save()
 
-        try RetainedBytesBackfill.backfill(in: context)
+        try RetainedBytesBackfill.backfillLegacy(in: context)
 
         let projections = try context.fetch(FetchDescriptor<RetainedBytesRow>())
         let projection = try #require(projections.first)
@@ -102,7 +102,7 @@ struct RetainedBytesBackfillTests {
         try context.save()
 
         #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
-            try RetainedBytesBackfill.backfill(in: context)
+            try RetainedBytesBackfill.backfillLegacy(in: context)
         }
         #expect(try context.fetchCount(FetchDescriptor<RetainedBytesRow>()) == 0)
     }
@@ -121,14 +121,14 @@ struct RetainedBytesBackfillTests {
     private func makeRow(
         canonicalBlob: Data? = nil,
         signatureBlob: Data
-    ) throws -> HistoryItemRow {
+    ) throws -> HistorySchemaV1.HistoryItemRow {
         let resolvedCanonicalBlob: Data
         if let canonicalBlob {
             resolvedCanonicalBlob = canonicalBlob
         } else {
             resolvedCanonicalBlob = try makeCanonicalBlob()
         }
-        return HistoryItemRow(
+        return HistorySchemaV1.HistoryItemRow(
             id: UUID(uuidString: "00000000-0000-0000-0000-00000000D011")!,
             contentVersionRaw: 1,
             canonicalBlob: resolvedCanonicalBlob,

@@ -304,7 +304,7 @@ private static func captureText(
         try WSSupport.fetchRows(container).first { $0.id == reference.id.rawValue }
     )
     #expect(row.searchBody.utf8.count == bound)
-    #expect(row.title.utf8.count <= HistoryLimits.standard.maximumStoredTitleUTF8Bytes)
+    #expect(row.titleUTF8.count <= HistoryLimits.standard.maximumStoredTitleUTF8Bytes)
     let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
     #expect(canonical.representations.map(\.content.bytes) == [Data(fullText.utf8)])
 }
@@ -342,8 +342,8 @@ private static func captureText(
     let row = try #require(
         try WSSupport.fetchRows(container).first { $0.id == reference.id.rawValue }
     )
-    #expect(row.title.utf8.count == bound)
-    #expect(row.title == expectedTitle)
+    #expect(row.titleUTF8.count == bound)
+    #expect(row.titleUTF8 == Data(expectedTitle.utf8))
 
     // The public read path (03b §8) reports the same bounded title.
     let page = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 10))

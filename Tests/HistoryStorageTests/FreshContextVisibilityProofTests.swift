@@ -79,7 +79,7 @@ struct FreshContextVisibilityProofTests {
     // §7.2: "sees the commit" — exactly one durable row.
     #expect(firstRows.count == 1, "§7.2: fresh container should see exactly one row after the first commit")
     let firstRow = try #require(firstRows.first)
-    #expect(firstRow.title == firstText, "§7.2: fresh container should see the committed row's title")
+    #expect(firstRow.titleUTF8 == Data(firstText.utf8), "§7.2: fresh container should see the committed row's title")
     #expect(firstRow.copyCount == 1, "§7.2: initial occurrence count is 1")
     // §7.2: the durable singleton matches the receipt's position.
     let firstPosition = try WSSupport.fetchPosition(firstVerification)

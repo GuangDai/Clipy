@@ -5,8 +5,8 @@
 /// What this pins: the CURRENT actual thrown classification of the public
 /// open path (03b §10 typed-failure vocabulary) for (a) a store created at a
 /// strictly future schema — one additive model beyond the shipped immutable
-/// V4 (`HistorySchemaV4`, DC-25), unreachable by `HistoryMigrationPlan`
-/// (`V2-02` §3.3 stage topology tops out at V4) — (b) a fixed non-SQLite
+/// V5 (`HistorySchemaV5`, 05 §3), unreachable by `HistoryMigrationPlan`
+/// (the shipped stage topology tops out at V5) — (b) a fixed non-SQLite
 /// byte literal at the store path, and (c) an EXISTING store directory whose
 /// owner write permission was removed (0500), so `ModelContainer` cannot
 /// create the SQLite file inside it: the permission dimension, staged at
@@ -44,8 +44,8 @@ import SwiftData
 import Testing
 @testable import HistoryStorage
 
-/// One additive model beyond the shipped immutable V4
-/// (`HistoryChangeJournalSchema`, DC-25): exactly the shape a NEWER Clipy
+/// One additive model beyond the shipped immutable V5
+/// (`HistoryProjectionSchema`, 05 §3): exactly the shape a NEWER Clipy
 /// build would leave behind for this build. Test-fixture only — the product
 /// never sees this type, and no shipped schema is edited.
 @Model
@@ -55,17 +55,17 @@ internal final class FutureOnlyRow {
     init() {}
 }
 
-/// The strictly-future schema the seeding container writes: the shipped V4
-/// model set plus exactly one new row, versioned at 5.0.0 so
+/// The strictly-future schema the seeding container writes: the shipped V5
+/// model set plus exactly one new row, versioned at 6.0.0 so
 /// `HistoryMigrationPlan` has no stage that can reach it. Reusing internal
-/// `HistorySchemaV4.models` (via `@testable`) keeps the fixture exactly one
+/// `HistorySchemaV5.models` (via `@testable`) keeps the fixture exactly one
 /// additive model away from production reality instead of a divergent
 /// hand-written model list.
-internal enum FutureSchemaV5: VersionedSchema {
-    static let versionIdentifier = Schema.Version(5, 0, 0)
+internal enum FutureSchemaV6: VersionedSchema {
+    static let versionIdentifier = Schema.Version(6, 0, 0)
 
     static var models: [any PersistentModel.Type] {
-        HistorySchemaV4.models + [FutureOnlyRow.self]
+        HistorySchemaV5.models + [FutureOnlyRow.self]
     }
 }
 
@@ -117,7 +117,7 @@ struct StoreOpenFailureCharacterizationTests {
     }
 
     /// Seeds the future-schema store inside the TEST process only: one
-    /// container at `FutureSchemaV5`, no migration plan, released with this
+    /// container at `FutureSchemaV6`, no migration plan, released with this
     /// scope so the only later owner of the store is the fresh probe child.
     /// Store creation is synchronous inside `ModelContainer.init`; one
     /// `FutureOnlyRow` is also inserted and saved so the store carries a
@@ -125,7 +125,7 @@ struct StoreOpenFailureCharacterizationTests {
     /// both the version metadata AND the un-migratable table, without
     /// depending on creation-time metadata bookkeeping alone.
     private static func seedFutureSchemaStore(at storeURL: URL) throws {
-        let schema = Schema(versionedSchema: FutureSchemaV5.self)
+        let schema = Schema(versionedSchema: FutureSchemaV6.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(

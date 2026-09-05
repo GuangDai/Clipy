@@ -202,13 +202,14 @@ extension HistoryAuthority {
             let identifiersBlob = row.effectiveTypeIdentifiersBlob
             let contentVersionRaw = row.contentVersionRaw
             let projectionSchemaVersion = row.projectionSchemaVersion
-            let title = row.title
+            let titleUTF8 = row.titleUTF8
             let searchBody = row.searchBody
             let lastCopiedAt = row.lastCopiedAt
             let copyCount = row.copyCount
             let lastSource = row.lastSource
             let rawPinOrdinal = row.pinOrdinal
-            let projectionSize = try mapCodecFailure {
+            let (title, projectionSize) = try mapCodecFailure {
+                let title = try ContentProjector.decodeStoredTitle(titleUTF8, limits: limits)
                 let size = try ContentProjector.validateStoredProjection(
                     schemaVersion: projectionSchemaVersion,
                     title: title,
@@ -223,7 +224,7 @@ extension HistoryAuthority {
                     lastSource,
                     limits: limits
                 )
-                return size
+                return (title, size)
             }
 #if DEBUG
             debugTitleUTF8Bytes += projectionSize.titleUTF8Bytes
