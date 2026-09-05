@@ -8,12 +8,10 @@
 /// that edits one (density, auto-open, divider width) resets it in-test to
 /// keep the suite order-independent.
 ///
-/// Row-density points (`PanelTheme` metrics) and the preview column's width
-/// are not published through the public accessibility tree. These journeys
-/// therefore prove the end-to-end wiring (Settings control → persisted
-/// preference → next panel open; divider gesture → live column) and assert
-/// only AX-visible evidence: the panel root, the stable row identifiers, the
-/// preview root, and the empty-state copy.
+/// Row-density points (`PanelTheme` metrics) are not published through the
+/// public accessibility tree. Divider geometry is observable through the
+/// real panel and divider frames: its relative position proves resizing and
+/// reset without reading a private preference or adding a measurement view.
 import AppKit
 import XCTest
 
@@ -227,17 +225,35 @@ final class AppearanceJourneyUITests: XCTestCase {
     /// The preview divider drags the column live inside the FIXED window
     /// (the browsing column absorbs the trade; the AppKit frame never
     /// moves), and a double click resets the width to the 320 default.
-    /// Column points are not AX-assertable, so the journey proves the
-    /// gesture wiring only: the divider exists while the preview is open,
-    /// and the preview root plus the panel root survive both the drag and
-    /// the reset. The reset runs in-test, so the persisted width leaves no
-    /// residue for later journeys.
+    /// A trailing preview makes a rightward drag shrink its measured span.
+    /// The real AX frames prove movement relative to the fixed panel, then
+    /// a return to the reset baseline. Edited preferences are restored using
+    /// the same Settings controls before the journey finishes.
     @MainActor
     func testPreviewDividerDragAndReset() throws {
         let app = try launchApp(capturing: "clipy-preview-divider-check")
         defer { app.terminate() }
 
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
+
+        // Automatic placement can flip the preview to the left near a
+        // screen edge. Configure a right-side, centered, default-size panel
+        // through the real Settings controls before measuring its divider.
+        openAppearanceTab(in: app)
+        let previewSide = app.descendants(matching: .any)[
+            "clipy.settings.appearance.preview-side"
+        ]
+        let panelPosition = app.descendants(matching: .any)[
+            "clipy.settings.appearance.panel-position"
+        ]
+        let resetPanelSize = app.buttons["clipy.settings.appearance.reset-panel-size"]
+        assertExists(previewSide, timeout: 5, in: app, context: "preview side control")
+        assertExists(panelPosition, timeout: 5, in: app, context: "panel position control")
+        assertExists(resetPanelSize, timeout: 5, in: app, context: "panel size reset control")
+        chooseOption("Right", in: previewSide, app: app, context: "trailing preview")
+        chooseOption("At Screen Center", in: panelPosition, app: app, context: "centered panel")
+        resetPanelSize.click()
+        closeSettingsAndSummonPanel(control: previewSide, panel: panel, app: app)
 
         // The selected row normally opens Preview through the production
         // 200 ms dwell. If the preference left by an earlier journey has not
@@ -258,11 +274,21 @@ final class AppearanceJourneyUITests: XCTestCase {
         ]
         assertExists(divider, timeout: 5, in: app, context: "preview divider")
 
-        // Start from the real reset width, independent of an earlier run's
-        // persisted adjustment. A rightward 80-point resize then remains
-        // above the collapse threshold in either preview placement.
+        // Start from the real 320-point reset width, independent of an
+        // earlier run's persisted adjustment. The 1-point divider's center
+        // adds half a point to the right-side span measured from AX frames.
         divider.doubleClick()
         assertExists(preview, timeout: 5, in: app, context: "preview reset before resizing")
+        XCTAssertTrue(
+            waitUntil(timeout: 5) {
+                preview.frame.midX > divider.frame.midX
+                    && abs(panel.frame.maxX - divider.frame.midX - 320.5) <= 3
+            },
+            diagnostic(app, context: "trailing preview at its 320-point reset width")
+        )
+        let baselinePanelFrame = panel.frame
+        let baselineDividerOffset = divider.frame.midX - baselinePanelFrame.minX
+        let baselinePreviewSpan = baselinePanelFrame.maxX - divider.frame.midX
 
         // This journey exercises settled resizing. The default 500px/s drag
         // with immediate release can legitimately trigger fling-to-collapse
@@ -273,7 +299,9 @@ final class AppearanceJourneyUITests: XCTestCase {
         )
         dividerCenter.click(
             forDuration: 0.3,
-            thenDragTo: dividerCenter.withOffset(CGVector(dx: 80, dy: 0)),
+            // 320 → 260 avoids both the 240-point settled minimum and the
+            // 280 ± 8-point magnetic stop (PanelGeometry).
+            thenDragTo: dividerCenter.withOffset(CGVector(dx: 60, dy: 0)),
             withVelocity: XCUIGestureVelocity(rawValue: 40),
             thenHoldForDuration: 0.5
         )
@@ -287,6 +315,24 @@ final class AppearanceJourneyUITests: XCTestCase {
             panel.exists,
             diagnostic(app, context: "panel intact after the divider drag")
         )
+        XCTAssertTrue(
+            waitUntil(timeout: 5) {
+                divider.frame.midX - panel.frame.minX >= baselineDividerOffset + 20
+            },
+            diagnostic(app, context: "slow drag moves divider right from offset \(baselineDividerOffset)")
+        )
+        let draggedPanelFrame = panel.frame
+        let draggedPreviewSpan = draggedPanelFrame.maxX - divider.frame.midX
+        XCTAssertLessThanOrEqual(draggedPreviewSpan, baselinePreviewSpan - 20,
+                                 diagnostic(app, context: "drag actually narrows preview"))
+        // The drag must settle above the 240-point floor; its observed AX
+        // displacement, not the requested pointer distance, is the proof.
+        XCTAssertGreaterThanOrEqual(draggedPreviewSpan, 237.5,
+                                    diagnostic(app, context: "preview respects settled minimum"))
+        XCTAssertEqual(draggedPanelFrame.minX, baselinePanelFrame.minX, accuracy: 3)
+        XCTAssertEqual(draggedPanelFrame.minY, baselinePanelFrame.minY, accuracy: 3)
+        XCTAssertEqual(draggedPanelFrame.width, baselinePanelFrame.width, accuracy: 3)
+        XCTAssertEqual(draggedPanelFrame.height, baselinePanelFrame.height, accuracy: 3)
 
         divider.doubleClick()
         assertExists(
@@ -299,6 +345,27 @@ final class AppearanceJourneyUITests: XCTestCase {
             panel.exists,
             diagnostic(app, context: "panel intact after the divider reset")
         )
+        XCTAssertTrue(
+            waitUntil(timeout: 5) {
+                abs((divider.frame.midX - panel.frame.minX) - baselineDividerOffset) <= 3
+                    && abs((panel.frame.maxX - divider.frame.midX) - baselinePreviewSpan) <= 3
+            },
+            diagnostic(app, context: "double-click restores the measured divider baseline")
+        )
+        XCTAssertEqual(panel.frame.minX, baselinePanelFrame.minX, accuracy: 3)
+        XCTAssertEqual(panel.frame.minY, baselinePanelFrame.minY, accuracy: 3)
+        XCTAssertEqual(panel.frame.width, baselinePanelFrame.width, accuracy: 3)
+        XCTAssertEqual(panel.frame.height, baselinePanelFrame.height, accuracy: 3)
+
+        openAppearanceTab(in: app)
+        assertExists(previewSide, timeout: 5, in: app, context: "preview side restore control")
+        assertExists(panelPosition, timeout: 5, in: app, context: "panel position restore control")
+        chooseOption("Automatic", in: previewSide, app: app, context: "preview side restore")
+        chooseOption("At Mouse Cursor", in: panelPosition, app: app, context: "panel position restore")
+        let generalTab = app.buttons["General"]
+        assertExists(generalTab, timeout: 5, in: app, context: "General tab")
+        generalTab.click()
+        app.typeKey("w", modifierFlags: .command)
     }
 
     @MainActor

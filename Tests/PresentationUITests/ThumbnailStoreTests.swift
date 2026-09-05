@@ -239,6 +239,29 @@ struct ThumbnailStoreTests {
         try #require(await pollUntil { store.inFlightCount == 0 })
     }
 
+    @Test func unavailableResultsAndPurgesStayWithinTheirOwningSurface() async throws {
+        let item = reference("00000000-0000-0000-0000-0000000000C7", version: 1)
+        let history = ThumbnailScriptHistory(failureByReference: [item: .thumbnailUnavailable])
+        let first = ThumbnailStore(history: history)
+        let second = ThumbnailStore(history: history)
+        first.prefetch(item)
+        second.prefetch(item)
+        try #require(await pollUntil { first.inFlightCount == 0 && second.inFlightCount == 0 })
+        #expect(await history.requestCount(for: item) == 2)
+        #expect(first.cachedEntryCount == 1)
+        #expect(second.cachedEntryCount == 1)
+
+        first.purge(.all)
+        #expect(first.cachedEntryCount == 0)
+        #expect(second.cachedEntryCount == 1)
+        second.prefetch(item)
+        #expect(second.inFlightCount == 0)
+        #expect(await history.requestCount(for: item) == 2)
+        first.prefetch(item)
+        try #require(await pollUntil { first.inFlightCount == 0 })
+        #expect(await history.requestCount(for: item) == 3)
+    }
+
     /// `reset()` clears the whole cache — reads miss again and a prefetch
     /// re-fetches — while in-flight bookkeeping cannot strand the entry.
     @Test func resetClearsCachedImagesAndAllowsRefetch() async {
@@ -262,6 +285,39 @@ struct ThumbnailStoreTests {
     }
 
     #if DEBUG
+    @Test func lateUnavailableResultCannotReplaceAnAlreadyPublishedNewFlight() async throws {
+        let item = reference("00000000-0000-0000-0000-0000000000C8", version: 1)
+        let history = PausableThumbnailHistory()
+        let store = ThumbnailStore(history: history)
+        store.prefetch(item)
+        try #require(await pollUntil { await history.requestCount == 1 })
+        store.reset()
+        store.prefetch(item)
+        try #require(await pollUntil { await history.requestCount == 2 })
+
+        #expect(await history.completeRequest(
+            for: item, occurrence: 1, with: .success(fixturePNGData)
+        ))
+        try #require(await pollUntil { store.imagePixelSize(for: item) != nil })
+        let producedSize = store.imagePixelSize(for: item)
+        let producedBytes = store.cachedDecodedBytes
+        #expect(producedBytes > 0)
+
+        // The older request returns a cacheable negative only AFTER the new
+        // request published pixels. It must not overwrite those pixels with
+        // a miss or alter the new result's byte accounting.
+        #expect(await history.completeRequest(for: item, with: .failure(.thumbnailUnavailable)))
+        try #require(await pollUntil { store.debugFetchCompletionCount == 2 })
+        #expect(store.debugDiscardedFetchCompletionCount == 1)
+        #expect(store.imagePixelSize(for: item) == producedSize)
+        #expect(store.cachedDecodedBytes == producedBytes)
+        #expect(store.cachedEntryCount == 1)
+        #expect(store.inFlightCount == 0)
+        store.prefetch(item)
+        #expect(store.inFlightCount == 0)
+        #expect(await history.requestCount == 2)
+    }
+
     @Test func purgedLatePayloadSkipsDisplayDecodingAndNewRequestStillRenders() async throws {
         let item = reference("00000000-0000-0000-0000-0000000000DC", version: 1)
         let history = PausableThumbnailHistory()

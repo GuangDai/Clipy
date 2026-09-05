@@ -66,6 +66,49 @@ struct QuickLookReferenceTests {
         #expect(surface.selection == other.item.id)
     }
 
+    @Test(arguments: [false, true])
+    func anotherSelectedItemsMutationPreservesThePinnedQuickLookTarget(revised: Bool) {
+        let quickLook = row()
+        let other = fixtureRow(
+            id: "00000000-0000-0000-0000-000000009903", title: "other selection"
+        )
+        let newerOther = fixtureRow(
+            id: other.item.id.rawValue.uuidString, title: "other revised", contentVersion: 2
+        )
+        let preview = PreviewPaneState(autoOpenDelay: .zero)
+        let surface = HistoryPanelSurfaceState(history: ScriptedHistory(), previewState: preview)
+        surface.beginSession(rows: [quickLook, other])
+        surface.quickLookReference = quickLook.item
+        surface.selection = other.item.id
+        preview.togglePreview(for: other.item)
+
+        surface.apply(HistorySurfacePurge(
+            generation: 1,
+            scope: revised
+                ? .revision(old: other.item, new: newerOther.item)
+                : .item(other.item.id)
+        ))
+        let remainingRows = revised ? [quickLook, newerOther] : [quickLook]
+        surface.reconcileSessionSelection(rows: remainingRows)
+        surface.retargetHiddenSelectionToDisplayedDefault(displayedRows: remainingRows)
+
+        // Quick Look owns A independently of the list's selection and the
+        // side pane. Removing selected B may leave nil selection; it must
+        // not dismiss still-readable A above the list.
+        #expect(surface.resolvedQuickLookReference(in: remainingRows) == quickLook.item)
+        #expect(surface.selection == (revised ? other.item.id : nil))
+        #expect(preview.previewedItem == (revised ? newerOther.item : nil))
+        #expect(preview.isOpen == revised)
+
+        // A's own receipt still closes the overlay without touching the
+        // unrelated B side pane, if that pane survived the first mutation.
+        surface.apply(HistorySurfacePurge(generation: 2, scope: .item(quickLook.item.id)))
+        #expect(surface.quickLookReference == nil)
+        #expect(surface.resolvedQuickLookReference(in: remainingRows) == nil)
+        #expect(preview.previewedItem == (revised ? newerOther.item : nil))
+        surface.endSession()
+    }
+
     @Test func loadingGapPreservesQuickLookButAnAuthoritativeEmptyPageClosesIt() {
         let surface = surface()
         surface.reconcileSessionSelection(rows: [], hasAuthoritativeFirstPage: false)
