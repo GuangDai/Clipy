@@ -71,6 +71,14 @@ struct PanelActionsCopyTests {
         ) == "public.utf16-external-plain-text 的编辑决定")
     }
 
+    @Test("editor explains independent formats and destination-app choice in both languages")
+    func formatIndependenceDisclosure() throws {
+        #expect(ReviseEditorPresentation.formatIndependenceDisclosure(bundle: try bundle("en")) ==
+            "Editing one format leaves other kept formats unchanged. The destination app may use those formats instead.")
+        #expect(ReviseEditorPresentation.formatIndependenceDisclosure(bundle: try bundle("zh-Hans")) ==
+            "编辑一种格式不会改变其他保留的格式。目标应用可能改用这些格式。")
+    }
+
     @Test("pin position uses localized words independently of numeric region")
     func pinnedPosition() throws {
         let chinese = try bundle("zh-Hans")

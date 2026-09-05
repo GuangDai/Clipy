@@ -115,3 +115,4 @@
 "Latest content can't be safely rebased onto this draft. Your edits are intact; keep editing or try again after the item changes." = "Latest content can't be safely rebased onto this draft. Your edits are intact; keep editing or try again after the item changes.";
 "Latest content loaded. Your draft was kept for formats that remain editable." = "Latest content loaded. Your draft was kept for formats that remain editable.";
 "Clipy couldn't load the latest content." = "Clipy couldn't load the latest content.";
+"Editing one format leaves other kept formats unchanged. The destination app may use those formats instead." = "Editing one format leaves other kept formats unchanged. The destination app may use those formats instead.";

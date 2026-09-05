@@ -20,6 +20,13 @@ package enum ReviseEditorPresentation {
     /// previously committed revisions.
     package static let revisionDisclosure =
         PanelActionsCopy.revisionDisclosure()
+
+    package static func formatIndependenceDisclosure(bundle: Bundle = .module) -> String {
+        PanelActionsCopy.text(
+            "Editing one format leaves other kept formats unchanged. The destination app may use those formats instead.",
+            bundle: bundle
+        )
+    }
 }
 
 /// The "Edit Content…" surface (contract §4.3): 520×440 when hosted as a
@@ -110,6 +117,17 @@ struct ReviseEditorView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(spacing: PanelTheme.spacingLarge) {
+                    if draft.canonicalRepresentations.count > 1 {
+                        Label(
+                            ReviseEditorPresentation.formatIndependenceDisclosure(),
+                            systemImage: "info.circle"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("clipy.editor.format-independence-disclosure")
+                    }
                     ForEach(
                         draft.canonicalRepresentations,
                         id: \.typeIdentifier

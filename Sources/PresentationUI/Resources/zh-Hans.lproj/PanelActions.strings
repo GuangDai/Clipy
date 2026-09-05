@@ -115,3 +115,4 @@
 "Clipy couldn't load this item." = "Clipy 无法加载此项目。";
 "Clipy couldn't update this item." = "Clipy 无法更新此项目。";
 "Clipy couldn't remove this item." = "Clipy 无法移除此项目。";
+"Editing one format leaves other kept formats unchanged. The destination app may use those formats instead." = "编辑一种格式不会改变其他保留的格式。目标应用可能改用这些格式。";
