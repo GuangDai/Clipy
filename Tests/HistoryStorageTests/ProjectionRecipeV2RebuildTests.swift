@@ -224,6 +224,30 @@ struct ProjectionRecipeV2RebuildTests {
         try context.save()
     }
 
+    /// A fresh, independently scoped context distinguishes fixture writes
+    /// from startup/read behavior. Never repair or reset the observed tag:
+    /// an unexpectedly current fixture must fail before public open.
+    private static func requireOpaqueStoredProjection(
+        fixture: LegacyFixture,
+        at storeURL: URL,
+        version: UInt16,
+        title: String,
+        searchBody: String
+    ) throws {
+        let context = ModelContext(try WSSupport.makeContainer(storeURL: storeURL))
+        context.autosaveEnabled = false
+        let row = try Self.fetchRow(id: fixture.id, in: context)
+        try #require(row.projectionSchemaVersion == version, "independent stored projection tag")
+        try #require(row.titleUTF8 == Data(title.utf8), "independent stored title bytes")
+        try #require(Data(row.searchBody.utf8) == Data(searchBody.utf8), "independent stored body bytes")
+        let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
+        try #require(canonical.representations.map(\.content.typeIdentifier)
+            == ["public.html", "public.rtf", "public.utf8-external-plain-text"])
+        try #require(canonical.representations.map(\.content.bytes) == fixture.canonicalBytes)
+        let lineage = try RevisionStateBlobCodec.decode(row.revisionStateBlob, canonical: canonical)
+        try #require(lineage.revisions.isEmpty && lineage.activeRevisionID == nil)
+    }
+
     @Test("public reopen rebuilds legacy projection before browse/search/details",
           arguments: [UInt16(1), 2, 3, 4, 5], ["public.utf8-plain-text", "public.utf16-external-plain-text"])
     func publicReopenRebuildsLegacyProjection(
@@ -308,6 +332,10 @@ struct ProjectionRecipeV2RebuildTests {
             row.titleUTF8 = Data(fixture.visibleText.utf8)
             row.searchBody = fixture.visibleText
         }
+        try Self.requireOpaqueStoredProjection(
+            fixture: fixture, at: storeURL, version: 2,
+            title: fixture.visibleText, searchBody: fixture.visibleText
+        )
         let history = try await SwiftDataHistory.open(configuration:
             HistoryConfiguration(persistence: .persistent(storeURL: storeURL))
         )
@@ -320,6 +348,10 @@ struct ProjectionRecipeV2RebuildTests {
             kind: .search(text: fixture.visibleText, mode: .exact), limit: 10
         ))
         #expect(search.rows.isEmpty)
+        try Self.requireOpaqueStoredProjection(
+            fixture: fixture, at: storeURL, version: 6,
+            title: "public.html", searchBody: ""
+        )
 
         let details = try await history.details(for: fixture.id)
         #expect(details.canonical.map(\.bytes) == fixture.canonicalBytes)

@@ -123,8 +123,21 @@ struct RetentionConfigSingletonStartupValidationTests {
     ) async throws -> SeededState {
         // Prepare immutable values before any ModelContext/@Model exists;
         // no SwiftData object survives a suspension point (05 §2).
-        let seededItems = try await MigrationSeeding.makeSeededItems()
-        let item = try #require(seededItems.first)
+        let source = "com.example.migration"
+        let observedAt = Date(timeIntervalSinceReferenceDate: 700_000_000)
+        let prepared = try await IngestPreparationActor().prepare(
+            WSSupport.textCapture(
+                "migration item alpha", observedAt: observedAt, source: source
+            )
+        )
+        let canonicalBlob = try CanonicalBlobCodec.encode(prepared.domain.canonical)
+        let revisionStateBlob = try RevisionStateBlobCodec.encode(
+            revisions: [], activeRevisionID: nil
+        )
+        let signatureBlob = try SignatureBlobCodec.encode(prepared.signatureEntries)
+        let typeIdentifiersBlob = try EffectiveTypeIdentifiersBlobCodec.encode(
+            prepared.projection.effectiveTypeIdentifiers
+        )
         let schema = Schema(versionedSchema: HistorySchemaV2.self)
         let configuration = ModelConfiguration(
             schema: schema,
@@ -159,8 +172,29 @@ struct RetentionConfigSingletonStartupValidationTests {
         // RetainedBytesRow. Reaching the later startup projection bootstrap
         // would repair that missing derived row, so its continued absence
         // after config rejection is non-vacuous ordering evidence.
-        context.insert(item.row)
+        try FileHandle.standardError.write(contentsOf: Data("[DEBUG-v2-seed-20260906] before-model\n".utf8))
+        let item = HistorySchemaV1.HistoryItemRow(
+            id: prepared.domain.candidateID.rawValue,
+            contentVersionRaw: 1,
+            canonicalBlob: canonicalBlob,
+            revisionStateBlob: revisionStateBlob,
+            canonicalSignatureBlob: signatureBlob,
+            projectionSchemaVersion: ContentProjector.legacySchemaVersion,
+            title: prepared.projection.title,
+            searchBody: prepared.projection.searchBody,
+            effectiveTypeIdentifiersBlob: typeIdentifiersBlob,
+            firstCopiedAt: observedAt,
+            lastCopiedAt: observedAt,
+            copyCount: 1,
+            firstSource: source,
+            lastSource: source,
+            pinOrdinal: nil
+        )
+        try FileHandle.standardError.write(contentsOf: Data("[DEBUG-v2-seed-20260906] after-model\n".utf8))
+        context.insert(item)
+        try FileHandle.standardError.write(contentsOf: Data("[DEBUG-v2-seed-20260906] after-insert\n".utf8))
         try context.save()
+        try FileHandle.standardError.write(contentsOf: Data("[DEBUG-v2-seed-20260906] after-save\n".utf8))
         return SeededState(config: ConfigScalars(config), itemID: item.id)
     }
 
