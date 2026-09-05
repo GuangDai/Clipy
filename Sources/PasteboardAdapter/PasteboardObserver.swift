@@ -87,7 +87,8 @@ public final class PasteboardObserver {
             return
         }
 
-        lastChangeCount = adapter.pasteboard.changeCount
+        let initialChangeCount = adapter.pasteboard.changeCount
+        lastChangeCount = initialChangeCount
 
         // The timer is added to the main run loop's common modes explicitly
         // rather than via `Timer.scheduledTimer` (which would silently bind
@@ -112,7 +113,10 @@ public final class PasteboardObserver {
         // can cancel this start; a replacement timer owns its own capture.
         onAccessBehaviorChanged?(accessBehavior)
         guard self.timer === timer else { return }
-        if captureCurrent {
+        // The access callback can also run a nested poll on this same timer.
+        // Its newer generation has already been consumed; do not duplicate
+        // that delivery with a second initial read after the callback returns.
+        if captureCurrent, lastChangeCount == initialChangeCount {
             deliverCurrentOutcome()
         }
     }

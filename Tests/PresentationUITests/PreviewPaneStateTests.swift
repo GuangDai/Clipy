@@ -269,6 +269,24 @@ struct PreviewPaneStateTests {
         #expect(state.previewedItem == nil)
     }
 
+    @Test func refreshingVisibleContentPreservesAnotherItemsPendingDwell() async {
+        let state = makeState()
+        defer { state.panelClosed() }
+        let first = reference()
+        let second = reference()
+        let updatedFirst = HistoryItemReference(
+            id: first.id, contentVersion: ContentVersion(rawValue: 2)
+        )
+        state.togglePreview(for: first)
+        state.handleSelectionChange(second)
+        state.refreshOpenPreview(updatedFirst)
+        #expect(state.previewedItem == updatedFirst)
+        // The zero-delay dwell cannot execute until this test yields the
+        // MainActor. Refreshing A must not cancel the already queued B task.
+        await waitForScheduledDwell { state.previewedItem == second }
+        #expect(state.previewedItem == second)
+    }
+
     @Test func dwellRetargetsAnAlreadyOpenPreview() async {
         let state = makeState()
         let first = reference()

@@ -68,7 +68,7 @@ struct PanelRootView: View {
             } else if let openFailure = appDelegate.openFailure {
                 failurePane(for: openFailure)
             } else {
-                ProgressView("Opening Clipy…")
+                ProgressView(AppRecoveryCopy.text("Opening Clipy…"))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -150,19 +150,19 @@ struct PanelRootView: View {
                     "clipy.store.open.failure.message"
                 )
             HStack(spacing: 8) {
-                Button("Retry") {
+                Button(AppRecoveryCopy.text("Retry")) {
                     appDelegate.retryCompositionOpen()
                 }
                 .accessibilityIdentifier(
                     "clipy.store.open.failure.retry"
                 )
-                Button("Reveal Store Location") {
+                Button(AppRecoveryCopy.text("Reveal Store Location")) {
                     appDelegate.revealStoreLocation()
                 }
                 .accessibilityIdentifier(
                     "clipy.store.open.failure.reveal"
                 )
-                Button("Quit") {
+                Button(AppRecoveryCopy.text("Quit")) {
                     NSApp.terminate(nil)
                 }
                 .accessibilityIdentifier(
@@ -182,48 +182,48 @@ struct PanelRootView: View {
     /// public typed failure. `.openStore` deliberately stays generic because
     /// SwiftData construction does not yet distinguish permission, ENOSPC,
     /// corruption, future schema, and other I/O failures reliably.
-    static func failureCategory(for error: any Error) -> String {
+    static func failureCategory(for error: any Error, bundle: Bundle = .main) -> String {
         guard let historyFailure = error as? HistoryFailure else {
             return error is ClipyCompositionError
-                ? "History Store Already Open"
-                : "History Store Open Failed"
+                ? AppRecoveryCopy.text("History Store Already Open", bundle: bundle)
+                : AppRecoveryCopy.text("History Store Open Failed", bundle: bundle)
         }
         guard case .persistence(let persistenceFailure) = historyFailure else {
-            return "History Store Open Failed"
+            return AppRecoveryCopy.text("History Store Open Failed", bundle: bundle)
         }
         switch persistenceFailure {
         case .openStore:
-            return "History Store Open Failed"
+            return AppRecoveryCopy.text("History Store Open Failed", bundle: bundle)
         case .storeAlreadyOpen:
             // DATA-7's cross-process lease denial is distinguishable from a
             // flat open failure and names the other live instance.
-            return "History Store Already Open"
+            return AppRecoveryCopy.text("History Store Already Open", bundle: bundle)
         case .corruptStoredValue:
-            return "Stored History Unreadable"
+            return AppRecoveryCopy.text("Stored History Unreadable", bundle: bundle)
         case .invariantViolation:
-            return "History Consistency Check Failed"
+            return AppRecoveryCopy.text("History Consistency Check Failed", bundle: bundle)
         case .transaction:
-            return "History Startup Transaction Failed"
+            return AppRecoveryCopy.text("History Startup Transaction Failed", bundle: bundle)
         }
     }
 
     /// Maps the open failure to its user-facing message. `HistoryFailure`
     /// renders through PresentationUI's shared vocabulary so the pane and the
     /// in-panel banner never disagree (03b §10).
-    static func failureMessage(for error: any Error) -> String {
+    static func failureMessage(for error: any Error, bundle: Bundle = .main) -> String {
         if let historyFailure = error as? HistoryFailure {
             // DATA-7: a live owner in ANOTHER process holds the StoreRoot
             // lease — the finding's "in use by another instance" wording,
             // not the generic storage error.
             if case .persistence(.storeAlreadyOpen) = historyFailure {
-                return "Clipy's history store is already open in another instance. Quit that instance and try again."
+                return AppRecoveryCopy.text("Clipy's history store is already open in another instance. Quit that instance and try again.", bundle: bundle)
             }
             return FailurePresentation.message(for: historyFailure)
         }
         if error is ClipyCompositionError {
-            return "Clipy's history store is already open in this app. Quit Clipy and try again."
+            return AppRecoveryCopy.text("Clipy's history store is already open in this app. Quit Clipy and try again.", bundle: bundle)
         }
-        return "Clipy couldn't open its history store."
+        return AppRecoveryCopy.text("Clipy couldn't open its history store.", bundle: bundle)
     }
 
     private func pasteFailureBanner(_ failure: ClipyPasteFailure) -> some View {
@@ -231,7 +231,7 @@ struct PanelRootView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.yellow)
                 .accessibilityHidden(true)
-            Text(pasteFailureMessage(failure))
+            Text(Self.pasteFailureMessage(failure))
                 .font(.callout)
                 .lineLimit(2)
             Spacer(minLength: 8)
@@ -241,7 +241,7 @@ struct PanelRootView: View {
                 Image(systemName: "xmark")
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Dismiss copy failure")
+            .accessibilityLabel(AppRecoveryCopy.text("Dismiss copy failure"))
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
@@ -249,14 +249,16 @@ struct PanelRootView: View {
         .shadow(radius: 4)
     }
 
-    private func pasteFailureMessage(_ failure: ClipyPasteFailure) -> String {
+    static func pasteFailureMessage(
+        _ failure: ClipyPasteFailure, bundle: Bundle = .main
+    ) -> String {
         switch failure {
         case .busy:
-            return "A copy is already in progress. Try again when it finishes."
+            return AppRecoveryCopy.text("A copy is already in progress. Try again when it finishes.", bundle: bundle)
         case .history(let historyFailure):
             return FailurePresentation.message(for: historyFailure)
         case .write:
-            return "The pasteboard refused this copy. Try again."
+            return AppRecoveryCopy.text("The pasteboard refused this copy. Try again.", bundle: bundle)
         }
     }
 

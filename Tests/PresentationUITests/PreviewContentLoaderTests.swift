@@ -116,6 +116,57 @@ struct PreviewContentLoaderTests {
         #expect(await history.detailRequests == [a.id])
     }
 
+    @Test func independentlyPreviewedItemAdvancesWhileAnotherRowIsSelected() async throws {
+        let a1 = reference("00000000-0000-0000-0000-0000000001A9", version: 1)
+        let a2 = HistoryItemReference(id: a1.id, contentVersion: ContentVersion(rawValue: 2))
+        let b = reference("00000000-0000-0000-0000-0000000001B9", version: 1)
+        let oldRows = [
+            fixtureRow(id: a1.id.rawValue.uuidString, title: "A", contentVersion: 1),
+            fixtureRow(id: b.id.rawValue.uuidString, title: "B"),
+        ]
+        let latestRows = [
+            fixtureRow(id: a1.id.rawValue.uuidString, title: "A revised", contentVersion: 2),
+            oldRows[1],
+        ]
+        let pane = PreviewPaneState(autoOpenDelay: .zero)
+        defer { pane.panelClosed() }
+        pane.isAutoOpenPreferenceEnabled = false
+        pane.togglePreview(for: a1)
+        pane.handleSelectionChange(b)
+        let initialSelection = PreviewSelectionResolution.resolve(selectedID: b.id, rows: oldRows)
+        let history = OverlappingDetailsHistory()
+        let loader = PreviewContentLoader(history: history)
+        let olderLoad = Task {
+            await loader.load(item: initialSelection.previewTarget(previewedItem: pane.previewedItem))
+        }
+        try #require(await pollUntil { await history.requestCount == 1 })
+
+        let latestSelection = PreviewSelectionResolution.resolve(selectedID: b.id, rows: latestRows)
+        let target = try #require(latestSelection.previewTarget(previewedItem: pane.previewedItem))
+        #expect(latestSelection != initialSelection)
+        #expect(latestSelection.reference == b)
+        #expect(target == a2)
+        // HistoryPanelView's resolved-target callback records the new visible
+        // version even though the list's selected B reference did not change.
+        pane.refreshOpenPreview(target)
+        let newerLoad = Task { await loader.load(item: target) }
+        try #require(await pollUntil { await history.requestCount == 2 })
+        await history.resumeRequest(1, with: details(for: a2, text: "current A"))
+        await newerLoad.value
+        await history.resumeRequest(0, with: details(for: a1, text: "obsolete A"))
+        await olderLoad.value
+
+        #expect(loader.requestedItem == a2)
+        #expect(loader.phase == .content(.text("current A")))
+        #expect(pane.previewedItem == a2)
+        #expect(initialSelection.previewTarget(previewedItem: pane.previewedItem) == a2)
+        let removedA = PreviewSelectionResolution.resolve(selectedID: b.id, rows: [oldRows[1]])
+        await loader.load(item: removedA.previewTarget(previewedItem: pane.previewedItem))
+        #expect(removedA.reference == b)
+        #expect(loader.requestedItem == nil)
+        #expect(loader.phase == .unsupported)
+    }
+
     /// A→B selection with A completing LATE: B publishes; A's late result is
     /// discarded by the exact-reference fence and never reaches the
     /// published state (SPEC-IMPL-007's cross-item leak).

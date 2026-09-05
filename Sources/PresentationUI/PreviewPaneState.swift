@@ -114,14 +114,17 @@ public final class PreviewPaneState {
     /// Advances the exact reference of the item already visible in preview.
     /// Observation can revise an item without changing the list's ID-only
     /// selection; that is content coherence, not a new cross-item dwell.
-    /// Closed/manual-suppressed panes stay closed.
+    /// Closed/manual-suppressed panes stay closed. A different selected item's
+    /// pending dwell keeps its original schedule.
     package func refreshOpenPreview(_ item: HistoryItemReference) {
         guard isOpen,
               let previewedItem,
               previewedItem.id == item.id,
               item.contentVersion.rawValue > previewedItem.contentVersion.rawValue
         else { return }
-        cancelPendingAutoOpen()
+        if pendingAutoOpenItem?.id == item.id {
+            cancelPendingAutoOpen()
+        }
         self.previewedItem = item
     }
 

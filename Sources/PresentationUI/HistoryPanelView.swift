@@ -78,25 +78,29 @@ package enum PanelSessionSelection {
 package struct PreviewSelectionResolution: Equatable {
     package let selectedID: HistoryItemID?
     package let reference: HistoryItemReference?
-    private let availableItemIDs: Set<HistoryItemID>
+    private let availableReferences: [HistoryItemID: HistoryItemReference]
 
     package static func resolve(
         selectedID: HistoryItemID?,
         rows: [HistoryRow]
     ) -> PreviewSelectionResolution {
+        let availableReferences = Dictionary(
+            rows.map { ($0.item.id, $0.item) },
+            uniquingKeysWith: { first, _ in first }
+        )
         guard let selectedID,
-              let reference = rows.first(where: { $0.item.id == selectedID })?.item
+              let reference = availableReferences[selectedID]
         else {
             return PreviewSelectionResolution(
                 selectedID: nil,
                 reference: nil,
-                availableItemIDs: Set(rows.map(\.item.id))
+                availableReferences: availableReferences
             )
         }
         return PreviewSelectionResolution(
             selectedID: selectedID,
             reference: reference,
-            availableItemIDs: Set(rows.map(\.item.id))
+            availableReferences: availableReferences
         )
     }
 
@@ -106,16 +110,17 @@ package struct PreviewSelectionResolution: Equatable {
     package func previewTarget(
         previewedItem: HistoryItemReference?
     ) -> HistoryItemReference? {
-        guard let reference,
+        guard reference != nil,
               let previewedItem,
-              availableItemIDs.contains(previewedItem.id)
+              let observed = availableReferences[previewedItem.id]
         else { return nil }
-        guard reference.id == previewedItem.id else { return previewedItem }
         // A revision receipt can advance the pane before observation catches
         // up. Both are authoritative references; use the newer ContentVersion
-        // (including revert's new version, 02 §11), never the stale page.
-        return reference.contentVersion.rawValue >= previewedItem.contentVersion.rawValue
-            ? reference : previewedItem
+        // (including revert's new version, 02 §11), never the stale page. This
+        // lookup follows the displayed item's ID even while another selection
+        // is dwelling or auto-open is disabled.
+        return observed.contentVersion.rawValue >= previewedItem.contentVersion.rawValue
+            ? observed : previewedItem
     }
 }
 
@@ -644,7 +649,14 @@ public struct HistoryPanelView: View {
                 retargetHiddenSelectionToDisplayedDefault()
             }
             .onChange(of: resolvedPreviewTarget) { _, target in
-                guard previewState.isOpen, target == nil else { return }
+                guard previewState.isOpen else { return }
+                if let target {
+                    // The visible item can change version while selection is
+                    // on another row. Retain that new exact target so a later
+                    // stale page cannot make the loader go backwards.
+                    previewState.refreshOpenPreview(target)
+                    return
+                }
                 // The selected row may still exist while the previously displayed
                 // cross-item dwell target was removed. Close only the preview;
                 // preserve the valid list selection and restart its dwell from

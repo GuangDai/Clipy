@@ -12,6 +12,67 @@ import Testing
 #if DEBUG
 @Suite("Pasteboard observer start semantics (DEC-OBSERVER-START)")
 struct PasteboardObserverStartSemanticsTests {
+    @Test("access callback writes are captured once with or without a nested poll",
+          arguments: [false, true])
+    @MainActor
+    func accessCallbackCannotDuplicateANewerGeneration(nestedPoll: Bool) {
+        let pasteboard = Self.makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        Self.replaceString("before-access-callback", on: pasteboard)
+        var reads = 0
+        var adapter = PasteboardAdapter(pasteboard: pasteboard)
+        adapter.payloadReadObserver = { _ in reads += 1 }
+        let observer = PasteboardObserver(adapter: adapter, pollInterval: 60)
+        defer { observer.stop() }
+        var received: [String] = []
+        observer.start(
+            onAccessBehaviorChanged: { _ in
+                Self.replaceString("access-callback-generation", on: pasteboard)
+                if nestedPoll { observer.pollForTesting() }
+            },
+            handler: { outcome in
+                if let text = Self.completeText(in: outcome) {
+                    received.append(text)
+                }
+            }
+        )
+
+        #expect(reads == 1)
+        #expect(received == ["access-callback-generation"])
+        observer.pollForTesting()
+        #expect(reads == 1)
+        #expect(received == ["access-callback-generation"])
+    }
+
+    @Test("access callback handler replacement retains the ordinary initial capture")
+    @MainActor
+    func accessCallbackCanReplaceOnlyTheHandlerWithoutSkippingCapture() {
+        let pasteboard = Self.makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        Self.replaceString("initial-capture", on: pasteboard)
+        let observer = PasteboardObserver(
+            adapter: PasteboardAdapter(pasteboard: pasteboard), pollInterval: 60
+        )
+        defer { observer.stop() }
+        var retired: [CaptureOutcome] = []
+        var current: [String] = []
+        observer.start(
+            onAccessBehaviorChanged: { _ in
+                observer.start { outcome in
+                    if let text = Self.completeText(in: outcome) {
+                        current.append(text)
+                    }
+                }
+            },
+            handler: { retired.append($0) }
+        )
+
+        #expect(retired.isEmpty)
+        #expect(current == ["initial-capture"])
+        observer.pollForTesting()
+        #expect(current == ["initial-capture"])
+    }
+
     @Test("a stop during payload access retires the read and any ownership retry",
           arguments: [false, true])
     @MainActor
