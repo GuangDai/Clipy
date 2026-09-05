@@ -108,14 +108,8 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
         })
         XCTAssertEqual(expectedRefs.count, Self.itemCount)
 
-        // —— Scrolling: the panel's history list scroll view. The wheel
-        //    increments are deliberately SMALL with real dwell between
-        //    them: the list is lazy, and a row only materializes (fires
-        //    its onAppear pagination trigger and its thumbnail prefetch)
-        //    while it passes through the viewport slowly enough to render.
-        //    A single large fling bottomed out page one without ever
-        //    materializing the page-two tail (observed on CI: exactly the
-        //    50 first-page rows).
+        // —— Scrolling: use the native History scrollbar for real endpoint
+        //    navigation, including after the second page extends the list.
         // A left-side text preview also has a scroll view. Select the one
         // containing the History outline, independent of preview placement.
         let scrollView = panel.scrollViews.containing(.outline, identifier: nil).firstMatch
@@ -123,14 +117,11 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
             scrollView.waitForExistence(timeout: 10),
             diagnostic(app, context: "history list scroll view")
         )
-        let listCenter = scrollView.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
-        )
 
         // Seeding can already request all 60 thumbnails while each PNG is
         // newest. Prove pagination separately: the oldest seeded row must
         // enter the History viewport, then the newest must be visible again.
-        // A finite number of small-step traversals permits deferred List
+        // A finite number of endpoint traversals permits deferred List
         // materialization without spending a fixed performance window.
         let scrollStart = Date()
         var passes = 0
@@ -138,12 +129,10 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
         var returnedToNewest = false
         while passes < 3 {
             reachedOldest = scroll(
-                listCenter, deltaY: -120, steps: 40,
-                untilVisible: rows[oldestIdentifier], in: scrollView
+                to: rows[oldestIdentifier], in: scrollView, towardEnd: true
             ) || reachedOldest
             returnedToNewest = scroll(
-                listCenter, deltaY: 120, steps: 40,
-                untilVisible: rows[newestIdentifier], in: scrollView
+                to: rows[newestIdentifier], in: scrollView, towardEnd: false
             )
             passes += 1
             if reachedOldest, returnedToNewest,
@@ -376,33 +365,34 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
 
     // MARK: - Scrolling
 
-    /// Move toward the endpoint's current frame once it materializes. Lazy
-    /// List row estimates can move that frame during scrolling; continuing
-    /// the initial fixed direction cannot correct an overshoot. Before the
-    /// endpoint exists, keep the caller's traversal direction so pagination
-    /// can materialize it. The step/pass limits remain unchanged.
+    /// Drag the real scrollbar to each end. Wheel deltas plus lazy List row
+    /// estimates did not reliably reach the last row on the runner. Another
+    /// drag can be needed after pagination extends the content.
     @MainActor
     private func scroll(
-        _ coordinate: XCUICoordinate,
-        deltaY: CGFloat,
-        steps: Int,
-        untilVisible row: XCUIElement,
-        in scrollView: XCUIElement
+        to row: XCUIElement,
+        in scrollView: XCUIElement,
+        towardEnd: Bool
     ) -> Bool {
-        for _ in 0..<steps {
-            var nextDeltaY = deltaY
-            if row.exists {
-                let rowFrame = row.frame
-                let viewport = scrollView.frame
-                if !rowFrame.isEmpty && viewport.contains(rowFrame) {
-                    return true
-                }
-                // Same frame-directed wheel behavior as the Settings
-                // journeys: smaller corrections once AX knows the target.
-                nextDeltaY = rowFrame.midY < viewport.midY ? 50 : -50
+        func endpointIsVisible() -> Bool {
+            guard row.exists else { return false }
+            let frame = row.frame
+            return !frame.isEmpty && scrollView.frame.contains(frame)
+        }
+        scrollView.hover()
+        let scrollbar = scrollView.scrollBars.firstMatch
+        let thumb = scrollbar.descendants(matching: .valueIndicator).firstMatch
+        for _ in 0..<6 {
+            if endpointIsVisible() { return true }
+            guard scrollbar.exists, thumb.exists else {
+                XCTFail("The History scrollbar thumb is unavailable.")
+                return false
             }
-            coordinate.scroll(byDeltaX: 0, deltaY: nextDeltaY)
-            dwell(0.2)
+            thumb.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .click(forDuration: 0.1, thenDragTo: scrollbar.coordinate(
+                    withNormalizedOffset: CGVector(dx: 0.5, dy: towardEnd ? 0.99 : 0.01)
+                ))
+            if waitUntil(timeout: 2, condition: endpointIsVisible) { return true }
         }
         guard row.exists else { return false }
         let rowFrame = row.frame
@@ -412,13 +402,6 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
             print("CLIPY_THUMB_SCROLL target=\(row.identifier) frame=\(rowFrame) viewport=\(viewport)")
         }
         return visible
-    }
-
-    /// Spins the run loop for `seconds` without a condition (the wait helper
-    /// with an always-false condition waits out its full timeout).
-    @MainActor
-    private func dwell(_ seconds: TimeInterval) {
-        _ = waitUntil(timeout: seconds) { false }
     }
 
     // MARK: - Measurement file

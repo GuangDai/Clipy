@@ -28,6 +28,10 @@ struct PanelActionsCopyTests {
         #expect(PanelActionsCopy.text(
             "Remove this item from your clipboard history?", bundle: chinese
         ) == "从剪贴板历史记录中移除此项目？")
+        #expect(PanelActionsCopy.text(
+            " Replace edits UTF-8 or UTF-16 plain text while preserving its encoding.",
+            bundle: chinese
+        ) == "“替换”编辑 UTF-8 或 UTF-16 纯文本，并保留其编码。")
     }
 
     @Test("translated accessibility actions preserve literal user titles and format identifiers")
@@ -40,8 +44,8 @@ struct PanelActionsCopyTests {
         #expect(PanelActionsCopy.format("Revert to %@", title, bundle: chinese) ==
             "还原为 Budget 100% %@ — 预算")
         #expect(PanelActionsCopy.format(
-            "Editing decision for %@", "public.utf8-plain-text", bundle: chinese
-        ) == "public.utf8-plain-text 的编辑决定")
+            "Editing decision for %@", "public.utf16-external-plain-text", bundle: chinese
+        ) == "public.utf16-external-plain-text 的编辑决定")
     }
 
     @Test("pin position uses localized words independently of numeric region")

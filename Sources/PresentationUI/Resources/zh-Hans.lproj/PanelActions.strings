@@ -96,9 +96,9 @@
 "Editing decision for %@" = "%@ 的编辑决定";
 "Replacement text for %@" = "%@ 的替换文本";
 "Keep Current preserves the bytes currently used for pasting. Use Original restores the captured bytes. Hide omits this type from pasting." = "“保留当前”保留当前粘贴所用的字节；“使用原始”恢复捕获时的字节；“隐藏”使粘贴时不包含此类型。";
-" Replace substitutes literal UTF-8 plain text." = "“替换”使用字面 UTF-8 纯文本替换内容。";
-" Replace requires valid UTF-8 plain text. Other formats can be preserved, restored, or hidden." = "“替换”需要有效的 UTF-8 纯文本。其他格式可以保留、恢复或隐藏。";
-"Replace supports valid UTF-8 plain text only. Keep Current preserves its exact bytes." = "“替换”仅支持有效的 UTF-8 纯文本。“保留当前”会原样保留其字节。";
+" Replace edits UTF-8 or UTF-16 plain text while preserving its encoding." = "“替换”编辑 UTF-8 或 UTF-16 纯文本，并保留其编码。";
+" Replace requires a supported UTF-8 or UTF-16 plain-text format with valid content. Other formats can be preserved, restored, or hidden." = "“替换”需要受支持的 UTF-8 或 UTF-16 纯文本格式，且内容必须有效。其他格式可以保留、恢复或隐藏。";
+"Replace supports valid UTF-8 and UTF-16 plain-text formats. Keep Current preserves exact bytes." = "“替换”支持有效的 UTF-8 和 UTF-16 纯文本格式。“保留当前”会原样保留字节。";
 "Clipy couldn't save this revision." = "Clipy 无法保存此修订版本。";
 "Latest content can't be safely rebased onto this draft. Your edits are intact; keep editing or try again after the item changes." = "无法将最新内容用作此草稿的编辑基准。您的修改仍完整保留；请继续编辑，或在项目更改后重试。";
 "Latest content loaded. Your draft was kept for formats that remain editable." = "已加载最新内容。仍可编辑格式的草稿已保留。";

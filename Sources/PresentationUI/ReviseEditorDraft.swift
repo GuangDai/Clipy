@@ -2,7 +2,6 @@
 /// current-vs-canonical decisions.  The view renders and mutates this value;
 /// this module alone translates those choices into HistoryCore vocabulary.
 /// Owning spec: docs/03a-instruction-set.md §5; review Card 3.
-import ClipboardFormats
 import Foundation
 import HistoryCore
 
@@ -23,9 +22,11 @@ package struct ReviseEditorDraft: Sendable {
     private var canonical: [HistoryRepresentation]
     private var effectiveByType: [String: HistoryRepresentation]
     private var openingChoices: [String: Choice]
-    private var openingReplacementBytes: [String: Data]
+    private var openingReplacementTextBytes: [String: Data]
+    private var openingReplacementCodecs: [String: EditorTextCodec]
     private var choices: [String: Choice]
     private var replacementTexts: [String: String]
+    private var replacementCodecs: [String: EditorTextCodec]
     package private(set) var isAwaitingLatestContent = false
 
     package init(details: HistoryDetails) {
@@ -34,11 +35,13 @@ package struct ReviseEditorDraft: Sendable {
         canonical = details.canonical
         effectiveByType = state.effectiveByType
         openingChoices = state.choices
-        openingReplacementBytes = state.replacementTexts.mapValues {
+        openingReplacementTextBytes = state.replacementTexts.mapValues {
             Data($0.utf8)
         }
+        openingReplacementCodecs = state.replacementCodecs
         choices = state.choices
         replacementTexts = state.replacementTexts
+        replacementCodecs = state.replacementCodecs
     }
 
     package var itemID: HistoryItemID { item.id }
@@ -58,11 +61,14 @@ package struct ReviseEditorDraft: Sendable {
 
     /// Dirty state is relative to the exact authoritative base presented at
     /// open or the last explicit reload. Swift String equality is canonically
-    /// equivalent, so replacement UTF-8 bytes preserve byte-exact edit intent.
+    /// equivalent, so UTF-8 text bytes distinguish literal Unicode edits.
+    /// These comparison bytes are independent of the replacement's actual
+    /// output codec, whose byte order and BOM are retained separately.
     package var isDirty: Bool {
         choices != openingChoices
             || replacementTexts.mapValues { Data($0.utf8) }
-                != openingReplacementBytes
+                != openingReplacementTextBytes
+            || replacementCodecs != openingReplacementCodecs
     }
 
     package var dismissalDecision: DismissalDecision {
@@ -70,11 +76,17 @@ package struct ReviseEditorDraft: Sendable {
     }
 
     package var allRepresentationsHidden: Bool {
-        !canonical.isEmpty && canonical.allSatisfy {
-            if case .hide = decision(for: $0).action {
+        !canonical.isEmpty && canonical.allSatisfy { representation in
+            // Availability checks need only the choice, not newly encoded
+            // replacement buffers on every editor redraw.
+            switch choice(for: representation.typeIdentifier) {
+            case .hide:
                 return true
+            case .keepCurrent:
+                return effectiveByType[representation.typeIdentifier] == nil
+            case .useOriginal, .replace:
+                return false
             }
-            return false
         }
     }
 
@@ -135,9 +147,11 @@ package struct ReviseEditorDraft: Sendable {
     /// not merge or submit content.
     @discardableResult
     package mutating func reloadLatest(details: HistoryDetails) -> Bool {
-        let previousOpeningReplacementBytes = openingReplacementBytes
+        let previousOpeningReplacementTextBytes = openingReplacementTextBytes
+        let previousOpeningReplacementCodecs = openingReplacementCodecs
         let previousChoices = choices
         let previousReplacementTexts = replacementTexts
+        let previousReplacementCodecs = replacementCodecs
 
         let latest = Self.initialState(
             canonical: canonical,
@@ -153,13 +167,13 @@ package struct ReviseEditorDraft: Sendable {
             let previousText = previousReplacementTexts[typeIdentifier]
             let previousBytes = previousText.map { Data($0.utf8) }
             let replacementWasAuthored = previousBytes
-                != previousOpeningReplacementBytes[typeIdentifier]
+                != previousOpeningReplacementTextBytes[typeIdentifier]
+                || previousReplacementCodecs[typeIdentifier]
+                    != previousOpeningReplacementCodecs[typeIdentifier]
             let hadAuthoredReplace = previousChoices[typeIdentifier] == .replace
                 || replacementWasAuthored
-            guard !hadAuthoredReplace || Self.canReplace(
-                canonical: representation,
-                effective: latest.effectiveByType[typeIdentifier]
-            ) else {
+            guard !hadAuthoredReplace
+                || latest.replacementCodecs[typeIdentifier] != nil else {
                 return false
             }
         }
@@ -167,11 +181,13 @@ package struct ReviseEditorDraft: Sendable {
         item = details.item
         effectiveByType = latest.effectiveByType
         openingChoices = latest.choices
-        openingReplacementBytes = latest.replacementTexts.mapValues {
+        openingReplacementTextBytes = latest.replacementTexts.mapValues {
             Data($0.utf8)
         }
+        openingReplacementCodecs = latest.replacementCodecs
         choices = latest.choices
         replacementTexts = latest.replacementTexts
+        replacementCodecs = latest.replacementCodecs
 
         for representation in canonical {
             let typeIdentifier = representation.typeIdentifier
@@ -183,10 +199,13 @@ package struct ReviseEditorDraft: Sendable {
                 let previousText = previousReplacementTexts[typeIdentifier]
                 let previousBytes = previousText.map { Data($0.utf8) }
                 let replacementWasAuthored = previousBytes
-                    != previousOpeningReplacementBytes[typeIdentifier]
+                    != previousOpeningReplacementTextBytes[typeIdentifier]
+                    || previousReplacementCodecs[typeIdentifier]
+                        != previousOpeningReplacementCodecs[typeIdentifier]
                 if previousChoice == .replace || replacementWasAuthored,
                    let previousText {
                     replacementTexts[typeIdentifier] = previousText
+                    replacementCodecs[typeIdentifier] = previousReplacementCodecs[typeIdentifier]
                 }
             } else if previousChoice != .replace {
                 choices[typeIdentifier] = previousChoice
@@ -197,10 +216,7 @@ package struct ReviseEditorDraft: Sendable {
     }
 
     package func canReplace(_ representation: HistoryRepresentation) -> Bool {
-        Self.canReplace(
-            canonical: representation,
-            effective: effectiveByType[representation.typeIdentifier]
-        )
+        replacementCodecs[representation.typeIdentifier] != nil
     }
 
     package func revisionRequest() -> RevisionRequest {
@@ -232,8 +248,11 @@ package struct ReviseEditorDraft: Sendable {
         case .hide:
             action = .hide
         case .replace:
+            // Replace can only be selected after a validated codec was
+            // installed, and reload never removes an authored draft's codec.
             action = .replace(
-                bytes: Data(replacementText(for: typeIdentifier).utf8)
+                bytes: replacementCodecs[typeIdentifier]!
+                    .encode(replacementText(for: typeIdentifier))
             )
         }
         return RevisionDecision(typeIdentifier: typeIdentifier, action: action)
@@ -243,6 +262,7 @@ package struct ReviseEditorDraft: Sendable {
         let effectiveByType: [String: HistoryRepresentation]
         let choices: [String: Choice]
         let replacementTexts: [String: String]
+        let replacementCodecs: [String: EditorTextCodec]
     }
 
     private static func initialState(details: HistoryDetails) -> InitialState {
@@ -262,71 +282,35 @@ package struct ReviseEditorDraft: Sendable {
         )
         var initialChoices: [String: Choice] = [:]
         var initialTexts: [String: String] = [:]
+        var initialCodecs: [String: EditorTextCodec] = [:]
         for representation in canonical {
             let typeIdentifier = representation.typeIdentifier
             initialChoices[typeIdentifier] = .keepCurrent
-            if canReplace(
-                canonical: representation,
-                effective: currentByType[typeIdentifier]
-            ) {
-                initialTexts[typeIdentifier] = currentByType[typeIdentifier]
-                    .flatMap(decodedText)
-                    ?? decodedText(representation)
-                    ?? ""
+            // Both immutable Canonical and any visible Effective value must
+            // satisfy their exact text format. Current bytes own the editor's
+            // BOM/byte order; a hidden type starts from Canonical instead.
+            guard let canonicalCodec = EditorTextCodec.matching(representation) else {
+                continue
             }
+            let source = currentByType[typeIdentifier] ?? representation
+            let codec: EditorTextCodec
+            if currentByType[typeIdentifier] != nil {
+                guard let currentCodec = EditorTextCodec.matching(source) else {
+                    continue
+                }
+                codec = currentCodec
+            } else {
+                codec = canonicalCodec
+            }
+            guard let text = codec.decode(source.bytes) else { continue }
+            initialTexts[typeIdentifier] = text
+            initialCodecs[typeIdentifier] = codec
         }
         return InitialState(
             effectiveByType: currentByType,
             choices: initialChoices,
-            replacementTexts: initialTexts
+            replacementTexts: initialTexts,
+            replacementCodecs: initialCodecs
         )
-    }
-
-    /// Replace is an encode operation, not a text-likeness heuristic. Clipy
-    /// currently owns exactly one paired editor codec: literal Swift String
-    /// <-> `public.utf8-plain-text` bytes. Structured, abstract, and
-    /// unspecified-encoding UTIs remain byte-exact through Keep Current / Use
-    /// Original / Hide until their own encoders land (review TYPE-2; pasteboard
-    /// type-system memo §9.2).
-    private static let replaceableTypeIdentifier: ClipboardFormatIdentifier =
-        .utf8PlainText
-
-    /// A visible current value must decode with the same exact codec used to
-    /// encode its replacement. When the type is currently hidden, a valid
-    /// Canonical UTF-8 value remains an explicit, safe starting point for
-    /// replacing (and therefore restoring) that representation.
-    private static func canReplace(
-        canonical: HistoryRepresentation,
-        effective: HistoryRepresentation?
-    ) -> Bool {
-        guard supportsLiteralReplacement(canonical) else {
-            return false
-        }
-        guard let effective else {
-            return true
-        }
-        return supportsLiteralReplacement(effective)
-    }
-
-    private static func supportsLiteralReplacement(
-        _ representation: HistoryRepresentation
-    ) -> Bool {
-        guard ClipboardFormatIdentifier(
-            rawValue: representation.typeIdentifier
-        ) == replaceableTypeIdentifier else {
-            return false
-        }
-        return String(data: representation.bytes, encoding: .utf8) != nil
-    }
-
-    private static func decodedText(
-        _ representation: HistoryRepresentation
-    ) -> String? {
-        guard ClipboardFormatIdentifier(
-            rawValue: representation.typeIdentifier
-        ) == replaceableTypeIdentifier else {
-            return nil
-        }
-        return String(data: representation.bytes, encoding: .utf8)
     }
 }

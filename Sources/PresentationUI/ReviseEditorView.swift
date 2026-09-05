@@ -333,8 +333,8 @@ struct ReviseEditorView: View {
         let typeIdentifier = representation.typeIdentifier
         let replacementIsAvailable = draft.canReplace(representation)
         let replacementAccessibilityHint = replacementIsAvailable
-            ? PanelActionsCopy.text(" Replace substitutes literal UTF-8 plain text.")
-            : PanelActionsCopy.text(" Replace requires valid UTF-8 plain text. Other formats can be preserved, restored, or hidden.")
+            ? PanelActionsCopy.text(" Replace edits UTF-8 or UTF-16 plain text while preserving its encoding.")
+            : PanelActionsCopy.text(" Replace requires a supported UTF-8 or UTF-16 plain-text format with valid content. Other formats can be preserved, restored, or hidden.")
         return VStack(alignment: .leading, spacing: PanelTheme.spacingXSmall) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(
@@ -363,8 +363,9 @@ struct ReviseEditorView: View {
                     Text(PanelActionsCopy.text("Use Original")).tag(ReviseEditorDraft.Choice.useOriginal)
                     Text(PanelActionsCopy.text("Hide")).tag(ReviseEditorDraft.Choice.hide)
                     if replacementIsAvailable {
-                        // Exact UTF-8 plain text is the editor's paired codec;
-                        // Details may display other encodings (review TYPE-2).
+                        // The draft admits only the three exact UTF-8/UTF-16
+                        // plain-text identifiers with valid paired codecs.
+                        // Displayability alone never enables replacement.
                         Text(PanelActionsCopy.text("Replace")).tag(ReviseEditorDraft.Choice.replace)
                     }
                 }
@@ -382,7 +383,7 @@ struct ReviseEditorView: View {
             }
             if !replacementIsAvailable {
                 Label(
-                    PanelActionsCopy.text("Replace supports valid UTF-8 plain text only. Keep Current preserves its exact bytes."),
+                    PanelActionsCopy.text("Replace supports valid UTF-8 and UTF-16 plain-text formats. Keep Current preserves exact bytes."),
                     systemImage: "lock"
                 )
                 .font(.caption)

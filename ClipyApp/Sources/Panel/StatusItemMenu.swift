@@ -79,7 +79,7 @@ final class StatusItemMenu: NSObject, NSMenuDelegate {
         self.onQuit = onQuit
         self.onMenuDidClose = onMenuDidClose
         let pauseResumeItem = NSMenuItem(
-            title: "Pause Clipboard Monitoring",
+            title: "Pause Clipboard Monitoring for 5 Minutes",
             action: #selector(toggleCapturePauseClicked(_:)),
             keyEquivalent: ""
         )
@@ -123,7 +123,7 @@ final class StatusItemMenu: NSObject, NSMenuDelegate {
     func refresh() {
         pauseResumeItem.title = isCapturePaused()
             ? "Resume Clipboard Monitoring"
-            : "Pause Clipboard Monitoring"
+            : "Pause Clipboard Monitoring for 5 Minutes"
         pauseResumeItem.isEnabled = canToggleCapturePause()
     }
 

@@ -48,9 +48,13 @@
 - Details and the large preview display exact UTF-8 plus native/external
   UTF-16 plain text. A UTF-16 BOM chooses byte order; without one, native
   text uses arm64 little endian and external text uses big endian. Details
-  retains its 500-character excerpt. Replace continues to require the exact
-  UTF-8 paired editor codec; displaying another encoding does not authorize
-  re-encoding it. Keep Current preserves its exact bytes.
+  retains its 500-character excerpt. Replace admits these same three exact
+  plain-text identifiers when their canonical and visible current bytes are
+  valid. It preserves the editing source's encoding, including UTF-16 byte
+  order and BOM presence; an initially hidden type uses its canonical
+  encoding. Authored replacements retain that encoding across reload. Generic plain
+  text, HTML, RTF, and opaque formats remain preserve/restore/hide-only.
+  Keep Current preserves the current exact bytes.
 - `ContentPreviewTests` prove exact UTF-8 and native/external UTF-16 behavior,
   exact PNG eager BGRA8/sRGB artifacts, malformed/unsupported classification, and
   content-free active-job/source-byte accounting. The history-pane profile
