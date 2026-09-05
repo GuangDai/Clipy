@@ -847,9 +847,7 @@ private struct DetailsBody: View {
                     isHiddenFromEffective: basis == .canonical
                         && !effectiveTypeIdentifiers.contains(
                             representation.typeIdentifier
-                        ),
-                    thumbnails: thumbnails,
-                    item: details.item
+                        )
                 )
             }
         } header: {
@@ -917,20 +915,24 @@ private struct DetailsBody: View {
 
 /// One representation row in the Content section: monospaced type identifier,
 /// byte size, "Hidden" badge (canonical-but-not-effective types), and the
-/// bounded preview — ≤500 characters for exact UTF-8/UTF-16 plain text, or the
-/// item thumbnail for image types. Structured, abstract, encoding-unspecified,
-/// and unknown representations remain type + byte metadata (review TYPE-2).
+/// bounded preview — ≤500 characters for exact UTF-8/UTF-16 plain text.
+/// Image rows show their own type and byte metadata, never the item-level
+/// thumbnail: that payload names neither its selected representation nor its
+/// basis, so it cannot describe each Canonical/Effective row (04 §9).
 private struct RepresentationRow: View {
 
     let representation: DetailsContentPresentation.Representation
     let isHiddenFromEffective: Bool
-    let thumbnails: ThumbnailStore
-    let item: HistoryItemReference
 
     var body: some View {
         let presentation = representation.presentation
         VStack(alignment: .leading, spacing: PanelTheme.spacingXSmall) {
             HStack(alignment: .firstTextBaseline) {
+                if representation.isImage {
+                    Image(systemName: "photo")
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                }
                 Text(representation.typeIdentifier)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
@@ -994,42 +996,13 @@ private struct RepresentationRow: View {
                     PanelActionsCopy.format("Text preview of %@", representation.typeIdentifier)
                 )
             }
-            if presentation == .metadataOnly,
-                !representation.isImage || thumbnails.isUnavailable(for: item)
-            {
+            if representation.showsUnavailablePreviewNotice {
                 Label(PanelActionsCopy.text("Preview unavailable"), systemImage: "doc")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(
                         PanelActionsCopy.format("Preview unavailable for %@", representation.typeIdentifier)
-                    )
-            }
-            if representation.isImage,
-               let raster = thumbnails.raster(for: item),
-               let image = PreviewRasterDisplay.image(
-                   raster,
-                   scale: 2,
-                   label: Text(PanelActionsCopy.text("Item thumbnail"))
-               )
-            {
-                image
-                    .resizable()
-                    .scaledToFit()
-                    // Widen with the resizable main column; the height cap
-                    // grew 90 → 160 (was maxWidth 120 / maxHeight 90).
-                    .frame(
-                        maxWidth: .infinity,
-                        maxHeight: 160,
-                        alignment: .leading
-                    )
-                    .clipShape(
-                        RoundedRectangle(
-                            cornerRadius: PanelTheme.cornerRadiusSmall
-                        )
-                    )
-                    .accessibilityLabel(
-                        PanelActionsCopy.format("Image preview of %@", representation.typeIdentifier)
                     )
             }
         }
@@ -1166,6 +1139,13 @@ package struct DetailsContentPresentation: Sendable {
         package let byteCount: Int
         package let presentation: DetailsRepresentationPresentation
         package let isImage: Bool
+
+        /// Item-thumbnail success or failure does not classify an individual
+        /// image representation. Its row retains metadata without claiming
+        /// that the source image was decoded or found unavailable (04 §9).
+        package var showsUnavailablePreviewNotice: Bool {
+            presentation == .metadataOnly && !isImage
+        }
     }
 
     package let canonical: [Representation]
