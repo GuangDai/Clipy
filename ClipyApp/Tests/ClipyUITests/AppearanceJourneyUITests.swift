@@ -303,7 +303,7 @@ final class AppearanceJourneyUITests: XCTestCase {
         // explicit pointer velocity and hold at the endpoint before release.
         let dividerCenter = divider.coordinate(
             withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
-        )
+        ).withOffset(CGVector(dx: -0.5, dy: 0))
         dividerCenter.click(
             forDuration: 0.3,
             // 320 → 260 avoids both the 240-point settled minimum and the
