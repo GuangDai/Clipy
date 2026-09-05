@@ -568,16 +568,20 @@ public struct HistoryPanelView: View {
             } action: { newSize in
                 panelTotalWidth = newSize.width
             }
-            // The closed-pane edge opener (V2-07 §3): a thin invisible
-            // strip pinned to the preview-side content edge admits an
-            // inward pull-to-open drag. It exists only while the pane is
-            // closed — the open pane's divider handle owns that region.
+            // Both handles live over the full content bounds. In particular,
+            // the open handle's 9-point hit region must not depend on hitting
+            // the visual Divider's 1-point parent. The narrow overlay changes
+            // hit testing only; it contributes no width to the column layout.
             .overlay(
                 alignment: previewPlacement == .trailing
                     ? .trailing
                     : .leading
             ) {
-                if !previewState.isOpen {
+                if previewState.isOpen {
+                    previewDividerHitStrip
+                        .offset(x: (previewPlacement == .trailing ? -1 : 1)
+                            * (previewColumnWidth + (PanelGeometry.dividerWidth - 9) / 2))
+                } else {
                     previewEdgeOpener
                 }
             }
@@ -719,13 +723,11 @@ public struct HistoryPanelView: View {
         .transition(.opacity)
     }
 
-    /// The 1 pt column separator plus the invisible 9 pt drag hit-strip
-    /// centered on it (the divider itself stays visually 1 pt; the overlay
-    /// widens only the hit area). `zIndex` keeps the strip ahead of both
-    /// columns' own hit regions in the few points where they overlap.
+    /// The visual 1-point separator. The 9-point interaction strip is
+    /// centered over it by the full-content overlay, independently of this
+    /// narrow view's hit bounds. The drag readout stays purely visual here.
     private var previewDivider: some View {
         Divider()
-            .overlay { previewDividerHitStrip }
             // Live drag readout (V2-07 §3): a composited pill while a drag
             // is active. Overlay-only — it joins no layout pass, and the
             // width it displays is never animated (the layout-storm lesson
@@ -787,14 +789,14 @@ public struct HistoryPanelView: View {
                             translation: value.translation.width
                         )
                         #if DEBUG
-                        print("[DEBUG-divider-20260905] changed translation=\(value.translation.width) start=\(startWidth) width=\(previewColumnWidth)")
+                        print("[DEBUG-divider-20260905] time=\(Date().timeIntervalSince1970) changed translation=\(value.translation.width) start=\(startWidth) width=\(previewColumnWidth)")
                         #endif
                     }
                     .onEnded { value in
                         let startWidth = previewDragStartWidth
                             ?? previewColumnWidth
                         #if DEBUG
-                        print("[DEBUG-divider-20260905] ended translation=\(value.translation.width) predicted=\(value.predictedEndTranslation.width) start=\(startWidth) width=\(previewColumnWidth)")
+                        print("[DEBUG-divider-20260905] time=\(Date().timeIntervalSince1970) ended translation=\(value.translation.width) predicted=\(value.predictedEndTranslation.width) start=\(startWidth) width=\(previewColumnWidth)")
                         #endif
                         previewDragStartWidth = nil
                         switch PanelGeometry.previewDragOutcome(
@@ -831,7 +833,7 @@ public struct HistoryPanelView: View {
                             )
                         }
                         #if DEBUG
-                        print("[DEBUG-divider-20260905] settled width=\(previewColumnWidth) isOpen=\(previewState.isOpen)")
+                        print("[DEBUG-divider-20260905] time=\(Date().timeIntervalSince1970) settled width=\(previewColumnWidth) isOpen=\(previewState.isOpen)")
                         #endif
                     }
             )
@@ -839,7 +841,7 @@ public struct HistoryPanelView: View {
                 TapGesture(count: 2)
                     .onEnded { _ in
                         #if DEBUG
-                        print("[DEBUG-divider-20260905] reset oldWidth=\(previewColumnWidth)")
+                        print("[DEBUG-divider-20260905] time=\(Date().timeIntervalSince1970) reset oldWidth=\(previewColumnWidth)")
                         #endif
                         previewColumnWidth = PanelGeometry.previewWidth
                         PanelGeometry.persistPreviewColumnWidth(
