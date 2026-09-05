@@ -149,6 +149,9 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         isFloatingPanel = true
         level = .statusBar
         collectionBehavior = [.auxiliary, .stationary, .moveToActiveSpace, .fullScreenAuxiliary]
+        // SwiftUI's header background owns window dragging. AppKit's
+        // automatic background drag also moved the whole panel when the
+        // user dragged the preview divider instead of resizing its column.
         isMovableByWindowBackground = false
         hidesOnDeactivate = false
         backgroundColor = .clear

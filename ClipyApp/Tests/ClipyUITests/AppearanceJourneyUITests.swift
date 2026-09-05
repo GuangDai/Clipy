@@ -364,6 +364,120 @@ final class AppearanceJourneyUITests: XCTestCase {
         XCTAssertEqual(panel.frame.width, baselinePanelFrame.width, accuracy: 3)
         XCTAssertEqual(panel.frame.height, baselinePanelFrame.height, accuracy: 3)
 
+        // The advertised 9-point strip must admit drags on both sides of
+        // the visual separator, not only at its center. Each attempt starts
+        // after a real reset and obtains fresh frames and pointer coordinates.
+        for hitOffset in [CGFloat(-3), CGFloat(3)] {
+            let sidePanelFrame = panel.frame
+            let sideDividerOffset = divider.frame.midX - sidePanelFrame.minX
+            let sidePreviewSpan = sidePanelFrame.maxX - divider.frame.midX
+            let sideStart = divider.coordinate(
+                withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
+            ).withOffset(CGVector(dx: hitOffset, dy: 0))
+            sideStart.click(
+                forDuration: 0.3,
+                thenDragTo: sideStart.withOffset(CGVector(dx: 60, dy: 0)),
+                withVelocity: XCUIGestureVelocity(rawValue: 40),
+                thenHoldForDuration: 0.5
+            )
+            assertExists(
+                preview, timeout: 5, in: app,
+                context: "preview survives divider hit offset \(hitOffset)"
+            )
+            XCTAssertTrue(
+                waitUntil(timeout: 5) {
+                    panel.exists && divider.exists
+                        && divider.frame.midX - panel.frame.minX >= sideDividerOffset + 20
+                },
+                diagnostic(app, context: "divider moves from hit offset \(hitOffset)")
+            )
+            let sideDraggedFrame = panel.frame
+            let sideDraggedSpan = sideDraggedFrame.maxX - divider.frame.midX
+            XCTAssertLessThanOrEqual(
+                sideDraggedSpan, sidePreviewSpan - 20,
+                diagnostic(app, context: "side hit \(hitOffset) narrows preview")
+            )
+            XCTAssertGreaterThanOrEqual(sideDraggedSpan, 237.5)
+            XCTAssertEqual(sideDraggedFrame.minX, sidePanelFrame.minX, accuracy: 3)
+            XCTAssertEqual(sideDraggedFrame.minY, sidePanelFrame.minY, accuracy: 3)
+            XCTAssertEqual(sideDraggedFrame.width, sidePanelFrame.width, accuracy: 3)
+            XCTAssertEqual(sideDraggedFrame.height, sidePanelFrame.height, accuracy: 3)
+
+            divider.doubleClick()
+            assertExists(
+                preview, timeout: 5, in: app,
+                context: "preview survives reset after hit offset \(hitOffset)"
+            )
+            XCTAssertTrue(
+                waitUntil(timeout: 5) {
+                    panel.exists && divider.exists
+                        && abs((divider.frame.midX - panel.frame.minX) - sideDividerOffset) <= 3
+                        && abs((panel.frame.maxX - divider.frame.midX) - sidePreviewSpan) <= 3
+                },
+                diagnostic(app, context: "double-click resets side hit \(hitOffset)")
+            )
+            XCTAssertEqual(panel.frame.minX, sidePanelFrame.minX, accuracy: 3)
+            XCTAssertEqual(panel.frame.minY, sidePanelFrame.minY, accuracy: 3)
+            XCTAssertEqual(panel.frame.width, sidePanelFrame.width, accuracy: 3)
+            XCTAssertEqual(panel.frame.height, sidePanelFrame.height, accuracy: 3)
+        }
+
+        // Header background drag moves the whole window, not either column.
+        // Stay horizontal: x=40 plus the 721-point panel and a 60-point move
+        // fits the 1024-point runner without invoking screen-edge clamping.
+        let searchField = app.textFields["clipy.search.field"]
+        let firstRow = historyRows(in: app).firstMatch
+        assertExists(searchField, timeout: 5, in: app, context: "search field before header drag")
+        assertExists(firstRow, timeout: 5, in: app, context: "first row below header drag")
+        let beforeHeaderDragFrame = panel.frame
+        for windowTranslation in [CGFloat(60), CGFloat(-60)] {
+            let windowFrame = panel.frame
+            let searchFrame = searchField.frame
+            let windowDividerOffset = divider.frame.midX - windowFrame.minX
+            let windowPreviewSpan = windowFrame.maxX - divider.frame.midX
+            // Search has 6 points of inner bottom padding; another 3 points
+            // reaches the middle of the header's 6-point outer padding.
+            // Check the live AX geometry before dispatching either drag.
+            let headerPoint = CGPoint(x: searchFrame.midX, y: searchFrame.maxY + 9)
+            XCTAssertTrue(windowFrame.contains(headerPoint))
+            XCTAssertFalse(searchFrame.contains(headerPoint))
+            XCTAssertLessThan(headerPoint.y, firstRow.frame.minY)
+            let headerStart = panel.coordinate(
+                withNormalizedOffset: CGVector(dx: 0, dy: 0)
+            ).withOffset(CGVector(
+                dx: headerPoint.x - windowFrame.minX,
+                dy: headerPoint.y - windowFrame.minY
+            ))
+            headerStart.click(
+                forDuration: 0.3,
+                thenDragTo: headerStart.withOffset(CGVector(dx: windowTranslation, dy: 0)),
+                withVelocity: XCUIGestureVelocity(rawValue: 40),
+                thenHoldForDuration: 0.5
+            )
+            XCTAssertTrue(
+                waitUntil(timeout: 5) {
+                    panel.exists
+                        && abs(panel.frame.minX - windowFrame.minX - windowTranslation) <= 3
+                },
+                diagnostic(app, context: "header moves window by \(windowTranslation) points")
+            )
+            assertExists(preview, timeout: 5, in: app, context: "preview survives header drag")
+            let movedWindowFrame = panel.frame
+            XCTAssertEqual(movedWindowFrame.minY, windowFrame.minY, accuracy: 3)
+            XCTAssertEqual(movedWindowFrame.width, windowFrame.width, accuracy: 3)
+            XCTAssertEqual(movedWindowFrame.height, windowFrame.height, accuracy: 3)
+            XCTAssertEqual(
+                divider.frame.midX - movedWindowFrame.minX, windowDividerOffset, accuracy: 3
+            )
+            XCTAssertEqual(
+                movedWindowFrame.maxX - divider.frame.midX, windowPreviewSpan, accuracy: 3
+            )
+        }
+        XCTAssertEqual(panel.frame.minX, beforeHeaderDragFrame.minX, accuracy: 3)
+        XCTAssertEqual(panel.frame.minY, beforeHeaderDragFrame.minY, accuracy: 3)
+        XCTAssertEqual(panel.frame.width, beforeHeaderDragFrame.width, accuracy: 3)
+        XCTAssertEqual(panel.frame.height, beforeHeaderDragFrame.height, accuracy: 3)
+
         openAppearanceTab(in: app)
         assertExists(previewSide, timeout: 5, in: app, context: "preview side restore control")
         assertExists(panelPosition, timeout: 5, in: app, context: "panel position restore control")

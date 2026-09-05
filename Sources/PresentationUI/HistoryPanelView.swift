@@ -951,6 +951,15 @@ public struct HistoryPanelView: View {
             .padding(.horizontal, PanelTheme.headerHorizontalPadding)
             .padding(.top, PanelTheme.headerTopPadding)
             .padding(.bottom, PanelTheme.headerBottomPadding)
+            .background {
+                // Only the header's empty background drags the window;
+                // foreground search controls keep their own interactions.
+                // List drag-out and the preview divider remain independent.
+                Color.clear
+                    .contentShape(Rectangle())
+                    .gesture(WindowDragGesture())
+                    .allowsWindowActivationEvents()
+            }
 
             NavigationStack(path: $surfaceState.detailsPath) {
                 HistoryListView(
