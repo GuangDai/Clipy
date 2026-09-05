@@ -236,9 +236,10 @@ final class AppearanceJourneyUITests: XCTestCase {
 
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
 
-        // Automatic placement can flip the preview to the left near a
-        // screen edge. Configure a right-side, centered, default-size panel
-        // through the real Settings controls before measuring its divider.
+        // Even an explicit Right preference can flip near a screen edge.
+        // A 400-point main panel centered on the 1024-point CI screen leaves
+        // only 312 points to its right, less than the 321-point preview.
+        // Use the real cursor-placement setting with space for that expansion.
         openAppearanceTab(in: app)
         let previewSide = app.descendants(matching: .any)[
             "clipy.settings.appearance.preview-side"
@@ -251,8 +252,14 @@ final class AppearanceJourneyUITests: XCTestCase {
         assertExists(panelPosition, timeout: 5, in: app, context: "panel position control")
         assertExists(resetPanelSize, timeout: 5, in: app, context: "panel size reset control")
         chooseOption("Right", in: previewSide, app: app, context: "trailing preview")
-        chooseOption("At Screen Center", in: panelPosition, app: app, context: "centered panel")
+        chooseOption("At Mouse Cursor", in: panelPosition, app: app, context: "cursor-placed panel")
         resetPanelSize.click()
+        // Move only the pointer while the coordinate's real Settings
+        // control still exists. Cmd-W and the summon shortcut below keep
+        // this x=40 position, leaving room for the trailing preview.
+        previewSide.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .withOffset(CGVector(dx: 40 - previewSide.frame.midX, dy: 0))
+            .hover()
         closeSettingsAndSummonPanel(control: previewSide, panel: panel, app: app)
 
         // The selected row normally opens Preview through the production
