@@ -40,9 +40,13 @@ enum CaptureNoticePresentation {
 /// first-page count a lower bound, so `+` is preserved instead of presenting
 /// it as an exact total (REVIEW UI-16 / Card 15D).
 enum SearchResultCountAnnouncementPresentation {
-    static func message(count: Int, hasNextPage: Bool) -> String {
-        if hasNextPage { return "\(count)+ results" }
-        return count == 1 ? "1 result" : "\(count) results"
+    static func message(
+        count: Int, hasNextPage: Bool,
+        bundle: Bundle = .main, locale: Locale = .current
+    ) -> String {
+        AppHistoryAnnouncementsCopy.searchResults(
+            count: count, hasNextPage: hasNextPage, bundle: bundle, locale: locale
+        )
     }
 }
 
@@ -105,21 +109,25 @@ struct AccessibilityAnnouncement {
         )
     }
 
-    func announceHistoryItemRemoved() {
+    func announceHistoryItemRemoved(bundle: Bundle = .main) {
         operations.post(
-            "Item removed from history.",
+            AppHistoryAnnouncementsCopy.text("Item removed from history.", bundle: bundle),
             priority: .medium
         )
     }
 
     func announceSettledSearchResultCount(
         _ count: Int,
-        hasNextPage: Bool
+        hasNextPage: Bool,
+        bundle: Bundle = .main,
+        locale: Locale = .current
     ) {
         operations.post(
             SearchResultCountAnnouncementPresentation.message(
                 count: count,
-                hasNextPage: hasNextPage
+                hasNextPage: hasNextPage,
+                bundle: bundle,
+                locale: locale
             ),
             priority: .medium
         )

@@ -211,8 +211,8 @@ public final class ThumbnailStore {
     /// requesting key only:
     /// - a `nil` payload (no thumbnailable content) is recorded as a miss,
     ///   so the row's fallback icon stops re-asking;
-    /// - `.thumbnailUnavailable` is the same stable miss for these immutable
-    ///   bytes, so scrolling does not repeatedly decode a malformed image;
+    /// - `.thumbnailUnavailable` is retained as an unavailable result in this
+    ///   surface; scrolling reuses it until an existing eviction, purge, or reset;
     /// - other failures are NOT retained — stale references, cancellation,
     ///   storage failures, and transient unavailability may recover.
     public func prefetch(_ item: HistoryItemReference) {

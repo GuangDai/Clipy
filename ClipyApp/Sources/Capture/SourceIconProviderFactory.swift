@@ -5,22 +5,15 @@
 /// `SourceIconProvider` value it consumes is built here at the composition
 /// boundary; a nil image is the row's documented fallback-symbol signal.
 ///
-/// The rasterized cache lives for the process run: application icons do
-/// not change meaningfully between panel sessions, and PresentationUI's
-/// own store must never re-rasterize across them. Misses are memoized too
-/// (a nil entry), so an unresolvable bundle identifier is looked up once.
+/// Retention belongs to PresentationUI's bounded per-surface SourceIconStore,
+/// including negative results. This factory resolves and rasterizes only;
+/// it does not keep a second process-lifetime collection of decoded icons.
 import AppKit
 import CoreGraphics
 import PresentationUI
 
 @MainActor
 enum SourceIconProviderFactory {
-    /// Rendered icons keyed by bundle identifier; `nil` values memoize
-    /// misses. Static process-lifetime storage is safe here because every
-    /// entry is an immutable `CGImage` and the whole factory is confined to
-    /// the main actor (01 §6).
-    private static var rasterizedIcons: [String: CGImage?] = [:]
-
     /// The rasterization edge in pixels: 2× the 32-point row slot, so the
     /// image stays sharp on Retina displays (the consumer chooses the
     /// point size; only pixels cross this boundary).
@@ -32,17 +25,8 @@ enum SourceIconProviderFactory {
     /// and nothing is retried eagerly.
     static func makeProvider() -> SourceIconProvider {
         SourceIconProvider(loadIcon: { bundleID in
-            icon(for: bundleID)
+            rasterizeIcon(for: bundleID)
         })
-    }
-
-    private static func icon(for bundleID: String) -> CGImage? {
-        if let cached = rasterizedIcons[bundleID] {
-            return cached
-        }
-        let rendered = rasterizeIcon(for: bundleID)
-        rasterizedIcons[bundleID] = rendered
-        return rendered
     }
 
     /// Resolves the owning application and draws its icon into one

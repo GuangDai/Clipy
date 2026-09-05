@@ -7,6 +7,75 @@ import Testing
 
 struct HistoryDetailsFormatSafetyTests {
 
+    @Test func preparedDetailsKeepBothBasesAndTextSiblingsIndependent() throws {
+        let canonical = [
+            HistoryRepresentation(typeIdentifier: "public.html", bytes: Data("<p>original</p>".utf8)),
+            HistoryRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data(String(repeating: "🦊", count: 501).utf8)),
+            HistoryRepresentation(typeIdentifier: "public.utf16-external-plain-text", bytes: Data([0x00, 0x41])),
+        ]
+        let effective = [
+            HistoryRepresentation(typeIdentifier: "public.html", bytes: Data("<p>current</p>".utf8)),
+            HistoryRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data(String(repeating: "x", count: 501).utf8) + Data([0xFF])),
+            HistoryRepresentation(typeIdentifier: "public.utf16-external-plain-text", bytes: Data([0x00, 0x42])),
+        ]
+        let prepared = try DetailsContentPresentation(details: details(canonical: canonical, effective: effective))
+
+        #expect(!prepared.effectiveMatchesCanonical)
+        #expect(prepared.canonical.map(\.typeIdentifier) == canonical.map(\.typeIdentifier))
+        #expect(prepared.effective.map(\.byteCount) == effective.map(\.bytes.count))
+        #expect(prepared.canonical[0].presentation == .metadataOnly)
+        #expect(prepared.canonical[1].presentation == .plainText(String(repeating: "🦊", count: 500)))
+        #expect(prepared.canonical[2].presentation == .plainText("A"))
+        #expect(prepared.effective[0].presentation == .metadataOnly)
+        #expect(prepared.effective[1].presentation == .metadataOnly, "invalid bytes beyond the displayed prefix still reject the complete input")
+        #expect(prepared.effective[2].presentation == .plainText("B"))
+        #expect(prepared.title == "B", "the title uses the same prepared effective previews")
+    }
+
+    @Test func preparedUTF16StillValidatesBytesBeyondTheDisplayLimit() throws {
+        let bytes = Data(Array(repeating: [UInt8(0x00), 0x41], count: 501).flatMap { $0 })
+            + Data([0xD8, 0x00])
+        let representation = HistoryRepresentation(typeIdentifier: "public.utf16-external-plain-text", bytes: bytes)
+        let prepared = try DetailsContentPresentation(details: details(
+            canonical: [representation], effective: [representation]
+        ))
+        #expect(prepared.effectiveMatchesCanonical)
+        #expect(prepared.canonical[0].presentation == .metadataOnly)
+        #expect(prepared.effective[0].presentation == .metadataOnly)
+        #expect(prepared.title == nil)
+    }
+
+    @Test @MainActor
+    func cancelledDetailsPreparationDoesNotPublishPartialRows() async {
+        let representation = HistoryRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data("complete".utf8))
+        let snapshot = details(canonical: [representation], effective: [representation])
+        let preparation = Task { try DetailsContentPresentation(details: snapshot) }
+        preparation.cancel()
+        do {
+            _ = try await preparation.value
+            Issue.record("Cancelled preparation must throw instead of returning display rows")
+        } catch is CancellationError {
+            // The actual preparation initializer observes task cancellation.
+        } catch {
+            Issue.record("Unexpected preparation error: \(error)")
+        }
+    }
+
+    private func details(
+        canonical: [HistoryRepresentation], effective: [HistoryRepresentation]
+    ) -> HistoryDetails {
+        HistoryDetails(
+            item: HistoryItemReference(id: HistoryItemID(rawValue: UUID()), contentVersion: .initial),
+            canonical: canonical, effective: effective, revisions: [],
+            occurrence: CopyOccurrenceSummary(
+                firstCopiedAt: Date(timeIntervalSinceReferenceDate: 1),
+                lastCopiedAt: Date(timeIntervalSinceReferenceDate: 2),
+                count: 1, firstSource: nil, lastSource: nil
+            ),
+            pinnedPosition: nil
+        )
+    }
+
     @Test func exactUTF8PlainTextDisplaysDecodedText() {
         let representation = HistoryRepresentation(
             typeIdentifier: "public.utf8-plain-text",

@@ -210,7 +210,7 @@ struct HistoryDetailsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if showsEditor, case .loaded(let details) = phase {
+            if showsEditor, case .loaded(let details, _) = phase {
                 ReviseEditorView(
                     viewState: viewState,
                     details: details,
@@ -245,8 +245,8 @@ struct HistoryDetailsView: View {
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                case .loaded(let details):
-                    loadedLayout(for: details)
+                case .loaded(let details, let content):
+                    loadedLayout(for: details, content: content)
                 }
             }
         }
@@ -335,7 +335,10 @@ struct HistoryDetailsView: View {
     // MARK: Loaded layout
 
     @ViewBuilder
-    private func loadedLayout(for details: HistoryDetails) -> some View {
+    private func loadedLayout(
+        for details: HistoryDetails,
+        content: DetailsContentPresentation
+    ) -> some View {
         VStack(spacing: 0) {
             if showsStaleNotice {
                 noticeBanner(
@@ -357,6 +360,7 @@ struct HistoryDetailsView: View {
             }
             DetailsBody(
                 details: details,
+                content: content,
                 thumbnails: thumbnails,
                 basis: $basis,
                 usesTwoColumnLayout: DetailsLayout.usesTwoColumnLayout(
@@ -502,7 +506,25 @@ struct HistoryDetailsView: View {
                 }
                 return
             }
-            phase = .loaded(details)
+            // Resolve all text rows once per immutable details snapshot,
+            // away from MainActor body evaluation. Cancellation can retire
+            // work between representations, not preempt a synchronous decode.
+            let preparation = Task.detached(priority: .userInitiated) {
+                try DetailsContentPresentation(details: details)
+            }
+            let content = try await withTaskCancellationHandler {
+                try await preparation.value
+            } onCancel: {
+                preparation.cancel()
+            }
+            guard reconcileSurfacePurge(viewState.surfacePurge) else { return }
+            guard loadFence.accepts(
+                generation,
+                returned: details.item,
+                expected: currentItem,
+                isCancelled: Task.isCancelled
+            ) else { return }
+            phase = .loaded(details, content)
         } catch let failure as HistoryFailure {
             guard reconcileSurfacePurge(viewState.surfacePurge) else { return }
             guard !Task.isCancelled, loadFence.owns(generation) else { return }
@@ -632,6 +654,7 @@ private struct DetailsBody: View {
     private static let metadataColumnWidth: CGFloat = 280
 
     let details: HistoryDetails
+    let content: DetailsContentPresentation
     let thumbnails: ThumbnailStore
     @Binding var basis: ContentBasis
     let usesTwoColumnLayout: Bool
@@ -700,7 +723,7 @@ private struct DetailsBody: View {
                     alignment: .leading,
                     spacing: PanelTheme.spacingXXSmall
                 ) {
-                    Text(detailTitle(for: details))
+                    Text(content.title ?? PanelActionsCopy.text("Clipboard Item"))
                         .font(.headline)
                         .lineLimit(2)
                         .accessibilityIdentifier("clipy.details.title")
@@ -882,11 +905,11 @@ private struct DetailsBody: View {
     /// construction; storage's no-op rule (02 §11 step 5) compares proposed
     /// content byte-for-byte, mirrored here by the representation lists.
     private var canRevertToOriginal: Bool {
-        !details.revisions.isEmpty && details.effective != details.canonical
+        !details.revisions.isEmpty && !content.effectiveMatchesCanonical
     }
 
-    private var representations: [HistoryRepresentation] {
-        basis == .effective ? details.effective : details.canonical
+    private var representations: [DetailsContentPresentation.Representation] {
+        basis == .effective ? content.effective : content.canonical
     }
 
     private var effectiveTypeIdentifiers: Set<String> {
@@ -898,20 +921,18 @@ private struct DetailsBody: View {
 
 /// One representation row in the Content section: monospaced type identifier,
 /// byte size, "Hidden" badge (canonical-but-not-effective types), and the
-/// bounded preview — ≤500 characters only for exact UTF-8 plain text, or the
+/// bounded preview — ≤500 characters for exact UTF-8/UTF-16 plain text, or the
 /// item thumbnail for image types. Structured, abstract, encoding-unspecified,
 /// and unknown representations remain type + byte metadata (review TYPE-2).
 private struct RepresentationRow: View {
 
-    let representation: HistoryRepresentation
+    let representation: DetailsContentPresentation.Representation
     let isHiddenFromEffective: Bool
     let thumbnails: ThumbnailStore
     let item: HistoryItemReference
 
     var body: some View {
-        let presentation = DetailsRepresentationPresentation.resolve(
-            representation
-        )
+        let presentation = representation.presentation
         VStack(alignment: .leading, spacing: PanelTheme.spacingXSmall) {
             HStack(alignment: .firstTextBaseline) {
                 Text(representation.typeIdentifier)
@@ -935,7 +956,7 @@ private struct RepresentationRow: View {
                 }
                 Text(
                     DetailsFormat.bytes.string(
-                        fromByteCount: Int64(representation.bytes.count)
+                        fromByteCount: Int64(representation.byteCount)
                     )
                 )
                 .font(.caption)
@@ -1074,7 +1095,7 @@ private struct RevisionRow: View {
 /// The lifecycle of one detail load (03b §10 typed failures mapped).
 private enum DetailsPhase {
     case loading
-    case loaded(HistoryDetails)
+    case loaded(HistoryDetails, DetailsContentPresentation)
     case removed
     case failed(message: String)
 }
@@ -1132,6 +1153,59 @@ package enum DetailsRepresentationPresentation: Equatable, Sendable {
             )
         default:
             return nil
+        }
+    }
+}
+
+/// Immutable display values prepared once for one Details load. Rows retain
+/// bounded text and byte counts, never another copy of the source Data. This
+/// is owned by the loaded phase and discarded with that snapshot.
+package struct DetailsContentPresentation: Sendable {
+    package struct Representation: Sendable {
+        package let typeIdentifier: String
+        package let byteCount: Int
+        package let presentation: DetailsRepresentationPresentation
+    }
+
+    package let canonical: [Representation]
+    package let effective: [Representation]
+    package let effectiveMatchesCanonical: Bool
+    /// Literal active-revision or first text title; the view localizes only
+    /// its absent-title fallback, not user content or durable revision titles.
+    package let title: String?
+
+    package init(details: HistoryDetails) throws {
+        canonical = try Self.prepare(details.canonical)
+        try Task.checkCancellation()
+        effectiveMatchesCanonical = details.effective == details.canonical
+        if effectiveMatchesCanonical {
+            effective = canonical
+        } else {
+            effective = try Self.prepare(details.effective)
+        }
+        if let active = details.revisions.first(where: \.isActive) {
+            title = active.title
+        } else {
+            title = effective.lazy.compactMap { representation -> String? in
+                guard case .plainText(let text) = representation.presentation else { return nil }
+                let firstLine = text.split(whereSeparator: \.isNewline).first?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return firstLine.isEmpty ? nil : String(firstLine.prefix(100))
+            }.first
+        }
+        try Task.checkCancellation()
+    }
+
+    private static func prepare(
+        _ representations: [HistoryRepresentation]
+    ) throws -> [Representation] {
+        try representations.map { representation in
+            try Task.checkCancellation()
+            return Representation(
+                typeIdentifier: representation.typeIdentifier,
+                byteCount: representation.bytes.count,
+                presentation: DetailsRepresentationPresentation.resolve(representation)
+            )
         }
     }
 }
@@ -1199,29 +1273,6 @@ private func typeSymbol(for typeIdentifiers: [String]) -> String {
     return "doc.on.clipboard"
 }
 
-/// The header title. Storage projects every revision's title from its
-/// content (ContentProjector, 05 §15), so the active revision's title IS the
-/// item's current title; the client-side fallback mirrors that derivation
-/// for robustness.
-private func detailTitle(for details: HistoryDetails) -> String {
-    if let active = details.revisions.first(where: \.isActive) {
-        return active.title
-    }
-    for representation in details.effective {
-        guard case .plainText(let text) =
-            DetailsRepresentationPresentation.resolve(representation)
-        else { continue }
-        let firstLine = text
-            .split(whereSeparator: \.isNewline)
-            .first?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !firstLine.isEmpty {
-            return String(firstLine.prefix(100))
-        }
-    }
-    return PanelActionsCopy.text("Clipboard Item")
-}
-
 #if DEBUG
 // Previews build DTOs through the package-visible inits (03a §3
 // scripted-preview allowance). PreviewClipboardHistory.details throws
@@ -1241,25 +1292,33 @@ private func detailTitle(for details: HistoryDetails) -> String {
 }
 
 #Preview("Content") {
-    DetailsBody(
-        details: detailsPreviewDetails(),
-        thumbnails: ThumbnailStore(history: PreviewClipboardHistory.empty),
-        basis: .constant(.effective),
-        usesTwoColumnLayout: false,
-        onRevise: { _ in }
-    )
-    .frame(width: 400, height: 560)
+    let details = detailsPreviewDetails()
+    if let content = try? DetailsContentPresentation(details: details) {
+        DetailsBody(
+            details: details,
+            content: content,
+            thumbnails: ThumbnailStore(history: PreviewClipboardHistory.empty),
+            basis: .constant(.effective),
+            usesTwoColumnLayout: false,
+            onRevise: { _ in }
+        )
+        .frame(width: 400, height: 560)
+    }
 }
 
 #Preview("Content (Two-Column)") {
-    DetailsBody(
-        details: detailsPreviewDetails(),
-        thumbnails: ThumbnailStore(history: PreviewClipboardHistory.empty),
-        basis: .constant(.effective),
-        usesTwoColumnLayout: true,
-        onRevise: { _ in }
-    )
-    .frame(width: 720, height: 560)
+    let details = detailsPreviewDetails()
+    if let content = try? DetailsContentPresentation(details: details) {
+        DetailsBody(
+            details: details,
+            content: content,
+            thumbnails: ThumbnailStore(history: PreviewClipboardHistory.empty),
+            basis: .constant(.effective),
+            usesTwoColumnLayout: true,
+            onRevise: { _ in }
+        )
+        .frame(width: 720, height: 560)
+    }
 }
 
 private func detailsPreviewDetails() -> HistoryDetails {

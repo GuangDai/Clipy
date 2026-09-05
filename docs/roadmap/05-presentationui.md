@@ -73,7 +73,7 @@
   ceilings or read cache/in-flight counters. This does not admit the deferred shared
   completed-thumbnail cache or establish an RSS/eviction performance budget.
 - The same bounded surface store retains `.thumbnailUnavailable` as an exact-
-  reference miss, so a malformed image is not requested again on every scroll.
+  reference unavailable result, reused on repeated scrolls within this surface.
   A new Content Version has its own answer; existing reset, clear, removal,
   revision purge, and capacity eviction release the miss. Other typed failures
   and cancellation remain eligible for a later request.

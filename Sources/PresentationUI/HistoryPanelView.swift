@@ -306,6 +306,7 @@ public final class HistoryPanelSurfaceState {
         // page) actually arrives. Merely ending loading with a failure is not
         // authoritative removal evidence (review Card 8A/8C).
         guard hasAuthoritativeFirstPage else { return }
+        quickLookReference = resolvedQuickLookReference(in: rows)
         guard let selection else {
             guard isAwaitingInitialSelection else { return }
             self.selection = PanelSessionSelection.preparedSelection(in: rows)
@@ -352,12 +353,31 @@ public final class HistoryPanelSurfaceState {
     package func retargetHiddenSelectionToDisplayedDefault(
         displayedRows: [HistoryRow]
     ) {
-        guard isSessionActive, let selection else { return }
+        guard isSessionActive else { return }
+        quickLookReference = resolvedQuickLookReference(in: displayedRows)
+        guard let selection else { return }
         guard !displayedRows.contains(where: { $0.item.id == selection })
         else { return }
         self.selection = PanelSessionSelection.preparedSelection(
             in: displayedRows
         )
+    }
+
+    /// Quick Look keeps its trigger-time target until that item is hidden,
+    /// removed, or revised. Resolve directly for rendering as well as state
+    /// reconciliation, so invalid content does not wait for an onChange
+    /// callback to disappear. Older rows cannot retire a newer known target,
+    /// and a query-loading gap is not authoritative absence.
+    package func resolvedQuickLookReference(
+        in rows: [HistoryRow],
+        hasAuthoritativeFirstPage: Bool = true
+    ) -> HistoryItemReference? {
+        guard let quickLookReference else { return nil }
+        guard hasAuthoritativeFirstPage else { return quickLookReference }
+        guard let row = rows.first(where: { $0.item.id == quickLookReference.id }),
+              row.item.contentVersion <= quickLookReference.contentVersion
+        else { return nil }
+        return quickLookReference
     }
 
     /// Exact executable selection for the AppKit window's IME-aware Return
@@ -652,24 +672,21 @@ public struct HistoryPanelView: View {
             // The quick-look overlay layers above the whole panel (browsing
             // and preview columns alike); it renders only while the surface
             // state holds a trigger-time exact reference.
-            if let quickLookItem = surfaceState.quickLookReference {
+            if let quickLookItem = surfaceState.resolvedQuickLookReference(
+                in: displayedSelectionRows,
+                hasAuthoritativeFirstPage: viewState.hasAuthoritativeFirstPage
+            ) {
                 HistoryQuickLookOverlay(
                     viewState: viewState,
                     previewState: previewState,
                     item: quickLookItem,
                     onDismiss: { surfaceState.quickLookReference = nil }
                 )
-                .transition(.opacity)
+                // Removed/revised content must not remain visible as a
+                // retained fading-out view after its target is invalidated.
+                .transition(.identity)
             }
         }
-        // Restrained motion, SwiftUI-local only: the overlay fades in/out.
-        // The preview column's WIDTH is never animated — FloatingPanel
-        // documents the NSHostingView re-layout storm a width animation
-        // forces per frame; compositing an opacity fade does not.
-        .animation(
-            .easeInOut(duration: 0.18),
-            value: surfaceState.quickLookReference != nil
-        )
     }
 
     // MARK: Main column
