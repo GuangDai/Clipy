@@ -1140,6 +1140,9 @@ package enum DetailsRepresentationPresentation: Equatable, Sendable {
         case .utf8PlainText:
             return String(data: bytes, encoding: .utf8)
         case .utf16PlainText, .utf16ExternalPlainText:
+            // Foundation may decode a valid prefix while dropping an odd
+            // trailing byte. A UTF-16 representation must contain whole units.
+            guard bytes.count.isMultiple(of: 2) else { return nil }
             if bytes.starts(with: [0xFE, 0xFF]) {
                 return String(data: bytes.dropFirst(2), encoding: .utf16BigEndian)
             }

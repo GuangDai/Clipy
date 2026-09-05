@@ -32,9 +32,10 @@ struct HistoryDetailsFormatSafetyTests {
         #expect(prepared.title == "B", "the title uses the same prepared effective previews")
     }
 
-    @Test func preparedUTF16StillValidatesBytesBeyondTheDisplayLimit() throws {
+    @Test(arguments: [Data([0xD8, 0x00]), Data([0xD8])])
+    func preparedUTF16StillValidatesBytesBeyondTheDisplayLimit(tail: Data) throws {
         let bytes = Data(Array(repeating: [UInt8(0x00), 0x41], count: 501).flatMap { $0 })
-            + Data([0xD8, 0x00])
+            + tail
         let representation = HistoryRepresentation(typeIdentifier: "public.utf16-external-plain-text", bytes: bytes)
         let prepared = try DetailsContentPresentation(details: details(
             canonical: [representation], effective: [representation]
@@ -131,7 +132,12 @@ struct HistoryDetailsFormatSafetyTests {
 
     @Test func malformedOrEmptyUTF16StaysMetadataOnly() {
         for identifier in ["public.utf16-plain-text", "public.utf16-external-plain-text"] {
-            for bytes in [Data(), Data([0x41]), Data([0xFF, 0xFE]), Data([0xFE, 0xFF, 0x41])] {
+            for bytes in [
+                Data(), Data([0x41]), Data([0xFF, 0xFE]), Data([0xFE, 0xFF, 0x41]),
+                Data([0x00, 0x41, 0x42]), Data([0x41, 0x00, 0x42]),
+                Data([0xFE, 0xFF, 0x00, 0x41, 0x42]),
+                Data([0xFF, 0xFE, 0x41, 0x00, 0x42]),
+            ] {
                 #expect(
                     DetailsRepresentationPresentation.resolve(
                         HistoryRepresentation(typeIdentifier: identifier, bytes: bytes)

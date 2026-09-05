@@ -379,7 +379,12 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
             let frame = row.frame
             return !frame.isEmpty && scrollView.frame.contains(frame)
         }
-        scrollView.hover()
+        // Rows can cover the entire container. Move to its scrollbar edge
+        // explicitly so XCTest does not search for an unoccluded blank
+        // region in the ScrollView before revealing the native scroller.
+        scrollView.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)
+        ).hover()
         let scrollbar = scrollView.scrollBars.firstMatch
         let thumb = scrollbar.descendants(matching: .valueIndicator).firstMatch
         for _ in 0..<6 {

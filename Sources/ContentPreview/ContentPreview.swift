@@ -443,6 +443,9 @@ private enum PreviewTextCodec: Sendable {
         case .declared(.utf8):
             return String(data: bytes, encoding: .utf8)
         case .declared(.nativeUTF16), .declared(.externalUTF16):
+            // Foundation can decode a valid prefix while ignoring an odd
+            // trailing byte. A UTF-16 preview requires complete code units.
+            guard bytes.count.isMultiple(of: 2) else { return nil }
             if bytes.starts(with: [0xFE, 0xFF]) {
                 return String(data: bytes.dropFirst(2), encoding: .utf16BigEndian)
             }

@@ -1,4 +1,4 @@
-/// Projection recipe-v3 public reopen and atomic startup-rebuild proofs.
+/// Projection recipe-v4 public reopen and atomic startup-rebuild proofs.
 /// Owning spec: docs/05-authority-kernel.md §13, §15.
 import Foundation
 import HistoryCore
@@ -7,7 +7,7 @@ import SwiftData
 import Testing
 @testable import HistoryStorage
 
-@Suite("Projection recipe v3 startup rebuild")
+@Suite("Projection recipe v4 startup rebuild")
 struct ProjectionRecipeV2RebuildTests {
     private struct LegacyFixture: Sendable {
         let id: HistoryItemID
@@ -225,7 +225,7 @@ struct ProjectionRecipeV2RebuildTests {
     }
 
     @Test("public reopen rebuilds legacy projection before browse/search/details",
-          arguments: [UInt16(1), 2], ["public.utf8-plain-text", "public.utf16-external-plain-text"])
+          arguments: [UInt16(1), 2, 3], ["public.utf8-plain-text", "public.utf16-external-plain-text"])
     func publicReopenRebuildsLegacyProjection(
         projectionVersion: UInt16, textTypeIdentifier: String
     ) async throws {
@@ -285,7 +285,7 @@ struct ProjectionRecipeV2RebuildTests {
         let inspection = try WSSupport.makeContainer(storeURL: storeURL)
         let inspectionContext = ModelContext(inspection)
         let stored = try Self.fetchRow(id: fixture.id, in: inspectionContext)
-        #expect(stored.projectionSchemaVersion == 3)
+        #expect(stored.projectionSchemaVersion == 4)
         #expect(stored.title == fixture.visibleText)
         #expect(stored.searchBody == fixture.visibleText)
     }

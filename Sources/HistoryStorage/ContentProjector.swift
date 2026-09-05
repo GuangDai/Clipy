@@ -33,7 +33,7 @@ import HistoryDomain
 /// unique, non-empty type summary of the projected content.
 internal struct ContentProjection: Sendable {
     /// Projection schema version; exactly `ContentProjector.schemaVersion`
-    /// (projection recipe v3 = 3) for every newly projected value.
+    /// (projection recipe v4 = 4) for every newly projected value.
     internal let schemaVersion: UInt16
     /// First eligible textual line after normalization, otherwise a stable
     /// type-based fallback (§15).
@@ -60,17 +60,18 @@ internal struct StoredProjectionSize: Equatable, Sendable {
 ///
 /// The projector is a namespace of pure functions — no actor, clock, I/O, or
 /// framework decode. Image bytes are never decoded for title/search (§15):
-/// only representations whose exact type identifier declares the frozen v3
+/// only representations whose exact type identifier declares the frozen v4
 /// plain-text encoding are decoded, so identical content always projects
 /// identically. Encoding-unspecified, abstract, and structured text formats
 /// remain opaque.
 internal enum ContentProjector {
-    /// Recipe 3 corrects the external UTF-16 identifier and byte order. The
-    /// existing startup rebuild upgrades recipes 1 and 2 before reads (§15).
-    internal static let schemaVersion: UInt16 = 3
+    /// Recipe 4 rejects incomplete UTF-16 code units before Foundation can
+    /// discard the trailing byte. Startup rebuilds recipes 1–3 before reads
+    /// using their unchanged Canonical/revision bytes (§15).
+    internal static let schemaVersion: UInt16 = 4
 
     /// The original recipe used by legacy migration fixtures. Startup also
-    /// accepts recipe 2; neither is accepted by ordinary reads (§13, §15).
+    /// accepts recipes 2 and 3; ordinary reads accept only recipe 4 (§13, §15).
     internal static let legacySchemaVersion: UInt16 = 1
 
     // MARK: Stored projection validation (docs/05-authority-kernel.md §4)
@@ -251,7 +252,7 @@ internal enum ContentProjector {
 
     // MARK: Textual eligibility and decoding (§15)
 
-    /// Projection-owned recipe-v3 admission. `ClipboardFormats` supplies the
+    /// Projection-owned recipe-v4 admission. `ClipboardFormats` supplies the
     /// exact codec facts, but adding a future stable codec must not silently
     /// change durable title/search behavior.
     private static let textualProjectionIdentifiers: Set<ClipboardFormatIdentifier> = [
@@ -283,6 +284,9 @@ internal enum ContentProjector {
             return String(data: representation.bytes, encoding: .utf8)
         case .nativeUTF16, .externalUTF16:
             let bytes = representation.bytes
+            // Foundation may decode a complete prefix and ignore one final
+            // byte. An incomplete UTF-16 code unit is malformed in full (§15).
+            guard bytes.count.isMultiple(of: 2) else { return nil }
             if bytes.starts(with: [0xFE, 0xFF]) {
                 return String(data: bytes.dropFirst(2), encoding: .utf16BigEndian)
             }

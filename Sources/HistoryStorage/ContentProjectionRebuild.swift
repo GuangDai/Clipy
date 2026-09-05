@@ -1,6 +1,6 @@
-/// Projection recipes v1/v2 → v3 startup rebuild.
+/// Projection recipes v1/v2/v3 → v4 startup rebuild.
 /// Owning spec: docs/05-authority-kernel.md §13 (startup order), §15
-/// (recipe v3 and the projection-only rebuild boundary).
+/// (recipe v4 and the projection-only rebuild boundary).
 import Foundation
 import HistoryCore
 import HistoryDomain
@@ -19,8 +19,8 @@ internal enum ContentProjectionRebuild {
 
     /// Rebuilds every legacy projection row before the facade is published.
     ///
-    /// The complete row set is bounded before any write. Only tags 1–3
-    /// are understood: v3 rows are left untouched, while each v1/v2 row is
+    /// The complete row set is bounded before any write. Only tags 1–4
+    /// are understood: v4 rows are left untouched, while each v1/v2/v3 row is
     /// derived again from validated Canonical/revision bytes. All legacy scalar
     /// replacements share one transaction, so a later invalid source or a
     /// transaction interruption publishes none of them. Source rejection
@@ -49,7 +49,7 @@ internal enum ContentProjectionRebuild {
 
         for row in rows {
             switch row.projectionSchemaVersion {
-            case ContentProjector.legacySchemaVersion, 2:
+            case ContentProjector.legacySchemaVersion, 2, 3:
                 continue
             case ContentProjector.schemaVersion:
                 continue

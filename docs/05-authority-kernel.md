@@ -229,7 +229,7 @@ Decode is not a blind memberwise conversion. It reconstructs Domain values throu
   copy count ≥1, monotone first/last copy time, and bounded source values;
 - a non-negative pin ordinal (negative is corruption);
 - the `effectiveTypeIdentifiersBlob` decodes to a sorted, unique, non-empty list of type identifiers at format version 1;
-- `projectionSchemaVersion` is exactly the current value (v3), and the stored `title` (≤ 1,024 UTF-8 bytes) and `searchBody` (≤ 256 KiB) obey their Part VI bounds. Tags v1/v2 are accepted only by the bounded startup rebuild below; ordinary reads never consume v1/v2 projection scalars.
+- `projectionSchemaVersion` is exactly the current value (v4), and the stored `title` (≤ 1,024 UTF-8 bytes) and `searchBody` (≤ 256 KiB) obey their Part VI bounds. Tags v1/v2/v3 are accepted only by the bounded startup rebuild below; ordinary reads never consume v1/v2/v3 projection scalars.
 
 Projection checks live at the scalar boundary rather than inside a blob codec:
 startup validates every row's schema tag; recent browse validates the fetched
@@ -293,7 +293,7 @@ internal struct PreparedCaptureBundle: Sendable {
 }
 
 internal struct ContentProjection: Sendable {
-    let schemaVersion: UInt16       // projection recipe v3 = 3
+    let schemaVersion: UInt16       // projection recipe v4 = 4
     let title: String
     let searchBody: String
     let effectiveTypeIdentifiers: [String]
@@ -618,9 +618,9 @@ same-interval proof, rather than an otherwise unread generation counter.
 3. enter `HistoryAuthority` and create the singleton at position 0 if this is a new store;
 4. validate exactly one singleton;
 5. bootstrap/validate the retention-expansion config singleton;
-6. derive every projection-schema-v1/v2 replacement from validated Canonical/revision bytes, then stamp them as recipe v3 in one bounded transaction; an unknown tag, invalid source, or failed transaction fails open without publishing a partial rebuild;
+6. derive every projection-schema-v1/v2/v3 replacement from validated Canonical/revision blobs, then stamp them as recipe v4 in one bounded transaction; an unknown tag, invalid source blob, or failed transaction fails open without publishing a partial rebuild;
 7. validate retained row count does not exceed the hard bound and fetch each row's business ID, nonzero Content Version, current projection schema version, pin ordinal, Canonical bytes, and signature metadata;
-8. require projection schema version 3;
+8. require projection schema version 4;
 9. decode Canonical and signature metadata, recompute Canonical signature
    entries, require bidirectional coverage, and build the complete index;
 10. validate the full pinned ordinal set from scalar fields;
@@ -629,8 +629,9 @@ same-interval proof, rather than an otherwise unread generation counter.
 
 The Canonical coverage pass is a correctness-first rule for the current
 hard-capped profile: a structurally valid but incomplete signature blob could
-otherwise create false-negative dedup candidates. Revision bytes remain
-untouched except when a legacy projection row already requires recipe rebuild.
+otherwise create false-negative dedup candidates. Revision blobs are read only
+when a legacy projection row requires recipe rebuild; the rebuild never
+rewrites their stored bytes.
 This full Canonical pass is not an admissible U-scale design. Before the global
 hard item bound can be removed, `DEC-U-SCALE-STARTUP-INDEX` must replace it with
 the approved durable candidate-query/lazy-shard authority and an equally strong
@@ -638,7 +639,7 @@ negative-evidence contract; it may not retain this O(N) hydration path or add a
 second truth index.
 
 Corrupt durable signature or pin metadata fails open rather than enabling
-writes from an unproved state. The explicit v1-to-v2 derived-projection rebuild
+writes from an unproved state. The explicit legacy-to-v4 derived-projection rebuild
 is not a silent or general repair path for corrupted data.
 
 ### 14. Read implementation
@@ -744,11 +745,14 @@ invalidation, and exposes neither current retained-byte usage nor a
 
 - title: first eligible textual line after normalization, otherwise a stable type-based fallback;
 - search body: eligible textual representations in deterministic type order, normalized and truncated to the hard search-body bound;
-- textual decoding is type-strict under projection recipe v3: only
+- textual decoding is type-strict under projection recipe v4: only
   `public.utf8-plain-text` uses UTF-8. `public.utf16-plain-text` uses native
   UTF-16 (little-endian on arm64); `public.utf16-external-plain-text` uses
   external UTF-16 (big-endian without a BOM). Both honor a leading byte-order
-  mark. The former misspelling `public.utf8-external-plain-text` is an unknown
+  mark. An odd byte count is rejected as a complete malformed representation
+  before Foundation decoding; a valid prefix followed by an incomplete
+  UTF-16 code unit never contributes to the title or search body.
+  The former misspelling `public.utf8-external-plain-text` is an unknown
   opaque identifier. `public.plain-text` has no
   declared encoding; `public.text` is abstract; RTF and HTML are structured
   formats. Those four families remain opaque and never enter title/search
@@ -769,17 +773,21 @@ summary; inactive revision summaries still project their own content titles.
 Projection schema changes require an explicit schema version and migration/rebuild plan. They never change Canonical Content, revisions, Content Version, or Change Position by themselves; a projection-only migration is not a History Action and emits no user-visible commit.
 
 Projection recipe v2 removed guessed text decoding. Recipe v3 corrects the
-external UTF-16 identifier and the native no-BOM byte order. `HistoryItemRow` already
-carries the consistency fence, so this is not a SwiftData schema change and
-does not add a schema-migration stage. During `SwiftDataHistory.open`, after
+external UTF-16 identifier and the native no-BOM byte order. Recipe v4 rejects
+odd-byte UTF-16 instead of accepting a decodable prefix and discarding the
+trailing byte. `HistoryItemRow` already carries the consistency fence, so this
+is not a SwiftData schema change and does not add a schema-migration stage.
+During `SwiftDataHistory.open`, after
 singleton bootstrap and before Signature Index publication or capture, the
 Authority fetches at most the hard retained-item bound plus one, accepts only
-projection tags 1, 2, and 3, then derives every v1/v2 replacement from validated
-Canonical/revision bytes before entering one `ModelContext.transaction` that
-updates the title, search body, effective-type blob, and tag. Source decode
-failure, an unknown tag, or
-transaction failure leaves no partially published v3 set and fails the open.
-Ordinary reads accept only v3. The rebuild preserves unknown representation
+projection tags 1, 2, 3, and 4, then derives every v1/v2/v3 replacement from
+validated Canonical/revision bytes before entering one `ModelContext.transaction` that
+updates only the derived title, search body, effective-type blob, and tag.
+Raw Canonical/revision bytes, Content Version, Change Position, and signature
+state remain unchanged. Malformed text is skipped by the projector while its
+raw representation stays retained. Source blob decode failure, an unknown tag,
+or transaction failure leaves no partially published v4 set and fails the open.
+Ordinary reads accept only v4. The rebuild preserves unknown representation
 bytes even when their old guessed title/search text is removed.
 
 Future changes to textual decoding, normalization, title, or body derivation
