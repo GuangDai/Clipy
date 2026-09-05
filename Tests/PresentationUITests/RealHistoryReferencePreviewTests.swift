@@ -110,6 +110,49 @@ struct RealHistoryReferencePreviewTests {
         #expect(page.rows.map(\.title) == [revisedAddress])
     }
 
+    @Test func clearingLoadedFileReferenceSurvivesCancelledQueuedReloadAndCanReopen() async throws {
+        let history = try await SwiftDataHistory.open(
+            configuration: HistoryConfiguration(persistence: .memory)
+        )
+        let address = "file:///clipy-preview-uncreated/\(UUID().uuidString)/Private%20notes.txt"
+        let bytes = Data(address.utf8)
+        let item = try await capture(bytes, type: "public.file-url", in: history)
+        let loader = PreviewContentLoader(history: history)
+        await loader.load(item: item)
+        let loaded = try #require(reference(in: loader))
+        #expect(loaded.kind == .file)
+        #expect(Data(loaded.address.utf8) == bytes)
+        #expect(loader.occurrence != nil)
+
+        // These steps run without a MainActor suspension: the queued task
+        // cannot start before cancellation and the synchronous close/clear.
+        // This is queued-work cancellation, not native-read preemption.
+        let queuedReload = Task { await loader.load(item: item) }
+        queuedReload.cancel()
+        loader.clear()
+        #expect(loader.phase == .unsupported)
+        #expect(loader.requestedItem == nil)
+        #expect(reference(in: loader) == nil)
+        #expect(loader.occurrence == nil)
+        await queuedReload.value
+        #expect(loader.phase == .unsupported)
+        #expect(loader.requestedItem == nil)
+        #expect(reference(in: loader) == nil)
+        #expect(loader.occurrence == nil)
+        #expect(loader.raster == nil)
+
+        // Closing the preview does not remove the retained item or poison its
+        // next legitimate load. The reopened artifact keeps the same spelling.
+        await loader.load(item: item)
+        let reopened = try #require(reference(in: loader))
+        #expect(loader.requestedItem == item)
+        #expect(reopened.kind == .file)
+        #expect(Data(reopened.address.utf8) == bytes)
+        #expect(reopened.filePath == loaded.filePath)
+        let paste = try await history.pastePayload(for: item.id)
+        #expect(paste.representations.map(\.bytes) == [bytes])
+    }
+
     private func reference(in loader: PreviewContentLoader) -> PreviewReference? {
         guard case let .content(.reference(artifact)) = loader.phase else { return nil }
         return artifact

@@ -7,6 +7,50 @@ import HistoryStorage
 import Testing
 
 struct ReferenceSearchJourneyTests {
+    @Test(arguments: [("%EF%BB%BF", "\u{FEFF}"), ("%CC%81", "\u{301}")])
+    func leadingFilenameScalarSurvivesSearchAndRevision(
+        encodedPrefix: String, prefix: String
+    ) async throws {
+        let history = try await openHistory()
+        let original = Data("file:///\(encodedPrefix)before.txt".utf8)
+        let captured = try await capture(original, type: "public.file-url", in: history)
+        let originalName = prefix + "before.txt"
+        let originalResult = try await singleResult(originalName, in: history)
+        #expect(originalResult.item == captured)
+        #expect(Data(originalResult.title.utf8) == Data(originalName.utf8))
+        #expect(originalResult.search?.snippet == nil)
+        try expectHighlighted(originalName, in: originalResult)
+        try await expectBytes(original, effective: original, item: captured, in: history)
+
+        let replacement = Data("file:///\(encodedPrefix)after.txt".utf8)
+        let receipt = try await history.perform(.revise(RevisionRequest(
+            itemID: captured.id,
+            expected: captured.contentVersion,
+            intent: .replace(RevisionDraft(decisions: [RevisionDecision(
+                typeIdentifier: "public.file-url",
+                action: .replace(bytes: replacement)
+            )]))
+        )))
+        guard case .committed(let commit) = receipt,
+              case .revised(let revised) = commit.outcome else {
+            Issue.record("expected a revision preserving the filename's leading scalar")
+            return
+        }
+        #expect(revised.id == captured.id)
+        #expect(revised.contentVersion != captured.contentVersion)
+        #expect(try await search(originalName, in: history).rows.isEmpty)
+        let revisedName = prefix + "after.txt"
+        let revisedResult = try await singleResult(revisedName, in: history)
+        #expect(revisedResult.item == revised)
+        #expect(Data(revisedResult.title.utf8) == Data(revisedName.utf8))
+        #expect(revisedResult.search?.snippet == nil)
+        try expectHighlighted(revisedName, in: revisedResult)
+        try await expectBytes(original, effective: replacement, item: revised, in: history)
+        let details = try await history.details(for: revised.id)
+        #expect(details.revisions.map { Data($0.title.utf8) } == [Data(revisedName.utf8)])
+        #expect(details.revisions.map(\.isActive) == [true])
+    }
+
     @Test func fileNameAndDecodedDirectorySearchFollowEffectiveRevisionOnly() async throws {
         let history = try await openHistory()
         let original = Data(

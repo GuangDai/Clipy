@@ -132,6 +132,39 @@ struct ReferencePreviewTests {
         }
     }
 
+    @Test("raw control characters are not repaired into a reference",
+          arguments: ["public.url", "public.file-url"])
+    func rawControlsRemainMalformed(_ identifier: String) async {
+        let prefix = identifier == "public.url"
+            ? "https://example.invalid/" : "file:///clipy-nonexistent-reference/"
+        let renderer = ContentPreview()
+        for control in ["\t", "\r", "\n", "\r\n"] {
+            let bytes = Data((prefix + "a" + control + "b.txt").utf8)
+            #expect(await renderer.renderHistoryPane([
+                PreviewRepresentation(typeIdentifier: identifier, bytes: bytes),
+            ]) == .failed(.malformedRepresentation))
+        }
+    }
+
+    @Test("encoded control characters remain literal file-path content",
+          arguments: ["public.url", "public.file-url"])
+    func encodedControlsKeepAddressAndPathBytes(_ identifier: String) async throws {
+        let address = "file:///clipy-nonexistent-reference/a%09b%0D%0Ac.txt"
+        let outcome = await ContentPreview().renderHistoryPane([
+            PreviewRepresentation(typeIdentifier: identifier, bytes: Data(address.utf8)),
+        ])
+        guard case let .content(.reference(reference)) = outcome else {
+            Issue.record("expected inert encoded-control reference, got \(outcome)")
+            return
+        }
+        #expect(reference.kind == .file)
+        #expect(Data(reference.address.utf8) == Data(address.utf8))
+        let path = try #require(reference.filePath)
+        // The preview carries the path verbatim; newline normalization belongs
+        // only to the separate bounded History search projection.
+        #expect(Data(path.utf8) == Data("/clipy-nonexistent-reference/a\tb\r\nc.txt".utf8))
+    }
+
     @Test("a reference accepts exactly 16 KiB but rejects the next byte",
           arguments: ["public.url", "public.file-url"])
     func candidateByteBoundary(_ identifier: String) async {
@@ -162,6 +195,27 @@ struct ReferencePreviewTests {
                 bytes: Data("https://example.invalid/".utf8)
             ),
         ]) == .unavailable(.unsupported))
+    }
+
+    @Test("lookalike input cannot claim an exact reference's failure or byte budget")
+    func unknownPrefixDoesNotOwnReferenceResolution() async {
+        let address = "https://example.invalid/first-exact?q=%2F"
+        let renderer = ContentPreview()
+        for identifier in ["public.url.private", "public.file-url.private"] {
+            for bytes in [Data([0xFF]), Data(repeating: 0x61, count: 16_385)] {
+                let outcome = await renderer.renderHistoryPane([
+                    PreviewRepresentation(typeIdentifier: identifier, bytes: bytes),
+                    PreviewRepresentation(typeIdentifier: "public.url", bytes: Data(address.utf8)),
+                ])
+                guard case let .content(.reference(reference)) = outcome else {
+                    Issue.record("expected the first exact reference to own resolution, got \(outcome)")
+                    continue
+                }
+                #expect(reference.kind == .url)
+                #expect(Data(reference.address.utf8) == Data(address.utf8))
+                #expect(reference.filePath == nil)
+            }
+        }
     }
 
     @Test("valid plain text wins regardless of reference validity or ordering")
