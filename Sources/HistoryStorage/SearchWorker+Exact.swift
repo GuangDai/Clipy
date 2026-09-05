@@ -127,7 +127,7 @@ extension SearchWorker {
             if let found = titleMatch {
                 // Title match: `snippet == nil`, UTF-16 ranges relative to
                 // `HistoryRow.title` (03b §8).
-                evaluated.append(
+                scanTracker.appendIfRetained(
                     EvaluatedRow(
                         corpusRow: row,
                         search: .ready(SearchPresentation(
@@ -138,7 +138,8 @@ extension SearchWorker {
                             )]
                         )),
                         anchor: Self.defaultOrderAnchor(for: row)
-                    )
+                    ),
+                    to: &evaluated
                 )
 #if DEBUG
                 debugTitleMatches += 1
@@ -194,7 +195,7 @@ extension SearchWorker {
             // many rows pays the O(matched-window) construction only for
             // returned rows, and continuation pages never rebuild the
             // dropped rows' excerpts.
-            evaluated.append(
+            scanTracker.appendIfRetained(
                 EvaluatedRow(
                     corpusRow: row,
                     search: .bodyExcerpt(
@@ -206,7 +207,8 @@ extension SearchWorker {
                         bodySuffixWasOmitted: false
                     ),
                     anchor: Self.defaultOrderAnchor(for: row)
-                )
+                ),
+                to: &evaluated
             )
 #if DEBUG
             debugBodyMatches += 1

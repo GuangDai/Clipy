@@ -71,6 +71,9 @@ enum ClipyCaptureFailure: Sendable, Equatable {
             self = .temporarilyUnavailable(reason)
         case .persistence(let failure):
             self = .persistence(failure)
+        case .thumbnailUnavailable:
+            // Capture retains opaque bytes and never renders thumbnails.
+            self = .unexpected
         case .notFound,
              .staleContent,
              .invalidPinnedPlacement,

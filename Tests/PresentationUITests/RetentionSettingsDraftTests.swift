@@ -28,7 +28,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("one configured snapshot preserves a newer count edit and loads untouched policies")
     func lateUnifiedReadMergesCountAndPoliciesPerField() throws {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         let request = draft.beginLoadRequest()
         draft.setMaximumUnpinnedText("31")
 
@@ -63,7 +63,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("unedited count readback submits exact configured value")
     func uneditedCountUsesTheUnifiedConfiguredSnapshot() throws {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(
             HistoryRetentionConfiguration(
                 maximumUnpinnedItems: 37,
@@ -88,7 +88,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("count Apply is enabled only when the validated value differs from configuration")
     func countChangesCompareTheCandidateToTheExactBaseline() {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(
             HistoryRetentionConfiguration(
                 maximumUnpinnedItems: 37,
@@ -114,7 +114,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("policy Apply is enabled only when the exact candidate differs from configuration")
     func policyChangesCompareTheCandidateToTheExactBaseline() {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(
             HistoryRetentionPolicies(
                 age: AgeRetention(maxAge: 90_001),
@@ -156,7 +156,7 @@ struct RetentionSettingsDraftTests {
 
         // Isolate the exact whole-number revision-count round trip from the
         // deliberately changed, non-representable fields above.
-        var countDraft = RetentionSettingsDraft()
+        var countDraft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(
             HistoryRetentionPolicies(
                 age: nil,
@@ -176,7 +176,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("representable whole-unit fields disable Apply after edit and restore")
     func exactWholeUnitBaselinesCanBeRestoredAfterEditing() {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(
             HistoryRetentionPolicies(
                 age: AgeRetention(maxAge: 172_800),
@@ -207,7 +207,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("late configured-policy read preserves edits and advances strictness baseline")
     func lateConfigurationReadCannotOverwriteNewerDraft() throws {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         let loadRequest = draft.beginLoadRequest()
 
         // The panel is still awaiting its configured-policy read. The user
@@ -250,7 +250,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("unedited rounded fields submit the exact configured policy values")
     func uneditedRoundedFieldsPreserveExactConfiguredValues() throws {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(HistoryRetentionPolicies(
             age: AgeRetention(maxAge: 90_001),
             storage: StorageRetention(maxTotalBytes: 1_048_577),
@@ -280,7 +280,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("editing one rounded field converts only that field to whole units")
     func editingOneFieldDoesNotRoundUntouchedPolicyValues() throws {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(HistoryRetentionPolicies(
             age: AgeRetention(maxAge: 90_001),
             storage: StorageRetention(maxTotalBytes: 1_048_577),
@@ -303,7 +303,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("enabling or lowering any threshold requires destructive confirmation")
     func onlyStrictTighteningRequiresConfirmation() throws {
-        var disabled = RetentionSettingsDraft()
+        var disabled = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(
             HistoryRetentionPolicies(age: nil, storage: nil, revisions: nil),
             into: &disabled
@@ -312,7 +312,7 @@ struct RetentionSettingsDraftTests {
         let enabledPolicies = try #require(disabled.submission()?.policies)
         #expect(disabled.requiresTighteningConfirmation(for: enabledPolicies))
 
-        var configured = RetentionSettingsDraft()
+        var configured = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(HistoryRetentionPolicies(
             age: AgeRetention(maxAge: 172_800),
             storage: StorageRetention(maxTotalBytes: 2_097_152),
@@ -335,7 +335,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("late apply completion cannot overwrite a newer edit")
     func lateApplyCompletionIsRejectedByEditGeneration() throws {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(HistoryRetentionPolicies(
             age: nil,
             storage: StorageRetention(maxTotalBytes: 4_194_304),
@@ -359,7 +359,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("stale success advances the strictness baseline without replacing newer text")
     func staleSuccessAdvancesOnlyTheConfiguredComparisonBaseline() throws {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(HistoryRetentionPolicies(
             age: nil,
             storage: StorageRetention(maxTotalBytes: 10_485_760),
@@ -384,7 +384,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("a new edit clears the accepted Done generation")
     func newEditClearsAcceptedApplyState() throws {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(HistoryRetentionPolicies(
             age: AgeRetention(maxAge: 172_800),
             storage: nil,
@@ -409,7 +409,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("an edit in either retention tab clears count Apply success")
     func crossTabEditClearsAcceptedCountSuccess() throws {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(
             HistoryRetentionConfiguration(
                 maximumUnpinnedItems: 37,
@@ -452,7 +452,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("a freshly loaded draft offers no write on either Apply")
     func uneditedConfigurationHasNoPendingWrite() {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(
             HistoryRetentionConfiguration(
                 maximumUnpinnedItems: 37,
@@ -486,7 +486,7 @@ struct RetentionSettingsDraftTests {
     @Test("each control dirties only its own edit state")
     func fieldEditsAreIndependentlyDirty() {
         // A count edit never dirties the policy dimensions (Card 10A).
-        var countDraft = RetentionSettingsDraft()
+        var countDraft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         countDraft.setMaximumUnpinnedText("31")
         #expect(countDraft.maximumUnpinnedValueIsDirty)
         #expect(countDraft.hasCountChanges)
@@ -501,7 +501,7 @@ struct RetentionSettingsDraftTests {
         #expect(!countDraft.hasPolicyChanges)
 
         // A toggle dirties its own toggle state only, never its value.
-        var toggleDraft = RetentionSettingsDraft()
+        var toggleDraft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         toggleDraft.setStorageEnabled(true)
         #expect(toggleDraft.storageToggleIsDirty)
         #expect(!toggleDraft.storageValueIsDirty)
@@ -513,7 +513,7 @@ struct RetentionSettingsDraftTests {
         // Text in a disabled dimension dirties its value only; with the
         // toggle off, the proposed bundle still matches the all-disabled
         // baseline, so there is nothing to write.
-        var valueDraft = RetentionSettingsDraft()
+        var valueDraft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         valueDraft.setRevisionCountText("7")
         #expect(valueDraft.revisionCountValueIsDirty)
         #expect(!valueDraft.revisionCountToggleIsDirty)
@@ -526,7 +526,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("loosening the count applies without destructive confirmation")
     func loosenedCountDoesNotRequireTighteningConfirmation() throws {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(
             HistoryRetentionConfiguration(
                 maximumUnpinnedItems: 37,
@@ -555,7 +555,7 @@ struct RetentionSettingsDraftTests {
         func draftWithOneEdit(
             _ edit: (inout RetentionSettingsDraft) -> Void
         ) -> RetentionSettingsDraft {
-            var draft = RetentionSettingsDraft()
+            var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
             load(
                 HistoryRetentionPolicies(
                     age: AgeRetention(maxAge: 172_800),

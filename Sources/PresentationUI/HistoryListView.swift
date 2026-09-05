@@ -17,22 +17,6 @@ import Foundation
 import HistoryCore
 import SwiftUI
 
-/// Pure Card 8B decision seam: pagination belongs to the complete displayed
-/// ordering, not specifically to the Recent section that happens to own most
-/// continuation rows.
-package enum HistoryListPaginationTrigger {
-    package static func shouldLoadNextPage(
-        appearingRowID: HistoryItemID,
-        lastDisplayedRowID: HistoryItemID?,
-        hasNextPage: Bool,
-        isLoadingPage: Bool
-    ) -> Bool {
-        hasNextPage
-            && !isLoadingPage
-            && lastDisplayedRowID == appearingRowID
-    }
-}
-
 /// Module-internal browsing list behind the caller-visible `HistoryPanelView`.
 /// Rows are keyed by `HistoryItemID`; the selection
 /// (hoisted to the panel so the preview pane can dwell on it) drives the
@@ -131,9 +115,7 @@ struct HistoryListView: View {
                 ForEach(viewState.displayedUnpinnedRows, id: \.item.id) { row in
                     rowContent(row, now: now, pinnedOrdinal: nil)
                 }
-                if viewState.isLoadingPage {
-                    loadingRow
-                }
+                paginationControl
             }
         }
         .listStyle(.inset)
@@ -182,7 +164,7 @@ struct HistoryListView: View {
         // contract is unchanged.
         .onDrag { viewState.dragItemProvider(for: row.item) }
         .onAppear {
-            prefetchNextPageIfNeeded(appearingRowID: row.item.id)
+            viewState.prefetchNextPageIfNeeded(appearingRowID: row.item.id)
         }
     }
 
@@ -197,14 +179,20 @@ struct HistoryListView: View {
         .accessibilityLabel("Loading more items")
     }
 
-    private func prefetchNextPageIfNeeded(appearingRowID: HistoryItemID) {
-        guard HistoryListPaginationTrigger.shouldLoadNextPage(
-            appearingRowID: appearingRowID,
-            lastDisplayedRowID: viewState.rows.last?.item.id,
-            hasNextPage: viewState.hasNextPage,
-            isLoadingPage: viewState.isLoadingPage
-        ) else { return }
-        viewState.loadNextPage()
+    /// A page can add only filtered-out rows, leaving the last rendered row
+    /// unchanged and producing no new onAppear. Keep an explicit continuation
+    /// reachable both there and when every loaded row is hidden (Card 8B).
+    @ViewBuilder
+    private var paginationControl: some View {
+        if viewState.isLoadingPage {
+            loadingRow
+        } else if viewState.hasNextPage {
+            Button("Load More") {
+                viewState.loadNextPage()
+            }
+            .frame(maxWidth: .infinity)
+            .accessibilityIdentifier("clipy.history.load-more")
+        }
     }
 
     // MARK: Empty states
@@ -236,11 +224,15 @@ struct HistoryListView: View {
     /// filter (no query) gets filter-specific copy, and a query plus filter
     /// still names the query.
     private var filteredEmptyState: some View {
-        ContentUnavailableView(
-            "No Results",
-            systemImage: "magnifyingglass",
-            description: Text(filteredEmptyDescription)
-        )
+        VStack {
+            ContentUnavailableView(
+                "No Results",
+                systemImage: "magnifyingglass",
+                description: Text(filteredEmptyDescription)
+            )
+            paginationControl
+                .padding(.bottom)
+        }
     }
 
     private var filteredEmptyDescription: String {

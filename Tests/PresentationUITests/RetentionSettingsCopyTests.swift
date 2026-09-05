@@ -6,9 +6,15 @@ import Testing
 struct RetentionSettingsCopyTests {
     // Use real resource bundles without changing process-wide language preferences.
     private func bundle(_ language: String) throws -> Bundle {
-        let url = try #require(RetentionSettingsCopy.bundle.url(
-            forResource: language, withExtension: "lproj"
-        ))
+        // SwiftPM lowercases processed localization directories (zh-hans).
+        // Resolve the exact requested language from the built bundle, without
+        // Bundle's preferred-language resource lookup or an English fallback.
+        let resources = RetentionSettingsCopy.bundle
+        let localization = try #require(resources.localizations.first {
+            $0.caseInsensitiveCompare(language) == .orderedSame
+        })
+        let root = try #require(resources.resourceURL)
+        let url = root.appendingPathComponent("\(localization).lproj", isDirectory: true)
         return try #require(Bundle(url: url))
     }
 

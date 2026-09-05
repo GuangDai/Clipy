@@ -8,6 +8,108 @@ import Fuse
 extension SearchWorker {
     // MARK: - Fuzzy mode (03b §8)
 
+    /// Per-request top-K selection. The root is the worst retained hit, so
+    /// a better candidate replaces it in O(log(limit)); prior-page hits
+    /// never occupy the heap. Keep the exact anchor separately for `page`'s
+    /// existing missing/changed-anchor rejection (04 §6). This bounds only
+    /// evaluated results, not the current full corpus snapshot.
+    internal struct FuzzyPageSelection {
+        private let directive: ScanDirective
+        internal private(set) var hits: [EvaluatedRow] = []
+        private var anchorRow: EvaluatedRow?
+
+        internal init(directive: ScanDirective) {
+            self.directive = directive
+        }
+
+        internal mutating func insert(_ hit: FuzzyHit) {
+            let row = EvaluatedRow(
+                corpusRow: hit.corpusRow,
+                search: hit.search,
+                anchor: hit.corpusRow.pinOrdinal == nil
+                    ? .fuzzyUnpinned(
+                        score: hit.score,
+                        lastCopiedAt: hit.corpusRow.lastCopiedAt,
+                        id: hit.corpusRow.id
+                    )
+                    : SearchWorker.defaultOrderAnchor(for: hit.corpusRow)
+            )
+            if let anchor = directive.continuationAnchor {
+                if row.anchor == anchor {
+                    anchorRow = row
+                    return
+                }
+                guard Self.precedes(anchor, row.anchor) else { return }
+            }
+            if hits.count < directive.maximumSurvivors {
+                hits.append(row)
+                var child = hits.count - 1
+                while child > 0 {
+                    let parent = (child - 1) / 2
+                    guard Self.precedes(hits[parent].anchor, hits[child].anchor) else {
+                        break
+                    }
+                    hits.swapAt(parent, child)
+                    child = parent
+                }
+            } else if let worst = hits.first,
+                      Self.precedes(row.anchor, worst.anchor) {
+                hits[0] = row
+                var parent = 0
+                while parent * 2 + 1 < hits.count {
+                    var child = parent * 2 + 1
+                    let right = child + 1
+                    if right < hits.count,
+                       Self.precedes(hits[child].anchor, hits[right].anchor) {
+                        child = right
+                    }
+                    guard Self.precedes(hits[parent].anchor, hits[child].anchor) else {
+                        break
+                    }
+                    hits.swapAt(parent, child)
+                    parent = child
+                }
+            }
+        }
+
+        internal func evaluatedRows() -> [EvaluatedRow] {
+            if directive.continuationAnchor != nil, anchorRow == nil {
+                return []
+            }
+            let ordered = hits.sorted { Self.precedes($0.anchor, $1.anchor) }
+            if let anchorRow { return [anchorRow] + ordered }
+            return ordered
+        }
+
+        /// The frozen pinned/score/date/UUID total order, shared by heap
+        /// selection and final ordering so equal scores keep cursor ties.
+        private static func precedes(
+            _ lhs: StoredOrderingAnchor,
+            _ rhs: StoredOrderingAnchor
+        ) -> Bool {
+            let leftDate: Date
+            let rightDate: Date
+            let leftID: HistoryItemID
+            let rightID: HistoryItemID
+            switch (lhs, rhs) {
+            case let (.defaultOrder(leftPin, ld, li), .defaultOrder(rightPin, rd, ri)):
+                if leftPin != rightPin {
+                    return (leftPin ?? Int.max) < (rightPin ?? Int.max)
+                }
+                (leftDate, rightDate, leftID, rightID) = (ld, rd, li, ri)
+            case (.defaultOrder, .fuzzyUnpinned):
+                return true
+            case (.fuzzyUnpinned, .defaultOrder):
+                return false
+            case let (.fuzzyUnpinned(ls, ld, li), .fuzzyUnpinned(rs, rd, ri)):
+                if ls != rs { return ls < rs }
+                (leftDate, rightDate, leftID, rightID) = (ld, rd, li, ri)
+            }
+            if leftDate != rightDate { return leftDate > rightDate }
+            return leftID < rightID
+        }
+    }
+
     /// Fuse search over the bounded prefixes (03b §8): the 64-Character
     /// query bound is enforced before Fuse is called; evaluation scans at
     /// most the first 5,000 Characters of title and, only on title miss,
@@ -18,7 +120,8 @@ extension SearchWorker {
     /// (03b §8; docs/04-coherence.md §7).
     internal func evaluateFuzzy(
         term: String,
-        in corpus: SearchCorpusSnapshot
+        in corpus: SearchCorpusSnapshot,
+        directive: ScanDirective
     ) async throws -> [EvaluatedRow] {
         // Fuse 1.4.0 does not enforce its `maxPatternLength` option (the
         // parameter is unread in the pinned revision, so the documented
@@ -39,8 +142,7 @@ extension SearchWorker {
             return []
         }
 
-        var pinnedHits: [FuzzyHit] = []
-        var unpinnedHits: [FuzzyHit] = []
+        var selection = FuzzyPageSelection(directive: directive)
 #if DEBUG
         let debugClock = ContinuousClock()
         let debugStart = debugClock.now
@@ -154,11 +256,7 @@ extension SearchWorker {
             recordProgressIfNeeded()
 #endif
             guard let hit else { continue scan }
-            if row.pinOrdinal == nil {
-                unpinnedHits.append(hit)
-            } else {
-                pinnedHits.append(hit)
-            }
+            selection.insert(hit)
         }
         try Task.checkCancellation()
 #if DEBUG
@@ -178,45 +276,11 @@ extension SearchWorker {
         )
 #endif
 
-        // Pinned rows first: the corpus is pre-ordered in the default
-        // order (05 §14.2), so pinned hits are already in `pinOrdinal`
-        // ascending (03b §8) and keep the `.defaultOrder` anchor family.
-        let pinned = pinnedHits.map { hit in
-            EvaluatedRow(
-                corpusRow: hit.corpusRow,
-                search: hit.search,
-                anchor: Self.defaultOrderAnchor(for: hit.corpusRow)
-            )
-        }
-        // Unpinned rows: ascending Fuse score, then `lastCopiedAt`
-        // descending, then History Item ID bytes ascending (03b §8; the
-        // 04 §7 tie-breaker tail). `HistoryItemID.<` compares raw UUID
-        // bytes lexicographically. Every hit carries only deferred
-        // presentation data (Character ranges, no excerpt text), so the
-        // sort moves small values regardless of how many rows matched.
-        let unpinned = unpinnedHits
-            .sorted { lhs, rhs in
-                if lhs.score != rhs.score {
-                    return lhs.score < rhs.score
-                }
-                if lhs.corpusRow.lastCopiedAt != rhs.corpusRow.lastCopiedAt {
-                    return lhs.corpusRow.lastCopiedAt > rhs.corpusRow.lastCopiedAt
-                }
-                return lhs.corpusRow.id < rhs.corpusRow.id
-            }
-            .map { hit in
-                EvaluatedRow(
-                    corpusRow: hit.corpusRow,
-                    search: hit.search,
-                    anchor: .fuzzyUnpinned(
-                        score: hit.score,
-                        lastCopiedAt: hit.corpusRow.lastCopiedAt,
-                        id: hit.corpusRow.id
-                    )
-                )
-            }
+        // Every row was scored, but only the bounded page candidates need
+        // sorting or retained presentation (03b §8 / 04 §6).
+        let evaluated = selection.evaluatedRows()
         try Task.checkCancellation()
-        return pinned + unpinned
+        return evaluated
     }
 
     /// Runs the frozen-parameter Fuse matcher over one pre-lowercased

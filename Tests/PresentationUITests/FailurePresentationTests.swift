@@ -97,6 +97,7 @@ struct FailurePresentationTests {
             ),
             .revisionNotFound(revisionID),
             .snapshotExpired(current: ChangePosition(rawValue: 7)),
+            .thumbnailUnavailable,
         ]
         failures += invalidInputReasons.map { HistoryFailure.invalidInput($0) }
         failures += pinnedPlacementFailures.map {
@@ -119,6 +120,13 @@ struct FailurePresentationTests {
         for failure in allFailures {
             #expect(!FailurePresentation.message(for: failure).isEmpty)
         }
+    }
+
+    @Test func undecodableThumbnailDoesNotImplyHistoryStorageFailure() {
+        #expect(FailurePresentation.message(for: .thumbnailUnavailable)
+            == "A thumbnail isn't available for this image")
+        #expect(FailurePresentation.message(for: .persistence(.corruptStoredValue))
+            == "History storage error")
     }
 
     // MARK: - Contract-pinned strings

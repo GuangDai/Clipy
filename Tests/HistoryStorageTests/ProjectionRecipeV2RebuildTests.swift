@@ -290,6 +290,70 @@ struct ProjectionRecipeV2RebuildTests {
         #expect(stored.searchBody == fixture.visibleText)
     }
 
+    @Test("recipe v2 guessed text becomes opaque without changing paste or coalescing")
+    func misspelledExternalTextSurvivesPublicReopenAsOpaqueBytes() async throws {
+        let storeURL = WSSupport.tempStoreURL("projection-v2-opaque-text")
+        defer { WSSupport.removeStore(storeURL) }
+        let typeIdentifier = "public.utf8-external-plain-text"
+        let fixtures = try await Self.seedLegacyRows(
+            at: storeURL,
+            count: 1,
+            projectionVersion: 2,
+            textTypeIdentifier: typeIdentifier
+        )
+        let fixture = try #require(fixtures.first)
+        // Recipe 2 incorrectly decoded this identifier as UTF-8. Seed its
+        // actual derived scalars instead of the helper's recipe-1 markup.
+        try Self.mutateStoredProjection(id: fixture.id, at: storeURL) { row in
+            row.title = fixture.visibleText
+            row.searchBody = fixture.visibleText
+        }
+        let history = try await SwiftDataHistory.open(configuration:
+            HistoryConfiguration(persistence: .persistent(storeURL: storeURL))
+        )
+
+        let recent = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 10))
+        #expect(recent.position.rawValue == 7)
+        #expect(recent.rows.map(\.item.id) == [fixture.id])
+        #expect(recent.rows.map(\.title) == ["public.html"])
+        let search = try await history.browse(HistoryBrowseRequest(
+            kind: .search(text: fixture.visibleText, mode: .exact), limit: 10
+        ))
+        #expect(search.rows.isEmpty)
+
+        let details = try await history.details(for: fixture.id)
+        #expect(details.canonical.map(\.bytes) == fixture.canonicalBytes)
+        #expect(details.effective == details.canonical)
+        #expect(details.item.contentVersion.rawValue == 1)
+        let payload = try await history.pastePayload(for: fixture.id)
+        #expect(payload.item == details.item)
+        #expect(payload.representations == details.canonical)
+        #expect(payload.representations.contains {
+            $0.typeIdentifier == typeIdentifier && $0.bytes == Data(fixture.visibleText.utf8)
+        })
+
+        // Recapture the unchanged payload through the public API: rebuilding
+        // title/search must preserve Canonical dedup identity (02 D2/D7).
+        let receipt = try await history.perform(.capture(ClipboardCapture(
+            representations: payload.representations.map {
+                CapturedRepresentation(typeIdentifier: $0.typeIdentifier, bytes: $0.bytes)
+            },
+            origin: CopyOriginObservation(sourceApplication: "com.example.projection-v3", lineageHint: nil),
+            observedAt: Date(timeIntervalSinceReferenceDate: 700_060_200)
+        )))
+        guard case let .committed(commit) = receipt,
+              case let .coalesced(reference) = commit.outcome else {
+            Issue.record("Unchanged opaque bytes should coalesce after projection rebuild")
+            return
+        }
+        #expect(commit.position.rawValue == 8)
+        #expect(reference == details.item)
+        let coalescedDetails = try await history.details(for: fixture.id)
+        #expect(coalescedDetails.occurrence.count == 2)
+        #expect(coalescedDetails.canonical == details.canonical)
+        #expect(coalescedDetails.effective == details.effective)
+    }
+
     @Test("invalid legacy revision source publishes no projection replacement")
     func invalidLegacyRevisionPublishesNoPartialRebuild() async throws {
         let storeURL = WSSupport.tempStoreURL("projection-recipe-v2-invalid")

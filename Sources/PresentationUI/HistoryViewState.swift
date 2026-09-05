@@ -282,6 +282,17 @@ public final class HistoryViewState {
         nextPageCursor != nil
     }
 
+    /// Prefetch follows the last row the list actually renders. A type or
+    /// pinned-only filter may hide the authoritative page's final row;
+    /// waiting for that hidden row's appearance would strand its cursor
+    /// (review Card 8B; 04 §6).
+    package func prefetchNextPageIfNeeded(appearingRowID: HistoryItemID) {
+        let lastDisplayedRowID = displayedUnpinnedRows.last?.item.id
+            ?? displayedPinnedRows.last?.item.id
+        guard lastDisplayedRowID == appearingRowID else { return }
+        loadNextPage()
+    }
+
     /// Whether the current browse generation has published its authoritative
     /// first page. Query restart clears this fact before clearing/replacing
     /// rows; a load failure leaves it false, while an authoritative empty page

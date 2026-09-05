@@ -95,10 +95,10 @@ public struct ClipySettingsView: View {
                 launchAtLogin: launchAtLogin,
                 summonShortcut: summonShortcut
             )
-                .tabItem { Label("General", systemImage: "gear") }
+                .tabItem { Label(SettingsCopy.text("General"), systemImage: "gear") }
                 .frame(width: 480, height: 440)
             AppearanceSettingsTab(popupPosition: popupPosition)
-                .tabItem { Label("Appearance", systemImage: "paintbrush") }
+                .tabItem { Label(SettingsCopy.text("Appearance"), systemImage: "paintbrush") }
                 // The two added typography pickers (snippet lines, font
                 // size) grew the tab beyond the shipped 320pt ideal height.
                 .frame(width: 480, height: 400)
@@ -173,12 +173,12 @@ private struct GeneralSettingsTab: View {
     var body: some View {
         Form {
             if let launchAtLogin {
-                Section("Startup") {
+                Section(SettingsCopy.text("Startup")) {
                     launchAtLoginControl(launchAtLogin)
                 }
             }
             if let summonShortcut {
-                Section("Keyboard Shortcut") {
+                Section(SettingsCopy.text("Keyboard Shortcut")) {
                     summonShortcutControl(summonShortcut)
                 }
             }
@@ -194,57 +194,57 @@ private struct GeneralSettingsTab: View {
                             Image(systemName: "minus.circle.fill")
                         }
                         .buttonStyle(.borderless)
-                        .accessibilityLabel("Remove \(bundleID)")
+                        .accessibilityLabel(SettingsCopy.removeIgnoredApp(bundleID))
                     }
                 }
                 HStack {
                     TextField(
-                        "Bundle identifier, e.g. com.1password.1password",
+                        SettingsCopy.text("Bundle identifier, e.g. com.1password.1password"),
                         text: $ignoredBundleIDDraft
                     )
-                    Button("Add") { addIgnoredBundleID() }
+                    Button(SettingsCopy.text("Add")) { addIgnoredBundleID() }
                         .accessibilityIdentifier(
                             "clipy.settings.privacy.add-ignore"
                         )
                         .disabled(!canAddIgnoredBundleID)
                 }
             } header: {
-                Text("Privacy")
+                Text(SettingsCopy.text("Privacy"))
             } footer: {
-                Text("Clipboard contents from these apps are never recorded.")
+                Text(SettingsCopy.text("Clipboard contents from these apps are never recorded."))
             }
             .accessibilityIdentifier("clipy.settings.privacy.ignored-list")
-            GroupBox("Danger Zone") {
+            GroupBox(SettingsCopy.text("Danger Zone")) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Button("Clear Unpinned Items…") {
+                    Button(SettingsCopy.text("Clear Unpinned Items…")) {
                         isConfirmingClearUnpinned = true
                     }
                     .foregroundStyle(.red)
                     .disabled(isWorking)
                     .confirmationDialog(
-                        "Remove all unpinned items?",
+                        SettingsCopy.text("Remove all unpinned items?"),
                         isPresented: $isConfirmingClearUnpinned,
                         titleVisibility: .visible
                     ) {
-                        Button("Clear Unpinned Items", role: .destructive) {
+                        Button(SettingsCopy.text("Clear Unpinned Items"), role: .destructive) {
                             Task { await performClear(.unpinned) }
                         }
-                        Button("Cancel", role: .cancel) {}
+                        Button(SettingsCopy.text("Cancel"), role: .cancel) {}
                     }
-                    Button("Clear All History…") {
+                    Button(SettingsCopy.text("Clear All History…")) {
                         isConfirmingClearAll = true
                     }
                     .foregroundStyle(.red)
                     .disabled(isWorking)
                     .confirmationDialog(
-                        "Remove every item, including pinned items?",
+                        SettingsCopy.text("Remove every item, including pinned items?"),
                         isPresented: $isConfirmingClearAll,
                         titleVisibility: .visible
                     ) {
-                        Button("Clear All History", role: .destructive) {
+                        Button(SettingsCopy.text("Clear All History"), role: .destructive) {
                             Task { await performClear(.all) }
                         }
-                        Button("Cancel", role: .cancel) {}
+                        Button(SettingsCopy.text("Cancel"), role: .cancel) {}
                     }
                     if let status {
                         SettingStatusView(status: status)
@@ -266,35 +266,35 @@ private struct GeneralSettingsTab: View {
     ) -> some View {
         switch settings.status {
         case .stopped:
-            LabeledContent("Summon shortcut", value: "Not registered")
+            LabeledContent(SettingsCopy.text("Summon shortcut"), value: SettingsCopy.text("Not registered"))
                 .accessibilityIdentifier("clipy.settings.shortcut.status")
         case .current(let chord):
             HStack {
-                LabeledContent("Summon shortcut", value: chord)
+                LabeledContent(SettingsCopy.text("Summon shortcut"), value: chord)
                     .accessibilityIdentifier("clipy.settings.shortcut.status")
                 shortcutChangeButton(settings)
-                Button("Reset") { settings.reset() }
+                Button(SettingsCopy.text("Reset")) { settings.reset() }
                     .disabled(!settings.canReset)
                     .accessibilityIdentifier("clipy.settings.shortcut.reset")
             }
         case .unavailable(let requested, let retainedCurrent):
             VStack(alignment: .leading, spacing: 6) {
                 Label(
-                    "\(requested) is unavailable.",
+                    SettingsCopy.shortcutUnavailable(requested),
                     systemImage: "exclamationmark.triangle"
                 )
                 .accessibilityIdentifier("clipy.settings.shortcut.status")
                 if let retainedCurrent {
-                    Text("The current \(retainedCurrent) shortcut still works.")
+                    Text(SettingsCopy.retainedShortcut(retainedCurrent))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 HStack {
                     shortcutChangeButton(settings)
-                    Button("Retry") { settings.retry() }
+                    Button(SettingsCopy.text("Retry")) { settings.retry() }
                         .disabled(!settings.canRetry)
                         .accessibilityIdentifier("clipy.settings.shortcut.retry")
-                    Button("Reset") { settings.reset() }
+                    Button(SettingsCopy.text("Reset")) { settings.reset() }
                         .disabled(!settings.canReset)
                         .accessibilityIdentifier("clipy.settings.shortcut.reset")
                 }
@@ -302,7 +302,7 @@ private struct GeneralSettingsTab: View {
         }
 
         if settings.warning == .showColorsConflict {
-            Text("This shortcut is also the standard Show Colors shortcut.")
+            Text(SettingsCopy.text("This shortcut is also the standard Show Colors shortcut."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("clipy.settings.shortcut.warning")
@@ -312,7 +312,7 @@ private struct GeneralSettingsTab: View {
     private func shortcutChangeButton(
         _ settings: SummonShortcutSettings
     ) -> some View {
-        Button("Change…") { settings.beginChange() }
+        Button(SettingsCopy.text("Change…")) { settings.beginChange() }
             .disabled(!settings.canChange)
             .accessibilityIdentifier("clipy.settings.shortcut.change")
     }
@@ -322,7 +322,7 @@ private struct GeneralSettingsTab: View {
         _ settings: LaunchAtLoginSettings
     ) -> some View {
         Toggle(
-            "Launch at Login",
+            SettingsCopy.text("Launch at Login"),
             isOn: Binding(
                 get: { settings.isOn },
                 set: { settings.setEnabled($0) }
@@ -337,7 +337,7 @@ private struct GeneralSettingsTab: View {
         case .requiresApproval:
             HStack {
                 Label(
-                    "Approval is required in System Settings.",
+                    SettingsCopy.text("Approval is required in System Settings."),
                     systemImage: "person.badge.clock"
                 )
                 .font(.caption)
@@ -346,7 +346,7 @@ private struct GeneralSettingsTab: View {
                     "clipy.settings.launch-at-login.approval-required"
                 )
                 Spacer(minLength: 8)
-                Button("Open Login Items Settings") {
+                Button(SettingsCopy.text("Open Login Items Settings")) {
                     settings.openSystemSettings()
                 }
                 .accessibilityIdentifier(
@@ -355,7 +355,7 @@ private struct GeneralSettingsTab: View {
             }
         case .unavailable:
             Label(
-                "Launch at Login is unavailable for this app.",
+                SettingsCopy.text("Launch at Login is unavailable for this app."),
                 systemImage: "exclamationmark.triangle"
             )
             .font(.caption)
@@ -367,7 +367,7 @@ private struct GeneralSettingsTab: View {
 
         if settings.operationFailed {
             Label(
-                "The Launch at Login setting couldn't be changed.",
+                SettingsCopy.text("The Launch at Login setting couldn't be changed."),
                 systemImage: "exclamationmark.triangle"
             )
             .font(.caption)
@@ -462,7 +462,7 @@ private struct AppearanceSettingsTab: View {
         Form {
             Section {
                 if let popupPosition {
-                    Picker("Panel position", selection: popupPosition) {
+                    Picker(SettingsCopy.text("Panel position"), selection: popupPosition) {
                         ForEach(PopupPositionMode.allCases, id: \.self) { mode in
                             Text(mode.displayName).tag(mode)
                         }
@@ -471,7 +471,7 @@ private struct AppearanceSettingsTab: View {
                         "clipy.settings.appearance.panel-position"
                     )
                 }
-                Picker("Preview side", selection: $previewSide) {
+                Picker(SettingsCopy.text("Preview side"), selection: $previewSide) {
                     ForEach(PreviewSidePreference.allCases, id: \.self) { side in
                         Text(previewSideLabel(side)).tag(side)
                     }
@@ -480,25 +480,25 @@ private struct AppearanceSettingsTab: View {
                     "clipy.settings.appearance.preview-side"
                 )
                 Toggle(
-                    "Open preview automatically",
+                    SettingsCopy.text("Open preview automatically"),
                     isOn: $isPreviewAutoOpenEnabled
                 )
                 .accessibilityIdentifier(
                     "clipy.settings.appearance.preview-auto-open"
                 )
-                Button("Reset Panel Size to Default") {
+                Button(SettingsCopy.text("Reset Panel Size to Default")) {
                     Self.resetPersistedPanelSize()
                 }
                 .accessibilityIdentifier(
                     "clipy.settings.appearance.reset-panel-size"
                 )
             } header: {
-                Text("Panel")
+                Text(SettingsCopy.text("Panel"))
             } footer: {
-                Text("Panel position and size changes apply the next time the panel opens.")
+                Text(SettingsCopy.text("Panel position and size changes apply the next time the panel opens."))
             }
-            Section("List") {
-                Picker("Row density", selection: $rowDensity) {
+            Section(SettingsCopy.text("List")) {
+                Picker(SettingsCopy.text("Row density"), selection: $rowDensity) {
                     ForEach(HistoryRowDensity.allCases, id: \.self) { density in
                         Text(rowDensityLabel(density)).tag(density)
                     }
@@ -507,7 +507,7 @@ private struct AppearanceSettingsTab: View {
                 .accessibilityIdentifier(
                     "clipy.settings.appearance.row-density"
                 )
-                Picker("Snippet lines", selection: $snippetLineCount) {
+                Picker(SettingsCopy.text("Snippet lines"), selection: $snippetLineCount) {
                     ForEach(HistorySnippetLineCount.allCases, id: \.self) { count in
                         Text(snippetLineCountLabel(count)).tag(count)
                     }
@@ -516,7 +516,7 @@ private struct AppearanceSettingsTab: View {
                 .accessibilityIdentifier(
                     "clipy.settings.appearance.snippet-lines"
                 )
-                Picker("Font size", selection: $rowFontSize) {
+                Picker(SettingsCopy.text("Font size"), selection: $rowFontSize) {
                     ForEach(HistoryRowFontSize.allCases, id: \.self) { size in
                         Text(rowFontSizeLabel(size)).tag(size)
                     }
@@ -534,16 +534,16 @@ private struct AppearanceSettingsTab: View {
     /// raw values remain the only cross-module vocabulary.
     private func previewSideLabel(_ side: PreviewSidePreference) -> String {
         switch side {
-        case .automatic: return "Automatic"
-        case .leading: return "Left"
-        case .trailing: return "Right"
+        case .automatic: return SettingsCopy.text("Automatic")
+        case .leading: return SettingsCopy.text("Left")
+        case .trailing: return SettingsCopy.text("Right")
         }
     }
 
     private func rowDensityLabel(_ density: HistoryRowDensity) -> String {
         switch density {
-        case .compact: return "Compact"
-        case .comfortable: return "Comfortable"
+        case .compact: return SettingsCopy.text("Compact")
+        case .comfortable: return SettingsCopy.text("Comfortable")
         }
     }
 
@@ -551,18 +551,18 @@ private struct AppearanceSettingsTab: View {
     /// explicit cases label with their raw counts.
     private func snippetLineCountLabel(_ count: HistorySnippetLineCount) -> String {
         switch count {
-        case .automatic: return "Auto"
-        case .one: return "1"
-        case .two: return "2"
-        case .three: return "3"
+        case .automatic: return SettingsCopy.text("Auto")
+        case .one: return LocalizedCountPresentation.number(1, locale: .current)
+        case .two: return LocalizedCountPresentation.number(2, locale: .current)
+        case .three: return LocalizedCountPresentation.number(3, locale: .current)
         }
     }
 
     private func rowFontSizeLabel(_ size: HistoryRowFontSize) -> String {
         switch size {
-        case .small: return "Small"
-        case .medium: return "Medium"
-        case .large: return "Large"
+        case .small: return SettingsCopy.text("Small")
+        case .medium: return SettingsCopy.text("Medium")
+        case .large: return SettingsCopy.text("Large")
         }
     }
 
@@ -857,23 +857,12 @@ private struct RetentionSettingsTab: View {
         )
     }
 
-    /// Stepper binding: reads the typed value clamped into the §2 range
-    /// (an out-of-range or unparseable field steps from the nearest legal
-    /// state instead of refusing), writes back plain decimal text.
+    /// The draft owns localized input parsing and the §2 stepper range.
     private var maximumUnpinnedStepperValue: Binding<Int> {
         Binding<Int>(
-            get: {
-                guard let typed = Int(
-                    draft.maximumUnpinnedText
-                        .trimmingCharacters(in: .whitespaces)
-                ) else {
-                    return HistoryLimits.standard.defaultMaximumUnpinnedItems
-                }
-                let range = HistoryLimits.standard.userMaximumUnpinnedRange
-                return min(max(typed, range.lowerBound), range.upperBound)
-            },
+            get: { draft.maximumUnpinnedStepperValue },
             set: {
-                draft.setMaximumUnpinnedText(String($0))
+                draft.maximumUnpinnedStepperValue = $0
                 countStatus = nil
             }
         )

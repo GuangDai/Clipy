@@ -278,7 +278,9 @@ internal actor SearchWorker {
                     directive: directive
                 )
             case .fuzzy:
-                evaluated = try await evaluateFuzzy(term: term, in: corpus)
+                evaluated = try await evaluateFuzzy(
+                    term: term, in: corpus, directive: directive
+                )
             }
         }
         try Task.checkCancellation()

@@ -27,6 +27,8 @@ public enum FailurePresentation {
             return "Results changed — showing the latest page"
         case .capacityExceeded(let kind):
             return message(for: kind)
+        case .thumbnailUnavailable:
+            return "A thumbnail isn't available for this image"
         case .temporarilyUnavailable(let reason):
             return message(for: reason)
         case .persistence:

@@ -107,14 +107,18 @@ extension HistoryAuthority {
             let byteCount = revision.content.representations.reduce(0) {
                 $0 + $1.bytes.count
             }
-            let revisionTitle = ContentProjector.projectTitle(
-                revision.content,
-                limits: limits
-            )
+            let isActive = revision.id == item.activeRevisionID
+            // The fetched row already carries the validated projection of
+            // this exact Effective Content (05 §14.3/§15). Reuse it for the
+            // active summary instead of decoding its text again on read.
+            // Inactive revisions still need their own title projection.
+            let revisionTitle = isActive
+                ? row.title
+                : ContentProjector.projectTitle(revision.content, limits: limits)
             return RevisionSummary(
                 id: revision.id,
                 createdAt: revision.createdAt,
-                isActive: revision.id == item.activeRevisionID,
+                isActive: isActive,
                 title: revisionTitle,
                 typeIdentifiers: revisionTypeIdentifiers,
                 byteCount: byteCount

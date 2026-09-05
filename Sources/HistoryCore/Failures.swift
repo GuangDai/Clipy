@@ -25,6 +25,10 @@ public enum HistoryFailure: Error, Sendable, Equatable {
     case snapshotExpired(current: ChangePosition)
     /// A configured capacity limit rejected the action.
     case capacityExceeded(CapacityKind)
+    /// The selected image representation cannot be decoded for a thumbnail.
+    /// Its raw clipboard bytes remain readable and pasteable; this does not
+    /// imply that the persisted History value is corrupt.
+    case thumbnailUnavailable
     /// The action cannot complete right now; the caller may retry later.
     case temporarilyUnavailable(UnavailableReason)
     /// The persistence layer failed to complete the durable transaction.

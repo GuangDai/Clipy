@@ -87,7 +87,9 @@ public protocol ClipboardHistory: Sendable {
     ) async throws -> PastePayload
 
     /// An encoded thumbnail for one item at one Effective Content state,
-    /// sized to `pixels`; `nil` when the item has no thumbnailable content.
+    /// sized to `pixels`; `nil` when no supported image representation exists.
+    /// A selected image that cannot be decoded throws `.thumbnailUnavailable`;
+    /// its raw bytes remain readable and pasteable.
     ///
     /// Returns encoded, Sendable bytes rather than `NSImage`/`CGImage`. A
     /// stale `item` reference fails typed rather than returning current bytes

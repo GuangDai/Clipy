@@ -89,6 +89,9 @@ func observerStopsAfterOneRetryAndEmitsOneTerminalContentFreeOutcome() throws {
         return
     }
     #expect(value.endChangeCount == pasteboard.changeCount)
+    observer.pollForTesting()
+    #expect(payloadReads == 2)
+    #expect(received.count == 1)
 }
 
 @Test @MainActor

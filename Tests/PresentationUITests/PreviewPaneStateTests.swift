@@ -194,7 +194,13 @@ struct PreviewPaneStateTests {
         state.handleSelectionChange(first)
         state.isAutoOpenPreferenceEnabled = false
         state.isAutoOpenPreferenceEnabled = true
-        for _ in 0..<100 { await Task.yield() }
+
+        // The exact-item purge has an observable effect only when this
+        // item still owns pending/visible work. It must now be a no-op:
+        // this proves retirement synchronously, without guessing how many
+        // scheduler turns let a cancelled dwell finish.
+        state.purge(.item(first.id))
+        #expect(state.purgeGeneration == 0)
         #expect(!state.isOpen)
         #expect(state.previewedItem == nil)
 

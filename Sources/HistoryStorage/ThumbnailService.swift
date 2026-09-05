@@ -218,15 +218,15 @@ internal actor ThumbnailWorker {
     ///
     /// 1. **Decode/downsample**: `CGImageSourceCreateWithData` wraps the
     ///    source bytes; a `nil` source means the stored representation is not
-    ///    a decodable image — §16 maps a decode failure to
-    ///    `.persistence(.corruptStoredValue)` (an in-store image
-    ///    representation that fails decode is a stored-value problem).
+    ///    a decodable image — §16 maps image interpretation failure to
+    ///    `.thumbnailUnavailable`. Captured bytes are opaque to persistence;
+    ///    failing image decode does not establish a corrupt stored value.
     ///    `CGImageSourceCreateThumbnailAtIndex` downsamples with
     ///    `MaxPixelSize` derived from an aspect fit of the oriented source
     ///    into both requested dimensions,
     ///    `CreateThumbnailFromImageAlways` = true, and
     ///    `CreateThumbnailWithTransform` = true. A `nil` thumbnail is the
-    ///    same corrupt-stored-value failure.
+    ///    same thumbnail-unavailable failure.
     /// 2. **Encode/bound**: `CGImageDestination` re-encodes the downsampled
     ///    `CGImage` as PNG (`UTType.png.identifier`); the encoded bytes must
     ///    be ≤ `HistoryLimits.standard.maximumEncodedThumbnailBytes` (06 §2:
@@ -240,8 +240,8 @@ internal actor ThumbnailWorker {
     /// result is tagged with the verified old reference regardless of
     /// intervening commits (§9; WS15).
     ///
-    /// - Throws: `HistoryFailure.persistence(.corruptStoredValue)` for a
-    ///   nil source or nil thumbnail; `.capacityExceeded(.thumbnailBytes)`
+    /// - Throws: `HistoryFailure.thumbnailUnavailable` for an undecodable
+    ///   source, missing dimensions, or nil thumbnail; `.capacityExceeded(.thumbnailBytes)`
     ///   when the encoded PNG exceeds the output bound; or
     ///   `.persistence(.invariantViolation)` when PNG encoding itself fails.
     internal func decodeThumbnail(
@@ -254,14 +254,14 @@ internal actor ThumbnailWorker {
         // Phase 1 — decode/downsample (§9 step 6; §14.5).
         //
         // CGImageSourceCreateWithData returns nil when the bytes are not a
-        // recognizable image container — a stored image representation that
-        // fails to decode is a corrupt stored value (§16: decode/schema
-        // invariant failures → .persistence(.corruptStoredValue)).
+        // recognizable image container. This interpretation failure says
+        // nothing about storage integrity: the source bytes already passed
+        // History's independent blob decoding (05 §16).
         guard let source = CGImageSourceCreateWithData(
             sourceBytes as CFData,
             nil
         ) else {
-            throw HistoryFailure.persistence(.corruptStoredValue)
+            throw HistoryFailure.thumbnailUnavailable
         }
 
         // Primary-image index (audit
@@ -286,7 +286,7 @@ internal actor ThumbnailWorker {
             let sourceHeight = properties[kCGImagePropertyPixelHeight] as? Int,
             sourceWidth > 0, sourceHeight > 0
         else {
-            throw HistoryFailure.persistence(.corruptStoredValue)
+            throw HistoryFailure.thumbnailUnavailable
         }
         let orientation = properties[kCGImagePropertyOrientation] as? Int ?? 1
         let swapsAxes = (5...8).contains(orientation)
@@ -306,9 +306,9 @@ internal actor ThumbnailWorker {
             imageIndex,
             thumbnailOptions
         ) else {
-            // The source was recognized but the thumbnail could not be created
-            // — the stored image data is corrupt (§16: .corruptStoredValue).
-            throw HistoryFailure.persistence(.corruptStoredValue)
+            // The source was recognized but ImageIO cannot render it. Raw
+            // representation reads and paste remain independent (05 §16).
+            throw HistoryFailure.thumbnailUnavailable
         }
 
         // Phase 2 — re-encode as PNG and enforce the output bound (06 §2).

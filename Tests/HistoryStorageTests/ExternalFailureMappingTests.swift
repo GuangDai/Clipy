@@ -57,6 +57,13 @@ struct ExternalFailureMappingTests {
                 ]
             ),
             MatrixRow(
+                source: .thumbnailUnavailable,
+                expected: [
+                    .invariant, .invariant, .invariant, .invariant,
+                    .invariant, .invariant, .invariant,
+                ]
+            ),
+            MatrixRow(
                 source: .invalidInput(.emptyCapture),
                 expected: [
                     .invariant, .invariant, .invariant, .invariant,

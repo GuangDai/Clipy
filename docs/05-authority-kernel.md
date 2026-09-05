@@ -229,7 +229,7 @@ Decode is not a blind memberwise conversion. It reconstructs Domain values throu
   copy count ≥1, monotone first/last copy time, and bounded source values;
 - a non-negative pin ordinal (negative is corruption);
 - the `effectiveTypeIdentifiersBlob` decodes to a sorted, unique, non-empty list of type identifiers at format version 1;
-- `projectionSchemaVersion` is exactly the current value (v2), and the stored `title` (≤ 1,024 UTF-8 bytes) and `searchBody` (≤ 256 KiB) obey their Part VI bounds. A v1 tag is accepted only by the bounded startup rebuild below; ordinary reads never consume v1 projection scalars.
+- `projectionSchemaVersion` is exactly the current value (v3), and the stored `title` (≤ 1,024 UTF-8 bytes) and `searchBody` (≤ 256 KiB) obey their Part VI bounds. Tags v1/v2 are accepted only by the bounded startup rebuild below; ordinary reads never consume v1/v2 projection scalars.
 
 Projection checks live at the scalar boundary rather than inside a blob codec:
 startup validates every row's schema tag; recent browse validates the fetched
@@ -620,7 +620,7 @@ same-interval proof, rather than an otherwise unread generation counter.
 5. bootstrap/validate the retention-expansion config singleton;
 6. derive every projection-schema-v1/v2 replacement from validated Canonical/revision bytes, then stamp them as recipe v3 in one bounded transaction; an unknown tag, invalid source, or failed transaction fails open without publishing a partial rebuild;
 7. validate retained row count does not exceed the hard bound and fetch each row's business ID, nonzero Content Version, current projection schema version, pin ordinal, Canonical bytes, and signature metadata;
-8. require projection schema version 2;
+8. require projection schema version 3;
 9. decode Canonical and signature metadata, recompute Canonical signature
    entries, require bidirectional coverage, and build the complete index;
 10. validate the full pinned ordinal set from scalar fields;
@@ -690,6 +690,11 @@ internal struct SearchCorpusRow: Sendable {
 ```
 
 `SearchWorker` evaluates exact/fuzzy/regexp over this `Sendable` snapshot and returns bounded row values. It never reads SwiftData and never uses dedup Candidate Rank.
+Exact/regexp scans retain only the continuation anchor and at most `limit + 1`
+subsequent matches. Fuzzy still scores the complete corpus, but retains only
+the best `limit + 1` post-anchor matches and the matching anchor, sorting only
+those candidates. This bounds evaluated-result storage; it does not replace
+the full corpus snapshot or change the frozen score/date/ID ordering.
 
 #### 14.3 Detail and paste
 
@@ -747,6 +752,8 @@ The projector constructs the joined search body directly under that hard
 UTF-8 bound; it does not materialize an unbounded concatenation and truncate it
 afterward. Read paths that need only a revision-summary title use the title-only
 projection and do not construct a search body.
+Details reuse the validated durable Effective title for the active revision's
+summary; inactive revision summaries still project their own content titles.
 
 Projection schema changes require an explicit schema version and migration/rebuild plan. They never change Canonical Content, revisions, Content Version, or Change Position by themselves; a projection-only migration is not a History Action and emits no user-visible commit.
 
@@ -783,6 +790,7 @@ At the `SwiftDataHistory` boundary:
 - a durable transaction error whose Cocoa code is `fileWriteOutOfSpace` or whose POSIX code is `ENOSPC` (directly or in the single observed `NSUnderlyingErrorKey` wrapper) → `.temporarilyUnavailable(.insufficientDiskSpace)`; classification uses domains/codes, never localized strings;
 - stamped-plan capacity admission → `.temporarilyUnavailable(.insufficientDiskSpace)`: before executing any stamped plan, the single writer refuses it — typed, with no receipt, durable commit, or invalidation — when the store volume's readable raw available-capacity fact (`volumeAvailableCapacity`) is below the plan's new external-storage payload total plus a fixed 1 MiB margin. The raw fact, not the important-usage variant, is authoritative here: the OS maintains purgeable-space accounting only on the boot volume, and the important-usage fact was observed returning zero on a dedicated mounted volume (dispatch run 32634051113, 254 MiB free, every capture refused); the raw fact matches the filesystem's own accounting on every volume and errs conservative on the boot volume, where ignoring purgeable space yields a typed, retryable refusal. The payload total counts the encoded `CanonicalBlobV1`/`RevisionStateBlobV1` bytes carried by `.create`, `.appendRevision`, and `.pruneRevisions` mutations (the wire-format byte counts Core Data externalizes, not raw clipboard bytes); plans writing no new external bytes — byte-exact copy coalescing, pin/occurrence/policy/delete-only commits — are never refused, and an unreadable capacity fact (in-memory store or unavailable resource value) leaves the path unrefused. Admission exists because the external-storage save path returns no out-of-space error at all: creating the `_EXTERNAL_DATA` interim file on a full volume raises an uncaught `NSInternalInconsistencyException` that terminates the process before this section's translation runs (Card 6B physical-ENOSPC runner evidence, 2026-08-23). An exhaustion that begins after admission passes remains that framework crash ceiling, not a typed failure;
 - hard retained/revision/copy-count limits → `.capacityExceeded` with the matching `CapacityKind`; valid encoded thumbnail output over the Part VI byte envelope → `.capacityExceeded(.thumbnailBytes)`; a `ContentVersion`/`ChangePosition` successor overflow → `.capacityExceeded(.coherenceToken)`;
+- an image representation that ImageIO cannot interpret or render as a thumbnail → `.thumbnailUnavailable`; this is not evidence of persisted-value corruption and does not affect byte-exact capture, detail, or paste. The selected candidate still fails without falling back to another representation;
 - decode/schema invariant failures or corrupt persisted values → `.persistence(.corruptStoredValue)` or `.persistence(.invariantViolation)`;
 - a PNG destination/finalization failure after source decode → `.persistence(.invariantViolation)` (encode-side invariant, never stored-value corruption);
 - any other `ModelContext.transaction` closure failure (including the `StorageInvariant.positionChanged` guard) or framework-level failure to durably commit the transaction → `.persistence(.transaction)`.

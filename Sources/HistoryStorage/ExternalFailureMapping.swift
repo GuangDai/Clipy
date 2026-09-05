@@ -174,7 +174,8 @@ internal func mapExternalHistoryFailure(
             return invariantMapping()
         }
 
-    case .staleContent, .revisionNotFound, .snapshotExpired:
+    case .staleContent, .revisionNotFound, .snapshotExpired, .thumbnailUnavailable:
+        // None of the seven external operations generates a thumbnail.
         return invariantMapping()
     }
 }

@@ -35,7 +35,7 @@ internal struct RetentionSettingsDraft {
 
     /// R1 runs on capture and `.setRetentionPolicies`; it has no wall-clock
     /// worker or background reaper (`V2-02` §2.2/§7; review Card 10B). The
-    /// copy resolves through the package String Catalog
+    /// copy resolves through the package localization resources
     /// (`RetentionSettingsCopy.ageEnforcementNote`; V2-07 §10).
     internal static let ageEnforcementExplanation =
         RetentionSettingsCopy.ageEnforcementNote
@@ -70,8 +70,31 @@ internal struct RetentionSettingsDraft {
         revisions: nil
     )
     private var editGeneration: UInt64 = 0
+    private let locale: Locale
     internal private(set) var acceptedSuccessMessage: String?
     internal private(set) var acceptedCountSuccessMessage: String?
+
+    internal init(locale: Locale = .current) {
+        self.locale = locale
+        maximumUnpinnedText = formatted(HistoryLimits.standard.defaultMaximumUnpinnedItems)
+        ageDaysText = formatted(30)
+        storageMiBText = formatted(500)
+        revisionCountText = formatted(20)
+        revisionMiBText = formatted(64)
+    }
+
+    /// The stepper and typed input share integer parsing; stepping an invalid
+    /// field starts from the default, while valid out-of-range input clamps.
+    internal var maximumUnpinnedStepperValue: Int {
+        get {
+            let typed = validatedSettingsWholeNumber(
+                maximumUnpinnedText, in: Int.min...Int.max, locale: locale
+            ) ?? HistoryLimits.standard.defaultMaximumUnpinnedItems
+            let range = HistoryLimits.standard.userMaximumUnpinnedRange
+            return min(max(typed, range.lowerBound), range.upperBound)
+        }
+        set { setMaximumUnpinnedText(formatted(newValue)) }
+    }
 
     internal var inputIsValid: Bool {
         (!ageEnabled || ageInputIsValid)
@@ -126,7 +149,7 @@ internal struct RetentionSettingsDraft {
         let generationIsCurrent = request.editGeneration == editGeneration
         configuredMaximumUnpinnedItems = configuration.maximumUnpinnedItems
         if generationIsCurrent || !maximumUnpinnedValueIsDirty {
-            maximumUnpinnedText = String(configuration.maximumUnpinnedItems)
+            maximumUnpinnedText = formatted(configuration.maximumUnpinnedItems)
         }
         let accepted = acceptLoaded(
             configuration.policies,
@@ -156,14 +179,14 @@ internal struct RetentionSettingsDraft {
         }
         if let age = policies.age,
            generationIsCurrent || !ageValueIsDirty {
-            ageDaysText = String(Self.ceilingDays(age.maxAge))
+            ageDaysText = formatted(Self.ceilingDays(age.maxAge))
         }
         if generationIsCurrent || !storageToggleIsDirty {
             storageEnabled = policies.storage != nil
         }
         if let storage = policies.storage,
            generationIsCurrent || !storageValueIsDirty {
-            storageMiBText = String(Self.ceilingMiB(
+            storageMiBText = formatted(Self.ceilingMiB(
                 storage.maxTotalBytes,
                 range: Self.storageMiBRange
             ))
@@ -173,14 +196,14 @@ internal struct RetentionSettingsDraft {
         }
         if let count = policies.revisions?.maxRevisionsPerItem,
            generationIsCurrent || !revisionCountValueIsDirty {
-            revisionCountText = String(count)
+            revisionCountText = formatted(count)
         }
         if generationIsCurrent || !revisionBytesToggleIsDirty {
             revisionBytesEnabled = policies.revisions?.maxRevisionBytesPerItem != nil
         }
         if let bytes = policies.revisions?.maxRevisionBytesPerItem,
            generationIsCurrent || !revisionBytesValueIsDirty {
-            revisionMiBText = String(Self.ceilingMiB(
+            revisionMiBText = formatted(Self.ceilingMiB(
                 bytes,
                 range: Self.revisionMiBRange
             ))
@@ -359,24 +382,29 @@ internal struct RetentionSettingsDraft {
     private var maximumUnpinnedItems: Int? {
         validatedSettingsWholeNumber(
             maximumUnpinnedText,
-            in: HistoryLimits.standard.userMaximumUnpinnedRange
+            in: HistoryLimits.standard.userMaximumUnpinnedRange,
+            locale: locale
         )
     }
 
     private var ageDays: Int? {
-        validatedSettingsWholeNumber(ageDaysText, in: Self.ageDaysRange)
+        validatedSettingsWholeNumber(ageDaysText, in: Self.ageDaysRange, locale: locale)
     }
 
     private var storageMiB: Int? {
-        validatedSettingsWholeNumber(storageMiBText, in: Self.storageMiBRange)
+        validatedSettingsWholeNumber(storageMiBText, in: Self.storageMiBRange, locale: locale)
     }
 
     private var revisionCount: Int? {
-        validatedSettingsWholeNumber(revisionCountText, in: Self.revisionCountRange)
+        validatedSettingsWholeNumber(revisionCountText, in: Self.revisionCountRange, locale: locale)
     }
 
     private var revisionMiB: Int? {
-        validatedSettingsWholeNumber(revisionMiBText, in: Self.revisionMiBRange)
+        validatedSettingsWholeNumber(revisionMiBText, in: Self.revisionMiBRange, locale: locale)
+    }
+
+    private func formatted(_ value: Int) -> String {
+        LocalizedCountPresentation.number(value, locale: locale)
     }
 
     private var proposedAgePolicy: AgeRetention? {
@@ -458,14 +486,22 @@ internal struct RetentionSettingsDraft {
     }
 }
 
-/// Shared strict integer parser for Settings numeric fields. A decimal,
-/// empty, or out-of-range value is not a whole policy value (contract §4.4).
+/// V2-07 §10.3: accept localized integers as displayed, with optional grouping.
+/// Comparing the parsed value's integer representations rejects decimal or
+/// partially parsed input even if Foundation can recover a number from it.
 internal func validatedSettingsWholeNumber(
     _ text: String,
-    in range: ClosedRange<Int>
+    in range: ClosedRange<Int>,
+    locale: Locale = .current
 ) -> Int? {
-    guard let value = Int(text.trimmingCharacters(in: .whitespaces)) else {
-        return nil
+    let text = text.trimmingCharacters(in: .whitespaces)
+    if let value = Int(text) {
+        return range.contains(value) ? value : nil
     }
-    return range.contains(value) ? value : nil
+    let style = IntegerFormatStyle<Int>.number.locale(locale)
+    guard let value = try? Int(text, format: style, lenient: false),
+          range.contains(value),
+          text == value.formatted(style)
+            || text == value.formatted(style.grouping(.never)) else { return nil }
+    return value
 }

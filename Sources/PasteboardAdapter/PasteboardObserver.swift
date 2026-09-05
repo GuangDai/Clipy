@@ -82,13 +82,12 @@ public final class PasteboardObserver {
 
         let accessBehavior = accessBehaviorProvider()
         lastAccessBehavior = accessBehavior
-        onAccessBehaviorChanged?(accessBehavior)
-        guard accessBehavior == .allowed else { return }
+        guard accessBehavior == .allowed else {
+            onAccessBehaviorChanged?(accessBehavior)
+            return
+        }
 
         lastChangeCount = adapter.pasteboard.changeCount
-        if captureCurrent {
-            deliverCurrentOutcome(to: handler)
-        }
 
         // The timer is added to the main run loop's common modes explicitly
         // rather than via `Timer.scheduledTimer` (which would silently bind
@@ -107,6 +106,15 @@ public final class PasteboardObserver {
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
+
+        // Both callbacks may synchronously stop or restart observation
+        // (01 §5.1 lifecycle ownership). Install the timer first so stop()
+        // can cancel this start; a replacement timer owns its own capture.
+        onAccessBehaviorChanged?(accessBehavior)
+        guard self.timer === timer, let currentHandler = self.handler else { return }
+        if captureCurrent {
+            deliverCurrentOutcome(to: currentHandler)
+        }
     }
 
     /// Stops polling and drops the handler. Safe to call when stopped; safe

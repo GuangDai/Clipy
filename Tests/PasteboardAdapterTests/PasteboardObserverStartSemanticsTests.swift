@@ -12,6 +12,94 @@ import Testing
 #if DEBUG
 @Suite("Pasteboard observer start semantics (DEC-OBSERVER-START)")
 struct PasteboardObserverStartSemanticsTests {
+    @Test("a synchronous stop from initial capture allows the next start to capture")
+    @MainActor
+    func initialCaptureCanStopObservation() {
+        let pasteboard = Self.makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        Self.replaceString("first-start", on: pasteboard)
+        let observer = PasteboardObserver(
+            adapter: PasteboardAdapter(pasteboard: pasteboard),
+            pollInterval: 60
+        )
+        defer { observer.stop() }
+        var received: [String] = []
+
+        observer.start { outcome in
+            if let text = Self.completeText(in: outcome) {
+                received.append(text)
+            }
+            observer.stop()
+        }
+        Self.replaceString("second-start", on: pasteboard)
+        observer.start { outcome in
+            if let text = Self.completeText(in: outcome) {
+                received.append(text)
+            }
+        }
+        #expect(received == ["first-start", "second-start"])
+        observer.pollForTesting()
+        #expect(received == ["first-start", "second-start"])
+    }
+
+    @Test("stopping in the initial access callback prevents all payload reads")
+    @MainActor
+    func initialAccessCallbackCanStopBeforeCapture() {
+        let pasteboard = Self.makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        Self.replaceString("do-not-read", on: pasteboard)
+        var reads = 0
+        var adapter = PasteboardAdapter(pasteboard: pasteboard)
+        adapter.payloadReadObserver = { _ in reads += 1 }
+        let observer = PasteboardObserver(adapter: adapter, pollInterval: 60)
+        defer { observer.stop() }
+        var received: [CaptureOutcome] = []
+
+        observer.start(
+            onAccessBehaviorChanged: { _ in observer.stop() },
+            handler: { received.append($0) }
+        )
+        #expect(reads == 0)
+        #expect(received.isEmpty)
+
+        observer.start { received.append($0) }
+        #expect(reads == 1)
+        #expect(received.count == 1)
+    }
+
+    @Test("a baseline restart in the access callback owns the replacement timer")
+    @MainActor
+    func accessCallbackCanReplaceStartWithBaselineOnlyObservation() {
+        let pasteboard = Self.makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        Self.replaceString("excluded-baseline", on: pasteboard)
+        let observer = PasteboardObserver(
+            adapter: PasteboardAdapter(pasteboard: pasteboard),
+            pollInterval: 60
+        )
+        defer { observer.stop() }
+        var received: [String] = []
+        let receive: @MainActor (CaptureOutcome) -> Void = { outcome in
+            if let text = Self.completeText(in: outcome) {
+                received.append(text)
+            }
+        }
+
+        observer.start(
+            onAccessBehaviorChanged: { _ in
+                observer.stop()
+                observer.start(captureCurrent: false, handler: receive)
+            },
+            handler: receive
+        )
+        observer.pollForTesting()
+        #expect(received.isEmpty)
+
+        Self.replaceString("after-baseline-restart", on: pasteboard)
+        observer.pollForTesting()
+        #expect(received == ["after-baseline-restart"])
+    }
+
     @Test("startup imports the complete generation already current")
     @MainActor
     func startupImportsCurrentGeneration() throws {

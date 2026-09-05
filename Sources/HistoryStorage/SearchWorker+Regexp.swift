@@ -122,7 +122,7 @@ extension SearchWorker {
                 // UTF-16 offsets, and the prefix's offsets index the title
                 // identically (03b §8: ranges relative to
                 // `HistoryRow.title`, `snippet == nil`).
-                evaluated.append(
+                scanTracker.appendIfRetained(
                     EvaluatedRow(
                         corpusRow: row,
                         search: .ready(SearchPresentation(
@@ -133,7 +133,8 @@ extension SearchWorker {
                             )]
                         )),
                         anchor: Self.defaultOrderAnchor(for: row)
-                    )
+                    ),
+                    to: &evaluated
                 )
 #if DEBUG
                 debugTitleMatches += 1
@@ -188,7 +189,7 @@ extension SearchWorker {
             )
             // The 03b §8 excerpt defers to page materialization with the
             // scan-bound and omitted-suffix facts recorded during the scan.
-            evaluated.append(
+            scanTracker.appendIfRetained(
                 EvaluatedRow(
                     corpusRow: row,
                     search: .bodyExcerpt(
@@ -198,7 +199,8 @@ extension SearchWorker {
                         bodySuffixWasOmitted: bodyScan.suffixWasOmitted
                     ),
                     anchor: Self.defaultOrderAnchor(for: row)
-                )
+                ),
+                to: &evaluated
             )
 #if DEBUG
             debugBodyMatches += 1
