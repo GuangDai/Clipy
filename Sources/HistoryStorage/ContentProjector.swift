@@ -176,25 +176,24 @@ internal enum ContentProjector {
             // Both sinks complete: nothing later can contribute. A textual
             // representation can only add search-body bytes (budget already
             // exhausted) or a title (already found), so its full decode and
-            // newline-normalization copy are skipped entirely — decisive
+            // search-body traversal are skipped entirely — decisive
             // when a capture carries multi-megabyte representations after
             // the first one already filled the 256-KiB body budget.
             if title != nil, remainingSearchBodyBytes == 0 {
                 break
             }
             guard let text = decodedText(of: representation) else { continue }
-            let normalized = normalizingNewlines(text)
             if title == nil {
-                title = firstContentLine(of: normalized)
+                title = firstContentLine(of: text)
             }
 
             // Build the durable corpus directly under its hard byte bound.
             // Joining all decoded representations first lets transient memory
             // scale with arbitrarily large capture bytes even though the
             // stored value is bounded (docs/06-cross-cutting.md §9, WL3).
-            guard containsNonWhitespace(in: normalized) else { continue }
+            guard containsNonWhitespace(in: text) else { continue }
             if hasSearchBodyPart {
-                guard appendUTF8Prefix(
+                guard appendNormalizedUTF8Prefix(
                     "\n",
                     to: &searchBody,
                     remainingByteCount: &remainingSearchBodyBytes
@@ -203,8 +202,8 @@ internal enum ContentProjector {
                 }
             }
             hasSearchBodyPart = true
-            guard appendUTF8Prefix(
-                normalized,
+            guard appendNormalizedUTF8Prefix(
+                text,
                 to: &searchBody,
                 remainingByteCount: &remainingSearchBodyBytes
             ) else {
@@ -303,22 +302,6 @@ internal enum ContentProjector {
 
     // MARK: Normalization (§15)
 
-    /// Newline normalization: CRLF and lone CR fold to LF so line splitting,
-    /// title selection, and stored search bodies are independent of the
-    /// source newline convention. Deterministic; no other bytes change.
-    private static func normalizingNewlines(_ text: String) -> String {
-        var normalized = ""
-        normalized.reserveCapacity(text.utf8.count)
-        for character in text {
-            if character == "\r\n" || character == "\r" {
-                normalized.append("\n")
-            } else {
-                normalized.append(character)
-            }
-        }
-        return normalized
-    }
-
     /// The first line whose whitespace-trimmed form is non-empty, trimmed;
     /// `nil` when the text has no such line (§15: "first eligible textual
     /// line after normalization"). CRLF, CR, and LF delimit the same lines
@@ -340,26 +323,31 @@ internal enum ContentProjector {
         }
     }
 
-    /// `true` when a normalized textual representation contributes something
-    /// other than whitespace/newlines to the search corpus (§15).
+    /// `true` when a textual representation contributes something other than
+    /// whitespace/newlines to the corpus (§15). CR/LF normalization preserves
+    /// this predicate, so it can inspect the decoded source directly.
     private static func containsNonWhitespace(in text: String) -> Bool {
         text.unicodeScalars.contains {
             !CharacterSet.whitespacesAndNewlines.contains($0)
         }
     }
 
-    /// Appends as much of `text` as fits at a Character boundary and reports
-    /// whether the full input was appended. The destination never grows past
-    /// its caller-owned UTF-8 budget.
-    private static func appendUTF8Prefix(
+    /// Normalizes CRLF/lone CR to LF while appending only the prefix that
+    /// fits the caller-owned UTF-8 budget at Character boundaries. Measure
+    /// the output Character (CRLF becomes one byte), preserving the exact
+    /// normalize-then-truncate result without allocating a full normalized
+    /// copy. Returns whether the complete input was appended.
+    private static func appendNormalizedUTF8Prefix(
         _ text: String,
         to result: inout String,
         remainingByteCount: inout Int
     ) -> Bool {
         for character in text {
-            let width = character.utf8.count
+            let normalized: Character = character == "\r\n" || character == "\r"
+                ? "\n" : character
+            let width = normalized.utf8.count
             guard width <= remainingByteCount else { return false }
-            result.append(character)
+            result.append(normalized)
             remainingByteCount -= width
         }
         return true
