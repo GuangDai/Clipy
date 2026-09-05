@@ -15,7 +15,9 @@ private func effectiveTextContent(
         representations: representations.map {
             ContentRepresentation(
                 typeIdentifier: $0.typeIdentifier,
-                bytes: Data($0.text.utf8)
+                bytes: $0.typeIdentifier == "public.utf16-external-plain-text"
+                    ? $0.text.data(using: .utf16BigEndian)!
+                    : Data($0.text.utf8)
             )
         }
     )
@@ -23,7 +25,7 @@ private func effectiveTextContent(
 
 @Test func projectionSkipsWhitespaceOnlyRepresentations() {
     let content = effectiveTextContent([
-        ("public.utf8-external-plain-text", " \r\n\t "),
+        ("public.utf16-external-plain-text", " \r\n\t "),
         ("public.utf8-plain-text", "  Useful title\r\nbody "),
     ])
 
@@ -38,7 +40,7 @@ private func effectiveTextContent(
     let prefix = String(repeating: "a", count: bound - 1)
     let content = effectiveTextContent([
         ("public.utf8-plain-text", prefix),
-        ("public.utf8-external-plain-text", "🙂tail"),
+        ("public.utf16-external-plain-text", "🙂tail"),
     ])
 
     let projection = ContentProjector.project(content)
@@ -49,19 +51,51 @@ private func effectiveTextContent(
     #expect(projection.searchBody.utf8.count == bound)
 }
 
-@Test func titleOnlyProjectionMatchesFullProjection() {
-    let content = effectiveTextContent([
-        ("public.utf8-plain-text", " \n First title \nbody"),
-        ("public.utf8-external-plain-text", String(repeating: "later", count: 80_000)),
-    ])
-
-    #expect(
-        ContentProjector.projectTitle(content)
-            == ContentProjector.project(content).title
-    )
+@Test func titleOnlyProjectionMatchesNewlineAndWhitespaceSemantics() {
+    let fixtures: [(String, String)] = [
+        (" \r\n\t\r\n First title \rignored", "First title"),
+        ("\r\n\r\n\n\r First title \nignored", "First title"),
+        ("\u{00A0}\r e\u{301} 👩‍💻 \r\nignored", "e\u{301} 👩‍💻"),
+        ("First\u{2028}Second\u{0085}Third\rignored", "First\u{2028}Second\u{0085}Third"),
+        (" \r\n\t\r\u{00A0}\n", "public.utf8-plain-text"),
+    ]
+    for (text, expected) in fixtures {
+        let content = effectiveTextContent([
+            ("public.utf8-plain-text", text),
+        ])
+        let title = ContentProjector.projectTitle(content)
+        // String equality alone would hide a change to Unicode normalization.
+        #expect(Data(title.utf8) == Data(expected.utf8))
+        #expect(Data(title.utf8) == Data(ContentProjector.project(content).title.utf8))
+    }
 }
 
-@Test func projectionSkipsLaterDecodesOnceTitleAndBodyBudgetsComplete() {
+@Test func titleOnlyProjectionKeepsGraphemesAtTheByteLimitBeforeALargeBody() {
+    let prefix = String(
+        repeating: "a",
+        count: HistoryLimits.standard.maximumStoredTitleUTF8Bytes - 1
+    )
+    let text = "\r\n " + prefix + "e\u{301} \r\n"
+        + String(repeating: "large body\r\n", count: 50_000)
+    for identifier in ["public.utf8-plain-text", "public.utf16-external-plain-text"] {
+        let content = effectiveTextContent([(identifier, text)])
+        let title = ContentProjector.projectTitle(content)
+        // The decomposed grapheme needs three bytes and cannot fit in the
+        // final one-byte slot. Neither its base nor its accent may be split.
+        #expect(Data(title.utf8) == Data(prefix.utf8))
+        #expect(Data(title.utf8) == Data(ContentProjector.project(content).title.utf8))
+    }
+}
+
+@Test func titleOnlyProjectionStillRejectsMalformedBytesAfterAValidFirstLine() {
+    let content = EffectiveContent(representations: [ContentRepresentation(
+        typeIdentifier: "public.utf8-plain-text",
+        bytes: Data("Valid first line\r\n".utf8) + Data([0xC3, 0x28])
+    )])
+    #expect(ContentProjector.projectTitle(content) == "public.utf8-plain-text")
+}
+
+@Test func completedTitleAndBodyBudgetsExcludeLaterText() {
     let bound = HistoryLimits.standard.maximumStoredSearchBodyUTF8Bytes
     let exactFill = String(repeating: "b", count: bound)
     // The budget filler's first line IS the whole text, so the durable
@@ -72,27 +106,26 @@ private func effectiveTextContent(
     )
 
     // The first representation fills the body budget exactly and yields
-    // the title; the second textual representation can contribute neither
-    // (its decode is skipped entirely) and the projection is unchanged.
+    // the title; later text contributes neither. These output assertions
+    // establish the budgets, not how many decoder calls were made.
     let content = effectiveTextContent([
         ("public.utf8-plain-text", exactFill),
-        ("public.utf8-external-plain-text", "decoded but contributes nothing"),
+        ("public.utf16-external-plain-text", "decoded but contributes nothing"),
     ])
     let projection = ContentProjector.project(content)
     #expect(projection.searchBody == exactFill)
     #expect(projection.title == truncatedTitle)
     #expect(
         projection.effectiveTypeIdentifiers
-            == ["public.utf8-plain-text", "public.utf8-external-plain-text"]
+            == ["public.utf8-plain-text", "public.utf16-external-plain-text"]
     )
 
-    // Boundary lock for the skip itself: a whitespace-only leading
-    // representation contributes neither title nor body, so the budget
-    // filler still owns the title and the trailing text still adds nothing.
+    // An encoding-unspecified leading representation remains opaque, so
+    // the budget filler still owns the title and body.
     let trailing = effectiveTextContent([
         ("public.plain-text", " \n "),
         ("public.utf8-plain-text", exactFill),
-        ("public.utf8-external-plain-text", "late tail text"),
+        ("public.utf16-external-plain-text", "late tail text"),
     ])
     let trailingProjection = ContentProjector.project(trailing)
     #expect(trailingProjection.searchBody == exactFill)
@@ -122,7 +155,7 @@ private func effectiveTextContent(
     #expect(projection.searchBody.isEmpty)
 }
 
-@Test func projectionV2KeepsStructuredAndAbstractTextOpaque() {
+@Test func projectionKeepsStructuredAndAbstractTextOpaque() {
     let content = effectiveTextContent([
         ("public.html", "<h1>markup</h1>"),
         ("public.plain-text", "encoding unspecified"),
@@ -133,7 +166,7 @@ private func effectiveTextContent(
 
     let projection = ContentProjector.project(content)
 
-    #expect(projection.schemaVersion == 2)
+    #expect(projection.schemaVersion == 4)
     #expect(projection.title == "Visible sibling")
     #expect(projection.searchBody == "Visible sibling")
     #expect(
@@ -147,17 +180,49 @@ private func effectiveTextContent(
     )
 }
 
-@Test func explicitUTF16TypeDecodesUTF16WithoutUTF8Fallback() {
-    let text = "UTF-16 title"
+@Test(arguments: [
+    Data([0x41, 0x00, 0x2D, 0x4E, 0x3E, 0xD8, 0x8A, 0xDD]),
+    Data([0xFF, 0xFE, 0x41, 0x00, 0x2D, 0x4E, 0x3E, 0xD8, 0x8A, 0xDD]),
+    Data([0xFE, 0xFF, 0x00, 0x41, 0x4E, 0x2D, 0xD8, 0x3E, 0xDD, 0x8A]),
+])
+func nativeUTF16ProjectionHonorsByteOrder(bytes: Data) {
+    // Literal bytes distinguish native no-BOM order from both BOM overrides
+    // without using Foundation's encoder as the decoder's test oracle.
     let content = EffectiveContent(representations: [ContentRepresentation(
         typeIdentifier: "public.utf16-plain-text",
-        bytes: text.data(using: .utf16)!
+        bytes: bytes
     )])
 
     let projection = ContentProjector.project(content)
 
-    #expect(projection.title == text)
-    #expect(projection.searchBody == text)
+    #expect(projection.title == "A中🦊")
+    #expect(projection.searchBody == "A中🦊")
+    #expect(ContentProjector.projectTitle(content) == "A中🦊")
+}
+
+@Test(arguments: [
+    Data([0x00, 0x41, 0x4E, 0x2D]),
+    Data([0xFE, 0xFF, 0x00, 0x41, 0x4E, 0x2D]),
+    Data([0xFF, 0xFE, 0x41, 0x00, 0x2D, 0x4E]),
+])
+func externalUTF16ProjectionHonorsByteOrder(bytes: Data) {
+    let content = EffectiveContent(representations: [ContentRepresentation(
+        typeIdentifier: "public.utf16-external-plain-text",
+        bytes: bytes
+    )])
+    let projection = ContentProjector.project(content)
+    #expect(projection.title == "A中")
+    #expect(projection.searchBody == "A中")
+    #expect(ContentProjector.projectTitle(content) == "A中")
+}
+
+@Test func misspelledExternalUTF8IdentifierRemainsOpaque() {
+    let content = effectiveTextContent([
+        ("public.utf8-external-plain-text", "Must not become searchable"),
+    ])
+    let projection = ContentProjector.project(content)
+    #expect(projection.title == "public.utf8-external-plain-text")
+    #expect(projection.searchBody.isEmpty)
 }
 
 @Test func storedProjectionValidationReturnsItsExistingUTF8Counts() throws {
@@ -173,4 +238,17 @@ private func effectiveTextContent(
 
     #expect(size.titleUTF8Bytes == title.utf8.count)
     #expect(size.searchBodyUTF8Bytes == body.utf8.count)
+}
+
+@Test func ordinaryReadsRequireRecipeFourAfterStartupRebuild() throws {
+    #expect(throws: CodecRejection.unknownProjectionSchemaVersion(found: 3)) {
+        try ContentProjector.validateStoredProjection(
+            schemaVersion: 3, title: "A", searchBody: "A", limits: .standard
+        )
+    }
+    let current = try ContentProjector.validateStoredProjection(
+        schemaVersion: 4, title: "A", searchBody: "A", limits: .standard
+    )
+    #expect(current.titleUTF8Bytes == 1)
+    #expect(current.searchBodyUTF8Bytes == 1)
 }

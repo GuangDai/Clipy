@@ -1,0 +1,11 @@
+"Pinned" = "置顶";
+"Recent" = "最近";
+"Loading more items" = "正在加载更多项目";
+"Load More" = "加载更多";
+"Loading clipboard history" = "正在加载剪贴板历史记录";
+"No Results" = "无结果";
+"No Clipboard History" = "暂无剪贴板历史记录";
+"Copy something and it will appear here." = "复制内容后，它会显示在这里。";
+"No items match the current filter." = "没有符合当前筛选条件的项目。";
+"No items match “%@”." = "没有与“%@”匹配的项目。";
+"Toggle Pin" = "切换置顶状态";

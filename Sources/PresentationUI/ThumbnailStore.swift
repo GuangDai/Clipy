@@ -183,8 +183,9 @@ public final class ThumbnailStore {
 
     // MARK: - Public surface
 
-    /// Content-free public observation used by hosted product journeys. Pixel
-    /// bytes stay package-only; callers outside SwiftPM see dimensions only.
+    /// Content-free public observation used by hosted product journeys.
+    /// Pixel bytes stay internal to this module (`raster(for:)` below);
+    /// callers outside SwiftPM see dimensions only.
     public func imagePixelSize(for item: HistoryItemReference) -> PixelSize? {
         guard let entry = entries[item], case .hit(let raster, _) = entry else {
             return nil
@@ -192,13 +193,23 @@ public final class ThumbnailStore {
         return PixelSize(width: raster.width, height: raster.height)
     }
 
-    /// Package render edge. The returned value is immutable Sendable pixels,
-    /// never a framework object, and this pure read never fetches.
-    package func raster(for item: HistoryItemReference) -> PreviewRaster? {
+    /// Internal render edge (GOV-3 tail: only this module's row and details
+    /// views read retained pixels; hosted journeys and owner tests observe
+    /// the content-free `imagePixelSize(for:)` above). The returned value is
+    /// immutable Sendable pixels, never a framework object, and this pure
+    /// read never fetches.
+    internal func raster(for item: HistoryItemReference) -> PreviewRaster? {
         guard let entry = entries[item], case .hit(let raster, _) = entry else {
             return nil
         }
         return raster
+    }
+
+    /// A completed unavailable result for this exact reference. Unrequested
+    /// and pending work are not failures; the read never starts a request.
+    internal func isUnavailable(for item: HistoryItemReference) -> Bool {
+        guard case .miss? = entries[item] else { return false }
+        return true
     }
 
     /// Starts one fetch for the exact reference if none is retained or in
@@ -207,8 +218,10 @@ public final class ThumbnailStore {
     /// requesting key only:
     /// - a `nil` payload (no thumbnailable content) is recorded as a miss,
     ///   so the row's fallback icon stops re-asking;
-    /// - a thrown failure is NOT retained — transient unavailability may
-    ///   recover, so the reference stays eligible for a later prefetch.
+    /// - `.thumbnailUnavailable` is retained as an unavailable result in this
+    ///   surface; scrolling reuses it until an existing eviction, purge, or reset;
+    /// - other failures are NOT retained — stale references, cancellation,
+    ///   storage failures, and transient unavailability may recover.
     public func prefetch(_ item: HistoryItemReference) {
         guard entries[item] == nil, inFlight[item] == nil else {
             #if DEBUG
@@ -248,6 +261,21 @@ public final class ThumbnailStore {
                 #if DEBUG
                 fetchMs = Self.elapsedMilliseconds(since: fetchStart)
                 #endif
+                // Deletion/reset can retire this request while History is
+                // suspended. Discard its encoded bytes before allocating a
+                // display raster; the final completion fence still covers a
+                // purge that happens during the renderer's own suspension.
+                guard self?.inFlight[item] == requestToken else {
+                    if let self {
+                        self.finishWithoutEntry(item: item, requestToken: requestToken)
+                        #if DEBUG
+                        self.recordMeasurement(
+                            .completed, item: item, fetchMs: fetchMs, outcome: .discarded
+                        )
+                        #endif
+                    }
+                    return
+                }
                 // A reset does not rely on native cancellation: it releases
                 // visible bookkeeping immediately and the request token
                 // rejects any late eager-raster result.
@@ -302,24 +330,24 @@ public final class ThumbnailStore {
                 #if DEBUG
                 fetchMs = Self.elapsedMilliseconds(since: fetchStart)
                 #endif
-                // Not retained: see `prefetch(_:)`.
                 guard let self else { return }
+                let isStableMiss = (error as? HistoryFailure) == .thumbnailUnavailable
                 #if DEBUG
-                let boundary = self.finishWithoutEntry(
-                    item: item,
-                    requestToken: requestToken
-                )
+                let boundary = isStableMiss
+                    ? self.store(item: item, raster: nil, requestToken: requestToken)
+                    : self.finishWithoutEntry(item: item, requestToken: requestToken)
                 self.recordMeasurement(
                     .completed,
                     item: item,
                     fetchMs: fetchMs,
-                    outcome: boundary == .discarded ? .discarded : .failure
+                    outcome: boundary == .discarded ? .discarded : (isStableMiss ? .miss : .failure)
                 )
                 #else
-                self.finishWithoutEntry(
-                    item: item,
-                    requestToken: requestToken
-                )
+                if isStableMiss {
+                    self.store(item: item, raster: nil, requestToken: requestToken)
+                } else {
+                    self.finishWithoutEntry(item: item, requestToken: requestToken)
+                }
                 #endif
             }
         }
@@ -590,8 +618,8 @@ package final class ThumbnailMeasurement {
     }
 
     /// What the completion boundary did with the flight's result. `.miss`
-    /// mirrors the store's negative entry (nil payload OR undecodable
-    /// payload); `.discarded` is the Card 9B request-token fence rejecting a
+    /// mirrors the store's negative entry (nil/undecodable payload or typed
+    /// `.thumbnailUnavailable`); `.discarded` is the request-token fence rejecting a
     /// late old-generation result.
     package enum Outcome: String, Codable, Sendable {
         case hit
@@ -664,8 +692,10 @@ package final class ThumbnailMeasurement {
     /// failures are observed-and-dropped (`try?`, the AppDelegate
     /// store-reveal marker precedent): measurement must never take down a
     /// running app, and a lost record surfaces as the journey's own
-    /// sampling-integrity assertion rather than as a crash here.
-    package func record(_ record: inout Record) {
+    /// sampling-integrity assertion rather than as a crash here. Internal
+    /// (GOV-3 tail): the owning store is the only writer; owner tests drive
+    /// recording through the store and read the JSONL back.
+    internal func record(_ record: inout Record) {
         nextSeq += 1
         record.seq = nextSeq
         record.monotonicMs = elapsedMilliseconds

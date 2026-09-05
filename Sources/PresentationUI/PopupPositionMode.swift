@@ -24,10 +24,10 @@ public enum PopupPositionMode: String, CaseIterable, Sendable {
     /// its cases, never the label.
     package var displayName: String {
         switch self {
-        case .cursor: return "At Mouse Cursor"
-        case .statusItem: return "Under Menu Bar Icon"
-        case .center: return "At Screen Center"
-        case .lastPosition: return "At Last Position"
+        case .cursor: return SettingsCopy.text("At Mouse Cursor")
+        case .statusItem: return SettingsCopy.text("Under Menu Bar Icon")
+        case .center: return SettingsCopy.text("At Screen Center")
+        case .lastPosition: return SettingsCopy.text("At Last Position")
         }
     }
 }

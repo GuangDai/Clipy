@@ -116,7 +116,10 @@ public final class HistoryViewState {
     /// whitespace is syntax and is never rewritten by presentation state.
     public var searchText: String = "" {
         didSet {
-            guard searchText != oldValue else { return }
+            // Swift String equality merges canonically equivalent spellings,
+            // but exact/regexp searches can distinguish their literal scalars.
+            // Such an edit must retire the old results and highlight ranges.
+            guard !searchText.utf8.elementsEqual(oldValue.utf8) else { return }
             advanceSearchQueryGeneration()
             scheduleSearchRestart()
         }
@@ -147,7 +150,8 @@ public final class HistoryViewState {
 
     /// Content-free accessibility handoff for one settled search intent.
     /// Only the current query generation's first authoritative observation
-    /// page invokes this callback. Debounce drafts, stale completions,
+    /// page invokes this callback with the client-filtered visible count.
+    /// Debounce drafts, stale completions,
     /// replacement snapshots, and pagination never do (REVIEW UI-16/Card
     /// 15D). `hasNextPage` keeps the app shell from presenting this bounded
     /// first-page count as an exact total.
@@ -267,19 +271,53 @@ public final class HistoryViewState {
     /// loaded pages by design; pagination still walks the unfiltered stream
     /// (`rows`/`nextPageCursor` are untouched by both filters).
     package var displayedPinnedRows: [HistoryRow] {
-        pinnedRows.filter { typeFilter.admits($0) }
+        rows.filter { $0.pinnedPosition != nil && isDisplayed($0) }
     }
 
     /// The recency lane after the client-side filter; empty while
     /// `showsPinnedOnly` is set.
     package var displayedUnpinnedRows: [HistoryRow] {
         guard !showsPinnedOnly else { return [] }
-        return unpinnedRows.filter { typeFilter.admits($0) }
+        return rows.filter { $0.pinnedPosition == nil && isDisplayed($0) }
+    }
+
+    /// The list's visible order after its type and pinned-only filters.
+    /// AppKit's Return handler reads this same order synchronously, so an
+    /// old selection cannot paste a hidden row while SwiftUI is still
+    /// reconciling the filter change (01 §5.6; review Card 14A).
+    public var displayedRows: [HistoryRow] {
+        var displayed = displayedPinnedRows
+        if !showsPinnedOnly {
+            for row in rows where row.pinnedPosition == nil && isDisplayed(row) {
+                displayed.append(row)
+            }
+        }
+        return displayed
+    }
+
+    private func isDisplayed(_ row: HistoryRow) -> Bool {
+        (!showsPinnedOnly || row.pinnedPosition != nil) && typeFilter.admits(row)
     }
 
     /// Whether a further one-shot page exists after the displayed rows.
     public var hasNextPage: Bool {
         nextPageCursor != nil
+    }
+
+    /// Prefetch follows the last row the list actually renders. A type or
+    /// pinned-only filter may hide the authoritative page's final row;
+    /// waiting for that hidden row's appearance would strand its cursor
+    /// (review Card 8B; 04 §6).
+    package func prefetchNextPageIfNeeded(appearingRowID: HistoryItemID) {
+        guard hasNextPage, !isLoadingPage else { return }
+        let lastUnpinned = showsPinnedOnly ? nil : rows.last(where: {
+            $0.pinnedPosition == nil && isDisplayed($0)
+        })
+        let lastDisplayed = lastUnpinned ?? rows.last(where: {
+            $0.pinnedPosition != nil && isDisplayed($0)
+        })
+        guard lastDisplayed?.item.id == appearingRowID else { return }
+        loadNextPage()
     }
 
     /// Whether the current browse generation has published its authoritative
@@ -413,11 +451,11 @@ public final class HistoryViewState {
     }
 
     /// List-owned paste requests are accepted only while the exact row is
-    /// still in the authoritative display. This closes the short render gap
-    /// in which a stale row closure could otherwise fire after query intent
-    /// has synchronously cleared `rows`.
+    /// still in the filtered authoritative display. This closes the render
+    /// gap after a filter hides a row or a query intent clears `rows`, while
+    /// the old row closure or selection may still be reachable.
     package func requestPasteFromDisplayedRow(_ item: HistoryItemReference) {
-        guard rows.contains(where: { $0.item == item }) else { return }
+        guard rows.contains(where: { $0.item == item && isDisplayed($0) }) else { return }
         onPaste(item)
     }
 
@@ -427,53 +465,57 @@ public final class HistoryViewState {
     /// resolve on drop through the same `pastePayload(for:)` Effective
     /// Content read that backs the composition root's paste hand-off
     /// (docs/01-architecture.md §5.6; docs/03b-instruction-set.md §9) —
-    /// never from row display state — and the registered representation is
-    /// the row's best advertised type in the paste preference order (plain
-    /// text, then the frozen v1 decodable image formats). A typed read
-    /// failure completes with `nil` rather than surfacing panel failure
-    /// vocabulary onto an external drop. `NSItemProvider` is Foundation, so
+    /// never from row display state. Every advertised type is available to
+    /// the receiver, including opaque bytes; plain text and the preferred
+    /// raster types are offered first. The read returns current Effective
+    /// Content by ID (03b §9 / 04 §8 DEC-PASTE-REFERENCE); an advertised type
+    /// hidden before that first read completes without bytes. Failures go
+    /// to the drop completion, without changing the panel banner.
+    /// The first representation request resolves one immutable payload for
+    /// the entire drag. Other formats share that result even if History
+    /// changes between receiver requests; constructing the provider does
+    /// not read or retain clipboard bytes.
+    /// `NSItemProvider` is Foundation, so
     /// PresentationUI's no-AppKit rule (01 §6) is preserved.
     package func dragItemProvider(
         for reference: HistoryItemReference
     ) -> NSItemProvider {
         let provider = NSItemProvider()
-        let advertised = rows.first { $0.item == reference }?.typeIdentifiers ?? []
-        let typeIdentifier = Self.dragTypeIdentifier(advertised: advertised)
-        let history = self.history
-        let itemID = reference.id
-        provider.registerDataRepresentation(
-            forTypeIdentifier: typeIdentifier,
-            visibility: .all
-        ) { completion in
-            Task {
-                let payload = try? await history.pastePayload(for: itemID)
-                let representations = payload?.representations ?? []
-                let bytes = representations
-                    .first { $0.typeIdentifier == typeIdentifier }?
-                    .bytes
-                completion(bytes, nil)
+        guard let row = rows.first(where: { $0.item == reference && isDisplayed($0) }) else {
+            return provider
+        }
+        let advertised = row.typeIdentifiers
+        let preferred = Self.dragTypePreference.filter { advertised.contains($0) }
+        let remaining = advertised.filter { !Self.dragTypePreference.contains($0) }
+        let payloadRead = DragPayloadRead(history: history, itemID: reference.id)
+        for typeIdentifier in preferred + remaining {
+            provider.registerDataRepresentation(
+                forTypeIdentifier: typeIdentifier,
+                visibility: .all
+            ) { completion in
+                Task {
+                    do {
+                        let payload = try await payloadRead.value()
+                        let bytes = payload.representations
+                            .first { $0.typeIdentifier == typeIdentifier }?.bytes
+                        completion(bytes, nil)
+                    } catch {
+                        completion(nil, error)
+                    }
+                }
+                return nil
             }
-            return nil
         }
         return provider
     }
 
-    /// Drag/paste representation preference: plain text first, then the
-    /// frozen v1 decodable image formats. A row advertising none of them
-    /// still offers best-effort plain text; the payload read is the
-    /// authority on what actually completes.
+    /// Registration preference only; other representations remain available
+    /// as their exact identifiers and bytes, without guessed text semantics.
     private static let dragTypePreference: [String] = [
         "public.utf8-plain-text",
         "public.png",
         "public.tiff",
     ]
-
-    private static func dragTypeIdentifier(advertised: [String]) -> String {
-        for candidate in dragTypePreference where advertised.contains(candidate) {
-            return candidate
-        }
-        return dragTypePreference[0]
-    }
 
     /// Pins or reorders; typed failures land in `failure`.
     public func pin(_ id: HistoryItemID, at placement: PinnedPlacement = .first) {
@@ -759,7 +801,7 @@ public final class HistoryViewState {
         isLoadingFirstPage = false
         if pendingSearchAnnouncementGeneration == queryGeneration {
             pendingSearchAnnouncementGeneration = nil
-            onSettledSearchResultCount(page.rows.count, page.next != nil)
+            onSettledSearchResultCount(displayedRows.count, page.next != nil)
         }
     }
 
@@ -979,5 +1021,28 @@ public final class HistoryViewState {
         case .mutation, nil:
             break
         }
+    }
+}
+
+/// One lazy History read for one drag gesture. Its provider's format
+/// callbacks share both the in-flight task and its immutable success/failure;
+/// a receiver cannot combine representations from different revisions.
+private actor DragPayloadRead {
+    private let history: any ClipboardHistory
+    private let itemID: HistoryItemID
+    private var task: Task<PastePayload, Error>?
+
+    init(history: any ClipboardHistory, itemID: HistoryItemID) {
+        self.history = history
+        self.itemID = itemID
+    }
+
+    func value() async throws -> PastePayload {
+        if let task { return try await task.value }
+        let history = history
+        let itemID = itemID
+        let task = Task { try await history.pastePayload(for: itemID) }
+        self.task = task
+        return try await task.value
     }
 }

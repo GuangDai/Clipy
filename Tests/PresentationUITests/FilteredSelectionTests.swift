@@ -15,6 +15,81 @@ import Testing
 @MainActor
 struct FilteredSelectionTests {
 
+    /// Filter mutation is synchronous; SwiftUI's selection-retarget callback
+    /// happens later. Both the row closure and AppKit's Return lookup must
+    /// stop admitting a hidden item during that interval.
+    @Test(arguments: [false, true])
+    func hiddenSelectionCannotPasteBeforeRetarget(pinnedOnly: Bool) async throws {
+        let (state, history) = activatedMixedState()
+        defer { state.deactivate() }
+        try #require(await pollUntil { state.rows.count == 5 })
+        let hidden = state.rows[pinnedOnly ? 2 : 3]
+        let visible = state.rows[0]
+        let surface = beginSurfaceSession(rows: state.rows)
+        surface.selection = hidden.item.id
+        let recorder = FilteredPasteRecorder()
+        state.onPaste = { recorder.items.append($0) }
+
+        state.typeFilter = pinnedOnly ? .all : .text
+        state.showsPinnedOnly = pinnedOnly
+
+        // Deliberately do not run retarget/reconciliation yet. The row is
+        // retained, and the old selection still names it.
+        #expect(state.rows.contains(hidden))
+        #expect(surface.selection == hidden.item.id)
+        #expect(surface.selectedReference(in: state.displayedRows) == nil)
+        state.requestPasteFromDisplayedRow(hidden.item)
+        #expect(recorder.items.isEmpty)
+
+        surface.retargetHiddenSelectionToDisplayedDefault(
+            displayedRows: state.displayedRows
+        )
+        #expect(surface.selectedReference(in: state.displayedRows) == visible.item)
+        state.requestPasteFromDisplayedRow(visible.item)
+        #expect(recorder.items == [visible.item])
+        await history.finishObservation()
+    }
+
+    @Test func observedUnpinChangesDisplayedMembershipWithoutChangingReference() async throws {
+        let pinned = filterSelectionRow(
+            id: "00000000-0000-0000-0000-00000000F210",
+            title: "only pinned item",
+            typeIdentifiers: ["public.utf8-plain-text"],
+            pinned: 0
+        )
+        let unpinned = filterSelectionRow(
+            id: pinned.item.id.rawValue.uuidString,
+            title: pinned.title,
+            typeIdentifiers: pinned.typeIdentifiers
+        )
+        let history = ScriptedHistory(
+            observedFirstPage: fixturePage(rows: [pinned], next: nil)
+        )
+        let state = HistoryViewState(history: history)
+        state.showsPinnedOnly = true
+        state.activate()
+        defer { state.deactivate() }
+        try #require(await pollUntil { state.hasAuthoritativeFirstPage })
+        let surface = beginSurfaceSession(rows: state.rows)
+        #expect(surface.selectedReference(in: state.displayedRows) == pinned.item)
+
+        await history.emitObservedPage(fixturePage(rows: [unpinned], next: nil))
+        try #require(await pollUntil { state.rows == [unpinned] })
+        #expect(state.rows.map(\.item) == [pinned.item])
+        #expect(state.displayedRows.isEmpty)
+        #expect(surface.selectedReference(in: state.displayedRows) == nil)
+
+        // Same callbacks as the panel's displayed-membership observation.
+        // The item still exists, but the pinned-only list can no longer
+        // keep it selected or submit it with Return.
+        surface.reconcileSessionSelection(rows: state.rows)
+        surface.retargetHiddenSelectionToDisplayedDefault(
+            displayedRows: state.displayedRows
+        )
+        #expect(surface.selection == nil)
+        await history.finishObservation()
+    }
+
     // MARK: - Arrow walk
 
     /// Arrows move through the displayed lanes only: the filtered-out image
@@ -218,7 +293,7 @@ struct FilteredSelectionTests {
     private func displayedSelectionRows(
         of state: HistoryViewState
     ) -> [HistoryRow] {
-        state.displayedPinnedRows + state.displayedUnpinnedRows
+        state.displayedRows
     }
 
     /// One activated view state over a five-row mixed-type page in
@@ -301,4 +376,9 @@ struct FilteredSelectionTests {
             search: nil
         )
     }
+}
+
+@MainActor
+private final class FilteredPasteRecorder {
+    var items: [HistoryItemReference] = []
 }

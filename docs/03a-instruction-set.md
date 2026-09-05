@@ -127,6 +127,8 @@ public protocol ClipboardHistory: Sendable {
 
     func retentionConfiguration(
     ) async throws -> HistoryRetentionConfiguration
+
+    func usage() async throws -> HistoryUsage
 }
 ```
 
@@ -139,6 +141,13 @@ bytes, model identity, or a freshness/OCC token. Adding this protocol
 requirement is an owned source-compatibility break for conformers; no default
 implementation may fabricate defaults or turn stored corruption into a value
 (`V2-02` §8.1a/§12; decision `DEC-RET-READ`).
+
+`usage()` returns the retained and pinned item counts, Canonical and retained
+revision byte totals, and their `ChangePosition` in one authoritative read.
+These are logical content bytes, including pinned content and inactive
+revisions; database/filesystem allocation and thumbnails are excluded. The
+Settings view reads this on opening, explicit Refresh, and after applying
+retention changes. It creates no background observation or stored aggregate.
 
 ### 4. Raw capture seam
 

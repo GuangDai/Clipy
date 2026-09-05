@@ -46,13 +46,22 @@ let admissionWarmupCount = admissionProfile.warmupCount
 let admissionPageLimit = admissionProfile.pageLimit
 
 /// Reduced per-mode measurement budget for `--admission exact-search`
-/// (IND-07): the absent-term worst-bound scan costs roughly 125 s per
-/// request over the 5,000 × 256 KiB corpus, so the profile's 101-sample
-/// budget cannot finish inside the dispatch lane's 90-minute step ceiling
-/// (104 × 125 s ≈ 3.6 h). Thirteen total requests (one validation outside
-/// this budget, one warmup, eleven samples) complete in roughly half an
-/// hour. At n = 11 the nearest-rank p95 and p99 both select the sample
-/// maximum; the fixture notes record that limitation.
+/// (IND-07). The original basis — roughly 125 s per absent-term request
+/// over the 5,000 × 256 KiB corpus, the Foundation-oracle diagnostic that
+/// opened IND-07 — is stale: with the compiled exact matcher, GOV-1 manual
+/// run 32685185124 (PR #34) measured p50 2,666 ms per request (11 samples,
+/// range 1,810–3,827 ms; the thirteen requests — one validation outside
+/// this budget, one warmup, eleven samples — took ≈35 s, ≈48 s of step
+/// wall time). At that cost the profile's 101-sample budget would fit the
+/// dispatch lane's 90-minute step ceiling (103 × 3.8 s ≈ 7 min), so cost
+/// no longer forces the reduction. The budget stays at 11: the fixture is
+/// record-only IND-07 evidence whose admitted need is a p50 trend, and
+/// thirteen requests still finish in ≈27 min even if a matcher regression
+/// routes the scan back to the Foundation oracle at its historical ~125 s,
+/// where 103 requests would need ≈3.6 h and forfeit the lane. At n = 11
+/// the nearest-rank p95 and p99 fall below their 20/100-sample support
+/// floors and encode as JSON null instead of a disguised sample maximum;
+/// the fixture notes record that limitation.
 let admissionExactSearchWarmupCount = 1
 let admissionExactSearchSampleCount = 11
 

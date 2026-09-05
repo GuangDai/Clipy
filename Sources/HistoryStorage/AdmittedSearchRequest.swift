@@ -20,8 +20,11 @@ internal struct AdmittedSearchRequest {
         guard term.utf8.count <= limits.maximumSearchTermUTF8Bytes else {
             throw HistoryFailure.invalidInput(.invalidSearchTerm)
         }
+        // Inspect only the first over-limit Character; counting the entire
+        // rejected suffix adds work without changing fuzzy admission.
         if mode == .fuzzy,
-           term.count > limits.maximumFuzzyQueryCharacters {
+           term.prefix(limits.maximumFuzzyQueryCharacters + 1).count
+                > limits.maximumFuzzyQueryCharacters {
             throw HistoryFailure.invalidInput(.invalidSearchTerm)
         }
         if mode == .regexp, !term.isEmpty {

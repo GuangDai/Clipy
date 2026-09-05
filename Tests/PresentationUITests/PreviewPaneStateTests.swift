@@ -184,6 +184,32 @@ struct PreviewPaneStateTests {
         #expect(state.previewedItem == second)
     }
 
+    @Test func togglingAutoOpenPreferenceRetiresTheAlreadyQueuedDwell() async {
+        let state = makeState()
+        let first = reference()
+        let second = reference()
+
+        // Both preference changes happen before the queued dwell can run.
+        // Re-enabling must not revive work scheduled for the old selection.
+        state.handleSelectionChange(first)
+        state.isAutoOpenPreferenceEnabled = false
+        state.isAutoOpenPreferenceEnabled = true
+
+        // The exact-item purge has an observable effect only when this
+        // item still owns pending/visible work. It must now be a no-op:
+        // this proves retirement synchronously, without guessing how many
+        // scheduler turns let a cancelled dwell finish.
+        state.purge(.item(first.id))
+        #expect(state.purgeGeneration == 0)
+        #expect(!state.isOpen)
+        #expect(state.previewedItem == nil)
+
+        state.handleSelectionChange(second)
+        await waitForScheduledDwell { state.previewedItem == second }
+        #expect(state.isOpen)
+        #expect(state.previewedItem == second)
+    }
+
     @Test func panelClosedDisarmsAutoOpenUntilThePanelBecomesKeyAgain() {
         let state = makeState()
         let first = reference()
@@ -241,6 +267,24 @@ struct PreviewPaneStateTests {
         state.refreshOpenPreview(version1)
         #expect(!state.isOpen)
         #expect(state.previewedItem == nil)
+    }
+
+    @Test func refreshingVisibleContentPreservesAnotherItemsPendingDwell() async {
+        let state = makeState()
+        defer { state.panelClosed() }
+        let first = reference()
+        let second = reference()
+        let updatedFirst = HistoryItemReference(
+            id: first.id, contentVersion: ContentVersion(rawValue: 2)
+        )
+        state.togglePreview(for: first)
+        state.handleSelectionChange(second)
+        state.refreshOpenPreview(updatedFirst)
+        #expect(state.previewedItem == updatedFirst)
+        // The zero-delay dwell cannot execute until this test yields the
+        // MainActor. Refreshing A must not cancel the already queued B task.
+        await waitForScheduledDwell { state.previewedItem == second }
+        #expect(state.previewedItem == second)
     }
 
     @Test func dwellRetargetsAnAlreadyOpenPreview() async {

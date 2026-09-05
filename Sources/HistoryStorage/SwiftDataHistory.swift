@@ -8,8 +8,10 @@
 /// sequence: docs/roadmap/03-historystorage.md (steps 5–8).
 ///
 /// `SwiftDataHistory` is a value of six actor references plus the immutable,
-/// `Sendable` App Intents connection identity accepted during startup. Its
-/// `Sendable` conformance is fully derived from those fields, so no unsafe
+/// `Sendable` App Intents connection identity accepted during startup and,
+/// for a persistent store, the held cross-process StoreRoot lease
+/// (`StoreRootLease`, REVIEW DATA-7). Its `Sendable`
+/// conformance is fully derived from those fields, so no unsafe
 /// conformance or other escape hatch appears here (Part V §2; Part VI §6).
 import Foundation
 import HistoryCore
@@ -96,6 +98,12 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     /// copies it into the public connection-bound facade and never re-mints it.
     private let appIntentsConnectionID: ExternalConnectionID
 
+    /// The cross-process single-writer lease held for a persistent store's
+    /// whole facade lifetime (REVIEW DATA-7 / PLAY-DISK-0B); `nil` for the
+    /// `.memory` medium, which has no StoreRoot to lease. The facade's last
+    /// release closes the descriptor and with it the record lock.
+    private let storeRootLease: StoreRootLease?
+
     /// Assembles the facade from its six actors and startup-validated external
     /// identity. Construction is internal to
     /// `open(configuration:)` — there is no other way to obtain a
@@ -107,7 +115,8 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         searchWorker: SearchWorker,
         thumbnailService: ThumbnailService,
         externalGateway: ExternalGateway,
-        appIntentsConnectionID: ExternalConnectionID
+        appIntentsConnectionID: ExternalConnectionID,
+        storeRootLease: StoreRootLease?
     ) {
         self.authority = authority
         self.ingestPreparation = ingestPreparation
@@ -116,6 +125,7 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         self.thumbnailService = thumbnailService
         self.externalGateway = externalGateway
         self.appIntentsConnectionID = appIntentsConnectionID
+        self.storeRootLease = storeRootLease
     }
 
     // MARK: Open (docs/05-authority-kernel.md §2, §13)
@@ -127,7 +137,9 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     ///
     /// 1. validates `configuration.initialMaximumUnpinnedItems` against the
     ///    fixed Part VI user range (`HistoryLimits.standard`, §2);
-    /// 2. opens/creates the `ModelContainer` over the current immutable V4
+    /// 2. acquires the StoreRoot's cross-process single-writer lease for a
+    ///    persistent store (`StoreRootLease`; REVIEW DATA-7 / PLAY-DISK-0B)
+    ///    and only then opens/creates the `ModelContainer` over the current immutable V4
     ///    schema (`Schema(versionedSchema: HistorySchemaV4.self)`) through
     ///    `HistoryMigrationPlan`: the custom `V1 → V2` stage (DC-02;
     ///    `V2-02` §3.3 / Record 5), the additive lightweight `V2 → V3`
@@ -157,6 +169,8 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     ///
     /// Failure translation at this boundary (§16, §2): an out-of-range
     /// initial retention value throws `.invalidInput(.invalidRetentionPolicy)`;
+    /// a StoreRoot already leased by another live owner process throws
+    /// `.persistence(.storeAlreadyOpen)` (DATA-7);
     /// a store that cannot be opened or migrated throws
     /// `.persistence(.openStore)`; startup corruption surfaced by the
     /// Authority propagates already typed as
@@ -216,6 +230,18 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
                 cloudKitDatabase: .none
             )
         }
+        // §13 step 2's DATA-7 lease half: a persistent store's StoreRoot is
+        // leased nonblocking BEFORE any `ModelContainer` exists
+        // (PLAY-DISK-0B). A contending live owner process fails the open here
+        // with `.persistence(.storeAlreadyOpen)`; a later startup failure
+        // releases the lease with the throwing scope. The `.memory` medium
+        // has no StoreRoot and leases nothing.
+        let storeRootLease: StoreRootLease?
+        if case .persistent(let storeURL) = configuration.persistence {
+            storeRootLease = try StoreRootLease.acquire(storeURL: storeURL)
+        } else {
+            storeRootLease = nil
+        }
         let container: ModelContainer
         do {
             container = try ModelContainer(
@@ -253,10 +279,19 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         // space a typed, retryable refusal already governs. An in-memory
         // store (or any unreadable fact) keeps the reader nil and
         // admission fail-open.
+        // The read must bypass URL's resource-value cache: the values are
+        // cached on the shared NSURL at first read, so a process that
+        // admitted one write while the volume had room would keep seeing
+        // that stale capacity after the volume filled — observed on the
+        // Card 6B revise cell (dispatch run 33687222086): the child's
+        // pre-fill capture read 254 MiB, the post-fill revise then passed
+        // admission on the cached value and died on the uncatchable
+        // external-storage NSException. A fresh URL per read has no cache.
         let volumeAvailableCapacityReader: @Sendable () -> Int64?
         if case .persistent(let storeURL) = configuration.persistence {
             volumeAvailableCapacityReader = {
-                guard let values = try? storeURL.resourceValues(
+                let freshURL = URL(fileURLWithPath: storeURL.path)
+                guard let values = try? freshURL.resourceValues(
                     forKeys: [.volumeAvailableCapacityKey]
                 ), let capacity = values.volumeAvailableCapacity else {
                     return nil
@@ -304,7 +339,8 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
             searchWorker: searchWorker,
             thumbnailService: ThumbnailService(),
             externalGateway: externalGateway,
-            appIntentsConnectionID: appIntentsConnectionID
+            appIntentsConnectionID: appIntentsConnectionID,
+            storeRootLease: storeRootLease
         )
     }
 
@@ -570,13 +606,19 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         try await authority.pastePayload(for: id)
     }
 
+    /// One authoritative snapshot of retained counts and logical content
+    /// bytes. The Authority owns aggregation and snapshot coherence.
+    public func usage() async throws -> HistoryUsage {
+        try await authority.usage()
+    }
+
     /// The authoritative configured retention state (docs/v2/V2-07-ux.md
     /// §5.2/§6.3 — the settings panel-open read; audit SPEC-IMPL-003): the
     /// Authority reads both durable singletons inside one serialized,
     /// non-suspending interval — the v1 count from the position singleton
     /// (§3.2) and the V2-02 dimensions through the shared config→policy
-    /// loader (`V2-02` §3.3). Configured policy only; no retained-byte usage
-    /// rides this value (V2-07 §2.2 OPEN-2).
+    /// loader (`V2-02` §3.3). Retained counts and content bytes are read
+    /// separately through `usage()`.
     public func retentionConfiguration() async throws -> HistoryRetentionConfiguration {
         try await authority.retentionConfiguration()
     }

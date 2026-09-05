@@ -363,7 +363,7 @@ extension HistoryAuthority {
         // drops were applied per lane above (04 §6).
         let merged = pinnedOrdered + unpinnedOrdered
 
-        let pageSlice = Array(merged.prefix(limit))
+        let pageSlice = merged.prefix(limit)
         let rows: [HistoryRow] = try pageSlice.map { scalarRow in
             try scalarRow.toHistoryRow(limits: limits)
         }

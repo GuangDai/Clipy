@@ -84,6 +84,7 @@ package enum ContentPreviewDebugInstrumentation {
 package struct ContentPreviewDebugSnapshot: Equatable, Sendable {
     package let activeJobs: Int
     package let retainedSourceBytes: Int
+    package let queuedRasterJobs: Int
 }
 #endif
 
@@ -95,7 +96,11 @@ package actor ContentPreview {
     /// work to overtake a slow native rasterization. Waiters carry no content;
     /// their caller tasks retain their own immutable snapshots.
     private var rasterizationActive = false
-    private var rasterizationWaiters: [CheckedContinuation<Void, Never>] = []
+    private struct RasterizationWaiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Bool, Never>
+    }
+    private var rasterizationWaiters: [RasterizationWaiter] = []
 
     #if DEBUG
     private var debugActiveJobs = 0
@@ -166,7 +171,8 @@ package actor ContentPreview {
     package func debugSnapshot() -> ContentPreviewDebugSnapshot {
         ContentPreviewDebugSnapshot(
             activeJobs: debugActiveJobs,
-            retainedSourceBytes: debugRetainedSourceBytes
+            retainedSourceBytes: debugRetainedSourceBytes,
+            queuedRasterJobs: rasterizationWaiters.count
         )
     }
     #endif
@@ -190,9 +196,16 @@ package actor ContentPreview {
                   let decoded = codec.decode(representation.bytes),
                   !decoded.isEmpty
             else { continue }
-            let wasTruncated = decoded.count > PreviewText.maximumCharacters
+            // Find the display cutoff once. Counting every Character first
+            // needlessly walks the undisplayed suffix of a large text value.
+            let end = decoded.index(
+                decoded.startIndex,
+                offsetBy: PreviewText.maximumCharacters,
+                limitedBy: decoded.endIndex
+            ) ?? decoded.endIndex
+            let wasTruncated = end != decoded.endIndex
             let body = wasTruncated
-                ? String(decoded.prefix(PreviewText.maximumCharacters)) + "\n\n…"
+                ? String(decoded[..<end]) + "\n\n…"
                 : decoded
             return .content(.text(PreviewText(
                 text: body,
@@ -211,7 +224,7 @@ package actor ContentPreview {
         _ representation: PreviewRepresentation,
         profile: ResourceProfile
     ) async -> PreviewOutcome {
-        await acquireRasterizationSlot()
+        guard await acquireRasterizationSlot() else { return .failed(.cancelled) }
         defer { releaseRasterizationSlot() }
         guard !Task.isCancelled else { return .failed(.cancelled) }
 
@@ -235,14 +248,37 @@ package actor ContentPreview {
         )
     }
 
-    private func acquireRasterizationSlot() async {
+    private func acquireRasterizationSlot() async -> Bool {
+        guard !Task.isCancelled else { return false }
         guard rasterizationActive else {
             rasterizationActive = true
+            return true
+        }
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                // Cancellation may precede registration. The actor cannot
+                // interleave waiter removal between this check and append.
+                guard !Task.isCancelled else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                rasterizationWaiters.append(RasterizationWaiter(
+                    id: id, continuation: continuation
+                ))
+            }
+        } onCancel: {
+            Task { await self.cancelRasterizationWaiter(id) }
+        }
+    }
+
+    private func cancelRasterizationWaiter(_ id: UUID) {
+        guard let index = rasterizationWaiters.firstIndex(where: { $0.id == id }) else {
+            // A waiter already handed the slot owns it and releases it via
+            // renderRasterOffActor's defer, even if it was just cancelled.
             return
         }
-        await withCheckedContinuation { continuation in
-            rasterizationWaiters.append(continuation)
-        }
+        rasterizationWaiters.remove(at: index).continuation.resume(returning: false)
     }
 
     private func releaseRasterizationSlot() {
@@ -250,7 +286,7 @@ package actor ContentPreview {
             rasterizationActive = false
             return
         }
-        rasterizationWaiters.removeFirst().resume()
+        rasterizationWaiters.removeFirst().continuation.resume(returning: true)
     }
 
     private static func renderRaster(
@@ -406,12 +442,20 @@ private enum PreviewTextCodec: Sendable {
         switch self {
         case .declared(.utf8):
             return String(data: bytes, encoding: .utf8)
-        case .declared(.nativeUTF16):
+        case .declared(.nativeUTF16), .declared(.externalUTF16):
+            // Foundation can decode a valid prefix while ignoring an odd
+            // trailing byte. A UTF-16 preview requires complete code units.
+            guard bytes.count.isMultiple(of: 2) else { return nil }
             if bytes.starts(with: [0xFE, 0xFF]) {
                 return String(data: bytes.dropFirst(2), encoding: .utf16BigEndian)
             }
             if bytes.starts(with: [0xFF, 0xFE]) {
                 return String(data: bytes.dropFirst(2), encoding: .utf16LittleEndian)
+            }
+            // Native text follows this app's arm64 little-endian platform;
+            // external UTF-16 defaults to big endian when no BOM is present.
+            if case .declared(.externalUTF16) = self {
+                return String(data: bytes, encoding: .utf16BigEndian)
             }
             return String(data: bytes, encoding: .utf16LittleEndian)
         }
@@ -420,5 +464,6 @@ private enum PreviewTextCodec: Sendable {
     private static let admittedIdentifiers: Set<ClipboardFormatIdentifier> = [
         .utf8PlainText,
         .utf16PlainText,
+        .utf16ExternalPlainText,
     ]
 }

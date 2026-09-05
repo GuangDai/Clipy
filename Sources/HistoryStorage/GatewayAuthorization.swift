@@ -130,7 +130,8 @@ extension ExternalOperationDescriptor {
             case .exact:
                 encodedMode = .exact
             case .fuzzy:
-                guard text.count <= limits.maximumFuzzyQueryCharacters else {
+                guard text.prefix(limits.maximumFuzzyQueryCharacters + 1).count
+                        <= limits.maximumFuzzyQueryCharacters else {
                     throw ExternalFailure.requestDenied(.invalidInput)
                 }
                 encodedMode = .fuzzy

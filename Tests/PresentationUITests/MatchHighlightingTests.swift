@@ -143,6 +143,36 @@ struct MatchHighlightingTests {
         #expect(segments(of: result, emphasized: false) == ["caf", " latte"])
     }
 
+    /// Regexp matches can start/end inside a grapheme while remaining on
+    /// complete Unicode scalar boundaries. Inspect actual attribute ranges
+    /// through the scalar view: slicing the Character view could hide an
+    /// expanded range by regrouping the base, mark, or joined emoji.
+    @Test(arguments: [
+        ("cafe\u{301} latte", 3, 1), // only the base e
+        ("cafe\u{301} latte", 4, 1), // only the combining acute accent
+        ("a👩‍💻z", 4, 2),             // only the complete laptop scalar
+    ])
+    func scalarMatchesWithinAGraphemeKeepTheirExactAttributedRange(
+        text: String, location: Int, length: Int
+    ) {
+        let expected = UTF16TextRange(location: location, length: length)
+        let result = MatchHighlighting.highlighted(text, ranges: [expected])
+        #expect(Data(String(result.characters).utf8) == Data(text.utf8))
+
+        let emphasizedRanges = result.runs.compactMap { run -> UTF16TextRange? in
+            guard run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true else {
+                return nil
+            }
+            let prefix = result.unicodeScalars[..<run.range.lowerBound]
+            let highlighted = result.unicodeScalars[run.range]
+            return UTF16TextRange(
+                location: prefix.reduce(0) { $0 + ($1.value > 0xFFFF ? 2 : 1) },
+                length: highlighted.reduce(0) { $0 + ($1.value > 0xFFFF ? 2 : 1) }
+            )
+        }
+        #expect(emphasizedRanges == [expected])
+    }
+
     // MARK: - Defensive dropping
 
     /// Out-of-bounds (past either end), zero-length, and overlapping ranges

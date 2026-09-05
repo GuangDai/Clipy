@@ -229,7 +229,7 @@ Decode is not a blind memberwise conversion. It reconstructs Domain values throu
   copy count ≥1, monotone first/last copy time, and bounded source values;
 - a non-negative pin ordinal (negative is corruption);
 - the `effectiveTypeIdentifiersBlob` decodes to a sorted, unique, non-empty list of type identifiers at format version 1;
-- `projectionSchemaVersion` is exactly the current value (v2), and the stored `title` (≤ 1,024 UTF-8 bytes) and `searchBody` (≤ 256 KiB) obey their Part VI bounds. A v1 tag is accepted only by the bounded startup rebuild below; ordinary reads never consume v1 projection scalars.
+- `projectionSchemaVersion` is exactly the current value (v4), and the stored `title` (≤ 1,024 UTF-8 bytes) and `searchBody` (≤ 256 KiB) obey their Part VI bounds. Tags v1/v2/v3 are accepted only by the bounded startup rebuild below; ordinary reads never consume v1/v2/v3 projection scalars.
 
 Projection checks live at the scalar boundary rather than inside a blob codec:
 startup validates every row's schema tag; recent browse validates the fetched
@@ -293,7 +293,7 @@ internal struct PreparedCaptureBundle: Sendable {
 }
 
 internal struct ContentProjection: Sendable {
-    let schemaVersion: UInt16       // projection recipe v2 = 2
+    let schemaVersion: UInt16       // projection recipe v4 = 4
     let title: String
     let searchBody: String
     let effectiveTypeIdentifiers: [String]
@@ -618,9 +618,9 @@ same-interval proof, rather than an otherwise unread generation counter.
 3. enter `HistoryAuthority` and create the singleton at position 0 if this is a new store;
 4. validate exactly one singleton;
 5. bootstrap/validate the retention-expansion config singleton;
-6. derive every projection-schema-v1 replacement from validated Canonical/revision bytes, then stamp them as recipe v2 in one bounded transaction; an unknown tag, invalid source, or failed transaction fails open without publishing a partial rebuild;
+6. derive every projection-schema-v1/v2/v3 replacement from validated Canonical/revision blobs, then stamp them as recipe v4 in one bounded transaction; an unknown tag, invalid source blob, or failed transaction fails open without publishing a partial rebuild;
 7. validate retained row count does not exceed the hard bound and fetch each row's business ID, nonzero Content Version, current projection schema version, pin ordinal, Canonical bytes, and signature metadata;
-8. require projection schema version 2;
+8. require projection schema version 4;
 9. decode Canonical and signature metadata, recompute Canonical signature
    entries, require bidirectional coverage, and build the complete index;
 10. validate the full pinned ordinal set from scalar fields;
@@ -629,8 +629,9 @@ same-interval proof, rather than an otherwise unread generation counter.
 
 The Canonical coverage pass is a correctness-first rule for the current
 hard-capped profile: a structurally valid but incomplete signature blob could
-otherwise create false-negative dedup candidates. Revision bytes remain
-untouched except when a legacy projection row already requires recipe rebuild.
+otherwise create false-negative dedup candidates. Revision blobs are read only
+when a legacy projection row requires recipe rebuild; the rebuild never
+rewrites their stored bytes.
 This full Canonical pass is not an admissible U-scale design. Before the global
 hard item bound can be removed, `DEC-U-SCALE-STARTUP-INDEX` must replace it with
 the approved durable candidate-query/lazy-shard authority and an equally strong
@@ -638,7 +639,7 @@ negative-evidence contract; it may not retain this O(N) hydration path or add a
 second truth index.
 
 Corrupt durable signature or pin metadata fails open rather than enabling
-writes from an unproved state. The explicit v1-to-v2 derived-projection rebuild
+writes from an unproved state. The explicit legacy-to-v4 derived-projection rebuild
 is not a silent or general repair path for corrupted data.
 
 ### 14. Read implementation
@@ -690,10 +691,21 @@ internal struct SearchCorpusRow: Sendable {
 ```
 
 `SearchWorker` evaluates exact/fuzzy/regexp over this `Sendable` snapshot and returns bounded row values. It never reads SwiftData and never uses dedup Candidate Rank.
+Exact/regexp scans retain only the continuation anchor and at most `limit + 1`
+subsequent matches. Fuzzy still scores the complete corpus, but retains only
+the best `limit + 1` post-anchor matches and the matching anchor, sorting only
+those candidates. This bounds evaluated-result storage; it does not replace
+the full corpus snapshot or change the frozen score/date/ID ordering.
 
 #### 14.3 Detail and paste
 
 Both fetch exactly one row and decode/validate its full lineage. Detail maps it to Canonical/effective/revision/occurrence DTOs. Paste maps only current Effective Content plus the current reference and lineage hint.
+
+The Settings `usage()` read joins existing validated retained-byte projections
+to item-ID and pin-ordinal scalars in one operation-local context, alongside
+the current position. It returns item/pinned counts and Canonical/revision
+byte sums. Missing or orphan projections fail the read instead of displaying
+a partial total. Content blobs are not decoded, and the read writes no state.
 
 #### 14.4 Observation registration
 
@@ -702,6 +714,17 @@ Both fetch exactly one row and decode/validate its full lineage. Detail maps it 
 #### 14.5 Thumbnail source
 
 `ThumbnailService` installs an exact-key source-to-decode task before its first suspension. The creator asks the Authority to fetch and fully hydrate exactly one item, verify the requested Content Version, derive Effective Content, and return immutable source image bytes. An existing-flight caller instead asks the Authority for a scalar-only dimension/existence/version fence before awaiting that task. ImageIO decode occurs only after all SwiftData objects and context have been released; no joiner rehydrates the content blob.
+
+Distinct creators wait for the preceding source-to-decode operation to finish
+before loading their own source. Waiting tasks retain request identity and the
+source-loading closure, not hydrated image bytes. A completion-only task tail
+advances on success, no-image, and failure, and is cleared when no flights remain.
+
+The worker aspect-fits the primary image into both requested pixel dimensions,
+using its display orientation when computing the downsample limit. Neither
+decoded axis exceeds the corresponding requested axis; aspect ratio is
+preserved to pixel rounding, with no upscaling. The payload retains the
+requested `PixelSize` as its key, even when the encoded image is smaller.
 
 #### 14.6 Configured retention read
 
@@ -722,9 +745,15 @@ invalidation, and exposes neither current retained-byte usage nor a
 
 - title: first eligible textual line after normalization, otherwise a stable type-based fallback;
 - search body: eligible textual representations in deterministic type order, normalized and truncated to the hard search-body bound;
-- textual decoding is type-strict under projection recipe v2: only
-  `public.utf8-plain-text` and `public.utf8-external-plain-text` use UTF-8,
-  and only `public.utf16-plain-text` uses UTF-16. `public.plain-text` has no
+- textual decoding is type-strict under projection recipe v4: only
+  `public.utf8-plain-text` uses UTF-8. `public.utf16-plain-text` uses native
+  UTF-16 (little-endian on arm64); `public.utf16-external-plain-text` uses
+  external UTF-16 (big-endian without a BOM). Both honor a leading byte-order
+  mark. An odd byte count is rejected as a complete malformed representation
+  before Foundation decoding; a valid prefix followed by an incomplete
+  UTF-16 code unit never contributes to the title or search body.
+  The former misspelling `public.utf8-external-plain-text` is an unknown
+  opaque identifier. `public.plain-text` has no
   declared encoding; `public.text` is abstract; RTF and HTML are structured
   formats. Those four families remain opaque and never enter title/search
   through a guessed UTF-8 decode. Malformed bytes of an exact plain type are
@@ -738,20 +767,28 @@ The projector constructs the joined search body directly under that hard
 UTF-8 bound; it does not materialize an unbounded concatenation and truncate it
 afterward. Read paths that need only a revision-summary title use the title-only
 projection and do not construct a search body.
+Details reuse the validated durable Effective title for the active revision's
+summary; inactive revision summaries still project their own content titles.
 
 Projection schema changes require an explicit schema version and migration/rebuild plan. They never change Canonical Content, revisions, Content Version, or Change Position by themselves; a projection-only migration is not a History Action and emits no user-visible commit.
 
-Projection recipe v2 is the first such rebuild. `HistoryItemRow` already
-carries the consistency fence, so this is not a SwiftData schema change and
-does not add a schema-migration stage. During `SwiftDataHistory.open`, after
+Projection recipe v2 removed guessed text decoding. Recipe v3 corrects the
+external UTF-16 identifier and the native no-BOM byte order. Recipe v4 rejects
+odd-byte UTF-16 instead of accepting a decodable prefix and discarding the
+trailing byte. `HistoryItemRow` already carries the consistency fence, so this
+is not a SwiftData schema change and does not add a schema-migration stage.
+During `SwiftDataHistory.open`, after
 singleton bootstrap and before Signature Index publication or capture, the
 Authority fetches at most the hard retained-item bound plus one, accepts only
-projection tags 1 and 2, then derives every v1 replacement from validated
-Canonical/revision bytes before entering one `ModelContext.transaction` that
-updates the title, search body, effective-type blob, and tag. Source decode
-failure, an unknown tag, or
-transaction failure leaves no partially published v2 set and fails the open.
-Ordinary reads accept only v2.
+projection tags 1, 2, 3, and 4, then derives every v1/v2/v3 replacement from
+validated Canonical/revision bytes before entering one `ModelContext.transaction` that
+updates only the derived title, search body, effective-type blob, and tag.
+Raw Canonical/revision bytes, Content Version, Change Position, and signature
+state remain unchanged. Malformed text is skipped by the projector while its
+raw representation stays retained. Source blob decode failure, an unknown tag,
+or transaction failure leaves no partially published v4 set and fails the open.
+Ordinary reads accept only v4. The rebuild preserves unknown representation
+bytes even when their old guessed title/search text is removed.
 
 Future changes to textual decoding, normalization, title, or body derivation
 must increment the projection schema again and ship an explicit bounded
@@ -772,6 +809,7 @@ At the `SwiftDataHistory` boundary:
 - a durable transaction error whose Cocoa code is `fileWriteOutOfSpace` or whose POSIX code is `ENOSPC` (directly or in the single observed `NSUnderlyingErrorKey` wrapper) → `.temporarilyUnavailable(.insufficientDiskSpace)`; classification uses domains/codes, never localized strings;
 - stamped-plan capacity admission → `.temporarilyUnavailable(.insufficientDiskSpace)`: before executing any stamped plan, the single writer refuses it — typed, with no receipt, durable commit, or invalidation — when the store volume's readable raw available-capacity fact (`volumeAvailableCapacity`) is below the plan's new external-storage payload total plus a fixed 1 MiB margin. The raw fact, not the important-usage variant, is authoritative here: the OS maintains purgeable-space accounting only on the boot volume, and the important-usage fact was observed returning zero on a dedicated mounted volume (dispatch run 32634051113, 254 MiB free, every capture refused); the raw fact matches the filesystem's own accounting on every volume and errs conservative on the boot volume, where ignoring purgeable space yields a typed, retryable refusal. The payload total counts the encoded `CanonicalBlobV1`/`RevisionStateBlobV1` bytes carried by `.create`, `.appendRevision`, and `.pruneRevisions` mutations (the wire-format byte counts Core Data externalizes, not raw clipboard bytes); plans writing no new external bytes — byte-exact copy coalescing, pin/occurrence/policy/delete-only commits — are never refused, and an unreadable capacity fact (in-memory store or unavailable resource value) leaves the path unrefused. Admission exists because the external-storage save path returns no out-of-space error at all: creating the `_EXTERNAL_DATA` interim file on a full volume raises an uncaught `NSInternalInconsistencyException` that terminates the process before this section's translation runs (Card 6B physical-ENOSPC runner evidence, 2026-08-23). An exhaustion that begins after admission passes remains that framework crash ceiling, not a typed failure;
 - hard retained/revision/copy-count limits → `.capacityExceeded` with the matching `CapacityKind`; valid encoded thumbnail output over the Part VI byte envelope → `.capacityExceeded(.thumbnailBytes)`; a `ContentVersion`/`ChangePosition` successor overflow → `.capacityExceeded(.coherenceToken)`;
+- an image representation that ImageIO cannot interpret or render as a thumbnail → `.thumbnailUnavailable`; this is not evidence of persisted-value corruption and does not affect byte-exact capture, detail, or paste. The selected candidate still fails without falling back to another representation;
 - decode/schema invariant failures or corrupt persisted values → `.persistence(.corruptStoredValue)` or `.persistence(.invariantViolation)`;
 - a PNG destination/finalization failure after source decode → `.persistence(.invariantViolation)` (encode-side invariant, never stored-value corruption);
 - any other `ModelContext.transaction` closure failure (including the `StorageInvariant.positionChanged` guard) or framework-level failure to durably commit the transaction → `.persistence(.transaction)`.

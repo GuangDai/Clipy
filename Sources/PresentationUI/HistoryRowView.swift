@@ -53,7 +53,7 @@ package enum HistoryRowAccessibilityAction {
 /// accessibility routing table is directly testable within the package.
 package struct HistoryRowView: View {
     private let row: HistoryRow
-    private let rendering: HistoryRowRenderingModel
+    private let now: Date
     private let pinnedOrdinal: Int?
     private let density: HistoryRowDensity
     private let snippetLineCount: HistorySnippetLineCount
@@ -66,6 +66,9 @@ package struct HistoryRowView: View {
     private let onUnpin: (HistoryItemID) -> Void
     private let onRemove: (HistoryItemID) -> Void
     private let onShowDetails: (HistoryItemReference) -> Void
+
+    @Environment(\.locale) private var locale
+    @Environment(\.timeZone) private var timeZone
 
     /// The typography/width parameters default to the product's narrow
     /// presentation, so existing callers (and below-560pt rendering) keep
@@ -87,7 +90,7 @@ package struct HistoryRowView: View {
         onShowDetails: @escaping (HistoryItemReference) -> Void
     ) {
         self.row = row
-        rendering = HistoryRowRenderingModel(row: row, now: now)
+        self.now = now
         self.pinnedOrdinal = pinnedOrdinal
         self.density = density
         self.snippetLineCount = snippetLineCount
@@ -138,13 +141,13 @@ package struct HistoryRowView: View {
         .accessibilityAction(named: Text(pinAccessibilityActionName)) {
             performAccessibilityAction(.togglePin)
         }
-        .accessibilityAction(named: Text("Show Details")) {
+        .accessibilityAction(named: Text(PanelActionsCopy.text("Show Details"))) {
             performAccessibilityAction(.showDetails)
         }
-        .accessibilityAction(named: Text("Remove")) {
+        .accessibilityAction(named: Text(PanelActionsCopy.text("Remove"))) {
             performAccessibilityAction(.remove)
         }
-        .accessibilityHint("Copies this item to the clipboard.")
+        .accessibilityHint(PanelActionsCopy.text("Copies this item to the clipboard."))
     }
 
     // MARK: Accessibility action dispatch (V2-07 §9)
@@ -191,7 +194,7 @@ package struct HistoryRowView: View {
                let image = PreviewRasterDisplay.image(
                    raster,
                    scale: 2,
-                   label: Text("Item thumbnail")
+                   label: Text(PanelActionsCopy.text("Item thumbnail"))
                ) {
                 image
                     .resizable()
@@ -218,12 +221,17 @@ package struct HistoryRowView: View {
         .clipShape(RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium))
         .overlay(alignment: .bottomLeading) { pinBadge }
         .task(id: row.item) {
+            guard !Task.isCancelled else { return }
             if ThumbnailStore.likelyThumbnailable(row.typeIdentifiers) {
                 thumbnails.prefetch(row.item)
             }
+        }
+        .task(id: row.lastSource) {
+            guard !Task.isCancelled else { return }
             if let lastSource = row.lastSource {
                 // Resolution mutates the store, so it runs here rather than
-                // in body evaluation; the row reads `cachedIcon` only.
+                // in body evaluation. Coalescing can change lastSource while
+                // preserving row.item, so this task follows the source itself.
                 sourceIcons?.icon(forBundleID: lastSource)
             }
         }
@@ -248,14 +256,14 @@ package struct HistoryRowView: View {
         if let ordinal = pinnedOrdinal {
             HStack(spacing: 1) {
                 Image(systemName: "pin.fill")
-                Text("\(ordinal)")
+                Text(LocalizedCountPresentation.number(ordinal, locale: locale))
             }
             .font(.system(size: 8, weight: .bold))
             .foregroundStyle(.primary)
             .padding(.horizontal, 3)
             .padding(.vertical, 1)
             .background { Capsule().fill(.thinMaterial) }
-            .accessibilityLabel("Pinned at position \(ordinal)")
+            .accessibilityLabel(PanelActionsCopy.pinnedPosition(ordinal, locale: locale))
         }
     }
 
@@ -280,7 +288,10 @@ package struct HistoryRowView: View {
     // MARK: Trailing metadata column
 
     private var metadataColumn: some View {
-        VStack(alignment: .trailing, spacing: PanelTheme.spacingXXXSmall) {
+        let rendering = HistoryRowRenderingModel(
+            row: row, now: now, locale: locale, timeZone: timeZone
+        )
+        return VStack(alignment: .trailing, spacing: PanelTheme.spacingXXXSmall) {
             // Wide presentation (≥560pt browsing column) swaps the relative
             // stamp for the absolute time of day; below the threshold the
             // relative text is byte-identical to the shipped row.
@@ -312,17 +323,15 @@ package struct HistoryRowView: View {
         }
     }
 
-    /// Plain-`String` rendering of the ×N count: `Text(_:)`'s
-    /// `LocalizedStringKey` interpolation has no `UInt64` overload, so the
-    /// count is formatted before reaching the view.
+    /// Keep the full UInt64 occurrence range while honoring locale grouping
+    /// and digits; row count presentation never changes the stored value.
     private var copyCountText: String {
-        "×\(row.copyCount)"
+        HistoryRowCopy.copyCount(row.copyCount, locale: locale)
     }
 
-    /// Accessibility rendering of the same count, precomputed for the same
-    /// `UInt64`-interpolation reason (docs/v2/V2-07-ux.md §9 point 1).
+    /// The same count with translated plural-aware VoiceOver copy (§9/§10).
     private var copyAccessibilityLabel: String {
-        "Copied \(row.copyCount) times"
+        HistoryRowCopy.copiedCount(row.copyCount, locale: locale)
     }
 
     /// The compact Actions rotor exposes the state-changing pin operation,
@@ -330,7 +339,7 @@ package struct HistoryRowView: View {
     /// explicit pointer/keyboard-menu choice while assistive technology gets
     /// one unambiguous Pin or Unpin action (V2-07 §9).
     private var pinAccessibilityActionName: String {
-        row.pinnedPosition == nil ? "Pin" : "Unpin"
+        row.pinnedPosition == nil ? PanelActionsCopy.text("Pin") : PanelActionsCopy.text("Unpin")
     }
 
     /// Narrow presentation keeps the shipped compact form: the last path
@@ -349,22 +358,22 @@ package struct HistoryRowView: View {
     /// the shared `HistoryRowKind` UTI vocabulary so the panel's type filter
     /// always agrees with the displayed family; anything not
     /// image/URL/rich-text falls back to the generic clipboard document.
-    private static func typeSymbol(for typeIdentifiers: [String]) -> String {
+    package static func typeSymbol(for typeIdentifiers: [String]) -> String {
         if HistoryRowKind.matchesAny(
             typeIdentifiers,
-            prefixes: HistoryRowKind.imageTypePrefixes
+            types: HistoryRowKind.imageTypes
         ) {
             return "photo"
         }
         if HistoryRowKind.matchesAny(
             typeIdentifiers,
-            prefixes: HistoryRowKind.linkTypePrefixes
+            types: HistoryRowKind.linkTypes
         ) {
             return "link"
         }
         if HistoryRowKind.matchesAny(
             typeIdentifiers,
-            prefixes: HistoryRowKind.richTextTypePrefixes
+            types: HistoryRowKind.richTextTypes
         ) {
             return "doc.text"
         }
@@ -378,42 +387,42 @@ package struct HistoryRowView: View {
         Button {
             onCopy(row.item)
         } label: {
-            Label("Copy to Clipboard", systemImage: "doc.on.clipboard")
+            Label(PanelActionsCopy.text("Copy to Clipboard"), systemImage: "doc.on.clipboard")
         }
 
         if row.pinnedPosition != nil {
             Button {
                 onPin(row.item.id, .first)
             } label: {
-                Label("Move to Top", systemImage: "arrow.up.to.line")
+                Label(PanelActionsCopy.text("Move to Top"), systemImage: "arrow.up.to.line")
             }
             Button {
                 onPin(row.item.id, .last)
             } label: {
-                Label("Move to Bottom", systemImage: "arrow.down.to.line")
+                Label(PanelActionsCopy.text("Move to Bottom"), systemImage: "arrow.down.to.line")
             }
             Button {
                 onUnpin(row.item.id)
             } label: {
-                Label("Unpin", systemImage: "pin.slash")
+                Label(PanelActionsCopy.text("Unpin"), systemImage: "pin.slash")
             }
         } else {
             Button {
                 onPin(row.item.id, .first)
             } label: {
-                Label("Pin to Top", systemImage: "pin")
+                Label(PanelActionsCopy.text("Pin to Top"), systemImage: "pin")
             }
             Button {
                 onPin(row.item.id, .last)
             } label: {
-                Label("Pin to Bottom", systemImage: "pin")
+                Label(PanelActionsCopy.text("Pin to Bottom"), systemImage: "pin")
             }
         }
 
         Button {
             onShowDetails(row.item)
         } label: {
-            Label("Show Details", systemImage: "info.circle")
+            Label(PanelActionsCopy.text("Show Details"), systemImage: "info.circle")
         }
         .keyboardShortcut("i", modifiers: .command)
 
@@ -422,7 +431,7 @@ package struct HistoryRowView: View {
         Button(role: .destructive) {
             onRemove(row.item.id)
         } label: {
-            Label("Remove", systemImage: "trash")
+            Label(PanelActionsCopy.text("Remove"), systemImage: "trash")
         }
         .keyboardShortcut(.delete, modifiers: [])
     }
@@ -435,7 +444,8 @@ package struct HistoryRowView: View {
 /// `absoluteTimeText` backs the wide presentation (≥560pt browsing column,
 /// `HistoryRowLayout.usesWidePresentation`): it formats the item's fixed
 /// time of day, so it needs no cadence. `timeZone` is injected for the same
-/// determinism reason as `locale`; production callers keep both defaults.
+/// determinism reason as `locale`; the row supplies both from its SwiftUI
+/// environment so region or time-zone changes update visible metadata.
 @MainActor
 package struct HistoryRowRenderingModel {
     package let relativeTimeText: String

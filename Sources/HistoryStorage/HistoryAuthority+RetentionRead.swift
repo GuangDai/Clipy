@@ -25,9 +25,8 @@ extension HistoryAuthority {
     /// different commits.
     ///
     /// This is a configured-POLICY read only: no retained-byte usage scalar
-    /// is fetched or returned (V2-07 §2.2 OPEN-2 — a live usage read is not
-    /// on the public surface; the `RetainedBytesRow` projection is a
-    /// planner-internal fact, `V2-02` §3.2).
+    /// is fetched or returned. The separate `usage()` read consumes the
+    /// existing `RetainedBytesRow` projections without loading content.
     ///
     /// Flow mirrors `currentPosition()`: operation-local context → singleton
     /// fetches → fail-closed validation → value assembly, with no `await`

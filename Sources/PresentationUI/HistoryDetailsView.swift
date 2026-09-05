@@ -210,7 +210,7 @@ struct HistoryDetailsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if showsEditor, case .loaded(let details) = phase {
+            if showsEditor, case .loaded(let details, _) = phase {
                 ReviseEditorView(
                     viewState: viewState,
                     details: details,
@@ -220,52 +220,52 @@ struct HistoryDetailsView: View {
             } else {
                 switch phase {
                 case .loading:
-                    ProgressView("Loading…")
+                    ProgressView(PanelActionsCopy.text("Loading…"))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .removed:
                     ContentUnavailableView(
-                        "Item Removed",
+                        PanelActionsCopy.text("Item Removed"),
                         systemImage: "trash",
                         description: Text(
-                            "This item is no longer in your clipboard history."
+                            PanelActionsCopy.text("This item is no longer in your clipboard history.")
                         )
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .failed(let message):
                     ContentUnavailableView {
                         Label(
-                            "Couldn't Load Item",
+                            PanelActionsCopy.text("Couldn't Load Item"),
                             systemImage: "exclamationmark.triangle"
                         )
                     } description: {
                         Text(message)
                     } actions: {
-                        Button("Retry") {
+                        Button(PanelActionsCopy.text("Retry")) {
                             Task { await load() }
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                case .loaded(let details):
-                    loadedLayout(for: details)
+                case .loaded(let details, let content):
+                    loadedLayout(for: details, content: content)
                 }
             }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.details.root")
-        .navigationTitle("Details")
+        .navigationTitle(PanelActionsCopy.text("Details"))
         .navigationBarBackButtonHidden(showsEditor)
         .overlay { detailsEscapeShortcut }
         .task { await load() }
         .confirmationDialog(
-            "Remove this item from your clipboard history?",
+            PanelActionsCopy.text("Remove this item from your clipboard history?"),
             isPresented: $showsRemoveConfirmation,
             titleVisibility: .visible
         ) {
-            Button("Remove", role: .destructive) {
+            Button(PanelActionsCopy.text("Remove"), role: .destructive) {
                 Task { await remove() }
             }
             .accessibilityIdentifier("clipy.details.confirm-remove")
-            Button("Cancel", role: .cancel) {}
+            Button(PanelActionsCopy.text("Cancel"), role: .cancel) {}
         }
         .onChange(of: viewState.surfacePurge, initial: true) { _, _ in
             _ = reconcileSurfacePurge(viewState.surfacePurge)
@@ -287,7 +287,7 @@ struct HistoryDetailsView: View {
     @ViewBuilder
     private var detailsEscapeShortcut: some View {
         if !showsEditor, !showsRemoveConfirmation {
-            Button("Back to History") {
+            Button(PanelActionsCopy.text("Back to History")) {
                 dismiss()
             }
             .keyboardShortcut(.cancelAction)
@@ -335,12 +335,16 @@ struct HistoryDetailsView: View {
     // MARK: Loaded layout
 
     @ViewBuilder
-    private func loadedLayout(for details: HistoryDetails) -> some View {
+    private func loadedLayout(
+        for details: HistoryDetails,
+        content: DetailsContentPresentation
+    ) -> some View {
         VStack(spacing: 0) {
             if showsStaleNotice {
                 noticeBanner(
-                    text: "This item changed while you were viewing it."
-                        + " Details reloaded.",
+                    text: PanelActionsCopy.text(
+                        "This item changed while you were viewing it. Details reloaded."
+                    ),
                     systemImage: "arrow.triangle.2.circlepath"
                 ) {
                     showsStaleNotice = false
@@ -356,6 +360,7 @@ struct HistoryDetailsView: View {
             }
             DetailsBody(
                 details: details,
+                content: content,
                 thumbnails: thumbnails,
                 basis: $basis,
                 usesTwoColumnLayout: DetailsLayout.usesTwoColumnLayout(
@@ -389,7 +394,7 @@ struct HistoryDetailsView: View {
                 // state routes it to the composition root's paste closure.
                 viewState.requestPaste(currentItem)
             } label: {
-                Label("Copy to Clipboard", systemImage: "doc.on.doc")
+                Label(PanelActionsCopy.text("Copy to Clipboard"), systemImage: "doc.on.doc")
             }
             .buttonStyle(.borderedProminent)
             Spacer(minLength: PanelTheme.spacingSmall)
@@ -401,42 +406,41 @@ struct HistoryDetailsView: View {
                         .controlSize(.small)
                 } else {
                     Label(
-                        isPinned ? "Unpin" : "Pin",
+                        isPinned ? PanelActionsCopy.text("Unpin") : PanelActionsCopy.text("Pin"),
                         systemImage: isPinned ? "pin.slash" : "pin"
                     )
                 }
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .help(isPinned ? "Unpin" : "Pin")
-            .accessibilityLabel(isPinned ? "Unpin" : "Pin")
+            .help(isPinned ? PanelActionsCopy.text("Unpin") : PanelActionsCopy.text("Pin"))
+            .accessibilityLabel(isPinned ? PanelActionsCopy.text("Unpin") : PanelActionsCopy.text("Pin"))
             .accessibilityHint(
-                "Pinned items stay at the top of the list and are exempt"
-                    + " from unpinned retention limits."
+                PanelActionsCopy.text("Pinned items stay at the top of the list and are exempt from unpinned retention limits.")
             )
             .accessibilityIdentifier("clipy.details.pin-toggle")
             .disabled(isTogglingPin)
             Button {
                 showsEditor = true
             } label: {
-                Label("Edit Content", systemImage: "square.and.pencil")
+                Label(PanelActionsCopy.text("Edit Content"), systemImage: "square.and.pencil")
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .help("Edit Content…")
-            .accessibilityLabel("Edit Content")
-            .accessibilityHint("Opens the revision editor for this item.")
+            .help(PanelActionsCopy.text("Edit Content…"))
+            .accessibilityLabel(PanelActionsCopy.text("Edit Content"))
+            .accessibilityHint(PanelActionsCopy.text("Opens the revision editor for this item."))
             Button {
                 showsRemoveConfirmation = true
             } label: {
-                Label("Remove", systemImage: "trash")
+                Label(PanelActionsCopy.text("Remove"), systemImage: "trash")
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .help("Remove")
-            .accessibilityLabel("Remove")
+            .help(PanelActionsCopy.text("Remove"))
+            .accessibilityLabel(PanelActionsCopy.text("Remove"))
             .accessibilityHint(
-                "Removes this item from your clipboard history."
+                PanelActionsCopy.text("Removes this item from your clipboard history.")
             )
             .accessibilityIdentifier("clipy.details.remove")
             .disabled(isRemoving)
@@ -464,7 +468,7 @@ struct HistoryDetailsView: View {
             }
             .buttonStyle(.borderless)
             .controlSize(.small)
-            .accessibilityLabel("Dismiss")
+            .accessibilityLabel(PanelActionsCopy.text("Dismiss"))
         }
         .padding(.horizontal, PanelTheme.spacingLarge)
         .padding(.vertical, PanelTheme.spacingXSmall)
@@ -502,7 +506,25 @@ struct HistoryDetailsView: View {
                 }
                 return
             }
-            phase = .loaded(details)
+            // Resolve all text rows once per immutable details snapshot,
+            // away from MainActor body evaluation. Cancellation can retire
+            // work between representations, not preempt a synchronous decode.
+            let preparation = Task.detached(priority: .userInitiated) {
+                try DetailsContentPresentation(details: details)
+            }
+            let content = try await withTaskCancellationHandler {
+                try await preparation.value
+            } onCancel: {
+                preparation.cancel()
+            }
+            guard reconcileSurfacePurge(viewState.surfacePurge) else { return }
+            guard loadFence.accepts(
+                generation,
+                returned: details.item,
+                expected: currentItem,
+                isCancelled: Task.isCancelled
+            ) else { return }
+            phase = .loaded(details, content)
         } catch let failure as HistoryFailure {
             guard reconcileSurfacePurge(viewState.surfacePurge) else { return }
             guard !Task.isCancelled, loadFence.owns(generation) else { return }
@@ -518,7 +540,7 @@ struct HistoryDetailsView: View {
             guard reconcileSurfacePurge(viewState.surfacePurge) else { return }
             guard !Task.isCancelled, loadFence.owns(generation) else { return }
             guard error is CancellationError else {
-                phase = .failed(message: "Clipy couldn't load this item.")
+                phase = .failed(message: PanelActionsCopy.text("Clipy couldn't load this item."))
                 return
             }
         }
@@ -558,7 +580,7 @@ struct HistoryDetailsView: View {
             failureNotice = FailurePresentation.message(for: failure)
         } catch {
             guard error is CancellationError else {
-                failureNotice = "Clipy couldn't update this item."
+                failureNotice = PanelActionsCopy.text("Clipy couldn't update this item.")
                 return
             }
         }
@@ -587,7 +609,7 @@ struct HistoryDetailsView: View {
             }
         } catch {
             guard error is CancellationError else {
-                failureNotice = "Clipy couldn't update this item."
+                failureNotice = PanelActionsCopy.text("Clipy couldn't update this item.")
                 return
             }
         }
@@ -610,7 +632,7 @@ struct HistoryDetailsView: View {
             failureNotice = FailurePresentation.message(for: failure)
         } catch {
             guard error is CancellationError else {
-                failureNotice = "Clipy couldn't remove this item."
+                failureNotice = PanelActionsCopy.text("Clipy couldn't remove this item.")
                 return
             }
         }
@@ -632,6 +654,7 @@ private struct DetailsBody: View {
     private static let metadataColumnWidth: CGFloat = 280
 
     let details: HistoryDetails
+    let content: DetailsContentPresentation
     let thumbnails: ThumbnailStore
     @Binding var basis: ContentBasis
     let usesTwoColumnLayout: Bool
@@ -700,7 +723,7 @@ private struct DetailsBody: View {
                     alignment: .leading,
                     spacing: PanelTheme.spacingXXSmall
                 ) {
-                    Text(detailTitle(for: details))
+                    Text(content.title ?? PanelActionsCopy.text("Clipboard Item"))
                         .font(.headline)
                         .lineLimit(2)
                         .accessibilityIdentifier("clipy.details.title")
@@ -718,7 +741,7 @@ private struct DetailsBody: View {
            let image = PreviewRasterDisplay.image(
                raster,
                scale: 2,
-               label: Text("Item thumbnail")
+               label: Text(PanelActionsCopy.text("Item thumbnail"))
            ) {
             image
                 .resizable()
@@ -729,13 +752,9 @@ private struct DetailsBody: View {
                         cornerRadius: PanelTheme.cornerRadiusMedium
                     )
                 )
-                .accessibilityLabel("Item thumbnail")
+                .accessibilityLabel(PanelActionsCopy.text("Item thumbnail"))
         } else {
-            Image(
-                systemName: typeSymbol(
-                    for: details.effective.map(\.typeIdentifier)
-                )
-            )
+            Image(systemName: content.symbolName)
             .font(.system(size: 28))
             .foregroundStyle(.secondary)
             .frame(width: 64, height: 64)
@@ -745,7 +764,7 @@ private struct DetailsBody: View {
                     cornerRadius: PanelTheme.cornerRadiusMedium
                 )
             )
-            .accessibilityLabel("Content type icon")
+            .accessibilityLabel(PanelActionsCopy.text("Content type icon"))
         }
     }
 
@@ -753,7 +772,7 @@ private struct DetailsBody: View {
     private var pinBadge: some View {
         if let position = details.pinnedPosition {
             // `pinnedPosition` is 0-based (03b §8); display is 1-based.
-            Label("Pinned #\(position + 1)", systemImage: "pin.fill")
+            Label(PanelActionsCopy.pinnedPosition(position + 1, compact: true), systemImage: "pin.fill")
                 .font(.caption)
                 .foregroundStyle(Color.accentColor)
                 .padding(.horizontal, PanelTheme.spacingXSmall)
@@ -762,10 +781,10 @@ private struct DetailsBody: View {
                     Color.accentColor.opacity(0.12),
                     in: Capsule()
                 )
-                .accessibilityLabel("Pinned at position \(position + 1)")
+                .accessibilityLabel(PanelActionsCopy.pinnedPosition(position + 1))
                 .accessibilityIdentifier("clipy.details.pin-status")
         } else {
-            Text("Unpinned")
+            Text(PanelActionsCopy.text("Unpinned"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, PanelTheme.spacingXSmall)
@@ -776,48 +795,47 @@ private struct DetailsBody: View {
     }
 
     private var infoSection: some View {
-        Section("Info") {
+        Section(PanelActionsCopy.text("Info")) {
             LabeledContent(
-                "First Copied",
+                PanelActionsCopy.text("First Copied"),
                 value: DetailsFormat.mediumDateTime.string(
                     from: details.occurrence.firstCopiedAt
                 )
             )
             LabeledContent(
-                "Last Copied",
+                PanelActionsCopy.text("Last Copied"),
                 value: DetailsFormat.mediumDateTime.string(
                     from: details.occurrence.lastCopiedAt
                 )
             )
             LabeledContent(
-                "Copy Count",
-                value: String(details.occurrence.count)
+                PanelActionsCopy.text("Copy Count"),
+                value: details.occurrence.count.formatted(.number)
             )
             LabeledContent(
-                "Source",
+                PanelActionsCopy.text("Source"),
                 value: details.occurrence.lastSource.map {
                     ($0 as NSString).lastPathComponent
-                } ?? "Unknown"
+                } ?? PanelActionsCopy.text("Unknown")
             )
             LabeledContent(
-                "Content Version",
-                value: String(details.item.contentVersion.rawValue)
+                PanelActionsCopy.text("Content Version"),
+                value: details.item.contentVersion.rawValue.formatted(.number)
             )
         }
     }
 
     private var contentSection: some View {
         Section {
-            Picker("Content", selection: $basis) {
-                Text("Effective").tag(ContentBasis.effective)
-                Text("Canonical").tag(ContentBasis.canonical)
+            Picker(PanelActionsCopy.text("Content"), selection: $basis) {
+                Text(PanelActionsCopy.text("Effective")).tag(ContentBasis.effective)
+                Text(PanelActionsCopy.text("Canonical")).tag(ContentBasis.canonical)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .accessibilityLabel("Content view")
+            .accessibilityLabel(PanelActionsCopy.text("Content view"))
             .accessibilityHint(
-                "Effective lists what pasting produces now; Canonical lists"
-                    + " every retained original type."
+                PanelActionsCopy.text("Effective lists what pasting produces now; Canonical lists every retained original type.")
             )
 
             ForEach(representations, id: \.typeIdentifier) { representation in
@@ -835,14 +853,14 @@ private struct DetailsBody: View {
                 )
             }
         } header: {
-            Text("Content")
+            Text(PanelActionsCopy.text("Content"))
         }
     }
 
     private var revisionsSection: some View {
         Section {
             if details.revisions.isEmpty {
-                Text("No revisions")
+                Text(PanelActionsCopy.text("No revisions"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -853,13 +871,13 @@ private struct DetailsBody: View {
             }
         } header: {
             HStack {
-                Text("Revisions")
+                Text(PanelActionsCopy.text("Revisions"))
                 Spacer()
                 Button {
                     onRevise(.revert(to: .canonical))
                 } label: {
                     Label(
-                        "Revert to Original",
+                        PanelActionsCopy.text("Revert to Original"),
                         systemImage: "arrow.uturn.backward"
                     )
                 }
@@ -869,10 +887,9 @@ private struct DetailsBody: View {
                 // `.unchanged` no-op (docs/02-domain.md §11 step 5; WS7 (b)),
                 // so the action is disabled exactly in that state.
                 .disabled(!canRevertToOriginal)
-                .accessibilityLabel("Revert to Original")
+                .accessibilityLabel(PanelActionsCopy.text("Revert to Original"))
                 .accessibilityHint(
-                    "Restores the canonical content as this item's current"
-                        + " content."
+                    PanelActionsCopy.text("Restores the canonical content as this item's current content.")
                 )
             }
         }
@@ -884,11 +901,11 @@ private struct DetailsBody: View {
     /// construction; storage's no-op rule (02 §11 step 5) compares proposed
     /// content byte-for-byte, mirrored here by the representation lists.
     private var canRevertToOriginal: Bool {
-        !details.revisions.isEmpty && details.effective != details.canonical
+        !details.revisions.isEmpty && !content.effectiveMatchesCanonical
     }
 
-    private var representations: [HistoryRepresentation] {
-        basis == .effective ? details.effective : details.canonical
+    private var representations: [DetailsContentPresentation.Representation] {
+        basis == .effective ? content.effective : content.canonical
     }
 
     private var effectiveTypeIdentifiers: Set<String> {
@@ -900,20 +917,18 @@ private struct DetailsBody: View {
 
 /// One representation row in the Content section: monospaced type identifier,
 /// byte size, "Hidden" badge (canonical-but-not-effective types), and the
-/// bounded preview — ≤500 characters only for exact UTF-8 plain text, or the
+/// bounded preview — ≤500 characters for exact UTF-8/UTF-16 plain text, or the
 /// item thumbnail for image types. Structured, abstract, encoding-unspecified,
 /// and unknown representations remain type + byte metadata (review TYPE-2).
 private struct RepresentationRow: View {
 
-    let representation: HistoryRepresentation
+    let representation: DetailsContentPresentation.Representation
     let isHiddenFromEffective: Bool
     let thumbnails: ThumbnailStore
     let item: HistoryItemReference
 
     var body: some View {
-        let presentation = DetailsRepresentationPresentation.resolve(
-            representation
-        )
+        let presentation = representation.presentation
         VStack(alignment: .leading, spacing: PanelTheme.spacingXSmall) {
             HStack(alignment: .firstTextBaseline) {
                 Text(representation.typeIdentifier)
@@ -924,7 +939,7 @@ private struct RepresentationRow: View {
                     .truncationMode(.middle)
                 Spacer(minLength: PanelTheme.spacingSmall)
                 if isHiddenFromEffective {
-                    Label("Hidden", systemImage: "eye.slash")
+                    Label(PanelActionsCopy.text("Hidden"), systemImage: "eye.slash")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, PanelTheme.spacingXSmall)
@@ -933,11 +948,11 @@ private struct RepresentationRow: View {
                             Color.primary.opacity(0.06),
                             in: Capsule()
                         )
-                        .accessibilityLabel("Hidden from effective content")
+                        .accessibilityLabel(PanelActionsCopy.text("Hidden from effective content"))
                 }
                 Text(
                     DetailsFormat.bytes.string(
-                        fromByteCount: Int64(representation.bytes.count)
+                        fromByteCount: Int64(representation.byteCount)
                     )
                 )
                 .font(.caption)
@@ -976,25 +991,25 @@ private struct RepresentationRow: View {
                     .strokeBorder(Color.primary.opacity(0.12))
                 }
                 .accessibilityLabel(
-                    "Text preview of \(representation.typeIdentifier)"
+                    PanelActionsCopy.format("Text preview of %@", representation.typeIdentifier)
                 )
             }
             if presentation == .metadataOnly,
-                !isImageType(representation.typeIdentifier)
+                !representation.isImage || thumbnails.isUnavailable(for: item)
             {
-                Label("Preview unavailable", systemImage: "doc")
+                Label(PanelActionsCopy.text("Preview unavailable"), systemImage: "doc")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(
-                        "Preview unavailable for \(representation.typeIdentifier)"
+                        PanelActionsCopy.format("Preview unavailable for %@", representation.typeIdentifier)
                     )
             }
-            if isImageType(representation.typeIdentifier),
+            if representation.isImage,
                let raster = thumbnails.raster(for: item),
                let image = PreviewRasterDisplay.image(
                    raster,
                    scale: 2,
-                   label: Text("Item thumbnail")
+                   label: Text(PanelActionsCopy.text("Item thumbnail"))
                )
             {
                 image
@@ -1013,7 +1028,7 @@ private struct RepresentationRow: View {
                         )
                     )
                     .accessibilityLabel(
-                        "Image preview of \(representation.typeIdentifier)"
+                        PanelActionsCopy.format("Image preview of %@", representation.typeIdentifier)
                     )
             }
         }
@@ -1053,18 +1068,18 @@ private struct RevisionRow: View {
             }
             Spacer(minLength: PanelTheme.spacingSmall)
             if revision.isActive {
-                Label("Active", systemImage: "checkmark.circle")
+                Label(PanelActionsCopy.text("Active"), systemImage: "checkmark.circle")
                     .font(.caption)
                     .foregroundStyle(Color.accentColor)
-                    .accessibilityLabel("Active revision")
+                    .accessibilityLabel(PanelActionsCopy.text("Active revision"))
             }
-            Button("Revert", action: onRevert)
+            Button(PanelActionsCopy.text("Revert"), action: onRevert)
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(revision.isActive)
-                .accessibilityLabel("Revert to \(revision.title)")
+                .accessibilityLabel(PanelActionsCopy.format("Revert to %@", revision.title))
                 .accessibilityHint(
-                    "Restores this revision as the item's current content."
+                    PanelActionsCopy.text("Restores this revision as the item's current content.")
                 )
         }
         .padding(.vertical, PanelTheme.spacingXXXSmall)
@@ -1076,7 +1091,7 @@ private struct RevisionRow: View {
 /// The lifecycle of one detail load (03b §10 typed failures mapped).
 private enum DetailsPhase {
     case loading
-    case loaded(HistoryDetails)
+    case loaded(HistoryDetails, DetailsContentPresentation)
     case removed
     case failed(message: String)
 }
@@ -1089,9 +1104,10 @@ private enum ContentBasis: String, Hashable {
 
 /// Details' complete text-preview decision for one representation row.
 ///
-/// Exact `public.utf8-plain-text` is the only admitted text contract in this
-/// owner. Valid UTF-8 bytes under RTF, HTML, abstract `public.text`, or
-/// encoding-unspecified `public.plain-text` remain opaque; a sibling exact
+/// Exact UTF-8 and native/external UTF-16 plain text use their declared byte
+/// order, matching the large preview. Valid UTF-8 bytes under RTF, HTML,
+/// abstract `public.text`, or encoding-unspecified `public.plain-text` remain
+/// opaque; a sibling exact
 /// plain-text representation is rendered independently by its own row. This
 /// path performs no document import or external-resource work (review TYPE-2;
 /// content-types review §3.4).
@@ -1102,15 +1118,104 @@ package enum DetailsRepresentationPresentation: Equatable, Sendable {
     package static func resolve(
         _ representation: HistoryRepresentation
     ) -> DetailsRepresentationPresentation {
-        guard ClipboardFormatIdentifier(
-            rawValue: representation.typeIdentifier
-        ) == .utf8PlainText,
-            let text = String(data: representation.bytes, encoding: .utf8),
-            !text.isEmpty
+        guard let text = decodedText(representation), !text.isEmpty
         else {
             return .metadataOnly
         }
         return .plainText(String(text.prefix(500)))
+    }
+
+    private static func decodedText(
+        _ representation: HistoryRepresentation
+    ) -> String? {
+        let identifier = ClipboardFormatIdentifier(
+            rawValue: representation.typeIdentifier
+        )
+        let bytes = representation.bytes
+        switch identifier {
+        case .utf8PlainText:
+            return String(data: bytes, encoding: .utf8)
+        case .utf16PlainText, .utf16ExternalPlainText:
+            // Foundation may decode a valid prefix while dropping an odd
+            // trailing byte. A UTF-16 representation must contain whole units.
+            guard bytes.count.isMultiple(of: 2) else { return nil }
+            if bytes.starts(with: [0xFE, 0xFF]) {
+                return String(data: bytes.dropFirst(2), encoding: .utf16BigEndian)
+            }
+            if bytes.starts(with: [0xFF, 0xFE]) {
+                return String(data: bytes.dropFirst(2), encoding: .utf16LittleEndian)
+            }
+            return String(
+                data: bytes,
+                encoding: identifier == .utf16PlainText
+                    ? .utf16LittleEndian : .utf16BigEndian
+            )
+        default:
+            return nil
+        }
+    }
+}
+
+/// Immutable display values prepared once for one Details load. Rows retain
+/// bounded text and byte counts, never another copy of the source Data. This
+/// is owned by the loaded phase and discarded with that snapshot.
+package struct DetailsContentPresentation: Sendable {
+    package struct Representation: Sendable {
+        package let typeIdentifier: String
+        package let byteCount: Int
+        package let presentation: DetailsRepresentationPresentation
+        package let isImage: Bool
+    }
+
+    package let canonical: [Representation]
+    package let effective: [Representation]
+    package let effectiveMatchesCanonical: Bool
+    package let symbolName: String
+    /// Literal active-revision or first text title; the view localizes only
+    /// its absent-title fallback, not user content or durable revision titles.
+    package let title: String?
+
+    package init(details: HistoryDetails) throws {
+        canonical = try Self.prepare(details.canonical)
+        try Task.checkCancellation()
+        effectiveMatchesCanonical = details.effective == details.canonical
+        // Domain equality deliberately accepts canonically equivalent type
+        // identifiers (02 §2.1), but display rows retain each DTO's spelling.
+        // Only share prepared rows when that spelling is byte-identical too.
+        if effectiveMatchesCanonical,
+           zip(details.canonical, details.effective).allSatisfy({ pair in
+               pair.0.typeIdentifier.utf8.elementsEqual(pair.1.typeIdentifier.utf8)
+           }) {
+            effective = canonical
+        } else {
+            effective = try Self.prepare(details.effective)
+        }
+        symbolName = typeSymbol(for: details.effective.map(\.typeIdentifier))
+        if let active = details.revisions.first(where: \.isActive) {
+            title = active.title
+        } else {
+            title = effective.lazy.compactMap { representation -> String? in
+                guard case .plainText(let text) = representation.presentation else { return nil }
+                let firstLine = text.split(whereSeparator: \.isNewline).first?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return firstLine.isEmpty ? nil : String(firstLine.prefix(100))
+            }.first
+        }
+        try Task.checkCancellation()
+    }
+
+    private static func prepare(
+        _ representations: [HistoryRepresentation]
+    ) throws -> [Representation] {
+        try representations.map { representation in
+            try Task.checkCancellation()
+            return Representation(
+                typeIdentifier: representation.typeIdentifier,
+                byteCount: representation.bytes.count,
+                presentation: DetailsRepresentationPresentation.resolve(representation),
+                isImage: isImageType(representation.typeIdentifier)
+            )
+        }
     }
 }
 
@@ -1139,28 +1244,29 @@ private let textualTypeIdentifiers: Set<String> = [
     ClipboardFormatIdentifier.plainText.rawValue,
     ClipboardFormatIdentifier.utf8PlainText.rawValue,
     ClipboardFormatIdentifier.utf16PlainText.rawValue,
-    ClipboardFormatIdentifier.utf8ExternalPlainText.rawValue,
+    ClipboardFormatIdentifier.utf16ExternalPlainText.rawValue,
     ClipboardFormatIdentifier.text.rawValue,
     ClipboardFormatIdentifier.rtf.rawValue,
     ClipboardFormatIdentifier.html.rawValue,
 ]
 
-/// Mirror of storage's frozen v1 ImageIO-decodable set (docs/04-coherence.md
-/// §9; `HistoryAuthority+DetailAndThumbnail.thumbnailImageTypeIdentifiers`).
+/// Exact image family for Details presentation, including the abstract image
+/// identifier. This is a display classification, not a decoder contract.
 private let imageTypeIdentifiers: Set<String> = [
-    "public.png",
-    "public.jpeg",
-    "public.tiff",
-    "public.heic",
-    "public.heif",
-    "com.compuserve.gif",
-    "com.microsoft.bmp",
+    ClipboardFormatIdentifier.image.rawValue,
+    ClipboardFormatIdentifier.png.rawValue,
+    ClipboardFormatIdentifier.jpeg.rawValue,
+    ClipboardFormatIdentifier.tiff.rawValue,
+    ClipboardFormatIdentifier.heic.rawValue,
+    ClipboardFormatIdentifier.heif.rawValue,
+    ClipboardFormatIdentifier.gif.rawValue,
+    ClipboardFormatIdentifier.bmp.rawValue,
 ]
 
-/// Image-type display heuristic (thumbnail row in the Content section).
+/// A similar prefix does not establish that an unknown representation is an
+/// image; opaque formats retain their unavailable-preview label (01 §2).
 private func isImageType(_ typeIdentifier: String) -> Bool {
     imageTypeIdentifiers.contains(typeIdentifier)
-        || typeIdentifier.hasPrefix("public.image")
 }
 
 /// SF Symbol fallback by dominant representation type.
@@ -1168,36 +1274,14 @@ private func typeSymbol(for typeIdentifiers: [String]) -> String {
     if typeIdentifiers.contains(where: isImageType) {
         return "photo"
     }
-    if typeIdentifiers.contains(where: { $0.contains("url") }) {
+    if typeIdentifiers.contains(ClipboardFormatIdentifier.url.rawValue)
+        || typeIdentifiers.contains(ClipboardFormatIdentifier.fileURL.rawValue) {
         return "link"
     }
     if typeIdentifiers.contains(where: textualTypeIdentifiers.contains) {
         return "doc.text"
     }
     return "doc.on.clipboard"
-}
-
-/// The header title. Storage projects every revision's title from its
-/// content (ContentProjector, 05 §15), so the active revision's title IS the
-/// item's current title; the client-side fallback mirrors that derivation
-/// for robustness.
-private func detailTitle(for details: HistoryDetails) -> String {
-    if let active = details.revisions.first(where: \.isActive) {
-        return active.title
-    }
-    for representation in details.effective {
-        guard case .plainText(let text) =
-            DetailsRepresentationPresentation.resolve(representation)
-        else { continue }
-        let firstLine = text
-            .split(whereSeparator: \.isNewline)
-            .first?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !firstLine.isEmpty {
-            return String(firstLine.prefix(100))
-        }
-    }
-    return "Clipboard Item"
 }
 
 #if DEBUG
@@ -1219,25 +1303,33 @@ private func detailTitle(for details: HistoryDetails) -> String {
 }
 
 #Preview("Content") {
-    DetailsBody(
-        details: detailsPreviewDetails(),
-        thumbnails: ThumbnailStore(history: PreviewClipboardHistory.empty),
-        basis: .constant(.effective),
-        usesTwoColumnLayout: false,
-        onRevise: { _ in }
-    )
-    .frame(width: 400, height: 560)
+    let details = detailsPreviewDetails()
+    if let content = try? DetailsContentPresentation(details: details) {
+        DetailsBody(
+            details: details,
+            content: content,
+            thumbnails: ThumbnailStore(history: PreviewClipboardHistory.empty),
+            basis: .constant(.effective),
+            usesTwoColumnLayout: false,
+            onRevise: { _ in }
+        )
+        .frame(width: 400, height: 560)
+    }
 }
 
 #Preview("Content (Two-Column)") {
-    DetailsBody(
-        details: detailsPreviewDetails(),
-        thumbnails: ThumbnailStore(history: PreviewClipboardHistory.empty),
-        basis: .constant(.effective),
-        usesTwoColumnLayout: true,
-        onRevise: { _ in }
-    )
-    .frame(width: 720, height: 560)
+    let details = detailsPreviewDetails()
+    if let content = try? DetailsContentPresentation(details: details) {
+        DetailsBody(
+            details: details,
+            content: content,
+            thumbnails: ThumbnailStore(history: PreviewClipboardHistory.empty),
+            basis: .constant(.effective),
+            usesTwoColumnLayout: true,
+            onRevise: { _ in }
+        )
+        .frame(width: 720, height: 560)
+    }
 }
 
 private func detailsPreviewDetails() -> HistoryDetails {

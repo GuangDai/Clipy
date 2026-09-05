@@ -33,7 +33,7 @@ import HistoryDomain
 /// unique, non-empty type summary of the projected content.
 internal struct ContentProjection: Sendable {
     /// Projection schema version; exactly `ContentProjector.schemaVersion`
-    /// (projection recipe v2 = 2) for every newly projected value.
+    /// (projection recipe v4 = 4) for every newly projected value.
     internal let schemaVersion: UInt16
     /// First eligible textual line after normalization, otherwise a stable
     /// type-based fallback (§15).
@@ -60,17 +60,18 @@ internal struct StoredProjectionSize: Equatable, Sendable {
 ///
 /// The projector is a namespace of pure functions — no actor, clock, I/O, or
 /// framework decode. Image bytes are never decoded for title/search (§15):
-/// only representations whose exact type identifier declares the frozen v2
+/// only representations whose exact type identifier declares the frozen v4
 /// plain-text encoding are decoded, so identical content always projects
 /// identically. Encoding-unspecified, abstract, and structured text formats
 /// remain opaque.
 internal enum ContentProjector {
-    /// The current projection recipe. Version 2 removes the v1 guessed UTF-8
-    /// decode of encoding-unspecified, abstract, RTF, and HTML values (§15).
-    internal static let schemaVersion: UInt16 = 2
+    /// Recipe 4 rejects incomplete UTF-16 code units before Foundation can
+    /// discard the trailing byte. Startup rebuilds recipes 1–3 before reads
+    /// using their unchanged Canonical/revision bytes (§15).
+    internal static let schemaVersion: UInt16 = 4
 
-    /// The only legacy projection recipe accepted by startup rebuild. It is
-    /// never accepted by an ordinary read boundary (§13, §15).
+    /// The original recipe used by legacy migration fixtures. Startup also
+    /// accepts recipes 2 and 3; ordinary reads accept only recipe 4 (§13, §15).
     internal static let legacySchemaVersion: UInt16 = 1
 
     // MARK: Stored projection validation (docs/05-authority-kernel.md §4)
@@ -175,25 +176,24 @@ internal enum ContentProjector {
             // Both sinks complete: nothing later can contribute. A textual
             // representation can only add search-body bytes (budget already
             // exhausted) or a title (already found), so its full decode and
-            // newline-normalization copy are skipped entirely — decisive
+            // search-body traversal are skipped entirely — decisive
             // when a capture carries multi-megabyte representations after
             // the first one already filled the 256-KiB body budget.
             if title != nil, remainingSearchBodyBytes == 0 {
                 break
             }
             guard let text = decodedText(of: representation) else { continue }
-            let normalized = normalizingNewlines(text)
             if title == nil {
-                title = firstContentLine(of: normalized)
+                title = firstContentLine(of: text)
             }
 
             // Build the durable corpus directly under its hard byte bound.
             // Joining all decoded representations first lets transient memory
             // scale with arbitrarily large capture bytes even though the
             // stored value is bounded (docs/06-cross-cutting.md §9, WL3).
-            guard containsNonWhitespace(in: normalized) else { continue }
+            guard containsNonWhitespace(in: text) else { continue }
             if hasSearchBodyPart {
-                guard appendUTF8Prefix(
+                guard appendNormalizedUTF8Prefix(
                     "\n",
                     to: &searchBody,
                     remainingByteCount: &remainingSearchBodyBytes
@@ -202,8 +202,8 @@ internal enum ContentProjector {
                 }
             }
             hasSearchBodyPart = true
-            guard appendUTF8Prefix(
-                normalized,
+            guard appendNormalizedUTF8Prefix(
+                text,
                 to: &searchBody,
                 remainingByteCount: &remainingSearchBodyBytes
             ) else {
@@ -232,7 +232,7 @@ internal enum ContentProjector {
         for representation in content.representations {
             guard
                 let text = decodedText(of: representation),
-                let title = firstContentLine(of: normalizingNewlines(text))
+                let title = firstContentLine(of: text)
             else {
                 continue
             }
@@ -251,23 +251,23 @@ internal enum ContentProjector {
 
     // MARK: Textual eligibility and decoding (§15)
 
-    /// Projection-owned recipe-v2 admission. `ClipboardFormats` supplies the
+    /// Projection-owned recipe-v4 admission. `ClipboardFormats` supplies the
     /// exact codec facts, but adding a future stable codec must not silently
     /// change durable title/search behavior.
     private static let textualProjectionIdentifiers: Set<ClipboardFormatIdentifier> = [
         .utf8PlainText,
-        .utf8ExternalPlainText,
+        .utf16ExternalPlainText,
         .utf16PlainText,
     ]
 
     /// Decodes one representation's bytes as text, or returns `nil` when the
     /// representation is not title/search eligible (§15: image bytes are not
     /// decoded). Encoding is fixed by the explicit type: UTF-16 only for
-    /// `public.utf16-plain-text`, UTF-8 for every other frozen textual type.
+    /// `public.utf16-plain-text`; external UTF-16 honors a BOM and otherwise
+    /// defaults to big-endian. Only `public.utf8-plain-text` declares UTF-8.
     /// The projector never guesses a fallback encoding for malformed bytes;
     /// an undecodable representation is skipped rather than durable mojibake.
-    /// The declared codec means the non-UTF-16 cases have an exact UTF-8
-    /// contract; there is no generic textual fallback.
+    /// There is no generic textual fallback.
     private static func decodedText(
         of representation: ContentRepresentation
     ) -> String? {
@@ -278,69 +278,76 @@ internal enum ContentProjector {
               let codec = identifier.declaredStringCodec else {
             return nil
         }
-        let encoding: String.Encoding = switch codec {
+        switch codec {
         case .utf8:
-            .utf8
-        case .nativeUTF16:
-            .utf16
+            return String(data: representation.bytes, encoding: .utf8)
+        case .nativeUTF16, .externalUTF16:
+            let bytes = representation.bytes
+            // Foundation may decode a complete prefix and ignore one final
+            // byte. An incomplete UTF-16 code unit is malformed in full (§15).
+            guard bytes.count.isMultiple(of: 2) else { return nil }
+            if bytes.starts(with: [0xFE, 0xFF]) {
+                return String(data: bytes.dropFirst(2), encoding: .utf16BigEndian)
+            }
+            if bytes.starts(with: [0xFF, 0xFE]) {
+                return String(data: bytes.dropFirst(2), encoding: .utf16LittleEndian)
+            }
+            // Native byte order is little-endian on the supported arm64
+            // platform; external UTF-16 without a BOM is big-endian (§15).
+            let encoding: String.Encoding = codec == .externalUTF16
+                ? .utf16BigEndian : .utf16LittleEndian
+            return String(data: bytes, encoding: encoding)
         }
-        return String(data: representation.bytes, encoding: encoding)
     }
 
     // MARK: Normalization (§15)
 
-    /// Newline normalization: CRLF and lone CR fold to LF so line splitting,
-    /// title selection, and stored search bodies are independent of the
-    /// source newline convention. Deterministic; no other bytes change.
-    private static func normalizingNewlines(_ text: String) -> String {
-        var normalized = ""
-        normalized.reserveCapacity(text.utf8.count)
-        for character in text {
-            if character == "\r\n" || character == "\r" {
-                normalized.append("\n")
-            } else {
-                normalized.append(character)
-            }
-        }
-        return normalized
-    }
-
     /// The first line whose whitespace-trimmed form is non-empty, trimmed;
     /// `nil` when the text has no such line (§15: "first eligible textual
-    /// line after normalization").
-    private static func firstContentLine(of normalizedText: String) -> String? {
-        var start = normalizedText.startIndex
+    /// line after normalization"). CRLF, CR, and LF delimit the same lines
+    /// before or after normalization. A title-only read therefore scans only
+    /// through its selected line without allocating a normalized copy of the
+    /// whole decoded representation. Other Unicode newline scalars retain
+    /// the existing trim-only behavior; they do not become line delimiters.
+    private static func firstContentLine(of text: String) -> String? {
+        var start = text.startIndex
         while true {
-            let end = normalizedText[start...].firstIndex(of: "\n")
-                ?? normalizedText.endIndex
-            let trimmed = normalizedText[start..<end]
+            let end = text[start...].firstIndex {
+                $0 == "\n" || $0 == "\r" || $0 == "\r\n"
+            } ?? text.endIndex
+            let trimmed = text[start..<end]
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty { return trimmed }
-            guard end != normalizedText.endIndex else { return nil }
-            start = normalizedText.index(after: end)
+            guard end != text.endIndex else { return nil }
+            start = text.index(after: end)
         }
     }
 
-    /// `true` when a normalized textual representation contributes something
-    /// other than whitespace/newlines to the search corpus (§15).
+    /// `true` when a textual representation contributes something other than
+    /// whitespace/newlines to the corpus (§15). CR/LF normalization preserves
+    /// this predicate, so it can inspect the decoded source directly.
     private static func containsNonWhitespace(in text: String) -> Bool {
         text.unicodeScalars.contains {
             !CharacterSet.whitespacesAndNewlines.contains($0)
         }
     }
 
-    /// Appends as much of `text` as fits at a Character boundary and reports
-    /// whether the full input was appended. The destination never grows past
-    /// its caller-owned UTF-8 budget.
-    private static func appendUTF8Prefix(
+    /// Normalizes CRLF/lone CR to LF while appending only the prefix that
+    /// fits the caller-owned UTF-8 budget at Character boundaries. Measure
+    /// the output Character (CRLF becomes one byte), preserving the exact
+    /// normalize-then-truncate result without allocating a full normalized
+    /// copy. Returns whether the complete input was appended.
+    private static func appendNormalizedUTF8Prefix(
         _ text: String,
         to result: inout String,
         remainingByteCount: inout Int
     ) -> Bool {
         for character in text {
-            let width = character.utf8.count
+            let normalized: Character = character == "\r\n" || character == "\r"
+                ? "\n" : character
+            let width = normalized.utf8.count
             guard width <= remainingByteCount else { return false }
-            result.append(character)
+            result.append(normalized)
             remainingByteCount -= width
         }
         return true

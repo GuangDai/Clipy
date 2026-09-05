@@ -10,6 +10,47 @@ import Testing
 @testable import PasteboardAdapter
 
 #if DEBUG
+/// Exercise reentry during either the first freeze or its one ownership
+/// retry. The nested poll consumes the newer generation; returning to the
+/// outer stack must neither read it again nor issue a second callback.
+@Test(arguments: [1, 2]) @MainActor
+func nestedPollSupersedesAnOuterFreezeWithoutDuplicateDelivery(nestedOnRead: Int) throws {
+    let pasteboard = makeRetryPasteboard()
+    defer { pasteboard.releaseGlobally() }
+    replaceString(on: pasteboard, with: "generation-0")
+    var payloadReads = 0
+    weak var activeObserver: PasteboardObserver?
+    var adapter = PasteboardAdapter(pasteboard: pasteboard)
+    adapter.payloadReadCompletionHook = { _ in
+        payloadReads += 1
+        guard payloadReads <= nestedOnRead else { return }
+        replaceString(on: pasteboard, with: "generation-\(payloadReads)")
+        if payloadReads == nestedOnRead {
+            activeObserver?.pollForTesting()
+        }
+    }
+    let observer = PasteboardObserver(adapter: adapter, pollInterval: 60)
+    activeObserver = observer
+    defer { observer.stop() }
+    var received: [CaptureOutcome] = []
+    observer.start { received.append($0) }
+
+    #expect(payloadReads == nestedOnRead + 1)
+    #expect(received.count == 1)
+    guard case let .complete(complete) = try #require(received.first) else {
+        Issue.record("only the nested poll's complete generation should be delivered")
+        return
+    }
+    #expect(complete.changeCount == pasteboard.changeCount)
+    #expect(complete.capture.representations == [CapturedRepresentation(
+        typeIdentifier: NSPasteboard.PasteboardType.string.rawValue,
+        bytes: Data("generation-\(nestedOnRead)".utf8)
+    )])
+    observer.pollForTesting()
+    #expect(payloadReads == nestedOnRead + 1)
+    #expect(received.count == 1)
+}
+
 @MainActor
 private func makeRetryPasteboard() -> NSPasteboard {
     NSPasteboard(
@@ -89,6 +130,9 @@ func observerStopsAfterOneRetryAndEmitsOneTerminalContentFreeOutcome() throws {
         return
     }
     #expect(value.endChangeCount == pasteboard.changeCount)
+    observer.pollForTesting()
+    #expect(payloadReads == 2)
+    #expect(received.count == 1)
 }
 
 @Test @MainActor

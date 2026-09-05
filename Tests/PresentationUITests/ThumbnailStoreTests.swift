@@ -7,17 +7,26 @@
 /// `prefetch(_:)` is idempotent per reference and materializes the encoded
 /// bytes OFF the MainActor into an eager Sendable raster retained under the
 /// EXACT requesting reference (id + Content Version — a revised item never
-/// sees stale pixels); a `nil` payload is negative-retained while a thrown
-/// failure is NOT (transient unavailability may recover); `reset()` clears
+/// sees stale pixels); `nil` and `.thumbnailUnavailable` are negative-retained
+/// while other failures are NOT (transient unavailability may recover); `reset()` clears
 /// everything and advances a surface-owned purge generation so late results
 /// cannot refill it. Retention is bounded by entry count AND decoded bytes
 /// (audit 2026-08-20 §S-3/§SPEC-IMPL-001 — the admission record lives in
 /// ThumbnailStore.swift's header). `likelyThumbnailable` mirrors the frozen
 /// v1 ImageIO-decodable UTI set that gates prefetch.
+import ContentPreview
 import Foundation
 import HistoryCore
-import PresentationUI
 import Testing
+@testable import PresentationUI
+
+#if DEBUG
+private actor ThumbnailDisplayDecodeProbe {
+    private(set) var count = 0
+
+    func record() { count += 1 }
+}
+#endif
 
 /// Real ImageIO materialization shares one owner-local native slot. Running
 /// this suite's independent stores concurrently under the full 962-test lane
@@ -96,8 +105,8 @@ struct ThumbnailStoreTests {
 
         // The revised reference fetches its own answer: nil, no image.
         store.prefetch(revised)
-        #expect(await pollUntil { await history.requestCount(for: revised) == 1 })
-        try? await Task.sleep(for: .milliseconds(150))
+        #expect(await pollUntil { store.inFlightCount == 0 })
+        #expect(await history.requestCount(for: revised) == 1)
         #expect(store.imagePixelSize(for: revised) == nil)
         // The original's decoded pixels are untouched.
         #expect(store.imagePixelSize(for: original) != nil)
@@ -106,37 +115,170 @@ struct ThumbnailStoreTests {
         // reference does not re-ask (stable negative — the .miss entry
         // blocks the fetch synchronously).
         store.prefetch(revised)
-        try? await Task.sleep(for: .milliseconds(150))
+        #expect(store.inFlightCount == 0)
         #expect(await history.requestCount(for: revised) == 1)
     }
 
     // MARK: - Failure handling (04 §9)
 
-    /// A thrown typed failure is NOT cached: the reference stays eligible,
+    /// A non-stable typed failure is NOT cached: the reference stays eligible,
     /// so a later prefetch re-fetches (transient unavailability may
     /// recover).
-    @Test func thrownFetchFailuresAreNotCached() async {
+    @Test(arguments: [
+        HistoryFailure.temporarilyUnavailable(.dedupIndexRebuild),
+        .persistence(.corruptStoredValue),
+        .staleContent(expected: .initial, current: ContentVersion(rawValue: 2)),
+    ])
+    func thrownFetchFailuresAreNotCached(_ failure: HistoryFailure) async {
         let item = reference(
             "00000000-0000-0000-0000-0000000000C1",
             version: 1
         )
         let history = ThumbnailScriptHistory(
-            failureByReference: [item: .temporarilyUnavailable(.dedupIndexRebuild)]
+            failureByReference: [item: failure]
         )
         let store = ThumbnailStore(history: history)
 
         store.prefetch(item)
-        #expect(await pollUntil { await history.requestCount(for: item) == 1 })
-        // Let the failure path finish (it removes the in-flight marker
-        // without recording an entry).
-        try? await Task.sleep(for: .milliseconds(150))
+        #expect(await pollUntil { store.inFlightCount == 0 })
+        #expect(await history.requestCount(for: item) == 1)
 
         store.prefetch(item)
         #expect(await pollUntil { await history.requestCount(for: item) == 2 })
         #expect(store.imagePixelSize(for: item) == nil)
+        #expect(!store.isUnavailable(for: item))
     }
 
     // MARK: - Reset (04 §9)
+
+    @Test func undecodableReferenceIsRequestedOnceAndNewContentVersionCanRender() async throws {
+        let original = reference("00000000-0000-0000-0000-0000000000C2", version: 1)
+        let revised = HistoryItemReference(id: original.id, contentVersion: ContentVersion(rawValue: 2))
+        let history = ThumbnailScriptHistory(
+            pngByReference: [revised: fixturePNGData],
+            failureByReference: [original: .thumbnailUnavailable]
+        )
+        let store = ThumbnailStore(history: history)
+        #expect(!store.isUnavailable(for: original))
+        store.prefetch(original)
+        #expect(store.inFlightCount == 1)
+        #expect(!store.isUnavailable(for: original))
+        try #require(await pollUntil { store.inFlightCount == 0 })
+        #expect(store.cachedEntryCount == 1)
+        #expect(store.cachedDecodedBytes == 0)
+        #expect(store.isUnavailable(for: original))
+
+        // Reappearance on scrolling uses the completed miss synchronously;
+        // no second History request can enter its ImageIO decode pipeline.
+        store.prefetch(original)
+        store.prefetch(original)
+        #expect(store.inFlightCount == 0)
+        #expect(await history.requestCount(for: original) == 1)
+
+        #expect(!store.isUnavailable(for: revised))
+        store.prefetch(revised)
+        #expect(!store.isUnavailable(for: revised))
+        try #require(await pollUntil { store.imagePixelSize(for: revised) != nil })
+        #expect(await history.requestCount(for: revised) == 1)
+        #expect(store.imagePixelSize(for: original) == nil)
+        #expect(store.isUnavailable(for: original))
+        #expect(!store.isUnavailable(for: revised))
+
+        store.purge(.revision(old: original, new: revised))
+        #expect(!store.isUnavailable(for: original))
+        #expect(!store.isUnavailable(for: revised))
+        #expect(store.imagePixelSize(for: revised) != nil)
+    }
+
+    enum MissPurge: Sendable {
+        case reset, clearAll, clearUnpinned, remove, revision
+    }
+
+    @Test(arguments: [MissPurge.reset, .clearAll, .clearUnpinned, .remove, .revision])
+    func existingPurgesReleaseTheUndecodableReference(_ purge: MissPurge) async throws {
+        let item = reference("00000000-0000-0000-0000-0000000000C3", version: 1)
+        let history = ThumbnailScriptHistory(failureByReference: [item: .thumbnailUnavailable])
+        let store = ThumbnailStore(history: history)
+        store.prefetch(item)
+        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(store.cachedEntryCount == 1)
+        #expect(store.isUnavailable(for: item))
+
+        switch purge {
+        case .reset: store.reset()
+        case .clearAll: store.purge(.all)
+        case .clearUnpinned: store.purge(.unpinned)
+        case .remove: store.purge(.item(item.id))
+        case .revision:
+            store.purge(.revision(old: item, new: HistoryItemReference(
+                id: item.id, contentVersion: ContentVersion(rawValue: 2)
+            )))
+        }
+        #expect(store.cachedEntryCount == 0)
+        #expect(!store.isUnavailable(for: item))
+        store.prefetch(item)
+        #expect(!store.isUnavailable(for: item))
+        try #require(await pollUntil { store.inFlightCount == 0 })
+        #expect(await history.requestCount(for: item) == 2)
+        #expect(store.isUnavailable(for: item))
+    }
+
+    @Test func undecodableReferencesShareTheExistingEntryBound() async throws {
+        let first = reference("00000000-0000-0000-0000-0000000000C4", version: 1)
+        let second = reference("00000000-0000-0000-0000-0000000000C5", version: 1)
+        let history = ThumbnailScriptHistory(failureByReference: [
+            first: .thumbnailUnavailable, second: .thumbnailUnavailable,
+        ])
+        let store = ThumbnailStore(history: history, maximumEntries: 1, maximumDecodedBytes: 64)
+        store.prefetch(first)
+        try #require(await pollUntil { store.inFlightCount == 0 })
+        #expect(store.cachedEntryCount == 1)
+        store.prefetch(second)
+        try #require(await pollUntil { store.inFlightCount == 0 })
+        #expect(store.cachedEntryCount == 0)
+        #expect(store.cachedDecodedBytes == 0)
+        store.prefetch(first)
+        try #require(await pollUntil { store.inFlightCount == 0 })
+        #expect(await history.requestCount(for: first) == 2)
+    }
+
+    @Test func cancelledFetchRemainsEligibleForAnotherRequest() async throws {
+        let item = reference("00000000-0000-0000-0000-0000000000C6", version: 1)
+        let history = PausableThumbnailHistory()
+        let store = ThumbnailStore(history: history)
+        store.prefetch(item)
+        try #require(await pollUntil { await history.requestCount == 1 })
+        #expect(await history.completeRequest(for: item, with: .cancelled))
+        try #require(await pollUntil { store.inFlightCount == 0 })
+        #expect(store.cachedEntryCount == 0)
+        store.prefetch(item)
+        try #require(await pollUntil { await history.requestCount == 2 })
+        #expect(await history.completeRequest(for: item, occurrence: 1, with: .success(nil)))
+        try #require(await pollUntil { store.inFlightCount == 0 })
+    }
+
+    @Test func unavailableResultsAndPurgesStayWithinTheirOwningSurface() async throws {
+        let item = reference("00000000-0000-0000-0000-0000000000C7", version: 1)
+        let history = ThumbnailScriptHistory(failureByReference: [item: .thumbnailUnavailable])
+        let first = ThumbnailStore(history: history)
+        let second = ThumbnailStore(history: history)
+        first.prefetch(item)
+        second.prefetch(item)
+        try #require(await pollUntil { first.inFlightCount == 0 && second.inFlightCount == 0 })
+        #expect(await history.requestCount(for: item) == 2)
+        #expect(first.cachedEntryCount == 1)
+        #expect(second.cachedEntryCount == 1)
+
+        first.purge(.all)
+        #expect(first.cachedEntryCount == 0)
+        #expect(second.cachedEntryCount == 1)
+        second.prefetch(item)
+        #expect(second.inFlightCount == 0)
+        #expect(await history.requestCount(for: item) == 2)
+        first.prefetch(item)
+        try #require(await pollUntil { first.inFlightCount == 0 })
+        #expect(await history.requestCount(for: item) == 3)
+    }
 
     /// `reset()` clears the whole cache — reads miss again and a prefetch
     /// re-fetches — while in-flight bookkeeping cannot strand the entry.
@@ -161,6 +303,69 @@ struct ThumbnailStoreTests {
     }
 
     #if DEBUG
+    @Test func lateUnavailableResultCannotReplaceAnAlreadyPublishedNewFlight() async throws {
+        let item = reference("00000000-0000-0000-0000-0000000000C8", version: 1)
+        let history = PausableThumbnailHistory()
+        let store = ThumbnailStore(history: history)
+        store.prefetch(item)
+        try #require(await pollUntil { await history.requestCount == 1 })
+        store.reset()
+        store.prefetch(item)
+        try #require(await pollUntil { await history.requestCount == 2 })
+
+        #expect(await history.completeRequest(
+            for: item, occurrence: 1, with: .success(fixturePNGData)
+        ))
+        try #require(await pollUntil { store.imagePixelSize(for: item) != nil })
+        let producedSize = store.imagePixelSize(for: item)
+        let producedBytes = store.cachedDecodedBytes
+        #expect(producedBytes > 0)
+
+        // The older request returns a cacheable negative only AFTER the new
+        // request published pixels. It must not overwrite those pixels with
+        // a miss or alter the new result's byte accounting.
+        #expect(await history.completeRequest(for: item, with: .failure(.thumbnailUnavailable)))
+        try #require(await pollUntil { store.debugFetchCompletionCount == 2 })
+        #expect(store.debugDiscardedFetchCompletionCount == 1)
+        #expect(store.imagePixelSize(for: item) == producedSize)
+        #expect(store.cachedDecodedBytes == producedBytes)
+        #expect(store.cachedEntryCount == 1)
+        #expect(store.inFlightCount == 0)
+        store.prefetch(item)
+        #expect(store.inFlightCount == 0)
+        #expect(await history.requestCount == 2)
+    }
+
+    @Test func purgedLatePayloadSkipsDisplayDecodingAndNewRequestStillRenders() async throws {
+        let item = reference("00000000-0000-0000-0000-0000000000DC", version: 1)
+        let history = PausableThumbnailHistory()
+        let store = ThumbnailStore(history: history)
+        let probe = ThumbnailDisplayDecodeProbe()
+
+        try await ContentPreviewDebugInstrumentation.$renderDidStart.withValue({
+            await probe.record()
+        }) {
+            store.prefetch(item)
+            try #require(await pollUntil { await history.requestCount == 1 })
+            store.purge(.item(item.id))
+            store.prefetch(item)
+            try #require(await pollUntil { await history.requestCount == 2 })
+
+            #expect(await history.completeRequest(for: item, with: .success(fixturePNGData)))
+            try #require(await pollUntil { store.debugDiscardedFetchCompletionCount == 1 })
+            #expect(await probe.count == 0)
+            #expect(store.cachedEntryCount == 0)
+            #expect(store.inFlightCount == 1)
+
+            #expect(await history.completeRequest(
+                for: item, occurrence: 1, with: .success(fixturePNGData)
+            ))
+            try #require(await pollUntil { store.imagePixelSize(for: item) != nil })
+            #expect(await probe.count == 1)
+            #expect(store.inFlightCount == 0)
+        }
+    }
+
     /// Reset is a privacy purge boundary, not merely an entries dictionary
     /// clear (deep review Card 9B). Every old-generation flight is released
     /// from visible bookkeeping immediately; whether it later returns a hit,
@@ -209,7 +414,7 @@ struct ThumbnailStoreTests {
         #expect(
             await history.completeRequest(
                 for: failingItem,
-                with: .failure(.temporarilyUnavailable(.dedupIndexRebuild))
+                with: .failure(.thumbnailUnavailable)
             )
         )
         #expect(
@@ -550,6 +755,54 @@ struct ThumbnailStoreTests {
         #expect(store.cachedDecodedBytes == 0)
     }
 
+    // MARK: - Product seam retention policy (GOV-3 tail)
+
+    /// The public product initializer fixes the retention policy (500
+    /// entries / 64 MiB — the literals live in that one convenience
+    /// initializer; the owner-test package initializer exists precisely so
+    /// the eviction proofs above need no 500-row fixture). Through that
+    /// fixed policy a panel-scale working set of distinct references is
+    /// retained whole: every hit stays readable, the entry and decoded-byte
+    /// ledgers sum exactly, and no bound-driven reset fires.
+    @Test func productSeamRetainsAPanelScaleWorkingSet() async {
+        let items = [
+            reference("00000000-0000-0000-0000-000000000101", version: 1),
+            reference("00000000-0000-0000-0000-000000000102", version: 1),
+            reference("00000000-0000-0000-0000-000000000103", version: 1),
+            reference("00000000-0000-0000-0000-000000000104", version: 1),
+            reference("00000000-0000-0000-0000-000000000105", version: 1),
+            reference("00000000-0000-0000-0000-000000000106", version: 1),
+            reference("00000000-0000-0000-0000-000000000107", version: 1),
+            reference("00000000-0000-0000-0000-000000000108", version: 1),
+        ]
+        let history = ThumbnailScriptHistory(
+            pngByReference: Dictionary(
+                uniqueKeysWithValues: items.map { ($0, fixturePNGData) }
+            )
+        )
+        let store = ThumbnailStore(history: history)
+
+        for item in items {
+            store.prefetch(item)
+        }
+
+        // Quiescence: every scripted fetch answered and every completion
+        // landed (the same monotone condition the ceiling proofs wait on).
+        #expect(await pollUntil {
+            for item in items where await history.requestCount(for: item) != 1 {
+                return false
+            }
+            return store.inFlightCount == 0
+        })
+        // Every 1×1 BGRA8 hit costs exactly 4 decoded bytes; nothing crossed
+        // either fixed bound, so both ledgers reflect the whole working set.
+        #expect(store.cachedEntryCount == items.count)
+        #expect(store.cachedDecodedBytes == 4 * items.count)
+        for item in items {
+            #expect(store.imagePixelSize(for: item) != nil)
+        }
+    }
+
     // MARK: - Prefetch gate (04 §9)
 
     /// The cheap UTI heuristic answers true exactly when some type is in
@@ -582,6 +835,11 @@ struct ThumbnailStoreTests {
 /// unstructured-task scheduling order. Target-internal (not file-private) so
 /// the ThumbnailMeasurement suite can drive the same parked boundary.
 actor PausableThumbnailHistory: ClipboardHistory {
+    func usage() async throws -> HistoryUsage {
+        // This thumbnail-flight script has no retained-byte snapshot.
+        throw HistoryFailure.temporarilyUnavailable(.factProof)
+    }
+
     enum Completion: Sendable {
         case success(Data?)
         case failure(HistoryFailure)

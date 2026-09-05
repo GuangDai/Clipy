@@ -8,6 +8,132 @@ import Testing
 
 @Suite("Retention settings draft")
 struct RetentionSettingsDraftTests {
+    @Test("an earlier settings load cannot overwrite a newer load without intervening edits")
+    func newerLoadOwnsTheExactBaseline() throws {
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+        let earlier = draft.beginLoadRequest()
+        let newer = draft.beginLoadRequest()
+        let current = HistoryRetentionConfiguration(
+            maximumUnpinnedItems: 42,
+            policies: HistoryRetentionPolicies(
+                age: AgeRetention(maxAge: 90_001),
+                storage: StorageRetention(maxTotalBytes: 1_048_577), revisions: nil
+            )
+        )
+        let acceptedNewer = draft.acceptLoaded(current, requestedAt: newer)
+        #expect(acceptedNewer)
+        #expect(!draft.isCurrent(earlier))
+        let acceptedEarlier = draft.acceptLoaded(
+            HistoryRetentionConfiguration(
+                maximumUnpinnedItems: 7,
+                policies: HistoryRetentionPolicies(age: nil, storage: nil, revisions: nil)
+            ), requestedAt: earlier
+        )
+        #expect(!acceptedEarlier)
+        #expect(draft.countSubmission()?.maximumUnpinnedItems == 42)
+        #expect(try #require(draft.submission()).policies == current.policies)
+        #expect(!draft.hasCountChanges)
+        #expect(!draft.hasPolicyChanges)
+    }
+
+    @Test("disappearing settings invalidate reads without clearing user edits or their baseline")
+    func invalidatedLoadCannotEraseUserDraft() throws {
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+        load(HistoryRetentionConfiguration(
+            maximumUnpinnedItems: 37,
+            policies: HistoryRetentionPolicies(
+                age: AgeRetention(maxAge: 90_001),
+                storage: StorageRetention(maxTotalBytes: 1_048_577), revisions: nil
+            )
+        ), into: &draft)
+        let request = draft.beginLoadRequest()
+        draft.setMaximumUnpinnedText("31")
+        draft.setStorageMiBText("15")
+        draft.invalidateLoadRequest()
+        #expect(!draft.isCurrent(request))
+        let acceptedInvalidated = draft.acceptLoaded(
+            HistoryRetentionPolicies(age: nil, storage: nil, revisions: nil),
+            requestedAt: request
+        )
+        #expect(!acceptedInvalidated)
+        #expect(draft.maximumUnpinnedText == "31")
+        #expect(draft.storageMiBText == "15")
+        #expect(draft.maximumUnpinnedValueIsDirty)
+        #expect(draft.storageValueIsDirty)
+        let submission = try #require(draft.submission())
+        #expect(submission.policies.age?.maxAge == 90_001)
+        #expect(submission.policies.storage?.maxTotalBytes == 15_728_640)
+        let count = try #require(draft.countSubmission())
+        #expect(draft.maximumUnpinnedRequiresTightening(for: count))
+
+        // Reopening starts after these edits. It must preserve them just as
+        // a read that started before the edits does, while updating untouched
+        // fields and the authoritative strictness baseline.
+        let reopened = draft.beginLoadRequest()
+        let acceptedReopened = draft.acceptLoaded(HistoryRetentionConfiguration(
+            maximumUnpinnedItems: 20,
+            policies: HistoryRetentionPolicies(
+                age: AgeRetention(maxAge: 180_001),
+                storage: StorageRetention(maxTotalBytes: 2_097_153), revisions: nil
+            )
+        ), requestedAt: reopened)
+        #expect(acceptedReopened)
+        #expect(draft.maximumUnpinnedText == "31")
+        #expect(draft.storageMiBText == "15")
+        #expect(draft.maximumUnpinnedValueIsDirty)
+        #expect(draft.storageValueIsDirty)
+        #expect(draft.ageDaysText == "3")
+        #expect(try #require(draft.submission()).policies.age?.maxAge == 180_001)
+        #expect(try #require(draft.submission()).policies.storage?.maxTotalBytes == 15_728_640)
+        #expect(!draft.maximumUnpinnedRequiresTightening(for: count))
+    }
+
+    @Test("reload preserves unsaved toggles and all V2 value fields")
+    func reloadedConfigurationDoesNotDiscardExistingPolicyEdits() throws {
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+        draft.setAgeEnabled(true)
+        draft.setAgeDaysText("4")
+        draft.setStorageEnabled(true)
+        draft.setStorageMiBText("2")
+        draft.setRevisionCountEnabled(true)
+        draft.setRevisionCountText("3")
+        draft.setRevisionBytesEnabled(true)
+        draft.setRevisionMiBText("5")
+        let request = draft.beginLoadRequest()
+        let accepted = draft.acceptLoaded(
+            HistoryRetentionPolicies(age: nil, storage: nil, revisions: nil),
+            requestedAt: request
+        )
+        #expect(accepted)
+        let policies = try #require(draft.submission()).policies
+        #expect(policies.age?.maxAge == 345_600)
+        #expect(policies.storage?.maxTotalBytes == 2_097_152)
+        #expect(policies.revisions?.maxRevisionsPerItem == 3)
+        #expect(policies.revisions?.maxRevisionBytesPerItem == 5_242_880)
+        #expect(draft.hasPolicyChanges)
+    }
+
+    @Test("a fresh configuration read clears old success feedback without changing edited values")
+    func reloadingRetiresPriorSuccessFeedback() throws {
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+        draft.setMaximumUnpinnedText("37")
+        draft.setAgeEnabled(true)
+        let policies = try #require(draft.submission())
+        let acceptedPolicies = draft.acceptApplied(policies, successMessage: "policies saved")
+        #expect(acceptedPolicies)
+        let count = try #require(draft.countSubmission())
+        let acceptedCount = draft.acceptApplied(count, successMessage: "count saved")
+        #expect(acceptedCount)
+        #expect(draft.acceptedSuccessMessage == "policies saved")
+        #expect(draft.acceptedCountSuccessMessage == "count saved")
+        let before = try #require(draft.submission()).policies
+        _ = draft.beginLoadRequest()
+        #expect(draft.acceptedSuccessMessage == nil)
+        #expect(draft.acceptedCountSuccessMessage == nil)
+        #expect(draft.maximumUnpinnedText == "37")
+        #expect(try #require(draft.submission()).policies == before)
+    }
+
     private func load(
         _ policies: HistoryRetentionPolicies,
         into draft: inout RetentionSettingsDraft
@@ -28,7 +154,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("one configured snapshot preserves a newer count edit and loads untouched policies")
     func lateUnifiedReadMergesCountAndPoliciesPerField() throws {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         let request = draft.beginLoadRequest()
         draft.setMaximumUnpinnedText("31")
 
@@ -63,7 +189,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("unedited count readback submits exact configured value")
     func uneditedCountUsesTheUnifiedConfiguredSnapshot() throws {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(
             HistoryRetentionConfiguration(
                 maximumUnpinnedItems: 37,
@@ -88,7 +214,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("count Apply is enabled only when the validated value differs from configuration")
     func countChangesCompareTheCandidateToTheExactBaseline() {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(
             HistoryRetentionConfiguration(
                 maximumUnpinnedItems: 37,
@@ -114,7 +240,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("policy Apply is enabled only when the exact candidate differs from configuration")
     func policyChangesCompareTheCandidateToTheExactBaseline() {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(
             HistoryRetentionPolicies(
                 age: AgeRetention(maxAge: 90_001),
@@ -156,7 +282,7 @@ struct RetentionSettingsDraftTests {
 
         // Isolate the exact whole-number revision-count round trip from the
         // deliberately changed, non-representable fields above.
-        var countDraft = RetentionSettingsDraft()
+        var countDraft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(
             HistoryRetentionPolicies(
                 age: nil,
@@ -176,7 +302,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("representable whole-unit fields disable Apply after edit and restore")
     func exactWholeUnitBaselinesCanBeRestoredAfterEditing() {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(
             HistoryRetentionPolicies(
                 age: AgeRetention(maxAge: 172_800),
@@ -207,7 +333,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("late configured-policy read preserves edits and advances strictness baseline")
     func lateConfigurationReadCannotOverwriteNewerDraft() throws {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         let loadRequest = draft.beginLoadRequest()
 
         // The panel is still awaiting its configured-policy read. The user
@@ -250,7 +376,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("unedited rounded fields submit the exact configured policy values")
     func uneditedRoundedFieldsPreserveExactConfiguredValues() throws {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(HistoryRetentionPolicies(
             age: AgeRetention(maxAge: 90_001),
             storage: StorageRetention(maxTotalBytes: 1_048_577),
@@ -280,7 +406,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("editing one rounded field converts only that field to whole units")
     func editingOneFieldDoesNotRoundUntouchedPolicyValues() throws {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(HistoryRetentionPolicies(
             age: AgeRetention(maxAge: 90_001),
             storage: StorageRetention(maxTotalBytes: 1_048_577),
@@ -303,7 +429,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("enabling or lowering any threshold requires destructive confirmation")
     func onlyStrictTighteningRequiresConfirmation() throws {
-        var disabled = RetentionSettingsDraft()
+        var disabled = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(
             HistoryRetentionPolicies(age: nil, storage: nil, revisions: nil),
             into: &disabled
@@ -312,7 +438,7 @@ struct RetentionSettingsDraftTests {
         let enabledPolicies = try #require(disabled.submission()?.policies)
         #expect(disabled.requiresTighteningConfirmation(for: enabledPolicies))
 
-        var configured = RetentionSettingsDraft()
+        var configured = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(HistoryRetentionPolicies(
             age: AgeRetention(maxAge: 172_800),
             storage: StorageRetention(maxTotalBytes: 2_097_152),
@@ -335,7 +461,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("late apply completion cannot overwrite a newer edit")
     func lateApplyCompletionIsRejectedByEditGeneration() throws {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(HistoryRetentionPolicies(
             age: nil,
             storage: StorageRetention(maxTotalBytes: 4_194_304),
@@ -359,7 +485,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("stale success advances the strictness baseline without replacing newer text")
     func staleSuccessAdvancesOnlyTheConfiguredComparisonBaseline() throws {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(HistoryRetentionPolicies(
             age: nil,
             storage: StorageRetention(maxTotalBytes: 10_485_760),
@@ -384,7 +510,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("a new edit clears the accepted Done generation")
     func newEditClearsAcceptedApplyState() throws {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(HistoryRetentionPolicies(
             age: AgeRetention(maxAge: 172_800),
             storage: nil,
@@ -409,7 +535,7 @@ struct RetentionSettingsDraftTests {
 
     @Test("an edit in either retention tab clears count Apply success")
     func crossTabEditClearsAcceptedCountSuccess() throws {
-        var draft = RetentionSettingsDraft()
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(
             HistoryRetentionConfiguration(
                 maximumUnpinnedItems: 37,
@@ -448,5 +574,147 @@ struct RetentionSettingsDraftTests {
                 + "change or you apply retention settings. Time passing alone "
                 + "doesn't remove items."
         )
+    }
+
+    @Test("a freshly loaded draft offers no write on either Apply")
+    func uneditedConfigurationHasNoPendingWrite() {
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+        load(
+            HistoryRetentionConfiguration(
+                maximumUnpinnedItems: 37,
+                policies: HistoryRetentionPolicies(
+                    age: AgeRetention(maxAge: 90_001),
+                    storage: StorageRetention(maxTotalBytes: 1_048_577),
+                    revisions: RevisionRetention(
+                        maxRevisionsPerItem: 19,
+                        maxRevisionBytesPerItem: 1_048_577
+                    )
+                )
+            ),
+            into: &draft
+        )
+
+        // Equal to the persisted configuration: no field is dirty, neither
+        // Apply enables, and nothing would be written (Card 10D/10E).
+        #expect(!draft.maximumUnpinnedValueIsDirty)
+        #expect(!draft.ageValueIsDirty)
+        #expect(!draft.storageValueIsDirty)
+        #expect(!draft.revisionCountValueIsDirty)
+        #expect(!draft.revisionBytesValueIsDirty)
+        #expect(!draft.ageToggleIsDirty)
+        #expect(!draft.storageToggleIsDirty)
+        #expect(!draft.revisionCountToggleIsDirty)
+        #expect(!draft.revisionBytesToggleIsDirty)
+        #expect(!draft.hasCountChanges)
+        #expect(!draft.hasPolicyChanges)
+    }
+
+    @Test("each control dirties only its own edit state")
+    func fieldEditsAreIndependentlyDirty() {
+        // A count edit never dirties the policy dimensions (Card 10A).
+        var countDraft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+        countDraft.setMaximumUnpinnedText("31")
+        #expect(countDraft.maximumUnpinnedValueIsDirty)
+        #expect(countDraft.hasCountChanges)
+        #expect(!countDraft.ageValueIsDirty)
+        #expect(!countDraft.storageValueIsDirty)
+        #expect(!countDraft.revisionCountValueIsDirty)
+        #expect(!countDraft.revisionBytesValueIsDirty)
+        #expect(!countDraft.ageToggleIsDirty)
+        #expect(!countDraft.storageToggleIsDirty)
+        #expect(!countDraft.revisionCountToggleIsDirty)
+        #expect(!countDraft.revisionBytesToggleIsDirty)
+        #expect(!countDraft.hasPolicyChanges)
+
+        // A toggle dirties its own toggle state only, never its value.
+        var toggleDraft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+        toggleDraft.setStorageEnabled(true)
+        #expect(toggleDraft.storageToggleIsDirty)
+        #expect(!toggleDraft.storageValueIsDirty)
+        #expect(!toggleDraft.ageToggleIsDirty)
+        #expect(!toggleDraft.revisionCountToggleIsDirty)
+        #expect(!toggleDraft.revisionBytesToggleIsDirty)
+        #expect(toggleDraft.hasPolicyChanges)
+
+        // Text in a disabled dimension dirties its value only; with the
+        // toggle off, the proposed bundle still matches the all-disabled
+        // baseline, so there is nothing to write.
+        var valueDraft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+        valueDraft.setRevisionCountText("7")
+        #expect(valueDraft.revisionCountValueIsDirty)
+        #expect(!valueDraft.revisionCountToggleIsDirty)
+        #expect(!valueDraft.revisionBytesValueIsDirty)
+        #expect(!valueDraft.ageValueIsDirty)
+        #expect(!valueDraft.storageValueIsDirty)
+        #expect(!valueDraft.hasPolicyChanges)
+        #expect(!valueDraft.hasCountChanges)
+    }
+
+    @Test("loosening the count applies without destructive confirmation")
+    func loosenedCountDoesNotRequireTighteningConfirmation() throws {
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+        load(
+            HistoryRetentionConfiguration(
+                maximumUnpinnedItems: 37,
+                policies: HistoryRetentionPolicies(
+                    age: nil,
+                    storage: nil,
+                    revisions: nil
+                )
+            ),
+            into: &draft
+        )
+
+        // Raising the configured count can retire nothing, so the direct
+        // Apply path is taken without the strict confirmation (Card 10D).
+        draft.setMaximumUnpinnedText("38")
+        let submission = try #require(draft.countSubmission())
+        #expect(draft.hasCountChanges)
+        #expect(!draft.maximumUnpinnedRequiresTightening(for: submission))
+    }
+
+    @Test("loosening any single dimension applies without confirmation")
+    func perDimensionLooseningDoesNotRequireConfirmation() throws {
+        // Card 10D's one-dimension-at-a-time table: loosening or disabling
+        // any configured dimension can retire nothing new, so every one
+        // takes the direct Apply path.
+        func draftWithOneEdit(
+            _ edit: (inout RetentionSettingsDraft) -> Void
+        ) -> RetentionSettingsDraft {
+            var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+            load(
+                HistoryRetentionPolicies(
+                    age: AgeRetention(maxAge: 172_800),
+                    storage: StorageRetention(maxTotalBytes: 2_097_152),
+                    revisions: RevisionRetention(
+                        maxRevisionsPerItem: 20,
+                        maxRevisionBytesPerItem: 2_097_152
+                    )
+                ),
+                into: &draft
+            )
+            edit(&draft)
+            return draft
+        }
+
+        let edits: [(String, (inout RetentionSettingsDraft) -> Void)] = [
+            ("age", { $0.setAgeDaysText("3") }),
+            ("storage", { $0.setStorageMiBText("3") }),
+            ("revision count", { $0.setRevisionCountText("21") }),
+            ("revision bytes", { $0.setRevisionMiBText("3") }),
+            ("age disable", { $0.setAgeEnabled(false) }),
+        ]
+        for (dimension, edit) in edits {
+            let draft = draftWithOneEdit(edit)
+            #expect(
+                draft.hasPolicyChanges,
+                "\(dimension): the edit is a pending change"
+            )
+            let submission = try #require(draft.submission())
+            #expect(
+                !draft.requiresTighteningConfirmation(for: submission.policies),
+                "\(dimension): loosening applies without the strict confirmation"
+            )
+        }
     }
 }

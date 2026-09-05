@@ -202,9 +202,13 @@ struct WS17ComposedSearchModesTests {
             },
             "WS17 regexp: the invalid pattern surfaces the typed failure"
         )
+        let bannerFailure = try #require(viewState.failure)
+        let bannerMessage = FailurePresentation.message(for: bannerFailure)
         #expect(
-            FailurePresentation.message(for: .invalidInput(.invalidRegularExpression))
-                == "Invalid regular expression"
+            bannerMessage == FailurePresentation.message(
+                for: .invalidInput(.invalidRegularExpression)
+            )
         )
+        #expect(!bannerMessage.contains(viewState.searchText))
     }
 }

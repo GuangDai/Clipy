@@ -146,13 +146,6 @@ extension HistoryAuthority {
         // appended ID, so the planner can never return the appended or any
         // revision it saw as the active.)
         var pruneSet: [RevisionID] = []
-        // The revised item's post-prune post-append revision summary — the
-        // §3.2 projection the R2 inventory credits it (and the same value
-        // the §6.3 folded `.appendRevision` stamp persists, computed through
-        // the ONE representation-byte measure `RET-PLATFORM-4` fences).
-        var projectedRevisionScalars = RetainedBytesStamping.revisionScalars(
-            of: facts.item.revisions + [appendedRevision]
-        )
         if let revisionPolicy = policies.revisions {
             pruneSet = planRevisionRetentionExpansion(
                 revisions: facts.item.revisions,
@@ -163,17 +156,22 @@ extension HistoryAuthority {
                     revisions: revisionPolicy
                 )
             )
-            let prunedIDs = Set(pruneSet)
-            var postPruneRevisions: [ContentRevision] = []
-            postPruneRevisions.reserveCapacity(facts.item.revisions.count + 1)
-            for revision in facts.item.revisions
-            where !prunedIDs.contains(revision.id) {
-                postPruneRevisions.append(revision)
-            }
-            postPruneRevisions.append(appendedRevision)
-            projectedRevisionScalars = RetainedBytesStamping.revisionScalars(
-                of: postPruneRevisions
-            )
+        }
+        // §3.2: measure only the retained lineage plus the appended active
+        // revision. A lazy filter avoids copying a survivor array, and R3
+        // no longer measures the full unpruned list before measuring it again.
+        let prunedIDs = Set(pruneSet)
+        let retained = RetainedBytesStamping.revisionScalars(
+            of: facts.item.revisions.lazy.filter { !prunedIDs.contains($0.id) }
+        )
+        let appended = RetainedBytesStamping.revisionScalars(
+            of: CollectionOfOne(appendedRevision)
+        )
+        let projectedRevisionScalars = RetainedRevisionScalars(
+            count: retained.count + appended.count,
+            bytes: retained.bytes + appended.bytes
+        )
+        if let revisionPolicy = policies.revisions {
             // §8.3 revise-time unsatisfiable, re-checked at commit: a
             // post-prune byte total still over `maxRevisionBytesPerItem`
             // means the appended (now-active) revision alone exceeds the
@@ -244,10 +242,8 @@ extension HistoryAuthority {
                     revisionBytes: revisionBytes
                 ))
             }
-            // Deterministic fact values regardless of fetch order (the v1
-            // loader's discipline; the planner is order-independent anyway,
-            // D16).
-            items.sort { $0.id < $1.id }
+            // The inventory loader already orders by ID; mapping its rows
+            // preserves that order without another sort (D16).
 
             // `protected` = pinned ∪ {revised item} (§4.3; D13/D14/plan
             // invariant 7). No count victims exist on this lane — the v1

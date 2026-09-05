@@ -7,7 +7,7 @@
 /// is not provable here; these tests pin the decision math the gestures
 /// delegate to.
 import Foundation
-import PresentationUI
+@testable import PresentationUI
 import Testing
 
 struct PreviewDividerGeometryTests {
@@ -184,13 +184,17 @@ struct PreviewDividerGeometryTests {
         ))
     }
 
-    @Test func footerHintsFollowTheSearchContext() {
+    @Test func footerHintsFollowTheSearchContext() throws {
+        let url = try #require(PanelFooterCopy.bundle.url(
+            forResource: "en", withExtension: "lproj"
+        ))
+        let english = try #require(Bundle(url: url))
         #expect(
-            PanelFooterShortcutHints.text(isSearchActive: true)
+            PanelFooterShortcutHints.text(isSearchActive: true, bundle: english)
                 == "↑↓ Select · Esc Clear"
         )
         #expect(
-            PanelFooterShortcutHints.text(isSearchActive: false)
+            PanelFooterShortcutHints.text(isSearchActive: false, bundle: english)
                 == "⏎ Paste · Space Quick Look · ⌘I Details"
         )
     }

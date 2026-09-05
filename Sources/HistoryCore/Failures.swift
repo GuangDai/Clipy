@@ -25,6 +25,10 @@ public enum HistoryFailure: Error, Sendable, Equatable {
     case snapshotExpired(current: ChangePosition)
     /// A configured capacity limit rejected the action.
     case capacityExceeded(CapacityKind)
+    /// The selected image representation cannot be decoded for a thumbnail.
+    /// Its raw clipboard bytes remain readable and pasteable; this does not
+    /// imply that the persisted History value is corrupt.
+    case thumbnailUnavailable
     /// The action cannot complete right now; the caller may retry later.
     case temporarilyUnavailable(UnavailableReason)
     /// The persistence layer failed to complete the durable transaction.
@@ -126,6 +130,15 @@ public enum UnavailableReason: Sendable, Equatable {
 public enum PersistenceFailure: Sendable, Equatable {
     /// The store could not be opened.
     case openStore
+    /// The StoreRoot is already leased by another live owner process
+    /// (REVIEW 01-findings.md DATA-7; 04-tdd-remediation-playbook.md
+    /// PLAY-DISK-0B): `SwiftDataHistory.open` could not acquire the
+    /// cross-process single-writer lease, so no `ModelContainer` was
+    /// created. This is Clipy's own deterministic refusal, distinct from
+    /// the flattened platform-cause `.openStore` (DATA-14); the
+    /// same-process half of the rule stays at the app composition root
+    /// (`ClipyCompositionError.storeAlreadyOpen`).
+    case storeAlreadyOpen
     /// A stored value failed decoding or integrity checks.
     case corruptStoredValue
     /// A storage invariant was violated.

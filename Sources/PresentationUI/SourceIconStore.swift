@@ -11,8 +11,9 @@ import SwiftUI
 
 /// One browsing surface's source-icon retention. The injected
 /// `SourceIconProvider` (the composition root's AppKit loader) is consulted
-/// at most once per bundle ID; the result — including a negative `nil` — is
-/// retained so rows never re-ask. Retention is bounded with FIFO eviction:
+/// at most once per retained bundle ID; the result — including a negative
+/// `nil` — is retained so rows do not re-ask until eviction. Retention is
+/// bounded with FIFO eviction:
 /// distinct source apps are few in practice, and the bound keeps a
 /// long-lived panel from accumulating an unbounded set of decoded
 /// application icons behind an adversarial bundle-ID stream.
@@ -26,9 +27,18 @@ package final class SourceIconStore {
 
     private let provider: SourceIconProvider
 
-    /// Retained icons keyed by bundle ID; a `nil` value is a recorded
-    /// negative result (resolved; this source has no usable icon).
-    private var entries: [String: CGImage?] = [:]
+    /// One resolution's identity and optional icon. A nil icon both stops
+    /// synchronous same-bundle reentry and retains a completed negative.
+    /// Replacing the dictionary value publishes through Observation.
+    private final class Entry {
+        let icon: CGImage?
+
+        init(icon: CGImage?) {
+            self.icon = icon
+        }
+    }
+
+    private var entries: [String: Entry] = [:]
 
     /// Insertion order for FIFO eviction (`entries` alone is unordered).
     private var insertionOrder: [String] = []
@@ -42,8 +52,7 @@ package final class SourceIconStore {
     /// must not mutate observable state, so provider resolution happens in
     /// the row's `.task` via `icon(forBundleID:)`.
     package func cachedIcon(forBundleID bundleID: String) -> CGImage? {
-        guard let entry = entries[bundleID] else { return nil }
-        return entry
+        entries[bundleID]?.icon
     }
 
     /// Resolves and retains the icon for one bundle ID, consulting the
@@ -52,12 +61,21 @@ package final class SourceIconStore {
     /// evicted simply re-resolves the next time its `.task` runs.
     @discardableResult
     package func icon(forBundleID bundleID: String) -> CGImage? {
-        if let entry = entries[bundleID] { return entry }
-        let resolved = provider.loadIcon(bundleID)
-        entries[bundleID] = resolved
+        if let entry = entries[bundleID] { return entry.icon }
+        // The provider may reenter this synchronous MainActor call. Record
+        // the existing nil entry before invoking it so another row asking
+        // for this bundle does not recursively load it a second time.
+        let entry = Entry(icon: nil)
+        entries[bundleID] = entry
         insertionOrder.append(bundleID)
         while entries.count > Self.maximumEntries {
             entries.removeValue(forKey: insertionOrder.removeFirst())
+        }
+        let resolved = provider.loadIcon(bundleID)
+        // Nested loads may evict this entry and then resolve the same bundle
+        // again. Only this resolution's own entry may accept its result.
+        if entries[bundleID] === entry {
+            entries[bundleID] = Entry(icon: resolved)
         }
         return resolved
     }

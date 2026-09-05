@@ -79,6 +79,94 @@ struct PreviewContentLoaderTests {
 
     // MARK: - Reference fence (PREVIEW-FENCE-1)
 
+    /// The pane already holds rendered A while a different selection B is
+    /// dwelling. B's revision changes dwell ownership but not the exact
+    /// `.task` target. This proves the stable target and retained loader
+    /// result; SwiftUI instance identity itself is a source-wiring obligation.
+    @Test func pendingRevisionKeepsTheAppliedPreviewAndItsLoadTarget() async throws {
+        let a = reference("00000000-0000-0000-0000-0000000001A8", version: 1)
+        let b = reference("00000000-0000-0000-0000-0000000001B8", version: 1)
+        let revisedB = HistoryItemReference(id: b.id, contentVersion: ContentVersion(rawValue: 2))
+        let history = PausableDetailsHistory()
+        await history.scriptDetails(details(for: a, text: "already visible A"))
+        let loader = PreviewContentLoader(history: history)
+        let pane = PreviewPaneState(autoOpenDelay: .seconds(3_600))
+        defer { pane.panelClosed() }
+        pane.togglePreview(for: a)
+        let load = Task { await loader.load(item: a) }
+        try #require(await pollUntil { await history.detailRequests.count == 1 })
+        await history.resumeDetails(for: a.id)
+        await load.value
+
+        pane.handleSelectionChange(b)
+        let selection = PreviewSelectionResolution.resolve(
+            selectedID: b.id,
+            rows: [
+                fixtureRow(id: a.id.rawValue.uuidString, title: "A"),
+                fixtureRow(id: b.id.rawValue.uuidString, title: "B"),
+            ]
+        )
+        #expect(selection.previewTarget(previewedItem: pane.previewedItem) == a)
+        pane.purge(.revision(old: b, new: revisedB))
+
+        #expect(pane.purgeGeneration == 1)
+        #expect(selection.previewTarget(previewedItem: pane.previewedItem) == a)
+        #expect(loader.requestedItem == a)
+        #expect(loader.phase == .content(.text("already visible A")))
+        #expect(await history.detailRequests == [a.id])
+    }
+
+    @Test func independentlyPreviewedItemAdvancesWhileAnotherRowIsSelected() async throws {
+        let a1 = reference("00000000-0000-0000-0000-0000000001A9", version: 1)
+        let a2 = HistoryItemReference(id: a1.id, contentVersion: ContentVersion(rawValue: 2))
+        let b = reference("00000000-0000-0000-0000-0000000001B9", version: 1)
+        let oldRows = [
+            fixtureRow(id: a1.id.rawValue.uuidString, title: "A", contentVersion: 1),
+            fixtureRow(id: b.id.rawValue.uuidString, title: "B"),
+        ]
+        let latestRows = [
+            fixtureRow(id: a1.id.rawValue.uuidString, title: "A revised", contentVersion: 2),
+            oldRows[1],
+        ]
+        let pane = PreviewPaneState(autoOpenDelay: .zero)
+        defer { pane.panelClosed() }
+        pane.isAutoOpenPreferenceEnabled = false
+        pane.togglePreview(for: a1)
+        pane.handleSelectionChange(b)
+        let initialSelection = PreviewSelectionResolution.resolve(selectedID: b.id, rows: oldRows)
+        let history = OverlappingDetailsHistory()
+        let loader = PreviewContentLoader(history: history)
+        let olderLoad = Task {
+            await loader.load(item: initialSelection.previewTarget(previewedItem: pane.previewedItem))
+        }
+        try #require(await pollUntil { await history.requestCount == 1 })
+
+        let latestSelection = PreviewSelectionResolution.resolve(selectedID: b.id, rows: latestRows)
+        let target = try #require(latestSelection.previewTarget(previewedItem: pane.previewedItem))
+        #expect(latestSelection != initialSelection)
+        #expect(latestSelection.reference == b)
+        #expect(target == a2)
+        // HistoryPanelView's resolved-target callback records the new visible
+        // version even though the list's selected B reference did not change.
+        pane.refreshOpenPreview(target)
+        let newerLoad = Task { await loader.load(item: target) }
+        try #require(await pollUntil { await history.requestCount == 2 })
+        await history.resumeRequest(1, with: details(for: a2, text: "current A"))
+        await newerLoad.value
+        await history.resumeRequest(0, with: details(for: a1, text: "obsolete A"))
+        await olderLoad.value
+
+        #expect(loader.requestedItem == a2)
+        #expect(loader.phase == .content(.text("current A")))
+        #expect(pane.previewedItem == a2)
+        #expect(initialSelection.previewTarget(previewedItem: pane.previewedItem) == a2)
+        let removedA = PreviewSelectionResolution.resolve(selectedID: b.id, rows: [oldRows[1]])
+        await loader.load(item: removedA.previewTarget(previewedItem: pane.previewedItem))
+        #expect(removedA.reference == b)
+        #expect(loader.requestedItem == nil)
+        #expect(loader.phase == .unsupported)
+    }
+
     /// A→B selection with A completing LATE: B publishes; A's late result is
     /// discarded by the exact-reference fence and never reaches the
     /// published state (SPEC-IMPL-007's cross-item leak).
@@ -90,23 +178,24 @@ struct PreviewContentLoaderTests {
         await history.scriptDetails(details(for: refB, text: "bravo"))
         let loader = PreviewContentLoader(history: history)
 
-        Task { await loader.load(item: refA) }
+        let loadA = Task { await loader.load(item: refA) }
         #expect(await pollUntil { await history.detailRequests.count == 1 })
         #expect(loader.phase == .loading)
 
-        Task { await loader.load(item: refB) }
+        let loadB = Task { await loader.load(item: refB) }
         #expect(await pollUntil { await history.detailRequests.count == 2 })
         #expect(loader.requestedItem == refB)
 
         // B completes FIRST and publishes.
         await history.resumeDetails(for: refB.id)
-        #expect(await pollUntil { loader.phase == .content(.text("bravo")) })
+        await loadB.value
+        #expect(loader.phase == .content(.text("bravo")))
         #expect(loader.occurrence?.lastSource == "com.example.preview")
 
-        // A completes LATE: superseded, so the fence discards it — the
-        // settle window lets A's completion run in full before asserting.
+        // Join the older task itself, so the assertion follows its actual
+        // completion even on a busy runner.
         await history.resumeDetails(for: refA.id)
-        try? await Task.sleep(for: .milliseconds(150))
+        await loadA.value
         #expect(loader.phase == .content(.text("bravo")))
         #expect(loader.requestedItem == refB)
     }
@@ -189,7 +278,7 @@ struct PreviewContentLoaderTests {
             await history.resumeDetails(for: ref.id)
             await gate.waitUntilParked()
 
-            await loader.load(item: nil)
+            loader.clear()
             #expect(loader.requestedItem == nil)
             #expect(loader.phase == .unsupported)
             #expect(loader.raster == nil)
@@ -251,6 +340,18 @@ struct PreviewContentLoaderTests {
         _ = await task.value  // deterministic: the discarded load ran to its end
         #expect(loader.phase == .loading)
         #expect(loader.occurrence == nil)
+    }
+
+    @Test func cancelledBeforeStartingDoesNotRestoreClearedState() async {
+        let ref = reference("00000000-0000-0000-0000-0000000001C2", version: 1)
+        let loader = PreviewContentLoader(history: PreviewClipboardHistory.empty)
+        let task = Task { await loader.load(item: ref) }
+        task.cancel()
+        loader.clear()
+        await task.value
+
+        #expect(loader.requestedItem == nil)
+        #expect(loader.phase == .unsupported)
     }
 
     /// The version half of the fence: `details(for:)` reads by ID, so a
@@ -336,6 +437,34 @@ struct PreviewContentLoaderTests {
 
         #expect(loader.requestedItem == refA)
         #expect(loader.phase == .content(.text("recovered")))
+        #expect(!loader.canRetryFailure)
+    }
+
+    @Test func closingDuringRetryDiscardsItsLateDetails() async throws {
+        let ref = reference("00000000-0000-0000-0000-0000000001E8", version: 1)
+        let history = PausableDetailsHistory()
+        let loader = PreviewContentLoader(history: history)
+        let firstLoad = Task { await loader.load(item: ref) }
+        try #require(await pollUntil { await history.detailRequests.count == 1 })
+        await history.resumeDetails(
+            for: ref.id,
+            throwing: .temporarilyUnavailable(.dedupIndexRebuild)
+        )
+        await firstLoad.value
+        try #require(loader.canRetryFailure)
+
+        await history.scriptDetails(details(for: ref, text: "retired retry"))
+        let retry = Task { await loader.retry() }
+        try #require(await pollUntil { await history.detailRequests.count == 2 })
+        retry.cancel()
+        loader.clear()
+        await history.resumeDetails(for: ref.id)
+        await retry.value
+
+        #expect(loader.requestedItem == nil)
+        #expect(loader.phase == .unsupported)
+        #expect(loader.occurrence == nil)
+        #expect(loader.raster == nil)
         #expect(!loader.canRetryFailure)
     }
 
@@ -557,6 +686,11 @@ private actor PreviewRenderGate {
 /// resumed explicitly by request order, making generation ordering observable
 /// without sleeps or a second storage implementation.
 private actor OverlappingDetailsHistory: ClipboardHistory {
+    func usage() async throws -> HistoryUsage {
+        // Overlapping detail completions do not establish a store total.
+        throw HistoryFailure.temporarilyUnavailable(.factProof)
+    }
+
     private var continuations: [CheckedContinuation<HistoryDetails, Error>?] = []
 
     var requestCount: Int { continuations.count }

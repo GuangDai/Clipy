@@ -50,7 +50,10 @@ internal func mapExternalHistoryFailure(
 
     case .persistence(let reason):
         switch reason {
-        case .openStore:
+        case .openStore, .storeAlreadyOpen:
+            // Neither open-stage failure can arise from an admitted external
+            // operation: the Gateway serves only through the
+            // already-published, already-leased facade (DATA-7).
             return invariantMapping()
         case .corruptStoredValue, .invariantViolation, .transaction:
             return ExternalHistoryFailureMapping(
@@ -171,7 +174,8 @@ internal func mapExternalHistoryFailure(
             return invariantMapping()
         }
 
-    case .staleContent, .revisionNotFound, .snapshotExpired:
+    case .staleContent, .revisionNotFound, .snapshotExpired, .thumbnailUnavailable:
+        // None of the seven external operations generates a thumbnail.
         return invariantMapping()
     }
 }

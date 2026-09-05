@@ -78,25 +78,29 @@ package enum PanelSessionSelection {
 package struct PreviewSelectionResolution: Equatable {
     package let selectedID: HistoryItemID?
     package let reference: HistoryItemReference?
-    private let availableItemIDs: Set<HistoryItemID>
+    private let availableReferences: [HistoryItemID: HistoryItemReference]
 
     package static func resolve(
         selectedID: HistoryItemID?,
         rows: [HistoryRow]
     ) -> PreviewSelectionResolution {
+        let availableReferences = Dictionary(
+            rows.map { ($0.item.id, $0.item) },
+            uniquingKeysWith: { first, _ in first }
+        )
         guard let selectedID,
-              let reference = rows.first(where: { $0.item.id == selectedID })?.item
+              let reference = availableReferences[selectedID]
         else {
             return PreviewSelectionResolution(
                 selectedID: nil,
                 reference: nil,
-                availableItemIDs: Set(rows.map(\.item.id))
+                availableReferences: availableReferences
             )
         }
         return PreviewSelectionResolution(
             selectedID: selectedID,
             reference: reference,
-            availableItemIDs: Set(rows.map(\.item.id))
+            availableReferences: availableReferences
         )
     }
 
@@ -106,11 +110,17 @@ package struct PreviewSelectionResolution: Equatable {
     package func previewTarget(
         previewedItem: HistoryItemReference?
     ) -> HistoryItemReference? {
-        guard let reference,
+        guard reference != nil,
               let previewedItem,
-              availableItemIDs.contains(previewedItem.id)
+              let observed = availableReferences[previewedItem.id]
         else { return nil }
-        return reference.id == previewedItem.id ? reference : previewedItem
+        // A revision receipt can advance the pane before observation catches
+        // up. Both are authoritative references; use the newer ContentVersion
+        // (including revert's new version, 02 §11), never the stale page. This
+        // lookup follows the displayed item's ID even while another selection
+        // is dwelling or auto-open is disabled.
+        return observed.contentVersion.rawValue >= previewedItem.contentVersion.rawValue
+            ? observed : previewedItem
     }
 }
 
@@ -122,10 +132,16 @@ package struct PreviewSelectionResolution: Equatable {
 /// arrows move the selection through SearchHeaderView's arrow-key seam and
 /// bare Space is the quick-look toggle.
 package enum PanelFooterShortcutHints {
-    package static func text(isSearchActive: Bool) -> String {
-        isSearchActive
-            ? "↑↓ Select · Esc Clear"
-            : "⏎ Paste · Space Quick Look · ⌘I Details"
+    package static func text(
+        isSearchActive: Bool,
+        bundle: Bundle? = nil
+    ) -> String {
+        PanelFooterCopy.text(
+            isSearchActive
+                ? "↑↓ Select · Esc Clear"
+                : "⏎ Paste · Space Quick Look · ⌘I Details",
+            bundle: bundle ?? .module
+        )
     }
 }
 
@@ -295,6 +311,7 @@ public final class HistoryPanelSurfaceState {
         // page) actually arrives. Merely ending loading with a failure is not
         // authoritative removal evidence (review Card 8A/8C).
         guard hasAuthoritativeFirstPage else { return }
+        quickLookReference = resolvedQuickLookReference(in: rows)
         guard let selection else {
             guard isAwaitingInitialSelection else { return }
             self.selection = PanelSessionSelection.preparedSelection(in: rows)
@@ -341,12 +358,31 @@ public final class HistoryPanelSurfaceState {
     package func retargetHiddenSelectionToDisplayedDefault(
         displayedRows: [HistoryRow]
     ) {
-        guard isSessionActive, let selection else { return }
+        guard isSessionActive else { return }
+        quickLookReference = resolvedQuickLookReference(in: displayedRows)
+        guard let selection else { return }
         guard !displayedRows.contains(where: { $0.item.id == selection })
         else { return }
         self.selection = PanelSessionSelection.preparedSelection(
             in: displayedRows
         )
+    }
+
+    /// Quick Look keeps its trigger-time target until that item is hidden,
+    /// removed, or revised. Resolve directly for rendering as well as state
+    /// reconciliation, so invalid content does not wait for an onChange
+    /// callback to disappear. Older rows cannot retire a newer known target,
+    /// and a query-loading gap is not authoritative absence.
+    package func resolvedQuickLookReference(
+        in rows: [HistoryRow],
+        hasAuthoritativeFirstPage: Bool = true
+    ) -> HistoryItemReference? {
+        guard let quickLookReference else { return nil }
+        guard hasAuthoritativeFirstPage else { return quickLookReference }
+        guard let row = rows.first(where: { $0.item.id == quickLookReference.id }),
+              row.item.contentVersion <= quickLookReference.contentVersion
+        else { return nil }
+        return quickLookReference
     }
 
     /// Exact executable selection for the AppKit window's IME-aware Return
@@ -591,7 +627,10 @@ public struct HistoryPanelView: View {
                     previewState.refreshOpenPreview(reference)
                 }
             }
-            .onChange(of: viewState.rows.map(\.item)) { _, _ in
+            // Pin-only membership can change without changing any item
+            // reference or raw ordering. Reconcile the rows actually shown
+            // so an observed Unpin also retires a now-hidden selection.
+            .onChange(of: viewState.displayedRows.map(\.item)) { _, _ in
                 reconcileSelectionWithDisplayedDefault()
             }
             // An authoritative empty replacement can leave `rows == []` across
@@ -610,7 +649,14 @@ public struct HistoryPanelView: View {
                 retargetHiddenSelectionToDisplayedDefault()
             }
             .onChange(of: resolvedPreviewTarget) { _, target in
-                guard previewState.isOpen, target == nil else { return }
+                guard previewState.isOpen else { return }
+                if let target {
+                    // The visible item can change version while selection is
+                    // on another row. Retain that new exact target so a later
+                    // stale page cannot make the loader go backwards.
+                    previewState.refreshOpenPreview(target)
+                    return
+                }
                 // The selected row may still exist while the previously displayed
                 // cross-item dwell target was removed. Close only the preview;
                 // preserve the valid list selection and restart its dwell from
@@ -638,24 +684,21 @@ public struct HistoryPanelView: View {
             // The quick-look overlay layers above the whole panel (browsing
             // and preview columns alike); it renders only while the surface
             // state holds a trigger-time exact reference.
-            if let quickLookItem = surfaceState.quickLookReference {
+            if let quickLookItem = surfaceState.resolvedQuickLookReference(
+                in: displayedSelectionRows,
+                hasAuthoritativeFirstPage: viewState.hasAuthoritativeFirstPage
+            ) {
                 HistoryQuickLookOverlay(
                     viewState: viewState,
                     previewState: previewState,
                     item: quickLookItem,
                     onDismiss: { surfaceState.quickLookReference = nil }
                 )
-                .transition(.opacity)
+                // Removed/revised content must not remain visible as a
+                // retained fading-out view after its target is invalidated.
+                .transition(.identity)
             }
         }
-        // Restrained motion, SwiftUI-local only: the overlay fades in/out.
-        // The preview column's WIDTH is never animated — FloatingPanel
-        // documents the NSHostingView re-layout storm a width animation
-        // forces per frame; compositing an opacity fade does not.
-        .animation(
-            .easeInOut(duration: 0.18),
-            value: surfaceState.quickLookReference != nil
-        )
     }
 
     // MARK: Main column
@@ -666,7 +709,6 @@ public struct HistoryPanelView: View {
             previewState: previewState,
             selection: previewSelection
         )
-        .id(previewState.purgeGeneration)
         // The divider handle's live width, full window height: the browsing
         // column alone absorbs both the drag and the user's window resize —
         // a divider drag never moves the AppKit frame.
@@ -794,7 +836,7 @@ public struct HistoryPanelView: View {
                         )
                     }
             )
-            .accessibilityLabel("Resize preview")
+            .accessibilityLabel(PanelFooterCopy.text("Resize preview"))
             .accessibilityIdentifier("clipy.panel.previewDivider")
     }
 
@@ -823,7 +865,7 @@ public struct HistoryPanelView: View {
                         )
                     }
             )
-            .accessibilityLabel("Show preview")
+            .accessibilityLabel(PanelFooterCopy.text("Show preview"))
             .accessibilityIdentifier("clipy.panel.previewEdgeOpener")
     }
 
@@ -888,7 +930,7 @@ public struct HistoryPanelView: View {
                 },
                 onSubmitSelection: {
                     guard let selectedID = surfaceState.selection,
-                          let selected = viewState.rows.first(where: {
+                          let selected = viewState.displayedRows.first(where: {
                               $0.item.id == selectedID
                           })
                     else { return }
@@ -909,6 +951,7 @@ public struct HistoryPanelView: View {
                     isSearchFieldFocused: isSearchFieldFocused,
                     selection: $surfaceState.selection,
                     sourceIcons: sourceIcons,
+                    onFocusHistory: { isSearchFieldFocused = false },
                     onShowDetails: { item in surfaceState.detailsPath.append(item) }
                 )
                 .navigationDestination(for: HistoryItemReference.self) { item in
@@ -964,7 +1007,7 @@ public struct HistoryPanelView: View {
     /// with an active filter, arrows can never land on an invisible row and
     /// Return can never paste one blindly.
     private var displayedSelectionRows: [HistoryRow] {
-        viewState.displayedPinnedRows + viewState.displayedUnpinnedRows
+        viewState.displayedRows
     }
 
     /// Authoritative reconciliation plus the wave-2 displayed-default
@@ -1019,7 +1062,7 @@ public struct HistoryPanelView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 if case .temporarilyUnavailable = failure,
                    viewState.canRetryFailureByRefreshing {
-                    Button("Retry") {
+                    Button(PanelActionsCopy.text("Retry")) {
                         viewState.refresh()
                     }
                 }
@@ -1032,7 +1075,7 @@ public struct HistoryPanelView: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Dismiss")
+                .accessibilityLabel(PanelActionsCopy.text("Dismiss"))
             }
             .padding(.horizontal, PanelTheme.bannerHorizontalPadding)
             .padding(.vertical, PanelTheme.bannerVerticalPadding)
@@ -1051,7 +1094,7 @@ public struct HistoryPanelView: View {
                 // (Card 8C); the tooltip discloses that without touching the
                 // pinned count formats.
                 .help(
-                    "Shows the loaded portion of your history. Search to narrow results."
+                    PanelFooterCopy.text("Shows the loaded portion of your history. Search to narrow results.")
                 )
             Spacer()
             // The context-keyed shortcut cheat-sheet (V2-07 §9): tertiary
@@ -1078,8 +1121,8 @@ public struct HistoryPanelView: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
-            .help("Toggle Preview (⌃Space)")
-            .accessibilityLabel("Toggle Preview")
+            .help(PanelFooterCopy.text("Toggle Preview (⌃Space)"))
+            .accessibilityLabel(PanelFooterCopy.text("Toggle Preview"))
             .accessibilityIdentifier("clipy.panel.preview-toggle")
             Menu {
                 // Opt-in keep-open affordance: the composition root admits it
@@ -1087,7 +1130,7 @@ public struct HistoryPanelView: View {
                 // shipped item set below byte-identical.
                 if let onToggleKeepPanelOpen {
                     Toggle(
-                        "Keep Panel Open",
+                        PanelFooterCopy.text("Keep Panel Open"),
                         isOn: Binding(
                             get: { keepPanelOpenIsActive },
                             set: { _ in onToggleKeepPanelOpen() }
@@ -1101,7 +1144,7 @@ public struct HistoryPanelView: View {
                         onPauseCapture()
                     } label: {
                         Label(
-                            "Pause Clipboard Monitoring for 5 Minutes",
+                            PanelFooterCopy.text("Pause Clipboard Monitoring for 5 Minutes"),
                             systemImage: "pause.circle"
                         )
                     }
@@ -1111,25 +1154,25 @@ public struct HistoryPanelView: View {
                 Button {
                     pendingClear = .unpinned
                 } label: {
-                    Label("Clear Unpinned Items…", systemImage: "trash")
+                    Label(PanelFooterCopy.text("Clear Unpinned Items…"), systemImage: "trash")
                 }
                 Button {
                     pendingClear = .all
                 } label: {
-                    Label("Clear All History…", systemImage: "trash.fill")
+                    Label(PanelFooterCopy.text("Clear All History…"), systemImage: "trash.fill")
                 }
                 Divider()
                 Button {
                     onOpenSettings()
                 } label: {
-                    Label("Settings…", systemImage: "gearshape")
+                    Label(PanelFooterCopy.text("Settings…"), systemImage: "gearshape")
                 }
                 .keyboardShortcut(",", modifiers: .command)
                 Divider()
                 Button {
                     onQuit()
                 } label: {
-                    Label("Quit Clipy", systemImage: "power")
+                    Label(PanelFooterCopy.text("Quit Clipy"), systemImage: "power")
                 }
                 .keyboardShortcut("q", modifiers: .command)
             } label: {
@@ -1138,7 +1181,7 @@ public struct HistoryPanelView: View {
             }
             .menuIndicator(.hidden)
             .fixedSize()
-            .accessibilityLabel("More Actions")
+            .accessibilityLabel(PanelFooterCopy.text("More Actions"))
             .accessibilityIdentifier("clipy.panel.more-actions")
         }
         .padding(.horizontal, PanelTheme.footerHorizontalPadding)
@@ -1147,30 +1190,31 @@ public struct HistoryPanelView: View {
 
     private var itemCountText: String {
         Self.itemCountText(
-            count: viewState.rows.count,
-            hasNextPage: viewState.hasNextPage,
+            for: viewState,
             locale: locale
         )
     }
 
-    /// A page cursor makes `count` a lower bound, not a total (Card 8C).
-    package static func itemCountText(
-        count: Int,
-        hasNextPage: Bool,
-        locale: Locale = .current
+    /// Count the same filtered rows as the list and keep cursor uncertainty.
+    internal static func itemCountText(
+        for viewState: HistoryViewState,
+        locale: Locale = .current,
+        bundle: Bundle = .module
     ) -> String {
-        let number = LocalizedCountPresentation.number(count, locale: locale)
-        let displayedCount = hasNextPage ? "\(number)+" : number
-        let noun = count == 1 && !hasNextPage ? "item" : "items"
-        return "\(displayedCount) \(noun)"
+        HistoryCountCopy.items(
+            count: viewState.displayedRows.count,
+            hasNextPage: viewState.hasNextPage,
+            locale: locale,
+            bundle: bundle
+        )
     }
 
     // MARK: Clear confirmation
 
     private var clearConfirmationTitle: String {
         switch pendingClear {
-        case .all: return "Clear All History?"
-        case .unpinned: return "Clear Unpinned Items?"
+        case .all: return PanelFooterCopy.text("Clear All History?")
+        case .unpinned: return PanelFooterCopy.text("Clear Unpinned Items?")
         case nil: return ""
         }
     }
@@ -1178,9 +1222,9 @@ public struct HistoryPanelView: View {
     private var clearConfirmationMessage: String {
         switch pendingClear {
         case .all:
-            return "All clipboard history, including pinned items, will be removed."
+            return PanelFooterCopy.text("All clipboard history, including pinned items, will be removed.")
         case .unpinned:
-            return "All unpinned items will be removed. Pinned items are kept."
+            return PanelFooterCopy.text("All unpinned items will be removed. Pinned items are kept.")
         case nil:
             return ""
         }
@@ -1189,14 +1233,14 @@ public struct HistoryPanelView: View {
     @ViewBuilder
     private var clearConfirmationActions: some View {
         if let scope = pendingClear {
-            Button("Clear", role: .destructive) {
+            Button(PanelFooterCopy.text("Clear"), role: .destructive) {
                 pendingClear = nil
                 Task {
                     _ = try? await viewState.clearAwaitingReceipt(scope)
                 }
             }
         }
-        Button("Cancel", role: .cancel) {
+        Button(PanelFooterCopy.text("Cancel"), role: .cancel) {
             pendingClear = nil
         }
     }
@@ -1227,7 +1271,7 @@ public struct HistoryPanelView: View {
     private var hiddenShortcuts: some View {
         Group {
             if surfaceState.detailsPath.isEmpty {
-                Button("Clear Search or Close") {
+                Button(PanelFooterCopy.text("Clear Search or Close")) {
                     if surfaceState.quickLookReference != nil {
                         surfaceState.quickLookReference = nil
                     } else if viewState.isSearchActive {
@@ -1239,12 +1283,12 @@ public struct HistoryPanelView: View {
                 .keyboardShortcut(.cancelAction)
             }
 
-            Button("Toggle Preview") {
+            Button(PanelFooterCopy.text("Toggle Preview")) {
                 previewState.togglePreview(for: previewSelection.reference)
             }
             .keyboardShortcut(.space, modifiers: .control)
 
-            Button("Quick Look") {
+            Button(PanelFooterCopy.text("Quick Look")) {
                 if surfaceState.quickLookReference != nil {
                     surfaceState.quickLookReference = nil
                 } else {

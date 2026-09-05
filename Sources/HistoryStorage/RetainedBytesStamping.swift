@@ -71,15 +71,17 @@ internal enum RetainedBytesStamping {
     /// overflow — the same justification the M1.4 backfill's plain addition
     /// uses.
     internal static func revisionScalars(
-        of revisions: [ContentRevision]
+        of revisions: some Sequence<ContentRevision>
     ) -> RetainedRevisionScalars {
+        var count = 0
         var bytes = 0
         for revision in revisions {
+            count += 1
             for representation in revision.content.representations {
                 bytes += representation.bytes.count
             }
         }
-        return RetainedRevisionScalars(count: revisions.count, bytes: bytes)
+        return RetainedRevisionScalars(count: count, bytes: bytes)
     }
 
     // MARK: Insert (V2-02 §3.3b capture-insert stamp)

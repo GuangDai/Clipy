@@ -252,11 +252,19 @@ struct ThumbnailMeasurementTests {
         let records = try readRecords(at: fileURL)
         #expect(records.map(\.event) == [.started, .completed])
         #expect(records[1].outcome == .discarded)
-        // The late raster was still produced and sampled; only publication
-        // was fenced.
-        #expect(records[1].rasterWidth == 1)
+        // History completed, but reset retired the request before display
+        // decoding. Record the fetch without inventing a raster sample.
+        let fetchMs = try #require(records[1].fetchMs)
+        #expect(fetchMs >= 0)
+        #expect(records[1].rasterMs == nil)
+        #expect(records[1].rasterWidth == nil)
+        #expect(records[1].rasterHeight == nil)
+        #expect(store.debugFetchCompletionCount == 1)
+        #expect(store.debugDiscardedFetchCompletionCount == 1)
+        #expect(store.inFlightCount == 0)
         #expect(store.imagePixelSize(for: item) == nil)
         #expect(store.cachedEntryCount == 0)
+        #expect(store.cachedDecodedBytes == 0)
     }
 
     /// The double-bound whole-store reset (ThumbnailStore's insert-then-evict

@@ -17,22 +17,6 @@ import Foundation
 import HistoryCore
 import SwiftUI
 
-/// Pure Card 8B decision seam: pagination belongs to the complete displayed
-/// ordering, not specifically to the Recent section that happens to own most
-/// continuation rows.
-package enum HistoryListPaginationTrigger {
-    package static func shouldLoadNextPage(
-        appearingRowID: HistoryItemID,
-        lastDisplayedRowID: HistoryItemID?,
-        hasNextPage: Bool,
-        isLoadingPage: Bool
-    ) -> Bool {
-        hasNextPage
-            && !isLoadingPage
-            && lastDisplayedRowID == appearingRowID
-    }
-}
-
 /// Module-internal browsing list behind the caller-visible `HistoryPanelView`.
 /// Rows are keyed by `HistoryItemID`; the selection
 /// (hoisted to the panel so the preview pane can dwell on it) drives the
@@ -56,6 +40,7 @@ struct HistoryListView: View {
     private let isSearchFieldFocused: Bool
     private let selection: Binding<HistoryItemID?>
     private let sourceIcons: SourceIconStore?
+    private let onFocusHistory: () -> Void
     private let onShowDetails: (HistoryItemReference) -> Void
 
     /// The browsing column's live width — the single wide/narrow signal
@@ -72,6 +57,7 @@ struct HistoryListView: View {
         isSearchFieldFocused: Bool,
         selection: Binding<HistoryItemID?>,
         sourceIcons: SourceIconStore? = nil,
+        onFocusHistory: @escaping () -> Void = {},
         onShowDetails: @escaping (HistoryItemReference) -> Void
     ) {
         self.viewState = viewState
@@ -82,17 +68,18 @@ struct HistoryListView: View {
         self.isSearchFieldFocused = isSearchFieldFocused
         self.selection = selection
         self.sourceIcons = sourceIcons
+        self.onFocusHistory = onFocusHistory
         self.onShowDetails = onShowDetails
     }
 
     var body: some View {
-        // Minute precision is the owning UX decision for relative metadata.
-        // One list-owned timeline supplies the same minute-boundary instant
-        // to every visible row. `.everyMinute` performs an immediate render
-        // and then advances at wall-clock minute boundaries; rows do not own
-        // timers, and no process-global clock service is introduced.
-        TimelineView(.everyMinute) { timeline in
-            content(now: timeline.date)
+        // One list-owned timeline refreshes idle relative metadata each
+        // minute. Its scheduled date may predate newly captured rows, so
+        // sample the actual redraw time once for the whole list; otherwise
+        // a copy made during this minute can read "in 23s" until the next
+        // tick (01 §6). Individual rows still own no clocks or timers.
+        TimelineView(.everyMinute) { _ in
+            content(now: Date())
                 .background { selectionShortcuts }
         }
     }
@@ -117,7 +104,7 @@ struct HistoryListView: View {
     private func list(now: Date) -> some View {
         List(selection: selection) {
             if !viewState.displayedPinnedRows.isEmpty {
-                Section("Pinned") {
+                Section(HistoryListCopy.text("Pinned")) {
                     ForEach(viewState.displayedPinnedRows, id: \.item.id) { row in
                         rowContent(
                             row,
@@ -127,13 +114,11 @@ struct HistoryListView: View {
                     }
                 }
             }
-            Section("Recent") {
+            Section(HistoryListCopy.text("Recent")) {
                 ForEach(viewState.displayedUnpinnedRows, id: \.item.id) { row in
                     rowContent(row, now: now, pinnedOrdinal: nil)
                 }
-                if viewState.isLoadingPage {
-                    loadingRow
-                }
+                paginationControl
             }
         }
         .listStyle(.inset)
@@ -174,6 +159,16 @@ struct HistoryListView: View {
             onShowDetails: onShowDetails
         )
         .tag(row.item.id)
+        // Clicking even the already-selected row transfers keyboard intent
+        // out of search, so Space opens Quick Look instead of editing the
+        // query. Keep this simultaneous with the row's double-click Copy;
+        // a single click only selects and changes focus (Card 14A).
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                selection.wrappedValue = row.item.id
+                onFocusHistory()
+            }
+        )
         // Drag-out loads its bytes lazily from the History paste read
         // (`HistoryViewState.dragItemProvider`), never from row state.
         // `onDrag(_:)` is the NSItemProvider-based drag API on macOS (the
@@ -182,7 +177,7 @@ struct HistoryListView: View {
         // contract is unchanged.
         .onDrag { viewState.dragItemProvider(for: row.item) }
         .onAppear {
-            prefetchNextPageIfNeeded(appearingRowID: row.item.id)
+            viewState.prefetchNextPageIfNeeded(appearingRowID: row.item.id)
         }
     }
 
@@ -194,17 +189,23 @@ struct HistoryListView: View {
             Spacer()
         }
         .padding(.vertical, 6)
-        .accessibilityLabel("Loading more items")
+        .accessibilityLabel(HistoryListCopy.text("Loading more items"))
     }
 
-    private func prefetchNextPageIfNeeded(appearingRowID: HistoryItemID) {
-        guard HistoryListPaginationTrigger.shouldLoadNextPage(
-            appearingRowID: appearingRowID,
-            lastDisplayedRowID: viewState.rows.last?.item.id,
-            hasNextPage: viewState.hasNextPage,
-            isLoadingPage: viewState.isLoadingPage
-        ) else { return }
-        viewState.loadNextPage()
+    /// A page can add only filtered-out rows, leaving the last rendered row
+    /// unchanged and producing no new onAppear. Keep an explicit continuation
+    /// reachable both there and when every loaded row is hidden (Card 8B).
+    @ViewBuilder
+    private var paginationControl: some View {
+        if viewState.isLoadingPage {
+            loadingRow
+        } else if viewState.hasNextPage {
+            Button(HistoryListCopy.text("Load More")) {
+                viewState.loadNextPage()
+            }
+            .frame(maxWidth: .infinity)
+            .accessibilityIdentifier("clipy.history.load-more")
+        }
     }
 
     // MARK: Empty states
@@ -214,18 +215,18 @@ struct HistoryListView: View {
         if viewState.isLoadingFirstPage {
             ProgressView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .accessibilityLabel("Loading clipboard history")
+                .accessibilityLabel(HistoryListCopy.text("Loading clipboard history"))
         } else if viewState.isSearchActive {
             ContentUnavailableView(
-                "No Results",
+                HistoryListCopy.text("No Results"),
                 systemImage: "magnifyingglass",
-                description: Text("No items match “\(viewState.searchText)”.")
+                description: Text(HistoryListCopy.searchMiss(viewState.searchText))
             )
         } else {
             ContentUnavailableView(
-                "No Clipboard History",
+                HistoryListCopy.text("No Clipboard History"),
                 systemImage: "doc.on.clipboard",
-                description: Text("Copy something and it will appear here.")
+                description: Text(HistoryListCopy.text("Copy something and it will appear here."))
             )
         }
     }
@@ -236,24 +237,28 @@ struct HistoryListView: View {
     /// filter (no query) gets filter-specific copy, and a query plus filter
     /// still names the query.
     private var filteredEmptyState: some View {
-        ContentUnavailableView(
-            "No Results",
-            systemImage: "magnifyingglass",
-            description: Text(filteredEmptyDescription)
-        )
+        VStack {
+            ContentUnavailableView(
+                HistoryListCopy.text("No Results"),
+                systemImage: "magnifyingglass",
+                description: Text(filteredEmptyDescription)
+            )
+            paginationControl
+                .padding(.bottom)
+        }
     }
 
     private var filteredEmptyDescription: String {
         viewState.searchText.isEmpty
-            ? "No items match the current filter."
-            : "No items match “\(viewState.searchText)”."
+            ? HistoryListCopy.text("No items match the current filter.")
+            : HistoryListCopy.searchMiss(viewState.searchText)
     }
 
     // MARK: Selection + keyboard surface
 
     private var selectedRow: HistoryRow? {
         guard let id = selection.wrappedValue else { return nil }
-        return viewState.rows.first { $0.item.id == id }
+        return viewState.displayedRows.first { $0.item.id == id }
     }
 
     /// Invisible buttons carrying the selection-keyed shortcuts. The ⌫
@@ -261,7 +266,7 @@ struct HistoryListView: View {
     /// keeps editing the query instead of removing the selected item.
     private var selectionShortcuts: some View {
         Group {
-            Button("Copy to Clipboard") {
+            Button(PanelActionsCopy.text("Copy to Clipboard")) {
                 if let row = selectedRow {
                     viewState.requestPasteFromDisplayedRow(row.item)
                 }
@@ -269,7 +274,7 @@ struct HistoryListView: View {
             .keyboardShortcut(.return, modifiers: [])
             .disabled(selectedRow == nil)
 
-            Button("Remove") {
+            Button(PanelActionsCopy.text("Remove")) {
                 if let row = selectedRow {
                     viewState.remove(row.item.id)
                 }
@@ -277,7 +282,7 @@ struct HistoryListView: View {
             .keyboardShortcut(.delete, modifiers: [])
             .disabled(selectedRow == nil || isSearchFieldFocused)
 
-            Button("Toggle Pin") {
+            Button(HistoryListCopy.text("Toggle Pin")) {
                 if let row = selectedRow {
                     if row.pinnedPosition != nil {
                         viewState.unpin(row.item.id)
@@ -290,7 +295,7 @@ struct HistoryListView: View {
             .disabled(selectedRow == nil)
 
             // Context-menu semantics: placePinned reorders an already-pinned item.
-            Button("Pin to Top") {
+            Button(PanelActionsCopy.text("Pin to Top")) {
                 if let row = selectedRow {
                     viewState.pin(row.item.id, at: .first)
                 }
@@ -298,7 +303,7 @@ struct HistoryListView: View {
             .keyboardShortcut(.upArrow, modifiers: [.option, .command])
             .disabled(selectedRow == nil)
 
-            Button("Pin to Bottom") {
+            Button(PanelActionsCopy.text("Pin to Bottom")) {
                 if let row = selectedRow {
                     viewState.pin(row.item.id, at: .last)
                 }
@@ -306,7 +311,7 @@ struct HistoryListView: View {
             .keyboardShortcut(.downArrow, modifiers: [.option, .command])
             .disabled(selectedRow == nil)
 
-            Button("Show Details") {
+            Button(PanelActionsCopy.text("Show Details")) {
                 if let row = selectedRow {
                     onShowDetails(row.item)
                 }

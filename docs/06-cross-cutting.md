@@ -91,6 +91,8 @@ None of these types, tables, protocols, or state machines belongs to v1. The tri
 
 Every admitted cache must satisfy the Part IV cache law. G2 must define durable record schema, retention, cursor expiration, crash consistency, and replay completeness before any collection cache can depend on it.
 
+G1 measurement status (2026-09-02): the representative-scrolling journey (`ThumbnailScrollMeasurementJourneyUITests`, ClipyUITests) measured decode-segment p95 ≈ 1.6 ms (threshold: above 16 ms; even the fetch+decode upper bound peaked at 11.05 ms p95) and 0% identical completed requests (threshold: ≥ 30%) on two independent green CI runs (PR #54 run 33224258855; master run 33226454046). Both conditions failed, so the shared in-memory completed-thumbnail cache is **not admitted** (DEC-THUMB-CACHE resolved; full adjudication record in `V2-04` §2.4). The trigger text above is unchanged: a future representative workload meeting both thresholds re-opens admission.
+
 ### 4. Product-deferred capabilities
 
 The following are not performance grafts and are not implied by G1–G8:

@@ -19,8 +19,7 @@ package enum ReviseEditorPresentation {
     /// Product decision 3D: Save never claims to redact Canonical Content or
     /// previously committed revisions.
     package static let revisionDisclosure =
-        "Save appends an immutable revision. Previous and original content "
-        + "may remain in this item's revision history."
+        PanelActionsCopy.revisionDisclosure()
 }
 
 /// The "Edit Content…" surface (contract §4.3): 520×440 when hosted as a
@@ -46,19 +45,17 @@ struct ReviseEditorView: View {
             switch self {
             case .stale:
                 return (
-                    "Revision Not Saved",
-                    "Edited content changed — your draft is intact. "
-                        + "Reload Latest updates the base while keeping your "
-                        + "edits for formats that are still editable."
+                    PanelActionsCopy.text("Revision Not Saved"),
+                    PanelActionsCopy.text("Edited content changed — your draft is intact. Reload Latest updates the base while keeping your edits for formats that are still editable.")
                 )
             case .saveFailure(let message):
-                return ("Couldn't Save Revision", message)
+                return (PanelActionsCopy.text("Couldn't Save Revision"), message)
             case .reloadFailure(let message):
-                return ("Couldn't Reload Latest", message)
+                return (PanelActionsCopy.text("Couldn't Reload Latest"), message)
             case .discardDraft:
                 return (
-                    "Discard Changes?",
-                    "Your unsaved changes will be lost."
+                    PanelActionsCopy.text("Discard Changes?"),
+                    PanelActionsCopy.text("Your unsaved changes will be lost.")
                 )
             }
         }
@@ -151,34 +148,34 @@ struct ReviseEditorView: View {
     private var alertActions: some View {
         switch activeAlert {
         case .discardDraft:
-            Button("Keep Editing", role: .cancel) {
+            Button(PanelActionsCopy.text("Keep Editing"), role: .cancel) {
                 activeAlert = nil
             }
-            Button("Discard Changes", role: .destructive) {
+            Button(PanelActionsCopy.text("Discard Changes"), role: .destructive) {
                 activeAlert = nil
                 completeDismissal()
             }
             .accessibilityIdentifier("clipy.editor.confirm-discard")
         case .stale:
-            Button("Keep Editing", role: .cancel) {
+            Button(PanelActionsCopy.text("Keep Editing"), role: .cancel) {
                 activeAlert = nil
             }
-            Button("Reload Latest") {
+            Button(PanelActionsCopy.text("Reload Latest")) {
                 activeAlert = nil
                 Task { await reloadLatest() }
             }
             .accessibilityIdentifier("clipy.editor.stale-reload")
         case .reloadFailure:
-            Button("Keep Editing", role: .cancel) {
+            Button(PanelActionsCopy.text("Keep Editing"), role: .cancel) {
                 activeAlert = nil
             }
-            Button("Retry Reload") {
+            Button(PanelActionsCopy.text("Retry Reload")) {
                 activeAlert = nil
                 Task { await reloadLatest() }
             }
             .accessibilityIdentifier("clipy.editor.retry-reload")
         case .saveFailure:
-            Button("OK") {
+            Button(PanelActionsCopy.text("OK")) {
                 activeAlert = nil
             }
         case nil:
@@ -224,14 +221,14 @@ struct ReviseEditorView: View {
         if draft.isAwaitingLatestContent {
             HStack(spacing: PanelTheme.spacingLarge) {
                 Label(
-                    "Reload latest content before saving again.",
+                    PanelActionsCopy.text("Reload latest content before saving again."),
                     systemImage: "arrow.clockwise"
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("clipy.editor.awaiting-reload")
                 Spacer(minLength: PanelTheme.spacingSmall)
-                Button(isReloading ? "Reloading…" : "Reload Latest") {
+                Button(isReloading ? PanelActionsCopy.text("Reloading…") : PanelActionsCopy.text("Reload Latest")) {
                     Task { await reloadLatest() }
                 }
                 .disabled(isReloading)
@@ -261,35 +258,35 @@ struct ReviseEditorView: View {
                 .foregroundStyle(.red)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityLabel(
-                    "Validation hint: \(validationMessage)"
+                    PanelActionsCopy.format("Validation hint: %@", validationMessage)
                 )
             }
             Spacer(minLength: PanelTheme.spacingSmall)
-            Button("Cancel") {
+            Button(PanelActionsCopy.text("Cancel")) {
                 requestDismissal()
             }
             .keyboardShortcut(.cancelAction)
             .accessibilityIdentifier("clipy.editor.cancel")
             .accessibilityHint(
                 draft.isDirty
-                    ? "Asks before discarding unsaved changes."
-                    : "Closes the editor without changing the item."
+                    ? PanelActionsCopy.text("Asks before discarding unsaved changes.")
+                    : PanelActionsCopy.text("Closes the editor without changing the item.")
             )
             Button {
                 Task { await save() }
             } label: {
                 if isSaving {
-                    Label("Saving…", systemImage: "hourglass")
+                    Label(PanelActionsCopy.text("Saving…"), systemImage: "hourglass")
                 } else {
-                    Label("Save Revision", systemImage: "checkmark")
+                    Label(PanelActionsCopy.text("Save Revision"), systemImage: "checkmark")
                 }
             }
             .keyboardShortcut("s", modifiers: .command)
             .disabled(!canSave || isSaving || isReloading)
-            .accessibilityLabel(isSaving ? "Saving revision" : "Save Revision")
+            .accessibilityLabel(isSaving ? PanelActionsCopy.text("Saving revision") : PanelActionsCopy.text("Save Revision"))
             .accessibilityIdentifier("clipy.editor.save")
             .accessibilityHint(
-                "Applies these decisions as a new revision of the item."
+                PanelActionsCopy.text("Applies these decisions as a new revision of the item.")
             )
         }
         .padding(PanelTheme.spacingLarge)
@@ -309,10 +306,10 @@ struct ReviseEditorView: View {
 
     private var validationMessage: String? {
         if allRepresentationsHidden {
-            return "Hiding every representation is not allowed"
+            return PanelActionsCopy.text("Hiding every representation is not allowed")
         }
         if draft.hasEmptyReplacement {
-            return "Replacement text cannot be empty"
+            return PanelActionsCopy.text("Replacement text cannot be empty")
         }
         return nil
     }
@@ -336,9 +333,8 @@ struct ReviseEditorView: View {
         let typeIdentifier = representation.typeIdentifier
         let replacementIsAvailable = draft.canReplace(representation)
         let replacementAccessibilityHint = replacementIsAvailable
-            ? " Replace substitutes literal UTF-8 plain text."
-            : " Replace is unavailable because Clipy cannot safely decode"
-                + " and re-encode this format yet."
+            ? PanelActionsCopy.text(" Replace edits UTF-8 or UTF-16 plain text while preserving its encoding.")
+            : PanelActionsCopy.text(" Replace requires a supported UTF-8 or UTF-16 plain-text format with valid content. Other formats can be preserved, restored, or hidden.")
         return VStack(alignment: .leading, spacing: PanelTheme.spacingXSmall) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(
@@ -360,37 +356,34 @@ struct ReviseEditorView: View {
                 }
                 Spacer(minLength: PanelTheme.spacingLarge)
                 Picker(
-                    "Decision",
+                    PanelActionsCopy.text("Decision"),
                     selection: choiceBinding(for: typeIdentifier)
                 ) {
-                    Text("Keep Current").tag(ReviseEditorDraft.Choice.keepCurrent)
-                    Text("Use Original").tag(ReviseEditorDraft.Choice.useOriginal)
-                    Text("Hide").tag(ReviseEditorDraft.Choice.hide)
+                    Text(PanelActionsCopy.text("Keep Current")).tag(ReviseEditorDraft.Choice.keepCurrent)
+                    Text(PanelActionsCopy.text("Use Original")).tag(ReviseEditorDraft.Choice.useOriginal)
+                    Text(PanelActionsCopy.text("Hide")).tag(ReviseEditorDraft.Choice.hide)
                     if replacementIsAvailable {
-                        // The first encoder-backed editing route is exact
-                        // Exact UTF-8 plain text only (review TYPE-2).
-                        Text("Replace").tag(ReviseEditorDraft.Choice.replace)
+                        // The draft admits only the three exact UTF-8/UTF-16
+                        // plain-text identifiers with valid paired codecs.
+                        // Displayability alone never enables replacement.
+                        Text(PanelActionsCopy.text("Replace")).tag(ReviseEditorDraft.Choice.replace)
                     }
                 }
                 .pickerStyle(.menu)
                 .labelsHidden()
                 .fixedSize()
-                .accessibilityLabel("Editing decision for \(typeIdentifier)")
+                .accessibilityLabel(PanelActionsCopy.format("Editing decision for %@", typeIdentifier))
                 .accessibilityIdentifier(
                     "clipy.editor.decision.\(typeIdentifier)"
                 )
                 .accessibilityHint(
-                    "Keep Current preserves the bytes currently used for"
-                        + " pasting. Use Original restores the captured bytes."
-                        + " Hide omits this type from pasting."
+                    PanelActionsCopy.text("Keep Current preserves the bytes currently used for pasting. Use Original restores the captured bytes. Hide omits this type from pasting.")
                         + replacementAccessibilityHint
                 )
             }
             if !replacementIsAvailable {
                 Label(
-                    "Replace unavailable: Clipy cannot safely decode and "
-                        + "re-encode this format yet. Keep Current preserves "
-                        + "its exact bytes.",
+                    PanelActionsCopy.text("Replace supports valid UTF-8 and UTF-16 plain-text formats. Keep Current preserves exact bytes."),
                     systemImage: "lock"
                 )
                 .font(.caption)
@@ -411,7 +404,7 @@ struct ReviseEditorView: View {
                         .strokeBorder(Color.primary.opacity(0.15))
                     }
                     .accessibilityLabel(
-                        "Replacement text for \(typeIdentifier)"
+                        PanelActionsCopy.format("Replacement text for %@", typeIdentifier)
                     )
                     .accessibilityIdentifier(
                         "clipy.editor.replacement.\(typeIdentifier)"
@@ -474,7 +467,7 @@ struct ReviseEditorView: View {
         } catch {
             guard error is CancellationError else {
                 activeAlert = .saveFailure(
-                    "Clipy couldn't save this revision."
+                    PanelActionsCopy.text("Clipy couldn't save this revision.")
                 )
                 return
             }
@@ -502,15 +495,12 @@ struct ReviseEditorView: View {
             let latest = try await viewState.details(for: draft.itemID)
             guard draft.reloadLatest(details: latest) else {
                 activeAlert = .reloadFailure(
-                    "Latest content can't be safely rebased onto this draft. "
-                        + "Your edits are intact; keep editing or try again "
-                        + "after the item changes."
+                    PanelActionsCopy.text("Latest content can't be safely rebased onto this draft. Your edits are intact; keep editing or try again after the item changes.")
                 )
                 return
             }
             onReferenceAdvance?(latest.item)
-            reloadNotice = "Latest content loaded. Your draft was kept for "
-                + "formats that remain editable."
+            reloadNotice = PanelActionsCopy.text("Latest content loaded. Your draft was kept for formats that remain editable.")
         } catch let failure as HistoryFailure {
             activeAlert = .reloadFailure(
                 FailurePresentation.message(for: failure)
@@ -518,7 +508,7 @@ struct ReviseEditorView: View {
         } catch {
             guard error is CancellationError else {
                 activeAlert = .reloadFailure(
-                    "Clipy couldn't load the latest content."
+                    PanelActionsCopy.text("Clipy couldn't load the latest content.")
                 )
                 return
             }

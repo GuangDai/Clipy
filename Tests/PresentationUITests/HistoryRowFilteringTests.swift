@@ -22,6 +22,8 @@ struct HistoryRowFilteringTests {
             ["public.jpeg"],
             ["public.tiff"],
             ["public.heic"],
+            ["public.heif"],
+            ["com.microsoft.bmp"],
             ["com.compuserve.gif"],
         ]
     )
@@ -30,6 +32,15 @@ struct HistoryRowFilteringTests {
             HistoryRowKind.classify(effectiveTypeIdentifiers: typeIdentifiers)
                 == .image
         )
+        #expect(HistoryRowView.typeSymbol(for: typeIdentifiers) == "photo")
+        let row = filterFixtureRow(
+            id: "00000000-0000-0000-0000-00000000F106",
+            title: "image",
+            typeIdentifiers: typeIdentifiers
+        )
+        #expect(HistoryTypeFilter.images.admits(row))
+        #expect(!HistoryTypeFilter.text.admits(row))
+        #expect(!HistoryTypeFilter.links.admits(row))
     }
 
     @Test(arguments: [["public.url"], ["public.file-url"]])
@@ -46,7 +57,7 @@ struct HistoryRowFilteringTests {
             ["public.plain-text"],
             ["public.utf8-plain-text"],
             ["public.utf16-plain-text"],
-            ["public.utf8-external-plain-text"],
+            ["public.utf16-external-plain-text"],
             ["public.html"],
             ["public.rtf"],
             ["com.apple.flat-rtfd"],
@@ -64,6 +75,15 @@ struct HistoryRowFilteringTests {
             ["com.adobe.pdf"],
             ["public.data"],
             ["com.example.custom-type"],
+            ["public.image.private"],
+            ["public.png-custom"],
+            ["public.heif-private"],
+            ["com.microsoft.bmp-private"],
+            ["public.url-private"],
+            ["public.html-private"],
+            ["public.utf8-plain-text-private"],
+            ["public.utf8-external-plain-text"],
+            ["dyn.example"],
             [],
         ]
     )
@@ -72,6 +92,16 @@ struct HistoryRowFilteringTests {
             HistoryRowKind.classify(effectiveTypeIdentifiers: typeIdentifiers)
                 == .other
         )
+        #expect(HistoryRowView.typeSymbol(for: typeIdentifiers) == "doc.on.clipboard")
+        let row = filterFixtureRow(
+            id: "00000000-0000-0000-0000-00000000F107",
+            title: "opaque",
+            typeIdentifiers: typeIdentifiers
+        )
+        #expect(HistoryTypeFilter.all.admits(row))
+        #expect(!HistoryTypeFilter.images.admits(row))
+        #expect(!HistoryTypeFilter.text.admits(row))
+        #expect(!HistoryTypeFilter.links.admits(row))
     }
 
     /// Priority matches the row's fallback symbol: a row carrying BOTH a URL
@@ -203,32 +233,49 @@ struct HistoryRowFilteringTests {
 
     /// Filter edits are pure in-memory narrowing: no new observe request, no
     /// debounce — the History query is untouched.
-    @Test func filterEditsNeverRestartObservation() async {
+    @Test func filterEditsNeverRestartObservation() async throws {
         let (state, history) = activatedMixedState()
-        #expect(await pollUntil { state.rows.count == 5 })
+        defer { state.deactivate() }
+        try #require(await pollUntil { state.rows.count == 5 && state.hasAuthoritativeFirstPage })
         #expect(await history.observeRequests.count == 1)
+        let loadedRows = state.rows
 
         state.typeFilter = .images
         state.showsPinnedOnly = true
         state.typeFilter = .links
         state.showsPinnedOnly = false
 
-        // Stable negative: settle past a full search debounce window (the
-        // sanctioned settle sleep of the sibling suites).
-        try? await Task.sleep(for: .milliseconds(400))
+        // Both immediate and debounced query restarts synchronously clear
+        // first-page authority and rows. Filter changes must preserve them
+        // before any scheduled task can repopulate a replacement page.
+        #expect(state.hasAuthoritativeFirstPage)
+        #expect(!state.isLoadingFirstPage)
+        #expect(state.rows == loadedRows)
+        #expect(state.displayedRows.map(\.title) == ["pinned-link"])
+
+        // A distinct snapshot delivered to the ORIGINAL subscription is the
+        // completion event: it must still update the filtered display. A
+        // cancelled/restarted subscription cannot satisfy this assertion.
+        let replacement = loadedRows + [filterFixtureRow(
+            id: "00000000-0000-0000-0000-00000000F108",
+            title: "new-link",
+            typeIdentifiers: ["public.url"]
+        )]
+        await history.emitObservedPage(
+            fixturePage(rows: replacement, next: nil), observationIndex: 0
+        )
+        try #require(await pollUntil { state.rows == replacement })
+        #expect(state.displayedRows.map(\.title) == ["pinned-link", "new-link"])
         #expect(await history.observeRequests.count == 1)
 
-        state.deactivate()
         await history.finishObservation()
     }
 
     // MARK: - Drag-out provider (01 §5.6; 03b §9)
 
-    /// The registered representation is the row's best advertised type in the
-    /// paste preference order (plain text, then PNG/TIFF); a row advertising
-    /// none of them — and an unknown reference alike — still offers
-    /// best-effort plain text.
-    @Test func dragProviderRegistersBestAdvertisedPasteType() async {
+    /// Register the actual row types without inventing UTF-8 for a URL or
+    /// UTF-16 representation; references absent from the display offer none.
+    @Test func dragProviderRegistersActualAdvertisedTypes() async {
         let (state, history) = activatedMixedState()
         #expect(await pollUntil { state.rows.count == 5 })
 
@@ -238,15 +285,15 @@ struct HistoryRowFilteringTests {
             state.dragItemProvider(for: state.rows[0].item)
                 .registeredTypeIdentifiers == ["public.utf8-plain-text"]
         )
-        // The pinned link advertises no paste-preferred type: fallback.
+        // A URL remains a URL; it is not a guessed UTF-8 representation.
         #expect(
             state.dragItemProvider(for: state.rows[1].item)
-                .registeredTypeIdentifiers == ["public.utf8-plain-text"]
+                .registeredTypeIdentifiers == ["public.url"]
         )
-        // UTF-16-only text: same best-effort fallback.
+        // UTF-16 is offered with its exact encoding identifier.
         #expect(
             state.dragItemProvider(for: state.rows[2].item)
-                .registeredTypeIdentifiers == ["public.utf8-plain-text"]
+                .registeredTypeIdentifiers == ["public.utf16-plain-text"]
         )
         #expect(
             state.dragItemProvider(for: state.rows[3].item)
@@ -260,7 +307,7 @@ struct HistoryRowFilteringTests {
         )
         #expect(
             state.dragItemProvider(for: stranger)
-                .registeredTypeIdentifiers == ["public.utf8-plain-text"]
+                .registeredTypeIdentifiers.isEmpty
         )
 
         state.deactivate()

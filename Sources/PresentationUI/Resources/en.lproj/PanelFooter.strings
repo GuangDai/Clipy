@@ -1,0 +1,23 @@
+// Panel footer actions and clear confirmation.
+"↑↓ Select · Esc Clear" = "↑↓ Select · Esc Clear";
+"⏎ Paste · Space Quick Look · ⌘I Details" = "⏎ Paste · Space Quick Look · ⌘I Details";
+"Shows the loaded portion of your history. Search to narrow results." = "Shows the loaded portion of your history. Search to narrow results.";
+"Toggle Preview (⌃Space)" = "Toggle Preview (⌃Space)";
+"Toggle Preview" = "Toggle Preview";
+"Keep Panel Open" = "Keep Panel Open";
+"Pause Clipboard Monitoring for 5 Minutes" = "Pause Clipboard Monitoring for 5 Minutes";
+"Clear Unpinned Items…" = "Clear Unpinned Items…";
+"Clear All History…" = "Clear All History…";
+"Settings…" = "Settings…";
+"Quit Clipy" = "Quit Clipy";
+"More Actions" = "More Actions";
+"Clear All History?" = "Clear All History?";
+"Clear Unpinned Items?" = "Clear Unpinned Items?";
+"All clipboard history, including pinned items, will be removed." = "All clipboard history, including pinned items, will be removed.";
+"All unpinned items will be removed. Pinned items are kept." = "All unpinned items will be removed. Pinned items are kept.";
+"Clear" = "Clear";
+"Cancel" = "Cancel";
+"Clear Search or Close" = "Clear Search or Close";
+"Quick Look" = "Quick Look";
+"Resize preview" = "Resize preview";
+"Show preview" = "Show preview";

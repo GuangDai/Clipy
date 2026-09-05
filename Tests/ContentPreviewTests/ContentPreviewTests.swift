@@ -51,6 +51,55 @@ struct ContentPreviewTests {
         }
     }
 
+    @Test("external UTF-16 honors BOM and otherwise defaults to big endian")
+    func externalUTF16Artifact() async {
+        let fixtures = [
+            Data([0x00, 0x41, 0x03, 0xA9, 0xD8, 0x3E, 0xDD, 0x8A]),
+            Data([0xFE, 0xFF, 0x00, 0x41, 0x03, 0xA9, 0xD8, 0x3E, 0xDD, 0x8A]),
+            Data([0xFF, 0xFE, 0x41, 0x00, 0xA9, 0x03, 0x3E, 0xD8, 0x8A, 0xDD]),
+        ]
+        for bytes in fixtures {
+            let outcome = await renderer.renderHistoryPane([
+                PreviewRepresentation(
+                    typeIdentifier: "public.utf16-external-plain-text",
+                    bytes: bytes
+                ),
+            ])
+            guard case let .content(.text(text)) = outcome else {
+                Issue.record("expected external UTF-16 text, got \(outcome)")
+                continue
+            }
+            #expect(text.text == "AΩ🦊")
+            #expect(!text.wasTruncated)
+        }
+    }
+
+    @Test("malformed external UTF-16 fails or yields to a valid sibling")
+    func malformedExternalUTF16() async {
+        for bytes in [Data([0x41]), Data([0xFF, 0xFE]), Data([0xFE, 0xFF, 0x41])] {
+            let malformed = PreviewRepresentation(
+                typeIdentifier: "public.utf16-external-plain-text",
+                bytes: bytes
+            )
+            #expect(
+                await renderer.renderHistoryPane([malformed])
+                    == .failed(.malformedRepresentation)
+            )
+            let outcome = await renderer.renderHistoryPane([
+                malformed,
+                PreviewRepresentation(
+                    typeIdentifier: "public.utf8-plain-text",
+                    bytes: Data("valid sibling".utf8)
+                ),
+            ])
+            guard case let .content(.text(text)) = outcome else {
+                Issue.record("expected valid text sibling, got \(outcome)")
+                continue
+            }
+            #expect(text.text == "valid sibling")
+        }
+    }
+
     @Test("structured source uses its later exact plain-text sibling")
     func structuredSourceUsesExactPlainSibling() async {
         for structured in ["public.rtf", "public.html"] {
@@ -91,8 +140,8 @@ struct ContentPreviewTests {
         #expect(text.text == "valid sibling")
     }
 
-    @Test("declared codec fact alone does not expand preview admission")
-    func externalUTF8RemainsUnsupported() async {
+    @Test("the old invented external UTF-8 identifier remains opaque")
+    func inventedExternalUTF8RemainsUnsupported() async {
         let outcome = await renderer.renderHistoryPane([
             PreviewRepresentation(
                 typeIdentifier: "public.utf8-external-plain-text",
@@ -298,6 +347,84 @@ struct ContentPreviewTests {
             #expect(queued)
             #expect(entryCountBeforeRelease == 1)
             #expect(await gate.entryCount == 2)
+        }
+
+        let settled = await renderer.debugSnapshot()
+        #expect(settled.activeJobs == 0)
+        #expect(settled.retainedSourceBytes == 0)
+    }
+
+    @Test("cancelling queued raster work releases its source without releasing the occupied slot")
+    @MainActor
+    func cancelledWaiterFinishesBeforeTheActiveRasterAndDoesNotAdmitTheNextWaiter() async {
+        let renderer = ContentPreview()
+        let gate = RenderStartGate()
+        let hook: @Sendable () async -> Void = { await gate.parkFirst() }
+        let pngBytes = Self.onePixelPNG.count
+
+        await ContentPreviewDebugInstrumentation.$renderDidStart.withValue(hook) {
+            let first = Task { await renderer.rasterizePNGForDisplay(Self.onePixelPNG) }
+            await gate.waitUntilParked()
+
+            var cancelledOutcome: PreviewOutcome?
+            let second = Task {
+                let outcome = await renderer.renderHistoryPane([
+                    PreviewRepresentation(typeIdentifier: "public.png", bytes: Self.onePixelPNG),
+                    PreviewRepresentation(typeIdentifier: "com.example.opaque", bytes: Data(repeating: 0, count: 4_096)),
+                ])
+                cancelledOutcome = outcome
+                return outcome
+            }
+            var secondQueued = false
+            for _ in 0..<10_000 {
+                if await renderer.debugSnapshot().queuedRasterJobs == 1 {
+                    secondQueued = true
+                    break
+                }
+                await Task.yield()
+            }
+            let withQueuedInput = await renderer.debugSnapshot()
+            second.cancel()
+            for _ in 0..<10_000 {
+                if cancelledOutcome != nil { break }
+                await Task.yield()
+            }
+            let cancelledBeforeFirstFinished = cancelledOutcome == .failed(.cancelled)
+            let afterCancellation = await renderer.debugSnapshot()
+
+            let third = Task { await renderer.rasterizePNGForDisplay(Self.onePixelPNG) }
+            var thirdQueued = false
+            for _ in 0..<10_000 {
+                if await renderer.debugSnapshot().queuedRasterJobs == 1 {
+                    thirdQueued = true
+                    break
+                }
+                await Task.yield()
+            }
+            let nativeEntriesBeforeRelease = await gate.entryCount
+
+            // Always release the native owner and join every task, even when
+            // a regression kept the cancelled waiter suspended. Failure must
+            // report the premature retention rather than hang the suite.
+            await gate.resume()
+            let firstOutcome = await first.value
+            _ = await second.value
+            let thirdOutcome = await third.value
+
+            #expect(secondQueued)
+            #expect(withQueuedInput.retainedSourceBytes == 2 * pngBytes + 4_096)
+            #expect(cancelledBeforeFirstFinished)
+            #expect(afterCancellation.activeJobs == 1)
+            #expect(afterCancellation.retainedSourceBytes == pngBytes)
+            #expect(afterCancellation.queuedRasterJobs == 0)
+            #expect(thirdQueued)
+            #expect(nativeEntriesBeforeRelease == 1)
+            #expect(await gate.entryCount == 2)
+            guard case .content(.raster) = firstOutcome,
+                  case .content(.raster) = thirdOutcome else {
+                Issue.record("The active and subsequent uncancelled raster requests must succeed")
+                return
+            }
         }
 
         let settled = await renderer.debugSnapshot()

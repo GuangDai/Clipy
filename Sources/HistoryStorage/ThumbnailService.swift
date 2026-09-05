@@ -91,6 +91,12 @@ package actor ThumbnailService {
     /// The owned off-Authority decode worker (§9 step 6; §14.5).
     private let worker = ThumbnailWorker()
 
+    /// Only the active creator hydrates source bytes. Queued creators await
+    /// a completion-only task, retaining their source-loading closure and
+    /// reference rather than full image Data. The Void result never retains
+    /// the predecessor's encoded thumbnail payload.
+    private var completionTail: Task<Void, Never>?
+
     /// The roadmap-owned WS15 suspension handler; `nil` in production
     /// (test seam — see `ThumbnailServiceSuspensionPoint`).
     private var suspensionHandler: (
@@ -110,6 +116,10 @@ package actor ThumbnailService {
     ) {
         suspensionHandler = handler
     }
+
+    /// Owner-test observation of admitted exact keys, including queued work.
+    /// It exposes no source bytes and does not change scheduling.
+    internal var inFlightCount: Int { flights.count }
 
     /// Joins or creates the source-inclusive single-flight for one exact key.
     /// The creator installs the task before the first suspension; that task
@@ -145,7 +155,9 @@ package actor ThumbnailService {
         // one shared task.
         let worker = worker
         let handler = suspensionHandler
+        let predecessor = completionTail
         let task = Task<ThumbnailPayload?, Error> {
+            await predecessor?.value
             guard let sourceBytes = try await loadSource() else {
                 return nil
             }
@@ -162,12 +174,18 @@ package actor ThumbnailService {
             )
         }
         flights[key] = task
+        completionTail = Task {
+            // Every terminal outcome advances the queue. The source task
+            // still carries its original result/error to its exact-key callers.
+            _ = try? await task.value
+        }
 
         // §9 step 7: remove the flight entry on success, failure, OR
         // cancellation — completed bytes are NOT retained. The deferred
         // removal runs unconditionally before the value/error propagates.
         defer {
             flights.removeValue(forKey: key)
+            if flights.isEmpty { completionTail = nil }
         }
         return try await task.value
     }
@@ -218,14 +236,15 @@ internal actor ThumbnailWorker {
     ///
     /// 1. **Decode/downsample**: `CGImageSourceCreateWithData` wraps the
     ///    source bytes; a `nil` source means the stored representation is not
-    ///    a decodable image — §16 maps a decode failure to
-    ///    `.persistence(.corruptStoredValue)` (an in-store image
-    ///    representation that fails decode is a stored-value problem).
+    ///    a decodable image — §16 maps image interpretation failure to
+    ///    `.thumbnailUnavailable`. Captured bytes are opaque to persistence;
+    ///    failing image decode does not establish a corrupt stored value.
     ///    `CGImageSourceCreateThumbnailAtIndex` downsamples with
-    ///    `MaxPixelSize` = `max(pixels.width, pixels.height)`,
+    ///    `MaxPixelSize` derived from an aspect fit of the oriented source
+    ///    into both requested dimensions,
     ///    `CreateThumbnailFromImageAlways` = true, and
     ///    `CreateThumbnailWithTransform` = true. A `nil` thumbnail is the
-    ///    same corrupt-stored-value failure.
+    ///    same thumbnail-unavailable failure.
     /// 2. **Encode/bound**: `CGImageDestination` re-encodes the downsampled
     ///    `CGImage` as PNG (`UTType.png.identifier`); the encoded bytes must
     ///    be ≤ `HistoryLimits.standard.maximumEncodedThumbnailBytes` (06 §2:
@@ -239,8 +258,8 @@ internal actor ThumbnailWorker {
     /// result is tagged with the verified old reference regardless of
     /// intervening commits (§9; WS15).
     ///
-    /// - Throws: `HistoryFailure.persistence(.corruptStoredValue)` for a
-    ///   nil source or nil thumbnail; `.capacityExceeded(.thumbnailBytes)`
+    /// - Throws: `HistoryFailure.thumbnailUnavailable` for an undecodable
+    ///   source, missing dimensions, or nil thumbnail; `.capacityExceeded(.thumbnailBytes)`
     ///   when the encoded PNG exceeds the output bound; or
     ///   `.persistence(.invariantViolation)` when PNG encoding itself fails.
     internal func decodeThumbnail(
@@ -253,31 +272,15 @@ internal actor ThumbnailWorker {
         // Phase 1 — decode/downsample (§9 step 6; §14.5).
         //
         // CGImageSourceCreateWithData returns nil when the bytes are not a
-        // recognizable image container — a stored image representation that
-        // fails to decode is a corrupt stored value (§16: decode/schema
-        // invariant failures → .persistence(.corruptStoredValue)).
+        // recognizable image container. This interpretation failure says
+        // nothing about storage integrity: the source bytes already passed
+        // History's independent blob decoding (05 §16).
         guard let source = CGImageSourceCreateWithData(
             sourceBytes as CFData,
             nil
         ) else {
-            throw HistoryFailure.persistence(.corruptStoredValue)
+            throw HistoryFailure.thumbnailUnavailable
         }
-
-        // The MaxPixelSize bounds the thumbnail's longer axis; ImageIO
-        // preserves aspect ratio, so the requested width/height are upper
-        // bounds and the actual decoded extent may be smaller.
-        let maxPixelSize = max(pixels.width, pixels.height)
-
-        // The `as CFDictionary` target makes the literal values infer as `Any`,
-        // so `Int` (bridged to NSNumber/CFNumber) and `CFBoolean` coexist. The
-        // `kCFBooleanTrue` constants are non-nil CoreFoundation globals —
-        // unwrapped explicitly so the IUO never coerces to `Any` (zero-warning
-        // rule, docs/AGENTS §4).
-        let thumbnailOptions = [
-            kCGImageSourceCreateThumbnailFromImageAlways: kCFBooleanTrue!,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
-            kCGImageSourceCreateThumbnailWithTransform: kCFBooleanTrue!
-        ] as CFDictionary
 
         // Primary-image index (audit
         // docs/reviews/2026-08-20-clipy-maccy-audit/03-apple-platform.md
@@ -290,14 +293,40 @@ internal actor ThumbnailWorker {
         // be deliberate"), not an oversight.
         let imageIndex = CGImageSourceGetPrimaryImageIndex(source)
 
+        // 05 §14.5: ImageIO accepts one longest-axis limit, but PixelSize
+        // bounds both axes. Fit the display dimensions after EXIF rotation;
+        // using max(request.width, request.height) can overflow the short
+        // requested axis even when ImageIO preserves the source aspect ratio.
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(
+            source, imageIndex, nil
+        ) as? [CFString: Any],
+            let sourceWidth = properties[kCGImagePropertyPixelWidth] as? Int,
+            let sourceHeight = properties[kCGImagePropertyPixelHeight] as? Int,
+            sourceWidth > 0, sourceHeight > 0
+        else {
+            throw HistoryFailure.thumbnailUnavailable
+        }
+        let orientation = properties[kCGImagePropertyOrientation] as? Int ?? 1
+        let swapsAxes = (5...8).contains(orientation)
+        let width = Double(swapsAxes ? sourceHeight : sourceWidth)
+        let height = Double(swapsAxes ? sourceWidth : sourceHeight)
+        let scale = min(1, Double(pixels.width) / width, Double(pixels.height) / height)
+        let maxPixelSize = max(1, Int((max(width, height) * scale).rounded(.down)))
+
+        let thumbnailOptions = [
+            kCGImageSourceCreateThumbnailFromImageAlways: kCFBooleanTrue!,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+            kCGImageSourceCreateThumbnailWithTransform: kCFBooleanTrue!
+        ] as CFDictionary
+
         guard let cgImage = CGImageSourceCreateThumbnailAtIndex(
             source,
             imageIndex,
             thumbnailOptions
         ) else {
-            // The source was recognized but the thumbnail could not be created
-            // — the stored image data is corrupt (§16: .corruptStoredValue).
-            throw HistoryFailure.persistence(.corruptStoredValue)
+            // The source was recognized but ImageIO cannot render it. Raw
+            // representation reads and paste remain independent (05 §16).
+            throw HistoryFailure.thumbnailUnavailable
         }
 
         // Phase 2 — re-encode as PNG and enforce the output bound (06 §2).
