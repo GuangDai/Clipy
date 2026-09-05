@@ -132,6 +132,31 @@ package final class PreviewContentLoader {
         self.history = history
     }
 
+    /// Coalescing updates occurrence facts without changing the content
+    /// reference or requiring another details read. Only a newer count for
+    /// this exact target can supersede the metadata. Retain accepted facts
+    /// across query-loading gaps without another content load or cache.
+    package func updateOccurrence(from observedRow: HistoryRow?) {
+        guard let occurrence, let observedRow,
+              observedRow.item == requestedItem,
+              observedRow.copyCount > occurrence.count
+        else { return }
+        self.occurrence = CopyOccurrenceSummary(
+            firstCopiedAt: occurrence.firstCopiedAt,
+            lastCopiedAt: observedRow.lastCopiedAt,
+            count: observedRow.copyCount,
+            firstSource: occurrence.firstSource,
+            lastSource: observedRow.lastSource
+        )
+    }
+
+    package func displayedOccurrence(
+        for item: HistoryItemReference?
+    ) -> CopyOccurrenceSummary? {
+        guard let item, requestedItem == item else { return nil }
+        return occurrence
+    }
+
     #if DEBUG
     /// Content-free renderer accounting for deterministic lifecycle proofs.
     /// The concrete renderer remains private and Release exposes no hook.
@@ -365,6 +390,11 @@ struct HistoryPreviewView: View {
         }
     }
 
+    private var observedRow: HistoryRow? {
+        guard let targetItem else { return nil }
+        return viewState.rows.first { $0.item == targetItem }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             previewBody
@@ -379,6 +409,12 @@ struct HistoryPreviewView: View {
         // another item's content (SPEC-IMPL-007 / PREVIEW-FENCE-1).
         .task(id: LoadRequest(item: targetItem, retryGeneration: retryGeneration)) {
             await loader.load(item: targetItem)
+            // Observation may have advanced while details/rendering suspended.
+            // Re-read its current row after loading publishes occurrence facts.
+            loader.updateOccurrence(from: observedRow)
+        }
+        .onChange(of: observedRow) { _, row in
+            loader.updateOccurrence(from: row)
         }
         .onDisappear {
             loader.clear()
@@ -501,8 +537,7 @@ struct HistoryPreviewView: View {
     @ViewBuilder
     private var metadataBar: some View {
         HStack(spacing: 6) {
-            if loader.requestedItem == targetItem,
-               let occurrence = loader.occurrence {
+            if let occurrence = loader.displayedOccurrence(for: targetItem) {
                 if let source = occurrence.lastSource {
                     Text(source)
                         .lineLimit(1)

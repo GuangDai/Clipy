@@ -388,6 +388,7 @@ struct ReviseEditorView: View {
                     }
                 }
                 .pickerStyle(.menu)
+                .disabled(isSaving)
                 .labelsHidden()
                 .fixedSize()
                 .accessibilityLabel(PanelActionsCopy.format("Editing decision for %@", typeIdentifier))
@@ -410,6 +411,7 @@ struct ReviseEditorView: View {
             }
             if draft.choice(for: typeIdentifier) == .replace {
                 TextEditor(text: textBinding(for: typeIdentifier))
+                    .disabled(isSaving)
                     .font(.system(.body, design: .monospaced))
                     // Grows vertically with the draft; the 96-point minimum
                     // keeps the one-line Replace state compact.
@@ -443,14 +445,20 @@ struct ReviseEditorView: View {
     ) -> Binding<ReviseEditorDraft.Choice> {
         Binding(
             get: { draft.choice(for: typeIdentifier) },
-            set: { draft.setChoice($0, for: typeIdentifier) }
+            set: {
+                guard !isSaving else { return }
+                draft.setChoice($0, for: typeIdentifier)
+            }
         )
     }
 
     private func textBinding(for typeIdentifier: String) -> Binding<String> {
         Binding(
             get: { draft.replacementText(for: typeIdentifier) },
-            set: { draft.setReplacementText($0, for: typeIdentifier) }
+            set: {
+                guard !isSaving else { return }
+                draft.setReplacementText($0, for: typeIdentifier)
+            }
         )
     }
 
@@ -463,6 +471,9 @@ struct ReviseEditorView: View {
     @MainActor
     private func save() async {
         guard !isSaving, draft.canSubmit else { return }
+        // The submitted request is a snapshot. Keep its draft controls fixed
+        // until it settles, so successful dismissal cannot discard later
+        // input that was never included in the committed revision.
         isSaving = true
         defer { isSaving = false }
         do {
