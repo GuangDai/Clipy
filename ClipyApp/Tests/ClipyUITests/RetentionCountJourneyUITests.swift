@@ -180,10 +180,10 @@ final class RetentionCountJourneyUITests: XCTestCase {
             context: "cancel before count mutation"
         )
 
-        // Re-enter through the real Settings scene and submit the same draft.
-        // A newly materialized view may show either its neutral prefill or the
-        // prior unsaved text until the authoritative read lands, so write the
-        // intended literal again instead of relying on scene retention.
+        // Re-enter through the real Settings scene without rewriting the
+        // field: its unsaved draft must survive both window closure and the
+        // next configured-policy read. Enabled Apply also joins that read;
+        // the control stays disabled while configuration is still loading.
         app.typeKey(",", modifierFlags: .command)
         assertExists(
             retentionTab,
@@ -198,10 +198,29 @@ final class RetentionCountJourneyUITests: XCTestCase {
             in: app,
             context: "reopened maximum unpinned field"
         )
+        XCTAssertTrue(
+            waitUntil(timeout: 5) {
+                maximumUnpinned.value as? String == "1" && applyItemLimit.isEnabled
+            },
+            diagnostic(app, context: "unsubmitted count draft survives Settings reopen and readback")
+        )
+        XCTAssertFalse(itemLimitStatus.exists,
+                       diagnostic(app, context: "reopened draft has no submitted receipt"))
+
+        // No confirmation was accepted. Returning the draft to this new
+        // store's original 200-item limit must be an exact no-change value,
+        // proving the durable comparison baseline did not become 1 on close.
+        replaceText(in: maximumUnpinned, with: "200")
+        XCTAssertTrue(
+            waitUntil(timeout: 5) {
+                maximumUnpinned.value as? String == "200" && !applyItemLimit.isEnabled
+            },
+            diagnostic(app, context: "unsubmitted draft leaves the durable 200-item limit unchanged")
+        )
         replaceText(in: maximumUnpinned, with: "1")
         XCTAssertTrue(
             waitUntil(timeout: 5) { applyItemLimit.isEnabled },
-            diagnostic(app, context: "reopened count configuration")
+            diagnostic(app, context: "edited count is applicable before its explicit confirmation")
         )
         applyItemLimit.click()
         assertExists(
