@@ -786,10 +786,16 @@ public struct HistoryPanelView: View {
                             from: startWidth,
                             translation: value.translation.width
                         )
+                        #if DEBUG
+                        print("[DEBUG-divider-20260905] changed translation=\(value.translation.width) start=\(startWidth) width=\(previewColumnWidth)")
+                        #endif
                     }
                     .onEnded { value in
                         let startWidth = previewDragStartWidth
                             ?? previewColumnWidth
+                        #if DEBUG
+                        print("[DEBUG-divider-20260905] ended translation=\(value.translation.width) predicted=\(value.predictedEndTranslation.width) start=\(startWidth) width=\(previewColumnWidth)")
+                        #endif
                         previewDragStartWidth = nil
                         switch PanelGeometry.previewDragOutcome(
                             startWidth: startWidth,
@@ -824,11 +830,17 @@ public struct HistoryPanelView: View {
                                 to: .standard
                             )
                         }
+                        #if DEBUG
+                        print("[DEBUG-divider-20260905] settled width=\(previewColumnWidth) isOpen=\(previewState.isOpen)")
+                        #endif
                     }
             )
             .simultaneousGesture(
                 TapGesture(count: 2)
                     .onEnded { _ in
+                        #if DEBUG
+                        print("[DEBUG-divider-20260905] reset oldWidth=\(previewColumnWidth)")
+                        #endif
                         previewColumnWidth = PanelGeometry.previewWidth
                         PanelGeometry.persistPreviewColumnWidth(
                             PanelGeometry.previewWidth,
