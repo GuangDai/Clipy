@@ -8,13 +8,16 @@ struct ReferencePreviewView: View {
     let reference: PreviewReference
 
     var body: some View {
+        let title = PreviewCopy.text(reference.kind == .file ? "File Reference" : "URL Reference")
         ScrollView {
             VStack(alignment: .leading, spacing: PanelTheme.spacingLarge) {
                 Label(
-                    PreviewCopy.text(reference.kind == .file ? "File Reference" : "URL Reference"),
+                    title,
                     systemImage: reference.kind == .file ? "doc" : "link"
                 )
                 .font(.headline)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(title)
                 .accessibilityIdentifier("clipy.preview.reference.title")
 
                 if let filePath = reference.filePath {

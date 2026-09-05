@@ -1,6 +1,7 @@
 /// A file URL travels through the real pasteboard observer and History into
-/// the dwell preview. The destination never exists; the journey inspects the
-/// reference as text and never opens it or invokes a file-reading operation.
+/// the dwell preview. Its synthetic destination exists while macOS brokers
+/// the pasteboard reference, then is removed after capture. Preview and
+/// search must still show the reference, never the file's marker contents.
 import AppKit
 import XCTest
 
@@ -19,9 +20,16 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         )
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let expectedPath = directory.path + "/未创建的文件 计划.txt"
-        let originalAddress = URL(fileURLWithPath: expectedPath).absoluteString
+        let expectedFilename = "未创建的文件 draft 计划.txt"
+        let expectedPath = directory.path + "/" + expectedFilename
+        let destination = URL(fileURLWithPath: expectedPath)
+        let originalAddress = destination.absoluteString
+        let fileContentMarker = "clipy-reference-file-contents-must-not-be-previewed"
         XCTAssertFalse(FileManager.default.fileExists(atPath: expectedPath))
+        // General-pasteboard file URLs require an existing target for the
+        // system's sandbox-extension creation. This is a small fixture file,
+        // not an injected preview or an application-side file read.
+        try Data(fileContentMarker.utf8).write(to: destination, options: .withoutOverwriting)
         XCTAssertTrue(originalAddress.contains("%20"))
         let fileType = NSPasteboard.PasteboardType("public.file-url")
         let item = NSPasteboardItem()
@@ -47,6 +55,12 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
             NSPredicate(format: "identifier BEGINSWITH %@", "clipy.history.row.")
         )
         XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 1 }, app.debugDescription)
+        let capturedRowIdentifier = rows.firstMatch.identifier
+        XCTAssertTrue(rows.firstMatch.label.contains(expectedFilename), app.debugDescription)
+        // Capture is now authoritative. Remove only the synthetic target;
+        // the subsequent Settings reopen and dwell use its retained URL.
+        try FileManager.default.removeItem(at: destination)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: expectedPath))
 
         // Configure the real auto-open control so this journey exercises
         // dwell even if a previous run left the preference disabled. No
@@ -85,6 +99,49 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
                     == "Only the reference is shown. Its destination has not been opened."
         }, app.debugDescription)
         XCTAssertEqual(rows.count, 1, app.debugDescription)
+
+        // Recipe 5 exposes the decoded basename and reference metadata to
+        // the ordinary search surface. Only the ASCII filename component is
+        // typed here; Chinese matching is covered by the storage owner tests.
+        let search = panel.textFields["clipy.search.field"]
+        XCTAssertTrue(search.exists && search.isHittable, app.debugDescription)
+        search.click()
+        search.typeKey("1", modifierFlags: [.command])
+        let searchMode = panel.descendants(matching: .any).matching(
+            NSPredicate(format: "label == %@", "Search Mode")
+        ).firstMatch
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            searchMode.exists && searchMode.value as? String == "Exact"
+        }, app.debugDescription)
+
+        // Observe a real empty result before the positive query, so an old
+        // Recent row cannot satisfy the assertion during debounce/loading.
+        search.typeText("clipy-reference-no-match")
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            rows.count == 0 && panel.staticTexts["No Results"].exists
+        }, app.debugDescription)
+        search.typeKey("a", modifierFlags: [.command])
+        search.typeText("draft")
+        XCTAssertEqual(search.value as? String, "draft", app.debugDescription)
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            rows.count == 1 && rows.firstMatch.identifier == capturedRowIdentifier
+                && rows.firstMatch.label.contains(expectedFilename)
+        }, app.debugDescription)
+
+        // The empty result retired selection. Select the recovered row using
+        // the real search-field arrow command and let preview dwell again.
+        search.typeKey(.downArrow, modifierFlags: [])
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            title.exists && path.exists && address.exists && disclosure.exists
+                && self.text(of: title) == "File Reference"
+                && self.text(of: path) == expectedPath
+                && self.text(of: address) == originalAddress
+                && self.text(of: disclosure)
+                    == "Only the reference is shown. Its destination has not been opened."
+        }, app.debugDescription)
+        XCTAssertFalse(preview.descendants(matching: .any).matching(
+            NSPredicate(format: "label == %@ OR value == %@", fileContentMarker, fileContentMarker)
+        ).firstMatch.exists, app.debugDescription)
         XCTAssertFalse(FileManager.default.fileExists(atPath: expectedPath))
     }
 
