@@ -240,9 +240,12 @@ bash scripts/ci/run_signed_runtime.sh \
 
 - `SwiftPM build + test` runs the strict-concurrency package build and the
   functional SwiftPM suite.
-- `XcodeGen generate + app build/test` regenerates the project, then builds and
-  tests the app, hosted integration target, and running-app UI target.
-- The two jobs run in parallel. Static regex/import/dependency scans,
+- Four `App build + GUI tests` jobs independently regenerate/build the app
+  and run disjoint GUI test groups on separate macOS runners. The fourth also
+  runs the hosted integration tests and all remaining/new GUI test classes.
+- SwiftPM and the four app jobs run in parallel (five jobs total). GUI tests
+  within each runner remain serial because they share the system pasteboard
+  and desktop. Static regex/import/dependency scans,
   SwiftLint, vendor/source scans, generated-project comparison, test-selection
   scans, and HistoryCore symbol generation/comparison are deliberately not
   correctness jobs. Architectural restrictions in §2/§5 remain design and
@@ -315,10 +318,11 @@ logs are not parsed as compiler output. Write warning-free code.
 
 ## 7. CI and deployment
 
-- `.github/workflows/correctness.yml` is the only push/PR workflow. It has two
-  parallel jobs: **SwiftPM build + test** and **XcodeGen generate + app
-  build/test**. Job steps delegate to `scripts/ci/` so the same commands are
-  reproducible without copying shell across YAML.
+- `.github/workflows/correctness.yml` is the only push/PR workflow. It runs
+  **SwiftPM build + test** alongside four **App build + GUI tests** shards.
+  Job steps delegate to `scripts/ci/`; `run_app_correctness.sh` accepts an
+  optional sixth argument (`1`–`4`), while its existing five-argument form
+  still runs the full hosted/UI suite. Each shard uploads its own results.
 - The exact-matcher and scale-admission workflows remain reusable
   `workflow_call` modules and run only through the dedicated manual
   `workflow_dispatch` caller after same-SHA correctness succeeds. They never
