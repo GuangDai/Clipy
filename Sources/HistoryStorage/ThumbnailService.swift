@@ -91,6 +91,12 @@ package actor ThumbnailService {
     /// The owned off-Authority decode worker (§9 step 6; §14.5).
     private let worker = ThumbnailWorker()
 
+    /// Only the active creator hydrates source bytes. Queued creators await
+    /// a completion-only task, retaining their source-loading closure and
+    /// reference rather than full image Data. The Void result never retains
+    /// the predecessor's encoded thumbnail payload.
+    private var completionTail: Task<Void, Never>?
+
     /// The roadmap-owned WS15 suspension handler; `nil` in production
     /// (test seam — see `ThumbnailServiceSuspensionPoint`).
     private var suspensionHandler: (
@@ -110,6 +116,10 @@ package actor ThumbnailService {
     ) {
         suspensionHandler = handler
     }
+
+    /// Owner-test observation of admitted exact keys, including queued work.
+    /// It exposes no source bytes and does not change scheduling.
+    internal var inFlightCount: Int { flights.count }
 
     /// Joins or creates the source-inclusive single-flight for one exact key.
     /// The creator installs the task before the first suspension; that task
@@ -145,7 +155,9 @@ package actor ThumbnailService {
         // one shared task.
         let worker = worker
         let handler = suspensionHandler
+        let predecessor = completionTail
         let task = Task<ThumbnailPayload?, Error> {
+            await predecessor?.value
             guard let sourceBytes = try await loadSource() else {
                 return nil
             }
@@ -162,12 +174,18 @@ package actor ThumbnailService {
             )
         }
         flights[key] = task
+        completionTail = Task {
+            // Every terminal outcome advances the queue. The source task
+            // still carries its original result/error to its exact-key callers.
+            _ = try? await task.value
+        }
 
         // §9 step 7: remove the flight entry on success, failure, OR
         // cancellation — completed bytes are NOT retained. The deferred
         // removal runs unconditionally before the value/error propagates.
         defer {
             flights.removeValue(forKey: key)
+            if flights.isEmpty { completionTail = nil }
         }
         return try await task.value
     }

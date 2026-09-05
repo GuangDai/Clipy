@@ -353,6 +353,84 @@ struct ContentPreviewTests {
         #expect(settled.activeJobs == 0)
         #expect(settled.retainedSourceBytes == 0)
     }
+
+    @Test("cancelling queued raster work releases its source without releasing the occupied slot")
+    @MainActor
+    func cancelledWaiterFinishesBeforeTheActiveRasterAndDoesNotAdmitTheNextWaiter() async {
+        let renderer = ContentPreview()
+        let gate = RenderStartGate()
+        let hook: @Sendable () async -> Void = { await gate.parkFirst() }
+        let pngBytes = Self.onePixelPNG.count
+
+        await ContentPreviewDebugInstrumentation.$renderDidStart.withValue(hook) {
+            let first = Task { await renderer.rasterizePNGForDisplay(Self.onePixelPNG) }
+            await gate.waitUntilParked()
+
+            var cancelledOutcome: PreviewOutcome?
+            let second = Task {
+                let outcome = await renderer.renderHistoryPane([
+                    PreviewRepresentation(typeIdentifier: "public.png", bytes: Self.onePixelPNG),
+                    PreviewRepresentation(typeIdentifier: "com.example.opaque", bytes: Data(repeating: 0, count: 4_096)),
+                ])
+                cancelledOutcome = outcome
+                return outcome
+            }
+            var secondQueued = false
+            for _ in 0..<10_000 {
+                if await renderer.debugSnapshot().queuedRasterJobs == 1 {
+                    secondQueued = true
+                    break
+                }
+                await Task.yield()
+            }
+            let withQueuedInput = await renderer.debugSnapshot()
+            second.cancel()
+            for _ in 0..<10_000 {
+                if cancelledOutcome != nil { break }
+                await Task.yield()
+            }
+            let cancelledBeforeFirstFinished = cancelledOutcome == .failed(.cancelled)
+            let afterCancellation = await renderer.debugSnapshot()
+
+            let third = Task { await renderer.rasterizePNGForDisplay(Self.onePixelPNG) }
+            var thirdQueued = false
+            for _ in 0..<10_000 {
+                if await renderer.debugSnapshot().queuedRasterJobs == 1 {
+                    thirdQueued = true
+                    break
+                }
+                await Task.yield()
+            }
+            let nativeEntriesBeforeRelease = await gate.entryCount
+
+            // Always release the native owner and join every task, even when
+            // a regression kept the cancelled waiter suspended. Failure must
+            // report the premature retention rather than hang the suite.
+            await gate.resume()
+            let firstOutcome = await first.value
+            _ = await second.value
+            let thirdOutcome = await third.value
+
+            #expect(secondQueued)
+            #expect(withQueuedInput.retainedSourceBytes == 2 * pngBytes + 4_096)
+            #expect(cancelledBeforeFirstFinished)
+            #expect(afterCancellation.activeJobs == 1)
+            #expect(afterCancellation.retainedSourceBytes == pngBytes)
+            #expect(afterCancellation.queuedRasterJobs == 0)
+            #expect(thirdQueued)
+            #expect(nativeEntriesBeforeRelease == 1)
+            #expect(await gate.entryCount == 2)
+            guard case .content(.raster) = firstOutcome,
+                  case .content(.raster) = thirdOutcome else {
+                Issue.record("The active and subsequent uncancelled raster requests must succeed")
+                return
+            }
+        }
+
+        let settled = await renderer.debugSnapshot()
+        #expect(settled.activeJobs == 0)
+        #expect(settled.retainedSourceBytes == 0)
+    }
     #endif
 
     private static let onePixelPNG = Data(base64Encoded:

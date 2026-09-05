@@ -268,14 +268,14 @@ public final class HistoryViewState {
     /// loaded pages by design; pagination still walks the unfiltered stream
     /// (`rows`/`nextPageCursor` are untouched by both filters).
     package var displayedPinnedRows: [HistoryRow] {
-        pinnedRows.filter { typeFilter.admits($0) }
+        rows.filter { $0.pinnedPosition != nil && isDisplayed($0) }
     }
 
     /// The recency lane after the client-side filter; empty while
     /// `showsPinnedOnly` is set.
     package var displayedUnpinnedRows: [HistoryRow] {
         guard !showsPinnedOnly else { return [] }
-        return unpinnedRows.filter { typeFilter.admits($0) }
+        return rows.filter { $0.pinnedPosition == nil && isDisplayed($0) }
     }
 
     /// The list's visible order after its type and pinned-only filters.
@@ -283,7 +283,17 @@ public final class HistoryViewState {
     /// old selection cannot paste a hidden row while SwiftUI is still
     /// reconciling the filter change (01 §5.6; review Card 14A).
     public var displayedRows: [HistoryRow] {
-        displayedPinnedRows + displayedUnpinnedRows
+        var displayed = displayedPinnedRows
+        if !showsPinnedOnly {
+            for row in rows where row.pinnedPosition == nil && isDisplayed(row) {
+                displayed.append(row)
+            }
+        }
+        return displayed
+    }
+
+    private func isDisplayed(_ row: HistoryRow) -> Bool {
+        (!showsPinnedOnly || row.pinnedPosition != nil) && typeFilter.admits(row)
     }
 
     /// Whether a further one-shot page exists after the displayed rows.
@@ -296,9 +306,14 @@ public final class HistoryViewState {
     /// waiting for that hidden row's appearance would strand its cursor
     /// (review Card 8B; 04 §6).
     package func prefetchNextPageIfNeeded(appearingRowID: HistoryItemID) {
-        let lastDisplayedRowID = displayedUnpinnedRows.last?.item.id
-            ?? displayedPinnedRows.last?.item.id
-        guard lastDisplayedRowID == appearingRowID else { return }
+        guard hasNextPage, !isLoadingPage else { return }
+        let lastUnpinned = showsPinnedOnly ? nil : rows.last(where: {
+            $0.pinnedPosition == nil && isDisplayed($0)
+        })
+        let lastDisplayed = lastUnpinned ?? rows.last(where: {
+            $0.pinnedPosition != nil && isDisplayed($0)
+        })
+        guard lastDisplayed?.item.id == appearingRowID else { return }
         loadNextPage()
     }
 
@@ -437,7 +452,7 @@ public final class HistoryViewState {
     /// gap after a filter hides a row or a query intent clears `rows`, while
     /// the old row closure or selection may still be reachable.
     package func requestPasteFromDisplayedRow(_ item: HistoryItemReference) {
-        guard displayedRows.contains(where: { $0.item == item }) else { return }
+        guard rows.contains(where: { $0.item == item && isDisplayed($0) }) else { return }
         onPaste(item)
     }
 
@@ -463,7 +478,7 @@ public final class HistoryViewState {
         for reference: HistoryItemReference
     ) -> NSItemProvider {
         let provider = NSItemProvider()
-        guard let row = displayedRows.first(where: { $0.item == reference }) else {
+        guard let row = rows.first(where: { $0.item == reference && isDisplayed($0) }) else {
             return provider
         }
         let advertised = row.typeIdentifiers

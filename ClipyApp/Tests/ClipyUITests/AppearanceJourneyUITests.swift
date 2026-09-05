@@ -258,14 +258,24 @@ final class AppearanceJourneyUITests: XCTestCase {
         ]
         assertExists(divider, timeout: 5, in: app, context: "preview divider")
 
-        // A conservative rightward drag: the trailing placement narrows the
-        // preview, and the 240…480 clamp keeps either direction safe.
+        // Start from the real reset width, independent of an earlier run's
+        // persisted adjustment. A rightward 80-point resize then remains
+        // above the collapse threshold in either preview placement.
+        divider.doubleClick()
+        assertExists(preview, timeout: 5, in: app, context: "preview reset before resizing")
+
+        // This journey exercises settled resizing. The default 500px/s drag
+        // with immediate release can legitimately trigger fling-to-collapse
+        // even when its final width is above the threshold. Use XCTest's
+        // explicit pointer velocity and hold at the endpoint before release.
         let dividerCenter = divider.coordinate(
             withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
         )
-        dividerCenter.press(
+        dividerCenter.click(
             forDuration: 0.3,
-            thenDragTo: dividerCenter.withOffset(CGVector(dx: 80, dy: 0))
+            thenDragTo: dividerCenter.withOffset(CGVector(dx: 80, dy: 0)),
+            withVelocity: XCUIGestureVelocity(rawValue: 40),
+            thenHoldForDuration: 0.5
         )
         assertExists(
             preview,

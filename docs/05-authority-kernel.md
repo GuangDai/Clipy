@@ -714,6 +714,11 @@ a partial total. Content blobs are not decoded, and the read writes no state.
 
 `ThumbnailService` installs an exact-key source-to-decode task before its first suspension. The creator asks the Authority to fetch and fully hydrate exactly one item, verify the requested Content Version, derive Effective Content, and return immutable source image bytes. An existing-flight caller instead asks the Authority for a scalar-only dimension/existence/version fence before awaiting that task. ImageIO decode occurs only after all SwiftData objects and context have been released; no joiner rehydrates the content blob.
 
+Distinct creators wait for the preceding source-to-decode operation to finish
+before loading their own source. Waiting tasks retain request identity and the
+source-loading closure, not hydrated image bytes. A completion-only task tail
+advances on success, no-image, and failure, and is cleared when no flights remain.
+
 The worker aspect-fits the primary image into both requested pixel dimensions,
 using its display orientation when computing the downsample limit. Neither
 decoded axis exceeds the corresponding requested axis; aspect ratio is

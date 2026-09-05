@@ -951,6 +951,7 @@ public struct HistoryPanelView: View {
                     isSearchFieldFocused: isSearchFieldFocused,
                     selection: $surfaceState.selection,
                     sourceIcons: sourceIcons,
+                    onFocusHistory: { isSearchFieldFocused = false },
                     onShowDetails: { item in surfaceState.detailsPath.append(item) }
                 )
                 .navigationDestination(for: HistoryItemReference.self) { item in

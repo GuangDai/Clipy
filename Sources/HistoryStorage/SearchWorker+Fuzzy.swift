@@ -130,7 +130,8 @@ extension SearchWorker {
         // completion bit or can overflow inside Fuse. The worker therefore
         // enforces the Part VI 64-Character bound before Fuse is called
         // (03b §8; 06 §2; V1-Verified/03c).
-        guard term.count <= limits.maximumFuzzyQueryCharacters else {
+        guard term.prefix(limits.maximumFuzzyQueryCharacters + 1).count
+                <= limits.maximumFuzzyQueryCharacters else {
             throw HistoryFailure.invalidInput(.invalidSearchTerm)
         }
         // `createPattern` lowercases the pattern (isCaseSensitive ==

@@ -854,11 +854,12 @@ struct HistoryViewStateTests {
     /// Switching a long exact draft to fuzzy admits one bounded query intent
     /// without first publishing an invalid fuzzy request. The raw draft stays
     /// untouched so switching back to a syntax-bearing mode is lossless.
-    @Test func longExactToFuzzyIsOneAtomicAdmittedIntent() async {
+    @Test(arguments: ["x", "e\u{301}", "😀"])
+    func longExactToFuzzyIsOneAtomicAdmittedIntent(character: String) async {
         let history = ScriptedHistory()
         let state = HistoryViewState(history: history)
-        let rawDraft = String(repeating: "x", count: 65)
-        let admittedDraft = String(repeating: "x", count: 64)
+        let admittedDraft = String(repeating: character, count: 64)
+        let rawDraft = admittedDraft + "TAIL" + String(repeating: "suffix", count: 2_000)
 
         state.searchText = rawDraft
         state.searchMode = .exact
@@ -885,6 +886,13 @@ struct HistoryViewStateTests {
                 == .search(text: admittedDraft, mode: .fuzzy)
         )
         #expect(state.searchText == rawDraft)
+
+        state.searchMode = .regexp
+        #expect(await pollUntil {
+            await history.observeRequests.last?.kind
+                == .search(text: rawDraft, mode: .regexp)
+        })
+        #expect(Data(state.searchText.utf8) == Data(rawDraft.utf8))
 
         state.deactivate()
         await history.finishObservation()

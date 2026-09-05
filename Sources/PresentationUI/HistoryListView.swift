@@ -40,6 +40,7 @@ struct HistoryListView: View {
     private let isSearchFieldFocused: Bool
     private let selection: Binding<HistoryItemID?>
     private let sourceIcons: SourceIconStore?
+    private let onFocusHistory: () -> Void
     private let onShowDetails: (HistoryItemReference) -> Void
 
     /// The browsing column's live width — the single wide/narrow signal
@@ -56,6 +57,7 @@ struct HistoryListView: View {
         isSearchFieldFocused: Bool,
         selection: Binding<HistoryItemID?>,
         sourceIcons: SourceIconStore? = nil,
+        onFocusHistory: @escaping () -> Void = {},
         onShowDetails: @escaping (HistoryItemReference) -> Void
     ) {
         self.viewState = viewState
@@ -66,6 +68,7 @@ struct HistoryListView: View {
         self.isSearchFieldFocused = isSearchFieldFocused
         self.selection = selection
         self.sourceIcons = sourceIcons
+        self.onFocusHistory = onFocusHistory
         self.onShowDetails = onShowDetails
     }
 
@@ -156,6 +159,16 @@ struct HistoryListView: View {
             onShowDetails: onShowDetails
         )
         .tag(row.item.id)
+        // Clicking even the already-selected row transfers keyboard intent
+        // out of search, so Space opens Quick Look instead of editing the
+        // query. Keep this simultaneous with the row's double-click Copy;
+        // a single click only selects and changes focus (Card 14A).
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                selection.wrappedValue = row.item.id
+                onFocusHistory()
+            }
+        )
         // Drag-out loads its bytes lazily from the History paste read
         // (`HistoryViewState.dragItemProvider`), never from row state.
         // `onDrag(_:)` is the NSItemProvider-based drag API on macOS (the
