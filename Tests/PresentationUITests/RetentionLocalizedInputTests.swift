@@ -139,9 +139,10 @@ struct RetentionLocalizedInputTests {
             storage: StorageRetention(maxTotalBytes: 4_999 * 1_048_576 + 1),
             revisions: RevisionRetention(maxRevisionsPerItem: 20, maxRevisionBytesPerItem: 64 * 1_048_576)
         )
+        let request = draft.beginLoadRequest()
         draft.acceptLoaded(
             HistoryRetentionConfiguration(maximumUnpinnedItems: 5_000, policies: policies),
-            requestedAt: draft.beginLoadRequest()
+            requestedAt: request
         )
         #expect(draft.maximumUnpinnedText == LocalizedCountPresentation.number(5_000, locale: locale))
         #expect(draft.ageDaysText == LocalizedCountPresentation.number(2_000, locale: locale))

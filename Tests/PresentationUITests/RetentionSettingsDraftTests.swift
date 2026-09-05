@@ -8,6 +8,132 @@ import Testing
 
 @Suite("Retention settings draft")
 struct RetentionSettingsDraftTests {
+    @Test("an earlier settings load cannot overwrite a newer load without intervening edits")
+    func newerLoadOwnsTheExactBaseline() throws {
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+        let earlier = draft.beginLoadRequest()
+        let newer = draft.beginLoadRequest()
+        let current = HistoryRetentionConfiguration(
+            maximumUnpinnedItems: 42,
+            policies: HistoryRetentionPolicies(
+                age: AgeRetention(maxAge: 90_001),
+                storage: StorageRetention(maxTotalBytes: 1_048_577), revisions: nil
+            )
+        )
+        let acceptedNewer = draft.acceptLoaded(current, requestedAt: newer)
+        #expect(acceptedNewer)
+        #expect(!draft.isCurrent(earlier))
+        let acceptedEarlier = draft.acceptLoaded(
+            HistoryRetentionConfiguration(
+                maximumUnpinnedItems: 7,
+                policies: HistoryRetentionPolicies(age: nil, storage: nil, revisions: nil)
+            ), requestedAt: earlier
+        )
+        #expect(!acceptedEarlier)
+        #expect(draft.countSubmission()?.maximumUnpinnedItems == 42)
+        #expect(try #require(draft.submission()).policies == current.policies)
+        #expect(!draft.hasCountChanges)
+        #expect(!draft.hasPolicyChanges)
+    }
+
+    @Test("disappearing settings invalidate reads without clearing user edits or their baseline")
+    func invalidatedLoadCannotEraseUserDraft() throws {
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+        load(HistoryRetentionConfiguration(
+            maximumUnpinnedItems: 37,
+            policies: HistoryRetentionPolicies(
+                age: AgeRetention(maxAge: 90_001),
+                storage: StorageRetention(maxTotalBytes: 1_048_577), revisions: nil
+            )
+        ), into: &draft)
+        let request = draft.beginLoadRequest()
+        draft.setMaximumUnpinnedText("31")
+        draft.setStorageMiBText("15")
+        draft.invalidateLoadRequest()
+        #expect(!draft.isCurrent(request))
+        let acceptedInvalidated = draft.acceptLoaded(
+            HistoryRetentionPolicies(age: nil, storage: nil, revisions: nil),
+            requestedAt: request
+        )
+        #expect(!acceptedInvalidated)
+        #expect(draft.maximumUnpinnedText == "31")
+        #expect(draft.storageMiBText == "15")
+        #expect(draft.maximumUnpinnedValueIsDirty)
+        #expect(draft.storageValueIsDirty)
+        let submission = try #require(draft.submission())
+        #expect(submission.policies.age?.maxAge == 90_001)
+        #expect(submission.policies.storage?.maxTotalBytes == 15_728_640)
+        let count = try #require(draft.countSubmission())
+        #expect(draft.maximumUnpinnedRequiresTightening(for: count))
+
+        // Reopening starts after these edits. It must preserve them just as
+        // a read that started before the edits does, while updating untouched
+        // fields and the authoritative strictness baseline.
+        let reopened = draft.beginLoadRequest()
+        let acceptedReopened = draft.acceptLoaded(HistoryRetentionConfiguration(
+            maximumUnpinnedItems: 20,
+            policies: HistoryRetentionPolicies(
+                age: AgeRetention(maxAge: 180_001),
+                storage: StorageRetention(maxTotalBytes: 2_097_153), revisions: nil
+            )
+        ), requestedAt: reopened)
+        #expect(acceptedReopened)
+        #expect(draft.maximumUnpinnedText == "31")
+        #expect(draft.storageMiBText == "15")
+        #expect(draft.maximumUnpinnedValueIsDirty)
+        #expect(draft.storageValueIsDirty)
+        #expect(draft.ageDaysText == "3")
+        #expect(try #require(draft.submission()).policies.age?.maxAge == 180_001)
+        #expect(try #require(draft.submission()).policies.storage?.maxTotalBytes == 15_728_640)
+        #expect(!draft.maximumUnpinnedRequiresTightening(for: count))
+    }
+
+    @Test("reload preserves unsaved toggles and all V2 value fields")
+    func reloadedConfigurationDoesNotDiscardExistingPolicyEdits() throws {
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+        draft.setAgeEnabled(true)
+        draft.setAgeDaysText("4")
+        draft.setStorageEnabled(true)
+        draft.setStorageMiBText("2")
+        draft.setRevisionCountEnabled(true)
+        draft.setRevisionCountText("3")
+        draft.setRevisionBytesEnabled(true)
+        draft.setRevisionMiBText("5")
+        let request = draft.beginLoadRequest()
+        let accepted = draft.acceptLoaded(
+            HistoryRetentionPolicies(age: nil, storage: nil, revisions: nil),
+            requestedAt: request
+        )
+        #expect(accepted)
+        let policies = try #require(draft.submission()).policies
+        #expect(policies.age?.maxAge == 345_600)
+        #expect(policies.storage?.maxTotalBytes == 2_097_152)
+        #expect(policies.revisions?.maxRevisionsPerItem == 3)
+        #expect(policies.revisions?.maxRevisionBytesPerItem == 5_242_880)
+        #expect(draft.hasPolicyChanges)
+    }
+
+    @Test("a fresh configuration read clears old success feedback without changing edited values")
+    func reloadingRetiresPriorSuccessFeedback() throws {
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+        draft.setMaximumUnpinnedText("37")
+        draft.setAgeEnabled(true)
+        let policies = try #require(draft.submission())
+        let acceptedPolicies = draft.acceptApplied(policies, successMessage: "policies saved")
+        #expect(acceptedPolicies)
+        let count = try #require(draft.countSubmission())
+        let acceptedCount = draft.acceptApplied(count, successMessage: "count saved")
+        #expect(acceptedCount)
+        #expect(draft.acceptedSuccessMessage == "policies saved")
+        #expect(draft.acceptedCountSuccessMessage == "count saved")
+        let before = try #require(draft.submission()).policies
+        _ = draft.beginLoadRequest()
+        #expect(draft.acceptedSuccessMessage == nil)
+        #expect(draft.acceptedCountSuccessMessage == nil)
+        #expect(draft.maximumUnpinnedText == "37")
+        #expect(try #require(draft.submission()).policies == before)
+    }
+
     private func load(
         _ policies: HistoryRetentionPolicies,
         into draft: inout RetentionSettingsDraft

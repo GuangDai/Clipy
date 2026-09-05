@@ -15,6 +15,7 @@ import HistoryCore
 internal struct RetentionSettingsDraft {
     internal struct LoadRequest: Sendable {
         fileprivate let editGeneration: UInt64
+        fileprivate let loadGeneration: UInt64
     }
 
     internal struct Submission: Sendable {
@@ -70,6 +71,7 @@ internal struct RetentionSettingsDraft {
         revisions: nil
     )
     private var editGeneration: UInt64 = 0
+    private var loadGeneration: UInt64 = 0
     private let locale: Locale
     internal private(set) var acceptedSuccessMessage: String?
     internal private(set) var acceptedCountSuccessMessage: String?
@@ -132,13 +134,26 @@ internal struct RetentionSettingsDraft {
     internal var revisionCountInputIsValid: Bool { revisionCount != nil }
     internal var revisionBytesInputIsValid: Bool { revisionMiB != nil }
 
-    internal func beginLoadRequest() -> LoadRequest {
-        LoadRequest(editGeneration: editGeneration)
+    internal mutating func beginLoadRequest() -> LoadRequest {
+        loadGeneration += 1
+        acceptedSuccessMessage = nil
+        acceptedCountSuccessMessage = nil
+        return LoadRequest(editGeneration: editGeneration, loadGeneration: loadGeneration)
+    }
+
+    /// A disappeared Settings surface cannot accept a pending read. Retire
+    /// only that read's ownership; user text and per-field edits survive.
+    internal mutating func invalidateLoadRequest() {
+        loadGeneration += 1
+    }
+
+    internal func isCurrent(_ request: LoadRequest) -> Bool {
+        request.loadGeneration == loadGeneration
     }
 
     /// Accepts the complete configured snapshot used by both Settings tabs.
-    /// A late read refreshes the count baseline but preserves a newer count
-    /// edit, then applies the same per-field merge to the V2 policy bundle.
+    /// A current read refreshes the count baseline but preserves an unsaved
+    /// count edit, then applies the same per-field merge to the V2 bundle.
     /// This is one History read and one edit generation, so count and policy
     /// controls cannot render values from different persisted snapshots.
     @discardableResult
@@ -146,77 +161,66 @@ internal struct RetentionSettingsDraft {
         _ configuration: HistoryRetentionConfiguration,
         requestedAt request: LoadRequest
     ) -> Bool {
-        let generationIsCurrent = request.editGeneration == editGeneration
+        guard isCurrent(request) else { return false }
         configuredMaximumUnpinnedItems = configuration.maximumUnpinnedItems
-        if generationIsCurrent || !maximumUnpinnedValueIsDirty {
+        if !maximumUnpinnedValueIsDirty {
             maximumUnpinnedText = formatted(configuration.maximumUnpinnedItems)
         }
-        let accepted = acceptLoaded(
+        return acceptLoaded(
             configuration.policies,
             requestedAt: request
         )
-        if accepted {
-            maximumUnpinnedValueIsDirty = false
-        }
-        return accepted
     }
 
     /// Accepts a configured-policy read against the edit generation at which
     /// it started (`04` Red 10A). A late read always refreshes the hidden
     /// authoritative comparison baseline and reflects each untouched control,
-    /// while preserving only toggles/fields carrying a newer dirty edit. This
-    /// per-control merge prevents one storage edit from erasing a configured
-    /// age or revision policy in the next whole-policy submission.
+    /// while preserving dirty toggles/fields, including edits made before a
+    /// reload began. Opening Settings again must not discard unsaved text.
+    /// Untouched fields still adopt the newest exact stored policy values.
     @discardableResult
     internal mutating func acceptLoaded(
         _ policies: HistoryRetentionPolicies,
         requestedAt request: LoadRequest
     ) -> Bool {
+        guard isCurrent(request) else { return false }
         let generationIsCurrent = request.editGeneration == editGeneration
         configuredPolicies = policies
-        if generationIsCurrent || !ageToggleIsDirty {
+        if !ageToggleIsDirty {
             ageEnabled = policies.age != nil
         }
         if let age = policies.age,
-           generationIsCurrent || !ageValueIsDirty {
+           !ageValueIsDirty {
             ageDaysText = formatted(Self.ceilingDays(age.maxAge))
         }
-        if generationIsCurrent || !storageToggleIsDirty {
+        if !storageToggleIsDirty {
             storageEnabled = policies.storage != nil
         }
         if let storage = policies.storage,
-           generationIsCurrent || !storageValueIsDirty {
+           !storageValueIsDirty {
             storageMiBText = formatted(Self.ceilingMiB(
                 storage.maxTotalBytes,
                 range: Self.storageMiBRange
             ))
         }
-        if generationIsCurrent || !revisionCountToggleIsDirty {
+        if !revisionCountToggleIsDirty {
             revisionCountEnabled = policies.revisions?.maxRevisionsPerItem != nil
         }
         if let count = policies.revisions?.maxRevisionsPerItem,
-           generationIsCurrent || !revisionCountValueIsDirty {
+           !revisionCountValueIsDirty {
             revisionCountText = formatted(count)
         }
-        if generationIsCurrent || !revisionBytesToggleIsDirty {
+        if !revisionBytesToggleIsDirty {
             revisionBytesEnabled = policies.revisions?.maxRevisionBytesPerItem != nil
         }
         if let bytes = policies.revisions?.maxRevisionBytesPerItem,
-           generationIsCurrent || !revisionBytesValueIsDirty {
+           !revisionBytesValueIsDirty {
             revisionMiBText = formatted(Self.ceilingMiB(
                 bytes,
                 range: Self.revisionMiBRange
             ))
         }
         guard generationIsCurrent else { return false }
-        ageValueIsDirty = false
-        storageValueIsDirty = false
-        revisionCountValueIsDirty = false
-        revisionBytesValueIsDirty = false
-        ageToggleIsDirty = false
-        storageToggleIsDirty = false
-        revisionCountToggleIsDirty = false
-        revisionBytesToggleIsDirty = false
         acceptedSuccessMessage = nil
         acceptedCountSuccessMessage = nil
         return true

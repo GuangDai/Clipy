@@ -112,6 +112,11 @@ public struct ClipySettingsView: View {
                 .frame(width: 480, height: 560)
         }
         .task { await loadRetentionConfiguration() }
+        .onDisappear {
+            retentionDraft.invalidateLoadRequest()
+            hasLoadedRetentionConfiguration = false
+            retentionConfigurationFailure = nil
+        }
     }
 
     /// One public read supplies both tabs. A response racing a user edit is
@@ -119,15 +124,21 @@ public struct ClipySettingsView: View {
     /// completed still unlocks Apply because the authoritative comparison
     /// baseline arrived even when newer text wins the display merge.
     private func loadRetentionConfiguration() async {
+        guard !Task.isCancelled else { return }
         let request = retentionDraft.beginLoadRequest()
+        hasLoadedRetentionConfiguration = false
+        retentionConfigurationFailure = nil
         do {
             let configuration = try await viewState.retentionConfiguration()
+            guard !Task.isCancelled, retentionDraft.isCurrent(request) else { return }
             retentionDraft.acceptLoaded(configuration, requestedAt: request)
             hasLoadedRetentionConfiguration = true
             retentionConfigurationFailure = nil
         } catch let failure as HistoryFailure {
+            guard !Task.isCancelled, retentionDraft.isCurrent(request) else { return }
             retentionConfigurationFailure = FailurePresentation.message(for: failure)
         } catch {
+            guard !Task.isCancelled, retentionDraft.isCurrent(request) else { return }
             retentionConfigurationFailure = RetentionSettingsCopy.readFailure
         }
     }
