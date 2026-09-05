@@ -406,12 +406,17 @@ private enum PreviewTextCodec: Sendable {
         switch self {
         case .declared(.utf8):
             return String(data: bytes, encoding: .utf8)
-        case .declared(.nativeUTF16):
+        case .declared(.nativeUTF16), .declared(.externalUTF16):
             if bytes.starts(with: [0xFE, 0xFF]) {
                 return String(data: bytes.dropFirst(2), encoding: .utf16BigEndian)
             }
             if bytes.starts(with: [0xFF, 0xFE]) {
                 return String(data: bytes.dropFirst(2), encoding: .utf16LittleEndian)
+            }
+            // Native text follows this app's arm64 little-endian platform;
+            // external UTF-16 defaults to big endian when no BOM is present.
+            if case .declared(.externalUTF16) = self {
+                return String(data: bytes, encoding: .utf16BigEndian)
             }
             return String(data: bytes, encoding: .utf16LittleEndian)
         }
@@ -420,5 +425,6 @@ private enum PreviewTextCodec: Sendable {
     private static let admittedIdentifiers: Set<ClipboardFormatIdentifier> = [
         .utf8PlainText,
         .utf16PlainText,
+        .utf16ExternalPlainText,
     ]
 }

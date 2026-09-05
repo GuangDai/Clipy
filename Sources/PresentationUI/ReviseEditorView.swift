@@ -337,8 +337,8 @@ struct ReviseEditorView: View {
         let replacementIsAvailable = draft.canReplace(representation)
         let replacementAccessibilityHint = replacementIsAvailable
             ? " Replace substitutes literal UTF-8 plain text."
-            : " Replace is unavailable because Clipy cannot safely decode"
-                + " and re-encode this format yet."
+            : " Replace requires valid UTF-8 plain text. Other formats can"
+                + " be preserved, restored, or hidden."
         return VStack(alignment: .leading, spacing: PanelTheme.spacingXSmall) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(
@@ -367,8 +367,8 @@ struct ReviseEditorView: View {
                     Text("Use Original").tag(ReviseEditorDraft.Choice.useOriginal)
                     Text("Hide").tag(ReviseEditorDraft.Choice.hide)
                     if replacementIsAvailable {
-                        // The first encoder-backed editing route is exact
-                        // Exact UTF-8 plain text only (review TYPE-2).
+                        // Exact UTF-8 plain text is the editor's paired codec;
+                        // Details may display other encodings (review TYPE-2).
                         Text("Replace").tag(ReviseEditorDraft.Choice.replace)
                     }
                 }
@@ -388,8 +388,8 @@ struct ReviseEditorView: View {
             }
             if !replacementIsAvailable {
                 Label(
-                    "Replace unavailable: Clipy cannot safely decode and "
-                        + "re-encode this format yet. Keep Current preserves "
+                    "Replace supports valid UTF-8 plain text only. "
+                        + "Keep Current preserves "
                         + "its exact bytes.",
                     systemImage: "lock"
                 )

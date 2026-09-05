@@ -1,4 +1,4 @@
-/// Projection recipe-v2 public reopen and atomic startup-rebuild proofs.
+/// Projection recipe-v3 public reopen and atomic startup-rebuild proofs.
 /// Owning spec: docs/05-authority-kernel.md §13, §15.
 import Foundation
 import HistoryCore
@@ -7,7 +7,7 @@ import SwiftData
 import Testing
 @testable import HistoryStorage
 
-@Suite("Projection recipe v2 startup rebuild")
+@Suite("Projection recipe v3 startup rebuild")
 struct ProjectionRecipeV2RebuildTests {
     private struct LegacyFixture: Sendable {
         let id: HistoryItemID
@@ -35,7 +35,9 @@ struct ProjectionRecipeV2RebuildTests {
         at storeURL: URL,
         count: Int,
         corruptLastRevisionState: Bool = false,
-        activeRevisionForFirst: Bool = false
+        activeRevisionForFirst: Bool = false,
+        projectionVersion: UInt16 = 1,
+        textTypeIdentifier: String = "public.utf8-plain-text"
     ) async throws -> [LegacyFixture] {
         let preparation = IngestPreparationActor()
         let observedAt = Date(timeIntervalSinceReferenceDate: 700_060_000)
@@ -53,14 +55,16 @@ struct ProjectionRecipeV2RebuildTests {
             let canonicalHTML = "<h1>CanonicalMarkup\(index)</h1>"
             let canonicalRTF = #"{\rtf1 CanonicalRTF"# + "\(index)}"
             let bundle = try await preparation.prepare(
-                WSSupport.textCapture(
-                    canonicalText,
-                    observedAt: observedAt.addingTimeInterval(Double(index)),
-                    source: "com.example.projection-v2",
-                    extra: [
-                        ("public.html", Array(canonicalHTML.utf8)),
-                        ("public.rtf", Array(canonicalRTF.utf8)),
-                    ]
+                ClipboardCapture(
+                    representations: [
+                        CapturedRepresentation(typeIdentifier: textTypeIdentifier,
+                            bytes: canonicalText.data(using: textTypeIdentifier == "public.utf16-external-plain-text"
+                                ? .utf16BigEndian : .utf8)!),
+                        CapturedRepresentation(typeIdentifier: "public.html", bytes: Data(canonicalHTML.utf8)),
+                        CapturedRepresentation(typeIdentifier: "public.rtf", bytes: Data(canonicalRTF.utf8)),
+                    ],
+                    origin: CopyOriginObservation(sourceApplication: "com.example.projection-v3", lineageHint: nil),
+                    observedAt: observedAt.addingTimeInterval(Double(index))
                 )
             )
             let hasActiveRevision = activeRevisionForFirst && index == 0
@@ -76,7 +80,8 @@ struct ProjectionRecipeV2RebuildTests {
             let effectiveBytes = [
                 Data(staleTitle.utf8),
                 Data(rtfSource.utf8),
-                Data(visibleText.utf8),
+                visibleText.data(using: textTypeIdentifier == "public.utf16-external-plain-text"
+                    ? .utf16BigEndian : .utf8)!,
             ]
             let revisions: [ContentRevision]
             let activeRevisionID: RevisionID?
@@ -98,7 +103,7 @@ struct ProjectionRecipeV2RebuildTests {
                             bytes: effectiveBytes[1]
                         ),
                         ContentRepresentation(
-                            typeIdentifier: "public.utf8-plain-text",
+                            typeIdentifier: textTypeIdentifier,
                             bytes: effectiveBytes[2]
                         ),
                     ])
@@ -171,7 +176,7 @@ struct ProjectionRecipeV2RebuildTests {
                 canonicalBlob: prepared.canonicalBlob,
                 revisionStateBlob: revisionStateBlob,
                 canonicalSignatureBlob: prepared.signatureBlob,
-                projectionSchemaVersion: ContentProjector.legacySchemaVersion,
+                projectionSchemaVersion: projectionVersion,
                 title: prepared.fixture.staleTitle,
                 searchBody: prepared.fixture.staleSearchBody,
                 effectiveTypeIdentifiersBlob: prepared.identifiersBlob,
@@ -219,14 +224,19 @@ struct ProjectionRecipeV2RebuildTests {
         try context.save()
     }
 
-    @Test("public reopen rebuilds v1 markup projection before browse/search/details")
-    func publicReopenRebuildsLegacyProjection() async throws {
+    @Test("public reopen rebuilds legacy projection before browse/search/details",
+          arguments: [UInt16(1), 2], ["public.utf8-plain-text", "public.utf16-external-plain-text"])
+    func publicReopenRebuildsLegacyProjection(
+        projectionVersion: UInt16, textTypeIdentifier: String
+    ) async throws {
         let storeURL = WSSupport.tempStoreURL("projection-recipe-v2-public")
         defer { WSSupport.removeStore(storeURL) }
         let fixtures = try await Self.seedLegacyRows(
             at: storeURL,
             count: 1,
-            activeRevisionForFirst: true
+            activeRevisionForFirst: true,
+            projectionVersion: projectionVersion,
+            textTypeIdentifier: textTypeIdentifier
         )
         let fixture = try #require(fixtures.first)
 
@@ -242,7 +252,7 @@ struct ProjectionRecipeV2RebuildTests {
         #expect(recent.rows.map(\.title) == [fixture.visibleText])
         #expect(
             recent.rows.first?.typeIdentifiers
-                == ["public.html", "public.rtf", "public.utf8-plain-text"]
+                == ["public.html", "public.rtf", textTypeIdentifier]
         )
 
         let visibleSearch = try await history.browse(HistoryBrowseRequest(
@@ -260,11 +270,11 @@ struct ProjectionRecipeV2RebuildTests {
         #expect(details.item.id == fixture.id)
         #expect(
             details.canonical.map(\.typeIdentifier)
-                == ["public.html", "public.rtf", "public.utf8-plain-text"]
+                == ["public.html", "public.rtf", textTypeIdentifier]
         )
         #expect(
             details.effective.map(\.typeIdentifier)
-                == ["public.html", "public.rtf", "public.utf8-plain-text"]
+                == ["public.html", "public.rtf", textTypeIdentifier]
         )
         #expect(details.canonical.map(\.bytes) == fixture.canonicalBytes)
         #expect(details.effective.map(\.bytes) == fixture.effectiveBytes)
@@ -275,7 +285,7 @@ struct ProjectionRecipeV2RebuildTests {
         let inspection = try WSSupport.makeContainer(storeURL: storeURL)
         let inspectionContext = ModelContext(inspection)
         let stored = try Self.fetchRow(id: fixture.id, in: inspectionContext)
-        #expect(stored.projectionSchemaVersion == 2)
+        #expect(stored.projectionSchemaVersion == 3)
         #expect(stored.title == fixture.visibleText)
         #expect(stored.searchBody == fixture.visibleText)
     }
@@ -309,7 +319,7 @@ struct ProjectionRecipeV2RebuildTests {
         }
     }
 
-    @Test("mixed v1/v2 startup rebuild leaves the existing v2 row untouched")
+    @Test("mixed legacy/current startup rebuild leaves the current row untouched")
     func mixedProjectionVersionsRebuildOnlyLegacyRow() async throws {
         let storeURL = WSSupport.tempStoreURL("projection-recipe-v2-mixed")
         defer { WSSupport.removeStore(storeURL) }

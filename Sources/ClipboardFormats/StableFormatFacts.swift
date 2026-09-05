@@ -19,10 +19,12 @@ package struct ClipboardFormatIdentifier: Hashable, Sendable {
     /// project, preview, present, or edit the representation.
     package var declaredStringCodec: DeclaredStringCodec? {
         switch self {
-        case .utf8PlainText, .utf8ExternalPlainText:
+        case .utf8PlainText:
             .utf8
         case .utf16PlainText:
             .nativeUTF16
+        case .utf16ExternalPlainText:
+            .externalUTF16
         default:
             nil
         }
@@ -35,16 +37,30 @@ package struct ClipboardFormatIdentifier: Hashable, Sendable {
 package enum DeclaredStringCodec: Equatable, Sendable {
     case utf8
     case nativeUTF16
+    /// UTF-16 with an optional byte-order mark; absent a BOM, big-endian.
+    /// Apple UTTypeUTF16ExternalPlainText declares this external byte order.
+    case externalUTF16
 }
 
 package extension ClipboardFormatIdentifier {
     static let plainText = Self(rawValue: "public.plain-text")
     static let utf8PlainText = Self(rawValue: "public.utf8-plain-text")
     static let utf16PlainText = Self(rawValue: "public.utf16-plain-text")
-    static let utf8ExternalPlainText = Self(
-        rawValue: "public.utf8-external-plain-text"
+    static let utf16ExternalPlainText = Self(
+        rawValue: "public.utf16-external-plain-text"
     )
     static let text = Self(rawValue: "public.text")
     static let rtf = Self(rawValue: "public.rtf")
     static let html = Self(rawValue: "public.html")
+    static let flatRTFD = Self(rawValue: "com.apple.flat-rtfd")
+    static let url = Self(rawValue: "public.url")
+    static let fileURL = Self(rawValue: "public.file-url")
+    static let image = Self(rawValue: "public.image")
+    static let png = Self(rawValue: "public.png")
+    static let jpeg = Self(rawValue: "public.jpeg")
+    static let tiff = Self(rawValue: "public.tiff")
+    static let heic = Self(rawValue: "public.heic")
+    static let heif = Self(rawValue: "public.heif")
+    static let gif = Self(rawValue: "com.compuserve.gif")
+    static let bmp = Self(rawValue: "com.microsoft.bmp")
 }

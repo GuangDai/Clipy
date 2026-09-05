@@ -222,7 +222,8 @@ internal actor ThumbnailWorker {
     ///    `.persistence(.corruptStoredValue)` (an in-store image
     ///    representation that fails decode is a stored-value problem).
     ///    `CGImageSourceCreateThumbnailAtIndex` downsamples with
-    ///    `MaxPixelSize` = `max(pixels.width, pixels.height)`,
+    ///    `MaxPixelSize` derived from an aspect fit of the oriented source
+    ///    into both requested dimensions,
     ///    `CreateThumbnailFromImageAlways` = true, and
     ///    `CreateThumbnailWithTransform` = true. A `nil` thumbnail is the
     ///    same corrupt-stored-value failure.
@@ -263,22 +264,6 @@ internal actor ThumbnailWorker {
             throw HistoryFailure.persistence(.corruptStoredValue)
         }
 
-        // The MaxPixelSize bounds the thumbnail's longer axis; ImageIO
-        // preserves aspect ratio, so the requested width/height are upper
-        // bounds and the actual decoded extent may be smaller.
-        let maxPixelSize = max(pixels.width, pixels.height)
-
-        // The `as CFDictionary` target makes the literal values infer as `Any`,
-        // so `Int` (bridged to NSNumber/CFNumber) and `CFBoolean` coexist. The
-        // `kCFBooleanTrue` constants are non-nil CoreFoundation globals —
-        // unwrapped explicitly so the IUO never coerces to `Any` (zero-warning
-        // rule, docs/AGENTS §4).
-        let thumbnailOptions = [
-            kCGImageSourceCreateThumbnailFromImageAlways: kCFBooleanTrue!,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
-            kCGImageSourceCreateThumbnailWithTransform: kCFBooleanTrue!
-        ] as CFDictionary
-
         // Primary-image index (audit
         // docs/reviews/2026-08-20-clipy-maccy-audit/03-apple-platform.md
         // §7 APL-C-06): a HEIF/HEIC container may carry auxiliary images
@@ -289,6 +274,32 @@ internal actor ThumbnailWorker {
         // product simplification (the audit's "GIF/TIFF first-frame may
         // be deliberate"), not an oversight.
         let imageIndex = CGImageSourceGetPrimaryImageIndex(source)
+
+        // 05 §14.5: ImageIO accepts one longest-axis limit, but PixelSize
+        // bounds both axes. Fit the display dimensions after EXIF rotation;
+        // using max(request.width, request.height) can overflow the short
+        // requested axis even when ImageIO preserves the source aspect ratio.
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(
+            source, imageIndex, nil
+        ) as? [CFString: Any],
+            let sourceWidth = properties[kCGImagePropertyPixelWidth] as? Int,
+            let sourceHeight = properties[kCGImagePropertyPixelHeight] as? Int,
+            sourceWidth > 0, sourceHeight > 0
+        else {
+            throw HistoryFailure.persistence(.corruptStoredValue)
+        }
+        let orientation = properties[kCGImagePropertyOrientation] as? Int ?? 1
+        let swapsAxes = (5...8).contains(orientation)
+        let width = Double(swapsAxes ? sourceHeight : sourceWidth)
+        let height = Double(swapsAxes ? sourceWidth : sourceHeight)
+        let scale = min(1, Double(pixels.width) / width, Double(pixels.height) / height)
+        let maxPixelSize = max(1, Int((max(width, height) * scale).rounded(.down)))
+
+        let thumbnailOptions = [
+            kCGImageSourceCreateThumbnailFromImageAlways: kCFBooleanTrue!,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+            kCGImageSourceCreateThumbnailWithTransform: kCFBooleanTrue!
+        ] as CFDictionary
 
         guard let cgImage = CGImageSourceCreateThumbnailAtIndex(
             source,

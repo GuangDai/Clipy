@@ -1,9 +1,6 @@
-/* Coexistence boundary (V2-07 §10): these two search result-count keys stay
-   in compiled-format tables because SwiftPM's native build (`swift test`)
-   copies `.xcstrings` verbatim without compiling them, so only
-   `.strings`/`.stringsdict` resolve in that lane. The Retention Settings
-   copy lives in `../RetentionSettings.xcstrings` instead, with embedded
-   English defaults at each lookup — see RetentionSettingsCopy.swift. */
+/* Native .strings/.stringsdict tables resolve in both SwiftPM and Xcode
+   builds (V2-07 §10). Retention Settings owns a separate RetentionSettings
+   table in each supported localization. */
 
 /* A lower-bound search result count; more results are available. */
 "%lld+ results" = "%lld+ results";

@@ -184,6 +184,26 @@ struct PreviewPaneStateTests {
         #expect(state.previewedItem == second)
     }
 
+    @Test func togglingAutoOpenPreferenceRetiresTheAlreadyQueuedDwell() async {
+        let state = makeState()
+        let first = reference()
+        let second = reference()
+
+        // Both preference changes happen before the queued dwell can run.
+        // Re-enabling must not revive work scheduled for the old selection.
+        state.handleSelectionChange(first)
+        state.isAutoOpenPreferenceEnabled = false
+        state.isAutoOpenPreferenceEnabled = true
+        for _ in 0..<100 { await Task.yield() }
+        #expect(!state.isOpen)
+        #expect(state.previewedItem == nil)
+
+        state.handleSelectionChange(second)
+        await waitForScheduledDwell { state.previewedItem == second }
+        #expect(state.isOpen)
+        #expect(state.previewedItem == second)
+    }
+
     @Test func panelClosedDisarmsAutoOpenUntilThePanelBecomesKeyAgain() {
         let state = makeState()
         let first = reference()

@@ -29,11 +29,12 @@
 /// - `PreviewAccessProfileTests` (`.enabled(if: FixtureCatalog.available)`,
 ///   always on in CI because the fixture fetch step fails the job on any
 ///   error): the real-scale characterization over the fixtures-v1 image
-///   set. Header-prefix floors/ceilings are LITERAL facts of the pinned
+///   set. Header-prefix floors are LITERAL facts of the pinned
 ///   fixture bytes (PNG IHDR ends at byte 33; the JPEG SOF0 segment ends at
 ///   byte 177; GIF LSD at 13; BMP dimensions at 26; the TIFF IFD sits at
 ///   the END of its file — the layout scan is recorded in V2-08 §3), not
-///   UTI-name presumptions (09 §12's rule).
+///   UTI-name presumptions (09 §12's rule). Field placement gives no upper
+///   bound on when ImageIO publishes dimensions from an unfinalized source.
 ///
 /// Both suites only assert decoder facts the probe actually measures; no
 /// timing threshold is ever adjudicated here (characterization, playbook
@@ -216,6 +217,7 @@ struct PreviewAccessProbeTests {
             record.outputBytes = 640 * 360 * 4
             record.decoderStatus = 0
             record.decodesUnfinalizedAtFullLength = true
+            record.dimensionsAvailableUnfinalizedAtFullLength = true
             return record
         }
         // Create-on-first-use: nothing on disk before the first record.
@@ -264,7 +266,7 @@ struct PreviewAccessProbeTests {
 
     /// One child run over the synthesized PNG yields the three modes in
     /// wire order, echoing fixture identity and input bytes; the header
-    /// mode proves the dimensions are available from a small early prefix
+    /// mode measures the prefix needed to publish the dimensions
     /// (floor 24: PNG width/height end at byte 24) while the full mode
     /// decodes the 64×48 image unscaled (below the 640-px box).
     @Test func synthesizedPNGHeaderPrefixAndFullDecode() throws {
@@ -292,10 +294,10 @@ struct PreviewAccessProbeTests {
         #expect(header.intrinsicWidth == 64)
         #expect(header.intrinsicHeight == 48)
         #expect(header.decoderStatus != nil)
+        #expect(header.dimensionsAvailableUnfinalizedAtFullLength == true)
         let headerPrefix = try #require(header.satisfiedPrefixBytes)
         #expect(headerPrefix >= 24)
-        #expect(headerPrefix <= 4_096)
-        #expect(headerPrefix < png.count)
+        #expect(headerPrefix <= png.count)
         #expect(header.largestFailingPrefixBytes == headerPrefix - 1)
         let headerWallMs = try #require(header.wallMs)
         #expect(headerWallMs >= 0)
@@ -345,6 +347,7 @@ struct PreviewAccessProbeTests {
         #expect(header.intrinsicWidth == nil)
         #expect(header.satisfiedPrefixBytes == nil)
         #expect(header.largestFailingPrefixBytes == nil)
+        #expect(header.dimensionsAvailableUnfinalizedAtFullLength == nil)
         let full = records[2]
         #expect(full.outputWidth == nil)
         #expect(full.outputBytes == nil)
@@ -471,10 +474,11 @@ struct PreviewAccessProfileTests {
         return records
     }
 
-    /// The shared head-fixed-layout profile: the dimensions purpose is
-    /// served by a small early prefix (within one 4 KiB read), the
-    /// full-decode purpose produces the expected bounded thumbnail, and
-    /// the range mode is recorded relationally (never presumed).
+    /// Dimension fields are near the head, but ImageIO can defer publishing
+    /// them until later bytes or until finalization (V2-08 §5.1). Require
+    /// complete-source dimensions and validate the measured prefix relation;
+    /// an unavailable incremental header must retain its failed full-input
+    /// observation. Full decode still has exact product output expectations.
     private func expectHeadFixedProfile(_ fixture: RealFixture) throws {
         let records = try characterize(fixture)
         #expect(records.map(\.mode) == [.headerOnly, .incrementalRange, .fullDecode])
@@ -485,17 +489,26 @@ struct PreviewAccessProfileTests {
         let header = records[0]
         #expect(header.intrinsicWidth == fixture.intrinsicWidth)
         #expect(header.intrinsicHeight == fixture.intrinsicHeight)
-        let headerPrefix = try #require(header.satisfiedPrefixBytes)
-        #expect(headerPrefix >= fixture.headerPrefixFloor)
-        #expect(headerPrefix <= 4_096)
-        #expect(headerPrefix < fixture.inputBytes)
-        #expect(header.largestFailingPrefixBytes == headerPrefix - 1)
+        let dimensionsAvailable = try #require(
+            header.dimensionsAvailableUnfinalizedAtFullLength
+        )
+        if dimensionsAvailable {
+            let headerPrefix = try #require(header.satisfiedPrefixBytes)
+            #expect(headerPrefix >= fixture.headerPrefixFloor)
+            #expect(headerPrefix <= fixture.inputBytes)
+            #expect(header.largestFailingPrefixBytes == headerPrefix - 1)
+        } else {
+            #expect(header.satisfiedPrefixBytes == nil)
+            #expect(header.largestFailingPrefixBytes == fixture.inputBytes)
+        }
         let headerWallMs = try #require(header.wallMs)
         #expect(headerWallMs >= 0)
 
         let range = records[1]
         if let satisfied = range.satisfiedPrefixBytes {
-            #expect(satisfied >= headerPrefix)
+            if let headerPrefix = header.satisfiedPrefixBytes {
+                #expect(satisfied >= headerPrefix)
+            }
             #expect(satisfied < fixture.inputBytes)
             let outputWidth = try #require(range.outputWidth)
             let outputHeight = try #require(range.outputHeight)
@@ -566,14 +579,18 @@ struct PreviewAccessProfileTests {
         #expect(records.allSatisfy { $0.inputBytes == fixture.inputBytes })
 
         let header = records[0]
+        #expect(header.intrinsicWidth == 3_840)
+        #expect(header.intrinsicHeight == 2_160)
         if let headerPrefix = header.satisfiedPrefixBytes {
+            #expect(header.dimensionsAvailableUnfinalizedAtFullLength == true)
             #expect(headerPrefix > fixture.inputBytes - 8_192)
-            #expect(header.intrinsicWidth == 3_840)
-            #expect(header.intrinsicHeight == 2_160)
+            #expect(headerPrefix <= fixture.inputBytes)
+            #expect(header.largestFailingPrefixBytes == headerPrefix - 1)
         } else {
             // Unfinalized incremental TIFF never surfaced dimensions: the
             // header purpose is unservable by any prefix on this layout.
-            #expect(header.largestFailingPrefixBytes == nil)
+            #expect(header.dimensionsAvailableUnfinalizedAtFullLength == false)
+            #expect(header.largestFailingPrefixBytes == fixture.inputBytes)
         }
         let headerWallMs = try #require(header.wallMs)
         #expect(headerWallMs >= 0)

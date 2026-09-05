@@ -372,7 +372,7 @@ internal actor HistoryAuthority {
     /// projection/index work, validate the
     /// retained row count against the hard bound, first rebuild legacy
     /// projection rows from their validated content lineage, then require
-    /// projection schema version 2 and enforce the
+    /// projection schema version 3 and enforce the
     /// `RetainedBytesRow` 1:1 correspondence both directions with
     /// `bytesSchemaVersion == 1` (the V2 half of `V2-roadmap` §5 step 11,
     /// `RET-PLATFORM-1b(a)`; live from roadmap R.3 — with the amended
@@ -461,7 +461,7 @@ internal actor HistoryAuthority {
                 historyLimits: limits
             )
 
-            // §13 step 6 / §15: projection recipe v1 → v2 rebuild is an
+            // §13 step 6 / §15: projection recipes v1/v2 → v3 rebuild is an
             // Authority-owned, bounded, atomic startup operation. It finishes
             // before the Signature Index is declared ready or capture exists.
             try ContentProjectionRebuild.rebuildIfNeeded(

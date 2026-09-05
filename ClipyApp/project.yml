@@ -21,12 +21,9 @@ targets:
     platform: macOS
     sources:
       - Sources
-      # The app target carries no catalogs of its own: user-facing copy
-      # localizes in the owning SwiftPM targets (PresentationUI's
-      # Resources/RetentionSettings.xcstrings — compiled into the package
-      # resource bundle by xcodebuild — plus its legacy en.lproj tables for
-      # the search result counts; see RetentionSettingsCopy.swift's header
-      # for the native-`swift test` boundary).
+      # User-facing copy localizes in the owning SwiftPM targets.
+      # PresentationUI uses native .strings/.stringsdict resources so the
+      # package and generated-app builds resolve the same translations.
       - Resources
       - Tools/ClipyUDSF0Shared
     settings:
@@ -43,6 +40,7 @@ targets:
       # from PRODUCT_NAME (Clipy), not the target name.
       PRODUCT_MODULE_NAME: ClipyApp
       INFOPLIST_KEY_LSUIElement: YES
+      INFOPLIST_KEY_CFBundleAllowMixedLocalizations: YES
       INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
     dependencies:
       - package: Clipy

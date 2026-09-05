@@ -1,44 +1,12 @@
-/// RetentionSettingsCopy.swift — every user-facing string of the unified
-/// Retention Settings surface (V2-07 §5.2/§6.3), resolved through the
-/// package String Catalog `Resources/RetentionSettings.xcstrings` (source
-/// language English; V2-07 §10 UI localization, §10.4 plural-aware
-/// receipt feedback).
-///
-/// Build-lane boundary: xcodebuild (the ClipyApp lanes) compiles the
-/// catalog into the package resource bundle via xcstringstool, but
-/// SwiftPM's native build system copies `.xcstrings` verbatim — its
-/// resource manifest builder issues copy commands only — so `swift test`
-/// bundles carry the raw catalog JSON and no compiled
-/// `RetentionSettings.strings` table. Every lookup therefore passes the
-/// English copy as the `value:` default: the native lane renders the
-/// embedded English while the app lane resolves the compiled catalog
-/// entry. `RetentionSettingsCopyTests` pins both halves: resolved copy
-/// equals the pinned English and never the raw key, and the raw catalog
-/// (present verbatim in the native-lane bundle) carries an `en` entry for
-/// every key.
-///
-/// Coexistence boundary: the pre-existing search result-count keys stay
-/// in `en.lproj/Localizable.strings[dict]` — already compiled-format
-/// tables the native build serves directly (PR #50). Moving them into a
-/// `Localizable.xcstrings` would break `resultCountText` under
-/// `swift test`, and a catalog's compiled output collides with a
-/// same-named legacy table at one bundle path under xcodebuild.
+/// User-facing copy for unified Retention Settings (V2-07 §5.2/§10).
+/// Native .strings/.stringsdict resources give SwiftPM and Xcode the same
+/// translations and plural rules without a separate catalog compilation step.
 import Foundation
 
-/// The Retention surface's copy keys (V2-07 §10). Internal (not private)
-/// so the SwiftPM suites pin resolution and catalog parity directly
-/// through `@testable`, like `clearStatusFeedback`.
+/// The Retention surface's localized copy.
 internal enum RetentionSettingsCopy {
 
-    /// The catalog compiles to `RetentionSettings.strings[dict]`; a
-    /// surface-specific table name keeps the compiled output clear of the
-    /// legacy `Localizable` tables in the same resource bundle.
     internal static let tableName = "RetentionSettings"
-
-    /// The package resource bundle the copy resolves from — internal so
-    /// the catalog-parity test can read the verbatim-copied catalog in
-    /// the native lane (test targets carry no `Bundle.module` of their
-    /// own).
     internal static var bundle: Bundle { .module }
 
     // MARK: Tab and Items section
@@ -195,17 +163,21 @@ internal enum RetentionSettingsCopy {
 
     // MARK: Range hint and failures
 
-    /// The invalid-input caption shared by every Retention value field
-    /// (admission ranges: `V2-02` §8.3; count range: 06 §2). The key
-    /// carries the two `%lld` substitutions — String Catalog format
-    /// entries keep their substitutions in the key; the English value
-    /// positions them.
-    internal static func rangeHint(from lowerBound: Int, to upperBound: Int) -> String {
+    /// V2-07 §10.3: ranges use the same locale-aware digits and grouping
+    /// as counts in receipt feedback.
+    internal static func rangeHint(
+        from lowerBound: Int,
+        to upperBound: Int,
+        bundle: Bundle = .module,
+        locale: Locale = .current
+    ) -> String {
         formatted(
-            "Enter a whole number from %lld to %lld.",
-            "Enter a whole number from %1$lld to %2$lld.",
-            lowerBound,
-            upperBound
+            "settings.retention.range-hint",
+            "Enter a whole number from %1$@ to %2$@.",
+            bundle: bundle,
+            locale: locale,
+            LocalizedCountPresentation.number(lowerBound, locale: locale),
+            LocalizedCountPresentation.number(upperBound, locale: locale)
         )
     }
 
@@ -253,70 +225,90 @@ internal enum RetentionSettingsCopy {
         "The history could not be cleared."
     )
 
-    /// The applied-policies summary joins the two plural phrases as one
-    /// sentence (`V2-02` §12 transparent data-minimization feedback). Same
-    /// catalog shape as `rangeHint`: substitutions live in the key.
+    /// Translators own the summary order and punctuation (V2-02 §12).
     internal static func appliedSummary(
         retiredPhrase: String,
-        prunedPhrase: String
+        prunedPhrase: String,
+        bundle: Bundle = .module,
+        locale: Locale = .current
     ) -> String {
         formatted(
             "Done. %@, %@.",
             "Done. %1$@, %2$@.",
+            bundle: bundle,
+            locale: locale,
             retiredPhrase,
             prunedPhrase
         )
     }
 
-    /// "Removed N items." for one Danger Zone clear (03a §6).
-    internal static func clearedItemsRemoved(_ removed: Int) -> String {
+    internal static func clearedItemsRemoved(
+        _ removed: Int,
+        bundle: Bundle = .module,
+        locale: Locale = .current
+    ) -> String {
         plural(
             "Removed %lld items.",
-            one: "Removed %lld item.",
-            other: "Removed %lld items.",
-            count: removed
+            one: "Removed %2$@ item.",
+            other: "Removed %2$@ items.",
+            count: removed,
+            bundle: bundle,
+            locale: locale
         )
     }
 
-    /// "Done. N items removed." for one item-count apply (V2-07 §5.2).
-    internal static func countLimitItemsRemoved(_ removed: Int) -> String {
+    internal static func countLimitItemsRemoved(
+        _ removed: Int,
+        bundle: Bundle = .module,
+        locale: Locale = .current
+    ) -> String {
         plural(
             "Done. %lld items removed.",
-            one: "Done. %lld item removed.",
-            other: "Done. %lld items removed.",
-            count: removed
+            one: "Done. %2$@ item removed.",
+            other: "Done. %2$@ items removed.",
+            count: removed,
+            bundle: bundle,
+            locale: locale
         )
     }
 
-    /// The retired-items phrase of the applied-policies summary (`V2-02`
-    /// §12).
-    internal static func itemsRetired(_ retired: Int) -> String {
+    internal static func itemsRetired(
+        _ retired: Int,
+        bundle: Bundle = .module,
+        locale: Locale = .current
+    ) -> String {
         plural(
             "%lld items retired",
-            one: "%lld item retired",
-            other: "%lld items retired",
-            count: retired
+            one: "%2$@ item retired",
+            other: "%2$@ items retired",
+            count: retired,
+            bundle: bundle,
+            locale: locale
         )
     }
 
-    /// The pruned-revisions phrase of the applied-policies summary
-    /// (`V2-02` §12).
-    internal static func revisionsPruned(_ pruned: Int) -> String {
+    internal static func revisionsPruned(
+        _ pruned: Int,
+        bundle: Bundle = .module,
+        locale: Locale = .current
+    ) -> String {
         plural(
             "%lld revisions pruned",
-            one: "%lld revision pruned",
-            other: "%lld revisions pruned",
-            count: pruned
+            one: "%2$@ revision pruned",
+            other: "%2$@ revisions pruned",
+            count: pruned,
+            bundle: bundle,
+            locale: locale
         )
     }
 
-    // MARK: Lookup plumbing
+    // MARK: Resource lookup
 
-    /// Resolves one non-substituted key from the catalog. The embedded
-    /// English is the `value:` default, so a lane whose bundle carries no
-    /// compiled table (native `swift test`; see the file header) renders
-    /// the same copy and a missing entry can never surface a raw key.
-    internal static func plain(_ key: String, _ englishDefault: String) -> String {
+    internal static func plain(
+        _ key: String,
+        _ englishDefault: String,
+        bundle: Bundle = .module
+    ) -> String {
         bundle.localizedString(
             forKey: key,
             value: englishDefault,
@@ -324,37 +316,37 @@ internal enum RetentionSettingsCopy {
         )
     }
 
-    /// Resolves one format pattern (`%1$lld`-style) the same way and
-    /// formats it without locale grouping, matching the direct
-    /// interpolation the fields used before.
     private static func formatted(
         _ key: String,
         _ englishDefault: String,
+        bundle: Bundle,
+        locale: Locale,
         _ arguments: CVarArg...
     ) -> String {
         String(
-            format: plain(key, englishDefault),
+            format: plain(key, englishDefault, bundle: bundle),
+            locale: locale,
             arguments: arguments
         )
     }
 
-    /// Resolves one plural-varied key (V2-07 §10.4). The compiled catalog
-    /// answers with the stringsdict `%#@…@` pattern and
-    /// `localizedStringWithFormat` picks the locale's plural category.
-    /// The native lane's verbatim catalog copy cannot vary by count, so
-    /// the embedded default carries the correct English one/other form —
-    /// keeping the two lanes byte-identical for English.
+    /// The numeric first argument selects the language's plural rule;
+    /// the second carries FormatStyle's localized grouping and digits.
     private static func plural(
         _ key: String,
         one englishOne: String,
         other englishOther: String,
-        count: Int
+        count: Int,
+        bundle: Bundle,
+        locale: Locale
     ) -> String {
-        let format = bundle.localizedString(
-            forKey: key,
-            value: count == 1 ? englishOne : englishOther,
-            table: tableName
+        formatted(
+            key,
+            count == 1 ? englishOne : englishOther,
+            bundle: bundle,
+            locale: locale,
+            count,
+            LocalizedCountPresentation.number(count, locale: locale)
         )
-        return String.localizedStringWithFormat(format, count)
     }
 }

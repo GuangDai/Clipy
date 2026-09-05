@@ -22,6 +22,8 @@ struct HistoryRowFilteringTests {
             ["public.jpeg"],
             ["public.tiff"],
             ["public.heic"],
+            ["public.heif"],
+            ["com.microsoft.bmp"],
             ["com.compuserve.gif"],
         ]
     )
@@ -30,6 +32,15 @@ struct HistoryRowFilteringTests {
             HistoryRowKind.classify(effectiveTypeIdentifiers: typeIdentifiers)
                 == .image
         )
+        #expect(HistoryRowView.typeSymbol(for: typeIdentifiers) == "photo")
+        let row = filterFixtureRow(
+            id: "00000000-0000-0000-0000-00000000F106",
+            title: "image",
+            typeIdentifiers: typeIdentifiers
+        )
+        #expect(HistoryTypeFilter.images.admits(row))
+        #expect(!HistoryTypeFilter.text.admits(row))
+        #expect(!HistoryTypeFilter.links.admits(row))
     }
 
     @Test(arguments: [["public.url"], ["public.file-url"]])
@@ -46,7 +57,7 @@ struct HistoryRowFilteringTests {
             ["public.plain-text"],
             ["public.utf8-plain-text"],
             ["public.utf16-plain-text"],
-            ["public.utf8-external-plain-text"],
+            ["public.utf16-external-plain-text"],
             ["public.html"],
             ["public.rtf"],
             ["com.apple.flat-rtfd"],
@@ -64,6 +75,15 @@ struct HistoryRowFilteringTests {
             ["com.adobe.pdf"],
             ["public.data"],
             ["com.example.custom-type"],
+            ["public.image.private"],
+            ["public.png-custom"],
+            ["public.heif-private"],
+            ["com.microsoft.bmp-private"],
+            ["public.url-private"],
+            ["public.html-private"],
+            ["public.utf8-plain-text-private"],
+            ["public.utf8-external-plain-text"],
+            ["dyn.example"],
             [],
         ]
     )
@@ -72,6 +92,16 @@ struct HistoryRowFilteringTests {
             HistoryRowKind.classify(effectiveTypeIdentifiers: typeIdentifiers)
                 == .other
         )
+        #expect(HistoryRowView.typeSymbol(for: typeIdentifiers) == "doc.on.clipboard")
+        let row = filterFixtureRow(
+            id: "00000000-0000-0000-0000-00000000F107",
+            title: "opaque",
+            typeIdentifiers: typeIdentifiers
+        )
+        #expect(HistoryTypeFilter.all.admits(row))
+        #expect(!HistoryTypeFilter.images.admits(row))
+        #expect(!HistoryTypeFilter.text.admits(row))
+        #expect(!HistoryTypeFilter.links.admits(row))
     }
 
     /// Priority matches the row's fallback symbol: a row carrying BOTH a URL

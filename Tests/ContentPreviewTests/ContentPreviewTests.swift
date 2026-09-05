@@ -51,6 +51,55 @@ struct ContentPreviewTests {
         }
     }
 
+    @Test("external UTF-16 honors BOM and otherwise defaults to big endian")
+    func externalUTF16Artifact() async {
+        let fixtures = [
+            Data([0x00, 0x41, 0x03, 0xA9, 0xD8, 0x3E, 0xDD, 0x8A]),
+            Data([0xFE, 0xFF, 0x00, 0x41, 0x03, 0xA9, 0xD8, 0x3E, 0xDD, 0x8A]),
+            Data([0xFF, 0xFE, 0x41, 0x00, 0xA9, 0x03, 0x3E, 0xD8, 0x8A, 0xDD]),
+        ]
+        for bytes in fixtures {
+            let outcome = await renderer.renderHistoryPane([
+                PreviewRepresentation(
+                    typeIdentifier: "public.utf16-external-plain-text",
+                    bytes: bytes
+                ),
+            ])
+            guard case let .content(.text(text)) = outcome else {
+                Issue.record("expected external UTF-16 text, got \(outcome)")
+                continue
+            }
+            #expect(text.text == "AΩ🦊")
+            #expect(!text.wasTruncated)
+        }
+    }
+
+    @Test("malformed external UTF-16 fails or yields to a valid sibling")
+    func malformedExternalUTF16() async {
+        for bytes in [Data([0x41]), Data([0xFF, 0xFE]), Data([0xFE, 0xFF, 0x41])] {
+            let malformed = PreviewRepresentation(
+                typeIdentifier: "public.utf16-external-plain-text",
+                bytes: bytes
+            )
+            #expect(
+                await renderer.renderHistoryPane([malformed])
+                    == .failed(.malformedRepresentation)
+            )
+            let outcome = await renderer.renderHistoryPane([
+                malformed,
+                PreviewRepresentation(
+                    typeIdentifier: "public.utf8-plain-text",
+                    bytes: Data("valid sibling".utf8)
+                ),
+            ])
+            guard case let .content(.text(text)) = outcome else {
+                Issue.record("expected valid text sibling, got \(outcome)")
+                continue
+            }
+            #expect(text.text == "valid sibling")
+        }
+    }
+
     @Test("structured source uses its later exact plain-text sibling")
     func structuredSourceUsesExactPlainSibling() async {
         for structured in ["public.rtf", "public.html"] {
@@ -91,8 +140,8 @@ struct ContentPreviewTests {
         #expect(text.text == "valid sibling")
     }
 
-    @Test("declared codec fact alone does not expand preview admission")
-    func externalUTF8RemainsUnsupported() async {
+    @Test("the old invented external UTF-8 identifier remains opaque")
+    func inventedExternalUTF8RemainsUnsupported() async {
         let outcome = await renderer.renderHistoryPane([
             PreviewRepresentation(
                 typeIdentifier: "public.utf8-external-plain-text",

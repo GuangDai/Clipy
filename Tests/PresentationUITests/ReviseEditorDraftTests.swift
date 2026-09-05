@@ -591,6 +591,11 @@ struct ReviseEditorDraftTests {
                 effectiveBytes: Data("abstract current".utf8)
             ),
             NonReplaceableFormatFixture(
+                typeIdentifier: "public.utf16-external-plain-text",
+                canonicalBytes: Data([0x00, 0x6F, 0x00, 0x6C, 0x00, 0x64]),
+                effectiveBytes: Data([0x00, 0x6E, 0x00, 0x65, 0x00, 0x77])
+            ),
+            NonReplaceableFormatFixture(
                 typeIdentifier: "public.plain-text",
                 canonicalBytes: Data("unspecified original".utf8),
                 effectiveBytes: Data("unspecified current".utf8)

@@ -90,23 +90,24 @@ struct PreviewContentLoaderTests {
         await history.scriptDetails(details(for: refB, text: "bravo"))
         let loader = PreviewContentLoader(history: history)
 
-        Task { await loader.load(item: refA) }
+        let loadA = Task { await loader.load(item: refA) }
         #expect(await pollUntil { await history.detailRequests.count == 1 })
         #expect(loader.phase == .loading)
 
-        Task { await loader.load(item: refB) }
+        let loadB = Task { await loader.load(item: refB) }
         #expect(await pollUntil { await history.detailRequests.count == 2 })
         #expect(loader.requestedItem == refB)
 
         // B completes FIRST and publishes.
         await history.resumeDetails(for: refB.id)
-        #expect(await pollUntil { loader.phase == .content(.text("bravo")) })
+        await loadB.value
+        #expect(loader.phase == .content(.text("bravo")))
         #expect(loader.occurrence?.lastSource == "com.example.preview")
 
-        // A completes LATE: superseded, so the fence discards it — the
-        // settle window lets A's completion run in full before asserting.
+        // Join the older task itself, so the assertion follows its actual
+        // completion even on a busy runner.
         await history.resumeDetails(for: refA.id)
-        try? await Task.sleep(for: .milliseconds(150))
+        await loadA.value
         #expect(loader.phase == .content(.text("bravo")))
         #expect(loader.requestedItem == refB)
     }
@@ -189,7 +190,7 @@ struct PreviewContentLoaderTests {
             await history.resumeDetails(for: ref.id)
             await gate.waitUntilParked()
 
-            await loader.load(item: nil)
+            loader.clear()
             #expect(loader.requestedItem == nil)
             #expect(loader.phase == .unsupported)
             #expect(loader.raster == nil)
@@ -251,6 +252,18 @@ struct PreviewContentLoaderTests {
         _ = await task.value  // deterministic: the discarded load ran to its end
         #expect(loader.phase == .loading)
         #expect(loader.occurrence == nil)
+    }
+
+    @Test func cancelledBeforeStartingDoesNotRestoreClearedState() async {
+        let ref = reference("00000000-0000-0000-0000-0000000001C2", version: 1)
+        let loader = PreviewContentLoader(history: PreviewClipboardHistory.empty)
+        let task = Task { await loader.load(item: ref) }
+        task.cancel()
+        loader.clear()
+        await task.value
+
+        #expect(loader.requestedItem == nil)
+        #expect(loader.phase == .unsupported)
     }
 
     /// The version half of the fence: `details(for:)` reads by ID, so a
@@ -336,6 +349,34 @@ struct PreviewContentLoaderTests {
 
         #expect(loader.requestedItem == refA)
         #expect(loader.phase == .content(.text("recovered")))
+        #expect(!loader.canRetryFailure)
+    }
+
+    @Test func closingDuringRetryDiscardsItsLateDetails() async throws {
+        let ref = reference("00000000-0000-0000-0000-0000000001E8", version: 1)
+        let history = PausableDetailsHistory()
+        let loader = PreviewContentLoader(history: history)
+        let firstLoad = Task { await loader.load(item: ref) }
+        try #require(await pollUntil { await history.detailRequests.count == 1 })
+        await history.resumeDetails(
+            for: ref.id,
+            throwing: .temporarilyUnavailable(.dedupIndexRebuild)
+        )
+        await firstLoad.value
+        try #require(loader.canRetryFailure)
+
+        await history.scriptDetails(details(for: ref, text: "retired retry"))
+        let retry = Task { await loader.retry() }
+        try #require(await pollUntil { await history.detailRequests.count == 2 })
+        retry.cancel()
+        loader.clear()
+        await history.resumeDetails(for: ref.id)
+        await retry.value
+
+        #expect(loader.requestedItem == nil)
+        #expect(loader.phase == .unsupported)
+        #expect(loader.occurrence == nil)
+        #expect(loader.raster == nil)
         #expect(!loader.canRetryFailure)
     }
 

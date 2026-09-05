@@ -62,8 +62,10 @@ package enum PreviewAccessMode: String, Codable, Sendable {
 ///
 /// - `satisfiedPrefixBytes`/`largestFailingPrefixBytes`: header mode
 ///   binary-searches the EXACT minimum satisfying prefix (failing = minimum
-///   − 1); range mode reports the factor-4 ladder rung that first decoded
-///   and the previous failing rung; full mode leaves both nil (it reads the
+///   − 1), or records the full input as failing when the unfinalized
+///   source never publishes dimensions; range mode reports the factor-4
+///   ladder rung that first decoded and the previous failing rung;
+///   full mode leaves both nil (it reads the
 ///   whole input by construction).
 /// - `wallMs`: header = full-data `CGImageSourceCopyPropertiesAtIndex`;
 ///   range = the satisfying ladder decode (nil when no prefix decoded);
@@ -77,6 +79,9 @@ package enum PreviewAccessMode: String, Codable, Sendable {
 /// - `decodesUnfinalizedAtFullLength`: range mode only — separates "needs
 ///   the tail bytes" from "needs the completion flag" when no proper prefix
 ///   decoded.
+/// - `dimensionsAvailableUnfinalizedAtFullLength`: header mode only, after
+///   complete-source dimensions are available. A false value distinguishes
+///   an incremental decoder limitation from missing dimensions in the file.
 package struct PreviewAccessRecord: Codable, Sendable, Equatable {
     package var seq = 0
     /// Milliseconds on the continuous clock since sink creation — monotone
@@ -102,6 +107,7 @@ package struct PreviewAccessRecord: Codable, Sendable, Equatable {
     package var outputBytes: Int?
     package var decoderStatus: Int?
     package var decodesUnfinalizedAtFullLength: Bool?
+    package var dimensionsAvailableUnfinalizedAtFullLength: Bool?
 
     package init(
         fixtureID: String,
@@ -192,6 +198,14 @@ package enum PreviewAccessProbe {
         }
         record.wallMs = elapsedMilliseconds(since: start)
         guard record.intrinsicWidth != nil else { return record }
+        let unfinalizedSize = primaryPixelSizeFromIncrementalPrefix(
+            bytes, count: bytes.count
+        )
+        record.dimensionsAvailableUnfinalizedAtFullLength = unfinalizedSize != nil
+        guard unfinalizedSize != nil else {
+            record.largestFailingPrefixBytes = bytes.count
+            return record
+        }
         let search = minimumSatisfyingPrefix(totalBytes: bytes.count) { prefix in
             primaryPixelSizeFromIncrementalPrefix(bytes, count: prefix) != nil
         }
@@ -365,9 +379,9 @@ package enum PreviewAccessProbe {
     /// Exact minimum satisfying prefix by binary search with VERIFIED
     /// endpoints (the caller's anchor proved `totalBytes` satisfies; zero
     /// is probed, not assumed). Returns nil when even the full input fails.
-    /// Cheap enough for the header condition, which stops parsing at the
-    /// header; the range mode deliberately uses the coarser ladder instead
-    /// because each of its probes is a real partial decode.
+    /// A property read need not stop at the file's dimension fields: ImageIO
+    /// may require later data before publishing them. The range mode uses
+    /// the coarser ladder because each probe is a real partial decode.
     private static func minimumSatisfyingPrefix(
         totalBytes: Int,
         isSatisfied: (Int) -> Bool

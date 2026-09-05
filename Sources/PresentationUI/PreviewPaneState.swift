@@ -61,7 +61,13 @@ public final class PreviewPaneState {
     /// NEXT selection change (it never opens the pane by itself).
     /// Package (GOV-3): `HistoryPanelView` pushes the preference from the
     /// injected appearance snapshot inside this module.
-    package var isAutoOpenPreferenceEnabled = true
+    package var isAutoOpenPreferenceEnabled = true {
+        didSet {
+            if !isAutoOpenPreferenceEnabled {
+                cancelPendingAutoOpen()
+            }
+        }
+    }
 
     /// The pending dwell task; cancelled by every selection change, manual
     /// toggle, or panel transition.

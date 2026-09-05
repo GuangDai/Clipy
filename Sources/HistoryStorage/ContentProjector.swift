@@ -33,7 +33,7 @@ import HistoryDomain
 /// unique, non-empty type summary of the projected content.
 internal struct ContentProjection: Sendable {
     /// Projection schema version; exactly `ContentProjector.schemaVersion`
-    /// (projection recipe v2 = 2) for every newly projected value.
+    /// (projection recipe v3 = 3) for every newly projected value.
     internal let schemaVersion: UInt16
     /// First eligible textual line after normalization, otherwise a stable
     /// type-based fallback (§15).
@@ -60,17 +60,17 @@ internal struct StoredProjectionSize: Equatable, Sendable {
 ///
 /// The projector is a namespace of pure functions — no actor, clock, I/O, or
 /// framework decode. Image bytes are never decoded for title/search (§15):
-/// only representations whose exact type identifier declares the frozen v2
+/// only representations whose exact type identifier declares the frozen v3
 /// plain-text encoding are decoded, so identical content always projects
 /// identically. Encoding-unspecified, abstract, and structured text formats
 /// remain opaque.
 internal enum ContentProjector {
-    /// The current projection recipe. Version 2 removes the v1 guessed UTF-8
-    /// decode of encoding-unspecified, abstract, RTF, and HTML values (§15).
-    internal static let schemaVersion: UInt16 = 2
+    /// Recipe 3 corrects the external UTF-16 identifier and byte order. The
+    /// existing startup rebuild upgrades recipes 1 and 2 before reads (§15).
+    internal static let schemaVersion: UInt16 = 3
 
-    /// The only legacy projection recipe accepted by startup rebuild. It is
-    /// never accepted by an ordinary read boundary (§13, §15).
+    /// The original recipe used by legacy migration fixtures. Startup also
+    /// accepts recipe 2; neither is accepted by ordinary reads (§13, §15).
     internal static let legacySchemaVersion: UInt16 = 1
 
     // MARK: Stored projection validation (docs/05-authority-kernel.md §4)
@@ -251,23 +251,23 @@ internal enum ContentProjector {
 
     // MARK: Textual eligibility and decoding (§15)
 
-    /// Projection-owned recipe-v2 admission. `ClipboardFormats` supplies the
+    /// Projection-owned recipe-v3 admission. `ClipboardFormats` supplies the
     /// exact codec facts, but adding a future stable codec must not silently
     /// change durable title/search behavior.
     private static let textualProjectionIdentifiers: Set<ClipboardFormatIdentifier> = [
         .utf8PlainText,
-        .utf8ExternalPlainText,
+        .utf16ExternalPlainText,
         .utf16PlainText,
     ]
 
     /// Decodes one representation's bytes as text, or returns `nil` when the
     /// representation is not title/search eligible (§15: image bytes are not
     /// decoded). Encoding is fixed by the explicit type: UTF-16 only for
-    /// `public.utf16-plain-text`, UTF-8 for every other frozen textual type.
+    /// `public.utf16-plain-text`; external UTF-16 honors a BOM and otherwise
+    /// defaults to big-endian. Only `public.utf8-plain-text` declares UTF-8.
     /// The projector never guesses a fallback encoding for malformed bytes;
     /// an undecodable representation is skipped rather than durable mojibake.
-    /// The declared codec means the non-UTF-16 cases have an exact UTF-8
-    /// contract; there is no generic textual fallback.
+    /// There is no generic textual fallback.
     private static func decodedText(
         of representation: ContentRepresentation
     ) -> String? {
@@ -278,13 +278,23 @@ internal enum ContentProjector {
               let codec = identifier.declaredStringCodec else {
             return nil
         }
-        let encoding: String.Encoding = switch codec {
+        switch codec {
         case .utf8:
-            .utf8
-        case .nativeUTF16:
-            .utf16
+            return String(data: representation.bytes, encoding: .utf8)
+        case .nativeUTF16, .externalUTF16:
+            let bytes = representation.bytes
+            if bytes.starts(with: [0xFE, 0xFF]) {
+                return String(data: bytes.dropFirst(2), encoding: .utf16BigEndian)
+            }
+            if bytes.starts(with: [0xFF, 0xFE]) {
+                return String(data: bytes.dropFirst(2), encoding: .utf16LittleEndian)
+            }
+            // Native byte order is little-endian on the supported arm64
+            // platform; external UTF-16 without a BOM is big-endian (§15).
+            let encoding: String.Encoding = codec == .externalUTF16
+                ? .utf16BigEndian : .utf16LittleEndian
+            return String(data: bytes, encoding: encoding)
         }
-        return String(data: representation.bytes, encoding: encoding)
     }
 
     // MARK: Normalization (§15)

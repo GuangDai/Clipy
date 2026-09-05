@@ -148,22 +148,37 @@ package final class PreviewContentLoader {
         await load(item: requestedItem)
     }
 
+    /// View disappearance releases applied content immediately, including
+    /// when SwiftUI retains this state for a later appearance. In-flight
+    /// reads/renders cannot publish after the pane or Quick Look closes
+    /// (PREVIEW-FENCE-1).
+    package func clear() {
+        requestGeneration += 1
+        requestedItem = nil
+        raster = nil
+        occurrence = nil
+        canRetryFailure = false
+        phase = .unsupported
+    }
+
     /// Loads the preview content for `item` (`nil` clears the pane's
-    /// content state). Driven by the view's `.task(id: targetItem)`: a
+    /// content state). Driven by the view's reference/retry-keyed task: a
     /// retarget cancels the previous load's task, and the fence covers the
     /// case where cancellation arrives late or the awaited work does not
     /// throw on cancellation.
     package func load(item: HistoryItemReference?) async {
+        guard !Task.isCancelled else { return }
+        guard let item else {
+            clear()
+            return
+        }
         requestGeneration += 1
         let generation = requestGeneration
         requestedItem = item
         raster = nil
         occurrence = nil
         canRetryFailure = false
-        phase = item == nil ? .unsupported : .loading
-        guard let item else {
-            return
-        }
+        phase = .loading
         do {
             let details = try await readDetails(for: item.id)
             try Task.checkCancellation()
@@ -269,6 +284,14 @@ struct HistoryPreviewView: View {
     private let selectionSource: SelectionSource
 
     @State private var loader: PreviewContentLoader
+    @State private var retryGeneration = 0
+
+    /// Retargets and retries share SwiftUI's view-owned task, so either a
+    /// new reference or disappearance cancels the active load (Card 9D).
+    private struct LoadRequest: Equatable {
+        let item: HistoryItemReference?
+        let retryGeneration: Int
+    }
 
     /// Standalone entry point: PreviewPaneState owns the exact target.
     init(viewState: HistoryViewState, previewState: PreviewPaneState) {
@@ -340,11 +363,14 @@ struct HistoryPreviewView: View {
                 .padding(.horizontal, PanelTheme.spacingMedium)
                 .padding(.vertical, PanelTheme.spacingSmall)
         }
-        // One load per exact observed reference; the loader's fence
+        // One load per exact observed reference or explicit retry; the loader's fence
         // discards a late result, so a superseded selection never renders
         // another item's content (SPEC-IMPL-007 / PREVIEW-FENCE-1).
-        .task(id: targetItem) {
+        .task(id: LoadRequest(item: targetItem, retryGeneration: retryGeneration)) {
             await loader.load(item: targetItem)
+        }
+        .onDisappear {
+            loader.clear()
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.preview.root")
@@ -433,8 +459,8 @@ struct HistoryPreviewView: View {
                 .accessibilityIdentifier("clipy.preview.failed")
             if loader.canRetryFailure {
                 Button("Retry") {
-                    Task {
-                        await loader.retry()
+                    if loader.phase == .failed, loader.canRetryFailure {
+                        retryGeneration += 1
                     }
                 }
                 .keyboardShortcut("r", modifiers: .command)

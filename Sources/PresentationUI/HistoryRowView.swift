@@ -349,22 +349,22 @@ package struct HistoryRowView: View {
     /// the shared `HistoryRowKind` UTI vocabulary so the panel's type filter
     /// always agrees with the displayed family; anything not
     /// image/URL/rich-text falls back to the generic clipboard document.
-    private static func typeSymbol(for typeIdentifiers: [String]) -> String {
+    package static func typeSymbol(for typeIdentifiers: [String]) -> String {
         if HistoryRowKind.matchesAny(
             typeIdentifiers,
-            prefixes: HistoryRowKind.imageTypePrefixes
+            types: HistoryRowKind.imageTypes
         ) {
             return "photo"
         }
         if HistoryRowKind.matchesAny(
             typeIdentifiers,
-            prefixes: HistoryRowKind.linkTypePrefixes
+            types: HistoryRowKind.linkTypes
         ) {
             return "link"
         }
         if HistoryRowKind.matchesAny(
             typeIdentifiers,
-            prefixes: HistoryRowKind.richTextTypePrefixes
+            types: HistoryRowKind.richTextTypes
         ) {
             return "doc.text"
         }

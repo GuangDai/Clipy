@@ -1089,9 +1089,10 @@ private enum ContentBasis: String, Hashable {
 
 /// Details' complete text-preview decision for one representation row.
 ///
-/// Exact `public.utf8-plain-text` is the only admitted text contract in this
-/// owner. Valid UTF-8 bytes under RTF, HTML, abstract `public.text`, or
-/// encoding-unspecified `public.plain-text` remain opaque; a sibling exact
+/// Exact UTF-8 and native/external UTF-16 plain text use their declared byte
+/// order, matching the large preview. Valid UTF-8 bytes under RTF, HTML,
+/// abstract `public.text`, or encoding-unspecified `public.plain-text` remain
+/// opaque; a sibling exact
 /// plain-text representation is rendered independently by its own row. This
 /// path performs no document import or external-resource work (review TYPE-2;
 /// content-types review §3.4).
@@ -1102,15 +1103,38 @@ package enum DetailsRepresentationPresentation: Equatable, Sendable {
     package static func resolve(
         _ representation: HistoryRepresentation
     ) -> DetailsRepresentationPresentation {
-        guard ClipboardFormatIdentifier(
-            rawValue: representation.typeIdentifier
-        ) == .utf8PlainText,
-            let text = String(data: representation.bytes, encoding: .utf8),
-            !text.isEmpty
+        guard let text = decodedText(representation), !text.isEmpty
         else {
             return .metadataOnly
         }
         return .plainText(String(text.prefix(500)))
+    }
+
+    private static func decodedText(
+        _ representation: HistoryRepresentation
+    ) -> String? {
+        let identifier = ClipboardFormatIdentifier(
+            rawValue: representation.typeIdentifier
+        )
+        let bytes = representation.bytes
+        switch identifier {
+        case .utf8PlainText:
+            return String(data: bytes, encoding: .utf8)
+        case .utf16PlainText, .utf16ExternalPlainText:
+            if bytes.starts(with: [0xFE, 0xFF]) {
+                return String(data: bytes.dropFirst(2), encoding: .utf16BigEndian)
+            }
+            if bytes.starts(with: [0xFF, 0xFE]) {
+                return String(data: bytes.dropFirst(2), encoding: .utf16LittleEndian)
+            }
+            return String(
+                data: bytes,
+                encoding: identifier == .utf16PlainText
+                    ? .utf16LittleEndian : .utf16BigEndian
+            )
+        default:
+            return nil
+        }
     }
 }
 
@@ -1139,7 +1163,7 @@ private let textualTypeIdentifiers: Set<String> = [
     ClipboardFormatIdentifier.plainText.rawValue,
     ClipboardFormatIdentifier.utf8PlainText.rawValue,
     ClipboardFormatIdentifier.utf16PlainText.rawValue,
-    ClipboardFormatIdentifier.utf8ExternalPlainText.rawValue,
+    ClipboardFormatIdentifier.utf16ExternalPlainText.rawValue,
     ClipboardFormatIdentifier.text.rawValue,
     ClipboardFormatIdentifier.rtf.rawValue,
     ClipboardFormatIdentifier.html.rawValue,

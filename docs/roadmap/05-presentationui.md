@@ -38,8 +38,14 @@
 - Import confinement (Part VI §6): `SwiftUI` belongs in this target and
   `HistoryDomain`/`HistoryStorage`/`SwiftData` remain forbidden by architecture
   and review.
-- `ContentPreviewTests` prove exact UTF-8 and native UTF-16 behavior, exact PNG
-  eager BGRA8/sRGB artifacts, malformed/unsupported classification, and
+- Details and the large preview display exact UTF-8 plus native/external
+  UTF-16 plain text. A UTF-16 BOM chooses byte order; without one, native
+  text uses arm64 little endian and external text uses big endian. Details
+  retains its 500-character excerpt. Replace continues to require the exact
+  UTF-8 paired editor codec; displaying another encoding does not authorize
+  re-encoding it. Keep Current preserves its exact bytes.
+- `ContentPreviewTests` prove exact UTF-8 and native/external UTF-16 behavior,
+  exact PNG eager BGRA8/sRGB artifacts, malformed/unsupported classification, and
   content-free active-job/source-byte accounting. The history-pane profile
   admits at most 64 MiB across the complete immutable representation snapshot,
   before source selection or native decode: the exact aggregate boundary may

@@ -1336,6 +1336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return LaunchAtLoginSettings(
             state: launchAtLoginPresentation.state,
             operationFailed: launchAtLoginPresentation.operationFailed,
+            operationPending: launchAtLoginPresentation.operationPending,
             setEnabled: { [weak self] enabled in
                 self?.launchAtLoginController.setEnabled(enabled)
             },

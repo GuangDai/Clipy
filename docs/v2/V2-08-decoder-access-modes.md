@@ -111,7 +111,12 @@ direct byte scan of the pinned files:
 | `images/photo-1080.bmp` | com.microsoft.bmp | 1920×1080 | 6,220,854 | 26 | BITMAPINFOHEADER; w/h at bytes 18–25 |
 | `images/photo4k-c.tiff` | public.tiff | 3840×2160 | 1,189,326 | **1,185,764** | little-endian; **IFD at offset 1,185,738 (99.7% into the file)**; width entry at 1,185,740–1,185,751, height at 1,185,752–1,185,763; IFD ends at 1,185,864 |
 
-The TIFF row is the load-bearing counterexample for the playbook's "never
+Field offsets are lower bounds, not decoder access requirements. ImageIO
+may wait for data beyond a dimension field before publishing properties,
+and some incremental decoders do not publish them before finalization.
+The observed PNG/GIF/BMP results in §5.1 demonstrate both cases.
+
+The TIFF row is a layout counterexample for the playbook's "never
 presume header-only from the UTI" rule: this encoder (Pillow LZW TIFF)
 places the directory that carries the dimensions at the *end* of the
 file, so a prefix read cannot serve P-dims for this layout at any useful
@@ -133,7 +138,11 @@ the three modes per fixture and returns one content-free
   read has no completion flag to give) surfaces both pixel dimensions.
   Satisfaction is monotone in prefix length for these parsers (a parser
   that has seen a header never un-sees it); both endpoints are probed,
-  not assumed.
+  not assumed. When complete-source dimensions exist, the record also
+  contains `dimensionsAvailableUnfinalizedAtFullLength`. If false, no
+  satisfying prefix is claimed and `largestFailingPrefixBytes` is the full
+  input size. This distinguishes an incremental decoder limitation from
+  a file that has no readable dimensions even as a complete source.
 - **incrementalRange** — fresh unfinalized sources fed a factor-4 prefix
   ladder (64 B upward; coarse by design, since each rung costs a real
   partial decode proportional to the prefix) until
@@ -196,19 +205,20 @@ docs/06-cross-cutting.md §3 and V2-06's P3 record.
 
 ### 5.1 Structural facts (CI-locked by the owner suites)
 
-For all six head-fixed-layout fixtures (three PNG scales, JPEG, GIF,
-BMP), the profile suite asserts:
+For all six fixtures with dimension fields near the head (three PNG
+scales, JPEG, GIF, BMP), the profile suite asserts:
 
-- P-dims is served from a small early prefix: the probe's minimum
-  satisfying prefix is ≥ the §3 floor and ≤ 4,096 B — i.e. within one
-  4 KiB read — and strictly below the encoded size; the returned
-  dimensions equal the fixture's pinned intrinsic dimensions;
+- complete-source dimensions equal the fixture's intrinsic dimensions;
+- when the unfinalized full input publishes dimensions, the measured
+  minimum satisfying prefix is between the §3 floor and the encoded size,
+  and the adjacent preceding prefix fails; when it does not, the record
+  contains no satisfying prefix and retains the full-input failed endpoint;
 - P-thumb at the 640-px box yields the expected bounded output
   (3840×2160 → 640×360; 7680×4320 → 640×360; 1920×1080 → 640×360;
   1280×720 → 640×360; 512×512 → 512×512 unscaled, since the box is a
   maximum), `outputBytes = w×h×4`;
-- range-mode results are recorded relationally only (a satisfying prefix
-  is never smaller than the header prefix; partial output, when the
+- range-mode results are recorded relationally only (when a header prefix
+  exists, a satisfying range prefix is no smaller; partial output, when the
   decoder produces any, is reported with its own dimensions) — no outcome
   is presumed for partial decodes.
 
@@ -217,6 +227,15 @@ decoder behaves: a satisfying header prefix, if one exists unfinalized,
 lies above `inputBytes − 8,192` (≈ the tail-IFD position), or no
 unfinalized prefix ever surfaces dimensions. Full decode still yields the
 640×360 thumbnail.
+
+Correctness run `33699550463` disproved the original proposed universal
+4 KiB ceiling: `huge-8k.png` published dimensions at **9,954 B** and
+`anim-720.gif` at **117,906 B**. `photo-1080.bmp` published 1920×1080
+dimensions from the complete source but none from an unfinalized source,
+even at the full 6,220,854 bytes. These are observations of that runner,
+not new thresholds. Tests preserve the actual recording and bounded-output
+contract rather than require a decoder to publish properties at an offset
+inferred from the encoded layout.
 
 ### 5.2 Timing profile (record-only, populated by a macOS run)
 
@@ -227,12 +246,12 @@ intentionally blank rather than fabricated:
 
 | Fixture | headerOnly wallMs (full-data property read) | headerOnly minimum prefix | incrementalRange first decode prefix | incrementalRange decode wallMs | fullDecode wallMs | fullDecode outputBytes |
 |---|---|---|---|---|---|---|
-| photo4k-a.png (848,017 B) | _(recorded run)_ | ≤ 4,096 B (CI-locked) | _(recorded run)_ | _(recorded run)_ | _(recorded run)_ | 640×360×4 = 921,600 |
-| icon-512.png (56,889 B) | _(recorded run)_ | ≤ 4,096 B (CI-locked) | _(recorded run)_ | _(recorded run)_ | _(recorded run)_ | 512×512×4 = 1,048,576 |
-| huge-8k.png (3,136,852 B) | _(recorded run)_ | ≤ 4,096 B (CI-locked) | _(recorded run)_ | _(recorded run)_ | _(recorded run)_ | 640×360×4 = 921,600 |
-| photo4k-b.jpg (189,348 B) | _(recorded run)_ | ≤ 4,096 B (CI-locked) | _(recorded run)_ | _(recorded run)_ | _(recorded run)_ | 640×360×4 = 921,600 |
-| anim-720.gif (342,612 B) | _(recorded run)_ | ≤ 4,096 B (CI-locked) | _(recorded run)_ | _(recorded run)_ | _(recorded run)_ | 640×360×4 = 921,600 |
-| photo-1080.bmp (6,220,854 B) | _(recorded run)_ | ≤ 4,096 B (CI-locked) | _(recorded run)_ | _(recorded run)_ | _(recorded run)_ | 640×360×4 = 921,600 |
+| photo4k-a.png (848,017 B) | _(recorded run)_ | _(recorded run)_ | _(recorded run)_ | _(recorded run)_ | _(recorded run)_ | 640×360×4 = 921,600 |
+| icon-512.png (56,889 B) | _(recorded run)_ | _(recorded run)_ | _(recorded run)_ | _(recorded run)_ | _(recorded run)_ | 512×512×4 = 1,048,576 |
+| huge-8k.png (3,136,852 B) | _(recorded run)_ | 9,954 B (run above) | _(recorded run)_ | _(recorded run)_ | _(recorded run)_ | 640×360×4 = 921,600 |
+| photo4k-b.jpg (189,348 B) | _(recorded run)_ | _(recorded run)_ | _(recorded run)_ | _(recorded run)_ | _(recorded run)_ | 640×360×4 = 921,600 |
+| anim-720.gif (342,612 B) | _(recorded run)_ | 117,906 B (run above) | _(recorded run)_ | _(recorded run)_ | _(recorded run)_ | 640×360×4 = 921,600 |
+| photo-1080.bmp (6,220,854 B) | _(recorded run)_ | none unfinalized (run above) | _(recorded run)_ | _(recorded run)_ | _(recorded run)_ | 640×360×4 = 921,600 |
 | photo4k-c.tiff (1,189,326 B) | _(recorded run)_ | **> 1,181,134 B or none** (CI-locked) | _(recorded run)_ | _(recorded run)_ | _(recorded run)_ | 640×360×4 = 921,600 |
 
 Note for the reader: under the *current* layout the headerOnly timing is
@@ -244,12 +263,14 @@ read alone; the byte column is where the access-mode difference lives.
 PLAY-TIER-1B is a pure planner Red — it outputs a range, a maximum byte
 count, and a fallback per purpose, and its tests must not invoke the
 decoder. It may only be written once this profile is approved. The
-proposal this profile supports, keyed on §3's *measured layout classes*
-(not UTI names):
+proposal this profile supports must include decoder behavior as well as
+layout (not UTI names or dimension-field offsets alone). The original
+universal 4 KiB prefix proposal is withdrawn by the observations in §5.1:
 
 | Purpose | Layout evidence class | Plan | Maximum bytes | Fallback |
 |---|---|---|---|---|
-| P-dims | head-fixed (PNG/GIF/BMP + JPEG layouts with SOF inside the first 4 KiB — all six §5.1 fixtures) | prefix read `[0, 4 KiB)` | 4,096 | properties absent at 4 KiB → escalate to full read |
+| P-dims | measured decoder + fixture + OS with a satisfying prefix | no general prefix bound admitted; retain full read until a separately measured access plan exists | full encoded bytes (current) | — |
+| P-dims | unfinalized full input does not publish dimensions (observed BMP) | complete-source full read | full encoded bytes | — |
 | P-dims | tail-IFD (the probed TIFF layout) | no prefix plan; full read under the current layout; a two-range read `{[0, 8), [N−4 KiB, N)}` only if a post-G8 physical range seam exists | full encoded bytes (current) | none needed — full read always serves |
 | P-dims | unknown/unprofiled layout | full read | full encoded bytes | — |
 | P-thumb | all probed layouts | full read. Partial incremental output, where the range mode records any, is a *fidelity-degraded* artifact and cannot serve the product's thumbnail contract; the range-mode numbers exist to feed the G8 decision, not to admit a range plan | full encoded bytes | — |
@@ -263,10 +284,9 @@ Consequences the approver should weigh:
   prefix plan only becomes physical bytes-on-disk savings after a G8-admitted
   range seam; before that it is a decoder-side fact, honestly recorded as
   such.
-- The plan table is per layout *class* with an explicit unknown-layout
-  default; a new encoder that relocates a header (the TIFF lesson) must
-  fall out of the head-fixed class by measurement, not by assumption —
-  that is the discipline the binary-search probe encodes.
+- Field placement alone cannot establish a prefix plan: both encoder
+  layout (the TIFF example) and the decoder's willingness to publish
+  properties before finalization (the PNG/GIF/BMP examples) matter.
 - No cache, permit, BlobStore, or History seam follows from this leaf;
   those remain behind their own playbook gates.
 

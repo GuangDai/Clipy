@@ -293,7 +293,7 @@ internal struct PreparedCaptureBundle: Sendable {
 }
 
 internal struct ContentProjection: Sendable {
-    let schemaVersion: UInt16       // projection recipe v2 = 2
+    let schemaVersion: UInt16       // projection recipe v3 = 3
     let title: String
     let searchBody: String
     let effectiveTypeIdentifiers: [String]
@@ -618,7 +618,7 @@ same-interval proof, rather than an otherwise unread generation counter.
 3. enter `HistoryAuthority` and create the singleton at position 0 if this is a new store;
 4. validate exactly one singleton;
 5. bootstrap/validate the retention-expansion config singleton;
-6. derive every projection-schema-v1 replacement from validated Canonical/revision bytes, then stamp them as recipe v2 in one bounded transaction; an unknown tag, invalid source, or failed transaction fails open without publishing a partial rebuild;
+6. derive every projection-schema-v1/v2 replacement from validated Canonical/revision bytes, then stamp them as recipe v3 in one bounded transaction; an unknown tag, invalid source, or failed transaction fails open without publishing a partial rebuild;
 7. validate retained row count does not exceed the hard bound and fetch each row's business ID, nonzero Content Version, current projection schema version, pin ordinal, Canonical bytes, and signature metadata;
 8. require projection schema version 2;
 9. decode Canonical and signature metadata, recompute Canonical signature
@@ -703,6 +703,12 @@ Both fetch exactly one row and decode/validate its full lineage. Detail maps it 
 
 `ThumbnailService` installs an exact-key source-to-decode task before its first suspension. The creator asks the Authority to fetch and fully hydrate exactly one item, verify the requested Content Version, derive Effective Content, and return immutable source image bytes. An existing-flight caller instead asks the Authority for a scalar-only dimension/existence/version fence before awaiting that task. ImageIO decode occurs only after all SwiftData objects and context have been released; no joiner rehydrates the content blob.
 
+The worker aspect-fits the primary image into both requested pixel dimensions,
+using its display orientation when computing the downsample limit. Neither
+decoded axis exceeds the corresponding requested axis; aspect ratio is
+preserved to pixel rounding, with no upscaling. The payload retains the
+requested `PixelSize` as its key, even when the encoded image is smaller.
+
 #### 14.6 Configured retention read
 
 `HistoryAuthority.retentionConfiguration()` creates one fresh read context and,
@@ -722,9 +728,12 @@ invalidation, and exposes neither current retained-byte usage nor a
 
 - title: first eligible textual line after normalization, otherwise a stable type-based fallback;
 - search body: eligible textual representations in deterministic type order, normalized and truncated to the hard search-body bound;
-- textual decoding is type-strict under projection recipe v2: only
-  `public.utf8-plain-text` and `public.utf8-external-plain-text` use UTF-8,
-  and only `public.utf16-plain-text` uses UTF-16. `public.plain-text` has no
+- textual decoding is type-strict under projection recipe v3: only
+  `public.utf8-plain-text` uses UTF-8. `public.utf16-plain-text` uses native
+  UTF-16 (little-endian on arm64); `public.utf16-external-plain-text` uses
+  external UTF-16 (big-endian without a BOM). Both honor a leading byte-order
+  mark. The former misspelling `public.utf8-external-plain-text` is an unknown
+  opaque identifier. `public.plain-text` has no
   declared encoding; `public.text` is abstract; RTF and HTML are structured
   formats. Those four families remain opaque and never enter title/search
   through a guessed UTF-8 decode. Malformed bytes of an exact plain type are
@@ -741,17 +750,19 @@ projection and do not construct a search body.
 
 Projection schema changes require an explicit schema version and migration/rebuild plan. They never change Canonical Content, revisions, Content Version, or Change Position by themselves; a projection-only migration is not a History Action and emits no user-visible commit.
 
-Projection recipe v2 is the first such rebuild. `HistoryItemRow` already
+Projection recipe v2 removed guessed text decoding. Recipe v3 corrects the
+external UTF-16 identifier and the native no-BOM byte order. `HistoryItemRow` already
 carries the consistency fence, so this is not a SwiftData schema change and
 does not add a schema-migration stage. During `SwiftDataHistory.open`, after
 singleton bootstrap and before Signature Index publication or capture, the
 Authority fetches at most the hard retained-item bound plus one, accepts only
-projection tags 1 and 2, then derives every v1 replacement from validated
+projection tags 1, 2, and 3, then derives every v1/v2 replacement from validated
 Canonical/revision bytes before entering one `ModelContext.transaction` that
 updates the title, search body, effective-type blob, and tag. Source decode
 failure, an unknown tag, or
-transaction failure leaves no partially published v2 set and fails the open.
-Ordinary reads accept only v2.
+transaction failure leaves no partially published v3 set and fails the open.
+Ordinary reads accept only v3. The rebuild preserves unknown representation
+bytes even when their old guessed title/search text is removed.
 
 Future changes to textual decoding, normalization, title, or body derivation
 must increment the projection schema again and ship an explicit bounded

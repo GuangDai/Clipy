@@ -11,8 +11,8 @@ struct StableFormatFactsTests {
                 == "public.utf8-plain-text"
         )
         #expect(
-            ClipboardFormatIdentifier.utf8ExternalPlainText.rawValue
-                == "public.utf8-external-plain-text"
+            ClipboardFormatIdentifier.utf16ExternalPlainText.rawValue
+                == "public.utf16-external-plain-text"
         )
         #expect(
             ClipboardFormatIdentifier.utf16PlainText.rawValue
@@ -23,8 +23,8 @@ struct StableFormatFactsTests {
                 == .utf8
         )
         #expect(
-            ClipboardFormatIdentifier.utf8ExternalPlainText.declaredStringCodec
-                == .utf8
+            ClipboardFormatIdentifier.utf16ExternalPlainText.declaredStringCodec
+                == .externalUTF16
         )
         #expect(
             ClipboardFormatIdentifier.utf16PlainText.declaredStringCodec
@@ -45,12 +45,16 @@ struct StableFormatFactsTests {
         })
     }
 
-    @Test func unknownIdentifierRemainsAnOpaqueRawValue() {
-        let unknown = ClipboardFormatIdentifier(
-            rawValue: "com.example.private-clipboard-value"
-        )
+    @Test(arguments: [
+        "com.example.private-clipboard-value",
+        "public.utf8-external-plain-text",
+        "public.utf16-external-plain-text.private",
+        "dyn.example",
+    ])
+    func unknownIdentifierRemainsAnOpaqueRawValue(rawValue: String) {
+        let unknown = ClipboardFormatIdentifier(rawValue: rawValue)
 
-        #expect(unknown.rawValue == "com.example.private-clipboard-value")
+        #expect(unknown.rawValue == rawValue)
         #expect(unknown.declaredStringCodec == nil)
     }
 }
