@@ -11,4 +11,4 @@
 "Address" = "Address";
 "File Path" = "File Path";
 "Only the reference is shown. Its destination has not been opened." = "Only the reference is shown. Its destination has not been opened.";
-"Preview truncated. Copy keeps the complete content." = "Preview truncated. Copy keeps the complete content.";
+"Preview truncated. Copying the item keeps its complete content." = "Preview truncated. Copying the item keeps its complete content.";

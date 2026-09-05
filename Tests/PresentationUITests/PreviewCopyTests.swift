@@ -57,11 +57,11 @@ struct PreviewCopyTests {
     }
 
     @Test func truncatedPreviewExplainsThatCopyRetainsTheCompleteContent() throws {
-        let key = "Preview truncated. Copy keeps the complete content."
+        let key = "Preview truncated. Copying the item keeps its complete content."
         #expect(PreviewCopy.text(key, bundle: try bundle("en")) ==
-            "Preview truncated. Copy keeps the complete content.")
+            "Preview truncated. Copying the item keeps its complete content.")
         #expect(PreviewCopy.text(key, bundle: try bundle("zh-Hans")) ==
-            "预览已截断，复制仍保留完整内容。")
+            "预览已截断，复制历史条目仍保留完整内容。")
     }
 
     @Test func imageAccessibilityMetadataKeepsWidthAndHeightInTheirTranslatedPositions() throws {

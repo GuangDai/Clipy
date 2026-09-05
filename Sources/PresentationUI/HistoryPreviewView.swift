@@ -437,7 +437,7 @@ struct HistoryPreviewView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     if wasTruncated {
                         Text(PreviewCopy.text(
-                            "Preview truncated. Copy keeps the complete content."
+                            "Preview truncated. Copying the item keeps its complete content."
                         ))
                         .font(.caption)
                         .foregroundStyle(.secondary)

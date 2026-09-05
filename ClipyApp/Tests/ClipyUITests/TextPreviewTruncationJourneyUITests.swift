@@ -63,7 +63,7 @@ final class TextPreviewTruncationJourneyUITests: XCTestCase {
         let notice = preview.descendants(matching: .any)["clipy.preview.truncation-notice"]
         XCTAssertTrue(waitUntil(timeout: 10) {
             notice.exists && notice.isHittable
-                && self.text(of: notice) == "Preview truncated. Copy keeps the complete content."
+                && self.text(of: notice) == "Preview truncated. Copying the item keeps its complete content."
         }, "Long-text preview must show its separate truncation notice")
 
         let longRow = rows.matching(NSPredicate(
