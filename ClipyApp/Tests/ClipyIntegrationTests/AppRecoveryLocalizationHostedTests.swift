@@ -62,8 +62,10 @@ struct AppRecoveryLocalizationHostedTests {
             : "Clipy 无法打开历史记录存储。"))
     }
 
-    @Test func typedHistoryFailuresKeepTheSharedPresentationVocabulary() {
-        let itemID = HistoryItemID(rawValue: UUID())
+    @Test func typedHistoryFailuresKeepTheSharedPresentationVocabulary() throws {
+        let itemID = try #require(HistoryItemID(
+            uuidString: "00000000-0000-0000-0000-000000000091"
+        ))
         let removed = HistoryFailure.notFound(itemID)
         #expect(PanelRootView.pasteFailureMessage(.history(removed)) ==
             FailurePresentation.message(for: removed))
