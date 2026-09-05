@@ -448,7 +448,9 @@ final class AppearanceJourneyUITests: XCTestCase {
             return
         }
         control.click()
-        let menuItem = app.menuItems[title]
+        // The system Window menu also has a "Right" move/resize command.
+        // The opened picker owns its own native menu in the AX tree.
+        let menuItem = control.menuItems[title]
         assertExists(menuItem, timeout: 5, in: app, context: "\(context) option")
         menuItem.click()
     }
