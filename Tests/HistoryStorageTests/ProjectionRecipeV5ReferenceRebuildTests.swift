@@ -72,7 +72,7 @@ struct ProjectionRecipeV5ReferenceRebuildTests {
         #expect(page.position == seeded.position)
         #expect(page.rows.map(\.item) == [seeded.details.item])
         let row = try #require(page.rows.first)
-        #expect(row.titleUTF8 == Data(fixture.title.utf8))
+        #expect(Data(row.title.utf8) == Data(fixture.title.utf8))
         #expect(row.typeIdentifiers == [fixture.typeIdentifier])
         let search = try await reopened.browse(HistoryBrowseRequest(
             kind: .search(text: fixture.searchNeedle, mode: .exact), limit: 10
