@@ -86,7 +86,12 @@ final class SearchAndAccessibilityJourneyUITests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 1 })
         XCTAssertTrue(rows.element(boundBy: 0).label.contains(captured))
 
+        // The default fuzzy mode may legitimately match the shared "clipy"
+        // text. Select Exact through its real shortcut before asserting the
+        // localized no-results state; language does not alter matching rules.
+        search.typeKey("1", modifierFlags: [.command])
         search.typeText("no-such-clipy-value")
+        XCTAssertEqual(search.value as? String, "no-such-clipy-value")
         let clear = app.buttons["clipy.search.clear"]
         XCTAssertTrue(clear.waitForExistence(timeout: 5))
         XCTAssertEqual(clear.label, "清除搜索")

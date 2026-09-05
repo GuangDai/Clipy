@@ -58,10 +58,11 @@ struct EditorTextCodecTests {
     ])
     func replacementPreservesEncodingAndExactUnicodeScalars(_ fixture: Fixture) throws {
         let original = Data(fixture.original)
-        let codec = try #require(EditorTextCodec.matching(HistoryRepresentation(
+        let decodedSource = try #require(EditorTextCodec.decode(HistoryRepresentation(
             typeIdentifier: fixture.type, bytes: original
         )))
-        let decoded = try #require(codec.decode(original))
+        let codec = decodedSource.codec
+        let decoded = decodedSource.text
         // String equality treats canonical-equivalent forms as equal. Scalar
         // equality also proves the combining sequence was not normalized.
         #expect(decoded.unicodeScalars.map(\.value) == [0x41, 0x3A9, 0x1F98A, 0x65, 0x301])
@@ -87,6 +88,9 @@ struct EditorTextCodecTests {
     func malformedUnicodeIsRejectedWithoutReplacementCharacters(_ fixture: MalformedFixture) throws {
         let bytes = Data(fixture.malformed)
         #expect(EditorTextCodec.matching(HistoryRepresentation(
+            typeIdentifier: fixture.type, bytes: bytes
+        )) == nil)
+        #expect(EditorTextCodec.decode(HistoryRepresentation(
             typeIdentifier: fixture.type, bytes: bytes
         )) == nil)
         let codec = try #require(EditorTextCodec.matching(HistoryRepresentation(

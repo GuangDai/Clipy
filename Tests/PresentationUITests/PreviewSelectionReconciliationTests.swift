@@ -55,6 +55,34 @@ struct PreviewSelectionReconciliationTests {
         )
     }
 
+    @Test(arguments: [(UInt64(1), UInt64(2)), (UInt64(2), UInt64(1)), (UInt64(2), UInt64(2))])
+    func sameItemTargetUsesTheNewestReceiptOrObservedVersion(
+        observed: UInt64, pane: UInt64
+    ) {
+        let selection = PreviewSelectionResolution.resolve(
+            selectedID: selectedID,
+            rows: [row(version: observed)]
+        )
+        #expect(selection.previewTarget(previewedItem: row(version: pane).item)
+            == row(version: 2).item)
+    }
+
+    @Test func lateObservationCannotRegressAReceiptAdvancedPane() {
+        let preview = PreviewPaneState(autoOpenDelay: .zero)
+        let old = row(version: 1).item
+        let current = row(version: 3).item
+        preview.togglePreview(for: old)
+        preview.purge(.revision(old: old, new: current))
+
+        // The intermediate observation can arrive after the v3 receipt.
+        preview.refreshOpenPreview(row(version: 2).item)
+        #expect(preview.previewedItem == current)
+        let selection = PreviewSelectionResolution.resolve(
+            selectedID: selectedID, rows: [row(version: 2)]
+        )
+        #expect(selection.previewTarget(previewedItem: preview.previewedItem) == current)
+    }
+
     @Test func crossItemChangeKeepsTheDwellTargetUntilPaneStateRetargets() {
         let previous = HistoryItemReference(
             id: HistoryItemID(

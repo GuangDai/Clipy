@@ -72,6 +72,11 @@
   per surface), not caller configuration. Only owner tests may inject smaller
   ceilings or read cache/in-flight counters. This does not admit the deferred shared
   completed-thumbnail cache or establish an RSS/eviction performance budget.
+- The same bounded surface store retains `.thumbnailUnavailable` as an exact-
+  reference miss, so a malformed image is not requested again on every scroll.
+  A new Content Version has its own answer; existing reset, clear, removal,
+  revision purge, and capacity eviction release the miss. Other typed failures
+  and cancellation remain eligible for a later request.
 - Relative copy time uses the system abbreviated formatter under the owning
   `01` §6 rule. One list-owned wall-clock minute cadence supplies the same
   explicit `now` to every row; a label may therefore lag its item-relative

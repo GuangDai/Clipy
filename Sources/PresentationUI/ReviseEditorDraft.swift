@@ -289,22 +289,24 @@ package struct ReviseEditorDraft: Sendable {
             // Both immutable Canonical and any visible Effective value must
             // satisfy their exact text format. Current bytes own the editor's
             // BOM/byte order; a hidden type starts from Canonical instead.
-            guard let canonicalCodec = EditorTextCodec.matching(representation) else {
+            guard let canonicalText = EditorTextCodec.decode(representation) else {
                 continue
             }
-            let source = currentByType[typeIdentifier] ?? representation
-            let codec: EditorTextCodec
-            if currentByType[typeIdentifier] != nil {
-                guard let currentCodec = EditorTextCodec.matching(source) else {
+            let source: (codec: EditorTextCodec, text: String)
+            if let current = currentByType[typeIdentifier],
+               current.bytes != representation.bytes {
+                guard let currentText = EditorTextCodec.decode(current) else {
                     continue
                 }
-                codec = currentCodec
+                source = currentText
             } else {
-                codec = canonicalCodec
+                // Identical raw bytes have identical text and BOM/byte order.
+                // Do not substitute Swift String equality here: canonical-
+                // equivalent spellings can carry distinct replacement bytes.
+                source = canonicalText
             }
-            guard let text = codec.decode(source.bytes) else { continue }
-            initialTexts[typeIdentifier] = text
-            initialCodecs[typeIdentifier] = codec
+            initialTexts[typeIdentifier] = source.text
+            initialCodecs[typeIdentifier] = source.codec
         }
         return InitialState(
             effectiveByType: currentByType,

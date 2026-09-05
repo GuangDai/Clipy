@@ -11,7 +11,7 @@
             <key>NSStringFormatSpecTypeKey</key>
             <string>NSStringPluralRuleType</string>
             <key>NSStringFormatValueTypeKey</key>
-            <string>llu</string>
+            <string>lld</string>
             <key>one</key>
             <string>Copied %2$@ time</string>
             <key>other</key>

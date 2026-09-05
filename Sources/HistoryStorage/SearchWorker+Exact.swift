@@ -17,7 +17,7 @@ extension SearchWorker {
         term: String,
         in corpus: SearchCorpusSnapshot,
         directive: ScanDirective
-    ) async throws -> [EvaluatedRow] {
+    ) async throws -> EvaluationResult {
         // Preprocess the eligible-ASCII needle once for this public request.
         // The scalar baseline has a linear worst-case bound and delegates
         // every fallback comparison to Foundation's frozen §8 semantics.
@@ -276,8 +276,14 @@ extension SearchWorker {
             exactASCIIEvaluations: debugExactASCIIEvaluations,
             exactFoundationEvaluations: debugExactFoundationEvaluations
         )
+        return EvaluationResult(
+            rows: evaluated,
+            debugRowsProcessed: debugProcessedRows,
+            debugMatchedRows: debugTitleMatches + debugBodyMatches
+        )
+#else
+        return EvaluationResult(rows: evaluated)
 #endif
-        return evaluated
     }
 
 }

@@ -122,7 +122,7 @@ extension SearchWorker {
         term: String,
         in corpus: SearchCorpusSnapshot,
         directive: ScanDirective
-    ) async throws -> [EvaluatedRow] {
+    ) async throws -> EvaluationResult {
         // Fuse 1.4.0 does not enforce its `maxPatternLength` option (the
         // parameter is unread in the pinned revision, so the documented
         // "return nil" never fires). Fuse 1.4.0's bitap stores its pattern
@@ -139,7 +139,11 @@ extension SearchWorker {
         // recent-equivalent lane), so `nil` is purely defensive and means
         // no row can match.
         guard let pattern = fuse.createPattern(from: term) else {
-            return []
+#if DEBUG
+            return EvaluationResult(rows: [], debugRowsProcessed: 0, debugMatchedRows: 0)
+#else
+            return EvaluationResult(rows: [])
+#endif
         }
 
         var selection = FuzzyPageSelection(directive: directive)
@@ -280,7 +284,15 @@ extension SearchWorker {
         // sorting or retained presentation (03b §8 / 04 §6).
         let evaluated = selection.evaluatedRows()
         try Task.checkCancellation()
-        return evaluated
+#if DEBUG
+        return EvaluationResult(
+            rows: evaluated,
+            debugRowsProcessed: debugProcessedRows,
+            debugMatchedRows: debugTitleMatches + debugBodyMatches
+        )
+#else
+        return EvaluationResult(rows: evaluated)
+#endif
     }
 
     /// Runs the frozen-parameter Fuse matcher over one pre-lowercased

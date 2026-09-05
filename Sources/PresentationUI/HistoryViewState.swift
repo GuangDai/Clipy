@@ -147,7 +147,8 @@ public final class HistoryViewState {
 
     /// Content-free accessibility handoff for one settled search intent.
     /// Only the current query generation's first authoritative observation
-    /// page invokes this callback. Debounce drafts, stale completions,
+    /// page invokes this callback with the client-filtered visible count.
+    /// Debounce drafts, stale completions,
     /// replacement snapshots, and pagination never do (REVIEW UI-16/Card
     /// 15D). `hasNextPage` keeps the app shell from presenting this bounded
     /// first-page count as an exact total.
@@ -782,7 +783,7 @@ public final class HistoryViewState {
         isLoadingFirstPage = false
         if pendingSearchAnnouncementGeneration == queryGeneration {
             pendingSearchAnnouncementGeneration = nil
-            onSettledSearchResultCount(page.rows.count, page.next != nil)
+            onSettledSearchResultCount(displayedRows.count, page.next != nil)
         }
     }
 

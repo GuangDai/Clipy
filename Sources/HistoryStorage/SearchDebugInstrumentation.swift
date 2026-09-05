@@ -16,8 +16,14 @@ internal struct SearchDebugEvent: Codable, Equatable, Sendable {
     let phase: String
     let phaseElapsedMilliseconds: Double
     let totalElapsedMilliseconds: Double
+    /// Rows handled by this phase. Worker evaluation/complete phases report
+    /// actual corpus rows examined; page materialization reports returned rows.
     let rowsProcessed: Int
+    /// This phase's input population: corpus size for scans, bounded
+    /// candidate count for continuation and page materialization.
     let rowsTotal: Int
+    /// Worker scan hits, including hits dropped by continuation or top-K
+    /// selection. The value is not the bounded candidate array's size.
     let matchedRows: Int
     let titleUTF8Bytes: Int
     let bodyUTF8Bytes: Int

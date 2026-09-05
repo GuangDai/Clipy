@@ -1,5 +1,5 @@
-/// Row occurrence-count presentation (V2-07 §9/§10). Counts stay UInt64;
-/// formatting never narrows the History occurrence counter to a signed Int.
+/// Row occurrence-count presentation (V2-07 §9/§10). Displayed counts keep
+/// the full UInt64 value independently of the native plural-rule operand.
 import Foundation
 
 internal enum HistoryRowCopy {
@@ -17,9 +17,14 @@ internal enum HistoryRowCopy {
             value: count == 1 ? "Copied %2$@ time" : "Copied %2$@ times",
             table: "HistoryRow"
         )
+        // Foundation's native plural formatting interprets integer operands
+        // as signed, even with "llu". The shipped English/Chinese resources
+        // use only one/other: saturating this selector keeps large counts in
+        // "other". The displayed count below remains the exact UInt64 value.
+        let pluralSelector = Int64(clamping: count)
         return String(
             format: format, locale: locale,
-            arguments: [count, count.formatted(.number.locale(locale))]
+            arguments: [pluralSelector, count.formatted(.number.locale(locale))]
         )
     }
 }

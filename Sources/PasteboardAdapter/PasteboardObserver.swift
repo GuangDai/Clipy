@@ -111,9 +111,9 @@ public final class PasteboardObserver {
         // (01 §5.1 lifecycle ownership). Install the timer first so stop()
         // can cancel this start; a replacement timer owns its own capture.
         onAccessBehaviorChanged?(accessBehavior)
-        guard self.timer === timer, let currentHandler = self.handler else { return }
+        guard self.timer === timer else { return }
         if captureCurrent {
-            deliverCurrentOutcome(to: currentHandler)
+            deliverCurrentOutcome()
         }
     }
 
@@ -128,18 +128,18 @@ public final class PasteboardObserver {
 
     /// One poll tick: delivers an outcome only when `changeCount` moved.
     private func poll() {
+        guard let activeTimer = timer else { return }
         let accessBehavior = accessBehaviorProvider()
         if accessBehavior != lastAccessBehavior {
             lastAccessBehavior = accessBehavior
             accessBehaviorHandler?(accessBehavior)
         }
-        guard accessBehavior == .allowed else { return }
+        guard self.timer === activeTimer, accessBehavior == .allowed else { return }
 
         let changeCount = adapter.pasteboard.changeCount
         guard changeCount != lastChangeCount else { return }
         lastChangeCount = changeCount
-        guard let handler else { return }
-        deliverCurrentOutcome(to: handler)
+        deliverCurrentOutcome()
     }
 
 #if DEBUG
@@ -156,15 +156,27 @@ public final class PasteboardObserver {
     /// replaces the superseded first attempt, while another unstable or
     /// otherwise incomplete attempt leaves one content-free generation-race
     /// outcome for the owner. There is no delay, task, or retry loop.
-    private func deliverCurrentOutcome(
-        to handler: @MainActor (CaptureOutcome) -> Void
-    ) {
-        guard let outcome = captureOutcomeWithOneOwnershipRetry() else {
+    private func deliverCurrentOutcome() {
+        guard let activeTimer = timer else { return }
+        let observedChangeCount = lastChangeCount
+        guard let outcome = captureOutcomeWithOneOwnershipRetry(
+            observing: activeTimer,
+            observedChangeCount: observedChangeCount
+        ) else {
             // Keep the generation sampled before this read. Another process
             // may write after the adapter found a stable empty pasteboard;
             // resampling here would mark that unread value as already seen.
             return
         }
+        // A promised-data accessor may reenter the main run loop. A stop or
+        // restart during that read owns a different timer/baseline, so this
+        // old read must neither advance it nor call a retired handler. A
+        // same-session start only replaces the handler and uses this result.
+        // A nested poll can also consume a newer pasteboard generation while
+        // retaining the same timer; its delivery supersedes this outer read.
+        guard self.timer === activeTimer,
+              lastChangeCount == observedChangeCount,
+              let handler else { return }
         switch outcome {
         case let .complete(value):
             lastChangeCount = value.changeCount
@@ -183,11 +195,16 @@ public final class PasteboardObserver {
     /// Card 5B's bounded retry is deliberately one additional freeze, not a
     /// general retry policy. Partial bytes from the retry cannot replace the
     /// first content-free ownership-race result.
-    private func captureOutcomeWithOneOwnershipRetry() -> CaptureOutcome? {
+    private func captureOutcomeWithOneOwnershipRetry(
+        observing activeTimer: Timer,
+        observedChangeCount: Int
+    ) -> CaptureOutcome? {
         guard let firstOutcome = adapter.captureOutcome() else { return nil }
         guard case .changedDuringRead = firstOutcome else {
             return firstOutcome
         }
+        guard self.timer === activeTimer,
+              lastChangeCount == observedChangeCount else { return nil }
 
         guard let retryOutcome = adapter.captureOutcome() else {
             return firstOutcome

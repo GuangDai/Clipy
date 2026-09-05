@@ -211,8 +211,10 @@ public final class ThumbnailStore {
     /// requesting key only:
     /// - a `nil` payload (no thumbnailable content) is recorded as a miss,
     ///   so the row's fallback icon stops re-asking;
-    /// - a thrown failure is NOT retained — transient unavailability may
-    ///   recover, so the reference stays eligible for a later prefetch.
+    /// - `.thumbnailUnavailable` is the same stable miss for these immutable
+    ///   bytes, so scrolling does not repeatedly decode a malformed image;
+    /// - other failures are NOT retained — stale references, cancellation,
+    ///   storage failures, and transient unavailability may recover.
     public func prefetch(_ item: HistoryItemReference) {
         guard entries[item] == nil, inFlight[item] == nil else {
             #if DEBUG
@@ -321,24 +323,24 @@ public final class ThumbnailStore {
                 #if DEBUG
                 fetchMs = Self.elapsedMilliseconds(since: fetchStart)
                 #endif
-                // Not retained: see `prefetch(_:)`.
                 guard let self else { return }
+                let isStableMiss = (error as? HistoryFailure) == .thumbnailUnavailable
                 #if DEBUG
-                let boundary = self.finishWithoutEntry(
-                    item: item,
-                    requestToken: requestToken
-                )
+                let boundary = isStableMiss
+                    ? self.store(item: item, raster: nil, requestToken: requestToken)
+                    : self.finishWithoutEntry(item: item, requestToken: requestToken)
                 self.recordMeasurement(
                     .completed,
                     item: item,
                     fetchMs: fetchMs,
-                    outcome: boundary == .discarded ? .discarded : .failure
+                    outcome: boundary == .discarded ? .discarded : (isStableMiss ? .miss : .failure)
                 )
                 #else
-                self.finishWithoutEntry(
-                    item: item,
-                    requestToken: requestToken
-                )
+                if isStableMiss {
+                    self.store(item: item, raster: nil, requestToken: requestToken)
+                } else {
+                    self.finishWithoutEntry(item: item, requestToken: requestToken)
+                }
                 #endif
             }
         }
@@ -609,8 +611,8 @@ package final class ThumbnailMeasurement {
     }
 
     /// What the completion boundary did with the flight's result. `.miss`
-    /// mirrors the store's negative entry (nil payload OR undecodable
-    /// payload); `.discarded` is the Card 9B request-token fence rejecting a
+    /// mirrors the store's negative entry (nil/undecodable payload or typed
+    /// `.thumbnailUnavailable`); `.discarded` is the request-token fence rejecting a
     /// late old-generation result.
     package enum Outcome: String, Codable, Sendable {
         case hit

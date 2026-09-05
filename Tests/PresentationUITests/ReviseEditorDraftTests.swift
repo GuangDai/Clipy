@@ -607,6 +607,40 @@ struct ReviseEditorDraftTests {
         ))
     }
 
+    @Test func initialEffectiveTextKeepsItsOwnSpellingAndCodec() {
+        let type = "public.utf16-external-plain-text"
+        let canonical = Data([0xFE, 0xFF, 0x00, 0xE9]) // BE: precomposed é
+        let current = Data([0xFF, 0xFE, 0x65, 0x00, 0x01, 0x03]) // LE: e + accent
+        var draft = ReviseEditorDraft(details: utf16Details(
+            type: type, canonical: canonical, effective: current
+        ))
+        #expect(draft.replacementText(for: type).unicodeScalars.map(\.value) == [0x65, 0x301])
+        #expect(!draft.isDirty)
+        draft.setChoice(.replace, for: type)
+        #expect(decisions(from: draft.revisionRequest())[type] == .replace(bytes: current))
+        draft.setReplacementText("B", for: type)
+        #expect(decisions(from: draft.revisionRequest())[type] == .replace(
+            bytes: Data([0xFF, 0xFE, 0x42, 0x00])
+        ))
+    }
+
+    @Test func initialReplacementStillRequiresValidCanonicalAndEffectiveText() throws {
+        let type = "public.utf16-external-plain-text"
+        let valid = Data([0x00, 0x41])
+        let malformed = Data([0xD8, 0x00]) // unpaired high surrogate
+        for (canonical, current) in [
+            (valid, malformed), (malformed, valid), (malformed, malformed),
+        ] {
+            var draft = ReviseEditorDraft(details: utf16Details(
+                type: type, canonical: canonical, effective: current
+            ))
+            let representation = try #require(draft.canonicalRepresentations.first)
+            #expect(!draft.canReplace(representation))
+            draft.setChoice(.replace, for: type)
+            #expect(draft.choice(for: type) == .keepCurrent)
+        }
+    }
+
     @Test func utf16DirtyComparisonPreservesCanonicallyEquivalentSpellings() {
         let type = "public.utf16-external-plain-text"
         let composed = Data([0xFE, 0xFF, 0x00, 0xE9])

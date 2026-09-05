@@ -98,6 +98,29 @@ struct SearchWorkerBoundedResultsTests {
         #expect(selection.evaluatedRows().isEmpty)
     }
 
+    @Test func recentEquivalentCountsAnchorLookupAndTheBoundedWindow() async {
+        let corpus = SearchCorpusSnapshot(
+            position: ChangePosition(rawValue: 1),
+            rows: (0..<5).map(Self.row),
+            debugTrace: SearchDebugTrace(id: UUID(), startedAt: ContinuousClock().now)
+        )
+        let worker = SearchWorker()
+        let cases: [(StoredOrderingAnchor?, Int, Int)] = [
+            (nil, 3, 3),
+            (SearchWorker.defaultOrderAnchor(for: Self.row(2)), 3, 5),
+            (SearchWorker.defaultOrderAnchor(for: Self.row(9)), 0, 5),
+        ]
+        for (anchor, retained, examined) in cases {
+            let result = await worker.evaluateRecentEquivalent(
+                in: corpus,
+                directive: .init(continuationAnchor: anchor, maximumSurvivors: 3)
+            )
+            #expect(result.rows.count == retained)
+            #expect(result.debugRowsProcessed == examined)
+            #expect(result.debugMatchedRows == examined)
+        }
+    }
+
     @Test(arguments: [SearchMode.exact, .regexp, .fuzzy])
     func smallPagesPreserveFullPageOrderAndPresentations(mode: SearchMode) async throws {
         let worker = SearchWorker()
@@ -139,17 +162,20 @@ struct SearchWorkerBoundedResultsTests {
         let directive = SearchWorker.ScanDirective(
             continuationAnchor: deepAnchor, maximumSurvivors: 4
         )
-        let retained: [SearchWorker.EvaluatedRow]
+        let evaluation: SearchWorker.EvaluationResult
         switch mode {
         case .exact:
-            retained = try await worker.evaluateExact(term: "alpha", in: corpus, directive: directive)
+            evaluation = try await worker.evaluateExact(term: "alpha", in: corpus, directive: directive)
         case .regexp:
-            retained = try await worker.evaluateRegexp(term: "alpha", in: corpus, directive: directive)
+            evaluation = try await worker.evaluateRegexp(term: "alpha", in: corpus, directive: directive)
         case .fuzzy:
-            retained = try await worker.evaluateFuzzy(term: "alpha", in: corpus, directive: directive)
+            evaluation = try await worker.evaluateFuzzy(term: "alpha", in: corpus, directive: directive)
         }
+        let retained = evaluation.rows
         #expect(retained.count <= 5)
         #expect(retained.first?.anchor == deepAnchor)
+        #expect(evaluation.debugRowsProcessed == 60)
+        #expect(evaluation.debugMatchedRows == 60)
     }
 }
 #endif

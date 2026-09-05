@@ -233,22 +233,41 @@ struct HistoryRowFilteringTests {
 
     /// Filter edits are pure in-memory narrowing: no new observe request, no
     /// debounce — the History query is untouched.
-    @Test func filterEditsNeverRestartObservation() async {
+    @Test func filterEditsNeverRestartObservation() async throws {
         let (state, history) = activatedMixedState()
-        #expect(await pollUntil { state.rows.count == 5 })
+        defer { state.deactivate() }
+        try #require(await pollUntil { state.rows.count == 5 && state.hasAuthoritativeFirstPage })
         #expect(await history.observeRequests.count == 1)
+        let loadedRows = state.rows
 
         state.typeFilter = .images
         state.showsPinnedOnly = true
         state.typeFilter = .links
         state.showsPinnedOnly = false
 
-        // Stable negative: settle past a full search debounce window (the
-        // sanctioned settle sleep of the sibling suites).
-        try? await Task.sleep(for: .milliseconds(400))
+        // Both immediate and debounced query restarts synchronously clear
+        // first-page authority and rows. Filter changes must preserve them
+        // before any scheduled task can repopulate a replacement page.
+        #expect(state.hasAuthoritativeFirstPage)
+        #expect(!state.isLoadingFirstPage)
+        #expect(state.rows == loadedRows)
+        #expect(state.displayedRows.map(\.title) == ["pinned-link"])
+
+        // A distinct snapshot delivered to the ORIGINAL subscription is the
+        // completion event: it must still update the filtered display. A
+        // cancelled/restarted subscription cannot satisfy this assertion.
+        let replacement = loadedRows + [filterFixtureRow(
+            id: "00000000-0000-0000-0000-00000000F108",
+            title: "new-link",
+            typeIdentifiers: ["public.url"]
+        )]
+        await history.emitObservedPage(
+            fixturePage(rows: replacement, next: nil), observationIndex: 0
+        )
+        try #require(await pollUntil { state.rows == replacement })
+        #expect(state.displayedRows.map(\.title) == ["pinned-link", "new-link"])
         #expect(await history.observeRequests.count == 1)
 
-        state.deactivate()
         await history.finishObservation()
     }
 

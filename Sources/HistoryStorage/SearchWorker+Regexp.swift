@@ -33,7 +33,7 @@ extension SearchWorker {
         term: String,
         in corpus: SearchCorpusSnapshot,
         directive: ScanDirective
-    ) async throws -> [EvaluatedRow] {
+    ) async throws -> EvaluationResult {
         // Admission (03b §8), every rejection is
         // `.invalidInput(.invalidRegularExpression)`: a pattern over the
         // Part VI 512-Character limit; a conservative textual guard for
@@ -230,8 +230,14 @@ extension SearchWorker {
             titleMatches: debugTitleMatches,
             bodyMatches: debugBodyMatches
         )
+        return EvaluationResult(
+            rows: evaluated,
+            debugRowsProcessed: debugProcessedRows,
+            debugMatchedRows: debugTitleMatches + debugBodyMatches
+        )
+#else
+        return EvaluationResult(rows: evaluated)
 #endif
-        return evaluated
     }
 
     /// Why an interruptible scan ended without a first match (03b §8

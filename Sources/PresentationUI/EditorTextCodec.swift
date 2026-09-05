@@ -21,6 +21,15 @@ package struct EditorTextCodec: Sendable, Equatable {
     package static func matching(
         _ representation: HistoryRepresentation
     ) -> EditorTextCodec? {
+        decode(representation)?.codec
+    }
+
+    /// Selects the exact codec and returns its strictly decoded text in the
+    /// same pass. Draft construction needs both values; it must not decode
+    /// a large representation again after validating its codec.
+    package static func decode(
+        _ representation: HistoryRepresentation
+    ) -> (codec: EditorTextCodec, text: String)? {
         let identifier = ClipboardFormatIdentifier(rawValue: representation.typeIdentifier)
         let codec: Self
         switch identifier {
@@ -41,7 +50,8 @@ package struct EditorTextCodec: Sendable, Equatable {
         default:
             return nil
         }
-        return codec.decode(representation.bytes) == nil ? nil : codec
+        guard let text = codec.decode(representation.bytes) else { return nil }
+        return (codec, text)
     }
 
     package func decode(_ bytes: Data) -> String? {

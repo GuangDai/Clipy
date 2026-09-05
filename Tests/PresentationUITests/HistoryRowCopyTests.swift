@@ -39,12 +39,22 @@ struct HistoryRowCopyTests {
         ) == "已复制 5.000 次")
     }
 
-    @Test("the unsigned occurrence maximum is formatted without narrowing")
+    @Test("signed and unsigned occurrence boundaries retain exact digits and plural forms")
     func completeOccurrenceRange() throws {
         let locale = Locale(identifier: "en_US")
-        #expect(HistoryRowCopy.copyCount(UInt64.max, locale: locale) == "×18,446,744,073,709,551,615")
-        #expect(HistoryRowCopy.copiedCount(
-            UInt64.max, bundle: try bundle("en"), locale: locale
-        ) == "Copied 18,446,744,073,709,551,615 times")
+        let english = try bundle("en")
+        let chinese = try bundle("zh-Hans")
+        let boundaries: [(UInt64, String)] = [
+            (UInt64(Int64.max), "9,223,372,036,854,775,807"),
+            (UInt64(Int64.max) + 1, "9,223,372,036,854,775,808"),
+            (UInt64.max, "18,446,744,073,709,551,615"),
+        ]
+        for (count, digits) in boundaries {
+            #expect(HistoryRowCopy.copyCount(count, locale: locale) == "×\(digits)")
+            let englishCount = HistoryRowCopy.copiedCount(count, bundle: english, locale: locale)
+            let chineseCount = HistoryRowCopy.copiedCount(count, bundle: chinese, locale: locale)
+            #expect(englishCount == "Copied \(digits) times")
+            #expect(chineseCount == "已复制 \(digits) 次")
+        }
     }
 }

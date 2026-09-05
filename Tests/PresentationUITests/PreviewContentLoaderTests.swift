@@ -79,6 +79,43 @@ struct PreviewContentLoaderTests {
 
     // MARK: - Reference fence (PREVIEW-FENCE-1)
 
+    /// The pane already holds rendered A while a different selection B is
+    /// dwelling. B's revision changes dwell ownership but not the exact
+    /// `.task` target. This proves the stable target and retained loader
+    /// result; SwiftUI instance identity itself is a source-wiring obligation.
+    @Test func pendingRevisionKeepsTheAppliedPreviewAndItsLoadTarget() async throws {
+        let a = reference("00000000-0000-0000-0000-0000000001A8", version: 1)
+        let b = reference("00000000-0000-0000-0000-0000000001B8", version: 1)
+        let revisedB = HistoryItemReference(id: b.id, contentVersion: ContentVersion(rawValue: 2))
+        let history = PausableDetailsHistory()
+        await history.scriptDetails(details(for: a, text: "already visible A"))
+        let loader = PreviewContentLoader(history: history)
+        let pane = PreviewPaneState(autoOpenDelay: .seconds(3_600))
+        defer { pane.panelClosed() }
+        pane.togglePreview(for: a)
+        let load = Task { await loader.load(item: a) }
+        try #require(await pollUntil { await history.detailRequests.count == 1 })
+        await history.resumeDetails(for: a.id)
+        await load.value
+
+        pane.handleSelectionChange(b)
+        let selection = PreviewSelectionResolution.resolve(
+            selectedID: b.id,
+            rows: [
+                fixtureRow(id: a.id.rawValue.uuidString, title: "A"),
+                fixtureRow(id: b.id.rawValue.uuidString, title: "B"),
+            ]
+        )
+        #expect(selection.previewTarget(previewedItem: pane.previewedItem) == a)
+        pane.purge(.revision(old: b, new: revisedB))
+
+        #expect(pane.purgeGeneration == 1)
+        #expect(selection.previewTarget(previewedItem: pane.previewedItem) == a)
+        #expect(loader.requestedItem == a)
+        #expect(loader.phase == .content(.text("already visible A")))
+        #expect(await history.detailRequests == [a.id])
+    }
+
     /// A→B selection with A completing LATE: B publishes; A's late result is
     /// discarded by the exact-reference fence and never reaches the
     /// published state (SPEC-IMPL-007's cross-item leak).

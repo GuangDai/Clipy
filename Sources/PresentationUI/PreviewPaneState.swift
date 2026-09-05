@@ -116,9 +116,13 @@ public final class PreviewPaneState {
     /// selection; that is content coherence, not a new cross-item dwell.
     /// Closed/manual-suppressed panes stay closed.
     package func refreshOpenPreview(_ item: HistoryItemReference) {
-        guard isOpen, previewedItem?.id == item.id else { return }
+        guard isOpen,
+              let previewedItem,
+              previewedItem.id == item.id,
+              item.contentVersion.rawValue > previewedItem.contentVersion.rawValue
+        else { return }
         cancelPendingAutoOpen()
-        previewedItem = item
+        self.previewedItem = item
     }
 
     // MARK: - Manual toggle (Maccy `togglePreview()`)

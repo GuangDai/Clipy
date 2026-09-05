@@ -133,9 +133,13 @@ actor ScriptedHistory: ClipboardHistory {
     // MARK: Test control
 
     /// Pushes one observed page to the live stream — models a later
-    /// authoritative snapshot (docs/04-coherence.md §5).
-    func emitObservedPage(_ page: HistoryPage) {
-        liveContinuation?.yield(page)
+    /// authoritative snapshot (docs/04-coherence.md §5). Returns whether
+    /// this unbounded stream accepted the page; a cancelled stream refuses it.
+    @discardableResult
+    func emitObservedPage(_ page: HistoryPage) -> Bool {
+        guard let liveContinuation else { return false }
+        if case .enqueued = liveContinuation.yield(page) { return true }
+        return false
     }
 
     /// Pushes to one exact historical observation request (zero based).

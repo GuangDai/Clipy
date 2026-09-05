@@ -110,7 +110,12 @@ package struct PreviewSelectionResolution: Equatable {
               let previewedItem,
               availableItemIDs.contains(previewedItem.id)
         else { return nil }
-        return reference.id == previewedItem.id ? reference : previewedItem
+        guard reference.id == previewedItem.id else { return previewedItem }
+        // A revision receipt can advance the pane before observation catches
+        // up. Both are authoritative references; use the newer ContentVersion
+        // (including revert's new version, 02 §11), never the stale page.
+        return reference.contentVersion.rawValue >= previewedItem.contentVersion.rawValue
+            ? reference : previewedItem
     }
 }
 
@@ -675,7 +680,6 @@ public struct HistoryPanelView: View {
             previewState: previewState,
             selection: previewSelection
         )
-        .id(previewState.purgeGeneration)
         // The divider handle's live width, full window height: the browsing
         // column alone absorbs both the drag and the user's window resize —
         // a divider drag never moves the AppKit frame.
@@ -1028,7 +1032,7 @@ public struct HistoryPanelView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 if case .temporarilyUnavailable = failure,
                    viewState.canRetryFailureByRefreshing {
-                    Button("Retry") {
+                    Button(PanelActionsCopy.text("Retry")) {
                         viewState.refresh()
                     }
                 }
@@ -1041,7 +1045,7 @@ public struct HistoryPanelView: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Dismiss")
+                .accessibilityLabel(PanelActionsCopy.text("Dismiss"))
             }
             .padding(.horizontal, PanelTheme.bannerHorizontalPadding)
             .padding(.vertical, PanelTheme.bannerVerticalPadding)

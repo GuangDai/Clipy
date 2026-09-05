@@ -121,15 +121,14 @@ struct HistoryViewStateTests {
         state.activate()
         #expect(await pollUntil { state.rows.count == 2 })
 
-        // Cancelled loop: the emitted page has no live consumer, so it can
-        // never be applied. The sleep is a stable-negative settle, not a
-        // race window — nothing can apply the page later either.
+        // The stream itself confirms that cancellation refused this page;
+        // no elapsed-time guess stands in for the observation shutdown.
         state.deactivate()
-        await history.emitObservedPage(fixturePage(
+        let acceptedAfterDeactivation = await history.emitObservedPage(fixturePage(
             rows: [fixtureRow(id: "00000000-0000-0000-0000-000000000013", title: "post-deactivate")],
             next: nil
         ))
-        try? await Task.sleep(for: .milliseconds(150))
+        #expect(!acceptedAfterDeactivation)
         #expect(state.rows.count == 2)
 
         // Re-activation starts a new observation (04 §5) whose live stream
@@ -238,7 +237,7 @@ struct HistoryViewStateTests {
         // Cursor exhausted: the guarded call issues no further browse
         // (stable negative — the guard is synchronous).
         state.loadNextPage()
-        try? await Task.sleep(for: .milliseconds(150))
+        #expect(!state.isLoadingPage)
         #expect(await history.browseRequests.count == 1)
 
         state.deactivate()

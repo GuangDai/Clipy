@@ -11,7 +11,7 @@
             <key>NSStringFormatSpecTypeKey</key>
             <string>NSStringPluralRuleType</string>
             <key>NSStringFormatValueTypeKey</key>
-            <string>llu</string>
+            <string>lld</string>
             <key>other</key>
             <string>已复制 %2$@ 次</string>
         </dict>
