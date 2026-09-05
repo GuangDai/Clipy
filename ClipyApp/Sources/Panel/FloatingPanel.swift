@@ -149,7 +149,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         isFloatingPanel = true
         level = .statusBar
         collectionBehavior = [.auxiliary, .stationary, .moveToActiveSpace, .fullScreenAuxiliary]
-        isMovableByWindowBackground = true
+        isMovableByWindowBackground = false
         hidesOnDeactivate = false
         backgroundColor = .clear
         isOpaque = false
