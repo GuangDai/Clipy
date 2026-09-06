@@ -29,6 +29,7 @@ struct PreviewDividerGeometryTests {
         #expect(PanelGeometry.previewSnapStops == [280, 320, 400])
         #expect(PanelGeometry.previewSnapTolerance == 8)
         #expect(PanelGeometry.previewEdgeOpenerWidth == 6)
+        #expect(PanelGeometry.previewEdgeOpenerInset == 6)
         #expect(PanelGeometry.previewEdgeOpenDistance == 48)
     }
 

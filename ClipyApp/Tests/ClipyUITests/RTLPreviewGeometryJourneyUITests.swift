@@ -146,12 +146,15 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
             // or a programmatic preview-state transition.
             app.typeKey(.space, modifierFlags: .control)
             let edge = panel.descendants(matching: .any)["clipy.panel.previewEdgeOpener"]
+            // The opener's 6 pt band sits inset 6 pt from the window edge so
+            // its press clears the AppKit live-resize track a `.resizable`
+            // window owns at its border; the strip's center is 9 pt in.
             XCTAssertTrue(waitUntil(timeout: 5) {
                 !preview.exists && edge.exists && edge.isHittable
                     && abs(panel.frame.width - 400) <= 3
                     && abs(edge.frame.midX - (isRight
-                        ? panel.frame.maxX - 3
-                        : panel.frame.minX + 3)) <= 1
+                        ? panel.frame.maxX - 9
+                        : panel.frame.minX + 9)) <= 1
             }, "\(side) closed preview must keep its physical pull edge.\n\(app.debugDescription)")
             assertFrame(panel.frame, equals: CGRect(
                 x: isRight ? baseline.minX : baseline.maxX - 400,

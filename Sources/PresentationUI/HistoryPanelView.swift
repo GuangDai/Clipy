@@ -585,6 +585,10 @@ public struct HistoryPanelView: View {
                             * (previewColumnWidth + (PanelGeometry.dividerWidth - 9) / 2))
                 } else {
                     previewEdgeOpener
+                        .padding(
+                            previewPlacement == .trailing ? .trailing : .leading,
+                            PanelGeometry.previewEdgeOpenerInset
+                        )
                 }
             }
             // Preview placement is physical Left/Right, matching AppKit's
@@ -861,13 +865,16 @@ public struct HistoryPanelView: View {
             .accessibilityIdentifier("clipy.panel.previewDivider")
     }
 
-    /// The closed-pane edge opener (V2-07 §3): a thin invisible strip on
-    /// the preview-side content edge. An inward pull ending past
+    /// The closed-pane edge opener (V2-07 §3): a thin invisible strip just
+    /// inside the preview-side content edge. An inward pull ending past
     /// `previewEdgeOpenDistance` opens the pane through the same manual
     /// toggle as ⌃Space (a nil selection is a no-op); shorter pulls,
-    /// outward drags, and plain clicks do nothing. The strip sits at the
-    /// very edge of the content and is only 6 pt wide, so the list's own
-    /// scroll region is never captured.
+    /// outward drags, and plain clicks do nothing. The strip is only 6 pt
+    /// wide and inset `previewEdgeOpenerInset` from the window edge, so it
+    /// clears the live-resize track a `.resizable` window keeps at its
+    /// border — a flush strip's press is consumed as a window resize and
+    /// never reaches this gesture — while capturing at most a 6 pt band
+    /// of the list's scroll region.
     private var previewEdgeOpener: some View {
         Color.clear
             .frame(width: PanelGeometry.previewEdgeOpenerWidth)

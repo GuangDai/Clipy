@@ -132,6 +132,14 @@ public enum PanelGeometry {
     /// the preview-side content edge (V2-07 §3).
     package static let previewEdgeOpenerWidth: CGFloat = 6
 
+    /// The edge opener's inset from the window's content edge. A
+    /// `.resizable` AppKit window keeps an edge live-resize track a few
+    /// points wide that consumes presses before SwiftUI sees them, so a
+    /// strip flush with the window edge is unreachable: an inward pull
+    /// there resizes the window instead of opening the preview. Insetting
+    /// by the same order as the strip width clears that track.
+    package static let previewEdgeOpenerInset: CGFloat = 6
+
     /// The placement-signed inward pull distance that opens the closed
     /// preview from the edge strip; shorter pulls and outward drags are
     /// ignored so the strip never fires on a click or a brush.
