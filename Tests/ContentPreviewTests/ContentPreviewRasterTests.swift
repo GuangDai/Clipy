@@ -112,13 +112,22 @@ struct ContentPreviewRasterTests {
     }
 
     @Test("valid image bytes under unknown or unsupported labels remain opaque",
-          arguments: ["public.png.private", "dyn.example", "com.adobe.pdf"])
+          arguments: ["public.png.private", "dyn.example", "public.pdf"])
     func unsupportedLabelDoesNotSniffImageBytes(_ identifier: String) async throws {
         let bytes = try Self.imageBytes(format: "public.png")
         let outcome = await ContentPreview().renderHistoryPane([
             PreviewRepresentation(typeIdentifier: identifier, bytes: bytes),
         ])
         #expect(outcome == .unavailable(.unsupported))
+    }
+
+    @Test("PDF-labelled image bytes are not decoded as an image")
+    func pdfLabelDoesNotSniffPNGBytes() async throws {
+        let bytes = try Self.imageBytes(format: "public.png")
+        let outcome = await ContentPreview().renderHistoryPane([
+            PreviewRepresentation(typeIdentifier: "com.adobe.pdf", bytes: bytes),
+        ])
+        #expect(outcome == .failed(.malformedRepresentation))
     }
 
     private static func imageBytes(

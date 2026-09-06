@@ -16,6 +16,32 @@ internal enum PreviewCopy {
         text("Only the reference is shown. Its destination has not been opened.", bundle: bundle)
     }
 
+    static func multiImageDisclosure(bundle: Bundle = .module) -> String {
+        text("Showing one image from a multi-image item. Copying the item keeps its complete content.", bundle: bundle)
+    }
+
+    static func pdfPageDisclosure(
+        pageCount: Int,
+        bundle: Bundle = .module,
+        locale: Locale = .current
+    ) -> String {
+        String(
+            format: text("Showing PDF page 1 of %@. Copying the item keeps its complete content.", bundle: bundle),
+            LocalizedCountPresentation.number(pageCount, locale: locale)
+        )
+    }
+
+    static func pdfPageAccessibilityLabel(
+        pageCount: Int,
+        bundle: Bundle = .module,
+        locale: Locale = .current
+    ) -> String {
+        String(
+            format: text("PDF preview, page 1 of %@", bundle: bundle),
+            LocalizedCountPresentation.number(pageCount, locale: locale)
+        )
+    }
+
     static func copyCount(
         _ count: UInt64,
         bundle: Bundle = .module,

@@ -5,6 +5,12 @@ import ClipboardFormats
 import Testing
 
 struct StableFormatFactsTests {
+    @Test func pdfKeepsItsOfficialIdentifierWithoutDeclaringAStringCodec() {
+        #expect(ClipboardFormatIdentifier.pdf.rawValue == "com.adobe.pdf")
+        #expect(ClipboardFormatIdentifier.pdf.declaredStringCodec == nil)
+        #expect(ClipboardFormatIdentifier.pdf != ClipboardFormatIdentifier(rawValue: "public.pdf"))
+    }
+
     @Test func exactPlainTextIdentifiersDeclareOnlyTheirOwnedCodecs() {
         #expect(
             ClipboardFormatIdentifier.utf8PlainText.rawValue

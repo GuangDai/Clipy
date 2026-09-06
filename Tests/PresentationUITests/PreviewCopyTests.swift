@@ -72,4 +72,28 @@ struct PreviewCopyTests {
             width: 1_920, height: 1_080, bundle: try bundle("zh-Hans"), locale: Locale(identifier: "zh_Hans_CN")
         ) == "图像预览，宽 1,920 像素，高 1,080 像素")
     }
+
+    @Test func partialRasterPreviewsDescribeOriginalContentWithoutClaimingPlayback() throws {
+        let english = try bundle("en")
+        let chinese = try bundle("zh-Hans")
+        #expect(PreviewCopy.multiImageDisclosure(bundle: english) ==
+            "Showing one image from a multi-image item. Copying the item keeps its complete content.")
+        #expect(PreviewCopy.multiImageDisclosure(bundle: chinese) ==
+            "仅显示多图条目中的一张图像，复制历史条目仍保留完整内容。")
+        #expect(PreviewCopy.pdfPageDisclosure(
+            pageCount: 2, bundle: english, locale: Locale(identifier: "en_US")
+        ) == "Showing PDF page 1 of 2. Copying the item keeps its complete content.")
+        #expect(PreviewCopy.pdfPageDisclosure(
+            pageCount: 2, bundle: chinese, locale: Locale(identifier: "zh_Hans_CN")
+        ) == "正在显示 PDF 的第 1 页，共 2 页。复制历史条目仍保留完整内容。")
+        #expect(PreviewCopy.pdfPageAccessibilityLabel(
+            pageCount: 1_234, bundle: english, locale: Locale(identifier: "de_DE")
+        ) == "PDF preview, page 1 of 1.234")
+        #expect(PreviewCopy.pdfPageDisclosure(
+            pageCount: 1_234, bundle: english, locale: Locale(identifier: "de_DE")
+        ) == "Showing PDF page 1 of 1.234. Copying the item keeps its complete content.")
+        #expect(PreviewCopy.pdfPageAccessibilityLabel(
+            pageCount: 2, bundle: chinese, locale: Locale(identifier: "zh_Hans_CN")
+        ) == "PDF 预览，第 1 页，共 2 页")
+    }
 }

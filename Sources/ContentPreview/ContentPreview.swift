@@ -2,7 +2,7 @@
 /// artifacts. Its small interface accepts immutable representation bytes plus
 /// a closed product purpose and returns only bounded `Sendable` values.
 ///
-/// Ownership: source priority, exact text codecs, ImageIO decode, eager pixel
+/// Ownership: source priority, exact text codecs, ImageIO/PDF decode, eager pixel
 /// materialization, resource profiles, and typed renderer outcomes. It never
 /// reads History, observes selection, owns panel lifecycle, performs external
 /// I/O, or exposes a framework object. `PreviewContentLoader` remains the sole
@@ -42,12 +42,26 @@ package struct PreviewRaster: Equatable, Sendable {
     package let width: Int
     package let height: Int
     package let rowBytes: Int
+    package let sourceImageCount: Int
 
-    internal init(pixels: Data, width: Int, height: Int, rowBytes: Int) {
+    internal init(pixels: Data, width: Int, height: Int, rowBytes: Int, sourceImageCount: Int = 1) {
         self.pixels = pixels
         self.width = width
         self.height = height
         self.rowBytes = rowBytes
+        self.sourceImageCount = sourceImageCount
+    }
+}
+
+/// A static first-page PDF preview, not an interactive document or a promise
+/// that copying the item is limited to the displayed page.
+package struct PreviewPDF: Equatable, Sendable {
+    package let raster: PreviewRaster
+    package let pageCount: Int
+
+    internal init(raster: PreviewRaster, pageCount: Int) {
+        self.raster = raster
+        self.pageCount = pageCount
     }
 }
 
@@ -55,6 +69,7 @@ package enum PreviewArtifact: Equatable, Sendable {
     case text(PreviewText)
     case raster(PreviewRaster)
     case reference(PreviewReference)
+    case pdf(PreviewPDF)
 }
 
 package enum PreviewUnavailability: Equatable, Sendable {
@@ -111,7 +126,7 @@ package actor ContentPreview {
     package init() {}
 
     /// Common-caller preset: history-owned Effective Content bytes, the
-    /// image-first/exact-text-then-reference selection and fixed history-pane
+    /// image/exact-text/PDF/reference selection and fixed history-pane
     /// resource profile. No History identity or lifecycle enters this actor.
     package func renderHistoryPane(
         _ representations: [PreviewRepresentation]
@@ -215,7 +230,15 @@ package actor ContentPreview {
                 wasTruncated: wasTruncated
             )))
         }
-        // A reference is useful when no existing image/text preview applies.
+        // A PDF supplies an inert first-page raster when no preferred image
+        // or valid plain text applies. Keep the first exact PDF authoritative
+        // for this purpose; a malformed one does not skip to a later sibling.
+        if let pdf = representations.first(where: {
+            $0.typeIdentifier == ClipboardFormatIdentifier.pdf.rawValue
+        }) {
+            return await renderRasterOffActor(pdf, profile: .historyPane)
+        }
+        // A reference is useful when no existing image/text/PDF preview applies.
         // Parsing the first exact URL candidate never opens its destination;
         // its bounded address/path artifact carries no loading capability.
         for representation in representations {
@@ -250,7 +273,17 @@ package actor ContentPreview {
             }
             #endif
             guard !Task.isCancelled else { return PreviewOutcome.failed(.cancelled) }
-            let outcome = Self.renderRaster(representation, profile: profile)
+            let outcome: PreviewOutcome
+            if representation.typeIdentifier == ClipboardFormatIdentifier.pdf.rawValue {
+                outcome = PreviewPDFRenderer.render(
+                    representation.bytes,
+                    maximumInputBytes: profile.maximumInputBytes,
+                    maximumPixelExtent: profile.maximumPixelExtent,
+                    maximumOutputBytes: profile.maximumOutputBytes
+                )
+            } else {
+                outcome = Self.renderRaster(representation, profile: profile)
+            }
             return Task.isCancelled ? .failed(.cancelled) : outcome
         }
         return await withTaskCancellationHandler(
@@ -313,6 +346,8 @@ package actor ContentPreview {
         ) else {
             return .failed(.malformedRepresentation)
         }
+        let sourceImageCount = CGImageSourceGetCount(source)
+        guard sourceImageCount > 0 else { return .failed(.malformedRepresentation) }
         let options: [CFString: Any] = [
             kCGImageSourceThumbnailMaxPixelSize: profile.maximumPixelExtent,
             kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -367,7 +402,8 @@ package actor ContentPreview {
             pixels: pixels,
             width: image.width,
             height: image.height,
-            rowBytes: rowBytes
+            rowBytes: rowBytes,
+            sourceImageCount: sourceImageCount
         )))
     }
 

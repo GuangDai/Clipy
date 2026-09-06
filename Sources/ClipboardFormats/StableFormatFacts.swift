@@ -52,6 +52,7 @@ package extension ClipboardFormatIdentifier {
     static let text = Self(rawValue: "public.text")
     static let rtf = Self(rawValue: "public.rtf")
     static let html = Self(rawValue: "public.html")
+    static let pdf = Self(rawValue: "com.adobe.pdf")
     static let flatRTFD = Self(rawValue: "com.apple.flat-rtfd")
     static let url = Self(rawValue: "public.url")
     static let fileURL = Self(rawValue: "public.file-url")

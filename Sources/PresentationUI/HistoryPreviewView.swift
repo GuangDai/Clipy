@@ -97,6 +97,10 @@ package final class PreviewContentLoader {
     /// observable state or crosses the renderer actor seam.
     package private(set) var raster: PreviewRaster?
 
+    /// PDF uses the same bitmap surface, but its page count must not be
+    /// mistaken for an image source's frame count. Other formats keep nil.
+    package private(set) var pdfPageCount: Int?
+
     /// The applied image's pixel dimensions — the package-observable proof
     /// of a decode without exposing the image itself.
     package var appliedImageSize: CGSize? {
@@ -107,8 +111,23 @@ package final class PreviewContentLoader {
     /// bounded eager artifact, never by retaining or introspecting a
     /// `CGImage`/`NSImage` accessibility object.
     package var appliedImageAccessibilityLabel: String? {
+        imageAccessibilityLabel(locale: .current)
+    }
+
+    package func imageAccessibilityLabel(locale: Locale) -> String? {
         guard let raster else { return nil }
-        return PreviewCopy.imageDimensions(width: raster.width, height: raster.height)
+        if let pdfPageCount {
+            return PreviewCopy.pdfPageAccessibilityLabel(pageCount: pdfPageCount, locale: locale)
+        }
+        return PreviewCopy.imageDimensions(width: raster.width, height: raster.height, locale: locale)
+    }
+
+    package func appliedRasterNotice(locale: Locale = .current) -> String? {
+        guard phase == .content(.image), let raster else { return nil }
+        if let pdfPageCount {
+            return PreviewCopy.pdfPageDisclosure(pageCount: pdfPageCount, locale: locale)
+        }
+        return raster.sourceImageCount > 1 ? PreviewCopy.multiImageDisclosure() : nil
     }
 
     private let history: any ClipboardHistory
@@ -184,6 +203,7 @@ package final class PreviewContentLoader {
         requestGeneration += 1
         requestedItem = nil
         raster = nil
+        pdfPageCount = nil
         occurrence = nil
         canRetryFailure = false
         phase = .unsupported
@@ -204,6 +224,7 @@ package final class PreviewContentLoader {
         let generation = requestGeneration
         requestedItem = item
         raster = nil
+        pdfPageCount = nil
         occurrence = nil
         canRetryFailure = false
         phase = .loading
@@ -235,6 +256,13 @@ package final class PreviewContentLoader {
             switch outcome {
             case .content(.raster(let artifact)):
                 raster = artifact
+                pdfPageCount = nil
+                canRetryFailure = false
+                phase = .content(.image)
+                occurrence = details.occurrence
+            case .content(.pdf(let artifact)):
+                raster = artifact.raster
+                pdfPageCount = artifact.pageCount
                 canRetryFailure = false
                 phase = .content(.image)
                 occurrence = details.occurrence
@@ -440,21 +468,33 @@ struct HistoryPreviewView: View {
             case .content(.image):
                 if let raster = loader.raster,
                    let accessibilityLabel =
-                    loader.appliedImageAccessibilityLabel,
+                    loader.imageAccessibilityLabel(locale: locale),
                    let image = PreviewRasterDisplay.image(
                        raster,
                        scale: 1,
                        label: Text(accessibilityLabel)
                    ) {
-                    image
-                        .resizable()
-                        .scaledToFit()
-                        // Fill the (window-sized) content area so a taller
-                        // panel shows a proportionally larger preview; the
-                        // image itself stays aspect-fit and centered.
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(8)
-                        .accessibilityIdentifier("clipy.preview.image")
+                    VStack(spacing: 0) {
+                        image
+                            .resizable()
+                            .scaledToFit()
+                            // Fill the available area while keeping the
+                            // bounded raster aspect-fit and centered.
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .padding(8)
+                            .accessibilityIdentifier("clipy.preview.image")
+                        if let notice = loader.appliedRasterNotice(locale: locale) {
+                            Text(notice)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(10)
+                                .accessibilityIdentifier(loader.pdfPageCount == nil
+                                    ? "clipy.preview.multi-image-notice"
+                                    : "clipy.preview.pdf-page-notice")
+                        }
+                    }
                 } else {
                     failedBody
                 }
