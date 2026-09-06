@@ -42,11 +42,14 @@ actor LocalFilePreviewLoader {
             throw Self.failure(for: errno)
         }
         try Self.checkFile(initialStatus)
-        var volume = statfs()
-        guard Darwin.statfs(path, &volume) == 0 else {
-            throw Self.failure(for: errno)
+        let isLocalVolume: Bool?
+        do {
+            isLocalVolume = try url.resourceValues(forKeys: [.volumeIsLocalKey]).volumeIsLocal
+        } catch {
+            throw Self.failure(for: error)
         }
-        guard volume.f_flags & UInt32(MNT_LOCAL) != 0 else {
+        guard let isLocalVolume else { throw FilePreviewFailure.unavailable }
+        guard isLocalVolume else {
             throw FilePreviewFailure.unsupported
         }
         try Task.checkCancellation()
@@ -70,9 +73,7 @@ actor LocalFilePreviewLoader {
                 chunk = try handle.read(upToCount: min(Self.chunkBytes, allowance)) ?? Data()
             } catch {
                 try Task.checkCancellation()
-                let error = error as NSError
-                throw error.code == NSFileReadNoPermissionError
-                    ? FilePreviewFailure.permissionDenied : FilePreviewFailure.unavailable
+                throw Self.failure(for: error)
             }
             guard !chunk.isEmpty else { break }
             try Task.checkCancellation()
@@ -106,6 +107,18 @@ actor LocalFilePreviewLoader {
 
     private static func failure(for code: Int32) -> FilePreviewFailure {
         code == EACCES || code == EPERM ? .permissionDenied : .unavailable
+    }
+
+    private static func failure(for error: any Error) -> FilePreviewFailure {
+        let error = error as NSError
+        if error.domain == NSCocoaErrorDomain, error.code == NSFileReadNoPermissionError {
+            return .permissionDenied
+        }
+        if error.domain == NSPOSIXErrorDomain,
+           error.code == Int(EACCES) || error.code == Int(EPERM) {
+            return .permissionDenied
+        }
+        return .unavailable
     }
 
     /// The formats the existing renderer consumes; no system app launch,
