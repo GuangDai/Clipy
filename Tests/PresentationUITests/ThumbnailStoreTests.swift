@@ -50,11 +50,26 @@ private actor ThumbnailDisplayCancellationProbe {
 
     private func recordCancellation() { wasCancelled = true }
 
-    // Keep the predicates on their concrete actor. Reading different actor
-    // properties inside the surrounding TaskLocal/poll closures triggers a
-    // Swift 6.2 async getter-thunk type mismatch in the SwiftPM CI build.
-    func hasStartedFirstRender() -> Bool { starts == 1 }
-    func hasObservedCancellation() -> Bool { wasCancelled }
+    // Poll actor-local state directly. This avoids the Swift 6.2 codegen
+    // failure when async predicate closures capture different actor types.
+    // Match pollUntil's bounded scheduled attempts, including cancellation.
+    func waitUntilFirstRenderStarts() async -> Bool {
+        for _ in 0..<2_000 {
+            if starts == 1 { return true }
+            do { try await Task.sleep(for: .milliseconds(5)) }
+            catch { return starts == 1 }
+        }
+        return starts == 1
+    }
+
+    func waitUntilCancellation() async -> Bool {
+        for _ in 0..<2_000 {
+            if wasCancelled { return true }
+            do { try await Task.sleep(for: .milliseconds(5)) }
+            catch { return wasCancelled }
+        }
+        return wasCancelled
+    }
 
     func resume() {
         isReleased = true
@@ -418,42 +433,57 @@ struct ThumbnailStoreTests {
         try await ContentPreviewDebugInstrumentation.$renderDidStart.withValue({
             await probe.parkFirst()
         }) {
-            store.prefetch(item)
-            try #require(await pollUntil { await history.requestCount == 1 })
-            #expect(await history.completeRequest(for: item, with: .success(fixturePNGData)))
-            let started = await pollUntil { await probe.hasStartedFirstRender() }
-            // Always release the hook even if the assertion fails, so a
-            // regression cannot strand a renderer task for the entire suite.
-            if !started { await probe.resume() }
-            try #require(started)
-
-            switch purge {
-            case .reset: store.reset()
-            case .clearAll: store.purge(.all)
-            case .clearUnpinned: store.purge(.unpinned)
-            case .remove: store.purge(.item(item.id))
-            case .revision:
-                store.purge(.revision(old: item, new: HistoryItemReference(
-                    id: item.id, contentVersion: ContentVersion(rawValue: 2)
-                )))
-            }
-            #expect(store.inFlightCount == 0)
-            let cancelledBeforeCompletion = await pollUntil { await probe.hasObservedCancellation() }
-            await probe.resume()
-            #expect(cancelledBeforeCompletion)
-            try #require(await pollUntil { store.debugDiscardedFetchCompletionCount == 1 })
-            #expect(store.cachedEntryCount == 0)
-            #expect(store.cachedDecodedBytes == 0)
-
-            store.prefetch(item)
-            try #require(await pollUntil { await history.requestCount == 2 })
-            #expect(await history.completeRequest(
-                for: item, occurrence: 1, with: .success(fixturePNGData)
-            ))
-            try #require(await pollUntil { store.imagePixelSize(for: item) != nil })
-            #expect(await probe.starts == 2)
-            #expect(store.inFlightCount == 0)
+            try await exerciseDisplayCancellation(
+                purge, item: item, history: history, store: store, probe: probe
+            )
         }
+    }
+
+    /// Keep the assertion scenario outside TaskLocal's generic operation
+    /// closure; the injected hook still propagates to every prefetch task.
+    private func exerciseDisplayCancellation(
+        _ purge: MissPurge,
+        item: HistoryItemReference,
+        history: PausableThumbnailHistory,
+        store: ThumbnailStore,
+        probe: ThumbnailDisplayCancellationProbe
+    ) async throws {
+        store.prefetch(item)
+        try #require(await pollUntil { await history.requestCount == 1 })
+        #expect(await history.completeRequest(for: item, with: .success(fixturePNGData)))
+        let started = await probe.waitUntilFirstRenderStarts()
+        // Always release the hook even if the assertion fails, so a
+        // regression cannot strand a renderer task for the entire suite.
+        if !started { await probe.resume() }
+        try #require(started)
+
+        switch purge {
+        case .reset: store.reset()
+        case .clearAll: store.purge(.all)
+        case .clearUnpinned: store.purge(.unpinned)
+        case .remove: store.purge(.item(item.id))
+        case .revision:
+            store.purge(.revision(old: item, new: HistoryItemReference(
+                id: item.id, contentVersion: ContentVersion(rawValue: 2)
+            )))
+        }
+        #expect(store.inFlightCount == 0)
+        let cancelledBeforeCompletion = await probe.waitUntilCancellation()
+        await probe.resume()
+        #expect(cancelledBeforeCompletion)
+        try #require(await pollUntil { store.debugDiscardedFetchCompletionCount == 1 })
+        #expect(store.cachedEntryCount == 0)
+        #expect(store.cachedDecodedBytes == 0)
+
+        store.prefetch(item)
+        try #require(await pollUntil { await history.requestCount == 2 })
+        #expect(await history.completeRequest(
+            for: item, occurrence: 1, with: .success(fixturePNGData)
+        ))
+        try #require(await pollUntil { store.imagePixelSize(for: item) != nil })
+        let renderStarts = await probe.starts
+        #expect(renderStarts == 2)
+        #expect(store.inFlightCount == 0)
     }
 
     /// Reset is a privacy purge boundary, not merely an entries dictionary
