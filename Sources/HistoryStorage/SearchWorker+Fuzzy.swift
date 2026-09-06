@@ -76,6 +76,10 @@ extension SearchWorker {
             if directive.continuationAnchor != nil, anchorRow == nil {
                 return []
             }
+            // The survivor window is limit-bounded, so this ordering sort
+            // (like the per-row heap upkeep) adds a log factor over the
+            // window, not the corpus; the §9 bullet 7 envelope still only
+            // rejects quadratic over the measured scales.
             let ordered = hits.sorted { Self.precedes($0.anchor, $1.anchor) }
             if let anchorRow { return [anchorRow] + ordered }
             return ordered

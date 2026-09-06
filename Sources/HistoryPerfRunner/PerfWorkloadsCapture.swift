@@ -166,7 +166,7 @@ func workloadPersistentStoreOpenScaling() async -> [WorkloadFixture] {
             ratio: ratio,
             bound: bound,
             pass: passed,
-            note: "Warm persistent-store opens over retained metadata run in fresh child processes; each child reports only its internal public SwiftDataHistory.open duration, excluding launch and teardown. The sample includes ModelContainer/SQLite open, singleton/startup validation, scalar metadata reads, and Signature Index rebuild (§9 bullet 3; 05 §13). This is not an isolated rebuild, cold-start, or G5 absolute-latency proof. \(envelope.scaleSpan)× items, \(bound)× bound = \(envelope.headroomFactor)× linear headroom.",
+            note: "Warm persistent-store opens over retained metadata run in fresh child processes; each child reports only its internal public SwiftDataHistory.open duration, excluding launch and teardown. The sample includes ModelContainer/SQLite open, singleton/startup validation, scalar metadata reads, and Signature Index rebuild (§9 bullet 3; 05 §13). This is not an isolated rebuild, cold-start, or G5 absolute-latency proof. \(envelope.scaleSpan)× items, \(bound)× bound = a \(envelope.headroomFactor)× bound over the measured span, rejecting quadratic scaling.",
             medium: ".persistent"
         )
         printResult(key, bullet, ratio, bound, passed)
@@ -223,7 +223,7 @@ func workloadPinReorder() async -> [WorkloadFixture] {
             ratio: ratio,
             bound: bound,
             pass: passed,
-            note: "Pin reorder O(pinned count), bounded by retained count (§9 bullet 4). \(envelope.scaleSpan)× pinned, \(bound)× bound = \(envelope.headroomFactor)× linear headroom."
+            note: "Pin reorder O(pinned count), bounded by retained count (§9 bullet 4). \(envelope.scaleSpan)× pinned, \(bound)× bound = a \(envelope.headroomFactor)× bound over the measured span, rejecting quadratic scaling."
         )
         printResult(key, bullet, ratio, bound, passed)
         return [fixture]
@@ -241,8 +241,8 @@ func workloadRetentionAndClear() async -> [WorkloadFixture] {
     let clearKey = "clearUnpinned"
     let clearEnvelope = complexityEnvelope(for: clearKey)
     // Five timed samples remove the old max-of-two noise rationale. A 6×
-    // envelope over a 3× corpus still leaves 2× linear headroom while failing
-    // the 9× ratio expected from an accidental quadratic path.
+    // envelope over a 3× corpus still leaves a 2× bound over the span while
+    // failing the 9× ratio expected from an accidental quadratic path.
     var fixtures: [WorkloadFixture] = []
 
     // --- Retention: setRetentionPolicy(1) mass eviction ---
@@ -274,7 +274,7 @@ func workloadRetentionAndClear() async -> [WorkloadFixture] {
             ratio: ratio,
             bound: retentionEnvelope.bound,
             pass: passed,
-            note: "Retention O(retained scalar metadata), bounded by retained count (§9 bullet 5). Five timed samples; \(retentionEnvelope.scaleSpan)× retained and \(retentionEnvelope.bound)× bound leave \(retentionEnvelope.headroomFactor)× linear headroom while rejecting quadratic scaling."
+            note: "Retention sweeps retained scalar metadata and sorts for eviction order — O(N log N) in retained count (§9 bullet 5). Five timed samples; \(retentionEnvelope.scaleSpan)× retained and \(retentionEnvelope.bound)× bound leave a \(retentionEnvelope.headroomFactor)× bound over the measured span while rejecting quadratic scaling — no-quadratic-observed, not a linear proof."
         ))
         printResult(
             retentionKey,
@@ -319,7 +319,7 @@ func workloadRetentionAndClear() async -> [WorkloadFixture] {
             ratio: ratio,
             bound: clearEnvelope.bound,
             pass: passed,
-            note: "Clear O(retained scalar metadata), bounded by retained count (§9 bullet 5). Five timed samples; \(clearEnvelope.scaleSpan)× retained and \(clearEnvelope.bound)× bound leave \(clearEnvelope.headroomFactor)× linear headroom while rejecting quadratic scaling."
+            note: "Clear sweeps retained scalar metadata and sorts for its pass order — O(N log N) in retained count (§9 bullet 5). Five timed samples; \(clearEnvelope.scaleSpan)× retained and \(clearEnvelope.bound)× bound leave a \(clearEnvelope.headroomFactor)× bound over the measured span while rejecting quadratic scaling — no-quadratic-observed, not a linear proof."
         ))
         printResult(clearKey, bullet, ratio, clearEnvelope.bound, passed)
     } catch {

@@ -8,8 +8,8 @@ import HistoryStorage
 
 func workloadSearchModesScaling() async -> [WorkloadFixture] {
     let bullet = "7"
-    // A 4× retained-row span with an 8× bound leaves 2× linear headroom
-    // while rejecting the nominal 16× ratio of a quadratic regression.
+    // A 4× retained-row span with an 8× bound leaves a 2× bound over the
+    // span while rejecting the nominal 16× ratio of a quadratic regression.
     let definitions: [(key: String, label: String, mode: SearchMode, term: String)] = [
         ("exactSearchScalesWithRetainedCount", "exact", .exact, "needle"),
         ("fuzzySearchScalesWithRetainedCount", "fuzzy", .fuzzy, "nedle"),
@@ -98,7 +98,7 @@ func workloadSearchModesScaling() async -> [WorkloadFixture] {
                 ratio: ratio,
                 bound: envelope.bound,
                 pass: passed,
-                note: "\(definition.label) search over the bounded scalar projection corpus (§9 bullet 7). The expected planted row must match; \(envelope.scaleSpan)× retained rows and an \(envelope.bound)× bound leave \(envelope.headroomFactor)× linear headroom while rejecting nominal quadratic scaling. This complexity envelope is not G2 absolute-latency evidence."
+                note: "\(definition.label) search over the bounded scalar projection corpus (§9 bullet 7). The expected planted row must match; \(envelope.scaleSpan)× retained rows and an \(envelope.bound)× bound leave a \(envelope.headroomFactor)× bound over the measured span while rejecting quadratic scaling — a no-quadratic-observed envelope, not a linear proof (the production corpus sort is O(N log N)). This complexity envelope is not G2 absolute-latency evidence."
             )
             printResult(
                 definition.key,

@@ -367,7 +367,9 @@ recorded fixtures and machine metadata.
   teardown. This is not an isolated index-rebuild timer, cold-start proof,
   external-storage teardown proof, or G5 absolute-latency fixture.
 - Pin reorder is O(pinned count), bounded by retained count.
-- User retention and clear are O(retained scalar metadata), bounded by retained count.
+- User retention and clear are bounded by retained scalar metadata plus its
+  eviction-order sort — O(N log N) in retained count. The §9 envelope rejects
+  quadratic scaling over the measured scales; it is not a linear proof.
 - Recent browse normally materializes at most `limit + 1` scalar rows across
   both lanes for a first page. Pinned and unpinned continuations materialize at
   most `limit + 2`: the former verifies and drops its complete offset anchor;
