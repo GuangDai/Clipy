@@ -17,7 +17,7 @@ import Foundation
 
 /// The drag-end verdict for the preview divider (V2-07 §3): settle at the
 /// dragged width through the existing clamp/guard/persist chain, or
-/// collapse the pane when the raw — or fling-predicted — proposed width
+/// collapse the pane when the actual release's raw proposed width
 /// falls below `PanelGeometry.previewCollapseThreshold`.
 package enum PreviewDragOutcome: Equatable {
     case settle
@@ -149,15 +149,13 @@ public enum PanelGeometry {
         startWidth + (placement == .trailing ? -translation : translation)
     }
 
-    /// Drag-to-collapse (V2-07 §3): the raw end width OR the fling's raw
-    /// predicted-end width below `previewCollapseThreshold` collapses the
-    /// pane (the view routes the verdict through the manual-toggle close
-    /// path); anything at or above the threshold settles through the
-    /// existing clamp/guard/persist chain.
+    /// Drag-to-collapse: only the actual release width below
+    /// `previewCollapseThreshold` closes the pane. A divider is a positioning
+    /// control, so velocity prediction does not override where it was left.
+    /// At or above the threshold, use the existing clamp/guard/persist chain.
     package static func previewDragOutcome(
         startWidth: CGFloat,
         translation: CGFloat,
-        predictedEndTranslation: CGFloat,
         placement: PreviewPlacement
     ) -> PreviewDragOutcome {
         let rawEnd = rawPreviewDragWidth(
@@ -165,13 +163,7 @@ public enum PanelGeometry {
             translation: translation,
             placement: placement
         )
-        let rawPredictedEnd = rawPreviewDragWidth(
-            startWidth: startWidth,
-            translation: predictedEndTranslation,
-            placement: placement
-        )
         return rawEnd < previewCollapseThreshold
-            || rawPredictedEnd < previewCollapseThreshold
             ? .collapse
             : .settle
     }

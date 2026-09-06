@@ -1,7 +1,7 @@
 /// PreviewDividerGeometryTests — the pure preview-divider interaction
 /// vocabulary (V2-07 §3/§9): the placement-signed raw drag width, the
-/// drag-to-collapse verdict (a raw end or fling predicted end below the
-/// 200 threshold), the ±8 pt magnetic snap stops, the closed-pane edge
+/// drag-to-collapse verdict (the actual release width below the 200
+/// threshold), the ±8 pt magnetic snap stops, the closed-pane edge
 /// pull's inward distance, and the footer's context-keyed shortcut-hint
 /// literals. The view-side wiring (hit strips, badge, overlay placement)
 /// is not provable here; these tests pin the decision math the gestures
@@ -62,33 +62,30 @@ struct PreviewDividerGeometryTests {
         #expect(PanelGeometry.previewDragOutcome(
             startWidth: 320,
             translation: 130,
-            predictedEndTranslation: 130,
             placement: .trailing
         ) == .collapse)
         // Leading: 320 - 130 = 190 < 200 through the mirrored sign.
         #expect(PanelGeometry.previewDragOutcome(
             startWidth: 320,
             translation: -130,
-            predictedEndTranslation: -130,
             placement: .leading
         ) == .collapse)
     }
 
-    @Test func flingBelowTheThresholdCollapsesWhenTheEndIsAbove() {
-        // Released at a settle (320 - 80 = 240) but flicked: the raw
-        // predicted end 320 - 160 = 160 is below the threshold.
+    @Test(arguments: [CGFloat(60), CGFloat(80)])
+    func releaseWithinTheVisiblePaneSettlesOnEitherSide(_ distance: CGFloat) {
+        // Positioning the divider at 260 or 240 leaves the pane visible.
+        // Velocity prediction no longer provides a second collapse signal.
         #expect(PanelGeometry.previewDragOutcome(
             startWidth: 320,
-            translation: 80,
-            predictedEndTranslation: 160,
+            translation: distance,
             placement: .trailing
-        ) == .collapse)
+        ) == .settle)
         #expect(PanelGeometry.previewDragOutcome(
             startWidth: 320,
-            translation: -80,
-            predictedEndTranslation: -160,
+            translation: -distance,
             placement: .leading
-        ) == .collapse)
+        ) == .settle)
     }
 
     @Test func endAtOrAboveTheThresholdSettles() {
@@ -96,21 +93,18 @@ struct PreviewDividerGeometryTests {
         #expect(PanelGeometry.previewDragOutcome(
             startWidth: 320,
             translation: 120,
-            predictedEndTranslation: 120,
             placement: .trailing
         ) == .settle)
-        // A predicted end exactly at the threshold settles as well.
+        // The same exact release boundary applies to a leading preview.
         #expect(PanelGeometry.previewDragOutcome(
             startWidth: 320,
-            translation: 100,
-            predictedEndTranslation: 120,
-            placement: .trailing
+            translation: -120,
+            placement: .leading
         ) == .settle)
-        // A widening drag with a huge outward fling stays a settle.
+        // A widening drag remains a settle.
         #expect(PanelGeometry.previewDragOutcome(
             startWidth: 320,
             translation: -100,
-            predictedEndTranslation: -400,
             placement: .trailing
         ) == .settle)
     }
@@ -121,13 +115,11 @@ struct PreviewDividerGeometryTests {
         #expect(PanelGeometry.previewDragOutcome(
             startWidth: 320,
             translation: -130,
-            predictedEndTranslation: -130,
             placement: .trailing
         ) == .settle)
         #expect(PanelGeometry.previewDragOutcome(
             startWidth: 320,
             translation: -130,
-            predictedEndTranslation: -130,
             placement: .leading
         ) == .collapse)
     }

@@ -771,8 +771,8 @@ public struct HistoryPanelView: View {
     /// the persisted 240 floor down to `previewDragVisualFloor` so the
     /// drag-to-collapse affordance reads, while the 480 ceiling and the
     /// browsing-column guard still bind, with the magnetic snap applied
-    /// last. On drag end `PanelGeometry.previewDragOutcome` decides: a raw
-    /// or fling-predicted width below `previewCollapseThreshold` closes the
+    /// last. On drag end `PanelGeometry.previewDragOutcome` decides: an actual
+    /// release width below `previewCollapseThreshold` closes the
     /// pane through the manual-toggle path (a width below the floor is
     /// never persisted); anything else settles at the clamped, guarded,
     /// snapped width and persists. A simultaneous double click restores and
@@ -789,7 +789,7 @@ public struct HistoryPanelView: View {
             .gesture(
                 // The handle moves while it resizes the columns. Measure
                 // from the stationary content space, not its moving local
-                // origin, including the velocity used for fling-to-collapse.
+                // origin. The release position alone decides collapse.
                 DragGesture(minimumDistance: 0, coordinateSpace: .global)
                     .onChanged { value in
                         let startWidth = previewDragStartWidth
@@ -807,8 +807,6 @@ public struct HistoryPanelView: View {
                         switch PanelGeometry.previewDragOutcome(
                             startWidth: startWidth,
                             translation: value.translation.width,
-                            predictedEndTranslation:
-                                value.predictedEndTranslation.width,
                             placement: previewPlacement
                         ) {
                         case .collapse:
@@ -825,12 +823,15 @@ public struct HistoryPanelView: View {
                                 for: previewSelection.reference
                             )
                         case .settle:
-                            // The live band below the 240 floor is visual
-                            // only: clamp before persisting so state and
-                            // the defaults key agree.
+                            // Use the actual release, which can advance past
+                            // the last onChanged event. Keep the same live
+                            // clamp/guard/snap chain, then the persisted floor.
                             previewColumnWidth =
                                 PanelGeometry.clampedPreviewColumnWidth(
-                                    previewColumnWidth
+                                    draggedPreviewColumnWidth(
+                                        from: startWidth,
+                                        translation: value.translation.width
+                                    )
                                 )
                             PanelGeometry.persistPreviewColumnWidth(
                                 previewColumnWidth,

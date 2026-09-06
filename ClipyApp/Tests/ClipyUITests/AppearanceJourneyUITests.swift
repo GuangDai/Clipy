@@ -297,10 +297,9 @@ final class AppearanceJourneyUITests: XCTestCase {
         let baselineDividerOffset = divider.frame.midX - baselinePanelFrame.minX
         let baselinePreviewSpan = baselinePanelFrame.maxX - divider.frame.midX
 
-        // This journey exercises settled resizing. The default 500px/s drag
-        // with immediate release can legitimately trigger fling-to-collapse
-        // even when its final width is above the threshold. Use XCTest's
-        // explicit pointer velocity and hold at the endpoint before release.
+        // Exercise the settled position with an explicit pointer velocity
+        // and endpoint hold. Only the actual release width decides collapse;
+        // a velocity prediction must not override this positioning control.
         let dividerCenter = divider.coordinate(
             withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
         )
