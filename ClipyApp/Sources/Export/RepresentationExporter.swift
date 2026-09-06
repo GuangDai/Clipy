@@ -42,7 +42,17 @@ enum RepresentationExporter {
         for typeIdentifier: String, bundle: Bundle = .main
     ) -> String {
         let base = bundle.localizedString(forKey: "Clipboard", value: "Clipboard", table: "RepresentationExport")
-        let suffix = UTType(typeIdentifier)?.preferredFilenameExtension ?? "bin"
+        // Clipboard encoding identifiers need not have filesystem tags in
+        // the system type database. Name their unchanged bytes as text;
+        // this is not a conversion or a semantic preview of opaque formats.
+        let suffix: String
+        switch typeIdentifier {
+        case "public.plain-text", "public.utf8-plain-text",
+             "public.utf16-plain-text", "public.utf16-external-plain-text":
+            suffix = "txt"
+        default:
+            suffix = UTType(typeIdentifier)?.preferredFilenameExtension ?? "bin"
+        }
         return base + "." + suffix
     }
 
