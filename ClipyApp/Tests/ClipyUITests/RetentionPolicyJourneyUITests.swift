@@ -383,8 +383,12 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
         )
 
         // Enabling the revision-count threshold at 1 is strict (the draft
-        // matrix pins the semantics; this journey runs the control).
-        let revisionCountToggle = app.switches["Keep at most"]
+        // matrix pins the semantics; this journey runs the control). The
+        // toggle is queried by identifier like the age/storage toggles —
+        // its text renders as an unbound StaticText in the AX tree.
+        let revisionCountToggle = app.switches[
+            "clipy.settings.retention.revision-count-enabled"
+        ]
         let revisionCountField = app.textFields[
             "clipy.settings.retention.revision-count"
         ]

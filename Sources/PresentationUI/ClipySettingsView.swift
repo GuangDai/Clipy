@@ -776,6 +776,9 @@ private struct RetentionSettingsTab: View {
                         .accessibilityHint(
                             RetentionSettingsCopy.revisionCountToggleHint
                         )
+                        .accessibilityIdentifier(
+                            "clipy.settings.retention.revision-count-enabled"
+                        )
                     ValueFieldRow(
                         label: RetentionSettingsCopy.revisionCountFieldLabel,
                         unit: RetentionSettingsCopy.revisionCountUnit,
@@ -791,6 +794,9 @@ private struct RetentionSettingsTab: View {
                     )
                         .accessibilityHint(
                             RetentionSettingsCopy.revisionBytesToggleHint
+                        )
+                        .accessibilityIdentifier(
+                            "clipy.settings.retention.revision-bytes-enabled"
                         )
                     ValueFieldRow(
                         label: RetentionSettingsCopy.revisionBytesFieldLabel,
