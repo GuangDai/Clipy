@@ -36,6 +36,13 @@ History 的同事务提交，不能只替换普通 capture/paste 路径。
 
 ## 3. 数据放在哪一层
 
+捕获沿用当前 Adapter 的 changeCount 与权限预检：后台只在明确允许访问时读取，
+`.ask`/默认/拒绝不由定时器反复触发内容读取。changeCount 不是内容身份，也不是完整
+历史日志；快速覆盖可能发生在两次采样之间。读取过程中 ownership 变化不能把不同
+代的表示拼成一个成功捕获。成功捕获立即进入唯一 Authority，提交后释放应用持有的
+输入，不保留一个不断增长的原始 Data 数组；这不意味着能强制系统 pasteboard 释放
+自己的内容。检测 metadata 也不能绕过原始内容访问权限。
+
 ```text
 NSPasteboard → 冻结一次新值 → HistoryAuthority
                                │
@@ -239,6 +246,9 @@ pressure 不推进 ContentVersion/ChangePosition；搜索取消/过期不发布�
 
 ## 11. 文档依据
 
+- Apple [`changeCount`](https://sosumi.ai/documentation/appkit/nspasteboard/changecount)
+  与 [`AccessBehavior`](https://sosumi.ai/documentation/appkit/nspasteboard/accessbehavior-swift.enum)：
+  ownership 计数与系统读取行为；不提供历史保存或丢失代补读保证。
 - Apple [`NSCache.totalCostLimit`](https://sosumi.ai/documentation/foundation/nscache/totalcostlimit)
   与 [`countLimit`](https://sosumi.ai/documentation/foundation/nscache/countlimit)：均非严格限额，淘汰顺序不保证。
 - Apple [`NSPurgeableData`](https://sosumi.ai/documentation/foundation/nspurgeabledata)
