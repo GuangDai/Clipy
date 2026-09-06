@@ -459,6 +459,135 @@ struct RetentionSettingsDraftTests {
         #expect(configured.requiresTighteningConfirmation(for: tightenedPolicies))
     }
 
+    @Test("every dimension's enable or lower is strict; every disable is direct")
+    func strictnessMatrixCoversEveryDimension() throws {
+        // The full Card 10D matrix beyond the sampled cells above, pinning
+        // RetentionSettingsDraft's documented rule that mixed edits confirm
+        // when ANY dimension can delete more history: enabling each absent
+        // dimension and lowering each configured one must confirm, and
+        // disabling each configured one must apply directly. The draft's
+        // seeded defaults (30 d / 500 MiB / 20 / 64 MiB) keep every enabled
+        // submission valid without further text edits.
+        let enableEdits: [(String, (inout RetentionSettingsDraft) -> Void)] = [
+            ("age enable", { $0.setAgeEnabled(true) }),
+            ("storage enable", { $0.setStorageEnabled(true) }),
+            ("revision count enable", { $0.setRevisionCountEnabled(true) }),
+            ("revision bytes enable", { $0.setRevisionBytesEnabled(true) }),
+        ]
+        for (dimension, enable) in enableEdits {
+            var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+            load(
+                HistoryRetentionPolicies(age: nil, storage: nil, revisions: nil),
+                into: &draft
+            )
+            enable(&draft)
+            let policies = try #require(
+                draft.submission()?.policies,
+                "\(dimension): the seeded default must submit"
+            )
+            #expect(
+                draft.requiresTighteningConfirmation(for: policies),
+                "\(dimension): enabling an absent threshold is strict"
+            )
+        }
+
+        let lowerEdits: [(String, (inout RetentionSettingsDraft) -> Void)] = [
+            ("age lower", { $0.setAgeDaysText("1") }),
+            ("storage lower", { $0.setStorageMiBText("1") }),
+            ("revision count lower", { $0.setRevisionCountText("19") }),
+            ("revision bytes lower", { $0.setRevisionMiBText("1") }),
+        ]
+        let configured = {
+            var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+            load(
+                HistoryRetentionPolicies(
+                    age: AgeRetention(maxAge: 172_800),
+                    storage: StorageRetention(maxTotalBytes: 2_097_152),
+                    revisions: RevisionRetention(
+                        maxRevisionsPerItem: 20,
+                        maxRevisionBytesPerItem: 2_097_152
+                    )
+                ),
+                into: &draft
+            )
+            return draft
+        }
+        for (dimension, lower) in lowerEdits {
+            var draft = configured()
+            lower(&draft)
+            let policies = try #require(draft.submission()?.policies)
+            #expect(
+                draft.requiresTighteningConfirmation(for: policies),
+                "\(dimension): lowering a configured threshold is strict"
+            )
+        }
+
+        let disableEdits: [(String, (inout RetentionSettingsDraft) -> Void)] = [
+            ("age disable", { $0.setAgeEnabled(false) }),
+            ("storage disable", { $0.setStorageEnabled(false) }),
+            ("revision count disable", { $0.setRevisionCountEnabled(false) }),
+            ("revision bytes disable", { $0.setRevisionBytesEnabled(false) }),
+        ]
+        for (dimension, disable) in disableEdits {
+            var draft = configured()
+            disable(&draft)
+            let policies = try #require(draft.submission()?.policies)
+            #expect(
+                !draft.requiresTighteningConfirmation(for: policies),
+                "\(dimension): disabling applies directly"
+            )
+        }
+    }
+
+    @Test("a mixed submission confirms when any dimension tightens")
+    func mixedTightenAndLoosenSubmissionConfirms() throws {
+        // The documented mixed-edit rule (RetentionSettingsDraft doc
+        // comment): one loosened dimension cannot cancel another
+        // dimension's tightening — the destructive confirmation still
+        // gates the submission. All-loose with one untouched dimension
+        // stays on the direct path.
+        var mixed = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+        load(
+            HistoryRetentionPolicies(
+                age: AgeRetention(maxAge: 172_800),
+                storage: StorageRetention(maxTotalBytes: 2_097_152),
+                revisions: RevisionRetention(
+                    maxRevisionsPerItem: 20,
+                    maxRevisionBytesPerItem: 2_097_152
+                )
+            ),
+            into: &mixed
+        )
+        mixed.setAgeDaysText("3")
+        mixed.setStorageMiBText("1")
+        let mixedPolicies = try #require(mixed.submission()?.policies)
+        #expect(
+            mixed.requiresTighteningConfirmation(for: mixedPolicies),
+            "a submission tightening storage must confirm even while age loosens"
+        )
+
+        var loosened = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+        load(
+            HistoryRetentionPolicies(
+                age: AgeRetention(maxAge: 172_800),
+                storage: StorageRetention(maxTotalBytes: 2_097_152),
+                revisions: RevisionRetention(
+                    maxRevisionsPerItem: 20,
+                    maxRevisionBytesPerItem: 2_097_152
+                )
+            ),
+            into: &loosened
+        )
+        loosened.setAgeDaysText("3")
+        loosened.setStorageMiBText("3")
+        loosened.setRevisionCountText("21")
+        let loosenedPolicies = try #require(loosened.submission()?.policies)
+        #expect(
+            !loosened.requiresTighteningConfirmation(for: loosenedPolicies),
+            "loosening with one equal dimension stays direct"
+        )
+    }
+
     @Test("late apply completion cannot overwrite a newer edit")
     func lateApplyCompletionIsRejectedByEditGeneration() throws {
         var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
