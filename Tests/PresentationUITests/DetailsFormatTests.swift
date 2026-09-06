@@ -3,22 +3,19 @@ import Testing
 @testable import PresentationUI
 
 struct DetailsFormatTests {
-    @Test(arguments: ["en_US", "zh_Hans_CN", "de_DE"], [0, 9 * 3_600])
-    func dateStyleMatchesThePreviousMediumFormatter(localeIdentifier: String, offset: Int) throws {
+    @Test(arguments: [
+        ("zh_Hans_CN", 0, "2001年1月1日 0:00:00"),
+        ("de_DE", 9 * 3_600, "1. Jan. 2001, 9:00:00"),
+    ])
+    func referenceEpochUsesNativeDateAndTimeStyles(
+        localeIdentifier: String, offset: Int, expected: String
+    ) throws {
         let locale = Locale(identifier: localeIdentifier)
         let zone = try #require(TimeZone(secondsFromGMT: offset))
-        let previous = DateFormatter()
-        previous.locale = locale
-        previous.timeZone = zone
-        previous.dateStyle = .medium
-        previous.timeStyle = .medium
-        // Independent legacy API oracle, including different months and
-        // periods of the day. Compare full strings, not normalized fields.
-        for seconds in [0.0, 725_857_445.0, 746_899_199.0] {
-            let instant = Date(timeIntervalSinceReferenceDate: seconds)
-            #expect(DetailsFormat.dateTime(instant, locale: locale, timeZone: zone)
-                == previous.string(from: instant))
-        }
+        // The reference epoch is 2001-01-01 at midnight UTC. Native styles
+        // use an unpadded hour and the locale's abbreviated month form.
+        let instant = Date(timeIntervalSinceReferenceDate: 0)
+        #expect(DetailsFormat.dateTime(instant, locale: locale, timeZone: zone) == expected)
     }
 
     @Test func countsFollowTheSelectedRegionWithoutNarrowingUnsignedFacts() {

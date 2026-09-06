@@ -1221,6 +1221,8 @@ internal enum DetailsFormat {
         value.formatted(ByteCountFormatStyle(style: .file, locale: locale))
     }
 
+    /// Native abbreviated-date and standard-time styles follow the view's
+    /// locale and time zone.
     /// Foundation caches the value format style's formatter internally, so
     /// a revision list does not allocate one DateFormatter per displayed row.
     static func dateTime(_ value: Date, locale: Locale, timeZone: TimeZone) -> String {
