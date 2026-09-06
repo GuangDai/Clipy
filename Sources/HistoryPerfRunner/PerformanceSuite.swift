@@ -35,9 +35,12 @@
 /// The V2-02 R-active retention lanes (docs/v2/V2-02-retention.md Record 3
 /// RET-PERF-1/2/3) reuse the same discipline: capture composition with R1+R2
 /// active, the revise-path expansion with R2+R3 active, and the
-/// `.setRetentionPolicies` scalar sweep each gate a 3× span at 6× (2× linear
-/// headroom) so a super-linear regression in the expansion pass fails exactly
-/// as it would on the projection-maintenance-only lanes.
+/// `.setRetentionPolicies` scalar sweep each gate a 3× span at 6× (a 2×
+/// bound over the measured span) so a quadratic-scale regression in the
+/// expansion pass fails exactly as it would on the projection-maintenance-only
+/// lanes. The retention and search lanes sort for eviction or corpus order,
+/// so every envelope is no-quadratic-observed over the measured scales, not
+/// a linear proof — a mild N-log-N regression passes (05 §5.5).
 ///
 /// Import confinement (Part I §8): the runner imports Foundation, HistoryCore,
 /// and HistoryStorage — HistoryStorage was added to the HistoryPerfRunner
