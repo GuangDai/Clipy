@@ -11,8 +11,7 @@ struct PositionSingletonStartupValidationTests {
     private static func seedSingleton(
         at storeURL: URL,
         position: UInt64,
-        maximumUnpinnedItems: Int,
-        includeValidRetentionConfig: Bool = false
+        maximumUnpinnedItems: Int
     ) throws {
         let schema = historySchema
         let configuration = ModelConfiguration(
@@ -31,20 +30,25 @@ struct PositionSingletonStartupValidationTests {
             rawValue: position,
             maximumUnpinnedItems: maximumUnpinnedItems
         ))
-        if includeValidRetentionConfig {
-            context.insert(RetentionExpansionConfigRow(
-                key: "retention-expansion",
-                agePolicyEnabled: false,
-                ageMaxSeconds: 0,
-                storagePolicyEnabled: false,
-                storageMaxBytes: 0,
-                revisionPolicyEnabled: false,
-                revisionMaxCount: nil,
-                revisionMaxBytes: nil,
-                configSchemaVersion: 1
-            ))
-        }
         try context.save()
+    }
+
+    private static func seedValidCurrentStore(at storeURL: URL) async throws {
+        let history = try await WSSupport.openHistory(storeURL: storeURL)
+        // Real commits establish position 17, policy 321 and their complete
+        // current journal/Gateway companions. No missing owner is bootstrapped
+        // from a historical partial schema when the next owner opens it.
+        for position in 1...17 {
+            let maximum = position.isMultiple(of: 2) ? 320 : 321
+            let receipt = try await history.perform(.setRetentionPolicy(
+                maximumUnpinnedItems: maximum
+            ))
+            guard case .committed(let commit) = receipt else {
+                Issue.record("Expected the fixture's count-policy commit")
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
+            #expect(commit.position.rawValue == UInt64(position))
+        }
     }
 
     @Test(arguments: [0, 5_001])
@@ -92,12 +96,7 @@ struct PositionSingletonStartupValidationTests {
     func validExistingSingletonIgnoresInitialValue() async throws {
         let storeURL = WSSupport.tempStoreURL("position-singleton-valid-existing")
         defer { WSSupport.removeStore(storeURL) }
-        try Self.seedSingleton(
-            at: storeURL,
-            position: 17,
-            maximumUnpinnedItems: 321,
-            includeValidRetentionConfig: true
-        )
+        try await Self.seedValidCurrentStore(at: storeURL)
 
         _ = try await SwiftDataHistory.open(
             configuration: HistoryConfiguration(
