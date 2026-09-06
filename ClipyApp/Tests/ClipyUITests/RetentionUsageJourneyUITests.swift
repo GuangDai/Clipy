@@ -71,12 +71,13 @@ final class RetentionUsageJourneyUITests: XCTestCase {
 
         app.buttons["General"].click()
         // The Settings window on the General tab is anchored by the
-        // privacy ignore-list's Add button, the retention field being
-        // off-tab (every journey anchors on a concrete interactive
-        // element, not a Form section identifier).
+        // Keyboard Shortcut section's Change button — the retention fields
+        // are off-tab, and the runtime AX tree flattens the privacy
+        // section's children under the section identifier, so only the
+        // shortcut control survives as a stable interactive anchor here.
         let settingsWindow = app.windows.containing(
-            .button,
-            identifier: "clipy.settings.privacy.add-ignore"
+            .any,
+            identifier: "clipy.settings.shortcut.change"
         ).firstMatch
         assertExists(
             settingsWindow,

@@ -352,7 +352,22 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
 
         // Two real revisions through the running Details editor: the
         // canonical capture stays, each replace appends one stored
-        // revision, and the newest revision is the effective value.
+        // revision, and the newest revision is the effective value. The
+        // list only carries the entry point once — after Save the panel
+        // stays on the Details surface, so the second revision enters
+        // through its Edit Content control directly.
+        let row = historyRows(in: app).firstMatch
+        XCTAssertTrue(
+            waitUntil(timeout: 10) { row.exists && row.isHittable },
+            diagnostic(app, context: "revision journey captured row")
+        )
+        row.rightClick()
+        let showDetails = app.menuItems["Show Details"]
+        XCTAssertTrue(
+            waitUntil(timeout: 5) { showDetails.exists && showDetails.isHittable },
+            diagnostic(app, context: "row context menu Show Details")
+        )
+        showDetails.click()
         try appendRevision(firstRevision, in: app)
         try appendRevision(secondRevision, in: app)
 
@@ -450,25 +465,13 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
         )
     }
 
-    /// Appends one revision through the real Details editor decision menu
-    /// (EditorRuntimeJourneyUITests' flow): open the captured row's Details
-    /// through its context menu, enter the editor with Edit Content, open
-    /// the replace editor for the UTF-8 representation, type the
-    /// replacement, Save, and return to the Details surface.
+    /// Appends one revision through the real Details editor, starting from
+    /// the open Details surface (EditorRuntimeJourneyUITests' flow after
+    /// its entry steps): enter the editor with Edit Content, open the
+    /// replace editor for the UTF-8 representation, type the replacement,
+    /// Save, and stay on the Details surface it returns to.
     @MainActor
     private func appendRevision(_ text: String, in app: XCUIApplication) throws {
-        let row = historyRows(in: app).firstMatch
-        XCTAssertTrue(
-            waitUntil(timeout: 10) { row.exists && row.isHittable },
-            diagnostic(app, context: "revision journey captured row")
-        )
-        row.rightClick()
-        let showDetails = app.menuItems["Show Details"]
-        XCTAssertTrue(
-            waitUntil(timeout: 5) { showDetails.exists && showDetails.isHittable },
-            diagnostic(app, context: "row context menu Show Details")
-        )
-        showDetails.click()
         let details = app.descendants(matching: .any)["clipy.details.root"]
         let edit = app.buttons["Edit Content"]
         XCTAssertTrue(

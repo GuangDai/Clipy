@@ -60,8 +60,8 @@ let admissionPageLimit = admissionProfile.pageLimit
 /// routes the scan back to the Foundation oracle at its historical ~125 s,
 /// where 103 requests would need ≈3.6 h and forfeit the lane. At n = 11
 /// the nearest-rank p95 and p99 fall below their 20/100-sample support
-/// floors and encode as JSON null instead of a disguised sample maximum;
-/// the fixture notes record that limitation.
+/// floors and are omitted from the encoded JSON entirely instead of
+/// disguising a sample maximum; the fixture notes record that limitation.
 let admissionExactSearchWarmupCount = 1
 let admissionExactSearchSampleCount = 11
 

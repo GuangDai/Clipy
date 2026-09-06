@@ -252,8 +252,8 @@ struct HistoryPerfRunnerHelperTests {
         // fixture is record-only p50-trend evidence, and 13 requests still
         // fit in ≈27 min at the historical ~125 s Foundation-path cost if a
         // matcher regression restores it. At n = 11 the nearest-rank
-        // p95/p99 fall below their 20/100-sample support floors and encode
-        // as JSON null, which the fixture notes must state.
+        // p95/p99 fall below their 20/100-sample support floors and are
+        // omitted from the encoded JSON, which the fixture notes must state.
         #expect(admissionExactSearchWarmupCount == 1)
         #expect(admissionExactSearchSampleCount == 11)
     }
