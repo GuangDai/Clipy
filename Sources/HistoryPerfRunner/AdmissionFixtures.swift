@@ -4,9 +4,10 @@ import HistoryStorage
 
 /// Nearest-rank percentiles with per-rank support gating: a rank is
 /// reported only when the sample count can select below the maximum
-/// (`ceil(p*n) < n`), otherwise it encodes as JSON null instead of a
-/// disguised sample maximum. The 11-sample exact-search budget therefore
-/// carries p50 only (docs/AUDIT.md IND-07 measurement budget).
+/// (`ceil(p*n) < n`); below its support floor the rank is omitted from
+/// the encoded JSON entirely instead of disguising a sample maximum. The
+/// 11-sample exact-search budget therefore carries p50 only
+/// (docs/AUDIT.md IND-07 measurement budget).
 struct AdmissionPercentiles: Codable, Sendable, Equatable {
     let p50Ms: Double
     let p95Ms: Double?
