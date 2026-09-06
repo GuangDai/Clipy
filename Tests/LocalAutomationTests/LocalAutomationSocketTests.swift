@@ -2,54 +2,58 @@ import ClipyCLIContract
 import Darwin
 import Foundation
 import HistoryCore
-import Testing
+import XCTest
 @testable import HistoryStorage
 @testable import LocalAutomation
 
-@Suite("Local Automation real socket and History")
-struct LocalAutomationSocketTests {
-    @Test func grantsProtectContentAndRevocationIsVisibleAcrossRealConnections() async throws {
+/// These tests exercise real wall-clock transport deadlines. XCTest runs its
+/// cases serially before Swift Testing starts the large parallel package suite,
+/// so unrelated synchronous fixtures cannot consume a request's entire deadline
+/// while its task is waiting to run (CI 34066411438).
+@MainActor
+final class LocalAutomationSocketTests: XCTestCase {
+    func testGrantsProtectContentAndRevocationIsVisibleAcrossRealConnections() async throws {
         try await withFixture { fixture in
             let request = try Self.json(arguments: ["query": "wire-secret", "mode": "exact", "limit": 1])
             let denied = try await fixture.send(request)
-            #expect(denied.exitCode == 3)
-            #expect(String(decoding: denied.stderr, as: UTF8.self) == "clipyctl: not_granted\n")
-            #expect(!String(decoding: denied.stdout, as: UTF8.self).contains("wire-secret"))
+            XCTAssertEqual(denied.exitCode, 3)
+            XCTAssertEqual(String(decoding: denied.stderr, as: UTF8.self), "clipyctl: not_granted\n")
+            XCTAssertTrue(!String(decoding: denied.stdout, as: UTF8.self).contains("wire-secret"))
             let wrong = try await fixture.send(request, credential: Data(repeating: 0, count: 48))
-            #expect(wrong.exitCode == 3)
-            #expect(String(decoding: wrong.stderr, as: UTF8.self) == "clipyctl: authentication_failed\n")
+            XCTAssertTrue(wrong.exitCode == 3)
+            XCTAssertTrue(String(decoding: wrong.stderr, as: UTF8.self) == "clipyctl: authentication_failed\n")
 
             try await fixture.history.grantCapability(.browsePreview, to: fixture.connection)
             let allowed = try await fixture.send(request)
-            #expect(allowed.exitCode == 0)
-            #expect(allowed.stderr.isEmpty)
-            #expect(String(decoding: allowed.stdout, as: UTF8.self).contains("wire-secret"))
+            XCTAssertTrue(allowed.exitCode == 0)
+            XCTAssertTrue(allowed.stderr.isEmpty)
+            XCTAssertTrue(String(decoding: allowed.stdout, as: UTF8.self).contains("wire-secret"))
             try await fixture.history.revokeConnection(fixture.connection)
             let revoked = try await fixture.send(request)
-            #expect(revoked.exitCode == 3)
-            #expect(String(decoding: revoked.stderr, as: UTF8.self) == "clipyctl: connection_revoked\n")
+            XCTAssertTrue(revoked.exitCode == 3)
+            XCTAssertTrue(String(decoding: revoked.stderr, as: UTF8.self) == "clipyctl: connection_revoked\n")
         }
     }
 
-    @Test func browsePaginationAndSevenOperationsUseTheSameLiveHistory() async throws {
+    func testBrowsePaginationAndSevenOperationsUseTheSameLiveHistory() async throws {
         try await withFixture { fixture in
             for capability in [ExternalCapability.browsePreview, .readEffectiveContent, .organize, .deleteItem] {
                 try await fixture.history.grantCapability(capability, to: fixture.connection)
             }
             let first = try Self.result(await fixture.send(Self.json(arguments: ["limit": 1])))
-            let items = try #require(first["items"] as? [[String: Any]])
-            let locator = try #require(items.first?["locator"] as? String)
-            let cursor = try #require(first["nextCursor"] as? String)
+            let items = try XCTUnwrap(first["items"] as? [[String: Any]])
+            let locator = try XCTUnwrap(items.first?["locator"] as? String)
+            let cursor = try XCTUnwrap(first["nextCursor"] as? String)
             let second = try Self.result(await fixture.send(Self.json(arguments: ["limit": 1, "cursor": cursor])))
-            let nextItems = try #require(second["items"] as? [[String: Any]])
-            #expect(nextItems.first?["locator"] as? String != locator)
+            let nextItems = try XCTUnwrap(second["items"] as? [[String: Any]])
+            XCTAssertTrue(nextItems.first?["locator"] as? String != locator)
             let mismatched = try await fixture.send(Self.json(arguments: [
                 "query": "wire-secret", "mode": "exact", "limit": 1, "cursor": cursor
             ]))
-            #expect(mismatched.exitCode == 4)
+            XCTAssertTrue(mismatched.exitCode == 4)
 
             let current = try await fixture.history.browse(.init(kind: .recent, limit: 1))
-            let item = try #require(current.rows.first?.item)
+            let item = try XCTUnwrap(current.rows.first?.item)
             _ = try await fixture.history.perform(.revise(.init(
                 itemID: item.id, expected: item.contentVersion,
                 intent: .replace(.init(decisions: [
@@ -59,26 +63,26 @@ struct LocalAutomationSocketTests {
             )))
             for operation in ["detailsEffective", "pasteEffective"] {
                 let content = try Self.result(await fixture.send(Self.json(operation: operation, arguments: ["locator": locator])))
-                #expect(Set(content.keys) == ["locator", "representations"])
-                let representations = try #require(content["representations"] as? [[String: Any]])
-                #expect(representations.count == 2)
-                let text = try #require(representations.first { $0["typeIdentifier"] as? String == "public.utf8-plain-text" })
-                let encoded = try #require(text["bytesBase64"] as? String)
-                #expect(Data(base64Encoded: encoded) == Data("revised-only".utf8))
-                let binary = try #require(representations.first { $0["typeIdentifier"] as? String == "com.clipy.tests.binary" })
-                let binaryEncoded = try #require(binary["bytesBase64"] as? String)
-                #expect(Data(base64Encoded: binaryEncoded) == Data([0, 255, 10]))
+                XCTAssertTrue(Set(content.keys) == ["locator", "representations"])
+                let representations = try XCTUnwrap(content["representations"] as? [[String: Any]])
+                XCTAssertTrue(representations.count == 2)
+                let text = try XCTUnwrap(representations.first { $0["typeIdentifier"] as? String == "public.utf8-plain-text" })
+                let encoded = try XCTUnwrap(text["bytesBase64"] as? String)
+                XCTAssertTrue(Data(base64Encoded: encoded) == Data("revised-only".utf8))
+                let binary = try XCTUnwrap(representations.first { $0["typeIdentifier"] as? String == "com.clipy.tests.binary" })
+                let binaryEncoded = try XCTUnwrap(binary["bytesBase64"] as? String)
+                XCTAssertTrue(Data(base64Encoded: binaryEncoded) == Data([0, 255, 10]))
             }
             for operation in ["pin", "unpin", "delete"] {
                 let changed = try Self.result(await fixture.send(Self.json(operation: operation, arguments: ["locator": locator])))
-                #expect(changed["changed"] as? Bool == true)
+                XCTAssertTrue(changed["changed"] as? Bool == true)
             }
             let remaining = try await fixture.history.browse(.init(kind: .recent, limit: 10))
-            #expect(remaining.rows.count == 2)
+            XCTAssertTrue(remaining.rows.count == 2)
         }
     }
 
-    @Test func partialAndOversizedFramesCloseWithoutDispatchingHistory() async throws {
+    func testPartialAndOversizedFramesCloseWithoutDispatchingHistory() async throws {
         try await withFixture { fixture in
             for oversized in [false, true] {
                 let descriptor = try LocalAutomationSocket.make()
@@ -99,23 +103,23 @@ struct LocalAutomationSocketTests {
                 _ = Darwin.shutdown(descriptor, SHUT_WR)
                 do {
                     _ = try await LocalAutomationSocket.receive(1, from: descriptor, deadline: deadline)
-                    Issue.record("malformed private request must close without a partial JSON response")
+                    XCTFail("malformed private request must close without a partial JSON response")
                 } catch let failure as LocalAutomationSocket.Failure {
-                    #expect(failure == .disconnected)
+                    XCTAssertTrue(failure == .disconnected)
                 }
             }
             let current = try await fixture.history.browse(.init(kind: .recent, limit: 10))
-            #expect(current.rows.count == 3)
+            XCTAssertTrue(current.rows.count == 3)
         }
     }
 
-    @Test func stopClosesIncompleteClientsAndRemovesItsEndpoint() async throws {
+    func testStopClosesIncompleteClientsAndRemovesItsEndpoint() async throws {
         try await withFixture { fixture in
             let client = try await LocalAutomationClient.connect(endpointURL: fixture.endpoint)
             await fixture.service.stop()
             let output = await client.request(try Self.json(arguments: ["limit": 1]), credential: fixture.credential)
-            #expect(output.exitCode == 5)
-            #expect(!FileManager.default.fileExists(atPath: fixture.endpoint.path))
+            XCTAssertTrue(output.exitCode == 5)
+            XCTAssertTrue(!FileManager.default.fileExists(atPath: fixture.endpoint.path))
         }
     }
 
@@ -132,7 +136,7 @@ struct LocalAutomationSocketTests {
         }
     }
 
-    private func withFixture(_ body: @Sendable (Fixture) async throws -> Void) async throws {
+    private func withFixture(_ body: @MainActor @Sendable (Fixture) async throws -> Void) async throws {
         let directory = URL(fileURLWithPath: "/tmp/clipy-wire-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let endpoint = directory.appendingPathComponent("automation.sock")
@@ -174,10 +178,10 @@ struct LocalAutomationSocketTests {
     }
 
     private static func result(_ output: LocalAutomationOutput) throws -> [String: Any] {
-        #expect(output.exitCode == 0)
-        #expect(output.stderr.isEmpty)
-        let envelope = try #require(JSONSerialization.jsonObject(with: output.stdout) as? [String: Any])
-        return try #require(envelope["result"] as? [String: Any])
+        XCTAssertEqual(output.exitCode, 0, String(decoding: output.stderr, as: UTF8.self))
+        XCTAssertEqual(output.stderr, Data())
+        let envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: output.stdout) as? [String: Any])
+        return try XCTUnwrap(envelope["result"] as? [String: Any])
     }
 }
 
