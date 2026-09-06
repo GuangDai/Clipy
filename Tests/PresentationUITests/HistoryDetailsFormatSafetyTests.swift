@@ -7,6 +7,41 @@ import Testing
 
 struct HistoryDetailsFormatSafetyTests {
 
+    /// Literal source vectors distinguish a UTF-16 encoding marker from the
+    /// first actual scalar. Details, editor prefill and saved replacement must
+    /// all preserve that scalar; paired encode/decode alone could hide a loss.
+    @Test func leadingUnicodeMarkersSurviveDetailsAndEditing() throws {
+        let fixtures: [(type: String, bytes: Data, text: String, suffix: Data)] = [
+            ("public.utf8-plain-text", Data([0xEF, 0xBB, 0xBF, 0x41]), "\u{FEFF}A", Data([0x42])),
+            ("public.utf16-plain-text", Data([0xFF, 0xFE, 0xFF, 0xFE, 0x41, 0x00]), "\u{FEFF}A", Data([0x42, 0x00])),
+            ("public.utf16-plain-text", Data([0xFF, 0xFE, 0xFE, 0xFF, 0x41, 0x00]), "\u{FFFE}A", Data([0x42, 0x00])),
+            ("public.utf16-external-plain-text", Data([0xFE, 0xFF, 0xFE, 0xFF, 0x00, 0x41]), "\u{FEFF}A", Data([0x00, 0x42])),
+            ("public.utf16-external-plain-text", Data([0xFE, 0xFF, 0xFF, 0xFE, 0x00, 0x41]), "\u{FFFE}A", Data([0x00, 0x42])),
+        ]
+        for fixture in fixtures {
+            let representation = HistoryRepresentation(typeIdentifier: fixture.type, bytes: fixture.bytes)
+            let snapshot = details(canonical: [representation], effective: [representation])
+            let prepared = try DetailsContentPresentation(details: snapshot)
+            #expect(prepared.canonical[0].presentation == .plainText(fixture.text))
+            #expect(prepared.effective[0].presentation == .plainText(fixture.text))
+
+            var draft = ReviseEditorDraft(details: snapshot)
+            #expect(draft.replacementText(for: fixture.type).utf8.elementsEqual(fixture.text.utf8))
+            draft.setChoice(.replace, for: fixture.type)
+            guard case .replace(let unedited) = draft.revisionRequest().intent else {
+                Issue.record("Replace must produce a replacement draft")
+                continue
+            }
+            #expect(unedited.decisions.first?.action == .replace(bytes: fixture.bytes))
+            draft.setReplacementText(fixture.text + "B", for: fixture.type)
+            guard case .replace(let edited) = draft.revisionRequest().intent else {
+                Issue.record("An authored replacement must produce a replacement draft")
+                continue
+            }
+            #expect(edited.decisions.first?.action == .replace(bytes: fixture.bytes + fixture.suffix))
+        }
+    }
+
     @Test(arguments: [
         "public.image.private", "public.image-url", "public.png.private",
         "public.url.private", "public.file-url.private", "com.example.curl-data", "dyn.example.url",

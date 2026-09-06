@@ -258,6 +258,36 @@ private func plannedRetirements(
     #expect(plan.retiredItems == 0)
 }
 
+@Test(arguments: [false, true], [569, 570, 571])
+func r2OldestPrefixRespectsByteBoundaryAndProtection(
+    _ reverseInventory: Bool, _ budget: Int
+) throws {
+    let pinned = expansionItem(
+        1, copiedAt: 0, pinned: PinOrdinal(rawValue: 0), canonicalBytes: 50
+    )
+    let primary = expansionItem(2, copiedAt: 0, canonicalBytes: 50)
+    let oldest = expansionItem(3, copiedAt: 100, canonicalBytes: 1)
+    let tied = expansionItem(4, copiedAt: 100, canonicalBytes: 10, revisionBytes: 10)
+    let newer = expansionItem(5, copiedAt: 200, canonicalBytes: 50, revisionBytes: 400)
+    let inventory = [newer, tied, pinned, oldest, primary]
+    // Total 571: 571 needs no victim, 570 removes the one-byte oldest, and
+    // 569 must remove both age-tied rows despite the newer row's 450 bytes.
+    let expected: [HistoryItemID] = switch budget {
+    case 571: []
+    case 570: [oldest.id]
+    default: [oldest.id, tied.id]
+    }
+    let retired = try plannedRetirements(
+        inventory: reverseInventory ? Array(inventory.reversed()) : inventory,
+        policies: HistoryRetentionPolicies(
+            age: nil, storage: StorageRetention(maxTotalBytes: budget), revisions: nil
+        ),
+        protected: [primary.id],
+        now: Date(timeIntervalSinceReferenceDate: 1000)
+    )
+    #expect(retired == expected)
+}
+
 // MARK: - R1-before-R2 union (V2-02 §4.1; RET-SELECT-1(d))
 
 @Test func r1VictimsAreExcludedFromTheProjectedByteTotalAndDeduplicated() throws {

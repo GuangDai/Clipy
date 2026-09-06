@@ -332,7 +332,11 @@ extension SearchWorker {
     /// patterns (03b §8); anything the scanner misreads structurally is
     /// still caught by the compilation check that follows.
     internal static func containsRejectedPatternShape(_ pattern: String) -> Bool {
-        let characters = Array(pattern)
+        // ICU interprets syntax as Unicode scalars, not grapheme clusters.
+        // A combining mark after `(`, `+`, `|`, or `}` must not hide that
+        // token from the existing 03b §8 nested-quantifier/alternation check.
+        // The separate query-size limits still count Characters.
+        let characters = Array(pattern.unicodeScalars)
         var index = 0
         var characterClassDepth = 0
         var inQuotedLiteral = false
@@ -487,7 +491,7 @@ extension SearchWorker {
     /// interpret the pattern's lexical structure.
     internal static func inlineFlagClauseEnablesComments(
         at groupStart: Int,
-        in characters: [Character]
+        in characters: [Unicode.Scalar]
     ) -> Bool {
         guard groupStart + 2 < characters.count,
               characters[groupStart + 1] == "?" else {
@@ -502,7 +506,7 @@ extension SearchWorker {
                 cursor += 1
                 continue
             }
-            guard "ismwx".contains(flag) else { return false }
+            guard "ismwx".unicodeScalars.contains(flag) else { return false }
             if flag == "x", enabling {
                 return true
             }
@@ -516,7 +520,7 @@ extension SearchWorker {
     /// just-closed group is itself quantified (03b §8).
     internal static func isQuantifierToken(
         at index: Int,
-        in characters: [Character]
+        in characters: [Unicode.Scalar]
     ) -> Bool {
         guard index < characters.count else { return false }
         switch characters[index] {
@@ -535,7 +539,7 @@ extension SearchWorker {
     /// requires).
     internal static func intervalQuantifierEnd(
         at start: Int,
-        in characters: [Character]
+        in characters: [Unicode.Scalar]
     ) -> Int? {
         var cursor = start + 1
         var digitCount = 0

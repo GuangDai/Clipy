@@ -173,4 +173,60 @@ func observerChecksRevocationBeforeReadingChangedPasteboardItems() {
     #expect(payloadReads == 1)
     #expect(received.count == 1)
 }
+
+@Test(arguments: [
+    PasteboardAccessBehavior.denied, .ask, .systemDefault, .unavailable
+]) @MainActor
+func observerRechecksAccessBeforeOwnershipRetry(
+    revokedBehavior: PasteboardAccessBehavior
+) throws {
+    let pasteboard = makeRetryPasteboard()
+    defer { pasteboard.releaseGlobally() }
+    replaceString(on: pasteboard, with: "initially-allowed")
+    var accessBehavior = PasteboardAccessBehavior.allowed
+    var payloadReads = 0
+    var adapter = PasteboardAdapter(pasteboard: pasteboard)
+    adapter.payloadReadCompletionHook = { _ in
+        payloadReads += 1
+        guard payloadReads == 1 else { return }
+        accessBehavior = revokedBehavior
+        replaceString(on: pasteboard, with: "current-after-revocation")
+    }
+    let observer = PasteboardObserver(adapter: adapter, pollInterval: 60)
+    observer.setAccessBehaviorProviderForTesting { accessBehavior }
+    defer { observer.stop() }
+    var accessEvents: [PasteboardAccessBehavior] = []
+    var received: [CaptureOutcome] = []
+    observer.start(
+        onAccessBehaviorChanged: { accessEvents.append($0) },
+        handler: { received.append($0) }
+    )
+
+    #expect(accessEvents == [.allowed, revokedBehavior])
+    #expect(payloadReads == 1)
+    #expect(received.isEmpty)
+    observer.pollForTesting()
+    #expect(accessEvents == [.allowed, revokedBehavior])
+    #expect(payloadReads == 1)
+    #expect(received.isEmpty)
+
+    // Without an owner stopping the timer, recovery still observes the
+    // unread current generation once; the refused retry did not consume it.
+    accessBehavior = .allowed
+    observer.pollForTesting()
+    #expect(accessEvents == [.allowed, revokedBehavior, .allowed])
+    #expect(payloadReads == 2)
+    #expect(received.count == 1)
+    guard case let .complete(complete) = try #require(received.first) else {
+        Issue.record("expected the complete generation after access recovery")
+        return
+    }
+    #expect(complete.capture.representations == [CapturedRepresentation(
+        typeIdentifier: NSPasteboard.PasteboardType.string.rawValue,
+        bytes: Data("current-after-revocation".utf8)
+    )])
+    observer.pollForTesting()
+    #expect(payloadReads == 2)
+    #expect(received.count == 1)
+}
 #endif

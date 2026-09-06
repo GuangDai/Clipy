@@ -760,6 +760,10 @@ final class AppComposition {
         capturePauseTask != nil
     }
 
+    /// Joins the owned deadline after a test releases its substituted sleep,
+    /// including a non-cooperative return after stop or manual Resume.
+    var capturePauseTaskForTesting: Task<Void, Never>? { capturePauseTask }
+
     /// Content-free Card 14C owner facts for hosted notification tests.
     var isCaptureObservationActiveForTesting: Bool { acceptsCaptures }
     var workspaceActivityForTesting: WorkspaceActivityState {

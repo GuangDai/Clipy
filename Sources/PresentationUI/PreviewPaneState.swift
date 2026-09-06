@@ -77,9 +77,10 @@ public final class PreviewPaneState {
     /// invalidate only work owned by the removed/revised item.
     private var pendingAutoOpenItem: HistoryItemReference?
 
-    /// Monotonic local invalidation fence. Cancellation remains an efficiency
-    /// hint; a completion must also belong to the current generation before
-    /// it can reopen or retarget the pane (review Card 9B).
+    /// Monotonic local observation of receipt-confirmed purges. A purge of
+    /// the visible item can leave a different item's pending dwell intact;
+    /// dwell validity therefore follows its exact target and cancellation,
+    /// rather than this surface-wide count (review Card 9B).
     package private(set) var purgeGeneration = 0
 
     /// Set by a manual close; cleared by the next selection change. While
@@ -222,7 +223,6 @@ public final class PreviewPaneState {
 
     private func scheduleAutoOpen(for item: HistoryItemReference) {
         let delay = autoOpenDelay
-        let generation = purgeGeneration
         pendingAutoOpenItem = item
         // Inherits the MainActor from this isolated context; `weak self`
         // keeps a released pane from being pinned by its own dwell task.
@@ -232,7 +232,6 @@ public final class PreviewPaneState {
             }
             guard !Task.isCancelled else { return }
             guard let self,
-                  self.purgeGeneration == generation,
                   self.pendingAutoOpenItem == item,
                   self.isAutoOpenEnabled,
                   self.isAutoOpenPreferenceEnabled,

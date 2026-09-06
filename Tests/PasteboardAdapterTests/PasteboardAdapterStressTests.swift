@@ -195,9 +195,15 @@ struct PasteboardAdapterStressTests {
         }
         let lastWriteBytes = Data("stress-write-\(writeCount - 1)".utf8)
 
-        // At least one capture must land; give the poll a generous window
-        // (≥1 s) before asserting.
-        #expect(spinMainRunLoop(until: { received.count >= 1 }, timeout: 2))
+        // Wait for the actual final value. A provider may service the run
+        // loop during the burst, so an already-delivered intermediate value
+        // is not evidence that the final generation has been observed.
+        #expect(spinMainRunLoop(until: {
+            received.last?.representations.contains {
+                $0.typeIdentifier == NSPasteboard.PasteboardType.string.rawValue
+                    && $0.bytes == lastWriteBytes
+            } == true
+        }, timeout: 2))
         // The initial capture on start found an empty pasteboard (nil, not
         // delivered), and polling delivers at most once per distinct change
         // count: delivered ∈ 1…(1 initial + 30 writes).

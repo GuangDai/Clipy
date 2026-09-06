@@ -887,6 +887,12 @@ private struct RetentionSettingsTab: View {
         .task(id: usageRefreshGeneration) {
             await refreshUsage()
         }
+        // Clear can finish after the user has already returned from General.
+        // The existing receipt-confirmed purge also covers destructive Apply
+        // and external removals, without another History subscription.
+        .onChange(of: viewState.surfacePurge?.generation) { _, _ in
+            usageRefreshGeneration += 1
+        }
         .onDisappear {
             usageRefreshGeneration += 1
             usage = nil
@@ -907,6 +913,16 @@ private struct RetentionSettingsTab: View {
             guard !Task.isCancelled, requestGeneration == usageRefreshGeneration else { return }
             usageFailed = true
         }
+    }
+
+    private func refreshUsageAfterApply(_ receipt: HistoryReceipt) {
+        // Destructive retention already publishes the purge observed above.
+        // Only non-destructive/no-op Apply needs its own refresh request.
+        if case .committed(let commit) = receipt,
+           commit.hasDestructiveRetentionEffects {
+            return
+        }
+        usageRefreshGeneration += 1
     }
 
     /// The parsed count, or `nil` when the text is not a whole number
@@ -976,7 +992,7 @@ private struct RetentionSettingsTab: View {
             )
             switch maximumUnpinnedStatusFeedback(receipt) {
             case .success(let successMessage):
-                usageRefreshGeneration += 1
+                refreshUsageAfterApply(receipt)
                 guard draft.acceptApplied(
                     submission,
                     successMessage: successMessage
@@ -1106,7 +1122,7 @@ private struct RetentionSettingsTab: View {
             let receipt = try await viewState.applyRetentionPolicies(submission.policies)
             switch retentionPoliciesStatusFeedback(receipt) {
             case .success(let successMessage):
-                usageRefreshGeneration += 1
+                refreshUsageAfterApply(receipt)
                 guard draft.acceptApplied(
                     submission,
                     successMessage: successMessage

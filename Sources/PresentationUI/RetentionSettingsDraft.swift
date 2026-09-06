@@ -21,7 +21,14 @@ internal struct RetentionSettingsDraft {
     internal struct Submission: Sendable {
         internal let policies: HistoryRetentionPolicies
         fileprivate let editGeneration: UInt64
-        fileprivate let policyEditGeneration: UInt64
+        fileprivate let ageEnabled: Bool
+        fileprivate let ageDaysText: String
+        fileprivate let storageEnabled: Bool
+        fileprivate let storageMiBText: String
+        fileprivate let revisionCountEnabled: Bool
+        fileprivate let revisionCountText: String
+        fileprivate let revisionBytesEnabled: Bool
+        fileprivate let revisionMiBText: String
     }
 
     internal struct CountSubmission: Sendable {
@@ -73,8 +80,7 @@ internal struct RetentionSettingsDraft {
         revisions: nil
     )
     private var countEditGeneration: UInt64 = 0
-    private var policyEditGeneration: UInt64 = 0
-    private var editGeneration: UInt64 { countEditGeneration + policyEditGeneration }
+    private var editGeneration: UInt64 = 0
     private var loadGeneration: UInt64 = 0
     private let locale: Locale
     internal private(set) var acceptedSuccessMessage: String?
@@ -302,7 +308,14 @@ internal struct RetentionSettingsDraft {
                 revisions: proposedRevisionPolicy
             ),
             editGeneration: editGeneration,
-            policyEditGeneration: policyEditGeneration
+            ageEnabled: ageEnabled,
+            ageDaysText: ageDaysText,
+            storageEnabled: storageEnabled,
+            storageMiBText: storageMiBText,
+            revisionCountEnabled: revisionCountEnabled,
+            revisionCountText: revisionCountText,
+            revisionBytesEnabled: revisionBytesEnabled,
+            revisionMiBText: revisionMiBText
         )
     }
 
@@ -352,10 +365,10 @@ internal struct RetentionSettingsDraft {
     }
 
     /// Shows Apply feedback only for the edit generation that produced it.
-    /// A saved group becomes clean if it has not been edited again, even if
-    /// the other group was edited while saving.
-    /// Otherwise a later configured read would preserve already-saved values
-    /// as though they were unsaved edits (`V2-07` §5.2/§6.3).
+    /// Each saved control becomes clean if its text or toggle still matches
+    /// the submitted control, even if another field was edited while saving.
+    /// Comparing actual controls also preserves newer disabled-field text,
+    /// which is absent from the policy DTO (`V2-07` §5.2/§6.3).
     /// The configured comparison baseline still advances after a stale-UI
     /// success because that submission did commit to History; otherwise the
     /// next draft could compare strictness against policy state that no longer
@@ -366,16 +379,18 @@ internal struct RetentionSettingsDraft {
         successMessage: String
     ) -> Bool {
         configuredPolicies = submission.policies
-        if submission.policyEditGeneration == policyEditGeneration {
-            ageValueIsDirty = false
-            storageValueIsDirty = false
-            revisionCountValueIsDirty = false
-            revisionBytesValueIsDirty = false
-            ageToggleIsDirty = false
-            storageToggleIsDirty = false
-            revisionCountToggleIsDirty = false
-            revisionBytesToggleIsDirty = false
-        }
+        ageValueIsDirty = ageValueIsDirty && ageDaysText != submission.ageDaysText
+        storageValueIsDirty = storageValueIsDirty && storageMiBText != submission.storageMiBText
+        revisionCountValueIsDirty = revisionCountValueIsDirty
+            && revisionCountText != submission.revisionCountText
+        revisionBytesValueIsDirty = revisionBytesValueIsDirty
+            && revisionMiBText != submission.revisionMiBText
+        ageToggleIsDirty = ageToggleIsDirty && ageEnabled != submission.ageEnabled
+        storageToggleIsDirty = storageToggleIsDirty && storageEnabled != submission.storageEnabled
+        revisionCountToggleIsDirty = revisionCountToggleIsDirty
+            && revisionCountEnabled != submission.revisionCountEnabled
+        revisionBytesToggleIsDirty = revisionBytesToggleIsDirty
+            && revisionBytesEnabled != submission.revisionBytesEnabled
         guard isCurrent(submission) else { return false }
         acceptedSuccessMessage = successMessage
         return true
@@ -474,10 +489,9 @@ internal struct RetentionSettingsDraft {
     }
 
     private mutating func recordEdit(isCountEdit: Bool = false) {
+        editGeneration += 1
         if isCountEdit {
             countEditGeneration += 1
-        } else {
-            policyEditGeneration += 1
         }
         acceptedSuccessMessage = nil
         acceptedCountSuccessMessage = nil

@@ -1124,41 +1124,15 @@ package enum DetailsRepresentationPresentation: Equatable, Sendable {
     package static func resolve(
         _ representation: HistoryRepresentation
     ) -> DetailsRepresentationPresentation {
-        guard let text = decodedText(representation), !text.isEmpty
+        // Both surfaces admit the same three exact plain-text encodings.
+        // Share strict byte decoding with the editor so Details cannot strip
+        // UTF-8 U+FEFF or interpret a second UTF-16 marker as encoding metadata.
+        // The excerpt/empty-text policy remains owned by Details (roadmap 05).
+        guard let text = EditorTextCodec.decode(representation)?.text, !text.isEmpty
         else {
             return .metadataOnly
         }
         return .plainText(String(text.prefix(500)))
-    }
-
-    private static func decodedText(
-        _ representation: HistoryRepresentation
-    ) -> String? {
-        let identifier = ClipboardFormatIdentifier(
-            rawValue: representation.typeIdentifier
-        )
-        let bytes = representation.bytes
-        switch identifier {
-        case .utf8PlainText:
-            return String(data: bytes, encoding: .utf8)
-        case .utf16PlainText, .utf16ExternalPlainText:
-            // Foundation may decode a valid prefix while dropping an odd
-            // trailing byte. A UTF-16 representation must contain whole units.
-            guard bytes.count.isMultiple(of: 2) else { return nil }
-            if bytes.starts(with: [0xFE, 0xFF]) {
-                return String(data: bytes.dropFirst(2), encoding: .utf16BigEndian)
-            }
-            if bytes.starts(with: [0xFF, 0xFE]) {
-                return String(data: bytes.dropFirst(2), encoding: .utf16LittleEndian)
-            }
-            return String(
-                data: bytes,
-                encoding: identifier == .utf16PlainText
-                    ? .utf16LittleEndian : .utf16BigEndian
-            )
-        default:
-            return nil
-        }
     }
 }
 

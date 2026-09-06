@@ -713,6 +713,78 @@ struct RetentionSettingsDraftTests {
         #expect(draft.submission()?.policies.age?.maxAge == 345_600)
     }
 
+    @Test("policy completion cleans saved fields while preserving a newer sibling field")
+    func completedPolicyFieldsCanRefreshAfterAnotherPolicyFieldWasEdited() throws {
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+        draft.setAgeEnabled(true)
+        draft.setAgeDaysText("4")
+        draft.setStorageEnabled(true)
+        draft.setStorageMiBText("3")
+        draft.setRevisionCountEnabled(true)
+        draft.setRevisionCountText("12")
+        draft.setRevisionBytesEnabled(true)
+        draft.setRevisionMiBText("5")
+        let submission = try #require(draft.submission())
+        draft.setStorageMiBText("2")
+
+        let accepted = draft.acceptApplied(submission, successMessage: "Done.")
+        #expect(!accepted)
+        #expect(draft.acceptedSuccessMessage == nil)
+        #expect(!draft.ageValueIsDirty)
+        #expect(draft.storageValueIsDirty)
+        #expect(!draft.revisionCountValueIsDirty)
+        #expect(!draft.revisionBytesValueIsDirty)
+        #expect(!draft.ageToggleIsDirty)
+        #expect(!draft.storageToggleIsDirty)
+        #expect(!draft.revisionCountToggleIsDirty)
+        #expect(!draft.revisionBytesToggleIsDirty)
+
+        load(HistoryRetentionPolicies(
+            age: AgeRetention(maxAge: 90_001),
+            storage: StorageRetention(maxTotalBytes: 3_145_729),
+            revisions: RevisionRetention(
+                maxRevisionsPerItem: 19, maxRevisionBytesPerItem: 1_048_577
+            )
+        ), into: &draft)
+        let proposed = try #require(draft.submission()).policies
+        #expect(draft.ageDaysText == "2")
+        #expect(draft.storageMiBText == "2")
+        #expect(draft.revisionCountText == "19")
+        #expect(draft.revisionMiBText == "2")
+        #expect(proposed.age?.maxAge == 90_001)
+        #expect(proposed.storage?.maxTotalBytes == 2_097_152)
+        #expect(proposed.revisions?.maxRevisionsPerItem == 19)
+        #expect(proposed.revisions?.maxRevisionBytesPerItem == 1_048_577)
+    }
+
+    @Test("policy completion preserves a newer toggle without retaining saved sibling toggles")
+    func completedPolicyTogglesCanRefreshAfterAnotherToggleWasEdited() throws {
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+        draft.setAgeEnabled(true)
+        draft.setStorageEnabled(true)
+        draft.setStorageMiBText("3")
+        let submission = try #require(draft.submission())
+        draft.setStorageEnabled(false)
+
+        let accepted = draft.acceptApplied(submission, successMessage: "Done.")
+        #expect(!accepted)
+        #expect(!draft.ageToggleIsDirty)
+        #expect(draft.storageToggleIsDirty)
+        #expect(!draft.storageValueIsDirty)
+
+        load(HistoryRetentionPolicies(
+            age: nil,
+            storage: StorageRetention(maxTotalBytes: 1_048_577),
+            revisions: nil
+        ), into: &draft)
+        #expect(!draft.ageEnabled)
+        #expect(!draft.storageEnabled)
+        #expect(draft.storageMiBText == "2")
+        #expect(draft.submission()?.policies.age == nil)
+        #expect(draft.submission()?.policies.storage == nil)
+        #expect(draft.hasPolicyChanges)
+    }
+
     @Test("a new edit clears the accepted Done generation")
     func newEditClearsAcceptedApplyState() throws {
         var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
