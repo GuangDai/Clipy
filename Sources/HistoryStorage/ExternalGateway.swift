@@ -78,22 +78,6 @@ internal actor ExternalGateway {
         self.uptimeNanoseconds = uptimeNanoseconds
     }
 
-    /// X.5 test seam: validates and authorizes one closed external mutation
-    /// request without dispatching it. Public X.6 calls use `perform` below.
-    internal func authorize(
-        _ request: ExternalRequest,
-        as connection: ExternalConnectionID
-    ) async throws {
-        let requestedAt = storageClock.now()
-        try requireKnownConnection(connection, capability: .manage)
-        try await authorizeKnownDescriptor(
-            ExternalOperationDescriptor.forRequest(request),
-            as: connection,
-            expectedConnectionKind: .appIntents,
-            requestedAt: requestedAt
-        )
-    }
-
     /// Runs one admitted manage request through the Authority's sole
     /// save-boundary gate and audited commit path (`V2-05` §5.1/§6.3).
     internal func perform(
@@ -112,26 +96,6 @@ internal actor ExternalGateway {
         return try await authority.commitExternal(
             request: request,
             connection: connection,
-            expectedConnectionKind: .appIntents,
-            requestedAt: requestedAt
-        )
-    }
-
-    /// Validates and authorizes one closed external read without evaluating
-    /// History. Bounds fail before the Authority and therefore append no audit;
-    /// rate and authorization denials use the real Authority audit barrier.
-    internal func authorize(
-        _ read: ExternalRead,
-        as connection: ExternalConnectionID
-    ) async throws {
-        let requestedAt = storageClock.now()
-        let capability = ExternalOperationDescriptor.requiredCapability(
-            for: read
-        )
-        try requireKnownConnection(connection, capability: capability)
-        try await authorizeKnownDescriptor(
-            ExternalOperationDescriptor.forRead(read),
-            as: connection,
             expectedConnectionKind: .appIntents,
             requestedAt: requestedAt
         )
@@ -196,47 +160,10 @@ internal actor ExternalGateway {
         )
     }
 
-    internal func authorize(
-        _ descriptor: ExternalOperationDescriptor,
-        as connection: ExternalConnectionID
-    ) async throws {
-        let requestedAt = storageClock.now()
-        try requireKnownConnection(
-            connection,
-            capability: descriptor.capability
-        )
-        try await authorizeKnownDescriptor(
-            descriptor,
-            as: connection,
-            expectedConnectionKind: .appIntents,
-            requestedAt: requestedAt
-        )
-    }
-
-    private func authorizeKnownDescriptor(
-        _ descriptor: ExternalOperationDescriptor,
-        as connection: ExternalConnectionID,
-        expectedConnectionKind: ConnectionEnrollKind,
-        requestedAt: Date
-    ) async throws {
-        try await beginAdmittedOperation(
-            descriptor,
-            as: connection,
-            expectedConnectionKind: expectedConnectionKind,
-            requestedAt: requestedAt
-        )
-        try await authority.authorizeExternal(
-            descriptor,
-            as: connection,
-            expectedConnectionKind: expectedConnectionKind,
-            requestedAt: requestedAt
-        )
-    }
-
     /// Applies pure pair admission, the retryable pre-dispatch maintenance
     /// cadence, and one process-local token debit. A successful return has not
-    /// performed any durable grant lookup; the X.5 authorize wrapper or one
-    /// X.6 Authority operation owns that single gate.
+    /// performed any durable grant lookup; the dispatched Authority operation
+    /// owns that single gate together with its History read or write.
     private func beginAdmittedOperation(
         _ descriptor: ExternalOperationDescriptor,
         as connection: ExternalConnectionID,
