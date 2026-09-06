@@ -78,7 +78,7 @@ enum CLIStandardStreams {
             }
             if ready < 0, errno != EINTR { throw Failure.unavailable }
             try await Task.sleep(
-                until: min(deadline, .now.advanced(by: .milliseconds(5))), clock: .continuous
+                until: min(deadline, ContinuousClock.now.advanced(by: .milliseconds(5))), clock: .continuous
             )
         }
     }

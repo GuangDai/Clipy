@@ -8,7 +8,8 @@ struct HistoryDetailsExportTests {
     func lateNoncooperativeFailureCannotPublishAfterDetailsRetires(cancelTask: Bool) async throws {
         let reference = HistoryItemReference(id: HistoryItemID(rawValue: UUID()), contentVersion: .initial)
         var fence = HistoryDetailsLoadFence()
-        let generation = try #require(fence.begin())
+        let loadRequest = fence.begin()
+        let generation = try #require(loadRequest)
         var release: CheckedContinuation<Result<Void, RepresentationExportFailure>, Never>?
         var displayedFailure: RepresentationExportFailure?
         let request = Task {
@@ -26,7 +27,8 @@ struct HistoryDetailsExportTests {
         if cancelTask {
             request.cancel()
         } else {
-            #expect(fence.purge(.item(reference.id), item: reference))
+            let purged = fence.purge(.item(reference.id), item: reference)
+            #expect(purged)
         }
         continuation.resume(returning: .failure(.writeFailed))
         await request.value

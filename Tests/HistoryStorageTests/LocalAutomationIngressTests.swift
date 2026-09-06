@@ -107,14 +107,20 @@ struct LocalAutomationIngressTests {
         #expect(second.rows.count == 1)
         #expect(second.rows[0].locator != firstRow.locator)
         #expect(try await page(fixture, limit: 1).rows.first?.locator == firstRow.locator)
-        let third = try await page(fixture, limit: 1, cursor: #require(second.nextCursor))
+        let thirdCursor = try #require(second.nextCursor)
+        let third = try await page(fixture, limit: 1, cursor: thirdCursor)
         #expect(third.rows.count == 1)
         #expect(third.nextCursor == nil)
         guard case .page(let searchPage) = try await fixture.ingress.execute(
             .search(text: "sentinel", mode: .exact, limit: 1, cursor: nil),
             presenting: fixture.credentials[0].exactBytes
-        ), case .page(let searchNext) = try await fixture.ingress.execute(
-            .search(text: "sentinel", mode: .exact, limit: 1, cursor: #require(searchPage.nextCursor)),
+        ) else {
+            Issue.record("Expected the first authenticated search page")
+            return
+        }
+        let searchCursor = try #require(searchPage.nextCursor)
+        guard case .page(let searchNext) = try await fixture.ingress.execute(
+            .search(text: "sentinel", mode: .exact, limit: 1, cursor: searchCursor),
             presenting: fixture.credentials[0].exactBytes
         ) else {
             Issue.record("Expected two authenticated search pages")

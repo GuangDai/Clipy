@@ -7,6 +7,7 @@
 /// caller example docs/03b-instruction-set.md §12; store startup
 /// docs/05-authority-kernel.md §2/§13; roadmap docs/roadmap/06-clipyapp.md
 /// (step 9b).
+import AppKit
 import Foundation
 import HistoryCore
 import HistoryStorage

@@ -87,7 +87,7 @@ extension ExternalOperationDescriptor {
             ? .organize : .manage
         let delete: ExternalCapability = expectedConnectionKind == .localAutomation
             ? .deleteItem : .manage
-        switch request {
+        return switch request {
         case .pin(let id):
             Self(
                 capability: organize,
