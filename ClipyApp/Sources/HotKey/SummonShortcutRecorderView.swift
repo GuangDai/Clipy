@@ -78,14 +78,16 @@ struct SummonShortcutRecorderView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Change Summon Shortcut")
+            Text(ShortcutRecorderCopy.text("Change Summon Shortcut"))
                 .font(.headline)
-            Text("Press a key together with Command, Control, Option, or Shift.")
+            Text(ShortcutRecorderCopy.text(
+                "Press a key together with Command, Control, Option, or Shift."
+            ))
                 .foregroundStyle(.secondary)
             ZStack {
                 RoundedRectangle(cornerRadius: 6)
                     .fill(.quaternary)
-                Text("Recording…")
+                Text(ShortcutRecorderCopy.text("Recording…"))
                     .font(.body.monospaced())
                     .allowsHitTesting(false)
                 SummonShortcutRecorderInput { decision in
@@ -104,7 +106,9 @@ struct SummonShortcutRecorderView: View {
             .frame(height: 36)
 
             if rejectedInput {
-                Text("Use a non-modifier key with at least one modifier.")
+                Text(ShortcutRecorderCopy.text(
+                    "Use a non-modifier key with at least one modifier."
+                ))
                     .font(.caption)
                     .foregroundStyle(.red)
                     .accessibilityIdentifier("clipy.settings.shortcut.recording-error")
@@ -112,7 +116,7 @@ struct SummonShortcutRecorderView: View {
 
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
+                Button(ShortcutRecorderCopy.text("Cancel")) { dismiss() }
                     .keyboardShortcut(.cancelAction)
                     .accessibilityIdentifier("clipy.settings.shortcut.recording-cancel")
             }
@@ -157,7 +161,7 @@ final class SummonShortcutRecorderInputView: NSView {
         super.init(frame: .zero)
         setAccessibilityElement(true)
         setAccessibilityRole(.textField)
-        setAccessibilityLabel("Record summon shortcut")
+        setAccessibilityLabel(ShortcutRecorderCopy.text("Record summon shortcut"))
     }
 
     @available(*, unavailable)
