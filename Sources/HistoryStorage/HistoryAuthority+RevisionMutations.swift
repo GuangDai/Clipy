@@ -45,6 +45,14 @@ extension HistoryAuthority {
         ) else {
             throw HistoryFailure.notFound(request.itemID)
         }
+#if DEBUG
+        // PLAY-STOR-2 arranged blob accessor: the revise lane invokes the
+        // shared lineage blob-fetch seam.
+        representationBlobFetchDebugProbe.record(
+            phase: .revisionMutationLane,
+            blobColumns: RepresentationBlobFetchDebugProbe.lineageBlobColumnCount
+        )
+#endif
         let item = try HistoryItemRowHydration.hydrate(row, limits: limits)
 
         // §6.2: reject immediately when the OCC token is already stale —
