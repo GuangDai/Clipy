@@ -334,6 +334,8 @@ extension HistoryAuthority {
             rowsTotal: corpusRows.count
         )
 #endif
+        // This order-by sort makes the corpus path O(N log N); the §9 bullet 7
+        // envelope only rejects quadratic over the measured scales (05 §5.5).
         corpusRows.sort { lhs, rhs in
             Self.defaultOrderIsOrdered(lhs, rhs)
         }

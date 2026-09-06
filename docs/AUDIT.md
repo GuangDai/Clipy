@@ -300,8 +300,8 @@ route-instrumentation suite pins the matcher's compiled/Foundation routing
 sweep), the worker probe's title/body route accounting and 250-row progress
 cadence are locked by tests, and admission percentiles are now per-rank
 support-gated — p50 needs n ≥ 3, p95 n ≥ 20, p99 n ≥ 100 (ceil(p·n) < n),
-otherwise the rank encodes as JSON null instead of a disguised sample
-maximum — with the matcher A/B lane carrying per-case corpus sizes (the
+otherwise the rank is omitted from the encoded JSON instead of disguising
+a sample maximum — with the matcher A/B lane carrying per-case corpus sizes (the
 repeated-prefix adversary runs 2 bodies — instrumented runs measured its
 Foundation side near 12 s per 256 KiB body, an O(n·m) NSString pathology, so
 the case proves the compiled side's linearity at a size its fallback can

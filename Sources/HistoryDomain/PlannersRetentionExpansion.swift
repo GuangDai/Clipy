@@ -162,6 +162,8 @@ package func planItemRetentionExpansion(
     // aged items have `lastCopiedAt < cutoff <=` each survivor's, so the
     // concatenation R1 ++ R2 below is globally oldest-first and structurally
     // deduplicated — R2 candidates exclude R1 victims by ID.
+    // The eviction-order sort makes the pass O(N log N) in retained count;
+    // the §9 envelope only rejects quadratic over the measured scales.
     r1Victims.sort(by: expansionEvictionRanksBefore)
     var retirements: [HistoryMutation] = r1Victims.map {
         .retire(itemID: $0.id, reason: .retention)
@@ -169,6 +171,8 @@ package func planItemRetentionExpansion(
 
     if let storagePolicy {
         var candidates = eligible.filter { !r1VictimIDs.contains($0.id) }
+        // Same eviction-order sort: O(N log N) in candidates; the §9
+        // envelope only rejects quadratic over the measured scales.
         candidates.sort(by: expansionEvictionRanksBefore)
         // Retire oldest eligible until the budget is restored — never
         // further (RET-SELECT-1(b)). Exhausting the candidates while still

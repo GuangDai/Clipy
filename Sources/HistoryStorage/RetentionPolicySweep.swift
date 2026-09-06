@@ -395,6 +395,10 @@ extension HistoryAuthority {
         // ID ascending.
         var survivingPruneItemIDs: [HistoryItemID] = []
         var prunedRevisions = 0
+        // The deterministic key sort — with the inventory's ID-ordered load
+        // and the planner's eviction-order sort — makes the sweep O(N log N)
+        // in retained count; the §9 envelope only rejects quadratic over the
+        // measured scales.
         for itemID in pruneIDsByItem.keys.sorted()
         where !retiredIDs.contains(itemID) {
             survivingPruneItemIDs.append(itemID)

@@ -170,6 +170,119 @@ struct ComposedRetentionLooseningTests {
         #expect(page.rows.count == 3, "all captured items survive")
     }
 
+    @Test @MainActor
+    func revisionBytesLoosenAndEveryDisableCommitDirectlyWithExactReadback() async throws {
+        let history = try await ComposedSupport.openMemoryHistory()
+        let viewState = HistoryViewState(history: history)
+
+        // The Batch 39 ceiling's remaining cells: a revision-bytes loosen
+        // and the storage/revision-count/revision-bytes disables — each a
+        // direct commit with a zero-effect receipt, an exact authoritative
+        // readback, and a final equal re-apply that advances nothing.
+        for (index, name) in ["alpha", "bravo"].enumerated() {
+            _ = try await history.perform(.capture(ComposedSupport.textCapture(
+                "clipy-composed-disable-\(name)",
+                observedAt: Date().addingTimeInterval(Double(index)),
+                source: "com.example.composed.disabling"
+            )))
+        }
+
+        let allEnabled = try await viewState.applyRetentionPolicies(
+            HistoryRetentionPolicies(
+                age: AgeRetention(maxAge: 2_592_000),
+                storage: StorageRetention(maxTotalBytes: 67_108_864),
+                revisions: RevisionRetention(
+                    maxRevisionsPerItem: 20,
+                    maxRevisionBytesPerItem: 67_108_864
+                )
+            )
+        )
+        expectPoliciesCommit(allEnabled, position: 3, "all four enabled")
+
+        let revisionBytesLoosened = try await viewState.applyRetentionPolicies(
+            HistoryRetentionPolicies(
+                age: AgeRetention(maxAge: 2_592_000),
+                storage: StorageRetention(maxTotalBytes: 67_108_864),
+                revisions: RevisionRetention(
+                    maxRevisionsPerItem: 20,
+                    maxRevisionBytesPerItem: 134_217_728
+                )
+            )
+        )
+        expectPoliciesCommit(revisionBytesLoosened, position: 4, "revision bytes loosen")
+
+        let storageDisabled = try await viewState.applyRetentionPolicies(
+            HistoryRetentionPolicies(
+                age: AgeRetention(maxAge: 2_592_000),
+                storage: nil,
+                revisions: RevisionRetention(
+                    maxRevisionsPerItem: 20,
+                    maxRevisionBytesPerItem: 134_217_728
+                )
+            )
+        )
+        expectPoliciesCommit(storageDisabled, position: 5, "storage disable")
+
+        let revisionCountDisabled = try await viewState.applyRetentionPolicies(
+            HistoryRetentionPolicies(
+                age: AgeRetention(maxAge: 2_592_000),
+                storage: nil,
+                revisions: RevisionRetention(
+                    maxRevisionsPerItem: nil,
+                    maxRevisionBytesPerItem: 134_217_728
+                )
+            )
+        )
+        expectPoliciesCommit(revisionCountDisabled, position: 6, "revision count disable")
+
+        let revisionBytesDisabled = try await viewState.applyRetentionPolicies(
+            HistoryRetentionPolicies(
+                age: AgeRetention(maxAge: 2_592_000),
+                storage: nil,
+                revisions: nil
+            )
+        )
+        expectPoliciesCommit(revisionBytesDisabled, position: 7, "revision bytes disable")
+
+        let equalReapply = try await viewState.applyRetentionPolicies(
+            HistoryRetentionPolicies(
+                age: AgeRetention(maxAge: 2_592_000),
+                storage: nil,
+                revisions: nil
+            )
+        )
+        expectUnchanged(equalReapply, "disable-tail equal re-apply")
+
+        let configuration = try await viewState.retentionConfiguration()
+        #expect(
+            configuration.policies == HistoryRetentionPolicies(
+                age: AgeRetention(maxAge: 2_592_000),
+                storage: nil,
+                revisions: nil
+            ),
+            "the authoritative read reflects the disable tail exactly"
+        )
+
+        // The equal re-apply advanced nothing: the next durable mutation
+        // lands at position 8, and both captured items survived.
+        let probe = try await history.perform(.capture(ComposedSupport.textCapture(
+            "clipy-composed-disable-probe",
+            observedAt: Date().addingTimeInterval(2),
+            source: "com.example.composed.disabling"
+        )))
+        let probeCommit = try #require(
+            ComposedSupport.commit(of: probe, "position proof capture")
+        )
+        #expect(
+            probeCommit.position.rawValue == 8,
+            "the equal re-apply produced no History Commit"
+        )
+        let page = try await history.browse(
+            HistoryBrowseRequest(kind: .recent, limit: 50)
+        )
+        #expect(page.rows.count == 3, "all captured items survive")
+    }
+
     /// A committed `.setRetentionPolicy` receipt with zero removals at the
     /// expected position, or a recorded issue (03a §6).
     private func expectCountCommit(

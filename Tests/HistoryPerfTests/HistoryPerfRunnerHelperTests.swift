@@ -107,8 +107,9 @@ struct HistoryPerfRunnerHelperTests {
     /// select a rank BELOW the maximum: ceil(p·n) < n requires n ≥ 3 for p50
     /// (ceil(0.5·2) = 1… the 1st of 2 — supported at 3 for a non-degenerate
     /// median), n ≥ 20 for p95, and n ≥ 100 for p99. Below a threshold the
-    /// rank encodes as JSON null instead of a disguised sample maximum —
-    /// the 11-sample exact-search budget therefore reports p50 only.
+    /// rank is omitted from the encoded JSON instead of disguising a
+    /// sample maximum — the 11-sample exact-search budget therefore
+    /// reports p50 only.
     @Test func admissionPercentilesReportOnlySupportedRanks() {
         #expect(admissionP50MinimumSamples == 3)
         #expect(admissionP95MinimumSamples == 20)
@@ -251,8 +252,8 @@ struct HistoryPerfRunnerHelperTests {
         // fixture is record-only p50-trend evidence, and 13 requests still
         // fit in ≈27 min at the historical ~125 s Foundation-path cost if a
         // matcher regression restores it. At n = 11 the nearest-rank
-        // p95/p99 fall below their 20/100-sample support floors and encode
-        // as JSON null, which the fixture notes must state.
+        // p95/p99 fall below their 20/100-sample support floors and are
+        // omitted from the encoded JSON, which the fixture notes must state.
         #expect(admissionExactSearchWarmupCount == 1)
         #expect(admissionExactSearchSampleCount == 11)
     }

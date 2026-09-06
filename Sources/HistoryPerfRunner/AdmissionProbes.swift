@@ -118,7 +118,7 @@ func measureAdmissionExactSearch(
                 + "survives even a regression to the ~125 s Foundation "
                 + "path (13 × 125 s ≈ 27 min vs 103 × 125 s ≈ 3.6 h). "
                 + "Per-rank support gating reports p50 only — p95 and p99 "
-                + "encode as null below their 20/100-sample nearest-rank "
+                + "are omitted below their 20/100-sample nearest-rank "
                 + "support floors instead of a disguised sample maximum.",
             "Peak RSS is a worst-bound process high-water ceiling, not "
                 + "transient-hydration attribution or representative "

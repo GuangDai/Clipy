@@ -330,6 +330,197 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
         )
     }
 
+    /// The Batch 38 ceiling's last strictness dimension at running-app
+    /// level: enabling the revision-count threshold is strict, prunes the
+    /// oldest inactive revision through the destructive confirmation, and
+    /// shrinks the retained-usage content size in the same receipt.
+    @MainActor
+    func testRevisionTighteningPrunesInactiveRevisionsAndShrinksUsage() throws {
+        let original = "clipy-r3-revision-original"
+        let firstRevision = "clipy-r3-revision-first"
+        let secondRevision = "clipy-r3-revision-second"
+        let app = try launchApp(capturing: original)
+        defer { app.terminate() }
+
+        let rows = historyRows(in: app)
+        assertRowCount(
+            1,
+            in: rows,
+            app: app,
+            context: "revision journey initial capture"
+        )
+
+        // Two real revisions through the running Details editor: the
+        // canonical capture stays, each replace appends one stored
+        // revision, and the newest revision is the effective value. The
+        // list only carries the entry point once — after Save the panel
+        // stays on the Details surface, so the second revision enters
+        // through its Edit Content control directly.
+        let row = historyRows(in: app).firstMatch
+        XCTAssertTrue(
+            waitUntil(timeout: 10) { row.exists && row.isHittable },
+            diagnostic(app, context: "revision journey captured row")
+        )
+        row.rightClick()
+        let showDetails = app.menuItems["Show Details"]
+        XCTAssertTrue(
+            waitUntil(timeout: 5) { showDetails.exists && showDetails.isHittable },
+            diagnostic(app, context: "row context menu Show Details")
+        )
+        showDetails.click()
+        try appendRevision(firstRevision, in: app)
+        try appendRevision(secondRevision, in: app)
+
+        openRetentionSettings(in: app)
+        // Usage before: the canonical capture plus both stored revisions.
+        let bytesBefore = original.utf8.count
+            + firstRevision.utf8.count
+            + secondRevision.utf8.count
+        assertUsage(
+            itemCount: "1",
+            contentSize: "\(bytesBefore) bytes",
+            in: app
+        )
+
+        // Enabling the revision-count threshold at 1 is strict (the draft
+        // matrix pins the semantics; this journey runs the control). The
+        // toggle is queried by identifier like the age/storage toggles —
+        // its text renders as an unbound StaticText in the AX tree.
+        let revisionCountToggle = app.switches[
+            "clipy.settings.retention.revision-count-enabled"
+        ]
+        let revisionCountField = app.textFields[
+            "clipy.settings.retention.revision-count"
+        ]
+        let owningWindow = settingsWindow(
+            in: app,
+            owningTextField: "clipy.settings.retention.revision-count"
+        )
+        let retentionScrollView = owningWindow.scrollViews.firstMatch
+        assertExists(
+            revisionCountToggle,
+            timeout: 5,
+            in: app,
+            context: "revision-count toggle"
+        )
+        assertExists(
+            revisionCountField,
+            timeout: 5,
+            in: app,
+            context: "revision-count field"
+        )
+        assertExists(
+            retentionScrollView,
+            timeout: 5,
+            in: app,
+            context: "revision policy scroll view"
+        )
+        guard scrollUntilFullyVisible(
+            revisionCountToggle,
+            in: retentionScrollView,
+            app: app,
+            context: "revision-count toggle below retained usage"
+        ) else { return }
+        revisionCountToggle.click()
+        guard scrollUntilFullyVisible(
+            revisionCountField,
+            in: retentionScrollView,
+            app: app,
+            context: "revision-count field below its toggle"
+        ) else { return }
+        replaceText(in: revisionCountField, with: "1")
+
+        let apply = app.buttons["clipy.settings.retention.apply"]
+        assertExists(apply, timeout: 5, in: app, context: "policy Apply")
+        XCTAssertTrue(
+            waitUntil(timeout: 5) { apply.isEnabled },
+            diagnostic(app, context: "enabled strict revision policy")
+        )
+        guard scrollUntilFullyVisible(
+            apply,
+            in: retentionScrollView,
+            app: app,
+            context: "strict revision policy Apply"
+        ) else { return }
+        apply.click()
+
+        confirmStrictPolicy(
+            in: owningWindow,
+            app: app,
+            context: "revision-count enable tightening"
+        )
+
+        // R3 keeps the newest inactive revision and prunes the oldest:
+        // one revision pruned, no items retired (HistoryUsageTests pins
+        // the same sweep semantics through the storage seam).
+        XCTAssertTrue(
+            app.staticTexts["Done. 0 items retired, 1 revision pruned."]
+                .waitForExistence(timeout: 10),
+            diagnostic(app, context: "exact revision prune receipt")
+        )
+
+        // The policy Apply refreshes usage in the same receipt: the pruned
+        // oldest revision's bytes leave the content size.
+        let bytesAfter = original.utf8.count + secondRevision.utf8.count
+        assertUsage(
+            itemCount: "1",
+            contentSize: "\(bytesAfter) bytes",
+            in: app
+        )
+    }
+
+    /// Appends one revision through the real Details editor, starting from
+    /// the open Details surface (EditorRuntimeJourneyUITests' flow after
+    /// its entry steps): enter the editor with Edit Content, open the
+    /// replace editor for the UTF-8 representation, type the replacement,
+    /// Save, and stay on the Details surface it returns to.
+    @MainActor
+    private func appendRevision(_ text: String, in app: XCUIApplication) throws {
+        let details = app.descendants(matching: .any)["clipy.details.root"]
+        let edit = app.buttons["Edit Content"]
+        XCTAssertTrue(
+            waitUntil(timeout: 10) { details.exists && edit.exists && edit.isHittable },
+            diagnostic(app, context: "Details Edit Content control")
+        )
+        edit.click()
+
+        let typeIdentifier = "public.utf8-plain-text"
+        let decision = app.descendants(matching: .any)[
+            "clipy.editor.decision.\(typeIdentifier)"
+        ]
+        XCTAssertTrue(
+            waitUntil(timeout: 10) { decision.exists && decision.isHittable },
+            diagnostic(app, context: "editor decision control")
+        )
+        decision.click()
+        let replace = app.menuItems["Replace"]
+        XCTAssertTrue(
+            waitUntil(timeout: 5) { replace.exists && replace.isHittable },
+            diagnostic(app, context: "decision menu Replace")
+        )
+        replace.click()
+        let replacement = app.descendants(matching: .any)[
+            "clipy.editor.replacement.\(typeIdentifier)"
+        ]
+        XCTAssertTrue(
+            waitUntil(timeout: 5) { replacement.exists && replacement.isHittable },
+            diagnostic(app, context: "replacement editor field")
+        )
+        replacement.click()
+        replacement.typeKey("a", modifierFlags: .command)
+        replacement.typeText(text)
+        let save = app.buttons["clipy.editor.save"]
+        XCTAssertTrue(
+            waitUntil(timeout: 5) { save.exists && save.isEnabled && save.isHittable },
+            diagnostic(app, context: "enabled Save for the valid replacement")
+        )
+        save.click()
+        XCTAssertTrue(
+            waitUntil(timeout: 10) { !app.buttons["clipy.editor.save"].exists },
+            diagnostic(app, context: "saved revision closes the editor")
+        )
+    }
+
     @MainActor
     private func launchApp(capturing value: String) throws -> XCUIApplication {
         let pasteboard = NSPasteboard.general
