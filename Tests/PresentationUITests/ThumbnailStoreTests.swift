@@ -50,6 +50,12 @@ private actor ThumbnailDisplayCancellationProbe {
 
     private func recordCancellation() { wasCancelled = true }
 
+    // Keep the predicates on their concrete actor. Reading different actor
+    // properties inside the surrounding TaskLocal/poll closures triggers a
+    // Swift 6.2 async getter-thunk type mismatch in the SwiftPM CI build.
+    func hasStartedFirstRender() -> Bool { starts == 1 }
+    func hasObservedCancellation() -> Bool { wasCancelled }
+
     func resume() {
         isReleased = true
         continuation?.resume()
@@ -415,7 +421,7 @@ struct ThumbnailStoreTests {
             store.prefetch(item)
             try #require(await pollUntil { await history.requestCount == 1 })
             #expect(await history.completeRequest(for: item, with: .success(fixturePNGData)))
-            let started = await pollUntil { await probe.starts == 1 }
+            let started = await pollUntil { await probe.hasStartedFirstRender() }
             // Always release the hook even if the assertion fails, so a
             // regression cannot strand a renderer task for the entire suite.
             if !started { await probe.resume() }
@@ -432,7 +438,7 @@ struct ThumbnailStoreTests {
                 )))
             }
             #expect(store.inFlightCount == 0)
-            let cancelledBeforeCompletion = await pollUntil { await probe.wasCancelled }
+            let cancelledBeforeCompletion = await pollUntil { await probe.hasObservedCancellation() }
             await probe.resume()
             #expect(cancelledBeforeCompletion)
             try #require(await pollUntil { store.debugDiscardedFetchCompletionCount == 1 })
