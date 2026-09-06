@@ -76,10 +76,10 @@ extension HistoryAuthority {
                     switch capability {
                     case .manage:
                         connectionKind = .appIntents
-                    case .organize, .deleteItem:
+                    case .organize, .deleteItem, .reviseContent:
                         connectionKind = .localAutomation
                     case .browse, .readContent, .browsePreview,
-                         .readEffectiveContent, .reviseContent:
+                         .readEffectiveContent:
                         throw ExternalWriteGateRejection.incoherentPlan
                     }
                     let config = try Self.loadGatewayConfig(in: context)

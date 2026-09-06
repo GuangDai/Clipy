@@ -46,12 +46,28 @@ final class MaintenanceJourneyUITests: XCTestCase {
         XCTAssertTrue(path.exists, app.debugDescription)
         XCTAssertEqual(text(path), folder.path)
         let initialPhysical = text(physical)
+        let derivedCache = app.staticTexts["clipy.settings.maintenance.derived-cache"]
+        XCTAssertTrue(derivedCache.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertEqual(text(derivedCache), "Not Used")
+        for identifier in [
+            "clipy.settings.maintenance.resident-bytes",
+            "clipy.settings.maintenance.peak-resident-bytes",
+            "clipy.settings.maintenance.footprint-bytes",
+        ] {
+            let reading = app.staticTexts[identifier]
+            XCTAssertTrue(waitUntil {
+                reading.exists && !self.text(reading).isEmpty
+                    && self.text(reading) != "Unavailable"
+                    && self.text(reading) != "0 bytes" && self.text(reading) != "16 bytes"
+            }, "kernel memory reading: \(identifier)\n\(app.debugDescription)")
+        }
 
         // An unrelated file belongs to the displayed folder total, while the
         // logical content and History remain unchanged.
         try Data(repeating: 7, count: 2_097_152).write(to: folder.appendingPathComponent("other-data"))
         let refresh = app.buttons["clipy.settings.maintenance.refresh"]
         XCTAssertTrue(refresh.exists, app.debugDescription)
+        scrollToVisible(refresh, in: app)
         refresh.click()
         XCTAssertTrue(waitUntil {
             logical.exists && self.text(logical) == "16 bytes"
@@ -61,9 +77,24 @@ final class MaintenanceJourneyUITests: XCTestCase {
 
         let reveal = app.buttons["clipy.settings.maintenance.reveal"]
         XCTAssertTrue(reveal.exists, app.debugDescription)
+        scrollToVisible(reveal, in: app)
         reveal.click()
         XCTAssertTrue(waitUntil { FileManager.default.fileExists(atPath: marker.path) }, app.debugDescription)
         XCTAssertEqual(try Data(contentsOf: marker), Data())
+    }
+
+    @MainActor
+    private func scrollToVisible(_ element: XCUIElement, in app: XCUIApplication) {
+        let window = app.windows.containing(
+            .any, identifier: "clipy.settings.maintenance.refresh"
+        ).firstMatch
+        let scrollView = window.scrollViews.firstMatch
+        for _ in 0..<10 {
+            if element.isHittable && scrollView.frame.contains(element.frame) { return }
+            scrollView.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .scroll(byDeltaX: 0, deltaY: element.frame.midY < scrollView.frame.midY ? 60 : -60)
+        }
+        XCTAssertTrue(element.isHittable, app.debugDescription)
     }
 
     @MainActor

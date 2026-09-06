@@ -59,7 +59,8 @@ struct LocalAutomationSocketTests {
             )))
             for operation in ["detailsEffective", "pasteEffective"] {
                 let content = try Self.result(await fixture.send(Self.json(operation: operation, arguments: ["locator": locator])))
-                #expect(Set(content.keys) == ["locator", "representations"])
+                #expect(Set(content.keys) == ["contentVersion", "locator", "representations"])
+                #expect(content["contentVersion"] as? UInt64 == 2)
                 let representations = try #require(content["representations"] as? [[String: Any]])
                 #expect(representations.count == 2)
                 let text = try #require(representations.first { $0["typeIdentifier"] as? String == "public.utf8-plain-text" })
@@ -109,6 +110,105 @@ struct LocalAutomationSocketTests {
         }
     }
 
+    @Test func revisionRequiresItsOwnGrantAndPreservesExactBytesWithOCC() async throws {
+        try await withFixture { fixture in
+            for capability in [ExternalCapability.browsePreview, .readEffectiveContent, .organize, .deleteItem] {
+                try await fixture.history.grantCapability(capability, to: fixture.connection)
+            }
+            let page = try Self.result(await fixture.send(Self.json(arguments: ["limit": 1])))
+            let rows = try #require(page["items"] as? [[String: Any]])
+            let locator = try #require(rows.first?["locator"] as? String)
+            let readRequest = try Self.json(operation: "detailsEffective", arguments: ["locator": locator])
+            let before = try Self.result(await fixture.send(readRequest))
+            let version = try #require(before["contentVersion"] as? UInt64)
+            let literal = Data("literal\u{0}\nreplacement e\u{301}".utf8)
+            let binary = Data([0, 255, 10, 0, 92])
+            let desired: [[String: String]] = [
+                ["typeIdentifier": "public.utf8-plain-text", "bytesBase64": literal.base64EncodedString()],
+                ["typeIdentifier": "com.clipy.tests.binary", "bytesBase64": binary.base64EncodedString()],
+            ]
+            let writeRequest = try Self.json(operation: "reviseContent", arguments: [
+                "locator": locator, "expectedContentVersion": version, "representations": desired,
+            ])
+            let denied = try await fixture.send(writeRequest)
+            #expect(denied.exitCode == 3)
+            #expect(String(decoding: denied.stderr, as: UTF8.self) == "clipyctl: not_granted\n")
+
+            try await fixture.history.grantCapability(.reviseContent, to: fixture.connection)
+            let changed = try Self.result(await fixture.send(writeRequest))
+            #expect(changed["changed"] as? Bool == true)
+            let after = try Self.result(await fixture.send(readRequest))
+            #expect(after["contentVersion"] as? UInt64 == version + 1)
+            let representations = try #require(after["representations"] as? [[String: String]])
+            #expect(representations.count == 2)
+            for (type, expected) in [("public.utf8-plain-text", literal), ("com.clipy.tests.binary", binary)] {
+                let encoded = try #require(representations.first { $0["typeIdentifier"] == type }?["bytesBase64"])
+                #expect(Data(base64Encoded: encoded) == expected)
+            }
+            let stale = try await fixture.send(writeRequest)
+            #expect(stale.exitCode == 4)
+            #expect(String(decoding: stale.stderr, as: UTF8.self) == "clipyctl: content_stale\n")
+            let stillCurrent = try Self.result(await fixture.send(readRequest))
+            #expect(stillCurrent["contentVersion"] as? UInt64 == version + 1)
+
+            let freshRequest = try Self.json(operation: "reviseContent", arguments: [
+                "locator": locator, "expectedContentVersion": version + 1, "representations": desired,
+            ])
+            let noChange = try Self.result(await fixture.send(freshRequest))
+            #expect(noChange["changed"] as? Bool == false)
+            let binaryOnly = [[
+                "typeIdentifier": "com.clipy.tests.binary", "bytesBase64": binary.base64EncodedString(),
+            ]]
+            let hideRequest = try Self.json(operation: "reviseContent", arguments: [
+                "locator": locator, "expectedContentVersion": version + 1, "representations": binaryOnly,
+            ])
+            let hidden = try Self.result(await fixture.send(hideRequest))
+            #expect(hidden["changed"] as? Bool == true)
+            let hiddenRead = try Self.result(await fixture.send(readRequest))
+            #expect(hiddenRead["contentVersion"] as? UInt64 == version + 2)
+            #expect(hiddenRead["representations"] as? [[String: String]] == binaryOnly)
+            let afterHideRequest = try Self.json(operation: "reviseContent", arguments: [
+                "locator": locator, "expectedContentVersion": version + 2, "representations": binaryOnly,
+            ])
+            try await fixture.history.revokeCapability(.reviseContent, of: fixture.connection)
+            let revokedGrant = try await fixture.send(afterHideRequest)
+            #expect(revokedGrant.exitCode == 3)
+            #expect(String(decoding: revokedGrant.stderr, as: UTF8.self) == "clipyctl: not_granted\n")
+            try await fixture.history.revokeConnection(fixture.connection)
+            let revokedConnection = try await fixture.send(afterHideRequest)
+            #expect(revokedConnection.exitCode == 3)
+            #expect(String(decoding: revokedConnection.stderr, as: UTF8.self) == "clipyctl: connection_revoked\n")
+        }
+    }
+
+    @Test func rejectedRevisionEncodingAndOversizedRequestsNeverModifyHistory() async throws {
+        try await withFixture { fixture in
+            try await fixture.history.grantCapability(.browsePreview, to: fixture.connection)
+            try await fixture.history.grantCapability(.reviseContent, to: fixture.connection)
+            let page = try Self.result(await fixture.send(Self.json(arguments: ["limit": 1])))
+            let rows = try #require(page["items"] as? [[String: Any]])
+            let locator = try #require(rows.first?["locator"] as? String)
+            for encoded in ["AA", "AB==", "AA==\n", "not base64"] {
+                let output = try await fixture.send(Self.json(operation: "reviseContent", arguments: [
+                    "locator": locator, "expectedContentVersion": 1,
+                    "representations": [["typeIdentifier": "com.clipy.tests.binary", "bytesBase64": encoded]],
+                ]))
+                #expect(output.exitCode == 2)
+                #expect(String(decoding: output.stderr, as: UTF8.self) == "clipyctl: invalid_request\n")
+            }
+            let oversized = try await fixture.send(Self.json(operation: "reviseContent", arguments: [
+                "locator": locator, "expectedContentVersion": 1,
+                "representations": [["typeIdentifier": "com.clipy.tests.binary", "bytesBase64":
+                    Data(repeating: 0, count: 50_000).base64EncodedString()]],
+            ]))
+            #expect(oversized.exitCode == 2)
+            #expect(String(decoding: oversized.stderr, as: UTF8.self) == "clipyctl: request_too_large\n")
+            let current = try await fixture.history.browse(.init(kind: .recent, limit: 10))
+            #expect(current.rows.count == 3)
+            #expect(current.rows.allSatisfy { $0.item.contentVersion.rawValue == 1 })
+        }
+    }
+
     @Test func stopClosesIncompleteClientsAndRemovesItsEndpoint() async throws {
         try await withFixture { fixture in
             let client = try await LocalAutomationClient.connect(endpointURL: fixture.endpoint)
@@ -116,6 +216,22 @@ struct LocalAutomationSocketTests {
             let output = await client.request(try Self.json(arguments: ["limit": 1]), credential: fixture.credential)
             #expect(output.exitCode == 5)
             #expect(!FileManager.default.fileExists(atPath: fixture.endpoint.path))
+        }
+    }
+
+    @Test func interruptedRevisionReturnsUnknownOutcomeWithoutRetrying() async throws {
+        try await withFixture { fixture in
+            let client = try await LocalAutomationClient.connect(endpointURL: fixture.endpoint)
+            await fixture.service.stop()
+            let request = try Self.json(operation: "reviseContent", arguments: [
+                "locator": "i1_interrupted", "expectedContentVersion": 1,
+                "representations": [["typeIdentifier": "public.utf8-plain-text", "bytesBase64": "AA=="]],
+            ])
+            let output = await client.request(request, credential: fixture.credential)
+            #expect(output.exitCode == 5)
+            #expect(String(decoding: output.stderr, as: UTF8.self) == "clipyctl: outcome_unknown\n")
+            let current = try await fixture.history.browse(.init(kind: .recent, limit: 10))
+            #expect(current.rows.allSatisfy { $0.item.contentVersion.rawValue == 1 })
         }
     }
 

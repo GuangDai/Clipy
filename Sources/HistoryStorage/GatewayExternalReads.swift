@@ -285,21 +285,22 @@ extension HistoryAuthority {
         descriptor: ExternalOperationDescriptor,
         connection: ExternalConnectionID,
         requestedAt: Date
-    ) throws -> [HistoryRepresentation] {
+    ) throws -> (contentVersion: UInt64, representations: [HistoryRepresentation]) {
         try autoreleasepool {
             try performExternalReadInOneInterval(
                 descriptor: descriptor, connection: connection,
                 expectedConnectionKind: .localAutomation,
                 requestedAt: requestedAt, operation: .readPastePayload
             ) { context in
-                let representations = try pastePayload(for: itemID, in: context).representations
+                let payload = try pastePayload(for: itemID, in: context)
+                let representations = payload.representations
                 let totalBytes = representations.reduce(0) { $0 + $1.bytes.count }
                 // 24,000,000 raw bytes fit below the existing 32 MiB JSON
                 // reply cap after base64 and bounded representation metadata.
                 guard totalBytes <= 24_000_000 else {
                     throw HistoryFailure.capacityExceeded(.storageBytes)
                 }
-                return (representations, .effectiveContent(
+                return ((payload.item.contentVersion.rawValue, representations), .effectiveContent(
                     representationCount: UInt16(representations.count),
                     totalBytes: UInt64(totalBytes)
                 ))

@@ -88,6 +88,21 @@ package final class PreviewContentLoader {
     /// head of every `load(item:)`; late completions compare against it.
     package private(set) var requestedItem: HistoryItemReference?
 
+    /// A confirmation never performs I/O. Only confirmFilePreview starts the
+    /// app-owned read, and every retarget/clear retires both steps.
+    package private(set) var fileLoadConfirmation: PreviewReference?
+    package private(set) var loadedFileReference: PreviewReference?
+    package private(set) var filePreviewFailure: FilePreviewFailure?
+    private let filePreviewSettings: FilePreviewSettings?
+    private var fileLoadTask: Task<Void, Never>?
+    private var fileReferenceOccurrence: CopyOccurrenceSummary?
+
+    package var canLoadFilePreview: Bool {
+        guard filePreviewSettings != nil,
+              case .content(.reference(let reference)) = phase else { return false }
+        return reference.kind == .file
+    }
+
     /// Distinguishes overlapping load episodes even when they request the
     /// same exact reference. Reference equality alone cannot tell an older
     /// retry from the current request (review Card 9A).
@@ -147,8 +162,9 @@ package final class PreviewContentLoader {
             ] == "transient-details-once"
 #endif
 
-    package init(history: any ClipboardHistory) {
+    package init(history: any ClipboardHistory, filePreviewSettings: FilePreviewSettings? = nil) {
         self.history = history
+        self.filePreviewSettings = filePreviewSettings
     }
 
     /// Coalescing updates occurrence facts without changing the content
@@ -167,6 +183,7 @@ package final class PreviewContentLoader {
             firstSource: occurrence.firstSource,
             lastSource: observedRow.lastSource
         )
+        if loadedFileReference != nil { fileReferenceOccurrence = self.occurrence }
     }
 
     package func displayedOccurrence(
@@ -200,6 +217,7 @@ package final class PreviewContentLoader {
     /// reads/renders cannot publish after the pane or Quick Look closes
     /// (PREVIEW-FENCE-1).
     package func clear() {
+        retireFileLoad()
         requestGeneration += 1
         requestedItem = nil
         raster = nil
@@ -220,6 +238,7 @@ package final class PreviewContentLoader {
             clear()
             return
         }
+        retireFileLoad()
         requestGeneration += 1
         let generation = requestGeneration
         requestedItem = item
@@ -253,51 +272,13 @@ package final class PreviewContentLoader {
             guard requestGeneration == generation,
                   requestedItem == item
             else { return }
-            switch outcome {
-            case .content(.raster(let artifact)):
-                raster = artifact
-                pdfPageCount = nil
-                canRetryFailure = false
-                phase = .content(.image)
-                occurrence = details.occurrence
-            case .content(.pdf(let artifact)):
-                raster = artifact.raster
-                pdfPageCount = artifact.pageCount
-                canRetryFailure = false
-                phase = .content(.image)
-                occurrence = details.occurrence
-            case .content(.text(let artifact)):
-                raster = nil
-                canRetryFailure = false
-                phase = .content(.text(
-                    artifact.text, wasTruncated: artifact.wasTruncated
-                ))
-                occurrence = details.occurrence
-            case .content(.reference(let artifact)):
-                raster = nil
-                canRetryFailure = false
-                phase = .content(.reference(artifact))
-                occurrence = details.occurrence
-            case .unavailable:
-                raster = nil
-                canRetryFailure = false
-                phase = .unsupported
-                occurrence = details.occurrence
-            case .failed(let failure):
-                raster = nil
-                canRetryFailure = failure == .renderer
-                phase = .failed
-                occurrence = nil
-            }
+            apply(outcome, occurrence: details.occurrence)
         } catch is CancellationError {
             // Cancellation is only a publication fence. It does not publish
             // a phase transition or claim that underlying History/native
             // work stopped; a superseding request owns the next phase.
             return
         } catch let failure as HistoryFailure {
-            // History keeps its own typed taxonomy. Only its explicit
-            // temporary-unavailability case admits replay of this exact
-            // request; invalid/stale/persistence failures remain terminal.
             guard !Task.isCancelled,
                   requestGeneration == generation,
                   requestedItem == item
@@ -320,6 +301,114 @@ package final class PreviewContentLoader {
             canRetryFailure = false
             phase = .failed
         }
+    }
+
+    private func apply(_ outcome: PreviewOutcome, occurrence: CopyOccurrenceSummary?) {
+        raster = nil
+        pdfPageCount = nil
+        canRetryFailure = false
+        self.occurrence = occurrence
+        switch outcome {
+        case .content(.raster(let artifact)):
+            raster = artifact
+            phase = .content(.image)
+        case .content(.pdf(let artifact)):
+            raster = artifact.raster
+            pdfPageCount = artifact.pageCount
+            phase = .content(.image)
+        case .content(.text(let artifact)):
+            phase = .content(.text(artifact.text, wasTruncated: artifact.wasTruncated))
+        case .content(.reference(let artifact)):
+            phase = .content(.reference(artifact))
+        case .unavailable:
+            phase = .unsupported
+        case .failed(let failure):
+            canRetryFailure = failure == .renderer
+            phase = .failed
+            self.occurrence = nil
+        }
+    }
+
+    package func requestFilePreview() {
+        guard canLoadFilePreview, case .content(.reference(let reference)) = phase else { return }
+        fileLoadConfirmation = reference
+    }
+
+    package func cancelFilePreviewConfirmation() { fileLoadConfirmation = nil }
+
+    @discardableResult
+    package func confirmFilePreview() -> Task<Void, Never>? {
+        guard !Task.isCancelled, let filePreviewSettings,
+              let reference = fileLoadConfirmation, let item = requestedItem,
+              phase == .content(.reference(reference)), reference.kind == .file else { return nil }
+        fileLoadConfirmation = nil
+        loadedFileReference = reference
+        filePreviewFailure = nil
+        requestGeneration += 1
+        let generation = requestGeneration
+        let occurrence = self.occurrence
+        fileReferenceOccurrence = occurrence
+        phase = .loading
+        canRetryFailure = false
+        fileLoadTask = Task { [weak self] in
+            do {
+                try Task.checkCancellation()
+                let representation = try await filePreviewSettings.load(reference.address)
+                try Task.checkCancellation()
+                guard let self, self.requestGeneration == generation, self.requestedItem == item else { return }
+                let outcome = await self.renderer.renderHistoryPane([
+                    PreviewRepresentation(typeIdentifier: representation.typeIdentifier, bytes: representation.bytes)
+                ])
+                try Task.checkCancellation()
+                guard self.requestGeneration == generation, self.requestedItem == item else { return }
+                self.apply(outcome, occurrence: self.occurrence ?? occurrence)
+                // Retrying a file requires the same explicit confirmation;
+                // the ordinary Retry control rereads History and is not used.
+                self.canRetryFailure = false
+                self.fileLoadTask = nil
+            } catch {
+                guard !Task.isCancelled, let self,
+                      self.requestGeneration == generation, self.requestedItem == item else { return }
+                self.filePreviewFailure = error as? FilePreviewFailure ?? .unavailable
+                self.canRetryFailure = false
+                self.phase = .failed
+                self.fileLoadTask = nil
+            }
+        }
+        return fileLoadTask
+    }
+
+    package func showFileReference() {
+        guard let reference = loadedFileReference else { return }
+        let occurrence = fileReferenceOccurrence
+        requestGeneration += 1
+        retireFileLoad()
+        raster = nil
+        pdfPageCount = nil
+        canRetryFailure = false
+        self.occurrence = occurrence
+        phase = .content(.reference(reference))
+    }
+
+    package func purgeFilePreview(_ scope: HistorySurfacePurge.Scope) {
+        guard loadedFileReference != nil || fileLoadConfirmation != nil,
+              let requestedItem else { return }
+        switch scope {
+        case .all, .unpinned: clear()
+        case .item(let id):
+            if requestedItem.id == id { clear() }
+        case .revision(let old, _):
+            if requestedItem == old { clear() }
+        }
+    }
+
+    private func retireFileLoad() {
+        fileLoadTask?.cancel()
+        fileLoadTask = nil
+        fileLoadConfirmation = nil
+        loadedFileReference = nil
+        filePreviewFailure = nil
+        fileReferenceOccurrence = nil
     }
 
     /// The DEBUG branch substitutes one outcome at the loader's details-call
@@ -348,6 +437,7 @@ struct HistoryPreviewView: View {
 
     @State private var loader: PreviewContentLoader
     @State private var retryGeneration = 0
+    @State private var fileConfirmationPresented = false
     @Environment(\.locale) private var locale
 
     /// Retargets and retries share SwiftUI's view-owned task, so either a
@@ -363,7 +453,9 @@ struct HistoryPreviewView: View {
         self.previewState = previewState
         selectionSource = .paneState
         _loader = State(
-            initialValue: PreviewContentLoader(history: viewState.history)
+            initialValue: PreviewContentLoader(
+                history: viewState.history, filePreviewSettings: viewState.filePreviewSettings
+            )
         )
     }
 
@@ -379,7 +471,9 @@ struct HistoryPreviewView: View {
         self.previewState = previewState
         selectionSource = .observedRows(selection)
         _loader = State(
-            initialValue: PreviewContentLoader(history: viewState.history)
+            initialValue: PreviewContentLoader(
+                history: viewState.history, filePreviewSettings: viewState.filePreviewSettings
+            )
         )
     }
 
@@ -397,7 +491,9 @@ struct HistoryPreviewView: View {
         self.previewState = previewState
         selectionSource = .exactItem(item)
         _loader = State(
-            initialValue: PreviewContentLoader(history: viewState.history)
+            initialValue: PreviewContentLoader(
+                history: viewState.history, filePreviewSettings: viewState.filePreviewSettings
+            )
         )
     }
 
@@ -425,6 +521,22 @@ struct HistoryPreviewView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if loader.requestedItem == targetItem, let file = loader.loadedFileReference {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(verbatim: file.filePath ?? file.address)
+                        .font(.caption)
+                        .lineLimit(2)
+                    Text(PreviewCopy.text("Showing the file’s current contents. Copying still copies the original file reference."))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button(PreviewCopy.text("Back to File Reference")) { loader.showFileReference() }
+                        .accessibilityIdentifier("clipy.preview.file.back")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .accessibilityIdentifier("clipy.preview.file.disclosure")
+                Divider()
+            }
             previewBody
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
@@ -444,8 +556,31 @@ struct HistoryPreviewView: View {
         .onChange(of: observedRow) { _, row in
             loader.updateOccurrence(from: row)
         }
+        .onChange(of: targetItem) { _, target in
+            fileConfirmationPresented = false
+            if loader.requestedItem != target { loader.clear() }
+        }
+        .onChange(of: viewState.surfacePurge) { _, purge in
+            guard let purge else { return }
+            loader.purgeFilePreview(purge.scope)
+            if loader.fileLoadConfirmation == nil { fileConfirmationPresented = false }
+        }
         .onDisappear {
+            fileConfirmationPresented = false
             loader.clear()
+        }
+        .alert(PreviewCopy.text("Load File Contents?"), isPresented: $fileConfirmationPresented) {
+            Button(PreviewCopy.text("Load File")) {
+                guard loader.requestedItem == targetItem else { return }
+                loader.confirmFilePreview()
+            }
+            .accessibilityIdentifier("clipy.preview.file.confirm")
+            Button(PreviewCopy.text("Cancel"), role: .cancel) {
+                loader.cancelFilePreviewConfirmation()
+            }
+        } message: {
+            Text(PreviewCopy.text("Clipy will read this local file once to show a preview. Its current contents are not added to clipboard history. No website will be opened.")
+                + "\n\n" + (loader.fileLoadConfirmation?.filePath ?? ""))
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.preview.root")
@@ -525,7 +660,13 @@ struct HistoryPreviewView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .content(.reference(let reference)):
-                ReferencePreviewView(reference: reference)
+                ReferencePreviewView(
+                    reference: reference,
+                    requestFileLoad: loader.canLoadFilePreview ? {
+                        loader.requestFilePreview()
+                        fileConfirmationPresented = loader.fileLoadConfirmation != nil
+                    } : nil
+                )
             case .failed:
                 failedBody
             case .unsupported:
@@ -556,7 +697,7 @@ struct HistoryPreviewView: View {
                 .font(.title2)
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            Text(PreviewCopy.text("Preview Unavailable"))
+            Text(loader.filePreviewFailure.map(PreviewCopy.fileFailure) ?? PreviewCopy.text("Preview Unavailable"))
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("clipy.preview.failed")

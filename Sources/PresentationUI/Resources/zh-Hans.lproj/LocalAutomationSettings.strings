@@ -18,4 +18,8 @@
 "Allow Programs to Delete History?" = "允许程序删除历史记录？";
 "Allow Deletion" = "允许删除";
 "Cancel" = "取消";
+"Revise Current Content" = "修订当前内容";
+"Allow Programs to Revise Current Content?" = "允许程序修订当前内容？";
+"Allow Revisions" = "允许修订";
+"Programs using your account will be able to change an item's current content without asking again. Each change appends an immutable revision. Original content and older revisions remain retained until removed by retention or item deletion; revision is not erasure. This permission does not grant content reading or deletion." = "使用你账户的程序将能够更改条目的当前内容，不再逐次询问。每次更改都会追加一个不可变的修订版本。原始内容和旧修订仍会保留，直到保留策略移除旧修订或条目被删除；修订并不等于擦除。此权限不会授予读取内容或删除条目的权限。";
 "Programs using your account will be able to permanently delete individual clipboard items without asking again. This cannot be undone." = "使用你账户的程序将能够永久删除单个剪贴板条目，不再逐次询问。此操作无法撤销。";

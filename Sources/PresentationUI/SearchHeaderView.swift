@@ -120,8 +120,8 @@ package struct SearchHeaderView: View {
         bundle: Bundle = .module
     ) -> String {
         HistoryCountCopy.results(
-            count: viewState.displayedRows.count,
-            hasNextPage: viewState.hasNextPage,
+            count: viewState.displayedCount,
+            hasNextPage: viewState.displayedCountIsLowerBound,
             locale: locale,
             bundle: bundle
         )

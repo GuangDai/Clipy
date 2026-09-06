@@ -19,4 +19,20 @@ internal enum MaintenanceSettingsCopy {
             bundle: bundle
         )
     }
+
+    static func cacheDisclosure(bundle: Bundle = .module) -> String {
+        text(
+            "Thumbnail and preview results are retained in memory. This version has no derived disk cache.",
+            bundle: bundle
+        )
+    }
+
+    static func memoryDisclosure(bundle: Bundle = .module) -> String {
+        text(
+            "Kernel readings for the whole Clipy process. RSS is currently resident memory; "
+                + "footprint is memory charged to the process. Peak RSS is since launch. "
+                + "These values include app and framework work, not just clipboard content or caches.",
+            bundle: bundle
+        )
+    }
 }

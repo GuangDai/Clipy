@@ -269,7 +269,7 @@ effect. Shared enum constructibility never grants an operation:
 | Connection kind | Grantable capability and allowed operations | Always denied |
 |---|---|---|
 | `.appIntents` | Existing V2-05 surface only: `.browse` -> `recent/search`; `.readContent` -> `details/pastePayload`; `.manage` -> `pin/unpin/remove`, with the existing `.manage`-implies-`.browse` rule | Every Local-Automation-only capability/operation and every unknown pair |
-| `.localAutomation` | `.browsePreview` -> bounded recent/search; `.readEffectiveContent` -> Effective-only representations; `.organize` -> pin/unpin; `.deleteItem` -> one-item delete | App-Intents-only `details/pastePayload/manage`, capture, clear, retention/admin, generic action, every unknown pair, and `.reviseContent` until its separate OCC contract is admitted |
+| `.localAutomation` | `.browsePreview` -> bounded recent/search; `.readEffectiveContent` -> Effective-only representations plus current Content Version; `.organize` -> pin/unpin; `.deleteItem` -> one-item delete; `.reviseContent` -> complete replacement under an expected Content Version | App-Intents-only `details/pastePayload/manage`, capture, clear, retention/admin, generic action, format declarations, and every unknown pair |
 
 This table preserves the current App Intents capability names, implication, and
 operation set. Adding `.localAutomation` does not silently narrow, broaden, or
@@ -814,7 +814,7 @@ public enum ExternalCapability: Int16, Sendable, Hashable, Codable {
     case readEffectiveContent = 11
     case organize = 12
     case deleteItem = 13
-    case reviseContent = 14 // declared but not grantable until separately admitted
+    case reviseContent = 14 // independent Local Automation OCC revision grant
 }
 ```
 
@@ -1126,9 +1126,10 @@ exactly six intent types and does not add a separate recent intent. The codec
 also covers the Effective-content read, all eight public admin requirements (four state mutations, three reads,
 and rebase), and the two distinct revoke semantics. It also covers automatic
 internal compaction as the ninth admin-class operation.
-`reviseContent` and `describeFormatCapabilities` remain unadmitted and have no
-V1 payload case; adding either later requires a new exhaustive codec version or
-an explicitly compatible owned case before its first writer.
+`reviseContent` uses the owned V1 request tag 18 below. It applies the existing
+immutable-revision transaction, including retention and OCC, and records only
+the target and expected version. `describeFormatCapabilities` remains
+unadmitted and has no V1 payload case.
 
 #### 4.4.1 Stable operation discriminators
 
@@ -1152,7 +1153,7 @@ public enum ExternalOperationKind: Int16, Sendable, Hashable, Codable {
     case adminRebase = 11
     case adminCompact = 12
     case readEffectiveContent = 13
-    case reviseContent = 14           // unadmitted; no V1 payload case
+    case reviseContent = 14           // Local Automation OCC revision; request tag 18
     case describeFormatCapabilities = 15 // unadmitted; no V1 payload case
     case adminRevokeCapability = 16
     case adminReadConnections = 17
@@ -1200,6 +1201,7 @@ and frozen as `exact = 1`, `fuzzy = 2`, `regexp = 3` because public
 | 15 | `readConnections` | `adminReadConnections`; nil connection + nil capability | no filter text |
 | 16 | `readGrants(connectionID: UUID)` | `adminReadGrants`; target connection + nil capability | one target connection; returned grant set absent |
 | 17 | `readAudit(since: UInt64, limit: UInt16)` | `adminReadAudit`; nil connection + nil capability | limit `1...500`; carries positions only, never prior payload bytes |
+| 18 | `reviseContent(itemID: UUID, expectedContentVersion: UInt64)` | `reviseContent`; Local Automation connection + `.reviseContent` | nonzero expected version; no replacement types or bytes in audit; success names the affected item, no-op has an empty affected-item list, failure has no result |
 
 Request tag and row `operationKindRaw` are a total one-to-one mapping except
 that tags 1, 2, 5, 6, and 7 can be admitted under different capability names
@@ -2656,7 +2658,7 @@ public enum ExternalOperationKind: Int16, Sendable, Hashable, Codable {
     case adminRebase = 11
     case adminCompact = 12
     case readEffectiveContent = 13 // Local Automation only (§0.2)
-    case reviseContent = 14        // declared; denied until separately admitted
+    case reviseContent = 14        // independent Local Automation OCC revision grant
     case describeFormatCapabilities = 15 // declared shape; runtime blocked by §0.3
     case adminRevokeCapability = 16 // revokeCapability only; raw 10 remains connection revoke
     case adminReadConnections = 17  // GatewayAdminHistory.connections()

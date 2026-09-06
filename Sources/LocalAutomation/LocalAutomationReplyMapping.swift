@@ -32,6 +32,7 @@ package enum LocalAutomationReplyMapping {
             case let .effective(content):
                 let effective = try ClipyCLIEffectiveResult(
                     locator: content.locator,
+                    contentVersion: content.contentVersion,
                     representations: content.representations.map {
                         .init(typeIdentifier: $0.typeIdentifier, bytes: $0.bytes)
                     }
@@ -59,6 +60,13 @@ package enum LocalAutomationReplyMapping {
         case let .pin(_, locator): .pin(locator: locator)
         case let .unpin(_, locator): .unpin(locator: locator)
         case let .delete(_, locator): .delete(locator: locator)
+        case let .reviseContent(_, locator, expectedContentVersion, representations):
+            .reviseContent(
+                locator: locator, expectedContentVersion: expectedContentVersion,
+                representations: representations.map {
+                    HistoryRepresentation(typeIdentifier: $0.typeIdentifier, bytes: $0.bytes)
+                }
+            )
         }
     }
 

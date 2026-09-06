@@ -22,14 +22,14 @@ struct LocalAutomationOperationCodecTests {
         let request = try #require(decodedRequest(ClipyCLIContract.decodeRequest(
             requestBytes(operation: "detailsEffective", arguments: #"{"locator":"i1_a"}"#)
         )))
-        let effective = try ClipyCLIEffectiveResult(locator: "i1_a", representations: [
+        let effective = try ClipyCLIEffectiveResult(locator: "i1_a", contentVersion: UInt64.max, representations: [
             .init(typeIdentifier: "com.example.binary", bytes: Data([0, 255, 10]))
         ])
         let output = ClipyCLIContract.render(.success(for: request, effective: effective))
         #expect(output.exitCode == 0)
         #expect(output.stderr.isEmpty)
         #expect(String(decoding: output.stdout, as: UTF8.self) ==
-            "{\"ok\":true,\"protocolVersion\":1,\"requestID\":\"\(validRequestID)\",\"result\":{\"locator\":\"i1_a\",\"representations\":[{\"bytesBase64\":\"AP8K\",\"typeIdentifier\":\"com.example.binary\"}]}}\n")
+            "{\"ok\":true,\"protocolVersion\":1,\"requestID\":\"\(validRequestID)\",\"result\":{\"contentVersion\":18446744073709551615,\"locator\":\"i1_a\",\"representations\":[{\"bytesBase64\":\"AP8K\",\"typeIdentifier\":\"com.example.binary\"}]}}\n")
     }
 
     @Test(arguments: [false, true])
@@ -46,7 +46,7 @@ struct LocalAutomationOperationCodecTests {
 
     @Test func effectiveContentBudgetIsCheckedBeforeBase64Rendering() {
         #expect(throws: ClipyCLIValueFailure.invalidValue) {
-            try ClipyCLIEffectiveResult(locator: "i1_a", representations: [
+            try ClipyCLIEffectiveResult(locator: "i1_a", contentVersion: 1, representations: [
                 .init(typeIdentifier: "com.example.binary", bytes: Data(
                     repeating: 0, count: ClipyCLIEffectiveResult.maximumContentBytes + 1
                 ))

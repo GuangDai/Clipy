@@ -44,6 +44,7 @@ internal enum RequestSummaryV1: Sendable, Equatable {
     case readConnections
     case readGrants(connectionID: UUID)
     case readAudit(since: UInt64, limit: UInt16)
+    case reviseContent(itemID: UUID, expectedContentVersion: UInt64)
 }
 
 internal enum ResultSummaryV1: Sendable, Equatable {
@@ -248,6 +249,8 @@ internal enum OperationPayloadBlobCodec {
             writer.append(UInt16(16)); writer.append(connectionID)
         case .readAudit(let since, let limit):
             writer.append(UInt16(17)); writer.append(since); writer.append(limit)
+        case .reviseContent(let itemID, let expected):
+            writer.append(UInt16(18)); writer.append(itemID); writer.append(expected)
         }
     }
 
@@ -358,6 +361,10 @@ internal enum OperationPayloadBlobCodec {
             return .readAudit(
                 since: try reader.readUInt64(),
                 limit: try reader.readUInt16()
+            )
+        case 18:
+            return .reviseContent(
+                itemID: try reader.readUUID(), expectedContentVersion: try reader.readUInt64()
             )
         default: throw OperationPayloadCodecRejection.unknownRequestTag(tag)
         }
@@ -497,6 +504,8 @@ internal enum OperationPayloadBlobCodec {
                 <= limits.maximumDisplayNameUTF8Bytes
         case .readAudit(_, let limit):
             return (1...limits.maxAuditReadBatchSize).contains(Int(limit))
+        case .reviseContent(_, let expected):
+            return expected > 0
         case .details, .pastePayload, .pin, .unpin, .remove, .grant,
              .revokeConnection, .rebase, .compact, .readEffectiveContent,
              .revokeCapability, .readConnections, .readGrants:
@@ -537,6 +546,7 @@ internal enum OperationPayloadBlobCodec {
              (.grant, .adminGrant), (.revokeConnection, .adminRevoke),
              (.rebase, .adminRebase), (.compact, .adminCompact),
              (.readEffectiveContent, .readEffectiveContent),
+             (.reviseContent, .reviseContent),
              (.revokeCapability, .adminRevokeCapability),
              (.readConnections, .adminReadConnections),
              (.readGrants, .adminReadGrants),
@@ -567,6 +577,8 @@ internal enum OperationPayloadBlobCodec {
                 && capability.map { $0 == .manage || $0 == .deleteItem } == true
         case .readEffectiveContent:
             return connectionID != nil && capability == .readEffectiveContent
+        case .reviseContent:
+            return connectionID != nil && capability == .reviseContent
         case .enroll:
             guard capability == nil else { return false }
             switch (context.outcome, payload.result) {
@@ -598,7 +610,7 @@ internal enum OperationPayloadBlobCodec {
             else { return false }
             let isHistoryMutation: Bool
             switch payload.request {
-            case .pin, .unpin, .remove: isHistoryMutation = true
+            case .pin, .unpin, .remove, .reviseContent: isHistoryMutation = true
             default: isHistoryMutation = false
             }
             if isHistoryMutation {
@@ -613,7 +625,8 @@ internal enum OperationPayloadBlobCodec {
             switch (payload.request, payload.result) {
             case (.pin, .affectedItemIDs(let itemIDs)),
                  (.unpin, .affectedItemIDs(let itemIDs)),
-                 (.remove, .affectedItemIDs(let itemIDs)):
+                 (.remove, .affectedItemIDs(let itemIDs)),
+                 (.reviseContent, .affectedItemIDs(let itemIDs)):
                 return itemIDs.isEmpty
             case (.revokeConnection, .connectionRevoked(let count)):
                 return count == 0
@@ -675,6 +688,7 @@ internal enum OperationPayloadBlobCodec {
         case (.recent, .page), (.search, .page), (.details, .details),
              (.pastePayload, .pastePayload), (.pin, .affectedItemIDs),
              (.unpin, .affectedItemIDs), (.remove, .affectedItemIDs),
+             (.reviseContent, .affectedItemIDs),
              (.revokeConnection, .connectionRevoked),
              (.readEffectiveContent, .effectiveContent),
              (.readConnections, .connections), (.readGrants, .grants),
@@ -710,7 +724,8 @@ internal enum OperationPayloadBlobCodec {
 
         case (.pin(let itemID), .affectedItemIDs(let itemIDs)),
              (.unpin(let itemID), .affectedItemIDs(let itemIDs)),
-             (.remove(let itemID), .affectedItemIDs(let itemIDs)):
+             (.remove(let itemID), .affectedItemIDs(let itemIDs)),
+             (.reviseContent(let itemID, _), .affectedItemIDs(let itemIDs)):
             switch context.outcome {
             case .succeeded:
                 return itemIDs == [itemID]

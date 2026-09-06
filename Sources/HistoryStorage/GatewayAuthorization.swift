@@ -34,7 +34,8 @@ internal struct ExternalOperationDescriptor: Sendable {
              (.pin, .managePin),
              (.unpin, .manageUnpin),
              (.remove, .manageRemove),
-             (.readEffectiveContent, .readEffectiveContent):
+             (.readEffectiveContent, .readEffectiveContent),
+             (.reviseContent, .reviseContent):
             true
         case (.enroll, _),
              (.grant, _),
@@ -52,7 +53,8 @@ internal struct ExternalOperationDescriptor: Sendable {
              (.pin, _),
              (.unpin, _),
              (.remove, _),
-             (.readEffectiveContent, _):
+             (.readEffectiveContent, _),
+             (.reviseContent, _):
             false
         }
     }

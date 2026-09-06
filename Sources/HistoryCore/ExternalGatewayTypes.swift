@@ -50,8 +50,9 @@ public enum ExternalOperationKind: Int16, Sendable, Hashable, Codable {
     case adminRebase = 11
     case adminCompact = 12
 
-    // Local Automation additions (V2-05 §0.2). `reviseContent` and the format
-    // declaration are intentionally constructible but not yet admitted.
+    // Local Automation additions (V2-05 §0.2). Revision requires its separate
+    // grant and an expected Content Version; the format declaration remains
+    // constructible but unadmitted.
     case readEffectiveContent = 13
     case reviseContent = 14
     case describeFormatCapabilities = 15

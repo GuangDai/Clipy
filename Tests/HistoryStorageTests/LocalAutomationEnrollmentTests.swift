@@ -42,7 +42,7 @@ struct LocalAutomationEnrollmentTests {
         let enabled = try await fixture.ingress.enable(clientDirectory: fixture.directory)
         let connection = try #require(enabled.connection)
         let bytes = try #require(fixture.custody.loadCredential())
-        let capabilities: [ExternalCapability] = [.browsePreview, .readEffectiveContent, .organize, .deleteItem]
+        let capabilities: [ExternalCapability] = [.browsePreview, .readEffectiveContent, .organize, .deleteItem, .reviseContent]
         for capability in capabilities {
             let granted = try await fixture.ingress.setCapability(
                 capability, enabled: true, clientDirectory: fixture.directory
@@ -65,6 +65,21 @@ struct LocalAutomationEnrollmentTests {
         let reenrolled = try await fixture.ingress.enable(clientDirectory: fixture.directory)
         #expect(reenrolled.connection != connection)
         #expect(reenrolled.grants.isEmpty)
+    }
+
+    @Test func revisionAndDeletionGrantsCanBeWithdrawnIndependently() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        _ = try await fixture.ingress.enable(clientDirectory: fixture.directory)
+        for capability in [ExternalCapability.browsePreview, .deleteItem, .reviseContent] {
+            _ = try await fixture.ingress.setCapability(capability, enabled: true, clientDirectory: fixture.directory)
+        }
+        let withoutDeletion = try await fixture.ingress.setCapability(.deleteItem, enabled: false, clientDirectory: fixture.directory)
+        #expect(withoutDeletion.grants == [.browsePreview, .reviseContent])
+        let withoutRevision = try await fixture.ingress.setCapability(.reviseContent, enabled: false, clientDirectory: fixture.directory)
+        #expect(withoutRevision.grants == [.browsePreview])
+        let readback = try await fixture.ingress.state(clientDirectory: fixture.directory)
+        #expect(readback.grants == [.browsePreview])
     }
 
     @Test(arguments: [false, true])

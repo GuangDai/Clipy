@@ -302,18 +302,20 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         // complete V4 HCR and Gateway state, so construct the X.5/X.6 actor
         // from the SAME SearchWorker and Storage clock witnesses, then publish
         // the six-actor History facade and its bound X.6 accessor.
+        let revisionPreparation = RevisionPreparationActor()
         let externalGateway = ExternalGateway(
             authority: authority,
             appIntentsConnectionID: appIntentsConnectionID,
             searchWorker: searchWorker,
-            storageClock: storageClock
+            storageClock: storageClock,
+            revisionPreparation: revisionPreparation
         )
         return SwiftDataHistory(
             authority: authority,
             ingestPreparation: IngestPreparationActor(
                 makeCandidateID: makeCandidateID
             ),
-            revisionPreparation: RevisionPreparationActor(),
+            revisionPreparation: revisionPreparation,
             searchWorker: searchWorker,
             thumbnailService: ThumbnailService(),
             externalGateway: externalGateway,

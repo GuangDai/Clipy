@@ -5,12 +5,11 @@ import Testing
 @testable import HistoryStorage
 
 struct RecentBoundaryTieFetchTests {
-    /// Both first-page ties and post-anchor ties need the complete boundary
-    /// date group, but neither needs older dates to choose page + lookahead.
-    /// Count the real SwiftData fetch, then finish pagination to prove the
-    /// excluded older rows still appear on their later pages (05 §14.1).
+    /// First-page and post-anchor ties fetch only page + lookahead, plus an
+    /// inclusive continuation anchor. Neither the complete tie group nor
+    /// older dates are materialized to determine a single page (05 §14.1).
     @Test(arguments: [false, true])
-    func boundaryExpansionExcludesOlderDates(withNewestSingleton: Bool) async throws {
+    func boundaryTiesKeepFetchBounded(withNewestSingleton: Bool) async throws {
         let history = try await SwiftDataHistory.open(
             configuration: HistoryConfiguration(persistence: .memory)
         )
@@ -58,13 +57,12 @@ struct RecentBoundaryTieFetchTests {
         )
         continuation.finish()
 
-        var fallbackCounts: [Int] = []
-        for await event in events where event.phase == .recentUnpinnedFallbackFetchComplete {
-            fallbackCounts.append(event.rows)
+        var fetchedCounts: [Int] = []
+        for await event in events where event.phase == .recentUnpinnedFetchComplete {
+            fetchedCounts.append(event.rows)
         }
-        // Five tied rows, plus the inclusive singleton continuation anchor.
-        // The six older rows must never enter this fallback fetch.
-        #expect(fallbackCounts == [withNewestSingleton ? 6 : 5])
+        // Page + lookahead, plus the inclusive continuation anchor if any.
+        #expect(fetchedCounts == [withNewestSingleton ? 3 : 2])
         #expect(page.rows.map(\.item.id) == [expected[seen.count]])
         seen.append(contentsOf: page.rows.map(\.item.id))
         let next = try #require(page.next)

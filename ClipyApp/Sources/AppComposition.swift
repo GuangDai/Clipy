@@ -221,6 +221,7 @@ final class AppComposition {
     /// task can reach its first `await`, so a second UI gesture is rejected as
     /// `.busy` instead of entering FIFO/latest-wins machinery (CLIP-5).
     private var pasteTask: Task<Void, Never>?
+    private let filePreviewLoader = LocalFilePreviewLoader()
 
 #if DEBUG
     /// App-internal deterministic results used by hosted composition tests
@@ -530,9 +531,14 @@ final class AppComposition {
         if storeURL.standardizedFileURL == defaultStoreURL.standardizedFileURL {
             let relay = composition.panelSurfacePurgeRelay
             let controller = LocalAutomationController(
-                ingress: history.localAutomationIngress { itemID in
-                    await relay.acceptCommittedExternalRemoval(itemID)
-                }
+                ingress: history.localAutomationIngress(
+                    onCommittedRemoval: { itemID in
+                        await relay.acceptCommittedExternalRemoval(itemID)
+                    },
+                    onCommittedRevision: { old, commit in
+                        await relay.acceptCommittedExternalRevision(from: old, commit: commit)
+                    }
+                )
             )
             composition.localAutomation = controller
             // Automation availability does not determine clipboard capture
@@ -573,6 +579,10 @@ final class AppComposition {
         viewState.onExportRepresentation = { representation in
             guard let window = NSApp.keyWindow else { return .failure(.unavailable) }
             return await RepresentationExporter.saveAs(representation, for: window)
+        }
+        let filePreviewLoader = self.filePreviewLoader
+        viewState.filePreviewSettings = FilePreviewSettings { address in
+            try await filePreviewLoader.load(address)
         }
         viewState.onCommittedUserRemoval = { [weak self] purge in
             self?.panelSurfacePurgeRelay.apply(purge)
@@ -625,6 +635,7 @@ final class AppComposition {
         reconcileCaptureObservation()
         viewState.deactivate()
         viewState.onPaste = { _ in }
+        viewState.filePreviewSettings = nil
         viewState.onExportRepresentation = { _ in .failure(.unavailable) }
         viewState.onCommittedUserRemoval = { _ in }
         pendingCapture = nil

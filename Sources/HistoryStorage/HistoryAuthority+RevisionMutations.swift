@@ -34,25 +34,38 @@ extension HistoryAuthority {
     ) {
         let context = ModelContext(container)
         context.autosaveEnabled = false
+        return try revisionPreparationInputs(
+            itemID: request.itemID, expected: request.expected, in: context
+        )
+    }
+
+    private func revisionPreparationInputs(
+        itemID: HistoryItemID,
+        expected: ContentVersion,
+        in context: ModelContext
+    ) throws -> (
+        snapshot: RevisionPreparationSnapshot,
+        retentionPolicies: HistoryRetentionPolicies?
+    ) {
 
         // ── Non-suspending read interval (§5): no `await` past this line
         //    while the context or fetched row is live. ──
 
         // §7.3: fetch and decode exactly the target item.
         guard let row = try HistoryItemRowHydration.fetchRow(
-            businessID: request.itemID,
+            businessID: itemID,
             in: context
         ) else {
-            throw HistoryFailure.notFound(request.itemID)
+            throw HistoryFailure.notFound(itemID)
         }
         let item = try HistoryItemRowHydration.hydrate(row, limits: limits)
 
         // §6.2: reject immediately when the OCC token is already stale —
         // the expensive resolution/projection phase never runs for a
         // proposal that cannot commit.
-        guard request.expected == item.contentVersion else {
+        guard expected == item.contentVersion else {
             throw HistoryFailure.staleContent(
-                expected: request.expected,
+                expected: expected,
                 current: item.contentVersion
             )
         }
@@ -67,6 +80,62 @@ extension HistoryAuthority {
             retentionPolicies: try RetentionConfigLoading.loadReviseLanePolicies(
                 in: context
             )
+        )
+    }
+
+    /// The external replacement is a complete desired Effective set. Hidden
+    /// Canonical types are resolved here into `.hide` decisions; the client
+    /// never needs a Canonical or revision-list read to construct its draft.
+    internal func localAutomationRevisionPreparationInputs(
+        itemID: HistoryItemID,
+        expected: ContentVersion,
+        representations: [HistoryRepresentation],
+        write: ExternalWriteCommitContext
+    ) throws -> (
+        request: RevisionRequest,
+        snapshot: RevisionPreparationSnapshot,
+        retentionPolicies: HistoryRetentionPolicies?
+    ) {
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let config = try Self.loadGatewayConfig(in: context)
+        switch try Self.targetedExternalAuthorizationDecision(
+            write.descriptor, connection: write.connection,
+            expectedConnectionKind: .localAutomation, config: config, in: context
+        ) {
+        case .authorized: break
+        case .unknownConnection, .inadmissibleConnection:
+            throw ExternalWriteGateRejection.unknownConnection(
+                requestedCapability: .reviseContent, connectionID: write.connection
+            )
+        case .denied(let failure):
+            throw ExternalWriteGateRejection.denied(failure)
+        }
+        guard !representations.isEmpty,
+              representations.count <= limits.maximumRepresentationsPerCaptureOrRevision else {
+            throw HistoryFailure.invalidInput(.incoherentRevisionDraft)
+        }
+        let inputs = try revisionPreparationInputs(itemID: itemID, expected: expected, in: context)
+        let canonicalTypes = Set(inputs.snapshot.canonical.representations.map(\.content.typeIdentifier))
+        var bytesByType: [String: Data] = [:]
+        for representation in representations {
+            guard canonicalTypes.contains(representation.typeIdentifier),
+                  !representation.bytes.isEmpty,
+                  bytesByType.updateValue(representation.bytes, forKey: representation.typeIdentifier) == nil else {
+                throw HistoryFailure.invalidInput(.incoherentRevisionDraft)
+            }
+        }
+        let decisions = inputs.snapshot.canonical.representations.map { canonical in
+            let type = canonical.content.typeIdentifier
+            return RevisionDecision(
+                typeIdentifier: type,
+                action: bytesByType[type].map { RevisionDecisionAction.replace(bytes: $0) } ?? .hide
+            )
+        }
+        return (
+            RevisionRequest(itemID: itemID, expected: expected, intent: .replace(RevisionDraft(decisions: decisions))),
+            inputs.snapshot,
+            inputs.retentionPolicies
         )
     }
 
@@ -113,7 +182,8 @@ extension HistoryAuthority {
     ///   transaction-closure failure (§16).
     internal func commitRevision(
         _ request: RevisionRequest,
-        _ bundle: PreparedRevisionBundle
+        _ bundle: PreparedRevisionBundle,
+        externalWrite: ExternalWriteCommitContext? = nil
     ) async throws -> HistoryReceipt {
         // Roadmap-owned WS20 test seam: the one legal suspension point of
         // this path — no context, row, fact, or plan is live yet (§5).
@@ -158,6 +228,9 @@ extension HistoryAuthority {
             // §9: release the context and return — nothing is retained
             // across the operation (§5), and a no-op yields no receipt,
             // index delta, or invalidation (docs/04-coherence.md §4).
+            if let externalWrite {
+                try commitExternalWriteNoOpAudit(externalWrite, in: context)
+            }
             return .unchanged
         }
 
@@ -187,7 +260,8 @@ extension HistoryAuthority {
         // itself, so these inputs are exactly the v1 shape.
         let stamped: StampedCommitPlan
         do {
-            stamped = try CommitPlanStamper.stamp(
+            let committedAt = storageClock.now()
+            let internalPlan = try CommitPlanStamper.stamp(
                 mutationPlan,
                 currentPosition: currentPosition,
                 inputs: .revision(
@@ -195,8 +269,11 @@ extension HistoryAuthority {
                     existingRevisions: facts.item.revisions,
                     projection: bundle.projection
                 ),
-                createdAt: storageClock.now()
+                createdAt: committedAt
             )
+            stamped = try externalWrite.map {
+                try Self.attachExternalWriteAudit(to: internalPlan, write: $0, committedAt: committedAt)
+            } ?? internalPlan
         } catch let rejection as StampingRejection {
             throw rejection.historyFailure
         } catch let rejection as CodecRejection {

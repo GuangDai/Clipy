@@ -11,6 +11,7 @@ internal enum ExternalAccessPolicy {
         case organize
         case delete
         case effectiveContentRead
+        case revise
         case forbidden
     }
 
@@ -52,10 +53,11 @@ internal enum ExternalAccessPolicy {
                 operationClass == .organize
             case .deleteItem:
                 operationClass == .delete
+            case .reviseContent:
+                operationClass == .revise
             case .browse,
                  .readContent,
-                 .manage,
-                 .reviseContent:
+                 .manage:
                 false
             }
         }
@@ -75,6 +77,8 @@ internal enum ExternalAccessPolicy {
             .delete
         case .readEffectiveContent:
             .effectiveContentRead
+        case .reviseContent:
+            .revise
         case .adminEnroll,
              .adminGrant,
              .adminRevoke,
@@ -84,7 +88,6 @@ internal enum ExternalAccessPolicy {
              .adminReadConnections,
              .adminReadGrants,
              .adminReadAudit,
-             .reviseContent,
              .describeFormatCapabilities:
             .forbidden
         }

@@ -18,4 +18,8 @@
 "Allow Programs to Delete History?" = "Allow Programs to Delete History?";
 "Allow Deletion" = "Allow Deletion";
 "Cancel" = "Cancel";
+"Revise Current Content" = "Revise Current Content";
+"Allow Programs to Revise Current Content?" = "Allow Programs to Revise Current Content?";
+"Allow Revisions" = "Allow Revisions";
+"Programs using your account will be able to change an item's current content without asking again. Each change appends an immutable revision. Original content and older revisions remain retained until removed by retention or item deletion; revision is not erasure. This permission does not grant content reading or deletion." = "Programs using your account will be able to change an item's current content without asking again. Each change appends an immutable revision. Original content and older revisions remain retained until removed by retention or item deletion; revision is not erasure. This permission does not grant content reading or deletion.";
 "Programs using your account will be able to permanently delete individual clipboard items without asking again. This cannot be undone." = "Programs using your account will be able to permanently delete individual clipboard items without asking again. This cannot be undone.";

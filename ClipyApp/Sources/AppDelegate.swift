@@ -1212,9 +1212,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func storageLocationSettings() -> StorageLocationSettings {
         let directory = compositionStoreURL.deletingLastPathComponent()
         let usage = StoreFolderUsage(directoryURL: directory)
+        let memory = ProcessMemoryReader()
         return StorageLocationSettings(
             directoryPath: directory.path,
             allocatedBytes: { try await usage.allocatedBytes() },
+            processMemory: { try await memory.read() },
             reveal: { [weak self] in self?.revealStoreLocation() }
         )
     }

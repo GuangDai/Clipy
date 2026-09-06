@@ -55,6 +55,22 @@ package extension ClipyCLIContract {
                 return failure(.invalidRequest)
             }
             return .success(.browsePreview(requestID: requestID, arguments: arguments))
+        case "reviseContent":
+            guard argumentObject.hasExactly(keys: [
+                "locator", "expectedContentVersion", "representations",
+            ]),
+                  case let .string(locator) = argumentObject.value(named: "locator"),
+                  isNonemptyUTF8(locator, atMost: 1_024),
+                  case let .number(versionToken) = argumentObject.value(named: "expectedContentVersion"),
+                  !versionToken.contains("."), !versionToken.contains("e"), !versionToken.contains("E"),
+                  let expected = UInt64(versionToken), expected > 0,
+                  let representations = decodeRevisionRepresentations(argumentObject.value(named: "representations")) else {
+                return failure(.invalidRequest)
+            }
+            return .success(.reviseContent(
+                requestID: requestID, locator: locator,
+                expectedContentVersion: expected, representations: representations
+            ))
         case "detailsEffective", "pasteEffective", "pin", "unpin", "delete":
             guard argumentObject.hasExactly(keys: ["locator"]),
                   case let .string(locator) = argumentObject.value(named: "locator"),
@@ -76,6 +92,28 @@ package extension ClipyCLIContract {
         default:
             return failure(.unknownOperation)
         }
+    }
+
+    /// One complete desired Effective set. JSON's existing 65,536-byte
+    /// envelope bounds base64 allocation before this decoder is entered.
+    /// Decode exact RFC 4648 base64 without ignoring or repairing characters.
+    private static func decodeRevisionRepresentations(
+        _ value: BoundedJSONValue?
+    ) -> [ClipyCLIRevisionRepresentation]? {
+        guard case let .array(values) = value, (1...32).contains(values.count) else { return nil }
+        var representations: [ClipyCLIRevisionRepresentation] = []
+        for value in values {
+            guard case let .object(object) = value,
+                  object.hasExactly(keys: ["typeIdentifier", "bytesBase64"]),
+                  case let .string(type) = object.value(named: "typeIdentifier"),
+                  isNonemptyUTF8(type, atMost: 512),
+                  !representations.contains(where: { $0.typeIdentifier.utf8.elementsEqual(type.utf8) }),
+                  case let .string(encoded) = object.value(named: "bytesBase64"),
+                  let bytes = Data(base64Encoded: encoded), !bytes.isEmpty,
+                  bytes.base64EncodedString() == encoded else { return nil }
+            representations.append(.init(typeIdentifier: type, bytes: bytes))
+        }
+        return representations
     }
 
     private static func decodeBrowseArguments(
@@ -178,6 +216,12 @@ package enum ClipyCLIRequest: Equatable, Sendable {
     case pin(requestID: ClipyCLIRequestID, locator: String)
     case unpin(requestID: ClipyCLIRequestID, locator: String)
     case delete(requestID: ClipyCLIRequestID, locator: String)
+    case reviseContent(
+        requestID: ClipyCLIRequestID,
+        locator: String,
+        expectedContentVersion: UInt64,
+        representations: [ClipyCLIRevisionRepresentation]
+    )
 
     package var requestID: ClipyCLIRequestID {
         switch self {
@@ -185,23 +229,29 @@ package enum ClipyCLIRequest: Equatable, Sendable {
              let .detailsEffective(requestID, _),
              let .pasteEffective(requestID, _),
              let .pin(requestID, _), let .unpin(requestID, _),
-             let .delete(requestID, _): requestID
+             let .delete(requestID, _),
+             let .reviseContent(requestID, _, _, _): requestID
         }
     }
 
     package var arguments: ClipyCLIBrowseArguments? {
         switch self {
         case let .browsePreview(_, arguments): arguments
-        case .detailsEffective, .pasteEffective, .pin, .unpin, .delete: nil
+        case .detailsEffective, .pasteEffective, .pin, .unpin, .delete, .reviseContent: nil
         }
     }
 
     package var isMutation: Bool {
         switch self {
-        case .pin, .unpin, .delete: true
+        case .pin, .unpin, .delete, .reviseContent: true
         case .browsePreview, .detailsEffective, .pasteEffective: false
         }
     }
+}
+
+package struct ClipyCLIRevisionRepresentation: Equatable, Sendable {
+    package let typeIdentifier: String
+    package let bytes: Data
 }
 
 package enum ClipyCLIBrowseArguments: Equatable, Sendable {

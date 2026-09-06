@@ -687,15 +687,11 @@ Within one Authority interval:
   `fetchOffset = anchorOrdinal`, fetches the anchor plus page and lookahead
   (at most `limit + 2`), verifies the complete anchor, then drops it; this
   preserves O(`limit`) work without accepting a malformed cursor;
-- for an unpinned continuation, fetch at most `limit + 2` in the normal case:
-  the inclusive date bound returns the anchor plus `limit` rows and one
-  lookahead. Because the store is not trusted to sort UUID ties, a full slice
-  is ordered by `(lastCopiedAt DESC, id ASC)` and re-fetched up to the hard
-  retained-item bound when consumed same-date rows contaminate the slice head,
-  the anchor is absent, or the true page/lookahead boundary ties;
-- when the slice already contains the anchor (if any), a complete page, and
-  lookahead, a tie re-fetch includes only dates through the lookahead date,
-  expanding that complete tie group without materializing older history;
+- for an unpinned continuation, fetch at most `limit + 2` using the inclusive
+  `(lastCopiedAt DESC, idOrder lexical ASC)` keyset predicate. The persisted
+  UUID text column preserves the business-ID byte order even at equal dates.
+  Verify that the first result matches the full anchor, then drop it. No
+  tie-group expansion, complete-lane fetch, or Swift-side heap is needed;
 - return a value `HistoryPage` and opaque cursor.
 
 No Canonical/revision blob is decoded.

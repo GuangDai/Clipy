@@ -1,5 +1,5 @@
-/// V2-07 §6.3: independent on-demand logical and filesystem facts. Neither
-/// read performs a History action or schedules retention work.
+/// V2-07 §6.3: separate logical, filesystem, derived-cache and process-memory
+/// facts. These on-demand reads never schedule retention or cache eviction.
 import HistoryCore
 import SwiftUI
 
@@ -13,6 +13,8 @@ struct MaintenanceSettingsView: View {
     @State private var logicalFailed = false
     @State private var allocatedBytes: Int?
     @State private var allocatedFailed = false
+    @State private var processMemory: ProcessMemoryUsage?
+    @State private var processMemoryFailed = false
 
     var body: some View {
         Form {
@@ -41,16 +43,41 @@ struct MaintenanceSettingsView: View {
                 Text(MaintenanceSettingsCopy.folderDisclosure())
                     .accessibilityIdentifier("clipy.settings.maintenance.folder-disclosure")
             }
+            Section {
+                LabeledContent(MaintenanceSettingsCopy.text("Derived Disk Cache")) {
+                    Text(MaintenanceSettingsCopy.text("Not Used"))
+                        .accessibilityIdentifier("clipy.settings.maintenance.derived-cache")
+                }
+            } footer: {
+                Text(MaintenanceSettingsCopy.cacheDisclosure())
+            }
+            Section {
+                LabeledContent(MaintenanceSettingsCopy.text("Resident Memory (RSS)")) {
+                    byteValue(processMemory?.residentBytes, failed: processMemoryFailed)
+                        .accessibilityIdentifier("clipy.settings.maintenance.resident-bytes")
+                }
+                LabeledContent(MaintenanceSettingsCopy.text("Peak Resident Memory")) {
+                    byteValue(processMemory?.peakResidentBytes, failed: processMemoryFailed)
+                        .accessibilityIdentifier("clipy.settings.maintenance.peak-resident-bytes")
+                }
+                LabeledContent(MaintenanceSettingsCopy.text("Memory Footprint")) {
+                    byteValue(processMemory?.footprintBytes, failed: processMemoryFailed)
+                        .accessibilityIdentifier("clipy.settings.maintenance.footprint-bytes")
+                }
+            } footer: {
+                Text(MaintenanceSettingsCopy.memoryDisclosure())
+            }
             Button(MaintenanceSettingsCopy.text("Refresh")) {
                 refreshGeneration += 1
             }
             .accessibilityIdentifier("clipy.settings.maintenance.refresh")
         }
         .formStyle(.grouped)
-        // Separate tasks let either fact succeed while the other is slow or
-        // unavailable. SwiftUI cancels both on refresh and tab disappearance.
+        // Separate tasks let each fact succeed while another is slow or
+        // unavailable. SwiftUI cancels them on refresh and tab disappearance.
         .task(id: refreshGeneration) { await refreshLogicalBytes() }
         .task(id: refreshGeneration) { await refreshAllocatedBytes() }
+        .task(id: refreshGeneration) { await refreshProcessMemory() }
     }
 
     @ViewBuilder
@@ -92,6 +119,20 @@ struct MaintenanceSettingsView: View {
         } catch {
             guard !Task.isCancelled else { return }
             allocatedFailed = true
+        }
+    }
+
+    private func refreshProcessMemory() async {
+        guard !Task.isCancelled else { return }
+        processMemory = nil
+        processMemoryFailed = false
+        do {
+            let memory = try await location.processMemory()
+            guard !Task.isCancelled else { return }
+            processMemory = memory
+        } catch {
+            guard !Task.isCancelled else { return }
+            processMemoryFailed = true
         }
     }
 }

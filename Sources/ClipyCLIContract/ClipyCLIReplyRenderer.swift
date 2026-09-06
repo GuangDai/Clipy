@@ -60,7 +60,9 @@ package extension ClipyCLIContract {
         case let .effective(requestID, result):
             output.appendASCII("{\"ok\":true,\"protocolVersion\":1,\"requestID\":")
             output.appendJSON(requestID.rawValue)
-            output.appendASCII(",\"result\":{\"locator\":")
+            output.appendASCII(",\"result\":{\"contentVersion\":")
+            output.appendASCII(String(result.contentVersion))
+            output.appendASCII(",\"locator\":")
             output.appendJSON(result.locator)
             output.appendASCII(",\"representations\":[")
             for (index, representation) in result.representations.enumerated() {
@@ -260,10 +262,12 @@ package struct ClipyCLIEffectiveResult: Sendable {
         }
     }
     package let locator: String
+    package let contentVersion: UInt64
     package let representations: [Representation]
 
-    package init(locator: String, representations: [Representation]) throws {
+    package init(locator: String, contentVersion: UInt64, representations: [Representation]) throws {
         guard !locator.isEmpty, locator.utf8.count <= 1_024,
+              contentVersion > 0,
               representations.count <= 32 else {
             throw ClipyCLIValueFailure.invalidValue
         }
@@ -277,6 +281,7 @@ package struct ClipyCLIEffectiveResult: Sendable {
             total += representation.bytes.count
         }
         self.locator = locator
+        self.contentVersion = contentVersion
         self.representations = representations
     }
 }

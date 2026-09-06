@@ -244,11 +244,9 @@ struct HistoryViewStateTests {
         await history.finishObservation()
     }
 
-    /// A `.snapshotExpired` pagination failure (04 §6) drops the appended
-    /// rows back to the observed first page, resumes pagination from the
-    /// OBSERVED page's cursor — not the expired one — and surfaces the typed
-    /// failure in the banner state.
-    @Test func snapshotExpiredDropsAppendedRowsAndResumesFromObservedCursor() async {
+    /// A `.snapshotExpired` pagination failure (04 §6) drops the old window,
+    /// reobserves the same query, and continues with its fresh first cursor.
+    @Test func snapshotExpiredReobservesTheCurrentQueryBeforeContinuing() async {
         let observedPage = fixturePage(
             rows: [
                 fixtureRow(id: "00000000-0000-0000-0000-000000000041", title: "observed-one"),
@@ -281,11 +279,12 @@ struct HistoryViewStateTests {
         #expect(await pollUntil { state.rows.count == 4 })
         state.loadNextPage()
 
-        // 04 §6 recovery: appended rows dropped, pagination resumes from the
-        // observed page's own cursor, failure surfaced.
+        // Refresh obtains a fresh authoritative first page and retires the
+        // old window and cursor bookmarks before allowing another browse.
         #expect(await pollUntil { state.rows.count == 2 && state.hasNextPage })
+        #expect(await history.observeRequests.count == 2)
         #expect(state.rows.map(\.title) == ["observed-one", "observed-two"])
-        #expect(state.failure == .snapshotExpired(current: ChangePosition(rawValue: 9)))
+        #expect(state.failure == nil)
         #expect(state.failureEpisode == 1)
 
         // The retry browses from the OBSERVED cursor again and re-appends.

@@ -15,6 +15,18 @@
 - **View state** built from `HistoryCore` DTOs (`HistoryRow`, `HistoryPage`,
   `HistoryDetails`, `PastePayload`, `ThumbnailPayload`,
   `HistoryItemReference`) plus bounded inert ContentPreview artifacts.
+- **Bounded row navigation:** the list retains at most three consecutive
+  request-sized pages (normally 150 rows). Last-row prefetch fills that window;
+  once full, **Older** explicitly loads the next page and drops the newest
+  page's DTOs. **Newer** re-reads an already visited request cursor and drops
+  the oldest page; **Latest** restarts observation. Only compact request cursors
+  survive eviction, with no accumulated row DTOs or item-ID inventory. A new
+  observed page/query or expired cursor resets navigation to page one. This
+  serves the current capped product and does not establish million-row scale.
+  Eviction is navigation, never a deletion purge: open Details remains intact
+  and keyboard selection moves to a currently displayed row if necessary.
+  Unfiltered captions include rows traversed before the window; local filters
+  keep a lower-bound `+` while newer or older rows are outside the window.
 - **Interactions** that call `browse` / `observe` / `details` / `perform` / `pastePayload` / `thumbnail` through the injected `any ClipboardHistory`.
 - **Unified retention presentation:** maximum-unpinned count and the admitted
   age/storage/revision policies share one Retention group, configured snapshot,

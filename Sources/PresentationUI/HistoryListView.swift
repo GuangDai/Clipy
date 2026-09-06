@@ -79,8 +79,22 @@ struct HistoryListView: View {
         // a copy made during this minute can read "in 23s" until the next
         // tick (01 §6). Individual rows still own no clocks or timers.
         TimelineView(.everyMinute) { _ in
-            content(now: Date())
-                .background { selectionShortcuts }
+            VStack(spacing: 0) {
+                if viewState.hasWindowedPages {
+                    HStack {
+                        Button(HistoryListCopy.text("Newer")) { viewState.loadPreviousPage() }
+                            .disabled(!viewState.hasPreviousPage || viewState.isLoadingPage)
+                            .accessibilityIdentifier("clipy.history.newer")
+                        Spacer()
+                        Button(HistoryListCopy.text("Latest")) { viewState.returnToLatest() }
+                            .accessibilityIdentifier("clipy.history.latest")
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 6)
+                }
+                content(now: Date())
+            }
+            .background { selectionShortcuts }
         }
     }
 
@@ -200,7 +214,7 @@ struct HistoryListView: View {
         if viewState.isLoadingPage {
             loadingRow
         } else if viewState.hasNextPage {
-            Button(HistoryListCopy.text("Load More")) {
+            Button(HistoryListCopy.text("Older")) {
                 viewState.loadNextPage()
             }
             .frame(maxWidth: .infinity)

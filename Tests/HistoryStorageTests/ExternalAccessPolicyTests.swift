@@ -36,6 +36,7 @@ import Testing
         Admission(connectionKind: .localAutomation, capability: .organize, operation: .managePin),
         Admission(connectionKind: .localAutomation, capability: .organize, operation: .manageUnpin),
         Admission(connectionKind: .localAutomation, capability: .deleteItem, operation: .manageRemove),
+        Admission(connectionKind: .localAutomation, capability: .reviseContent, operation: .reviseContent),
     ]
 
     let connectionKinds: [ConnectionEnrollKind] = [.appIntents, .localAutomation]

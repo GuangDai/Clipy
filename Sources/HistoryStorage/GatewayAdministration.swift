@@ -30,8 +30,8 @@ internal enum GatewayAdministration {
     }
 
     /// Closed grant-admission matrix (`V2-05` §0.2/§3.2). Constructible
-    /// capability vocabulary is wider than what either connection kind may
-    /// receive; notably `.reviseContent` remains unadmitted.
+    /// capabilities remain specific to each connection kind; Local Automation
+    /// replacement requires its own explicit `.reviseContent` grant.
     internal static func isGrantable(
         _ capability: ExternalCapability,
         to connectionKind: ConnectionEnrollKind
@@ -54,12 +54,12 @@ internal enum GatewayAdministration {
             case .browsePreview,
                  .readEffectiveContent,
                  .organize,
-                 .deleteItem:
+                 .deleteItem,
+                 .reviseContent:
                 true
             case .browse,
                  .readContent,
-                 .manage,
-                 .reviseContent:
+                 .manage:
                 false
             }
         }

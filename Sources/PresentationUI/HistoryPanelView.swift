@@ -311,7 +311,8 @@ public final class HistoryPanelSurfaceState {
 
     package func reconcileSessionSelection(
         rows: [HistoryRow],
-        hasAuthoritativeFirstPage: Bool = true
+        hasAuthoritativeFirstPage: Bool = true,
+        selectsVisibleWindow: Bool = false
     ) {
         guard isSessionActive else { return }
         // Query restart synchronously clears `HistoryViewState.rows` before
@@ -333,7 +334,10 @@ public final class HistoryPanelSurfaceState {
         }
         guard rows.contains(where: { $0.item.id == selection }) else {
             isAwaitingInitialSelection = false
-            self.selection = nil
+            // Moving a bounded page window is navigation, not deletion.
+            // Keep a visible keyboard target without executing the evicted ID.
+            self.selection = selectsVisibleWindow
+                ? PanelSessionSelection.preparedSelection(in: rows) : nil
             return
         }
         isAwaitingInitialSelection = false
@@ -649,6 +653,10 @@ public struct HistoryPanelView: View {
                     // an otherwise valid selection; Return remains disabled by
                     // the exact-reference check until authoritative rows return.
                     guard viewState.hasAuthoritativeFirstPage else { return }
+                    if viewState.hasWindowedPages {
+                        reconcileSelectionWithDisplayedDefault()
+                        return
+                    }
                     surfaceState.selection = nil
                     previewState.handleSelectionChange(nil)
                     return
@@ -1070,7 +1078,8 @@ public struct HistoryPanelView: View {
     private func reconcileSelectionWithDisplayedDefault() {
         surfaceState.reconcileSessionSelection(
             rows: viewState.rows,
-            hasAuthoritativeFirstPage: viewState.hasAuthoritativeFirstPage
+            hasAuthoritativeFirstPage: viewState.hasAuthoritativeFirstPage,
+            selectsVisibleWindow: viewState.hasWindowedPages
         )
         retargetHiddenSelectionToDisplayedDefault()
     }
@@ -1259,8 +1268,8 @@ public struct HistoryPanelView: View {
         bundle: Bundle = .module
     ) -> String {
         HistoryCountCopy.items(
-            count: viewState.displayedRows.count,
-            hasNextPage: viewState.hasNextPage,
+            count: viewState.displayedCount,
+            hasNextPage: viewState.displayedCountIsLowerBound,
             locale: locale,
             bundle: bundle
         )

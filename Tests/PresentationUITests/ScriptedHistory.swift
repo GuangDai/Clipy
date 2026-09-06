@@ -199,6 +199,7 @@ actor ScriptedHistory: ClipboardHistory {
 
     func browse(_ request: HistoryBrowseRequest) async throws -> HistoryPage {
         browseRequests.append(request)
+        if request.after == nil, let observedFirstPage { return observedFirstPage }
         guard let cursor = request.after,
               let outcome = browseScript[cursor]
         else {

@@ -3,6 +3,7 @@ import Foundation
 import HistoryCore
 @testable import HistoryStorage
 import LocalAutomation
+import PresentationUI
 import XCTest
 @testable import ClipyApp
 
@@ -12,7 +13,7 @@ import XCTest
 /// rather than modifying a developer's existing automation installation.
 @MainActor
 final class LocalAutomationClientRuntimeTests: XCTestCase {
-    func testBundledClientUsesEnrollmentGrantsAndAllSevenOperations() async throws {
+    func testBundledClientUsesEnrollmentGrantsAndRevisionOCC() async throws {
         let clientDirectory = LocalAutomationPaths.clientDirectory
         let socketDirectory = LocalAutomationPaths.endpointURL.deletingLastPathComponent()
         guard !FileManager.default.fileExists(atPath: clientDirectory.path),
@@ -37,9 +38,22 @@ final class LocalAutomationClientRuntimeTests: XCTestCase {
         _ = try await history.perform(.capture(ComposedSupport.textCapture(
             "cli-original", observedAt: Date(timeIntervalSinceReferenceDate: 12)
         )))
+        let observedHistory = PostInitialObservationSuspendingHistory(base: history)
+        let viewState = HistoryViewState(history: observedHistory)
+        let preview = PreviewPaneState()
+        let surface = HistoryPanelSurfaceState(viewState: viewState, previewState: preview)
+        let relay = PanelSurfacePurgeRelay(viewState: viewState)
+        relay.install(surface)
+        defer {
+            viewState.deactivate()
+            Task { await observedHistory.releasePostInitialObservation() }
+        }
         let ingress = LocalAutomationIngress(
             authority: history.authority, gateway: history.externalGateway,
-            credentialStore: CredentialStore(operations: ClientRuntimeCredentials())
+            credentialStore: CredentialStore(operations: ClientRuntimeCredentials()),
+            onCommittedRevision: { old, commit in
+                await relay.acceptCommittedExternalRevision(from: old, commit: commit)
+            }
         )
         let state = try await ingress.enable(clientDirectory: clientDirectory)
         XCTAssertNotNil(state.connection)
@@ -79,10 +93,69 @@ final class LocalAutomationClientRuntimeTests: XCTestCase {
                     operation: operation, arguments: ["locator": locator]
                 )))
                 let representations = try XCTUnwrap(content["representations"] as? [[String: Any]])
-                XCTAssertEqual(Set(content.keys), ["locator", "representations"])
+                XCTAssertEqual(Set(content.keys), ["contentVersion", "locator", "representations"])
+                XCTAssertEqual(content["contentVersion"] as? UInt64, 2)
                 let encoded = try XCTUnwrap(representations.first?["bytesBase64"] as? String)
                 XCTAssertEqual(Data(base64Encoded: encoded), Data("cli-current".utf8))
             }
+            let displayed = try await history.details(for: reference.id).item
+            viewState.activate()
+            let initialVisible = await ComposedSupport.waitFor {
+                viewState.rows.first?.item == displayed
+            }
+            XCTAssertTrue(initialVisible)
+            guard initialVisible else { throw ProcessFailure.initialPageUnavailable }
+            preview.togglePreview(for: displayed)
+            XCTAssertEqual(preview.previewedItem, displayed)
+            let replacement = try request(operation: "reviseContent", arguments: [
+                "locator": locator,
+                "expectedContentVersion": 2,
+                "representations": [[
+                    "typeIdentifier": "public.utf8-plain-text",
+                    "bytesBase64": Data("cli-authored".utf8).base64EncodedString(),
+                ]],
+            ])
+            let deniedRevision = try await runClient(replacement)
+            XCTAssertEqual(deniedRevision.exitCode, 3)
+            XCTAssertEqual(deniedRevision.stderr, Data("clipyctl: not_granted\n".utf8))
+            _ = try await ingress.setCapability(.reviseContent, enabled: true, clientDirectory: clientDirectory)
+            let revised = try result(await runClient(replacement))
+            XCTAssertEqual(revised["changed"] as? Bool, true)
+            await observedHistory.waitUntilPostInitialObservationIsHeld()
+            // The actual CLI reply has returned while its replacement page
+            // is held. The ingress must already have retired old UI bytes.
+            let committedReference = try await history.details(for: reference.id).item
+            XCTAssertTrue(viewState.rows.isEmpty)
+            XCTAssertEqual(preview.previewedItem, committedReference)
+            XCTAssertNotEqual(preview.previewedItem, displayed)
+            XCTAssertEqual(surface.appliedPurgeGeneration, 1)
+            let stale = try await runClient(replacement)
+            XCTAssertEqual(stale.exitCode, 4)
+            XCTAssertEqual(stale.stderr, Data("clipyctl: content_stale\n".utf8))
+            XCTAssertEqual(surface.appliedPurgeGeneration, 1)
+            let unchanged = try result(await runClient(request(operation: "reviseContent", arguments: [
+                "locator": locator,
+                "expectedContentVersion": 3,
+                "representations": [[
+                    "typeIdentifier": "public.utf8-plain-text",
+                    "bytesBase64": Data("cli-authored".utf8).base64EncodedString(),
+                ]],
+            ])))
+            XCTAssertEqual(unchanged["changed"] as? Bool, false)
+            XCTAssertEqual(surface.appliedPurgeGeneration, 1)
+            let authored = try result(await runClient(request(
+                operation: "detailsEffective", arguments: ["locator": locator]
+            )))
+            XCTAssertEqual(authored["contentVersion"] as? UInt64, 3)
+            let authoredRepresentations = try XCTUnwrap(authored["representations"] as? [[String: Any]])
+            let authoredBytes = try XCTUnwrap(authoredRepresentations.first?["bytesBase64"] as? String)
+            XCTAssertEqual(Data(base64Encoded: authoredBytes), Data("cli-authored".utf8))
+            await observedHistory.releasePostInitialObservation()
+            let replacementVisible = await ComposedSupport.waitFor {
+                viewState.rows.first?.item == committedReference
+            }
+            XCTAssertTrue(replacementVisible)
+            viewState.deactivate()
             for operation in ["pin", "unpin", "delete"] {
                 let changed = try result(await runClient(request(
                     operation: operation, arguments: ["locator": locator]
@@ -209,7 +282,7 @@ final class LocalAutomationClientRuntimeTests: XCTestCase {
         }
     }
 
-    private enum ProcessFailure: Error { case didNotExit, pipeUnavailable }
+    private enum ProcessFailure: Error { case didNotExit, pipeUnavailable, initialPageUnavailable }
 }
 
 private struct ClientRuntimeCredentials: CredentialStoreExternalOperations {

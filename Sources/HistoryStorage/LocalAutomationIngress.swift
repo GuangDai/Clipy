@@ -12,6 +12,7 @@ package enum LocalAutomationRequest: Sendable {
     case pin(locator: String)
     case unpin(locator: String)
     case delete(locator: String)
+    case reviseContent(locator: String, expectedContentVersion: UInt64, representations: [HistoryRepresentation])
 }
 
 package struct LocalAutomationRow: Sendable {
@@ -30,6 +31,7 @@ package struct LocalAutomationPage: Sendable {
 
 package struct LocalAutomationEffectiveContent: Sendable {
     package let locator: String
+    package let contentVersion: UInt64
     package let representations: [HistoryRepresentation]
 }
 
@@ -55,6 +57,7 @@ public actor LocalAutomationIngress {
     private let authenticator: LocalAutomationCredentialAuthenticator
     private let gateway: ExternalGateway
     private let onCommittedRemoval: (@Sendable (HistoryItemID) async -> Void)?
+    private let onCommittedRevision: (@Sendable (HistoryItemReference, HistoryCommit) async -> Void)?
 
     private struct LocatorTarget: Hashable {
         let connection: ExternalConnectionID
@@ -80,12 +83,14 @@ public actor LocalAutomationIngress {
         authority: HistoryAuthority,
         gateway: ExternalGateway,
         credentialStore: CredentialStore,
-        onCommittedRemoval: (@Sendable (HistoryItemID) async -> Void)? = nil
+        onCommittedRemoval: (@Sendable (HistoryItemID) async -> Void)? = nil,
+        onCommittedRevision: (@Sendable (HistoryItemReference, HistoryCommit) async -> Void)? = nil
     ) {
         self.authority = authority
         self.gateway = gateway
         self.credentialStore = credentialStore
         self.onCommittedRemoval = onCommittedRemoval
+        self.onCommittedRevision = onCommittedRevision
         authenticator = LocalAutomationCredentialAuthenticator(
             credentialStore: credentialStore, authority: authority
         )
@@ -124,13 +129,29 @@ public actor LocalAutomationIngress {
             )
         case .detailsEffective(let locator), .pasteEffective(let locator):
             let itemID = try resolve(locator, connection: connection)
-            let representations = try await gateway.readLocalAutomationEffectiveContent(
+            let content = try await gateway.readLocalAutomationEffectiveContent(
                 itemID, asAuthenticated: connection
             )
             try Task.checkCancellation()
             return .effective(LocalAutomationEffectiveContent(
-                locator: locator, representations: representations
+                locator: locator, contentVersion: content.contentVersion,
+                representations: content.representations
             ))
+        case .reviseContent(let locator, let expected, let representations):
+            let itemID = try resolve(locator, connection: connection)
+            let receipt = try await gateway.reviseLocalAutomationContent(
+                itemID, expectedContentVersion: expected, representations: representations,
+                asAuthenticated: connection
+            )
+            guard case .committed(let commit) = receipt else { return .unchanged }
+            guard case .revised = commit.outcome else {
+                throw ExternalFailure.persistence(.invariantViolation)
+            }
+            let previous = HistoryItemReference(
+                id: itemID, contentVersion: ContentVersion(rawValue: expected)
+            )
+            await onCommittedRevision?(previous, commit)
+            return .changed
         case .pin(let locator), .unpin(let locator), .delete(let locator):
             let itemID = try resolve(locator, connection: connection)
             let mutation: ExternalRequest
@@ -138,7 +159,7 @@ public actor LocalAutomationIngress {
             case .pin: mutation = .pin(itemID)
             case .unpin: mutation = .unpin(itemID)
             case .delete: mutation = .remove(itemID)
-            case .recent, .search, .detailsEffective, .pasteEffective:
+            case .recent, .search, .detailsEffective, .pasteEffective, .reviseContent:
                 throw ExternalFailure.persistence(.invariantViolation)
             }
             let result = try await gateway.performLocalAutomation(
@@ -236,11 +257,13 @@ public actor LocalAutomationIngress {
 public extension SwiftDataHistory {
     /// Call once per running app and share with its transport and Settings.
     func localAutomationIngress(
-        onCommittedRemoval: (@Sendable (HistoryItemID) async -> Void)? = nil
+        onCommittedRemoval: (@Sendable (HistoryItemID) async -> Void)? = nil,
+        onCommittedRevision: (@Sendable (HistoryItemReference, HistoryCommit) async -> Void)? = nil
     ) -> LocalAutomationIngress {
         LocalAutomationIngress(
             authority: authority, gateway: externalGateway, credentialStore: CredentialStore(),
-            onCommittedRemoval: onCommittedRemoval
+            onCommittedRemoval: onCommittedRemoval,
+            onCommittedRevision: onCommittedRevision
         )
     }
 }

@@ -69,8 +69,6 @@ struct StorageLifecycleDebugInstrumentationTests {
             .recentUnpinnedFetchBegin,
             .recentUnpinnedFetchComplete,
             .recentUnpinnedOrderBegin,
-            .recentUnpinnedFallbackFetchBegin,
-            .recentUnpinnedFallbackFetchComplete,
             .recentUnpinnedOrderComplete,
             .recentFetchComplete,
             .recentAutoreleasePoolDrained,
@@ -99,12 +97,12 @@ struct StorageLifecycleDebugInstrumentationTests {
         })
         #expect(captureTransactionCompleteIndex < captureDrainedIndex)
 
-        let fallbackFetch = try #require(captured.first {
-            $0.phase == .recentUnpinnedFallbackFetchComplete
+        let unpinnedFetch = try #require(captured.first {
+            $0.phase == .recentUnpinnedFetchComplete
         })
-        #expect(fallbackFetch.rows == 12)
-        let fallbackCompleteIndex = try #require(captured.firstIndex {
-            $0.phase == .recentUnpinnedFallbackFetchComplete
+        #expect(unpinnedFetch.rows == 11)
+        let fetchCompleteIndex = try #require(captured.firstIndex {
+            $0.phase == .recentUnpinnedFetchComplete
         })
         let orderCompleteIndex = try #require(captured.firstIndex {
             $0.phase == .recentUnpinnedOrderComplete
@@ -112,7 +110,7 @@ struct StorageLifecycleDebugInstrumentationTests {
         let recentDrainedIndex = try #require(captured.firstIndex {
             $0.phase == .recentAutoreleasePoolDrained
         })
-        #expect(fallbackCompleteIndex < orderCompleteIndex)
+        #expect(fetchCompleteIndex < orderCompleteIndex)
         #expect(orderCompleteIndex < recentDrainedIndex)
 
         let rendered = captured.compactMap(\.logLine).joined(separator: "\n")

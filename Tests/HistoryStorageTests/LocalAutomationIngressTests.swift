@@ -50,10 +50,12 @@ struct LocalAutomationIngressTests {
                 return
             }
             #expect(content.locator == row.locator)
+            #expect(content.contentVersion == 2)
             #expect(content.representations.count == 1)
             #expect(content.representations[0].bytes == currentBytes)
         }
-        let audit = try await fixture.history.auditLog(since: 0)
+        // Fresh stores retain audit sequences starting at 1; `since` is inclusive.
+        let audit = try await fixture.history.auditLog(since: 1)
         let reads = audit.filter { $0.operationKind == .readEffectiveContent }
         #expect(reads.count == 3)
         #expect(reads.map(\.outcome) == [.denied, .succeeded, .succeeded])
@@ -89,7 +91,7 @@ struct LocalAutomationIngressTests {
         }
         #expect(try await page(fixture).rows.isEmpty)
         #expect(await removal.count == 1)
-        let audit = try await fixture.history.auditLog(since: 0)
+        let audit = try await fixture.history.auditLog(since: 1)
         let writes = audit.filter { [.managePin, .manageUnpin, .manageRemove].contains($0.operationKind) }
         #expect(writes.map(\.capability) == [.organize, .organize, .deleteItem, .deleteItem])
         #expect(writes.map(\.outcome) == [.succeeded, .succeeded, .denied, .succeeded])
@@ -223,7 +225,7 @@ struct LocalAutomationIngressTests {
                     )
                 }
         }
-        let audit = try await fixture.history.auditLog(since: 0)
+        let audit = try await fixture.history.auditLog(since: 1)
         #expect(audit.filter { $0.operationKind == .readSearch }.map(\.outcome) == [.denied])
     }
 

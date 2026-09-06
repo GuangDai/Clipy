@@ -23,8 +23,6 @@ internal enum StorageLifecycleDebugPhase: String, Codable, Hashable, Sendable {
     case recentUnpinnedFetchBegin = "recent.unpinned-fetch.begin"
     case recentUnpinnedFetchComplete = "recent.unpinned-fetch.complete"
     case recentUnpinnedOrderBegin = "recent.unpinned-order.begin"
-    case recentUnpinnedFallbackFetchBegin = "recent.unpinned-fallback-fetch.begin"
-    case recentUnpinnedFallbackFetchComplete = "recent.unpinned-fallback-fetch.complete"
     case recentUnpinnedOrderComplete = "recent.unpinned-order.complete"
     case recentFetchComplete = "recent.fetch.complete"
     case recentAutoreleasePoolDrained = "recent.autoreleasepool.drained"

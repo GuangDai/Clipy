@@ -6,6 +6,18 @@ import Foundation
 internal enum PreviewCopy {
     static var bundle: Bundle { .module }
 
+    static func fileFailure(_ failure: FilePreviewFailure) -> String {
+        let message: String
+        switch failure {
+        case .invalidReference: message = "This is not a local file reference."
+        case .unavailable: message = "The file could not be read. It may have moved or been deleted."
+        case .permissionDenied: message = "Clipy does not have permission to read this file."
+        case .tooLarge: message = "The file is too large to preview."
+        case .unsupported: message = "This file type cannot be previewed."
+        }
+        return text(message)
+    }
+
     static func text(_ english: String, bundle: Bundle = .module) -> String {
         bundle.localizedString(forKey: english, value: english, table: "Preview")
     }

@@ -1,11 +1,13 @@
 /// Inert URL/file-reference presentation shared by the side pane and Quick
 /// Look through HistoryPreviewView. All address/path values are literal,
-/// selectable text; no link, file accessor, or destination opener is created.
+/// selectable text. The optional file action only requests confirmation;
+/// file access belongs to the app-owned callback after that confirmation.
 import ContentPreview
 import SwiftUI
 
 struct ReferencePreviewView: View {
     let reference: PreviewReference
+    var requestFileLoad: (() -> Void)? = nil
 
     var body: some View {
         let title = PreviewCopy.text(reference.kind == .file ? "File Reference" : "URL Reference")
@@ -33,10 +35,16 @@ struct ReferencePreviewView: View {
                     identifier: "clipy.preview.reference.address"
                 )
 
-                Text(PreviewCopy.referenceDisclosure())
+                Text(reference.kind == .file && requestFileLoad != nil
+                    ? PreviewCopy.text("Only the reference is shown. Loading its contents requires confirmation.")
+                    : PreviewCopy.referenceDisclosure())
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("clipy.preview.reference.disclosure")
+                if reference.kind == .file, let requestFileLoad {
+                    Button(PreviewCopy.text("Preview File Contents…"), action: requestFileLoad)
+                        .accessibilityIdentifier("clipy.preview.file.request")
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(PanelTheme.spacingLarge)

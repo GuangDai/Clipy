@@ -35,41 +35,60 @@ public struct LocalAutomationSettings {
 }
 
 struct LocalAutomationSettingsView: View {
-    let settings: LocalAutomationSettings
-    @State private var state: LocalAutomationSettingsState?
-    @State private var isWorking = false
-    @State private var failed = false
-    @State private var confirmsDeletionGrant = false
+    @State private var model: LocalAutomationSettingsModel
+
+    init(settings: LocalAutomationSettings) {
+        _model = State(initialValue: LocalAutomationSettingsModel(settings: settings))
+    }
 
     var body: some View {
         Form {
             Section {
-                Text(LocalAutomationSettingsCopy.text(statusText))
+                Text(LocalAutomationSettingsCopy.text(model.statusText))
                     .accessibilityIdentifier("clipy.settings.automation.status")
                 Text(LocalAutomationSettingsCopy.text(
                     "Local Automation lets programs using your account call clipyctl. Enable it, then grant each permission separately."
                 ))
-                if state?.enabled == true || failed {
+                if model.state?.enabled == true || model.failed {
                     Button(LocalAutomationSettingsCopy.text("Revoke Access"), role: .destructive) {
-                        Task { await perform(settings.revoke) }
+                        Task { await model.revoke() }
                     }
                     .accessibilityIdentifier("clipy.settings.automation.revoke")
                 } else {
                     Button(LocalAutomationSettingsCopy.text("Enable Local Automation")) {
-                        Task { await perform(settings.enable) }
+                        Task { await model.enable() }
                     }
-                    .disabled(state == nil)
+                    .disabled(model.state == nil)
                     .accessibilityIdentifier("clipy.settings.automation.enable")
                 }
             } header: {
                 Text(LocalAutomationSettingsCopy.text("Local Automation"))
             }
-            if state?.enabled == true {
+            if model.state?.enabled == true {
                 Section {
                     capabilityToggle(.browsePreview, title: "Browse Previews", identifier: "browse")
                     capabilityToggle(.readEffectiveContent, title: "Read Current Content", identifier: "read")
                     capabilityToggle(.organize, title: "Pin and Unpin Items", identifier: "organize")
                     capabilityToggle(.deleteItem, title: "Delete Items", identifier: "delete")
+                        .alert(LocalAutomationSettingsCopy.text("Allow Programs to Delete History?"), isPresented: $model.confirmsDeletionGrant) {
+                            Button(LocalAutomationSettingsCopy.text("Allow Deletion"), role: .destructive) {
+                                Task { await model.confirmDeletionGrant() }
+                            }
+                            Button(LocalAutomationSettingsCopy.text("Cancel"), role: .cancel) { model.cancelDeletionGrant() }
+                        } message: {
+                            Text(LocalAutomationSettingsCopy.text(
+                                "Programs using your account will be able to permanently delete individual clipboard items without asking again. This cannot be undone."
+                            ))
+                        }
+                    capabilityToggle(.reviseContent, title: "Revise Current Content", identifier: "revise")
+                        .alert(LocalAutomationSettingsCopy.text("Allow Programs to Revise Current Content?"), isPresented: $model.confirmsRevisionGrant) {
+                            Button(LocalAutomationSettingsCopy.text("Allow Revisions"), role: .destructive) {
+                                Task { await model.confirmRevisionGrant() }
+                            }
+                            Button(LocalAutomationSettingsCopy.text("Cancel"), role: .cancel) { model.cancelRevisionGrant() }
+                        } message: {
+                            Text(LocalAutomationSettingsCopy.revisionDisclosure())
+                        }
                 } header: {
                     Text(LocalAutomationSettingsCopy.text("Permissions"))
                 } footer: {
@@ -78,75 +97,47 @@ struct LocalAutomationSettingsView: View {
                     ))
                 }
             }
-            if failed {
+            if model.failed {
                 Section {
                     Text(LocalAutomationSettingsCopy.text("Could not update Local Automation. Retry or revoke access."))
                     Button(LocalAutomationSettingsCopy.text("Retry")) {
-                        Task { await perform(settings.load) }
+                        Task { await model.load() }
                     }
                     .accessibilityIdentifier("clipy.settings.automation.retry")
                 }
             }
-            if isWorking { ProgressView() }
+            if model.isWorking { ProgressView() }
         }
         .formStyle(.grouped)
-        .disabled(isWorking)
-        .task { await perform(settings.load) }
-        .alert(LocalAutomationSettingsCopy.text("Allow Programs to Delete History?"), isPresented: $confirmsDeletionGrant) {
-            Button(LocalAutomationSettingsCopy.text("Allow Deletion"), role: .destructive) {
-                Task { await changeCapability(.deleteItem, enabled: true) }
-            }
-            Button(LocalAutomationSettingsCopy.text("Cancel"), role: .cancel) {}
-        } message: {
-            Text(LocalAutomationSettingsCopy.text(
-                "Programs using your account will be able to permanently delete individual clipboard items without asking again. This cannot be undone."
-            ))
-        }
+        .disabled(model.isWorking)
+        .task { await model.load() }
     }
 
     private func capabilityToggle(
         _ capability: ExternalCapability, title: String, identifier: String
     ) -> some View {
         Toggle(LocalAutomationSettingsCopy.text(title), isOn: Binding(
-            get: { state?.grants.contains(capability) == true },
+            get: { model.state?.grants.contains(capability) == true },
             set: { enabled in
-                if capability == .deleteItem, enabled {
-                    confirmsDeletionGrant = true
-                } else {
-                    Task { await changeCapability(capability, enabled: enabled) }
-                }
+                Task { await model.requestCapability(capability, enabled: enabled) }
             }
         ))
         .accessibilityIdentifier("clipy.settings.automation.grant.\(identifier)")
     }
 
-    private var statusText: String {
-        if let state { return state.enabled ? "Enabled" : "Disabled" }
-        return failed ? "Unavailable" : "Loading…"
-    }
-
-    private func changeCapability(_ capability: ExternalCapability, enabled: Bool) async {
-        await perform { try await settings.setCapability(capability, enabled) }
-    }
-
-    private func perform(_ action: @MainActor () async throws -> LocalAutomationSettingsState) async {
-        guard !isWorking else { return }
-        isWorking = true
-        defer { isWorking = false }
-        do {
-            let updated = try await action()
-            guard !Task.isCancelled else { return }
-            state = updated
-            failed = false
-        } catch {
-            guard !Task.isCancelled else { return }
-            failed = true
-        }
-    }
 }
 
 enum LocalAutomationSettingsCopy {
-    static func text(_ key: String) -> String {
-        Bundle.module.localizedString(forKey: key, value: key, table: "LocalAutomationSettings")
+    static let bundle = Bundle.module
+
+    static func text(_ key: String, bundle: Bundle? = nil) -> String {
+        (bundle ?? Self.bundle).localizedString(forKey: key, value: key, table: "LocalAutomationSettings")
+    }
+
+    static func revisionDisclosure(bundle: Bundle? = nil) -> String {
+        text(
+            "Programs using your account will be able to change an item's current content without asking again. Each change appends an immutable revision. Original content and older revisions remain retained until removed by retention or item deletion; revision is not erasure. This permission does not grant content reading or deletion.",
+            bundle: bundle
+        )
     }
 }
