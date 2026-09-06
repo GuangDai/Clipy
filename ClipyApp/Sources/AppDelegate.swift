@@ -698,7 +698,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                           panelSurfaceState.isAtListRoot
                     else { return false }
                     return panelSurfaceState.selectedReference(
-                        in: composition.viewState.rows
+                        in: composition.viewState.displayedRows
                     ) != nil
                 },
                 onSubmitSelection: { [weak self] in
@@ -724,7 +724,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func submitPanelSelection() {
         guard let composition,
               let reference = panelSurfaceState?.selectedReference(
-                  in: composition.viewState.rows
+                  in: composition.viewState.displayedRows
               )
         else { return }
         composition.viewState.requestPaste(reference)
@@ -1116,9 +1116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateStatusItemImage() {
         let isPaused = captureAccessState == .userPaused
         let symbolName = statusItemSymbolName
-        let accessibilityLabel = isPaused
-            ? "Clipy, clipboard monitoring paused"
-            : "Clipy"
+        let accessibilityLabel = AppCaptureCopy.statusLabel(isPaused: isPaused)
         let image = NSImage(
             systemSymbolName: symbolName,
             accessibilityDescription: accessibilityLabel
@@ -1336,6 +1334,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return LaunchAtLoginSettings(
             state: launchAtLoginPresentation.state,
             operationFailed: launchAtLoginPresentation.operationFailed,
+            operationPending: launchAtLoginPresentation.operationPending,
             setEnabled: { [weak self] enabled in
                 self?.launchAtLoginController.setEnabled(enabled)
             },

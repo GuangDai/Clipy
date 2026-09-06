@@ -54,14 +54,16 @@ private final class NonCooperativeLaunchOperation {
     enum Failure: Error { case rejected }
 
     private(set) var entered = false
+    private(set) var completed = false
     private var continuation: CheckedContinuation<Void, Never>?
 
-    func runThenFail() async throws {
+    func run(shouldFail: Bool = true) async throws {
         entered = true
         await withCheckedContinuation { continuation in
             self.continuation = continuation
         }
-        throw Failure.rejected
+        completed = true
+        if shouldFail { throw Failure.rejected }
     }
 
     func finish() {
@@ -180,6 +182,129 @@ struct LaunchAtLoginControllerTests {
         #expect(unregister.unregisterCount == 1)
     }
 
+    @Test("pending operation suppresses repeated input and settles from system status")
+    @MainActor
+    func pendingOperationSuppressesRepeatedInput() async {
+        let operation = NonCooperativeLaunchOperation()
+        let recorder = LaunchAtLoginOperationRecorder(status: .notRegistered)
+        let controller = LaunchAtLoginController(
+            operations: LaunchAtLoginOperations(
+                status: { recorder.status },
+                register: {
+                    recorder.registerCount += 1
+                    try await operation.run(shouldFail: false)
+                    recorder.status = .requiresApproval
+                },
+                unregister: { recorder.unregisterCount += 1 },
+                openSystemSettings: {}
+            )
+        )
+
+        controller.setEnabled(true)
+        #expect(controller.presentation.operationPending)
+        #expect(controller.presentation.state == .off)
+        controller.setEnabled(true)
+        controller.setEnabled(false)
+        let entered = await waitUntil { operation.entered }
+        #expect(entered)
+        #expect(recorder.registerCount == 1)
+        #expect(recorder.unregisterCount == 0)
+
+        operation.finish()
+        let settled = await waitUntil {
+            !controller.presentation.operationPending
+        }
+        #expect(settled)
+        #expect(controller.presentation.state == .requiresApproval)
+        #expect(!controller.presentation.operationFailed)
+    }
+
+    @Test("retry clears the previous error while its system operation is pending")
+    @MainActor
+    func retryClearsPreviousFailureImmediately() async {
+        let operation = NonCooperativeLaunchOperation()
+        let recorder = LaunchAtLoginOperationRecorder(status: .notRegistered)
+        let controller = LaunchAtLoginController(
+            operations: LaunchAtLoginOperations(
+                status: { recorder.status },
+                register: {
+                    recorder.registerCount += 1
+                    if recorder.registerCount == 1 {
+                        throw LaunchAtLoginOperationRecorder.Failure.rejected
+                    }
+                    try await operation.run(shouldFail: false)
+                    recorder.status = .enabled
+                },
+                unregister: {},
+                openSystemSettings: {}
+            )
+        )
+
+        controller.setEnabled(true)
+        let failed = await waitUntil { controller.presentation.operationFailed }
+        #expect(failed)
+        #expect(!controller.presentation.operationPending)
+
+        controller.setEnabled(true)
+        #expect(!controller.presentation.operationFailed)
+        #expect(controller.presentation.operationPending)
+        let entered = await waitUntil { operation.entered }
+        #expect(entered)
+        operation.finish()
+        let settled = await waitUntil {
+            !controller.presentation.operationPending
+        }
+        #expect(settled)
+        #expect(controller.presentation.state == .on)
+        #expect(!controller.presentation.operationFailed)
+    }
+
+    @Test("refresh before a scheduled operation starts prevents its external call")
+    @MainActor
+    func refreshBeforeOperationStarts() async {
+        let recorder = LaunchAtLoginOperationRecorder(status: .notRegistered)
+        let controller = LaunchAtLoginController(operations: recorder.operations)
+
+        controller.setEnabled(true)
+        controller.refresh()
+        #expect(!controller.presentation.operationPending)
+
+        // Join a subsequent operation so the queued main-actor work is driven
+        // to completion; the superseded registration must never run.
+        recorder.statusAfterUnregister = .notFound
+        controller.setEnabled(false)
+        let settled = await waitUntil {
+            controller.presentation.state == .unavailable
+        }
+        #expect(settled)
+        #expect(recorder.registerCount == 0)
+        #expect(recorder.unregisterCount == 1)
+    }
+
+    @Test("refresh follows externally changed approval and registration status")
+    @MainActor
+    func refreshFollowsExternalChanges() {
+        let recorder = LaunchAtLoginOperationRecorder(status: .notRegistered)
+        let controller = LaunchAtLoginController(operations: recorder.operations)
+        let states: [(LaunchAtLoginSystemStatus, LaunchAtLoginState)] = [
+            (.requiresApproval, .requiresApproval),
+            (.enabled, .on),
+            (.notRegistered, .off),
+            (.notFound, .unavailable),
+            (.unknown, .unavailable),
+        ]
+
+        for (status, expected) in states {
+            recorder.status = status
+            controller.refresh()
+            #expect(controller.presentation.state == expected)
+            #expect(!controller.presentation.operationPending)
+            #expect(!controller.presentation.operationFailed)
+        }
+        #expect(recorder.registerCount == 0)
+        #expect(recorder.unregisterCount == 0)
+    }
+
     @Test("requires approval opens the official settings destination")
     @MainActor
     func approvalRecoveryUsesExternalOperation() {
@@ -199,7 +324,7 @@ struct LaunchAtLoginControllerTests {
         let status = LaunchAtLoginOperationRecorder(status: .notRegistered)
         let operations = LaunchAtLoginOperations(
             status: { status.status },
-            register: { try await gate.runThenFail() },
+            register: { try await gate.run() },
             unregister: {},
             openSystemSettings: {}
         )
@@ -212,9 +337,11 @@ struct LaunchAtLoginControllerTests {
         controller.refresh()
         #expect(controller.presentation.state == .on)
         #expect(!controller.presentation.operationFailed)
+        #expect(!controller.presentation.operationPending)
 
         gate.finish()
-        for _ in 0..<4 { await Task.yield() }
+        let completed = await waitUntil { gate.completed }
+        #expect(completed)
         #expect(controller.presentation.state == .on)
         #expect(!controller.presentation.operationFailed)
     }

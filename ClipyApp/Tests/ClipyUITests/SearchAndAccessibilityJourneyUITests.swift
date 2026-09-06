@@ -68,6 +68,85 @@ final class SearchAndAccessibilityJourneyUITests: XCTestCase {
         XCTAssertTrue(rows.element(boundBy: 0).label.contains(captured))
     }
 
+    /// Exercise language selection in the real generated application, not
+    /// just an explicitly opened .lproj bundle. Clipboard text stays literal
+    /// while the surrounding search actions use the requested app language.
+    @MainActor
+    func testChineseSearchDetailsAndEditorUsePackagedTranslations() throws {
+        let captured = "clipy-ui-localized-alpha"
+        let app = try launchApp(
+            capturing: captured, language: "zh-Hans", locale: "zh_CN"
+        )
+        defer { app.terminate() }
+
+        let search = app.textFields["clipy.search.field"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        XCTAssertEqual(search.label, "搜索剪贴板历史记录")
+        let rows = historyRows(in: app)
+        XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 1 })
+        XCTAssertTrue(rows.element(boundBy: 0).label.contains(captured))
+
+        // The default fuzzy mode may legitimately match the shared "clipy"
+        // text. Select Exact through its real shortcut before asserting the
+        // localized no-results state; language does not alter matching rules.
+        search.typeKey("1", modifierFlags: [.command])
+        search.typeText("no-such-clipy-value")
+        XCTAssertEqual(search.value as? String, "no-such-clipy-value")
+        let clear = app.buttons["clipy.search.clear"]
+        XCTAssertTrue(clear.waitForExistence(timeout: 5))
+        XCTAssertEqual(clear.label, "清除搜索")
+        XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 0 })
+        XCTAssertTrue(app.staticTexts["无结果"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts[
+            "没有与“no-such-clipy-value”匹配的项目。"
+        ].exists)
+
+        clear.click()
+        XCTAssertTrue(waitUntil(timeout: 10) { !clear.exists && rows.count == 1 })
+        XCTAssertEqual(search.value as? String, "")
+        XCTAssertTrue(rows.element(boundBy: 0).label.contains(captured))
+        // Localized controls must preserve the same focus restoration.
+        search.typeText("alpha")
+        XCTAssertTrue(clear.waitForExistence(timeout: 5))
+        XCTAssertEqual(search.value as? String, "alpha")
+        XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 1 })
+
+        // Continue through the real row menu and Details/editor surfaces in
+        // the same language. The original clipboard text remains literal.
+        rows.element(boundBy: 0).rightClick()
+        let showDetails = app.menuItems["显示详情"]
+        XCTAssertTrue(showDetails.waitForExistence(timeout: 5))
+        showDetails.click()
+        let details = app.descendants(matching: .any)["clipy.details.root"]
+        XCTAssertTrue(details.waitForExistence(timeout: 5))
+        let edit = app.buttons["编辑内容"]
+        XCTAssertTrue(edit.waitForExistence(timeout: 5))
+        XCTAssertTrue(edit.isHittable)
+        edit.click()
+
+        let decision = app.descendants(matching: .any)[
+            "clipy.editor.decision.public.utf8-plain-text"
+        ]
+        XCTAssertTrue(decision.waitForExistence(timeout: 5))
+        let disclosure = app.descendants(matching: .any)[
+            "clipy.editor.revision-disclosure"
+        ]
+        XCTAssertTrue(disclosure.waitForExistence(timeout: 5))
+        let expectedDisclosure =
+            "保存会追加一个不可变的修订版本。先前内容和原始内容可能仍保留在此项目的修订历史中。"
+        XCTAssertTrue(
+            disclosure.label == expectedDisclosure
+                || (disclosure.value as? String) == expectedDisclosure,
+            "The editor must expose its localized immutable-revision disclosure.\n\(app.debugDescription)"
+        )
+        let cancel = app.buttons["clipy.editor.cancel"]
+        XCTAssertEqual(cancel.label, "取消")
+        XCTAssertEqual(app.buttons["clipy.editor.save"].label, "保存修订版本")
+        cancel.click()
+        XCTAssertTrue(waitUntil(timeout: 5) { !decision.exists && details.exists })
+        XCTAssertEqual(NSPasteboard.general.data(forType: .string), Data(captured.utf8))
+    }
+
     /// Card 15 / UI-16: resolve the running row by its exact stable
     /// AXIdentifier, invoke the public AXPress default action, and observe the
     /// production Copy pipeline's General-pasteboard bytes and panel close.
@@ -146,7 +225,11 @@ final class SearchAndAccessibilityJourneyUITests: XCTestCase {
     }
 
     @MainActor
-    private func launchApp(capturing value: String) throws -> XCUIApplication {
+    private func launchApp(
+        capturing value: String,
+        language: String = "en",
+        locale: String = "en_US"
+    ) throws -> XCUIApplication {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         XCTAssertTrue(pasteboard.setString(value, forType: .string))
@@ -160,6 +243,9 @@ final class SearchAndAccessibilityJourneyUITests: XCTestCase {
         temporaryDirectory = directory
 
         let app = XCUIApplication()
+        app.launchArguments += [
+            "-AppleLanguages", "(\(language))", "-AppleLocale", locale
+        ]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory
             .appendingPathComponent("history.store")

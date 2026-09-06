@@ -202,10 +202,21 @@ struct GatewayExternalWriteTests {
             operationKind: .manageUnpin,
             requestSummary: .unpin(itemID: fixture.item.id.rawValue)
         )
-        try await fixture.authority.authorizeExternal(
-            descriptor,
-            as: fixture.connection
-        )
+        do {
+            let context = ModelContext(fixture.container)
+            context.autosaveEnabled = false
+            let config = try HistoryAuthority.loadGatewayConfig(in: context)
+            guard case .authorized = try HistoryAuthority.targetedExternalAuthorizationDecision(
+                descriptor,
+                connection: fixture.connection,
+                expectedConnectionKind: .appIntents,
+                config: config,
+                in: context
+            ) else {
+                Issue.record("the live grant must pass the pre-revocation decision")
+                return
+            }
+        }
         try await fixture.history.revokeCapability(
             .manage,
             of: fixture.connection

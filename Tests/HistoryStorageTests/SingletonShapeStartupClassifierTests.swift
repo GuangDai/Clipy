@@ -1,7 +1,7 @@
 /// DATA-1 startup-shape proofs (`05` §13; deep review Card 1A-1).
 ///
 /// The production seam is a persistent `SwiftDataHistory.open`: each fixture
-/// first creates a real current V4 store and captures one item through the public
+/// first creates a real current store and captures one item through the public
 /// boundary, then an independent container damages only one singleton shape.
 /// A second public open must reject the shape. A fresh independent inspector
 /// compares durable singleton, item/blob, retained-byte, and Gateway values
@@ -10,12 +10,9 @@
 /// This is a same-process reopen proof; coordinator teardown in a true child
 /// process remains Card 1C evidence rather than an implied claim here.
 ///
-/// Retention-config absence is now distinguishable after X.3 bootstrap:
-/// surviving Gateway rows prove current durable state and prohibit repair.
-/// A migrated V1/V2 store awaiting bootstrap still has empty Gateway tables,
-/// so its documented create-with-defaults path remains available. The causal
-/// ceiling still applies to a store stripped of every post-V2 row: its all-empty
-/// shape is indistinguishable from fresh state without provenance.
+/// Surviving item, byte-accounting, Gateway, or journal facts prohibit
+/// restoring a missing config to defaults. Only an empty current-store
+/// bootstrap may create absent configuration.
 import Foundation
 import HistoryCore
 import SwiftData
@@ -121,10 +118,9 @@ struct SingletonShapeStartupClassifierTests {
     }
 
     private static func makeContainer(at storeURL: URL) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: HistorySchemaV4.self)
+        let schema = historySchema
         return try ModelContainer(
             for: schema,
-            migrationPlan: HistoryMigrationPlan.self,
             configurations: [ModelConfiguration(
                 schema: schema,
                 url: storeURL,
@@ -133,7 +129,9 @@ struct SingletonShapeStartupClassifierTests {
         )
     }
 
-    private static func seedExistingV4(at storeURL: URL) async throws {
+    private static func seedExistingCurrentStore(
+        at storeURL: URL, clearAfterCapture: Bool = false
+    ) async throws {
         let history = try await SwiftDataHistory.open(
             configuration: HistoryConfiguration(
                 persistence: .persistent(storeURL: storeURL),
@@ -144,15 +142,51 @@ struct SingletonShapeStartupClassifierTests {
             "singleton-shape",
             observedAt: Date(timeIntervalSince1970: 1_700_000_000)
         )))
+        if clearAfterCapture {
+            _ = try await history.perform(.clear(.all))
+        }
     }
 
-    private static func seedFreshCurrentV4(at storeURL: URL) async throws {
+    private static func seedFreshCurrentStore(at storeURL: URL) async throws {
         _ = try await SwiftDataHistory.open(
             configuration: HistoryConfiguration(
                 persistence: .persistent(storeURL: storeURL),
                 initialMaximumUnpinnedItems: 321
             )
         )
+    }
+
+    /// Remove later-owner evidence to isolate the retained item / byte row
+    /// guards. The source store was created and captured through real History.
+    private static func leaveHistoryFactWithoutConfiguration(
+        at storeURL: URL,
+        removeRetentionConfig: Bool,
+        keepItem: Bool,
+        forceFreshPosition: Bool = false
+    ) throws {
+        let context = ModelContext(try makeContainer(at: storeURL))
+        context.autosaveEnabled = false
+        if forceFreshPosition {
+            let position = try #require(context.fetch(FetchDescriptor<LastChangePositionRow>()).first)
+            position.rawValue = 0
+        }
+        if removeRetentionConfig {
+            for row in try context.fetch(FetchDescriptor<RetentionExpansionConfigRow>()) {
+                context.delete(row)
+            }
+        }
+        for row in try context.fetch(FetchDescriptor<GatewayConfigRow>()) { context.delete(row) }
+        for row in try context.fetch(FetchDescriptor<ConnectionRow>()) { context.delete(row) }
+        for row in try context.fetch(FetchDescriptor<GrantRow>()) { context.delete(row) }
+        for row in try context.fetch(FetchDescriptor<OperationRecordRow>()) { context.delete(row) }
+        for row in try context.fetch(FetchDescriptor<HistoryChangeRecordRow>()) { context.delete(row) }
+        for row in try context.fetch(FetchDescriptor<JournalConfigRow>()) { context.delete(row) }
+        if keepItem {
+            for row in try context.fetch(FetchDescriptor<RetainedBytesRow>()) { context.delete(row) }
+        } else {
+            for row in try context.fetch(FetchDescriptor<HistoryItemRow>()) { context.delete(row) }
+        }
+        try context.save()
     }
 
     private static func deletePositionAndRetentionConfig(
@@ -233,6 +267,64 @@ struct SingletonShapeStartupClassifierTests {
         )
     }
 
+    @Test("retained facts prohibit missing configuration defaults even without later tables",
+          arguments: [false, true], [false, true])
+    func retainedFactsPreventMissingConfigurationRepair(
+        removeRetentionConfig: Bool, keepItem: Bool
+    ) async throws {
+        let storeURL = WSSupport.tempStoreURL("missing-config-retained-fact")
+        defer { WSSupport.removeStore(storeURL) }
+        try await Self.seedExistingCurrentStore(at: storeURL)
+        try Self.leaveHistoryFactWithoutConfiguration(
+            at: storeURL, removeRetentionConfig: removeRetentionConfig, keepItem: keepItem,
+            forceFreshPosition: true
+        )
+        let before = try Self.snapshot(at: storeURL)
+        #expect(before.items.count == (keepItem ? 1 : 0))
+        #expect(before.retainedBytes.count == (keepItem ? 0 : 1))
+        #expect(before.configs.count == (removeRetentionConfig ? 0 : 1))
+        // Even a zeroed counter cannot disguise retained facts as fresh.
+        #expect(before.positions.map(\.rawValue) == [0])
+        #expect(before.gateway.configs.isEmpty && before.gateway.connections.isEmpty)
+
+        await #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
+            _ = try await SwiftDataHistory.open(configuration: HistoryConfiguration(
+                persistence: .persistent(storeURL: storeURL), initialMaximumUnpinnedItems: 200
+            ))
+        }
+        // A later orphan check could also fail after incorrectly creating
+        // defaults. Compare durable state, not merely the thrown failure.
+        #expect(try Self.snapshot(at: storeURL) == before)
+        let inspection = ModelContext(try Self.makeContainer(at: storeURL))
+        #expect(try inspection.fetchCount(FetchDescriptor<JournalConfigRow>()) == 0)
+        #expect(try inspection.fetchCount(FetchDescriptor<HistoryChangeRecordRow>()) == 0)
+    }
+
+    @Test("cleared history is not a fresh configuration bootstrap",
+          arguments: [false, true])
+    func nonzeroPositionPreventsMissingConfigurationRepair(removeRetentionConfig: Bool) async throws {
+        let storeURL = WSSupport.tempStoreURL("missing-config-cleared-history")
+        defer { WSSupport.removeStore(storeURL) }
+        try await Self.seedExistingCurrentStore(at: storeURL, clearAfterCapture: true)
+        try Self.leaveHistoryFactWithoutConfiguration(
+            at: storeURL, removeRetentionConfig: removeRetentionConfig, keepItem: true
+        )
+        let before = try Self.snapshot(at: storeURL)
+        #expect(before.items.isEmpty && before.retainedBytes.isEmpty)
+        #expect(before.positions.map(\.rawValue) == [2])
+        #expect(before.configs.count == (removeRetentionConfig ? 0 : 1))
+        #expect(before.gateway.configs.isEmpty && before.gateway.connections.isEmpty)
+        await #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
+            _ = try await SwiftDataHistory.open(configuration: HistoryConfiguration(
+                persistence: .persistent(storeURL: storeURL), initialMaximumUnpinnedItems: 200
+            ))
+        }
+        #expect(try Self.snapshot(at: storeURL) == before)
+        let inspection = ModelContext(try Self.makeContainer(at: storeURL))
+        #expect(try inspection.fetchCount(FetchDescriptor<JournalConfigRow>()) == 0)
+        #expect(try inspection.fetchCount(FetchDescriptor<HistoryChangeRecordRow>()) == 0)
+    }
+
     @Test("non-fresh singleton corruption is rejected without durable mutation")
     func nonFreshSingletonCorruptionIsRejectedWithoutDurableMutation() async throws {
         for damage in Damage.allCases {
@@ -240,7 +332,7 @@ struct SingletonShapeStartupClassifierTests {
                 "singleton-shape-\(damage.label)"
             )
             defer { WSSupport.removeStore(storeURL) }
-            try await Self.seedExistingV4(at: storeURL)
+            try await Self.seedExistingCurrentStore(at: storeURL)
             try Self.damage(damage, at: storeURL)
             let before = try Self.snapshot(at: storeURL)
             #expect(before.gateway.configs.count == 1)
@@ -277,7 +369,7 @@ struct SingletonShapeStartupClassifierTests {
             "singleton-shape-gateway-only-missing-position"
         )
         defer { WSSupport.removeStore(storeURL) }
-        try await Self.seedFreshCurrentV4(at: storeURL)
+        try await Self.seedFreshCurrentStore(at: storeURL)
         try Self.deletePositionAndRetentionConfig(at: storeURL)
         let before = try Self.snapshot(at: storeURL)
         #expect(before.positions.isEmpty)

@@ -9,6 +9,7 @@ public struct PreviewLoaderDebugSnapshot: Equatable, Sendable {
     public enum Kind: Equatable, Sendable {
         case text
         case raster
+        case reference
         case failed
         case unsupported
     }
@@ -44,7 +45,7 @@ public final class PreviewLoaderDebugDriver {
     ) async -> PreviewLoaderDebugSnapshot {
         await loader.load(item: item)
         switch loader.phase {
-        case .content(.text(let text)):
+        case .content(.text(let text, _)):
             return PreviewLoaderDebugSnapshot(
                 kind: .text,
                 textCharacterCount: text.count
@@ -55,6 +56,8 @@ public final class PreviewLoaderDebugDriver {
                 rasterWidth: loader.raster?.width,
                 rasterHeight: loader.raster?.height
             )
+        case .content(.reference):
+            return PreviewLoaderDebugSnapshot(kind: .reference)
         case .failed:
             return PreviewLoaderDebugSnapshot(kind: .failed)
         case .loading, .unsupported:

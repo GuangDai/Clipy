@@ -10,9 +10,8 @@
 /// Capture projection uses initial Effective Content (Canonical Content with
 /// fingerprints stripped); revision projection uses the prepared proposed
 /// Effective Content. Copy Coalescing, pin, unpin, clear, removal, and
-/// retention never recompute it (§15). Projection schema changes require an
-/// explicit schema version and a migration/rebuild plan; they never change
-/// Canonical Content, revisions, or Content Version by themselves.
+/// retention never recompute it (§15). Projection does not change Canonical
+/// Content, revisions, or Content Version by itself.
 import ClipboardFormats
 import Foundation
 import HistoryCore
@@ -28,15 +27,12 @@ import HistoryDomain
 /// `HistoryLimits.maximumStoredSearchBodyUTF8Bytes`) by construction:
 /// `ContentProjector` truncates at a deterministic Unicode boundary
 /// (docs/06-cross-cutting.md §2), and every row-read path re-verifies the
-/// projection schema and the scalar fields it consumes
+/// scalar fields it consumes
 /// (docs/05-authority-kernel.md §4). `effectiveTypeIdentifiers` is the sorted,
 /// unique, non-empty type summary of the projected content.
 internal struct ContentProjection: Sendable {
-    /// Projection schema version; exactly `ContentProjector.schemaVersion`
-    /// (projection recipe v2 = 2) for every newly projected value.
-    internal let schemaVersion: UInt16
-    /// First eligible textual line after normalization, otherwise a stable
-    /// type-based fallback (§15).
+    /// First eligible textual line, otherwise eligible reference metadata or
+    /// a stable type-based fallback (§15).
     internal let title: String
     /// Eligible textual representations in deterministic type order,
     /// normalized and truncated to the hard search-body bound (§15).
@@ -58,30 +54,50 @@ internal struct StoredProjectionSize: Equatable, Sendable {
 /// Pure, deterministic projection from Effective Content to its bounded
 /// durable `ContentProjection`. docs/05-authority-kernel.md §15
 ///
-/// The projector is a namespace of pure functions — no actor, clock, I/O, or
-/// framework decode. Image bytes are never decoded for title/search (§15):
-/// only representations whose exact type identifier declares the frozen v2
-/// plain-text encoding are decoded, so identical content always projects
-/// identically. Encoding-unspecified, abstract, and structured text formats
-/// remain opaque.
+/// The projector is a namespace of pure functions — no actor, clock, or I/O.
+/// Image bytes are never decoded for title/search (§15). Exact plain-text
+/// codecs keep priority over bounded
+/// URL/file reference metadata without following the reference. Other
+/// encoding-unspecified, abstract, and structured text formats remain opaque.
 internal enum ContentProjector {
-    /// The current projection recipe. Version 2 removes the v1 guessed UTF-8
-    /// decode of encoding-unspecified, abstract, RTF, and HTML values (§15).
-    internal static let schemaVersion: UInt16 = 2
-
-    /// The only legacy projection recipe accepted by startup rebuild. It is
-    /// never accepted by an ordinary read boundary (§13, §15).
-    internal static let legacySchemaVersion: UInt16 = 1
-
     // MARK: Stored projection validation (docs/05-authority-kernel.md §4)
 
-    /// Re-validates the schema tag before any durable projection scalar is
-    /// trusted. A future projection schema requires an explicit migration;
-    /// ordinary reads never guess how to interpret another version.
-    internal static func validateStoredSchemaVersion(_ found: UInt16) throws {
-        guard found == schemaVersion else {
-            throw CodecRejection.unknownProjectionSchemaVersion(found: found)
+    /// Decodes the bounded literal title bytes without Foundation's encoding
+    /// interpretation. Empty bytes are a valid empty title; a leading U+FEFF
+    /// is content, not a byte-order marker to strip. Reject oversize input
+    /// before decoding, and never repair malformed UTF-8 (§4, §15).
+    internal static func decodeStoredTitle(
+        _ bytes: Data,
+        limits: HistoryLimits
+    ) throws -> String {
+        guard bytes.count <= limits.maximumStoredTitleUTF8Bytes else {
+            throw CodecRejection.storedTitleExceedsBound(
+                found: bytes.count,
+                bound: limits.maximumStoredTitleUTF8Bytes
+            )
         }
+        guard let title = String(validating: bytes, as: UTF8.self) else {
+            throw CodecRejection.invalidStoredTitleUTF8
+        }
+        return title
+    }
+
+    /// Search bodies share the literal UTF-8 contract of titles, with their
+    /// own bound. A content FEFF is not an encoding marker to remove (§15).
+    internal static func decodeStoredSearchBody(
+        _ bytes: Data,
+        limits: HistoryLimits
+    ) throws -> String {
+        guard bytes.count <= limits.maximumStoredSearchBodyUTF8Bytes else {
+            throw CodecRejection.storedSearchBodyExceedsBound(
+                found: bytes.count,
+                bound: limits.maximumStoredSearchBodyUTF8Bytes
+            )
+        }
+        guard let body = String(validating: bytes, as: UTF8.self) else {
+            throw CodecRejection.invalidStoredSearchBodyUTF8
+        }
+        return body
     }
 
     /// Re-validates a durable title at its read boundary. The write-side
@@ -121,12 +137,10 @@ internal enum ContentProjector {
     /// Full validation used by lineage hydration and search corpus reads.
     @discardableResult
     internal static func validateStoredProjection(
-        schemaVersion: UInt16,
         title: String,
         searchBody: String,
         limits: HistoryLimits
     ) throws -> StoredProjectionSize {
-        try validateStoredSchemaVersion(schemaVersion)
         let titleUTF8Bytes = try validateStoredTitle(title, limits: limits)
         let searchBodyUTF8Bytes = try validateStoredSearchBody(
             searchBody,
@@ -146,13 +160,15 @@ internal enum ContentProjector {
     /// - Title: the first line (in deterministic representation order, then
     ///   line order) whose whitespace-trimmed form is non-empty, trimmed and
     ///   truncated to `limits.maximumStoredTitleUTF8Bytes`; when no textual
-    ///   representation yields such a line, a stable type-based fallback.
+    ///   representation yields such a line and no known image is present,
+    ///   a valid reference supplies its filename/address before type fallback.
     /// - Search body: the newline-normalized text of every eligible textual
     ///   representation, in the content's normalized type-identifier order,
     ///   joined by `\n` and truncated to
     ///   `limits.maximumStoredSearchBodyUTF8Bytes`. Whitespace-only texts
-    ///   contribute nothing. The body may be empty (image-only content);
-    ///   the §4 decode bounds permit that.
+    ///   contribute nothing. A reference owning the title instead contributes
+    ///   its original address and non-empty decoded path under the same join
+    ///   and byte budget. The body may be empty (image-only/opaque content).
     /// - Effective type identifiers: the content's type identifiers, already
     ///   sorted, unique, and non-empty by the normalized-set invariant
     ///   (docs/02-domain.md §2.1).
@@ -175,25 +191,24 @@ internal enum ContentProjector {
             // Both sinks complete: nothing later can contribute. A textual
             // representation can only add search-body bytes (budget already
             // exhausted) or a title (already found), so its full decode and
-            // newline-normalization copy are skipped entirely — decisive
+            // search-body traversal are skipped entirely — decisive
             // when a capture carries multi-megabyte representations after
             // the first one already filled the 256-KiB body budget.
             if title != nil, remainingSearchBodyBytes == 0 {
                 break
             }
             guard let text = decodedText(of: representation) else { continue }
-            let normalized = normalizingNewlines(text)
             if title == nil {
-                title = firstContentLine(of: normalized)
+                title = firstContentLine(of: text)
             }
 
             // Build the durable corpus directly under its hard byte bound.
             // Joining all decoded representations first lets transient memory
             // scale with arbitrarily large capture bytes even though the
             // stored value is bounded (docs/06-cross-cutting.md §9, WL3).
-            guard containsNonWhitespace(in: normalized) else { continue }
+            guard containsNonWhitespace(in: text) else { continue }
             if hasSearchBodyPart {
-                guard appendUTF8Prefix(
+                guard appendNormalizedUTF8Prefix(
                     "\n",
                     to: &searchBody,
                     remainingByteCount: &remainingSearchBodyBytes
@@ -202,16 +217,37 @@ internal enum ContentProjector {
                 }
             }
             hasSearchBodyPart = true
-            guard appendUTF8Prefix(
-                normalized,
+            guard appendNormalizedUTF8Prefix(
+                text,
                 to: &searchBody,
                 remainingByteCount: &remainingSearchBodyBytes
             ) else {
                 break
             }
         }
+        if title == nil, let reference = referenceProjection(in: content) {
+            title = reference.title
+            var parts = [reference.address]
+            if !reference.path.isEmpty {
+                parts.append(reference.path)
+            }
+            for part in parts {
+                if hasSearchBodyPart {
+                    guard appendNormalizedUTF8Prefix(
+                        "\n",
+                        to: &searchBody,
+                        remainingByteCount: &remainingSearchBodyBytes
+                    ) else { break }
+                }
+                hasSearchBodyPart = true
+                guard appendNormalizedUTF8Prefix(
+                    part,
+                    to: &searchBody,
+                    remainingByteCount: &remainingSearchBodyBytes
+                ) else { break }
+            }
+        }
         return ContentProjection(
-            schemaVersion: schemaVersion,
             title: truncatedToUTF8ByteLimit(
                 title ?? typeBasedFallbackTitle(typeIdentifiers: typeIdentifiers),
                 limit: limits.maximumStoredTitleUTF8Bytes
@@ -232,7 +268,7 @@ internal enum ContentProjector {
         for representation in content.representations {
             guard
                 let text = decodedText(of: representation),
-                let title = firstContentLine(of: normalizingNewlines(text))
+                let title = firstContentLine(of: text)
             else {
                 continue
             }
@@ -242,32 +278,91 @@ internal enum ContentProjector {
             )
         }
         return truncatedToUTF8ByteLimit(
-            typeBasedFallbackTitle(
+            referenceProjection(in: content)?.title ?? typeBasedFallbackTitle(
                 typeIdentifiers: content.representations.map(\.typeIdentifier)
             ),
             limit: limits.maximumStoredTitleUTF8Bytes
         )
     }
 
+    // MARK: Inert reference metadata (§15)
+
+    private static let maximumReferenceSourceBytes = 16 * 1_024
+
+    /// Called only after plain text failed to supply a title. The first exact
+    /// reference owns this attempt; invalid/oversized input never advances to
+    /// another candidate. Known images retain their existing opaque projection.
+    /// The tuple contains fields, not a joined search body, so title-only reads
+    /// perform no body normalization or assembly.
+    private static func referenceProjection(
+        in content: EffectiveContent
+    ) -> (title: String, address: String, path: String)? {
+        guard !content.representations.contains(where: {
+            imageTypeIdentifiers.contains($0.typeIdentifier)
+        }), let representation = content.representations.first(where: {
+            let identifier = ClipboardFormatIdentifier(rawValue: $0.typeIdentifier)
+            return identifier == .url || identifier == .fileURL
+        }) else { return nil }
+
+        guard representation.bytes.count <= maximumReferenceSourceBytes,
+              let address = String(validating: representation.bytes, as: UTF8.self),
+              !address.isEmpty,
+              let url = URL(string: address, encodingInvalidCharacters: false),
+              let scheme = url.scheme,
+              !scheme.isEmpty else { return nil }
+        let identifier = ClipboardFormatIdentifier(rawValue: representation.typeIdentifier)
+        guard identifier != .fileURL || url.isFileURL else { return nil }
+
+        // These are lexical URL components, never filesystem resource reads.
+        // Host spelling is retained in address; remote file references are
+        // neither rejected nor presented as evidence of a local file.
+        let path = url.path(percentEncoded: false)
+        guard url.isFileURL else {
+            return (title: address, address: address, path: path)
+        }
+        let scalars = path.unicodeScalars
+        guard scalars.first?.value == 0x2F else { return nil }
+        // Foundation's lastPathComponent can strip a leading BOM while
+        // decoding the filename. The path is already decoded: slice its
+        // scalars directly, including when '/' shares a Character with a
+        // combining mark. Ignore trailing separators; an all-slash root
+        // keeps its original path instead of inventing an empty filename.
+        let filename: String
+        if let last = scalars.lastIndex(where: { $0 != "/" }) {
+            let end = scalars.index(after: last)
+            let start = scalars[..<end].lastIndex(of: "/").map {
+                scalars.index(after: $0)
+            } ?? scalars.startIndex
+            filename = String(scalars[start..<end])
+        } else {
+            filename = path
+        }
+        return (
+            title: filename,
+            address: address,
+            path: path
+        )
+    }
+
     // MARK: Textual eligibility and decoding (§15)
 
-    /// Projection-owned recipe-v2 admission. `ClipboardFormats` supplies the
+    /// Projection-owned exact text admission. `ClipboardFormats` supplies the
     /// exact codec facts, but adding a future stable codec must not silently
     /// change durable title/search behavior.
     private static let textualProjectionIdentifiers: Set<ClipboardFormatIdentifier> = [
         .utf8PlainText,
-        .utf8ExternalPlainText,
+        .utf16ExternalPlainText,
         .utf16PlainText,
     ]
 
     /// Decodes one representation's bytes as text, or returns `nil` when the
     /// representation is not title/search eligible (§15: image bytes are not
     /// decoded). Encoding is fixed by the explicit type: UTF-16 only for
-    /// `public.utf16-plain-text`, UTF-8 for every other frozen textual type.
+    /// `public.utf16-plain-text`; external UTF-16 honors a BOM and otherwise
+    /// defaults to big-endian. Only `public.utf8-plain-text` declares UTF-8.
     /// The projector never guesses a fallback encoding for malformed bytes;
     /// an undecodable representation is skipped rather than durable mojibake.
-    /// The declared codec means the non-UTF-16 cases have an exact UTF-8
-    /// contract; there is no generic textual fallback.
+    /// There is no generic textual fallback.
     private static func decodedText(
         of representation: ContentRepresentation
     ) -> String? {
@@ -278,69 +373,76 @@ internal enum ContentProjector {
               let codec = identifier.declaredStringCodec else {
             return nil
         }
-        let encoding: String.Encoding = switch codec {
+        switch codec {
         case .utf8:
-            .utf8
-        case .nativeUTF16:
-            .utf16
+            return String(data: representation.bytes, encoding: .utf8)
+        case .nativeUTF16, .externalUTF16:
+            let bytes = representation.bytes
+            // Foundation may decode a complete prefix and ignore one final
+            // byte. An incomplete UTF-16 code unit is malformed in full (§15).
+            guard bytes.count.isMultiple(of: 2) else { return nil }
+            if bytes.starts(with: [0xFE, 0xFF]) {
+                return String(data: bytes.dropFirst(2), encoding: .utf16BigEndian)
+            }
+            if bytes.starts(with: [0xFF, 0xFE]) {
+                return String(data: bytes.dropFirst(2), encoding: .utf16LittleEndian)
+            }
+            // Native byte order is little-endian on the supported arm64
+            // platform; external UTF-16 without a BOM is big-endian (§15).
+            let encoding: String.Encoding = codec == .externalUTF16
+                ? .utf16BigEndian : .utf16LittleEndian
+            return String(data: bytes, encoding: encoding)
         }
-        return String(data: representation.bytes, encoding: encoding)
     }
 
     // MARK: Normalization (§15)
 
-    /// Newline normalization: CRLF and lone CR fold to LF so line splitting,
-    /// title selection, and stored search bodies are independent of the
-    /// source newline convention. Deterministic; no other bytes change.
-    private static func normalizingNewlines(_ text: String) -> String {
-        var normalized = ""
-        normalized.reserveCapacity(text.utf8.count)
-        for character in text {
-            if character == "\r\n" || character == "\r" {
-                normalized.append("\n")
-            } else {
-                normalized.append(character)
-            }
-        }
-        return normalized
-    }
-
     /// The first line whose whitespace-trimmed form is non-empty, trimmed;
     /// `nil` when the text has no such line (§15: "first eligible textual
-    /// line after normalization").
-    private static func firstContentLine(of normalizedText: String) -> String? {
-        var start = normalizedText.startIndex
+    /// line after normalization"). CRLF, CR, and LF delimit the same lines
+    /// before or after normalization. A title-only read therefore scans only
+    /// through its selected line without allocating a normalized copy of the
+    /// whole decoded representation. Other Unicode newline scalars retain
+    /// the existing trim-only behavior; they do not become line delimiters.
+    private static func firstContentLine(of text: String) -> String? {
+        var start = text.startIndex
         while true {
-            let end = normalizedText[start...].firstIndex(of: "\n")
-                ?? normalizedText.endIndex
-            let trimmed = normalizedText[start..<end]
+            let end = text[start...].firstIndex {
+                $0 == "\n" || $0 == "\r" || $0 == "\r\n"
+            } ?? text.endIndex
+            let trimmed = text[start..<end]
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty { return trimmed }
-            guard end != normalizedText.endIndex else { return nil }
-            start = normalizedText.index(after: end)
+            guard end != text.endIndex else { return nil }
+            start = text.index(after: end)
         }
     }
 
-    /// `true` when a normalized textual representation contributes something
-    /// other than whitespace/newlines to the search corpus (§15).
+    /// `true` when a textual representation contributes something other than
+    /// whitespace/newlines to the corpus (§15). CR/LF normalization preserves
+    /// this predicate, so it can inspect the decoded source directly.
     private static func containsNonWhitespace(in text: String) -> Bool {
         text.unicodeScalars.contains {
             !CharacterSet.whitespacesAndNewlines.contains($0)
         }
     }
 
-    /// Appends as much of `text` as fits at a Character boundary and reports
-    /// whether the full input was appended. The destination never grows past
-    /// its caller-owned UTF-8 budget.
-    private static func appendUTF8Prefix(
+    /// Normalizes CRLF/lone CR to LF while appending only the prefix that
+    /// fits the caller-owned UTF-8 budget at Character boundaries. Measure
+    /// the output Character (CRLF becomes one byte), preserving the exact
+    /// normalize-then-truncate result without allocating a full normalized
+    /// copy. Returns whether the complete input was appended.
+    private static func appendNormalizedUTF8Prefix(
         _ text: String,
         to result: inout String,
         remainingByteCount: inout Int
     ) -> Bool {
         for character in text {
-            let width = character.utf8.count
+            let normalized: Character = character == "\r\n" || character == "\r"
+                ? "\n" : character
+            let width = normalized.utf8.count
             guard width <= remainingByteCount else { return false }
-            result.append(character)
+            result.append(normalized)
             remainingByteCount -= width
         }
         return true
@@ -349,7 +451,7 @@ internal enum ContentProjector {
     // MARK: Type-based fallback title (§15)
 
     /// Image type identifiers recognized by the fallback title. This remains
-    /// projection-owned purpose policy; it is frozen with recipe v2.
+    /// projection-owned purpose policy.
     private static let imageTypeIdentifiers: Set<String> = [
         "public.image",
         "public.png",

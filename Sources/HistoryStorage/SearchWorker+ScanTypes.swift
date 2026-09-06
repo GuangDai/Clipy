@@ -34,8 +34,8 @@ extension SearchWorker {
     /// docs/04-coherence.md §6): after the continuation anchor (when
     /// present), at most `limit + 1` matched rows can still influence the
     /// returned page or its `next`-cursor decision, so the scan may stop
-    /// once that many post-anchor survivors exist. The fuzzy lane never
-    /// uses it — its score ordering needs every corpus row.
+    /// once that many post-anchor survivors exist. Fuzzy still scans every
+    /// row, but retains only that many best post-anchor hits.
     internal struct ScanDirective: Sendable {
         let continuationAnchor: StoredOrderingAnchor?
         let maximumSurvivors: Int
@@ -54,6 +54,17 @@ extension SearchWorker {
         internal init(directive: ScanDirective) {
             self.anchor = directive.continuationAnchor
             self.maximumSurvivors = directive.maximumSurvivors
+        }
+
+        /// Keep the anchor for `page`'s exact validation and its successors;
+        /// earlier matches cannot contribute to this page's presentation.
+        internal func appendIfRetained(
+            _ row: EvaluatedRow,
+            to rows: inout [EvaluatedRow]
+        ) {
+            if anchor == nil || anchorSeen || row.anchor == anchor {
+                rows.append(row)
+            }
         }
 
         internal mutating func recordMatch(

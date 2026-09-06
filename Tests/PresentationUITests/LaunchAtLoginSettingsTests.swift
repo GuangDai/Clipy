@@ -47,6 +47,22 @@ struct LaunchAtLoginSettingsTests {
         #expect(value.operationFailed)
     }
 
+    @Test("pending operation preserves status and disables another toggle")
+    @MainActor
+    func pendingOperationDisablesToggle() {
+        let recorder = LaunchAtLoginIntentRecorder()
+        let value = LaunchAtLoginSettings(
+            state: .on,
+            operationPending: true,
+            setEnabled: { recorder.requestedEnabledValues.append($0) }
+        )
+
+        #expect(value.isOn)
+        #expect(!value.canToggle)
+        value.setEnabled(false)
+        #expect(recorder.requestedEnabledValues.isEmpty)
+    }
+
     @Test("approval remains on while exposing unregister and recovery intents")
     @MainActor
     func approvalStateForwardsBothRecoveryIntents() {

@@ -19,6 +19,7 @@ public enum LaunchAtLoginState: Sendable, Equatable {
 public struct LaunchAtLoginSettings: Sendable {
     public let state: LaunchAtLoginState
     public let operationFailed: Bool
+    public let operationPending: Bool
 
     private let setEnabledAction: @MainActor @Sendable (Bool) -> Void
     private let refreshAction: @MainActor @Sendable () -> Void
@@ -27,12 +28,14 @@ public struct LaunchAtLoginSettings: Sendable {
     public init(
         state: LaunchAtLoginState,
         operationFailed: Bool = false,
+        operationPending: Bool = false,
         setEnabled: @escaping @MainActor @Sendable (Bool) -> Void = { _ in },
         refresh: @escaping @MainActor @Sendable () -> Void = {},
         openSystemSettings: @escaping @MainActor @Sendable () -> Void = {}
     ) {
         self.state = state
         self.operationFailed = operationFailed
+        self.operationPending = operationPending
         self.setEnabledAction = setEnabled
         self.refreshAction = refresh
         self.openSystemSettingsAction = openSystemSettings
@@ -45,7 +48,7 @@ public struct LaunchAtLoginSettings: Sendable {
     /// Package (GOV-3): the Settings toggle's enabled state; ClipyApp drives
     /// the controller, not the value.
     package var canToggle: Bool {
-        state != .unavailable
+        state != .unavailable && !operationPending
     }
 
     /// Package (GOV-3): read by this module's Settings button and by
@@ -59,6 +62,7 @@ public struct LaunchAtLoginSettings: Sendable {
     /// ClipyApp's `LaunchAtLoginController`.
     @MainActor
     package func setEnabled(_ enabled: Bool) {
+        guard canToggle else { return }
         setEnabledAction(enabled)
     }
 

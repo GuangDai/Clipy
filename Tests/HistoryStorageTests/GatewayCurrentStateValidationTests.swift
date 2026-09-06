@@ -47,7 +47,7 @@ struct GatewayCurrentStateValidationTests {
     }
 
     private static func makeContext() throws -> ModelContext {
-        let schema = Schema(versionedSchema: HistorySchemaV3.self)
+        let schema = historySchema
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(

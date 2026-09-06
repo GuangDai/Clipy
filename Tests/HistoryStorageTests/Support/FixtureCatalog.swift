@@ -12,7 +12,7 @@
 /// targets cannot share code without a new library target, and the loader is
 /// deliberately tiny (06 §8 test-independence spirit). Keep the copies
 /// byte-identical: Tests/HistoryStorageTests, Tests/PasteboardAdapterTests,
-/// ClipyApp/Tests/ClipyIntegrationTests.
+/// Tests/ContentPreviewTests, ClipyApp/Tests/ClipyIntegrationTests.
 import Foundation
 
 /// Namespace for fixture lookup. Not a service locator: it reads one

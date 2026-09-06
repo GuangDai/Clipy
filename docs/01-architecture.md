@@ -38,7 +38,7 @@ There is no `DomainCore` target. The few values that must appear in both the cal
 | Target | Surface | Owns | Must not own |
 |---|---|---|---|
 | `ClipboardFormats` | Package-only, Foundation-only | Open-world exact identifiers and declared string-codec facts | Purpose admission, decoders, bytes, registries, caches, plugins, framework objects |
-| `ContentPreview` | Package-only concrete actor and immutable values | Preview source priority, exact text codecs, fixed resource profiles, eager ImageIO decode, and bounded inert text/raster outcomes | History reads, item/reference identity, selection or panel lifecycle, thumbnail request/source/cache policy, external I/O, registries, plugins, or framework objects in its interface |
+| `ContentPreview` | Package-only concrete actor and immutable values | Preview source priority, exact text codecs, fixed resource profiles, eager ImageIO/PDF page rendering, and bounded inert text/raster/copied-address outcomes | History reads, item/reference identity, selection or panel lifecycle, thumbnail request/source/cache policy, external I/O, registries, plugins, or framework objects in its interface |
 | `ClipyCLIContract` | Package-only, Foundation-only, no product | Versioned UTF-8 JSON request/reply values, bounded decoding/encoding, and stable exit classes | File handles or standard-stream side effects, transport, credentials, Gateway/History access, a product CLI, operation dispatch, or fabricated Gateway results |
 | `HistoryCore` | Public, Foundation-only | `ClipboardHistory`, IDs/tokens, History Actions, request/response DTOs, receipts, typed failures | Canonical state, fingerprints, SwiftData, AppKit, concrete storage |
 | `HistoryDomain` | Package-only, Foundation-only | Content lineage, immutable state, complete fact values, pure planners, semantic mutation plans and invariants | Public ports, I/O, actors, clocks, UUID generation, persistence |
@@ -304,6 +304,13 @@ passes an already selected encoded PNG payload to `ContentPreview` only for
 eager display materialization. This does not move thumbnail request, source,
 version, single-flight, or cache policy into `ContentPreview`.
 
+The surface retains at most 500 completed results and 64 MiB of decoded
+pixels. Repeated prefetch requests refresh local recency; display reads do
+not. Crossing either bound evicts cold completed entries until both bounds
+hold, without invalidating unrelated flights or clearing every hot image.
+An individually oversized result is not retained. This remains per-surface
+display state, not a new process-wide or persistent cache.
+
 ### 6. Isolation model
 
 #### Main actor
@@ -335,14 +342,26 @@ real multi-display matrix.
 
 #### Background isolation
 
-- `ContentPreview` owns transient preview source selection and text/image
-  rendering on its actor. Its eager raster is tight premultiplied BGRA8/sRGB
+- `ContentPreview` owns transient preview source selection, text/image/PDF
+  rendering, and inert URL-reference parsing on its actor. Copied addresses
+  and decoded file-URL paths are immutable strings, not filesystem handles or
+  loading capabilities; displaying them never follows the destination.
+  Its eager raster is tight premultiplied BGRA8/sRGB
   bytes with checked dimensions and byte count; no `CGImage`, `CGImageSource`,
   or encoded source bytes are retained in observable UI state. One native
   raster slot preserves bounded decode concurrency; the actor awaits that
   off-actor work, so a newer exact-text render can complete while an older
   native rasterization is pending. Cancellation remains a publication fence
   and does not promise immediate native preemption.
+  History-pane priority is image, valid exact plain text, exact
+  `com.adobe.pdf`, then an inert copied reference. PDF rendering uses a
+  memory data provider and local Core Graphics document/page objects in the
+  existing native slot: only the first cropped/rotated page becomes a white-
+  backed raster within the 640-pixel/output-byte profile. Password-protected
+  PDFs remain unsupported. No PDF text indexing, editing, interactive
+  document actions or additional file access is introduced. The UI discloses
+  page 1 and the total page count; multi-image raster sources likewise carry
+  a static-preview notice. Neither notice changes complete item copying.
 
 All of the following are `actor` types; each is therefore `Sendable`, which is what makes `SwiftDataHistory: Sendable` derivable without `@unchecked Sendable`. `SwiftDataHistory` stores six of them as fields (Part V §2); `ThumbnailWorker` is owned and invoked by `ThumbnailService`, not stored directly.
 

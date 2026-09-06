@@ -173,11 +173,23 @@ final class LaunchAtLoginController {
     }
 
     func setEnabled(_ enabled: Bool) {
+        guard !presentation.operationPending,
+              presentation.state != .unavailable else { return }
         let operationGeneration = OperationGeneration()
         generation = operationGeneration
         operationTask?.cancel()
+        // Card 10C: preserve authoritative status while the system operation
+        // runs, clear the previous attempt's error, and disable repeat input.
+        publish(
+            state: presentation.state,
+            operationFailed: false,
+            operationPending: true
+        )
         let operations = self.operations
         operationTask = Task { [weak self] in
+            // An appearance/activation refresh may supersede the request
+            // before this main-actor task has started its external operation.
+            guard !Task.isCancelled else { return }
             do {
                 if enabled {
                     try await operations.register()
@@ -212,11 +224,13 @@ final class LaunchAtLoginController {
 
     private func publish(
         state: LaunchAtLoginState,
-        operationFailed: Bool
+        operationFailed: Bool,
+        operationPending: Bool = false
     ) {
         presentation = LaunchAtLoginSettings(
             state: state,
-            operationFailed: operationFailed
+            operationFailed: operationFailed,
+            operationPending: operationPending
         )
         onPresentationChanged?(presentation)
     }

@@ -307,7 +307,7 @@ V4 schema/migration、bounded affected-items codec、empty/existing bootstrap、
 | Card 6B APFS capture transaction | Done（Card 6B exact physical ENOSPC leaf，dispatch run [32636093920](https://github.com/GuangDai/Clipy/actions/runs/32636093920) 全绿） | PR #21/#22 scaffold；[PR #24](https://github.com/GuangDai/Clipy/pull/24)修复两处 interpolation 语法错误；[PR #25](https://github.com/GuangDai/Clipy/pull/25)新增 docs/05 §16 stamped-plan capacity admission（run [32632262141](https://github.com/GuangDai/Clipy/actions/runs/32632262141) 证明 external-storage 满盘抛 uncaught `NSInternalInconsistencyException` 而非 NSError）；[PR #26](https://github.com/GuangDai/Clipy/pull/26)改用 raw `volumeAvailableCapacity`（important-usage 变体在挂载卷返回 0）；[PR #27–#29](https://github.com/GuangDai/Clipy/pull/29)修复 bash 3.2 substitution-subshell 内 EXIT trap 提前触发 teardown | 已证：UDRW/APFS attach、WritableVolume 元数据、1-MiB preflight、seed tokens、真实竞争 ENOSPC、production capture 以 `.temporarilyUnavailable(.insufficientDiskSpace)` 拒绝且 seed 不变、容量释放后 fresh-process seed reopen。仍不证：admission 通过后才开始的中途耗尽（Apple framework crash ceiling，见 §16/AUDIT）、disk-full open/migration、revise/remove/clear 满盘、StoreRoot recovery、signed/distribution |
 | General pasteboard cross-process visibility | Done（cross-process visibility leaf，dispatch run [32632263996](https://github.com/GuangDai/Clipy/actions/runs/32632263996) 全绿） | PR #21/#22 scaffold；[PR #24](https://github.com/GuangDai/Clipy/pull/24)修复 build-blocking 语法错误；分支的 Info.plist-absent 容错与 ad-hoc+hardened-runtime bundle 签名链在绿 run 实证 | 已证：writer 经 production `PasteboardAdapter.write` 发布 16-byte 合成 `com.clipy.probe.cross-process` payload，writer host 退出后 reader 原生 AppKit byte-exact 读回；phase marker、discovery/filter、codesign policy 全过。仍不证：TCC/App Intents/target-app paste/atomicity/WindowServer（workflow 显式 non-claims） |
 
-## 21. PLAY-STOR-1 closure + Batch 21/30–48 landed（doc 11 标记已全量刷新）
+## 21. PLAY-STOR-1 closure + Batch 21/30–49 landed（doc 11 标记已全量刷新）
 
 | Leaf | 当前状态 | 当前 source / test | 当前支持上限 |
 |---|---|---|---|
@@ -356,6 +356,7 @@ V4 schema/migration、bounded affected-items codec、empty/existing bootstrap、
 
 | Batch 47 DEC/regexp/permission/ingress leaves | Done（[PR #53](https://github.com/GuangDai/Clipy/pull/53) merge `b8c3d56`；final PR/master correctness 33218836013/33219472982 绿） | ① `DEC-REVERT-RACE`/`DEC-UNPIN-SWEEP` 裁决入 V2-02 §4.3/§7 + 03-target-direction §13 + 03a 交叉引用，两个判别测试穿真实 Authority seam 钉死现状（parked 两相 interleave；unpin-then-capture 受害集）；② REVIEW Card 11C 裁决：grammar 冻结不变 + 扫描换 Apple 可中断 `enumerateMatches`（.reportProgress/.reportCompletion，首 result 即 stop，UTF-16 语义逐字保留）+ 每请求 2,000ms typed `.temporarilyUnavailable(.searchEngineDeadline)`（引擎 internalError 显式化、无部分页）——两次 master CI watchdog run 证明旧 `firstMatch` 在已放行 pattern 上不可中断卡 actor；③ 满盘外的 permission 维度见上行；④ unified retention external ingress 裁决路线 B（Settings 唯一 owner）：AUDIT 行 + hosted 隔离测试（配置位级不变 + 审计 kind 封闭子集）+ 封闭 raw 词汇边界（20...999 拒绝） | ①零产品代码改动，纯裁决+钉死；②非抢占/非总时长保证（性能归 Part VI §9）；platform 依赖（progress 回调）由 characterization suite 硬断言守望；④无新 Gateway 操作、无 manifest gate（policy 禁） |
 | Batch 48 direct product leaves | Done（[PR #54](https://github.com/GuangDai/Clipy/pull/54) merge `8b7486a`；final PR/master correctness 33224258855/33225305486 绿） | ① mid-transaction kill 原子性（05-OQ9/CE26/Card 1C-2）：DEBUG TaskLocal kill 钩子 + 窗口 A（事务闭包内 pending，确定性 complete-OLD）/窗口 B（willSave 锚定 save 区间，old-or-new 二值）两 probe phase + fresh child verify（含 DATA-13 writability 尾步）；② Card 6B 满盘 dispatch cells：probe `openFullVolume`/`openSeededFullVolume`/`pressureRevise`/`pressureReviseCommit`/`pressureReviseVerify` + run_apfs_enospc.sh 追加两轮满盘循环（断言只在 dispatch lane 产出，PR 内仅编译）；③ GOV-3 PresentationUI public surface 收缩 36 声明（9 文件；ThumbnailStore 留给后续批；3 个 HistoryStorage 协议 witness 因 public 协议一致性要求如实跳过）；④ DEC-THUMB-CACHE 测量叶（05-DE4/G1 供证）：DEBUG ThumbnailMeasurement sink + owner 七测 + 60-PNG 滚动 journey（XCTAttachment 导出，只断言采样完整性） | ①只证 process-kill（不断电/fsync）；窗口 B 若 Apple transaction 不 post willSave 会诚实红；②满盘 evidence 须手动 dispatch run 归档；mid-transaction 耗尽仍为已接受 crash ceiling；③④无阈值断言、无新 scanner/gate |
+| Batch 49 direct product leaves | In progress（[PR #58](https://github.com/GuangDai/Clipy/pull/58)；PR correctness 33689990278 双 job 绿；APFS dispatch 33689980610 绿；待合并，merge SHA 由下批回填） | ① GOV-3 ThumbnailStore 尾巴：`raster(for:)` 与 DEBUG `ThumbnailMeasurement.record(_:)` 收 `internal`（repo-wide caller 核实），产品缝（500/64MiB 固定 init）经新增 retention 钉测守望；② F1 client credential custody（§4.2）：package-only `LocalAutomationClientCredentialCustody`——0700/0600 tighten-on-save/reject-on-load、no-follow、原子替换+逐字 readback、stdin 供应、authority-first 撤销、orphan temp 回收，16 测试；③ Card 10 收尾（§4.1）：`.success("Done.")` 兜底清零改 exact per-receipt feedback（`.unchanged` 诚实 no-op 文案），loosen/equal/逐维控制 draft 单测 + hosted `ComposedRetentionLooseningTests`（tighten→loosen→equal 全链 + exact readback + ChangePosition no-op 证明）；④ DATA-7a 跨进程单写者租约（§4.5）：`StoreRootLease`（`.lease` artifact 上 `fcntl(F_SETLK)`，ModelContainer 前非阻塞获取，进程退出内核释放），竞争抛新 public typed `HistoryFailure.persistence(.storeAlreadyOpen)`（03b §10 已同步），三进程 child 证明；⑤ §16 admission 容量事实修复：URL resource values 缓存于共享 NSURL——pre-fill 254MiB 读数被满盘 revise 复用放行 → external-storage NSException SIGABRT（dispatch 33687222086 暴露），改 fresh-URL 逐读 + probe 两格 GO 容量观测行（dispatch 33689980610：capture/revise 均 typed 拒绝 + commit/verify 绿）；APFS 脚本修复：capture fill cycle 重接管 `filler`（run 33637018304 `of=""`） | ①②④无新 gate/scanner/CLI/ingress/transport（DEC-PY-AUTHENTICATED-INGRESS 仍 BLOCKED-SPEC）；③launch-at-login 四态仍 signed-only；④同进程无二写者仍由 composition root 担保（fcntl 每进程语义）；⑤mid-transaction 耗尽仍为已接受 crash ceiling；open 满盘两格记录 `*_OPENSTORE_REFUSED` 观测分支 |
 
 ## 22. 明确仍 Open，禁止误报完成
 
@@ -372,8 +373,11 @@ V4 schema/migration、bounded affected-items codec、empty/existing bootstrap、
   decision禁止从nil provider data推断timeout；permission归Card 5A，General pasteboard/TCC
   仍Open，lineage absent/malformed保持optional contract。
 - Card 6B 的真实 bounded-volume/APFS ENOSPC capture 叶已于 2026-08-23 转绿（§20 run
-  32636093920，经 §16 capacity admission）；仍缺 open/migration 满盘、revise/remove/clear 满盘
-  （admission 后的中途耗尽是已记录的 Apple framework crash ceiling）与发行身份环境恢复。Batch 6
+  32636093920，经 §16 capacity admission）；open/revise 满盘 cells 的 dispatch 断言已由
+  Batch 49 归档（run 33689980610：两 open 格记录 `*_OPENSTORE_REFUSED` 分支，revise 满盘
+  typed 拒绝 + 释放后提交 + fresh verify 全绿），同批修复 §16 admission 的 URL
+  resource-values 缓存陈旧缺陷（run 33687222086 暴露的 SIGABRT）；仍缺 migration 满盘
+  （无可铸造 V1 store 路径）、remove/clear 满盘（明示不刻画）与发行身份环境恢复。Batch 6
   不能把 synthetic production-catch proof 外推为这些未证子叶。
 - Card 3D、Card 15 所有的真实Retry/no-Retry control/键盘/AX、localization、完整unified-retention hosted journey、VoiceOver/FKA、custom shortcut、signed release、StoreRoot/recovery、
   Gateway后续层、format runtime/manifests与tiered/unbounded production transition仍按 `04`/`07`–`09` 的 gates执行。
@@ -382,8 +386,9 @@ V4 schema/migration、bounded affected-items codec、empty/existing bootstrap、
   指定上限合并。X.7 的 hosted tests 不关闭framework system-manager resolution、真cold/warm
   Siri/Shortcuts invocation、discovery、
   process placement、Swift 6 queue-crash或TCC cells。public `ReconnectHistory`/cursor/reader/cache
-  不属于当前 prerequisite；Batch 18只闭合server credential ordinary/injected leaf，signed
-  DPK、client custody、authentication、CLI/transport仍属于后续层。
+  不属于当前 prerequisite；Batch 18只闭合server credential ordinary/injected leaf，Batch 49
+  已闭合 client 侧 custody 文件层（0700/0600/no-follow/原子替换/stdin 供应/orphan 回收，
+  见 §21 Batch 49 行）；signed DPK、authenticated ingress、CLI/transport仍属于后续层。
 - Batch 15 的 X.8 已以 [PR #17](https://github.com/GuangDai/Clipy/pull/17) 合并，但只关闭
   `ClipyCLIContract` 的指定 A2A–A2I 字节/grammar/renderer/exit-map leaf。X.9+
   仍需交付 `clipyctl` executable、process I/O、Python-to-History、authenticated ingress、

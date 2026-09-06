@@ -5,7 +5,7 @@
 /// invocation owns one `SwiftDataHistory` for one short process; no SwiftData
 /// object or generated identity crosses a phase boundary.
 /// The Retention phases prove exact configured-value persistence across
-/// terminated owners only; they do not prove migration or crash durability
+/// terminated owners only; they do not prove crash durability
 /// (`11-ai-todo-map-2026-08-23.md` §4.3; `V2-02-retention.md` §8.1/§12).
 /// The full-disk cells (pressureCapture plus the Card 6B pressureRevise
 /// trio and the openFullVolume/openSeededFullVolume pair) run only on the
@@ -20,8 +20,7 @@
 /// disjunction instead of a single outcome. Nowhere proven here:
 /// post-admission mid-transaction exhaustion (the Apple framework crash
 /// ceiling), remove/clear full-disk tails (zero-demand plans are never
-/// admission-refused), and V1→V2 migration on a full volume (no public
-/// API path mints a V1 store).
+/// admission-refused).
 /// The validateSeed/validateAll pair closes doc 11 §4.3's "External-clone
 /// 验证子进程" row and the 05 blind spot
 /// (`05-evidence-and-open-questions.md`:165, "未证明逐个 hydrate 所有
@@ -43,6 +42,12 @@
 /// old or complete new state, then proves the reopened store still writes
 /// (DATA-13). Process-kill evidence only, with largeBlobCrashCommit's same
 /// ceiling: no fsync, sudden-power-loss, or sidecar-layout claim.
+/// The leaseHold/openRejectLeasedStore pair closes DATA-7a's cross-process
+/// single-writer lease (REVIEW 01-findings.md DATA-7; PLAY-DISK-0B): a live
+/// owner child parked on stdin holds the StoreRoot lease, a second process's
+/// open of the same root must fail `.persistence(.storeAlreadyOpen)` before
+/// any `ModelContainer` exists, and after the owner's clean exit a fresh
+/// child reacquires.
 import Foundation
 import HistoryCore
 import HistoryStorage
@@ -65,9 +70,10 @@ private enum ProbePhase: String {
     case retentionVerifyUpdated
     case retentionRejectMalformed
     case retentionRejectWrongKey
-    case openRejectFutureSchema
     case openRejectCorruptBytes
     case openRejectReadOnlyDirectory
+    case openRejectLeasedStore
+    case leaseHold
     case gatewayAuditSeed
     case gatewayAuditCrash
     case gatewayAuditVerify
@@ -1045,8 +1051,8 @@ private func retentionVerifyUpdated(storeURL: URL) async throws {
 /// REVIEW §4.3 Retention-config restart tail, extended to the DATA-14
 /// open-failure fixtures (REVIEW 05 §7 Q13): the fixture process must
 /// observe the production public-open classifier itself. Every
-/// `ModelContainer` construction failure — an impossible stored shape, a
-/// future schema, non-SQLite bytes, an existing read-only store
+/// `ModelContainer` construction failure — an impossible stored shape,
+/// non-SQLite bytes, an existing read-only store
 /// directory — currently surfaces as one
 /// `.persistence(.openStore)` (03b §10); until a classification proof
 /// exists, no caller may auto-quarantine or silently recreate a store on
@@ -1068,6 +1074,26 @@ private func requirePublicOpenFailure(
         throw ProbeFailure.unexpectedState
     }
     throw ProbeFailure.unexpectedState
+}
+
+/// DATA-7a cross-process lease owner (REVIEW 01-findings.md DATA-7;
+/// PLAY-DISK-0B): opens the store through the public facade — acquiring the
+/// StoreRoot's single-writer lease — reports the held lease with one fixed
+/// marker line, then parks until this process's stdin reaches EOF, the
+/// parent's deterministic clean-release signal. Reused for both cells of the
+/// lease proof: with the parent holding the write end open this child is the
+/// live owner a second process must fail against; with a null stdin it is
+/// the fresh reacquire child, returning immediately. The trailing read pins
+/// the leased store's healthy empty projection at position 0 on both paths.
+private func leaseHold(storeURL: URL) async throws {
+    let history = try await openHistory(at: storeURL)
+    FileHandle.standardOutput.write(Data("LEASEHOLD_READY\n".utf8))
+    // The facade (and so the lease) is fenced across the park, mirroring
+    // crashCommit's explicit lifetime discipline.
+    withExtendedLifetime(history) {
+        _ = FileHandle.standardInput.readDataToEndOfFile()
+    }
+    try await requireEmptyHistory(history, position: 0)
 }
 
 private func requireInserted(
@@ -1880,6 +1906,15 @@ private func pressureCapture(storeURL: URL) async throws {
         throw ProbeFailure.unexpectedState
     }
     diagnostic("pressure.go-received")
+    // Evidence-only control for the revise cell's capacity line: the same
+    // fresh-URL read at GO time (this child's first capacity read is already
+    // post-fill, which is why the capture admission was never stale).
+    let captureAdmissionCapacity = try? URL(fileURLWithPath: storeURL.path)
+        .resourceValues(forKeys: [.volumeAvailableCapacityKey])
+        .volumeAvailableCapacity
+    diagnostic(
+        "pressure.admission-capacity-bytes=\(captureAdmissionCapacity.map(String.init) ?? "unavailable")"
+    )
 
     let pressureCapture = ClipboardCapture(
         representations: [CapturedRepresentation(
@@ -1953,6 +1988,16 @@ private func pressureRevise(storeURL: URL) async throws {
         throw ProbeFailure.unexpectedState
     }
     diagnostic("revise.go-received")
+    // Evidence-only: the capacity fact the §16 admission must see from this
+    // child at GO time, read through a fresh URL (no resource-value cache).
+    // Run 33687222086 crashed here when the store URL's cached pre-fill
+    // capacity let admission pass; this line records what a fresh read saw.
+    let reviseAdmissionCapacity = try? URL(fileURLWithPath: storeURL.path)
+        .resourceValues(forKeys: [.volumeAvailableCapacityKey])
+        .volumeAvailableCapacity
+    diagnostic(
+        "revise.admission-capacity-bytes=\(reviseAdmissionCapacity.map(String.init) ?? "unavailable")"
+    )
 
     do {
         _ = try await history.perform(pressureReviseRequest(
@@ -2365,11 +2410,6 @@ private struct HistoryRestartProbe {
                     at: storeURL,
                     expected: .persistence(.invariantViolation)
                 )
-            case .openRejectFutureSchema:
-                try await requirePublicOpenFailure(
-                    at: storeURL,
-                    expected: .persistence(.openStore)
-                )
             case .openRejectCorruptBytes:
                 try await requirePublicOpenFailure(
                     at: storeURL,
@@ -2380,6 +2420,13 @@ private struct HistoryRestartProbe {
                     at: storeURL,
                     expected: .persistence(.openStore)
                 )
+            case .openRejectLeasedStore:
+                try await requirePublicOpenFailure(
+                    at: storeURL,
+                    expected: .persistence(.storeAlreadyOpen)
+                )
+            case .leaseHold:
+                try await leaseHold(storeURL: storeURL)
             case .gatewayAuditSeed:
                 try await gatewayAuditSeed(storeURL: storeURL)
             case .gatewayAuditCrash:

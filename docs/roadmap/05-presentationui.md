@@ -23,6 +23,13 @@
   must not rewrite untouched sub-unit raw values, while an edited whole-unit
   field represents the user's explicit whole-unit value.
 - **Selection, window behavior, observable presentation state** on the Main actor (Part I §6).
+- **Drag-out:** register each displayed row's actual Effective type, including
+  opaque representations, with plain text and preferred raster types first.
+  Require the displayed exact reference when the drag begins, then resolve
+  current Effective Content lazily through `pastePayload(for:)` by ID
+  (`03b` §9 / `04` §8 `DEC-PASTE-REFERENCE`). A drag already started can
+  finish after the panel closes. A removed item fails the read; an advertised
+  type hidden by a later revision completes without bytes.
 - **Scripted preview adapter:** a small `ClipboardHistory` implementation for SwiftUI previews; it must be `Sendable` and must not substitute for storage semantic tests (03a §3, 01 §4).
 - **Preview deep module:** `PreviewContentLoader` alone owns History reads,
   exact-reference/task/generation/lifecycle fences and publication. It maps one
@@ -38,8 +45,18 @@
 - Import confinement (Part VI §6): `SwiftUI` belongs in this target and
   `HistoryDomain`/`HistoryStorage`/`SwiftData` remain forbidden by architecture
   and review.
-- `ContentPreviewTests` prove exact UTF-8 and native UTF-16 behavior, exact PNG
-  eager BGRA8/sRGB artifacts, malformed/unsupported classification, and
+- Details and the large preview display exact UTF-8 plus native/external
+  UTF-16 plain text. A UTF-16 BOM chooses byte order; without one, native
+  text uses arm64 little endian and external text uses big endian. Details
+  retains its 500-character excerpt. Replace admits these same three exact
+  plain-text identifiers when their canonical and visible current bytes are
+  valid. It preserves the editing source's encoding, including UTF-16 byte
+  order and BOM presence; an initially hidden type uses its canonical
+  encoding. Authored replacements retain that encoding across reload. Generic plain
+  text, HTML, RTF, and opaque formats remain preserve/restore/hide-only.
+  Keep Current preserves the current exact bytes.
+- `ContentPreviewTests` prove exact UTF-8 and native/external UTF-16 behavior,
+  exact PNG eager BGRA8/sRGB artifacts, malformed/unsupported classification, and
   content-free active-job/source-byte accounting. The history-pane profile
   admits at most 64 MiB across the complete immutable representation snapshot,
   before source selection or native decode: the exact aggregate boundary may
@@ -55,6 +72,11 @@
   per surface), not caller configuration. Only owner tests may inject smaller
   ceilings or read cache/in-flight counters. This does not admit the deferred shared
   completed-thumbnail cache or establish an RSS/eviction performance budget.
+- The same bounded surface store retains `.thumbnailUnavailable` as an exact-
+  reference unavailable result, reused on repeated scrolls within this surface.
+  A new Content Version has its own answer; existing reset, clear, removal,
+  revision purge, and capacity eviction release the miss. Other typed failures
+  and cancellation remain eligible for a later request.
 - Relative copy time uses the system abbreviated formatter under the owning
   `01` §6 rule. One list-owned wall-clock minute cadence supplies the same
   explicit `now` to every row; a label may therefore lag its item-relative

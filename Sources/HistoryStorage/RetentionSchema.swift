@@ -1,38 +1,12 @@
-/// V2-02 retention-expansion schema additions (`HistorySchemaV2`,
-/// `V2-roadmap` §5 M1.2). Under DC-03 incremental shipping the first shipped
-/// V2 schema carries **only** the retention rows: the frozen v1 models plus
-/// `RetentionExpansionConfigRow` and `RetainedBytesRow` (`V2-02` §3.3).
-/// Access rule unchanged (`01` §2): all model types stay internal to
-/// HistoryStorage and never occur in a public or package signature.
+/// Durable retention policy and retained-content byte accounting.
+/// Models remain internal to HistoryStorage (01 §2; V2-02 §3.3).
 import Foundation
 import SwiftData
 
-/// The first shipped V2 schema (`HistorySchemaV2`, `V2-02` §3.3): the frozen
-/// v1 model set (`05` §3) plus the two additive retention rows below.
-/// Immutable once shipped (`V2-roadmap` §5 M1.2): later admitted grafts
-/// receive `HistorySchemaV3+`, never an edit of this type. The
-/// `V1 → V2` hop is one `MigrationStage.custom` stage (DC-02; `V2-02` §3.3
-/// "Stage topology"): the schema ADD is expressed by the versioned schemas
-/// themselves and the `RetainedBytesRow` backfill runs in the stage's
-/// `didMigrate`.
-internal enum HistorySchemaV2: VersionedSchema {
-    static let versionIdentifier = Schema.Version(2, 0, 0)
-
-    static var models: [any PersistentModel.Type] {
-        [
-            HistoryItemRow.self,
-            LastChangePositionRow.self,
-            RetentionExpansionConfigRow.self,
-            RetainedBytesRow.self
-        ]
-    }
-}
-
-/// Persisted V2 retention policies singleton (`V2-02` §3.3). One row, keyed
-/// `key == "retention-expansion"`, mirroring the v1 `LastChangePositionRow`
-/// singleton pattern (`05` §3.2). Created at `open` with every policy
-/// disabled — never by the migration — so a migrated v1 store starts
-/// v1-faithful (`V2-roadmap` §5 total open order step 5; M1.3).
+/// Persisted retention policies singleton (`V2-02` §3.3). One row, keyed
+/// `key == "retention-expansion"`, following the `LastChangePositionRow`
+/// singleton pattern (`05` §3.2). Created at `open` with every optional
+/// policy disabled (`V2-roadmap` §5 total open order step 5; M1.3).
 ///
 /// `configSchemaVersion` follows the codec discipline of a blob
 /// `formatVersion` (`05` §4): `open` validates `configSchemaVersion == 1`;
@@ -99,7 +73,7 @@ internal final class RetentionExpansionConfigRow {
 /// `bytesSchemaVersion` is the projection-coherence fence: a row with an
 /// unknown version, or scalars inconsistent with the item's actual blob,
 /// fails closed (`05` §4/§16) — never silently used as a stale byte fact.
-/// A missing row for an existing item post-backfill is
+/// A missing row for an existing item is
 /// `.persistence(.invariantViolation)` (`V2-02` Record 5).
 @Model
 internal final class RetainedBytesRow {

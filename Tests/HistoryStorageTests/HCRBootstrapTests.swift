@@ -40,6 +40,61 @@ struct HCRBootstrapTests {
         ) == 0)
     }
 
+    private enum SurvivingHistoryFact: Equatable {
+        case item, retainedBytes, record
+    }
+
+    @Test("position zero cannot recreate a journal singleton over surviving history facts",
+          arguments: [SurvivingHistoryFact.item, .retainedBytes, .record])
+    private func zeroPositionWithHistoryFactsFailsClosed(_ fact: SurvivingHistoryFact) async throws {
+        let bundle = try await IngestPreparationActor().prepare(WSSupport.textCapture(
+            "journal current item", observedAt: Self.now, source: nil
+        ))
+        let container = try Self.makeContainer()
+        let context = ModelContext(container)
+        context.insert(LastChangePositionRow(
+            key: HistoryAuthority.positionSingletonKey, rawValue: 0,
+            maximumUnpinnedItems: 200
+        ))
+        switch fact {
+        case .item:
+            context.insert(try HistoryItemRow(
+                id: bundle.domain.candidateID.rawValue, contentVersionRaw: 1,
+                canonicalBlob: CanonicalBlobCodec.encode(bundle.domain.canonical),
+                revisionStateBlob: RevisionStateBlobCodec.encode(revisions: [], activeRevisionID: nil),
+                canonicalSignatureBlob: SignatureBlobCodec.encode(bundle.signatureEntries),
+                title: bundle.projection.title, searchBody: bundle.projection.searchBody,
+                effectiveTypeIdentifiersBlob: EffectiveTypeIdentifiersBlobCodec.encode(
+                    bundle.projection.effectiveTypeIdentifiers
+                ),
+                firstCopiedAt: Self.now, lastCopiedAt: Self.now, copyCount: 1,
+                firstSource: nil, lastSource: nil, pinOrdinal: nil
+            ))
+        case .retainedBytes:
+            context.insert(RetainedBytesRow(
+                itemID: bundle.domain.candidateID.rawValue, canonicalBytes: 20,
+                revisionCount: 0, revisionBytes: 0, bytesSchemaVersion: 1
+            ))
+        case .record:
+            context.insert(HistoryChangeRecordRow(
+                sequence: 1, changePositionRaw: 1, changeKindRaw: HistoryChangeKindRawV1.insert.rawValue,
+                affectedItemsBlob: try AffectedItemsBlobCodec.encode(
+                    [bundle.domain.candidateID], for: .insert
+                ),
+                createdAt: Self.now
+            ))
+        }
+        try context.save()
+        #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
+            try HCRBootstrap.ensureReady(in: context, now: Self.now)
+        }
+        let verification = ModelContext(container)
+        #expect(try verification.fetchCount(FetchDescriptor<JournalConfigRow>()) == 0)
+        #expect(try verification.fetchCount(FetchDescriptor<HistoryItemRow>()) == (fact == .item ? 1 : 0))
+        #expect(try verification.fetchCount(FetchDescriptor<RetainedBytesRow>()) == (fact == .retainedBytes ? 1 : 0))
+        #expect(try verification.fetchCount(FetchDescriptor<HistoryChangeRecordRow>()) == (fact == .record ? 1 : 0))
+    }
+
     @Test("Gateway validation failure occurs before absent HCR bootstrap")
     func gatewayValidationPrecedesHCRBootstrap() async throws {
         let container = try Self.makeContainer()
@@ -72,8 +127,8 @@ struct HCRBootstrapTests {
         #expect(try oracle.fetchCount(FetchDescriptor<JournalConfigRow>()) == 0)
     }
 
-    @Test("HCR validation failure occurs before legacy projection rebuild")
-    func hcrValidationPrecedesProjectionRebuild() async throws {
+    @Test("HCR validation failure occurs before retained-byte correspondence validation")
+    func hcrValidationPrecedesRetainedBytesValidation() async throws {
         let container = try Self.makeContainer()
         let firstAuthority = HistoryAuthority(
             container: container,
@@ -94,8 +149,12 @@ struct HCRBootstrapTests {
         let item = try #require(
             context.fetch(FetchDescriptor<HistoryItemRow>()).first
         )
+        let originalContent = item.canonicalBlob
         journal.configSchemaVersion = 2
-        item.projectionSchemaVersion = 1
+        // Missing accounting would independently fail with invariantViolation.
+        // The earlier malformed HCR config must instead report corruptStoredValue.
+        let bytes = try #require(context.fetch(FetchDescriptor<RetainedBytesRow>()).first)
+        context.delete(bytes)
         try context.save()
 
         await #expect(
@@ -109,27 +168,28 @@ struct HCRBootstrapTests {
         let storedItem = try #require(
             oracle.fetch(FetchDescriptor<HistoryItemRow>()).first
         )
-        #expect(storedItem.projectionSchemaVersion == 1)
+        #expect(storedItem.canonicalBlob == originalContent)
+        #expect(try oracle.fetchCount(FetchDescriptor<RetainedBytesRow>()) == 0)
     }
 
-    @Test("migrated position bootstraps as coverage floor without backfill")
-    func migratedStoreStartsAtCurrentPosition() throws {
+    @Test("missing journal config at a committed position fails even when all records and items are gone",
+          arguments: [UInt64(1), 19])
+    func committedPositionCannotRecreateMissingJournalConfig(_ position: UInt64) throws {
         let container = try Self.makeContainer()
         let context = ModelContext(container)
         context.insert(LastChangePositionRow(
             key: "retained-history",
-            rawValue: 19,
+            rawValue: position,
             maximumUnpinnedItems: 200
         ))
         try context.save()
 
-        try HCRBootstrap.ensureReady(in: context, now: Self.now)
-
-        let config = try #require(
-            context.fetch(FetchDescriptor<JournalConfigRow>()).first
-        )
-        #expect(config.compactionFloorRaw == 19)
-        #expect(config.journalBytes == 0)
+        #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
+            try HCRBootstrap.ensureReady(in: context, now: Self.now)
+        }
+        let verification = ModelContext(container)
+        #expect(try verification.fetchCount(FetchDescriptor<JournalConfigRow>()) == 0)
+        #expect(try verification.fetch(FetchDescriptor<LastChangePositionRow>()).first?.rawValue == position)
         #expect(try context.fetchCount(
             FetchDescriptor<HistoryChangeRecordRow>()
         ) == 0)
@@ -389,7 +449,7 @@ struct HCRBootstrapTests {
     }
 
     private static func makeContainer() throws -> ModelContainer {
-        let schema = Schema(versionedSchema: HistorySchemaV4.self)
+        let schema = historySchema
         return try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(

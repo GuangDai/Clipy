@@ -6,7 +6,7 @@
 /// these tests prove its RECORDING semantics through the same scripted
 /// doubles as ThumbnailStoreTests: one started/completed pair per flight,
 /// duplicate requests recorded as rejections without new flights, the
-/// Card 9B discarded boundary, whole-store eviction as the repeat-decode
+/// Card 9B discarded boundary, cold-entry eviction as the repeat-decode
 /// input, and the envelope gate.
 ///
 /// Every duration assertion is presence/non-negativity only — this suite
@@ -252,19 +252,25 @@ struct ThumbnailMeasurementTests {
         let records = try readRecords(at: fileURL)
         #expect(records.map(\.event) == [.started, .completed])
         #expect(records[1].outcome == .discarded)
-        // The late raster was still produced and sampled; only publication
-        // was fenced.
-        #expect(records[1].rasterWidth == 1)
+        // History completed, but reset retired the request before display
+        // decoding. Record the fetch without inventing a raster sample.
+        let fetchMs = try #require(records[1].fetchMs)
+        #expect(fetchMs >= 0)
+        #expect(records[1].rasterMs == nil)
+        #expect(records[1].rasterWidth == nil)
+        #expect(records[1].rasterHeight == nil)
+        #expect(store.debugFetchCompletionCount == 1)
+        #expect(store.debugDiscardedFetchCompletionCount == 1)
+        #expect(store.inFlightCount == 0)
         #expect(store.imagePixelSize(for: item) == nil)
         #expect(store.cachedEntryCount == 0)
+        #expect(store.cachedDecodedBytes == 0)
     }
 
-    /// The double-bound whole-store reset (ThumbnailStore's insert-then-evict
-    /// discipline) is the repeat-decode input at capacity: after the second
-    /// completion clears the store, the FIRST reference's next prefetch is a
-    /// fresh `.started` — the measurement-side mirror of the bound-crossing
-    /// reset behavior.
-    @Test func evictionRepeatAfterBoundReset() async throws {
+    /// After a second entry evicts the first at capacity, only the evicted
+    /// reference's next prefetch starts another decode. The newer retained
+    /// reference still records a rejected-retained request, not a new flight.
+    @Test func evictionRepeatsOnlyTheColdReference() async throws {
         let (directory, fileURL) = try makeMeasurementFile()
         defer { try? FileManager.default.removeItem(at: directory) }
         let first = reference(
@@ -285,14 +291,18 @@ struct ThumbnailMeasurementTests {
         )
 
         store.prefetch(first)
+        try #require(await pollUntil { store.imagePixelSize(for: first) != nil })
         store.prefetch(second)
         #expect(await pollUntil {
             guard store.inFlightCount == 0 else { return false }
             guard await history.requestCount(for: first) == 1 else { return false }
             return await history.requestCount(for: second) == 1
         })
-        // The second completion crossed the 1-entry bound: whole-store reset.
-        #expect(store.cachedEntryCount == 0)
+        #expect(store.cachedEntryCount == 1)
+        #expect(store.imagePixelSize(for: first) == nil)
+        #expect(store.imagePixelSize(for: second) != nil)
+        store.prefetch(second)
+        #expect(await history.requestCount(for: second) == 1)
 
         store.prefetch(first)
         #expect(await pollUntil { store.imagePixelSize(for: first) != nil })
@@ -307,6 +317,12 @@ struct ThumbnailMeasurementTests {
         #expect(completions.count == 2)
         #expect(completions.allSatisfy { $0.outcome == .hit })
         #expect(await history.requestCount(for: first) == 2)
+        #expect(records.filter {
+            $0.refID == second.id.rawValue.uuidString && $0.event == .started
+        }.count == 1)
+        #expect(records.filter {
+            $0.refID == second.id.rawValue.uuidString && $0.event == .rejectedRetained
+        }.count == 1)
     }
 
     // MARK: - Envelope gate

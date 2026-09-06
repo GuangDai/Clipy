@@ -9,7 +9,7 @@ internal enum HCRBootstrap {
     internal static let configKey = "change-journal"
     internal static let configSchemaVersion: UInt16 = 1
 
-    /// One-row probes used by earlier startup singleton classifiers. Any V4
+    /// One-row probes used by earlier startup singleton classifiers. Any
     /// HCR fact proves that those earlier owners have already bootstrapped;
     /// their missing rows must therefore fail closed instead of being repaired.
     internal static func tablesAreEmpty(in context: ModelContext) throws -> Bool {
@@ -40,14 +40,17 @@ internal enum HCRBootstrap {
         let configs = try loadConfigs(in: context)
         switch configs.count {
         case 0:
-            guard try historyChangeRowsAreEmpty(in: context) else {
+            // Only a never-used, empty History may create the singleton.
+            // Clearing retained items does not erase committed history or
+            // permit reconstruction of a missing journal coverage floor.
+            guard position == 0, try historyRowsAreEmpty(in: context) else {
                 throw HistoryFailure.persistence(.invariantViolation)
             }
             do {
                 try context.transaction {
                     context.insert(JournalConfigRow(
                         key: configKey,
-                        compactionFloorRaw: position,
+                        compactionFloorRaw: 0,
                         journalBytes: 0,
                         configSchemaVersion: configSchemaVersion
                     ))
@@ -269,13 +272,21 @@ internal enum HCRBootstrap {
         }
     }
 
-    private static func historyChangeRowsAreEmpty(
+    private static func historyRowsAreEmpty(
         in context: ModelContext
     ) throws -> Bool {
-        var descriptor = FetchDescriptor<HistoryChangeRecordRow>()
-        descriptor.fetchLimit = 1
+        var records = FetchDescriptor<HistoryChangeRecordRow>()
+        records.fetchLimit = 1
+        var items = FetchDescriptor<HistoryItemRow>()
+        items.propertiesToFetch = [\.id]
+        items.fetchLimit = 1
+        var byteRows = FetchDescriptor<RetainedBytesRow>()
+        byteRows.propertiesToFetch = [\.itemID]
+        byteRows.fetchLimit = 1
         do {
-            return try context.fetch(descriptor).isEmpty
+            return try context.fetch(records).isEmpty
+                && context.fetch(items).isEmpty
+                && context.fetch(byteRows).isEmpty
         } catch {
             throw HistoryFailure.persistence(.openStore)
         }

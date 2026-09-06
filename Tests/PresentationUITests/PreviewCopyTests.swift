@@ -1,0 +1,99 @@
+import Foundation
+import Testing
+@testable import PresentationUI
+
+struct PreviewCopyTests {
+    private func bundle(_ language: String) throws -> Bundle {
+        let localization = try #require(PreviewCopy.bundle.localizations.first {
+            $0.caseInsensitiveCompare(language) == .orderedSame
+        })
+        let root = try #require(PreviewCopy.bundle.resourceURL)
+        return try #require(Bundle(url: root.appendingPathComponent(
+            "\(localization).lproj", isDirectory: true
+        )))
+    }
+
+    @Test func statesAndQuickLookActionsHaveBothNativeLocalizations() throws {
+        let english = try bundle("en")
+        let chinese = try bundle("zh-Hans")
+        for (key, translation) in [
+            ("Loading preview", "正在加载预览"),
+            ("No Preview", "无可用预览"),
+            ("Preview Unavailable", "预览暂不可用"),
+            ("Retry", "重试"),
+            ("Close", "关闭"),
+            ("Quick Look preview", "快速查看预览"),
+        ] {
+            #expect(PreviewCopy.text(key, bundle: english) == key)
+            #expect(PreviewCopy.text(key, bundle: chinese) == translation)
+        }
+    }
+
+    @Test func copyCountsKeepTheirFullUnsignedValueAndLocalizedGrouping() throws {
+        let english = try bundle("en")
+        let chinese = try bundle("zh-Hans")
+        #expect(PreviewCopy.copyCount(1, bundle: english, locale: Locale(identifier: "en_US")) == "Copied 1×")
+        #expect(PreviewCopy.copyCount(1_234, bundle: chinese, locale: Locale(identifier: "zh_Hans_CN")) == "已复制 1,234 次")
+        #expect(PreviewCopy.copyCount(1_234, bundle: english, locale: Locale(identifier: "de_DE")) == "Copied 1.234×")
+        #expect(PreviewCopy.copyCount(UInt64.max, bundle: english, locale: Locale(identifier: "en_US")) == "Copied 18,446,744,073,709,551,615×")
+    }
+
+    @Test func referencePreviewsDistinguishCopiedAddressesFromDestinationContent() throws {
+        let english = try bundle("en")
+        let chinese = try bundle("zh-Hans")
+        for (label, translated) in [
+            ("URL Reference", "网址引用"),
+            ("File Reference", "文件引用"),
+            ("Address", "地址"),
+            ("File Path", "文件路径"),
+        ] {
+            #expect(PreviewCopy.text(label, bundle: english) == label)
+            #expect(PreviewCopy.text(label, bundle: chinese) == translated)
+        }
+        #expect(PreviewCopy.referenceDisclosure(bundle: english) ==
+            "Only the reference is shown. Its destination has not been opened.")
+        #expect(PreviewCopy.referenceDisclosure(bundle: chinese) ==
+            "仅显示引用信息，未打开其指向的目标。")
+    }
+
+    @Test func truncatedPreviewExplainsThatCopyRetainsTheCompleteContent() throws {
+        let key = "Preview truncated. Copying the item keeps its complete content."
+        #expect(PreviewCopy.text(key, bundle: try bundle("en")) ==
+            "Preview truncated. Copying the item keeps its complete content.")
+        #expect(PreviewCopy.text(key, bundle: try bundle("zh-Hans")) ==
+            "预览已截断，复制历史条目仍保留完整内容。")
+    }
+
+    @Test func imageAccessibilityMetadataKeepsWidthAndHeightInTheirTranslatedPositions() throws {
+        #expect(PreviewCopy.imageDimensions(
+            width: 1, height: 1, bundle: try bundle("en"), locale: Locale(identifier: "en_US")
+        ) == "Image preview, 1 by 1 pixels")
+        #expect(PreviewCopy.imageDimensions(
+            width: 1_920, height: 1_080, bundle: try bundle("zh-Hans"), locale: Locale(identifier: "zh_Hans_CN")
+        ) == "图像预览，宽 1,920 像素，高 1,080 像素")
+    }
+
+    @Test func partialRasterPreviewsDescribeOriginalContentWithoutClaimingPlayback() throws {
+        let english = try bundle("en")
+        let chinese = try bundle("zh-Hans")
+        #expect(PreviewCopy.multiImageDisclosure(bundle: english) ==
+            "Showing one image from a multi-image item. Copying the item keeps its complete content.")
+        #expect(PreviewCopy.multiImageDisclosure(bundle: chinese) ==
+            "仅显示多图条目中的一张图像，复制历史条目仍保留完整内容。")
+        #expect(PreviewCopy.pdfPageDisclosure(
+            pageCount: 2, bundle: english, locale: Locale(identifier: "en_US")
+        ) == "Showing PDF page 1 of 2. Copying the item keeps its complete content.")
+        #expect(PreviewCopy.pdfPageDisclosure(
+            pageCount: 2, bundle: chinese, locale: Locale(identifier: "zh_Hans_CN")
+        ) == "正在显示 PDF 的第 1 页，共 2 页。复制历史条目仍保留完整内容。")
+        #expect(PreviewCopy.pdfPageAccessibilityLabel(
+            pageCount: 1_234, bundle: english, locale: Locale(identifier: "de_DE")
+        ) == "PDF preview, page 1 of 1.234")
+        #expect(PreviewCopy.pdfPageDisclosure(
+            pageCount: 1_234, bundle: english, locale: Locale(identifier: "de_DE")
+        ) == "Showing PDF page 1 of 1.234. Copying the item keeps its complete content.")
+        #expect(PreviewCopy.pdfPageAccessibilityLabel(
+            pageCount: 2, bundle: chinese, locale: Locale(identifier: "zh_Hans_CN")
+        ) == "PDF 预览，第 1 页，共 2 页")
+    }
+}

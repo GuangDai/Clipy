@@ -14,7 +14,7 @@ extension HistoryAuthority {
     // `await` is the WS12 test seam at entry, before the context exists (§5).
 
     /// One owner for the projection scalars fetched by recent/search reads
-    /// and the unpinned exactness fallback. Search adds only `searchBody`;
+    /// and the unpinned exactness fallback. Search adds only `searchBodyUTF8`;
     /// keeping the common list here prevents one read path silently omitting
     /// a field that `ScalarReadRow`/`SearchCorpusRow` consumes (§14.1–§14.2).
     internal static func scalarProjectionProperties(
@@ -23,8 +23,7 @@ extension HistoryAuthority {
         var properties: [PartialKeyPath<HistoryItemRow>] = [
             \.id,
             \.contentVersionRaw,
-            \.projectionSchemaVersion,
-            \.title,
+            \.titleUTF8,
             \.effectiveTypeIdentifiersBlob,
             \.lastCopiedAt,
             \.copyCount,
@@ -32,7 +31,7 @@ extension HistoryAuthority {
             \.pinOrdinal,
         ]
         if includingSearchBody {
-            properties.append(\.searchBody)
+            properties.append(\.searchBodyUTF8)
         }
         return properties
     }
@@ -363,7 +362,7 @@ extension HistoryAuthority {
         // drops were applied per lane above (04 §6).
         let merged = pinnedOrdered + unpinnedOrdered
 
-        let pageSlice = Array(merged.prefix(limit))
+        let pageSlice = merged.prefix(limit)
         let rows: [HistoryRow] = try pageSlice.map { scalarRow in
             try scalarRow.toHistoryRow(limits: limits)
         }

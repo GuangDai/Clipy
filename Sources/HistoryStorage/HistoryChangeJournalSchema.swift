@@ -1,25 +1,7 @@
-/// Internal HCR-only V4 schema prerequisite (`V2-roadmap` J.2/J.3 and the
-/// 2026-08-23 DC-25 controlling amendment). The shipped `HistorySchemaV3`
-/// remains immutable; this additive graft introduces exactly the durable
-/// commit record and its minimal accounting singleton. It deliberately does
-/// not admit reconnect cursors, collection-cache state, materializer state,
-/// store identity, user-configurable limits, or a public journal surface.
+/// Durable History change records and journal accounting.
+/// Models remain internal to HistoryStorage (V2-roadmap J.2/J.3).
 import Foundation
 import SwiftData
-
-/// The fourth shipped schema: immutable V3 plus the two HCR-only rows. The
-/// V3 → V4 hop adds tables only, so it requires no historical HCR backfill
-/// and rewrites no existing row or column.
-internal enum HistorySchemaV4: VersionedSchema {
-    static let versionIdentifier = Schema.Version(4, 0, 0)
-
-    static var models: [any PersistentModel.Type] {
-        HistorySchemaV3.models + [
-            HistoryChangeRecordRow.self,
-            JournalConfigRow.self,
-        ]
-    }
-}
 
 /// One durable record per non-empty History Commit. `sequence` and
 /// `changePositionRaw` are equal by construction; keeping both makes the
@@ -59,7 +41,7 @@ internal final class HistoryChangeRecordRow {
 /// `compactionFloorRaw == currentPosition` and `journalBytes == 0`.
 /// `journalBytes` is the checked exact sum of each retained record's
 /// `affectedItemsBlob.count`. The later Authority bootstrap owns initial
-/// values and validation; migration itself inserts no row.
+/// values and validation.
 @Model
 internal final class JournalConfigRow {
     @Attribute(.unique)

@@ -2,7 +2,7 @@
 /// artifacts. Its small interface accepts immutable representation bytes plus
 /// a closed product purpose and returns only bounded `Sendable` values.
 ///
-/// Ownership: source priority, exact text codecs, ImageIO decode, eager pixel
+/// Ownership: source priority, exact text codecs, ImageIO/PDF decode, eager pixel
 /// materialization, resource profiles, and typed renderer outcomes. It never
 /// reads History, observes selection, owns panel lifecycle, performs external
 /// I/O, or exposes a framework object. `PreviewContentLoader` remains the sole
@@ -42,18 +42,34 @@ package struct PreviewRaster: Equatable, Sendable {
     package let width: Int
     package let height: Int
     package let rowBytes: Int
+    package let sourceImageCount: Int
 
-    internal init(pixels: Data, width: Int, height: Int, rowBytes: Int) {
+    internal init(pixels: Data, width: Int, height: Int, rowBytes: Int, sourceImageCount: Int = 1) {
         self.pixels = pixels
         self.width = width
         self.height = height
         self.rowBytes = rowBytes
+        self.sourceImageCount = sourceImageCount
+    }
+}
+
+/// A static first-page PDF preview, not an interactive document or a promise
+/// that copying the item is limited to the displayed page.
+package struct PreviewPDF: Equatable, Sendable {
+    package let raster: PreviewRaster
+    package let pageCount: Int
+
+    internal init(raster: PreviewRaster, pageCount: Int) {
+        self.raster = raster
+        self.pageCount = pageCount
     }
 }
 
 package enum PreviewArtifact: Equatable, Sendable {
     case text(PreviewText)
     case raster(PreviewRaster)
+    case reference(PreviewReference)
+    case pdf(PreviewPDF)
 }
 
 package enum PreviewUnavailability: Equatable, Sendable {
@@ -84,6 +100,7 @@ package enum ContentPreviewDebugInstrumentation {
 package struct ContentPreviewDebugSnapshot: Equatable, Sendable {
     package let activeJobs: Int
     package let retainedSourceBytes: Int
+    package let queuedRasterJobs: Int
 }
 #endif
 
@@ -95,7 +112,11 @@ package actor ContentPreview {
     /// work to overtake a slow native rasterization. Waiters carry no content;
     /// their caller tasks retain their own immutable snapshots.
     private var rasterizationActive = false
-    private var rasterizationWaiters: [CheckedContinuation<Void, Never>] = []
+    private struct RasterizationWaiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Bool, Never>
+    }
+    private var rasterizationWaiters: [RasterizationWaiter] = []
 
     #if DEBUG
     private var debugActiveJobs = 0
@@ -105,7 +126,7 @@ package actor ContentPreview {
     package init() {}
 
     /// Common-caller preset: history-owned Effective Content bytes, the
-    /// current image-first/exact-text route, and the fixed history-pane
+    /// image/exact-text/PDF/reference selection and fixed history-pane
     /// resource profile. No History identity or lifecycle enters this actor.
     package func renderHistoryPane(
         _ representations: [PreviewRepresentation]
@@ -166,7 +187,8 @@ package actor ContentPreview {
     package func debugSnapshot() -> ContentPreviewDebugSnapshot {
         ContentPreviewDebugSnapshot(
             activeJobs: debugActiveJobs,
-            retainedSourceBytes: debugRetainedSourceBytes
+            retainedSourceBytes: debugRetainedSourceBytes,
+            queuedRasterJobs: rasterizationWaiters.count
         )
     }
     #endif
@@ -190,14 +212,39 @@ package actor ContentPreview {
                   let decoded = codec.decode(representation.bytes),
                   !decoded.isEmpty
             else { continue }
-            let wasTruncated = decoded.count > PreviewText.maximumCharacters
+            // Find the display cutoff once. Counting every Character first
+            // needlessly walks the undisplayed suffix of a large text value.
+            let end = decoded.index(
+                decoded.startIndex,
+                offsetBy: PreviewText.maximumCharacters,
+                limitedBy: decoded.endIndex
+            ) ?? decoded.endIndex
+            let wasTruncated = end != decoded.endIndex
+            // Keep selectable text an exact source prefix. Presentation owns
+            // a separate truncation notice; it must not become copied text.
             let body = wasTruncated
-                ? String(decoded.prefix(PreviewText.maximumCharacters)) + "\n\n…"
+                ? String(decoded[..<end])
                 : decoded
             return .content(.text(PreviewText(
                 text: body,
                 wasTruncated: wasTruncated
             )))
+        }
+        // A PDF supplies an inert first-page raster when no preferred image
+        // or valid plain text applies. Keep the first exact PDF authoritative
+        // for this purpose; a malformed one does not skip to a later sibling.
+        if let pdf = representations.first(where: {
+            $0.typeIdentifier == ClipboardFormatIdentifier.pdf.rawValue
+        }) {
+            return await renderRasterOffActor(pdf, profile: .historyPane)
+        }
+        // A reference is useful when no existing image/text/PDF preview applies.
+        // Parsing the first exact URL candidate never opens its destination;
+        // its bounded address/path artifact carries no loading capability.
+        for representation in representations {
+            if let reference = PreviewReference.resolve(representation) {
+                return reference
+            }
         }
         return sawTextCandidate
             ? .failed(.malformedRepresentation)
@@ -211,7 +258,7 @@ package actor ContentPreview {
         _ representation: PreviewRepresentation,
         profile: ResourceProfile
     ) async -> PreviewOutcome {
-        await acquireRasterizationSlot()
+        guard await acquireRasterizationSlot() else { return .failed(.cancelled) }
         defer { releaseRasterizationSlot() }
         guard !Task.isCancelled else { return .failed(.cancelled) }
 
@@ -226,7 +273,17 @@ package actor ContentPreview {
             }
             #endif
             guard !Task.isCancelled else { return PreviewOutcome.failed(.cancelled) }
-            let outcome = Self.renderRaster(representation, profile: profile)
+            let outcome: PreviewOutcome
+            if representation.typeIdentifier == ClipboardFormatIdentifier.pdf.rawValue {
+                outcome = PreviewPDFRenderer.render(
+                    representation.bytes,
+                    maximumInputBytes: profile.maximumInputBytes,
+                    maximumPixelExtent: profile.maximumPixelExtent,
+                    maximumOutputBytes: profile.maximumOutputBytes
+                )
+            } else {
+                outcome = Self.renderRaster(representation, profile: profile)
+            }
             return Task.isCancelled ? .failed(.cancelled) : outcome
         }
         return await withTaskCancellationHandler(
@@ -235,14 +292,37 @@ package actor ContentPreview {
         )
     }
 
-    private func acquireRasterizationSlot() async {
+    private func acquireRasterizationSlot() async -> Bool {
+        guard !Task.isCancelled else { return false }
         guard rasterizationActive else {
             rasterizationActive = true
+            return true
+        }
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                // Cancellation may precede registration. The actor cannot
+                // interleave waiter removal between this check and append.
+                guard !Task.isCancelled else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                rasterizationWaiters.append(RasterizationWaiter(
+                    id: id, continuation: continuation
+                ))
+            }
+        } onCancel: {
+            Task { await self.cancelRasterizationWaiter(id) }
+        }
+    }
+
+    private func cancelRasterizationWaiter(_ id: UUID) {
+        guard let index = rasterizationWaiters.firstIndex(where: { $0.id == id }) else {
+            // A waiter already handed the slot owns it and releases it via
+            // renderRasterOffActor's defer, even if it was just cancelled.
             return
         }
-        await withCheckedContinuation { continuation in
-            rasterizationWaiters.append(continuation)
-        }
+        rasterizationWaiters.remove(at: index).continuation.resume(returning: false)
     }
 
     private func releaseRasterizationSlot() {
@@ -250,7 +330,7 @@ package actor ContentPreview {
             rasterizationActive = false
             return
         }
-        rasterizationWaiters.removeFirst().resume()
+        rasterizationWaiters.removeFirst().continuation.resume(returning: true)
     }
 
     private static func renderRaster(
@@ -266,6 +346,8 @@ package actor ContentPreview {
         ) else {
             return .failed(.malformedRepresentation)
         }
+        let sourceImageCount = CGImageSourceGetCount(source)
+        guard sourceImageCount > 0 else { return .failed(.malformedRepresentation) }
         let options: [CFString: Any] = [
             kCGImageSourceThumbnailMaxPixelSize: profile.maximumPixelExtent,
             kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -320,7 +402,8 @@ package actor ContentPreview {
             pixels: pixels,
             width: image.width,
             height: image.height,
-            rowBytes: rowBytes
+            rowBytes: rowBytes,
+            sourceImageCount: sourceImageCount
         )))
     }
 
@@ -406,12 +489,20 @@ private enum PreviewTextCodec: Sendable {
         switch self {
         case .declared(.utf8):
             return String(data: bytes, encoding: .utf8)
-        case .declared(.nativeUTF16):
+        case .declared(.nativeUTF16), .declared(.externalUTF16):
+            // Foundation can decode a valid prefix while ignoring an odd
+            // trailing byte. A UTF-16 preview requires complete code units.
+            guard bytes.count.isMultiple(of: 2) else { return nil }
             if bytes.starts(with: [0xFE, 0xFF]) {
                 return String(data: bytes.dropFirst(2), encoding: .utf16BigEndian)
             }
             if bytes.starts(with: [0xFF, 0xFE]) {
                 return String(data: bytes.dropFirst(2), encoding: .utf16LittleEndian)
+            }
+            // Native text follows this app's arm64 little-endian platform;
+            // external UTF-16 defaults to big endian when no BOM is present.
+            if case .declared(.externalUTF16) = self {
+                return String(data: bytes, encoding: .utf16BigEndian)
             }
             return String(data: bytes, encoding: .utf16LittleEndian)
         }
@@ -420,5 +511,6 @@ private enum PreviewTextCodec: Sendable {
     private static let admittedIdentifiers: Set<ClipboardFormatIdentifier> = [
         .utf8PlainText,
         .utf16PlainText,
+        .utf16ExternalPlainText,
     ]
 }

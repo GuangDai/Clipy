@@ -1,0 +1,10 @@
+// Retained logical content usage (V2-07 §6/§10).
+"Retained History" = "Retained History";
+"Items" = "Items";
+"Pinned Items" = "Pinned Items";
+"Content Size" = "Content Size";
+"Content size includes originals and retained revisions. Actual disk usage may differ." = "Content size includes originals and retained revisions. Actual disk usage may differ.";
+"Loading usage…" = "Loading usage…";
+"Usage unavailable." = "Usage unavailable.";
+"Refresh" = "Refresh";
+"Retry" = "Retry";

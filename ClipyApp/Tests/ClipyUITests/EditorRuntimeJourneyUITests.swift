@@ -11,6 +11,7 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
     private let textType = "public.utf8-plain-text"
     private let competingRevision = "clipy-editor-competing-revision"
     private var temporaryDirectory: URL?
+    private var capturedItemID: UUID?
 
     override func setUpWithError() throws {
         try super.setUpWithError()
@@ -22,7 +23,110 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
             try? FileManager.default.removeItem(at: temporaryDirectory)
         }
         temporaryDirectory = nil
+        capturedItemID = nil
         try super.tearDownWithError()
+    }
+
+    /// Exact external UTF-16 editing through the running app: the original
+    /// representation has a big-endian BOM. macOS also supplies a UTF-8
+    /// sibling; explicitly Hide that captured sibling before editing UTF-16,
+    /// so Save/Copy cannot retain its old "Before" bytes as another flavor.
+    /// The UTF-16 type, byte order, and BOM must survive the actual edit.
+    /// Canonical/revision lineage preservation is covered by storage tests.
+    @MainActor
+    func testExternalUTF16ReplaceSaveAndCopyPreservesItsWireEncoding() throws {
+        let typeIdentifier = "public.utf16-external-plain-text"
+        let type = NSPasteboard.PasteboardType(typeIdentifier)
+        // Literal UTF-16BE+BOM vectors, independent of the product encoder.
+        let originalBytes = Data([
+            0xFE, 0xFF, 0x00, 0x42, 0x00, 0x65, 0x00, 0x66,
+            0x00, 0x6F, 0x00, 0x72, 0x00, 0x65,
+        ]) // "Before"
+        let expectedBytes = Data([
+            0xFE, 0xFF, 0x00, 0x41, 0x00, 0x66, 0x00, 0x74,
+            0x00, 0x65, 0x00, 0x72,
+        ]) // "After"
+        let app = try launchEditor(
+            capturing: "Before",
+            typeIdentifier: typeIdentifier,
+            bytes: originalBytes
+        )
+        defer { app.terminate() }
+        let expectedItemID = try XCTUnwrap(capturedItemID)
+        let pasteboard = NSPasteboard.general
+        let source = try XCTUnwrap(pasteboard.pasteboardItems?.first)
+        XCTAssertEqual(Set(source.types.map(\.rawValue)), Set([typeIdentifier, textType]))
+        XCTAssertEqual(source.data(forType: type), originalBytes)
+        XCTAssertEqual(source.data(forType: .string), Data("Before".utf8))
+
+        // Each captured representation has its own revision decision. Editing
+        // UTF-16 does not implicitly rewrite a different captured flavor.
+        let utf8Decision = app.descendants(matching: .any)[
+            "clipy.editor.decision.\(textType)"
+        ]
+        guard assertEventually(
+            { utf8Decision.exists && utf8Decision.isHittable },
+            in: app,
+            message: "The captured UTF-8 sibling did not expose its editor decision."
+        ) else { return }
+        utf8Decision.click()
+        let hideUTF8 = app.menuItems["Hide"]
+        guard assertEventually(
+            { hideUTF8.exists && hideUTF8.isHittable },
+            in: app,
+            message: "The real decision menu did not offer Hide for the UTF-8 sibling."
+        ) else { return }
+        hideUTF8.click()
+
+        _ = try authorReplacement("After", in: app, typeIdentifier: typeIdentifier)
+        let save = app.buttons["clipy.editor.save"]
+        guard assertEventually(
+            { save.exists && save.isEnabled && save.isHittable },
+            in: app,
+            message: "The valid UTF-16 replacement did not enable Save."
+        ) else { return }
+        save.click()
+
+        let editorDecision = app.descendants(matching: .any)[
+            "clipy.editor.decision.\(typeIdentifier)"
+        ]
+        let detailsTitle = app.descendants(matching: .any)["clipy.details.title"]
+        let copy = editorDetailsDialog(in: app).buttons["Copy to Clipboard"]
+        guard assertEventually(
+            {
+                !editorDecision.exists && detailsTitle.exists
+                    && self.accessibilityText(of: detailsTitle) == "After"
+                    && copy.exists && copy.isHittable
+            },
+            in: app,
+            timeout: 10,
+            message: "Saved UTF-16 content did not return to copyable current Details."
+        ) else { return }
+        copy.click()
+        guard assertEventually(
+            { pasteboard.pasteboardItems?.first?.data(forType: type) == expectedBytes },
+            in: app,
+            timeout: 10,
+            message: "Copy did not write the edited UTF-16BE bytes and BOM."
+        ) else { return }
+
+        let pastedItems = try XCTUnwrap(pasteboard.pasteboardItems)
+        XCTAssertEqual(pastedItems.count, 1)
+        let pasted = try XCTUnwrap(pastedItems.first)
+        let writtenTypes = Set(pasted.types.map(\.rawValue))
+        let requiredTypes = Set([typeIdentifier, "com.clipy.lineageHint"])
+        XCTAssertTrue(requiredTypes.isSubset(of: writtenTypes))
+        XCTAssertTrue(writtenTypes.isSubset(of: requiredTypes.union([textType])))
+        XCTAssertEqual(pasted.data(forType: type), expectedBytes)
+        // General pasteboard may synthesize UTF-8 again from the newly written
+        // UTF-16. Such a sibling must describe After, never the hidden Before.
+        if writtenTypes.contains(textType) {
+            XCTAssertEqual(pasted.data(forType: .string), Data("After".utf8))
+        }
+        XCTAssertEqual(
+            pasted.data(forType: NSPasteboard.PasteboardType("com.clipy.lineageHint")),
+            Data(expectedItemID.uuidString.utf8)
+        )
     }
 
     /// Card 3B: one real competing revision makes Save fail OCC-stale. The
@@ -273,11 +377,16 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
     @MainActor
     private func launchEditor(
         capturing value: String,
+        typeIdentifier: String = "public.utf8-plain-text",
+        bytes: Data? = nil,
         editorJourney: String? = nil
     ) throws -> XCUIApplication {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        XCTAssertTrue(pasteboard.setString(value, forType: .string))
+        XCTAssertTrue(pasteboard.setData(
+            bytes ?? Data(value.utf8),
+            forType: NSPasteboard.PasteboardType(typeIdentifier)
+        ))
 
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -288,6 +397,7 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
         temporaryDirectory = directory
 
         let app = XCUIApplication()
+        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory
             .appendingPathComponent("history.store")
@@ -319,6 +429,9 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
             timeout: 10,
             message: "The real clipboard capture did not produce its history row."
         ) else { return app }
+        capturedItemID = try XCTUnwrap(UUID(uuidString: String(
+            row.identifier.dropFirst("clipy.history.row.".count)
+        )))
         row.rightClick()
 
         let showDetails = app.menuItems["Show Details"]
@@ -340,7 +453,7 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
         edit.click()
 
         let editorDecision = app.descendants(matching: .any)[
-            "clipy.editor.decision.\(textType)"
+            "clipy.editor.decision.\(typeIdentifier)"
         ]
         _ = assertEventually(
             {
@@ -357,15 +470,16 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
     @MainActor
     private func authorReplacement(
         _ draft: String,
-        in app: XCUIApplication
+        in app: XCUIApplication,
+        typeIdentifier: String = "public.utf8-plain-text"
     ) throws -> XCUIElement {
         let decision = app.descendants(matching: .any)[
-            "clipy.editor.decision.\(textType)"
+            "clipy.editor.decision.\(typeIdentifier)"
         ]
         guard assertEventually(
             { decision.exists && decision.isHittable },
             in: app,
-            message: "The UTF-8 editor decision control was not publicly usable."
+            message: "The \(typeIdentifier) editor decision control was not publicly usable."
         ) else { throw JourneyFailure.precondition }
         decision.click()
 
@@ -378,7 +492,7 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
         replace.click()
 
         let replacement = app.descendants(matching: .any)[
-            "clipy.editor.replacement.\(textType)"
+            "clipy.editor.replacement.\(typeIdentifier)"
         ]
         guard assertEventually(
             { replacement.exists && replacement.isHittable },

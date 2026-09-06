@@ -369,16 +369,11 @@ internal actor HistoryAuthority {
     /// X.3 deny-by-default Gateway config/App Intents connection pair
     /// (`V2-roadmap` §5 total open order step 5, M1.3), then bootstrap/
     /// validate and age-compact the internal DC-25 X-HCR suffix before any
-    /// projection/index work, validate the
-    /// retained row count against the hard bound, first rebuild legacy
-    /// projection rows from their validated content lineage, then require
-    /// projection schema version 2 and enforce the
+    /// index work, validate the retained row count against the hard bound,
+    /// and enforce the
     /// `RetainedBytesRow` 1:1 correspondence both directions with
     /// `bytesSchemaVersion == 1` (the V2 half of `V2-roadmap` §5 step 11,
-    /// `RET-PLATFORM-1b(a)`; live from roadmap R.3 — with the amended
-    /// Record 5 missing-rows recovery re-run first, see
-    /// `RetainedBytesStamping.validateOneToOneCorrespondence`), decode and
-    /// decode Canonical/signatures, recompute authoritative signature
+    /// `RET-PLATFORM-1b(a)`), decode Canonical/signatures, recompute authoritative signature
     /// coverage and build the complete Signature Index, and
     /// validate the full pinned ordinal set from scalar fields.
     ///
@@ -396,19 +391,15 @@ internal actor HistoryAuthority {
     ///   read or the singleton cannot be created (§2: store-open failures);
     ///   `.persistence(.corruptStoredValue)` for an out-of-range durable
     ///   position-singleton retention value, or corrupt durable signature,
-    ///   projection-version, Content Version, pin-ordinal, or
+    ///   Content Version, pin-ordinal, or
     ///   retention-config values (unknown `configSchemaVersion` or a
     ///   non-finite `ageMaxSeconds`, `V2-02` §3.3 / DC-21);
     ///   `.persistence(.invariantViolation)` for a duplicate/absent
     ///   singleton, an out-of-range or contradictory retention-config
     ///   combination (`V2-02` §8.3), over-bound or duplicate rows, a
     ///   malformed pinned order, or a violated `RetainedBytesRow` 1:1
-    ///   correspondence / `bytesSchemaVersion` fence after the Record 5
-    ///   missing-rows recovery re-run (`V2-02` §3.3b). Corrupt durable
-    ///   metadata fails open; the explicit legacy derived-projection rebuild
-    ///   is not a general stored-data repair path (§13). A projection-rebuild
-    ///   transaction failure is
-    ///   `.persistence(.transaction)` under the uniform §16 boundary.
+    ///   correspondence / `bytesSchemaVersion` fence (`V2-02` §3.3b).
+    ///   Corrupt durable metadata rejects open without repair (§13).
     @discardableResult
     internal func performStartup(
         initialMaximumUnpinnedItems: Int
@@ -436,11 +427,8 @@ internal actor HistoryAuthority {
                 limits: limits
             )
 
-            // V2-roadmap §5 total open order step 5 (M1.3): bootstrap/validate
-            // the retention-expansion config singleton immediately AFTER the
-            // v1 position singleton and before the retained-row scan —
-            // absent → create all-disabled (a migrated store starts
-            // v1-faithful); present → the fail-closed V2-02 §3.3 validation.
+            // Bootstrap/validate retention configuration after the position
+            // singleton and before the retained-row scan (V2-02 §3.3).
             try Self.ensureRetentionExpansionConfig(in: context)
 
             // V2-roadmap §10 X.3 / V2-05 §4.6: after the pre-existing
@@ -451,22 +439,14 @@ internal actor HistoryAuthority {
             // together with the first writer and complete validation.
             let appIntentsConnectionID = try ensureGatewayBootstrap(in: context)
 
-            // DC-25 X-HCR open-order step 7: V4 migration has completed and
-            // Gateway/Audit state is valid. Bootstrap or fail-closed validate
+            // DC-25 X-HCR open-order step 7: Gateway/Audit state is valid.
+            // Bootstrap or fail-closed validate
             // the internal journal suffix, then run its fixed startup prefix
             // compaction before projection/index construction or publication.
             try HCRBootstrap.ensureReady(
                 in: context,
                 now: storageClock.now(),
                 historyLimits: limits
-            )
-
-            // §13 step 6 / §15: projection recipe v1 → v2 rebuild is an
-            // Authority-owned, bounded, atomic startup operation. It finishes
-            // before the Signature Index is declared ready or capture exists.
-            try ContentProjectionRebuild.rebuildIfNeeded(
-                in: context,
-                limits: limits
             )
 
             // §13 steps 7–10: scalar scan, Signature Index build, pin-order proof.
@@ -481,12 +461,8 @@ internal actor HistoryAuthority {
             // directions with `bytesSchemaVersion == 1`
             // (`RET-PLATFORM-1b(a)`). A fresh store holds vacuously (zero
             // items; rows arrive via the capture-insert stamping, V2-02
-            // §3.3b). Amended Record 5 (interruption recovery): a
-            // missing-rows-only divergence — the producible
-            // interrupted-migration shape — first re-runs the idempotent
-            // backfill once on this Authority-owned startup context (no new
-            // writer); every remaining violation fails closed — never a
-            // zero read (V2-02 §3.2).
+            // §3.3b). Missing, orphaned, or invalid rows fail closed; startup
+            // never reconstructs missing durable accounting (V2-02 §3.2).
             try RetainedBytesStamping.validateOneToOneCorrespondence(
                 in: context,
                 limits: limits
@@ -507,7 +483,7 @@ internal actor HistoryAuthority {
     }
 
     /// §13 steps 3–4: create the singleton at position 0 only for the
-    /// fresh-compatible empty V3 row shape, then require exactly one row
+    /// empty current row shape, then require exactly one row
     /// carrying the well-known key. docs/05-authority-kernel.md §13, §3.2;
     /// deep review DATA-1 / Card 1A-1.
     ///
@@ -538,7 +514,7 @@ internal actor HistoryAuthority {
         }
         switch rows.count {
         case 0:
-            // Absence authorizes a write only when every other V3 durable
+            // Absence authorizes a write only when every other durable
             // table is empty. Any surviving history, retention, projection,
             // or Gateway fact proves damaged state, not a new store.
             guard try isFreshCompatiblePositionBootstrapShape(in: context) else {
@@ -574,10 +550,10 @@ internal actor HistoryAuthority {
 
     /// The only currently distinguishable write authorization for an absent
     /// position singleton.
-    /// Current `HistorySchemaV4` contains the history/retention siblings
+    /// The current schema contains the history/retention siblings
     /// queried here plus the Gateway and HCR tables queried by their bounded
     /// absence classifiers; zero rows in every sibling table is the
-    /// fresh-compatible shape. It is not causal proof: an existing V4 store
+    /// fresh-compatible shape. It is not causal proof: an existing store
     /// stripped of every durable row is identical without provenance. This is
     /// intentionally not a generic repair classifier; any surviving durable
     /// fact makes missing authoritative position state unrecoverable.
@@ -617,8 +593,7 @@ internal actor HistoryAuthority {
     /// survive the `DEC-U-SCALE-STARTUP-INDEX` transition.
     ///
     /// Checks, in fetch order: row count within the hard retained-item bound;
-    /// unique business IDs; a nonzero Content Version (§4); projection schema
-    /// version exactly the current v2 value; Canonical/signature decode plus
+    /// unique business IDs; a nonzero Content Version (§4); Canonical/signature decode plus
     /// authoritative recomputed coverage and complete index build; and the
     /// full pinned ordinal set unique and exactly `0 ..< p` from scalar fields
     /// (D12). Corrupt metadata fails open (§13); a store that cannot be read
@@ -631,7 +606,6 @@ internal actor HistoryAuthority {
         descriptor.propertiesToFetch = [
             \.id,
             \.contentVersionRaw,
-            \.projectionSchemaVersion,
             \.pinOrdinal,
             \.canonicalBlob,
             \.canonicalSignatureBlob,
@@ -659,15 +633,6 @@ internal actor HistoryAuthority {
             // §13 step 7, §4: a valid (≥1) Content Version.
             _ = try mapCodecFailure {
                 try RevisionStateBlobCodec.decodeContentVersion(row.contentVersionRaw)
-            }
-            // §13 step 8: startup rebuild has already upgraded every legacy
-            // row, so only the current projection version is valid here.
-            // Reuse the same fail-closed validator as every read path (§4).
-            let projectionSchemaVersion = row.projectionSchemaVersion
-            try mapCodecFailure {
-                try ContentProjector.validateStoredSchemaVersion(
-                    projectionSchemaVersion
-                )
             }
             let pinOrdinal = try mapCodecFailure {
                 try RevisionStateBlobCodec.decodePinOrdinal(row.pinOrdinal)

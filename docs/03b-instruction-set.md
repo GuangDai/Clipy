@@ -245,6 +245,12 @@ public struct ThumbnailPayload: Sendable, Hashable {
 
 Detail is the only general UI query that returns content lineage bytes. Paste returns current Effective Content only. Thumbnail returns encoded, Sendable bytes rather than `NSImage`/`CGImage`.
 
+Thumbnail returns `nil` when no supported image representation exists. If the
+selected representation cannot be decoded as an image, it throws
+`.thumbnailUnavailable`; this does not imply persisted-value corruption or
+prevent reading and pasting its original bytes. Image interpretation is not
+part of capture admission.
+
 **`DEC-PASTE-REFERENCE` (v1 decision).** Paste is **current-by-ID**: Copy
 denotes the retained item, not one historical revision state. When a list
 surface supplies a `HistoryItemReference`, it proves which exact displayed row
@@ -273,6 +279,7 @@ public enum HistoryFailure: Error, Sendable, Equatable {
     case revisionNotFound(RevisionID)
     case snapshotExpired(current: ChangePosition)
     case capacityExceeded(CapacityKind)
+    case thumbnailUnavailable
     case temporarilyUnavailable(UnavailableReason)
     case persistence(PersistenceFailure)
 }
@@ -317,6 +324,7 @@ public enum UnavailableReason: Sendable, Equatable {
 
 public enum PersistenceFailure: Sendable, Equatable {
     case openStore
+    case storeAlreadyOpen     // StoreRoot leased by another live owner process (REVIEW DATA-7 / PLAY-DISK-0B); deterministic refusal, distinct from platform-cause .openStore (DATA-14).
     case corruptStoredValue
     case invariantViolation
     case transaction

@@ -1189,7 +1189,11 @@ record_event "ready"
 # The requested write exceeds the entire image capacity. Require dd both to
 # fail and to report ENOSPC under a fixed C locale. Its expected failure text
 # stays in the disposable temp root because BSD dd prefixes it with a path.
+# `filler` is re-assigned for the same reason as in require_competitor_enospc:
+# the open cells' release above cleared it, and each fill cycle must own the
+# competitor path again (dispatch run 33637018304 died here on `of=""`).
 begin_phase "fill-volume"
+filler="$mountpoint/competitor.fill"
 record_volume_facts "before-competitor"
 set +e
 LC_ALL=C dd if=/dev/zero of="$filler" \
@@ -1531,7 +1535,7 @@ set +e
     "same revision committed after space release"
   printf 'pressure_revise_verify=%s\n' "durable revised state readable"
   printf '%s\n' \
-    "evidence_ceiling=Card 6B admission-refusal leaves only; post-admission mid-transaction exhaustion remains the Apple framework crash ceiling (docs/05 §16); remove/clear full-disk tails uncharacterized (zero-demand plans are never admission-refused); V1->V2 migration-on-full-disk is not triggerable through the public API"
+    "evidence_ceiling=Card 6B admission-refusal leaves only; post-admission mid-transaction exhaustion remains the Apple framework crash ceiling (docs/05 §16); remove/clear full-disk tails uncharacterized (zero-demand plans are never admission-refused)"
 } | tee "$log_dir/apfs-enospc-summary.log"
 success_summary_status=$?
 set -e

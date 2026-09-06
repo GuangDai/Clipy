@@ -131,13 +131,12 @@ private static func replaceTextRequest(
     #expect(reviseState.activeRevisionID == firstRevision.id)
     // WS6: "Effective-derived title/search … updated" — the §15 durable
     // projection now derives from the revised Effective Content.
-    #expect(reviseRow.title == revisedText)
-    #expect(reviseRow.searchBody == revisedText)
+    #expect(reviseRow.titleUTF8 == Data(revisedText.utf8))
+    #expect(reviseRow.searchBodyUTF8 == Data(revisedText.utf8))
     #expect(
         try EffectiveTypeIdentifiersBlobCodec.decode(reviseRow.effectiveTypeIdentifiersBlob)
             == ["public.utf8-plain-text"]
     )
-    #expect(reviseRow.projectionSchemaVersion == ContentProjector.schemaVersion)
     // The durable singleton matches the receipt's position (one transaction,
     // docs/06-cross-cutting.md §7.1).
     let revisePosition = try WSSupport.fetchPosition(reviseContainer)
@@ -165,8 +164,8 @@ private static func replaceTextRequest(
     #expect(staleRows.count == 1)
     let staleRow = try #require(staleRows.first)
     #expect(staleRow.contentVersionRaw == 2)
-    #expect(staleRow.title == revisedText)
-    #expect(staleRow.searchBody == revisedText)
+    #expect(staleRow.titleUTF8 == Data(revisedText.utf8))
+    #expect(staleRow.searchBodyUTF8 == Data(revisedText.utf8))
     let staleCanonical = try CanonicalBlobCodec.decode(staleRow.canonicalBlob)
     let staleState = try RevisionStateBlobCodec.decode(
         staleRow.revisionStateBlob,
@@ -229,13 +228,12 @@ private static func replaceTextRequest(
     #expect(revertState.activeRevisionID == appendedRevision.id)
     // WS6: "Effective-derived title/search … updated" — the §15 projection is
     // back to the Canonical text.
-    #expect(revertRow.title == canonicalText)
-    #expect(revertRow.searchBody == canonicalText)
+    #expect(revertRow.titleUTF8 == Data(canonicalText.utf8))
+    #expect(revertRow.searchBodyUTF8 == Data(canonicalText.utf8))
     #expect(
         try EffectiveTypeIdentifiersBlobCodec.decode(revertRow.effectiveTypeIdentifiersBlob)
             == ["public.utf8-plain-text"]
     )
-    #expect(revertRow.projectionSchemaVersion == ContentProjector.schemaVersion)
     // The durable singleton matches the revert receipt's position.
     let revertPosition = try WSSupport.fetchPosition(revertContainer)
     #expect(revertPosition.rawValue == 3)

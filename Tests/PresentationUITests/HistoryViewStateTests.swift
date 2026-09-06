@@ -121,15 +121,14 @@ struct HistoryViewStateTests {
         state.activate()
         #expect(await pollUntil { state.rows.count == 2 })
 
-        // Cancelled loop: the emitted page has no live consumer, so it can
-        // never be applied. The sleep is a stable-negative settle, not a
-        // race window — nothing can apply the page later either.
+        // The stream itself confirms that cancellation refused this page;
+        // no elapsed-time guess stands in for the observation shutdown.
         state.deactivate()
-        await history.emitObservedPage(fixturePage(
+        let acceptedAfterDeactivation = await history.emitObservedPage(fixturePage(
             rows: [fixtureRow(id: "00000000-0000-0000-0000-000000000013", title: "post-deactivate")],
             next: nil
         ))
-        try? await Task.sleep(for: .milliseconds(150))
+        #expect(!acceptedAfterDeactivation)
         #expect(state.rows.count == 2)
 
         // Re-activation starts a new observation (04 §5) whose live stream
@@ -238,7 +237,7 @@ struct HistoryViewStateTests {
         // Cursor exhausted: the guarded call issues no further browse
         // (stable negative — the guard is synchronous).
         state.loadNextPage()
-        try? await Task.sleep(for: .milliseconds(150))
+        #expect(!state.isLoadingPage)
         #expect(await history.browseRequests.count == 1)
 
         state.deactivate()
@@ -855,11 +854,12 @@ struct HistoryViewStateTests {
     /// Switching a long exact draft to fuzzy admits one bounded query intent
     /// without first publishing an invalid fuzzy request. The raw draft stays
     /// untouched so switching back to a syntax-bearing mode is lossless.
-    @Test func longExactToFuzzyIsOneAtomicAdmittedIntent() async {
+    @Test(arguments: ["x", "e\u{301}", "😀"])
+    func longExactToFuzzyIsOneAtomicAdmittedIntent(character: String) async {
         let history = ScriptedHistory()
         let state = HistoryViewState(history: history)
-        let rawDraft = String(repeating: "x", count: 65)
-        let admittedDraft = String(repeating: "x", count: 64)
+        let admittedDraft = String(repeating: character, count: 64)
+        let rawDraft = admittedDraft + "TAIL" + String(repeating: "suffix", count: 2_000)
 
         state.searchText = rawDraft
         state.searchMode = .exact
@@ -886,6 +886,13 @@ struct HistoryViewStateTests {
                 == .search(text: admittedDraft, mode: .fuzzy)
         )
         #expect(state.searchText == rawDraft)
+
+        state.searchMode = .regexp
+        #expect(await pollUntil {
+            await history.observeRequests.last?.kind
+                == .search(text: rawDraft, mode: .regexp)
+        })
+        #expect(Data(state.searchText.utf8) == Data(rawDraft.utf8))
 
         state.deactivate()
         await history.finishObservation()
@@ -1780,6 +1787,11 @@ struct HistoryViewStateTests {
 /// One-operation-at-a-time public History boundary used to place the Card 9B
 /// assertion exactly before or after the real receipt, without timing sleeps.
 private actor PausableMutationHistory: ClipboardHistory {
+    func usage() async throws -> HistoryUsage {
+        // This mutation script does not configure retained-byte snapshots.
+        throw HistoryFailure.temporarilyUnavailable(.factProof)
+    }
+
     enum Completion: Sendable {
         case success(HistoryReceipt)
         case failure(HistoryFailure)

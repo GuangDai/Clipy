@@ -1,9 +1,9 @@
 /// M1.3 proof (`V2-roadmap` §5 M1.3): the retention-expansion config
 /// bootstrap creates/validates exactly-one `RetentionExpansionConfigRow` —
-/// absent → the all-disabled v1-faithful defaults; present → the
+/// absent in an empty current store → all-disabled defaults; present → the
 /// fail-closed `configSchemaVersion == 1` / finiteness (DC-21) /
 /// non-contradictory-combination validation (`V2-02` §3.3). Containers are
-/// built directly over the current `HistorySchemaV4` so the config's
+/// built directly over the current `historySchema` so the config's
 /// pre-bootstrap Gateway-table absence classifier runs against its real
 /// model set, and
 /// `HistoryAuthority.ensureRetentionExpansionConfig(in:)` is driven via
@@ -33,9 +33,9 @@ struct RetentionConfigBootstrapTests {
 
     // MARK: - Fixtures
 
-    /// A fresh in-memory container over the current V4 schema with a ready context.
+    /// A fresh in-memory container over the current schema with a ready context.
     private func makeContext() throws -> (ModelContainer, ModelContext) {
-        let schema = Schema(versionedSchema: HistorySchemaV4.self)
+        let schema = historySchema
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -92,12 +92,15 @@ struct RetentionConfigBootstrapTests {
     // MARK: - Absent → create exactly the all-disabled row
 
     /// `V2-roadmap` §5 total open order step 5 / `V2-02` §3.3: an absent row
-    /// (the only create-with-defaults path) creates exactly one all-disabled
-    /// row with `configSchemaVersion == 1`, so a migrated store starts
-    /// v1-faithful.
+    /// in an empty current store creates exactly one all-disabled row with
+    /// `configSchemaVersion == 1`.
     @Test("absent config creates exactly one all-disabled row, durably")
     func absentConfigCreatesExactlyOneAllDisabledRow() throws {
         let (container, context) = try makeContext()
+        context.insert(LastChangePositionRow(
+            key: "retained-history", rawValue: 0, maximumUnpinnedItems: 200
+        ))
+        try context.save()
 
         try HistoryAuthority.ensureRetentionExpansionConfig(in: context)
 

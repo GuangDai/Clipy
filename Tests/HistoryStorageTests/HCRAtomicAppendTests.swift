@@ -88,7 +88,7 @@ struct HCRAtomicAppendTests {
         _ seeds: [SeedRecord],
         limits: JournalLimits
     ) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: HistorySchemaV4.self)
+        let schema = historySchema
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(

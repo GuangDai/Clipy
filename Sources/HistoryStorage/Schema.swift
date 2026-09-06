@@ -1,134 +1,21 @@
-/// SwiftData schema v1 (`HistorySchemaV1`): the durable rows behind
-/// `SwiftDataHistory`.
-/// Owning spec: docs/05-authority-kernel.md §3 (Part V); access rule:
-/// docs/01-architecture.md §2 (all model types are internal to HistoryStorage
-/// and never occur in a public or package signature).
-///
-/// The schema deliberately has no History Change Record table, no Operation
-/// Record or external-connection table, no thumbnail/list/search cache table,
-/// no version-map/checkpoint row, no separate pin table or denormalized
-/// occupancy map, no enrichment or revision-retention metadata, and no
-/// migration bridge from the current Maccy models (§3.3).
+/// Current durable History schema. All models remain internal to
+/// HistoryStorage; no storage-model type crosses the public History seam.
+/// Owning spec: docs/05-authority-kernel.md §3; docs/01-architecture.md §2.
 import Foundation
 import SwiftData
 
-/// The v1 schema (`HistorySchemaV1`) containing exactly `HistoryItemRow` and
-/// `LastChangePositionRow`, registered with the `ModelContainer` at `open`
-/// time (docs/05-authority-kernel.md §3).
-///
-/// `HistorySchemaV1` is also the conceptual version label referenced by the
-/// §17 migration stance: a future schema change increments it and adds a
-/// migration plan.
-internal let v1Schema = Schema(HistoryItemRow.self, LastChangePositionRow.self)
-
-/// M1-owned `VersionedSchema` anchor naming the shipped v1 schema
-/// (`V2-roadmap` §5 M1.1; `V2-02` §3.3 "Stage topology"). Behavior-preserving
-/// by construction: the `v1Schema` value above, the V1 model set, rows, and
-/// behavior stay frozen — this type adds no model, column, or migration; it
-/// only gives the eventual `V1 → V2` custom migration hop a
-/// `VersionedSchema`-conforming `fromVersion` (`MigrationStage` stages take
-/// versioned-schema types, not `Schema` values; `V2-facts.md` cycle-2
-/// facts). `Schema(versionedSchema:)` resolving the same entities as
-/// `v1Schema` is proven by `HistorySchemaAnchorTests` on the macOS runner
-/// (M1.1 exit: a current v1 store opens with no row/blob/token drift, and
-/// the v1 tests are byte-for-byte unchanged).
-internal enum HistorySchemaV1: VersionedSchema {
-    static let versionIdentifier = Schema.Version(1, 0, 0)
-
-    static var models: [any PersistentModel.Type] {
-        [HistoryItemRow.self, LastChangePositionRow.self]
-    }
-}
-
-/// Durable row for one retained History Item (docs/05-authority-kernel.md §3.1).
-///
-/// Semantic mapping (§3.1):
-///
-/// - `id` is the stable business ID; `PersistentIdentifier` is never exposed.
-/// - `contentVersionRaw` is the current Effective Content version, always at
-///   least 1.
-/// - `canonicalBlob` holds the immutable Canonical representations including
-///   per-representation fingerprint evidence (`CanonicalBlobV1`, §4).
-/// - `revisionStateBlob` holds the full revision list plus the active Revision
-///   ID (`RevisionStateBlobV1`, §4). The active revision's bytes are present
-///   whenever `activeRevisionID` is non-nil; for a Canonical-state item
-///   (`activeRevisionID == nil`) the revision list is empty and there are no
-///   revision bytes — Effective Content equals Canonical Content.
-/// - `canonicalSignatureBlob` holds durable signature metadata
-///   (`SignatureBlobV1`, §4). Current hard-capped index builds validate it
-///   against recomputed Canonical fingerprints before publishing readiness.
-/// - The projection fields are the durable bounded projection of the current
-///   Effective Content for list/search (§15).
-/// - The occurrence fields hold the full first/last time and source summary.
-/// - `pinOrdinal` is the internal encoding of pinned order; `nil` is unpinned.
-///
-/// `@Attribute(.externalStorage)` is an implementation hint: correctness, byte
-/// limits, and read isolation do not depend on whether SwiftData stores a blob
-/// inline or externally (§3.1). There is no `pinned: Bool`, inactive-only
-/// revision list, single `application` column, enrichment field, tombstone,
-/// cache payload, durable change record, or SwiftData identity map.
-@Model
-internal final class HistoryItemRow {
-    @Attribute(.unique)
-    var id: UUID
-
-    var contentVersionRaw: UInt64
-
-    @Attribute(.externalStorage)
-    var canonicalBlob: Data
-
-    @Attribute(.externalStorage)
-    var revisionStateBlob: Data
-
-    var canonicalSignatureBlob: Data
-
-    var projectionSchemaVersion: UInt16
-    var title: String
-    var searchBody: String
-    var effectiveTypeIdentifiersBlob: Data
-
-    var firstCopiedAt: Date
-    var lastCopiedAt: Date
-    var copyCount: UInt64
-    var firstSource: String?
-    var lastSource: String?
-
-    var pinOrdinal: Int?
-
-    init(
-        id: UUID,
-        contentVersionRaw: UInt64,
-        canonicalBlob: Data,
-        revisionStateBlob: Data,
-        canonicalSignatureBlob: Data,
-        projectionSchemaVersion: UInt16,
-        title: String,
-        searchBody: String,
-        effectiveTypeIdentifiersBlob: Data,
-        firstCopiedAt: Date,
-        lastCopiedAt: Date,
-        copyCount: UInt64,
-        firstSource: String?,
-        lastSource: String?,
-        pinOrdinal: Int?
-    ) {
-        self.id = id
-        self.contentVersionRaw = contentVersionRaw
-        self.canonicalBlob = canonicalBlob
-        self.revisionStateBlob = revisionStateBlob
-        self.canonicalSignatureBlob = canonicalSignatureBlob
-        self.projectionSchemaVersion = projectionSchemaVersion
-        self.title = title
-        self.searchBody = searchBody
-        self.effectiveTypeIdentifiersBlob = effectiveTypeIdentifiersBlob
-        self.firstCopiedAt = firstCopiedAt
-        self.lastCopiedAt = lastCopiedAt
-        self.copyCount = copyCount
-        self.firstSource = firstSource
-        self.lastSource = lastSource
-        self.pinOrdinal = pinOrdinal
-    }
-}
+internal let historySchema = Schema(
+    HistoryItemRow.self,
+    LastChangePositionRow.self,
+    RetentionExpansionConfigRow.self,
+    RetainedBytesRow.self,
+    ConnectionRow.self,
+    GrantRow.self,
+    OperationRecordRow.self,
+    GatewayConfigRow.self,
+    HistoryChangeRecordRow.self,
+    JournalConfigRow.self
+)
 
 /// Change-position and retention-policy singleton row
 /// (docs/05-authority-kernel.md §3.2).
@@ -137,7 +24,7 @@ internal final class HistoryItemRow {
 /// History Commit updates this row in the same transaction as its item
 /// mutations; the first commit moves `rawValue` 0 → 1, so empty stores still
 /// support an authoritative `HistoryPage(position: 0, rows: [])`. The same
-/// singleton owns the current v1 retention policy (`maximumUnpinnedItems`) so
+/// singleton owns the current count retention policy (`maximumUnpinnedItems`) so
 /// capture and policy changes read one authoritative value.
 ///
 /// The singleton is not a journal: it only identifies the latest durable

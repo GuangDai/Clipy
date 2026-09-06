@@ -71,14 +71,15 @@ internal enum CodecRejection: Error, Sendable, Equatable {
     /// represented by `Int`.
     case totalBytesExceedBound(found: Int, bound: Int)
 
-    /// A scalar projection row names a schema version this greenfield v1
-    /// reader does not understand (§4: known projection schema version).
-    case unknownProjectionSchemaVersion(found: UInt16)
-
     /// A stored title exceeds the Part VI UTF-8 byte bound. Projection fields
     /// are durable derived data and are re-validated on every path that reads
     /// them; corruption is never silently truncated at read time (§4).
     case storedTitleExceedsBound(found: Int, bound: Int)
+
+    /// The bounded title bytes are not strictly valid UTF-8. No replacement
+    /// characters or legacy String fallback may repair this projection (§4).
+    case invalidStoredTitleUTF8
+    case invalidStoredSearchBodyUTF8
 
     /// A stored search body exceeds the Part VI UTF-8 byte bound, under the
     /// same fail-closed scalar-projection rule as `storedTitleExceedsBound`.
@@ -156,8 +157,9 @@ extension CodecRejection {
              .emptyBytes,
              .representationBytesExceedBound,
              .totalBytesExceedBound,
-             .unknownProjectionSchemaVersion,
              .storedTitleExceedsBound,
+             .invalidStoredTitleUTF8,
+             .invalidStoredSearchBodyUTF8,
              .storedSearchBodyExceedsBound,
              .nonPositiveSignatureByteCount,
              .signatureByteCountExceedsBound,

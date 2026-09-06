@@ -21,6 +21,8 @@ targets:
     platform: macOS
     sources:
       - Sources
+      # App-owned copy (including StatusMenu) lives in this bundle;
+      # SwiftPM targets retain their own localized resources.
       - Resources
       - Tools/ClipyUDSF0Shared
     settings:
@@ -37,6 +39,7 @@ targets:
       # from PRODUCT_NAME (Clipy), not the target name.
       PRODUCT_MODULE_NAME: ClipyApp
       INFOPLIST_KEY_LSUIElement: YES
+      INFOPLIST_KEY_CFBundleAllowMixedLocalizations: YES
       INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
     dependencies:
       - package: Clipy

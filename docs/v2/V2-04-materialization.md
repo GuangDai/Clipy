@@ -200,6 +200,74 @@ independently admissible but share the `ThumbnailSourceFingerprint` substrate,
 so the natural ship order is S1+C1 → C3 → C2 (`V2-roadmap` will record the
 gate-respecting order).
 
+### 2.4 DEC-THUMB-CACHE — G1 adjudication record (resolved 2026-09-02)
+
+The C1 evidence trigger (`06` §3 G1, restated in §2.3 and §13 Record 1) was
+adjudicated against measured evidence on 2026-09-02. Verdict: **G1 NOT MET —
+the shared in-memory completed-thumbnail cache (C1) is NOT admitted.** The v1
+per-surface visible-state retention (PresentationUI `ThumbnailStore`'s bounded
+recorded intermediate state: 500-entry / 64 MiB admission caps, single-flight,
+request-token late fence) remains the shipping design; C1/C2/C3/S1 remain
+design-only and reserve no v1 surface.
+
+- **Criterion (verbatim, `06` §3 G1):** "Representative scrolling shows
+  thumbnail decode p95 above 16 ms and at least 30% identical completed
+  requests within the measurement window." The conjunction requires both
+  conditions; either failure rejects.
+- **Evidence source.** The Batch 48 (PR #54, merge `8b7486a`) measurement
+  leaf: `ThumbnailScrollMeasurementJourneyUITests` /
+  `testRepresentativeScrollRecordsThumbnailRequestAndDecodeSamples`
+  (ClipyUITests) seeded 60 mutually distinct 96×96 PNG captures (one real
+  pagination past the 50-row page limit), scrolled the real panel down/up
+  across an ≥ 60 s window, and read the DEBUG-only `ThumbnailMeasurement`
+  sink (`Sources/PresentationUI/ThumbnailStore.swift`,
+  `CLIPY_UI_TEST_THUMB_MEASUREMENT_PATH`). The summary rode the
+  `CLIPY_THUMB_MEASUREMENT` job-log line; the raw JSONL and summary JSON are
+  also `.keepAlways` XCTAttachments in each run's `app.xcresult` (inside the
+  `xcodeproj-<run>-1` artifact). Two independent green runs of identical
+  product+test code:
+  - PR #54 final correctness run **33224258855** — journey passed in
+    529.4 s; scroll window 89.4 s.
+  - `master` run **33226454046** (`ddeef6c`, a docs-only delta over
+    `8b7486a`) — journey passed in 491.9 s; scroll window 90.8 s. (The
+    Batch 48 status row's cited master run 33225305486 concluded
+    `cancelled`; 33226454046 is the same-product-code master evidence.)
+- **Measured values (run 33224258855 / run 33226454046).** 60 seeded, 60
+  distinct references requested, 60 `started` + 60 `completed` (all `hit`),
+  zero `rejectedRetained`/`rejectedInFlight`; 60 samples per segment (≥ the
+  20-sample reporting floor, `reviews/2026-08-22-clipy-maccy-deep-review/05`
+  §5.5; p99 not reported at <100 samples).
+  - Decode segment (`rasterMs`, wrapping `rasterizePNGForDisplay`, including
+    single decode-slot queueing): p50 0.66 / 0.64 ms, **p95 1.57 / 1.67 ms**.
+  - Fetch segment (`fetchMs`, the awaited `history.thumbnail`): p50 2.13 /
+    2.13 ms, p95 4.41 / 3.55 ms.
+  - Fetch+decode upper bound (`totalMs`): p50 2.83 / 2.86 ms, **p95 11.05 /
+    5.81 ms**.
+  - Identical-request readings (both instrumented definitions reported by the
+    journey): `repeatRequestRate` = (rejectedRetained + rejectedInFlight) /
+    all requests = **0% / 0%**; `repeatDecodeCompletionRate` = (completions −
+    distinct completed refs) / completions = **0% / 0%**.
+- **Condition A — decode p95 above 16 ms: NOT MET.** The decode-segment p95
+  is ~1.6 ms, an order of magnitude under; even the most conservative
+  reading — the fetch+decode upper bound — peaks at 11.05 ms p95, still
+  under 16 ms.
+- **Condition B — ≥ 30% identical completed requests: NOT MET.** 0% on both
+  instrumented readings in both runs. The panel's SwiftUI `List` retained
+  off-screen row views across the full ~90 s down/up traversals, so a
+  scroll-back never re-ran the row `.task`: the existing per-surface
+  retention already absorbs every repeat request in the representative
+  scenario (the journey records a zero duplicate count as legitimate G1
+  input, not a fixture failure).
+- **Consequences.** C1 stays unadmitted; no v1 surface is reserved. C2's G3
+  trigger stays unreachable (it requires C1 already justified). S1 (G4) and
+  C3 (G6) carry independent, unadjudicated triggers and are unaffected.
+  Re-admission requires a fresh representative-scrolling measurement meeting
+  both thresholds after a material change to the thumbnail pipeline or panel
+  retention behavior. Scope honesty: the "settled RSS" leg of
+  `reviews/2026-08-22-clipy-maccy-deep-review/05` §6's minimal experiment was
+  not instrumented by this leaf; it cannot change the verdict because G1's
+  conjunction already fails on both measured axes.
+
 ## 3. S1 — ThumbnailSourceFingerprint (independent concrete type)
 
 S1 (`06` §3 G4) is the mechanism that lets the thumbnail cache survive a
@@ -1741,7 +1809,8 @@ V2-04 provides the data hooks V2-07 (UX) consumes; it owns no SwiftUI:
   … generic purpose/source-stamp systems"), and `06` §3 G1. Evidence trigger:
   representative scrolling shows thumbnail decode p95 above 16 ms **and** at
   least 30% identical completed requests in the measurement window (`V2-00` §3;
-  `06` §3 G1).
+  `06` §3 G1). **Trigger adjudicated NOT MET 2026-09-02** (both conditions
+  failed on two green CI runs; §2.4) — C1 remains unadmitted.
 - **C2** lifts `00` §2 Excluded ("disk materialization caches") and `06` §3 G3.
   Evidence trigger: C1 already justified **and** measured cross-launch reuse is
   substantial **and** a structural materializer fingerprint

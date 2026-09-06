@@ -1,0 +1,16 @@
+// App-owned store recovery and paste failure messages.
+"Opening Clipy…" = "Opening Clipy…";
+"Retry" = "Retry";
+"Reveal Store Location" = "Reveal Store Location";
+"Quit" = "Quit";
+"History Store Already Open" = "History Store Already Open";
+"History Store Open Failed" = "History Store Open Failed";
+"Stored History Unreadable" = "Stored History Unreadable";
+"History Consistency Check Failed" = "History Consistency Check Failed";
+"History Startup Transaction Failed" = "History Startup Transaction Failed";
+"Clipy's history store is already open in another instance. Quit that instance and try again." = "Clipy's history store is already open in another instance. Quit that instance and try again.";
+"Clipy's history store is already open in this app. Quit Clipy and try again." = "Clipy's history store is already open in this app. Quit Clipy and try again.";
+"Clipy couldn't open its history store." = "Clipy couldn't open its history store.";
+"Dismiss copy failure" = "Dismiss copy failure";
+"A copy is already in progress. Try again when it finishes." = "A copy is already in progress. Try again when it finishes.";
+"The pasteboard refused this copy. Try again." = "The pasteboard refused this copy. Try again.";

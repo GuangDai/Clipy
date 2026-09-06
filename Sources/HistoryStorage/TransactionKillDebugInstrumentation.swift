@@ -3,16 +3,13 @@ import Foundation
 import SwiftData
 
 /// Process-death seam strictly inside the one durable commit transaction
-/// (`docs/05-authority-kernel.md` §10), closing REVIEW 05-OQ9/05-CE26
-/// (`05-evidence-and-open-questions.md` §7 Q9 and §3 CE26 — "SwiftData
-/// custom migration在transaction中child kill、externalStorage写入中kill后的原子性";
-/// "randomized child kill覆盖willSave/didSave/return") and Card 1C-2
+/// (`docs/05-authority-kernel.md` §10), covering current capture/revision
+/// transaction interruption and Card 1C-2
 /// (`04-tdd-remediation-playbook.md`: "在…transaction return，以及大型external
 /// capture/revise/clear的已批准barrier执行process kill…fresh child重开只能看到
 /// 完整old或完整new state"). Every earlier kill witness dies OUTSIDE the
 /// commit boundary — `crashCommit`/`largeBlobCrashCommit` after the receipt,
-/// `gatewayAuditCrash` post-commit at the publication seam, the migration
-/// abort seam before any transaction begins — and the WS13 closure-throw
+/// `gatewayAuditCrash` post-commit at the publication seam — and the WS13 closure-throw
 /// proofs keep the process alive. This seam adds the missing in-flight
 /// death. Package-visible solely so `HistoryRestartProbe` can arm it; an
 /// ordinary product call leaves the TaskLocal nil, and Release builds
@@ -51,8 +48,7 @@ package enum TransactionKillDebugInstrumentation {
 
     /// Fixed, content-free stderr marker prefix emitted immediately before
     /// the injected death, so a parent fixture can prove the child died AT
-    /// the seam rather than anywhere else — the
-    /// `MigrationBackfillAbortProbe.markerLine` discipline. No store path,
+    /// the seam rather than anywhere else. No store path,
     /// item identifier, or clipboard value can enter it.
     package static let markerPrefix = "[CLIPY_TX_KILL]"
 

@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>%lld items retired</key>
+    <dict>
+        <key>NSStringLocalizedFormatKey</key>
+        <string>%1$#@count@</string>
+        <key>count</key>
+        <dict>
+            <key>NSStringFormatSpecTypeKey</key>
+            <string>NSStringPluralRuleType</string>
+            <key>NSStringFormatValueTypeKey</key>
+            <string>lld</string>
+            <key>other</key>
+            <string>已移除 %2$@ 个项目</string>
+        </dict>
+    </dict>
+    <key>%lld revisions pruned</key>
+    <dict>
+        <key>NSStringLocalizedFormatKey</key>
+        <string>%1$#@count@</string>
+        <key>count</key>
+        <dict>
+            <key>NSStringFormatSpecTypeKey</key>
+            <string>NSStringPluralRuleType</string>
+            <key>NSStringFormatValueTypeKey</key>
+            <string>lld</string>
+            <key>other</key>
+            <string>已清理 %2$@ 个修订版本</string>
+        </dict>
+    </dict>
+    <key>Done. %lld items removed.</key>
+    <dict>
+        <key>NSStringLocalizedFormatKey</key>
+        <string>%1$#@count@</string>
+        <key>count</key>
+        <dict>
+            <key>NSStringFormatSpecTypeKey</key>
+            <string>NSStringPluralRuleType</string>
+            <key>NSStringFormatValueTypeKey</key>
+            <string>lld</string>
+            <key>other</key>
+            <string>已完成。已移除 %2$@ 个项目。</string>
+        </dict>
+    </dict>
+    <key>Removed %lld items.</key>
+    <dict>
+        <key>NSStringLocalizedFormatKey</key>
+        <string>%1$#@count@</string>
+        <key>count</key>
+        <dict>
+            <key>NSStringFormatSpecTypeKey</key>
+            <string>NSStringPluralRuleType</string>
+            <key>NSStringFormatValueTypeKey</key>
+            <string>lld</string>
+            <key>other</key>
+            <string>已移除 %2$@ 个项目。</string>
+        </dict>
+    </dict>
+</dict>
+</plist>

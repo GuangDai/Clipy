@@ -212,7 +212,10 @@ struct AccessibilityAnnouncementTests {
         #expect(recorder.records.count == 1)
         #expect(recorder.records[0].targetsApplication)
         #expect(recorder.records[0].notification == .announcementRequested)
-        #expect(recorder.records[0].message == "Item removed from history.")
+        #expect(recorder.records[0].message == AppHistoryAnnouncementsCopy.text(
+            "Item removed from history."
+        ))
+        #expect(!(recorder.records[0].message?.contains(inserted.id.description) ?? true))
         #expect(surfaceWasAppliedBeforeAnnouncement)
         #expect(
             appDelegate.panelSurfaceState?.appliedPurgeGeneration == 1
@@ -232,25 +235,6 @@ struct AccessibilityAnnouncementTests {
     @Test("installed settled-search callback announces the bounded count")
     @MainActor
     func settledSearchCountUsesTheAppOwnedAnnouncementBoundary() async throws {
-        #expect(
-            SearchResultCountAnnouncementPresentation.message(
-                count: 0,
-                hasNextPage: false
-            ) == "0 results"
-        )
-        #expect(
-            SearchResultCountAnnouncementPresentation.message(
-                count: 1,
-                hasNextPage: false
-            ) == "1 result"
-        )
-        #expect(
-            SearchResultCountAnnouncementPresentation.message(
-                count: 27,
-                hasNextPage: false
-            ) == "27 results"
-        )
-
         let history = try await SwiftDataHistory.open(
             configuration: HistoryConfiguration(persistence: .memory)
         )
@@ -272,11 +256,69 @@ struct AccessibilityAnnouncementTests {
         #expect(recorder.records.count == 1)
         #expect(recorder.records[0].targetsApplication)
         #expect(recorder.records[0].notification == .announcementRequested)
-        #expect(recorder.records[0].message == "50+ results")
+        #expect(recorder.records[0].message == SearchResultCountAnnouncementPresentation.message(
+            count: 50, hasNextPage: true
+        ))
         #expect(
             recorder.records[0].priority
                 == NSAccessibilityPriorityLevel.medium.rawValue
         )
+    }
+
+    @Test("history announcements use real app resources and native plural rules",
+          arguments: ["en", "zh-Hans"])
+    @MainActor
+    func localizedHistoryAnnouncements(_ language: String) throws {
+        let bundle = try appBundle(language)
+        let locale = Locale(identifier: language == "en" ? "en_US" : "zh_Hans_CN")
+        let recorder = AccessibilityAnnouncementRecorder()
+        let announcement = AccessibilityAnnouncement(operations: recorder.operations)
+
+        announcement.announceHistoryItemRemoved(bundle: bundle)
+        for count in [0, 1, 27, 5_000] {
+            announcement.announceSettledSearchResultCount(
+                count, hasNextPage: false, bundle: bundle, locale: locale
+            )
+        }
+        for count in [0, 1, 5_000] {
+            announcement.announceSettledSearchResultCount(
+                count, hasNextPage: true, bundle: bundle, locale: locale
+            )
+        }
+
+        let expected = language == "en"
+            ? ["Item removed from history.", "0 results", "1 result", "27 results",
+               "5,000 results", "0+ results", "1+ results", "5,000+ results"]
+            : ["已从历史记录移除项目。", "0 个结果", "1 个结果", "27 个结果",
+               "5,000 个结果", "0+ 个结果", "1+ 个结果", "5,000+ 个结果"]
+        #expect(recorder.records.compactMap(\.message) == expected)
+        #expect(recorder.records.allSatisfy {
+            $0.targetsApplication && $0.notification == .announcementRequested
+                && $0.priority == NSAccessibilityPriorityLevel.medium.rawValue
+        })
+    }
+
+    @Test("announcement language and numeric region are independent")
+    func announcementNumericRegion() throws {
+        let german = Locale(identifier: "de_DE")
+        #expect(SearchResultCountAnnouncementPresentation.message(
+            count: 5_000, hasNextPage: false,
+            bundle: try appBundle("en"), locale: german
+        ) == "5.000 results")
+        #expect(SearchResultCountAnnouncementPresentation.message(
+            count: 5_000, hasNextPage: true,
+            bundle: try appBundle("zh-Hans"), locale: german
+        ) == "5.000+ 个结果")
+    }
+
+    private func appBundle(_ language: String) throws -> Bundle {
+        let localization = try #require(Bundle.main.localizations.first {
+            $0.caseInsensitiveCompare(language) == .orderedSame
+        })
+        let root = try #require(Bundle.main.resourceURL)
+        return try #require(Bundle(url: root.appendingPathComponent(
+            "\(localization).lproj", isDirectory: true
+        )))
     }
 
     private static func health(

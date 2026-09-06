@@ -173,6 +173,16 @@ internal actor SearchWorker {
         let anchor: StoredOrderingAnchor
     }
 
+    /// Bounded page candidates and the scan's existing Debug totals. Matches
+    /// discarded by continuation/top-K selection still count as scan hits.
+    internal struct EvaluationResult {
+        let rows: [EvaluatedRow]
+#if DEBUG
+        let debugRowsProcessed: Int
+        let debugMatchedRows: Int
+#endif
+    }
+
     /// One fuzzy-matched row before ordering: the corpus row, the Fuse
     /// score (internal only — 03b §8: "Search scores and Fuse objects
     /// remain internal"), and the deferred presentation.
@@ -260,28 +270,31 @@ internal actor SearchWorker {
             continuationAnchor: continuationAnchor,
             maximumSurvivors: request.limit + 1
         )
-        let evaluated: [EvaluatedRow]
+        let evaluation: EvaluationResult
         if term.isEmpty {
-            evaluated = evaluateRecentEquivalent(in: corpus, directive: directive)
+            evaluation = evaluateRecentEquivalent(in: corpus, directive: directive)
         } else {
             switch mode {
             case .exact:
-                evaluated = try await evaluateExact(
+                evaluation = try await evaluateExact(
                     term: term,
                     in: corpus,
                     directive: directive
                 )
             case .regexp:
-                evaluated = try await evaluateRegexp(
+                evaluation = try await evaluateRegexp(
                     term: term,
                     in: corpus,
                     directive: directive
                 )
             case .fuzzy:
-                evaluated = try await evaluateFuzzy(term: term, in: corpus)
+                evaluation = try await evaluateFuzzy(
+                    term: term, in: corpus, directive: directive
+                )
             }
         }
         try Task.checkCancellation()
+        let evaluated = evaluation.rows
 
 #if DEBUG
         searchDebugProbe.record(
@@ -290,9 +303,9 @@ internal actor SearchWorker {
             phase: "evaluation-complete",
             phaseElapsed: debugEvaluationStart.duration(to: debugClock.now),
             totalElapsed: debugTotalStart.duration(to: debugClock.now),
-            rowsProcessed: corpus.rows.count,
+            rowsProcessed: evaluation.debugRowsProcessed,
             rowsTotal: corpus.rows.count,
-            matchedRows: evaluated.count
+            matchedRows: evaluation.debugMatchedRows
         )
         let debugContinuationStart = debugClock.now
 #endif
@@ -322,7 +335,7 @@ internal actor SearchWorker {
             totalElapsed: debugTotalStart.duration(to: debugClock.now),
             rowsProcessed: survivors.count,
             rowsTotal: evaluated.count,
-            matchedRows: evaluated.count
+            matchedRows: evaluation.debugMatchedRows
         )
         let debugMaterializationStart = debugClock.now
 #endif
@@ -432,7 +445,7 @@ internal actor SearchWorker {
             totalElapsed: debugTotalStart.duration(to: debugClock.now),
             rowsProcessed: rows.count,
             rowsTotal: evaluated.count,
-            matchedRows: evaluated.count
+            matchedRows: evaluation.debugMatchedRows
         )
         searchDebugProbe.record(
             traceID: debugTraceID,
@@ -440,9 +453,9 @@ internal actor SearchWorker {
             phase: "complete",
             phaseElapsed: debugTotalStart.duration(to: debugClock.now),
             totalElapsed: debugTotalStart.duration(to: debugClock.now),
-            rowsProcessed: rows.count,
+            rowsProcessed: evaluation.debugRowsProcessed,
             rowsTotal: corpus.rows.count,
-            matchedRows: evaluated.count
+            matchedRows: evaluation.debugMatchedRows
         )
 #endif
 
@@ -478,14 +491,22 @@ internal actor SearchWorker {
     internal func evaluateRecentEquivalent(
         in corpus: SearchCorpusSnapshot,
         directive: ScanDirective
-    ) -> [EvaluatedRow] {
+    ) -> EvaluationResult {
         var startIndex = corpus.rows.startIndex
         var window = directive.maximumSurvivors
         if let anchor = directive.continuationAnchor {
             guard let anchorIndex = corpus.rows.firstIndex(where: {
                 Self.defaultOrderAnchor(for: $0) == anchor
             }) else {
-                return []
+#if DEBUG
+                return EvaluationResult(
+                    rows: [],
+                    debugRowsProcessed: corpus.rows.count,
+                    debugMatchedRows: corpus.rows.count
+                )
+#else
+                return EvaluationResult(rows: [])
+#endif
             }
             // Include the anchor row itself: `page` locates it in the
             // evaluated array before dropping it, so an anchor-exclusive
@@ -493,7 +514,7 @@ internal actor SearchWorker {
             startIndex = anchorIndex
             window += 1
         }
-        return corpus.rows[startIndex...]
+        let rows = corpus.rows[startIndex...]
             .prefix(window)
             .map { row in
                 EvaluatedRow(
@@ -502,6 +523,17 @@ internal actor SearchWorker {
                     anchor: Self.defaultOrderAnchor(for: row)
                 )
             }
+#if DEBUG
+        // Empty terms match every row examined. Include rows visited during
+        // anchor lookup, counting the anchor only once when it is retained.
+        return EvaluationResult(
+            rows: rows,
+            debugRowsProcessed: startIndex + rows.count,
+            debugMatchedRows: startIndex + rows.count
+        )
+#else
+        return EvaluationResult(rows: rows)
+#endif
     }
 
 }

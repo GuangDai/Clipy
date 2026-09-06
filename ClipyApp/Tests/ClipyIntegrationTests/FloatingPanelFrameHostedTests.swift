@@ -103,6 +103,54 @@ struct FloatingPanelFrameHostedTests {
         #expect(panel.frame.width == 400)
     }
 
+    /// The closed-edge opener consumes the same published physical placement
+    /// as the visible divider. Closing must preserve that side as well as the
+    /// main frame; this hosted test does not simulate the edge-pull gesture.
+    @Test(arguments: [PreviewSidePreference.leading, .trailing])
+    func closingPreviewPreservesItsPhysicalEdgeAndMainFrame(
+        side: PreviewSidePreference
+    ) throws {
+        let screen = try #require(NSScreen.main ?? NSScreen.screens.first)
+        let visibleFrame = screen.visibleFrame
+        try #require(visibleFrame.width >= 721 && visibleFrame.height >= 560)
+        let restoreGeometry = isolatePersistedPanelGeometryKeys()
+        defer { restoreGeometry() }
+
+        let expectedPlacement: PreviewPlacement = side == .leading ? .leading : .trailing
+        var publishedPlacement: PreviewPlacement = .trailing
+        let appDelegate = AppDelegate()
+        let panel = FloatingPanel(
+            rootView: PanelRootView(appDelegate: appDelegate),
+            previewState: appDelegate.previewState,
+            onPreviewPlacementChange: { publishedPlacement = $0 },
+            onClosed: {}
+        )
+        defer { panel.close() }
+        panel.open(
+            at: .statusItem,
+            statusItemButtonScreenFrame: NSRect(
+                x: side == .leading ? visibleFrame.maxX - 1 : visibleFrame.minX,
+                y: visibleFrame.maxY - 1, width: 1, height: 1
+            ),
+            previewSide: side
+        )
+        let mainFrame = panel.frame
+        #expect(mainFrame.width == 400)
+        panel.setPreviewVisible(true)
+        #expect(panel.previewPlacement == expectedPlacement)
+        #expect(publishedPlacement == expectedPlacement)
+        #expect(panel.frame == NSRect(
+            x: mainFrame.minX - (side == .leading ? 321 : 0),
+            y: mainFrame.minY, width: 721, height: mainFrame.height
+        ))
+
+        panel.setPreviewVisible(false)
+        #expect(panel.frame == mainFrame)
+        #expect(panel.previewPlacement == expectedPlacement)
+        #expect(publishedPlacement == expectedPlacement,
+                "the closed-edge consumer must keep the side that just closed")
+    }
+
     /// The preview extension is the divider's persisted free-drag width,
     /// read fresh per width computation: a persisted 400-point column
     /// widens the 400-point default main surface to 400+1+400 = 801 and

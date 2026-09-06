@@ -79,7 +79,10 @@ internal enum StoredQueryShape: Sendable, Hashable {
             guard case .search(let requestText, let requestMode) = request.kind else {
                 return false
             }
-            return text == requestText
+            // Search consumes the original scalar sequence (exact uses
+            // literal matching). Swift String equality folds canonical
+            // equivalents, which can resume a different query at this anchor.
+            return text.utf8.elementsEqual(requestText.utf8)
                 && mode == requestMode
                 && request.limit == limit
         }

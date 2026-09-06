@@ -39,7 +39,7 @@ struct LocalAutomationCredentialAuthenticatorTests {
     private static func makeFixture(
         enroll: Bool = true
     ) async throws -> Fixture {
-        let schema = Schema(versionedSchema: HistorySchemaV4.self)
+        let schema = historySchema
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(

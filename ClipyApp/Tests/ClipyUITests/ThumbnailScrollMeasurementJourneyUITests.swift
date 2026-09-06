@@ -1,33 +1,23 @@
-/// ThumbnailScrollMeasurementJourneyUITests.swift — DEC-THUMB-CACHE G1
-/// evidence journey (docs/06-cross-cutting.md §3 G1; docs/reviews/
-/// 2026-08-22-clipy-maccy-deep-review/05-evidence-and-open-questions.md §6
-/// "Completed thumbnail cache" row and §5.5's reporting floors; 11 §4.7).
+/// Thumbnail pagination and scrolling through the running application.
 ///
 /// The journey seeds 60 distinct real PNG captures through the production
 /// pasteboard observer (60 > the 50-row page limit, forcing one real
-/// pagination; >= 20 raster samples keeps p95 reportable while p99 stays
-/// "not-reported"), scrolls the real panel list down and up across the full
-/// >= 60 s window, and exports the DEBUG-only in-app measurement sink's
+/// pagination), scrolls the real panel list down to the oldest item and back
+/// to the newest, and exports the DEBUG-only in-app measurement sink's
 /// JSONL (CLIPY_UI_TEST_THUMB_MEASUREMENT_PATH) out of the app process via
 /// XCTAttachment (.keepAlways → app.xcresult → the correctness workflow's
 /// ci-result-bundles artifact) plus one prefixed log line (os_log is
 /// disabled by OS_ACTIVITY_MODE=disable in CI).
 ///
-/// ONLY sampling completeness is asserted here — every item requested,
-/// counts self-consistent, timestamps monotone. No duration or rate
-/// threshold is adjudicated by this test: G1's dual-threshold decision
-/// stays with docs/06 §3 G1 and docs/v2/V2-07.
+/// Completion depends on real traversal and per-item decode coverage, not
+/// elapsed scrolling time. JSONL/timing summaries remain diagnostic only;
+/// this is not a comparable 60-second G1 performance remeasurement.
 import AppKit
 import XCTest
 
 final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
-    /// 60 items: above the 50-row first page (one real pagination traversal)
-    /// and above the 20-sample p95 floor (reviews/05 §5.5).
+    /// 60 items: above the 50-row first page, requiring real pagination.
     private static let itemCount = 60
-
-    /// The >= 60 s representative scrolling window (reviews/05 §6's
-    /// "60 second real scroll").
-    private static let scrollWindowSeconds: TimeInterval = 60
 
     private var temporaryDirectory: URL?
 
@@ -38,7 +28,7 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
 
     override func tearDownWithError() throws {
         // A failed journey aborts before its success-path attachments run,
-        // and this leaf exists to PRODUCE evidence — so the raw JSONL is
+        // so the raw diagnostic JSONL is
         // attached here, on every path, BEFORE the fixture directory is
         // removed. Otherwise the first failure would destroy exactly the
         // data needed to diagnose it.
@@ -59,7 +49,7 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
     }
 
     @MainActor
-    func testRepresentativeScrollRecordsThumbnailRequestAndDecodeSamples() throws {
+    func testScrollingAcrossPagesCompletesEveryThumbnail() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(
@@ -70,7 +60,16 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
         let measurementURL = directory
             .appendingPathComponent("thumb-measure.jsonl")
 
+        // Startup deliberately captures the current General pasteboard.
+        // Remove the previous journey's value before launching, so a late
+        // startup text capture cannot acknowledge the first PNG below.
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        XCTAssertTrue((pasteboard.pasteboardItems ?? []).isEmpty)
+        defer { pasteboard.clearContents() }
+
         let app = XCUIApplication()
+        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory
             .appendingPathComponent("history.store")
@@ -90,64 +89,65 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
             diagnostic(app, context: "measurement journey panel")
         )
         let rows = historyRows(in: app)
+        XCTAssertTrue(
+            app.staticTexts["No Clipboard History"].waitForExistence(timeout: 20),
+            diagnostic(app, context: "fresh History observation completed empty")
+        )
+        XCTAssertEqual(rows.count, 0, diagnostic(app, context: "empty capture baseline"))
 
         // —— Seeding: 60 mutually distinct real PNG captures. The unpinned
         //    lane is newest-first (lastCopiedAt descending), so every capture
         //    surfaces as exactly one NEW row identifier in the first page —
         //    the uniform completion signal both below and above the 50-row
         //    page boundary, where `rows.count` saturates at the page limit.
-        try seedThumbnailItems(Self.itemCount, app: app, rows: rows)
+        let seededIdentifiers = try seedThumbnailItems(Self.itemCount, app: app, rows: rows)
+        let oldestIdentifier = try XCTUnwrap(seededIdentifiers.first)
+        let newestIdentifier = try XCTUnwrap(seededIdentifiers.last)
+        let expectedRefs = Set(seededIdentifiers.map {
+            String($0.dropFirst("clipy.history.row.".count))
+        })
+        XCTAssertEqual(expectedRefs.count, Self.itemCount)
 
-        // —— Scrolling: the panel's history list scroll view. The wheel
-        //    increments are deliberately SMALL with real dwell between
-        //    them: the list is lazy, and a row only materializes (fires
-        //    its onAppear pagination trigger and its thumbnail prefetch)
-        //    while it passes through the viewport slowly enough to render.
-        //    A single large fling bottomed out page one without ever
-        //    materializing the page-two tail (observed on CI: exactly the
-        //    50 first-page rows).
-        let scrollView = panel.scrollViews.firstMatch
+        // —— Scrolling: use the native History scrollbar for real endpoint
+        //    navigation, including after the second page extends the list.
+        // A left-side text preview also has a scroll view. Select the one
+        // containing the History outline, independent of preview placement.
+        let scrollView = panel.scrollViews.containing(.outline, identifier: nil).firstMatch
         XCTAssertTrue(
             scrollView.waitForExistence(timeout: 10),
             diagnostic(app, context: "history list scroll view")
         )
-        let listCenter = scrollView.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
-        )
 
-        // Sanity only — the AX row count is the MATERIALIZED window, not
-        // the loaded pages (off-screen rows unmaterialize), so the real
-        // pagination + full-traversal proof is the measurement records'
-        // 60-distinct-reference coverage asserted after the journey: the
-        // ten page-two rows are the FIRST-seeded (oldest) items, which
-        // are unreachable without both pagination and a full descent.
-        XCTAssertTrue(
-            waitUntil(timeout: 20) { rows.count >= 30 },
-            diagnostic(
-                app,
-                context: "history rows materialized; observed \(rows.count) rows"
-            )
-        )
-
-        // Slow full traversals. One pass ≈ 40 small wheel steps ≈ the full
-        // 60-row content height (60 × ~52 pt plus viewport); repeated
-        // down-up round trips cover the >= 60 s window (bounded by a pass
-        // cap as the CI job-budget backstop).
+        // Seeding can already request all 60 thumbnails while each PNG is
+        // newest. Prove pagination separately: the oldest seeded row must
+        // enter the History viewport, then the newest must be visible again.
+        // A finite number of endpoint traversals permits deferred List
+        // materialization without spending a fixed performance window.
         let scrollStart = Date()
         var passes = 0
-        while Date().timeIntervalSince(scrollStart) < Self.scrollWindowSeconds
-            && passes < 8
-        {
-            scroll(listCenter, deltaY: -120, steps: 40, dwellSeconds: 0.2)
-            dwell(0.5)
-            scroll(listCenter, deltaY: 120, steps: 40, dwellSeconds: 0.2)
-            dwell(0.5)
+        var reachedOldest = false
+        var returnedToNewest = false
+        while passes < 3 {
+            reachedOldest = scroll(
+                to: rows[oldestIdentifier], in: scrollView, towardEnd: true
+            ) || reachedOldest
+            returnedToNewest = scroll(
+                to: rows[newestIdentifier], in: scrollView, towardEnd: false
+            )
             passes += 1
+            if reachedOldest, returnedToNewest,
+               hasCompleteThumbnailCoverage(at: measurementURL, expectedRefs: expectedRefs) {
+                break
+            }
         }
         let scrollSeconds = Date().timeIntervalSince(scrollStart)
         XCTAssertTrue(
-            scrollSeconds >= Self.scrollWindowSeconds,
-            "scroll window floor not reached after \(passes) passes"
+            reachedOldest,
+            diagnostic(app, context: "oldest PNG reached across pagination after \(passes) passes")
+        )
+        XCTAssertTrue(
+            returnedToNewest,
+            diagnostic(app, context: "returned to newest PNG after \(passes) passes")
         )
 
         // —— Quiescence: wait until every started flight for every reference
@@ -155,9 +155,9 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
         //    to its boundary; only its publication can be fenced).
         XCTAssertTrue(
             waitUntil(timeout: 90) {
-                self.isMeasurementQuiesced(at: measurementURL)
+                self.hasCompleteThumbnailCoverage(at: measurementURL, expectedRefs: expectedRefs)
             },
-            diagnostic(app, context: "measurement flights quiesced")
+            diagnostic(app, context: "all seeded thumbnails displayed and flights completed")
         )
 
         app.terminate()
@@ -178,10 +178,10 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
             )
         }
 
-        // Every seeded item was requested at least once.
+        // Every specific seeded item was requested at least once.
         XCTAssertEqual(
-            Set(records.map(\.refID)).count,
-            Self.itemCount,
+            Set(records.map(\.refID)),
+            expectedRefs,
             "expected \(Self.itemCount) distinct requested references"
         )
 
@@ -210,8 +210,7 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
         // Duplicate requests are OBSERVED, not required: macOS SwiftUI
         // List may keep off-screen row views alive, in which case a
         // scroll-back never re-runs the row's `.task` and the retained-
-        // rejection count is legitimately zero — itself G1 input (cache
-        // reuse never needed in this scenario). What IS asserted is the
+        // rejection count is legitimately zero. What IS asserted is the
         // ordering invariant of any rejection that did occur: it must
         // follow that reference's first completion.
         for record in records where record.event == "rejectedRetained" {
@@ -227,13 +226,13 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
             )
         }
 
-        // Display-side sampling: every item decoded at least once, with a
-        // non-empty raster dimension sample, and enough hit samples for a
-        // reportable p50/p95 (reviews/05 §5.5) — counts only, never values.
+        // Every seeded item must have a successful display decode; repeated
+        // completions of another item cannot substitute for missing coverage.
         let hits = records.filter {
             $0.event == "completed" && $0.outcome == "hit"
         }
         XCTAssertGreaterThanOrEqual(hits.count, Self.itemCount)
+        XCTAssertEqual(Set(hits.map(\.refID)), expectedRefs)
         XCTAssertTrue(
             hits.allSatisfy {
                 ($0.rasterWidth ?? 0) > 0 && ($0.rasterHeight ?? 0) > 0
@@ -279,8 +278,11 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
         _ count: Int,
         app: XCUIApplication,
         rows: XCUIElementQuery
-    ) throws {
-        var lastFirstRowIdentifier = rows.element(boundBy: 0).identifier
+    ) throws -> [String] {
+        // The caller joined the authoritative empty-state presentation.
+        // There is no row to query until the first PNG capture arrives.
+        var lastFirstRowIdentifier = ""
+        var identifiers: [String] = []
         for index in 0..<count {
             let png = try encodedPNG(index: index, totalCount: count)
             let pasteboard = NSPasteboard.general
@@ -296,8 +298,11 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
             )
             XCTAssertTrue(
                 waitUntil(timeout: 20) {
-                    rows.element(boundBy: 0).identifier
-                        != lastFirstRowIdentifier
+                    let firstRow = rows.element(boundBy: 0)
+                    guard firstRow.exists else { return false }
+                    let identifier = firstRow.identifier
+                    return !identifier.isEmpty
+                        && identifier != lastFirstRowIdentifier
                 },
                 diagnostic(
                     app,
@@ -305,14 +310,14 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
                 )
             )
             lastFirstRowIdentifier = rows.element(boundBy: 0).identifier
+            identifiers.append(lastFirstRowIdentifier)
         }
+        return identifiers
     }
 
     /// One real, mutually distinct PNG per index (96×96, per-index hue) so
     /// the two-stage byte-exact dedup keeps every seeded capture a separate
-    /// item and every thumbnail decode an independent sample. The small
-    /// fixture is an honest input: decode times far below the 16 ms G1
-    /// threshold are a legal "G1 not met" reading, not a fixture failure.
+    /// item and every thumbnail decode an independent functional sample.
     @MainActor
     private func encodedPNG(index: Int, totalCount: Int) throws -> Data {
         let edge = 96
@@ -360,27 +365,48 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
 
     // MARK: - Scrolling
 
-    /// Bounded wheel increments in one direction, clamped by the scroll
-    /// view's own bounds; a short run-loop-spinning dwell between gestures
-    /// gives row `.task` lifecycle (appear/disappear/reappear) time to run.
+    /// Drag the real scrollbar to each end. Wheel deltas plus lazy List row
+    /// estimates did not reliably reach the last row on the runner. Another
+    /// drag can be needed after pagination extends the content.
     @MainActor
     private func scroll(
-        _ coordinate: XCUICoordinate,
-        deltaY: CGFloat,
-        steps: Int,
-        dwellSeconds: TimeInterval = 0.15
-    ) {
-        for _ in 0..<steps {
-            coordinate.scroll(byDeltaX: 0, deltaY: deltaY)
-            dwell(dwellSeconds)
+        to row: XCUIElement,
+        in scrollView: XCUIElement,
+        towardEnd: Bool
+    ) -> Bool {
+        func endpointIsVisible() -> Bool {
+            guard row.exists else { return false }
+            let frame = row.frame
+            return !frame.isEmpty && scrollView.frame.contains(frame)
         }
-    }
-
-    /// Spins the run loop for `seconds` without a condition (the wait helper
-    /// with an always-false condition waits out its full timeout).
-    @MainActor
-    private func dwell(_ seconds: TimeInterval) {
-        _ = waitUntil(timeout: seconds) { false }
+        // Rows can cover the entire container. Move to its scrollbar edge
+        // explicitly so XCTest does not search for an unoccluded blank
+        // region in the ScrollView before revealing the native scroller.
+        scrollView.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)
+        ).hover()
+        let scrollbar = scrollView.scrollBars.firstMatch
+        let thumb = scrollbar.descendants(matching: .valueIndicator).firstMatch
+        for _ in 0..<6 {
+            if endpointIsVisible() { return true }
+            guard scrollbar.exists, thumb.exists else {
+                XCTFail("The History scrollbar thumb is unavailable.")
+                return false
+            }
+            thumb.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .click(forDuration: 0.1, thenDragTo: scrollbar.coordinate(
+                    withNormalizedOffset: CGVector(dx: 0.5, dy: towardEnd ? 0.99 : 0.01)
+                ))
+            if waitUntil(timeout: 2, condition: endpointIsVisible) { return true }
+        }
+        guard row.exists else { return false }
+        let rowFrame = row.frame
+        let viewport = scrollView.frame
+        let visible = !rowFrame.isEmpty && viewport.contains(rowFrame)
+        if !visible {
+            print("CLIPY_THUMB_SCROLL target=\(row.identifier) frame=\(rowFrame) viewport=\(viewport)")
+        }
+        return visible
     }
 
     // MARK: - Measurement file
@@ -403,17 +429,22 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
         var outcome: String?
     }
 
-    /// True once every reference's started count equals its completed count
-    /// (no flight left in flight). Malformed/partial trailing lines are
-    /// tolerated while polling; the strict parse below is post-terminate.
+    /// Each seeded reference must have a successful nonempty display raster,
+    /// and every started flight must have completed. Tolerate a partial final
+    /// JSONL line while polling; the post-terminate parse remains strict.
     @MainActor
-    private func isMeasurementQuiesced(at url: URL) -> Bool {
+    private func hasCompleteThumbnailCoverage(at url: URL, expectedRefs: Set<String>) -> Bool {
         guard
             let data = try? Data(contentsOf: url),
             !data.isEmpty,
             let records = try? decodeRecords(from: data, strict: false),
             !records.isEmpty
         else { return false }
+        let displayedRefs = Set(records.filter {
+            $0.event == "completed" && $0.outcome == "hit"
+                && ($0.rasterWidth ?? 0) > 0 && ($0.rasterHeight ?? 0) > 0
+        }.map(\.refID))
+        guard displayedRefs == expectedRefs else { return false }
         var delta: [String: Int] = [:]
         for record in records {
             switch record.event {
@@ -452,10 +483,9 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
 
     // MARK: - Summary export
 
-    /// Content-free evidence summary. Two readings of G1's "identical
-    /// requests" are reported side by side (duplicate REQUESTS vs repeated
-    /// decode COMPLETIONS) with their exact definitions — the adjudicator
-    /// chooses; this journey does not.
+    /// Content-free diagnostics from this functional traversal. Variable
+    /// duration makes rates/timings unsuitable for comparison with the
+    /// historical fixed-duration G1 performance journey.
     private func measurementSummary(
         records: [ThumbMeasuredRecord],
         scrollSeconds: TimeInterval
@@ -508,7 +538,7 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
         let distinctCompletedRefs = Set(completions.map(\.refID)).count
 
         let summary: [String: Any] = [
-            "purpose": "DEC-THUMB-CACHE G1 evidence (docs/06-cross-cutting.md §3 G1; reviews/05 §6); sampling only, no threshold adjudicated",
+            "purpose": "Functional thumbnail pagination and scrolling coverage; timings are diagnostic, not a comparable 60-second G1 remeasurement",
             "itemCountSeeded": Self.itemCount,
             "scrollWindowSeconds": (scrollSeconds * 10).rounded() / 10,
             "records": records.count,
@@ -543,9 +573,9 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
                 note: "includes single decode-slot queueing (ContentPreview)"
             ),
             "totalMs": segment(totalSamples),
-            "p99": "not-reported (<100 samples, reviews/05 §5.5)",
+            "p99": "not reported by this functional journey",
             "settledRSS": "not covered by this measurement leaf",
-            "fixtureNote": "96x96 generated PNGs; decode far below the 16 ms G1 threshold is a legal 'G1 not met' reading, not a fixture failure",
+            "fixtureNote": "60 distinct 96x96 PNGs; stop after actual oldest/newest traversal and complete per-item display coverage",
         ]
         let json = String(
             data: try JSONSerialization.data(

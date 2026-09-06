@@ -15,6 +15,7 @@ import HistoryCore
 internal struct RetentionSettingsDraft {
     internal struct LoadRequest: Sendable {
         fileprivate let editGeneration: UInt64
+        fileprivate let loadGeneration: UInt64
     }
 
     internal struct Submission: Sendable {
@@ -34,10 +35,11 @@ internal struct RetentionSettingsDraft {
     internal static let mebibyteUnitLabel = "MiB"
 
     /// R1 runs on capture and `.setRetentionPolicies`; it has no wall-clock
-    /// worker or background reaper (`V2-02` §2.2/§7; review Card 10B).
+    /// worker or background reaper (`V2-02` §2.2/§7; review Card 10B). The
+    /// copy resolves through the package localization resources
+    /// (`RetentionSettingsCopy.ageEnforcementNote`; V2-07 §10).
     internal static let ageEnforcementExplanation =
-        "Age limits are checked when Clipy captures a clipboard change or "
-        + "you apply retention settings. Time passing alone doesn't remove items."
+        RetentionSettingsCopy.ageEnforcementNote
 
     internal private(set) var maximumUnpinnedText =
         String(HistoryLimits.standard.defaultMaximumUnpinnedItems)
@@ -69,8 +71,32 @@ internal struct RetentionSettingsDraft {
         revisions: nil
     )
     private var editGeneration: UInt64 = 0
+    private var loadGeneration: UInt64 = 0
+    private let locale: Locale
     internal private(set) var acceptedSuccessMessage: String?
     internal private(set) var acceptedCountSuccessMessage: String?
+
+    internal init(locale: Locale = .current) {
+        self.locale = locale
+        maximumUnpinnedText = formatted(HistoryLimits.standard.defaultMaximumUnpinnedItems)
+        ageDaysText = formatted(30)
+        storageMiBText = formatted(500)
+        revisionCountText = formatted(20)
+        revisionMiBText = formatted(64)
+    }
+
+    /// The stepper and typed input share integer parsing; stepping an invalid
+    /// field starts from the default, while valid out-of-range input clamps.
+    internal var maximumUnpinnedStepperValue: Int {
+        get {
+            let typed = validatedSettingsWholeNumber(
+                maximumUnpinnedText, in: Int.min...Int.max, locale: locale
+            ) ?? HistoryLimits.standard.defaultMaximumUnpinnedItems
+            let range = HistoryLimits.standard.userMaximumUnpinnedRange
+            return min(max(typed, range.lowerBound), range.upperBound)
+        }
+        set { setMaximumUnpinnedText(formatted(newValue)) }
+    }
 
     internal var inputIsValid: Bool {
         (!ageEnabled || ageInputIsValid)
@@ -108,13 +134,26 @@ internal struct RetentionSettingsDraft {
     internal var revisionCountInputIsValid: Bool { revisionCount != nil }
     internal var revisionBytesInputIsValid: Bool { revisionMiB != nil }
 
-    internal func beginLoadRequest() -> LoadRequest {
-        LoadRequest(editGeneration: editGeneration)
+    internal mutating func beginLoadRequest() -> LoadRequest {
+        loadGeneration += 1
+        acceptedSuccessMessage = nil
+        acceptedCountSuccessMessage = nil
+        return LoadRequest(editGeneration: editGeneration, loadGeneration: loadGeneration)
+    }
+
+    /// A disappeared Settings surface cannot accept a pending read. Retire
+    /// only that read's ownership; user text and per-field edits survive.
+    internal mutating func invalidateLoadRequest() {
+        loadGeneration += 1
+    }
+
+    internal func isCurrent(_ request: LoadRequest) -> Bool {
+        request.loadGeneration == loadGeneration
     }
 
     /// Accepts the complete configured snapshot used by both Settings tabs.
-    /// A late read refreshes the count baseline but preserves a newer count
-    /// edit, then applies the same per-field merge to the V2 policy bundle.
+    /// A current read refreshes the count baseline but preserves an unsaved
+    /// count edit, then applies the same per-field merge to the V2 bundle.
     /// This is one History read and one edit generation, so count and policy
     /// controls cannot render values from different persisted snapshots.
     @discardableResult
@@ -122,77 +161,66 @@ internal struct RetentionSettingsDraft {
         _ configuration: HistoryRetentionConfiguration,
         requestedAt request: LoadRequest
     ) -> Bool {
-        let generationIsCurrent = request.editGeneration == editGeneration
+        guard isCurrent(request) else { return false }
         configuredMaximumUnpinnedItems = configuration.maximumUnpinnedItems
-        if generationIsCurrent || !maximumUnpinnedValueIsDirty {
-            maximumUnpinnedText = String(configuration.maximumUnpinnedItems)
+        if !maximumUnpinnedValueIsDirty {
+            maximumUnpinnedText = formatted(configuration.maximumUnpinnedItems)
         }
-        let accepted = acceptLoaded(
+        return acceptLoaded(
             configuration.policies,
             requestedAt: request
         )
-        if accepted {
-            maximumUnpinnedValueIsDirty = false
-        }
-        return accepted
     }
 
     /// Accepts a configured-policy read against the edit generation at which
     /// it started (`04` Red 10A). A late read always refreshes the hidden
     /// authoritative comparison baseline and reflects each untouched control,
-    /// while preserving only toggles/fields carrying a newer dirty edit. This
-    /// per-control merge prevents one storage edit from erasing a configured
-    /// age or revision policy in the next whole-policy submission.
+    /// while preserving dirty toggles/fields, including edits made before a
+    /// reload began. Opening Settings again must not discard unsaved text.
+    /// Untouched fields still adopt the newest exact stored policy values.
     @discardableResult
     internal mutating func acceptLoaded(
         _ policies: HistoryRetentionPolicies,
         requestedAt request: LoadRequest
     ) -> Bool {
+        guard isCurrent(request) else { return false }
         let generationIsCurrent = request.editGeneration == editGeneration
         configuredPolicies = policies
-        if generationIsCurrent || !ageToggleIsDirty {
+        if !ageToggleIsDirty {
             ageEnabled = policies.age != nil
         }
         if let age = policies.age,
-           generationIsCurrent || !ageValueIsDirty {
-            ageDaysText = String(Self.ceilingDays(age.maxAge))
+           !ageValueIsDirty {
+            ageDaysText = formatted(Self.ceilingDays(age.maxAge))
         }
-        if generationIsCurrent || !storageToggleIsDirty {
+        if !storageToggleIsDirty {
             storageEnabled = policies.storage != nil
         }
         if let storage = policies.storage,
-           generationIsCurrent || !storageValueIsDirty {
-            storageMiBText = String(Self.ceilingMiB(
+           !storageValueIsDirty {
+            storageMiBText = formatted(Self.ceilingMiB(
                 storage.maxTotalBytes,
                 range: Self.storageMiBRange
             ))
         }
-        if generationIsCurrent || !revisionCountToggleIsDirty {
+        if !revisionCountToggleIsDirty {
             revisionCountEnabled = policies.revisions?.maxRevisionsPerItem != nil
         }
         if let count = policies.revisions?.maxRevisionsPerItem,
-           generationIsCurrent || !revisionCountValueIsDirty {
-            revisionCountText = String(count)
+           !revisionCountValueIsDirty {
+            revisionCountText = formatted(count)
         }
-        if generationIsCurrent || !revisionBytesToggleIsDirty {
+        if !revisionBytesToggleIsDirty {
             revisionBytesEnabled = policies.revisions?.maxRevisionBytesPerItem != nil
         }
         if let bytes = policies.revisions?.maxRevisionBytesPerItem,
-           generationIsCurrent || !revisionBytesValueIsDirty {
-            revisionMiBText = String(Self.ceilingMiB(
+           !revisionBytesValueIsDirty {
+            revisionMiBText = formatted(Self.ceilingMiB(
                 bytes,
                 range: Self.revisionMiBRange
             ))
         }
         guard generationIsCurrent else { return false }
-        ageValueIsDirty = false
-        storageValueIsDirty = false
-        revisionCountValueIsDirty = false
-        revisionBytesValueIsDirty = false
-        ageToggleIsDirty = false
-        storageToggleIsDirty = false
-        revisionCountToggleIsDirty = false
-        revisionBytesToggleIsDirty = false
         acceptedSuccessMessage = nil
         acceptedCountSuccessMessage = nil
         return true
@@ -358,24 +386,29 @@ internal struct RetentionSettingsDraft {
     private var maximumUnpinnedItems: Int? {
         validatedSettingsWholeNumber(
             maximumUnpinnedText,
-            in: HistoryLimits.standard.userMaximumUnpinnedRange
+            in: HistoryLimits.standard.userMaximumUnpinnedRange,
+            locale: locale
         )
     }
 
     private var ageDays: Int? {
-        validatedSettingsWholeNumber(ageDaysText, in: Self.ageDaysRange)
+        validatedSettingsWholeNumber(ageDaysText, in: Self.ageDaysRange, locale: locale)
     }
 
     private var storageMiB: Int? {
-        validatedSettingsWholeNumber(storageMiBText, in: Self.storageMiBRange)
+        validatedSettingsWholeNumber(storageMiBText, in: Self.storageMiBRange, locale: locale)
     }
 
     private var revisionCount: Int? {
-        validatedSettingsWholeNumber(revisionCountText, in: Self.revisionCountRange)
+        validatedSettingsWholeNumber(revisionCountText, in: Self.revisionCountRange, locale: locale)
     }
 
     private var revisionMiB: Int? {
-        validatedSettingsWholeNumber(revisionMiBText, in: Self.revisionMiBRange)
+        validatedSettingsWholeNumber(revisionMiBText, in: Self.revisionMiBRange, locale: locale)
+    }
+
+    private func formatted(_ value: Int) -> String {
+        LocalizedCountPresentation.number(value, locale: locale)
     }
 
     private var proposedAgePolicy: AgeRetention? {
@@ -457,14 +490,22 @@ internal struct RetentionSettingsDraft {
     }
 }
 
-/// Shared strict integer parser for Settings numeric fields. A decimal,
-/// empty, or out-of-range value is not a whole policy value (contract §4.4).
+/// V2-07 §10.3: accept localized integers as displayed, with optional grouping.
+/// Comparing the parsed value's integer representations rejects decimal or
+/// partially parsed input even if Foundation can recover a number from it.
 internal func validatedSettingsWholeNumber(
     _ text: String,
-    in range: ClosedRange<Int>
+    in range: ClosedRange<Int>,
+    locale: Locale = .current
 ) -> Int? {
-    guard let value = Int(text.trimmingCharacters(in: .whitespaces)) else {
-        return nil
+    let text = text.trimmingCharacters(in: .whitespaces)
+    if let value = Int(text) {
+        return range.contains(value) ? value : nil
     }
-    return range.contains(value) ? value : nil
+    let style = IntegerFormatStyle<Int>.number.locale(locale)
+    guard let value = try? Int(text, format: style, lenient: false),
+          range.contains(value),
+          text == value.formatted(style)
+            || text == value.formatted(style.grouping(.never)) else { return nil }
+    return value
 }

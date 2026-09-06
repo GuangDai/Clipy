@@ -1,4 +1,4 @@
-/// X.5 real in-process Gateway denial proofs.
+/// Real in-process Gateway denial proofs through read/perform dispatch.
 /// Owning spec: `V2-05` §3.1/§4.5/§8 and roadmap X.5.
 import Foundation
 import HistoryCore
@@ -219,15 +219,15 @@ struct ExternalGatewayDenialTests {
         case request(ExternalRequest)
         case read(ExternalRead)
 
-        func authorize(
+        func dispatch(
             on gateway: ExternalGateway,
             as connection: ExternalConnectionID
         ) async throws {
             switch self {
             case .request(let request):
-                try await gateway.authorize(request, as: connection)
+                _ = try await gateway.perform(request, as: connection)
             case .read(let read):
-                try await gateway.authorize(read, as: connection)
+                _ = try await gateway.read(read, as: connection)
             }
         }
     }
@@ -236,7 +236,7 @@ struct ExternalGatewayDenialTests {
         limits: ExternalLimits = .standard,
         rateLimiter: ExternalRateLimiter? = nil
     ) async throws -> Fixture {
-        let schema = Schema(versionedSchema: HistorySchemaV4.self)
+        let schema = historySchema
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(
@@ -377,7 +377,7 @@ struct ExternalGatewayDenialTests {
         let connection = try #require(connections.first).id
         try await history.grantCapability(.browse, to: connection)
 
-        try await history.externalGateway.authorize(
+        _ = try await history.externalGateway.read(
             .recent(limit: 1),
             as: connection
         )
@@ -386,6 +386,7 @@ struct ExternalGatewayDenialTests {
         #expect(audit.map(\.operationKind) == [
             .adminReadConnections,
             .adminGrant,
+            .readRecent,
         ])
         #expect(audit.last?.outcome == .succeeded)
     }
@@ -404,7 +405,7 @@ struct ExternalGatewayDenialTests {
             requestedCapability: .browse,
             connectionID: fixture.connection
         )) {
-            try await fixture.gateway.authorize(
+            _ = try await fixture.gateway.read(
                 .search(text: privateQuery, mode: .exact, limit: 10),
                 as: fixture.connection
             )
@@ -479,7 +480,7 @@ struct ExternalGatewayDenialTests {
                 requestedCapability: candidate.capability,
                 connectionID: fixture.connection
             )) {
-                try await candidate.route.authorize(
+                try await candidate.route.dispatch(
                     on: fixture.gateway,
                     as: fixture.connection
                 )
@@ -512,7 +513,7 @@ struct ExternalGatewayDenialTests {
         await #expect(throws: ExternalFailure.connectionRevoked(
             connectionID: fixture.connection
         )) {
-            try await fixture.gateway.authorize(
+            _ = try await fixture.gateway.read(
                 .recent(limit: 10),
                 as: fixture.connection
             )
@@ -551,7 +552,7 @@ struct ExternalGatewayDenialTests {
             requestedCapability: .browse,
             connectionID: fixture.connection
         )) {
-            try await fixture.gateway.authorize(
+            _ = try await fixture.gateway.read(
                 .recent(limit: 10),
                 as: fixture.connection
             )
@@ -569,8 +570,8 @@ struct ExternalGatewayDenialTests {
 #endif
     }
 
-    @Test("invalid input and connection-kind pair never reach Authority audit")
-    func invalidInputAndPairAreUnaudited() async throws {
+    @Test("invalid read input never reaches Authority audit or consumes rate tokens")
+    func invalidReadInputIsUnauditedAndDoesNotConsumeTokens() async throws {
         let fixture = try await Self.makeFixture()
         let invalidReads: [ExternalRead] = [
             .recent(limit: 0),
@@ -582,12 +583,12 @@ struct ExternalGatewayDenialTests {
         let beforeInvalidInput = try Self.gatewaySnapshot(in: fixture.container)
         for read in invalidReads {
             await #expect(throws: ExternalFailure.requestDenied(.invalidInput)) {
-                try await fixture.gateway.authorize(read, as: fixture.connection)
+                _ = try await fixture.gateway.read(read, as: fixture.connection)
             }
         }
         for _ in 0..<25 {
             await #expect(throws: ExternalFailure.requestDenied(.invalidInput)) {
-                try await fixture.gateway.authorize(
+                _ = try await fixture.gateway.read(
                     .recent(limit: 0),
                     as: fixture.connection
                 )
@@ -595,38 +596,23 @@ struct ExternalGatewayDenialTests {
         }
         #expect(try Self.gatewaySnapshot(in: fixture.container) == beforeInvalidInput)
 
-        let invalidPair = ExternalOperationDescriptor(
-            capability: .readContent,
-            operationKind: .managePin,
-            requestSummary: .pin(itemID: Self.unknownUUID)
-        )
-        let beforeInvalidPair = try Self.gatewaySnapshot(in: fixture.container)
-        for _ in 0..<30 {
-            await #expect(throws: ExternalFailure.requestDenied(.invalidInput)) {
-                try await fixture.gateway.authorize(
-                    invalidPair,
-                    as: fixture.connection
-                )
-            }
-        }
-        #expect(try Self.gatewaySnapshot(in: fixture.container) == beforeInvalidPair)
-
-        // Thirty malformed requests and thirty invalid pairs consume no
-        // token. The next thirty well-formed calls exhaust the bucket, and
-        // only the following call is rate denied.
+        // Thirty malformed reads consume no token. The next thirty
+        // well-formed calls exhaust the bucket, and only the following call
+        // is rate denied. Impossible descriptor pairs are not a dispatch
+        // input; ExternalAccessPolicyTests independently covers their matrix.
         for _ in 0..<30 {
             await #expect(throws: ExternalFailure.unauthorized(
                 requestedCapability: .browse,
                 connectionID: fixture.connection
             )) {
-                try await fixture.gateway.authorize(
+                _ = try await fixture.gateway.read(
                     .recent(limit: 1),
                     as: fixture.connection
                 )
             }
         }
         await #expect(throws: ExternalFailure.requestDenied(.rateLimited)) {
-            try await fixture.gateway.authorize(
+            _ = try await fixture.gateway.read(
                 .recent(limit: 1),
                 as: fixture.connection
             )
@@ -643,13 +629,13 @@ struct ExternalGatewayDenialTests {
             requestedCapability: .browse,
             connectionID: unknown
         )) {
-            try await fixture.gateway.authorize(.recent(limit: 1), as: unknown)
+            _ = try await fixture.gateway.read(.recent(limit: 1), as: unknown)
         }
         await #expect(throws: ExternalFailure.unauthorized(
             requestedCapability: .browse,
             connectionID: unknown
         )) {
-            try await fixture.gateway.authorize(.recent(limit: 0), as: unknown)
+            _ = try await fixture.gateway.read(.recent(limit: 0), as: unknown)
         }
 
         #expect(try Self.gatewaySnapshot(in: fixture.container) == before)
@@ -668,7 +654,7 @@ struct ExternalGatewayDenialTests {
                 requestedCapability: .browse,
                 connectionID: fixture.connection
             )) {
-                try await fixture.gateway.authorize(
+                _ = try await fixture.gateway.read(
                     .recent(limit: 1),
                     as: fixture.connection
                 )
@@ -676,7 +662,7 @@ struct ExternalGatewayDenialTests {
         }
         let beforeRateDenial = try Self.gatewaySnapshot(in: fixture.container)
         await #expect(throws: ExternalFailure.requestDenied(.rateLimited)) {
-            try await fixture.gateway.authorize(
+            _ = try await fixture.gateway.read(
                 .recent(limit: 1),
                 as: fixture.connection
             )
@@ -712,7 +698,7 @@ struct ExternalGatewayDenialTests {
             requestedCapability: .browse,
             connectionID: fixture.connection
         )) {
-            try await fixture.gateway.authorize(
+            _ = try await fixture.gateway.read(
                 .recent(limit: 1),
                 as: fixture.connection
             )
@@ -765,7 +751,7 @@ struct ExternalGatewayDenialTests {
             .browse,
             to: fixture.connection
         )
-        try await fixture.gateway.authorize(
+        _ = try await fixture.gateway.read(
             .recent(limit: 1),
             as: fixture.connection
         )
@@ -818,7 +804,7 @@ struct ExternalGatewayDenialTests {
             .browse,
             to: fixture.connection
         )
-        try await fixture.gateway.authorize(
+        _ = try await fixture.gateway.read(
             .recent(limit: 1),
             as: fixture.connection
         )
@@ -852,7 +838,7 @@ struct ExternalGatewayDenialTests {
         do {
             let firstTask = Task {
                 try await firstCompactionRace.track {
-                    try await gateway.authorize(
+                    _ = try await gateway.read(
                         .recent(limit: 1),
                         as: connection
                     )
@@ -871,7 +857,7 @@ struct ExternalGatewayDenialTests {
                             followerRace.signal(.parked)
                             await followerGate.park(at: followerPoint)
                         }) {
-                            try await gateway.authorize(
+                            _ = try await gateway.read(
                                 .recent(limit: 1),
                                 as: connection
                             )
@@ -890,7 +876,7 @@ struct ExternalGatewayDenialTests {
             entryCounter.expectThirdRequest()
             let thirdTask = Task {
                 try await thirdCompactionRace.track {
-                    try await gateway.authorize(
+                    _ = try await gateway.read(
                         .recent(limit: 1),
                         as: connection
                     )
@@ -923,6 +909,14 @@ struct ExternalGatewayDenialTests {
             throw error
         }
         await fixture.authority.setSuspensionHandler(nil)
+        // Each follower now completes a real read, not authorization-only
+        // staging. The initial read plus these three reads each publish one
+        // successful audit despite sharing two maintenance attempts.
+        let completedReads = try Self.gatewaySnapshot(in: fixture.container).operations.filter {
+            $0.operationKindRaw == ExternalOperationKind.readRecent.rawValue
+        }
+        #expect(completedReads.count == 4)
+        #expect(completedReads.allSatisfy { $0.outcomeRaw == ExternalOutcome.succeeded.rawValue })
     }
 #endif
 
@@ -946,7 +940,7 @@ struct ExternalGatewayDenialTests {
             requestedCapability: .browse,
             connectionID: fixture.connection
         )) {
-            try await fixture.gateway.authorize(
+            _ = try await fixture.gateway.read(
                 .recent(limit: 1),
                 as: fixture.connection
             )
@@ -984,7 +978,7 @@ struct ExternalGatewayDenialTests {
         )
 
         await #expect(throws: ExternalFailure.requestDenied(.rateLimited)) {
-            try await fixture.gateway.authorize(
+            _ = try await fixture.gateway.read(
                 .recent(limit: 1),
                 as: fixture.connection
             )

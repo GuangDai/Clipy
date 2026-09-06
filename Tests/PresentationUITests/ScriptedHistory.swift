@@ -1,8 +1,8 @@
 /// ScriptedHistory.swift — the scripted `ClipboardHistory` doubles and shared
 /// helpers for the PresentationUI suites (docs/01-architecture.md §4; docs/
-/// roadmap/05-presentationui.md). The test target cannot import
-/// HistoryStorage, so view-state and thumbnail semantics are driven through
-/// the public seam exactly as SwiftUI previews do — but, per
+/// roadmap/05-presentationui.md). These doubles exercise view-state and
+/// thumbnail responses through the public seam exactly as SwiftUI previews
+/// do; integration tests use the real HistoryStorage implementation. Per
 /// docs/01-architecture.md §4, a scripted double is legitimate here because
 /// these are VIEW-STATE tests (what `HistoryViewState`/`ThumbnailStore` do
 /// with pages, cursors, and failures), never storage semantic tests.
@@ -30,7 +30,8 @@ import HistoryCore
 ///   04-coherence.md §6).
 /// - `perform` records every action and either throws `performFailure` or
 ///   returns the scripted receipt (`.unchanged` by default).
-/// - `details`/`pastePayload` throw `.notFound`; `thumbnail` returns `nil`.
+/// - `details` throws `.notFound`; `pastePayload` uses an optional scripted
+///   read for drag-provider UI tests, otherwise `.notFound`; thumbnail is nil.
 /// - `retentionConfiguration` returns the scripted configured-policy value
 ///   and records the request count (V2-07 §6.3's panel-open read).
 actor ScriptedHistory: ClipboardHistory {
@@ -67,6 +68,9 @@ actor ScriptedHistory: ClipboardHistory {
 
     /// The configured-policy value `retentionConfiguration` returns.
     private let scriptedRetentionConfiguration: HistoryRetentionConfiguration
+
+    private let pastePayloadRead:
+        (@Sendable (HistoryItemID) async throws -> PastePayload)?
 
     /// Recorded `observe` requests, in order.
     private(set) var observeRequests: [HistoryObservationRequest] = []
@@ -114,7 +118,8 @@ actor ScriptedHistory: ClipboardHistory {
         browseScript: [HistoryPageCursor: BrowseOutcome] = [:],
         performFailure: HistoryFailure? = nil,
         performReceipt: HistoryReceipt = .unchanged,
-        scriptedRetentionConfiguration: HistoryRetentionConfiguration = .newStoreDefaults
+        scriptedRetentionConfiguration: HistoryRetentionConfiguration = .newStoreDefaults,
+        pastePayloadRead: (@Sendable (HistoryItemID) async throws -> PastePayload)? = nil
     ) {
         self.observedFirstPage = observedFirstPage
         self.repeatsObservedFirstPage = repeatsObservedFirstPage
@@ -122,14 +127,19 @@ actor ScriptedHistory: ClipboardHistory {
         self.performFailure = performFailure
         self.performReceipt = performReceipt
         self.scriptedRetentionConfiguration = scriptedRetentionConfiguration
+        self.pastePayloadRead = pastePayloadRead
     }
 
     // MARK: Test control
 
     /// Pushes one observed page to the live stream — models a later
-    /// authoritative snapshot (docs/04-coherence.md §5).
-    func emitObservedPage(_ page: HistoryPage) {
-        liveContinuation?.yield(page)
+    /// authoritative snapshot (docs/04-coherence.md §5). Returns whether
+    /// this unbounded stream accepted the page; a cancelled stream refuses it.
+    @discardableResult
+    func emitObservedPage(_ page: HistoryPage) -> Bool {
+        guard let liveContinuation else { return false }
+        if case .enqueued = liveContinuation.yield(page) { return true }
+        return false
     }
 
     /// Pushes to one exact historical observation request (zero based).
@@ -232,6 +242,9 @@ actor ScriptedHistory: ClipboardHistory {
     }
 
     func pastePayload(for id: HistoryItemID) async throws -> PastePayload {
+        if let pastePayloadRead {
+            return try await pastePayloadRead(id)
+        }
         throw HistoryFailure.notFound(id)
     }
 
@@ -245,6 +258,11 @@ actor ScriptedHistory: ClipboardHistory {
     func retentionConfiguration() async throws -> HistoryRetentionConfiguration {
         retentionConfigurationRequestCount += 1
         return scriptedRetentionConfiguration
+    }
+
+    func usage() async throws -> HistoryUsage {
+        // No retained-byte snapshot is configured by this read/receipt script.
+        throw HistoryFailure.temporarilyUnavailable(.factProof)
     }
 }
 
@@ -329,6 +347,11 @@ actor ThumbnailScriptHistory: ClipboardHistory {
     func retentionConfiguration() async throws -> HistoryRetentionConfiguration {
         .newStoreDefaults
     }
+
+    func usage() async throws -> HistoryUsage {
+        // Encoded thumbnails are not retained Canonical/revision bytes.
+        throw HistoryFailure.temporarilyUnavailable(.factProof)
+    }
 }
 
 // MARK: - PausableDetailsHistory (preview fence double)
@@ -345,6 +368,11 @@ actor ThumbnailScriptHistory: ClipboardHistory {
 /// already suspended would replace the first continuation (leaking it), so
 /// tests keep one selection per ID.
 actor PausableDetailsHistory: ClipboardHistory {
+
+    func usage() async throws -> HistoryUsage {
+        // Individual scripted details do not establish a whole-store total.
+        throw HistoryFailure.temporarilyUnavailable(.factProof)
+    }
 
     /// Scripted detail answers by item ID.
     private var detailsByID: [HistoryItemID: HistoryDetails] = [:]

@@ -28,6 +28,17 @@ Gateway's admitted operations, and xxh3's clipboard-dedup candidate lookup may
 be maintained when directly required by behavior; this paragraph forbids
 inventing new enforcement or orchestration around them.
 
+**Current storage direction (user direction, 2026-09-06):** this is a new
+project with no legacy-store compatibility requirement. Keep one current
+SwiftData schema with ten models; remove historical model variants,
+`VersionedSchema`/migration plans, legacy projection columns and recipe tags,
+startup projection rebuilds, and retained-byte backfill paths. Titles and
+search bodies persist only as `titleUTF8: Data` and `searchBodyUTF8: Data`.
+This does not retire current blob codecs, corrupt-value rejection, immutable
+content revisions, `ContentVersion`, or `ChangePosition`. Historical migration
+chapters and progress entries are records, not instructions to restore those
+paths. Do not replace them with new compatibility or enforcement machinery.
+
 **Platform and toolchain:**
 
 - macOS 26+ only (`platforms: [.macOS(.v26)]`), arm64.
@@ -39,7 +50,7 @@ inventing new enforcement or orchestration around them.
   Correctness CI intentionally consists of the SwiftPM and generated-app
   build/test lanes; there is no separate static-source or symbol-snapshot lane.
 
-**Current state (2026-08-24, `master` through PR #44):** steps 0–9 are
+**Historical baseline (2026-08-24, `master` through PR #44):** steps 0–9 are
 done and CI-green (scaffold + build/tests, `HistoryCore` public surface,
 `HistoryDomain` pure core, dependency pins, schema v1 + codecs,
 `HistoryAuthority` capture/mutations/reads/observation/thumbnail, product
@@ -154,6 +165,7 @@ ContentPreview ────────────→ ClipboardFormats + CoreGr
                              (package-only bounded transient renderer)
 ClipyCLIContract ──────────→ Foundation only (package-only pure wire contract)
 HistoryRestartProbe ───────→ HistoryCore + HistoryStorage (test evidence only)
+PreviewAccessProbeRunner ──→ ContentPreview (DEBUG-only test evidence only)
 ```
 
 | Target | Surface | Role |
@@ -170,6 +182,7 @@ HistoryRestartProbe ───────→ HistoryCore + HistoryStorage (test 
 | `xxh3` | Package-internal C | 64-bit representation fingerprints (vendored xxHash v0.8.3) |
 | `HistoryPerfRunner` | Executable | Part VI §9 performance-runner scaffold (fixtures populate at step 8) |
 | `HistoryRestartProbe` | Test evidence executable target | Card 1C-1 three-process public-API restart tracer; no declared package product |
+| `PreviewAccessProbeRunner` | Test evidence executable target | PLAY-TIER-1A decoder access-mode probe child (docs/v2/V2-08-decoder-access-modes.md); DEBUG-only, no declared package product |
 
 **Current implementation shape (docs/01-architecture.md §3/§6/§8):**
 
@@ -238,9 +251,12 @@ bash scripts/ci/run_signed_runtime.sh \
 
 - `SwiftPM build + test` runs the strict-concurrency package build and the
   functional SwiftPM suite.
-- `XcodeGen generate + app build/test` regenerates the project, then builds and
-  tests the app, hosted integration target, and running-app UI target.
-- The two jobs run in parallel. Static regex/import/dependency scans,
+- Four `App build + GUI tests` jobs independently regenerate/build the app
+  and run disjoint GUI test groups on separate macOS runners. The fourth also
+  runs the hosted integration tests and all remaining/new GUI test classes.
+- SwiftPM and the four app jobs run in parallel (five jobs total). GUI tests
+  within each runner remain serial because they share the system pasteboard
+  and desktop. Static regex/import/dependency scans,
   SwiftLint, vendor/source scans, generated-project comparison, test-selection
   scans, and HistoryCore symbol generation/comparison are deliberately not
   correctness jobs. Architectural restrictions in §2/§5 remain design and
@@ -313,10 +329,11 @@ logs are not parsed as compiler output. Write warning-free code.
 
 ## 7. CI and deployment
 
-- `.github/workflows/correctness.yml` is the only push/PR workflow. It has two
-  parallel jobs: **SwiftPM build + test** and **XcodeGen generate + app
-  build/test**. Job steps delegate to `scripts/ci/` so the same commands are
-  reproducible without copying shell across YAML.
+- `.github/workflows/correctness.yml` is the only push/PR workflow. It runs
+  **SwiftPM build + test** alongside four **App build + GUI tests** shards.
+  Job steps delegate to `scripts/ci/`; `run_app_correctness.sh` accepts an
+  optional sixth argument (`1`–`4`), while its existing five-argument form
+  still runs the full hosted/UI suite. Each shard uploads its own results.
 - The exact-matcher and scale-admission workflows remain reusable
   `workflow_call` modules and run only through the dedicated manual
   `workflow_dispatch` caller after same-SHA correctness succeeds. They never

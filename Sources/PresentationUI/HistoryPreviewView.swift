@@ -49,10 +49,13 @@ package final class PreviewContentLoader {
     /// What the preview column renders for the requested item. Raster pixels
     /// stay in the framework-neutral `raster` value below.
     package enum AppliedContent: Equatable {
-        /// Body text, capped by ContentPreview's history-pane profile.
-        case text(String)
+        /// Body text, capped by ContentPreview's history-pane profile, with
+        /// truncation kept separate from the literal preview body.
+        case text(String, wasTruncated: Bool = false)
         /// A bounded decoded image is published on `image`.
         case image
+        /// An inert copied address; rendering never follows its destination.
+        case reference(PreviewReference)
     }
 
     /// The loader's closed presentation phase (review Card 9D). A valid type
@@ -94,6 +97,10 @@ package final class PreviewContentLoader {
     /// observable state or crosses the renderer actor seam.
     package private(set) var raster: PreviewRaster?
 
+    /// PDF uses the same bitmap surface, but its page count must not be
+    /// mistaken for an image source's frame count. Other formats keep nil.
+    package private(set) var pdfPageCount: Int?
+
     /// The applied image's pixel dimensions — the package-observable proof
     /// of a decode without exposing the image itself.
     package var appliedImageSize: CGSize? {
@@ -104,8 +111,23 @@ package final class PreviewContentLoader {
     /// bounded eager artifact, never by retaining or introspecting a
     /// `CGImage`/`NSImage` accessibility object.
     package var appliedImageAccessibilityLabel: String? {
+        imageAccessibilityLabel(locale: .current)
+    }
+
+    package func imageAccessibilityLabel(locale: Locale) -> String? {
         guard let raster else { return nil }
-        return "Image preview, \(raster.width) by \(raster.height) pixels"
+        if let pdfPageCount {
+            return PreviewCopy.pdfPageAccessibilityLabel(pageCount: pdfPageCount, locale: locale)
+        }
+        return PreviewCopy.imageDimensions(width: raster.width, height: raster.height, locale: locale)
+    }
+
+    package func appliedRasterNotice(locale: Locale = .current) -> String? {
+        guard phase == .content(.image), let raster else { return nil }
+        if let pdfPageCount {
+            return PreviewCopy.pdfPageDisclosure(pageCount: pdfPageCount, locale: locale)
+        }
+        return raster.sourceImageCount > 1 ? PreviewCopy.multiImageDisclosure() : nil
     }
 
     private let history: any ClipboardHistory
@@ -129,6 +151,31 @@ package final class PreviewContentLoader {
         self.history = history
     }
 
+    /// Coalescing updates occurrence facts without changing the content
+    /// reference or requiring another details read. Only a newer count for
+    /// this exact target can supersede the metadata. Retain accepted facts
+    /// across query-loading gaps without another content load or cache.
+    package func updateOccurrence(from observedRow: HistoryRow?) {
+        guard let occurrence, let observedRow,
+              observedRow.item == requestedItem,
+              observedRow.copyCount > occurrence.count
+        else { return }
+        self.occurrence = CopyOccurrenceSummary(
+            firstCopiedAt: occurrence.firstCopiedAt,
+            lastCopiedAt: observedRow.lastCopiedAt,
+            count: observedRow.copyCount,
+            firstSource: occurrence.firstSource,
+            lastSource: observedRow.lastSource
+        )
+    }
+
+    package func displayedOccurrence(
+        for item: HistoryItemReference?
+    ) -> CopyOccurrenceSummary? {
+        guard let item, requestedItem == item else { return nil }
+        return occurrence
+    }
+
     #if DEBUG
     /// Content-free renderer accounting for deterministic lifecycle proofs.
     /// The concrete renderer remains private and Release exposes no hook.
@@ -148,22 +195,39 @@ package final class PreviewContentLoader {
         await load(item: requestedItem)
     }
 
+    /// View disappearance releases applied content immediately, including
+    /// when SwiftUI retains this state for a later appearance. In-flight
+    /// reads/renders cannot publish after the pane or Quick Look closes
+    /// (PREVIEW-FENCE-1).
+    package func clear() {
+        requestGeneration += 1
+        requestedItem = nil
+        raster = nil
+        pdfPageCount = nil
+        occurrence = nil
+        canRetryFailure = false
+        phase = .unsupported
+    }
+
     /// Loads the preview content for `item` (`nil` clears the pane's
-    /// content state). Driven by the view's `.task(id: targetItem)`: a
+    /// content state). Driven by the view's reference/retry-keyed task: a
     /// retarget cancels the previous load's task, and the fence covers the
     /// case where cancellation arrives late or the awaited work does not
     /// throw on cancellation.
     package func load(item: HistoryItemReference?) async {
+        guard !Task.isCancelled else { return }
+        guard let item else {
+            clear()
+            return
+        }
         requestGeneration += 1
         let generation = requestGeneration
         requestedItem = item
         raster = nil
+        pdfPageCount = nil
         occurrence = nil
         canRetryFailure = false
-        phase = item == nil ? .unsupported : .loading
-        guard let item else {
-            return
-        }
+        phase = .loading
         do {
             let details = try await readDetails(for: item.id)
             try Task.checkCancellation()
@@ -192,13 +256,27 @@ package final class PreviewContentLoader {
             switch outcome {
             case .content(.raster(let artifact)):
                 raster = artifact
+                pdfPageCount = nil
+                canRetryFailure = false
+                phase = .content(.image)
+                occurrence = details.occurrence
+            case .content(.pdf(let artifact)):
+                raster = artifact.raster
+                pdfPageCount = artifact.pageCount
                 canRetryFailure = false
                 phase = .content(.image)
                 occurrence = details.occurrence
             case .content(.text(let artifact)):
                 raster = nil
                 canRetryFailure = false
-                phase = .content(.text(artifact.text))
+                phase = .content(.text(
+                    artifact.text, wasTruncated: artifact.wasTruncated
+                ))
+                occurrence = details.occurrence
+            case .content(.reference(let artifact)):
+                raster = nil
+                canRetryFailure = false
+                phase = .content(.reference(artifact))
                 occurrence = details.occurrence
             case .unavailable:
                 raster = nil
@@ -269,6 +347,15 @@ struct HistoryPreviewView: View {
     private let selectionSource: SelectionSource
 
     @State private var loader: PreviewContentLoader
+    @State private var retryGeneration = 0
+    @Environment(\.locale) private var locale
+
+    /// Retargets and retries share SwiftUI's view-owned task, so either a
+    /// new reference or disappearance cancels the active load (Card 9D).
+    private struct LoadRequest: Equatable {
+        let item: HistoryItemReference?
+        let retryGeneration: Int
+    }
 
     /// Standalone entry point: PreviewPaneState owns the exact target.
     init(viewState: HistoryViewState, previewState: PreviewPaneState) {
@@ -331,6 +418,11 @@ struct HistoryPreviewView: View {
         }
     }
 
+    private var observedRow: HistoryRow? {
+        guard let targetItem else { return nil }
+        return viewState.rows.first { $0.item == targetItem }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             previewBody
@@ -340,11 +432,20 @@ struct HistoryPreviewView: View {
                 .padding(.horizontal, PanelTheme.spacingMedium)
                 .padding(.vertical, PanelTheme.spacingSmall)
         }
-        // One load per exact observed reference; the loader's fence
+        // One load per exact observed reference or explicit retry; the loader's fence
         // discards a late result, so a superseded selection never renders
         // another item's content (SPEC-IMPL-007 / PREVIEW-FENCE-1).
-        .task(id: targetItem) {
+        .task(id: LoadRequest(item: targetItem, retryGeneration: retryGeneration)) {
             await loader.load(item: targetItem)
+            // Observation may have advanced while details/rendering suspended.
+            // Re-read its current row after loading publishes occurrence facts.
+            loader.updateOccurrence(from: observedRow)
+        }
+        .onChange(of: observedRow) { _, row in
+            loader.updateOccurrence(from: row)
+        }
+        .onDisappear {
+            loader.clear()
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.preview.root")
@@ -358,45 +459,73 @@ struct HistoryPreviewView: View {
             unavailableBody
         } else if loader.requestedItem != targetItem {
             ProgressView()
-                .accessibilityLabel("Loading preview")
+                .accessibilityLabel(PreviewCopy.text("Loading preview"))
         } else {
             switch loader.phase {
             case .loading:
                 ProgressView()
-                    .accessibilityLabel("Loading preview")
+                    .accessibilityLabel(PreviewCopy.text("Loading preview"))
             case .content(.image):
                 if let raster = loader.raster,
                    let accessibilityLabel =
-                    loader.appliedImageAccessibilityLabel,
+                    loader.imageAccessibilityLabel(locale: locale),
                    let image = PreviewRasterDisplay.image(
                        raster,
                        scale: 1,
                        label: Text(accessibilityLabel)
                    ) {
-                    image
-                        .resizable()
-                        .scaledToFit()
-                        // Fill the (window-sized) content area so a taller
-                        // panel shows a proportionally larger preview; the
-                        // image itself stays aspect-fit and centered.
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(8)
-                        .accessibilityIdentifier("clipy.preview.image")
+                    VStack(spacing: 0) {
+                        image
+                            .resizable()
+                            .scaledToFit()
+                            // Fill the available area while keeping the
+                            // bounded raster aspect-fit and centered.
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .padding(8)
+                            .accessibilityIdentifier("clipy.preview.image")
+                        if let notice = loader.appliedRasterNotice(locale: locale) {
+                            Text(notice)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(10)
+                                .accessibilityIdentifier(loader.pdfPageCount == nil
+                                    ? "clipy.preview.multi-image-notice"
+                                    : "clipy.preview.pdf-page-notice")
+                        }
+                    }
                 } else {
                     failedBody
                 }
-            case .content(.text(let text)):
-                ScrollView(.vertical) {
-                    Text(text)
-                        .font(.body)
-                        .textSelection(.enabled)
+            case .content(.text(let text, let wasTruncated)):
+                VStack(spacing: 0) {
+                    ScrollView(.vertical) {
+                        Text(verbatim: text)
+                            .font(.body)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
+                            .accessibilityIdentifier("clipy.preview.text")
+                    }
+                    // The body scrolls independently; the disclosure stays
+                    // visible and never becomes part of selectable content.
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    if wasTruncated {
+                        Text(PreviewCopy.text(
+                            "Preview truncated. Copying the item keeps its complete content."
+                        ))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(10)
-                        .accessibilityIdentifier("clipy.preview.text")
+                        .accessibilityIdentifier("clipy.preview.truncation-notice")
+                    }
                 }
-                // The column is window-sized; the scroll view fills it so a
-                // taller panel reveals more of the body per page.
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .content(.reference(let reference)):
+                ReferencePreviewView(reference: reference)
             case .failed:
                 failedBody
             case .unsupported:
@@ -411,7 +540,7 @@ struct HistoryPreviewView: View {
                 .font(.title2)
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            Text("No Preview")
+            Text(PreviewCopy.text("No Preview"))
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("clipy.preview.unsupported")
@@ -427,14 +556,14 @@ struct HistoryPreviewView: View {
                 .font(.title2)
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            Text("Preview Unavailable")
+            Text(PreviewCopy.text("Preview Unavailable"))
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("clipy.preview.failed")
             if loader.canRetryFailure {
-                Button("Retry") {
-                    Task {
-                        await loader.retry()
+                Button(PreviewCopy.text("Retry")) {
+                    if loader.phase == .failed, loader.canRetryFailure {
+                        retryGeneration += 1
                     }
                 }
                 .keyboardShortcut("r", modifiers: .command)
@@ -448,13 +577,12 @@ struct HistoryPreviewView: View {
     @ViewBuilder
     private var metadataBar: some View {
         HStack(spacing: 6) {
-            if loader.requestedItem == targetItem,
-               let occurrence = loader.occurrence {
+            if let occurrence = loader.displayedOccurrence(for: targetItem) {
                 if let source = occurrence.lastSource {
                     Text(source)
                         .lineLimit(1)
                 }
-                Text("Copied \(occurrence.count)×")
+                Text(PreviewCopy.copyCount(occurrence.count, locale: locale))
                 Spacer(minLength: 4)
                 Text(occurrence.lastCopiedAt, style: .date)
                 Text(occurrence.lastCopiedAt, style: .time)

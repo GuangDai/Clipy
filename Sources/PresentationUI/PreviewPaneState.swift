@@ -61,7 +61,13 @@ public final class PreviewPaneState {
     /// NEXT selection change (it never opens the pane by itself).
     /// Package (GOV-3): `HistoryPanelView` pushes the preference from the
     /// injected appearance snapshot inside this module.
-    package var isAutoOpenPreferenceEnabled = true
+    package var isAutoOpenPreferenceEnabled = true {
+        didSet {
+            if !isAutoOpenPreferenceEnabled {
+                cancelPendingAutoOpen()
+            }
+        }
+    }
 
     /// The pending dwell task; cancelled by every selection change, manual
     /// toggle, or panel transition.
@@ -108,11 +114,18 @@ public final class PreviewPaneState {
     /// Advances the exact reference of the item already visible in preview.
     /// Observation can revise an item without changing the list's ID-only
     /// selection; that is content coherence, not a new cross-item dwell.
-    /// Closed/manual-suppressed panes stay closed.
+    /// Closed/manual-suppressed panes stay closed. A different selected item's
+    /// pending dwell keeps its original schedule.
     package func refreshOpenPreview(_ item: HistoryItemReference) {
-        guard isOpen, previewedItem?.id == item.id else { return }
-        cancelPendingAutoOpen()
-        previewedItem = item
+        guard isOpen,
+              let previewedItem,
+              previewedItem.id == item.id,
+              item.contentVersion.rawValue > previewedItem.contentVersion.rawValue
+        else { return }
+        if pendingAutoOpenItem?.id == item.id {
+            cancelPendingAutoOpen()
+        }
+        self.previewedItem = item
     }
 
     // MARK: - Manual toggle (Maccy `togglePreview()`)

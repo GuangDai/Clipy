@@ -184,7 +184,7 @@ private static func expectCreateGuardRollback(
     let row = try #require(rows.first)
     #expect(row.id == reference.id.rawValue)
     #expect(row.contentVersionRaw == reference.contentVersion.rawValue)
-    #expect(row.title == canonicalText)
+    #expect(row.titleUTF8 == Data(canonicalText.utf8))
     let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
     let lineage = try RevisionStateBlobCodec.decode(
         row.revisionStateBlob,

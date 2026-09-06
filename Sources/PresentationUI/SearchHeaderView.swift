@@ -50,6 +50,8 @@ package struct SearchHeaderView: View {
         .background { modeShortcuts }
     }
 
+    private var copyBundle: Bundle { PanelActionsCopy.bundle(for: locale) }
+
     // MARK: Search field
 
     private var searchField: some View {
@@ -57,12 +59,12 @@ package struct SearchHeaderView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            TextField("Search clipboard…", text: searchTextBinding)
+            TextField(PanelActionsCopy.text("Search clipboard…", bundle: copyBundle), text: searchTextBinding)
                 .textFieldStyle(.plain)
                 .focused(searchFieldFocused)
                 .autocorrectionDisabled(true)
                 .accessibilityIdentifier("clipy.search.field")
-                .accessibilityLabel("Search clipboard history")
+                .accessibilityLabel(PanelActionsCopy.text("Search clipboard history", bundle: copyBundle))
                 .onSubmit(onSubmitSelection)
                 .onKeyPress(.downArrow) {
                     onMoveSelection(1)
@@ -77,14 +79,14 @@ package struct SearchHeaderView: View {
                     viewState.clearSearch()
                     searchFieldFocused.wrappedValue = true
                 } label: {
-                    Text("Clear")
+                    Text(PanelActionsCopy.text("Clear", bundle: copyBundle))
                 }
                 .buttonStyle(.plain)
                 .contentShape(Rectangle())
                 .accessibilityIdentifier("clipy.search.clear")
-                .accessibilityLabel("Clear search")
+                .accessibilityLabel(PanelActionsCopy.text("Clear search", bundle: copyBundle))
                 .accessibilityHint(
-                    "Clears the query and keeps focus in search."
+                    PanelActionsCopy.text("Clears the query and keeps focus in search.", bundle: copyBundle)
                 )
             }
         }
@@ -101,36 +103,27 @@ package struct SearchHeaderView: View {
     private var resultCountCaption: some View {
         Text(
             Self.resultCountText(
-                count: viewState.rows.count,
-                hasNextPage: viewState.hasNextPage,
-                locale: locale
+                for: viewState,
+                locale: locale,
+                bundle: copyBundle
             )
         )
             .font(.caption)
             .foregroundStyle(.secondary)
     }
 
-    /// A page cursor makes `count` a lower bound, not a total (Card 8C).
-    /// The exact-count key varies by plural in PresentationUI's resources;
-    /// the cursor key stays explicitly plural because even `1+` is not one.
-    package static func resultCountText(
-        count: Int,
-        hasNextPage: Bool,
-        locale: Locale = .current
+    /// Match the list's client-side type/pinned filter. A cursor still makes
+    /// this a lower bound, since later pages may contain more visible matches.
+    internal static func resultCountText(
+        for viewState: HistoryViewState,
+        locale: Locale = .current,
+        bundle: Bundle = .module
     ) -> String {
-        if hasNextPage {
-            return String(
-                localized: "\(count)+ results",
-                bundle: .module,
-                locale: locale,
-                comment: "A lower-bound search result count; more results are available."
-            )
-        }
-        return String(
-            localized: "\(count) results",
-            bundle: .module,
+        HistoryCountCopy.results(
+            count: viewState.displayedRows.count,
+            hasNextPage: viewState.hasNextPage,
             locale: locale,
-            comment: "The exact number of search results."
+            bundle: bundle
         )
     }
 
@@ -138,27 +131,27 @@ package struct SearchHeaderView: View {
 
     private var modeMenu: some View {
         Menu {
-            Picker("Search Mode", selection: searchModeBinding) {
-                Text("Exact").tag(SearchMode.exact)
-                Text("Fuzzy").tag(SearchMode.fuzzy)
-                Text("Regular Expression").tag(SearchMode.regexp)
+            Picker(PanelActionsCopy.text("Search Mode", bundle: copyBundle), selection: searchModeBinding) {
+                Text(PanelActionsCopy.text("Exact", bundle: copyBundle)).tag(SearchMode.exact)
+                Text(PanelActionsCopy.text("Fuzzy", bundle: copyBundle)).tag(SearchMode.fuzzy)
+                Text(PanelActionsCopy.text("Regular Expression", bundle: copyBundle)).tag(SearchMode.regexp)
             }
         } label: {
             Label(
-                Self.modeName(viewState.searchMode),
+                modeName(viewState.searchMode),
                 systemImage: "text.magnifyingglass"
             )
         }
         .fixedSize()
-        .accessibilityLabel("Search Mode")
-        .accessibilityValue(Self.modeName(viewState.searchMode))
+        .accessibilityLabel(PanelActionsCopy.text("Search Mode", bundle: copyBundle))
+        .accessibilityValue(modeName(viewState.searchMode))
     }
 
-    private static func modeName(_ mode: SearchMode) -> String {
+    private func modeName(_ mode: SearchMode) -> String {
         switch mode {
-        case .exact: return "Exact"
-        case .fuzzy: return "Fuzzy"
-        case .regexp: return "Regular Expression"
+        case .exact: return PanelActionsCopy.text("Exact", bundle: copyBundle)
+        case .fuzzy: return PanelActionsCopy.text("Fuzzy", bundle: copyBundle)
+        case .regexp: return PanelActionsCopy.text("Regular Expression", bundle: copyBundle)
         }
     }
 
@@ -169,20 +162,20 @@ package struct SearchHeaderView: View {
     /// restarts the History query (see `HistoryViewState.typeFilter`).
     private var filterMenu: some View {
         Menu {
-            Picker("Filter", selection: typeFilterBinding) {
-                Text("All").tag(HistoryTypeFilter.all)
-                Text("Text").tag(HistoryTypeFilter.text)
-                Text("Images").tag(HistoryTypeFilter.images)
-                Text("Links").tag(HistoryTypeFilter.links)
+            Picker(PanelActionsCopy.text("Filter", bundle: copyBundle), selection: typeFilterBinding) {
+                Text(PanelActionsCopy.text("All", bundle: copyBundle)).tag(HistoryTypeFilter.all)
+                Text(PanelActionsCopy.text("Text", bundle: copyBundle)).tag(HistoryTypeFilter.text)
+                Text(PanelActionsCopy.text("Images", bundle: copyBundle)).tag(HistoryTypeFilter.images)
+                Text(PanelActionsCopy.text("Links", bundle: copyBundle)).tag(HistoryTypeFilter.links)
             }
             Divider()
-            Toggle("Pinned Only", isOn: pinnedOnlyBinding)
+            Toggle(PanelActionsCopy.text("Pinned Only", bundle: copyBundle), isOn: pinnedOnlyBinding)
         } label: {
             Image(systemName: "line.3.horizontal.decrease.circle")
         }
         .fixedSize()
         .accessibilityIdentifier("clipy.search.filter")
-        .accessibilityLabel("Filter results")
+        .accessibilityLabel(PanelActionsCopy.text("Filter results", bundle: copyBundle))
     }
 
     // MARK: Bindings
@@ -221,11 +214,11 @@ package struct SearchHeaderView: View {
     /// keyboard surface; the contract's sanctioned hidden-shortcut pattern).
     private var modeShortcuts: some View {
         Group {
-            Button("Exact") { viewState.searchMode = .exact }
+            Button(PanelActionsCopy.text("Exact", bundle: copyBundle)) { viewState.searchMode = .exact }
                 .keyboardShortcut("1", modifiers: .command)
-            Button("Fuzzy") { viewState.searchMode = .fuzzy }
+            Button(PanelActionsCopy.text("Fuzzy", bundle: copyBundle)) { viewState.searchMode = .fuzzy }
                 .keyboardShortcut("2", modifiers: .command)
-            Button("Regular Expression") { viewState.searchMode = .regexp }
+            Button(PanelActionsCopy.text("Regular Expression", bundle: copyBundle)) { viewState.searchMode = .regexp }
                 .keyboardShortcut("3", modifiers: .command)
         }
         .opacity(0)

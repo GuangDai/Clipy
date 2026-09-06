@@ -69,8 +69,9 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
     /// anchor is the fifth match, finds only three post-anchor survivors
     /// and therefore scans the whole corpus again. Pages must partition
     /// the matches exactly.
-    @Test func exactScanStopsAtThePageBudgetAndResumesAcrossContinuations() async throws {
-        let storeURL = WSSupport.tempStoreURL("scan-budget-exact")
+    @Test(arguments: [SearchMode.exact, .regexp])
+    func orderedScanStopsAtThePageBudgetAndResumesAcrossContinuations(mode: SearchMode) async throws {
+        let storeURL = WSSupport.tempStoreURL("scan-budget-ordered")
         defer { WSSupport.removeStore(storeURL) }
         let history = try await WSSupport.openHistory(storeURL: storeURL)
         // Bodies are pairwise distinct (copy coalescing would otherwise
@@ -88,7 +89,7 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
 
         let (events, eventContinuation, _) = await Self.captureProbe(into: history)
         let first = try await history.browse(HistoryBrowseRequest(
-            kind: .search(text: "budgetterm", mode: .exact),
+            kind: .search(text: "budgetterm", mode: mode),
             limit: 5
         ))
         #expect(first.rows.count == 5)
@@ -103,17 +104,28 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
         )
 
         let scanComplete = try #require(firstEvents.first {
-            $0.component == "worker" && $0.phase == "exact-scan-complete"
+            $0.component == "worker"
+                && $0.phase == (mode == .exact ? "exact-scan-complete" : "regexp-scan-complete")
         })
         #expect(scanComplete.rowsProcessed == 8)
         #expect(scanComplete.rowsTotal == 12)
         #expect(scanComplete.matchedRows == 6)
+        for phase in ["evaluation-complete", "continuation", "page-materialization", "complete"] {
+            let summary = try #require(firstEvents.first {
+                $0.component == "worker" && $0.phase == phase
+            })
+            #expect(summary.matchedRows == 6)
+            if phase == "evaluation-complete" || phase == "complete" {
+                #expect(summary.rowsProcessed == 8)
+                #expect(summary.rowsTotal == 12)
+            }
+        }
 
         let (continuationEvents, tailContinuation, _) = await Self.captureProbe(
             into: history
         )
         let second = try await history.browse(HistoryBrowseRequest(
-            kind: .search(text: "budgetterm", mode: .exact),
+            kind: .search(text: "budgetterm", mode: mode),
             limit: 5,
             after: first.next
         ))
@@ -126,10 +138,22 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
         )
 
         let continuationComplete = try #require(secondEvents.first {
-            $0.component == "worker" && $0.phase == "exact-scan-complete"
+            $0.component == "worker"
+                && $0.phase == (mode == .exact ? "exact-scan-complete" : "regexp-scan-complete")
         })
         #expect(continuationComplete.rowsProcessed == 12)
         #expect(continuationComplete.matchedRows == 8)
+        for phase in ["evaluation-complete", "continuation", "page-materialization", "complete"] {
+            let summary = try #require(secondEvents.first {
+                $0.component == "worker" && $0.phase == phase
+            })
+            // All eight encountered matches count, including the first page's
+            // hits that did not enter this page's bounded candidates.
+            #expect(summary.matchedRows == 8)
+            if phase == "evaluation-complete" || phase == "complete" {
+                #expect(summary.rowsProcessed == 12)
+            }
+        }
 
         // No gap, no repeat: the two pages partition the eight matches.
         let firstIDs = Set(first.rows.map(\.item.id))
@@ -202,8 +226,8 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
     }
 
     /// The fuzzy lane emits its begin/complete events with per-lane title
-    /// and body accounting; the row that matches in title and the row that
-    /// matches in body are counted separately and nothing else matches.
+    /// and body accounting. Three matches exceed the two-candidate heap for
+    /// a one-row page; post-scan totals must still report all three hits.
     @Test func fuzzyScanEmitsLaneEventsWithSeparateTitleAndBodyAccounting() async throws {
         let storeURL = WSSupport.tempStoreURL("fuzzy-lane-probe")
         defer { WSSupport.removeStore(storeURL) }
@@ -214,17 +238,22 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
             "0123456789\n9876543210\n002",
         ])
         // One body-only match (term below the first line, digit-only title)
-        // plus one title match (term in the single-line body ⇒ title).
+        // plus two title matches (term in the single-line body ⇒ title).
         _ = try await history.perform(.capture(WSSupport.textCapture(
             "budget 0123456789",
             observedAt: Self.base.addingTimeInterval(100),
+            source: "com.example.budget"
+        )))
+        _ = try await history.perform(.capture(WSSupport.textCapture(
+            "budget another title",
+            observedAt: Self.base.addingTimeInterval(101),
             source: "com.example.budget"
         )))
 
         let (events, eventContinuation, _) = await Self.captureProbe(into: history)
         let page = try await history.browse(HistoryBrowseRequest(
             kind: .search(text: "budget", mode: .fuzzy),
-            limit: 10
+            limit: 1
         ))
         let captured = await Self.finishCapture(
             history,
@@ -235,15 +264,25 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
         let complete = try #require(captured.first {
             $0.component == "worker" && $0.phase == "fuzzy-scan-complete"
         })
-        #expect(complete.rowsTotal == 4)
-        #expect(complete.rowsProcessed == 4)
-        #expect(complete.titleMatches == 1)
+        #expect(complete.rowsTotal == 5)
+        #expect(complete.rowsProcessed == 5)
+        #expect(complete.titleMatches == 2)
         #expect(complete.bodyMatches == 1)
-        #expect(complete.matchedRows == 2)
+        #expect(complete.matchedRows == 3)
+        for phase in ["evaluation-complete", "continuation", "page-materialization", "complete"] {
+            let summary = try #require(captured.first {
+                $0.component == "worker" && $0.phase == phase
+            })
+            #expect(summary.matchedRows == 3)
+            if phase == "evaluation-complete" || phase == "complete" {
+                #expect(summary.rowsProcessed == 5)
+            }
+        }
         #expect(captured.contains {
             $0.component == "worker" && $0.phase == "fuzzy-scan-begin"
         })
-        #expect(page.rows.count == 2)
+        #expect(page.rows.count == 1)
+        #expect(page.next != nil)
     }
 
     /// The regexp lane emits the same correlated accounting, and its

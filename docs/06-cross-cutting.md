@@ -91,6 +91,8 @@ None of these types, tables, protocols, or state machines belongs to v1. The tri
 
 Every admitted cache must satisfy the Part IV cache law. G2 must define durable record schema, retention, cursor expiration, crash consistency, and replay completeness before any collection cache can depend on it.
 
+G1 measurement status (2026-09-02): the representative-scrolling journey (`ThumbnailScrollMeasurementJourneyUITests`, ClipyUITests) measured decode-segment p95 ≈ 1.6 ms (threshold: above 16 ms; even the fetch+decode upper bound peaked at 11.05 ms p95) and 0% identical completed requests (threshold: ≥ 30%) on two independent green CI runs (PR #54 run 33224258855; master run 33226454046). Both conditions failed, so the shared in-memory completed-thumbnail cache is **not admitted** (DEC-THUMB-CACHE resolved; full adjudication record in `V2-04` §2.4). The trigger text above is unchanged: a future representative workload meeting both thresholds re-opens admission.
+
 ### 4. Product-deferred capabilities
 
 The following are not performance grafts and are not implied by G1–G8:
@@ -155,11 +157,33 @@ a package-only Foundation target containing only open-world exact identifiers
 and declared codec facts. Each behavior owner retains its purpose admission.
 `ContentPreview` is likewise concrete rather than speculative: package-only
 immutable representation inputs plus closed product presets produce bounded
-text or eager tight BGRA8/sRGB raster outcomes. It may import only Foundation,
+text, eager tight BGRA8/sRGB rasters, or copied-address metadata. It may import only Foundation,
 ClipboardFormats, CoreGraphics, and ImageIO; it never reads History, owns item/
 reference/lifecycle/cache state, performs external I/O, or exposes framework
 objects. Its direct tests and Presentation lifecycle tracers are functional
 correctness tests in the default lane.
+
+The history-pane preview keeps image-first and valid exact-text precedence.
+Text artifacts contain at most 50,000 complete Swift `Character`s as an exact
+source prefix. A separate truncation fact drives a visible UI notice outside
+the selectable body; no synthetic ellipsis is appended to copied source text.
+The preview limit never truncates History's retained values or paste payloads.
+When neither applies, the first exact `public.url` or `public.file-url`
+representation can produce an inert reference artifact. That selected input
+is limited to 16 KiB and must be strict UTF-8 with an absolute URL scheme;
+file references additionally require an absolute path. Parsing uses
+[Foundation's non-repairing URL initializer](https://developer.apple.com/documentation/foundation/url/init(string:encodinginvalidcharacters:))
+and [syntactic path extraction](https://developer.apple.com/documentation/foundation/url/path(percentencoded:)).
+The artifact retains the complete original address spelling and, for files,
+its decoded path. It does not resolve bookmarks or symlinks, query resource
+values, open files, request network resources, or provide an Open action.
+The UI presents selectable literal text and explains that the destination
+has not been opened. Invalid/oversized selected references return the existing
+malformed/resource-limit outcomes rather than silently trying another URL.
+Previewing the reference does not mutate History or the retained/paste bytes.
+Its separate stored filename/address search projection is owned by
+`ContentProjector` (Part V §15), not by the preview renderer.
+
 `HistoryRestartProbe` is likewise a no-product test-evidence executable; it is
 not part of the app or the future `clipyctl` surface. `HistoryPerfTests` imports
 the performance executable target only to prove its pure

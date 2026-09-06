@@ -107,7 +107,19 @@ func measureAdmissionExactSearch(
         notes: [
             "Each public search snapshots 5,000 inline 256 KiB searchBody projections before exact evaluation.",
             "The absent term forces a complete bounded-corpus scan without result DTO retention.",
-            "IND-07 measurement budget: 11 samples (reduced from the 101-sample profile budget) because each absent-term request costs roughly 125 s; per-rank support gating reports p50 only — p95 and p99 encode as null below their 20/100-sample nearest-rank support floors instead of a disguised sample maximum.",
+            "IND-07 measurement budget: 11 samples, reduced from the "
+                + "101-sample profile budget. The original ~125 s/request "
+                + "basis (the Foundation-oracle diagnostic that opened "
+                + "IND-07) is stale: GOV-1 run 32685185124 measured p50 "
+                + "2,666 ms per absent-term request (11 samples, range "
+                + "1,810–3,827 ms), at which 101 samples would fit the "
+                + "90-minute step ceiling (103 × 3.8 s ≈ 7 min). The "
+                + "reduction is retained so the record-only p50 trend "
+                + "survives even a regression to the ~125 s Foundation "
+                + "path (13 × 125 s ≈ 27 min vs 103 × 125 s ≈ 3.6 h). "
+                + "Per-rank support gating reports p50 only — p95 and p99 "
+                + "encode as null below their 20/100-sample nearest-rank "
+                + "support floors instead of a disguised sample maximum.",
             "Peak RSS is a worst-bound process high-water ceiling, not "
                 + "transient-hydration attribution or representative "
                 + "concurrent-DTO G8 evidence.",

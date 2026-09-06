@@ -130,7 +130,8 @@ extension ExternalOperationDescriptor {
             case .exact:
                 encodedMode = .exact
             case .fuzzy:
-                guard text.count <= limits.maximumFuzzyQueryCharacters else {
+                guard text.prefix(limits.maximumFuzzyQueryCharacters + 1).count
+                        <= limits.maximumFuzzyQueryCharacters else {
                     throw ExternalFailure.requestDenied(.invalidInput)
                 }
                 encodedMode = .fuzzy
@@ -190,55 +191,10 @@ internal enum TargetedExternalAuthorizationDecision: Sendable {
 }
 
 extension HistoryAuthority {
-    /// Re-fetches and validates exactly one connection plus at most nine
-    /// per-connection grant rows. Unknown connections and forbidden
-    /// connection-kind/capability/operation triples are rejected before an
-    /// audit row can attribute them to a known admitted connection.
-    ///
-    /// A known revoked connection or a known active connection without the
-    /// requested live grant crosses the mandatory denied-audit publication
-    /// barrier before its typed failure is released. Success writes nothing.
-    internal func authorizeExternal(
-        _ descriptor: ExternalOperationDescriptor,
-        as connection: ExternalConnectionID,
-        expectedConnectionKind: ConnectionEnrollKind = .appIntents
-    ) throws {
-        let requestedAt = storageClock.now()
-        try authorizeExternal(
-            descriptor,
-            as: connection,
-            expectedConnectionKind: expectedConnectionKind,
-            requestedAt: requestedAt
-        )
-    }
-
-    /// X.5 wrapper for a Gateway entry that already sampled the shared
-    /// Storage clock. Keeping the timestamp explicit prevents a second sample
-    /// from changing denial attribution.
-    internal func authorizeExternal(
-        _ descriptor: ExternalOperationDescriptor,
-        as connection: ExternalConnectionID,
-        expectedConnectionKind: ConnectionEnrollKind,
-        requestedAt: Date
-    ) throws {
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
-        let config = try Self.loadGatewayConfig(in: context)
-
-        try authorizeExternal(
-            descriptor,
-            as: connection,
-            expectedConnectionKind: expectedConnectionKind,
-            requestedAt: requestedAt,
-            config: config,
-            in: context
-        )
-    }
-
-    /// Caller-context X.5 denial wrapper. A known denial is appended through
+    /// Caller-context authorization. A known denial is appended through
     /// the caller's context before it escapes; an unknown connection remains
-    /// unaudited. Positive reads use this immediately before their V1
-    /// projection, while the legacy X.5 entry above preserves its behavior.
+    /// unaudited. Reads use this immediately before projection in their same
+    /// Authority interval; their successful result has its own audit barrier.
     internal func authorizeExternal(
         _ descriptor: ExternalOperationDescriptor,
         as connection: ExternalConnectionID,

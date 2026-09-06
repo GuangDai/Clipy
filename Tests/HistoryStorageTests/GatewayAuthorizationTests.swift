@@ -61,7 +61,7 @@ struct GatewayAuthorizationTests {
     )
 
     private static func makeFixture() async throws -> Fixture {
-        let schema = Schema(versionedSchema: HistorySchemaV4.self)
+        let schema = historySchema
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(
@@ -184,9 +184,10 @@ struct GatewayAuthorizationTests {
             requestedCapability: .manage,
             connectionID: Self.unknownConnectionID
         )) {
-            try await fixture.authority.authorizeExternal(
-                Self.pinDescriptor,
-                as: Self.unknownConnectionID
+            _ = try await fixture.authority.commitExternal(
+                request: .pin(Self.itemID),
+                connection: Self.unknownConnectionID,
+                requestedAt: fixture.clock.now()
             )
         }
 
@@ -199,13 +200,16 @@ struct GatewayAuthorizationTests {
     func missingGrantIsAudited() async throws {
         let fixture = try await Self.makeFixture()
 
+        // The real target is absent. Authorization must still determine the
+        // published denial and audit, rather than disclosing notFound.
         await #expect(throws: ExternalFailure.unauthorized(
             requestedCapability: .manage,
             connectionID: Self.connectionID
         )) {
-            try await fixture.authority.authorizeExternal(
-                Self.pinDescriptor,
-                as: Self.connectionID
+            _ = try await fixture.authority.commitExternal(
+                request: .pin(Self.itemID),
+                connection: Self.connectionID,
+                requestedAt: fixture.clock.now()
             )
         }
 
@@ -236,9 +240,10 @@ struct GatewayAuthorizationTests {
         await #expect(throws: ExternalFailure.connectionRevoked(
             connectionID: Self.connectionID
         )) {
-            try await fixture.authority.authorizeExternal(
-                Self.pinDescriptor,
-                as: Self.connectionID
+            _ = try await fixture.authority.commitExternal(
+                request: .pin(Self.itemID),
+                connection: Self.connectionID,
+                requestedAt: fixture.clock.now()
             )
         }
 
@@ -268,9 +273,10 @@ struct GatewayAuthorizationTests {
             requestedCapability: .manage,
             connectionID: Self.connectionID
         )) {
-            try await fixture.authority.authorizeExternal(
-                Self.pinDescriptor,
-                as: Self.connectionID
+            _ = try await fixture.authority.commitExternal(
+                request: .pin(Self.itemID),
+                connection: Self.connectionID,
+                requestedAt: fixture.clock.now()
             )
         }
 
@@ -292,27 +298,53 @@ struct GatewayAuthorizationTests {
         let fixture = try await Self.makeFixture()
         try Self.insertGrant(.manage, in: fixture)
 
-        try await fixture.authority.authorizeExternal(
-            Self.pinDescriptor,
-            as: Self.connectionID
-        )
+        let clockCallsBefore = fixture.clock.callCount
+        do {
+            let context = ModelContext(fixture.container)
+            context.autosaveEnabled = false
+            let config = try HistoryAuthority.loadGatewayConfig(in: context)
+            guard case .authorized = try HistoryAuthority.targetedExternalAuthorizationDecision(
+                Self.pinDescriptor,
+                connection: Self.connectionID,
+                expectedConnectionKind: .appIntents,
+                config: config,
+                in: context
+            ) else {
+                Issue.record("the live manage grant must authorize the pure targeted decision")
+                return
+            }
+        }
 
         #expect(try Self.snapshot(fixture).operations.isEmpty)
-        #expect(fixture.clock.callCount == 2)
+        #expect(fixture.clock.callCount == clockCallsBefore)
         try await Self.expectHistoryPositionUnchanged(fixture)
     }
 
-    @Test("live manage grant satisfies browse without loading a second policy")
+    @Test("live manage grant permits a real browse with a successful audit")
     func manageGrantImpliesBrowse() async throws {
         let fixture = try await Self.makeFixture()
         try Self.insertGrant(.manage, in: fixture)
 
-        try await fixture.authority.authorizeExternal(
-            Self.recentDescriptor,
-            as: Self.connectionID
+        let result = try await fixture.authority.performExternalRead(
+            .recent(limit: 1),
+            connection: Self.connectionID,
+            requestedAt: fixture.clock.now(),
+            searchWorker: SearchWorker()
         )
-
-        #expect(try Self.snapshot(fixture).operations.isEmpty)
+        guard case .page(let page) = result else {
+            Issue.record("the manage grant must permit an actual recent read")
+            return
+        }
+        #expect(page.rows.isEmpty)
+        let snapshot = try Self.snapshot(fixture)
+        #expect(snapshot.operations.count == 1)
+        let operation = try #require(snapshot.operations.first)
+        #expect(operation.connectionIDRaw == Self.connectionID.rawValue)
+        #expect(operation.capabilityRaw == Self.recentDescriptor.capability.rawValue)
+        #expect(operation.operationKindRaw == Self.recentDescriptor.operationKind.rawValue)
+        #expect(operation.outcomeRaw == ExternalOutcome.succeeded.rawValue)
+        #expect(operation.failureKindRaw == nil)
+        #expect(operation.changePositionRaw == nil)
         try await Self.expectHistoryPositionUnchanged(fixture)
     }
 

@@ -171,21 +171,16 @@ extension WS14RestartReconstructionTests {
 
     // WS14 (ii): §15 projection fields — A's projection is of the SECOND
     // replacement (revision projection uses the prepared proposed Effective
-    // Content, §15); B and C keep their capture-time projections; every row
-    // carries the current projection recipe-v2 schema version.
+    // Content, §15); B and C keep their capture-time projections.
     let effectiveTypesA = try EffectiveTypeIdentifiersBlobCodec.decode(rowA.effectiveTypeIdentifiersBlob)
     let effectiveTypesB = try EffectiveTypeIdentifiersBlobCodec.decode(rowB.effectiveTypeIdentifiersBlob)
     let effectiveTypesC = try EffectiveTypeIdentifiersBlobCodec.decode(rowC.effectiveTypeIdentifiersBlob)
     #expect(
-        rowA.projectionSchemaVersion == ContentProjector.schemaVersion,
-        "WS14 (projections): A's projection schema version is current"
-    )
-    #expect(
-        rowA.title == replacementTwo,
+        rowA.titleUTF8 == Data(replacementTwo.utf8),
         "WS14 (projections): A's title projects the active Effective Content"
     )
     #expect(
-        rowA.searchBody == replacementTwo,
+        rowA.searchBodyUTF8 == Data(replacementTwo.utf8),
         "WS14 (projections): A's search body projects the active Effective Content"
     )
     #expect(
@@ -193,15 +188,11 @@ extension WS14RestartReconstructionTests {
         "WS14 (projections): A's effective type identifiers"
     )
     #expect(
-        rowB.projectionSchemaVersion == ContentProjector.schemaVersion,
-        "WS14 (projections): B's projection schema version is current"
-    )
-    #expect(
-        rowB.title == textB,
+        rowB.titleUTF8 == Data(textB.utf8),
         "WS14 (projections): B's title keeps the capture-time projection"
     )
     #expect(
-        rowB.searchBody == textB,
+        rowB.searchBodyUTF8 == Data(textB.utf8),
         "WS14 (projections): B's search body keeps the capture-time projection"
     )
     #expect(
@@ -209,15 +200,11 @@ extension WS14RestartReconstructionTests {
         "WS14 (projections): B's effective type identifiers"
     )
     #expect(
-        rowC.projectionSchemaVersion == ContentProjector.schemaVersion,
-        "WS14 (projections): C's projection schema version is current"
-    )
-    #expect(
-        rowC.title == textC,
+        rowC.titleUTF8 == Data(textC.utf8),
         "WS14 (projections): C's title keeps the capture-time projection"
     )
     #expect(
-        rowC.searchBody == textC,
+        rowC.searchBodyUTF8 == Data(textC.utf8),
         "WS14 (projections): C's search body keeps the capture-time projection"
     )
     #expect(

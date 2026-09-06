@@ -66,7 +66,7 @@ struct PanelKeepOpenAndStatusMenuHostedTests {
         let items = menu.items.filter { !$0.isSeparatorItem }
         #expect(items.map(\.title) == [
             "Show Clipboard History",
-            "Pause Clipboard Monitoring",
+            "Pause Clipboard Monitoring for 5 Minutes",
             "Settings…",
             "Quit Clipy",
         ])
@@ -105,7 +105,7 @@ struct PanelKeepOpenAndStatusMenuHostedTests {
         }
 
         refreshThroughDelegate()
-        #expect(pauseItem.title == "Pause Clipboard Monitoring")
+        #expect(pauseItem.title == "Pause Clipboard Monitoring for 5 Minutes")
         #expect(pauseItem.isEnabled)
 
         appDelegate.pauseCapture()
@@ -117,7 +117,7 @@ struct PanelKeepOpenAndStatusMenuHostedTests {
         appDelegate.recoverCaptureAccess()
         #expect(appDelegate.captureAccessState == .allowed)
         refreshThroughDelegate()
-        #expect(pauseItem.title == "Pause Clipboard Monitoring")
+        #expect(pauseItem.title == "Pause Clipboard Monitoring for 5 Minutes")
         #expect(pauseItem.isEnabled)
     }
 

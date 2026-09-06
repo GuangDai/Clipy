@@ -17,7 +17,7 @@ extension SearchWorker {
         term: String,
         in corpus: SearchCorpusSnapshot,
         directive: ScanDirective
-    ) async throws -> [EvaluatedRow] {
+    ) async throws -> EvaluationResult {
         // Preprocess the eligible-ASCII needle once for this public request.
         // The scalar baseline has a linear worst-case bound and delegates
         // every fallback comparison to Foundation's frozen §8 semantics.
@@ -127,7 +127,7 @@ extension SearchWorker {
             if let found = titleMatch {
                 // Title match: `snippet == nil`, UTF-16 ranges relative to
                 // `HistoryRow.title` (03b §8).
-                evaluated.append(
+                scanTracker.appendIfRetained(
                     EvaluatedRow(
                         corpusRow: row,
                         search: .ready(SearchPresentation(
@@ -138,7 +138,8 @@ extension SearchWorker {
                             )]
                         )),
                         anchor: Self.defaultOrderAnchor(for: row)
-                    )
+                    ),
+                    to: &evaluated
                 )
 #if DEBUG
                 debugTitleMatches += 1
@@ -194,7 +195,7 @@ extension SearchWorker {
             // many rows pays the O(matched-window) construction only for
             // returned rows, and continuation pages never rebuild the
             // dropped rows' excerpts.
-            evaluated.append(
+            scanTracker.appendIfRetained(
                 EvaluatedRow(
                     corpusRow: row,
                     search: .bodyExcerpt(
@@ -206,7 +207,8 @@ extension SearchWorker {
                         bodySuffixWasOmitted: false
                     ),
                     anchor: Self.defaultOrderAnchor(for: row)
-                )
+                ),
+                to: &evaluated
             )
 #if DEBUG
             debugBodyMatches += 1
@@ -274,8 +276,14 @@ extension SearchWorker {
             exactASCIIEvaluations: debugExactASCIIEvaluations,
             exactFoundationEvaluations: debugExactFoundationEvaluations
         )
+        return EvaluationResult(
+            rows: evaluated,
+            debugRowsProcessed: debugProcessedRows,
+            debugMatchedRows: debugTitleMatches + debugBodyMatches
+        )
+#else
+        return EvaluationResult(rows: evaluated)
 #endif
-        return evaluated
     }
 
 }

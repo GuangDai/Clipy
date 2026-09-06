@@ -308,7 +308,6 @@ struct HCRStampingTests {
 
     private var projection: ContentProjection {
         ContentProjection(
-            schemaVersion: ContentProjector.schemaVersion,
             title: "title",
             searchBody: "body",
             effectiveTypeIdentifiers: ["public.text"]

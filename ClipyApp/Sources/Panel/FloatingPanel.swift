@@ -149,7 +149,10 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         isFloatingPanel = true
         level = .statusBar
         collectionBehavior = [.auxiliary, .stationary, .moveToActiveSpace, .fullScreenAuxiliary]
-        isMovableByWindowBackground = true
+        // SwiftUI's header background owns window dragging. AppKit's
+        // automatic background drag also moved the whole panel when the
+        // user dragged the preview divider instead of resizing its column.
+        isMovableByWindowBackground = false
         hidesOnDeactivate = false
         backgroundColor = .clear
         isOpaque = false
@@ -351,7 +354,8 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
                 mainSurfaceWidth: frame.width - Self.previewExtension
             )
             isPreviewVisible = false
-            setPreviewPlacement(.trailing)
+            // Keep the actual side for the closed-edge opener. The next
+            // expansion resolves placement from its current screen and preference.
             setFrameProgrammatically(mainSurfaceFrame, display: isPresented)
         }
         applyResizeLimits()

@@ -7,9 +7,10 @@
 /// decision: no storage-level type query in v1). It never restarts search,
 /// observation, or pagination — docs/04-coherence.md §5's replacement pages
 /// remain the only row source, and pagination keeps walking the unfiltered
-/// stream. The UTI prefix vocabulary below is shared by
+/// stream. The exact UTI vocabulary below is shared by
 /// `HistoryRowKind.classify` and `HistoryRowView.typeSymbol` so the filter
 /// and the row's type fallback always agree on a row's family.
+import ClipboardFormats
 import CoreGraphics
 import Foundation
 import HistoryCore
@@ -37,40 +38,38 @@ package enum HistoryRowKind: Sendable, Equatable {
     case image
     case other
 
-    /// Image UTIs — the same prefix set the row maps to the "photo" symbol.
-    package static let imageTypePrefixes: [String] = [
-        "public.image", "public.png", "public.jpeg",
-        "public.tiff", "public.heic", "com.compuserve.gif",
+    /// Exact image identifiers the row maps to the "photo" symbol. This UI
+    /// family does not imply decoder support (01 §2 stable-facts ownership).
+    package static let imageTypes: [ClipboardFormatIdentifier] = [
+        .image, .png, .jpeg, .tiff, .heic, .heif, .gif, .bmp,
     ]
 
     /// URL UTIs — the row's "link" symbol set.
-    package static let linkTypePrefixes: [String] = [
-        "public.url", "public.file-url",
+    package static let linkTypes: [ClipboardFormatIdentifier] = [
+        .url, .fileURL,
     ]
 
     /// Rich-text UTIs — the row's "doc.text" symbol set. For filtering these
     /// are the text FAMILY even though the fallback symbol distinguishes
     /// them from plain text.
-    package static let richTextTypePrefixes: [String] = [
-        "public.html", "public.rtf", "com.apple.flat-rtfd",
+    package static let richTextTypes: [ClipboardFormatIdentifier] = [
+        .html, .rtf, .flatRTFD,
     ]
 
     /// Plain-text UTIs — text rows the fallback renders as the generic
     /// clipboard document. Mirrors ClipboardFormats' exact text identifiers.
-    package static let plainTextTypePrefixes: [String] = [
-        "public.text", "public.plain-text", "public.utf8-plain-text",
-        "public.utf16-plain-text", "public.utf8-external-plain-text",
+    package static let plainTextTypes: [ClipboardFormatIdentifier] = [
+        .text, .plainText, .utf8PlainText, .utf16PlainText, .utf16ExternalPlainText,
     ]
 
-    /// Prefix membership over the open-world UTI space (unknown identifiers
-    /// stay representable and opaque, per ClipboardFormats' open-world
-    /// posture).
+    /// Exact membership: a similar identifier prefix does not establish UTI
+    /// conformance. Unknown identifiers stay opaque (01 §2).
     package static func matchesAny(
         _ typeIdentifiers: [String],
-        prefixes: [String]
+        types: [ClipboardFormatIdentifier]
     ) -> Bool {
         typeIdentifiers.contains { identifier in
-            prefixes.contains { identifier.hasPrefix($0) }
+            types.contains(ClipboardFormatIdentifier(rawValue: identifier))
         }
     }
 
@@ -80,14 +79,14 @@ package enum HistoryRowKind: Sendable, Equatable {
     package static func classify(
         effectiveTypeIdentifiers: [String]
     ) -> HistoryRowKind {
-        if matchesAny(effectiveTypeIdentifiers, prefixes: imageTypePrefixes) {
+        if matchesAny(effectiveTypeIdentifiers, types: imageTypes) {
             return .image
         }
-        if matchesAny(effectiveTypeIdentifiers, prefixes: linkTypePrefixes) {
+        if matchesAny(effectiveTypeIdentifiers, types: linkTypes) {
             return .link
         }
-        if matchesAny(effectiveTypeIdentifiers, prefixes: richTextTypePrefixes)
-            || matchesAny(effectiveTypeIdentifiers, prefixes: plainTextTypePrefixes) {
+        if matchesAny(effectiveTypeIdentifiers, types: richTextTypes)
+            || matchesAny(effectiveTypeIdentifiers, types: plainTextTypes) {
             return .text
         }
         return .other

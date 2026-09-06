@@ -7,8 +7,8 @@ import Synchronization
 import Testing
 @testable import HistoryStorage
 
-// Every case opens and seeds a complete V4 store. Serializing this suite keeps
-// five ModelContainer startup/migration paths from competing at once with the
+// Every case opens and seeds a complete current store. Serializing this suite keeps
+// five ModelContainer startup paths from competing at once with the
 // MainActor-driven PresentationUI suites in the package-wide test process.
 @Suite("Gateway authoritative connection-kind recheck", .serialized)
 struct GatewayConnectionKindRecheckTests {
@@ -108,10 +108,11 @@ struct GatewayConnectionKindRecheckTests {
             requestedCapability: .browsePreview,
             connectionID: fixture.appIntentsConnection
         )) {
-            try await fixture.authority.authorizeExternal(
-                Self.localRecentDescriptor,
-                as: fixture.appIntentsConnection,
-                expectedConnectionKind: .localAutomation
+            _ = try await fixture.authority.performLocalAutomationBrowsePreview(
+                .recent(limit: 1),
+                connection: fixture.appIntentsConnection,
+                requestedAt: Self.epoch,
+                searchWorker: SearchWorker()
             )
         }
 
@@ -159,11 +160,21 @@ struct GatewayConnectionKindRecheckTests {
         let historyBeforeGrant = try Self.historySnapshot(in: fixture.container)
         let gatewayBeforeGrant = try Self.gatewaySnapshot(in: fixture.container)
 
-        try await fixture.authority.authorizeExternal(
-            Self.localRecentDescriptor,
-            as: fixture.localAutomationConnection,
-            expectedConnectionKind: .localAutomation
-        )
+        do {
+            let context = ModelContext(fixture.container)
+            context.autosaveEnabled = false
+            let config = try HistoryAuthority.loadGatewayConfig(in: context)
+            guard case .authorized = try HistoryAuthority.targetedExternalAuthorizationDecision(
+                Self.localRecentDescriptor,
+                connection: fixture.localAutomationConnection,
+                expectedConnectionKind: .localAutomation,
+                config: config,
+                in: context
+            ) else {
+                Issue.record("the correct local kind and live grant must authorize")
+                return
+            }
+        }
 
         #expect(try Self.historySnapshot(in: fixture.container)
             == historyBeforeGrant)
@@ -179,10 +190,11 @@ struct GatewayConnectionKindRecheckTests {
         await #expect(throws: ExternalFailure.connectionRevoked(
             connectionID: fixture.localAutomationConnection
         )) {
-            try await fixture.authority.authorizeExternal(
-                Self.localRecentDescriptor,
-                as: fixture.localAutomationConnection,
-                expectedConnectionKind: .localAutomation
+            _ = try await fixture.authority.performLocalAutomationBrowsePreview(
+                .recent(limit: 1),
+                connection: fixture.localAutomationConnection,
+                requestedAt: Self.epoch,
+                searchWorker: SearchWorker()
             )
         }
 

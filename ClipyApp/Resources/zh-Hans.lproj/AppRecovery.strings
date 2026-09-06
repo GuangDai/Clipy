@@ -1,0 +1,16 @@
+// App-owned store recovery and paste failure messages.
+"Opening Clipy…" = "正在打开 Clipy…";
+"Retry" = "重试";
+"Reveal Store Location" = "显示存储位置";
+"Quit" = "退出";
+"History Store Already Open" = "历史记录存储已打开";
+"History Store Open Failed" = "无法打开历史记录存储";
+"Stored History Unreadable" = "无法读取已存储的历史记录";
+"History Consistency Check Failed" = "历史记录一致性检查失败";
+"History Startup Transaction Failed" = "历史记录启动事务失败";
+"Clipy's history store is already open in another instance. Quit that instance and try again." = "Clipy 的历史记录存储已在另一个实例中打开。请退出该实例后重试。";
+"Clipy's history store is already open in this app. Quit Clipy and try again." = "Clipy 的历史记录存储已在此应用中打开。请退出 Clipy 后重试。";
+"Clipy couldn't open its history store." = "Clipy 无法打开历史记录存储。";
+"Dismiss copy failure" = "关闭复制失败提示";
+"A copy is already in progress. Try again when it finishes." = "正在进行复制，请完成后重试。";
+"The pasteboard refused this copy. Try again." = "剪贴板拒绝了此次复制，请重试。";

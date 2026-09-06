@@ -373,7 +373,7 @@ struct ReviseEditorDraftTests {
         #expect(!draft.hasEmptyReplacement)
     }
 
-    @Test func onlyExactUTF8PlainTextOffersLiteralReplacement() {
+    @Test func unsupportedTextFormatsRemainOutsideLiteralReplacement() {
         let utf8 = HistoryRepresentation(
             typeIdentifier: textType,
             bytes: Data("literal UTF-8".utf8)
@@ -481,6 +481,232 @@ struct ReviseEditorDraftTests {
         )
     }
 
+    @Test(arguments: ["public.utf16-plain-text", "public.utf16-external-plain-text"])
+    func utf16ChoicesPreserveRawCurrentOrCanonicalBytes(type: String) {
+        let original = Data([0xFF, 0xFE, 0x41, 0x00])
+        let current = Data([0xFE, 0xFF, 0x00, 0x42])
+        var draft = ReviseEditorDraft(details: utf16Details(
+            type: type, canonical: original, effective: current
+        ))
+        #expect(decisions(from: draft.revisionRequest())[type] == .replace(bytes: current))
+        draft.setChoice(.useOriginal, for: type)
+        #expect(decisions(from: draft.revisionRequest())[type] == .inheritCanonical)
+        draft.setChoice(.hide, for: type)
+        #expect(decisions(from: draft.revisionRequest())[type] == .hide)
+        #expect(draft.allRepresentationsHidden)
+        draft.setChoice(.keepCurrent, for: type)
+        #expect(decisions(from: draft.revisionRequest())[type] == .replace(bytes: current))
+        draft.setChoice(.replace, for: type)
+        #expect(draft.replacementText(for: type) == "B")
+        #expect(decisions(from: draft.revisionRequest())[type] == .replace(bytes: current))
+    }
+
+    @Test(arguments: ReviseEditorDraftTests.utf16EncodingFixtures)
+    func utf16ReplacementRetainsTheSourceByteOrderAndBOM(fixture: UTF16EncodingFixture) throws {
+        var draft = ReviseEditorDraft(details: utf16Details(
+            type: fixture.type, canonical: fixture.initial, effective: fixture.initial
+        ))
+        let representation = try #require(draft.canonicalRepresentations.first)
+        #expect(draft.canReplace(representation))
+        #expect(draft.replacementText(for: fixture.type) == "A")
+        #expect(!draft.isDirty)
+
+        draft.setChoice(.replace, for: fixture.type)
+        #expect(decisions(from: draft.revisionRequest())[fixture.type] == .replace(bytes: fixture.initial))
+        draft.setReplacementText("B🌿", for: fixture.type)
+        #expect(decisions(from: draft.revisionRequest())[fixture.type] == .replace(bytes: fixture.edited))
+    }
+
+    @Test func utf16AuthoredReplacementKeepsItsCodecAcrossRepeatedReloads() {
+        let type = "public.utf16-external-plain-text"
+        let original = Data([0xFF, 0xFE, 0x41, 0x00])
+        var draft = ReviseEditorDraft(details: utf16Details(
+            type: type, canonical: original, effective: original
+        ))
+        draft.setChoice(.replace, for: type)
+        draft.setReplacementText("B🌿", for: type)
+
+        for version in [UInt64(3), UInt64(4)] {
+            draft.markStale()
+            let reloaded = draft.reloadLatest(details: utf16Details(
+                type: type,
+                canonical: original,
+                effective: Data([0xFE, 0xFF, 0x00, 0x43]),
+                version: version
+            ))
+            #expect(reloaded)
+            #expect(draft.revisionRequest().expected == ContentVersion(rawValue: version))
+            #expect(draft.replacementText(for: type) == "B🌿")
+            #expect(decisions(from: draft.revisionRequest())[type] == .replace(
+                bytes: Data([0xFF, 0xFE, 0x42, 0x00, 0x3C, 0xD8, 0x3F, 0xDF])
+            ))
+            #expect(draft.isDirty)
+            #expect(draft.canSubmit)
+        }
+    }
+
+    @Test func untouchedUTF16ReloadAdoptsTheNewEffectiveCodec() {
+        let type = "public.utf16-plain-text"
+        let original = Data([0xFF, 0xFE, 0x41, 0x00])
+        let latest = Data([0xFE, 0xFF, 0x00, 0x41])
+        var draft = ReviseEditorDraft(details: utf16Details(
+            type: type, canonical: original, effective: original
+        ))
+        draft.markStale()
+        let reloaded = draft.reloadLatest(details: utf16Details(
+            type: type, canonical: original, effective: latest, version: 3
+        ))
+        #expect(reloaded)
+        #expect(!draft.isDirty)
+        #expect(draft.replacementText(for: type) == "A")
+        draft.setChoice(.replace, for: type)
+        draft.setReplacementText("B", for: type)
+        #expect(decisions(from: draft.revisionRequest())[type] == .replace(
+            bytes: Data([0xFE, 0xFF, 0x00, 0x42])
+        ))
+    }
+
+    @Test func hiddenUTF16ReplacementStartsFromCanonicalTextAndEncoding() {
+        let type = "public.utf16-external-plain-text"
+        let canonical = HistoryRepresentation(
+            typeIdentifier: type, bytes: Data([0xFE, 0xFF, 0x00, 0x41])
+        )
+        var draft = ReviseEditorDraft(details: details(canonical: [canonical], effective: []))
+        #expect(draft.allRepresentationsHidden)
+        #expect(draft.canReplace(canonical))
+        #expect(draft.replacementText(for: type) == "A")
+        draft.setChoice(.replace, for: type)
+        #expect(draft.canSubmit)
+        #expect(decisions(from: draft.revisionRequest())[type] == .replace(bytes: canonical.bytes))
+    }
+
+    @Test func malformedUTF16ReloadLeavesAuthoredBytesAndOldBaseIntact() {
+        let type = "public.utf16-plain-text"
+        let original = Data([0xFF, 0xFE, 0x41, 0x00])
+        var draft = ReviseEditorDraft(details: utf16Details(
+            type: type, canonical: original, effective: original
+        ))
+        draft.setChoice(.replace, for: type)
+        draft.setReplacementText("B", for: type)
+        draft.markStale()
+
+        let reloaded = draft.reloadLatest(details: utf16Details(
+            type: type,
+            canonical: original,
+            effective: Data([0xFF, 0xFE, 0x00, 0xD8]), // unpaired high surrogate
+            version: 3
+        ))
+        #expect(!reloaded)
+        #expect(draft.isAwaitingLatestContent)
+        #expect(!draft.canSubmit)
+        #expect(draft.revisionRequest().expected == ContentVersion(rawValue: 2))
+        #expect(draft.choice(for: type) == .replace)
+        #expect(draft.replacementText(for: type) == "B")
+        #expect(decisions(from: draft.revisionRequest())[type] == .replace(
+            bytes: Data([0xFF, 0xFE, 0x42, 0x00])
+        ))
+    }
+
+    @Test func initialEffectiveTextKeepsItsOwnSpellingAndCodec() {
+        let type = "public.utf16-external-plain-text"
+        let canonical = Data([0xFE, 0xFF, 0x00, 0xE9]) // BE: precomposed é
+        let current = Data([0xFF, 0xFE, 0x65, 0x00, 0x01, 0x03]) // LE: e + accent
+        var draft = ReviseEditorDraft(details: utf16Details(
+            type: type, canonical: canonical, effective: current
+        ))
+        #expect(draft.replacementText(for: type).unicodeScalars.map(\.value) == [0x65, 0x301])
+        #expect(!draft.isDirty)
+        draft.setChoice(.replace, for: type)
+        #expect(decisions(from: draft.revisionRequest())[type] == .replace(bytes: current))
+        draft.setReplacementText("B", for: type)
+        #expect(decisions(from: draft.revisionRequest())[type] == .replace(
+            bytes: Data([0xFF, 0xFE, 0x42, 0x00])
+        ))
+    }
+
+    @Test func initialReplacementStillRequiresValidCanonicalAndEffectiveText() throws {
+        let type = "public.utf16-external-plain-text"
+        let valid = Data([0x00, 0x41])
+        let malformed = Data([0xD8, 0x00]) // unpaired high surrogate
+        for (canonical, current) in [
+            (valid, malformed), (malformed, valid), (malformed, malformed),
+        ] {
+            var draft = ReviseEditorDraft(details: utf16Details(
+                type: type, canonical: canonical, effective: current
+            ))
+            let representation = try #require(draft.canonicalRepresentations.first)
+            #expect(!draft.canReplace(representation))
+            draft.setChoice(.replace, for: type)
+            #expect(draft.choice(for: type) == .keepCurrent)
+        }
+    }
+
+    @Test func utf16DirtyComparisonPreservesCanonicallyEquivalentSpellings() {
+        let type = "public.utf16-external-plain-text"
+        let composed = Data([0xFE, 0xFF, 0x00, 0xE9])
+        var draft = ReviseEditorDraft(details: utf16Details(
+            type: type, canonical: composed, effective: composed
+        ))
+        draft.setReplacementText("e\u{301}", for: type)
+        #expect(draft.isDirty)
+        draft.setChoice(.replace, for: type)
+        #expect(decisions(from: draft.revisionRequest())[type] == .replace(
+            bytes: Data([0xFE, 0xFF, 0x00, 0x65, 0x03, 0x01])
+        ))
+        draft.setReplacementText("é", for: type)
+        draft.setChoice(.keepCurrent, for: type)
+        #expect(!draft.isDirty)
+    }
+
+    @Test func utf16BOMDoesNotMakeAnEmptyReplacementSubmittable() {
+        let type = "public.utf16-plain-text"
+        let original = Data([0xFF, 0xFE, 0x41, 0x00])
+        var draft = ReviseEditorDraft(details: utf16Details(
+            type: type, canonical: original, effective: original
+        ))
+        draft.setChoice(.replace, for: type)
+        draft.setReplacementText("", for: type)
+        #expect(draft.hasEmptyReplacement)
+        #expect(!draft.canSubmit)
+        draft.setReplacementText("B", for: type)
+        #expect(!draft.hasEmptyReplacement)
+        #expect(draft.canSubmit)
+    }
+
+    private func utf16Details(
+        type: String,
+        canonical: Data,
+        effective: Data,
+        version: UInt64 = 2
+    ) -> HistoryDetails {
+        details(
+            canonical: [HistoryRepresentation(typeIdentifier: type, bytes: canonical)],
+            effective: [HistoryRepresentation(typeIdentifier: type, bytes: effective)],
+            version: version
+        )
+    }
+
+    struct UTF16EncodingFixture: Sendable {
+        let type: String
+        let initial: Data
+        let edited: Data
+    }
+
+    private static let utf16EncodingFixtures: [UTF16EncodingFixture] = [
+        .init(type: "public.utf16-plain-text", initial: Data([0x41, 0x00]),
+              edited: Data([0x42, 0x00, 0x3C, 0xD8, 0x3F, 0xDF])),
+        .init(type: "public.utf16-plain-text", initial: Data([0xFF, 0xFE, 0x41, 0x00]),
+              edited: Data([0xFF, 0xFE, 0x42, 0x00, 0x3C, 0xD8, 0x3F, 0xDF])),
+        .init(type: "public.utf16-plain-text", initial: Data([0xFE, 0xFF, 0x00, 0x41]),
+              edited: Data([0xFE, 0xFF, 0x00, 0x42, 0xD8, 0x3C, 0xDF, 0x3F])),
+        .init(type: "public.utf16-external-plain-text", initial: Data([0x00, 0x41]),
+              edited: Data([0x00, 0x42, 0xD8, 0x3C, 0xDF, 0x3F])),
+        .init(type: "public.utf16-external-plain-text", initial: Data([0xFF, 0xFE, 0x41, 0x00]),
+              edited: Data([0xFF, 0xFE, 0x42, 0x00, 0x3C, 0xD8, 0x3F, 0xDF])),
+        .init(type: "public.utf16-external-plain-text", initial: Data([0xFE, 0xFF, 0x00, 0x41]),
+              edited: Data([0xFE, 0xFF, 0x00, 0x42, 0xD8, 0x3C, 0xDF, 0x3F])),
+    ]
+
     private func details(
         canonicalText: Data,
         effectiveText: Data,
@@ -577,15 +803,6 @@ struct ReviseEditorDraftTests {
                 effectiveBytes: Data("<p>current</p>".utf8)
             ),
             NonReplaceableFormatFixture(
-                typeIdentifier: "public.utf16-plain-text",
-                canonicalBytes: Data([
-                    0xFF, 0xFE, 0x6F, 0x00, 0x6C, 0x00, 0x64, 0x00,
-                ]),
-                effectiveBytes: Data([
-                    0xFF, 0xFE, 0x6E, 0x00, 0x65, 0x00, 0x77, 0x00,
-                ])
-            ),
-            NonReplaceableFormatFixture(
                 typeIdentifier: "public.text",
                 canonicalBytes: Data("abstract original".utf8),
                 effectiveBytes: Data("abstract current".utf8)
@@ -603,12 +820,3 @@ struct ReviseEditorDraftTests {
         ]
     }
 }
-    @Test("revision disclosure states the immutable-history boundary")
-    func immutableRevisionDisclosureIsExplicit() {
-        let expected =
-            "Save appends an immutable revision. Previous and original "
-            + "content may remain in this item's revision history."
-        #expect(
-            ReviseEditorPresentation.revisionDisclosure == expected
-        )
-    }

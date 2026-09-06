@@ -1,7 +1,8 @@
 /// FailurePresentation.swift — typed-failure → user-facing message mapping
 /// (docs/03b-instruction-set.md §10; roadmap 05). Used by the panel failure
-/// banner and the settings surfaces. Short, plain English; no raw payloads,
+/// banner and the settings surfaces. Localized recovery copy; no raw payloads,
 /// paths, or type identifiers leak into the strings.
+import Foundation
 import HistoryCore
 
 /// Produces one-line user-facing messages for the typed `HistoryFailure`
@@ -12,13 +13,21 @@ public enum FailurePresentation {
 
     /// The message for one typed failure.
     public static func message(for failure: HistoryFailure) -> String {
+        message(for: failure, bundle: FailureCopy.bundle)
+    }
+
+    internal static func message(for failure: HistoryFailure, bundle: Bundle) -> String {
+        FailureCopy.text(key(for: failure), bundle: bundle)
+    }
+
+    private static func key(for failure: HistoryFailure) -> String {
         switch failure {
         case .notFound:
             return "Item was removed"
         case .staleContent:
             return "Item changed while editing"
         case .invalidInput(let reason):
-            return message(for: reason)
+            return key(for: reason)
         case .invalidPinnedPlacement:
             return "The item to pin next to is no longer available"
         case .revisionNotFound:
@@ -26,9 +35,11 @@ public enum FailurePresentation {
         case .snapshotExpired:
             return "Results changed — showing the latest page"
         case .capacityExceeded(let kind):
-            return message(for: kind)
+            return key(for: kind)
+        case .thumbnailUnavailable:
+            return "A thumbnail isn't available for this image"
         case .temporarilyUnavailable(let reason):
-            return message(for: reason)
+            return key(for: reason)
         case .persistence:
             return "History storage error"
         }
@@ -37,7 +48,7 @@ public enum FailurePresentation {
     // MARK: - Nested-vocabulary messages (private)
 
     /// Caller-input validation rejections (docs/03b-instruction-set.md §10).
-    private static func message(for reason: InvalidInputReason) -> String {
+    private static func key(for reason: InvalidInputReason) -> String {
         switch reason {
         case .emptyCapture, .excludedFromHistory:
             // Capture-side rejections the capture loop swallows; surfaced
@@ -65,7 +76,7 @@ public enum FailurePresentation {
     /// Capacity rejections (docs/03b-instruction-set.md §10). The R2
     /// storage-budget case carries the settings-surface wording
     /// (docs/v2/V2-07-ux.md §5).
-    private static func message(for kind: CapacityKind) -> String {
+    private static func key(for kind: CapacityKind) -> String {
         switch kind {
         case .storageBytes:
             return "This budget can't be satisfied with the current history."
@@ -81,7 +92,7 @@ public enum FailurePresentation {
 
     /// Temporary-unavailability rejections (docs/03b-instruction-set.md §10)
     /// — retryable, so the message says so.
-    private static func message(for reason: UnavailableReason) -> String {
+    private static func key(for reason: UnavailableReason) -> String {
         switch reason {
         case .factProof:
             return "History is busy. Try again shortly."

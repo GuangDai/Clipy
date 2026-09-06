@@ -17,7 +17,7 @@ import Foundation
 
 /// The drag-end verdict for the preview divider (V2-07 §3): settle at the
 /// dragged width through the existing clamp/guard/persist chain, or
-/// collapse the pane when the raw — or fling-predicted — proposed width
+/// collapse the pane when the actual release's raw proposed width
 /// falls below `PanelGeometry.previewCollapseThreshold`.
 package enum PreviewDragOutcome: Equatable {
     case settle
@@ -132,6 +132,14 @@ public enum PanelGeometry {
     /// the preview-side content edge (V2-07 §3).
     package static let previewEdgeOpenerWidth: CGFloat = 6
 
+    /// The edge opener's inset from the window's content edge. A
+    /// `.resizable` AppKit window keeps an edge live-resize track a few
+    /// points wide that consumes presses before SwiftUI sees them, so a
+    /// strip flush with the window edge is unreachable: an inward pull
+    /// there resizes the window instead of opening the preview. Insetting
+    /// by the same order as the strip width clears that track.
+    package static let previewEdgeOpenerInset: CGFloat = 6
+
     /// The placement-signed inward pull distance that opens the closed
     /// preview from the edge strip; shorter pulls and outward drags are
     /// ignored so the strip never fires on a click or a brush.
@@ -149,15 +157,13 @@ public enum PanelGeometry {
         startWidth + (placement == .trailing ? -translation : translation)
     }
 
-    /// Drag-to-collapse (V2-07 §3): the raw end width OR the fling's raw
-    /// predicted-end width below `previewCollapseThreshold` collapses the
-    /// pane (the view routes the verdict through the manual-toggle close
-    /// path); anything at or above the threshold settles through the
-    /// existing clamp/guard/persist chain.
+    /// Drag-to-collapse: only the actual release width below
+    /// `previewCollapseThreshold` closes the pane. A divider is a positioning
+    /// control, so velocity prediction does not override where it was left.
+    /// At or above the threshold, use the existing clamp/guard/persist chain.
     package static func previewDragOutcome(
         startWidth: CGFloat,
         translation: CGFloat,
-        predictedEndTranslation: CGFloat,
         placement: PreviewPlacement
     ) -> PreviewDragOutcome {
         let rawEnd = rawPreviewDragWidth(
@@ -165,13 +171,7 @@ public enum PanelGeometry {
             translation: translation,
             placement: placement
         )
-        let rawPredictedEnd = rawPreviewDragWidth(
-            startWidth: startWidth,
-            translation: predictedEndTranslation,
-            placement: placement
-        )
         return rawEnd < previewCollapseThreshold
-            || rawPredictedEnd < previewCollapseThreshold
             ? .collapse
             : .settle
     }

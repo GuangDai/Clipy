@@ -95,10 +95,10 @@ public struct ClipySettingsView: View {
                 launchAtLogin: launchAtLogin,
                 summonShortcut: summonShortcut
             )
-                .tabItem { Label("General", systemImage: "gear") }
+                .tabItem { Label(SettingsCopy.text("General"), systemImage: "gear") }
                 .frame(width: 480, height: 440)
             AppearanceSettingsTab(popupPosition: popupPosition)
-                .tabItem { Label("Appearance", systemImage: "paintbrush") }
+                .tabItem { Label(SettingsCopy.text("Appearance"), systemImage: "paintbrush") }
                 // The two added typography pickers (snippet lines, font
                 // size) grew the tab beyond the shipped 320pt ideal height.
                 .frame(width: 480, height: 400)
@@ -108,10 +108,15 @@ public struct ClipySettingsView: View {
                 hasLoadedRetentionConfiguration: hasLoadedRetentionConfiguration,
                 retentionConfigurationFailure: retentionConfigurationFailure
             )
-                .tabItem { Label("Retention", systemImage: "clock.arrow.circlepath") }
+                .tabItem { Label(RetentionSettingsCopy.tabTitle, systemImage: "clock.arrow.circlepath") }
                 .frame(width: 480, height: 560)
         }
         .task { await loadRetentionConfiguration() }
+        .onDisappear {
+            retentionDraft.invalidateLoadRequest()
+            hasLoadedRetentionConfiguration = false
+            retentionConfigurationFailure = nil
+        }
     }
 
     /// One public read supplies both tabs. A response racing a user edit is
@@ -119,16 +124,22 @@ public struct ClipySettingsView: View {
     /// completed still unlocks Apply because the authoritative comparison
     /// baseline arrived even when newer text wins the display merge.
     private func loadRetentionConfiguration() async {
+        guard !Task.isCancelled else { return }
         let request = retentionDraft.beginLoadRequest()
+        hasLoadedRetentionConfiguration = false
+        retentionConfigurationFailure = nil
         do {
             let configuration = try await viewState.retentionConfiguration()
+            guard !Task.isCancelled, retentionDraft.isCurrent(request) else { return }
             retentionDraft.acceptLoaded(configuration, requestedAt: request)
             hasLoadedRetentionConfiguration = true
             retentionConfigurationFailure = nil
         } catch let failure as HistoryFailure {
+            guard !Task.isCancelled, retentionDraft.isCurrent(request) else { return }
             retentionConfigurationFailure = FailurePresentation.message(for: failure)
         } catch {
-            retentionConfigurationFailure = "The current retention settings could not be read."
+            guard !Task.isCancelled, retentionDraft.isCurrent(request) else { return }
+            retentionConfigurationFailure = RetentionSettingsCopy.readFailure
         }
     }
 }
@@ -173,12 +184,12 @@ private struct GeneralSettingsTab: View {
     var body: some View {
         Form {
             if let launchAtLogin {
-                Section("Startup") {
+                Section(SettingsCopy.text("Startup")) {
                     launchAtLoginControl(launchAtLogin)
                 }
             }
             if let summonShortcut {
-                Section("Keyboard Shortcut") {
+                Section(SettingsCopy.text("Keyboard Shortcut")) {
                     summonShortcutControl(summonShortcut)
                 }
             }
@@ -194,57 +205,57 @@ private struct GeneralSettingsTab: View {
                             Image(systemName: "minus.circle.fill")
                         }
                         .buttonStyle(.borderless)
-                        .accessibilityLabel("Remove \(bundleID)")
+                        .accessibilityLabel(SettingsCopy.removeIgnoredApp(bundleID))
                     }
                 }
                 HStack {
                     TextField(
-                        "Bundle identifier, e.g. com.1password.1password",
+                        SettingsCopy.text("Bundle identifier, e.g. com.1password.1password"),
                         text: $ignoredBundleIDDraft
                     )
-                    Button("Add") { addIgnoredBundleID() }
+                    Button(SettingsCopy.text("Add")) { addIgnoredBundleID() }
                         .accessibilityIdentifier(
                             "clipy.settings.privacy.add-ignore"
                         )
                         .disabled(!canAddIgnoredBundleID)
                 }
             } header: {
-                Text("Privacy")
+                Text(SettingsCopy.text("Privacy"))
             } footer: {
-                Text("Clipboard contents from these apps are never recorded.")
+                Text(SettingsCopy.text("Clipboard contents from these apps are never recorded."))
             }
             .accessibilityIdentifier("clipy.settings.privacy.ignored-list")
-            GroupBox("Danger Zone") {
+            GroupBox(SettingsCopy.text("Danger Zone")) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Button("Clear Unpinned Items…") {
+                    Button(SettingsCopy.text("Clear Unpinned Items…")) {
                         isConfirmingClearUnpinned = true
                     }
                     .foregroundStyle(.red)
                     .disabled(isWorking)
                     .confirmationDialog(
-                        "Remove all unpinned items?",
+                        SettingsCopy.text("Remove all unpinned items?"),
                         isPresented: $isConfirmingClearUnpinned,
                         titleVisibility: .visible
                     ) {
-                        Button("Clear Unpinned Items", role: .destructive) {
+                        Button(SettingsCopy.text("Clear Unpinned Items"), role: .destructive) {
                             Task { await performClear(.unpinned) }
                         }
-                        Button("Cancel", role: .cancel) {}
+                        Button(SettingsCopy.text("Cancel"), role: .cancel) {}
                     }
-                    Button("Clear All History…") {
+                    Button(SettingsCopy.text("Clear All History…")) {
                         isConfirmingClearAll = true
                     }
                     .foregroundStyle(.red)
                     .disabled(isWorking)
                     .confirmationDialog(
-                        "Remove every item, including pinned items?",
+                        SettingsCopy.text("Remove every item, including pinned items?"),
                         isPresented: $isConfirmingClearAll,
                         titleVisibility: .visible
                     ) {
-                        Button("Clear All History", role: .destructive) {
+                        Button(SettingsCopy.text("Clear All History"), role: .destructive) {
                             Task { await performClear(.all) }
                         }
-                        Button("Cancel", role: .cancel) {}
+                        Button(SettingsCopy.text("Cancel"), role: .cancel) {}
                     }
                     if let status {
                         SettingStatusView(status: status)
@@ -266,35 +277,35 @@ private struct GeneralSettingsTab: View {
     ) -> some View {
         switch settings.status {
         case .stopped:
-            LabeledContent("Summon shortcut", value: "Not registered")
+            LabeledContent(SettingsCopy.text("Summon shortcut"), value: SettingsCopy.text("Not registered"))
                 .accessibilityIdentifier("clipy.settings.shortcut.status")
         case .current(let chord):
             HStack {
-                LabeledContent("Summon shortcut", value: chord)
+                LabeledContent(SettingsCopy.text("Summon shortcut"), value: chord)
                     .accessibilityIdentifier("clipy.settings.shortcut.status")
                 shortcutChangeButton(settings)
-                Button("Reset") { settings.reset() }
+                Button(SettingsCopy.text("Reset")) { settings.reset() }
                     .disabled(!settings.canReset)
                     .accessibilityIdentifier("clipy.settings.shortcut.reset")
             }
         case .unavailable(let requested, let retainedCurrent):
             VStack(alignment: .leading, spacing: 6) {
                 Label(
-                    "\(requested) is unavailable.",
+                    SettingsCopy.shortcutUnavailable(requested),
                     systemImage: "exclamationmark.triangle"
                 )
                 .accessibilityIdentifier("clipy.settings.shortcut.status")
                 if let retainedCurrent {
-                    Text("The current \(retainedCurrent) shortcut still works.")
+                    Text(SettingsCopy.retainedShortcut(retainedCurrent))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 HStack {
                     shortcutChangeButton(settings)
-                    Button("Retry") { settings.retry() }
+                    Button(SettingsCopy.text("Retry")) { settings.retry() }
                         .disabled(!settings.canRetry)
                         .accessibilityIdentifier("clipy.settings.shortcut.retry")
-                    Button("Reset") { settings.reset() }
+                    Button(SettingsCopy.text("Reset")) { settings.reset() }
                         .disabled(!settings.canReset)
                         .accessibilityIdentifier("clipy.settings.shortcut.reset")
                 }
@@ -302,7 +313,7 @@ private struct GeneralSettingsTab: View {
         }
 
         if settings.warning == .showColorsConflict {
-            Text("This shortcut is also the standard Show Colors shortcut.")
+            Text(SettingsCopy.text("This shortcut is also the standard Show Colors shortcut."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("clipy.settings.shortcut.warning")
@@ -312,7 +323,7 @@ private struct GeneralSettingsTab: View {
     private func shortcutChangeButton(
         _ settings: SummonShortcutSettings
     ) -> some View {
-        Button("Change…") { settings.beginChange() }
+        Button(SettingsCopy.text("Change…")) { settings.beginChange() }
             .disabled(!settings.canChange)
             .accessibilityIdentifier("clipy.settings.shortcut.change")
     }
@@ -322,7 +333,7 @@ private struct GeneralSettingsTab: View {
         _ settings: LaunchAtLoginSettings
     ) -> some View {
         Toggle(
-            "Launch at Login",
+            SettingsCopy.text("Launch at Login"),
             isOn: Binding(
                 get: { settings.isOn },
                 set: { settings.setEnabled($0) }
@@ -337,7 +348,7 @@ private struct GeneralSettingsTab: View {
         case .requiresApproval:
             HStack {
                 Label(
-                    "Approval is required in System Settings.",
+                    SettingsCopy.text("Approval is required in System Settings."),
                     systemImage: "person.badge.clock"
                 )
                 .font(.caption)
@@ -346,7 +357,7 @@ private struct GeneralSettingsTab: View {
                     "clipy.settings.launch-at-login.approval-required"
                 )
                 Spacer(minLength: 8)
-                Button("Open Login Items Settings") {
+                Button(SettingsCopy.text("Open Login Items Settings")) {
                     settings.openSystemSettings()
                 }
                 .accessibilityIdentifier(
@@ -355,7 +366,7 @@ private struct GeneralSettingsTab: View {
             }
         case .unavailable:
             Label(
-                "Launch at Login is unavailable for this app.",
+                SettingsCopy.text("Launch at Login is unavailable for this app."),
                 systemImage: "exclamationmark.triangle"
             )
             .font(.caption)
@@ -367,7 +378,7 @@ private struct GeneralSettingsTab: View {
 
         if settings.operationFailed {
             Label(
-                "The Launch at Login setting couldn't be changed.",
+                SettingsCopy.text("The Launch at Login setting couldn't be changed."),
                 systemImage: "exclamationmark.triangle"
             )
             .font(.caption)
@@ -382,35 +393,19 @@ private struct GeneralSettingsTab: View {
     ///
     /// The awaitable view-state intent preserves the receipt needed for the
     /// mandated "Removed N items." feedback while keeping receipt-confirmed
-    /// Card 9B surface purge publication at the shared mutation owner.
+    /// Card 9B surface purge publication at the shared mutation owner. Every
+    /// receipt state maps to deliberate feedback in `clearStatusFeedback` —
+    /// no blanket "Done." catch-all (deep review Card 10).
     private func performClear(_ scope: ClearScope) async {
         isWorking = true
         defer { isWorking = false }
         do {
             let receipt = try await viewState.clearAwaitingReceipt(scope)
-            if case .committed(let commit) = receipt,
-               case .cleared(count: let removed) = commit.outcome {
-                status = .success(Self.clearFeedback(removed))
-            } else {
-                status = .success("Done.")
-            }
+            status = clearStatusFeedback(receipt)
         } catch let failure as HistoryFailure {
             status = .failure(FailurePresentation.message(for: failure))
         } catch {
-            status = .failure("The history could not be cleared.")
-        }
-    }
-
-    /// "Removed N items." — plural-aware; a no-op clear reports "Done."
-    /// (contract §4.4).
-    private static func clearFeedback(_ removedCount: Int) -> String {
-        switch removedCount {
-        case 0:
-            return "Done."
-        case 1:
-            return "Removed 1 item."
-        default:
-            return "Removed \(removedCount) items."
+            status = .failure(RetentionSettingsCopy.clearFailure)
         }
     }
 
@@ -478,7 +473,7 @@ private struct AppearanceSettingsTab: View {
         Form {
             Section {
                 if let popupPosition {
-                    Picker("Panel position", selection: popupPosition) {
+                    Picker(SettingsCopy.text("Panel position"), selection: popupPosition) {
                         ForEach(PopupPositionMode.allCases, id: \.self) { mode in
                             Text(mode.displayName).tag(mode)
                         }
@@ -487,7 +482,7 @@ private struct AppearanceSettingsTab: View {
                         "clipy.settings.appearance.panel-position"
                     )
                 }
-                Picker("Preview side", selection: $previewSide) {
+                Picker(SettingsCopy.text("Preview side"), selection: $previewSide) {
                     ForEach(PreviewSidePreference.allCases, id: \.self) { side in
                         Text(previewSideLabel(side)).tag(side)
                     }
@@ -496,25 +491,25 @@ private struct AppearanceSettingsTab: View {
                     "clipy.settings.appearance.preview-side"
                 )
                 Toggle(
-                    "Open preview automatically",
+                    SettingsCopy.text("Open preview automatically"),
                     isOn: $isPreviewAutoOpenEnabled
                 )
                 .accessibilityIdentifier(
                     "clipy.settings.appearance.preview-auto-open"
                 )
-                Button("Reset Panel Size to Default") {
+                Button(SettingsCopy.text("Reset Panel Size to Default")) {
                     Self.resetPersistedPanelSize()
                 }
                 .accessibilityIdentifier(
                     "clipy.settings.appearance.reset-panel-size"
                 )
             } header: {
-                Text("Panel")
+                Text(SettingsCopy.text("Panel"))
             } footer: {
-                Text("Panel position and size changes apply the next time the panel opens.")
+                Text(SettingsCopy.text("Panel position and size changes apply the next time the panel opens."))
             }
-            Section("List") {
-                Picker("Row density", selection: $rowDensity) {
+            Section(SettingsCopy.text("List")) {
+                Picker(SettingsCopy.text("Row density"), selection: $rowDensity) {
                     ForEach(HistoryRowDensity.allCases, id: \.self) { density in
                         Text(rowDensityLabel(density)).tag(density)
                     }
@@ -523,7 +518,7 @@ private struct AppearanceSettingsTab: View {
                 .accessibilityIdentifier(
                     "clipy.settings.appearance.row-density"
                 )
-                Picker("Snippet lines", selection: $snippetLineCount) {
+                Picker(SettingsCopy.text("Snippet lines"), selection: $snippetLineCount) {
                     ForEach(HistorySnippetLineCount.allCases, id: \.self) { count in
                         Text(snippetLineCountLabel(count)).tag(count)
                     }
@@ -532,7 +527,7 @@ private struct AppearanceSettingsTab: View {
                 .accessibilityIdentifier(
                     "clipy.settings.appearance.snippet-lines"
                 )
-                Picker("Font size", selection: $rowFontSize) {
+                Picker(SettingsCopy.text("Font size"), selection: $rowFontSize) {
                     ForEach(HistoryRowFontSize.allCases, id: \.self) { size in
                         Text(rowFontSizeLabel(size)).tag(size)
                     }
@@ -550,16 +545,16 @@ private struct AppearanceSettingsTab: View {
     /// raw values remain the only cross-module vocabulary.
     private func previewSideLabel(_ side: PreviewSidePreference) -> String {
         switch side {
-        case .automatic: return "Automatic"
-        case .leading: return "Left"
-        case .trailing: return "Right"
+        case .automatic: return SettingsCopy.text("Automatic")
+        case .leading: return SettingsCopy.text("Left")
+        case .trailing: return SettingsCopy.text("Right")
         }
     }
 
     private func rowDensityLabel(_ density: HistoryRowDensity) -> String {
         switch density {
-        case .compact: return "Compact"
-        case .comfortable: return "Comfortable"
+        case .compact: return SettingsCopy.text("Compact")
+        case .comfortable: return SettingsCopy.text("Comfortable")
         }
     }
 
@@ -567,18 +562,18 @@ private struct AppearanceSettingsTab: View {
     /// explicit cases label with their raw counts.
     private func snippetLineCountLabel(_ count: HistorySnippetLineCount) -> String {
         switch count {
-        case .automatic: return "Auto"
-        case .one: return "1"
-        case .two: return "2"
-        case .three: return "3"
+        case .automatic: return SettingsCopy.text("Auto")
+        case .one: return LocalizedCountPresentation.number(1, locale: .current)
+        case .two: return LocalizedCountPresentation.number(2, locale: .current)
+        case .three: return LocalizedCountPresentation.number(3, locale: .current)
         }
     }
 
     private func rowFontSizeLabel(_ size: HistoryRowFontSize) -> String {
         switch size {
-        case .small: return "Small"
-        case .medium: return "Medium"
-        case .large: return "Large"
+        case .small: return SettingsCopy.text("Small")
+        case .medium: return SettingsCopy.text("Medium")
+        case .large: return SettingsCopy.text("Large")
         }
     }
 
@@ -608,9 +603,9 @@ private struct AppearanceSettingsTab: View {
 /// persisted configured policy loaded on appear (`V2-07` §6.3's panel-open
 /// read; audit SPEC-IMPL-003), and Apply stays disabled until that read
 /// lands — an unexamined Apply against the neutral prefill could otherwise
-/// silently wipe a real persisted policy. The read is the configured
-/// policy only: no live usage readout exists on the public surface (the
-/// OPEN-2 exclusion — V2-07 §5.2 "live storage indicator not available").
+/// silently wipe a real persisted policy. Retained counts and logical
+/// content size load separately on opening or explicit refresh, and after
+/// applying a policy; they do not start another observation subscription.
 private struct RetentionSettingsTab: View {
 
     private let viewState: HistoryViewState
@@ -623,6 +618,9 @@ private struct RetentionSettingsTab: View {
     private let retentionConfigurationFailure: String?
     @State private var countStatus: SettingStatus?
     @State private var policyStatus: SettingStatus?
+    @State private var usageRefreshGeneration = 0
+    @State private var usage: HistoryUsage?
+    @State private var usageFailed = false
     @State private var isWorking = false
     @State private var pendingCountSubmission:
         RetentionSettingsDraft.CountSubmission?
@@ -645,13 +643,20 @@ private struct RetentionSettingsTab: View {
     var body: some View {
         ScrollView {
             Form {
-                Section("Items") {
-                    LabeledContent("Keep at most") {
+                HistoryUsageView(
+                    usage: usage,
+                    failed: usageFailed,
+                    onRefresh: { usageRefreshGeneration += 1 }
+                )
+                Section {
+                    LabeledContent {
                         HStack {
                             TextField("200", text: maximumUnpinnedText)
                                 .frame(width: 88)
                                 .multilineTextAlignment(.trailing)
-                                .accessibilityLabel("Maximum unpinned items")
+                                .accessibilityLabel(
+                                    RetentionSettingsCopy.maximumUnpinnedAccessibilityLabel
+                                )
                                 .accessibilityIdentifier(
                                     "clipy.settings.retention.maximum-unpinned"
                                 )
@@ -661,16 +666,20 @@ private struct RetentionSettingsTab: View {
                                 in: HistoryLimits.standard.userMaximumUnpinnedRange
                             )
                             .labelsHidden()
-                            .accessibilityLabel("Maximum unpinned items")
-                            Text("unpinned items")
+                            .accessibilityLabel(
+                                RetentionSettingsCopy.maximumUnpinnedAccessibilityLabel
+                            )
+                            Text(RetentionSettingsCopy.unpinnedItemsUnit)
                         }
+                    } label: {
+                        Text(RetentionSettingsCopy.itemsKeepAtMost)
                     }
                     if maximumUnpinnedValue == nil {
                         Text(unpinnedRangeHint)
                             .font(.caption)
                             .foregroundStyle(.red)
                     }
-                    Button("Apply Item Limit") {
+                    Button(RetentionSettingsCopy.applyItemLimit) {
                         requestMaximumUnpinnedApply()
                     }
                     .accessibilityIdentifier(
@@ -683,23 +692,24 @@ private struct RetentionSettingsTab: View {
                             || !hasLoadedRetentionConfiguration
                     )
                     .confirmationDialog(
-                        "Apply a stricter item limit?",
+                        RetentionSettingsCopy.confirmItemLimitTitle,
                         isPresented: $isConfirmingCountTightening,
                         titleVisibility: .visible
                     ) {
-                        Button("Apply Stricter Limit", role: .destructive) {
+                        Button(
+                            RetentionSettingsCopy.confirmItemLimitApply,
+                            role: .destructive
+                        ) {
                             guard let submission = pendingCountSubmission else {
                                 return
                             }
                             Task { await applyMaximumUnpinned(submission) }
                         }
-                        Button("Cancel", role: .cancel) {
+                        Button(RetentionSettingsCopy.confirmCancel, role: .cancel) {
                             pendingCountSubmission = nil
                         }
                     } message: {
-                        Text(
-                            "A stricter limit can immediately remove unpinned items, and they can't be recovered."
-                        )
+                        Text(RetentionSettingsCopy.confirmItemLimitMessage)
                     }
                     // The status sits on its own row below the button so a
                     // long receipt or failure message can never squeeze the
@@ -717,14 +727,16 @@ private struct RetentionSettingsTab: View {
                     } else if let retentionConfigurationFailure {
                         SettingStatusView(status: .failure(retentionConfigurationFailure))
                     }
+                } header: {
+                    Text(RetentionSettingsCopy.itemsSection)
                 }
-                Section("Item age") {
-                    Toggle("Limit item age", isOn: ageEnabled)
-                        .accessibilityHint("Retire items whose last copy is older than the entered age.")
+                Section {
+                    Toggle(RetentionSettingsCopy.ageToggle, isOn: ageEnabled)
+                        .accessibilityHint(RetentionSettingsCopy.ageToggleHint)
                         .accessibilityIdentifier("clipy.settings.retention.age-enabled")
                     ValueFieldRow(
-                        label: "Maximum item age",
-                        unit: "days",
+                        label: RetentionSettingsCopy.ageFieldLabel,
+                        unit: RetentionSettingsCopy.ageUnit,
                         accessibilityIdentifier: "clipy.settings.retention.age-days",
                         text: ageDaysText,
                         isEnabled: draft.ageEnabled,
@@ -737,13 +749,15 @@ private struct RetentionSettingsTab: View {
                         .accessibilityIdentifier(
                             "clipy.settings.retention.age-enforcement"
                         )
+                } header: {
+                    Text(RetentionSettingsCopy.ageSection)
                 }
-                Section("Storage") {
-                    Toggle("Limit storage budget", isOn: storageEnabled)
-                        .accessibilityHint("Retire the oldest unpinned items until history fits the budget.")
+                Section {
+                    Toggle(RetentionSettingsCopy.storageToggle, isOn: storageEnabled)
+                        .accessibilityHint(RetentionSettingsCopy.storageToggleHint)
                         .accessibilityIdentifier("clipy.settings.retention.storage-enabled")
                     ValueFieldRow(
-                        label: "Storage budget",
+                        label: RetentionSettingsCopy.storageFieldLabel,
                         unit: RetentionSettingsDraft.mebibyteUnitLabel,
                         accessibilityIdentifier: "clipy.settings.retention.storage-mib",
                         text: storageMiBText,
@@ -751,23 +765,35 @@ private struct RetentionSettingsTab: View {
                         isValid: draft.storageInputIsValid,
                         range: RetentionSettingsDraft.storageMiBRange
                     )
+                } header: {
+                    Text(RetentionSettingsCopy.storageSection)
                 }
-                Section("Revision limits") {
-                    Toggle("Keep at most", isOn: revisionCountEnabled)
-                        .accessibilityHint("Prune the oldest inactive revisions beyond this count.")
+                Section {
+                    Toggle(
+                        RetentionSettingsCopy.revisionCountKeepAtMost,
+                        isOn: revisionCountEnabled
+                    )
+                        .accessibilityHint(
+                            RetentionSettingsCopy.revisionCountToggleHint
+                        )
                     ValueFieldRow(
-                        label: "Revisions per item",
-                        unit: "revisions",
+                        label: RetentionSettingsCopy.revisionCountFieldLabel,
+                        unit: RetentionSettingsCopy.revisionCountUnit,
                         accessibilityIdentifier: "clipy.settings.retention.revision-count",
                         text: revisionCountText,
                         isEnabled: draft.revisionCountEnabled,
                         isValid: draft.revisionCountInputIsValid,
                         range: RetentionSettingsDraft.revisionCountRange
                     )
-                    Toggle("Limit revision storage", isOn: revisionBytesEnabled)
-                        .accessibilityHint("Prune the oldest inactive revisions until they fit this budget.")
+                    Toggle(
+                        RetentionSettingsCopy.revisionBytesToggle,
+                        isOn: revisionBytesEnabled
+                    )
+                        .accessibilityHint(
+                            RetentionSettingsCopy.revisionBytesToggleHint
+                        )
                     ValueFieldRow(
-                        label: "Revision storage per item",
+                        label: RetentionSettingsCopy.revisionBytesFieldLabel,
                         unit: RetentionSettingsDraft.mebibyteUnitLabel,
                         accessibilityIdentifier: "clipy.settings.retention.revision-mib",
                         text: revisionMiBText,
@@ -775,9 +801,11 @@ private struct RetentionSettingsTab: View {
                         isValid: draft.revisionBytesInputIsValid,
                         range: RetentionSettingsDraft.revisionMiBRange
                     )
+                } header: {
+                    Text(RetentionSettingsCopy.revisionsSection)
                 }
                 Section {
-                    Button("Apply") {
+                    Button(RetentionSettingsCopy.applyPolicies) {
                         requestApply()
                     }
                     .accessibilityIdentifier("clipy.settings.retention.apply")
@@ -786,22 +814,25 @@ private struct RetentionSettingsTab: View {
                             || !hasLoadedRetentionConfiguration
                     )
                     .confirmationDialog(
-                        "Apply stricter retention limits?",
+                        RetentionSettingsCopy.confirmPoliciesTitle,
                         isPresented: $isConfirmingTightening,
                         titleVisibility: .visible
                     ) {
-                        Button("Apply Stricter Limits", role: .destructive) {
+                        Button(
+                            RetentionSettingsCopy.confirmPoliciesApply,
+                            role: .destructive
+                        ) {
                             guard let submission = pendingSubmission else { return }
                             Task { await applyRetention(submission) }
                         }
-                        Button("Cancel", role: .cancel) {
+                        Button(RetentionSettingsCopy.confirmCancel, role: .cancel) {
                             pendingSubmission = nil
                         }
                     } message: {
                         // Deep review `04` Red 10D: only a strict local
                         // tightening is destructive-confirmed; equal or
                         // looser policy values apply directly.
-                        Text("Stricter limits can permanently remove items or revisions.")
+                        Text(RetentionSettingsCopy.confirmPoliciesMessage)
                     }
                     // Same own-row treatment as the item-limit status above:
                     // a long receipt or failure message must not squeeze the
@@ -819,13 +850,39 @@ private struct RetentionSettingsTab: View {
                     } else if let retentionConfigurationFailure {
                         SettingStatusView(status: .failure(retentionConfigurationFailure))
                     }
-                    Text("Changes apply to new and existing items at once.")
+                    Text(RetentionSettingsCopy.applyNote)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)
             .padding([.horizontal, .bottom])
+        }
+        // The tab owns this task, so scrolling the usage section offscreen
+        // cannot start another read. Refresh and successful policy changes
+        // replace the task; tab/window disappearance cancels it.
+        .task(id: usageRefreshGeneration) {
+            await refreshUsage()
+        }
+        .onDisappear {
+            usageRefreshGeneration += 1
+            usage = nil
+            usageFailed = false
+        }
+    }
+
+    private func refreshUsage() async {
+        guard !Task.isCancelled else { return }
+        let requestGeneration = usageRefreshGeneration
+        usage = nil
+        usageFailed = false
+        do {
+            let result = try await viewState.history.usage()
+            guard !Task.isCancelled, requestGeneration == usageRefreshGeneration else { return }
+            usage = result
+        } catch {
+            guard !Task.isCancelled, requestGeneration == usageRefreshGeneration else { return }
+            usageFailed = true
         }
     }
 
@@ -845,23 +902,12 @@ private struct RetentionSettingsTab: View {
         )
     }
 
-    /// Stepper binding: reads the typed value clamped into the §2 range
-    /// (an out-of-range or unparseable field steps from the nearest legal
-    /// state instead of refusing), writes back plain decimal text.
+    /// The draft owns localized input parsing and the §2 stepper range.
     private var maximumUnpinnedStepperValue: Binding<Int> {
         Binding<Int>(
-            get: {
-                guard let typed = Int(
-                    draft.maximumUnpinnedText
-                        .trimmingCharacters(in: .whitespaces)
-                ) else {
-                    return HistoryLimits.standard.defaultMaximumUnpinnedItems
-                }
-                let range = HistoryLimits.standard.userMaximumUnpinnedRange
-                return min(max(typed, range.lowerBound), range.upperBound)
-            },
+            get: { draft.maximumUnpinnedStepperValue },
             set: {
-                draft.setMaximumUnpinnedText(String($0))
+                draft.maximumUnpinnedStepperValue = $0
                 countStatus = nil
             }
         )
@@ -869,7 +915,10 @@ private struct RetentionSettingsTab: View {
 
     private var unpinnedRangeHint: String {
         let range = HistoryLimits.standard.userMaximumUnpinnedRange
-        return "Enter a whole number from \(range.lowerBound) to \(range.upperBound)."
+        return RetentionSettingsCopy.rangeHint(
+            from: range.lowerBound,
+            to: range.upperBound
+        )
     }
 
     /// Count is part of the same destructive-retention family as the V2
@@ -887,7 +936,10 @@ private struct RetentionSettingsTab: View {
     }
 
     /// Applies the count policy and reports the receipt inline
-    /// (`.retentionPolicySet(removedCount:)`, 03a §6; V2-07 §5.2).
+    /// (`.retentionPolicySet(removedCount:)`, 03a §6; V2-07 §5.2). Every
+    /// receipt state maps to deliberate feedback in
+    /// `maximumUnpinnedStatusFeedback` — no blanket "Done." catch-all
+    /// (deep review Card 10).
     private func applyMaximumUnpinned(
         _ submission: RetentionSettingsDraft.CountSubmission
     ) async {
@@ -899,36 +951,28 @@ private struct RetentionSettingsTab: View {
             let receipt = try await viewState.applyMaximumUnpinnedItems(
                 submission.maximumUnpinnedItems
             )
-            let successMessage: String
-            if case .committed(let commit) = receipt,
-               case .retentionPolicySet(removedCount: let removed) = commit.outcome {
-                successMessage = Self.maximumUnpinnedFeedback(removed)
-            } else {
-                successMessage = "Done."
+            switch maximumUnpinnedStatusFeedback(receipt) {
+            case .success(let successMessage):
+                usageRefreshGeneration += 1
+                guard draft.acceptApplied(
+                    submission,
+                    successMessage: successMessage
+                ) else { return }
+                countStatus = nil
+            case .failure(let message):
+                // A committed receipt without `.retentionPolicySet` cannot
+                // confirm this submission; the configured comparison
+                // baseline stays put so the next Apply still compares
+                // against the last known configuration.
+                guard draft.isCurrent(submission) else { return }
+                countStatus = .failure(message)
             }
-            guard draft.acceptApplied(
-                submission,
-                successMessage: successMessage
-            ) else { return }
-            countStatus = nil
         } catch let failure as HistoryFailure {
             guard draft.isCurrent(submission) else { return }
             countStatus = .failure(FailurePresentation.message(for: failure))
         } catch {
             guard draft.isCurrent(submission) else { return }
-            countStatus = .failure("The setting could not be saved.")
-        }
-    }
-
-    /// "Done. N items removed." / "Done." — plural-aware (contract §4.4).
-    private static func maximumUnpinnedFeedback(_ removedCount: Int) -> String {
-        switch removedCount {
-        case 0:
-            return "Done."
-        case 1:
-            return "Done. 1 item removed."
-        default:
-            return "Done. \(removedCount) items removed."
+            countStatus = .failure(RetentionSettingsCopy.countSaveFailure)
         }
     }
 
@@ -1025,7 +1069,9 @@ private struct RetentionSettingsTab: View {
 
     /// Applies all dimensions as one policy value and reports the receipt
     /// inline (`.retentionPoliciesSet(retiredItems:prunedRevisions:)`,
-    /// 03a §6 / `V2-02` §8.1; feedback per V2-07 §5.2).
+    /// 03a §6 / `V2-02` §8.1; feedback per V2-07 §5.2). Every receipt state
+    /// maps to deliberate feedback in `retentionPoliciesStatusFeedback` —
+    /// no blanket "Done." catch-all (deep review Card 10).
     private func applyRetention(
         _ submission: RetentionSettingsDraft.Submission
     ) async {
@@ -1035,45 +1081,29 @@ private struct RetentionSettingsTab: View {
         defer { isWorking = false }
         do {
             let receipt = try await viewState.applyRetentionPolicies(submission.policies)
-            let successMessage: String
-            if case .committed(let commit) = receipt,
-               case .retentionPoliciesSet(
-                   retiredItems: let retired,
-                   prunedRevisions: let pruned
-               ) = commit.outcome {
-                successMessage = Self.retentionFeedback(
-                    retiredItems: retired,
-                    prunedRevisions: pruned
-                )
-            } else {
-                successMessage = "Done."
+            switch retentionPoliciesStatusFeedback(receipt) {
+            case .success(let successMessage):
+                usageRefreshGeneration += 1
+                guard draft.acceptApplied(
+                    submission,
+                    successMessage: successMessage
+                ) else { return }
+                policyStatus = nil
+            case .failure(let message):
+                // A committed receipt without `.retentionPoliciesSet`
+                // cannot confirm this submission; the configured
+                // comparison baseline stays put so the next Apply still
+                // compares against the last known configuration.
+                guard draft.isCurrent(submission) else { return }
+                policyStatus = .failure(message)
             }
-            guard draft.acceptApplied(
-                submission,
-                successMessage: successMessage
-            ) else { return }
-            policyStatus = nil
         } catch let failure as HistoryFailure {
             guard draft.isCurrent(submission) else { return }
             policyStatus = .failure(Self.retentionFailureMessage(failure))
         } catch {
             guard draft.isCurrent(submission) else { return }
-            policyStatus = .failure("The policies could not be saved.")
+            policyStatus = .failure(RetentionSettingsCopy.policiesSaveFailure)
         }
-    }
-
-    /// "Done. N items retired, M revisions pruned." — plural-aware; a
-    /// nothing-happened set reports plain "Done." (contract §4.4;
-    /// transparent data-minimization feedback, `V2-02` §12).
-    private static func retentionFeedback(retiredItems: Int, prunedRevisions: Int) -> String {
-        if retiredItems == 0 && prunedRevisions == 0 {
-            return "Done."
-        }
-        let retiredPhrase = retiredItems == 1 ? "1 item retired" : "\(retiredItems) items retired"
-        let prunedPhrase = prunedRevisions == 1
-            ? "1 revision pruned"
-            : "\(prunedRevisions) revisions pruned"
-        return "Done. \(retiredPhrase), \(prunedPhrase)."
     }
 
     /// Retention-specific recovery guidance (V2-07 §5.2): the set-time
@@ -1083,9 +1113,9 @@ private struct RetentionSettingsTab: View {
     private static func retentionFailureMessage(_ failure: HistoryFailure) -> String {
         switch failure {
         case .invalidInput(.invalidRetentionPolicy):
-            return "Pinned items exceed this budget. Unpin items or raise the budget."
+            return RetentionSettingsCopy.pinnedOverBudget
         case .capacityExceeded(.storageBytes):
-            return "This budget can't be satisfied with the current history."
+            return RetentionSettingsCopy.budgetUnsatisfiable
         default:
             return FailurePresentation.message(for: failure)
         }
@@ -1124,7 +1154,12 @@ private struct ValueFieldRow: View {
                     .foregroundStyle(.secondary)
             }
             if isEnabled && !isValid {
-                Text("Enter a whole number from \(range.lowerBound) to \(range.upperBound).")
+                Text(
+                    RetentionSettingsCopy.rangeHint(
+                        from: range.lowerBound,
+                        to: range.upperBound
+                    )
+                )
                     .font(.caption)
                     .foregroundStyle(.red)
             }
@@ -1133,8 +1168,10 @@ private struct ValueFieldRow: View {
 }
 
 /// Inline outcome of one settings mutation: success carries receipt-derived
-/// text, failure carries the already-mapped user-facing message.
-private enum SettingStatus {
+/// text, failure carries the already-mapped user-facing message. Internal
+/// (not private) so the SwiftPM suites pin the receipt-feedback mapping
+/// directly through `@testable`, like `validatedSettingsWholeNumber`.
+internal enum SettingStatus: Equatable {
     case success(String)
     case failure(String)
 }
@@ -1156,6 +1193,95 @@ private struct SettingStatusView: View {
                 .font(.callout)
                 .foregroundStyle(.red)
         }
+    }
+}
+
+// MARK: Receipt feedback
+
+/// Exact per-receipt feedback for one Danger Zone clear (deep review Card
+/// 10): a committed clear reports its removed count ("Removed N items." —
+/// plural-aware, 03a §6); `.unchanged` means the scope matched nothing, so
+/// no History Commit exists and no removal is implied (02 §8); a commit
+/// carrying another action's outcome is a boundary violation, rendered as a
+/// failure rather than a blanket success. Copy resolves through
+/// `RetentionSettingsCopy` (V2-07 §10; the count phrase varies by plural in
+/// the package String Catalog per §10.4).
+internal func clearStatusFeedback(_ receipt: HistoryReceipt) -> SettingStatus {
+    switch receipt {
+    case .committed(let commit):
+        guard case .cleared(count: let removed) = commit.outcome else {
+            return .failure(RetentionSettingsCopy.clearFailure)
+        }
+        switch removed {
+        case 0:
+            return .success(RetentionSettingsCopy.feedbackDone)
+        default:
+            return .success(RetentionSettingsCopy.clearedItemsRemoved(removed))
+        }
+    case .unchanged:
+        return .success(RetentionSettingsCopy.feedbackNothingToClear)
+    }
+}
+
+/// Exact per-receipt feedback for one item-count apply (deep review Card
+/// 10): a committed `.setRetentionPolicy` reports its removed count
+/// ("Done. N items removed." — plural-aware, 03a §6; V2-07 §5.2);
+/// `.unchanged` means the submitted count already equals the persisted
+/// value and nothing was written (02 §8/§12); a commit carrying another
+/// action's outcome is a boundary violation, rendered as a failure rather
+/// than a blanket success. Copy resolves through `RetentionSettingsCopy`
+/// (V2-07 §10; the count phrase varies by plural in the package String
+/// Catalog per §10.4).
+internal func maximumUnpinnedStatusFeedback(
+    _ receipt: HistoryReceipt
+) -> SettingStatus {
+    switch receipt {
+    case .committed(let commit):
+        guard case .retentionPolicySet(removedCount: let removed)
+                = commit.outcome else {
+            return .failure(RetentionSettingsCopy.countSaveFailure)
+        }
+        switch removed {
+        case 0:
+            return .success(RetentionSettingsCopy.feedbackDone)
+        default:
+            return .success(RetentionSettingsCopy.countLimitItemsRemoved(removed))
+        }
+    case .unchanged:
+        return .success(RetentionSettingsCopy.feedbackNoChange)
+    }
+}
+
+/// Exact per-receipt feedback for one V2-02 policy apply (deep review Card
+/// 10): a committed `.setRetentionPolicies` reports retired items and
+/// pruned revisions separately ("Done. N items retired, M revisions
+/// pruned." — plural-aware; transparent data-minimization feedback,
+/// `V2-02` §12); `.unchanged` means the submitted bundle already equals
+/// the persisted policy and nothing was written (`V2-02` §4.4/§5.6); a
+/// commit carrying another action's outcome is a boundary violation,
+/// rendered as a failure rather than a blanket success. Copy resolves
+/// through `RetentionSettingsCopy` (V2-07 §10; both phrases vary by plural
+/// in the package String Catalog per §10.4).
+internal func retentionPoliciesStatusFeedback(
+    _ receipt: HistoryReceipt
+) -> SettingStatus {
+    switch receipt {
+    case .committed(let commit):
+        guard case .retentionPoliciesSet(
+            retiredItems: let retired,
+            prunedRevisions: let pruned
+        ) = commit.outcome else {
+            return .failure(RetentionSettingsCopy.policiesSaveFailure)
+        }
+        if retired == 0 && pruned == 0 {
+            return .success(RetentionSettingsCopy.feedbackDone)
+        }
+        return .success(RetentionSettingsCopy.appliedSummary(
+            retiredPhrase: RetentionSettingsCopy.itemsRetired(retired),
+            prunedPhrase: RetentionSettingsCopy.revisionsPruned(pruned)
+        ))
+    case .unchanged:
+        return .success(RetentionSettingsCopy.feedbackNoChange)
     }
 }
 

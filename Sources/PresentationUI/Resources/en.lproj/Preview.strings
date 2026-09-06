@@ -1,0 +1,17 @@
+"Loading preview" = "Loading preview";
+"No Preview" = "No Preview";
+"Preview Unavailable" = "Preview Unavailable";
+"Retry" = "Retry";
+"Close" = "Close";
+"Quick Look preview" = "Quick Look preview";
+"Copied %@×" = "Copied %@×";
+"Image preview, %@ by %@ pixels" = "Image preview, %@ by %@ pixels";
+"URL Reference" = "URL Reference";
+"File Reference" = "File Reference";
+"Address" = "Address";
+"File Path" = "File Path";
+"Only the reference is shown. Its destination has not been opened." = "Only the reference is shown. Its destination has not been opened.";
+"Preview truncated. Copying the item keeps its complete content." = "Preview truncated. Copying the item keeps its complete content.";
+"Showing one image from a multi-image item. Copying the item keeps its complete content." = "Showing one image from a multi-image item. Copying the item keeps its complete content.";
+"Showing PDF page 1 of %@. Copying the item keeps its complete content." = "Showing PDF page 1 of %@. Copying the item keeps its complete content.";
+"PDF preview, page 1 of %@" = "PDF preview, page 1 of %@";

@@ -43,22 +43,19 @@ internal struct ScalarReadRow {
 
     internal init(_ row: HistoryItemRow, limits: HistoryLimits) throws {
         self.id = HistoryItemID(rawValue: row.id)
-        let projectionSchemaVersion = row.projectionSchemaVersion
-        let title = row.title
+        let titleUTF8 = row.titleUTF8
         let lastCopiedAt = row.lastCopiedAt
         let copyCount = row.copyCount
         let lastSource = row.lastSource
-        try mapCodecFailure {
-            try ContentProjector.validateStoredSchemaVersion(
-                projectionSchemaVersion
-            )
-            try ContentProjector.validateStoredTitle(title, limits: limits)
+        let title = try mapCodecFailure {
+            let title = try ContentProjector.decodeStoredTitle(titleUTF8, limits: limits)
             try RevisionStateBlobCodec.validateFiniteLastCopiedAt(lastCopiedAt)
             try RevisionStateBlobCodec.validateCopyCount(copyCount)
             try RevisionStateBlobCodec.validateSourceObservation(
                 lastSource,
                 limits: limits
             )
+            return title
         }
         self.contentVersion = try mapCodecFailure {
             try RevisionStateBlobCodec.decodeContentVersion(row.contentVersionRaw)
@@ -219,9 +216,15 @@ internal extension HistoryAuthority {
         anchorDate: Date?,
         in context: ModelContext
     ) throws -> [ScalarReadRow] {
-        try validateFiniteLastCopiedDates(in: rows)
-        let orderedSlice = try rows.sorted(by: unpinnedRowPrecedes).map {
+        // Read and validate each model's scalars once before comparison.
+        // ScalarReadRow rejects non-finite dates itself; sorting these values
+        // avoids repeated SwiftData property access and UUID conversion at
+        // every comparison (05 §14.1).
+        var orderedSlice = try rows.map {
             try ScalarReadRow($0, limits: limits)
+        }
+        orderedSlice.sort {
+            $0.unpinnedOrderKey < $1.unpinnedOrderKey
         }
         // When pinned rows fill the page exactly, one unpinned row is fetched
         // only as existence lookahead. Its UUID tie order cannot affect the
@@ -298,7 +301,6 @@ internal extension HistoryAuthority {
                 rows: source.count
             )
 #endif
-            try validateFiniteLastCopiedDates(in: source)
         } else {
             source = rows
         }
@@ -377,30 +379,6 @@ internal extension HistoryAuthority {
         // If the anchor was absent, leave it absent: the existing caller maps
         // that frozen-snapshot contradiction to `.snapshotExpired`.
         return ordered
-    }
-
-    /// Full unpinned order (03b §8): newest copy first, business ID as the
-    /// deterministic tie-breaker. Kept as one helper so guard inspection and
-    /// the authoritative re-fetch cannot drift.
-    func unpinnedRowPrecedes(_ lhs: HistoryItemRow, _ rhs: HistoryItemRow) -> Bool {
-        if lhs.lastCopiedAt != rhs.lastCopiedAt {
-            return lhs.lastCopiedAt > rhs.lastCopiedAt
-        }
-        return HistoryItemID(rawValue: lhs.id) < HistoryItemID(rawValue: rhs.id)
-    }
-
-    /// Validate ordering scalars before any comparator sees them. NaN would
-    /// make the comparator non-strict; infinity is likewise outside the v1
-    /// durable Date contract (§4).
-    func validateFiniteLastCopiedDates(in rows: [HistoryItemRow]) throws {
-        for row in rows {
-            let lastCopiedAt = row.lastCopiedAt
-            try mapCodecFailure {
-                try RevisionStateBlobCodec.validateFiniteLastCopiedAt(
-                    lastCopiedAt
-                )
-            }
-        }
     }
 }
 

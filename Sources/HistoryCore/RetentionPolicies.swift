@@ -104,10 +104,9 @@ public struct RevisionRetention: Sendable, Hashable {
 /// configured budget") and §6.3 (each settings section renders from the
 /// capability's status value on panel-open — a one-shot read per §4.2.2);
 /// audit: docs/reviews/2026-08-20-clipy-maccy-audit/02-spec-implementation.md
-/// SPEC-IMPL-003. This is the configured POLICY state only: a live
-/// current-retained-bytes usage read is deliberately excluded from the
-/// public surface (V2-07 §2.2 OPEN-2; `V2-02` §8.1 admits the budget and the
-/// receipt, never the usage), so this value carries no usage field. Both
+/// SPEC-IMPL-003. This is configured POLICY state only; current content
+/// counts and bytes are returned separately by `ClipboardHistory.usage()`.
+/// This value carries no usage field. Both
 /// halves travel together because V2-07 §6.3 renders the count control and
 /// the V2-02 dimensions as ONE unified "Retention" group — one read, one
 /// serialized snapshot, no cross-read drift.

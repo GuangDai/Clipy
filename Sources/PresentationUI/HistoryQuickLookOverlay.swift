@@ -10,8 +10,9 @@
 /// (SPEC-IMPL-007 / PREVIEW-FENCE-1). Dismissal is panel-local state:
 /// `HistoryPanelSurfaceState.quickLookReference` is cleared by the close
 /// button, Space/Esc, and the same purge/session transitions that retire the
-/// selection (review Card 9B), so overlay content can never outlive its
-/// authoritative row.
+/// selection (review Card 9B). Authoritative row removal, revision, or filter
+/// exclusion also dismisses the exact target without automatically reopening
+/// it for another item or version.
 ///
 /// Pure SwiftUI over HistoryCore DTOs: no AppKit, no SwiftData (01 §6/§8).
 import Foundation
@@ -57,7 +58,7 @@ struct HistoryQuickLookOverlay: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Close")
+            .accessibilityLabel(PreviewCopy.text("Close"))
             // Esc dismisses the overlay; the panel's list-root Esc shortcut
             // checks the overlay first, so both paths agree.
             .keyboardShortcut(.cancelAction)
@@ -68,6 +69,6 @@ struct HistoryQuickLookOverlay: View {
         .background(.regularMaterial)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.panel.quicklook")
-        .accessibilityLabel("Quick Look preview")
+        .accessibilityLabel(PreviewCopy.text("Quick Look preview"))
     }
 }

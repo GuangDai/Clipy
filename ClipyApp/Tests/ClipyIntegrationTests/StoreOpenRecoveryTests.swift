@@ -200,12 +200,15 @@ struct StoreOpenRecoveryTests {
         #expect(failure == .persistence(.openStore))
         #expect(
             PanelRootView.failureCategory(for: failure)
-                == "History Store Open Failed"
+                == AppRecoveryCopy.text("History Store Open Failed")
         )
+        let failureMessage = PanelRootView.failureMessage(for: failure)
         #expect(
-            FailurePresentation.message(for: failure)
-                == "History storage error"
+            failureMessage
+                == FailurePresentation.message(for: .persistence(.openStore))
         )
+        #expect(!failureMessage.contains(guardedRoot.path))
+        #expect(!failureMessage.contains(storeURL.path))
 
         // Reveal names the CONFIGURED store directory even though the failed
         // open never created it. Finder is a no-op for a missing directory —
@@ -250,29 +253,42 @@ struct StoreOpenRecoveryTests {
         #expect(
             PanelRootView.failureCategory(
                 for: HistoryFailure.persistence(.openStore)
-            ) == "History Store Open Failed"
+            ) == AppRecoveryCopy.text("History Store Open Failed")
         )
         #expect(
             PanelRootView.failureCategory(
                 for: HistoryFailure.persistence(.corruptStoredValue)
-            ) == "Stored History Unreadable"
+            ) == AppRecoveryCopy.text("Stored History Unreadable")
         )
         #expect(
             PanelRootView.failureCategory(
                 for: HistoryFailure.persistence(.invariantViolation)
-            ) == "History Consistency Check Failed"
+            ) == AppRecoveryCopy.text("History Consistency Check Failed")
         )
         #expect(
             PanelRootView.failureCategory(
                 for: HistoryFailure.persistence(.transaction)
-            ) == "History Startup Transaction Failed"
+            ) == AppRecoveryCopy.text("History Startup Transaction Failed")
+        )
+        #expect(
+            PanelRootView.failureCategory(
+                for: HistoryFailure.persistence(.storeAlreadyOpen)
+            ) == AppRecoveryCopy.text("History Store Already Open")
+        )
+        // DATA-7a: the cross-process lease denial carries the finding's
+        // "in use by another instance" wording, not the generic storage
+        // error the flat `.openStore` dimensions share.
+        #expect(
+            PanelRootView.failureMessage(
+                for: HistoryFailure.persistence(.storeAlreadyOpen)
+            ) == AppRecoveryCopy.text("Clipy's history store is already open in another instance. Quit that instance and try again.")
         )
         #expect(
             PanelRootView.failureCategory(
                 for: ClipyCompositionError.storeAlreadyOpen(
                     URL(fileURLWithPath: "/tmp/clipy-store")
                 )
-            ) == "History Store Already Open"
+            ) == AppRecoveryCopy.text("History Store Already Open")
         )
     }
 }

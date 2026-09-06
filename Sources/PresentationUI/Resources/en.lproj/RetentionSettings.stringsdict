@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>%lld items retired</key>
+    <dict>
+        <key>NSStringLocalizedFormatKey</key>
+        <string>%1$#@count@</string>
+        <key>count</key>
+        <dict>
+            <key>NSStringFormatSpecTypeKey</key>
+            <string>NSStringPluralRuleType</string>
+            <key>NSStringFormatValueTypeKey</key>
+            <string>lld</string>
+            <key>one</key>
+            <string>%2$@ item retired</string>
+            <key>other</key>
+            <string>%2$@ items retired</string>
+        </dict>
+    </dict>
+    <key>%lld revisions pruned</key>
+    <dict>
+        <key>NSStringLocalizedFormatKey</key>
+        <string>%1$#@count@</string>
+        <key>count</key>
+        <dict>
+            <key>NSStringFormatSpecTypeKey</key>
+            <string>NSStringPluralRuleType</string>
+            <key>NSStringFormatValueTypeKey</key>
+            <string>lld</string>
+            <key>one</key>
+            <string>%2$@ revision pruned</string>
+            <key>other</key>
+            <string>%2$@ revisions pruned</string>
+        </dict>
+    </dict>
+    <key>Done. %lld items removed.</key>
+    <dict>
+        <key>NSStringLocalizedFormatKey</key>
+        <string>%1$#@count@</string>
+        <key>count</key>
+        <dict>
+            <key>NSStringFormatSpecTypeKey</key>
+            <string>NSStringPluralRuleType</string>
+            <key>NSStringFormatValueTypeKey</key>
+            <string>lld</string>
+            <key>one</key>
+            <string>Done. %2$@ item removed.</string>
+            <key>other</key>
+            <string>Done. %2$@ items removed.</string>
+        </dict>
+    </dict>
+    <key>Removed %lld items.</key>
+    <dict>
+        <key>NSStringLocalizedFormatKey</key>
+        <string>%1$#@count@</string>
+        <key>count</key>
+        <dict>
+            <key>NSStringFormatSpecTypeKey</key>
+            <string>NSStringPluralRuleType</string>
+            <key>NSStringFormatValueTypeKey</key>
+            <string>lld</string>
+            <key>one</key>
+            <string>Removed %2$@ item.</string>
+            <key>other</key>
+            <string>Removed %2$@ items.</string>
+        </dict>
+    </dict>
+</dict>
+</plist>

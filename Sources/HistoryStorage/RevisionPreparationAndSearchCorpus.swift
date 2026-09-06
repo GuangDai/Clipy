@@ -338,6 +338,40 @@ internal actor RevisionPreparationActor {
         let candidateRevisionID = makeRevisionID()
         let createdAt = now()
 
+        // An unchanged proposal consumes no append capacity (02 §11 step 5).
+        // The snapshot's lineage was validated by the Authority; select its
+        // current bytes without converting an opaque sibling to text. Keep
+        // input validation above, and return a normal preparation bundle:
+        // phase two still reloads facts and lets Domain recheck OCC before it
+        // alone decides `.unchanged`. No receipt is inferred from this read.
+        let current: EffectiveContent
+        if let activeRevisionID = source.activeRevisionID {
+            guard let active = source.revisions.first(where: {
+                $0.id == activeRevisionID
+            }) else {
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
+            current = active.content
+        } else {
+            guard source.revisions.isEmpty else {
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
+            current = EffectiveContent(
+                representations: source.canonical.representations.map(\.content)
+            )
+        }
+        if proposed == current {
+            return PreparedRevisionBundle(
+                domain: PreparedRevision(
+                    candidateRevisionID: candidateRevisionID,
+                    createdAt: createdAt,
+                    basedOn: source.contentVersion,
+                    proposedContent: proposed
+                ),
+                projection: ContentProjector.project(proposed, limits: limits)
+            )
+        }
+
         // ── V2-02 §4.3 PHASE 1 R3 block (Record 2's conditionally-EXTENDED
         //    preparation path; §5.4's ordering rule) ──
         // When R3 is active for this item's thresholds, compute the prune
