@@ -72,7 +72,7 @@ final class SearchAndAccessibilityJourneyUITests: XCTestCase {
     /// just an explicitly opened .lproj bundle. Clipboard text stays literal
     /// while the surrounding search actions use the requested app language.
     @MainActor
-    func testChineseSearchCopyAndClearUsePackagedTranslations() throws {
+    func testChineseSearchDetailsAndEditorUsePackagedTranslations() throws {
         let captured = "clipy-ui-localized-alpha"
         let app = try launchApp(
             capturing: captured, language: "zh-Hans", locale: "zh_CN"
@@ -110,6 +110,41 @@ final class SearchAndAccessibilityJourneyUITests: XCTestCase {
         XCTAssertTrue(clear.waitForExistence(timeout: 5))
         XCTAssertEqual(search.value as? String, "alpha")
         XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 1 })
+
+        // Continue through the real row menu and Details/editor surfaces in
+        // the same language. The original clipboard text remains literal.
+        rows.element(boundBy: 0).rightClick()
+        let showDetails = app.menuItems["显示详情"]
+        XCTAssertTrue(showDetails.waitForExistence(timeout: 5))
+        showDetails.click()
+        let details = app.descendants(matching: .any)["clipy.details.root"]
+        XCTAssertTrue(details.waitForExistence(timeout: 5))
+        let edit = app.buttons["编辑内容"]
+        XCTAssertTrue(edit.waitForExistence(timeout: 5))
+        XCTAssertTrue(edit.isHittable)
+        edit.click()
+
+        let decision = app.descendants(matching: .any)[
+            "clipy.editor.decision.public.utf8-plain-text"
+        ]
+        XCTAssertTrue(decision.waitForExistence(timeout: 5))
+        let disclosure = app.descendants(matching: .any)[
+            "clipy.editor.revision-disclosure"
+        ]
+        XCTAssertTrue(disclosure.waitForExistence(timeout: 5))
+        let expectedDisclosure =
+            "保存会追加一个不可变的修订版本。先前内容和原始内容可能仍保留在此项目的修订历史中。"
+        XCTAssertTrue(
+            disclosure.label == expectedDisclosure
+                || (disclosure.value as? String) == expectedDisclosure,
+            "The editor must expose its localized immutable-revision disclosure.\n\(app.debugDescription)"
+        )
+        let cancel = app.buttons["clipy.editor.cancel"]
+        XCTAssertEqual(cancel.label, "取消")
+        XCTAssertEqual(app.buttons["clipy.editor.save"].label, "保存修订版本")
+        cancel.click()
+        XCTAssertTrue(waitUntil(timeout: 5) { !decision.exists && details.exists })
+        XCTAssertEqual(NSPasteboard.general.data(forType: .string), Data(captured.utf8))
     }
 
     /// Card 15 / UI-16: resolve the running row by its exact stable

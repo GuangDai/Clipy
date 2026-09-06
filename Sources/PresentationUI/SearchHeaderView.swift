@@ -50,6 +50,8 @@ package struct SearchHeaderView: View {
         .background { modeShortcuts }
     }
 
+    private var copyBundle: Bundle { PanelActionsCopy.bundle(for: locale) }
+
     // MARK: Search field
 
     private var searchField: some View {
@@ -57,12 +59,12 @@ package struct SearchHeaderView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            TextField(PanelActionsCopy.text("Search clipboard…"), text: searchTextBinding)
+            TextField(PanelActionsCopy.text("Search clipboard…", bundle: copyBundle), text: searchTextBinding)
                 .textFieldStyle(.plain)
                 .focused(searchFieldFocused)
                 .autocorrectionDisabled(true)
                 .accessibilityIdentifier("clipy.search.field")
-                .accessibilityLabel(PanelActionsCopy.text("Search clipboard history"))
+                .accessibilityLabel(PanelActionsCopy.text("Search clipboard history", bundle: copyBundle))
                 .onSubmit(onSubmitSelection)
                 .onKeyPress(.downArrow) {
                     onMoveSelection(1)
@@ -77,14 +79,14 @@ package struct SearchHeaderView: View {
                     viewState.clearSearch()
                     searchFieldFocused.wrappedValue = true
                 } label: {
-                    Text(PanelActionsCopy.text("Clear"))
+                    Text(PanelActionsCopy.text("Clear", bundle: copyBundle))
                 }
                 .buttonStyle(.plain)
                 .contentShape(Rectangle())
                 .accessibilityIdentifier("clipy.search.clear")
-                .accessibilityLabel(PanelActionsCopy.text("Clear search"))
+                .accessibilityLabel(PanelActionsCopy.text("Clear search", bundle: copyBundle))
                 .accessibilityHint(
-                    PanelActionsCopy.text("Clears the query and keeps focus in search.")
+                    PanelActionsCopy.text("Clears the query and keeps focus in search.", bundle: copyBundle)
                 )
             }
         }
@@ -102,7 +104,8 @@ package struct SearchHeaderView: View {
         Text(
             Self.resultCountText(
                 for: viewState,
-                locale: locale
+                locale: locale,
+                bundle: copyBundle
             )
         )
             .font(.caption)
@@ -128,27 +131,27 @@ package struct SearchHeaderView: View {
 
     private var modeMenu: some View {
         Menu {
-            Picker(PanelActionsCopy.text("Search Mode"), selection: searchModeBinding) {
-                Text(PanelActionsCopy.text("Exact")).tag(SearchMode.exact)
-                Text(PanelActionsCopy.text("Fuzzy")).tag(SearchMode.fuzzy)
-                Text(PanelActionsCopy.text("Regular Expression")).tag(SearchMode.regexp)
+            Picker(PanelActionsCopy.text("Search Mode", bundle: copyBundle), selection: searchModeBinding) {
+                Text(PanelActionsCopy.text("Exact", bundle: copyBundle)).tag(SearchMode.exact)
+                Text(PanelActionsCopy.text("Fuzzy", bundle: copyBundle)).tag(SearchMode.fuzzy)
+                Text(PanelActionsCopy.text("Regular Expression", bundle: copyBundle)).tag(SearchMode.regexp)
             }
         } label: {
             Label(
-                Self.modeName(viewState.searchMode),
+                modeName(viewState.searchMode),
                 systemImage: "text.magnifyingglass"
             )
         }
         .fixedSize()
-        .accessibilityLabel(PanelActionsCopy.text("Search Mode"))
-        .accessibilityValue(Self.modeName(viewState.searchMode))
+        .accessibilityLabel(PanelActionsCopy.text("Search Mode", bundle: copyBundle))
+        .accessibilityValue(modeName(viewState.searchMode))
     }
 
-    private static func modeName(_ mode: SearchMode) -> String {
+    private func modeName(_ mode: SearchMode) -> String {
         switch mode {
-        case .exact: return PanelActionsCopy.text("Exact")
-        case .fuzzy: return PanelActionsCopy.text("Fuzzy")
-        case .regexp: return PanelActionsCopy.text("Regular Expression")
+        case .exact: return PanelActionsCopy.text("Exact", bundle: copyBundle)
+        case .fuzzy: return PanelActionsCopy.text("Fuzzy", bundle: copyBundle)
+        case .regexp: return PanelActionsCopy.text("Regular Expression", bundle: copyBundle)
         }
     }
 
@@ -159,20 +162,20 @@ package struct SearchHeaderView: View {
     /// restarts the History query (see `HistoryViewState.typeFilter`).
     private var filterMenu: some View {
         Menu {
-            Picker(PanelActionsCopy.text("Filter"), selection: typeFilterBinding) {
-                Text(PanelActionsCopy.text("All")).tag(HistoryTypeFilter.all)
-                Text(PanelActionsCopy.text("Text")).tag(HistoryTypeFilter.text)
-                Text(PanelActionsCopy.text("Images")).tag(HistoryTypeFilter.images)
-                Text(PanelActionsCopy.text("Links")).tag(HistoryTypeFilter.links)
+            Picker(PanelActionsCopy.text("Filter", bundle: copyBundle), selection: typeFilterBinding) {
+                Text(PanelActionsCopy.text("All", bundle: copyBundle)).tag(HistoryTypeFilter.all)
+                Text(PanelActionsCopy.text("Text", bundle: copyBundle)).tag(HistoryTypeFilter.text)
+                Text(PanelActionsCopy.text("Images", bundle: copyBundle)).tag(HistoryTypeFilter.images)
+                Text(PanelActionsCopy.text("Links", bundle: copyBundle)).tag(HistoryTypeFilter.links)
             }
             Divider()
-            Toggle(PanelActionsCopy.text("Pinned Only"), isOn: pinnedOnlyBinding)
+            Toggle(PanelActionsCopy.text("Pinned Only", bundle: copyBundle), isOn: pinnedOnlyBinding)
         } label: {
             Image(systemName: "line.3.horizontal.decrease.circle")
         }
         .fixedSize()
         .accessibilityIdentifier("clipy.search.filter")
-        .accessibilityLabel(PanelActionsCopy.text("Filter results"))
+        .accessibilityLabel(PanelActionsCopy.text("Filter results", bundle: copyBundle))
     }
 
     // MARK: Bindings
@@ -211,11 +214,11 @@ package struct SearchHeaderView: View {
     /// keyboard surface; the contract's sanctioned hidden-shortcut pattern).
     private var modeShortcuts: some View {
         Group {
-            Button(PanelActionsCopy.text("Exact")) { viewState.searchMode = .exact }
+            Button(PanelActionsCopy.text("Exact", bundle: copyBundle)) { viewState.searchMode = .exact }
                 .keyboardShortcut("1", modifiers: .command)
-            Button(PanelActionsCopy.text("Fuzzy")) { viewState.searchMode = .fuzzy }
+            Button(PanelActionsCopy.text("Fuzzy", bundle: copyBundle)) { viewState.searchMode = .fuzzy }
                 .keyboardShortcut("2", modifiers: .command)
-            Button(PanelActionsCopy.text("Regular Expression")) { viewState.searchMode = .regexp }
+            Button(PanelActionsCopy.text("Regular Expression", bundle: copyBundle)) { viewState.searchMode = .regexp }
                 .keyboardShortcut("3", modifiers: .command)
         }
         .opacity(0)

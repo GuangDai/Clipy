@@ -4,6 +4,54 @@ import Testing
 
 @Suite("Panel action and revision safety localization")
 struct PanelActionsCopyTests {
+    @Test("editor byte labels retain English output and follow the view locale")
+    func editorByteLabelsFollowLocale() {
+        let english = Locale(identifier: "en_US")
+        #expect(EditorFormat.bytes(1, locale: english) == "1 byte")
+        #expect(EditorFormat.bytes(4, locale: english) == "4 bytes")
+        #expect(EditorFormat.bytes(13, locale: english) == "13 bytes")
+        #expect(EditorFormat.bytes(70, locale: english) == "70 bytes")
+        let chinese = EditorFormat.bytes(70, locale: Locale(identifier: "zh_Hans_CN"))
+        #expect(chinese.contains("70") && chinese.contains("字节"))
+        #expect(EditorFormat.bytes(70, locale: english) == "70 bytes")
+    }
+
+    @Test("view locale switches existing editor resources without a process-language cache")
+    func editorLocaleChanges() {
+        let englishDisclosure = "Save appends an immutable revision. Previous and original content "
+            + "may remain in this item's revision history."
+        for (identifier, button, disclosure) in [
+            ("en_US", "Keep Current", englishDisclosure),
+            ("zh_Hans_CN", "保留当前", "保存会追加一个不可变的修订版本。先前内容和原始内容可能仍保留在此项目的修订历史中。"),
+            ("en_GB", "Keep Current", englishDisclosure),
+        ] {
+            let selected = PanelActionsCopy.bundle(for: Locale(identifier: identifier))
+            #expect(PanelActionsCopy.text("Keep Current", bundle: selected) == button)
+            #expect(ReviseEditorPresentation.revisionDisclosure(bundle: selected) == disclosure)
+        }
+    }
+
+    @Test("unsupported view language falls back to the module development localization")
+    func unsupportedLocaleUsesDevelopmentLanguage() throws {
+        #expect(PanelActionsCopy.bundle.developmentLocalization == "en")
+        let selected = PanelActionsCopy.bundle(for: Locale(identifier: "fr_FR"))
+        let english = try bundle("en")
+        #expect(selected.bundleURL == english.bundleURL)
+        #expect(PanelActionsCopy.text("Reload Latest", bundle: selected) == "Reload Latest")
+    }
+
+    @Test("locale-selected resources preserve literal format arguments and typed failure copy")
+    func localeSelectedLiteralAndFailureCopy() {
+        let chinese = PanelActionsCopy.bundle(for: Locale(identifier: "zh_Hans_SG"))
+        let literal = "com.example.format.%@.100% — **原样**"
+        #expect(PanelActionsCopy.format(
+            "Replacement text for %@", literal, bundle: chinese
+        ) == "com.example.format.%@.100% — **原样** 的替换文本")
+        #expect(FailurePresentation.message(
+            for: .temporarilyUnavailable(.factProof), bundle: chinese
+        ) == "历史记录正忙，请稍后重试。")
+    }
+
     @Test("details metadata and recovery copy use native resources")
     func detailsMetadataAndRecovery() throws {
         let english = try bundle("en")

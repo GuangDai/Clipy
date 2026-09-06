@@ -5,6 +5,25 @@ import Foundation
 internal enum PanelActionsCopy {
     static var bundle: Bundle { .module }
 
+    /// Respect a view's locale independently of the process's preferred
+    /// language. Foundation owns language/script/region matching; the module's
+    /// declared development localization remains the unsupported-locale fallback.
+    static func bundle(for locale: Locale) -> Bundle {
+        let resources = Bundle.module
+        var preferences = [locale.identifier(.bcp47)]
+        if let development = resources.developmentLocalization {
+            preferences.append(development)
+        }
+        guard let localization = Bundle.preferredLocalizations(
+            from: resources.localizations, forPreferences: preferences
+        ).first,
+              let resourceURL = resources.resourceURL,
+              let localized = Bundle(url: resourceURL.appendingPathComponent(
+                "\(localization).lproj", isDirectory: true
+              )) else { return resources }
+        return localized
+    }
+
     static func text(_ english: String, bundle: Bundle = .module) -> String {
         bundle.localizedString(forKey: english, value: english, table: "PanelActions")
     }

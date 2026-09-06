@@ -141,14 +141,16 @@ package struct HistoryRowView: View {
         .accessibilityAction(named: Text(pinAccessibilityActionName)) {
             performAccessibilityAction(.togglePin)
         }
-        .accessibilityAction(named: Text(PanelActionsCopy.text("Show Details"))) {
+        .accessibilityAction(named: Text(PanelActionsCopy.text("Show Details", bundle: copyBundle))) {
             performAccessibilityAction(.showDetails)
         }
-        .accessibilityAction(named: Text(PanelActionsCopy.text("Remove"))) {
+        .accessibilityAction(named: Text(PanelActionsCopy.text("Remove", bundle: copyBundle))) {
             performAccessibilityAction(.remove)
         }
-        .accessibilityHint(PanelActionsCopy.text("Copies this item to the clipboard."))
+        .accessibilityHint(PanelActionsCopy.text("Copies this item to the clipboard.", bundle: copyBundle))
     }
+
+    private var copyBundle: Bundle { PanelActionsCopy.bundle(for: locale) }
 
     // MARK: Accessibility action dispatch (V2-07 §9)
 
@@ -194,7 +196,7 @@ package struct HistoryRowView: View {
                let image = PreviewRasterDisplay.image(
                    raster,
                    scale: 2,
-                   label: Text(PanelActionsCopy.text("Item thumbnail"))
+                   label: Text(PanelActionsCopy.text("Item thumbnail", bundle: copyBundle))
                ) {
                 image
                     .resizable()
@@ -263,7 +265,7 @@ package struct HistoryRowView: View {
             .padding(.horizontal, 3)
             .padding(.vertical, 1)
             .background { Capsule().fill(.thinMaterial) }
-            .accessibilityLabel(PanelActionsCopy.pinnedPosition(ordinal, locale: locale))
+            .accessibilityLabel(PanelActionsCopy.pinnedPosition(ordinal, bundle: copyBundle, locale: locale))
         }
     }
 
@@ -331,7 +333,7 @@ package struct HistoryRowView: View {
 
     /// The same count with translated plural-aware VoiceOver copy (§9/§10).
     private var copyAccessibilityLabel: String {
-        HistoryRowCopy.copiedCount(row.copyCount, locale: locale)
+        HistoryRowCopy.copiedCount(row.copyCount, bundle: copyBundle, locale: locale)
     }
 
     /// The compact Actions rotor exposes the state-changing pin operation,
@@ -339,7 +341,7 @@ package struct HistoryRowView: View {
     /// explicit pointer/keyboard-menu choice while assistive technology gets
     /// one unambiguous Pin or Unpin action (V2-07 §9).
     private var pinAccessibilityActionName: String {
-        row.pinnedPosition == nil ? PanelActionsCopy.text("Pin") : PanelActionsCopy.text("Unpin")
+        row.pinnedPosition == nil ? PanelActionsCopy.text("Pin", bundle: copyBundle) : PanelActionsCopy.text("Unpin", bundle: copyBundle)
     }
 
     /// Narrow presentation keeps the shipped compact form: the last path
@@ -387,42 +389,42 @@ package struct HistoryRowView: View {
         Button {
             onCopy(row.item)
         } label: {
-            Label(PanelActionsCopy.text("Copy to Clipboard"), systemImage: "doc.on.clipboard")
+            Label(PanelActionsCopy.text("Copy to Clipboard", bundle: copyBundle), systemImage: "doc.on.clipboard")
         }
 
         if row.pinnedPosition != nil {
             Button {
                 onPin(row.item.id, .first)
             } label: {
-                Label(PanelActionsCopy.text("Move to Top"), systemImage: "arrow.up.to.line")
+                Label(PanelActionsCopy.text("Move to Top", bundle: copyBundle), systemImage: "arrow.up.to.line")
             }
             Button {
                 onPin(row.item.id, .last)
             } label: {
-                Label(PanelActionsCopy.text("Move to Bottom"), systemImage: "arrow.down.to.line")
+                Label(PanelActionsCopy.text("Move to Bottom", bundle: copyBundle), systemImage: "arrow.down.to.line")
             }
             Button {
                 onUnpin(row.item.id)
             } label: {
-                Label(PanelActionsCopy.text("Unpin"), systemImage: "pin.slash")
+                Label(PanelActionsCopy.text("Unpin", bundle: copyBundle), systemImage: "pin.slash")
             }
         } else {
             Button {
                 onPin(row.item.id, .first)
             } label: {
-                Label(PanelActionsCopy.text("Pin to Top"), systemImage: "pin")
+                Label(PanelActionsCopy.text("Pin to Top", bundle: copyBundle), systemImage: "pin")
             }
             Button {
                 onPin(row.item.id, .last)
             } label: {
-                Label(PanelActionsCopy.text("Pin to Bottom"), systemImage: "pin")
+                Label(PanelActionsCopy.text("Pin to Bottom", bundle: copyBundle), systemImage: "pin")
             }
         }
 
         Button {
             onShowDetails(row.item)
         } label: {
-            Label(PanelActionsCopy.text("Show Details"), systemImage: "info.circle")
+            Label(PanelActionsCopy.text("Show Details", bundle: copyBundle), systemImage: "info.circle")
         }
         .keyboardShortcut("i", modifiers: .command)
 
@@ -431,7 +433,7 @@ package struct HistoryRowView: View {
         Button(role: .destructive) {
             onRemove(row.item.id)
         } label: {
-            Label(PanelActionsCopy.text("Remove"), systemImage: "trash")
+            Label(PanelActionsCopy.text("Remove", bundle: copyBundle), systemImage: "trash")
         }
         .keyboardShortcut(.delete, modifiers: [])
     }
