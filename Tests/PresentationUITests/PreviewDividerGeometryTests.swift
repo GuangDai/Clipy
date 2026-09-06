@@ -72,9 +72,9 @@ struct PreviewDividerGeometryTests {
         ) == .collapse)
     }
 
-    @Test(arguments: [CGFloat(60), CGFloat(80)])
+    @Test(arguments: [CGFloat(0), CGFloat(60), CGFloat(80)])
     func releaseWithinTheVisiblePaneSettlesOnEitherSide(_ distance: CGFloat) {
-        // Positioning the divider at 260 or 240 leaves the pane visible.
+        // A real drag back to its start, or to 260/240, leaves the pane visible.
         // Velocity prediction no longer provides a second collapse signal.
         #expect(PanelGeometry.previewDragOutcome(
             startWidth: 320,

@@ -792,6 +792,9 @@ public struct HistoryPanelView: View {
                 // origin. The release position alone decides collapse.
                 DragGesture(minimumDistance: 0, coordinateSpace: .global)
                     .onChanged { value in
+                        // A click belongs to the simultaneous double-tap
+                        // reset; it must not capture or rewrite its old width.
+                        guard value.translation.width != 0 else { return }
                         let startWidth = previewDragStartWidth
                             ?? previewColumnWidth
                         previewDragStartWidth = startWidth
@@ -801,9 +804,13 @@ public struct HistoryPanelView: View {
                         )
                     }
                     .onEnded { value in
-                        let startWidth = previewDragStartWidth
-                            ?? previewColumnWidth
+                        let dragStart = previewDragStartWidth
                         previewDragStartWidth = nil
+                        // Ignore a pure click without overwriting a Tap(2)
+                        // reset. A real drag back to its origin still settles
+                        // at its actual zero-delta release using the old start.
+                        guard dragStart != nil || value.translation.width != 0 else { return }
+                        let startWidth = dragStart ?? previewColumnWidth
                         switch PanelGeometry.previewDragOutcome(
                             startWidth: startWidth,
                             translation: value.translation.width,
