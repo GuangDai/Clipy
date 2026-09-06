@@ -96,26 +96,26 @@ struct HistoryMigrationTests {
         let storeURL = WSSupport.tempStoreURL("v2-migration-v1-to-v2")
         defer { WSSupport.removeStore(storeURL) }
 
-        // Seed a genuine v1 store with the OLD schema and no migration plan.
-        let v1Container = try MigrationSeeding.makeV1Container(storeURL: storeURL)
-        let v1Context = ModelContext(v1Container)
-        v1Context.autosaveEnabled = false
-        let seeded = try await MigrationSeeding.seedV1Store(into: v1Context)
-
-        // RET-PLATFORM-1 (`V2-02` Record 3: "v1 rows, `LastChangePositionRow`,
-        // the Signature Index, and the singleton position are untouched"):
-        // capture the seeded position singleton's values BEFORE the
-        // migration container opens, so the survival assertion below
-        // compares against the pre-hop values (scalar copies — a `@Model`
-        // stays bound to the context that fetched it).
-        let seededPositionRows = try v1Context.fetch(
-            FetchDescriptor<LastChangePositionRow>()
-        )
-        #expect(seededPositionRows.count == 1)
-        let seededPosition = try #require(seededPositionRows.first)
-        let seededPositionKey = seededPosition.key
-        let seededPositionValue = seededPosition.rawValue
-        let seededPositionMaximumUnpinned = seededPosition.maximumUnpinnedItems
+        let seeded = try await MigrationSeeding.makeSeededItems()
+        let seededPositionKey: String
+        let seededPositionValue: UInt64
+        let seededPositionMaximumUnpinned: Int
+        do {
+            // Seed a genuine v1 store, then leave the old-model/context scope
+            // before opening its migrated schema. Only scalar copies escape.
+            let v1Container = try MigrationSeeding.makeV1Container(storeURL: storeURL)
+            let v1Context = ModelContext(v1Container)
+            v1Context.autosaveEnabled = false
+            try MigrationSeeding.seedV1Store(seeded, into: v1Context)
+            let seededPositionRows = try v1Context.fetch(
+                FetchDescriptor<LastChangePositionRow>()
+            )
+            #expect(seededPositionRows.count == 1)
+            let seededPosition = try #require(seededPositionRows.first)
+            seededPositionKey = seededPosition.key
+            seededPositionValue = seededPosition.rawValue
+            seededPositionMaximumUnpinned = seededPosition.maximumUnpinnedItems
+        }
 
         // Open a NEW container for the SAME url WITH the migration plan —
         // the exact construction of SwiftDataHistory.open step 2.
@@ -197,18 +197,24 @@ struct HistoryMigrationTests {
         let storeURL = WSSupport.tempStoreURL("v2-migration-reopen")
         defer { WSSupport.removeStore(storeURL) }
 
-        let v1Container = try MigrationSeeding.makeV1Container(storeURL: storeURL)
-        let v1Context = ModelContext(v1Container)
-        v1Context.autosaveEnabled = false
-        let seeded = try await MigrationSeeding.seedV1Store(into: v1Context)
+        let seeded = try await MigrationSeeding.makeSeededItems()
+        do {
+            let v1Container = try MigrationSeeding.makeV1Container(storeURL: storeURL)
+            let v1Context = ModelContext(v1Container)
+            v1Context.autosaveEnabled = false
+            try MigrationSeeding.seedV1Store(seeded, into: v1Context)
+        }
 
-        // Migrate once; snapshot the post-migration projection.
-        let migratedContainer = try MigrationSeeding.makeMigrationContainer(storeURL: storeURL)
-        let migratedContext = ModelContext(migratedContainer)
-        let migratedItems = try migratedContext.fetch(FetchDescriptor<HistoryItemRow>())
-        let migratedBytes = try MigrationSeeding.bytesSnapshots(migratedContext)
-        #expect(migratedItems.count == seeded.count)
-        #expect(migratedBytes.count == seeded.count)
+        // Migrate once; retain only value snapshots before the async open.
+        let migratedBytes: [MigrationSeeding.RetainedBytesSnapshot]
+        do {
+            let migratedContainer = try MigrationSeeding.makeMigrationContainer(storeURL: storeURL)
+            let migratedContext = ModelContext(migratedContainer)
+            let migratedItems = try migratedContext.fetch(FetchDescriptor<HistoryItemRow>())
+            migratedBytes = try MigrationSeeding.bytesSnapshots(migratedContext)
+            #expect(migratedItems.count == seeded.count)
+            #expect(migratedBytes.count == seeded.count)
+        }
 
         // Full open path over the SAME url: construct + startup (steps 1–13).
         _ = try await SwiftDataHistory.open(
@@ -254,6 +260,7 @@ struct HistoryMigrationTests {
     /// recompute, never a resumed partial write.
     @Test("(d) backfill is idempotent by construction and corrects wrong scalars")
     func backfillIsIdempotentAndCorrectsWrongScalars() async throws {
+        let seeded = try await MigrationSeeding.makeSeededItems()
         let schema = Schema(versionedSchema: HistorySchemaV2.self)
         let container = try ModelContainer(
             for: schema,
@@ -261,7 +268,7 @@ struct HistoryMigrationTests {
         )
         let context = ModelContext(container)
         context.autosaveEnabled = false
-        let seeded = try await MigrationSeeding.seedV1Store(into: context)
+        try MigrationSeeding.seedV1Store(seeded, into: context)
         #expect(seeded.count == 3)
 
         try RetainedBytesBackfill.backfillLegacy(in: context)

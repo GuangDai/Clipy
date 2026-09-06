@@ -168,24 +168,27 @@ struct HistoryMigrationInterruptionTests {
         let storeURL = WSSupport.tempStoreURL("v2-migration-interruption")
         defer { WSSupport.removeStore(storeURL) }
 
-        // 1. A genuine v1 store with the OLD schema and no migration plan.
-        let v1Container = try MigrationSeeding.makeV1Container(storeURL: storeURL)
-        let v1Context = ModelContext(v1Container)
-        v1Context.autosaveEnabled = false
-        let seeded = try await MigrationSeeding.seedV1Store(into: v1Context)
+        let seeded = try await MigrationSeeding.makeSeededItems()
         #expect(seeded.count == 3)
-
-        // RET-PLATFORM-1: the seeded position singleton's value BEFORE any
-        // hop runs (scalar copies — a `@Model` stays bound to the context
-        // that fetched it).
-        let seededPositionRows = try v1Context.fetch(
-            FetchDescriptor<LastChangePositionRow>()
-        )
-        #expect(seededPositionRows.count == 1)
-        let seededPosition = try #require(seededPositionRows.first)
-        let seededPositionKey = seededPosition.key
-        let seededPositionValue = seededPosition.rawValue
-        let seededPositionMaximumUnpinned = seededPosition.maximumUnpinnedItems
+        let seededPositionKey: String
+        let seededPositionValue: UInt64
+        let seededPositionMaximumUnpinned: Int
+        do {
+            // 1. Seed synchronously with the OLD schema. No parent-side
+            // context or model remains in scope during the child migration.
+            let v1Container = try MigrationSeeding.makeV1Container(storeURL: storeURL)
+            let v1Context = ModelContext(v1Container)
+            v1Context.autosaveEnabled = false
+            try MigrationSeeding.seedV1Store(seeded, into: v1Context)
+            let seededPositionRows = try v1Context.fetch(
+                FetchDescriptor<LastChangePositionRow>()
+            )
+            #expect(seededPositionRows.count == 1)
+            let seededPosition = try #require(seededPositionRows.first)
+            seededPositionKey = seededPosition.key
+            seededPositionValue = seededPosition.rawValue
+            seededPositionMaximumUnpinned = seededPosition.maximumUnpinnedItems
+        }
 
         // 2. The interruption child: armed after 2 of the 3 rows, so death
         //    is provably MID-loop (row 3 never computes; the backfill's

@@ -91,6 +91,17 @@ struct GatewaySchemaMigrationTests {
     private static func seedLiteralV2Store(
         at storeURL: URL
     ) async throws -> ExistingV2RowsSnapshot {
+        // Complete the only asynchronous preparation before constructing any
+        // old-schema model or context. The synchronous writer returns values
+        // only, so those objects cannot escape into the later public open.
+        let seeded = try await MigrationSeeding.makeSeededItems()
+        return try writeLiteralV2Store(seeded, at: storeURL)
+    }
+
+    private static func writeLiteralV2Store(
+        _ seeded: [MigrationSeeding.SeededItem],
+        at storeURL: URL
+    ) throws -> ExistingV2RowsSnapshot {
         let schema = Schema(versionedSchema: HistorySchemaV2.self)
         let container = try ModelContainer(
             for: schema,
@@ -103,7 +114,7 @@ struct GatewaySchemaMigrationTests {
         let context = ModelContext(container)
         context.autosaveEnabled = false
 
-        let seeded = try await MigrationSeeding.seedV1Store(into: context)
+        try MigrationSeeding.seedV1Store(seeded, into: context)
         try RetainedBytesBackfill.backfillLegacy(in: context)
         // Literal recipe-2 projections of these three ASCII fixtures. Beta's
         // active revision, not its Canonical text+PNG, supplies its metadata.
@@ -111,11 +122,15 @@ struct GatewaySchemaMigrationTests {
         let effectiveTexts = [
             "migration item alpha", "beta revision two body", "migration item gamma"
         ]
+        try #require(seeded.count == effectiveTexts.count)
+        let legacyRows = try context.fetch(FetchDescriptor<HistorySchemaV1.HistoryItemRow>())
+        try #require(legacyRows.count == seeded.count)
         for (item, effectiveText) in zip(seeded, effectiveTexts) {
-            item.row.projectionSchemaVersion = 2
-            item.row.title = effectiveText
-            item.row.searchBody = effectiveText
-            item.row.effectiveTypeIdentifiersBlob = try EffectiveTypeIdentifiersBlobCodec.encode(
+            let row = try #require(legacyRows.first { $0.id == item.id })
+            row.projectionSchemaVersion = 2
+            row.title = effectiveText
+            row.searchBody = effectiveText
+            row.effectiveTypeIdentifiersBlob = try EffectiveTypeIdentifiersBlobCodec.encode(
                 ["public.utf8-plain-text"]
             )
         }

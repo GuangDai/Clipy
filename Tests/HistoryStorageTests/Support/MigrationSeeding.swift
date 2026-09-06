@@ -27,15 +27,24 @@ enum MigrationSeeding {
         case mismatch
     }
 
-    /// One seeded v1 item: the insertable durable row plus the pre-migration
-    /// copies and expected byte-projection scalars.
-    struct SeededItem {
-        let row: HistorySchemaV1.HistoryItemRow
+    /// Immutable seeding facts and independent expectations. Asynchronous
+    /// preparation never creates a model or carries one across suspension.
+    struct SeededItem: Sendable {
         let id: UUID
         let contentVersionRaw: UInt64
         let canonicalBlob: Data
         let revisionStateBlob: Data
         let canonicalSignatureBlob: Data
+        let projectionSchemaVersion: UInt16
+        let title: String
+        let searchBody: String
+        let effectiveTypeIdentifiersBlob: Data
+        let firstCopiedAt: Date
+        let lastCopiedAt: Date
+        let copyCount: UInt64
+        let firstSource: String?
+        let lastSource: String?
+        let pinOrdinal: Int?
         let expectedCanonicalBytes: Int
         let expectedRevisionCount: Int
         let expectedRevisionBytes: Int
@@ -57,7 +66,7 @@ enum MigrationSeeding {
         let alphaBundle = try await ingest.prepare(
             WSSupport.textCapture(textAlpha, observedAt: observedAt, source: source)
         )
-        let alphaRow = try HistorySchemaV1.HistoryItemRow(
+        let alpha = try SeededItem(
             id: alphaBundle.domain.candidateID.rawValue,
             contentVersionRaw: 1,
             canonicalBlob: CanonicalBlobCodec.encode(alphaBundle.domain.canonical),
@@ -77,7 +86,11 @@ enum MigrationSeeding {
             copyCount: 1,
             firstSource: source,
             lastSource: source,
-            pinOrdinal: nil
+            pinOrdinal: nil,
+            // Literal content-byte arithmetic, independent of the codecs.
+            expectedCanonicalBytes: Data(textAlpha.utf8).count,
+            expectedRevisionCount: 0,
+            expectedRevisionBytes: 0
         )
 
         let textBeta = "migration item beta body"
@@ -117,7 +130,7 @@ enum MigrationSeeding {
             activeRevisionID: betaRevisionTwo.id
         )
         // Two appends over the initial version: Content Version 3.
-        let betaRow = try HistorySchemaV1.HistoryItemRow(
+        let beta = try SeededItem(
             id: betaBundle.domain.candidateID.rawValue,
             contentVersionRaw: 3,
             canonicalBlob: CanonicalBlobCodec.encode(betaBundle.domain.canonical),
@@ -134,14 +147,18 @@ enum MigrationSeeding {
             copyCount: 1,
             firstSource: source,
             lastSource: source,
-            pinOrdinal: nil
+            pinOrdinal: nil,
+            expectedCanonicalBytes: Data(textBeta.utf8).count + betaPNGBytes.count,
+            expectedRevisionCount: 2,
+            expectedRevisionBytes: Data(betaRevisionOneText.utf8).count
+                + Data(betaRevisionTwoText.utf8).count
         )
 
         let textGamma = "migration item gamma"
         let gammaBundle = try await ingest.prepare(
             WSSupport.textCapture(textGamma, observedAt: observedAt, source: source)
         )
-        let gammaRow = try HistorySchemaV1.HistoryItemRow(
+        let gamma = try SeededItem(
             id: gammaBundle.domain.candidateID.rawValue,
             contentVersionRaw: 1,
             canonicalBlob: CanonicalBlobCodec.encode(gammaBundle.domain.canonical),
@@ -161,56 +178,36 @@ enum MigrationSeeding {
             copyCount: 1,
             firstSource: source,
             lastSource: source,
-            pinOrdinal: nil
+            pinOrdinal: nil,
+            expectedCanonicalBytes: Data(textGamma.utf8).count,
+            expectedRevisionCount: 0,
+            expectedRevisionBytes: 0
         )
 
-        return [
-            SeededItem(
-                row: alphaRow,
-                id: alphaRow.id,
-                contentVersionRaw: alphaRow.contentVersionRaw,
-                canonicalBlob: alphaRow.canonicalBlob,
-                revisionStateBlob: alphaRow.revisionStateBlob,
-                canonicalSignatureBlob: alphaRow.canonicalSignatureBlob,
-                // Literal fixture arithmetic (independent of the codecs):
-                // one text representation, empty revision list.
-                expectedCanonicalBytes: Data(textAlpha.utf8).count,
-                expectedRevisionCount: 0,
-                expectedRevisionBytes: 0
-            ),
-            SeededItem(
-                row: betaRow,
-                id: betaRow.id,
-                contentVersionRaw: betaRow.contentVersionRaw,
-                canonicalBlob: betaRow.canonicalBlob,
-                revisionStateBlob: betaRow.revisionStateBlob,
-                canonicalSignatureBlob: betaRow.canonicalSignatureBlob,
-                // text + PNG Canonical; two text revisions.
-                expectedCanonicalBytes: Data(textBeta.utf8).count + betaPNGBytes.count,
-                expectedRevisionCount: 2,
-                expectedRevisionBytes: Data(betaRevisionOneText.utf8).count
-                    + Data(betaRevisionTwoText.utf8).count
-            ),
-            SeededItem(
-                row: gammaRow,
-                id: gammaRow.id,
-                contentVersionRaw: gammaRow.contentVersionRaw,
-                canonicalBlob: gammaRow.canonicalBlob,
-                revisionStateBlob: gammaRow.revisionStateBlob,
-                canonicalSignatureBlob: gammaRow.canonicalSignatureBlob,
-                expectedCanonicalBytes: Data(textGamma.utf8).count,
-                expectedRevisionCount: 0,
-                expectedRevisionBytes: 0
-            )
-        ]
+        return [alpha, beta, gamma]
     }
 
-    /// Seeds a complete v1 store (items + position singleton) into `context`
-    /// and returns the pre-migration copies.
-    static func seedV1Store(into context: ModelContext) async throws -> [SeededItem] {
-        let items = try await makeSeededItems()
+    /// Constructs old models only after the caller's old-schema container
+    /// exists. The entire insert/save interval is synchronous.
+    static func seedV1Store(_ items: [SeededItem], into context: ModelContext) throws {
         for item in items {
-            context.insert(item.row)
+            context.insert(HistorySchemaV1.HistoryItemRow(
+                id: item.id,
+                contentVersionRaw: item.contentVersionRaw,
+                canonicalBlob: item.canonicalBlob,
+                revisionStateBlob: item.revisionStateBlob,
+                canonicalSignatureBlob: item.canonicalSignatureBlob,
+                projectionSchemaVersion: item.projectionSchemaVersion,
+                title: item.title,
+                searchBody: item.searchBody,
+                effectiveTypeIdentifiersBlob: item.effectiveTypeIdentifiersBlob,
+                firstCopiedAt: item.firstCopiedAt,
+                lastCopiedAt: item.lastCopiedAt,
+                copyCount: item.copyCount,
+                firstSource: item.firstSource,
+                lastSource: item.lastSource,
+                pinOrdinal: item.pinOrdinal
+            ))
         }
         context.insert(LastChangePositionRow(
             key: HistoryAuthority.positionSingletonKey,
@@ -218,7 +215,6 @@ enum MigrationSeeding {
             maximumUnpinnedItems: 200
         ))
         try context.save()
-        return items
     }
 
     /// An old-schema (v1, no migration plan) container over the store URL.
@@ -242,7 +238,7 @@ enum MigrationSeeding {
     }
 
     /// One comparable `RetainedBytesRow` projection snapshot.
-    struct RetainedBytesSnapshot: Equatable {
+    struct RetainedBytesSnapshot: Equatable, Sendable {
         let itemID: UUID
         let canonicalBytes: Int
         let revisionCount: Int
