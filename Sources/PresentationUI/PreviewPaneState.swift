@@ -86,6 +86,21 @@ public final class PreviewPaneState {
     /// Set by a manual close; cleared by the next selection change. While
     /// set, dwell auto-open does not fire (Maccy's `autoOpenSuppressed`).
     private var isAutoOpenSuppressed = false
+    package private(set) var isAutoOpenSuspendedForMemoryPressure = false
+
+    /// Critical pressure stops speculative dwell work without overwriting
+    /// the user's preference or preventing an explicit preview request.
+    package func respondToMemoryPressure(_ pressure: DisplayMemoryPressure) {
+        switch pressure {
+        case .normal:
+            isAutoOpenSuspendedForMemoryPressure = false
+        case .warning:
+            break
+        case .critical:
+            isAutoOpenSuspendedForMemoryPressure = true
+            cancelPendingAutoOpen()
+        }
+    }
 
     public init(autoOpenDelay: Duration = .milliseconds(200)) {
         self.autoOpenDelay = autoOpenDelay
@@ -107,6 +122,7 @@ public final class PreviewPaneState {
         }
         guard isAutoOpenEnabled,
               isAutoOpenPreferenceEnabled,
+              !isAutoOpenSuspendedForMemoryPressure,
               !isAutoOpenSuppressed
         else { return }
         scheduleAutoOpen(for: item)
@@ -222,6 +238,7 @@ public final class PreviewPaneState {
     // MARK: - Private
 
     private func scheduleAutoOpen(for item: HistoryItemReference) {
+        guard !isAutoOpenSuspendedForMemoryPressure else { return }
         let delay = autoOpenDelay
         pendingAutoOpenItem = item
         // Inherits the MainActor from this isolated context; `weak self`
@@ -235,6 +252,7 @@ public final class PreviewPaneState {
                   self.pendingAutoOpenItem == item,
                   self.isAutoOpenEnabled,
                   self.isAutoOpenPreferenceEnabled,
+                  !self.isAutoOpenSuspendedForMemoryPressure,
                   !self.isAutoOpenSuppressed
             else {
                 return

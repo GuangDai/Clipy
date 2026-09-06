@@ -222,6 +222,42 @@ package struct HistoryRowView: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium))
         .overlay(alignment: .bottomLeading) { pinBadge }
+        .onAppear {
+            thumbnails.setDisplayed(row.item, true)
+            if let source = row.lastSource { sourceIcons?.setDisplayed(source, true) }
+        }
+        .onDisappear {
+            thumbnails.setDisplayed(row.item, false)
+            if let source = row.lastSource { sourceIcons?.setDisplayed(source, false) }
+        }
+        .onChange(of: row.item) { old, new in
+            thumbnails.setDisplayed(old, false)
+            thumbnails.setDisplayed(new, true)
+        }
+        .onChange(of: row.lastSource) { old, new in
+            if let old { sourceIcons?.setDisplayed(old, false) }
+            if let new { sourceIcons?.setDisplayed(new, true) }
+        }
+        .onChange(of: thumbnails.isPrefetchSuspended) { _, suspended in
+            if !suspended, ThumbnailStore.likelyThumbnailable(row.typeIdentifiers) {
+                thumbnails.prefetch(row.item)
+            }
+        }
+        .onChange(of: thumbnails.isSurfaceActive) { _, active in
+            if active, ThumbnailStore.likelyThumbnailable(row.typeIdentifiers) {
+                thumbnails.prefetch(row.item)
+            }
+        }
+        .onChange(of: sourceIcons?.isPrefetchSuspended) { _, suspended in
+            if suspended == false, let source = row.lastSource {
+                sourceIcons?.icon(forBundleID: source)
+            }
+        }
+        .onChange(of: sourceIcons?.isSurfaceActive) { _, active in
+            if active == true, let source = row.lastSource {
+                sourceIcons?.icon(forBundleID: source)
+            }
+        }
         .task(id: row.item) {
             guard !Task.isCancelled else { return }
             if ThumbnailStore.likelyThumbnailable(row.typeIdentifiers) {

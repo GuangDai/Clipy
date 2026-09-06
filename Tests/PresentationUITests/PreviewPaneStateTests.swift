@@ -25,6 +25,33 @@ struct PreviewPaneStateTests {
         PreviewPaneState(autoOpenDelay: .zero)
     }
 
+    @Test func criticalPressureStopsDwellButKeepsManualPreviewAndUserPreference() async {
+        let state = makeState()
+        let item = reference()
+        state.handleSelectionChange(item)
+        state.respondToMemoryPressure(.critical)
+        #expect(state.isAutoOpenSuspendedForMemoryPressure)
+        #expect(state.isAutoOpenPreferenceEnabled)
+        state.handleSelectionChange(reference())
+        #expect(!state.isOpen)
+        state.togglePreview(for: item)
+        #expect(state.isOpen)
+        #expect(state.previewedItem == item)
+        state.togglePreview(for: item)
+        state.respondToMemoryPressure(.warning)
+        #expect(state.isAutoOpenSuspendedForMemoryPressure)
+        state.respondToMemoryPressure(.normal)
+        #expect(!state.isOpen)
+        state.handleSelectionChange(item)
+        await waitForScheduledDwell { state.isOpen }
+        #expect(state.previewedItem == item)
+        state.togglePreview(for: item)
+        state.isAutoOpenPreferenceEnabled = false
+        state.respondToMemoryPressure(.critical)
+        state.respondToMemoryPressure(.normal)
+        #expect(!state.isAutoOpenPreferenceEnabled)
+    }
+
     /// Waits for a zero-delay dwell already queued on the MainActor. A clock
     /// deadline can expire before either this test or the dwell regains the
     /// actor on a saturated runner; yielding instead observes causal task

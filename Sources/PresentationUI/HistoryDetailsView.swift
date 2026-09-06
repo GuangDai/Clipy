@@ -141,6 +141,8 @@ struct HistoryDetailsView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.locale) private var locale
+    @Environment(\.displayMemoryPressure) private var memoryPressure
+    @Environment(\.displayMemoryPressureGeneration) private var memoryPressureGeneration
     private var copyBundle: Bundle { PanelActionsCopy.bundle(for: locale) }
     private let viewState: HistoryViewState
     private let onReferenceAdvance:
@@ -163,6 +165,8 @@ struct HistoryDetailsView: View {
     @State private var isTogglingPin = false
     @State private var isRemoving = false
     @State private var isRevising = false
+    @State private var isExporting = false
+    @State private var exportTask: Task<Void, Never>?
     @State private var loadFence = HistoryDetailsLoadFence()
 
     /// The details surface's live measured width — the signal for
@@ -271,8 +275,12 @@ struct HistoryDetailsView: View {
             .accessibilityIdentifier("clipy.details.confirm-remove")
             Button(PanelActionsCopy.text("Cancel", bundle: copyBundle), role: .cancel) {}
         }
+        .onDisappear(perform: cancelExport)
         .onChange(of: viewState.surfacePurge, initial: true) { _, _ in
             _ = reconcileSurfacePurge(viewState.surfacePurge)
+        }
+        .onChange(of: memoryPressureGeneration, initial: true) { _, _ in
+            thumbnails.respondToMemoryPressure(memoryPressure)
         }
         // The browsing column's user resize (PanelGeometry 360…720) is this
         // view's live width signal; `onGeometryChange` reports it without
@@ -330,6 +338,7 @@ struct HistoryDetailsView: View {
         guard loadFence.advanceReference(from: previous, to: latest) else {
             return
         }
+        if latest != previous { cancelExport() }
         currentItem = latest
         if latest != previous {
             thumbnails.purge(.revision(old: previous, new: latest))
@@ -378,7 +387,9 @@ struct HistoryDetailsView: View {
                             expected: details.item.contentVersion
                         )
                     }
-                }
+                },
+                onExport: startExport,
+                isExporting: isExporting
             )
             .disabled(isRevising)
             Divider()
@@ -484,6 +495,51 @@ struct HistoryDetailsView: View {
 
     // MARK: Data flow
 
+    /// Export the selected immutable snapshot, including opaque/empty bytes.
+    /// Cancellation leaves the surface untouched; a write failure is shown
+    /// here independently of History's mutation failures (V2-07 §4.1.1).
+    @MainActor
+    private func startExport(_ representation: HistoryRepresentation) {
+        guard !isExporting else { return }
+        guard reconcileSurfacePurge(viewState.surfacePurge) else { return }
+        let reference = currentItem
+        let generation = loadFence.generation
+        isExporting = true
+        failureNotice = nil
+        exportTask = Task {
+            guard !Task.isCancelled else { return }
+            let result = await viewState.onExportRepresentation(representation)
+            guard !Task.isCancelled else { return }
+            exportTask = nil
+            isExporting = false
+            // A closed/purged or retargeted Details surface cannot accept a
+            // late export result, even if an app callback ignores cancellation.
+            guard reconcileSurfacePurge(viewState.surfacePurge),
+                  loadFence.accepts(
+                    generation, returned: reference, expected: currentItem,
+                    isCancelled: Task.isCancelled
+                  ) else { return }
+            switch result {
+            case .success:
+                break
+            case .failure(let failure):
+                switch failure {
+                case .unavailable:
+                    failureNotice = PanelActionsCopy.text("The Save dialog is unavailable. Try again.", bundle: copyBundle)
+                case .writeFailed:
+                    failureNotice = PanelActionsCopy.text("Clipy couldn't save this file. Choose another location and try again.", bundle: copyBundle)
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func cancelExport() {
+        exportTask?.cancel()
+        exportTask = nil
+        isExporting = false
+    }
+
     /// Loads (or reloads) the detail snapshot. `.notFound` maps to the
     /// removed placeholder; every other typed failure maps to the
     /// user-facing `FailurePresentation` message (03b §10).
@@ -574,6 +630,7 @@ struct HistoryDetailsView: View {
         _ purge: HistorySurfacePurge?
     ) -> Bool {
         if let scope = loadFence.reconcile(purge, item: currentItem) {
+            cancelExport()
             thumbnails.purge(scope)
             showsEditor = false
             phase = .removed
@@ -688,6 +745,8 @@ private struct DetailsBody: View {
     @Binding var basis: ContentBasis
     let usesTwoColumnLayout: Bool
     let onRevise: (RevisionIntent) -> Void
+    var onExport: (HistoryRepresentation) -> Void = { _ in }
+    var isExporting = false
 
     var body: some View {
         if usesTwoColumnLayout {
@@ -738,6 +797,19 @@ private struct DetailsBody: View {
             HStack(alignment: .top, spacing: PanelTheme.spacingLarge) {
                 thumbnail
                     .frame(width: 64, height: 64)
+                    .onAppear { thumbnails.setDisplayed(details.item, true) }
+                    .onDisappear { thumbnails.setDisplayed(details.item, false) }
+                    .onChange(of: details.item) { old, new in
+                        thumbnails.setDisplayed(old, false)
+                        thumbnails.setDisplayed(new, true)
+                    }
+                    .onChange(of: thumbnails.isPrefetchSuspended) { _, suspended in
+                        if !suspended, ThumbnailStore.likelyThumbnailable(
+                            details.effective.map(\.typeIdentifier)
+                        ) {
+                            thumbnails.prefetch(details.item)
+                        }
+                    }
                     .task(id: details.item) {
                         // Prefetch is gated by the same cheap UTI heuristic
                         // the row list uses (04 §9); the store applies a
@@ -876,7 +948,16 @@ private struct DetailsBody: View {
                     isHiddenFromEffective: basis == .canonical
                         && !effectiveTypeIdentifiers.contains(
                             representation.typeIdentifier
-                        )
+                        ),
+                    isExporting: isExporting,
+                    onExport: {
+                        if let raw = basis.representation(
+                            typeIdentifier: representation.typeIdentifier,
+                            in: details
+                        ) {
+                            onExport(raw)
+                        }
+                    }
                 )
             }
         } header: {
@@ -955,6 +1036,8 @@ private struct RepresentationRow: View {
 
     let representation: DetailsContentPresentation.Representation
     let isHiddenFromEffective: Bool
+    let isExporting: Bool
+    let onExport: () -> Void
 
     var body: some View {
         let presentation = representation.presentation
@@ -990,6 +1073,14 @@ private struct RepresentationRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
+            Button(action: onExport) {
+                Label(PanelActionsCopy.text("Save As…", bundle: copyBundle), systemImage: "square.and.arrow.down")
+            }
+            .controlSize(.small)
+            .disabled(isExporting)
+            .accessibilityIdentifier("clipy.details.save-as." + representation.typeIdentifier)
+            .accessibilityLabel(PanelActionsCopy.format("Save %@ As…", representation.typeIdentifier, bundle: copyBundle))
+            .accessibilityHint(PanelActionsCopy.text("Saves the complete bytes of this displayed representation to a file you choose.", bundle: copyBundle))
             if case .plainText(let preview) = presentation {
                 ScrollView {
                     Text(preview)
@@ -1103,9 +1194,18 @@ private enum DetailsPhase {
 }
 
 /// Which content lineage the Content section lists (03b §9).
-private enum ContentBasis: String, Hashable {
+internal enum ContentBasis: String, Hashable {
     case effective
     case canonical
+
+    /// The user exports the displayed basis, never the bounded preview or a
+    /// later History read. Canonical includes representations hidden by edits.
+    func representation(
+        typeIdentifier: String, in details: HistoryDetails
+    ) -> HistoryRepresentation? {
+        let values = self == .effective ? details.effective : details.canonical
+        return values.first { $0.typeIdentifier == typeIdentifier }
+    }
 }
 
 /// Details' complete text-preview decision for one representation row.

@@ -160,7 +160,12 @@ struct WS9RetentionPrimaryCommitTests {
     let facts = IngestFacts(
         hintedItem: nil,
         candidates: CompleteDedupCandidates(items: []),
-        retention: CompleteRetentionInventory(allItems: pinnedSummaries)
+        candidateIDExists: false,
+        retention: CaptureRetentionFacts(
+            retainedCount: pinnedSummaries.count,
+            unpinnedCount: 0,
+            oldestUnpinnedItems: []
+        )
     )
 
     // A valid one-representation prepared capture; with no hint and no

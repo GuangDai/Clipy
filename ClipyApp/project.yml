@@ -50,6 +50,26 @@ targets:
         product: PasteboardAdapter
       - package: Clipy
         product: PresentationUI
+      - package: Clipy
+        product: LocalAutomation
+      - target: clipyctl
+        link: false
+        embed: true
+        codeSign: false
+        copy:
+          destination: executables
+  clipyctl:
+    type: tool
+    platform: macOS
+    sources:
+      - Tools/clipyctl
+    settings:
+      PRODUCT_NAME: clipyctl
+      SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+      GCC_TREAT_WARNINGS_AS_ERRORS: YES
+    dependencies:
+      - package: Clipy
+        product: LocalAutomation
   ClipyUDSF0Client:
     type: tool
     platform: macOS
@@ -86,6 +106,8 @@ targets:
         product: PasteboardAdapter
       - package: Clipy
         product: PresentationUI
+      - package: Clipy
+        product: LocalAutomation
   ClipyUITests:
     type: bundle.ui-testing
     platform: macOS

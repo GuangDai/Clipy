@@ -46,7 +46,7 @@ extension HistoryAuthority {
         let write = ExternalWriteCommitContext(
             connection: connection,
             expectedConnectionKind: expectedConnectionKind,
-            descriptor: .forRequest(request),
+            descriptor: .forRequest(request, expectedConnectionKind: expectedConnectionKind),
             requestedAt: requestedAt
         )
         try requireExternalKindAdmissionBeforeHistory(

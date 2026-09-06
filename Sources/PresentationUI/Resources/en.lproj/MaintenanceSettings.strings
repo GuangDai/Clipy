@@ -1,0 +1,9 @@
+"Maintenance" = "Maintenance";
+"Logical Content Size" = "Logical Content Size";
+"Store Folder Size" = "Store Folder Size";
+"Show in Finder" = "Show in Finder";
+"Refresh" = "Refresh";
+"Unavailable" = "Unavailable";
+"Loading size…" = "Loading size…";
+"Originals and retained revisions, excluding database and filesystem overhead." = "Originals and retained revisions, excluding database and filesystem overhead.";
+"Approximate allocated size of all files in this folder, including hidden files and any other data stored here. Linked files and folders are excluded. Live writes and shared disk blocks can affect this estimate." = "Approximate allocated size of all files in this folder, including hidden files and any other data stored here. Linked files and folders are excluded. Live writes and shared disk blocks can affect this estimate.";

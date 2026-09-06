@@ -491,10 +491,9 @@ struct PreviewContentLoaderTests {
         #expect(!loader.canRetryFailure)
     }
 
-    /// RTF/HTML are valid opaque clipboard representations but have no safe
-    /// semantic renderer in this phase. They settle as unsupported, and the
-    /// Card 9D retry affordance cannot start another History read.
-    @Test func structuredTextWithoutPlainSiblingIsUnsupportedAndNotRetryable() async throws {
+    /// RTF without a plain-text sibling now reaches the offline text parser.
+    /// A loaded result does not expose Retry or issue another History read.
+    @Test func structuredTextWithoutPlainSiblingLoadsWithoutAnotherHistoryRead() async throws {
         let ref = reference("00000000-0000-0000-0000-0000000001E3", version: 1)
         let representations = [
             HistoryRepresentation(
@@ -515,11 +514,11 @@ struct PreviewContentLoaderTests {
         await history.resumeDetails(for: ref.id)
         _ = await task.value
 
-        #expect(loader.phase == .unsupported)
+        #expect(loader.phase == .content(.text("Literal RTF")))
         #expect(!loader.canRetryFailure)
         await loader.retry()
         #expect(await history.detailRequests.count == 1)
-        #expect(loader.phase == .unsupported)
+        #expect(loader.phase == .content(.text("Literal RTF")))
     }
 
     /// Caller-input failures are terminal for this exact preview request.

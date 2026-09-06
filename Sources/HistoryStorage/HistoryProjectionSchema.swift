@@ -7,8 +7,14 @@ import SwiftData
 
 @Model
 internal final class HistoryItemRow {
+    #Index<HistoryItemRow>([\.pinOrdinal, \.lastCopiedAt, \.idOrder])
+
     @Attribute(.unique)
     var id: UUID
+    /// UUID's fixed-width uppercase text has the same order as its bytes.
+    /// Persisting that sortable scalar lets count retention select a bounded
+    /// oldest prefix even when every copy has the same timestamp (02 §12).
+    var idOrder: String
 
     var contentVersionRaw: UInt64
 
@@ -51,6 +57,7 @@ internal final class HistoryItemRow {
         pinOrdinal: Int?
     ) {
         self.id = id
+        self.idOrder = id.uuidString
         self.contentVersionRaw = contentVersionRaw
         self.canonicalBlob = canonicalBlob
         self.revisionStateBlob = revisionStateBlob

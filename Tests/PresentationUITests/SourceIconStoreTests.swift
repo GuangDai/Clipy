@@ -8,6 +8,40 @@ import Testing
 @MainActor
 struct SourceIconStoreTests {
     @Test
+    func pressurePreservesDisplayedIconsAndNormalResumesResolution() throws {
+        let calls = IconProviderCalls()
+        calls.image = try image()
+        let store = SourceIconStore(provider: SourceIconProvider { bundleID in
+            calls.bundleIDs.append(bundleID)
+            return calls.image
+        })
+        store.icon(forBundleID: "hot")
+        store.icon(forBundleID: "cold")
+        // Two visible rows may share one source. Removing one must not make
+        // that bundle cold while the other row still displays it.
+        store.setDisplayed("hot", true)
+        store.setDisplayed("hot", true)
+        store.setDisplayed("hot", false)
+        store.respondToMemoryPressure(.warning)
+        #expect(store.cachedIcon(forBundleID: "hot") === calls.image)
+        #expect(store.cachedIcon(forBundleID: "cold") == nil)
+        store.icon(forBundleID: "cold-after-warning")
+        #expect(store.cachedIcon(forBundleID: "cold-after-warning") === calls.image)
+        store.respondToMemoryPressure(.warning)
+        #expect(store.cachedIcon(forBundleID: "cold-after-warning") == nil)
+        #expect(store.cachedIcon(forBundleID: "hot") === calls.image)
+        store.respondToMemoryPressure(.critical)
+        #expect(store.cachedIcon(forBundleID: "hot") == nil)
+        store.icon(forBundleID: "hot")
+        store.respondToMemoryPressure(.warning)
+        store.icon(forBundleID: "hot")
+        #expect(calls.bundleIDs == ["hot", "cold", "cold-after-warning"])
+        store.respondToMemoryPressure(.normal)
+        store.icon(forBundleID: "hot")
+        #expect(calls.bundleIDs == ["hot", "cold", "cold-after-warning", "hot"])
+    }
+
+    @Test
     func rowReadsDoNotLoadAndRepeatedMissingIconsAreRetained() {
         let calls = IconProviderCalls()
         let store = SourceIconStore(provider: SourceIconProvider { bundleID in

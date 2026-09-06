@@ -163,7 +163,16 @@ public final class HistoryPanelSurfaceState {
     public private(set) var appliedPurgeGeneration = 0
     public private(set) var sessionGeneration = 0
     public private(set) var isSessionActive = false
+    public private(set) var memoryPressure: DisplayMemoryPressure = .normal
+    package private(set) var memoryPressureGeneration = 0
     public var isAtListRoot: Bool { detailsPath.isEmpty }
+
+    public func respondToMemoryPressure(_ pressure: DisplayMemoryPressure) {
+        memoryPressure = pressure
+        memoryPressureGeneration += 1
+        thumbnails.respondToMemoryPressure(pressure)
+        previewState.respondToMemoryPressure(pressure)
+    }
     package private(set) var detailsPurgeGeneration = 0
 
     private let previewState: PreviewPaneState
@@ -261,6 +270,7 @@ public final class HistoryPanelSurfaceState {
     public func beginSession(rows: [HistoryRow]) {
         sessionGeneration += 1
         isSessionActive = true
+        thumbnails.isSurfaceActive = true
         detailsPath.removeAll()
         quickLookReference = nil
         selection = PanelSessionSelection.preparedSelection(in: rows)
@@ -273,6 +283,7 @@ public final class HistoryPanelSurfaceState {
     public func endSession() {
         guard isSessionActive else { return }
         isSessionActive = false
+        thumbnails.isSurfaceActive = false
         detailsPath.removeAll()
         isAwaitingInitialSelection = false
         selection = nil
@@ -596,6 +607,11 @@ public struct HistoryPanelView: View {
             // Keep only this column layout/handle geometry unmirrored; each
             // column restores the user's direction for its own controls/text.
             .environment(\.layoutDirection, .leftToRight)
+            .environment(\.displayMemoryPressure, surfaceState.memoryPressure)
+            .environment(\.displayMemoryPressureGeneration, surfaceState.memoryPressureGeneration)
+            .onChange(of: surfaceState.memoryPressureGeneration, initial: true) { _, _ in
+                sourceIcons?.respondToMemoryPressure(surfaceState.memoryPressure)
+            }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("clipy.panel.root")
             .background { hiddenShortcuts }
@@ -612,7 +628,8 @@ public struct HistoryPanelView: View {
                 previewState.isAutoOpenPreferenceEnabled =
                     newAppearance.isPreviewAutoOpenEnabled
             }
-            .onChange(of: surfaceState.isSessionActive) { _, isActive in
+            .onChange(of: surfaceState.isSessionActive, initial: true) { _, isActive in
+                sourceIcons?.isSurfaceActive = isActive
                 if !isActive { isSearchFieldFocused = false }
             }
             .onChange(of: surfaceState.selection) { _, newSelection in

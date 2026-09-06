@@ -77,23 +77,30 @@ extension ExternalOperationDescriptor {
     }
 
     /// One owner for the closed manage-subset descriptor mapping.
-    internal static func forRequest(_ request: ExternalRequest) -> Self {
+    internal static func forRequest(
+        _ request: ExternalRequest,
+        expectedConnectionKind: ConnectionEnrollKind = .appIntents
+    ) -> Self {
+        let organize: ExternalCapability = expectedConnectionKind == .localAutomation
+            ? .organize : .manage
+        let delete: ExternalCapability = expectedConnectionKind == .localAutomation
+            ? .deleteItem : .manage
         switch request {
         case .pin(let id):
             Self(
-                capability: .manage,
+                capability: organize,
                 operationKind: .managePin,
                 requestSummary: .pin(itemID: id.rawValue)
             )
         case .unpin(let id):
             Self(
-                capability: .manage,
+                capability: organize,
                 operationKind: .manageUnpin,
                 requestSummary: .unpin(itemID: id.rawValue)
             )
         case .remove(let id):
             Self(
-                capability: .manage,
+                capability: delete,
                 operationKind: .manageRemove,
                 requestSummary: .remove(itemID: id.rawValue)
             )

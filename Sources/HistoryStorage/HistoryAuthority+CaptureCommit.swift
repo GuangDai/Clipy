@@ -83,6 +83,7 @@ extension HistoryAuthority {
             in: context,
             prepared: prepared.domain,
             signatureIndex: signatureIndex,
+            retention: retention,
             limits: limits
         )
         signatureIndex = load.signatureIndex
@@ -105,8 +106,8 @@ extension HistoryAuthority {
             )
         } catch let rejection as DomainRejection {
             if case .candidateItemIDCollision(let itemID) = rejection {
-                // Card 2B-1/2B-2: Domain proves the candidate is occupied from
-                // the complete retained inventory; Storage owns entropy and
+                // Card 2B-1/2B-2: Domain consumes the candidate's point-read
+                // occupancy; Storage owns entropy and
                 // turns that package rejection into the facade's bounded
                 // remint signal before stamping or transaction entry.
                 throw CaptureCandidateIDCollision(itemID: itemID)
@@ -136,7 +137,6 @@ extension HistoryAuthority {
         let mutationPlan = try composeRetentionExpansionForCapture(
             v1Plan,
             prepared: prepared,
-            facts: load.facts,
             in: context
         )
 

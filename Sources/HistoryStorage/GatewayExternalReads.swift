@@ -20,6 +20,8 @@ import SwiftData
 package enum ExternalReadPublicationDebugInstrumentation {
     @TaskLocal package static var afterSynchronousSuccessfulAuditCommit:
         (@Sendable () -> Void)?
+    @TaskLocal internal static var beforeLocalAutomationSearchPublication:
+        (@Sendable () async -> Void)?
 }
 #endif
 
@@ -177,13 +179,15 @@ extension HistoryAuthority {
     /// revision-count entity facts (V2-05 §5.2/§7.1).
     internal func performLocalAutomationBrowsePreview(
         _ request: ExternalRead,
+        after: HistoryPageCursor? = nil,
         connection: ExternalConnectionID,
         requestedAt: Date,
         searchWorker: SearchWorker
     ) async throws -> HistoryPage {
         let facts = try externalReadFacts(
             for: request,
-            expectedConnectionKind: .localAutomation
+            expectedConnectionKind: .localAutomation,
+            after: after
         )
 
         switch request {
@@ -198,7 +202,7 @@ extension HistoryAuthority {
                 ) { context in
                     let page = try recentPageInLocalContext(
                         limit: limit,
-                        after: nil,
+                        after: after,
                         context: context
                     )
                     return (page, try Self.historyPageSummary(page))
@@ -225,13 +229,30 @@ extension HistoryAuthority {
                     continuationAnchor: captured.continuationAnchor,
                     processMarker: cursorProcessMarker
                 )
-                try commitExternalReadAudit(
+                // Local Automation revocation takes effect before content
+                // publication, including while the search worker was away.
+#if DEBUG
+                await ExternalReadPublicationDebugInstrumentation
+                    .beforeLocalAutomationSearchPublication?()
+#endif
+                try Task.checkCancellation()
+                let context = ModelContext(container)
+                context.autosaveEnabled = false
+                let config = try Self.loadGatewayConfig(in: context)
+                try authorizeExternal(
+                    facts.descriptor, as: connection,
+                    expectedConnectionKind: .localAutomation,
+                    requestedAt: requestedAt, config: config, in: context
+                )
+                try commitGatewayAudit(
                     Self.succeededExternalReadPayload(
                         descriptor: facts.descriptor,
                         connection: connection,
                         result: try Self.historyPageSummary(page),
                         requestedAt: requestedAt
-                    )
+                    ),
+                    config: config,
+                    in: context
                 )
                 return page
             } catch let failure as HistoryFailure {
@@ -240,7 +261,8 @@ extension HistoryAuthority {
                     descriptor: facts.descriptor,
                     connection: connection,
                     requestedAt: requestedAt,
-                    operation: .readSearch
+                    operation: .readSearch,
+                    expectedConnectionKind: .localAutomation
                 )
             } catch is CancellationError {
                 try publishExternalSearchCancellation(
@@ -254,6 +276,36 @@ extension HistoryAuthority {
             throw ExternalFailure.persistence(.invariantViolation)
         }
     }
+
+    /// Current Effective representations only. The existing paste projection
+    /// supplies bytes, but neither its lineage hint nor any detail/revision
+    /// DTO crosses this Local Automation operation (`V2-05` §0.2).
+    internal func performLocalAutomationEffectiveRead(
+        _ itemID: HistoryItemID,
+        descriptor: ExternalOperationDescriptor,
+        connection: ExternalConnectionID,
+        requestedAt: Date
+    ) throws -> [HistoryRepresentation] {
+        try autoreleasepool {
+            try performExternalReadInOneInterval(
+                descriptor: descriptor, connection: connection,
+                expectedConnectionKind: .localAutomation,
+                requestedAt: requestedAt, operation: .readPastePayload
+            ) { context in
+                let representations = try pastePayload(for: itemID, in: context).representations
+                let totalBytes = representations.reduce(0) { $0 + $1.bytes.count }
+                // 24,000,000 raw bytes fit below the existing 32 MiB JSON
+                // reply cap after base64 and bounded representation metadata.
+                guard totalBytes <= 24_000_000 else {
+                    throw HistoryFailure.capacityExceeded(.storageBytes)
+                }
+                return (representations, .effectiveContent(
+                    representationCount: UInt16(representations.count),
+                    totalBytes: UInt64(totalBytes)
+                ))
+            }
+        }
+    }
 }
 
 private extension HistoryAuthority {
@@ -264,7 +316,8 @@ private extension HistoryAuthority {
 
     func externalReadFacts(
         for request: ExternalRead,
-        expectedConnectionKind: ConnectionEnrollKind
+        expectedConnectionKind: ConnectionEnrollKind,
+        after: HistoryPageCursor? = nil
     ) throws
         -> ExternalReadFacts
     {
@@ -278,7 +331,8 @@ private extension HistoryAuthority {
                 descriptor: descriptor,
                 searchRequest: HistoryBrowseRequest(
                     kind: .search(text: text, mode: mode),
-                    limit: limit
+                    limit: limit,
+                    after: after
                 )
             )
         }
@@ -315,6 +369,7 @@ private extension HistoryAuthority {
                 connection: connection,
                 requestedAt: requestedAt,
                 operation: operation,
+                expectedConnectionKind: expectedConnectionKind,
                 config: config,
                 in: context
             )
@@ -345,6 +400,7 @@ private extension HistoryAuthority {
                 connection: connection,
                 requestedAt: requestedAt,
                 operation: operation,
+                expectedConnectionKind: expectedConnectionKind,
                 config: config,
                 in: context
             )
@@ -424,11 +480,13 @@ private extension HistoryAuthority {
                 context: context
             )
         } catch let failure as HistoryFailure {
-            try publishExternalSearchCaptureFailure(
+            try publishExternalReadFailure(
                 failure,
                 descriptor: descriptor,
                 connection: connection,
                 requestedAt: requestedAt,
+                operation: .readSearch,
+                expectedConnectionKind: .localAutomation,
                 config: config,
                 in: context
             )
@@ -463,10 +521,21 @@ private extension HistoryAuthority {
         connection: ExternalConnectionID,
         requestedAt: Date,
         operation: ExternalHistoryOperationContext,
+        expectedConnectionKind: ConnectionEnrollKind = .appIntents,
         config: GatewayConfigRow? = nil,
         in callerContext: ModelContext? = nil
     ) throws -> Never {
-        let mapping = mapExternalHistoryFailure(source, for: operation)
+        let mapping: ExternalHistoryFailureMapping
+        switch (expectedConnectionKind, source) {
+        case (.localAutomation, .snapshotExpired),
+             (.localAutomation, .capacityExceeded(.storageBytes)):
+            mapping = ExternalHistoryFailureMapping(
+                failure: .history(source), auditFailureKind: .history,
+                auditDenialReason: nil
+            )
+        default:
+            mapping = mapExternalHistoryFailure(source, for: operation)
+        }
         if let config, let callerContext {
             try commitGatewayAudit(
                 Self.failedExternalReadPayload(

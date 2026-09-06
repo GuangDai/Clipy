@@ -46,14 +46,36 @@ package extension ClipyCLIContract {
         guard case let .string(operation) = root.value(named: "operation") else {
             return failure(.invalidRequest)
         }
-        guard operation == "browsePreview" else {
-            return failure(.unknownOperation)
-        }
-        guard case let .object(argumentObject) = root.value(named: "arguments"),
-              let arguments = decodeBrowseArguments(argumentObject) else {
+        guard case let .object(argumentObject) = root.value(named: "arguments") else {
             return failure(.invalidRequest)
         }
-        return .success(.browsePreview(requestID: requestID, arguments: arguments))
+        switch operation {
+        case "browsePreview":
+            guard let arguments = decodeBrowseArguments(argumentObject) else {
+                return failure(.invalidRequest)
+            }
+            return .success(.browsePreview(requestID: requestID, arguments: arguments))
+        case "detailsEffective", "pasteEffective", "pin", "unpin", "delete":
+            guard argumentObject.hasExactly(keys: ["locator"]),
+                  case let .string(locator) = argumentObject.value(named: "locator"),
+                  isNonemptyUTF8(locator, atMost: 1_024) else {
+                return failure(.invalidRequest)
+            }
+            switch operation {
+            case "detailsEffective":
+                return .success(.detailsEffective(requestID: requestID, locator: locator))
+            case "pasteEffective":
+                return .success(.pasteEffective(requestID: requestID, locator: locator))
+            case "pin":
+                return .success(.pin(requestID: requestID, locator: locator))
+            case "unpin":
+                return .success(.unpin(requestID: requestID, locator: locator))
+            default:
+                return .success(.delete(requestID: requestID, locator: locator))
+            }
+        default:
+            return failure(.unknownOperation)
+        }
     }
 
     private static func decodeBrowseArguments(
@@ -151,16 +173,33 @@ package enum ClipyCLIRequest: Equatable, Sendable {
         requestID: ClipyCLIRequestID,
         arguments: ClipyCLIBrowseArguments
     )
+    case detailsEffective(requestID: ClipyCLIRequestID, locator: String)
+    case pasteEffective(requestID: ClipyCLIRequestID, locator: String)
+    case pin(requestID: ClipyCLIRequestID, locator: String)
+    case unpin(requestID: ClipyCLIRequestID, locator: String)
+    case delete(requestID: ClipyCLIRequestID, locator: String)
 
     package var requestID: ClipyCLIRequestID {
         switch self {
-        case let .browsePreview(requestID, _): requestID
+        case let .browsePreview(requestID, _),
+             let .detailsEffective(requestID, _),
+             let .pasteEffective(requestID, _),
+             let .pin(requestID, _), let .unpin(requestID, _),
+             let .delete(requestID, _): requestID
         }
     }
 
-    package var arguments: ClipyCLIBrowseArguments {
+    package var arguments: ClipyCLIBrowseArguments? {
         switch self {
         case let .browsePreview(_, arguments): arguments
+        case .detailsEffective, .pasteEffective, .pin, .unpin, .delete: nil
+        }
+    }
+
+    package var isMutation: Bool {
+        switch self {
+        case .pin, .unpin, .delete: true
+        case .browsePreview, .detailsEffective, .pasteEffective: false
         }
     }
 }

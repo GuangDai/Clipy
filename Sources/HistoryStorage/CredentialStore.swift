@@ -26,6 +26,8 @@ internal enum CredentialStoreDeleteResult: Sendable {
 }
 
 internal protocol CredentialStoreExternalOperations: Sendable {
+    mutating func connectionIDs() throws -> [ExternalConnectionID]
+
     mutating func addCredential(
         _ data: Data,
         for connection: ExternalConnectionID
@@ -43,8 +45,8 @@ internal protocol CredentialStoreExternalOperations: Sendable {
 /// Actor-confined server copy of Local Automation credentials.
 ///
 /// The production operations use the app-private Data Protection Keychain.
-/// The client-side owner-only file and enrollment/revocation coordination are
-/// separate future F1 leaves and are intentionally absent here.
+/// LocalAutomationIngress's enrollment extension coordinates this server
+/// copy with client-file custody and the Authority's connection transaction.
 internal actor CredentialStore {
     private var operations: any CredentialStoreExternalOperations
 
@@ -54,6 +56,12 @@ internal actor CredentialStore {
 
     internal init(operations: any CredentialStoreExternalOperations) {
         self.operations = operations
+    }
+
+    /// Account names only, for removing interrupted enrollment's server copy
+    /// when its client file has already disappeared (V2-05 §0.3).
+    internal func connectionIDs() throws -> [ExternalConnectionID] {
+        try operations.connectionIDs()
     }
 
     internal func storeCredential(
@@ -114,6 +122,30 @@ private struct DataProtectionKeychainCredentialOperations:
 {
     private static let service =
         "com.clipy.Clipy.local-automation.server-credential"
+
+    func connectionIDs() throws -> [ExternalConnectionID] {
+        let query: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: Self.service,
+            kSecUseDataProtectionKeychain: true,
+            kSecMatchLimit: kSecMatchLimitAll,
+            kSecReturnAttributes: true,
+        ]
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return [] }
+        guard status == errSecSuccess,
+              let items = result as? [[String: Any]] else {
+            throw CredentialStoreFailure.unavailable
+        }
+        return try items.map { item in
+            guard let account = item[kSecAttrAccount as String] as? String,
+                  let id = UUID(uuidString: account) else {
+                throw CredentialStoreFailure.corruptStoredValue
+            }
+            return ExternalConnectionID(rawValue: id)
+        }
+    }
 
     func addCredential(
         _ data: Data,

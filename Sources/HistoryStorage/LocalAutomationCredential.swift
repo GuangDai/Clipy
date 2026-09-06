@@ -64,7 +64,7 @@ internal struct LocalAutomationCredential: Sendable, Equatable {
     }
 
     /// The only production secret-minting path. The connection identifier is
-    /// preassigned by the future enrollment coordinator; randomness supplies
+    /// preassigned by the enrollment coordinator; randomness supplies
     /// only the exact 32-byte secret suffix (`V2-05` §0.3).
     internal static func generate(
         for connection: ExternalConnectionID

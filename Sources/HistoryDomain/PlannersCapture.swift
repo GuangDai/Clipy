@@ -147,14 +147,12 @@ package func planCapture(
         outcome = .coalesced(winner.id)
         isInsert = false
     } else {
-        // Card 2B-1: the complete retention inventory is the authoritative
-        // pure fact for business-ID occupancy. Only the insert lane consumes
+        // Card 2B-1: the point-read occupancy is the authoritative pure fact
+        // for this prepared business ID. Only the insert lane consumes
         // the prepared candidate; a coalescing winner above deliberately
         // ignores it. Storage catches this package rejection and remints —
         // the Domain never generates identity (docs/02-domain.md §1/§4).
-        guard !facts.retention.allItems.contains(where: {
-            $0.id == capture.candidateID
-        }) else {
+        guard !facts.candidateIDExists else {
             throw DomainRejection.candidateItemIDCollision(
                 capture.candidateID
             )
@@ -183,17 +181,10 @@ package func planCapture(
     // inventory. An insert adds one unpinned row; a coalesce changes only the
     // primary's recency, and the primary is ineligible as its own victim, so
     // that recency never affects the ordering of eligible rows (§12, D14).
-    let retainedCount = facts.retention.allItems.count + (isInsert ? 1 : 0)
-    let inventoryCounts = facts.retention.allItems.reduce(
-        into: (unpinned: 0, eligible: 0)
-    ) { counts, item in
-        guard item.pinOrdinal == nil else { return }
-        counts.unpinned += 1
-        if item.id != primaryID {
-            counts.eligible += 1
-        }
-    }
-    let unpinnedCount = inventoryCounts.unpinned + (isInsert ? 1 : 0)
+    let retainedCount = facts.retention.retainedCount + (isInsert ? 1 : 0)
+    let eligibleCount = facts.retention.unpinnedCount
+        - (winner != nil && winner?.pinOrdinal == nil ? 1 : 0)
+    let unpinnedCount = facts.retention.unpinnedCount + (isInsert ? 1 : 0)
     let userPolicyVictims = max(
         0,
         unpinnedCount - retention.maximumUnpinnedItems
@@ -212,18 +203,15 @@ package func planCapture(
 
     // Pinned items are exempt (D13); the primary is never its own victim
     // (§12). Establishing this order is paid only when a victim can exist.
-    guard victimCount <= inventoryCounts.eligible else {
+    guard victimCount <= eligibleCount else {
         // D19: the user policy alone can always be satisfied; only the global
         // hard retained-item bound forces this failure (§12).
         throw DomainRejection.capacityExceeded(.retainedItems)
     }
 
-    let victims = evictionVictims(
-        in: facts.retention.allItems,
-        excluding: primaryID,
-        count: victimCount,
-        eligibleCount: inventoryCounts.eligible
-    )
+    let victims = facts.retention.oldestUnpinnedItems.lazy
+        .filter { $0.id != primaryID }
+        .prefix(victimCount)
     for victim in victims {
         mutations.append(.retire(itemID: victim.id, reason: .retention))
     }

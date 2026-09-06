@@ -176,6 +176,11 @@ private struct MemoryCredentialStoreOperations:
         self.isUnavailable = isUnavailable
     }
 
+    func connectionIDs() throws -> [ExternalConnectionID] {
+        guard !isUnavailable else { throw CredentialStoreFailure.unavailable }
+        return Array(values.keys)
+    }
+
     mutating func addCredential(
         _ data: Data,
         for connection: ExternalConnectionID

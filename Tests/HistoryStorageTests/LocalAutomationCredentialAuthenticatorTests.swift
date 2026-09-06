@@ -220,6 +220,10 @@ private struct AuthenticationMemoryCredentialOperations:
         self.forcedCopyResult = forcedCopyResult
     }
 
+    func connectionIDs() throws -> [ExternalConnectionID] {
+        Array(values.keys)
+    }
+
     mutating func addCredential(
         _ data: Data,
         for connection: ExternalConnectionID

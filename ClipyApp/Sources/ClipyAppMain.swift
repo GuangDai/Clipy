@@ -60,7 +60,9 @@ private struct SettingsRootView: View {
                 summonShortcut: appDelegate.summonShortcutBinding {
                     isRecordingSummonShortcut = true
                 },
-                popupPosition: $panelPosition
+                popupPosition: $panelPosition,
+                storageLocation: appDelegate.storageLocationSettings(),
+                localAutomation: composition.localAutomation?.settings
             )
             .sheet(isPresented: $isRecordingSummonShortcut) {
                 SummonShortcutRecorderView { chord in

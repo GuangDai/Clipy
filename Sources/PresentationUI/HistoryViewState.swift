@@ -141,6 +141,14 @@ public final class HistoryViewState {
     /// previews need no wiring.
     public var onPaste: @MainActor @Sendable (HistoryItemReference) -> Void = { _ in }
 
+    /// Explicit Details Save As handoff. The immutable representation comes
+    /// from the displayed Canonical/Effective snapshot; the app owns the
+    /// destination picker and file write (V2-07 §4.1.1).
+    public var onExportRepresentation:
+        @MainActor @Sendable (HistoryRepresentation) async -> Result<Void, RepresentationExportFailure> = {
+            _ in .failure(.unavailable)
+        }
+
     /// App-shell accessibility handoff for one user-initiated remove whose
     /// committed receipt has already published its exact surface purge.
     /// External/background mutations use their own ingress and never invoke

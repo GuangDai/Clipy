@@ -123,10 +123,6 @@ internal struct SignatureIndex: Sendable, Equatable {
     /// (§12).
     private var entriesByItem: [HistoryItemID: [ContentSignatureEntry]]
 
-    /// Exact retained-ID coverage, maintained with both maps so a capture fact
-    /// load does not materialize another O(N) set.
-    private var indexedItemIDs: Set<HistoryItemID>
-
     /// A fresh, unready index (§12 `.unready`). `HistoryAuthority` creates
     /// this on entry; `open` (§13) or the capture-time rebuild (§7.1 step 1)
     /// replaces it with a `build(from:limits:)` result.
@@ -134,20 +130,17 @@ internal struct SignatureIndex: Sendable, Equatable {
         state = .unready
         postings = [:]
         entriesByItem = [:]
-        indexedItemIDs = []
     }
 
     /// Designated initializer from already-validated maps.
     private init(
         state: State,
         postings: [ContentSignatureEntry: Set<HistoryItemID>],
-        entriesByItem: [HistoryItemID: [ContentSignatureEntry]],
-        indexedItemIDs: Set<HistoryItemID>
+        entriesByItem: [HistoryItemID: [ContentSignatureEntry]]
     ) {
         self.state = state
         self.postings = postings
         self.entriesByItem = entriesByItem
-        self.indexedItemIDs = indexedItemIDs
     }
 
     // MARK: Complete construction (§13 step 8; §7.1 step 1)
@@ -161,10 +154,9 @@ internal struct SignatureIndex: Sendable, Equatable {
     /// coverage before passing entries here. Startup constructs postings
     /// before declaring ready and never decodes revision bytes merely to build
     /// the index (§12–§13). An empty dictionary builds an empty ready index,
-    /// valid only for an empty retained store (§12); the caller passes the
-    /// complete retained set, and every capture fact load re-verifies index
-    /// coverage against the fetched retained IDs before constructing
-    /// `IngestFacts` (§7.1 step 6).
+    /// valid only for an empty retained store (§12). Startup establishes
+    /// complete membership and isolated commit deltas maintain it. Capture
+    /// checks the retained count and point-fetches its actual candidates.
     ///
     /// - Throws: `SignatureIndexRejection` when completeness cannot be proved
     ///   — the input exceeds the hard retained-item bound, or an entry list
@@ -194,8 +186,7 @@ internal struct SignatureIndex: Sendable, Equatable {
         return SignatureIndex(
             state: .ready,
             postings: postings,
-            entriesByItem: entriesByItem,
-            indexedItemIDs: Set(signatures.keys)
+            entriesByItem: entriesByItem
         )
     }
 
@@ -204,13 +195,11 @@ internal struct SignatureIndex: Sendable, Equatable {
     /// The complete set of retained item IDs currently indexed.
     /// docs/05-authority-kernel.md §12
     ///
-    /// A capture fact load compares this against the fetched retained ID set
-    /// before constructing `IngestFacts` (§7.1 step 6) — the standing check
-    /// behind §12's "an empty ready index is valid only for an empty retained
-    /// store" and "every fact-load checks that candidate IDs remain retained
-    /// in its serialized Authority interval".
+    /// Used by owning tests and fixture construction. Ordinary capture needs
+    /// only `itemCount` and actual candidate point reads, not another full ID
+    /// set comparison (05 §7.1).
     internal var itemIDs: Set<HistoryItemID> {
-        indexedItemIDs
+        Set(entriesByItem.keys)
     }
 
     /// The number of retained items currently indexed.
@@ -324,10 +313,6 @@ internal struct SignatureIndex: Sendable, Equatable {
                 markUnready()
                 return
             }
-            guard indexedItemIDs.remove(itemID) != nil else {
-                markUnready()
-                return
-            }
             for entry in entries {
                 guard var posting = postings[entry],
                       posting.remove(itemID) != nil
@@ -344,10 +329,6 @@ internal struct SignatureIndex: Sendable, Equatable {
         }
         for (itemID, entries) in delta.additions {
             entriesByItem[itemID] = entries
-            guard indexedItemIDs.insert(itemID).inserted else {
-                markUnready()
-                return
-            }
             for entry in entries {
                 postings[entry, default: []].insert(itemID)
             }
@@ -369,7 +350,6 @@ internal struct SignatureIndex: Sendable, Equatable {
         state = .unready
         postings.removeAll()
         entriesByItem.removeAll()
-        indexedItemIDs.removeAll()
     }
 
     // MARK: Shared delta and entry-list checks (§9, §12)

@@ -272,6 +272,26 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
             message: "Committed v3 Save did not keep current authored Details open."
         ) else { return }
 
+        // Save As opens a real native sheet attached to this Details window.
+        // Cancelling must keep the floating surface and edited content intact.
+        try clickDetailsButton("clipy.details.save-as.\(textType)", in: app)
+        let saveSheet = editorDetailsDialog(in: app).sheets.firstMatch
+        let cancelExport = saveSheet.buttons["Cancel"]
+        guard assertEventually(
+            { saveSheet.exists && cancelExport.exists && cancelExport.isHittable },
+            in: app,
+            message: "Save As did not present its native destination sheet."
+        ) else { return }
+        cancelExport.click()
+        guard assertEventually(
+            {
+                !saveSheet.exists && detailsTitle.exists
+                    && self.accessibilityText(of: detailsTitle) == draft
+            },
+            in: app,
+            message: "Cancelling export did not preserve current Details."
+        ) else { return }
+
         // The Details Revert controls use the same commit-before-purge
         // ordering as Save. Exercise both controls through their real wiring:
         // neither restore may dismiss Details as though the item was removed.

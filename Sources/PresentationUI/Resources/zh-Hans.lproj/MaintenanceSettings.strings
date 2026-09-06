@@ -1,0 +1,9 @@
+"Maintenance" = "维护";
+"Logical Content Size" = "逻辑内容大小";
+"Store Folder Size" = "存储文件夹大小";
+"Show in Finder" = "在访达中显示";
+"Refresh" = "刷新";
+"Unavailable" = "暂不可用";
+"Loading size…" = "正在读取大小…";
+"Originals and retained revisions, excluding database and filesystem overhead." = "原始内容与保留的修订版本，不包括数据库及文件系统开销。";
+"Approximate allocated size of all files in this folder, including hidden files and any other data stored here. Linked files and folders are excluded. Live writes and shared disk blocks can affect this estimate." = "此文件夹内所有文件的近似磁盘分配空间，包括隐藏文件及存放在此处的其他数据，不包括链接的文件和文件夹。实时写入与共享磁盘块可能影响此估算值。";

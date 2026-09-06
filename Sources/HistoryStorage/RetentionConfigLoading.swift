@@ -374,7 +374,6 @@ extension HistoryAuthority {
     internal func composeRetentionExpansionForCapture(
         _ v1Plan: MutationPlan,
         prepared: PreparedCaptureBundle,
-        facts: IngestFacts,
         in context: ModelContext
     ) throws -> MutationPlan {
         // §4.2: "if neither R1 nor R2 active: stamp+transact v1Plan exactly
@@ -419,13 +418,19 @@ extension HistoryAuthority {
         }
 
         // ── Expansion facts over the projected inventory (§3.2/§4.2) ──
+        // R1/R2 still need a complete inventory. Count-only capture never
+        // reaches this load and carries only counts and possible victims.
+        let inventory = try HistoryItemRowHydration.fetchRetainedInventory(
+            in: context,
+            limits: limits
+        )
         let scalarsByItem = try RetentionConfigLoading.fetchProjectedScalars(
             in: context,
             limits: limits
         )
-        // The pre-commit store retains exactly `facts.retention.allItems`,
+        // The pre-commit store retains exactly `inventory`,
         // and the 1:1 law makes the row set equal to it.
-        let retainedIDs = Set(facts.retention.allItems.map(\.id))
+        let retainedIDs = Set(inventory.map(\.id))
         guard Set(scalarsByItem.keys) == retainedIDs else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
@@ -440,9 +445,9 @@ extension HistoryAuthority {
         // preserves the winner's pin ordinal, `02` §9.5).
         var items: [RetentionExpansionItemSummary] = []
         items.reserveCapacity(
-            facts.retention.allItems.count + (primaryIsInsert ? 1 : 0)
+            inventory.count + (primaryIsInsert ? 1 : 0)
         )
-        for summary in facts.retention.allItems {
+        for summary in inventory {
             guard !countVictimIDs.contains(summary.id) else { continue }
             guard let scalars = scalarsByItem[summary.id] else {
                 // Unreachable after the both-directions check; kept as the
@@ -496,7 +501,7 @@ extension HistoryAuthority {
         var protected = Set<HistoryItemID>(minimumCapacity: countVictimIDs.count + 1)
         protected.formUnion(countVictimIDs)
         protected.insert(primaryID)
-        for summary in facts.retention.allItems
+        for summary in inventory
         where summary.pinOrdinal != nil {
             protected.insert(summary.id)
         }

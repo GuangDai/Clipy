@@ -116,3 +116,8 @@
 "Latest content loaded. Your draft was kept for formats that remain editable." = "Latest content loaded. Your draft was kept for formats that remain editable.";
 "Clipy couldn't load the latest content." = "Clipy couldn't load the latest content.";
 "Editing one format leaves other kept formats unchanged. The destination app may use those formats instead." = "Editing one format leaves other kept formats unchanged. The destination app may use those formats instead.";
+"Save As…" = "Save As…";
+"Save %@ As…" = "Save %@ As…";
+"Saves the complete bytes of this displayed representation to a file you choose." = "Saves the complete bytes of this displayed representation to a file you choose.";
+"The Save dialog is unavailable. Try again." = "The Save dialog is unavailable. Try again.";
+"Clipy couldn't save this file. Choose another location and try again." = "Clipy couldn't save this file. Choose another location and try again.";

@@ -10,6 +10,7 @@
 import Foundation
 import HistoryCore
 import HistoryStorage
+import LocalAutomation
 import PasteboardAdapter
 import PresentationUI
 
@@ -338,6 +339,10 @@ final class AppComposition {
         .appendingPathComponent("Clipy", isDirectory: true)
         .appendingPathComponent("history.store")
 
+    /// Optional automation is composed only after the real store opens.
+    /// Test-only memory compositions never acquire the user's fixed socket.
+    private(set) var localAutomation: LocalAutomationController?
+
     /// Assembles one coherent app graph from the two true boundary values.
     /// View state and observer are always derived here, so tests cannot pair
     /// a History or pasteboard adapter with mismatched collaborators.
@@ -474,7 +479,12 @@ final class AppComposition {
                 capturePauseDuration: capturePauseDuration,
                 injectEditorJourney: injectEditorJourney
             )
-            try Task.checkCancellation()
+            do {
+                try Task.checkCancellation()
+            } catch {
+                await composition.stopLocalAutomation()
+                throw error
+            }
             composition.start(
                 workspaceActivity: workspaceActivityProvider()
             )
@@ -517,6 +527,18 @@ final class AppComposition {
                 forcedInitialCaptureAccessBehavior,
             capturePauseDuration: capturePauseDuration
         )
+        if storeURL.standardizedFileURL == defaultStoreURL.standardizedFileURL {
+            let relay = composition.panelSurfacePurgeRelay
+            let controller = LocalAutomationController(
+                ingress: history.localAutomationIngress { itemID in
+                    await relay.acceptCommittedExternalRemoval(itemID)
+                }
+            )
+            composition.localAutomation = controller
+            // Automation availability does not determine clipboard capture
+            // availability. Settings can retry a listener or custody failure.
+            try? await controller.startIfEnabled()
+        }
 #if DEBUG
         if injectEditorJourney {
             composition.viewState
@@ -547,6 +569,10 @@ final class AppComposition {
         // There is no mailbox, pending queue, or nested task.
         viewState.onPaste = { [weak self] item in
             self?.requestPaste(item)
+        }
+        viewState.onExportRepresentation = { representation in
+            guard let window = NSApp.keyWindow else { return .failure(.unavailable) }
+            return await RepresentationExporter.saveAs(representation, for: window)
         }
         viewState.onCommittedUserRemoval = { [weak self] purge in
             self?.panelSurfacePurgeRelay.apply(purge)
@@ -591,11 +617,15 @@ final class AppComposition {
     /// publish a late side effect after shutdown.
     func stop() {
         isStarted = false
+        if let localAutomation {
+            Task { await localAutomation.stop() }
+        }
         capturePauseTask?.cancel()
         capturePauseTask = nil
         reconcileCaptureObservation()
         viewState.deactivate()
         viewState.onPaste = { _ in }
+        viewState.onExportRepresentation = { _ in .failure(.unavailable) }
         viewState.onCommittedUserRemoval = { _ in }
         pendingCapture = nil
         drainsPreInactivityPendingCapture = false
@@ -604,6 +634,10 @@ final class AppComposition {
         activeCaptureBytes = 0
         publishCaptureHealthIfChanged()
         cancelPendingPaste()
+    }
+
+    func stopLocalAutomation() async {
+        await localAutomation?.stop()
     }
 
     /// Card 7/14: Copy belongs to the panel session that admitted it. Closing

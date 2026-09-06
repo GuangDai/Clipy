@@ -12,6 +12,8 @@ import HistoryCore
 internal enum ExternalGatewayDebugInstrumentation {
     @TaskLocal internal static var compactionFollowerDidJoin:
         (@Sendable () async -> Void)?
+    @TaskLocal internal static var beforeLocalAutomationWriteCommit:
+        (@Sendable () async -> Void)?
 }
 #endif
 
@@ -154,9 +156,49 @@ internal actor ExternalGateway {
         )
         return try await authority.performLocalAutomationBrowsePreview(
             read,
+            after: request.after,
             connection: connection,
             requestedAt: requestedAt,
             searchWorker: searchWorker
+        )
+    }
+
+    /// F1 operations share the existing Authority authorization and audit
+    /// owners. Local grants remain independent: organizing cannot delete.
+    internal func performLocalAutomation(
+        _ request: ExternalRequest,
+        asAuthenticated connection: ExternalConnectionID
+    ) async throws -> ExternalResponse {
+        let requestedAt = storageClock.now()
+        let descriptor = ExternalOperationDescriptor.forRequest(
+            request, expectedConnectionKind: .localAutomation
+        )
+        try await beginStructurallyAdmittedOperation(
+            descriptor, expectedConnectionKind: .localAutomation
+        )
+#if DEBUG
+        await ExternalGatewayDebugInstrumentation.beforeLocalAutomationWriteCommit?()
+#endif
+        return try await authority.commitExternal(
+            request: request, connection: connection,
+            expectedConnectionKind: .localAutomation, requestedAt: requestedAt
+        )
+    }
+
+    internal func readLocalAutomationEffectiveContent(
+        _ itemID: HistoryItemID,
+        asAuthenticated connection: ExternalConnectionID
+    ) async throws -> [HistoryRepresentation] {
+        let requestedAt = storageClock.now()
+        let descriptor = ExternalOperationDescriptor(
+            capability: .readEffectiveContent, operationKind: .readEffectiveContent,
+            requestSummary: .readEffectiveContent(itemID: itemID.rawValue)
+        )
+        try await beginStructurallyAdmittedOperation(
+            descriptor, expectedConnectionKind: .localAutomation
+        )
+        return try await authority.performLocalAutomationEffectiveRead(
+            itemID, descriptor: descriptor, connection: connection, requestedAt: requestedAt
         )
     }
 

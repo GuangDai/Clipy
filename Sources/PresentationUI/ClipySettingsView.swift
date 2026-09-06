@@ -57,6 +57,8 @@ public struct ClipySettingsView: View {
     /// placement the user can configure (the geometry lives in ClipyApp —
     /// PresentationUI carries the mode value only).
     private let popupPosition: Binding<PopupPositionMode>?
+    private let storageLocation: StorageLocationSettings?
+    private let localAutomation: LocalAutomationSettings?
 
     /// One panel-owned configured snapshot and edit generation shared by the
     /// v1 count control and all V2 dimensions (DEC-RET-READ / Card 10A).
@@ -77,16 +79,24 @@ public struct ClipySettingsView: View {
     ///     binding or unavailable candidate plus Change/Retry/Reset recovery.
     ///   - popupPosition: when non-`nil`, the Appearance tab shows the panel
     ///     position picker bound to it; `nil` omits the picker entirely.
+    ///   - storageLocation: when non-`nil`, Maintenance displays logical
+    ///     content and approximate folder allocation with read-only intents.
+    ///   - localAutomation: when non-`nil`, Automation exposes the app-owned
+    ///     explicit enrollment, independent grants and revocation controls.
     public init(
         viewState: HistoryViewState,
         launchAtLogin: LaunchAtLoginSettings? = nil,
         summonShortcut: SummonShortcutSettings? = nil,
-        popupPosition: Binding<PopupPositionMode>? = nil
+        popupPosition: Binding<PopupPositionMode>? = nil,
+        storageLocation: StorageLocationSettings? = nil,
+        localAutomation: LocalAutomationSettings? = nil
     ) {
         self.viewState = viewState
         self.launchAtLogin = launchAtLogin
         self.summonShortcut = summonShortcut
         self.popupPosition = popupPosition
+        self.storageLocation = storageLocation
+        self.localAutomation = localAutomation
     }
 
     public var body: some View {
@@ -114,6 +124,20 @@ public struct ClipySettingsView: View {
             )
                 .tabItem { Label(RetentionSettingsCopy.tabTitle, systemImage: "clock.arrow.circlepath") }
                 .frame(width: 480, height: 560)
+            if let localAutomation {
+                LocalAutomationSettingsView(settings: localAutomation)
+                    .tabItem {
+                        Label(LocalAutomationSettingsCopy.text("Automation"), systemImage: "terminal")
+                    }
+                    .frame(width: 480, height: 480)
+            }
+            if let storageLocation {
+                MaintenanceSettingsView(history: viewState.history, location: storageLocation)
+                    .tabItem {
+                        Label(MaintenanceSettingsCopy.text("Maintenance"), systemImage: "internaldrive")
+                    }
+                    .frame(width: 480, height: 440)
+            }
         }
         .task(id: retentionConfigurationRefreshGeneration) {
             await loadRetentionConfiguration()

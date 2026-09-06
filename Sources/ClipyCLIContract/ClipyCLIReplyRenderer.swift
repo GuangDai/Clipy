@@ -57,6 +57,27 @@ package extension ClipyCLIContract {
                 output.appendASCII("null")
             }
             output.appendASCII("}}")
+        case let .effective(requestID, result):
+            output.appendASCII("{\"ok\":true,\"protocolVersion\":1,\"requestID\":")
+            output.appendJSON(requestID.rawValue)
+            output.appendASCII(",\"result\":{\"locator\":")
+            output.appendJSON(result.locator)
+            output.appendASCII(",\"representations\":[")
+            for (index, representation) in result.representations.enumerated() {
+                if index != 0 { output.appendASCII(",") }
+                output.appendASCII("{\"bytesBase64\":")
+                output.appendJSON(representation.bytes.base64EncodedString())
+                output.appendASCII(",\"typeIdentifier\":")
+                output.appendJSON(representation.typeIdentifier)
+                output.appendASCII("}")
+            }
+            output.appendASCII("]}}")
+        case let .mutation(requestID, changed):
+            output.appendASCII("{\"ok\":true,\"protocolVersion\":1,\"requestID\":")
+            output.appendJSON(requestID.rawValue)
+            output.appendASCII(",\"result\":{\"changed\":")
+            output.appendASCII(changed ? "true" : "false")
+            output.appendASCII("}}")
         case let .failure(requestID, code):
             output.appendASCII("{\"error\":{\"code\":")
             output.appendJSON(code.rawValue)
@@ -175,6 +196,8 @@ package struct ClipyCLIBrowsePreviewResult: Equatable, Sendable {
 package struct ClipyCLIReply: Sendable {
     fileprivate enum Payload: Sendable {
         case success(ClipyCLIRequestID, ClipyCLIBrowsePreviewResult)
+        case effective(ClipyCLIRequestID, ClipyCLIEffectiveResult)
+        case mutation(ClipyCLIRequestID, Bool)
         case failure(ClipyCLIRequestID?, ClipyCLIErrorCode)
     }
 
@@ -186,7 +209,8 @@ package struct ClipyCLIReply: Sendable {
         for request: ClipyCLIRequest,
         result: ClipyCLIBrowsePreviewResult
     ) throws -> Self {
-        guard result.items.count <= request.arguments.limit else {
+        guard let arguments = request.arguments,
+              result.items.count <= arguments.limit else {
             throw ClipyCLIValueFailure.invalidValue
         }
         return .init(
@@ -194,6 +218,19 @@ package struct ClipyCLIReply: Sendable {
             requestID: request.requestID,
             errorCode: nil
         )
+    }
+
+    package static func success(
+        for request: ClipyCLIRequest,
+        effective: ClipyCLIEffectiveResult
+    ) -> Self {
+        .init(payload: .effective(request.requestID, effective),
+              requestID: request.requestID, errorCode: nil)
+    }
+
+    package static func success(for request: ClipyCLIRequest, changed: Bool) -> Self {
+        .init(payload: .mutation(request.requestID, changed),
+              requestID: request.requestID, errorCode: nil)
     }
 
     package static func failure(
@@ -205,6 +242,42 @@ package struct ClipyCLIReply: Sendable {
             requestID: requestID,
             errorCode: code
         )
+    }
+}
+
+/// JSON carries current Effective bytes only. Check the raw byte budget
+/// before allocating base64 strings; 24 MB leaves room for base64 expansion
+/// and the bounded identifiers below within the existing 32 MiB reply cap.
+package struct ClipyCLIEffectiveResult: Sendable {
+    package static let maximumContentBytes = 24_000_000
+    package struct Representation: Sendable {
+        package let typeIdentifier: String
+        package let bytes: Data
+
+        package init(typeIdentifier: String, bytes: Data) {
+            self.typeIdentifier = typeIdentifier
+            self.bytes = bytes
+        }
+    }
+    package let locator: String
+    package let representations: [Representation]
+
+    package init(locator: String, representations: [Representation]) throws {
+        guard !locator.isEmpty, locator.utf8.count <= 1_024,
+              representations.count <= 32 else {
+            throw ClipyCLIValueFailure.invalidValue
+        }
+        var total = 0
+        for representation in representations {
+            guard !representation.typeIdentifier.isEmpty,
+                  representation.typeIdentifier.utf8.count <= 512,
+                  representation.bytes.count <= Self.maximumContentBytes - total else {
+                throw ClipyCLIValueFailure.invalidValue
+            }
+            total += representation.bytes.count
+        }
+        self.locator = locator
+        self.representations = representations
     }
 }
 

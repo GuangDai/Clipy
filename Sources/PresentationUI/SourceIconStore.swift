@@ -42,6 +42,28 @@ package final class SourceIconStore {
 
     /// Insertion order for FIFO eviction (`entries` alone is unordered).
     private var insertionOrder: [String] = []
+    private var displayedBundleCounts: [String: Int] = [:]
+    package var isSurfaceActive = true
+    package private(set) var isPrefetchSuspended = false
+
+    package func setDisplayed(_ bundleID: String, _ displayed: Bool) {
+        let count = (displayedBundleCounts[bundleID] ?? 0) + (displayed ? 1 : -1)
+        displayedBundleCounts[bundleID] = count > 0 ? count : nil
+    }
+
+    package func respondToMemoryPressure(_ pressure: DisplayMemoryPressure) {
+        switch pressure {
+        case .normal:
+            isPrefetchSuspended = false
+        case .warning:
+            entries = entries.filter { isSurfaceActive && displayedBundleCounts[$0.key] != nil }
+            insertionOrder.removeAll { entries[$0] == nil }
+        case .critical:
+            isPrefetchSuspended = true
+            entries.removeAll()
+            insertionOrder.removeAll()
+        }
+    }
 
     package init(provider: SourceIconProvider) {
         self.provider = provider
@@ -62,6 +84,7 @@ package final class SourceIconStore {
     @discardableResult
     package func icon(forBundleID bundleID: String) -> CGImage? {
         if let entry = entries[bundleID] { return entry.icon }
+        guard !isPrefetchSuspended, isSurfaceActive else { return nil }
         // The provider may reenter this synchronous MainActor call. Record
         // the existing nil entry before invoking it so another row asking
         // for this bundle does not recursively load it a second time.

@@ -66,6 +66,32 @@ public final class ThumbnailStore {
     }
     private var inFlight: [HistoryItemReference: Flight] = [:]
 
+    /// Actual row/header appearances distinguish display demand from cold
+    /// retained results. These references own no pixels or History values.
+    private var displayedItems: Set<HistoryItemReference> = []
+    package var isSurfaceActive = true
+    package private(set) var isPrefetchSuspended = false
+
+    package func setDisplayed(_ item: HistoryItemReference, _ displayed: Bool) {
+        if displayed { displayedItems.insert(item) }
+        else { displayedItems.remove(item) }
+    }
+
+    package func respondToMemoryPressure(_ pressure: DisplayMemoryPressure) {
+        switch pressure {
+        case .normal:
+            isPrefetchSuspended = false
+        case .warning:
+            removeEntries { !isSurfaceActive || !displayedItems.contains($0) }
+            for item in inFlight.keys.filter({ !isSurfaceActive || !displayedItems.contains($0) }) {
+                inFlight.removeValue(forKey: item)?.task.cancel()
+            }
+        case .critical:
+            isPrefetchSuspended = true
+            reset()
+        }
+    }
+
     /// Monotone surface-owned purge generation. It is local observability for
     /// destructive invalidation, not a process-wide cache epoch.
     package private(set) var purgeGeneration = 0
@@ -221,7 +247,7 @@ public final class ThumbnailStore {
         // A view task can be cancelled before its MainActor body executes.
         // It no longer expresses demand: neither start independent work nor
         // promote a retained entry on behalf of that retired caller.
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, !isPrefetchSuspended, isSurfaceActive else { return }
         if entries[item] != nil {
             nextRecency += 1
             entries[item]?.recency = nextRecency
