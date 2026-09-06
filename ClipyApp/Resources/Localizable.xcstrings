@@ -1,6 +1,23 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Clipboard History Item" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clipboard History Item"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "剪贴板历史记录项目"
+          }
+        }
+      }
+    },
     "Clipboard access is not allowed." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -69,6 +86,23 @@
         }
       }
     },
+    "Copy Count" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copy Count"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制次数"
+          }
+        }
+      }
+    },
     "Copy one retained item to the clipboard." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -82,6 +116,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "将一个保留项目复制到剪贴板。"
+          }
+        }
+      }
+    },
+    "Exact" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exact"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "精确"
+          }
+        }
+      }
+    },
+    "Fuzzy" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fuzzy"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模糊"
           }
         }
       }
@@ -133,6 +201,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "项目 ID"
+          }
+        }
+      }
+    },
+    "Last Copied" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last Copied"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近复制"
           }
         }
       }
@@ -205,6 +290,23 @@
         }
       }
     },
+    "Pinned" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pinned"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已置顶"
+          }
+        }
+      }
+    },
     "Query" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -218,6 +320,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "查询"
+          }
+        }
+      }
+    },
+    "Regular Expression" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Regular Expression"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正则表达式"
           }
         }
       }
@@ -256,6 +375,23 @@
         }
       }
     },
+    "Revision Count" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Revision Count"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "修订版本数"
+          }
+        }
+      }
+    },
     "Search Clipboard History" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -269,6 +405,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "搜索剪贴板历史记录"
+          }
+        }
+      }
+    },
+    "Search Mode" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search Mode"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索模式"
           }
         }
       }
@@ -303,6 +456,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "搜索文本。"
+          }
+        }
+      }
+    },
+    "Source Application" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Source Application"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来源应用"
           }
         }
       }
@@ -354,6 +524,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "剪贴板请求无效。"
+          }
+        }
+      }
+    },
+    "Title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Title"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标题"
+          }
+        }
+      }
+    },
+    "Type Identifiers" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Type Identifiers"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "类型标识符"
           }
         }
       }

@@ -71,10 +71,12 @@ final class RetentionUsageJourneyUITests: XCTestCase {
 
         app.buttons["General"].click()
         // The Settings window on the General tab is anchored by the
-        // privacy ignore-list section, the retention field being off-tab.
+        // privacy ignore-list's Add button, the retention field being
+        // off-tab (every journey anchors on a concrete interactive
+        // element, not a Form section identifier).
         let settingsWindow = app.windows.containing(
-            .any,
-            identifier: "clipy.settings.privacy.ignored-list"
+            .button,
+            identifier: "clipy.settings.privacy.add-ignore"
         ).firstMatch
         assertExists(
             settingsWindow,
@@ -131,6 +133,13 @@ final class RetentionUsageJourneyUITests: XCTestCase {
         XCTAssertTrue(
             waitUntil(timeout: 5) { !confirmationSheet.exists },
             diagnostic(app, context: "clear-all sheet dismisses after receipt")
+        )
+        // The sheet dismisses before the clear's Task completes; join the
+        // receipt itself before re-entering the tab, so the tab's single
+        // usage read cannot race the commit.
+        XCTAssertTrue(
+            app.staticTexts["Removed 2 items."].waitForExistence(timeout: 10),
+            diagnostic(app, context: "exact clear-all receipt feedback")
         )
 
         // Re-entering the Retention tab must show the emptied store, not

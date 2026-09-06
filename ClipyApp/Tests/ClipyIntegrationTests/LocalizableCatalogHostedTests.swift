@@ -66,5 +66,47 @@ struct LocalizableCatalogHostedTests {
                 ) == value
             )
         }
+
+        // The entity surface the Shortcuts UI renders beyond the intent
+        // titles: the entity display name, the search-mode enum, and the
+        // property titles (ClipboardIntentModels' LocalizedStringResource
+        // literals resolve against the same table).
+        let modelLiterals = [
+            "Clipboard History Item",
+            "Search Mode",
+            "Exact",
+            "Fuzzy",
+            "Regular Expression",
+            "Title",
+            "Type Identifiers",
+            "Last Copied",
+            "Copy Count",
+            "Source Application",
+            "Pinned",
+            "Revision Count",
+        ]
+        let expectedModelLiterals = [
+            "剪贴板历史记录项目",
+            "搜索模式",
+            "精确",
+            "模糊",
+            "正则表达式",
+            "标题",
+            "类型标识符",
+            "最近复制",
+            "复制次数",
+            "来源应用",
+            "已置顶",
+            "修订版本数",
+        ]
+        for (literal, value) in zip(modelLiterals, expectedModelLiterals) {
+            #expect(
+                bundle.localizedString(
+                    forKey: literal,
+                    value: literal,
+                    table: "Localizable"
+                ) == value
+            )
+        }
     }
 }

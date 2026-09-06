@@ -358,11 +358,12 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
 
         openRetentionSettings(in: app)
         // Usage before: the canonical capture plus both stored revisions.
+        let bytesBefore = original.utf8.count
+            + firstRevision.utf8.count
+            + secondRevision.utf8.count
         assertUsage(
             itemCount: "1",
-            contentSize: "\(original.utf8.count
-                + firstRevision.utf8.count
-                + secondRevision.utf8.count) bytes",
+            contentSize: "\(bytesBefore) bytes",
             in: app
         )
 
@@ -402,6 +403,12 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             context: "revision-count toggle below retained usage"
         ) else { return }
         revisionCountToggle.click()
+        guard scrollUntilFullyVisible(
+            revisionCountField,
+            in: retentionScrollView,
+            app: app,
+            context: "revision-count field below its toggle"
+        ) else { return }
         replaceText(in: revisionCountField, with: "1")
 
         let apply = app.buttons["clipy.settings.retention.apply"]
@@ -435,20 +442,41 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
 
         // The policy Apply refreshes usage in the same receipt: the pruned
         // oldest revision's bytes leave the content size.
+        let bytesAfter = original.utf8.count + secondRevision.utf8.count
         assertUsage(
             itemCount: "1",
-            contentSize: "\(original.utf8.count
-                + secondRevision.utf8.count) bytes",
+            contentSize: "\(bytesAfter) bytes",
             in: app
         )
     }
 
     /// Appends one revision through the real Details editor decision menu
-    /// (EditorRuntimeJourneyUITests' flow): open the replace editor for the
-    /// UTF-8 representation, type the replacement, Save, and return to the
-    /// Details surface.
+    /// (EditorRuntimeJourneyUITests' flow): open the captured row's Details
+    /// through its context menu, enter the editor with Edit Content, open
+    /// the replace editor for the UTF-8 representation, type the
+    /// replacement, Save, and return to the Details surface.
     @MainActor
     private func appendRevision(_ text: String, in app: XCUIApplication) throws {
+        let row = historyRows(in: app).firstMatch
+        XCTAssertTrue(
+            waitUntil(timeout: 10) { row.exists && row.isHittable },
+            diagnostic(app, context: "revision journey captured row")
+        )
+        row.rightClick()
+        let showDetails = app.menuItems["Show Details"]
+        XCTAssertTrue(
+            waitUntil(timeout: 5) { showDetails.exists && showDetails.isHittable },
+            diagnostic(app, context: "row context menu Show Details")
+        )
+        showDetails.click()
+        let details = app.descendants(matching: .any)["clipy.details.root"]
+        let edit = app.buttons["Edit Content"]
+        XCTAssertTrue(
+            waitUntil(timeout: 10) { details.exists && edit.exists && edit.isHittable },
+            diagnostic(app, context: "Details Edit Content control")
+        )
+        edit.click()
+
         let typeIdentifier = "public.utf8-plain-text"
         let decision = app.descendants(matching: .any)[
             "clipy.editor.decision.\(typeIdentifier)"
