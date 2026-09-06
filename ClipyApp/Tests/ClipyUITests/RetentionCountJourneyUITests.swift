@@ -1,9 +1,11 @@
 /// RetentionCountJourneyUITests.swift — running-app proof that the unified
 /// Retention surface sends the real v1 count action only after destructive
-/// confirmation, clears accepted success on a newer edit, and reads the
-/// committed value back after a same-store process restart. The DEBUG launch
-/// seam changes only the store path and privacy posture; captures, retention
-/// mutation, persistence, observation, and panel purge remain production paths.
+/// confirmation, clears accepted success on a newer edit, reads the
+/// committed value back after a same-store process restart, and refreshes
+/// the retained-usage row when the accepted count Apply lands (037178f's
+/// display trigger, previously untested). The DEBUG launch seam changes
+/// only the store path and privacy posture; captures, retention mutation,
+/// persistence, observation, and panel purge remain production paths.
 import AppKit
 import XCTest
 
@@ -222,6 +224,11 @@ final class RetentionCountJourneyUITests: XCTestCase {
             waitUntil(timeout: 5) { applyItemLimit.isEnabled },
             diagnostic(app, context: "edited count is applicable before its explicit confirmation")
         )
+        // Record the retained-usage row before the accepted Apply: both
+        // captures are live, so the store measures 2 items / 56 logical
+        // bytes. The post-receipt assertion below then proves the count
+        // path refreshed usage without a manual Refresh click.
+        assertUsage(itemCount: "2", contentSize: "56 bytes", in: app)
         applyItemLimit.click()
         assertExists(
             confirmationSheet,
@@ -253,6 +260,12 @@ final class RetentionCountJourneyUITests: XCTestCase {
             app.staticTexts["Done. 1 item removed."].exists,
             diagnostic(app, context: "exact count receipt feedback")
         )
+
+        // The count Apply path bumps the Retention tab's usage-refresh
+        // generation alongside its receipt, so the row must show the
+        // post-retention store (the newest capture's 28 bytes alone)
+        // without clicking Refresh.
+        assertUsage(itemCount: "1", contentSize: "28 bytes", in: app)
 
         // Card 10E: an accepted success belongs to exactly one edit
         // generation. A newer edit clears it immediately; restoring the exact
@@ -415,6 +428,29 @@ final class RetentionCountJourneyUITests: XCTestCase {
                 app,
                 context: "\(context); expected \(expected) rows, observed \(rows.count)"
             )
+        )
+    }
+
+    @MainActor
+    private func assertUsage(itemCount: String, contentSize: String, in app: XCUIApplication) {
+        let items = app.staticTexts["clipy.settings.usage.item-count"]
+        let pinned = app.staticTexts["clipy.settings.usage.pinned-count"]
+        let bytes = app.staticTexts["clipy.settings.usage.content-bytes"]
+        // Foundation can use a nonbreaking space between quantity and unit;
+        // compare the user-visible words without pinning that typography.
+        func text(of element: XCUIElement) -> String {
+            (element.value as? String ?? element.label)
+                .split(whereSeparator: { $0.isWhitespace })
+                .joined(separator: " ")
+        }
+        XCTAssertTrue(
+            waitUntil(timeout: 10) {
+                items.exists && pinned.exists && bytes.exists
+                    && text(of: items) == itemCount
+                    && text(of: pinned) == "0"
+                    && text(of: bytes) == contentSize
+            },
+            diagnostic(app, context: "retained usage: \(itemCount) items, 0 pinned, \(contentSize)")
         )
     }
 
