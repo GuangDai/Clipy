@@ -8,22 +8,11 @@
 /// thumbnail source/version/single-flight owner; ContentPreview performs only
 /// PNG display materialization and knows no item/reference/cache semantics.
 ///
-/// ADMISSION RECORD (audit 01 §S-3 / 02 §SPEC-IMPL-001; 05 §4.1 rule 4):
-/// the retained dictionary below is per-surface DISPLAY STATE, explicitly
-/// NOT the deferred G1 shared completed-thumbnail cache (docs/
-/// 00-overview.md's v1 cache exclusion; docs/06-cross-cutting.md §3 G1's
-/// unmet evidence thresholds) and not the V2-04 C1 cache (docs/v2/
-/// V2-roadmap.md). One store per browsing surface, keyed by exact
-/// reference, released with its surface — and, as the audit's minimum for
-/// an admitted UI-side store, bounded by DECODED BYTES as well as entry
-/// count (`maximumDecodedBytes` / `maximumEntries`, whole-store reset when
-/// either bound is crossed; the byte cost of a hit is its backing bitmap's
-/// `bytesPerRow × height`, not its display points). 05 §4.1 rule 4's end
-/// state — view state retaining only the currently visible images, with
-/// identical in-flight decodes coalesced and zero cross-page completed
-/// retention — additionally requires row-view ownership changes and the
-/// G1 evidence/spec admission; that follow-up stays open, and this bounded
-/// store is the recorded intermediate state, not a silently grown cache.
+/// Retention is local to one browsing surface, never a shared completed
+/// cache. Both entry count and actual decoded bytes are bounded. Capacity
+/// pressure removes the least recently requested completed entries until
+/// both limits hold, preserving hotter entries rather than clearing every
+/// image. Request-time recency never turns a SwiftUI render read into a write.
 import ContentPreview
 import Foundation
 import HistoryCore
@@ -39,9 +28,10 @@ public final class ThumbnailStore {
     /// One retained entry: a decoded image WITH its decoded-byte cost, or a
     /// recorded negative result (fetched; nothing decodable at that exact
     /// reference — zero decoded bytes).
-    private enum Entry {
-        case miss
-        case hit(PreviewRaster, decodedBytes: Int)
+    private struct Entry {
+        let raster: PreviewRaster?
+        let decodedBytes: Int
+        var recency: UInt64
     }
 
     // MARK: - Injected state
@@ -53,10 +43,14 @@ public final class ThumbnailStore {
     /// policy and is injected per surface, never process-global.
     private let renderer = ContentPreview()
 
-    // MARK: - Bounded retention (admission record in the file header)
+    // MARK: - Bounded per-surface retention
 
     /// Decoded images and negative results keyed by exact reference.
     private var entries: [HistoryItemReference: Entry] = [:]
+
+    /// Only prefetch reuse and accepted new completions advance recency.
+    /// Pixel/availability reads from View.body remain pure observations.
+    @ObservationIgnored private var nextRecency: UInt64 = 0
 
     /// The retained hits' summed decoded-byte cost — the byte half of the
     /// admission bound (misses contribute zero).
@@ -93,7 +87,7 @@ public final class ThumbnailStore {
     #endif
 
     /// Entry-count half of the admission bound (default 500). Injectable so
-    /// the memory-eviction smoke suites can drive the reset at a small
+    /// the memory-eviction smoke suites can drive eviction at a small
     /// scale instead of seeding 500+ thumbnails.
     private let maximumEntries: Int
 
@@ -187,7 +181,7 @@ public final class ThumbnailStore {
     /// Pixel bytes stay internal to this module (`raster(for:)` below);
     /// callers outside SwiftPM see dimensions only.
     public func imagePixelSize(for item: HistoryItemReference) -> PixelSize? {
-        guard let entry = entries[item], case .hit(let raster, _) = entry else {
+        guard let raster = entries[item]?.raster else {
             return nil
         }
         return PixelSize(width: raster.width, height: raster.height)
@@ -199,17 +193,14 @@ public final class ThumbnailStore {
     /// immutable Sendable pixels, never a framework object, and this pure
     /// read never fetches.
     internal func raster(for item: HistoryItemReference) -> PreviewRaster? {
-        guard let entry = entries[item], case .hit(let raster, _) = entry else {
-            return nil
-        }
-        return raster
+        entries[item]?.raster
     }
 
     /// A completed unavailable result for this exact reference. Unrequested
     /// and pending work are not failures; the read never starts a request.
     internal func isUnavailable(for item: HistoryItemReference) -> Bool {
-        guard case .miss? = entries[item] else { return false }
-        return true
+        guard let entry = entries[item] else { return false }
+        return entry.raster == nil
     }
 
     /// Starts one fetch for the exact reference if none is retained or in
@@ -223,6 +214,10 @@ public final class ThumbnailStore {
     /// - other failures are NOT retained — stale references, cancellation,
     ///   storage failures, and transient unavailability may recover.
     public func prefetch(_ item: HistoryItemReference) {
+        if entries[item] != nil {
+            nextRecency += 1
+            entries[item]?.recency = nextRecency
+        }
         guard entries[item] == nil, inFlight[item] == nil else {
             #if DEBUG
             // The duplicate-request signal of DEC-THUMB-CACHE G1's
@@ -489,8 +484,8 @@ public final class ThumbnailStore {
     }
     #endif
 
-    /// Records a completed fetch under its exact requesting key, resetting
-    /// the whole store when EITHER admission bound is exceeded.
+    /// Records a completed fetch under its exact requesting key, removing
+    /// cold entries when EITHER retention bound is exceeded.
     /// Insert-then-evict: checking BEFORE insertion would let retention
     /// reach `maximumEntries + 1` (audit 2026-08-20 cache-ceiling
     /// off-by-one); checking after the insert keeps
@@ -506,21 +501,21 @@ public final class ThumbnailStore {
         guard acceptCompletion(item: item, requestToken: requestToken) else {
             return .discarded
         }
+        let cost = raster.map(Self.decodedByteCost(of:)) ?? 0
+        // An individually oversized raster cannot fit even in an empty
+        // store. Do not evict useful hot entries just to reject it afterward.
+        guard maximumEntries > 0, cost <= maximumDecodedBytes else {
+            return .accepted
+        }
         // A same-key overwrite cannot happen (`prefetch` refuses to start
         // when an entry exists), but keep the byte total exact even so.
-        if case .hit(_, let replacedCost) = entries[item] {
-            retainedDecodedBytes -= replacedCost
+        if let replaced = entries[item] {
+            retainedDecodedBytes -= replaced.decodedBytes
         }
-        if let raster {
-            let cost = Self.decodedByteCost(of: raster)
-            entries[item] = .hit(raster, decodedBytes: cost)
-            retainedDecodedBytes += cost
-        } else {
-            entries[item] = .miss
-        }
-        if entries.count > maximumEntries || retainedDecodedBytes > maximumDecodedBytes {
-            evictRetainedEntries()
-        }
+        nextRecency += 1
+        entries[item] = Entry(raster: raster, decodedBytes: cost, recency: nextRecency)
+        retainedDecodedBytes += cost
+        evictColdEntriesIfNeeded()
         return .accepted
     }
 
@@ -528,9 +523,14 @@ public final class ThumbnailStore {
     /// not advance the privacy-purge generation or invalidate unrelated
     /// visible-row flights: those rows have already issued their `.task`
     /// request and would otherwise remain permanent fallbacks.
-    private func evictRetainedEntries() {
-        entries.removeAll()
-        retainedDecodedBytes = 0
+    private func evictColdEntriesIfNeeded() {
+        while entries.count > maximumEntries || retainedDecodedBytes > maximumDecodedBytes {
+            guard let coldest = entries.min(by: { $0.value.recency < $1.value.recency }) else {
+                return
+            }
+            entries.removeValue(forKey: coldest.key)
+            retainedDecodedBytes -= coldest.value.decodedBytes
+        }
     }
 
     /// Finishes a thrown/cancelled request without negative-retaining it.
@@ -574,8 +574,8 @@ public final class ThumbnailStore {
     ) {
         let removedKeys = entries.keys.filter(shouldRemove)
         for key in removedKeys {
-            if case .hit(_, let cost) = entries.removeValue(forKey: key) {
-                retainedDecodedBytes -= cost
+            if let removed = entries.removeValue(forKey: key) {
+                retainedDecodedBytes -= removed.decodedBytes
             }
         }
     }

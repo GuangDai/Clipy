@@ -235,11 +235,17 @@ struct ThumbnailStoreTests {
         #expect(store.cachedEntryCount == 1)
         store.prefetch(second)
         try #require(await pollUntil { store.inFlightCount == 0 })
-        #expect(store.cachedEntryCount == 0)
+        #expect(store.cachedEntryCount == 1)
         #expect(store.cachedDecodedBytes == 0)
+        #expect(!store.isUnavailable(for: first))
+        #expect(store.isUnavailable(for: second))
         store.prefetch(first)
         try #require(await pollUntil { store.inFlightCount == 0 })
         #expect(await history.requestCount(for: first) == 2)
+        #expect(await history.requestCount(for: second) == 1)
+        #expect(store.isUnavailable(for: first))
+        #expect(!store.isUnavailable(for: second))
+        #expect(store.cachedEntryCount == 1)
     }
 
     @Test func cancelledFetchRemainsEligibleForAnotherRequest() async throws {
@@ -611,7 +617,7 @@ struct ThumbnailStoreTests {
 
     // MARK: - Cache ceiling (04 §9 step 7)
 
-    /// The whole-store entry ceiling is a hard bound: with
+    /// The per-surface entry ceiling is a hard bound: with
     /// `maximumEntries: 3`, four completed fetches leave at most 3 retained
     /// entries. The eviction check runs AFTER insertion
     /// (insert-then-evict); the pre-insertion `>` check it replaced let the
@@ -651,7 +657,7 @@ struct ThumbnailStoreTests {
     }
 
     /// Capacity eviction is not a privacy purge. A completed insert may
-    /// clear retained entries when the bound is crossed, but an unrelated
+    /// evict cold retained entries when the bound is crossed, but an unrelated
     /// visible-row request already in flight must remain eligible to publish.
     @Test func capacityEvictionDoesNotInvalidateUnrelatedFlights() async throws {
         let first = reference(
@@ -693,7 +699,9 @@ struct ThumbnailStoreTests {
                 with: .success(fixturePNGData)
             )
         )
-        try #require(await pollUntil { store.cachedEntryCount == 0 })
+        try #require(await pollUntil { store.imagePixelSize(for: second) != nil })
+        #expect(store.cachedEntryCount == 1)
+        #expect(store.imagePixelSize(for: first) == nil)
         #expect(store.inFlightCount == 1)
 
         #expect(
@@ -704,16 +712,16 @@ struct ThumbnailStoreTests {
         )
         #expect(await pollUntil { store.imagePixelSize(for: stillVisible) != nil })
         #expect(store.inFlightCount == 0)
+        #expect(store.cachedEntryCount == 1)
+        #expect(store.purgeGeneration == 0)
     }
 
     // MARK: - Decoded-byte bound (audit 2026-08-20 §S-3/§SPEC-IMPL-001)
 
     /// The decoded-byte ceiling is a hard second bound: with
-    /// `maximumDecodedBytes: 1`, one decoded hit already exceeds it, so the
-    /// whole store resets to zero entries AND zero retained bytes. (The
-    /// reset is the same order-independent whole-store discipline as the
-    /// entry ceiling.)
-    @Test func byteBudgetResetsTheWholeStore() async {
+    /// `maximumDecodedBytes: 1`, one decoded hit already exceeds it, so it
+    /// cannot enter retention. The empty store stays at zero entries/bytes.
+    @Test func individuallyOversizedRasterIsNotRetained() async {
         let item = reference("00000000-0000-0000-0000-0000000000F1", version: 1)
         let history = ThumbnailScriptHistory(pngByReference: [item: fixturePNGData])
         let store = ThumbnailStore(
@@ -763,7 +771,7 @@ struct ThumbnailStoreTests {
     /// the eviction proofs above need no 500-row fixture). Through that
     /// fixed policy a panel-scale working set of distinct references is
     /// retained whole: every hit stays readable, the entry and decoded-byte
-    /// ledgers sum exactly, and no bound-driven reset fires.
+    /// ledgers sum exactly, and no bound-driven eviction fires.
     @Test func productSeamRetainsAPanelScaleWorkingSet() async {
         let items = [
             reference("00000000-0000-0000-0000-000000000101", version: 1),
