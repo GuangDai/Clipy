@@ -423,6 +423,7 @@ public final class HistoryPanelSurfaceState {
 /// store from it, and only in-package callers inject a store directly.
 public struct HistoryPanelView: View {
     @Environment(\.locale) private var locale
+    @Environment(\.layoutDirection) private var contentLayoutDirection
 
     private let viewState: HistoryViewState
     private let previewState: PreviewPaneState
@@ -555,6 +556,7 @@ public struct HistoryPanelView: View {
                 }
                 mainColumn
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .environment(\.layoutDirection, contentLayoutDirection)
                 if previewState.isOpen, previewPlacement == .trailing {
                     previewDivider
                     previewColumn
@@ -585,6 +587,11 @@ public struct HistoryPanelView: View {
                     previewEdgeOpener
                 }
             }
+            // Preview placement is physical Left/Right, matching AppKit's
+            // window extension and the divider's screen-space translation.
+            // Keep only this column layout/handle geometry unmirrored; each
+            // column restores the user's direction for its own controls/text.
+            .environment(\.layoutDirection, .leftToRight)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("clipy.panel.root")
             .background { hiddenShortcuts }
@@ -721,6 +728,7 @@ public struct HistoryPanelView: View {
         // Opacity-only fade (Maccy's lesson: animating the WIDTH forces an
         // NSHostingView re-layout per frame; compositing a fade does not).
         .transition(.opacity)
+        .environment(\.layoutDirection, contentLayoutDirection)
     }
 
     /// The visual 1-point separator. The 9-point interaction strip is
