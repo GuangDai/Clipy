@@ -214,6 +214,10 @@ public final class ThumbnailStore {
     /// - other failures are NOT retained — stale references, cancellation,
     ///   storage failures, and transient unavailability may recover.
     public func prefetch(_ item: HistoryItemReference) {
+        // A view task can be cancelled before its MainActor body executes.
+        // It no longer expresses demand: neither start independent work nor
+        // promote a retained entry on behalf of that retired caller.
+        guard !Task.isCancelled else { return }
         if entries[item] != nil {
             nextRecency += 1
             entries[item]?.recency = nextRecency

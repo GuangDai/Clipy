@@ -168,6 +168,56 @@ struct RealHistoryThumbnailEvictionTests {
         #expect(produced.allSatisfy { $0.outcome == .hit && $0.rasterWidth == 2 && $0.rasterHeight == 1 })
     }
 
+    @Test func cancelledViewTaskDoesNotStartAThumbnailRequest() async throws {
+        let history = try await memoryHistory()
+        let item = try await capture("cancelled request", png: fixturePNGData, into: history)
+        let directory = try measurementDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("thumbnail.jsonl")
+        let store = ThumbnailStore(
+            history: history, maximumEntries: 2, maximumDecodedBytes: 64,
+            measurement: ThumbnailMeasurement(fileURL: file)
+        )
+        // No suspension before cancellation: the child is already cancelled
+        // when its inherited MainActor body reaches the synchronous prefetch.
+        let retiredViewTask = Task { store.prefetch(item) }
+        retiredViewTask.cancel()
+        await retiredViewTask.value
+        #expect(store.inFlightCount == 0)
+        #expect(store.cachedEntryCount == 0)
+        #expect(!store.isUnavailable(for: item))
+        #expect(!FileManager.default.fileExists(atPath: file.path),
+                "A cancelled request must not emit even a started event")
+
+        try await complete(item, in: store)
+        #expect(store.imagePixelSize(for: item) == PixelSize(width: 1, height: 1))
+        let records = try records(at: file)
+        #expect(count(.started, for: item, in: records) == 1)
+        #expect(count(.completed, for: item, in: records) == 1)
+        #expect(count(.rejectedRetained, for: item, in: records) == 0)
+        #expect(count(.rejectedInFlight, for: item, in: records) == 0)
+    }
+
+    @Test func cancelledViewTaskDoesNotPromoteAColdRetainedRaster() async throws {
+        let history = try await memoryHistory()
+        let a = try await capture("cancelled cold A", png: fixturePNGData, into: history)
+        let b = try await capture("current B", png: fixturePNGData, into: history)
+        let c = try await capture("current C", png: fixturePNGData, into: history)
+        let store = ThumbnailStore(history: history, maximumEntries: 2, maximumDecodedBytes: 64)
+        try await complete(a, in: store)
+        try await complete(b, in: store)
+        let retiredViewTask = Task { store.prefetch(a) }
+        retiredViewTask.cancel()
+        await retiredViewTask.value
+        try await complete(c, in: store)
+        #expect(store.imagePixelSize(for: a) == nil)
+        #expect(store.imagePixelSize(for: b) == PixelSize(width: 1, height: 1))
+        #expect(store.imagePixelSize(for: c) == PixelSize(width: 1, height: 1))
+        #expect(store.cachedEntryCount == 2)
+        #expect(store.cachedDecodedBytes == 8)
+        #expect(store.purgeGeneration == 0)
+    }
+
     private func memoryHistory() async throws -> SwiftDataHistory {
         try await SwiftDataHistory.open(configuration: HistoryConfiguration(persistence: .memory))
     }

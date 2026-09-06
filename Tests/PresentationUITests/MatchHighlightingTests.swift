@@ -36,6 +36,20 @@ struct MatchHighlightingTests {
         }
     }
 
+    private func emphasizedUTF16Ranges(of attributed: AttributedString) -> [UTF16TextRange] {
+        attributed.runs.compactMap { run in
+            guard run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true else {
+                return nil
+            }
+            let prefix = attributed.unicodeScalars[..<run.range.lowerBound]
+            let highlighted = attributed.unicodeScalars[run.range]
+            return UTF16TextRange(
+                location: prefix.reduce(0) { $0 + ($1.value > 0xFFFF ? 2 : 1) },
+                length: highlighted.reduce(0) { $0 + ($1.value > 0xFFFF ? 2 : 1) }
+            )
+        }
+    }
+
     // MARK: - Plain pass-through
 
     /// No ranges → the plain string, attribute-free (docs/
@@ -159,21 +173,44 @@ struct MatchHighlightingTests {
         let result = MatchHighlighting.highlighted(text, ranges: [expected])
         #expect(Data(String(result.characters).utf8) == Data(text.utf8))
 
-        let emphasizedRanges = result.runs.compactMap { run -> UTF16TextRange? in
-            guard run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true else {
-                return nil
-            }
-            let prefix = result.unicodeScalars[..<run.range.lowerBound]
-            let highlighted = result.unicodeScalars[run.range]
-            return UTF16TextRange(
-                location: prefix.reduce(0) { $0 + ($1.value > 0xFFFF ? 2 : 1) },
-                length: highlighted.reduce(0) { $0 + ($1.value > 0xFFFF ? 2 : 1) }
-            )
-        }
-        #expect(emphasizedRanges == [expected])
+        #expect(emphasizedUTF16Ranges(of: result) == [expected])
     }
 
     // MARK: - Defensive dropping
+
+    @Test func negativeAndOverflowingRangesCannotBreakValidScalarHighlights() {
+        let text = "\u{FEFF}A🦊Z"
+        let valid = [UTF16TextRange(location: 0, length: 1), UTF16TextRange(location: 2, length: 2)]
+        let invalid = [
+            UTF16TextRange(location: 2, length: -1), // valid scalar offsets, reversed range
+            UTF16TextRange(location: -1, length: 2),
+            UTF16TextRange(location: 0, length: -1),
+            UTF16TextRange(location: Int.min, length: 1),
+            UTF16TextRange(location: Int.max, length: 1),
+            UTF16TextRange(location: 1, length: Int.max),
+            UTF16TextRange(location: 0, length: Int.max),
+        ]
+        for range in invalid {
+            let result = MatchHighlighting.highlighted(text, ranges: [range] + valid)
+            #expect(Data(String(result.characters).utf8) == Data(text.utf8))
+            #expect(emphasizedUTF16Ranges(of: result) == valid)
+        }
+    }
+
+    @Test func adjacentScalarMatchesJoinWithoutAbsorbingAnOverlappingRange() {
+        let text = "\u{FEFF}e\u{301}abc"
+        let result = MatchHighlighting.highlighted(text, ranges: [
+            UTF16TextRange(location: 5, length: 1), // c: intentionally unsorted
+            UTF16TextRange(location: 0, length: 2), // FEFF and base e
+            UTF16TextRange(location: 1, length: 4), // overlapping e + mark + ab: drop in full
+            UTF16TextRange(location: 2, length: 1), // adjacent combining mark: keep
+        ])
+        #expect(Data(String(result.characters).utf8) == Data(text.utf8))
+        #expect(emphasizedUTF16Ranges(of: result) == [
+            UTF16TextRange(location: 0, length: 3),
+            UTF16TextRange(location: 5, length: 1),
+        ])
+    }
 
     /// Out-of-bounds (past either end), zero-length, and overlapping ranges
     /// are all ignored; the one valid range still highlights.

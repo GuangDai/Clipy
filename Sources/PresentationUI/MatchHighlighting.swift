@@ -32,6 +32,9 @@ package enum MatchHighlighting {
         // dropped, never clamped).
         let matched = ranges
             .compactMap { utf16Range -> Range<String.Index>? in
+                // A negative length can convert two valid offsets into a
+                // reversed Swift range; reject it before Foundation bridging.
+                guard utf16Range.location >= 0, utf16Range.length > 0 else { return nil }
                 let (end, overflowed) = utf16Range.location
                     .addingReportingOverflow(utf16Range.length)
                 guard !overflowed,
