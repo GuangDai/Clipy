@@ -354,7 +354,8 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
                 mainSurfaceWidth: frame.width - Self.previewExtension
             )
             isPreviewVisible = false
-            setPreviewPlacement(.trailing)
+            // Keep the actual side for the closed-edge opener. The next
+            // expansion resolves placement from its current screen and preference.
             setFrameProgrammatically(mainSurfaceFrame, display: isPresented)
         }
         applyResizeLimits()

@@ -140,6 +140,37 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
                     && abs(preview.frame.width - 320) <= 3
             }, "\(side) divider must reset.\n\(app.debugDescription)")
             assertFrame(panel.frame, equals: baseline)
+
+            // Closing preserves the physical edge the user just resized.
+            // Pull that real edge inward to reopen, without a second launch
+            // or a programmatic preview-state transition.
+            app.typeKey(.space, modifierFlags: .control)
+            let edge = panel.descendants(matching: .any)["clipy.panel.previewEdgeOpener"]
+            XCTAssertTrue(waitUntil(timeout: 5) {
+                !preview.exists && edge.exists && edge.isHittable
+                    && abs(panel.frame.width - 400) <= 3
+                    && abs(edge.frame.midX - (isRight
+                        ? panel.frame.maxX - 3
+                        : panel.frame.minX + 3)) <= 1
+            }, "\(side) closed preview must keep its physical pull edge.\n\(app.debugDescription)")
+            assertFrame(panel.frame, equals: CGRect(
+                x: isRight ? baseline.minX : baseline.maxX - 400,
+                y: baseline.minY, width: 400, height: baseline.height
+            ))
+            let edgeStart = edge.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            edgeStart.click(
+                forDuration: 0.3,
+                thenDragTo: edgeStart.withOffset(CGVector(dx: -translation, dy: 0)),
+                withVelocity: XCUIGestureVelocity(rawValue: 40),
+                thenHoldForDuration: 0.5
+            )
+            XCTAssertTrue(waitUntil(timeout: 5) {
+                preview.exists && divider.exists
+                    && abs(panel.frame.width - baseline.width) <= 3
+                    && abs(divider.frame.midX - panel.frame.minX - expectedOffset) <= 3
+                    && abs(preview.frame.width - 320) <= 3
+            }, "\(side) inward edge pull must restore the preview.\n\(app.debugDescription)")
+            assertFrame(panel.frame, equals: baseline)
         }
 
         // Each side has already restored preview width 320 without changing
