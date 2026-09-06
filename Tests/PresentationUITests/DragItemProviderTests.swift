@@ -173,7 +173,7 @@ struct DragItemProviderTests {
             #expect(!result.failed)
         } else {
             #expect(result.bytes == nil)
-            if change == "removed" { #expect(result.failed) }
+            #expect(result.failed)
         }
         #expect(state.failure == nil)
         await history.finishObservation()

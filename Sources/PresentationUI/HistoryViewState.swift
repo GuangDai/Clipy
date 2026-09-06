@@ -469,7 +469,7 @@ public final class HistoryViewState {
     /// the receiver, including opaque bytes; plain text and the preferred
     /// raster types are offered first. The read returns current Effective
     /// Content by ID (03b §9 / 04 §8 DEC-PASTE-REFERENCE); an advertised type
-    /// hidden before that first read completes without bytes. Failures go
+    /// hidden before that first read reports item-unavailable. Failures go
     /// to the drop completion, without changing the panel banner.
     /// The first representation request resolves one immutable payload for
     /// the entire drag. Other formats share that result even if History
@@ -496,8 +496,14 @@ public final class HistoryViewState {
                 Task {
                     do {
                         let payload = try await payloadRead.value()
-                        let bytes = payload.representations
-                            .first { $0.typeIdentifier == typeIdentifier }?.bytes
+                        guard let bytes = payload.representations
+                            .first(where: { $0.typeIdentifier == typeIdentifier })?.bytes else {
+                            completion(nil, NSError(
+                                domain: NSItemProvider.errorDomain,
+                                code: NSItemProvider.ErrorCode.itemUnavailableError.rawValue
+                            ))
+                            return
+                        }
                         completion(bytes, nil)
                     } catch {
                         completion(nil, error)
