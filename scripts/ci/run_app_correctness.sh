@@ -20,21 +20,21 @@ shard="${6:-all}"
 # cannot be shared by concurrent UI runners on the same desktop.
 gui_group_1=(
   AppearanceJourneyUITests
-  StoreOpenRecoveryJourneyUITests
-  SearchAndAccessibilityJourneyUITests
-  CaptureHealthBannerJourneyUITests
+  RetentionCountJourneyUITests
+  PDFPreviewJourneyUITests
+  TextPreviewTruncationJourneyUITests
 )
 gui_group_2=(
   ThumbnailScrollMeasurementJourneyUITests
-  RetentionCountJourneyUITests
-  FileReferencePreviewJourneyUITests
-  TextPreviewTruncationJourneyUITests
+  CaptureAccessJourneyUITests
+  StoreOpenRecoveryJourneyUITests
+  DetailsUnavailableImageJourneyUITests
 )
 gui_group_3=(
+  RTLPreviewGeometryJourneyUITests
   EditorRuntimeJourneyUITests
-  ClipboardJourneyUITests
+  FileReferencePreviewJourneyUITests
   PreviewRecoveryJourneyUITests
-  DetailsMutationJourneyUITests
 )
 test_arguments=(-parallel-testing-enabled NO)
 case "$shard" in
