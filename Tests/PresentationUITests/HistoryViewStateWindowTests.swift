@@ -74,6 +74,51 @@ struct HistoryViewStateWindowTests {
         #expect(!state.hasWindowedPages)
     }
 
+    @Test func closingReleasesTheVisitedWindowAndReopensTheSameQueryFromPageOne() async throws {
+        let (history, allRows) = fixture()
+        let state = HistoryViewState(history: history, pageLimit: 2)
+        state.searchMode = .exact
+        state.searchText = "row "
+        state.typeFilter = .text
+        state.activate()
+        defer { state.deactivate() }
+        try #require(await pollUntil { state.rows.count == 2 })
+        for _ in 1..<8 {
+            state.loadNextPage()
+            try #require(await pollUntil { !state.isLoadingPage })
+        }
+        #expect(state.hasWindowedPages)
+        #expect(state.hasPreviousPage)
+        let retainedReference = try #require(state.rows.last?.item)
+        let requestCount = await history.browseRequests.count
+        var pasted: HistoryItemReference?
+        state.onPaste = { pasted = $0 }
+        state.deactivate()
+
+        #expect(state.rows.isEmpty)
+        #expect(!state.hasPreviousPage)
+        #expect(!state.hasNextPage)
+        #expect(!state.hasWindowedPages)
+        #expect(!state.hasAuthoritativeFirstPage)
+        #expect(!state.isLoadingFirstPage)
+        #expect(state.traversedRowCount == 0)
+        #expect(state.searchText == "row ")
+        #expect(state.searchMode == .exact)
+        #expect(state.typeFilter == .text)
+        state.loadPreviousPage()
+        state.loadNextPage()
+        state.requestPasteFromDisplayedRow(retainedReference)
+        #expect(pasted == nil)
+        #expect(await history.browseRequests.count == requestCount)
+
+        state.activate()
+        try #require(await pollUntil { state.rows == Array(allRows.prefix(2)) })
+        #expect(!state.hasPreviousPage)
+        #expect(!state.hasWindowedPages)
+        #expect(state.hasNextPage)
+        #expect(await history.observeRequests.last?.kind == .search(text: "row ", mode: .exact))
+    }
+
     @Test func fullWindowStopsPrefetchAndRetargetsOnlyTheVisibleSelection() async throws {
         let (history, allRows) = fixture()
         let state = HistoryViewState(history: history, pageLimit: 2)

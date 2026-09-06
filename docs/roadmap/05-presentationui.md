@@ -35,6 +35,9 @@
   must not rewrite untouched sub-unit raw values, while an edited whole-unit
   field represents the user's explicit whole-unit value.
 - **Selection, window behavior, observable presentation state** on the Main actor (Part I §6).
+  Closing the surface releases row DTOs and visited-page cursors, not only
+  its observation task. A delayed Clear Unpinned receipt may refresh an active
+  surface but must not restart observation for a closed one.
 - **Drag-out:** register each displayed row's actual Effective type, including
   opaque representations, with plain text and preferred raster types first.
   Require the displayed exact reference when the drag begins, then resolve
@@ -45,7 +48,14 @@
 - **Scripted preview adapter:** a small `ClipboardHistory` implementation for SwiftUI previews; it must be `Sendable` and must not substitute for storage semantic tests (03a §3, 01 §4).
 - **Preview deep module:** `PreviewContentLoader` alone owns History reads,
   exact-reference/task/generation/lifecycle fences and publication. It maps one
-  immutable Effective Content snapshot into `ContentPreview`, which owns the
+  immutable Effective Content snapshot from `pastePayload(for:)` into
+  `ContentPreview` in a structured concurrent function; only its bounded
+  outcome returns to the MainActor. This avoids Details' Canonical bytes and
+  inactive-revision title work, without claiming that Storage no longer
+  hydrates its aggregate lineage. The footer reads only the current exact
+  row's last source, copy count and last-copy date; an unavailable or different
+  version has no footer, and repeat copies update it without rerendering.
+  `ContentPreview` owns the
   image-first/exact-text route, fixed budgets, eager ImageIO work and bounded
   inert outcomes. The SwiftUI edge constructs and immediately consumes a
   `CGImage`; no framework object enters observable state or crosses an actor or

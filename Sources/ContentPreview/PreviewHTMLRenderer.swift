@@ -57,6 +57,8 @@ internal enum PreviewHTMLRenderer {
         var headDepth = 0
         var templateDepth = 0
         var rawTextTag: String?
+        var textAreaActive = false
+        var ignoreLeadingTextAreaNewline = false
         var isSuppressed: Bool { headDepth > 0 || templateDepth > 0 }
 
         init(_ source: String, maximumOutputBytes: Int) {
@@ -68,9 +70,29 @@ internal enum PreviewHTMLRenderer {
         mutating func render() throws -> PreviewText {
             while index != scalars.endIndex, !truncated {
                 let scalar = scalars[index]
+                // HTML input preprocessing folds CR/CRLF to LF. Preserve
+                // the resulting textarea line breaks as visible field text.
+                if textAreaActive, scalar == "\r" {
+                    try advance()
+                    if index != scalars.endIndex, scalars[index] == "\n" { try advance() }
+                    if !isSuppressed { append("\n") }
+                    continue
+                }
                 if scalar == "<" {
                     let start = index
                     try advance()
+                    if textAreaActive {
+                        // RCDATA recognizes only its own end tag. Markup,
+                        // comments and script source inside a textarea are
+                        // user-visible text, not new document instructions.
+                        // WHATWG parsing.html#rcdata-state / #parsing-main-inbody.
+                        if startsRawClosingTag("textarea"), let tag = try consumeTag() {
+                            handle(tag)
+                        } else if !isSuppressed {
+                            append("<")
+                        }
+                        continue
+                    }
                     if let rawTextTag {
                         // Raw script/style text has no ordinary tags or
                         // comments. Only its own closing tag ends the skip.
@@ -194,6 +216,12 @@ internal enum PreviewHTMLRenderer {
                 if !tag.closing { rawTextTag = tag.name }
                 return
             }
+            if tag.name == "textarea" {
+                textAreaActive = !tag.closing
+                ignoreLeadingTextAreaNewline = !tag.closing
+                if !isSuppressed { separate("\n") }
+                return
+            }
             if tag.name == "head" {
                 headDepth = tag.closing ? max(0, headDepth - 1) : headDepth + 1
                 return
@@ -221,9 +249,13 @@ internal enum PreviewHTMLRenderer {
 
         mutating func append(_ scalar: Unicode.Scalar) {
             guard !truncated else { return }
+            if textAreaActive, ignoreLeadingTextAreaNewline {
+                ignoreLeadingTextAreaNewline = false
+                if scalar == "\n" { return }
+            }
             // HTML collapses only ASCII whitespace. NBSP remains selectable
             // content, including when produced by a character reference.
-            if preDepth == 0, Self.isWhitespace(scalar) {
+            if preDepth == 0, !textAreaActive, Self.isWhitespace(scalar) {
                 separate(" ")
                 return
             }

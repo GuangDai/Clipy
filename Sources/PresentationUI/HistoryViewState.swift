@@ -383,14 +383,20 @@ public final class HistoryViewState {
         replaceObservationImmediately()
     }
 
-    /// Cancels the observe loop and any pending debounce; safe to call again
-    /// or to follow with `activate()`.
+    /// Cancels browsing and releases this closed surface's rows/cursors.
+    /// Query, mode and filters survive; activate obtains a fresh first page.
     public func deactivate() {
         debounceTask?.cancel()
         debounceTask = nil
         observationTask?.cancel()
         observationTask = nil
         invalidatePagination()
+        observationGeneration += 1
+        hasAuthoritativeFirstPage = false
+        observedPosition = nil
+        rows = []
+        nextPageCursor = nil
+        resetPageWindow()
         isLoadingFirstPage = false
     }
 
@@ -1013,10 +1019,13 @@ public final class HistoryViewState {
            count > 0 {
             onCommittedUserRemoval(purge)
         }
-        if scope == .unpinned {
+        if scope == .unpinned, observationTask != nil {
             // Pin state in the held page may trail a just-committed Unpin.
             // Clear every executable row and restart this exact query; only
             // the post-receipt authoritative snapshot may repopulate it.
+            // A late receipt or a Settings-only mutation must not reopen a
+            // closed browsing surface. An active search debounce already owns
+            // its replacement when no observation task currently exists.
             replaceObservationImmediately()
         }
     }

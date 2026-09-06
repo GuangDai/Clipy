@@ -39,11 +39,14 @@ extension SearchWorker {
     /// and derives its enclosing Characters only to position the window.
     /// A zero-length regexp match centers a window but clips away,
     /// contributing no snippet range.
+    /// A regexp/fuzzy scan prefix may be borrowed as a Substring: constructing
+    /// the returned window must not first copy that complete prefix. Only the
+    /// returned snippet and its window-sized UTF-16 offsets own new storage.
     ///
     /// Internal only so direct `@testable` worked examples can pin this frozen
     /// pure algorithm independently of the SwiftData/Fuse integration proof.
     internal static func bodyExcerpt(
-        body: String,
+        body: some StringProtocol,
         characterRanges: [Range<Int>],
         snippetLimit: Int,
         bodySuffixWasOmitted: Bool = false,
@@ -244,7 +247,7 @@ extension SearchWorker {
     /// This walks only through the match, without allocating a body buffer.
     private static func enclosingCharacterRange(
         for range: UTF16TextRange,
-        in text: String
+        in text: some StringProtocol
     ) -> Range<Int> {
         var index = text.startIndex
         var characterOffset = 0

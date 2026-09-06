@@ -3,6 +3,49 @@ import Testing
 @testable import ContentPreview
 
 struct PreviewHTMLRendererTests {
+    @Test(arguments: [
+        ("<textarea><b>bold</b> &amp; <!-- note --> <script>code</script></textarea><p>after</p>",
+         "<b>bold</b> & <!-- note --> <script>code</script>\nafter"),
+        ("<textarea>&lt;/textarea&gt; &lt;b&gt;</textarea><p>after</p>", "</textarea> <b>\nafter"),
+        ("<textarea>A</textareaX>B</TeXtArEa><p>end</p>", "A</textareaX>B\nend"),
+        ("<textarea>\n a\n  b\t c\n</textarea>", " a\n  b\t c\n"),
+        ("<textarea>\n\nx</textarea>", "\nx"),
+        ("<textarea>&#10;x</textarea>", "x"),
+        ("<textarea>\r\nx\r y\r\nz</textarea>", "x\n y\nz"),
+        ("<textarea><textarea>nested</textarea><p>outside</p>", "<textarea>nested\noutside"),
+        ("<textarea>unclosed <b>&amp; tail", "unclosed <b>& tail"),
+        ("<template><textarea></template><script>x</script></textarea></template><p>visible</p>", "visible"),
+    ])
+    func textAreaContentRemainsLiteralExceptForEntities(source: String, expected: String) throws {
+        let text = try rendered(source)
+        #expect(Data(text.text.utf8) == Data(expected.utf8))
+        #expect(!text.wasTruncated)
+    }
+
+    @Test func historyPaneShowsCopiedTextAreaCodeWithoutInterpretingItsTags() async {
+        let source = #"<textarea><img src="file:///private/secret">&amp;<iframe src="https://example.invalid"></iframe></textarea>"#
+        let outcome = await ContentPreview().renderHistoryPane([
+            PreviewRepresentation(typeIdentifier: "public.html", bytes: Data(source.utf8)),
+        ])
+        guard case .content(.text(let text)) = outcome else {
+            Issue.record("Expected inert textarea contents, got \(outcome)")
+            return
+        }
+        #expect(text.text == #"<img src="file:///private/secret">&<iframe src="https://example.invalid"></iframe>"#)
+        #expect(!text.wasTruncated)
+    }
+
+    @Test func textAreaKeepsTheExistingGraphemeAndByteLimits() throws {
+        let prefix = String(repeating: "x", count: 49_999) + "e\u{301}"
+        let text = try rendered("<textarea>" + prefix + " omitted</textarea>")
+        #expect(Data(text.text.utf8) == Data(prefix.utf8))
+        #expect(text.wasTruncated)
+
+        let byteLimited = try rendered("<textarea> a\n e\u{301}tail</textarea>", maximumOutputBytes: 5)
+        #expect(byteLimited.text == " a\n ")
+        #expect(byteLimited.wasTruncated)
+    }
+
     @Test func documentAndClipboardFragmentBecomeReadableParagraphs() throws {
         let html = """
         <!DOCTYPE html><HTML><head><title>Hidden title</title>

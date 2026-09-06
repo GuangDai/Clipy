@@ -129,7 +129,8 @@ struct HistoryViewStateTests {
             next: nil
         ))
         #expect(!acceptedAfterDeactivation)
-        #expect(state.rows.count == 2)
+        #expect(state.rows.isEmpty)
+        #expect(!state.hasAuthoritativeFirstPage)
 
         // Re-activation starts a new observation (04 §5) whose live stream
         // still receives later pages.
@@ -352,8 +353,8 @@ struct HistoryViewStateTests {
             }
         )
         await Task.yield()
-        #expect(state.rows.map(\.title) == ["visible"])
-        #expect(state.hasNextPage)
+        #expect(state.rows.isEmpty)
+        #expect(!state.hasNextPage)
         #expect(!state.isLoadingPage)
 
         await history.finishObservation()

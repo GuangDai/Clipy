@@ -355,50 +355,50 @@ actor ThumbnailScriptHistory: ClipboardHistory {
     }
 }
 
-// MARK: - PausableDetailsHistory (preview fence double)
+// MARK: - PausablePreviewHistory (preview fence double)
 
 /// A scripted `ClipboardHistory` for `PreviewContentLoader` fence tests
 /// (audit docs/reviews/2026-08-20-clipy-maccy-audit/
 /// 02-spec-implementation.md §SPEC-IMPL-007;
-/// 05-recommended-target-design.md §4.1 PREVIEW-FENCE-1): `details(for:)`
+/// 05-recommended-target-design.md §4.1 PREVIEW-FENCE-1): `pastePayload(for:)`
 /// records the request, then SUSPENDS until the test resumes it with the
-/// scripted `HistoryDetails` (or a typed failure) — so two in-flight detail
+/// scripted `PastePayload` (or a typed failure) — so two in-flight payload
 /// reads can be completed in REVERSE order deterministically, with no sleeps
 /// on the deciding path. One in-flight read per item ID: the pane never
 /// loads the same item twice concurrently, and a second read for an ID
 /// already suspended would replace the first continuation (leaking it), so
 /// tests keep one selection per ID.
-actor PausableDetailsHistory: ClipboardHistory {
+actor PausablePreviewHistory: ClipboardHistory {
 
     func usage() async throws -> HistoryUsage {
-        // Individual scripted details do not establish a whole-store total.
+        // Individual scripted payloads do not establish a whole-store total.
         throw HistoryFailure.temporarilyUnavailable(.factProof)
     }
 
-    /// Scripted detail answers by item ID.
-    private var detailsByID: [HistoryItemID: HistoryDetails] = [:]
+    /// Scripted Effective payloads by item ID.
+    private var payloadsByID: [HistoryItemID: PastePayload] = [:]
 
-    /// Suspended detail reads by item ID.
-    private var continuations: [HistoryItemID: CheckedContinuation<HistoryDetails, Error>] = [:]
+    /// Suspended payload reads by item ID.
+    private var continuations: [HistoryItemID: CheckedContinuation<PastePayload, Error>] = [:]
 
-    /// Recorded `details` request IDs, in order.
-    private(set) var detailRequests: [HistoryItemID] = []
+    /// Recorded `pastePayload` request IDs, in order.
+    private(set) var payloadRequests: [HistoryItemID] = []
 
-    /// Scripts the answer `details(for:)` completes with once resumed.
-    func scriptDetails(_ details: HistoryDetails) {
-        detailsByID[details.item.id] = details
+    /// Scripts the answer `pastePayload(for:)` completes with once resumed.
+    func scriptPayload(_ payload: PastePayload) {
+        payloadsByID[payload.item.id] = payload
     }
 
     /// Resumes the suspended read for `id` with the scripted answer, or with
     /// `failure` when one is given. No-op when no read is suspended — tests
-    /// poll `detailRequests` before resuming, so a missing continuation
+    /// poll `payloadRequests` before resuming, so a missing continuation
     /// surfaces as the poll's timeout failure, never as a silent pass.
-    func resumeDetails(for id: HistoryItemID, throwing failure: HistoryFailure? = nil) {
+    func resumePayload(for id: HistoryItemID, throwing failure: HistoryFailure? = nil) {
         guard let continuation = continuations.removeValue(forKey: id) else { return }
         if let failure {
             continuation.resume(throwing: failure)
-        } else if let details = detailsByID[id] {
-            continuation.resume(returning: details)
+        } else if let payload = payloadsByID[id] {
+            continuation.resume(returning: payload)
         } else {
             continuation.resume(throwing: HistoryFailure.notFound(id))
         }
@@ -423,14 +423,15 @@ actor PausableDetailsHistory: ClipboardHistory {
     }
 
     func details(for id: HistoryItemID) async throws -> HistoryDetails {
-        detailRequests.append(id)
-        return try await withCheckedThrowingContinuation { continuation in
-            continuations[id] = continuation
-        }
+        Issue.record("Preview must not request full Details")
+        throw HistoryFailure.notFound(id)
     }
 
     func pastePayload(for id: HistoryItemID) async throws -> PastePayload {
-        throw HistoryFailure.notFound(id)
+        payloadRequests.append(id)
+        return try await withCheckedThrowingContinuation { continuation in
+            continuations[id] = continuation
+        }
     }
 
     func thumbnail(

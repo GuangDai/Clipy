@@ -122,7 +122,6 @@ struct RealHistoryReferencePreviewTests {
         let loaded = try #require(reference(in: loader))
         #expect(loaded.kind == .file)
         #expect(Data(loaded.address.utf8) == bytes)
-        #expect(loader.occurrence != nil)
 
         // These steps run without a MainActor suspension: the queued task
         // cannot start before cancellation and the synchronous close/clear.
@@ -133,12 +132,10 @@ struct RealHistoryReferencePreviewTests {
         #expect(loader.phase == .unsupported)
         #expect(loader.requestedItem == nil)
         #expect(reference(in: loader) == nil)
-        #expect(loader.occurrence == nil)
         await queuedReload.value
         #expect(loader.phase == .unsupported)
         #expect(loader.requestedItem == nil)
         #expect(reference(in: loader) == nil)
-        #expect(loader.occurrence == nil)
         #expect(loader.raster == nil)
 
         // Closing the preview does not remove the retained item or poison its

@@ -4,6 +4,7 @@
 /// examples pin edge redistribution, ellipsis placement, long-match clipping,
 /// and UTF-16 translation without constructing a SwiftData store. WS17 keeps
 /// the separate public-facade integration proof.
+import Foundation
 import HistoryCore
 import Testing
 @testable import HistoryStorage
@@ -269,5 +270,39 @@ struct SearchWorkerExcerptTests {
             UTF16TextRange(location: 1, length: 2),
             UTF16TextRange(location: 3, length: 2),
         ])
+    }
+
+    @Test func borrowedPrefixUsesItsOwnUTF16OriginForScalarHighlights() {
+        let source = "🦊PREFIXhead e\u{301} tailSUFFIX"
+        let start = source.index(source.startIndex, offsetBy: 7)
+        let end = source.index(start, offsetBy: 11)
+        let body = source[start..<end]
+        let scalar = SearchWorker.bodyExcerpt(
+            body: body, characterRanges: [], snippetLimit: 322,
+            utf16Range: UTF16TextRange(location: 6, length: 1)
+        )
+        #expect(Data(scalar.snippet.utf8) == Data("head e\u{301} tail".utf8))
+        #expect(scalar.ranges == [UTF16TextRange(location: 6, length: 1)])
+
+        let fuzzy = SearchWorker.bodyExcerpt(
+            body: body, characterRanges: [5..<6], snippetLimit: 322
+        )
+        #expect(Data(fuzzy.snippet.utf8) == Data("head e\u{301} tail".utf8))
+        #expect(fuzzy.ranges == [UTF16TextRange(location: 5, length: 2)])
+    }
+
+    @Test func borrowedPrefixWindowDoesNotIncludeItsOwnersOutsideText() {
+        let source = "OUTER😀" + String(repeating: "a", count: 200)
+            + "e\u{301}" + String(repeating: "b", count: 200) + "😀OUTER"
+        let start = source.index(source.startIndex, offsetBy: 6)
+        let end = source.index(start, offsetBy: 401)
+        let excerpt = SearchWorker.bodyExcerpt(
+            body: source[start..<end], characterRanges: [], snippetLimit: 322,
+            utf16Range: UTF16TextRange(location: 201, length: 1)
+        )
+        let expected = "…" + String(repeating: "a", count: 159)
+            + "e\u{301}" + String(repeating: "b", count: 160) + "…"
+        #expect(Data(excerpt.snippet.utf8) == Data(expected.utf8))
+        #expect(excerpt.ranges == [UTF16TextRange(location: 161, length: 1)])
     }
 }

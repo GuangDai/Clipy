@@ -116,6 +116,17 @@ struct PanelLifecycleHostedTests {
         let surface = try #require(appDelegate.panelSurfaceState)
         await history.waitForObservationCount(1)
 
+        // Supply a real History page to the lifecycle-only observation double.
+        // A previously empty fixture could not prove close releases row DTOs.
+        let source = try await ComposedSupport.openMemoryHistory()
+        _ = try await source.perform(.capture(ComposedSupport.textCapture(
+            "visible before close", observedAt: Date(timeIntervalSince1970: 1)
+        )))
+        let page = try await source.browse(HistoryBrowseRequest(kind: .recent, limit: 50))
+        await history.emitObservedPage(page)
+        try #require(await ComposedSupport.waitFor { composition.viewState.rows == page.rows })
+        #expect(!composition.viewState.rows.isEmpty)
+
         #expect(panel.isPresented)
         #expect(surface.isSessionActive)
         #expect(surface.sessionGeneration == 1)
@@ -133,6 +144,9 @@ struct PanelLifecycleHostedTests {
         #expect(!surface.isSessionActive)
         #expect(await history.observationCount == 1)
         #expect(await history.terminationCount == 1)
+        #expect(composition.viewState.rows.isEmpty)
+        #expect(!composition.viewState.hasNextPage)
+        #expect(!composition.viewState.isLoadingFirstPage)
 
         appDelegate.openPanelForTesting()
 
@@ -144,6 +158,8 @@ struct PanelLifecycleHostedTests {
         composition.viewState.activate()
         await history.waitForObservationCount(2)
         #expect(await history.observationCount == 2)
+        await history.emitObservedPage(page)
+        try #require(await ComposedSupport.waitFor { composition.viewState.rows == page.rows })
     }
 
     /// Card 14C app-activation leaf. `NSApplication.didResignActiveNotification`
@@ -668,6 +684,10 @@ actor LifecycleObservationHistory: ClipboardHistory {
     private var terminationWaiters: [
         (target: Int, continuation: CheckedContinuation<Void, Never>)
     ] = []
+
+    func emitObservedPage(_ page: HistoryPage) {
+        observationContinuations.last?.yield(page)
+    }
 
     func waitForObservationCount(_ target: Int) async {
         guard observationCount < target else { return }

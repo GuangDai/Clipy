@@ -20,16 +20,16 @@ import HistoryCore
 import SwiftUI
 
 /// The preview column's content loader (audit 02 §SPEC-IMPL-007; 05 §4.1
-/// PREVIEW-FENCE-1): owns the async details read, renderer invocation, and
+/// PREVIEW-FENCE-1): owns the async Effective-payload read, renderer invocation, and
 /// exact-reference fence. ContentPreview owns the off-MainActor bounded
 /// decode itself.
 ///
 /// Fence law: a load captures its `HistoryItemReference` at start; after
 /// EVERY await it re-checks cancellation AND that its reference is still
-/// the requested one. The details answer itself must also carry that same
-/// reference: `details(for:)` reads by ID, so a concurrent revision that
+/// the requested one. The payload itself must also carry that same
+/// reference: `pastePayload(for:)` reads by ID, so a concurrent revision that
 /// advanced the Content Version is invisible to the request — the
-/// `details.item == item` half pins the version (04 §9's caller-side fence
+/// `payload.item == item` half pins the version (04 §9's caller-side fence
 /// convention). A late or superseded result is DISCARDED without touching
 /// any published state (the newer load owns the phase and applied content).
 /// Starting a new exact reference invalidates the previous publication
@@ -38,11 +38,10 @@ import SwiftUI
 ///
 /// Retention: only the REQUESTED item's applied content lives here — a
 /// bounded decoded image or a capped text body. The full Effective Content
-/// bytes are a transient local of `load(item:)`, never stored (closing
-/// SPEC-IMPL-007's "retains the full selected image bytes in view state").
-/// Bounding those bytes BEFORE they reach the MainActor needs the 05 §3.1
-/// `preview(for:pixels:)` storage seam — an owned follow-up outside this
-/// file set.
+/// bytes stay inside the concurrent payload-to-render function, never in the
+/// MainActor load frame. Storage's payload read still hydrates its current
+/// lineage; this change avoids the larger Details DTO and inactive titles at
+/// the consumer, not that existing storage work.
 @MainActor @Observable
 package final class PreviewContentLoader {
 
@@ -81,9 +80,6 @@ package final class PreviewContentLoader {
     /// review Card 9D).
     package private(set) var canRetryFailure = false
 
-    /// The metadata-bar facts for the applied item (03b §9).
-    package private(set) var occurrence: CopyOccurrenceSummary?
-
     /// The exact reference the loader is serving — set synchronously at the
     /// head of every `load(item:)`; late completions compare against it.
     package private(set) var requestedItem: HistoryItemReference?
@@ -95,7 +91,6 @@ package final class PreviewContentLoader {
     package private(set) var filePreviewFailure: FilePreviewFailure?
     private let filePreviewSettings: FilePreviewSettings?
     private var fileLoadTask: Task<Void, Never>?
-    private var fileReferenceOccurrence: CopyOccurrenceSummary?
 
     package var canLoadFilePreview: Bool {
         guard filePreviewSettings != nil,
@@ -150,12 +145,12 @@ package final class PreviewContentLoader {
     private let renderer = ContentPreview()
 
 #if DEBUG
-    /// Running-app acceptance can make only this loader's first details read
+    /// Running-app acceptance can make only this loader's first payload read
     /// transiently unavailable. The one-shot is instance-local: Retry still
     /// replays the same exact reference through the production History read
     /// and ContentPreview renderer, while Release has no failure switch
     /// (review Card 9D / Card 15 runtime acceptance).
-    private var shouldFailNextDetailsReadForRunningUITest =
+    private var shouldFailNextPayloadReadForRunningUITest =
         ProcessInfo.processInfo.environment["CLIPY_RUNNING_UI_TEST"] == "1"
             && ProcessInfo.processInfo.environment[
                 "CLIPY_UI_TEST_PREVIEW_FAILURE"
@@ -165,32 +160,6 @@ package final class PreviewContentLoader {
     package init(history: any ClipboardHistory, filePreviewSettings: FilePreviewSettings? = nil) {
         self.history = history
         self.filePreviewSettings = filePreviewSettings
-    }
-
-    /// Coalescing updates occurrence facts without changing the content
-    /// reference or requiring another details read. Only a newer count for
-    /// this exact target can supersede the metadata. Retain accepted facts
-    /// across query-loading gaps without another content load or cache.
-    package func updateOccurrence(from observedRow: HistoryRow?) {
-        guard let occurrence, let observedRow,
-              observedRow.item == requestedItem,
-              observedRow.copyCount > occurrence.count
-        else { return }
-        self.occurrence = CopyOccurrenceSummary(
-            firstCopiedAt: occurrence.firstCopiedAt,
-            lastCopiedAt: observedRow.lastCopiedAt,
-            count: observedRow.copyCount,
-            firstSource: occurrence.firstSource,
-            lastSource: observedRow.lastSource
-        )
-        if loadedFileReference != nil { fileReferenceOccurrence = self.occurrence }
-    }
-
-    package func displayedOccurrence(
-        for item: HistoryItemReference?
-    ) -> CopyOccurrenceSummary? {
-        guard let item, requestedItem == item else { return nil }
-        return occurrence
     }
 
     #if DEBUG
@@ -222,7 +191,6 @@ package final class PreviewContentLoader {
         requestedItem = nil
         raster = nil
         pdfPageCount = nil
-        occurrence = nil
         canRetryFailure = false
         phase = .unsupported
     }
@@ -244,35 +212,33 @@ package final class PreviewContentLoader {
         requestedItem = item
         raster = nil
         pdfPageCount = nil
-        occurrence = nil
         canRetryFailure = false
         phase = .loading
         do {
-            let details = try await readDetails(for: item.id)
-            try Task.checkCancellation()
-            guard requestGeneration == generation,
-                  requestedItem == item
-            else { return }
-            guard details.item == item else {
-                // The ID-based detail read raced a revision. Observation
-                // retargets the current exact reference; this stale episode
-                // must settle instead of retaining a permanent spinner.
-                phase = .failed
-                return
+#if DEBUG
+            if shouldFailNextPayloadReadForRunningUITest {
+                shouldFailNextPayloadReadForRunningUITest = false
+                throw HistoryFailure.temporarilyUnavailable(.dedupIndexRebuild)
             }
-            let outcome = await renderer.renderHistoryPane(
-                details.effective.map {
-                    PreviewRepresentation(
-                        typeIdentifier: $0.typeIdentifier,
-                        bytes: $0.bytes
-                    )
+#endif
+            let outcome = try await Self.renderPayload(
+                for: item, history: history, renderer: renderer,
+                isCurrent: { [weak self] in
+                    self?.requestGeneration == generation && self?.requestedItem == item
                 }
             )
             try Task.checkCancellation()
             guard requestGeneration == generation,
                   requestedItem == item
             else { return }
-            apply(outcome, occurrence: details.occurrence)
+            guard let outcome else {
+                // The ID-based payload read raced a revision. Observation
+                // retargets the current exact reference; this stale episode
+                // must settle instead of retaining a permanent spinner.
+                phase = .failed
+                return
+            }
+            apply(outcome)
         } catch is CancellationError {
             // Cancellation is only a publication fence. It does not publish
             // a phase transition or claim that underlying History/native
@@ -284,7 +250,6 @@ package final class PreviewContentLoader {
                   requestedItem == item
             else { return }
             raster = nil
-            occurrence = nil
             if case .temporarilyUnavailable = failure {
                 canRetryFailure = true
             } else {
@@ -297,17 +262,15 @@ package final class PreviewContentLoader {
                   requestedItem == item
             else { return }
             raster = nil
-            occurrence = nil
             canRetryFailure = false
             phase = .failed
         }
     }
 
-    private func apply(_ outcome: PreviewOutcome, occurrence: CopyOccurrenceSummary?) {
+    private func apply(_ outcome: PreviewOutcome) {
         raster = nil
         pdfPageCount = nil
         canRetryFailure = false
-        self.occurrence = occurrence
         switch outcome {
         case .content(.raster(let artifact)):
             raster = artifact
@@ -325,7 +288,6 @@ package final class PreviewContentLoader {
         case .failed(let failure):
             canRetryFailure = failure == .renderer
             phase = .failed
-            self.occurrence = nil
         }
     }
 
@@ -346,8 +308,6 @@ package final class PreviewContentLoader {
         filePreviewFailure = nil
         requestGeneration += 1
         let generation = requestGeneration
-        let occurrence = self.occurrence
-        fileReferenceOccurrence = occurrence
         phase = .loading
         canRetryFailure = false
         fileLoadTask = Task { [weak self] in
@@ -361,7 +321,7 @@ package final class PreviewContentLoader {
                 ])
                 try Task.checkCancellation()
                 guard self.requestGeneration == generation, self.requestedItem == item else { return }
-                self.apply(outcome, occurrence: self.occurrence ?? occurrence)
+                self.apply(outcome)
                 // Retrying a file requires the same explicit confirmation;
                 // the ordinary Retry control rereads History and is not used.
                 self.canRetryFailure = false
@@ -380,13 +340,11 @@ package final class PreviewContentLoader {
 
     package func showFileReference() {
         guard let reference = loadedFileReference else { return }
-        let occurrence = fileReferenceOccurrence
         requestGeneration += 1
         retireFileLoad()
         raster = nil
         pdfPageCount = nil
         canRetryFailure = false
-        self.occurrence = occurrence
         phase = .content(.reference(reference))
     }
 
@@ -408,21 +366,42 @@ package final class PreviewContentLoader {
         fileLoadConfirmation = nil
         loadedFileReference = nil
         filePreviewFailure = nil
-        fileReferenceOccurrence = nil
     }
 
-    /// The DEBUG branch substitutes one outcome at the loader's details-call
-    /// boundary. A successful retry still has to traverse the real History
-    /// read, ContentPreview renderer, and view publication before content is
-    /// observable; the first substituted episode does not claim History I/O.
-    private func readDetails(for id: HistoryItemID) async throws -> HistoryDetails {
-#if DEBUG
-        if shouldFailNextDetailsReadForRunningUITest {
-            shouldFailNextDetailsReadForRunningUITest = false
-            throw HistoryFailure.temporarilyUnavailable(.dedupIndexRebuild)
-        }
-#endif
-        return try await history.details(for: id)
+    /// Structured concurrency preserves cancellation and renderer TaskLocals.
+    /// The ID-based read must return the exact requested version before any
+    /// rendering starts; only the bounded artifact returns to MainActor.
+    @concurrent
+    private static func renderPayload(
+        for item: HistoryItemReference,
+        history: any ClipboardHistory,
+        renderer: ContentPreview,
+        isCurrent: @MainActor @Sendable () -> Bool
+    ) async throws -> PreviewOutcome? {
+        let payload = try await history.pastePayload(for: item.id)
+        try Task.checkCancellation()
+        guard payload.item == item else { return nil }
+        guard await isCurrent() else { return nil }
+        try Task.checkCancellation()
+        return await renderer.renderHistoryPane(payload.representations.map {
+            PreviewRepresentation(typeIdentifier: $0.typeIdentifier, bytes: $0.bytes)
+        })
+    }
+}
+
+/// Footer facts are the current visible row's values, independent of content
+/// loading. Missing rows (including page-window/query gaps) hide the footer;
+/// another version never supplies metadata for the requested exact reference.
+package struct PreviewFooterMetadata: Equatable, Sendable {
+    package let lastSource: String?
+    package let count: UInt64
+    package let lastCopiedAt: Date
+
+    package init?(item: HistoryItemReference?, row: HistoryRow?) {
+        guard let item, let row, row.item == item else { return nil }
+        lastSource = row.lastSource
+        count = row.copyCount
+        lastCopiedAt = row.lastCopiedAt
     }
 }
 
@@ -549,12 +528,6 @@ struct HistoryPreviewView: View {
         // another item's content (SPEC-IMPL-007 / PREVIEW-FENCE-1).
         .task(id: LoadRequest(item: targetItem, retryGeneration: retryGeneration)) {
             await loader.load(item: targetItem)
-            // Observation may have advanced while details/rendering suspended.
-            // Re-read its current row after loading publishes occurrence facts.
-            loader.updateOccurrence(from: observedRow)
-        }
-        .onChange(of: observedRow) { _, row in
-            loader.updateOccurrence(from: row)
         }
         .onChange(of: targetItem) { _, target in
             fileConfirmationPresented = false
@@ -718,7 +691,7 @@ struct HistoryPreviewView: View {
     @ViewBuilder
     private var metadataBar: some View {
         HStack(spacing: 6) {
-            if let occurrence = loader.displayedOccurrence(for: targetItem) {
+            if let occurrence = PreviewFooterMetadata(item: targetItem, row: observedRow) {
                 if let source = occurrence.lastSource {
                     Text(source)
                         .lineLimit(1)

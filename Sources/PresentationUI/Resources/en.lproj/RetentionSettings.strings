@@ -27,6 +27,8 @@
 "settings.retention.items.section" = "Items";
 "settings.retention.items.unit" = "unpinned items";
 "settings.retention.pinned-over-budget" = "Pinned items exceed this budget. Unpin items or raise the budget.";
+"settings.retention.active-revision-over-budget" = "An active revision exceeds this limit. Increase the revision storage limit.";
+"settings.retention.combined-budget-unsatisfiable" = "Pinned items may exceed the storage budget, or an active revision may exceed its limit. Raise the limits, or unpin items to reduce protected storage.";
 "settings.retention.policies-save-failure" = "The policies could not be saved.";
 "settings.retention.range-hint" = "Enter a whole number from %1$@ to %2$@.";
 "settings.retention.read-failure" = "The current retention settings could not be read.";

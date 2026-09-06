@@ -125,6 +125,9 @@ struct DragItemProviderTests {
         let provider = state.dragItemProvider(for: reference)
         state.deactivate()
 
+        #expect(state.rows.isEmpty)
+        #expect(state.dragItemProvider(for: reference).registeredTypeIdentifiers.isEmpty)
+
         let result = await Self.load(provider)
         #expect(result.bytes == Data("chosen before panel close".utf8))
         #expect(!result.failed)

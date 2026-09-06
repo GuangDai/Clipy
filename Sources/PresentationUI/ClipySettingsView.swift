@@ -1162,25 +1162,12 @@ private struct RetentionSettingsTab: View {
             }
         } catch let failure as HistoryFailure {
             guard draft.isCurrent(submission) else { return }
-            policyStatus = .failure(Self.retentionFailureMessage(failure))
+            policyStatus = .failure(RetentionSettingsCopy.failureMessage(
+                for: failure, policies: submission.policies
+            ))
         } catch {
             guard draft.isCurrent(submission) else { return }
             policyStatus = .failure(RetentionSettingsCopy.policiesSaveFailure)
-        }
-    }
-
-    /// Retention-specific recovery guidance (V2-07 §5.2): the set-time
-    /// pinned-over-budget rejection and the unsatisfiable R2 budget carry
-    /// their own text; every other failure falls through to the shared
-    /// `FailurePresentation` mapping (03b §10).
-    private static func retentionFailureMessage(_ failure: HistoryFailure) -> String {
-        switch failure {
-        case .invalidInput(.invalidRetentionPolicy):
-            return RetentionSettingsCopy.pinnedOverBudget
-        case .capacityExceeded(.storageBytes):
-            return RetentionSettingsCopy.budgetUnsatisfiable
-        default:
-            return FailurePresentation.message(for: failure)
         }
     }
 }

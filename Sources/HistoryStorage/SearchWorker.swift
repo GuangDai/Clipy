@@ -370,13 +370,14 @@ internal actor SearchWorker {
                 let excerpt: (snippet: String, ranges: [UTF16TextRange])
                 if let maximumCharacters {
                     // Fuzzy/regexp windows: the lane's bounded scan prefix
-                    // (03b §8), re-derived from the stored body.
+                    // (03b §8), borrowed from the stored body. The excerpt
+                    // owns only its final window, not a second scan-prefix copy.
                     let scan = Self.boundedCharacterPrefix(
                         of: corpusRow.searchBody,
                         maximumCharacters: maximumCharacters
                     )
                     excerpt = Self.bodyExcerpt(
-                        body: String(scan.text),
+                        body: scan.text,
                         characterRanges: characterRanges,
                         snippetLimit: limits.maximumBodySearchSnippetCharacters,
                         bodySuffixWasOmitted: bodySuffixWasOmitted,

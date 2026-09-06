@@ -58,7 +58,6 @@ struct FilePreviewTests {
         loader.showFileReference()
         #expect(loader.loadedFileReference == nil)
         #expect(loader.canLoadFilePreview)
-        #expect(loader.occurrence?.count == 1)
         #expect(loader.raster == nil)
     }
 

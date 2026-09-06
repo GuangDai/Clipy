@@ -400,6 +400,49 @@ func r2OldestPrefixRespectsByteBoundaryAndProtection(
 
 // MARK: - Determinism and D24 postconditions (V2-02 §11)
 
+@Test(arguments: [false, true], [0, 1, 2])
+func largeInventoryRetainsTheSameProtectedOldestPrefix(
+    _ reversed: Bool, _ additionalByteVictims: Int
+) throws {
+    let pinned = expansionItem(1, copiedAt: 10, pinned: PinOrdinal(rawValue: 0), canonicalBytes: 100)
+    let primary = expansionItem(2, copiedAt: 20, canonicalBytes: 100)
+    let aged = expansionItem(3, copiedAt: 100, canonicalBytes: 100)
+    let oldestSurvivor = expansionItem(4, copiedAt: 800, canonicalBytes: 100)
+    let nextSurvivor = expansionItem(5, copiedAt: 850, canonicalBytes: 100)
+    var inventory = [pinned, primary, aged, oldestSurvivor, nextSurvivor]
+    for index in 0..<4_995 {
+        let id = HistoryItemID(rawValue: UUID(uuid: (
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            UInt8(index >> 8), UInt8(index & 0xFF)
+        )))
+        inventory.append(RetentionExpansionItemSummary(
+            id: id, lastCopiedAt: Date(timeIntervalSinceReferenceDate: 900 + Double(index)),
+            pinOrdinal: nil, canonicalBytes: 100, revisionCount: 0, revisionBytes: 0
+        ))
+    }
+    if reversed { inventory.reverse() }
+    let now = Date(timeIntervalSinceReferenceDate: 1000)
+    // All 5,000 rows contribute bytes, including pinned and primary rows.
+    #expect(try plannedRetirements(
+        inventory: inventory,
+        policies: HistoryRetentionPolicies(age: nil, storage: StorageRetention(maxTotalBytes: 500_000), revisions: nil),
+        protected: [primary.id], now: now
+    ).isEmpty)
+    // R1 selects only `aged`. R2 either needs no further victim, exactly
+    // one, or two; later rows must survive every path and both input orders.
+    let victims = try plannedRetirements(
+        inventory: inventory,
+        policies: HistoryRetentionPolicies(
+            age: AgeRetention(maxAge: 300),
+            storage: StorageRetention(maxTotalBytes: 500_000 - 100 * (1 + additionalByteVictims)),
+            revisions: nil
+        ),
+        protected: [primary.id], now: now
+    )
+    let expected = [aged.id] + Array([oldestSurvivor.id, nextSurvivor.id].prefix(additionalByteVictims))
+    #expect(victims == expected)
+}
+
 @Test func identicalFactsInDifferentInventoryOrderProduceIdenticalPlans() throws {
     // D16: a deterministic pure function of (inventory, policies,
     // protected, now). Unique IDs make the eviction order total, so input
