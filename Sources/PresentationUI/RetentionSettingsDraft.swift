@@ -29,6 +29,10 @@ internal struct RetentionSettingsDraft {
         fileprivate let revisionCountText: String
         fileprivate let revisionBytesEnabled: Bool
         fileprivate let revisionMiBText: String
+        fileprivate let ageValueWasDirty: Bool
+        fileprivate let storageValueWasDirty: Bool
+        fileprivate let revisionCountValueWasDirty: Bool
+        fileprivate let revisionBytesValueWasDirty: Bool
     }
 
     internal struct CountSubmission: Sendable {
@@ -315,7 +319,11 @@ internal struct RetentionSettingsDraft {
             revisionCountEnabled: revisionCountEnabled,
             revisionCountText: revisionCountText,
             revisionBytesEnabled: revisionBytesEnabled,
-            revisionMiBText: revisionMiBText
+            revisionMiBText: revisionMiBText,
+            ageValueWasDirty: ageValueIsDirty,
+            storageValueWasDirty: storageValueIsDirty,
+            revisionCountValueWasDirty: revisionCountValueIsDirty,
+            revisionBytesValueWasDirty: revisionBytesValueIsDirty
         )
     }
 
@@ -369,6 +377,9 @@ internal struct RetentionSettingsDraft {
     /// the submitted control, even if another field was edited while saving.
     /// Comparing actual controls also preserves newer disabled-field text,
     /// which is absent from the policy DTO (`V2-07` §5.2/§6.3).
+    /// A newly edited rounded field remains dirty even when its text returns
+    /// to the submitted display: it now proposes exact whole units, rather
+    /// than the unedited raw bytes/seconds saved in that submission.
     /// The configured comparison baseline still advances after a stale-UI
     /// success because that submission did commit to History; otherwise the
     /// next draft could compare strictness against policy state that no longer
@@ -379,12 +390,16 @@ internal struct RetentionSettingsDraft {
         successMessage: String
     ) -> Bool {
         configuredPolicies = submission.policies
-        ageValueIsDirty = ageValueIsDirty && ageDaysText != submission.ageDaysText
-        storageValueIsDirty = storageValueIsDirty && storageMiBText != submission.storageMiBText
+        ageValueIsDirty = ageValueIsDirty
+            && (!submission.ageValueWasDirty || ageDaysText != submission.ageDaysText)
+        storageValueIsDirty = storageValueIsDirty
+            && (!submission.storageValueWasDirty || storageMiBText != submission.storageMiBText)
         revisionCountValueIsDirty = revisionCountValueIsDirty
-            && revisionCountText != submission.revisionCountText
+            && (!submission.revisionCountValueWasDirty
+                || revisionCountText != submission.revisionCountText)
         revisionBytesValueIsDirty = revisionBytesValueIsDirty
-            && revisionMiBText != submission.revisionMiBText
+            && (!submission.revisionBytesValueWasDirty
+                || revisionMiBText != submission.revisionMiBText)
         ageToggleIsDirty = ageToggleIsDirty && ageEnabled != submission.ageEnabled
         storageToggleIsDirty = storageToggleIsDirty && storageEnabled != submission.storageEnabled
         revisionCountToggleIsDirty = revisionCountToggleIsDirty

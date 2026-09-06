@@ -785,6 +785,38 @@ struct RetentionSettingsDraftTests {
         #expect(draft.hasPolicyChanges)
     }
 
+    @Test("policy completion preserves an explicit whole-unit edit returning to rounded display")
+    func completedPolicyDoesNotRestoreRawValuesOverNewWholeUnitIntent() throws {
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+        load(HistoryRetentionPolicies(
+            age: AgeRetention(maxAge: 90_001),
+            storage: StorageRetention(maxTotalBytes: 1_048_577),
+            revisions: RevisionRetention(
+                maxRevisionsPerItem: 20, maxRevisionBytesPerItem: 1_048_577
+            )
+        ), into: &draft)
+        draft.setRevisionCountText("19")
+        let submission = try #require(draft.submission())
+
+        draft.setAgeDaysText("3")
+        draft.setAgeDaysText("2")
+        draft.setStorageMiBText("3")
+        draft.setStorageMiBText("2")
+        draft.setRevisionMiBText("3")
+        draft.setRevisionMiBText("2")
+        let accepted = draft.acceptApplied(submission, successMessage: "Done.")
+        #expect(!accepted)
+        #expect(draft.ageValueIsDirty)
+        #expect(draft.storageValueIsDirty)
+        #expect(draft.revisionBytesValueIsDirty)
+        #expect(!draft.revisionCountValueIsDirty)
+        let proposed = try #require(draft.submission()).policies
+        #expect(proposed.age?.maxAge == 172_800)
+        #expect(proposed.storage?.maxTotalBytes == 2_097_152)
+        #expect(proposed.revisions?.maxRevisionBytesPerItem == 2_097_152)
+        #expect(draft.hasPolicyChanges)
+    }
+
     @Test("a new edit clears the accepted Done generation")
     func newEditClearsAcceptedApplyState() throws {
         var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
