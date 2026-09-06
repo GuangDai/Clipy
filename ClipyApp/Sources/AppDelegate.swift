@@ -770,10 +770,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Bookkeeping after every panel close: reset the keep-open pin (it is
-    /// per-session state, never a preference), disarm the preview pane, and
-    /// stop the view-state observation until the next summon.
+    /// per-session state, never a preference), retire its unresolved Copy,
+    /// disarm the preview pane, and stop observation until the next summon.
     private func panelDidClose() {
         isPanelKeepOpenActive = false
+        composition?.cancelPendingPaste()
         panelSurfaceState?.endSession()
         composition?.viewState.deactivate()
     }

@@ -180,6 +180,23 @@ package struct EffectiveContent: Sendable, Hashable {
     package init(representations: [ContentRepresentation]) {
         self.representations = representations
     }
+
+    /// Representation-set equality for normalized content (`02` §2.1,
+    /// §9.3, §11): equivalent identifier spellings can occupy different
+    /// positions in scalar-sorted arrays. Index only the identifiers, then
+    /// compare payload bytes without hashing clipboard content.
+    package func hasSameRepresentations(as other: EffectiveContent) -> Bool {
+        guard representations.count == other.representations.count else { return false }
+        if representations == other.representations { return true }
+        var bytesByType: [String: Data] = [:]
+        bytesByType.reserveCapacity(representations.count)
+        for representation in representations {
+            bytesByType[representation.typeIdentifier] = representation.bytes
+        }
+        return other.representations.allSatisfy {
+            bytesByType[$0.typeIdentifier] == $0.bytes
+        }
+    }
 }
 
 // MARK: - Content Revision (docs/02-domain.md §2.5)

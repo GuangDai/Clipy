@@ -85,26 +85,10 @@ package func planCapture(
             // planner's defensive backstop (docs/02-domain.md §6).
             throw DomainRejection.corruptLineage
         }
-        // Lane 1's byte-set equality without hashing clipboard bytes: both
-        // lists are validated to hold at most one representation per
-        // canonically equivalent type identifier (docs/02-domain.md §2.1),
-        // so `typeIdentifier → bytes` dictionaries preserve exact Set
-        // semantics while hashing only the bounded type-identifier
-        // strings — the same shape `canonicalContains` uses in lane 2.
-        // A Set<ContentRepresentation> here would hash every clipboard
-        // byte on every hinted capture, the hottest paste path.
-        var incomingBytesByType: [String: Data] = [:]
-        incomingBytesByType.reserveCapacity(capture.canonical.representations.count)
-        for representation in capture.canonical.representations {
-            incomingBytesByType[representation.content.typeIdentifier] =
-                representation.content.bytes
-        }
-        var hintedBytesByType: [String: Data] = [:]
-        hintedBytesByType.reserveCapacity(hintedEffective.representations.count)
-        for representation in hintedEffective.representations {
-            hintedBytesByType[representation.typeIdentifier] = representation.bytes
-        }
-        if incomingBytesByType == hintedBytesByType {
+        let incomingEffective = EffectiveContent(
+            representations: capture.canonical.representations.map(\.content)
+        )
+        if incomingEffective.hasSameRepresentations(as: hintedEffective) {
             winner = hinted
         }
     }
@@ -116,18 +100,21 @@ package func planCapture(
     if winner == nil {
         winner = facts.candidates.items.lazy
             .compactMap { item -> ConfirmedCanonicalCandidate? in
-                let isExactCanonicalMatch = item.canonical == capture.canonical
-                guard isExactCanonicalMatch || canonicalContains(
+                guard item.canonical == capture.canonical || canonicalContains(
                     existing: item.canonical,
                     incoming: capture.canonical
                 ) else {
                     return nil
                 }
+                // §2.1/§9.4: confirmed containment with equal cardinality
+                // is exact set equality. Scalar-sorted array equality can
+                // disagree when equivalent Unicode spellings change order.
+                let extraRepresentationCount = item.canonical.representations.count
+                    - capture.canonical.representations.count
                 return ConfirmedCanonicalCandidate(
                     item: item,
-                    isExactCanonicalMatch: isExactCanonicalMatch,
-                    extraRepresentationCount: item.canonical.representations.count
-                        - capture.canonical.representations.count
+                    isExactCanonicalMatch: extraRepresentationCount == 0,
+                    extraRepresentationCount: extraRepresentationCount
                 )
             }
             .min(by: canonicalWinnerRanksBefore)?.item

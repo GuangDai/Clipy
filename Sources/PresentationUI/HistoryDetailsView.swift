@@ -156,11 +156,13 @@ struct HistoryDetailsView: View {
     @State private var phase: DetailsPhase = .loading
     @State private var basis: ContentBasis = .effective
     @State private var showsStaleNotice = false
+    @State private var needsRevisionConflictReload = false
     @State private var failureNotice: String?
     @State private var showsEditor = false
     @State private var showsRemoveConfirmation = false
     @State private var isTogglingPin = false
     @State private var isRemoving = false
+    @State private var isRevising = false
     @State private var loadFence = HistoryDetailsLoadFence()
 
     /// The details surface's live measured width — the signal for
@@ -217,7 +219,7 @@ struct HistoryDetailsView: View {
                     viewState: viewState,
                     details: details,
                     onDismiss: closeEditor,
-                    onReferenceAdvance: advanceEditorReference
+                    onReferenceAdvance: advanceDetailsReference
                 )
             } else {
                 switch phase {
@@ -310,12 +312,12 @@ struct HistoryDetailsView: View {
         Task { await load(presentingTransition: false) }
     }
 
-    /// Reload Latest and a committed editor Save are the only sources allowed
-    /// to retarget this already-open Details surface. Both values have crossed
+    /// Explicit revision recovery and committed Save/Revert are the sources
+    /// allowed to retarget this already-open Details surface. All values cross
     /// History's authoritative read/receipt boundary. External mismatches on
     /// ordinary `load()` remain rejected by the unchanged exact fence.
     @MainActor
-    private func advanceEditorReference(_ latest: HistoryItemReference) {
+    private func advanceDetailsReference(_ latest: HistoryItemReference) {
         let previous = currentItem
         guard !loadFence.isPurged,
               latest.id == previous.id,
@@ -378,8 +380,10 @@ struct HistoryDetailsView: View {
                     }
                 }
             )
+            .disabled(isRevising)
             Divider()
             actionBar(isPinned: details.pinnedPosition != nil)
+                .disabled(isRevising)
         }
     }
 
@@ -486,7 +490,7 @@ struct HistoryDetailsView: View {
     @MainActor
     private func load(presentingTransition: Bool = true) async {
         guard reconcileSurfacePurge(viewState.surfacePurge) else { return }
-        guard let generation = loadFence.begin() else {
+        guard var generation = loadFence.begin() else {
             phase = .removed
             return
         }
@@ -496,6 +500,19 @@ struct HistoryDetailsView: View {
         do {
             let details = try await viewState.details(for: currentItem.id)
             guard reconcileSurfacePurge(viewState.surfacePurge) else { return }
+            // A failed explicit Revert reloads the authoritative latest base
+            // (03b §10). Ordinary reads still require the displayed reference.
+            // Keep this intent across a transient read failure so Retry can
+            // still recover the newer base instead of reporting it removed.
+            if needsRevisionConflictReload,
+               !Task.isCancelled,
+               loadFence.owns(generation) {
+                advanceDetailsReference(details.item)
+                generation = loadFence.generation
+                if details.item == currentItem {
+                    needsRevisionConflictReload = false
+                }
+            }
             guard loadFence.accepts(
                 generation,
                 returned: details.item,
@@ -594,18 +611,23 @@ struct HistoryDetailsView: View {
     /// other typed failures surface their message inline.
     @MainActor
     private func revise(intent: RevisionIntent, expected: ContentVersion) async {
+        guard !isRevising else { return }
+        isRevising = true
+        defer { isRevising = false }
         do {
-            _ = try await viewState.revise(
+            _ = try await viewState.reviseKeepingDetails(
                 RevisionRequest(
                     itemID: currentItem.id,
                     expected: expected,
                     intent: intent
-                )
+                ),
+                onCommittedReference: advanceDetailsReference
             )
             await load(presentingTransition: false)
         } catch let failure as HistoryFailure {
             if case .staleContent = failure {
                 showsStaleNotice = true
+                needsRevisionConflictReload = true
                 await load(presentingTransition: false)
             } else {
                 failureNotice = FailurePresentation.message(for: failure, bundle: copyBundle)

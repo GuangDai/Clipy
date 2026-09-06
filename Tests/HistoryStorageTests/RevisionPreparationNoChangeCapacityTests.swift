@@ -51,6 +51,56 @@ struct RevisionPreparationNoChangeCapacityTests {
         #expect(changed.domain.basedOn == source.contentVersion)
     }
 
+    @Test(arguments: [CapacityKind.revisionCount, .revisionBytes], [false, true])
+    func equivalentTypeSpellingsNeedNoAppendCapacity(
+        _ capacity: CapacityKind, _ useDecomposedCanonical: Bool
+    ) async throws {
+        let canonicalType = useDecomposedCanonical ? "e\u{301}" : "\u{e9}"
+        let activeType = useDecomposedCanonical ? "\u{e9}" : "e\u{301}"
+        let captured = try await IngestPreparationActor().prepare(ClipboardCapture(
+            representations: [
+                CapturedRepresentation(typeIdentifier: canonicalType, bytes: Data([0x01, 0x02])),
+                CapturedRepresentation(typeIdentifier: "f", bytes: Data([0x03, 0x04])),
+            ],
+            origin: CopyOriginObservation(sourceApplication: nil, lineageHint: nil),
+            observedAt: Date(timeIntervalSinceReferenceDate: 700_093_000)
+        ))
+        let active = ContentRevision(
+            id: RevisionID(rawValue: UUID()),
+            createdAt: Date(timeIntervalSinceReferenceDate: 700_093_001),
+            content: EffectiveContent(representations: [
+                ContentRepresentation(typeIdentifier: activeType, bytes: Data([0x01, 0x02])),
+                ContentRepresentation(typeIdentifier: "f", bytes: Data([0x03, 0x04])),
+            ].sorted {
+                $0.typeIdentifier.unicodeScalars.lexicographicallyPrecedes($1.typeIdentifier.unicodeScalars)
+            })
+        )
+        let source = RevisionPreparationSnapshot(
+            canonical: captured.domain.canonical, revisions: [active],
+            activeRevisionID: active.id, contentVersion: ContentVersion(rawValue: 2)
+        )
+        let preparation = RevisionPreparationActor(limits: try limits(
+            count: capacity == .revisionCount ? 1 : 10,
+            bytes: capacity == .revisionBytes ? 4 : 64
+        ))
+        let revert = RevisionRequest(
+            itemID: HistoryItemID(rawValue: UUID()), expected: source.contentVersion,
+            intent: .revert(to: .canonical)
+        )
+        let unchanged = try await preparation.prepare(revert, from: source)
+        #expect(unchanged.domain.proposedContent.representations == captured.domain.canonical.representations.map(\.content))
+        let changed = RevisionRequest(
+            itemID: revert.itemID, expected: source.contentVersion,
+            intent: .replace(RevisionDraft(decisions: [
+                RevisionDecision(typeIdentifier: canonicalType, action: .replace(bytes: Data([0x01, 0x05]))),
+                RevisionDecision(typeIdentifier: "f", action: .inheritCanonical),
+            ]))
+        )
+        await #expect(throws: HistoryFailure.capacityExceeded(capacity)) {
+            try await preparation.prepare(changed, from: source)
+        }
+    }
+
     private func request(bytes: Data) -> RevisionRequest {
         RevisionRequest(
             itemID: HistoryItemID(rawValue: UUID()), expected: ContentVersion(rawValue: 2),

@@ -495,7 +495,7 @@ struct ReviseEditorView: View {
         isSaving = true
         defer { isSaving = false }
         do {
-            _ = try await viewState.reviseFromEditor(
+            _ = try await viewState.reviseKeepingDetails(
                 draft.revisionRequest()
             ) { reference in
                 onReferenceAdvance?(reference)

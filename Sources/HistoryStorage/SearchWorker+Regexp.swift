@@ -169,34 +169,22 @@ extension SearchWorker {
 #endif
                 continue scan
             }
-            // Convert the UTF-16 match to Character offsets for the
-            // excerpt algorithm. The conversion cannot fail — the range
-            // was produced against this very string — but a failed
-            // conversion is treated as a miss rather than a crash.
-            guard let found = Range(match.range, in: bodyPrefix) else {
-#if DEBUG
-                recordProgressIfNeeded()
-#endif
-                continue scan
-            }
-            let lower = bodyPrefix.distance(
-                from: bodyPrefix.startIndex,
-                to: found.lowerBound
-            )
-            let upper = bodyPrefix.distance(
-                from: bodyPrefix.startIndex,
-                to: found.upperBound
-            )
             // The 03b §8 excerpt defers to page materialization with the
-            // scan-bound and omitted-suffix facts recorded during the scan.
+            // original UTF-16 match intact. A regexp may match only part of
+            // a Character; converting through Character offsets here loses
+            // that range. Window coordinates are needed only for returned rows.
             scanTracker.appendIfRetained(
                 EvaluatedRow(
                     corpusRow: row,
                     search: .bodyExcerpt(
-                        characterRanges: [lower..<upper],
+                        characterRanges: [],
                         maximumCharacters: limits
                             .maximumRegexpTitleBodyPrefixCharacters,
-                        bodySuffixWasOmitted: bodyScan.suffixWasOmitted
+                        bodySuffixWasOmitted: bodyScan.suffixWasOmitted,
+                        utf16Range: UTF16TextRange(
+                            location: match.range.location,
+                            length: match.range.length
+                        )
                     ),
                     anchor: Self.defaultOrderAnchor(for: row)
                 ),

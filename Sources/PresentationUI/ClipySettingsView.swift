@@ -66,6 +66,7 @@ public struct ClipySettingsView: View {
     @State private var retentionDraft = RetentionSettingsDraft()
     @State private var hasLoadedRetentionConfiguration = false
     @State private var retentionConfigurationFailure: String?
+    @State private var retentionConfigurationRefreshGeneration = 0
 
     /// - Parameters:
     ///   - viewState: the shared interaction-state object (contract §3).
@@ -106,12 +107,17 @@ public struct ClipySettingsView: View {
                 viewState: viewState,
                 draft: $retentionDraft,
                 hasLoadedRetentionConfiguration: hasLoadedRetentionConfiguration,
-                retentionConfigurationFailure: retentionConfigurationFailure
+                retentionConfigurationFailure: retentionConfigurationFailure,
+                retryRetentionConfiguration: {
+                    retentionConfigurationRefreshGeneration += 1
+                }
             )
                 .tabItem { Label(RetentionSettingsCopy.tabTitle, systemImage: "clock.arrow.circlepath") }
                 .frame(width: 480, height: 560)
         }
-        .task { await loadRetentionConfiguration() }
+        .task(id: retentionConfigurationRefreshGeneration) {
+            await loadRetentionConfiguration()
+        }
         .onDisappear {
             retentionDraft.invalidateLoadRequest()
             hasLoadedRetentionConfiguration = false
@@ -616,6 +622,7 @@ private struct RetentionSettingsTab: View {
     @Binding private var draft: RetentionSettingsDraft
     private let hasLoadedRetentionConfiguration: Bool
     private let retentionConfigurationFailure: String?
+    private let retryRetentionConfiguration: () -> Void
     @State private var countStatus: SettingStatus?
     @State private var policyStatus: SettingStatus?
     @State private var usageRefreshGeneration = 0
@@ -632,17 +639,31 @@ private struct RetentionSettingsTab: View {
         viewState: HistoryViewState,
         draft: Binding<RetentionSettingsDraft>,
         hasLoadedRetentionConfiguration: Bool,
-        retentionConfigurationFailure: String?
+        retentionConfigurationFailure: String?,
+        retryRetentionConfiguration: @escaping () -> Void
     ) {
         self.viewState = viewState
         _draft = draft
         self.hasLoadedRetentionConfiguration = hasLoadedRetentionConfiguration
         self.retentionConfigurationFailure = retentionConfigurationFailure
+        self.retryRetentionConfiguration = retryRetentionConfiguration
     }
 
     var body: some View {
         ScrollView {
             Form {
+                if let retentionConfigurationFailure {
+                    Section {
+                        SettingStatusView(status: .failure(retentionConfigurationFailure))
+                            .accessibilityIdentifier(
+                                "clipy.settings.retention.configuration-failure"
+                            )
+                        Button(SettingsCopy.text("Retry"), action: retryRetentionConfiguration)
+                            .accessibilityIdentifier(
+                                "clipy.settings.retention.retry-configuration"
+                            )
+                    }
+                }
                 HistoryUsageView(
                     usage: usage,
                     failed: usageFailed,
@@ -724,8 +745,6 @@ private struct RetentionSettingsTab: View {
                             .accessibilityIdentifier(
                                 "clipy.settings.retention.item-limit-status"
                             )
-                    } else if let retentionConfigurationFailure {
-                        SettingStatusView(status: .failure(retentionConfigurationFailure))
                     }
                 } header: {
                     Text(RetentionSettingsCopy.itemsSection)
@@ -853,8 +872,6 @@ private struct RetentionSettingsTab: View {
                             .accessibilityIdentifier(
                                 "clipy.settings.retention.policy-status"
                             )
-                    } else if let retentionConfigurationFailure {
-                        SettingStatusView(status: .failure(retentionConfigurationFailure))
                     }
                     Text(RetentionSettingsCopy.applyNote)
                         .font(.footnote)

@@ -637,6 +637,82 @@ struct RetentionSettingsDraftTests {
         #expect(draft.requiresTighteningConfirmation(for: newerPolicies))
     }
 
+    @Test("count completion clears saved count edits after a policy edit")
+    func countCompletionWithNewPolicyEditAllowsFreshCountReadback() throws {
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+        draft.setMaximumUnpinnedText("38")
+        let submission = try #require(draft.countSubmission())
+        draft.setAgeEnabled(true)
+        draft.setAgeDaysText("4")
+
+        let accepted = draft.acceptApplied(submission, successMessage: "Done.")
+        #expect(!accepted)
+        #expect(draft.acceptedCountSuccessMessage == nil)
+        #expect(!draft.maximumUnpinnedValueIsDirty)
+        #expect(draft.ageToggleIsDirty)
+        #expect(draft.ageValueIsDirty)
+
+        load(HistoryRetentionConfiguration(
+            maximumUnpinnedItems: 42,
+            policies: HistoryRetentionPolicies(age: nil, storage: nil, revisions: nil)
+        ), into: &draft)
+        #expect(draft.countSubmission()?.maximumUnpinnedItems == 42)
+        #expect(!draft.hasCountChanges)
+        #expect(draft.submission()?.policies.age?.maxAge == 345_600)
+        #expect(draft.hasPolicyChanges)
+    }
+
+    @Test("policy completion clears saved policy edits after a count edit")
+    func policyCompletionWithNewCountEditAllowsFreshPolicyReadback() throws {
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+        draft.setAgeEnabled(true)
+        draft.setAgeDaysText("4")
+        let submission = try #require(draft.submission())
+        draft.setMaximumUnpinnedText("38")
+
+        let accepted = draft.acceptApplied(submission, successMessage: "Done.")
+        #expect(!accepted)
+        #expect(draft.acceptedSuccessMessage == nil)
+        #expect(!draft.ageToggleIsDirty)
+        #expect(!draft.ageValueIsDirty)
+        #expect(draft.maximumUnpinnedValueIsDirty)
+
+        load(HistoryRetentionConfiguration(
+            maximumUnpinnedItems: 42,
+            policies: HistoryRetentionPolicies(
+                age: AgeRetention(maxAge: 90_001), storage: nil, revisions: nil
+            )
+        ), into: &draft)
+        #expect(draft.countSubmission()?.maximumUnpinnedItems == 38)
+        #expect(draft.hasCountChanges)
+        #expect(draft.ageDaysText == "2")
+        #expect(draft.submission()?.policies.age?.maxAge == 90_001)
+        #expect(!draft.hasPolicyChanges)
+    }
+
+    @Test("policy completion preserves newer text in a disabled field")
+    func policyCompletionDoesNotDiscardAnUnsubmittedDisabledFieldEdit() throws {
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+        draft.setStorageEnabled(true)
+        let submission = try #require(draft.submission())
+        draft.setAgeDaysText("4")
+
+        // The policies are equal because age is disabled, but its new text
+        // remains an unsaved edit and must survive the next configured read.
+        #expect(draft.submission()?.policies == submission.policies)
+        let accepted = draft.acceptApplied(submission, successMessage: "Done.")
+        #expect(!accepted)
+        #expect(draft.ageValueIsDirty)
+
+        load(HistoryRetentionPolicies(
+            age: AgeRetention(maxAge: 90_001),
+            storage: StorageRetention(maxTotalBytes: 524_288_000),
+            revisions: nil
+        ), into: &draft)
+        #expect(draft.ageDaysText == "4")
+        #expect(draft.submission()?.policies.age?.maxAge == 345_600)
+    }
+
     @Test("a new edit clears the accepted Done generation")
     func newEditClearsAcceptedApplyState() throws {
         var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))

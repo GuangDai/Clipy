@@ -360,7 +360,7 @@ internal actor RevisionPreparationActor {
                 representations: source.canonical.representations.map(\.content)
             )
         }
-        if proposed == current {
+        if proposed.hasSameRepresentations(as: current) {
             return PreparedRevisionBundle(
                 domain: PreparedRevision(
                     candidateRevisionID: candidateRevisionID,

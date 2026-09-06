@@ -73,15 +73,6 @@ extension HistoryAuthority {
         ) else {
             throw HistoryFailure.notFound(id)
         }
-#if DEBUG
-        // PLAY-STOR-2 arranged blob accessor: this lane is about to invoke
-        // the shared lineage blob-fetch seam, which materializes the row's
-        // Canonical, revision-state, and signature blobs.
-        representationBlobFetchDebugProbe.record(
-            phase: .detailsLane,
-            blobColumns: RepresentationBlobFetchDebugProbe.lineageBlobColumnCount
-        )
-#endif
         let (item, title) = try HistoryItemRowHydration.hydrateWithTitle(row, limits: limits)
 
         // Derive current Effective Content (docs/02-domain.md §2.6).
@@ -194,14 +185,6 @@ extension HistoryAuthority {
         ) else {
             throw HistoryFailure.notFound(id)
         }
-#if DEBUG
-        // PLAY-STOR-2 arranged blob accessor: the paste lane invokes the
-        // shared lineage blob-fetch seam.
-        representationBlobFetchDebugProbe.record(
-            phase: .pasteLane,
-            blobColumns: RepresentationBlobFetchDebugProbe.lineageBlobColumnCount
-        )
-#endif
         let item = try HistoryItemRowHydration.hydrate(row, limits: limits)
 
         let effective: EffectiveContent
@@ -372,15 +355,6 @@ extension HistoryAuthority {
         guard !aggregateOverflow else {
             throw HistoryFailure.persistence(.corruptStoredValue)
         }
-#if DEBUG
-        // PLAY-STOR-2 arranged blob accessor: the thumbnail lane invokes the
-        // shared lineage blob-fetch seam (its earlier direct aggregate byte
-        // counting above stays covered by the PLAY-TIER-2A-THUMB receipt).
-        representationBlobFetchDebugProbe.record(
-            phase: .thumbnailLane,
-            blobColumns: RepresentationBlobFetchDebugProbe.lineageBlobColumnCount
-        )
-#endif
         let hydrated = try HistoryItemRowHydration.hydrate(row, limits: limits)
 
         // §9 step 2: the version fence — a reference already stale before this

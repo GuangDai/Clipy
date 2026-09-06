@@ -34,9 +34,11 @@ extension SearchWorker {
     /// `snippetLimit`; the 320-Character window capacity is derived from
     /// it, not hardcoded.
     ///
-    /// Ranges are half-open Character offsets into `body`. (A zero-length
-    /// match — possible under regexp mode — centers a window but clips
-    /// away, contributing no snippet range.)
+    /// Ranges are half-open Character offsets into `body`. When supplied,
+    /// `utf16Range` instead preserves an exact/regexp engine's original match
+    /// and derives its enclosing Characters only to position the window.
+    /// A zero-length regexp match centers a window but clips away,
+    /// contributing no snippet range.
     ///
     /// Internal only so direct `@testable` worked examples can pin this frozen
     /// pure algorithm independently of the SwiftData/Fuse integration proof.
@@ -44,10 +46,17 @@ extension SearchWorker {
         body: String,
         characterRanges: [Range<Int>],
         snippetLimit: Int,
-        bodySuffixWasOmitted: Bool = false
+        bodySuffixWasOmitted: Bool = false,
+        utf16Range: UTF16TextRange? = nil
     ) -> (snippet: String, ranges: [UTF16TextRange]) {
         let windowCapacity = snippetLimit - 2
-        let sortedRanges = characterRanges.sorted {
+        // Exact/regexp matches can end inside an extended grapheme cluster.
+        // Character coordinates choose the intact text window (03b §8), but
+        // the original UTF-16 range remains the highlight's source of truth.
+        let windowRanges = utf16Range.map {
+            [enclosingCharacterRange(for: $0, in: body)]
+        } ?? characterRanges
+        let sortedRanges = windowRanges.sorted {
             $0.lowerBound < $1.lowerBound
         }
 
@@ -191,6 +200,20 @@ extension SearchWorker {
             snippet.append("…")
         }
 
+        if let utf16Range {
+            let windowStart = windowLowerIndex.utf16Offset(in: body)
+            let lower = max(utf16Range.location, windowStart)
+            let upper = min(
+                utf16Range.location + utf16Range.length,
+                windowUpperIndex.utf16Offset(in: body)
+            )
+            let ranges = lower < upper ? [UTF16TextRange(
+                location: lower - windowStart + (hasLeadingEllipsis ? 1 : 0),
+                length: upper - lower
+            )] : []
+            return (snippet, ranges)
+        }
+
         // Clip to the window, then convert to UTF-16 offsets into the
         // final snippet, shifting right by the leading ellipsis only when
         // present (03b §8 steps 5–6).
@@ -214,6 +237,36 @@ extension SearchWorker {
             )
         }
         return (snippet, ranges)
+    }
+
+    /// Expand only the window anchor to complete Characters. Keep an empty
+    /// regexp match empty so it selects context without highlighting text.
+    /// This walks only through the match, without allocating a body buffer.
+    private static func enclosingCharacterRange(
+        for range: UTF16TextRange,
+        in text: String
+    ) -> Range<Int> {
+        var index = text.startIndex
+        var characterOffset = 0
+        var utf16Offset = 0
+        while index != text.endIndex {
+            let next = text.index(after: index)
+            let nextUTF16Offset = utf16Offset + text[index..<next].utf16.count
+            if nextUTF16Offset > range.location { break }
+            index = next
+            utf16Offset = nextUTF16Offset
+            characterOffset += 1
+        }
+        let lower = characterOffset
+        if range.length == 0 { return lower..<lower }
+        let end = range.location + range.length
+        while index != text.endIndex, utf16Offset < end {
+            let next = text.index(after: index)
+            utf16Offset += text[index..<next].utf16.count
+            index = next
+            characterOffset += 1
+        }
+        return lower..<characterOffset
     }
 
     /// Materializes at most `maximumCharacters` and reports whether the

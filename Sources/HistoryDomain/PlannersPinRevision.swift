@@ -247,9 +247,9 @@ package func planRevision(
 
     // §11 step 5 (§2.5 rule 7): a proposed revision byte-equal to current
     // Effective Content is a no-op — no redundant revision, commit, version,
-    // or invalidation. Both sides are normalized, so array equality is byte
-    // equality.
-    guard prepared.proposedContent != current else {
+    // or invalidation. Compare representation sets because equivalent type
+    // identifier spellings can change their normalized scalar order (§2.1).
+    guard !prepared.proposedContent.hasSameRepresentations(as: current) else {
         return .unchanged
     }
 

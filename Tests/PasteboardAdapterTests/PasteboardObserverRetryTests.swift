@@ -5,7 +5,6 @@
 import AppKit
 import Foundation
 import HistoryCore
-import Synchronization
 import Testing
 @testable import PasteboardAdapter
 
@@ -72,7 +71,12 @@ private func replaceString(
 @Test @MainActor
 func observerRetriesChangedFreezeOnceAndEmitsOnlyStableCompleteOutcome() throws {
     let pasteboard = makeRetryPasteboard()
+    defer { pasteboard.releaseGlobally() }
     replaceString(on: pasteboard, with: "old-generation")
+    #expect(pasteboard.setData(
+        Data("<b>old-generation</b>".utf8),
+        forType: NSPasteboard.PasteboardType("public.html")
+    ))
 
     var payloadReads = 0
     var replacedInitialGeneration = false
@@ -91,6 +95,8 @@ func observerRetriesChangedFreezeOnceAndEmitsOnlyStableCompleteOutcome() throws 
 
     #expect(received.count == 1)
     let outcome = try #require(received.first)
+    // One old payload discovers the ownership change; only the new single
+    // representation is read by the retry. The old sibling stays unread.
     #expect(payloadReads == 2)
     guard case let .complete(value) = outcome else {
         Issue.record("expected the stable retry to be the only complete outcome")
@@ -139,13 +145,13 @@ func observerStopsAfterOneRetryAndEmitsOneTerminalContentFreeOutcome() throws {
 func observerChecksRevocationBeforeReadingChangedPasteboardItems() {
     let pasteboard = makeRetryPasteboard()
     replaceString(on: pasteboard, with: "allowed-generation")
-    let accessBehavior = Mutex(PasteboardAccessBehavior.allowed)
+    var accessBehavior = PasteboardAccessBehavior.allowed
     var payloadReads = 0
     var adapter = PasteboardAdapter(pasteboard: pasteboard)
     adapter.payloadReadObserver = { _ in payloadReads += 1 }
     let observer = PasteboardObserver(adapter: adapter)
     observer.setAccessBehaviorProviderForTesting {
-        accessBehavior.withLock { $0 }
+        accessBehavior
     }
     var accessEvents: [PasteboardAccessBehavior] = []
     var received: [CaptureOutcome] = []
@@ -159,7 +165,7 @@ func observerChecksRevocationBeforeReadingChangedPasteboardItems() {
     #expect(payloadReads == 1)
     #expect(received.count == 1)
 
-    accessBehavior.withLock { $0 = .denied }
+    accessBehavior = .denied
     replaceString(on: pasteboard, with: "denied-generation")
     observer.pollForTesting()
 

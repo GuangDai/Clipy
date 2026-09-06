@@ -237,6 +237,7 @@ internal extension HistoryAuthority {
         let sliceIsFull = rows.count == fetchDepth
 
         let needsFullFetch: Bool
+        var earliestRequiredDate: Date?
         if !sliceIsFull {
             // Fewer rows than the fetch limit proves the complete bounded lane
             // is already present; anchor validation remains the caller's job.
@@ -255,6 +256,9 @@ internal extension HistoryAuthority {
                 // can no longer prove page+lookahead completeness even when
                 // its final two store-level dates differ (V1V-03B-001).
                 needsFullFetch = anchorIndex > 0 || pageBoundaryTies
+                if anchorIndex == 0, pageBoundaryTies {
+                    earliestRequiredDate = orderedSlice[pageLimit + 1].lastCopiedAt
+                }
             } else {
                 // A full date-bounded slice can omit the anchor when a large
                 // same-date group is returned in an unspecified store order.
@@ -264,12 +268,34 @@ internal extension HistoryAuthority {
         } else {
             needsFullFetch = orderedSlice[pageLimit - 1].lastCopiedAt
                 == orderedSlice[pageLimit].lastCopiedAt
+            if needsFullFetch {
+                earliestRequiredDate = orderedSlice[pageLimit].lastCopiedAt
+            }
         }
 
         let source: [HistoryItemRow]
         if needsFullFetch {
             var descriptor: FetchDescriptor<HistoryItemRow>
-            if let anchorDate {
+            // A complete page plus lookahead already proves that older dates
+            // cannot enter this page. Expand only its boundary's entire date
+            // group, preserving the UUID tie order without fetching cold
+            // history (05 §14.1). A missing/preceded continuation anchor has
+            // no such completeness proof and retains the full bounded lane.
+            if let earliestRequiredDate, let anchorDate {
+                descriptor = FetchDescriptor<HistoryItemRow>(
+                    predicate: #Predicate {
+                        $0.pinOrdinal == nil
+                            && $0.lastCopiedAt <= anchorDate
+                            && $0.lastCopiedAt >= earliestRequiredDate
+                    }
+                )
+            } else if let earliestRequiredDate {
+                descriptor = FetchDescriptor<HistoryItemRow>(
+                    predicate: #Predicate {
+                        $0.pinOrdinal == nil && $0.lastCopiedAt >= earliestRequiredDate
+                    }
+                )
+            } else if let anchorDate {
                 descriptor = FetchDescriptor<HistoryItemRow>(
                     predicate: #Predicate { $0.pinOrdinal == nil && $0.lastCopiedAt <= anchorDate }
                 )

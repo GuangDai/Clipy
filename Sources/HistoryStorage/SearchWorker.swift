@@ -364,7 +364,8 @@ internal actor SearchWorker {
             case .bodyExcerpt(
                 let characterRanges,
                 let maximumCharacters,
-                let bodySuffixWasOmitted
+                let bodySuffixWasOmitted,
+                let utf16Range
             ):
                 let excerpt: (snippet: String, ranges: [UTF16TextRange])
                 if let maximumCharacters {
@@ -378,7 +379,8 @@ internal actor SearchWorker {
                         body: String(scan.text),
                         characterRanges: characterRanges,
                         snippetLimit: limits.maximumBodySearchSnippetCharacters,
-                        bodySuffixWasOmitted: bodySuffixWasOmitted
+                        bodySuffixWasOmitted: bodySuffixWasOmitted,
+                        utf16Range: utf16Range
                     )
                 } else {
                     // Exact mode windows the complete bounded projection.
@@ -386,7 +388,8 @@ internal actor SearchWorker {
                         body: corpusRow.searchBody,
                         characterRanges: characterRanges,
                         snippetLimit: limits.maximumBodySearchSnippetCharacters,
-                        bodySuffixWasOmitted: bodySuffixWasOmitted
+                        bodySuffixWasOmitted: bodySuffixWasOmitted,
+                        utf16Range: utf16Range
                     )
                 }
                 search = SearchPresentation(

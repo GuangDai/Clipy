@@ -150,7 +150,8 @@ public struct PasteboardAdapter {
     ///   Concealed and unsupported-shape outcomes are likewise intentionally
     ///   empty and cannot masquerade as admissible content.
     /// - The pasteboard `changeCount` is recorded before metadata access and
-    ///   after the last payload read. A mismatch produces an explicit
+    ///   checked after each payload read. A mismatch stops further reads of
+    ///   the superseded item and produces an explicit
     ///   changed-during-read outcome containing no representations. It is a
     ///   retry signal, not an unavailable-type diagnosis.
     public func captureOutcome(observedAt: Date = Date()) -> CaptureOutcome? {
@@ -219,6 +220,17 @@ public struct PasteboardAdapter {
                 forType: NSPasteboard.PasteboardType(typeIdentifier)
             )
             #endif
+            // A promised-data accessor may yield to another pasteboard
+            // owner (REVIEW Card 5B). Once this generation is superseded,
+            // none of its remaining payloads can enter the freeze; avoid
+            // invoking more synchronous providers before the one retry.
+            let currentChangeCount = pasteboard.changeCount
+            guard startChangeCount == currentChangeCount else {
+                return changedDuringReadOutcome(
+                    startChangeCount: startChangeCount,
+                    endChangeCount: currentChangeCount
+                )
+            }
             if typeIdentifier == PasteboardLineageHint.typeIdentifier {
                 lineageHint = data.flatMap(PasteboardLineageHint.decode)
                 continue

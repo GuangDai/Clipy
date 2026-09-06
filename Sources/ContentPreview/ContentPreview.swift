@@ -488,7 +488,10 @@ private enum PreviewTextCodec: Sendable {
     func decode(_ bytes: Data) -> String? {
         switch self {
         case .declared(.utf8):
-            return String(data: bytes, encoding: .utf8)
+            // Preserve every source scalar, including a leading U+FEFF.
+            // Foundation's encoding initializer consumes a UTF-8 signature,
+            // changing the exact selectable prefix required by 06 §5.
+            return String(validating: bytes, as: UTF8.self)
         case .declared(.nativeUTF16), .declared(.externalUTF16):
             // Foundation can decode a valid prefix while ignoring an odd
             // trailing byte. A UTF-16 preview requires complete code units.

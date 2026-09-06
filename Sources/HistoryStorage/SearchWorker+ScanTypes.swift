@@ -17,7 +17,8 @@ extension SearchWorker {
     /// - `titleRanges` defers the fuzzy title UTF-16 translation to page
     ///   materialization;
     /// - `bodyExcerpt` defers the 03b §8 body excerpt window, recording the
-    ///   matched Character ranges, the lane's scan-prefix bound (`nil`
+    ///   matched Character ranges (Fuse) or the original UTF-16 range
+    ///   (exact/regexp), the lane's scan-prefix bound (`nil`
     ///   windows the full stored body in exact mode), and whether the
     ///   stored body continued past that prefix.
     internal enum DeferredSearchPresentation {
@@ -26,7 +27,8 @@ extension SearchWorker {
         case bodyExcerpt(
             characterRanges: [Range<Int>],
             maximumCharacters: Int?,
-            bodySuffixWasOmitted: Bool
+            bodySuffixWasOmitted: Bool,
+            utf16Range: UTF16TextRange? = nil
         )
     }
 

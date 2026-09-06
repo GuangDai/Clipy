@@ -1406,11 +1406,25 @@ struct HistoryViewStateTests {
         state.deactivate()
     }
 
-    /// The embedded editor's receipt continuation must retarget its Details
+    /// Save and both Revert actions must retarget their Details
     /// owner before the matching revision purge becomes observable. This is
     /// the sole ordering difference from ordinary `revise`; the same receipt
     /// and exact purge are still published afterward.
-    @Test func editorReceivesCommittedReferenceBeforeRevisionPurge() async throws {
+    @Test(arguments: [
+        RevisionIntent.replace(RevisionDraft(decisions: [
+            RevisionDecision(
+                typeIdentifier: "public.utf8-plain-text",
+                action: .replace(bytes: Data("v2".utf8))
+            )
+        ])),
+        .revert(to: .canonical),
+        .revert(to: .revision(RevisionID(rawValue: UUID(
+            uuidString: "00000000-0000-0000-0000-000000009B14"
+        )!)))
+    ])
+    func detailsReceivesCommittedReferenceBeforeRevisionPurge(
+        intent: RevisionIntent
+    ) async throws {
         let itemID = HistoryItemID(
             rawValue: UUID(
                 uuidString: "00000000-0000-0000-0000-000000009B13"
@@ -1436,21 +1450,17 @@ struct HistoryViewStateTests {
         let request = RevisionRequest(
             itemID: itemID,
             expected: old.contentVersion,
-            intent: .replace(
-                RevisionDraft(decisions: [
-                    RevisionDecision(
-                        typeIdentifier: "public.utf8-plain-text",
-                        action: .replace(bytes: Data("v2".utf8))
-                    )
-                ])
-            )
+            intent: intent
         )
         var callbackReference: HistoryItemReference?
         var callbackSawPublishedPurge = true
+        var detailsFence = HistoryDetailsLoadFence()
+        let priorLoad = try #require(detailsFence.begin())
 
-        _ = try await state.reviseFromEditor(request) { reference in
+        _ = try await state.reviseKeepingDetails(request) { reference in
             callbackReference = reference
             callbackSawPublishedPurge = state.surfacePurge != nil
+            #expect(detailsFence.advanceReference(from: old, to: reference))
         }
 
         #expect(callbackReference == current)
@@ -1458,6 +1468,18 @@ struct HistoryViewStateTests {
         #expect(
             state.surfacePurge?.scope == .revision(old: old, new: current)
         )
+        // The initiating details surface survives its own content purge and
+        // can load the new revision, while an old in-flight read is retired.
+        #expect(detailsFence.reconcile(state.surfacePurge, item: current) == nil)
+        #expect(!detailsFence.isPurged)
+        #expect(!detailsFence.owns(priorLoad))
+        let currentLoad = try #require(detailsFence.begin())
+        #expect(detailsFence.accepts(
+            currentLoad,
+            returned: current,
+            expected: current,
+            isCancelled: false
+        ))
     }
 
     /// A retention expansion may delete rows or prune revision bytes while

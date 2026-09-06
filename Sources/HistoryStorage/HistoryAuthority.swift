@@ -300,13 +300,6 @@ internal actor HistoryAuthority {
     /// retaining a logger, context, or row across Authority operations.
     internal var storageLifecycleDebugProbe = StorageLifecycleDebugProbe
         .environmentConfigured()
-
-    /// Opt-in representation-blob fetch counting at the lineage-hydration
-    /// seam (PLAY-STOR-2 characterization). This field and every call site
-    /// are absent from Release builds; tests may replace the
-    /// environment-backed stderr probe with an in-memory sink.
-    internal var representationBlobFetchDebugProbe = RepresentationBlobFetchDebugProbe
-        .environmentConfigured()
 #endif
 
     /// The singleton row's well-known key (§3.2: always "retained-history").
@@ -364,15 +357,6 @@ internal actor HistoryAuthority {
         _ probe: StorageLifecycleDebugProbe
     ) {
         storageLifecycleDebugProbe = probe
-    }
-
-    /// Installs a Debug-only representation-blob fetch counter for
-    /// supported-platform characterization and diagnostics. The probe is a
-    /// Sendable value with a synchronous sink.
-    internal func setRepresentationBlobFetchDebugProbe(
-        _ probe: RepresentationBlobFetchDebugProbe
-    ) {
-        representationBlobFetchDebugProbe = probe
     }
 #endif
 

@@ -683,6 +683,9 @@ Within one Authority interval:
   is ordered by `(lastCopiedAt DESC, id ASC)` and re-fetched up to the hard
   retained-item bound when consumed same-date rows contaminate the slice head,
   the anchor is absent, or the true page/lookahead boundary ties;
+- when the slice already contains the anchor (if any), a complete page, and
+  lookahead, a tie re-fetch includes only dates through the lookahead date,
+  expanding that complete tie group without materializing older history;
 - return a value `HistoryPage` and opaque cursor.
 
 No Canonical/revision blob is decoded.

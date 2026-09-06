@@ -593,12 +593,12 @@ public final class HistoryViewState {
         try await performRevision(request, beforePurge: nil)
     }
 
-    /// The embedded editor must hand its receipt-minted exact reference to
-    /// the Details owner before this state publishes the corresponding purge.
+    /// A details-owned edit or revert must hand its receipt-minted exact
+    /// reference to the Details owner before publishing the corresponding purge.
     /// That ordering prevents the old-reference surface from being retired in
     /// the same MainActor turn, while every other revise caller keeps the
     /// ordinary purge behavior above.
-    package func reviseFromEditor(
+    package func reviseKeepingDetails(
         _ request: RevisionRequest,
         onCommittedReference:
             @escaping @MainActor (HistoryItemReference) -> Void

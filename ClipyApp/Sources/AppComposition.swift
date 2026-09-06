@@ -603,9 +603,24 @@ final class AppComposition {
         captureTask = nil
         activeCaptureBytes = 0
         publishCaptureHealthIfChanged()
+        cancelPendingPaste()
+    }
+
+    /// Card 7/14: Copy belongs to the panel session that admitted it. Closing
+    /// that session retires an unresolved payload before it can overwrite the
+    /// pasteboard or close a subsequently reopened panel. The existing
+    /// post-read cancellation check precedes the synchronous MainActor write;
+    /// cancellation never attempts to undo an already completed write.
+    func cancelPendingPaste() {
         pasteTask?.cancel()
         pasteTask = nil
     }
+
+#if DEBUG
+    /// Lets hosted tests join the exact cancelled task after its deliberately
+    /// non-cooperative History read returns, without scheduler-turn guesses.
+    var pendingPasteForTesting: Task<Void, Never>? { pasteTask }
+#endif
 
     /// Card 14C: apply the AppDelegate-owned power/login-session facts without
     /// changing the user's access/Pause choice. Becoming inactive stops new

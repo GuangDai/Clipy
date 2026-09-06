@@ -271,6 +271,50 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
             timeout: 10,
             message: "Committed v3 Save did not keep current authored Details open."
         ) else { return }
+
+        // The Details Revert controls use the same commit-before-purge
+        // ordering as Save. Exercise both controls through their real wiring:
+        // neither restore may dismiss Details as though the item was removed.
+        try clickDetailsButton("Revert to Original", in: app)
+        guard assertEventually(
+            {
+                detailsTitle.exists
+                    && self.accessibilityText(of: detailsTitle)
+                        == "clipy-editor-stale-original"
+                    && !app.staticTexts["Item Removed"].exists
+            },
+            in: app,
+            timeout: 10,
+            message: "Restoring Canonical content did not keep updated Details open."
+        ) else { return }
+
+        try clickDetailsButton("Revert to \(competingRevision)", in: app)
+        guard assertEventually(
+            {
+                detailsTitle.exists
+                    && self.accessibilityText(of: detailsTitle) == self.competingRevision
+                    && !app.staticTexts["Item Removed"].exists
+            },
+            in: app,
+            timeout: 10,
+            message: "Restoring a retained revision did not keep updated Details open."
+        ) else { return }
+
+        // Copy resolves current Effective Content from the real store after
+        // both restores, independently of the title shown by the Details UI.
+        let copy = editorDetailsDialog(in: app).buttons["Copy to Clipboard"]
+        guard assertEventually(
+            { copy.exists && copy.isEnabled && copy.isHittable },
+            in: app,
+            message: "Restored Details did not remain copyable."
+        ) else { return }
+        copy.click()
+        _ = assertEventually(
+            { NSPasteboard.general.data(forType: .string) == Data(self.competingRevision.utf8) },
+            in: app,
+            timeout: 10,
+            message: "Copy after both restores did not return the selected revision's bytes."
+        )
     }
 
     /// Card 3C: Esc and Cancel enter the same dirty-dismiss alert. Keeping
@@ -515,6 +559,36 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
     }
 
     // MARK: - Evidence helpers
+
+    /// Grouped Forms retain offscreen AX children. Scroll the owning Details
+    /// Form until its real control is visible, as in the Details image journey.
+    @MainActor
+    private func clickDetailsButton(_ label: String, in app: XCUIApplication) throws {
+        let details = app.descendants(matching: .any)["clipy.details.root"]
+        let button = details.buttons[label]
+        guard assertEventually(
+            { button.exists && button.isEnabled },
+            in: app,
+            message: "Details did not expose enabled \(label)."
+        ) else { throw JourneyFailure.precondition }
+        let scrollView = try XCTUnwrap(details.scrollViews.allElementsBoundByIndex.first {
+            $0.buttons[label].exists
+        })
+        let coordinate = scrollView.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
+        )
+        for _ in 0..<8 {
+            if button.isHittable && scrollView.frame.contains(button.frame) { break }
+            let deltaY: CGFloat = button.frame.midY < scrollView.frame.midY ? 50 : -50
+            coordinate.scroll(byDeltaX: 0, deltaY: deltaY)
+        }
+        guard assertEventually(
+            { button.isHittable && scrollView.frame.contains(button.frame) },
+            in: app,
+            message: "Details could not scroll \(label) into view."
+        ) else { throw JourneyFailure.precondition }
+        button.click()
+    }
 
     private enum JourneyFailure: Error {
         case precondition
