@@ -81,6 +81,9 @@ struct RepresentationExportHostedTests {
     func suggestedNamesUseKnownExtensionsAndOpaqueFallback() {
         #expect(RepresentationExporter.suggestedFileName(for: "public.png").hasSuffix(".png"))
         #expect(RepresentationExporter.suggestedFileName(for: "public.utf8-plain-text").hasSuffix(".txt"))
+        #expect(RepresentationExporter.suggestedFileName(for: "public.plain-text").hasSuffix(".txt"))
+        #expect(RepresentationExporter.suggestedFileName(for: "public.utf16-plain-text").hasSuffix(".txt"))
+        #expect(RepresentationExporter.suggestedFileName(for: "public.utf16-external-plain-text").hasSuffix(".txt"))
         #expect(RepresentationExporter.suggestedFileName(for: "com.example.unknown").hasSuffix(".bin"))
     }
 }
