@@ -1455,12 +1455,14 @@ struct HistoryViewStateTests {
         var callbackReference: HistoryItemReference?
         var callbackSawPublishedPurge = true
         var detailsFence = HistoryDetailsLoadFence()
-        let priorLoad = try #require(detailsFence.begin())
+        let priorLoadRequest = detailsFence.begin()
+        let priorLoad = try #require(priorLoadRequest)
 
         _ = try await state.reviseKeepingDetails(request) { reference in
             callbackReference = reference
             callbackSawPublishedPurge = state.surfacePurge != nil
-            #expect(detailsFence.advanceReference(from: old, to: reference))
+            let advanced = detailsFence.advanceReference(from: old, to: reference)
+            #expect(advanced)
         }
 
         #expect(callbackReference == current)
@@ -1473,7 +1475,8 @@ struct HistoryViewStateTests {
         #expect(detailsFence.reconcile(state.surfacePurge, item: current) == nil)
         #expect(!detailsFence.isPurged)
         #expect(!detailsFence.owns(priorLoad))
-        let currentLoad = try #require(detailsFence.begin())
+        let currentLoadRequest = detailsFence.begin()
+        let currentLoad = try #require(currentLoadRequest)
         #expect(detailsFence.accepts(
             currentLoad,
             returned: current,
