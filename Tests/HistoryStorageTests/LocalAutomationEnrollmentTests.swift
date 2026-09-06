@@ -27,7 +27,7 @@ struct LocalAutomationEnrollmentTests {
         let enabled = try await fixture.ingress.enable(clientDirectory: fixture.directory)
         let connection = try #require(enabled.connection)
         #expect(enabled.grants.isEmpty)
-        let bytes = try #require(fixture.custody.loadCredential())
+        let bytes = try #require(try fixture.custody.loadCredential())
         #expect(try await fixture.credentials.loadCredential(for: connection) == bytes)
         #expect(try await fixture.ingress.enable(clientDirectory: fixture.directory) == enabled)
         #expect(try fixture.custody.loadCredential() == bytes)
@@ -41,7 +41,7 @@ struct LocalAutomationEnrollmentTests {
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let enabled = try await fixture.ingress.enable(clientDirectory: fixture.directory)
         let connection = try #require(enabled.connection)
-        let bytes = try #require(fixture.custody.loadCredential())
+        let bytes = try #require(try fixture.custody.loadCredential())
         let capabilities: [ExternalCapability] = [.browsePreview, .readEffectiveContent, .organize, .deleteItem]
         for capability in capabilities {
             let granted = try await fixture.ingress.setCapability(
@@ -114,7 +114,7 @@ struct LocalAutomationEnrollmentTests {
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let enabled = try await fixture.ingress.enable(clientDirectory: fixture.directory)
         let connection = try #require(enabled.connection)
-        let bytes = try #require(fixture.custody.loadCredential())
+        let bytes = try #require(try fixture.custody.loadCredential())
         try FileManager.default.removeItem(at: fixture.custody.credentialFileURL)
         try FileManager.default.createDirectory(at: fixture.custody.credentialFileURL, withIntermediateDirectories: false)
         let revoked = try await fixture.ingress.revoke(clientDirectory: fixture.directory)
