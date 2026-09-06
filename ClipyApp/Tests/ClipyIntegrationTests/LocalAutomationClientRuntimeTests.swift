@@ -8,7 +8,8 @@ import XCTest
 @testable import ClipyApp
 
 /// Actual bundled processes against the app's listener and sole History
-/// writer. Only the unavailable unsigned-runner Keychain calls are replaced.
+/// writer. Credential calls use a deterministic fixture here; the separate
+/// LocalAutomationKeychainHostedTests exercise the actual Keychain store.
 /// XCTest runs these cases serially; occupied production paths are skipped
 /// rather than modifying a developer's existing automation installation.
 @MainActor

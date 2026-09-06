@@ -9,7 +9,14 @@ struct LocalAutomationKeychainHostedTests {
     /// entitlement/signature changes or injected operations are involved.
     /// Unsupported access is a failure, not a skipped or simulated success.
     @Test func productionCredentialStorePersistsAndDeletesInTheAppHost() async throws {
-        let connection = ExternalConnectionID(rawValue: UUID())
+        // The app host is outside the Swift package and cannot mint package-
+        // scoped connection IDs. An isolated in-memory store's public admin
+        // read supplies its freshly generated bootstrap UUID without exposing
+        // a constructor or depending on successful credential enrollment.
+        let history = try await SwiftDataHistory.open(
+            configuration: HistoryConfiguration(persistence: .memory)
+        )
+        let connection = try #require(try await history.connections().first).id
         let credential = try LocalAutomationCredential(
             connection: connection, secret: Data((0..<32).map { UInt8($0) })
         )

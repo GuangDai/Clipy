@@ -7,8 +7,8 @@ struct HistoryDetailsExportTests {
     @Test(arguments: [false, true]) @MainActor
     func lateNoncooperativeFailureCannotPublishAfterDetailsRetires(cancelTask: Bool) async throws {
         let reference = HistoryItemReference(id: HistoryItemID(rawValue: UUID()), contentVersion: .initial)
-        var fence = HistoryDetailsLoadFence()
-        let loadRequest = fence.begin()
+        let fixture = ExportLoadFixture()
+        let loadRequest = fixture.fence.begin()
         let generation = try #require(loadRequest)
         var release: CheckedContinuation<Result<Void, RepresentationExportFailure>, Never>?
         var displayedFailure: RepresentationExportFailure?
@@ -16,7 +16,7 @@ struct HistoryDetailsExportTests {
             // This suspension deliberately ignores cancellation, like an
             // exporter whose underlying filesystem callback finishes late.
             let result = await withCheckedContinuation { release = $0 }
-            guard fence.accepts(
+            guard fixture.fence.accepts(
                 generation, returned: reference, expected: reference,
                 isCancelled: Task.isCancelled
             ) else { return }
@@ -27,7 +27,7 @@ struct HistoryDetailsExportTests {
         if cancelTask {
             request.cancel()
         } else {
-            let purged = fence.purge(.item(reference.id), item: reference)
+            let purged = fixture.fence.purge(.item(reference.id), item: reference)
             #expect(purged)
         }
         continuation.resume(returning: .failure(.writeFailed))
@@ -69,4 +69,9 @@ struct HistoryDetailsExportTests {
         #expect(ContentBasis.effective.representation(typeIdentifier: opaqueType, in: snapshot) == nil)
         #expect(ContentBasis.effective.representation(typeIdentifier: emptyType, in: snapshot) == nil)
     }
+}
+
+@MainActor
+private final class ExportLoadFixture {
+    var fence = HistoryDetailsLoadFence()
 }
