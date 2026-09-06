@@ -1,6 +1,7 @@
 /// SmokeMeasurementTests — the measurement-hook smoke journeys the perf
-/// work will hang its budgets on: corpus MEMORY LOADING, RENDER-SPEED timing
-/// capture, and the PREVIEW pane
+/// work will hang its budgets on: corpus MEMORY LOADING, PANEL PAGE-ARRIVAL
+/// timing capture (HistoryViewState row/page arrival, not NSHostingView
+/// frame timing), and the PREVIEW pane
 /// end-to-end. Each test proves the behavioral path against the real
 /// composed stack (real `SwiftDataHistory`, real `HistoryViewState`,
 /// `ThumbnailStore`, `PreviewPaneState`) and prints its measurements as
@@ -21,7 +22,7 @@ import Testing
 
 /// `.serialized`: the RSS probes read PROCESS-wide resident memory, so
 /// these tests must not overlap each other (or their seeding phases).
-@Suite("Smoke measurement hooks (loading / render / preview)", .serialized)
+@Suite("Smoke measurement hooks (loading / page arrival / preview)", .serialized)
 struct SmokeMeasurementTests {
 
     // MARK: - Memory loading (corpus browse)
@@ -89,15 +90,16 @@ struct SmokeMeasurementTests {
         )
     }
 
-    // MARK: - Render speed (record-only timings)
+    // MARK: - Panel page arrival (record-only timings)
 
-    /// Render-speed smoke: times first-page materialization and every page
-    /// turn over a 120-item corpus, then records the samples. Nothing is
-    /// asserted beyond convergence — this is the harness the future
-    /// render-budget lane reads (Part VI §9 owns hard budgets; the UI-side
-    /// NSHostingView frame timing lands with that lane, not here).
+    /// Panel page-arrival smoke: times first-page materialization and every
+    /// page turn over a 120-item corpus as HistoryViewState row arrivals,
+    /// then records the samples. Nothing is asserted beyond convergence —
+    /// this is the harness the future render-budget lane reads (Part VI §9
+    /// owns hard budgets; the UI-side NSHostingView frame timing lands with
+    /// that lane, not here).
     @Test @MainActor
-    func renderSpeedSmoke() async throws {
+    func panelPageArrivalTimingSmoke() async throws {
         let history = try await ComposedSupport.openMemoryHistory()
         let base = Date(timeIntervalSinceReferenceDate: 700_204_200)
         let itemCount = 120
@@ -121,7 +123,7 @@ struct SmokeMeasurementTests {
             viewState.rows.count == 50
         }
         let firstPageMs = milliseconds(clock.now - activateStart)
-        #expect(firstPage, "render smoke: the first page converges")
+        #expect(firstPage, "page-arrival smoke: the first page converges")
 
         var pageTurnMs: [Double] = []
         while viewState.hasNextPage {
@@ -132,7 +134,7 @@ struct SmokeMeasurementTests {
                 viewState.rows.count == expected
             }
             pageTurnMs.append(milliseconds(clock.now - turnStart))
-            #expect(paged, "render smoke: a page turn converges")
+            #expect(paged, "page-arrival smoke: a page turn converges")
         }
         #expect(viewState.rows.count == itemCount)
         #expect(viewState.failure == nil)
@@ -144,7 +146,7 @@ struct SmokeMeasurementTests {
         for (index, sample) in pageTurnMs.enumerated() {
             fields["pageTurnMs.\(index)"] = sample
         }
-        SmokeMeasurement.record(name: "renderSpeed", fields: fields)
+        SmokeMeasurement.record(name: "panelPageArrival", fields: fields)
     }
 
     // MARK: - Preview pane

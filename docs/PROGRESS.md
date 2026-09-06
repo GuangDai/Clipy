@@ -871,7 +871,8 @@ test.
   `SmokeMeasurementTests`):** thumbnail-cache memory eviction (deterministic
   entry-count proof at an injected ceiling of 3: six inserts leave exactly
   two entries), corpus memory loading (RSS bounded across a full 150-item
-  page-through), render-speed first-page/page-turn timing capture, and the
+  page-through), panel page-arrival first-page/page-turn timing capture
+  (HistoryViewState row arrival, not NSHostingView frame timing), and the
   preview pane end-to-end over the real facade. Measurements print as
   grep-able `clipy.smoke.measurement` JSON lines — recorded, never asserted.
   `PanelAndHotKeyTests` proves the origin geometry over synthetic screen
