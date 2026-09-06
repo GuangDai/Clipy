@@ -40,7 +40,8 @@ struct RecentBoundaryTieFetchTests {
         if withNewestSingleton {
             let first = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 1))
             seen.append(contentsOf: first.rows.map(\.item.id))
-            cursor = try #require(first.next)
+            let next = try #require(first.next)
+            cursor = next
         }
 
         let (events, continuation) = AsyncStream<StorageLifecycleDebugEvent>.makeStream()
@@ -66,7 +67,8 @@ struct RecentBoundaryTieFetchTests {
         #expect(fallbackCounts == [withNewestSingleton ? 6 : 5])
         #expect(page.rows.map(\.item.id) == [expected[seen.count]])
         seen.append(contentsOf: page.rows.map(\.item.id))
-        cursor = try #require(page.next)
+        let next = try #require(page.next)
+        cursor = next
 
         for _ in 0..<captured.count {
             let nextPage = try await history.browse(HistoryBrowseRequest(
