@@ -1,4 +1,4 @@
-/// M1.3 — the retention-expansion config bootstrap: load-or-create exactly
+/// Retention-expansion config bootstrap: load-or-create exactly
 /// one `RetentionExpansionConfigRow` and validate it fail-closed.
 /// Owning spec: `V2-02` §3.3 (`RetentionExpansionConfigRow` singleton,
 /// `configSchemaVersion` contract) and §8.3 (the policy bounds); open order:
@@ -12,9 +12,9 @@
 /// `.persistence(.openStore)` (§2's startup vocabulary). Startup fetches the
 /// complete singleton table: a wrong/extra key or duplicate row is
 /// `.persistence(.invariantViolation)`, never absence followed by repair.
-/// Migration never creates this row (`V2-02` §3.3 Stage topology / Record 5:
-/// data bootstrap is `open`, not migration), so a genuinely absent row stays
-/// the migration-compatible create-with-defaults path.
+/// Defaults are created only at position zero before any retained history, byte-accounting,
+/// Gateway, or journal facts exist. Missing config in a populated store is
+/// corruption, never an invitation to replace the user's policy with defaults.
 import Foundation
 import HistoryCore
 import SwiftData
@@ -132,11 +132,9 @@ extension HistoryAuthority {
     /// Bootstraps/validates the retention-expansion config singleton
     /// (`V2-roadmap` §5 total open order step 5, M1.3).
     ///
-    /// Per `V2-02` §3.3: "A migrated v1 store has no
-    /// `RetentionExpansionConfigRow`; `SwiftDataHistory.open` creates it with
-    /// all policies disabled ... so a migrated store starts v1-faithful" —
-    /// an absent row is the only create-with-defaults path, never a version
-    /// mismatch. A present row is validated as one unit and fails closed:
+    /// An absent row is created with disabled policies only for empty current
+    /// history before later startup owners have durable facts. A present row
+    /// is validated as one unit and fails closed:
     ///
     /// - `configSchemaVersion != 1` → `.persistence(.corruptStoredValue)`
     ///   (forward-incompatible; the codec-discipline analog of an unknown
@@ -157,14 +155,10 @@ extension HistoryAuthority {
     /// `.persistence(.openStore)` — §2's startup failure vocabulary, which
     /// does not include `.transaction`.
     ///
-    /// DATA-1 evidence ceiling: a genuine V1/V2 store migrated to the V3
-    /// schema but awaiting this bootstrap has empty Gateway tables. That
-    /// shape remains indistinguishable from an earlier store whose config was
-    /// deleted before X.3 bootstrap, so it remains migration-compatible. Any
-    /// Gateway fact proves post-X3 durable state, and any HCR fact proves
-    /// post-V4 durable state; either makes absence an invariant violation.
-    /// No provenance marker is introduced; the fully empty causal ambiguity
-    /// remains. A present wrong-key row is never treated as absence.
+    /// A history item, retained-byte row, Gateway fact, or HCR fact makes
+    /// absence an invariant violation. A present wrong-key row is likewise
+    /// never treated as absence. These checks inspect current store contents,
+    /// without a provenance marker or a repair path for missing configuration.
     internal static func ensureRetentionExpansionConfig(
         in context: ModelContext
     ) throws {
@@ -179,13 +173,27 @@ extension HistoryAuthority {
         }
         switch rows.count {
         case 0:
-            guard try gatewayTablesAreEmpty(in: context),
+            let historyIsEmpty: Bool
+            do {
+                var positionDescriptor = FetchDescriptor<LastChangePositionRow>()
+                positionDescriptor.fetchLimit = 2
+                let positions = try context.fetch(positionDescriptor)
+                let itemCount = try context.fetchCount(FetchDescriptor<HistoryItemRow>())
+                let byteRowCount = try context.fetchCount(FetchDescriptor<RetainedBytesRow>())
+                historyIsEmpty = positions.count == 1
+                    && positions[0].key == positionSingletonKey
+                    && positions[0].rawValue == 0
+                    && itemCount == 0 && byteRowCount == 0
+            } catch {
+                throw HistoryFailure.persistence(.openStore)
+            }
+            guard historyIsEmpty,
+                  try gatewayTablesAreEmpty(in: context),
                   try HCRBootstrap.tablesAreEmpty(in: context) else {
                 throw HistoryFailure.persistence(.invariantViolation)
             }
-            // `V2-02` §3.3 / `V2-roadmap` §5 step 5: created at open, all
-            // policies disabled (`configSchemaVersion == 1`), so a migrated
-            // store starts v1-faithful. One `ModelContext.transaction`,
+            // Created at fresh open with all policies disabled. One
+            // `ModelContext.transaction`,
             // exactly like the v1 singleton create (§10: closure success is
             // the durable boundary; no `save()` follows it).
             do {

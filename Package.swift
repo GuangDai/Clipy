@@ -123,12 +123,6 @@ let package = Package(
                 "HistoryStorage",
                 "HistoryDomain",
                 "HistoryCore",
-                // RET-PLATFORM-1b(e) engine-level interruption fixture
-                // (HistoryMigrationInterruptionTests) spawns the DEBUG
-                // HistoryPerfRunner child mode; this edge guarantees
-                // `swift test` builds that executable even without a prior
-                // `swift build`.
-                .target(name: "HistoryPerfRunner"),
                 // Evidence Card 1C-1 runs three short-lived probe processes.
                 // This build edge guarantees `.build/debug/HistoryRestartProbe`
                 // exists before the test launches it directly; never nest a

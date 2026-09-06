@@ -17,7 +17,7 @@ enum GatewayAuditTestSupport {
     static let requestedAt = Date(timeIntervalSinceReferenceDate: 900_000_000)
 
     static func makeContainer() throws -> ModelContainer {
-        let schema = Schema(versionedSchema: HistorySchemaV3.self)
+        let schema = historySchema
         return try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(

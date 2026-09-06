@@ -87,7 +87,6 @@ private static func makeRow(
         canonicalBlob: CanonicalBlobCodec.encode(bundle.domain.canonical),
         revisionStateBlob: RevisionStateBlobCodec.encode(revisions: [], activeRevisionID: nil),
         canonicalSignatureBlob: SignatureBlobCodec.encode(bundle.signatureEntries),
-        projectionSchemaVersion: bundle.projection.schemaVersion,
         title: bundle.projection.title,
         searchBody: bundle.projection.searchBody,
         effectiveTypeIdentifiersBlob: EffectiveTypeIdentifiersBlobCodec

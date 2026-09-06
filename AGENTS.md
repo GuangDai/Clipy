@@ -28,6 +28,17 @@ Gateway's admitted operations, and xxh3's clipboard-dedup candidate lookup may
 be maintained when directly required by behavior; this paragraph forbids
 inventing new enforcement or orchestration around them.
 
+**Current storage direction (user direction, 2026-09-06):** this is a new
+project with no legacy-store compatibility requirement. Keep one current
+SwiftData schema with ten models; remove historical model variants,
+`VersionedSchema`/migration plans, legacy projection columns and recipe tags,
+startup projection rebuilds, and retained-byte backfill paths. Titles and
+search bodies persist only as `titleUTF8: Data` and `searchBodyUTF8: Data`.
+This does not retire current blob codecs, corrupt-value rejection, immutable
+content revisions, `ContentVersion`, or `ChangePosition`. Historical migration
+chapters and progress entries are records, not instructions to restore those
+paths. Do not replace them with new compatibility or enforcement machinery.
+
 **Platform and toolchain:**
 
 - macOS 26+ only (`platforms: [.macOS(.v26)]`), arm64.
@@ -39,7 +50,7 @@ inventing new enforcement or orchestration around them.
   Correctness CI intentionally consists of the SwiftPM and generated-app
   build/test lanes; there is no separate static-source or symbol-snapshot lane.
 
-**Current state (2026-08-24, `master` through PR #44):** steps 0–9 are
+**Historical baseline (2026-08-24, `master` through PR #44):** steps 0–9 are
 done and CI-green (scaffold + build/tests, `HistoryCore` public surface,
 `HistoryDomain` pure core, dependency pins, schema v1 + codecs,
 `HistoryAuthority` capture/mutations/reads/observation/thumbnail, product

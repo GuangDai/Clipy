@@ -10,9 +10,8 @@
 /// Capture projection uses initial Effective Content (Canonical Content with
 /// fingerprints stripped); revision projection uses the prepared proposed
 /// Effective Content. Copy Coalescing, pin, unpin, clear, removal, and
-/// retention never recompute it (§15). Projection schema changes require an
-/// explicit schema version and a migration/rebuild plan; they never change
-/// Canonical Content, revisions, or Content Version by themselves.
+/// retention never recompute it (§15). Projection does not change Canonical
+/// Content, revisions, or Content Version by itself.
 import ClipboardFormats
 import Foundation
 import HistoryCore
@@ -28,13 +27,10 @@ import HistoryDomain
 /// `HistoryLimits.maximumStoredSearchBodyUTF8Bytes`) by construction:
 /// `ContentProjector` truncates at a deterministic Unicode boundary
 /// (docs/06-cross-cutting.md §2), and every row-read path re-verifies the
-/// projection schema and the scalar fields it consumes
+/// scalar fields it consumes
 /// (docs/05-authority-kernel.md §4). `effectiveTypeIdentifiers` is the sorted,
 /// unique, non-empty type summary of the projected content.
 internal struct ContentProjection: Sendable {
-    /// Projection schema version; exactly `ContentProjector.schemaVersion`
-    /// (projection recipe v6 = 6) for every newly projected value.
-    internal let schemaVersion: UInt16
     /// First eligible textual line, otherwise eligible reference metadata or
     /// a stable type-based fallback (§15).
     internal let title: String
@@ -59,30 +55,12 @@ internal struct StoredProjectionSize: Equatable, Sendable {
 /// durable `ContentProjection`. docs/05-authority-kernel.md §15
 ///
 /// The projector is a namespace of pure functions — no actor, clock, or I/O.
-/// Image bytes are never decoded for title/search (§15). Recipe-v4 exact
-/// plain-text codecs keep priority; recipe 5 additionally projects bounded
+/// Image bytes are never decoded for title/search (§15). Exact plain-text
+/// codecs keep priority over bounded
 /// URL/file reference metadata without following the reference. Other
 /// encoding-unspecified, abstract, and structured text formats remain opaque.
 internal enum ContentProjector {
-    /// Recipe 6 stores unchanged projected titles and bodies as UTF-8 bytes.
-    /// Startup rebuilds recipes 1–5 from their validated Canonical/revision
-    /// bytes, never from potentially lossy legacy String columns (§15).
-    internal static let schemaVersion: UInt16 = 6
-
-    /// The original recipe used by legacy migration fixtures. Startup also
-    /// accepts recipes 2–5; ordinary reads accept only recipe 6 (§13, §15).
-    internal static let legacySchemaVersion: UInt16 = 1
-
     // MARK: Stored projection validation (docs/05-authority-kernel.md §4)
-
-    /// Re-validates the schema tag before any durable projection scalar is
-    /// trusted. A future projection schema requires an explicit migration;
-    /// ordinary reads never guess how to interpret another version.
-    internal static func validateStoredSchemaVersion(_ found: UInt16) throws {
-        guard found == schemaVersion else {
-            throw CodecRejection.unknownProjectionSchemaVersion(found: found)
-        }
-    }
 
     /// Decodes the bounded literal title bytes without Foundation's encoding
     /// interpretation. Empty bytes are a valid empty title; a leading U+FEFF
@@ -159,12 +137,10 @@ internal enum ContentProjector {
     /// Full validation used by lineage hydration and search corpus reads.
     @discardableResult
     internal static func validateStoredProjection(
-        schemaVersion: UInt16,
         title: String,
         searchBody: String,
         limits: HistoryLimits
     ) throws -> StoredProjectionSize {
-        try validateStoredSchemaVersion(schemaVersion)
         let titleUTF8Bytes = try validateStoredTitle(title, limits: limits)
         let searchBodyUTF8Bytes = try validateStoredSearchBody(
             searchBody,
@@ -272,7 +248,6 @@ internal enum ContentProjector {
             }
         }
         return ContentProjection(
-            schemaVersion: schemaVersion,
             title: truncatedToUTF8ByteLimit(
                 title ?? typeBasedFallbackTitle(typeIdentifiers: typeIdentifiers),
                 limit: limits.maximumStoredTitleUTF8Bytes
@@ -310,7 +285,7 @@ internal enum ContentProjector {
         )
     }
 
-    // MARK: Inert reference metadata (recipe 5, §15)
+    // MARK: Inert reference metadata (§15)
 
     private static let maximumReferenceSourceBytes = 16 * 1_024
 
@@ -371,7 +346,7 @@ internal enum ContentProjector {
 
     // MARK: Textual eligibility and decoding (§15)
 
-    /// Projection-owned recipe-v4 admission. `ClipboardFormats` supplies the
+    /// Projection-owned exact text admission. `ClipboardFormats` supplies the
     /// exact codec facts, but adding a future stable codec must not silently
     /// change durable title/search behavior.
     private static let textualProjectionIdentifiers: Set<ClipboardFormatIdentifier> = [
@@ -476,7 +451,7 @@ internal enum ContentProjector {
     // MARK: Type-based fallback title (§15)
 
     /// Image type identifiers recognized by the fallback title. This remains
-    /// projection-owned purpose policy; it is frozen with recipe v2.
+    /// projection-owned purpose policy.
     private static let imageTypeIdentifiers: Set<String> = [
         "public.image",
         "public.png",

@@ -121,6 +121,11 @@ struct RetentionConfigSingletonStartupValidationTests {
         at storeURL: URL,
         corruption: Corruption? = nil
     ) async throws -> SeededState {
+        // Start with the current complete singleton set, never a partial
+        // historical store whose later bootstrap would manufacture owners.
+        _ = try await SwiftDataHistory.open(configuration: HistoryConfiguration(
+            persistence: .persistent(storeURL: storeURL), initialMaximumUnpinnedItems: 321
+        ))
         // Prepare immutable values before any ModelContext/@Model exists;
         // no SwiftData object survives a suspension point (05 §2).
         let source = "com.example.migration"
@@ -138,7 +143,7 @@ struct RetentionConfigSingletonStartupValidationTests {
         let typeIdentifiersBlob = try EffectiveTypeIdentifiersBlobCodec.encode(
             prepared.projection.effectiveTypeIdentifiers
         )
-        let schema = Schema(versionedSchema: HistorySchemaV2.self)
+        let schema = historySchema
         let configuration = ModelConfiguration(
             schema: schema,
             url: storeURL,
@@ -150,35 +155,29 @@ struct RetentionConfigSingletonStartupValidationTests {
         )
         let context = ModelContext(container)
         context.autosaveEnabled = false
-        context.insert(LastChangePositionRow(
-            key: "retained-history",
-            rawValue: 17,
-            maximumUnpinnedItems: 321
-        ))
-        let config = RetentionExpansionConfigRow(
-            key: "retention-expansion",
-            agePolicyEnabled: true,
-            ageMaxSeconds: 86_400,
-            storagePolicyEnabled: true,
-            storageMaxBytes: 536_870_912,
-            revisionPolicyEnabled: true,
-            revisionMaxCount: 20,
-            revisionMaxBytes: 16_777_216,
-            configSchemaVersion: 1
-        )
+        let position = try #require(context.fetch(FetchDescriptor<LastChangePositionRow>()).first)
+        position.rawValue = 17
+        let config = try Self.fetchConfig(from: context)
+        config.agePolicyEnabled = true
+        config.ageMaxSeconds = 86_400
+        config.storagePolicyEnabled = true
+        config.storageMaxBytes = 536_870_912
+        config.revisionPolicyEnabled = true
+        config.revisionMaxCount = 20
+        config.revisionMaxBytes = 16_777_216
+        // The literal position represents an already-compacted prefix. Its
+        // existing journal remains complete and coherent with that position.
+        let journal = try #require(context.fetch(FetchDescriptor<JournalConfigRow>()).first)
+        journal.compactionFloorRaw = 17
         corruption?.apply(to: config)
-        context.insert(config)
-        // One production-codec-valid item deliberately has no
-        // RetainedBytesRow. Reaching the later startup projection bootstrap
-        // would repair that missing derived row, so its continued absence
-        // after config rejection is non-vacuous ordering evidence.
-        let item = HistorySchemaV1.HistoryItemRow(
+        // Every case supplies current required accounting. The chosen config
+        // corruption is the only invalid state, never a missing-row repair test.
+        let item = HistoryItemRow(
             id: prepared.domain.candidateID.rawValue,
             contentVersionRaw: 1,
             canonicalBlob: canonicalBlob,
             revisionStateBlob: revisionStateBlob,
             canonicalSignatureBlob: signatureBlob,
-            projectionSchemaVersion: ContentProjector.legacySchemaVersion,
             title: prepared.projection.title,
             searchBody: prepared.projection.searchBody,
             effectiveTypeIdentifiersBlob: typeIdentifiersBlob,
@@ -190,6 +189,13 @@ struct RetentionConfigSingletonStartupValidationTests {
             pinOrdinal: nil
         )
         context.insert(item)
+        context.insert(RetainedBytesRow(
+            itemID: item.id,
+            canonicalBytes: prepared.signatureEntries.reduce(0) { $0 + $1.byteCount },
+            revisionCount: 0,
+            revisionBytes: 0,
+            bytesSchemaVersion: 1
+        ))
         try context.save()
         return SeededState(config: ConfigScalars(config), itemID: item.id)
     }
@@ -242,7 +248,9 @@ struct RetentionConfigSingletonStartupValidationTests {
             let items = try context.fetch(FetchDescriptor<HistoryItemRow>())
             #expect(items.count == 1)
             #expect(items.first?.id == seeded.itemID)
-            #expect(try context.fetchCount(FetchDescriptor<RetainedBytesRow>()) == 0)
+            let bytes = try context.fetch(FetchDescriptor<RetainedBytesRow>())
+            #expect(bytes.count == 1)
+            #expect(bytes.first?.itemID == seeded.itemID)
         }
     }
 

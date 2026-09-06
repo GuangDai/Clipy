@@ -122,7 +122,6 @@ internal enum HistoryItemRowHydration {
         _ = try mapCodecFailure {
             let searchBody = try ContentProjector.decodeStoredSearchBody(searchBodyUTF8, limits: limits)
             return try ContentProjector.validateStoredProjection(
-                schemaVersion: row.projectionSchemaVersion,
                 title: title,
                 searchBody: searchBody,
                 limits: limits

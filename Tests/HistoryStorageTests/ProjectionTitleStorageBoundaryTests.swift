@@ -40,7 +40,7 @@ struct ProjectionTitleStorageBoundaryTests {
 
         // Register the current schema before constructing its model. From
         // here through fresh-context readback there is no actor suspension.
-        let schema = Schema(versionedSchema: HistorySchemaV5.self)
+        let schema = historySchema
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -105,7 +105,7 @@ struct ProjectionTitleStorageBoundaryTests {
         // This isolated schema round trip distinguishes an accessor/insert
         // change from a transaction-save or fresh-context materialization
         // change. Public capture/revise/search remain covered by the journey.
-        let schema = Schema(versionedSchema: HistorySchemaV5.self)
+        let schema = historySchema
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]

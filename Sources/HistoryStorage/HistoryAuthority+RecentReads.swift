@@ -23,7 +23,6 @@ extension HistoryAuthority {
         var properties: [PartialKeyPath<HistoryItemRow>] = [
             \.id,
             \.contentVersionRaw,
-            \.projectionSchemaVersion,
             \.titleUTF8,
             \.effectiveTypeIdentifiersBlob,
             \.lastCopiedAt,

@@ -1,29 +1,7 @@
-/// X.3 Gateway/Audit schema additions (`V2-roadmap` §10 X.3; `V2-05` §4
-/// / Record 5), corrected by DC-03 incremental shipping. The shipped
-/// `HistorySchemaV2` remains immutable; this purely additive graft receives
-/// `HistorySchemaV3`. All model types remain internal to HistoryStorage.
+/// Durable Gateway connections, grants, operation records and configuration.
+/// All model types remain internal to HistoryStorage (V2-05 §4).
 import Foundation
 import SwiftData
-
-/// The second shipped V2-era schema: the immutable V2 retention schema plus
-/// the four Gateway/Audit rows. The `V2 → V3` hop is lightweight because it
-/// adds tables only and neither rewrites existing rows nor backfills data.
-internal enum HistorySchemaV3: VersionedSchema {
-    static let versionIdentifier = Schema.Version(3, 0, 0)
-
-    static var models: [any PersistentModel.Type] {
-        [
-            HistorySchemaV1.HistoryItemRow.self,
-            LastChangePositionRow.self,
-            RetentionExpansionConfigRow.self,
-            RetainedBytesRow.self,
-            ConnectionRow.self,
-            GrantRow.self,
-            OperationRecordRow.self,
-            GatewayConfigRow.self
-        ]
-    }
-}
 
 /// Durable lifecycle state for one external connection (`V2-05` §4.1).
 /// Capability grants and audit records reference the business UUID by value;

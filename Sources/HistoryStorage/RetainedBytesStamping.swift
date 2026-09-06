@@ -1,12 +1,6 @@
-/// R.3 — the `RetainedBytesRow` projection-lifecycle stamping: the
-/// same-transaction insert/restamp/delete steps that keep the 1:1 per-item
-/// byte projection coherent with the blob writes that change it, plus the
-/// startup both-directions existence check that turns the M1 fixture
-/// invariant into the runtime step-7 gate — since the RET-PLATFORM-1b(e)
-/// measured-fact response, a TWO-phase gate (amended `V2-02` Record 5):
-/// idempotent open-time recovery of the missing-rows (interrupted
-/// migration) shape first, then the unchanged fail-closed strict
-/// validation for every other divergence.
+/// Retained-bytes projection maintenance shares each content transaction.
+/// Startup validates the current one-to-one scalar correspondence without
+/// repairing missing rows or decoding content blobs.
 /// Owning spec: `V2-02` §3.3b (projection coherence: "its three scalar
 /// fields are recomputed and stamped in the same `ModelContext.transaction`
 /// as the blob write that changes them — at capture-insert ... at coalesce
@@ -55,10 +49,7 @@ internal enum RetainedBytesStamping {
 
     /// The only projection version this lifecycle writes (`V2-02` §3.3b:
     /// the `bytesSchemaVersion` projection-coherence fence, 1 for V2-02).
-    /// Same value and same fence as the M1.4 backfill's constant; declared
-    /// separately because the fence is owned by the projection lifecycle,
-    /// not by the one-time migration hop (each codec owns its own
-    /// `formatVersion` the same way).
+    /// The projection lifecycle owns this scalar format version.
     internal static let bytesSchemaVersion: UInt16 = 1
 
     // MARK: Scalar recomputation
@@ -68,8 +59,7 @@ internal enum RetainedBytesStamping {
     /// (`maximumProposedRevisionBytes`), per-item totals
     /// (`maximumTotalRevisionBytesPerItem`), and the revision count
     /// (`maximumRevisionsPerItem`), so the sum stays far below `Int`
-    /// overflow — the same justification the M1.4 backfill's plain addition
-    /// uses.
+    /// overflow.
     internal static func revisionScalars(
         of revisions: some Sequence<ContentRevision>
     ) -> RetainedRevisionScalars {
@@ -137,7 +127,7 @@ internal enum RetainedBytesStamping {
     /// A missing row is corruption, never a zero read or a silent skip
     /// (`V2-02` §3.2 / Record 5): the row is created at insert, maintained
     /// 1:1 by every blob-changing write, and its absence proves the store
-    /// already violates the migration invariant.
+    /// already violates the current one-to-one invariant.
     internal static func restamp(
         itemID: HistoryItemID,
         revisionScalars: RetainedRevisionScalars,
@@ -251,8 +241,7 @@ internal enum RetainedBytesStamping {
     /// bounded-inventory discipline). Returns nil when the plan retires
     /// nothing (the common single-action path fetches its one row
     /// directly). A duplicate `itemID` — impossible through `.unique` plus
-    /// the single writer — is the invariant violation it represents
-    /// (mirroring the backfill's duplicate guard).
+    /// the single writer — is the invariant violation it represents.
     internal static func prefetchRowsForRetirements(
         in mutations: [StampedMutation],
         context: ModelContext
@@ -282,50 +271,11 @@ internal enum RetainedBytesStamping {
 
     // MARK: Startup 1:1 check (V2-roadmap §5 total open order step 11)
 
-    /// The runtime `RET-PLATFORM-1b(a)` check, live from slice R.3
-    /// (`V2-roadmap` §5 step-7 sequencing note: before R.3, capture creates
-    /// items without rows, so an unconditional check would fail every
-    /// capture-created item; R.3's lifecycle stamping is what makes the
-    /// check enforceable): after the v1 scalar scan, every retained item has
-    /// exactly one `RetainedBytesRow`, every row names a retained item
-    /// (both directions), every `bytesSchemaVersion == 1`, and every scalar
-    /// value/relation satisfies the same validated-value contract used by
-    /// retention planning (`V2-02` §3.3b; DATA-2). A fresh store holds the
-    /// correspondence vacuously (zero items; rows arrive via the
-    /// capture-insert stamping).
-    ///
-    /// TWO phases since the amended `V2-02` Record 5 (interruption
-    /// recovery — the RET-PLATFORM-1b(e) measured-platform-fact response):
-    ///
-    /// - Phase (i) RECOVERY: a correspondence incomplete ONLY in the
-    ///   missing-rows direction — every existing row names a retained item
-    ///   and carries a valid version and scalar set, but some retained item
-    ///   lacks its row — is the one producible interrupted-migration shape.
-    ///   SwiftData stamps the store's schema version before (or
-    ///   independently of) the custom stage's `didMigrate` data work
-    ///   committing — measured fact, CI run 31955551834: a child process
-    ///   dying mid-backfill pre-transaction leaves a version-V2 store with
-    ///   missing rows, so the parent's open never re-runs the stage; the
-    ///   engine does NOT provide interruption atomicity. The M1.4 backfill
-    ///   is idempotent by construction (full recompute from the blobs,
-    ///   delete-then-insert; V2-00 §5 decision 18 — recompute never invents
-    ///   bytes and reproduces the (a)/(b) invariants exactly), so this
-    ///   phase runs it ONCE on the Authority-owned startup context — no
-    ///   new writer; the same sanctioned context that creates the position
-    ///   singleton — and re-reads the correspondence.
-    /// - Phase (ii) STRICT VALIDATION: any violation that remains — missing
-    ///   rows after recovery, an orphan row, or an invalid version/scalar —
-    ///   fails closed `.persistence(.invariantViolation)` ("row existence is
-    ///   the migration invariant ... never ... a zero-byte read", `V2-02`
-    ///   §3.2). Orphans and invalid present rows NEVER recover: the backfill
-    ///   writes only complete rows for retained items, so neither is a
-    ///   producible interruption shape.
-    ///
-    /// A store that cannot be read fails as `.persistence(.openStore)` (§2's
-    /// startup vocabulary, which does not include `.transaction`). The
-    /// check itself is scalar-only (no Canonical or revision blob decode,
-    /// `05` §13); the phase-(i) backfill decodes blobs exactly as the
-    /// migration hop always has.
+    /// Every current retained item has exactly one valid byte projection,
+    /// and every projection names a retained item (V2-02 §3.3b; 05 §13).
+    /// Missing, orphaned, duplicate or invalid rows fail closed; this read
+    /// never recreates data. A fresh empty store satisfies both directions.
+    /// Framework fetch failures map to `.persistence(.openStore)`.
     internal static func validateOneToOneCorrespondence(
         in context: ModelContext,
         limits: HistoryLimits
@@ -352,51 +302,21 @@ internal enum RetainedBytesStamping {
             }
         }
 
-        var rowItemIDs = try fetchedValidatedRowItemIDs(
+        let rowItemIDs = try fetchedValidatedRowItemIDs(
             in: context,
             limits: limits,
             itemIDs: itemIDs
         )
 
-        // Phase (i) — RECOVERY (amended Record 5): the strict row pass just
-        // proved every PRESENT row valid and item-naming, so a set
-        // difference here can only be the missing-rows direction — some
-        // retained item lacks its row, the interrupted-migration shape.
-        // Re-run the idempotent backfill once (it owns its
-        // `ModelContext.transaction` on this context) and re-read the
-        // correspondence; the item set needs no re-read because the
-        // backfill writes only `RetainedBytesRow`s. A complete store —
-        // migrated-complete or capture-maintained — skips this branch on
-        // two set comparisons over already-fetched data: no measurable
-        // open cost.
-        if rowItemIDs != itemIDs {
-            try RetainedBytesBackfill.backfill(in: context)
-            rowItemIDs = try fetchedValidatedRowItemIDs(
-                in: context,
-                limits: limits,
-                itemIDs: itemIDs
-            )
-        }
-
-        // Phase (ii) — STRICT: direction 1 (every retained item has exactly
-        // one row) holds after recovery or fails closed. Orphans, version
-        // mismatches, and duplicates already threw inside the strict row
-        // pass and never reach a repair.
+        // Both directions must already hold; no startup repair is permitted.
         guard rowItemIDs == itemIDs else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
     }
 
-    /// One strict row-side read of the correspondence: fetches every
-    /// `RetainedBytesRow`'s identity and scalar fields under the hard-bound
-    /// guard and returns the validated row item-ID set (the shared read of
-    /// phases (i) and (ii) above). Per-row failures — an unknown
-    /// `bytesSchemaVersion`, an impossible scalar value/relation, a duplicate
-    /// business ID, or an orphan naming no retained item — fail closed
-    /// `.persistence(.invariantViolation)` and are NEVER recoverable: the
-    /// backfill writes only complete rows for retained items, so none of them
-    /// is a producible interruption shape (amended Record 5). A store that
-    /// cannot be read fails as `.persistence(.openStore)` (§2).
+    /// Reads bounded projection identities and validates their scalar values.
+    /// Invalid rows, duplicates and orphans fail as invariant violations;
+    /// framework fetch failures map to `.persistence(.openStore)`.
     private static func fetchedValidatedRowItemIDs(
         in context: ModelContext,
         limits: HistoryLimits,
@@ -425,9 +345,7 @@ internal enum RetainedBytesStamping {
         }
         var rowItemIDs = Set<UUID>(minimumCapacity: rows.count)
         for row in rows {
-            // Validate every PRESENT row before deciding that any missing
-            // rows form the recoverable interrupted-migration shape. This is
-            // the same scalar-only value factory destructive planning uses;
+            // Use the same scalar-only value factory as destructive planning;
             // no Canonical/revision blob is fetched or compared (DATA-2).
             _ = try ValidatedRetainedBytesScalars.validating(
                 canonicalBytes: row.canonicalBytes,

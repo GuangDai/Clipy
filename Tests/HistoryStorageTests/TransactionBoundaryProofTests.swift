@@ -375,10 +375,7 @@ struct TransactionItemSnapshot: Equatable, Sendable {
     let canonicalBlob: Data
     let revisionStateBlob: Data
     let canonicalSignatureBlob: Data
-    let projectionSchemaVersion: UInt16
-    let title: String
     let titleUTF8: Data
-    let searchBody: String
     let searchBodyUTF8: Data
     let effectiveTypeIdentifiersBlob: Data
     let firstCopiedAt: Date
@@ -394,10 +391,7 @@ struct TransactionItemSnapshot: Equatable, Sendable {
         canonicalBlob = row.canonicalBlob
         revisionStateBlob = row.revisionStateBlob
         canonicalSignatureBlob = row.canonicalSignatureBlob
-        projectionSchemaVersion = row.projectionSchemaVersion
-        title = row.title
         titleUTF8 = row.titleUTF8
-        searchBody = row.searchBody
         searchBodyUTF8 = row.searchBodyUTF8
         effectiveTypeIdentifiersBlob = row.effectiveTypeIdentifiersBlob
         firstCopiedAt = row.firstCopiedAt

@@ -3,32 +3,14 @@ import SwiftData
 import Testing
 @testable import HistoryStorage
 
-/// X.3 schema proof (`V2-roadmap` §10 X.3; `V2-05` §4 / Record 5,
-/// corrected by DC-03 incremental shipping): the immutable V3 schema is the
-/// shipped V2 model set plus exactly four additive Gateway/Audit tables.
-@Suite("HistorySchemaV3 (X.3 schema slice)")
-struct HistorySchemaV3Tests {
+/// Current Gateway/audit rows preserve their stored values and optional
+/// absence; regrant updates the existing grant row (V2-05 §4).
+@Suite("Gateway schema round trip")
+struct GatewaySchemaRoundTripTests {
 
-    @Test("V3 is version 3.0.0 and adds exactly the four Gateway models")
-    func modelSetIsV2PlusGatewayRows() {
-        #expect(HistorySchemaV3.versionIdentifier == Schema.Version(3, 0, 0))
-
-        let v3Models = Set(HistorySchemaV3.models.map { "\($0)" })
-        let expected = Set(HistorySchemaV2.models.map { "\($0)" }).union([
-            "\(ConnectionRow.self)",
-            "\(GrantRow.self)",
-            "\(OperationRecordRow.self)",
-            "\(GatewayConfigRow.self)"
-        ])
-
-        #expect(v3Models == expected)
-        #expect(HistorySchemaV3.models.count == 8)
-        #expect(v3Models.isSuperset(of: Set(HistorySchemaV2.models.map { "\($0)" })))
-    }
-
-    @Test("a V3 container round-trips the complete Gateway row surface")
+    @Test("a container round-trips the complete Gateway row surface")
     func gatewayRowsRoundTrip() throws {
-        let schema = Schema(versionedSchema: HistorySchemaV3.self)
+        let schema = historySchema
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(

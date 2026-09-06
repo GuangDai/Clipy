@@ -282,7 +282,6 @@ extension HistoryAuthority {
             // written together (§10).
             row.contentVersionRaw = update.nextVersion.rawValue
             row.revisionStateBlob = update.revisionStateBlob
-            row.projectionSchemaVersion = update.projection.schemaVersion
             row.titleUTF8 = Data(update.projection.title.utf8)
             row.searchBodyUTF8 = Data(update.projection.searchBody.utf8)
             row.effectiveTypeIdentifiersBlob = update.effectiveTypeIdentifiersBlob
@@ -377,7 +376,6 @@ extension HistoryAuthority {
             canonicalBlob: item.canonicalBlob,
             revisionStateBlob: item.revisionStateBlob,
             canonicalSignatureBlob: item.canonicalSignatureBlob,
-            projectionSchemaVersion: item.projection.schemaVersion,
             title: item.projection.title,
             searchBody: item.projection.searchBody,
             effectiveTypeIdentifiersBlob: item.effectiveTypeIdentifiersBlob,

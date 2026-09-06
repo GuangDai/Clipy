@@ -201,7 +201,6 @@ extension HistoryAuthority {
             // (actor-isolated context — sending the row risks data races).
             let identifiersBlob = row.effectiveTypeIdentifiersBlob
             let contentVersionRaw = row.contentVersionRaw
-            let projectionSchemaVersion = row.projectionSchemaVersion
             let titleUTF8 = row.titleUTF8
             let searchBodyUTF8 = row.searchBodyUTF8
             let lastCopiedAt = row.lastCopiedAt
@@ -212,7 +211,6 @@ extension HistoryAuthority {
                 let title = try ContentProjector.decodeStoredTitle(titleUTF8, limits: limits)
                 let searchBody = try ContentProjector.decodeStoredSearchBody(searchBodyUTF8, limits: limits)
                 let size = try ContentProjector.validateStoredProjection(
-                    schemaVersion: projectionSchemaVersion,
                     title: title,
                     searchBody: searchBody,
                     limits: limits

@@ -60,7 +60,7 @@ struct HistoryUsagePersistenceTests {
         let retained = try await capture("keep", at: 300, in: history)
         let first = try await replace(pinned, with: "first", in: history)
         let second = try await replace(first, with: "second!", in: history)
-        _ = try await replace(second, with: "third?", in: history)
+        let third = try await replace(second, with: "third?", in: history)
         expectUsage(try await history.usage(), position: 7, items: 3, pinned: 1,
                     canonical: 12, revisions: 18, total: 30)
         let before = try await history.details(for: pinned.id)
@@ -69,6 +69,7 @@ struct HistoryUsagePersistenceTests {
 
         // R3 removes "first" (5 B). R2 then sees 25 B and removes the
         // oldest unpinned "older" (5 B), leaving 20 B under its 21 B budget.
+        try await expectCurrentTitle("third?", item: third, stage: "before retention sweep", in: history)
         let sweep = try await history.perform(.setRetentionPolicies(HistoryRetentionPolicies(
             age: nil,
             storage: StorageRetention(maxTotalBytes: 21),
@@ -79,6 +80,7 @@ struct HistoryUsagePersistenceTests {
             Issue.record("Expected one R3 prune and one R2 retirement")
             throw HistoryFailure.persistence(.invariantViolation)
         }
+        try await expectCurrentTitle("third?", item: third, stage: "after retention sweep", in: history)
         let usage = try await history.usage()
         expectUsage(usage, position: 8, items: 2, pinned: 1, canonical: 7, revisions: 13, total: 20)
         #expect(usage.position == commit.position)
@@ -114,7 +116,20 @@ struct HistoryUsagePersistenceTests {
             Issue.record("Expected an immutable usage fixture revision")
             throw HistoryFailure.persistence(.invariantViolation)
         }
+        try await expectCurrentTitle(text, item: revised, stage: "after replace with \(text)", in: history)
         return revised
+    }
+
+    private func expectCurrentTitle(
+        _ title: String, item: HistoryItemReference, stage: String,
+        in history: SwiftDataHistory
+    ) async throws {
+        let page = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 10))
+        let matches = page.rows.filter { $0.item.id == item.id }
+        try #require(matches.count == 1)
+        let row = try #require(matches.first)
+        #expect(row.item == item, "reference \(stage)")
+        #expect(Data(row.title.utf8) == Data(title.utf8), "title \(stage)")
     }
 
     private func expectUsage(

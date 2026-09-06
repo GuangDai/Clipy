@@ -14,7 +14,7 @@ struct PositionSingletonStartupValidationTests {
         maximumUnpinnedItems: Int,
         includeValidRetentionConfig: Bool = false
     ) throws {
-        let schema = Schema(versionedSchema: HistorySchemaV2.self)
+        let schema = historySchema
         let configuration = ModelConfiguration(
             schema: schema,
             url: storeURL,

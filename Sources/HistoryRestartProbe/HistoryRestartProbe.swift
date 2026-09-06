@@ -5,7 +5,7 @@
 /// invocation owns one `SwiftDataHistory` for one short process; no SwiftData
 /// object or generated identity crosses a phase boundary.
 /// The Retention phases prove exact configured-value persistence across
-/// terminated owners only; they do not prove migration or crash durability
+/// terminated owners only; they do not prove crash durability
 /// (`11-ai-todo-map-2026-08-23.md` §4.3; `V2-02-retention.md` §8.1/§12).
 /// The full-disk cells (pressureCapture plus the Card 6B pressureRevise
 /// trio and the openFullVolume/openSeededFullVolume pair) run only on the
@@ -20,8 +20,7 @@
 /// disjunction instead of a single outcome. Nowhere proven here:
 /// post-admission mid-transaction exhaustion (the Apple framework crash
 /// ceiling), remove/clear full-disk tails (zero-demand plans are never
-/// admission-refused), and V1→V2 migration on a full volume (no public
-/// API path mints a V1 store).
+/// admission-refused).
 /// The validateSeed/validateAll pair closes doc 11 §4.3's "External-clone
 /// 验证子进程" row and the 05 blind spot
 /// (`05-evidence-and-open-questions.md`:165, "未证明逐个 hydrate 所有
@@ -71,7 +70,6 @@ private enum ProbePhase: String {
     case retentionVerifyUpdated
     case retentionRejectMalformed
     case retentionRejectWrongKey
-    case openRejectFutureSchema
     case openRejectCorruptBytes
     case openRejectReadOnlyDirectory
     case openRejectLeasedStore
@@ -1053,8 +1051,8 @@ private func retentionVerifyUpdated(storeURL: URL) async throws {
 /// REVIEW §4.3 Retention-config restart tail, extended to the DATA-14
 /// open-failure fixtures (REVIEW 05 §7 Q13): the fixture process must
 /// observe the production public-open classifier itself. Every
-/// `ModelContainer` construction failure — an impossible stored shape, a
-/// future schema, non-SQLite bytes, an existing read-only store
+/// `ModelContainer` construction failure — an impossible stored shape,
+/// non-SQLite bytes, an existing read-only store
 /// directory — currently surfaces as one
 /// `.persistence(.openStore)` (03b §10); until a classification proof
 /// exists, no caller may auto-quarantine or silently recreate a store on
@@ -2411,11 +2409,6 @@ private struct HistoryRestartProbe {
                 try await requirePublicOpenFailure(
                     at: storeURL,
                     expected: .persistence(.invariantViolation)
-                )
-            case .openRejectFutureSchema:
-                try await requirePublicOpenFailure(
-                    at: storeURL,
-                    expected: .persistence(.openStore)
                 )
             case .openRejectCorruptBytes:
                 try await requirePublicOpenFailure(

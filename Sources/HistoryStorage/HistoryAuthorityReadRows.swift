@@ -43,15 +43,11 @@ internal struct ScalarReadRow {
 
     internal init(_ row: HistoryItemRow, limits: HistoryLimits) throws {
         self.id = HistoryItemID(rawValue: row.id)
-        let projectionSchemaVersion = row.projectionSchemaVersion
         let titleUTF8 = row.titleUTF8
         let lastCopiedAt = row.lastCopiedAt
         let copyCount = row.copyCount
         let lastSource = row.lastSource
         let title = try mapCodecFailure {
-            try ContentProjector.validateStoredSchemaVersion(
-                projectionSchemaVersion
-            )
             let title = try ContentProjector.decodeStoredTitle(titleUTF8, limits: limits)
             try RevisionStateBlobCodec.validateFiniteLastCopiedAt(lastCopiedAt)
             try RevisionStateBlobCodec.validateCopyCount(copyCount)

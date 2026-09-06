@@ -17,8 +17,8 @@ extension HistoryAuthority {
 
     /// Bootstraps or validates the complete X.3 Gateway table shape.
     ///
-    /// Absence is a migration-compatible create path only when all four
-    /// Gateway tables and both later V4 HCR tables are empty. The config
+    /// Absence is a fresh-store create path only at position zero when retained history and
+    /// its byte-accounting rows, all Gateway tables, and HCR tables are empty. The config
     /// singleton and its matching
     /// active App Intents connection are inserted in one transaction/save
     /// boundary before facade publication; no grant is created. Once config
@@ -46,7 +46,22 @@ extension HistoryAuthority {
 
         switch configs.count {
         case 0:
-            guard try Self.gatewayTablesAreEmpty(in: context),
+            let historyIsEmpty: Bool
+            do {
+                var positionDescriptor = FetchDescriptor<LastChangePositionRow>()
+                positionDescriptor.fetchLimit = 2
+                let positions = try context.fetch(positionDescriptor)
+                let itemCount = try context.fetchCount(FetchDescriptor<HistoryItemRow>())
+                let byteRowCount = try context.fetchCount(FetchDescriptor<RetainedBytesRow>())
+                historyIsEmpty = positions.count == 1
+                    && positions[0].key == Self.positionSingletonKey
+                    && positions[0].rawValue == 0
+                    && itemCount == 0 && byteRowCount == 0
+            } catch {
+                throw HistoryFailure.persistence(.openStore)
+            }
+            guard historyIsEmpty,
+                  try Self.gatewayTablesAreEmpty(in: context),
                   try HCRBootstrap.tablesAreEmpty(in: context) else {
                 throw HistoryFailure.persistence(.invariantViolation)
             }

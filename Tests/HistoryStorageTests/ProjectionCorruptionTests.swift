@@ -11,7 +11,6 @@ import Testing
 struct ProjectionCorruptionTests {
 
 private enum Corruption: Equatable {
-    case schemaVersion
     case title
     case malformedTitleUTF8
     case searchBody
@@ -25,114 +24,57 @@ private static func seedRow(
     at storeURL: URL,
     corruption: Corruption
 ) async throws -> HistoryItemID {
+    let history = try await WSSupport.openHistory(storeURL: storeURL)
     let observedAt = Date(timeIntervalSinceReferenceDate: 700_050_000)
-    let preparation = IngestPreparationActor()
-    let bundle = try await preparation.prepare(
-        WSSupport.textCapture(
-            "projection corruption control",
-            observedAt: observedAt,
-            source: "com.example.projection-corruption"
-        )
-    )
+    let receipt = try await history.perform(.capture(WSSupport.textCapture(
+        "projection corruption control",
+        observedAt: observedAt,
+        source: "com.example.projection-corruption"
+    )))
+    guard case let .committed(commit) = receipt,
+          case let .inserted(reference) = commit.outcome else {
+        throw FixtureFailure.expectedInsert
+    }
 
-    let schemaVersion: UInt16 = corruption == .schemaVersion
-        ? ContentProjector.schemaVersion + 1
-        : bundle.projection.schemaVersion
-    let title = corruption == .title
-        ? String(
-            repeating: "t",
+    // Real capture creates every current singleton, journal, blob and byte
+    // projection. Mutate only the chosen scalar in an independent context;
+    // no startup compatibility or repair makes this fixture valid.
+    let context = ModelContext(try WSSupport.makeContainer(storeURL: storeURL))
+    context.autosaveEnabled = false
+    let rows = try context.fetch(FetchDescriptor<HistoryItemRow>())
+    let row = try #require(rows.count == 1 ? rows.first : nil)
+    #expect(row.id == reference.id.rawValue)
+    switch corruption {
+    case .title:
+        row.titleUTF8 = Data(
+            repeating: 0x74,
             count: HistoryLimits.standard.maximumStoredTitleUTF8Bytes + 1
         )
-        : bundle.projection.title
-    let searchBodyUTF8 = corruption == .searchBody
-        ? Data(
+    case .malformedTitleUTF8:
+        row.titleUTF8 = Data([0xEF, 0xBB, 0xBF, 0xFF])
+    case .searchBody:
+        row.searchBodyUTF8 = Data(
             repeating: 0x62,
             count: HistoryLimits.standard.maximumStoredSearchBodyUTF8Bytes + 1
         )
-        : Data(bundle.projection.searchBody.utf8)
-    // SQLite binds NaN as SQL NULL, which would fail this non-optional column
-    // before the read-path validator is exercised. Infinity remains a REAL and
-    // therefore reaches the exact durable-scalar boundary under test; NaN is
-    // covered directly by RevisionStateBlobCodecTests.
-    let lastCopiedAt = corruption == .lastCopiedAt
-        ? Date(timeIntervalSinceReferenceDate: .infinity)
-        : observedAt
-    let copyCount: UInt64 = corruption == .copyCount ? 0 : 1
-    let lastSource = corruption == .lastSource
-        ? String(
-            repeating: "s",
-            count: HistoryLimits.standard
-                .maximumSourceApplicationObservationUTF8Bytes + 1
-        )
-        : "com.example.projection-corruption"
-
-    let row = try HistoryItemRow(
-        id: bundle.domain.candidateID.rawValue,
-        contentVersionRaw: 1,
-        canonicalBlob: CanonicalBlobCodec.encode(bundle.domain.canonical),
-        revisionStateBlob: RevisionStateBlobCodec.encode(
-            revisions: [],
-            activeRevisionID: nil
-        ),
-        canonicalSignatureBlob: SignatureBlobCodec.encode(bundle.signatureEntries),
-        projectionSchemaVersion: schemaVersion,
-        title: title,
-        searchBody: bundle.projection.searchBody,
-        effectiveTypeIdentifiersBlob: EffectiveTypeIdentifiersBlobCodec.encode(
-            bundle.projection.effectiveTypeIdentifiers
-        ),
-        firstCopiedAt: observedAt,
-        lastCopiedAt: lastCopiedAt,
-        copyCount: copyCount,
-        firstSource: "com.example.projection-corruption",
-        lastSource: lastSource,
-        pinOrdinal: nil
-    )
-    row.searchBodyUTF8 = searchBodyUTF8
-    if corruption == .malformedTitleUTF8 {
-        row.titleUTF8 = Data([0xEF, 0xBB, 0xBF, 0xFF])
-        // A plausible legacy String must not become a fallback for damaged
-        // current title bytes; current reads fail closed instead.
-        row.title = bundle.projection.title
-    }
-    if corruption == .malformedSearchBodyUTF8 {
+    case .malformedSearchBodyUTF8:
         row.searchBodyUTF8 = Data("projection corruption control".utf8) + Data([0xFF])
-        // Search must reject malformed current bytes rather than accepting a
-        // valid prefix or falling back to this plausible legacy String.
-        row.searchBody = bundle.projection.searchBody
+    case .lastCopiedAt:
+        // SQLite binds NaN as NULL; Infinity reaches the durable validator.
+        row.lastCopiedAt = Date(timeIntervalSinceReferenceDate: .infinity)
+    case .copyCount:
+        row.copyCount = 0
+    case .lastSource:
+        row.lastSource = String(
+            repeating: "s",
+            count: HistoryLimits.standard.maximumSourceApplicationObservationUTF8Bytes + 1
+        )
     }
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
-    let context = ModelContext(container)
-    // This is a raw current store fixture, not a fresh-store bootstrap. Keep its
-    // authoritative singleton shape valid so only `corruption` selects the
-    // startup/read failure under test (05 §13; DATA-1).
-    context.insert(LastChangePositionRow(
-        key: HistoryAuthority.positionSingletonKey,
-        rawValue: 1,
-        maximumUnpinnedItems: 200
-    ))
-    context.insert(row)
-    // V2-02 §3.3b (roadmap R.3): every test this fixture feeds except the
-    // schemaVersion one expects startup to SUCCEED, so the crafted store
-    // must satisfy the step-7 `RetainedBytesRow` 1:1 law — the row's
-    // projection is exactly what the capture-insert stamping would write
-    // (signature byte-count sum; empty revision list ⇒ revisionCount 0 /
-    // revisionBytes 0; `bytesSchemaVersion == 1`), keeping the corruption
-    // under test confined to the one damaged scalar/projection field.
-    var canonicalBytes = 0
-    for entry in bundle.signatureEntries {
-        canonicalBytes += entry.byteCount
-    }
-    context.insert(RetainedBytesRow(
-        itemID: bundle.domain.candidateID.rawValue,
-        canonicalBytes: canonicalBytes,
-        revisionCount: 0,
-        revisionBytes: 0,
-        bytesSchemaVersion: 1
-    ))
     try context.save()
-    return bundle.domain.candidateID
+    return reference.id
 }
+
+private enum FixtureFailure: Error { case expectedInsert }
 
 /// Shared only with Card 11A's public-facade admission proof. Keeping the
 /// malformed row construction here ensures its corpus poison is the same real
@@ -141,18 +83,6 @@ static func seedOverBoundSearchBodyRow(
     at storeURL: URL
 ) async throws -> HistoryItemID {
     try await seedRow(at: storeURL, corruption: .searchBody)
-}
-
-/// Startup consumes the projection schema tag while rebuilding scalar
-/// metadata, so an unknown tag prevents the facade from being published.
-@Test func startupRejectsUnknownProjectionSchemaVersion() async throws {
-    let storeURL = WSSupport.tempStoreURL("projection-corrupt-schema")
-    defer { WSSupport.removeStore(storeURL) }
-    _ = try await Self.seedRow(at: storeURL, corruption: .schemaVersion)
-
-    await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
-        _ = try await WSSupport.makeAuthority(storeURL: storeURL)
-    }
 }
 
 /// Title is consumed by recent, search, and full-lineage reads; each path

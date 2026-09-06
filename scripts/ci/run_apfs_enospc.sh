@@ -1535,7 +1535,7 @@ set +e
     "same revision committed after space release"
   printf 'pressure_revise_verify=%s\n' "durable revised state readable"
   printf '%s\n' \
-    "evidence_ceiling=Card 6B admission-refusal leaves only; post-admission mid-transaction exhaustion remains the Apple framework crash ceiling (docs/05 §16); remove/clear full-disk tails uncharacterized (zero-demand plans are never admission-refused); V1->V2 migration-on-full-disk is not triggerable through the public API"
+    "evidence_ceiling=Card 6B admission-refusal leaves only; post-admission mid-transaction exhaustion remains the Apple framework crash ceiling (docs/05 §16); remove/clear full-disk tails uncharacterized (zero-demand plans are never admission-refused)"
 } | tee "$log_dir/apfs-enospc-summary.log"
 success_summary_status=$?
 set -e
