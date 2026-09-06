@@ -7,6 +7,58 @@ import ImageIO
 import Testing
 
 struct ImageFormatFitTests {
+    struct OrientationFixture: Sendable {
+        let orientation: Int
+        let width: Int
+        let height: Int
+        let expectedOrder: [Int]
+    }
+
+    /// Source rows are A B C / D E F. Each output order below is an
+    /// independent EXIF display-layout literal, not a product transform or
+    /// an expected image generated through ImageIO's thumbnail API.
+    @Test(arguments: [
+        OrientationFixture(orientation: 1, width: 3, height: 2, expectedOrder: [0, 1, 2, 3, 4, 5]),
+        OrientationFixture(orientation: 2, width: 3, height: 2, expectedOrder: [2, 1, 0, 5, 4, 3]),
+        OrientationFixture(orientation: 3, width: 3, height: 2, expectedOrder: [5, 4, 3, 2, 1, 0]),
+        OrientationFixture(orientation: 4, width: 3, height: 2, expectedOrder: [3, 4, 5, 0, 1, 2]),
+        OrientationFixture(orientation: 5, width: 2, height: 3, expectedOrder: [0, 3, 1, 4, 2, 5]),
+        OrientationFixture(orientation: 6, width: 2, height: 3, expectedOrder: [3, 0, 4, 1, 5, 2]),
+        OrientationFixture(orientation: 7, width: 2, height: 3, expectedOrder: [5, 2, 4, 1, 3, 0]),
+        OrientationFixture(orientation: 8, width: 2, height: 3, expectedOrder: [2, 5, 1, 4, 0, 3]),
+    ])
+    func asymmetricPixelsFollowEveryEXIFOrientation(_ fixture: OrientationFixture) async throws {
+        let bytes = try Self.encodedAsymmetricTIFF(orientation: fixture.orientation)
+        let source = try #require(CGImageSourceCreateWithData(bytes as CFData, nil))
+        let properties = try #require(
+            CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        )
+        try #require(properties[kCGImagePropertyPixelWidth] as? Int == 3)
+        try #require(properties[kCGImagePropertyPixelHeight] as? Int == 2)
+        let encodedOrientation = properties[kCGImagePropertyOrientation] as? Int ?? 1
+        try #require(encodedOrientation == fixture.orientation)
+
+        let outcome = await ContentPreview().renderHistoryPane([
+            PreviewRepresentation(typeIdentifier: "public.tiff", bytes: bytes),
+        ])
+        guard case .content(.raster(let raster)) = outcome else {
+            Issue.record("expected EXIF-oriented TIFF, got \(outcome)")
+            return
+        }
+        #expect(raster.width == fixture.width)
+        #expect(raster.height == fixture.height)
+        #expect(raster.rowBytes == fixture.width * 4)
+        #expect(raster.sourceImageCount == 1)
+        // BGRA literals for A red, B green, C blue, D cyan, E magenta,
+        // F yellow. TIFF is lossless and no scaling is needed for six pixels.
+        let palette: [[UInt8]] = [
+            [0, 0, 255, 255], [0, 255, 0, 255], [255, 0, 0, 255],
+            [255, 255, 0, 255], [255, 0, 255, 255], [0, 255, 255, 255],
+        ]
+        let expected = Data(fixture.expectedOrder.flatMap { palette[$0] })
+        #expect(raster.pixels == expected)
+    }
+
     struct Fixture: Sendable {
         let format: String
         let label: String
@@ -77,6 +129,31 @@ struct ImageFormatFitTests {
             ).joined())
             #expect(raster.pixels == redPixels)
         }
+    }
+
+    private static func encodedAsymmetricTIFF(orientation: Int) throws -> Data {
+        // Raw RGBA scanlines define top-to-bottom source order without a
+        // drawing context's coordinate system participating in the fixture.
+        let pixels = Data([
+            UInt8(255), 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255,
+            0, 255, 255, 255, 255, 0, 255, 255, 255, 255, 0, 255,
+        ])
+        let provider = try #require(CGDataProvider(data: pixels as CFData))
+        let colorSpace = try #require(CGColorSpace(name: CGColorSpace.sRGB))
+        let image = try #require(CGImage(
+            width: 3, height: 2, bitsPerComponent: 8, bitsPerPixel: 32,
+            bytesPerRow: 12, space: colorSpace,
+            bitmapInfo: CGBitmapInfo(rawValue: CGBitmapInfo.byteOrder32Big.rawValue
+                | CGImageAlphaInfo.premultipliedLast.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent
+        ))
+        let data = try #require(CFDataCreateMutable(kCFAllocatorDefault, 0))
+        let destination = try #require(CGImageDestinationCreateWithData(data, "public.tiff" as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, image, [
+            kCGImagePropertyOrientation: orientation,
+        ] as CFDictionary)
+        try #require(CGImageDestinationFinalize(destination))
+        return data as Data
     }
 
     private static func encodedRedImage(_ fixture: Fixture) throws -> Data {
