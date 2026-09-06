@@ -96,8 +96,9 @@ struct RecentKeysetPaginationTests {
         }
         let page = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 1))
         let cursor = try #require(page.next)
+        let processMarker = await history.authority.cursorProcessMarker
         let resolved = try PageCursorCodec.decode(
-            cursor, processMarker: history.authority.cursorProcessMarker
+            cursor, processMarker: processMarker
         )
         let malformed = try PageCursorCodec.encode(ResolvedPageCursor(
             queryShape: resolved.queryShape,
@@ -107,7 +108,7 @@ struct RecentKeysetPaginationTests {
                 lastCopiedAt: Date(timeIntervalSinceReferenceDate: 840_000_100),
                 id: HistoryItemID(rawValue: UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)))
             )
-        ), processMarker: history.authority.cursorProcessMarker)
+        ), processMarker: processMarker)
 
         await #expect(throws: HistoryFailure.snapshotExpired(current: page.position)) {
             try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 1, after: malformed))
