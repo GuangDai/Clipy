@@ -9,6 +9,11 @@ import Testing
 @testable import PasteboardAdapter
 
 #if DEBUG
+@MainActor
+private final class RetryAccessBehavior {
+    var value = PasteboardAccessBehavior.allowed
+}
+
 /// Exercise reentry during either the first freeze or its one ownership
 /// retry. The nested poll consumes the newer generation; returning to the
 /// outer stack must neither read it again nor issue a second callback.
@@ -145,13 +150,13 @@ func observerStopsAfterOneRetryAndEmitsOneTerminalContentFreeOutcome() throws {
 func observerChecksRevocationBeforeReadingChangedPasteboardItems() {
     let pasteboard = makeRetryPasteboard()
     replaceString(on: pasteboard, with: "allowed-generation")
-    var accessBehavior = PasteboardAccessBehavior.allowed
+    let accessBehavior = RetryAccessBehavior()
     var payloadReads = 0
     var adapter = PasteboardAdapter(pasteboard: pasteboard)
     adapter.payloadReadObserver = { _ in payloadReads += 1 }
     let observer = PasteboardObserver(adapter: adapter)
     observer.setAccessBehaviorProviderForTesting {
-        accessBehavior
+        accessBehavior.value
     }
     var accessEvents: [PasteboardAccessBehavior] = []
     var received: [CaptureOutcome] = []
@@ -165,7 +170,7 @@ func observerChecksRevocationBeforeReadingChangedPasteboardItems() {
     #expect(payloadReads == 1)
     #expect(received.count == 1)
 
-    accessBehavior = .denied
+    accessBehavior.value = .denied
     replaceString(on: pasteboard, with: "denied-generation")
     observer.pollForTesting()
 
