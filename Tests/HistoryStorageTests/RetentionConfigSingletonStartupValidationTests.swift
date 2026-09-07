@@ -82,7 +82,7 @@ struct RetentionConfigSingletonStartupValidationTests {
             FROM history_state
             """)
         defer { state.finalize() }
-        try #require(state.step())
+        try #require(try state.step())
         return try StoredState(
             policies: policies, position: state.blob(at: 0),
             maximumUnpinnedItems: state.integer(at: 1),
@@ -156,8 +156,9 @@ struct RetentionConfigSingletonStartupValidationTests {
                 maxRevisionsPerItem: 20, maxRevisionBytesPerItem: 16_777_216
             )
         ))
-        await history.authority.withTestDatabase { authority in
-            #expect(try Self.readState(in: authority.database) == seeded)
+        let persisted = try await history.authority.withTestDatabase { authority in
+            try Self.readState(in: authority.database)
         }
+        #expect(persisted == seeded)
     }
 }

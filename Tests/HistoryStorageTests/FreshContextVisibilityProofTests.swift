@@ -52,7 +52,7 @@ struct FreshContextVisibilityProofTests {
             FROM history_state s CROSS JOIN history_items i WHERE s.key = 'retained-history'
             """)
         defer { statement.finalize() }
-        try #require(statement.step())
+        try #require(try statement.step())
         return try Read(position: sqliteUInt64(statement.blob(at: 0)), copyCount: sqliteUInt64(statement.blob(at: 1)),
                         title: statement.blob(at: 2), lastCopiedAt: statement.real(at: 3))
     }
