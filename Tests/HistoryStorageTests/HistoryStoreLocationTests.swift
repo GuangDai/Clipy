@@ -136,7 +136,7 @@ struct HistoryStoreLocationTests {
         // Two blobs and at most two shard directories fit in the first batch;
         // subsequent calls also traverse staging and restart enumeration.
         for _ in 0..<4 {
-            removed += try blobs.cleanupBatch(limit: 8) { try isReferenced($0, in: database) }
+            removed += try blobs.cleanupBatch(limit: 8) { try isReferenced($0, in: database) }.removedCount
         }
         return removed
     }

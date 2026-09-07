@@ -106,14 +106,20 @@ extension HistoryAuthority {
     /// SQL transaction has returned successfully.
     internal func publishCommittedHistory(_ commit: HistoryCommit) -> HistoryReceipt {
         invalidationPublisher.publish(HistoryInvalidation(latestPosition: commit.position))
-        _ = try? blobStore.cleanupBatch { id in
-            let statement = try database.prepare(
-                "SELECT 1 FROM representations WHERE blobID = ? LIMIT 1",
-                bindings: [.text(id.uuidString)]
-            )
-            defer { statement.finalize() }
-            return try statement.step()
+        let removedContent: Bool
+        switch commit.outcome {
+        case .removed(let count), .cleared(let count):
+            removedContent = count > 0
+        case .retentionPolicySet(let count):
+            removedContent = count > 0
+        case .retentionPoliciesSet(let retiredItems, let prunedRevisions):
+            removedContent = retiredItems > 0 || prunedRevisions > 0
+        case .inserted, .coalesced, .placedPinned, .unpinned, .revised:
+            removedContent = false
         }
+        // This existing receipt fact includes capture/revise retention and
+        // append-with-prune. Ordinary copy/pin does not start another scan.
+        if removedContent || commit.hasDestructiveRetentionEffects { requestBlobCleanup() }
         return .committed(commit)
     }
 }

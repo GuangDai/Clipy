@@ -217,6 +217,11 @@ public final class HistoryViewState {
     /// though the receipt still publishes its derived-state purge.
     private var observedPosition: ChangePosition?
 
+    /// A receipt proves this history instance has committed at least this
+    /// position. Buffered observations/one-shot reads may predate its delivery.
+    /// Query changes and panel closure do not erase that already-known fact.
+    private var latestReceiptPosition: ChangePosition?
+
     /// Rows-epoch counter. Bumped on every observation restart AND on every
     /// applied observed page, so a one-shot pagination result captured against
     /// superseded rows is discarded instead of appending to replaced rows.
@@ -458,6 +463,11 @@ public final class HistoryViewState {
                       self.paginationRequestToken == requestToken,
                       self.observationGeneration == generation
                 else { return }
+                guard self.latestReceiptPosition.map({ page.position >= $0 }) ?? true else {
+                    self.nextPageCursor = nil
+                    self.finishPagination(requestToken)
+                    return
+                }
                 // The first page uses after:nil. A concurrent commit may
                 // therefore return a newer snapshot before observe delivers
                 // it; never combine that page with the old window.
@@ -778,6 +788,8 @@ public final class HistoryViewState {
     /// Composition-root removal handoff. The app-owned ingress calls this
     /// after the real Gateway has committed a positive remove and before
     /// replying; pin/unpin/no-op/failure never enter this seam (Card 9B).
+    /// This ID-only callback proves an exact purge, not a snapshot position;
+    /// it cannot reject buffered observations using the receipt floor.
     public func acceptCommittedExternalRemoval(
         _ itemID: HistoryItemID
     ) -> HistorySurfacePurge {
@@ -882,6 +894,7 @@ public final class HistoryViewState {
         _ page: HistoryPage,
         forSearchGeneration queryGeneration: Int
     ) {
+        guard latestReceiptPosition.map({ page.position >= $0 }) ?? true else { return }
         invalidatePagination()
         observationGeneration += 1
         rows = page.rows
@@ -988,6 +1001,7 @@ public final class HistoryViewState {
         receipt: HistoryReceipt
     ) {
         guard case .committed(let commit) = receipt else { return }
+        recordCommittedPosition(commit.position)
 
         let scope: HistorySurfacePurge.Scope?
         if commit.hasDestructiveRetentionEffects {
@@ -1034,6 +1048,7 @@ public final class HistoryViewState {
         _ scope: HistorySurfacePurge.Scope,
         position: ChangePosition
     ) -> HistorySurfacePurge {
+        recordCommittedPosition(position)
         let hasObservedCommit = observedPosition.map {
             $0 >= position
         } ?? false
@@ -1052,9 +1067,15 @@ public final class HistoryViewState {
     /// Capture receipts have no local action-to-outcome scope. Only the
     /// authoritative retention-effect bit can invalidate their surfaces.
     private func publishDestructiveRetentionPurge(_ receipt: HistoryReceipt) {
-        guard case .committed(let commit) = receipt,
-              commit.hasDestructiveRetentionEffects else { return }
+        guard case .committed(let commit) = receipt else { return }
+        recordCommittedPosition(commit.position)
+        guard commit.hasDestructiveRetentionEffects else { return }
         _ = publishCommittedSurfacePurge(.all, position: commit.position)
+    }
+
+    private func recordCommittedPosition(_ position: ChangePosition) {
+        guard latestReceiptPosition.map({ position > $0 }) ?? true else { return }
+        latestReceiptPosition = position
     }
 
     private func publishExactItemPurge(

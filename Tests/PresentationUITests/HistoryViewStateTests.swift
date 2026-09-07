@@ -420,12 +420,13 @@ struct HistoryViewStateTests {
             )],
             next: "fuzzy-page"
         )
-        let exactFirst = fixturePage(
+        let exactFirst = HistoryPage(
+            position: ChangePosition(rawValue: 2),
             rows: [fixtureRow(
                 id: "00000000-0000-0000-0000-000000000048",
                 title: "exact-first"
             )],
-            next: "exact-page"
+            next: exactCursor
         )
         let staleFuzzyPage = fixturePage(
             rows: [fixtureRow(
@@ -434,7 +435,8 @@ struct HistoryViewStateTests {
             )],
             next: nil
         )
-        let exactSecond = fixturePage(
+        let exactSecond = HistoryPage(
+            position: ChangePosition(rawValue: 2),
             rows: [fixtureRow(
                 id: "00000000-0000-0000-0000-000000000050",
                 title: "exact-second"
@@ -455,6 +457,12 @@ struct HistoryViewStateTests {
         state.loadNextPage()
         #expect(await pollUntil { await history.isBrowsePaused(after: fuzzyCursor) })
 
+        // The old task now fails both receipt-position and query ownership.
+        // Its floor rejection must not clear the newer query's valid cursor.
+        state.acceptCaptureReceipt(.committed(HistoryCommit(
+            position: ChangePosition(rawValue: 2),
+            outcome: .inserted(exactFirst.rows[0].item)
+        )))
         state.searchMode = .exact
         #expect(!state.isLoadingPage)
         #expect(await pollUntil { await history.observeRequests.count == 2 })
@@ -474,6 +482,7 @@ struct HistoryViewStateTests {
         await Task.yield()
         #expect(state.rows.map(\.title) == ["exact-first"])
         #expect(state.isLoadingPage)
+        #expect(state.hasNextPage)
 
         await history.resumeBrowse(after: exactCursor)
         #expect(
@@ -1282,9 +1291,10 @@ struct HistoryViewStateTests {
         // Even an observation delivered before the receipt is retired at the
         // receipt boundary; its pin classification cannot authorize copying.
         await history.emitObservedPage(
-            fixturePage(
+            HistoryPage(
+                position: ChangePosition(rawValue: 19),
                 rows: [pinnedSurvivor, newUnpinned],
-                next: "survivor-continuation"
+                next: fixtureCursor("survivor-continuation")
             )
         )
         try #require(
@@ -1318,7 +1328,11 @@ struct HistoryViewStateTests {
         #expect(await pasteRecorder.received.isEmpty)
 
         await history.emitObservedPage(
-            fixturePage(rows: [pinnedSurvivor, newUnpinned], next: nil)
+            HistoryPage(
+                position: ChangePosition(rawValue: 20),
+                rows: [pinnedSurvivor, newUnpinned],
+                next: nil
+            )
         )
         try #require(
             await pollUntil {

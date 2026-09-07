@@ -7,6 +7,12 @@ internal struct ImmutableBlobReference: Sendable, Equatable {
     internal let byteCount: Int
 }
 
+internal struct BlobCleanupBatchResult: Sendable, Equatable {
+    internal let removedCount: Int
+    /// Both blobs and staging have been visited; no enumerator is retained.
+    internal let completedPass: Bool
+}
+
 /// Concrete file implementation owned by the sole HistoryAuthority. Calls are
 /// synchronous: publication/reference commits and cleanup cannot interleave.
 /// V2-09 §§3/5/6: random identity, immutable files, database references last.
@@ -38,7 +44,9 @@ internal final class ImmutableBlobStore {
     /// Writes and synchronizes a private staging file, then publishes using a
     /// hard link: the final directory entry is atomic and never overwrites.
     /// A later SQL rollback may leave this published file for bounded cleanup.
-    internal func write(_ bytes: Data, id: UUID = UUID()) throws -> ImmutableBlobReference {
+    internal func write(
+        _ bytes: Data, id: UUID = UUID(), didPublish: () -> Void = {}
+    ) throws -> ImmutableBlobReference {
         let temporary = root.appendingPathComponent("staging/\(id.uuidString).partial")
         let destination = blobURL(id)
         let descriptor = Darwin.open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, mode_t(0o600))
@@ -58,6 +66,7 @@ internal final class ImmutableBlobStore {
             guard Darwin.link(temporary.path, destination.path) == 0 else {
                 throw posixFailure()
             }
+            didPublish()
             try synchronizeDirectory(destination.deletingLastPathComponent())
             // fsync moves data to the drive; F_FULLFSYNC also flushes its
             // buffered writes. Neither failure permits a database reference.
@@ -125,18 +134,27 @@ internal final class ImmutableBlobStore {
     /// advances across calls; no complete live-ID collection or startup scan.
     /// The synchronous SQL callback and unlink run in one Authority interval.
     @discardableResult
-    internal func cleanupBatch(limit: Int = 64, isReferenced: (UUID) throws -> Bool) throws -> Int {
-        guard limit > 0 else { return 0 }
+    internal func cleanupBatch(
+        limit: Int = 64, isReferenced: (UUID) throws -> Bool
+    ) throws -> BlobCleanupBatchResult {
+        guard limit > 0 else { return BlobCleanupBatchResult(removedCount: 0, completedPass: false) }
         var removed = 0
         for _ in 0..<limit {
             if cleanupEnumerator == nil {
                 let directory = root.appendingPathComponent(cleaningStaging ? "staging" : "blobs")
-                cleanupEnumerator = files.enumerator(at: directory, includingPropertiesForKeys: [.isRegularFileKey])
+                guard let enumerator = files.enumerator(at: directory, includingPropertiesForKeys: [.isRegularFileKey]) else {
+                    throw HistoryFailure.persistence(.transaction)
+                }
+                cleanupEnumerator = enumerator
             }
             guard let url = cleanupEnumerator?.nextObject() as? URL else {
                 cleanupEnumerator = nil
-                cleaningStaging.toggle()
-                break
+                if cleaningStaging {
+                    cleaningStaging = false
+                    return BlobCleanupBatchResult(removedCount: removed, completedPass: true)
+                }
+                cleaningStaging = true
+                continue
             }
             let suffix = cleaningStaging ? "partial" : "blob"
             guard url.pathExtension == suffix,
@@ -154,7 +172,15 @@ internal final class ImmutableBlobStore {
                 removed += 1
             }
         }
-        return removed
+        return BlobCleanupBatchResult(removedCount: removed, completedPass: false)
+    }
+
+    /// Cancellation and failed passes release directory traversal immediately.
+    /// The next work request starts a fresh finite pass rather than resuming
+    /// past entries whose database references may since have been removed.
+    internal func cancelCleanupPass() {
+        cleanupEnumerator = nil
+        cleaningStaging = false
     }
 
     private var corruptValue: HistoryFailure { .persistence(.corruptStoredValue) }

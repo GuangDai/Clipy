@@ -241,7 +241,7 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
             storageClock: storageClock,
             revisionPreparation: revisionPreparation
         )
-        return SQLiteHistory(
+        let history = SQLiteHistory(
             authority: authority,
             ingestPreparation: IngestPreparationActor(
                 makeCandidateID: makeCandidateID
@@ -254,6 +254,10 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
             storeLocation: storeLocation,
             storeRootLease: storeRootLease
         )
+        // Construction is complete before maintenance is scheduled. This
+        // actor call only queues work; startup never walks blob directories.
+        await authority.requestBlobCleanup()
+        return history
     }
 
     /// Returns the External History entry bound to the startup-validated

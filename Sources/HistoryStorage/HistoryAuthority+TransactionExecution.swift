@@ -12,8 +12,13 @@ extension HistoryAuthority {
         expectedPreviousPosition: ChangePosition,
         in database: SQLiteDatabase
     ) throws {
+        var publishedNewFiles = false
+        var committed = false
+        defer {
+            if publishedNewFiles && !committed { requestBlobCleanup() }
+        }
         do {
-            let published = try publishHistoryContent(for: plan)
+            let published = try publishHistoryContent(for: plan) { publishedNewFiles = true }
             try database.writeTransaction {
                 let auditConfig = try validateHistoryCommit(
                     expectedPreviousPosition: expectedPreviousPosition,
@@ -31,6 +36,7 @@ extension HistoryAuthority {
                     auditAppend: plan.auditAppend, auditConfig: auditConfig, in: database
                 )
             }
+            committed = true
         } catch let rejection as ExternalWriteGateRejection {
             throw rejection
         } catch let failure as ExternalFailure {
