@@ -90,10 +90,14 @@ final class MaintenanceJourneyUITests: XCTestCase {
         ).firstMatch
         let scrollView = window.scrollViews.firstMatch
         for _ in 0..<10 {
-            if element.isHittable && scrollView.frame.contains(element.frame) { return }
+            if element.isHittable && scrollView.frame.contains(element.frame) { break }
             scrollView.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
                 .scroll(byDeltaX: 0, deltaY: element.frame.midY < scrollView.frame.midY ? 60 : -60)
         }
+        // Both are required: the regressed 640-point tab could scroll to its
+        // end and contain its bottom button while AppKit still exposed no
+        // hit point. A view-local rectangle alone does not prove usability.
+        XCTAssertTrue(scrollView.frame.contains(element.frame), app.debugDescription)
         XCTAssertTrue(element.isHittable, app.debugDescription)
     }
 

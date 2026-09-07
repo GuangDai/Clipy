@@ -97,7 +97,7 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
                 && self.text(of: path) == expectedPath
                 && self.text(of: address) == originalAddress
                 && self.text(of: disclosure)
-                    == "Only the reference is shown. Its destination has not been opened."
+                    == "Only the reference is shown. Loading its contents requires confirmation."
         }, app.debugDescription)
         XCTAssertEqual(rows.count, 1, app.debugDescription)
 
@@ -138,7 +138,7 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
                 && self.text(of: path) == expectedPath
                 && self.text(of: address) == originalAddress
                 && self.text(of: disclosure)
-                    == "Only the reference is shown. Its destination has not been opened."
+                    == "Only the reference is shown. Loading its contents requires confirmation."
         }, app.debugDescription)
         XCTAssertFalse(preview.descendants(matching: .any).matching(
             NSPredicate(format: "label == %@ OR value == %@", fileContentMarker, fileContentMarker)
@@ -170,7 +170,7 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
                 && self.text(of: quickPath) == expectedPath
                 && self.text(of: quickAddress) == originalAddress
                 && self.text(of: quickDisclosure)
-                    == "Only the reference is shown. Its destination has not been opened."
+                    == "Only the reference is shown. Loading its contents requires confirmation."
         }, app.debugDescription)
         XCTAssertEqual(search.value as? String, "draft", app.debugDescription)
         XCTAssertFalse(quickLook.descendants(matching: .any).matching(
@@ -188,7 +188,7 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
                 && self.text(of: path) == expectedPath
                 && self.text(of: address) == originalAddress
                 && self.text(of: disclosure)
-                    == "Only the reference is shown. Its destination has not been opened."
+                    == "Only the reference is shown. Loading its contents requires confirmation."
         }, app.debugDescription)
         XCTAssertFalse(preview.descendants(matching: .any).matching(
             NSPredicate(format: "label == %@ OR value == %@", fileContentMarker, fileContentMarker)
@@ -241,10 +241,16 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         XCTAssertFalse(renderedText.exists, app.debugDescription)
 
         request.click()
-        let confirm = app.buttons["clipy.preview.file.confirm"]
+        // AppKit also exposes Cancel/Load File in the Touch Bar. Scope both
+        // actions to the visible confirmation sheet rather than selecting
+        // an offscreen duplicate from the application-wide button query.
+        let confirmation = app.sheets.containing(
+            .button, identifier: "clipy.preview.file.confirm"
+        ).firstMatch
+        let confirm = confirmation.buttons["clipy.preview.file.confirm"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertFalse(renderedText.exists, app.debugDescription)
-        let cancel = app.buttons["Cancel"]
+        let cancel = confirmation.buttons["Cancel"]
         XCTAssertTrue(cancel.exists && cancel.isHittable, app.debugDescription)
         cancel.click()
         XCTAssertTrue(waitUntil(timeout: 5) { !confirm.exists && request.exists }, app.debugDescription)
