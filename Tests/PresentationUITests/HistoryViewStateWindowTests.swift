@@ -8,7 +8,8 @@ struct HistoryViewStateWindowTests {
     private func fixture(
         rowCount: Int = 16,
         pausedPage: Int? = nil,
-        newerOutcome: ScriptedHistory.BrowseOutcome? = nil
+        newerOutcome: ScriptedHistory.BrowseOutcome? = nil,
+        repeatsObservedFirstPage: Bool = true
     ) -> (ScriptedHistory, [HistoryRow]) {
         let rows = (1...rowCount).map { index in
             fixtureRow(
@@ -33,6 +34,7 @@ struct HistoryViewStateWindowTests {
         }
         return (ScriptedHistory(
             observedFirstPage: pages[0],
+            repeatsObservedFirstPage: repeatsObservedFirstPage,
             browseScript: script
         ), rows)
     }
@@ -233,13 +235,25 @@ struct HistoryViewStateWindowTests {
     }
 
     @Test func expiredNewerCursorRestartsTheSameSearchAtPageOne() async throws {
-        let (history, allRows) = fixture(newerOutcome: .failure(.snapshotExpired))
+        let currentPosition = ChangePosition(rawValue: 2)
+        let (history, allRows) = fixture(
+            newerOutcome: .failure(.snapshotExpired(current: currentPosition)),
+            repeatsObservedFirstPage: false
+        )
         let state = HistoryViewState(history: history, pageLimit: 2)
         state.searchMode = .exact
         state.searchText = "row "
         state.typeFilter = .text
         state.activate()
         defer { state.deactivate() }
+        try #require(await pollUntil {
+            await history.observeRequests.last?.kind == .search(text: "row ", mode: .exact)
+        })
+        await history.emitObservedPage(HistoryPage(
+            position: ChangePosition(rawValue: 1),
+            rows: Array(allRows.prefix(2)),
+            next: fixtureCursor("page-1")
+        ))
         try #require(await pollUntil { state.rows.count == 2 })
         for _ in 0..<3 {
             state.loadNextPage()
@@ -248,6 +262,15 @@ struct HistoryViewStateWindowTests {
         let observedCount = await history.observeRequests.count
         state.loadPreviousPage()
         try #require(await pollUntil { await history.observeRequests.count > observedCount })
+        #expect(state.rows.isEmpty)
+        #expect(state.isLoadingFirstPage)
+        // The cursor belongs to position 1. A commit expired it at 2, so
+        // the replacement read must not replay the older fixture snapshot.
+        await history.emitObservedPage(HistoryPage(
+            position: currentPosition,
+            rows: Array(allRows.prefix(2)),
+            next: fixtureCursor("current-page-1")
+        ))
         try #require(await pollUntil { state.rows == Array(allRows.prefix(2)) })
         #expect(await history.browseRequests.last?.cursor == fixtureCursor("newer-0"))
         #expect(await history.observeRequests.last?.kind == .search(text: "row ", mode: .exact))
