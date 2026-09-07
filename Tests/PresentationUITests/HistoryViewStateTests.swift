@@ -193,7 +193,7 @@ struct HistoryViewStateTests {
 
     // MARK: - Pagination (03a §7; 04 §6)
 
-    /// `loadNextPage()` issues one one-shot `browse(after:)` with the page's
+    /// `loadNextPage()` issues one one-shot `browse(cursor:)` with the page's
     /// cursor and kind, appends the returned rows, and `hasNextPage` flips
     /// false when the appended page's cursor is nil. With no next cursor,
     /// `loadNextPage()` is a no-op.
@@ -233,7 +233,7 @@ struct HistoryViewStateTests {
         #expect(browseRequests.count == 1)
         #expect(browseRequests.first?.kind == .recent)
         #expect(browseRequests.first?.limit == 50)
-        #expect(browseRequests.first?.after == fixtureCursor("cursor-one"))
+        #expect(browseRequests.first?.cursor == fixtureCursor("cursor-one"))
 
         // Cursor exhausted: the guarded call issues no further browse
         // (stable negative — the guard is synchronous).
@@ -297,7 +297,7 @@ struct HistoryViewStateTests {
             state.rows.map(\.title)
                 == ["observed-one", "observed-two", "appended-one", "appended-two"]
         )
-        let cursors = await history.browseRequests.map(\.after)
+        let cursors = await history.browseRequests.map(\.cursor)
         #expect(
             cursors
                 == [
@@ -339,13 +339,13 @@ struct HistoryViewStateTests {
         #expect(await pollUntil { state.rows.map(\.title) == ["visible"] })
 
         state.loadNextPage()
-        #expect(await pollUntil { await history.isBrowsePaused(after: cursor) })
+        #expect(await pollUntil { await history.isBrowsePaused(cursor: cursor) })
         #expect(state.isLoadingPage)
 
         state.deactivate()
         #expect(!state.isLoadingPage)
 
-        await history.resumeBrowse(after: cursor)
+        await history.resumeBrowse(cursor: cursor)
         #expect(
             await pollUntil {
                 let completed = await history.completedPausedBrowseCursors
@@ -388,13 +388,13 @@ struct HistoryViewStateTests {
         #expect(await pollUntil { state.rows.map(\.title) == ["old-query-row"] })
 
         state.loadNextPage()
-        #expect(await pollUntil { await history.isBrowsePaused(after: cursor) })
+        #expect(await pollUntil { await history.isBrowsePaused(cursor: cursor) })
         #expect(state.isLoadingPage)
 
         state.searchText = "new query"
         #expect(!state.isLoadingPage)
 
-        await history.resumeBrowse(after: cursor)
+        await history.resumeBrowse(cursor: cursor)
         #expect(
             await pollUntil {
                 let completed = await history.completedPausedBrowseCursors
@@ -455,7 +455,7 @@ struct HistoryViewStateTests {
         #expect(await pollUntil { state.rows.map(\.title) == ["fuzzy-first"] })
 
         state.loadNextPage()
-        #expect(await pollUntil { await history.isBrowsePaused(after: fuzzyCursor) })
+        #expect(await pollUntil { await history.isBrowsePaused(cursor: fuzzyCursor) })
 
         // The old task now fails both receipt-position and query ownership.
         // Its floor rejection must not clear the newer query's valid cursor.
@@ -469,10 +469,10 @@ struct HistoryViewStateTests {
         await history.emitObservedPage(exactFirst)
         #expect(await pollUntil { state.rows.map(\.title) == ["exact-first"] })
         state.loadNextPage()
-        #expect(await pollUntil { await history.isBrowsePaused(after: exactCursor) })
+        #expect(await pollUntil { await history.isBrowsePaused(cursor: exactCursor) })
         #expect(state.isLoadingPage)
 
-        await history.resumeBrowse(after: fuzzyCursor)
+        await history.resumeBrowse(cursor: fuzzyCursor)
         #expect(
             await pollUntil {
                 let completed = await history.completedPausedBrowseCursors
@@ -484,7 +484,7 @@ struct HistoryViewStateTests {
         #expect(state.isLoadingPage)
         #expect(state.hasNextPage)
 
-        await history.resumeBrowse(after: exactCursor)
+        await history.resumeBrowse(cursor: exactCursor)
         #expect(
             await pollUntil {
                 state.rows.map(\.title) == ["exact-first", "exact-second"]

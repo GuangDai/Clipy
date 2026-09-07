@@ -133,7 +133,8 @@ struct EditorNoChangeAtRevisionCapacityTests {
         #expect(sourceRequest == HistoryRepresentationRequest(item: current, basis: .effective, typeIdentifier: textType))
         let source = try await history.representation(sourceRequest)
         #expect(source.bytes == Data("revision \(maximum)".utf8))
-        #expect(changedDraft.installReplacementSource(source))
+        let installed = changedDraft.installReplacementSource(source)
+        #expect(installed)
         #expect(!changedDraft.hasReplacementSource(for: opaqueType))
         changedDraft.setChoice(.replace, for: textType)
         // Merely opening Replace must still submit byte-identical current

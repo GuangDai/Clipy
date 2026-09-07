@@ -127,7 +127,7 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
         let second = try await history.browse(HistoryBrowseRequest(
             kind: .search(text: "budgetterm", mode: mode),
             limit: 5,
-            after: first.next
+            cursor: first.next
         ))
         #expect(second.rows.count == 3)
         #expect(second.next == nil)
@@ -185,7 +185,7 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
         let second = try await history.browse(HistoryBrowseRequest(
             kind: .search(text: "budgetterm", mode: .exact),
             limit: 10,
-            after: first.next
+            cursor: first.next
         ))
         #expect(second.rows.count == 2)
         #expect(second.next == nil)
@@ -213,7 +213,7 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
             let page = try await history.browse(HistoryBrowseRequest(
                 kind: .search(text: "", mode: .exact),
                 limit: 5,
-                after: current
+                cursor: current
             ))
             for row in page.rows {
                 #expect(seen.insert(row.item.id).inserted)

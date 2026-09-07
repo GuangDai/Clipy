@@ -253,6 +253,19 @@ internal actor SearchWorker {
         let admitted = try AdmittedSearchRequest(request, limits: limits)
         let term = admitted.term
         let mode = admitted.mode
+        let direction: HistoryPageDirection
+        if let cursor = request.cursor {
+            do {
+                let decoded = try PageCursorCodec.decode(cursor, processMarker: processMarker)
+                guard decoded.position == corpus.position, decoded.queryShape.matches(request),
+                      decoded.anchor == continuationAnchor else {
+                    throw HistoryFailure.snapshotExpired(current: corpus.position)
+                }
+                direction = decoded.direction
+            } catch is PageCursorRejection {
+                throw HistoryFailure.snapshotExpired(current: corpus.position)
+            }
+        } else { direction = .forward }
 
         // WS12/search-observation seam: the Authority has already released
         // its operation-local context and handed over this immutable snapshot.
@@ -271,7 +284,8 @@ internal actor SearchWorker {
         // what the cursor binds.
         let directive = ScanDirective(
             continuationAnchor: continuationAnchor,
-            maximumSurvivors: request.limit + 1
+            maximumSurvivors: request.limit + 1,
+            direction: direction
         )
         let evaluation: EvaluationResult
         if term.isEmpty {
@@ -317,17 +331,10 @@ internal actor SearchWorker {
         // the previous page in this exact computed order; an absent anchor
         // means the cursor no longer matches this snapshot and fails
         // explicitly rather than silently skipping or repeating rows.
-        let survivors: ArraySlice<EvaluatedRow>
-        if let continuationAnchor {
-            guard let anchorIndex = evaluated.firstIndex(
-                where: { $0.anchor == continuationAnchor }
-            ) else {
-                throw HistoryFailure.snapshotExpired(current: corpus.position)
-            }
-            survivors = evaluated[(anchorIndex + 1)...]
-        } else {
-            survivors = evaluated[...]
-        }
+        let window = try Self.pageWindow(
+            in: evaluated, anchor: continuationAnchor, direction: direction,
+            limit: request.limit, position: corpus.position
+        )
 
 #if DEBUG
         searchDebugProbe.record(
@@ -336,14 +343,14 @@ internal actor SearchWorker {
             phase: "continuation",
             phaseElapsed: debugContinuationStart.duration(to: debugClock.now),
             totalElapsed: debugTotalStart.duration(to: debugClock.now),
-            rowsProcessed: survivors.count,
+            rowsProcessed: window.rows.count,
             rowsTotal: evaluated.count,
             matchedRows: evaluation.debugMatchedRows
         )
         let debugMaterializationStart = debugClock.now
 #endif
 
-        let pageSlice = survivors.prefix(request.limit)
+        let pageSlice = window.rows
         let rows = try pageSlice.map { row in
             try Task.checkCancellation()
             return materialize(row)
@@ -355,26 +362,16 @@ internal actor SearchWorker {
         // position, and the last RETURNED row's complete ordering anchor
         // (04 §6). `next` exists exactly when survivors remain beyond the
         // returned page.
+        let previous: HistoryPageCursor?
+        if window.hasPrevious, let first = pageSlice.first {
+            previous = try Self.mintSearchCursor(at: first.anchor, direction: .backward,
+                                                 request: request, position: corpus.position, processMarker: processMarker)
+        } else { previous = nil }
         let next: HistoryPageCursor?
-        if survivors.count > request.limit, let lastReturned = pageSlice.last {
-            do {
-                next = try PageCursorCodec.encode(
-                    ResolvedPageCursor(
-                        queryShape: .search(text: term, mode: mode, limit: request.limit),
-                        position: corpus.position,
-                        anchor: lastReturned.anchor
-                    ),
-                    processMarker: processMarker
-                )
-            } catch {
-                // A cursor is minted only from already validated scalar/search
-                // values. Encoding failure is therefore an internal invariant,
-                // never an expired caller cursor (05 §16).
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
-        } else {
-            next = nil
-        }
+        if window.hasNext, let last = pageSlice.last {
+            next = try Self.mintSearchCursor(at: last.anchor, direction: .forward,
+                                             request: request, position: corpus.position, processMarker: processMarker)
+        } else { next = nil }
 
 #if DEBUG
         searchDebugProbe.record(
@@ -400,7 +397,7 @@ internal actor SearchWorker {
 #endif
 
         try Task.checkCancellation()
-        return HistoryPage(position: corpus.position, rows: rows, next: next)
+        return HistoryPage(position: corpus.position, rows: rows, previous: previous, next: next)
     }
 
     // MARK: - Default-order anchor (docs/04-coherence.md §6)
@@ -466,51 +463,29 @@ internal actor SearchWorker {
     /// consume — the continuation anchor itself (page drops up to and
     /// including it) plus at most `limit + 1` successors — so a 5,000-row
     /// corpus no longer materializes 5,000 evaluated rows per page. A
-    /// missing anchor yields an empty array, which `page` maps to
-    /// `snapshotExpired` exactly as the full scan did.
+    /// The shared tracker also retains backward predecessors before an
+    /// anchor reaches a later SQL batch. Final page selection rejects an
+    /// anchor absent from the complete evaluated range.
     internal func evaluateRecentEquivalent(
         in corpus: SearchCorpusSnapshot,
         directive: ScanDirective
     ) -> EvaluationResult {
-        var startIndex = corpus.rows.startIndex
-        var window = directive.maximumSurvivors
-        if let anchor = directive.continuationAnchor {
-            guard let anchorIndex = corpus.rows.firstIndex(where: {
-                Self.defaultOrderAnchor(for: $0) == anchor
-            }) else {
+        var tracker = OrderPreservingScanTracker(directive: directive)
+        var rows: [EvaluatedRow] = []
 #if DEBUG
-                return EvaluationResult(
-                    rows: [],
-                    debugRowsProcessed: corpus.rows.count,
-                    debugMatchedRows: corpus.rows.count
-                )
-#else
-                return EvaluationResult(rows: [])
+        var processed = 0
 #endif
-            }
-            // Include the anchor row itself: `page` locates it in the
-            // evaluated array before dropping it, so an anchor-exclusive
-            // window would read as an expired cursor.
-            startIndex = anchorIndex
-            window += 1
-        }
-        let rows = corpus.rows[startIndex...]
-            .prefix(window)
-            .map { row in
-                EvaluatedRow(
-                    corpusRow: row,
-                    search: nil,
-                    anchor: Self.defaultOrderAnchor(for: row)
-                )
-            }
+        for row in corpus.rows {
+            let evaluated = EvaluatedRow(corpusRow: row, search: nil,
+                                         anchor: Self.defaultOrderAnchor(for: row))
+            tracker.appendIfRetained(evaluated, to: &rows)
 #if DEBUG
-        // Empty terms match every row examined. Include rows visited during
-        // anchor lookup, counting the anchor only once when it is retained.
-        return EvaluationResult(
-            rows: rows,
-            debugRowsProcessed: startIndex + rows.count,
-            debugMatchedRows: startIndex + rows.count
-        )
+            processed += 1
+#endif
+            if !tracker.recordMatch(ofRow: evaluated.anchor) { break }
+        }
+#if DEBUG
+        return EvaluationResult(rows: rows, debugRowsProcessed: processed, debugMatchedRows: processed)
 #else
         return EvaluationResult(rows: rows)
 #endif

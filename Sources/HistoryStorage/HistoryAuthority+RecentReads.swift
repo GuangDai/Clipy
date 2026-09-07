@@ -13,7 +13,7 @@ extension HistoryAuthority {
     /// One explicit snapshot joins ChangePosition, anchor validation and the
     /// bounded page. The synchronous helper also serves Gateway callers that
     /// already own a transaction; it never nests BEGIN inside that interval.
-    internal func recentPage(limit: Int, after: HistoryPageCursor?) async throws -> HistoryPage {
+    internal func recentPage(limit: Int, cursor: HistoryPageCursor?) async throws -> HistoryPage {
         await suspendIfRequested(.readEntry)
         guard limits.pageRowLimitRange.contains(limit) else {
             throw HistoryFailure.invalidInput(.invalidPageLimit)
@@ -22,7 +22,7 @@ extension HistoryAuthority {
         do {
             page = try autoreleasepool {
                 try database.readTransaction {
-                    try recentPageInLocalContext(limit: limit, after: after)
+                    try recentPageInLocalContext(limit: limit, cursor: cursor)
                 }
             }
         } catch let failure as SQLiteFailure {
@@ -35,7 +35,7 @@ extension HistoryAuthority {
     }
 
     internal func recentPageInLocalContext(
-        limit: Int, after: HistoryPageCursor?
+        limit: Int, cursor continuation: HistoryPageCursor?
     ) throws -> HistoryPage {
         guard limits.pageRowLimitRange.contains(limit) else {
             throw HistoryFailure.invalidInput(.invalidPageLimit)
@@ -44,7 +44,7 @@ extension HistoryAuthority {
         let currentPosition = try Self.decodePositionRow(row, limits: limits).position
         let cursor: ResolvedPageCursor?
         do {
-            cursor = try after.map {
+            cursor = try continuation.map {
                 try Self.decodeCursor($0, request: .init(kind: .recent, limit: limit), processMarker: processMarker)
             }
         } catch is PageCursorRejection {
@@ -61,6 +61,11 @@ extension HistoryAuthority {
             anchor = (ordinal, date, id)
         } else {
             anchor = nil
+        }
+        if let cursor, cursor.direction == .backward, let anchor {
+            return try recentPrecedingPage(
+                limit: limit, cursor: cursor, anchor: anchor, position: currentPosition
+            )
         }
 #if DEBUG
         let clock = ContinuousClock()
@@ -154,20 +159,112 @@ extension HistoryAuthority {
         )
 #endif
         let slice = merged.prefix(limit)
-        let rows = try slice.map { try $0.toHistoryRow(limits: limits) }
-        let next: HistoryPageCursor?
-        if merged.count > limit, let last = slice.last {
-            do {
-                next = try PageCursorCodec.encode(ResolvedPageCursor(
-                    queryShape: .recent(limit: limit), position: currentPosition, anchor: last.defaultOrderAnchor
-                ), processMarker: processMarker)
-            } catch {
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
-        } else {
-            next = nil
+        return try recentResult(
+            Array(slice), limit: limit, position: currentPosition,
+            hasPrevious: cursor != nil, hasNext: merged.count > limit
+        )
+    }
+
+    /// Reverse the existing partial indexes, selecting the nearest preceding
+    /// rows, then restore the canonical display order. Equal dates use the
+    /// reverse UUID tie-break; the unpinned head joins the pinned tail.
+    private func recentPrecedingPage(
+        limit: Int, cursor: ResolvedPageCursor,
+        anchor: (ordinal: Int?, date: Date, id: HistoryItemID), position: ChangePosition
+    ) throws -> HistoryPage {
+#if DEBUG
+        let clock = ContinuousClock()
+        let started = clock.now
+        storageLifecycleDebugProbe.record(phase: .recentFetchBegin)
+#endif
+        let storedAnchor = try fetchRecentScalars(
+            whereSQL: "id = ?", orderSQL: "id", bindings: [.text(anchor.id.rawValue.uuidString)], limit: 1
+        )
+        guard storedAnchor.first?.matches(cursor.anchor) == true else {
+            throw HistoryFailure.snapshotExpired(current: position)
         }
-        return HistoryPage(position: currentPosition, rows: rows, next: next)
+        var preceding: [ScalarReadRow] = []
+        if anchor.ordinal == nil {
+#if DEBUG
+            let laneStarted = clock.now
+            storageLifecycleDebugProbe.record(phase: .recentUnpinnedFetchBegin)
+#endif
+            let date = anchor.date.timeIntervalSinceReferenceDate
+            preceding = try fetchRecentScalars(
+                whereSQL: "pinOrdinal IS NULL AND lastCopiedAt = ? AND id < ?",
+                orderSQL: "id DESC", bindings: [.real(date), .text(anchor.id.rawValue.uuidString)], limit: limit + 1
+            )
+            if preceding.count <= limit {
+                preceding += try fetchRecentScalars(
+                    whereSQL: "pinOrdinal IS NULL AND lastCopiedAt > ?",
+                    orderSQL: "lastCopiedAt ASC, id DESC", bindings: [.real(date)], limit: limit + 1 - preceding.count
+                )
+            }
+#if DEBUG
+            storageLifecycleDebugProbe.record(
+                phase: .recentUnpinnedFetchComplete, elapsed: laneStarted.duration(to: clock.now), rows: preceding.count + 1
+            )
+#endif
+        }
+        if preceding.count <= limit {
+#if DEBUG
+            let laneStarted = clock.now
+            storageLifecycleDebugProbe.record(phase: .recentPinnedFetchBegin)
+#endif
+            let pinned: [ScalarReadRow]
+            if let ordinal = anchor.ordinal {
+                pinned = try fetchRecentScalars(
+                    whereSQL: "pinOrdinal IS NOT NULL AND pinOrdinal < ?",
+                    orderSQL: "pinOrdinal DESC", bindings: [.integer(Int64(ordinal))], limit: limit + 1
+                )
+            } else {
+                pinned = try fetchRecentScalars(
+                    whereSQL: "pinOrdinal IS NOT NULL", orderSQL: "pinOrdinal DESC", limit: limit + 1 - preceding.count
+                )
+            }
+            preceding += pinned
+#if DEBUG
+            storageLifecycleDebugProbe.record(
+                phase: .recentPinnedFetchComplete, elapsed: laneStarted.duration(to: clock.now),
+                rows: pinned.count + (anchor.ordinal == nil ? 0 : 1)
+            )
+#endif
+        }
+#if DEBUG
+        storageLifecycleDebugProbe.record(
+            phase: .recentFetchComplete, elapsed: started.duration(to: clock.now), rows: preceding.count
+        )
+#endif
+        return try recentResult(
+            Array(preceding.prefix(limit).reversed()), limit: limit, position: position,
+            hasPrevious: preceding.count > limit, hasNext: true
+        )
+    }
+
+    private func recentResult(
+        _ slice: [ScalarReadRow], limit: Int, position: ChangePosition,
+        hasPrevious: Bool, hasNext: Bool
+    ) throws -> HistoryPage {
+        let rows = try slice.map { try $0.toHistoryRow(limits: limits) }
+        let previous: HistoryPageCursor?
+        let next: HistoryPageCursor?
+        do {
+            previous = try hasPrevious ? slice.first.map {
+                try PageCursorCodec.encode(ResolvedPageCursor(
+                    queryShape: .recent(limit: limit), position: position,
+                    anchor: $0.defaultOrderAnchor, direction: .backward
+                ), processMarker: processMarker)
+            } : nil
+            next = try hasNext ? slice.last.map {
+                try PageCursorCodec.encode(ResolvedPageCursor(
+                    queryShape: .recent(limit: limit), position: position,
+                    anchor: $0.defaultOrderAnchor, direction: .forward
+                ), processMarker: processMarker)
+            } : nil
+        } catch {
+            throw HistoryFailure.persistence(.invariantViolation)
+        }
+        return HistoryPage(position: position, rows: rows, previous: previous, next: next)
     }
 
     /// Every query uses a concrete partial index range and a bound LIMIT.

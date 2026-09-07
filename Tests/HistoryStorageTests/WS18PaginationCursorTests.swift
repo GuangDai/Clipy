@@ -84,7 +84,7 @@ private static func captureItems(
 
     // WS18: page 2 — the NEXT 3 rows, no overlap with page1, no gap.
     let page2 = try await history.browse(
-        HistoryBrowseRequest(kind: .recent, limit: 3, after: page1Cursor)
+        HistoryBrowseRequest(kind: .recent, limit: 3, cursor: page1Cursor)
     )
     #expect(page2.rows.count == 3, "WS18: page2 has 3 rows")
     #expect(
@@ -100,7 +100,7 @@ private static func captureItems(
 
     // WS18: page 3 — the remaining 1 row, next == nil (last page).
     let page3 = try await history.browse(
-        HistoryBrowseRequest(kind: .recent, limit: 3, after: page2Cursor)
+        HistoryBrowseRequest(kind: .recent, limit: 3, cursor: page2Cursor)
     )
     #expect(page3.rows.count == 1, "WS18: page3 has 1 row")
     #expect(
@@ -174,7 +174,7 @@ private static func captureItems(
     var cursor: HistoryPageCursor?
     repeat {
         let page = try await history.browse(
-            HistoryBrowseRequest(kind: .recent, limit: 2, after: cursor)
+            HistoryBrowseRequest(kind: .recent, limit: 2, cursor: cursor)
         )
         actual.append(contentsOf: page.rows.map(\.item.id))
         cursor = page.next
@@ -223,7 +223,7 @@ private static func captureItems(
     // new durable position 8 fails explicitly (no silent skip or repeat).
     await #expect(throws: HistoryFailure.snapshotExpired(current: ChangePosition(rawValue: 8))) {
         try await history.browse(
-            HistoryBrowseRequest(kind: .recent, limit: 3, after: staleCursor)
+            HistoryBrowseRequest(kind: .recent, limit: 3, cursor: staleCursor)
         )
     }
 }
@@ -252,7 +252,7 @@ private static func captureItems(
             HistoryBrowseRequest(
                 kind: .search(text: "ws18", mode: .exact),
                 limit: 3,
-                after: recentCursor
+                cursor: recentCursor
             )
         )
     }
@@ -262,7 +262,7 @@ private static func captureItems(
     // `.snapshotExpired`.
     await #expect(throws: HistoryFailure.snapshotExpired(current: ChangePosition(rawValue: 7))) {
         try await history.browse(
-            HistoryBrowseRequest(kind: .recent, limit: 2, after: recentCursor)
+            HistoryBrowseRequest(kind: .recent, limit: 2, cursor: recentCursor)
         )
     }
 }
@@ -315,7 +315,7 @@ private static func captureItems(
     // WS18/05 §14.1: page2 crosses into the unpinned lane — the remaining
     // item (ids[2], newest by observedAt) with no duplication of page1 rows.
     let page2 = try await history.browse(
-        HistoryBrowseRequest(kind: .recent, limit: 2, after: laneCursor)
+        HistoryBrowseRequest(kind: .recent, limit: 2, cursor: laneCursor)
     )
     #expect(page2.rows.count == 1, "WS18: page2 has 1 unpinned row")
     #expect(
@@ -365,7 +365,7 @@ private static func captureItems(
     var cursor: HistoryPageCursor?
     repeat {
         let page = try await history.browse(
-            HistoryBrowseRequest(kind: .recent, limit: 2, after: cursor)
+            HistoryBrowseRequest(kind: .recent, limit: 2, cursor: cursor)
         )
         actual.append(contentsOf: page.rows.map(\.item.id))
         cursor = page.next
@@ -421,14 +421,14 @@ private static func captureItems(
         try await history.browse(HistoryBrowseRequest(
             kind: .recent,
             limit: 1,
-            after: try mutatedCursor(id: foreignID)
+            cursor: try mutatedCursor(id: foreignID)
         ))
     }
     await #expect(throws: expectedFailure) {
         try await history.browse(HistoryBrowseRequest(
             kind: .recent,
             limit: 1,
-            after: try mutatedCursor(pinnedOrdinal: 4_999)
+            cursor: try mutatedCursor(pinnedOrdinal: 4_999)
         ))
     }
 }

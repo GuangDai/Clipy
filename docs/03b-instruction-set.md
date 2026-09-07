@@ -70,21 +70,32 @@ public struct HistoryRow: Sendable, Hashable {
 public struct HistoryPage: Sendable, Hashable {
     public let position: ChangePosition
     public let rows: [HistoryRow]
+    public let previous: HistoryPageCursor?
     public let next: HistoryPageCursor?
 
     package init(
         position: ChangePosition,
         rows: [HistoryRow],
+        previous: HistoryPageCursor? = nil,
         next: HistoryPageCursor?
     ) {
         self.position = position
         self.rows = rows
+        self.previous = previous
         self.next = next
     }
 }
 ```
 
 Recent rows have `search == nil`; search rows carry presentation evidence but not an internal score. Results are already deterministically ordered. `HistoryRow.pinnedPosition` is 0-based and equals the item's `PinOrdinal` (`nil` for unpinned rows); it identifies position within the pinned group only — a UI wanting a 1-based display number adds one itself.
+
+`previous` requests up to `limit` matching rows immediately before this page's first row;
+`next` requests up to `limit` matching rows immediately after its last row. Returned rows
+always use the same normal display order, including when traversing backwards. Neither
+cursor is emitted when that direction has no matching rows; empty pages have neither.
+This applies to recent and all three search modes, with unchanged matching and ordering.
+Callers can retain a bounded page window with its two continuation endpoints instead of
+remembering every previously visited request cursor.
 
 Default total ordering:
 

@@ -66,20 +66,24 @@ public struct HistoryRow: Sendable, Hashable {
 }
 
 /// A deterministically ordered page of rows, stamped with the change position
-/// it was read at and carrying a cursor to the next page when one exists.
+/// it was read at, with cursors to the immediately adjacent pages. Both
+/// directions return rows in the query's normal order, including a short tail.
 /// Owning spec: docs/03b-instruction-set.md §8.
 public struct HistoryPage: Sendable, Hashable {
     public let position: ChangePosition
     public let rows: [HistoryRow]
+    public let previous: HistoryPageCursor?
     public let next: HistoryPageCursor?
 
     package init(
         position: ChangePosition,
         rows: [HistoryRow],
+        previous: HistoryPageCursor? = nil,
         next: HistoryPageCursor?
     ) {
         self.position = position
         self.rows = rows
+        self.previous = previous
         self.next = next
     }
 }

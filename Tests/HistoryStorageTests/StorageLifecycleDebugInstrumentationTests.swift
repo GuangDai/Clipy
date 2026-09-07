@@ -43,7 +43,7 @@ struct StorageLifecycleDebugInstrumentationTests {
             privateItemIDs.append(bundle.domain.candidateID.rawValue.uuidString)
             _ = try await authority.commitCapture(bundle)
         }
-        let page = try await authority.recentPage(limit: 10, after: nil)
+        let page = try await authority.recentPage(limit: 10, cursor: nil)
         #expect(page.rows.count == 10)
         #expect(page.next != nil)
 

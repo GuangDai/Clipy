@@ -216,7 +216,7 @@ import Testing
 
     #expect(request.kind == .search(text: "clipy", mode: .fuzzy))
     #expect(request.limit == 50)
-    #expect(request.after == nil)
+    #expect(request.cursor == nil)
 }
 
 @Test func historyObservationRequestConstruction() {

@@ -369,12 +369,12 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
             case .recent:
                 return try await authority.recentPage(
                     limit: request.limit,
-                    after: request.after
+                    cursor: request.cursor
                 )
             case .search(let text, _) where text.isEmpty:
                 return try await authority.recentPage(
                     limit: request.limit,
-                    after: request.after
+                    cursor: request.cursor
                 )
             case .search:
                 return try await searchWorker.page(

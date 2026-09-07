@@ -69,6 +69,20 @@ private static func replacingAnchorID(
     ))
 }
 
+/// Keep the real item ID but alter its complete ordering anchor. Finding the
+/// same item is insufficient when the date/score differs from its match.
+private static func replacingAnchorOrder(in cursor: HistoryPageCursor) throws -> HistoryPageCursor {
+    var root = try #require(JSONSerialization.jsonObject(with: cursor.payload) as? [String: Any])
+    var anchor = try #require(root["anchor"] as? [String: Any])
+    if let score = anchor["score"] as? Double { anchor["score"] = score + 0.1 }
+    else {
+        let date = try #require(anchor["lastCopiedAt"] as? Double)
+        anchor["lastCopiedAt"] = date + 1
+    }
+    root["anchor"] = anchor
+    return HistoryPageCursor(payload: try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]))
+}
+
 /// 04 §6/05 §14.2: exact, fuzzy, and regexp search cursors each resume over
 /// three pages without a gap or repeat. This exercises `.defaultOrder` for
 /// exact/regexp and `.fuzzyUnpinned` for fuzzy.
@@ -97,7 +111,7 @@ private static func replacingAnchorID(
         let page2 = try await history.browse(HistoryBrowseRequest(
             kind: kind,
             limit: 2,
-            after: cursor1
+            cursor: cursor1
         ))
         let cursor2 = try #require(
             page2.next,
@@ -106,7 +120,7 @@ private static func replacingAnchorID(
         let page3 = try await history.browse(HistoryBrowseRequest(
             kind: kind,
             limit: 2,
-            after: cursor2
+            cursor: cursor2
         ))
 
         let actual = page1.rows.map(\.item.id)
@@ -164,19 +178,16 @@ private static func replacingAnchorID(
             limit: 2
         ))
         let validCursor = try #require(firstPage.next)
-        let missingAnchorCursor = try Self.replacingAnchorID(
-            in: validCursor,
-            with: foreignID
-        )
-
-        await #expect(
-            throws: HistoryFailure.snapshotExpired(current: firstPage.position)
-        ) {
-            try await history.browse(HistoryBrowseRequest(
-                kind: kind,
-                limit: 2,
-                after: missingAnchorCursor
-            ))
+        let second = try await history.browse(HistoryBrowseRequest(kind: kind, limit: 2, cursor: validCursor))
+        let backward = try #require(second.previous)
+        for cursor in [validCursor, backward] {
+            let missing = try Self.replacingAnchorID(in: cursor, with: foreignID)
+            let changedOrder = try Self.replacingAnchorOrder(in: cursor)
+            for invalid in [missing, changedOrder] {
+                await #expect(throws: HistoryFailure.snapshotExpired(current: firstPage.position)) {
+                    try await history.browse(HistoryBrowseRequest(kind: kind, limit: 2, cursor: invalid))
+                }
+            }
         }
     }
 }
@@ -187,11 +198,12 @@ private static func replacingAnchorID(
     let storeURL = WSSupport.tempStoreURL("search-cursor-commit-expiry")
     defer { WSSupport.removeStore(storeURL) }
     let history = try await WSSupport.openHistory(storeURL: storeURL)
-    _ = try await Self.captureMatchingRows(
+    let ids = try await Self.captureMatchingRows(
         history,
         count: 5,
         base: 700_082_000
     )
+    let beforeCopy = try await history.pastePayload(for: ids[0])
 
     var cursors: [(mode: SearchMode, cursor: HistoryPageCursor)] = []
     for mode in Self.modes {
@@ -200,10 +212,15 @@ private static func replacingAnchorID(
             limit: 2
         ))
         cursors.append((mode, try #require(page.next)))
+        let next = try #require(page.next)
+        let second = try await history.browse(HistoryBrowseRequest(
+            kind: .search(text: "alpha", mode: mode), limit: 2, cursor: next
+        ))
+        cursors.append((mode, try #require(second.previous)))
     }
 
     let receipt = try await history.perform(.capture(WSSupport.textCapture(
-        "alpha item after cursor",
+        "alpha item 0",
         observedAt: Date(timeIntervalSinceReferenceDate: 700_083_000),
         source: "com.example.search-cursor.commit"
     )))
@@ -211,6 +228,8 @@ private static func replacingAnchorID(
         Issue.record("Search cursor arrange: intervening capture did not commit")
         return
     }
+    let afterCopy = try await history.pastePayload(for: ids[0])
+    #expect(afterCopy.item == beforeCopy.item, "Metadata-only copy still expires both cursor directions")
 
     for entry in cursors {
         await #expect(
@@ -219,7 +238,7 @@ private static func replacingAnchorID(
             try await history.browse(HistoryBrowseRequest(
                 kind: .search(text: "alpha", mode: entry.mode),
                 limit: 2,
-                after: entry.cursor
+                cursor: entry.cursor
             ))
         }
     }

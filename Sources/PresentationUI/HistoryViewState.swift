@@ -186,19 +186,27 @@ public final class HistoryViewState {
     /// mutating rows or a newer request's loading state.
     private var paginationRequestToken = 0
 
-    /// Cursor to the page after the last displayed page; `nil` when the
-    /// display holds the final page.
-    private var nextPageCursor: HistoryPageCursor?
+    /// Direction is encoded by History, never interpreted here. Only the
+    /// three loaded pages retain navigation metadata (04 §6).
+    private struct LoadedPage {
+        let rowCount: Int
+        let previous: HistoryPageCursor?
+        let next: HistoryPageCursor?
 
-    /// Only the visible three pages retain rows. Visited request cursors are
-    /// compact navigation bookmarks, without DTOs or accumulated item IDs.
-    private var pageRowCounts: [Int] = []
-    private var visitedPageCursors: [HistoryPageCursor?] = []
-    private var firstLoadedPageIndex = 0
+        init(_ page: HistoryPage) {
+            rowCount = page.rows.count
+            previous = page.previous
+            next = page.next
+        }
+    }
+    private var loadedPages: [LoadedPage] = []
     private var rowsBeforeWindow = 0
 
-    package var hasPreviousPage: Bool { firstLoadedPageIndex > 0 }
-    package var hasWindowedPages: Bool { visitedPageCursors.count > pageRowCounts.count }
+    package var hasPreviousPage: Bool { loadedPages.first?.previous != nil }
+    package var loadedPageCount: Int { loadedPages.count }
+    /// Remains true when Newer returns to the first three pages: dropping
+    /// the tail still needs visible-selection reconciliation and Latest.
+    package private(set) var hasWindowedPages = false
     package var traversedRowCount: Int { rowsBeforeWindow + rows.count }
 
     /// Unfiltered counts include rows traversed before this window. A local
@@ -297,7 +305,7 @@ public final class HistoryViewState {
 
     /// The pinned lane after the client-side filter. Filtering is over the
     /// loaded pages by design; pagination still walks the unfiltered stream
-    /// (`rows`/`nextPageCursor` are untouched by both filters).
+    /// (`rows`/page cursors are untouched by both filters).
     package var displayedPinnedRows: [HistoryRow] {
         rows.filter { $0.pinnedPosition != nil && isDisplayed($0) }
     }
@@ -329,7 +337,7 @@ public final class HistoryViewState {
 
     /// Whether a further one-shot page exists after the displayed rows.
     public var hasNextPage: Bool {
-        nextPageCursor != nil
+        loadedPages.last?.next != nil
     }
 
     /// Prefetch follows the last row the list actually renders. A type or
@@ -339,7 +347,7 @@ public final class HistoryViewState {
     package func prefetchNextPageIfNeeded(appearingRowID: HistoryItemID) {
         // Once the three-page window is full, navigation becomes explicit.
         // Newly appearing rows must not trigger an endless eviction/prefetch loop.
-        guard hasNextPage, !isLoadingPage, pageRowCounts.count < 3 else { return }
+        guard hasNextPage, !isLoadingPage, loadedPageCount < 3 else { return }
         let lastUnpinned = showsPinnedOnly ? nil : rows.last(where: {
             $0.pinnedPosition == nil && isDisplayed($0)
         })
@@ -400,7 +408,6 @@ public final class HistoryViewState {
         hasAuthoritativeFirstPage = false
         observedPosition = nil
         rows = []
-        nextPageCursor = nil
         resetPageWindow()
         isLoadingFirstPage = false
     }
@@ -427,21 +434,21 @@ public final class HistoryViewState {
     /// Appends the next older page, retiring the newest page when the window
     /// is full. Expiration restarts the same query at page one (04 §6).
     public func loadNextPage() {
-        guard !isLoadingPage, let cursor = nextPageCursor else { return }
-        loadPage(after: cursor, prepending: false)
+        guard !isLoadingPage, let cursor = loadedPages.last?.next else { return }
+        loadPage(cursor: cursor, prepending: false)
     }
 
-    /// Re-read the previous visited page without retaining its old row values.
+    /// Read adjacent newer rows using the first loaded page's opaque cursor.
     package func loadPreviousPage() {
-        guard !isLoadingPage, hasPreviousPage else { return }
-        loadPage(after: visitedPageCursors[firstLoadedPageIndex - 1], prepending: true)
+        guard !isLoadingPage, let cursor = loadedPages.first?.previous else { return }
+        loadPage(cursor: cursor, prepending: true)
     }
 
     package func returnToLatest() {
         replaceObservationImmediately()
     }
 
-    private func loadPage(after cursor: HistoryPageCursor?, prepending: Bool) {
+    private func loadPage(cursor: HistoryPageCursor, prepending: Bool) {
         paginationRequestToken += 1
         let requestToken = paginationRequestToken
         isLoadingPage = true
@@ -457,50 +464,44 @@ public final class HistoryViewState {
         paginationTask = Task { [weak self] in
             do {
                 let page = try await history.browse(
-                    HistoryBrowseRequest(kind: kind, limit: limit, after: cursor)
+                    HistoryBrowseRequest(kind: kind, limit: limit, cursor: cursor)
                 )
                 guard let self,
                       self.paginationRequestToken == requestToken,
                       self.observationGeneration == generation
                 else { return }
                 guard self.latestReceiptPosition.map({ page.position >= $0 }) ?? true else {
-                    self.nextPageCursor = nil
+                    // Neither edge of this older snapshot remains usable.
+                    // Keep the partial display, not an invented exact total.
+                    self.loadedPages = []
+                    self.observedPosition = nil
                     self.finishPagination(requestToken)
                     return
                 }
-                // The first page uses after:nil. A concurrent commit may
-                // therefore return a newer snapshot before observe delivers
-                // it; never combine that page with the old window.
+                // Never combine pages from different snapshots, even if
+                // an adapter returns a page before observation catches up.
                 guard page.position == self.observedPosition else {
                     self.replaceObservationImmediately()
                     return
                 }
                 if prepending {
-                    self.firstLoadedPageIndex -= 1
                     self.rowsBeforeWindow -= page.rows.count
-                    self.pageRowCounts.insert(page.rows.count, at: 0)
-                    if self.pageRowCounts.count > 3 {
-                        self.rows.removeLast(self.pageRowCounts.removeLast())
-                        let nextIndex = self.firstLoadedPageIndex + self.pageRowCounts.count
-                        self.nextPageCursor = self.visitedPageCursors[nextIndex]
+                    if self.loadedPages.count == 3 {
+                        self.hasWindowedPages = true
+                        // The final older page can be shorter than limit.
+                        self.rows.removeLast(self.loadedPages.removeLast().rowCount)
                     }
+                    self.loadedPages.insert(LoadedPage(page), at: 0)
                     self.rows.insert(contentsOf: page.rows, at: 0)
                 } else {
-                    let pageIndex = self.firstLoadedPageIndex + self.pageRowCounts.count
-                    if pageIndex == self.visitedPageCursors.count {
-                        self.visitedPageCursors.append(cursor)
-                    } else {
-                        self.visitedPageCursors[pageIndex] = cursor
-                    }
-                    self.pageRowCounts.append(page.rows.count)
-                    if self.pageRowCounts.count > 3 {
-                        let removedCount = self.pageRowCounts.removeFirst()
+                    if self.loadedPages.count == 3 {
+                        self.hasWindowedPages = true
+                        let removedCount = self.loadedPages.removeFirst().rowCount
                         self.rows.removeFirst(removedCount)
                         self.rowsBeforeWindow += removedCount
-                        self.firstLoadedPageIndex += 1
                     }
+                    self.loadedPages.append(LoadedPage(page))
                     self.rows.append(contentsOf: page.rows)
-                    self.nextPageCursor = page.next
                 }
                 self.clearFailure(from: .pagination)
                 self.finishPagination(requestToken)
@@ -844,7 +845,6 @@ public final class HistoryViewState {
         hasAuthoritativeFirstPage = false
         observedPosition = nil
         rows = []
-        nextPageCursor = nil
         resetPageWindow()
         clearQueryFailure()
         isLoadingFirstPage = true
@@ -898,10 +898,8 @@ public final class HistoryViewState {
         invalidatePagination()
         observationGeneration += 1
         rows = page.rows
-        nextPageCursor = page.next
-        pageRowCounts = [page.rows.count]
-        visitedPageCursors = [nil]
-        firstLoadedPageIndex = 0
+        loadedPages = [LoadedPage(page)]
+        hasWindowedPages = false
         rowsBeforeWindow = 0
         observedPosition = page.position
         hasAuthoritativeFirstPage = true
@@ -924,9 +922,8 @@ public final class HistoryViewState {
     }
 
     private func resetPageWindow() {
-        pageRowCounts = []
-        visitedPageCursors = []
-        firstLoadedPageIndex = 0
+        loadedPages = []
+        hasWindowedPages = false
         rowsBeforeWindow = 0
     }
 
@@ -1100,7 +1097,6 @@ public final class HistoryViewState {
     ) {
         invalidatePagination()
         observationGeneration += 1
-        nextPageCursor = nil
         resetPageWindow()
         // Until observation supplies a replacement, the surviving rows are
         // only a partial display and cannot establish an exact total count.

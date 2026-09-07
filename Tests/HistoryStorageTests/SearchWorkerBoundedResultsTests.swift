@@ -42,7 +42,8 @@ struct SearchWorkerBoundedResultsTests {
         )
     }
 
-    @Test func boundedHeapMatchesIndependentFullSortForEveryCursorPosition() {
+    @Test(arguments: [HistoryPageDirection.forward, .backward])
+    func boundedHeapMatchesIndependentFullSortForEveryCursorPosition(direction: HistoryPageDirection) {
         let hits = (0..<60).map { index in
             SearchWorker.FuzzyHit(
                 corpusRow: Self.row(index),
@@ -64,25 +65,32 @@ struct SearchWorkerBoundedResultsTests {
         }
         let ordered = pinned + unpinned
         for capacity in [1, 3, 7] {
-            for anchorIndex in -1..<ordered.count {
+            for anchorIndex in (direction == .forward ? -1 : 0)..<ordered.count {
                 let anchor = anchorIndex < 0 ? nil : Self.anchor(ordered[anchorIndex])
                 var selection = SearchWorker.FuzzyPageSelection(directive: .init(
                     continuationAnchor: anchor,
-                    maximumSurvivors: capacity
+                    maximumSurvivors: capacity,
+                    direction: direction
                 ))
                 for hit in hits.reversed() {
                     selection.insert(hit)
                     #expect(selection.hits.count <= capacity)
                 }
-                let start = max(0, anchorIndex)
-                let count = capacity + (anchor == nil ? 0 : 1)
-                let expected = ordered.dropFirst(start).prefix(count).map { $0.corpusRow.id }
+                let expected: [HistoryItemID]
+                if direction == .forward {
+                    let start = max(0, anchorIndex)
+                    let count = capacity + (anchor == nil ? 0 : 1)
+                    expected = ordered.dropFirst(start).prefix(count).map { $0.corpusRow.id }
+                } else {
+                    expected = ordered.prefix(anchorIndex + 1).suffix(capacity + 1).map { $0.corpusRow.id }
+                }
                 #expect(selection.evaluatedRows().map { $0.corpusRow.id } == expected)
             }
         }
     }
 
-    @Test func changedFuzzyScoreDoesNotValidateAnExistingItemAsTheAnchor() {
+    @Test(arguments: [HistoryPageDirection.forward, .backward])
+    func changedFuzzyScoreDoesNotValidateAnExistingItemAsTheAnchor(direction: HistoryPageDirection) {
         let hit = SearchWorker.FuzzyHit(
             corpusRow: Self.row(10), score: 0.1, search: .titleRanges([0..<1])
         )
@@ -92,10 +100,34 @@ struct SearchWorkerBoundedResultsTests {
                 lastCopiedAt: hit.corpusRow.lastCopiedAt,
                 id: hit.corpusRow.id
             ),
-            maximumSurvivors: 3
+            maximumSurvivors: 3,
+            direction: direction
         ))
         selection.insert(hit)
         #expect(selection.evaluatedRows().isEmpty)
+    }
+
+    @Test func backwardOrderedSelectionKeepsOnlyTheNearestPredecessors() {
+        let corpus = (0..<70).map(Self.row)
+        for capacity in [1, 4, 7] {
+            for anchorIndex in [0, 1, 3, 32, 66, 69] {
+                let anchor = SearchWorker.defaultOrderAnchor(for: corpus[anchorIndex])
+                var tracker = SearchWorker.OrderPreservingScanTracker(directive: .init(
+                    continuationAnchor: anchor, maximumSurvivors: capacity, direction: .backward
+                ))
+                var retained: [SearchWorker.EvaluatedRow] = []
+                for row in corpus {
+                    let evaluated = SearchWorker.EvaluatedRow(
+                        corpusRow: row, search: nil, anchor: SearchWorker.defaultOrderAnchor(for: row)
+                    )
+                    tracker.appendIfRetained(evaluated, to: &retained)
+                    #expect(retained.count <= capacity + 1)
+                    if !tracker.recordMatch(ofRow: evaluated.anchor) { break }
+                }
+                let expected = corpus.prefix(anchorIndex + 1).suffix(capacity + 1).map(\.id)
+                #expect(retained.map { $0.corpusRow.id } == expected)
+            }
+        }
     }
 
     @Test func recentEquivalentCountsAnchorLookupAndTheBoundedWindow() async {

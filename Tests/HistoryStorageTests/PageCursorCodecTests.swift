@@ -134,15 +134,33 @@ private func mutateCursorObject(
     ]
 
     for value in values {
-        let encoded = try PageCursorCodec.encode(
-            value,
-            processMarker: cursorProcessMarker
-        )
-        let decoded = try PageCursorCodec.decode(
-            encoded,
-            processMarker: cursorProcessMarker
-        )
-        #expect(decoded == value)
+        for direction in [HistoryPageDirection.forward, .backward] {
+            let directed = ResolvedPageCursor(
+                queryShape: value.queryShape, position: value.position,
+                anchor: value.anchor, direction: direction
+            )
+            let encoded = try PageCursorCodec.encode(directed, processMarker: cursorProcessMarker)
+            let decoded = try PageCursorCodec.decode(encoded, processMarker: cursorProcessMarker)
+            #expect(decoded == directed)
+        }
+    }
+}
+
+@Test(arguments: [false, true])
+func cursorDecodeRequiresKnownDirection(removeField: Bool) throws {
+    let cursor = try cursorByMutatingJSON(encodedCursor()) { root in
+        if removeField { root.removeValue(forKey: "direction") }
+        else { root["direction"] = "sideways" }
+    }
+    #expect(throws: PageCursorRejection.malformedCursor) {
+        try PageCursorCodec.decode(cursor, processMarker: cursorProcessMarker)
+    }
+}
+
+@Test func cursorDecodeRejectsRetiredFormatWithoutCompatibility() throws {
+    let cursor = try cursorByMutatingJSON(encodedCursor()) { root in root["formatVersion"] = 1 }
+    #expect(throws: PageCursorRejection.unknownCursorVersion(found: 1)) {
+        try PageCursorCodec.decode(cursor, processMarker: cursorProcessMarker)
     }
 }
 
@@ -163,7 +181,7 @@ private func mutateCursorObject(
 @Test func cursorWireStrategiesProduceStableBytes() throws {
     let cursor = try encodedCursor()
     let expected = Data(
-        #"{"anchor":{"id":"00000000-0000-0000-0000-0000000000C3","kind":"defaultOrder","lastCopiedAt":123456.5},"formatVersion":1,"processMarker":"00000000-0000-0000-0000-0000000000C1","queryShape":{"kind":"recent","limit":3},"rawValue":42}"#.utf8
+        #"{"anchor":{"id":"00000000-0000-0000-0000-0000000000C3","kind":"defaultOrder","lastCopiedAt":123456.5},"direction":"forward","formatVersion":2,"processMarker":"00000000-0000-0000-0000-0000000000C1","queryShape":{"kind":"recent","limit":3},"rawValue":42}"#.utf8
     )
     #expect(cursor.payload == expected)
     #expect(try encodedCursor().payload == expected)
@@ -210,7 +228,7 @@ private func mutateCursorObject(
 
 @Test func cursorDecodeRejectsUnknownVersion() throws {
     let mutated = try cursorByMutatingJSON(encodedCursor()) { root in
-        root["formatVersion"] = 2
+        root["formatVersion"] = 99
     }
 
     do {
@@ -220,7 +238,7 @@ private func mutateCursorObject(
         )
         Issue.record("unknown cursor version decoded successfully")
     } catch PageCursorRejection.unknownCursorVersion(let found) {
-        #expect(found == 2)
+        #expect(found == 99)
     } catch {
         Issue.record("unknown version produced the wrong rejection: \(error)")
     }

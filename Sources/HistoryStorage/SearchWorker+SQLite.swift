@@ -92,25 +92,29 @@ extension SearchWorker {
                 throw HistoryFailure.snapshotExpired(current: position)
             }
             let anchor: StoredOrderingAnchor?
-            if let cursor = request.after {
+            let direction: HistoryPageDirection
+            if let cursor = request.cursor {
                 do {
                     let decoded = try PageCursorCodec.decode(cursor, processMarker: processMarker)
                     guard decoded.position == position, decoded.queryShape.matches(request) else {
                         throw HistoryFailure.snapshotExpired(current: position)
                     }
                     anchor = decoded.anchor
+                    direction = decoded.direction
                 } catch is PageCursorRejection {
                     throw HistoryFailure.snapshotExpired(current: position)
                 }
             } else {
                 anchor = nil
+                direction = .forward
             }
 
             await suspensionHandler?(.evaluationEntry)
             try checkSnapshotDeadline(lifetimeDeadline)
             let reader = SQLiteSearchRows(database: database, limits: limits)
             defer { reader.finish() }
-            let directive = ScanDirective(continuationAnchor: anchor, maximumSurvivors: request.limit + 1)
+            let directive = ScanDirective(continuationAnchor: anchor, maximumSurvivors: request.limit + 1,
+                                          direction: direction)
             var tracker = OrderPreservingScanTracker(directive: directive)
             var ordered: [EvaluatedRow] = []
             var fuzzySelection = FuzzyPageSelection(directive: directive)
@@ -156,9 +160,11 @@ extension SearchWorker {
                     let isRankedFuzzy = admitted.mode == .fuzzy && !admitted.term.isEmpty
                     let survivorsSoFar = max(0, ordered.count - (anchor == nil ? 0 : 1))
                     let batchDirective = ScanDirective(
-                        continuationAnchor: isRankedFuzzy || !ordered.isEmpty ? nil : anchor,
-                        maximumSurvivors: isRankedFuzzy
-                            ? batch.rows.count + 1 : request.limit + 1 - survivorsSoFar
+                        continuationAnchor: isRankedFuzzy || (direction == .forward && !ordered.isEmpty)
+                            ? nil : anchor,
+                        maximumSurvivors: isRankedFuzzy || direction == .backward
+                            ? batch.rows.count + 1 : request.limit + 1 - survivorsSoFar,
+                        direction: isRankedFuzzy ? .forward : direction
                     )
                     if admitted.term.isEmpty {
                         evaluation = evaluateRecentEquivalent(in: snapshot, directive: batchDirective)
@@ -233,27 +239,20 @@ extension SearchWorker {
                 rowsProcessed: evaluatedRows, rowsTotal: processed, matchedRows: matchedRows
             )
 #endif
-            let survivors: ArraySlice<EvaluatedRow>
-            if let anchor {
-                guard let anchorIndex = evaluated.firstIndex(where: { $0.anchor == anchor }) else {
-                    throw HistoryFailure.snapshotExpired(current: position)
-                }
-                survivors = evaluated[(anchorIndex + 1)...]
-            } else {
-                survivors = evaluated[...]
-            }
+            let window = try Self.pageWindow(in: evaluated, anchor: anchor, direction: direction,
+                                             limit: request.limit, position: position)
 #if DEBUG
             searchDebugProbe.record(
                 traceID: trace.id, component: "worker", phase: "continuation",
                 phaseElapsed: .zero, totalElapsed: startedAt.duration(to: clock.now),
-                rowsProcessed: survivors.count, rowsTotal: evaluated.count, matchedRows: matchedRows
+                rowsProcessed: window.rows.count, rowsTotal: evaluated.count, matchedRows: matchedRows
             )
             let materializationStart = clock.now
 #endif
             var rows: [HistoryRow] = []
-            rows.reserveCapacity(min(request.limit, survivors.count))
+            rows.reserveCapacity(window.rows.count)
             var returnedCounts: [HistoryItemID: Int] = [:]
-            for evaluated in survivors.prefix(request.limit) {
+            for evaluated in window.rows {
                 try checkSnapshotDeadline(lifetimeDeadline)
                 let row: EvaluatedRow
                 if case .bodyExcerpt? = evaluated.search {
@@ -287,17 +286,15 @@ extension SearchWorker {
                     returnedCounts[row.corpusRow.id] = count
                 }
             }
+            let previous: HistoryPageCursor?
+            if window.hasPrevious, let first = window.rows.first {
+                previous = try Self.mintSearchCursor(at: first.anchor, direction: .backward,
+                                                     request: request, position: position, processMarker: processMarker)
+            } else { previous = nil }
             let next: HistoryPageCursor?
-            if survivors.count > request.limit, let last = survivors.prefix(request.limit).last {
-                do {
-                    next = try PageCursorCodec.encode(
-                        ResolvedPageCursor(queryShape: StoredQueryShape(request: request),
-                                           position: position, anchor: last.anchor),
-                        processMarker: processMarker
-                    )
-                } catch {
-                    throw HistoryFailure.persistence(.invariantViolation)
-                }
+            if window.hasNext, let last = window.rows.last {
+                next = try Self.mintSearchCursor(at: last.anchor, direction: .forward,
+                                                 request: request, position: position, processMarker: processMarker)
             } else { next = nil }
             try checkSnapshotDeadline(lifetimeDeadline)
 #if DEBUG
@@ -313,7 +310,7 @@ extension SearchWorker {
             )
 #endif
             return SearchPageResult(
-                page: HistoryPage(position: position, rows: rows, next: next),
+                page: HistoryPage(position: position, rows: rows, previous: previous, next: next),
                 revisionCounts: returnedCounts
             )
         } catch let failure as SQLiteFailure {

@@ -49,7 +49,7 @@ extension HistoryAuthority {
                 ) { context in
                     let page = try recentPageInLocalContext(
                         limit: limit,
-                        after: nil
+                        cursor: nil
                     )
                     let externalPage = try Self.externalPage(
                         from: page,
@@ -189,7 +189,7 @@ extension HistoryAuthority {
                 ) { context in
                     let page = try recentPageInLocalContext(
                         limit: limit,
-                        after: after
+                        cursor: after
                     )
                     return (page, try Self.historyPageSummary(page))
                 }
@@ -310,7 +310,7 @@ private extension HistoryAuthority {
                 searchRequest: HistoryBrowseRequest(
                     kind: .search(text: text, mode: mode),
                     limit: limit,
-                    after: after
+                    cursor: after
                 )
             )
         }
@@ -415,7 +415,7 @@ private extension HistoryAuthority {
                     )
                     return SearchPageResult(page: page, revisionCounts: [:])
                 }
-            } catch HistoryFailure.snapshotExpired(_) where request.after == nil {
+            } catch HistoryFailure.snapshotExpired(_) where request.cursor == nil {
                 continue
             }
         }

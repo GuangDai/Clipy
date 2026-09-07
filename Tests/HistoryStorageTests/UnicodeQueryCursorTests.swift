@@ -43,14 +43,14 @@ struct UnicodeQueryCursorTests {
         let cursor = try #require(first.next)
         let firstID = try #require(first.rows.first?.item.id)
         let continued = try await history.browse(HistoryBrowseRequest(
-            kind: .search(text: original, mode: mode), limit: 1, after: cursor
+            kind: .search(text: original, mode: mode), limit: 1, cursor: cursor
         ))
         #expect(continued.rows.count == 1)
         #expect(continued.rows.first?.item.id != firstID)
         #expect(continued.position == first.position)
         await #expect(throws: HistoryFailure.snapshotExpired(current: first.position)) {
             try await history.browse(HistoryBrowseRequest(
-                kind: .search(text: changed, mode: mode), limit: 1, after: cursor
+                kind: .search(text: changed, mode: mode), limit: 1, cursor: cursor
             ))
         }
         let restarted = try await history.browse(HistoryBrowseRequest(
