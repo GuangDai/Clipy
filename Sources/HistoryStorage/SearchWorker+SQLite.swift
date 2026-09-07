@@ -267,8 +267,9 @@ extension SearchWorker {
                     guard try statement.step() else {
                         throw HistoryFailure.persistence(.invariantViolation)
                     }
+                    let bodyBytes = try statement.blob(at: 0)
                     let body = try mapCodecFailure {
-                        try ContentProjector.decodeStoredSearchBody(statement.blob(at: 0), limits: limits)
+                        try ContentProjector.decodeStoredSearchBody(bodyBytes, limits: limits)
                     }
                     row = EvaluatedRow(
                         corpusRow: evaluated.corpusRow.replacingSearchBody(with: body),
