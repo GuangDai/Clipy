@@ -136,7 +136,7 @@ public struct ClipySettingsView: View {
                     .tabItem {
                         Label(MaintenanceSettingsCopy.text("Maintenance"), systemImage: "internaldrive")
                     }
-                    .frame(width: 480, height: 640)
+                    .frame(width: 480, height: 560)
             }
         }
         .task(id: retentionConfigurationRefreshGeneration) {
