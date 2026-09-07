@@ -41,6 +41,7 @@ internal struct SQLiteFailure: Error, Equatable, Sendable {
 
 internal final class SQLiteDatabase {
     private var handle: OpaquePointer?
+    private var readDeadline: SQLiteReadDeadline?
 
     internal init(url: URL?, readOnly: Bool = false) throws {
         if let url, !url.isFileURL {
@@ -102,6 +103,28 @@ internal final class SQLiteDatabase {
         guard let handle else { return }
         try check(sqlite3_close(handle))
         self.handle = nil
+        readDeadline = nil
+    }
+
+    /// V2-09 §4: a bounded search batch can still spend substantial time
+    /// inside one sqlite3_step/prepare call. SQLite invokes this callback
+    /// synchronously on this connection's owner; it never touches the
+    /// connection or shares mutable state with a cancellation task.
+    /// Remove it before ROLLBACK so an expired read cannot interrupt cleanup.
+    internal func setReadInterruptionDeadline(_ deadline: ContinuousClock.Instant?) throws {
+        let handle = try openHandle()
+        if let deadline {
+            let state = SQLiteReadDeadline(deadline: deadline)
+            sqlite3_progress_handler(handle, 1_000, { context in
+                guard let context else { return 0 }
+                let state = Unmanaged<SQLiteReadDeadline>.fromOpaque(context).takeUnretainedValue()
+                return Task.isCancelled || ContinuousClock().now >= state.deadline ? 1 : 0
+            }, Unmanaged.passUnretained(state).toOpaque())
+            readDeadline = state
+        } else {
+            sqlite3_progress_handler(handle, 0, nil, nil)
+            readDeadline = nil
+        }
     }
 
     internal var lastInsertedRowID: Int64 {
@@ -199,6 +222,12 @@ internal final class SQLiteDatabase {
     fileprivate func check(_ result: Int32) throws {
         guard result == SQLITE_OK else { throw failure(code: result) }
     }
+}
+
+/// Retained by its connection for precisely the installed callback lifetime.
+private final class SQLiteReadDeadline {
+    let deadline: ContinuousClock.Instant
+    init(deadline: ContinuousClock.Instant) { self.deadline = deadline }
 }
 
 internal final class SQLiteStatement {

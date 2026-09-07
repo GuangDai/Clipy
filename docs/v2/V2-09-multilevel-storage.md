@@ -102,6 +102,8 @@ signature candidate postings；不能把所有表示及所有修订继续塞进�
 - dedup 用当前 xxh3 候选事实做持久索引查询，然后逐候选、逐表示确认 bytes。
   指纹不成为 BlobID，不替代相等判断。类型名的索引键必须保留现有 Swift String
   canonical-equivalence 语义；原始标识拼写仍保留用于输出。
+  确认期间仅保留输入及当前候选表示；即使已匹配输入子集，也须验证候选余下表示，
+  不能因提前命中而忽略损坏内容。Canonical 字节总数须与条目聚合值一致。
 - 启动不恢复完整 SignatureIndex，不遍历全部内容，也不把所有业务 ID 放进 Set。
 - 计数与 logical byte aggregates 在同一次 History transaction 中更新。
 - 搜索按行数和 UTF-8 字节数双重约束读取批次，只保留 top-K 与游标所需数据。
@@ -111,6 +113,12 @@ signature candidate postings；不能把所有表示及所有修订继续塞进�
   CPU/I/O 可能是 O(N)。不能用另一个名字掩盖完整搜索被缩小。
 - SQLite read transaction 可以提供搜索所需的一致视图；其寿命必须有取消和时间约束，
   因为长读会影响 WAL 回收。不得通过把多次不同 position 的批次拼起来伪造一个快照。
+  查询执行中的 SQLite progress callback 检查同一次请求的取消和截止时间，退出时先
+  移除 callback 再回滚。regexp 的截止时间也不得超过快照剩余寿命；这不意味着能
+  抢占阻塞的文件系统调用或每一段同步原生计算。
+
+`history_items.currentContentID` 的外键查找使用索引，避免每次删除 content 都扫描
+全部条目。Swift facts 有界仍不足以排除数据库内部重复全表扫描。
 
 当前存储已实现持久候选查询、分批搜索、无全仓索引恢复的启动及 recent keyset；
 这些行为仍需规模测试验证。UI 三页窗口必须同时约束行 DTO 与导航元数据：每页只
@@ -150,6 +158,9 @@ ContentReference 携带业务身份和内容版本，绝不携带可绕过 Histo
 Storage 校验版本、目标存活和范围；Preview 仍负责格式选择与解码，Storage 不加入
 PNG/RTF/PDF 路由表。Details 默认只取 metadata 和有限预览，展开/导出才读取目标 bytes。
 Copy 只读取当前 Effective Content，不为了复制 v20 去读取 Canonical 和前 19 次修订。
+Details 的显式表示预览也先按 renderer 元数据限额决定是否读取；不支持或超限的表示
+只显示 metadata，Save As 仍读取完整原始字节。编辑器 Reload Latest 的任务由编辑器
+持有，关闭或丢弃后取消；迟到结果不得改写原 Details owner。
 
 当前 NSPasteboard 写入可能仍要求完整 Data。因此复制大内容仍有单次工作集，不能
 宣称 range/mmap 已经让整个 paste 成为流式、零复制操作。单次请求大小和并发应按
@@ -165,6 +176,9 @@ Copy 只读取当前 Effective Content，不为了复制 v20 去读取 Canonical
 文件读取完成不等于 UI 仍可发布：删除、版本变化或关闭面板后，现有引用与任务检查
 仍须丢弃迟到结果。磁盘读取中途失败时不返回成功的部分内容；应用可重建的预览才可
 按其明确的截断规则展示有限内容，原始 Copy/Save As 不得静默截断。
+整值文件读取前后检查取消；范围读取在同一描述符的 64 KiB 分块之间检查取消。
+取消保持 `CancellationError`，不误报为存储损坏；同步 Foundation 整值读取本身
+不可立即抢占，完成后取消的结果也不得返回给调用方。
 
 ## 6. 原子发布、删除与恢复
 
@@ -229,6 +243,9 @@ NSPurgeableData 创建时已有一次 content access。放入冷缓存前结束�
 
 每次压力事件都要到达消费者，不能只依赖枚举值变化。应用能取消自己的排队工作，
 不能承诺立即抢占正在执行的系统 decoder。
+critical 期间只保留当前预览 dwell 的目标；恢复 normal 时重新等待该目标，期间的
+新选择或修订替换目标。手动关闭、关闭面板、失去焦点、禁用自动预览或删除目标后
+不得恢复；重复 normal 事件不重置正在等待的 dwell。
 
 维护页分开显示 logical retained bytes、近似 allocated store bytes、derived disk cache、
 全进程 RSS/footprint。RSS、启动以来 peak RSS 和 footprint 也不是相同数值。
@@ -270,6 +287,15 @@ APFS 共享块和备份会使物理大小不同；不能把近似目录 allocate
 6. 上述路径可用且数据支持结论后，取消 5,000 hard cap 和 count-only 产品上限。
    不先改成 Int.max 再让旧全量路径承受百万条数据。
 
+手动 `SQLite storage measurements` 工作流提供 10k、100k、1m 或三档并行选择，
+使用 Release `HistoryPerfRunner --sqlite-scale`。seed 和 measure 分属独立进程，
+fixture open 只调整该专用数据库的条数限额，公开产品 open 仍用标准限额。工作负载
+包含首屏、固定单页窗口的全量遍历、三种不存在词项搜索、当前/Canonical Copy 及
+revision/prune，分别记录逻辑内容、文件系统用量、RSS、进程历史 peak RSS、footprint
+和耗时，不设数值达标门槛。进程冷启动不代表磁盘缓存冷启动；独立 Storage runner
+也不能证明整个 App 的 owned bytes、真实压力恢复或完整生产者内容分布。实现了
+测量入口不代表这些规模已通过验证，产品条数上限仍须等真实结果再调整。
+
 必须验证：候选碰撞仍逐字节判断；数据库提交失败保留旧历史；文件发布后崩溃可清孤儿；
 删除期间已打开读取仍有定义；缺失/损坏原始 blob 不变成空内容；缓存被丢弃能重新生成；
 pressure 不推进 ContentVersion/ChangePosition；搜索取消/过期不发布混合快照。
@@ -290,6 +316,8 @@ pressure 不推进 ContentVersion/ChangePosition；搜索取消/过期不发布�
   邻近 model store 的 binary placement，不公开 blob URL/range/eviction Interface。
 - Apple [`MemoryPressureEvent`](https://sosumi.ai/documentation/dispatch/dispatchsource/memorypressureevent)：系统状态事件。
 - SQLite [`incremental BLOB I/O`](https://sqlite.org/c3ref/blob_open.html)、
-  [`mmap`](https://sqlite.org/mmap.html)、[`FTS5`](https://sqlite.org/fts5.html)：具体能力及适用限制。
+  [`mmap`](https://sqlite.org/mmap.html)、[`FTS5`](https://sqlite.org/fts5.html)、
+  [`progress callback`](https://sqlite.org/c3ref/progress_handler.html) 和
+  [`外键索引`](https://sqlite.org/foreignkeys.html#required_and_suggested_database_indexes)：具体能力及适用限制。
 - 历史 [09 多级存储审查](../reviews/2026-08-22-clipy-maccy-deep-review/09-tiered-storage-and-unbounded-history.md)
   的四 bytes、O(N) 分析可作背景；其迁移、完整 checkpoint 与治理条件不作为本设计实现要求。

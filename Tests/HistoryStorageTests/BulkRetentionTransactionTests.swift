@@ -88,6 +88,25 @@ struct BulkRetentionTransactionTests {
                 )))
             }
         }
+        // Inspect the DELETE itself: SQLite must use an indexed lookup for
+        // its incoming current-content FK, including for inactive revisions
+        // where there is no matching history item. A full scan here repeats
+        // once per deleted content during both prune and cascading retirement.
+        let foreignKeyLookups = try await history.authority.withTestDatabase { authority in
+            let query = try authority.database.prepare(
+                "EXPLAIN QUERY PLAN DELETE FROM contents WHERE id = ?",
+                bindings: [.text(UUID().uuidString)]
+            )
+            defer { query.finalize() }
+            var details: [String] = []
+            while try query.step() {
+                let detail = try query.text(at: 3)
+                if detail.contains("history_items") { details.append(detail) }
+            }
+            return details
+        }
+        #expect(!foreignKeyLookups.isEmpty)
+        #expect(foreignKeyLookups.allSatisfy { $0.hasPrefix("SEARCH history_items ") })
         // Every item: 64 canonical + 16 inactive + 16 active bytes. R3
         // projects 80 bytes; R2 keeps 25 items. Victims' 15 prunes are
         // subsumed by retirement, so the receipt must report only 25 prunes.

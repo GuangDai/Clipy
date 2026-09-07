@@ -53,9 +53,7 @@ extension SQLiteHistory {
         makeCapture: @Sendable (Int) -> ClipboardCapture,
         progress: @Sendable (Int) -> Void = { _ in }
     ) async throws -> PerformanceFixtureSeedReceipt {
-        guard rowCount > 0,
-              rowCount <= HistoryLimits.standard.hardMaximumRetainedItems
-        else {
+        guard rowCount > 0 else {
             throw PerformanceFixtureSeedError.invalidRowCount
         }
 
@@ -90,6 +88,58 @@ extension SQLiteHistory {
             retainedRows: retainedCount,
             transactionCount: transactionCount,
             batchSize: Self.performanceFixtureSeedBatchSize
+        )
+    }
+}
+
+// V2-09 §10: measurement-only capacity, leaving the public product cap intact.
+// These disposable stores are opened only by the performance runner; no
+// alternate schema, writer, durability policy, or content limits are used.
+extension SQLiteHistory {
+    package static func openPerformanceFixture(
+        storeURL: URL,
+        retainedRows: Int
+    ) async throws -> SQLiteHistory {
+        guard (2...1_000_000).contains(retainedRows) else {
+            throw PerformanceFixtureSeedError.invalidRowCount
+        }
+        let standard = HistoryLimits.standard
+        guard let limits = HistoryLimits(
+            maximumRepresentationsPerCaptureOrRevision: standard.maximumRepresentationsPerCaptureOrRevision,
+            maximumTypeIdentifierUTF8Bytes: standard.maximumTypeIdentifierUTF8Bytes,
+            maximumRepresentationBytes: standard.maximumRepresentationBytes,
+            maximumCaptureBytes: standard.maximumCaptureBytes,
+            maximumProposedRevisionBytes: standard.maximumProposedRevisionBytes,
+            maximumRevisionsPerItem: standard.maximumRevisionsPerItem,
+            maximumTotalRevisionBytesPerItem: standard.maximumTotalRevisionBytesPerItem,
+            hardMaximumRetainedItems: retainedRows,
+            userMaximumUnpinnedLowerBound: 1,
+            userMaximumUnpinnedUpperBound: retainedRows,
+            defaultMaximumUnpinnedItems: min(standard.defaultMaximumUnpinnedItems, retainedRows),
+            maximumSourceApplicationObservationUTF8Bytes: standard.maximumSourceApplicationObservationUTF8Bytes,
+            maximumStoredTitleUTF8Bytes: standard.maximumStoredTitleUTF8Bytes,
+            maximumStoredSearchBodyUTF8Bytes: standard.maximumStoredSearchBodyUTF8Bytes,
+            pageRowLimitLowerBound: standard.pageRowLimitRange.lowerBound,
+            pageRowLimitUpperBound: standard.pageRowLimitRange.upperBound,
+            maximumSearchTermUTF8Bytes: standard.maximumSearchTermUTF8Bytes,
+            maximumRegexpPatternCharacters: standard.maximumRegexpPatternCharacters,
+            maximumFuzzyQueryCharacters: standard.maximumFuzzyQueryCharacters,
+            maximumFuzzyTitleBodyPrefixCharacters: standard.maximumFuzzyTitleBodyPrefixCharacters,
+            maximumRegexpTitleBodyPrefixCharacters: standard.maximumRegexpTitleBodyPrefixCharacters,
+            maximumBodySearchSnippetCharacters: standard.maximumBodySearchSnippetCharacters,
+            thumbnailDimensionLowerBound: standard.thumbnailDimensionRange.lowerBound,
+            thumbnailDimensionUpperBound: standard.thumbnailDimensionRange.upperBound,
+            maximumEncodedThumbnailBytes: standard.maximumEncodedThumbnailBytes
+        ) else {
+            throw PerformanceFixtureSeedError.invalidRowCount
+        }
+        return try await open(
+            configuration: HistoryConfiguration(
+                persistence: .persistent(storeURL: storeURL),
+                initialMaximumUnpinnedItems: retainedRows
+            ),
+            limits: limits,
+            makeCandidateID: { HistoryItemID(rawValue: UUID()) }
         )
     }
 }

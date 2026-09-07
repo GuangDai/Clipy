@@ -1,0 +1,72 @@
+name: SQLite storage measurements
+
+on:
+  workflow_dispatch:
+    inputs:
+      rows:
+        description: Retained rows per disposable store
+        type: choice
+        default: '10000'
+        options: ['10000', '100000', '1000000', 'all']
+      body_bytes:
+        description: UTF-8 bytes per synthetic clipboard value
+        type: choice
+        default: '1024'
+        options: ['1024', '65536', '262144']
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    name: SQLite ${{ matrix.rows }} rows
+    runs-on: macos-26
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        rows: ${{ fromJSON(inputs.rows == 'all' && '[10000,100000,1000000]' || format('[{0}]', inputs.rows)) }}
+    env:
+      NSUnbufferedIO: YES
+      OS_ACTIVITY_MODE: disable
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+      SCALE_ROWS: ${{ matrix.rows }}
+      SCALE_BODY_BYTES: ${{ inputs.body_bytes }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify macOS runner
+        run: bash scripts/ci/verify_macos_runner.sh
+      - name: Test measurement helpers
+        run: swift test --filter 'HistoryPerfTests.SQLiteScaleTests'
+      - name: Build Release measurement runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p sqlite-scale-logs
+          swift build -c release --product HistoryPerfRunner 2>&1 | tee sqlite-scale-logs/build.log
+          swift build -c release --show-bin-path > sqlite-scale-logs/bin-path.log
+          python3 scripts/diagnostic_scan.py --profile strict sqlite-scale-logs/build.log
+      - name: Seed disposable SQLite store
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/clipy-sqlite-scale"
+          scale_runner="$(tail -n 1 sqlite-scale-logs/bin-path.log)/HistoryPerfRunner"
+          /usr/bin/time -l -o sqlite-scale-logs/seed.time "$scale_runner" --sqlite-scale seed \
+            "$RUNNER_TEMP/clipy-sqlite-scale/history.sqlite" "$SCALE_ROWS" "$SCALE_BODY_BYTES" \
+            sqlite-scale-logs/seed.json 2>&1 | tee sqlite-scale-logs/seed.log
+      - name: Measure in a fresh process
+        shell: bash
+        run: |
+          set -euo pipefail
+          scale_runner="$(tail -n 1 sqlite-scale-logs/bin-path.log)/HistoryPerfRunner"
+          /usr/bin/time -l -o sqlite-scale-logs/measure.time "$scale_runner" --sqlite-scale measure \
+            "$RUNNER_TEMP/clipy-sqlite-scale/history.sqlite" "$SCALE_ROWS" "$SCALE_BODY_BYTES" \
+            sqlite-scale-logs/measure.json 2>&1 | tee sqlite-scale-logs/measure.log
+      - name: Upload available measurements
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sqlite-${{ matrix.rows }}-${{ inputs.body_bytes }}-${{ github.run_id }}
+          path: sqlite-scale-logs/
+          retention-days: 14

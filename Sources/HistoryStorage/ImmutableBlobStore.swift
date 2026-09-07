@@ -82,6 +82,7 @@ internal final class ImmutableBlobStore {
     /// Mapping is only a hint for these app-private immutable files. Returned
     /// Data owns its bytes/mapping independently of the directory entry.
     internal func read(id: UUID, expectedByteCount: Int) throws -> Data {
+        try Task.checkCancellation()
         guard expectedByteCount >= 0 else { throw corruptValue }
         do {
             let url = blobURL(id)
@@ -90,7 +91,12 @@ internal final class ImmutableBlobStore {
             }
             let bytes = try Data(contentsOf: url, options: .mappedIfSafe)
             guard bytes.count == expectedByteCount else { throw corruptValue }
+            // Foundation's synchronous read cannot be preempted. A task
+            // cancelled during it must still discard the completed value.
+            try Task.checkCancellation()
             return bytes
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw readFailure(for: error)
         }
@@ -100,6 +106,7 @@ internal final class ImmutableBlobStore {
     /// Unlink cannot invalidate an already-open read; a subsequent read must
     /// first pass the Authority's current-reference check again (V2-09 §5).
     internal func read(id: UUID, expectedByteCount: Int, range: Range<Int>) throws -> Data {
+        try Task.checkCancellation()
         guard expectedByteCount >= 0, range.lowerBound >= 0,
               range.upperBound <= expectedByteCount else { throw corruptValue }
         do {
@@ -110,13 +117,19 @@ internal final class ImmutableBlobStore {
             var bytes = Data()
             bytes.reserveCapacity(range.count)
             while bytes.count < range.count {
+                // V2-09 §5: cancellation ends this logical read and closes
+                // its single descriptor without returning partial bytes.
+                try Task.checkCancellation()
                 let amount = min(64 * 1_024, range.count - bytes.count)
                 guard let chunk = try handle.read(upToCount: amount), !chunk.isEmpty else {
                     throw corruptValue
                 }
                 bytes.append(chunk)
             }
+            try Task.checkCancellation()
             return bytes
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw readFailure(for: error)
         }

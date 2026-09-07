@@ -8,6 +8,29 @@ import Testing
 /// V2-09 §§5/6: immutable publication, corruption rejection and bounded GC.
 struct ImmutableBlobStoreTests {
     @Test(arguments: [false, true])
+    func cancelledReadsDiscardBytesAndPreserveStoredContent(ranged: Bool) async throws {
+        let task = Task {
+            try withStore { store, root in
+                let bytes = Data(repeating: 83, count: 256 * 1_024)
+                let reference = try store.write(bytes)
+                withUnsafeCurrentTask { $0?.cancel() }
+                #expect(throws: CancellationError.self) {
+                    if ranged {
+                        return try store.read(
+                            id: reference.id, expectedByteCount: bytes.count, range: 17..<180_053
+                        )
+                    }
+                    return try store.read(id: reference.id, expectedByteCount: bytes.count)
+                }
+                // Cancellation is a request-lifetime outcome, not a file
+                // failure or permission to remove the original bytes.
+                #expect(try Data(contentsOf: blobURL(root, reference.id)) == bytes)
+            }
+        }
+        try await task.value
+    }
+
+    @Test(arguments: [false, true])
     func synchronizationFailureCannotReturnAPublishedReference(fully: Bool) throws {
         try withStore { _, root in
             var directorySyncs = 0

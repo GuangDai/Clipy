@@ -117,45 +117,66 @@ internal enum HistoryItemRowHydration {
                                  blobStore: ImmutableBlobStore, limits: HistoryLimits = .standard)
         throws -> (metadata: HistoryContentMetadata, content: EffectiveContent, fingerprints: [ContentFingerprint?]) {
         let metadata = try contentMetadata(id: id, itemID: itemID, in: database)
+        var representations: [ContentRepresentation] = []
+        var fingerprints: [ContentFingerprint?] = []
+        try visitRepresentations(in: metadata, itemID: itemID, database: database,
+                                 blobStore: blobStore, limits: limits) { representation, fingerprint in
+            representations.append(representation)
+            fingerprints.append(fingerprint)
+        }
+        return (metadata, EffectiveContent(representations: representations), fingerprints)
+    }
+
+    /// V2-09 §4: capture confirmation consumes one representation at a time.
+    /// Other callers that actually need complete content collect these same
+    /// validated values. Even a nonmatching candidate must finish validation.
+    internal static func visitRepresentations(
+        in metadata: HistoryContentMetadata, itemID: HistoryItemID, database: SQLiteDatabase,
+        blobStore: ImmutableBlobStore, limits: HistoryLimits,
+        visit: (ContentRepresentation, ContentFingerprint?) -> Void
+    ) throws {
         guard metadata.representationCount <= limits.maximumRepresentationsPerCaptureOrRevision,
               metadata.byteCount <= (metadata.ordinal == 0 ? limits.maximumCaptureBytes : limits.maximumProposedRevisionBytes)
         else { throw corrupt }
         let rows = try database.prepare("""
             SELECT ordinal,exactType,typeKey,byteCount,fingerprint,inlineBytes,blobID
             FROM representations WHERE contentID=? ORDER BY ordinal
-            """, bindings: [.text(id.uuidString)])
+            """, bindings: [.text(metadata.id.uuidString)])
         defer { rows.finalize() }
-        var representations: [ContentRepresentation] = []
-        var fingerprints: [ContentFingerprint?] = []
         var types = Set<String>()
         var total = 0
+        var representationCount = 0
+        var previousType: String?
         while try rows.step() {
-            let type = try rows.text(at: 1)
-            let count = try integer(rows, 3)
-            guard try integer(rows, 0) == representations.count,
-                  !type.isEmpty, type.utf8.count <= limits.maximumTypeIdentifierUTF8Bytes,
-                  try rows.text(at: 2) == type.precomposedStringWithCanonicalMapping,
-                  types.insert(type).inserted, count > 0, count <= limits.maximumRepresentationBytes,
-                  representations.count < metadata.representationCount else { throw corrupt }
-            if let previous = representations.last {
-                guard previous.typeIdentifier.unicodeScalars.lexicographicallyPrecedes(type.unicodeScalars) else { throw corrupt }
+            try autoreleasepool {
+                let type = try rows.text(at: 1)
+                let count = try integer(rows, 3)
+                guard try integer(rows, 0) == representationCount,
+                      !type.isEmpty, type.utf8.count <= limits.maximumTypeIdentifierUTF8Bytes,
+                      try rows.text(at: 2) == type.precomposedStringWithCanonicalMapping,
+                      types.insert(type).inserted, count > 0, count <= limits.maximumRepresentationBytes,
+                      representationCount < metadata.representationCount else { throw corrupt }
+                if let previousType {
+                    guard previousType.unicodeScalars.lexicographicallyPrecedes(type.unicodeScalars) else { throw corrupt }
+                }
+                let inline = try rows.optionalBlob(at: 5)
+                let blobID = try rows.optionalText(at: 6)
+                let bytes: Data
+                switch (inline, blobID) {
+                case (.some(let value), .none): bytes = value
+                case (.none, .some(let value)): bytes = try blobStore.read(id: uuid(value), expectedByteCount: count)
+                default: throw corrupt
+                }
+                guard bytes.count == count else { throw corrupt }
+                let fingerprint = try rows.optionalBlob(at: 4).map { ContentFingerprint(rawValue: try sqliteUInt64($0)) }
+                guard (metadata.ordinal == 0) == (fingerprint != nil) else { throw corrupt }
+                visit(ContentRepresentation(typeIdentifier: type, bytes: bytes), fingerprint)
+                representationCount += 1
+                previousType = type
+                total += count
             }
-            let inline = try rows.optionalBlob(at: 5)
-            let blobID = try rows.optionalText(at: 6)
-            let bytes: Data
-            switch (inline, blobID) {
-            case (.some(let value), .none): bytes = value
-            case (.none, .some(let value)): bytes = try blobStore.read(id: uuid(value), expectedByteCount: count)
-            default: throw corrupt
-            }
-            guard bytes.count == count else { throw corrupt }
-            let fingerprint = try rows.optionalBlob(at: 4).map { ContentFingerprint(rawValue: try sqliteUInt64($0)) }
-            guard (metadata.ordinal == 0) == (fingerprint != nil) else { throw corrupt }
-            representations.append(ContentRepresentation(typeIdentifier: type, bytes: bytes))
-            fingerprints.append(fingerprint)
-            total += count
         }
-        guard representations.count == metadata.representationCount, total == metadata.byteCount else { throw corrupt }
+        guard representationCount == metadata.representationCount, total == metadata.byteCount else { throw corrupt }
         if metadata.ordinal > 0 {
             let canonicalTypes = try database.prepare("""
                 SELECT r.typeKey FROM representations r JOIN contents c ON c.id=r.contentID
@@ -166,7 +187,6 @@ internal enum HistoryItemRowHydration {
             while try canonicalTypes.step() { allowed.insert(try canonicalTypes.text(at: 0)) }
             guard types.isSubset(of: allowed) else { throw corrupt }
         }
-        return (metadata, EffectiveContent(representations: representations), fingerprints)
     }
 
     internal static func retainedSummary(_ row: SQLiteStatement) throws -> RetainedItemSummary {
@@ -198,9 +218,8 @@ internal enum IngestFactLoader {
         var match: CaptureMatch?
         if let hintedID = prepared.origin.lineageHint,
            let metadata = try HistoryItemRowHydration.metadata(itemID: hintedID, in: database, limits: limits) {
-            let effective = try HistoryItemRowHydration.effective(itemID: hintedID, in: database, blobStore: blobStore, limits: limits)
-            match = confirmLineageCapture(incoming: prepared.canonical, effective: effective.content,
-                                          id: hintedID, occurrence: metadata.occurrence, pinOrdinal: metadata.pinOrdinal)
+            match = try SQLiteCaptureConfirmation.lineage(incoming: prepared.canonical, item: metadata,
+                database: database, blobStore: blobStore, limits: limits)
         }
         if match == nil {
             var sql = """
@@ -224,9 +243,8 @@ internal enum IngestFactLoader {
                     guard let metadata = try HistoryItemRowHydration.metadata(itemID: itemID, in: database, limits: limits) else {
                         throw HistoryFailure.persistence(.invariantViolation)
                     }
-                    let canonical = try HistoryItemRowHydration.canonical(itemID: itemID, in: database, blobStore: blobStore, limits: limits)
-                    return confirmCanonicalCapture(incoming: prepared.canonical, existing: canonical,
-                        id: itemID, occurrence: metadata.occurrence, pinOrdinal: metadata.pinOrdinal)
+                    return try SQLiteCaptureConfirmation.canonical(incoming: prepared.canonical, item: metadata,
+                        database: database, blobStore: blobStore, limits: limits)
                 }
                 if let confirmed {
                     winner = winner.map { preferredCanonicalCaptureMatch($0, confirmed) } ?? confirmed

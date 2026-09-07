@@ -166,6 +166,8 @@ struct PerfRunner {
                 mode: childMode,
                 arguments: Array(arguments.dropFirst())
             )
+        } else if arguments.first == "--sqlite-scale" {
+            exitCode = await runSQLiteScale(arguments: Array(arguments.dropFirst()))
         } else if arguments.first == "--admission" {
             exitCode = await runAdmission(
                 arguments: Array(arguments.dropFirst())

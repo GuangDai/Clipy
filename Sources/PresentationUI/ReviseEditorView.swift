@@ -100,6 +100,7 @@ struct ReviseEditorView: View {
 
     @State private var isSaving = false
     @State private var isReloading = false
+    @State private var reloadTask: Task<Void, Never>?
     @State private var replacementTask: Task<Void, Never>?
     @State private var replacementFailure: String?
     @State private var replacementType: String?
@@ -187,7 +188,10 @@ struct ReviseEditorView: View {
             minHeight: layout == .standaloneSheet ? 440 : nil,
             maxHeight: layout == .embeddedInDetails ? .infinity : 440
         )
-        .onDisappear { cancelReplacementLoad() }
+        .onDisappear {
+            cancelReplacementLoad()
+            cancelReload()
+        }
         .alert(
             alertTitle,
             isPresented: Binding(
@@ -219,7 +223,7 @@ struct ReviseEditorView: View {
             }
             Button(PanelActionsCopy.text("Reload Latest", bundle: copyBundle)) {
                 activeAlert = nil
-                Task { await reloadLatest() }
+                startReload()
             }
             .accessibilityIdentifier("clipy.editor.stale-reload")
         case .reloadFailure, .incompatibleReload:
@@ -228,7 +232,7 @@ struct ReviseEditorView: View {
             }
             Button(PanelActionsCopy.text("Retry Reload", bundle: copyBundle)) {
                 activeAlert = nil
-                Task { await reloadLatest() }
+                startReload()
             }
             .accessibilityIdentifier("clipy.editor.retry-reload")
         case .saveFailure:
@@ -286,7 +290,7 @@ struct ReviseEditorView: View {
                 .accessibilityIdentifier("clipy.editor.awaiting-reload")
                 Spacer(minLength: PanelTheme.spacingSmall)
                 Button(isReloading ? PanelActionsCopy.text("Reloading…", bundle: copyBundle) : PanelActionsCopy.text("Reload Latest", bundle: copyBundle)) {
-                    Task { await reloadLatest() }
+                    startReload()
                 }
                 .disabled(isReloading)
                 .accessibilityIdentifier("clipy.editor.reload-latest")
@@ -598,6 +602,7 @@ struct ReviseEditorView: View {
 
     @MainActor
     private func completeDismissal() {
+        cancelReload()
         cancelReplacementLoad()
         if let onDismiss {
             onDismiss()
@@ -606,18 +611,48 @@ struct ReviseEditorView: View {
         }
     }
 
+    /// Reload is owned by this editor, including Cancel/Discard while its
+    /// read is suspended. A closed editor must never advance its former
+    /// Details owner when a non-cooperative read eventually returns (V2-09 §5).
+    @MainActor
+    private func startReload() {
+        guard reloadTask == nil, draft.isAwaitingLatestContent else { return }
+        reloadTask = Task {
+            await reloadLatest()
+            guard !Task.isCancelled else { return }
+            reloadTask = nil
+        }
+    }
+
+    @MainActor
+    private func cancelReload() {
+        reloadTask?.cancel()
+        reloadTask = nil
+        isReloading = false
+    }
+
     /// Fetches current details only after explicit user intent, then rebases
     /// the pure draft. It never auto-merges or submits. A typed read failure
     /// leaves the stale gate and all draft bytes untouched so Retry is safe.
     @MainActor
     private func reloadLatest() async {
-        guard !isReloading, draft.isAwaitingLatestContent else { return }
+        guard !Task.isCancelled, !isReloading, draft.isAwaitingLatestContent else { return }
+        let reference = draft.itemReference
+        _ = readFence.reconcile(viewState.surfacePurge, item: reference)
+        guard let generation = readFence.begin() else { return }
         cancelReplacementLoad()
         replacementFailure = nil
         isReloading = true
-        defer { isReloading = false }
+        defer {
+            if !Task.isCancelled { isReloading = false }
+        }
         do {
-            let latest = try await viewState.details(for: draft.itemID)
+            let latest = try await viewState.details(for: reference.id)
+            guard !Task.isCancelled else { return }
+            _ = readFence.reconcile(viewState.surfacePurge, item: reference)
+            guard !readFence.isPurged,
+                  readFence.owns(generation), draft.itemReference == reference
+            else { return }
             guard draft.reloadLatest(details: latest) else {
                 activeAlert = .incompatibleReload
                 return
@@ -625,8 +660,16 @@ struct ReviseEditorView: View {
             onReferenceAdvance?(latest.item)
             reloadNotice = "Latest content loaded. Your draft was kept for formats that remain editable."
         } catch let failure as HistoryFailure {
+            guard !Task.isCancelled else { return }
+            _ = readFence.reconcile(viewState.surfacePurge, item: reference)
+            guard !readFence.isPurged,
+                  readFence.owns(generation) else { return }
             activeAlert = .reloadFailure(failure)
         } catch {
+            guard !Task.isCancelled else { return }
+            _ = readFence.reconcile(viewState.surfacePurge, item: reference)
+            guard !readFence.isPurged,
+                  readFence.owns(generation) else { return }
             guard error is CancellationError else {
                 activeAlert = .reloadFailure(nil)
                 return

@@ -584,37 +584,20 @@ struct HistoryDetailsView: View {
             return
         }
         cancelRepresentationPreview()
-        guard request.item == currentItem, reconcileSurfacePurge(viewState.surfacePurge) else { return }
+        guard request.item == currentItem, reconcileSurfacePurge(viewState.surfacePurge),
+              case .loaded(let details, _) = phase else { return }
+        let representations = request.basis == .canonical ? details.canonical : details.effective
+        guard let metadata = representations.first(where: {
+            $0.typeIdentifier == request.typeIdentifier
+        }) else { return }
         previewRequest = request
         let generation = loadFence.generation
         representationTask = Task {
             do {
-                let raw = try await viewState.history.representation(request)
-                guard !Task.isCancelled, previewRequest == request,
-                      reconcileSurfacePurge(viewState.surfacePurge),
-                      loadFence.accepts(generation, returned: request.item, expected: currentItem, isCancelled: Task.isCancelled)
-                else { return }
-                let presentation: DetailsRepresentationPresentation
-                let type = ClipboardFormatIdentifier(rawValue: raw.typeIdentifier)
-                if type == .utf8PlainText || type == .utf16PlainText || type == .utf16ExternalPlainText {
-                    let decoding = Task.detached {
-                        guard !Task.isCancelled else { return DetailsRepresentationPresentation.metadataOnly }
-                        return DetailsRepresentationPresentation.resolve(raw)
-                    }
-                    presentation = await withTaskCancellationHandler {
-                        await decoding.value
-                    } onCancel: { decoding.cancel() }
-                } else {
-                    let outcome = await representationRenderer.renderHistoryPane([
-                        PreviewRepresentation(typeIdentifier: raw.typeIdentifier, bytes: raw.bytes)
-                    ])
-                    switch outcome {
-                    case .content(.text(let text)): presentation = .plainText(String(text.text.prefix(500)))
-                    case .content(.raster(let raster)): presentation = .image(raster)
-                    case .content(.pdf(let pdf)): presentation = .image(pdf.raster)
-                    default: presentation = .metadataOnly
-                    }
-                }
+                let presentation = try await DetailsRepresentationPresentation.load(
+                    request, metadata: metadata, history: viewState.history,
+                    renderer: representationRenderer
+                )
                 guard !Task.isCancelled, previewRequest == request,
                       reconcileSurfacePurge(viewState.surfacePurge),
                       loadFence.accepts(generation, returned: request.item, expected: currentItem, isCancelled: Task.isCancelled)
@@ -1332,6 +1315,47 @@ package enum DetailsRepresentationPresentation: Equatable, Sendable {
     case plainText(String)
     case image(PreviewRaster)
     case metadataOnly
+
+    /// One explicit row preview uses the renderer's existing metadata limits
+    /// before reading bytes (V2-09 §5). Opaque and over-budget representations
+    /// stay metadata-only; Save As continues to read their complete bytes.
+    package static func load(
+        _ request: HistoryRepresentationRequest,
+        metadata: HistoryRepresentationMetadata,
+        history: any ClipboardHistory,
+        renderer: ContentPreview
+    ) async throws -> DetailsRepresentationPresentation {
+        try Task.checkCancellation()
+        guard let source = ContentPreview.prepareHistoryPane([
+            PreviewRepresentationMetadata(
+                typeIdentifier: metadata.typeIdentifier, byteCount: metadata.byteCount
+            )
+        ]).first, source.preflightFailure == nil else { return .metadataOnly }
+        let raw = try await history.representation(request)
+        try Task.checkCancellation()
+        let type = ClipboardFormatIdentifier(rawValue: raw.typeIdentifier)
+        if type == .utf8PlainText || type == .utf16PlainText || type == .utf16ExternalPlainText {
+            let decoding = Task.detached {
+                guard !Task.isCancelled else { return DetailsRepresentationPresentation.metadataOnly }
+                return resolve(raw)
+            }
+            let presentation = await withTaskCancellationHandler {
+                await decoding.value
+            } onCancel: { decoding.cancel() }
+            try Task.checkCancellation()
+            return presentation
+        }
+        let outcome = await renderer.renderSelectedHistoryPane(source, representation: PreviewRepresentation(
+            typeIdentifier: raw.typeIdentifier, bytes: raw.bytes
+        ))
+        try Task.checkCancellation()
+        switch outcome {
+        case .content(.text(let text)): return .plainText(String(text.text.prefix(500)))
+        case .content(.raster(let raster)): return .image(raster)
+        case .content(.pdf(let pdf)): return .image(pdf.raster)
+        default: return .metadataOnly
+        }
+    }
 
     package static func resolve(
         _ representation: HistoryRepresentation
