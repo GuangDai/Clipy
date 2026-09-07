@@ -57,6 +57,7 @@ struct GatewayExternalWriteTests {
             kind: .pin,
             request: .pin(itemID: fixture.item.id.rawValue),
             itemID: fixture.item.id,
+            affected: .pinOrderChange(itemID: fixture.item.id, shiftedOrdinals: nil, affectedCount: 1),
             expectedPosition: 2
         )
         #expect(afterPin.pinOrdinal == 0)
@@ -102,6 +103,7 @@ struct GatewayExternalWriteTests {
             kind: .unpin,
             request: .unpin(itemID: fixture.item.id.rawValue),
             itemID: fixture.item.id,
+            affected: .pinOrderChange(itemID: fixture.item.id, shiftedOrdinals: nil, affectedCount: 1),
             expectedPosition: 3
         )
         #expect(afterUnpin.pinOrdinal == nil)
@@ -124,6 +126,7 @@ struct GatewayExternalWriteTests {
             kind: .remove,
             request: .remove(itemID: fixture.item.id.rawValue),
             itemID: fixture.item.id,
+            affected: .explicit([fixture.item.id]),
             expectedPosition: 4
         )
         #expect(afterRemove.itemCount == 0)
@@ -519,6 +522,7 @@ struct GatewayExternalWriteTests {
         kind: HistoryChangeKindRawV1,
         request: RequestSummaryV1,
         itemID: HistoryItemID,
+        affected: HistoryAffectedItems,
         expectedPosition: UInt64
     ) throws {
         #expect(snapshot.position == expectedPosition)
@@ -528,7 +532,7 @@ struct GatewayExternalWriteTests {
         #expect(hcr.sequence == expectedPosition)
         #expect(hcr.changePosition == expectedPosition)
         #expect(hcr.kind == kind)
-        #expect(hcr.affected == .explicit([itemID]))
+        #expect(hcr.affected == affected)
         #expect(snapshot.gateway.operations.count
             == prior.gateway.operations.count + 1)
         let audit = try #require(snapshot.gateway.operations.last)
