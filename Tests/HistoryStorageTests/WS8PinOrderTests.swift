@@ -11,7 +11,7 @@
 /// `.placedPinned(id)` /
 /// `.unpinned(id)` receipt outcomes, exactly one Change Position advance per
 /// non-no-op action and no advance for a no-op placement (docs/02-domain.md
-/// §13), Content Version untouched by pin/reorder/unpin (§13: `.assignPin`
+/// §13), Content Version untouched by pin/reorder/unpin (§13: pin relocation
 /// preserves), a RESTART after each receipt, and stored pin ordinals unique and
 /// exactly `0 ..< pinnedCount` (D12) with the expected id→ordinal mapping,
 /// all as seen through an INDEPENDENT second `SQLite connection` over the same
@@ -111,7 +111,7 @@ private static func restartAndAssertStoredPinState(
             "WS8 (\(clause)): stored pin ordinal matches the expected id→ordinal mapping"
         )
         // Pin/reorder/unpin never advances Content Version
-        // (docs/02-domain.md §13: `.assignPin` preserves).
+        // (docs/02-domain.md §13: pin relocation preserves content).
         #expect(
             row.contentVersionRaw == 1,
             "WS8 (\(clause)): Content Version remains unchanged"

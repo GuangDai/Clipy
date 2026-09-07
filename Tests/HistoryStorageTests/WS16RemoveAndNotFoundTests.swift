@@ -9,7 +9,7 @@
 /// `.committed` receipt with
 /// `.removed(count: 1)` and Change Position advanced exactly once; the
 /// pinned-lane compaction inside the remove commit (AUDIT IMP6-01,
-/// docs/02-domain.md §10: the survivors re-zip against `0 ..< count` in the
+/// docs/02-domain.md §10: the survivor range shifts back to `0 ..< count` in the
 /// SAME commit, so D12 holds and the final-order revalidation cannot gap);
 /// the failure vocabulary — `.remove`, `.unpin`, and `.revise` on an absent
 /// ID throw `.notFound(id)` while `.placePinned` throws

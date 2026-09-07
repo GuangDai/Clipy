@@ -102,7 +102,6 @@ func equivalentTypeSpellingsDoNotAppendARevision(_ useDecomposedCanonical: Bool)
 
 @Test func removingAnUnpinnedItemEmitsOnlyItsCompleteRetirementPayload() throws {
     let target = pinRevisionItemID(1)
-    let retainedPinned = pinRevisionItemID(2)
     let result = try planRemove(
         itemID: target,
         facts: RemoveFacts(
@@ -111,7 +110,7 @@ func equivalentTypeSpellingsDoNotAppendARevision(_ useDecomposedCanonical: Bool)
                 lastCopiedAt: Date(timeIntervalSinceReferenceDate: 100),
                 pinOrdinal: nil
             ),
-            pinnedOrder: CompletePinnedOrder(itemIDs: [retainedPinned])
+            pinnedCount: 1
         )
     )
 

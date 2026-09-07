@@ -13,9 +13,9 @@ import HistoryCore
 /// - `create`: the ID does not already exist in the facts (invariant 2).
 /// - `recordCopy`: carries the final folded occurrence; Storage does not
 ///   reconstruct it (invariant 3).
-/// - `assignPin`: `nil` ordinal means unpinned (docs/02-domain.md §3); the
-///   final set of `assignPin` mutations plus unchanged pinned items produces
-///   exactly one contiguous order (invariant 4).
+/// - `relocatePin`: the target and its original ordinal interval describe
+///   exactly the affected pinned positions; the final order remains unique
+///   and contiguous without expanding membership (invariant 4).
 /// - `appendRevision`: carries the complete immutable revision and the final
 ///   active ID (invariant 5); always changes Effective Content — same-content
 ///   requests returned `.unchanged` earlier (invariant 6).
@@ -33,7 +33,7 @@ import HistoryCore
 package enum HistoryMutation: Sendable {
     case create(NewHistoryItem)
     case recordCopy(itemID: HistoryItemID, occurrence: CopyOccurrence)
-    case assignPin(itemID: HistoryItemID, ordinal: PinOrdinal?)
+    case relocatePin(PinRelocation)
     case appendRevision(
         itemID: HistoryItemID,
         revision: ContentRevision,
@@ -92,8 +92,8 @@ package enum RetirementReason: Sendable {
 /// 2. A create ID does not already exist in the facts.
 /// 3. `recordCopy` carries the final folded occurrence; Storage does not
 ///    reconstruct it.
-/// 4. The final set of `assignPin` mutations plus unchanged pinned items
-///    produces exactly one contiguous order.
+/// 4. A pin relocation and its range shift, together with unchanged pinned
+///    items, produce exactly one contiguous order.
 /// 5. `appendRevision` carries the complete immutable revision and final
 ///    active ID.
 /// 6. The revision case always changes Effective Content; same-content

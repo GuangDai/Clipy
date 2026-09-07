@@ -187,18 +187,8 @@ extension HistoryAuthority {
                     .text(itemID.rawValue.uuidString),
                 ])
 
-        case .setPinOrdinal(let itemID, let ordinal):
-            let old = try requireMutationRow(itemID, in: database)
-            try database.execute("UPDATE history_items SET pinOrdinal = ? WHERE id = ?", bindings: [
-                ordinal.map { .integer(Int64($0)) } ?? .null, .text(itemID.rawValue.uuidString),
-            ])
-            let delta = (ordinal == nil ? 0 : 1) - (old.pinned ? 1 : 0)
-            if delta != 0 {
-                try database.execute(
-                    "UPDATE history_state SET pinnedItemCount = pinnedItemCount + ? WHERE key = ?",
-                    bindings: [.integer(Int64(delta)), .text(Self.positionSingletonKey)]
-                )
-            }
+        case .relocatePin(let relocation):
+            try applyPinRelocation(relocation, in: database)
 
         case .appendRevision(let update):
             guard let published else { throw HistoryFailure.persistence(.invariantViolation) }
@@ -245,7 +235,7 @@ extension HistoryAuthority {
                     pinnedItemCount = pinnedItemCount - ?, canonicalBytes = canonicalBytes - ?,
                     revisionBytes = revisionBytes - ? WHERE key = ?
                 """, bindings: [
-                    .integer(old.pinned ? 1 : 0), .integer(Int64(old.canonicalBytes)),
+                    .integer(old.pinOrdinal == nil ? 0 : 1), .integer(Int64(old.canonicalBytes)),
                     .integer(Int64(old.revisionBytes)), .text(Self.positionSingletonKey),
                 ])
 
@@ -388,9 +378,9 @@ extension HistoryAuthority {
         )
     }
 
-    private func requireMutationRow(
+    internal func requireMutationRow(
         _ itemID: HistoryItemID, in database: SQLiteDatabase
-    ) throws -> (version: UInt64, canonicalBytes: Int, revisionBytes: Int, pinned: Bool) {
+    ) throws -> (version: UInt64, canonicalBytes: Int, revisionBytes: Int, pinOrdinal: Int?) {
         let statement = try database.prepare("""
             SELECT contentVersion, canonicalBytes, revisionBytes, pinOrdinal
             FROM history_items WHERE id = ?
@@ -401,24 +391,22 @@ extension HistoryAuthority {
         }
         let canonical = try statement.integer(at: 1)
         let revisions = try statement.integer(at: 2)
-        guard canonical >= 0, revisions >= 0 else { throw HistoryFailure.persistence(.corruptStoredValue) }
+        let ordinal = try statement.isNull(at: 3) ? nil : statement.integer(at: 3)
+        guard canonical >= 0, revisions >= 0,
+              ordinal.map({ $0 >= 0 && $0 < Int64(limits.hardMaximumRetainedItems) }) ?? true else {
+            throw HistoryFailure.persistence(.corruptStoredValue)
+        }
         return (
             try sqliteUInt64(statement.blob(at: 0)), Int(canonical), Int(revisions),
-            try !statement.isNull(at: 3)
+            ordinal.map(Int.init)
         )
     }
 
     internal func validateFinalPinOrder(in database: SQLiteDatabase) throws {
-        let statement = try database.prepare(
-            "SELECT pinOrdinal FROM history_items WHERE pinOrdinal IS NOT NULL ORDER BY pinOrdinal"
-        )
-        defer { statement.finalize() }
-        var expected: Int64 = 0
-        while try statement.step() {
-            guard try statement.integer(at: 0) == expected else {
-                throw TransactionApplyRejection.finalPinOrderViolated
-            }
-            expected += 1
+        do {
+            _ = try PinnedOrderSQL.validatedCount(in: database, limits: limits)
+        } catch HistoryFailure.persistence(.invariantViolation) {
+            throw TransactionApplyRejection.finalPinOrderViolated
         }
         if consumeTransactionFailureInjection(.finalPinOrderViolated) {
             throw TransactionApplyRejection.finalPinOrderViolated

@@ -283,6 +283,112 @@ struct HCRAtomicAppendTests {
         #expect(try AffectedItemsBlobCodec.decode(record.affectedItemsBlob, for: kind) == expected)
     }
 
+    @Test("nonempty pin reorder rolls back shifts and HCR, then succeeds on retry",
+          arguments: [InjectedTransactionFailure.beforeHCRAppend, .beforeSingletonUpdate])
+    func pinReorderRollsBackWithJournal(injection: InjectedTransactionFailure) async throws {
+        let fixture = try await Self.makeHistory()
+        let first = try await Self.capture("reorder rollback first", in: fixture.history)
+        let second = try await Self.capture("reorder rollback second", in: fixture.history)
+        let third = try await Self.capture("reorder rollback third", in: fixture.history)
+        for item in [first, second, third] {
+            _ = try await fixture.history.perform(.placePinned(item.id, at: .last))
+        }
+        let before = try await Self.snapshot(in: fixture.authority)
+        await fixture.authority.setTransactionFailureInjection(injection)
+        let publications = await SingleOperationInvalidationPublicationProbe.begin(on: fixture.authority)
+        await #expect(throws: HistoryFailure.persistence(.transaction)) {
+            _ = try await fixture.history.perform(.placePinned(third.id, at: .first))
+        }
+        let observed = try await publications.finish(on: fixture.authority)
+        #expect(observed.count == 0)
+        #expect(try await Self.snapshot(in: fixture.authority) == before)
+        try await Self.expectPinChange(
+            .placePinned(third.id, at: .first), target: third.id, kind: .pin,
+            range: 0...1, order: [third.id, first.id, second.id], in: fixture.history
+        )
+    }
+
+    @Test("pin insertion, both reorder directions, unpin and pinned removal report exact members")
+    func pinScopesCoverEveryChangedOrdinal() async throws {
+        let fixture = try await Self.makeHistory()
+        let first = try await Self.capture("pin scope first", in: fixture.history)
+        let second = try await Self.capture("pin scope second", in: fixture.history)
+        let third = try await Self.capture("pin scope third", in: fixture.history)
+        let fourth = try await Self.capture("pin scope fourth", in: fixture.history)
+        for item in [first, second, third] {
+            _ = try await fixture.history.perform(.placePinned(item.id, at: .last))
+        }
+        try await Self.expectPinChange(
+            .placePinned(fourth.id, at: .first), target: fourth.id, kind: .pin,
+            range: 0...2, order: [fourth.id, first.id, second.id, third.id], in: fixture.history
+        )
+        try await Self.expectPinChange(
+            .placePinned(third.id, at: .first), target: third.id, kind: .pin,
+            range: 0...2, order: [third.id, fourth.id, first.id, second.id], in: fixture.history
+        )
+        try await Self.expectPinChange(
+            .placePinned(third.id, at: .before(second.id)), target: third.id, kind: .pin,
+            range: 1...2, order: [fourth.id, first.id, third.id, second.id], in: fixture.history
+        )
+
+        let beforeNoOp = try await Self.snapshot(in: fixture.authority)
+        let noOp = try await fixture.history.perform(.placePinned(third.id, at: .before(second.id)))
+        guard case .unchanged = noOp else {
+            Issue.record("adjacent target and anchor must remain a no-op")
+            return
+        }
+        #expect(try await Self.snapshot(in: fixture.authority) == beforeNoOp)
+
+        try await Self.expectPinChange(
+            .unpin(first.id), target: first.id, kind: .unpin,
+            range: 2...3, order: [fourth.id, third.id, second.id], in: fixture.history
+        )
+        try await Self.expectPinChange(
+            .remove(third.id), target: third.id, kind: .remove,
+            range: 2...2, order: [fourth.id, second.id], in: fixture.history
+        )
+        try await Self.expectPinChange(
+            .remove(second.id), target: second.id, kind: .remove,
+            range: nil, order: [fourth.id], in: fixture.history
+        )
+    }
+
+    private static func expectPinChange(
+        _ action: HistoryAction, target: HistoryItemID, kind: HistoryChangeKindRawV1,
+        range: ClosedRange<Int>?, order: [HistoryItemID], in history: SQLiteHistory
+    ) async throws {
+        let before = try await snapshot(in: history.authority)
+        let receipt = try await history.perform(action)
+        guard case .committed(let commit) = receipt else {
+            Issue.record("expected a changed pin order")
+            return
+        }
+        let after = try await snapshot(in: history.authority)
+        #expect(after.position == before.position + 1)
+        #expect(after.position == commit.position.rawValue)
+        #expect(after.records.dropLast() == before.records[...])
+        let record = try #require(after.records.last)
+        #expect(record.kindRaw == kind.rawValue)
+        #expect(record.sequence == after.position)
+        #expect(record.changePosition == after.position)
+        let selected = before.items.filter { row in
+            row.id == target.rawValue || row.pinOrdinal.map { range?.contains($0) ?? false } == true
+        }.map(\.id).sorted { $0.uuidString < $1.uuidString }
+        let changed = before.items.filter { old in
+            guard let new = after.items.first(where: { $0.id == old.id }) else { return true }
+            return old.pinOrdinal != new.pinOrdinal
+        }.map(\.id).sorted { $0.uuidString < $1.uuidString }
+        #expect(changed == selected)
+        #expect(selected.count == 1 + (range.map { $0.upperBound - $0.lowerBound + 1 } ?? 0))
+        #expect(try AffectedItemsBlobCodec.decode(record.affectedItemsBlob, for: kind) == .pinOrderChange(
+            itemID: target, shiftedOrdinals: range, affectedCount: selected.count
+        ))
+        let pinned = after.items.filter { $0.pinOrdinal != nil }
+            .sorted { $0.pinOrdinal! < $1.pinOrdinal! }
+        #expect(pinned.map(\.id) == order.map(\.rawValue))
+        #expect(pinned.compactMap(\.pinOrdinal) == Array(0..<order.count))
+    }
+
     @Test("count cap trims exactly the oldest prefix in the append transaction")
     func countCapTrimsOldestPrefix() async throws {
         let limits = try #require(JournalLimits(

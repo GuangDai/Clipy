@@ -92,9 +92,9 @@ compaction; future J1-only state requires a later immutable schema.
 
 The current SQLite implementation stores a strict tagged scope in the existing
 `affectedItemsBlob` column. This supersedes the earlier ID-only wire: there is
-one current version (2), no old-format decoder or migration.
+one current version (3), no old-format decoder or migration.
 
-All integers use network byte order. The prefix is `UInt16 version = 2` plus
+All integers use network byte order. The prefix is `UInt16 version = 3` plus
 one scope tag:
 
 | Tag | Scope and following fields |
@@ -104,6 +104,7 @@ one scope tag:
 | 3 | Unpinned items: UInt64 actual retired count |
 | 4 | Unpinned eviction prefix: UInt64 actual retired count, Double timestamp bits, cutoff UUID16, optional excluded UUID16, optional primary UUID16 |
 | 5 | Conservative whole pre-commit History: UInt64 actual retired item count, UInt64 actual pruned revision count |
+| 6 | Pin-order change: target UUID16, one-byte 0/1 range flag, optional UInt64 lower/upper pre-commit pin ordinals, UInt64 actual affected count |
 
 Each optional UUID uses a one-byte 0/1 presence flag. Prefix membership is
 unpinned rows at or before the inclusive `(lastCopiedAt, itemID)` cutoff, minus
@@ -112,8 +113,15 @@ a retention-only prefix has no primary change. The conservative retention
 scope does **not** claim every covered item changed. It allows R3 to report
 exact counts without storing an unbounded set of surviving item IDs.
 
-Explicit arrays alone use the 5,001-ID bound. Bulk clear is 11 bytes, a prefix
-at most 69 bytes, and conservative retention 19 bytes regardless of item count.
+Pin-order membership is the exact target plus items whose **pre-commit** pin
+ordinal lies in the inclusive shifted range. The target is outside that range;
+the actual count is one plus its width, or one when absent. Pin, unpin and
+pinned-item removal use this compact scope; a no-op produces no record. The
+range is not a query against the post-commit order and carries no content bytes.
+
+Explicit arrays alone use an independent, fixed 5,001-ID bound. Bulk clear is
+11 bytes, a prefix at most 69 bytes, conservative retention 19 bytes, and a
+pin-order scope 28 or 44 bytes, regardless of the number of affected items.
 The decode envelope is `max(5 + 16 * maxAffectedItemsPerRecord, 69)`.
 The decoder rejects unknown versions/tags, malformed lengths or flags,
 non-finite cutoffs, non-ascending/duplicate explicit IDs, integer overflow,
@@ -569,8 +577,9 @@ for all `affectedItemIDs`" and refetches — exactly the cache's conservative fl
 The current manual wire and strict validation are specified in §0.2.
 `HistoryChangeRecordPayload.affectedItems` is a closed immutable
 `HistoryAffectedItems` value: complete explicit IDs, all/unpinned clear,
-an unpinned eviction prefix with optional primary, or conservative retention
-coverage with actual counts. An empty explicit list is only a policy-only
+an unpinned eviction prefix with optional primary, conservative retention
+coverage with actual counts, or an exact target plus a pre-commit pin-ordinal
+range. An empty explicit list is only a policy-only
 change, never a substitute for unknown membership.
 
 The codec rejects invalid persisted shapes as
@@ -589,7 +598,7 @@ and V2-01's `EnrichmentLimits`):
 
 | Bound | V2 value |
 |---|---:|
-| `maxAffectedItemsPerRecord` | `HistoryLimits.standard.hardMaximumRetainedItems + 1` (5,001); only bounds complete explicit ID arrays. Bulk scope counts are independent and do not enumerate IDs (§0.2). |
+| `maxAffectedItemsPerRecord` | Fixed 5,001, independent of History retention capacity; only bounds complete explicit ID arrays. Bulk and pin-range scope counts are independent and do not enumerate IDs (§0.2). |
 | `maxJournalRecordCount` (compaction cap) | 10,000 |
 | `maxJournalAgeSeconds` (compaction cap) | 604,800 (7 days) |
 | `maxJournalBytes` (whole-journal affected-items payload cap) | 80 MiB; exactly the checked sum of retained `affectedItemsBlob.count`, tracked by `JournalConfigRow.journalBytes`. This is not a physical SQLite/WAL/index-byte claim; record count/floor bounds are separate. |

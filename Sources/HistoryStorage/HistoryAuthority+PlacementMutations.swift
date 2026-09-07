@@ -20,6 +20,7 @@ extension HistoryAuthority {
 
         let facts = try MutationFactLoaders.loadPinFacts(
             itemID: itemID,
+            placement: placement,
             in: database,
             limits: limits
         )

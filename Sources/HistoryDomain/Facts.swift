@@ -92,30 +92,24 @@ package struct IngestFacts: Sendable {
 
 // MARK: - Pinned-order facts (docs/02-domain.md §5.2)
 
-/// The complete ordered list of pinned History Item IDs.
-/// docs/02-domain.md §5.2
-///
-/// Construction (in `HistoryStorage`) validates that every pinned retained
-/// row appears exactly once and that ordinals are unique and contiguous
-/// (D12). A malformed stored order is a persistence invariant failure; the
-/// planner does not guess a repair.
-package struct CompletePinnedOrder: Sendable {
-    package let itemIDs: [HistoryItemID]
-
-    package init(itemIDs: [HistoryItemID]) {
-        self.itemIDs = itemIDs
-    }
-}
-
 /// The complete facts pin placement and unpin planning require.
-/// docs/02-domain.md §5.2
+/// Storage proves the pinned lane is exactly 0..<pinnedCount, then point
+/// reads the target and (only for .before) anchor. No pinned IDs are loaded
+/// merely to describe an ordinal shift (02 §5.2/§10, D12).
 package struct PinFacts: Sendable {
     package let targetExists: Bool
-    package let order: CompletePinnedOrder
+    package let targetOrdinal: PinOrdinal?
+    /// Nil means the requested anchor is absent or unpinned. Not consumed
+    /// for first/last placement or unpin.
+    package let anchorOrdinal: PinOrdinal?
+    package let pinnedCount: Int
 
-    package init(targetExists: Bool, order: CompletePinnedOrder) {
+    package init(targetExists: Bool, targetOrdinal: PinOrdinal?,
+                 anchorOrdinal: PinOrdinal? = nil, pinnedCount: Int) {
         self.targetExists = targetExists
-        self.order = order
+        self.targetOrdinal = targetOrdinal
+        self.anchorOrdinal = anchorOrdinal
+        self.pinnedCount = pinnedCount
     }
 }
 
@@ -158,17 +152,16 @@ package struct RevisionFacts: Sendable {
 /// docs/02-domain.md §5.4
 ///
 /// A nil `item` means the target is absent from the retained set; planning
-/// rejects it with `.notFound`. `pinnedOrder` is the same proven value pin
-/// planning loads (§5.2): removing a pinned item must compact the pinned lane
-/// in the same commit (§10, D12 — AUDIT IMP6-01), which a target-only fact
-/// cannot plan.
+/// rejects it with `.notFound`. The target's ordinal and the proven pinned
+/// count suffice to describe the complete later suffix shifted by removal
+/// (§10, D12 — AUDIT IMP6-01).
 package struct RemoveFacts: Sendable {
     package let item: RetainedItemSummary?
-    package let pinnedOrder: CompletePinnedOrder
+    package let pinnedCount: Int
 
-    package init(item: RetainedItemSummary?, pinnedOrder: CompletePinnedOrder) {
+    package init(item: RetainedItemSummary?, pinnedCount: Int) {
         self.item = item
-        self.pinnedOrder = pinnedOrder
+        self.pinnedCount = pinnedCount
     }
 }
 

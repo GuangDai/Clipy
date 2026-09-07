@@ -16,7 +16,17 @@ internal enum SQLiteHistorySchema {
         guard try existing.step() else { throw HistoryFailure.persistence(.openStore) }
         let currentTableCount = try existing.integer(at: 0)
         existing.finalize()
-        if currentTableCount == 11 { return }
+        if currentTableCount == 11 {
+            // The aggregate density proof relies on this actual constraint,
+            // not merely a familiar table/name in an older database file.
+            let pinIndex = try database.prepare("""
+                SELECT 1 FROM pragma_index_list('history_items')
+                WHERE name='history_items_pinned_order' AND "unique"=1 AND partial=1 LIMIT 1
+                """)
+            defer { pinIndex.finalize() }
+            guard try pinIndex.step() else { throw HistoryFailure.persistence(.openStore) }
+            return
+        }
 
         let occupied = try database.prepare("""
             SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1
@@ -165,7 +175,7 @@ internal enum SQLiteHistorySchema {
         )
         """,
         """
-        CREATE INDEX history_items_pinned_order ON history_items(pinOrdinal)
+        CREATE UNIQUE INDEX history_items_pinned_order ON history_items(pinOrdinal)
             WHERE pinOrdinal IS NOT NULL
         """,
         """
