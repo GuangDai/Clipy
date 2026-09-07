@@ -347,9 +347,10 @@ struct ReviseEditorDraftTests {
         installSource(current.bytes, for: textType, in: &draft)
         #expect(!draft.isDirty)
         draft.markStale()
-        #expect(draft.reloadLatest(details: details(
+        let reloaded = draft.reloadLatest(details: details(
             canonical: [original, sibling], effective: [sibling], version: 3
-        )))
+        ))
+        #expect(reloaded)
         #expect(!draft.isAwaitingLatestContent)
         #expect(!draft.isDirty)
         #expect(!draft.hasReplacementSource(for: textType))
@@ -370,9 +371,10 @@ struct ReviseEditorDraftTests {
         draft.setChoice(.replace, for: textType)
         draft.setReplacementText("draft-A", for: textType)
         draft.markStale()
-        #expect(!draft.reloadLatest(details: details(
+        let reloaded = draft.reloadLatest(details: details(
             canonicalText: Data("original".utf8), effectiveText: Data("older".utf8), version: 3
-        )))
+        ))
+        #expect(!reloaded)
         #expect(draft.isAwaitingLatestContent)
         #expect(!draft.canSubmit)
         #expect(draft.revisionRequest().expected == ContentVersion(rawValue: 4))
@@ -742,7 +744,8 @@ struct ReviseEditorDraftTests {
             canonicalText: Data("original".utf8), effectiveText: malformed
         ))
         let source = HistoryRepresentation(typeIdentifier: textType, bytes: malformed)
-        #expect(!draft.installReplacementSource(source))
+        let installedMalformed = draft.installReplacementSource(source)
+        #expect(!installedMalformed)
         #expect(!draft.hasReplacementSource(for: textType))
         draft.setChoice(.replace, for: textType)
         #expect(draft.choice(for: textType) == .keepCurrent)
@@ -750,13 +753,15 @@ struct ReviseEditorDraftTests {
 
         // A later failed source result cannot clobber an already-authored
         // draft; the UI also owns its separate request-reference check.
-        #expect(draft.reloadLatest(details: details(
+        let reloaded = draft.reloadLatest(details: details(
             canonicalText: Data("original".utf8), effectiveText: Data("current".utf8), version: 3
-        )))
+        ))
+        #expect(reloaded)
         installSource(Data("current".utf8), for: textType, in: &draft)
         draft.setChoice(.replace, for: textType)
         draft.setReplacementText("authored 🌿", for: textType)
-        #expect(!draft.installReplacementSource(source))
+        let reinstalledMalformed = draft.installReplacementSource(source)
+        #expect(!reinstalledMalformed)
         #expect(draft.replacementText(for: textType) == "authored 🌿")
         #expect(decisions(from: draft.revisionRequest())[textType] == .replace(bytes: Data("authored 🌿".utf8)))
     }
@@ -903,7 +908,8 @@ struct ReviseEditorDraftTests {
         #expect(draft.replacementRequest(for: type) == HistoryRepresentationRequest(
             item: draft.itemReference, basis: basis, typeIdentifier: type
         ))
-        #expect(draft.installReplacementSource(HistoryRepresentation(typeIdentifier: type, bytes: bytes)))
+        let installed = draft.installReplacementSource(HistoryRepresentation(typeIdentifier: type, bytes: bytes))
+        #expect(installed)
     }
 
     private func decisions(
