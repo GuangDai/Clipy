@@ -61,8 +61,17 @@ func undecodableImageIsStillReadableAndPasteable(_ bytes: Data) async throws {
     let expected = [HistoryRepresentation(typeIdentifier: "public.png", bytes: bytes)]
     let details = try await history.details(for: reference.id)
     #expect(details.item == reference)
-    #expect(details.canonical == expected)
-    #expect(details.effective == expected)
+    let expectedMetadata = [HistoryRepresentationMetadata(typeIdentifier: "public.png", byteCount: bytes.count)]
+    #expect(details.canonical == expectedMetadata)
+    #expect(details.effective == expectedMetadata)
+    let canonical = try await history.representation(.init(
+        item: details.item, basis: .canonical, typeIdentifier: "public.png"
+    ))
+    let effective = try await history.representation(.init(
+        item: details.item, basis: .effective, typeIdentifier: "public.png"
+    ))
+    #expect([canonical] == expected)
+    #expect([effective] == expected)
     let paste = try await history.pastePayload(for: reference.id)
     #expect(paste.item == reference)
     #expect(paste.representations == expected)
