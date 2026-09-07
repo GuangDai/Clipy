@@ -4,7 +4,7 @@ import Testing
 @testable import HistoryStorage
 
 struct LocalAutomationEnrollmentTests {
-    @Test func disabledStatusDoesNotRequireKeychainAccess() async throws {
+    @Test func disabledStatusDoesNotRequireServerCustodyAccess() async throws {
         let fixture = try await fixture(credentials: CredentialStore(
             operations: EnrollmentCredentialOperations(refusesEnumeration: true)
         ))
@@ -29,6 +29,13 @@ struct LocalAutomationEnrollmentTests {
         #expect(enabled.grants.isEmpty)
         let bytes = try #require(try fixture.custody.loadCredential())
         #expect(try await fixture.credentials.loadCredential(for: connection) == bytes)
+        let reopenedCredentials = CredentialStore(directoryURL: fixture.serverDirectory)
+        #expect(try await reopenedCredentials.loadCredential(for: connection) == bytes)
+        let reopenedIngress = LocalAutomationIngress(
+            authority: fixture.history.authority, gateway: fixture.history.externalGateway,
+            credentialStore: reopenedCredentials
+        )
+        #expect(try await reopenedIngress.state(clientDirectory: fixture.directory) == enabled)
         #expect(try await fixture.ingress.enable(clientDirectory: fixture.directory) == enabled)
         #expect(try fixture.custody.loadCredential() == bytes)
         await #expect(throws: ExternalFailure.unauthorized(requestedCapability: .browsePreview, connectionID: connection)) {
@@ -62,9 +69,25 @@ struct LocalAutomationEnrollmentTests {
         await #expect(throws: ExternalFailure.connectionRevoked(connectionID: connection)) {
             _ = try await fixture.ingress.execute(.recent(limit: 10, cursor: nil), presenting: bytes)
         }
+        // A second actor reads the surviving verifier from disk after the
+        // client file is gone. Authentication preserves the durable ID so
+        // the actual Gateway still publishes the truthful revoked outcome.
+        let reopenedCredentials = CredentialStore(directoryURL: fixture.serverDirectory)
+        let reopenedAuthenticator = LocalAutomationCredentialAuthenticator(
+            credentialStore: reopenedCredentials, authority: fixture.history.authority
+        )
+        #expect(try await reopenedAuthenticator.authenticate(bytes) == connection)
+        let reopenedIngress = LocalAutomationIngress(
+            authority: fixture.history.authority, gateway: fixture.history.externalGateway,
+            credentialStore: reopenedCredentials
+        )
+        await #expect(throws: ExternalFailure.connectionRevoked(connectionID: connection)) {
+            _ = try await reopenedIngress.execute(.recent(limit: 10, cursor: nil), presenting: bytes)
+        }
         let reenrolled = try await fixture.ingress.enable(clientDirectory: fixture.directory)
         #expect(reenrolled.connection != connection)
         #expect(reenrolled.grants.isEmpty)
+        #expect(try await reopenedCredentials.loadCredential(for: connection) == bytes)
     }
 
     @Test(arguments: [false, true])
@@ -83,16 +106,26 @@ struct LocalAutomationEnrollmentTests {
     }
 
     @Test func enableRemovesPowerlessServerOrphansEvenWithoutAClientFile() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let retained = try await fixture.ingress.enable(clientDirectory: fixture.directory)
+        let retainedID = try #require(retained.connection)
+        let retainedBytes = try #require(try fixture.custody.loadCredential())
+        _ = try await fixture.ingress.revoke(clientDirectory: fixture.directory)
         let orphan = ExternalConnectionID(rawValue: UUID())
         let bytes = try LocalAutomationCredential(connection: orphan, secret: Data(repeating: 1, count: 32)).exactBytes
-        let credentials = CredentialStore(operations: EnrollmentCredentialOperations(values: [orphan: bytes]))
-        let fixture = try await fixture(credentials: credentials)
-        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try await fixture.credentials.storeCredential(bytes, for: orphan)
+        #expect(try fixture.custody.loadCredential() == nil)
         #expect(try await fixture.ingress.state(clientDirectory: fixture.directory).connection == nil)
         let enabled = try await fixture.ingress.enable(clientDirectory: fixture.directory)
         #expect(enabled.connection != orphan)
-        #expect(try await credentials.loadCredential(for: orphan) == nil)
+        #expect(try await fixture.credentials.loadCredential(for: orphan) == nil)
         #expect(enabled.grants.isEmpty)
+        let reopenedCredentials = CredentialStore(directoryURL: fixture.serverDirectory)
+        #expect(try await reopenedCredentials.loadCredential(for: retainedID) == retainedBytes)
+        let enabledID = try #require(enabled.connection)
+        #expect(Set(try await reopenedCredentials.connectionIDs()) == [retainedID, enabledID])
+        #expect(try await fixture.history.connections().first { $0.id == retainedID }?.status == .revoked)
     }
 
     @Test func lostClientFileCanStillRevokeDurableAccess() async throws {
@@ -131,6 +164,7 @@ struct LocalAutomationEnrollmentTests {
         let ingress: LocalAutomationIngress
         let root: URL
         var directory: URL { root.appendingPathComponent("LocalAutomation") }
+        var serverDirectory: URL { root.appendingPathComponent("ServerCredentials") }
         var custody: LocalAutomationClientCredentialCustody { .init(directoryURL: directory) }
     }
 
@@ -138,7 +172,7 @@ struct LocalAutomationEnrollmentTests {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let history = try await SwiftDataHistory.open(configuration: HistoryConfiguration(persistence: .memory))
-        let credentials = credentials ?? CredentialStore(operations: EnrollmentCredentialOperations())
+        let credentials = credentials ?? CredentialStore(directoryURL: root.appendingPathComponent("ServerCredentials"))
         return Fixture(
             history: history, credentials: credentials,
             ingress: LocalAutomationIngress(authority: history.authority, gateway: history.externalGateway, credentialStore: credentials),
@@ -147,8 +181,8 @@ struct LocalAutomationEnrollmentTests {
     }
 }
 
-/// Only the true external Keychain is substituted; every durable connection,
-/// grant, denial and revoke passes through the real HistoryAuthority.
+/// Fault injection only: successful custody uses the real private files.
+/// Every durable connection, grant, denial and revoke uses HistoryAuthority.
 private struct EnrollmentCredentialOperations: CredentialStoreExternalOperations {
     var values: [ExternalConnectionID: Data] = [:]
     var refusesAdd = false

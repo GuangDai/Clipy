@@ -5,8 +5,16 @@ your program needs. Access starts with no permissions. All programs running as
 your macOS account share this connection; deletion requires its own confirmation
 when granting access.
 
+The server credential is kept in a separate owner-only directory under
+`Application Support/Clipy/LocalAutomationServer`, one connection UUID per
+subdirectory. Directories use mode `0700` and credential files use `0600`.
+The client has its own credential copy; deleting it does not erase the server
+verifier needed to report a revoked connection. This is account-wide access,
+not protection against a malicious program already running as your account.
+There is no Keychain fallback, signature requirement, or old-custody migration.
+
 When access is disabled and no client credential remains, opening Settings
-does not access the Keychain. Enable first removes server credentials left by
+does not read server credentials. Enable first removes server credentials left by
 an interrupted enrollment that has no saved connection, including those whose
 client file has disappeared; cleanup must succeed before creating a new
 connection. Revoked connections retain their server verifier so previously

@@ -312,15 +312,22 @@ framing bounds, and failure mapping are frozen; it must not publish the Gateway,
 CredentialStore, socket path, or framing as a second public interface.
 
 For the current **non-sandbox, account-wide** product direction, credential
-custody is now decided as follows:
+custody uses separate server and client files (user-approved 2026-09-07).
+This replaces the earlier Data Protection Keychain direction; older signed
+Keychain evidence references are historical, not current implementation
+requirements. There is no fallback to Keychain or legacy-custody migration.
 
 - one credential is exactly 48 opaque bytes: the preassigned connection UUID
   as 16 bytes followed by 32 bytes generated directly with `SecRandomCopyBytes`;
   neither component is a request hash, digest, signature, derived identity, or
   password encoding;
-- the server stores that exact 48-byte value in the app-private Data Protection
-  Keychain (`kSecUseDataProtectionKeychain`), keyed by the connection UUID. No
-  secret is added to SwiftData, an audit payload, argv, environment, or log;
+- the server stores that exact 48-byte value under
+  `Application Support/Clipy/LocalAutomationServer/<connection UUID>/`, in a
+  `local-automation.credential` file. Directories are current-user-owned and
+  private (`0700`); the regular credential file is private (`0600`), with
+  symbolic-link occupants rejected. An existing credential is never overwritten
+  by add. No secret is added to SwiftData, an audit payload, argv, environment,
+  or log;
 - the first-party client stores the same exact value in one owner-only file
   beneath a validated owner-only directory: directory mode `0700`, regular-file
   mode `0600`, no symlink traversal, no-follow open, owner/mode/type checks on
@@ -335,15 +342,15 @@ custody is now decided as follows:
 
 Enrollment publishes authority last. The app preassigns the connection UUID and
 secret, invokes the bounded provisioning helper, verifies an exact client-file
-readback, writes and exact-reads the server Keychain item, and only then asks the
+readback, writes and exact-reads the separate server file, and only then asks the
 single Authority transaction to insert the preassigned `.localAutomation`
 connection row plus its successful admin-enroll audit. That row starts with
 **zero grants**; enrollment never grants `browsePreview` or another capability
 implicitly. A crash before the Authority transaction can leave a client file,
-a Keychain item, or both, but no durable connection row or grant: those orphans
-are powerless. At startup, exact 48-byte Keychain/client artifacts whose UUID
-has no matching durable local-automation row are removed best-effort; a repeated
-enable retries the same cleanup before minting a fresh UUID. Cleanup failure is
+a server file, or both, but no durable connection row or grant: those orphans
+are powerless. Enrollment reconciliation removes unretained credential files;
+explicit Enable also finds server orphans whose client file has disappeared.
+It excludes every retained connection, including revoked connections. Cleanup failure is
 reported and blocks publication rather than causing a row to be inferred from a
 secret.
 
@@ -380,10 +387,9 @@ The stored secret comparison is byte-exact and timing-safe, but that mechanism
 does not change the accepted same-EUID threat model.
 
 This decision removes the former F1 client-custody **spec** blocker only for the
-current non-sandbox account-wide promise. Actual Developer ID/team/profile,
-Data Protection Keychain round-trip, nested-tool signing, installer/provisioning,
-notarization/stapling, Gatekeeper, and the real caller matrix remain open signed
-evidence. If a future threat model requires confidentiality from malicious
+current non-sandbox account-wide promise. Signing and distribution evidence are
+separate operations, not prerequisites for these private files. If a future
+threat model requires confidentiality from malicious
 same-EUID processes or enables App Sandbox, the client must become an app-like
 wrapped executable with an approved shared Data Protection Keychain access
 group (and matching Team ID/profile/entitlements) or another separately approved
@@ -559,8 +565,8 @@ V2-05 owns:
   actor);
 - the `AppIntent` conformances and `ClipboardShortcuts: AppShortcutsProvider` in
   `ClipyApp`;
-- the F1 credential-store seam (server-side app-private Data Protection
-  Keychain `SecItem*` plus the §0.3 client-file custody decision; unused by the
+- the F1 credential-store seam (separate server and client private files under
+  the §0.3 custody decision; unused by the
   App Intents path. PR #20 landed only the internal exact-value/server-store
   leaf; PR #38 landed only the in-process authenticator; Batch 39 source adds
   only the preassigned publication and internal recent/search browse route.
@@ -668,7 +674,7 @@ not a permanent prohibition on the ordered `clipyctl` continuation.
 - **Cryptographic integrity, tamper evidence, or non-repudiation.** None is
   claimed or implemented. A future security graft would require explicit user
   approval of that new boundary; it is not predesigned here.
-- **A network / remote enrollment kind.** The credential-store seam (Keychain)
+- **A network / remote enrollment kind.** The credential-store seam (private files)
   is specified (§6.7) but exercised only by future non-App-Intents enrollment
   kinds (URL-scheme bearer token, XPC service label). V2 ships App Intents only.
 
@@ -933,23 +939,17 @@ public enum ConnectionStatus: Int16, Sendable, Hashable, Codable {
 
 ### 3.4 Local Automation credential custody (F1 direction)
 
-The controlling F1 decision is §0.3: an exact 48-byte credential is stored
-server-side in the app-private Data Protection Keychain and client-side in a
-validated owner-only no-follow file for the deliberately non-sandbox,
-account-wide product. `CredentialStore` remains actor-confined around
-`SecItemAdd` / `SecItemCopyMatching` / `SecItemDelete`; the client file is not
-a shared Keychain substitute and makes no malicious-same-EUID confidentiality
-claim. App Intents still use no credential.
+The controlling F1 decision is §0.3: an exact 48-byte credential has separate
+server and client owner-only files for the deliberately non-sandbox,
+account-wide product. `CredentialStore` confines server filesystem work and
+exposes only validated immutable bytes or content-free failures. Only secret
+generation uses `Security`. App Intents still use no credential.
 
-This section fixes architecture and publication order, not platform evidence.
-PR #20 links `Security` only for an internal 48-byte value plus actor-confined
-server-store leaf. Its ordinary correctness tests use
-an injected in-memory adapter for the true Keychain boundary, so they establish
-shape, validation, and content-free store semantics, not Data Protection
-Keychain behavior. `X-PLATFORM-3` must still prove exact add/read/delete,
-duplicate/retry handling, process restart, and Developer ID/profile behavior in
-the actual signed artifact. No positive Local Automation request may be
-released from this server-only leaf.
+Real filesystem tests must cover add/read/delete, duplicate preservation,
+corrupt values, permissions, and reading from a fresh owner. Enrollment and
+actual CLI tests must use real file custody for positive paths; injected
+operation failures remain useful for errors that cannot be induced reliably.
+The server-only store grants no capability and never publishes a History result.
 
 ## 4. Data model
 
@@ -1992,11 +1992,10 @@ is `01` §8 / `06` §6: "`import SwiftData` appears only in `HistoryStorage`"):
   **not** import `AppIntents` — the gateway exposes a Foundation-only
   `ExternalHistory` protocol, and the `AppIntent` conformances that consume it
   live in `ClipyApp` (R-m2 / Lens B nit). Audit adds no hashing or cryptography
-  import. The Batch 18 F1 server-custody leaf adds `import Security` only inside
-  `HistoryStorage` for `SecRandomCopyBytes` and app-private Data Protection
-  Keychain `SecItem*`; it adds no Security edge to audit, Core, Domain, UI, or
-  adapters. Ordinary injected-operation tests do not close `X-PLATFORM-3`,
-  which still owns supported signed-artifact compile/runtime evidence.
+  import. F1 retains `import Security` only inside `HistoryStorage` for
+  `SecRandomCopyBytes`; credential storage is filesystem work. It adds no
+  Security edge to audit, Core, Domain, UI, or adapters. Injected-operation
+  tests alone do not establish the real-file custody behavior in `X-PLATFORM-3`.
 - **App Intents surface** (the `AppIntent` conformances — e.g.,
   `SearchHistoryIntent`, `GetItemDetailsIntent`, `PasteItemIntent`,
   `PinItemIntent`, `UnpinItemIntent`, `RemoveItemIntent` — and
@@ -2398,32 +2397,25 @@ direct hosted invocation do not establish that system-created intents run in
 the main app process or inherit its TCC/entitlements; those remain
 `X-SECURITY-1` signed-runtime questions.
 
-### 6.7 CredentialStore (F1 Data Protection Keychain direction)
+### 6.7 CredentialStore (F1 private-file custody)
 
 ```swift
 internal actor CredentialStore {
-    // Confines blocking SecItem* calls. F1 stores exactly 48 bytes in the
-    // app-private Data Protection Keychain. X-PLATFORM-3 still owns the actual
-    // signed-artifact compilation and exact round-trip proof.
+    // Confines server filesystem access. The separate client copy can be
+    // removed after revocation without losing this retained verifier.
     func storeCredential(_ data: Data, for connection: ExternalConnectionID) async throws
     func loadCredential(for connection: ExternalConnectionID) async throws -> Data?
     func deleteCredential(for connection: ExternalConnectionID) async throws
 }
 ```
 
-The actor owns only the server copy. PR #20 implements this actor, exact UUID16
-+ secret32 validation/generation, duplicate rejection,
-idempotent missing delete, corrupt-value fail-closed behavior, and content-free
-failure mapping. Its deterministic tests substitute only the true external
-Security operations; they do not exercise a real Keychain. The separately
-executed client receives
-the exact value through inherited stdin and keeps it in the §0.3 owner-only
-file; no access group is claimed for that client. That client leaf is still
-BLOCKED-SPEC on its executable/product placement and fixed production path. A
-future sandbox or malicious-same-EUID confidentiality requirement invalidates
-the file-custody choice and requires an app-like wrapped client plus proven
-shared Data Protection Keychain entitlements, not a silent widening of this
-actor.
+The actor owns only the server copy: exact UUID16 + secret32 validation,
+duplicate rejection, idempotent missing delete, corrupt-value rejection, and
+content-free failure mapping remain unchanged. Tests use the actual filesystem
+with isolated directories for normal behavior and inject operations only when
+needed for deterministic failures. Revocation does not delete the server
+verifier. No shared access group, Keychain fallback, legacy-store reading,
+signing step, or protection from malicious same-EUID processes is implied.
 
 ## 7. Public surface (HistoryCore, Foundation-only)
 
@@ -2909,10 +2901,10 @@ its dedicated v1 vocabulary (`02` §10), and `ExternalFailure` has no
   app's single in-process `HistoryAuthority` and the app's pasteboard TCC; no
   separate entitlement is needed for the intent to call `ClipboardHistory`. An
   App Intents extension target is a second process and is post-V2.
-- **F1 credential custody.** App Intents need no credential. Local Automation's
-  server-side app-private Data Protection Keychain and client-side owner-file
-  direction is frozen in §0.3 but remains unimplemented and open under
-  `X-PLATFORM-3`; actor confinement applies to blocking Keychain work.
+- **F1 credential custody.** App Intents need no credential. Local Automation
+  uses the separate server/client private files in §0.3; the actor confines
+  server filesystem work. These files do not protect against malicious
+  same-EUID code and do not create an independent authorization database.
 - **Crash safety.** The audit log is durable state (not a derivation): its loss
   loses audit provenance (irreversible — Record 4 states it is NOT a cache).
   Typed payload or retained-sequence corruption is surfaced as a typed failure;
@@ -3001,9 +2993,8 @@ on macOS 26:
 
 - **X-COMPILE-1 (compile/dependency).** Swift 6 complete strict-concurrency
   build succeeds; no hashing/cryptography import is added for audit. The F1
-  server-store leaf imports `Security` only in `HistoryStorage`; PR #20 passed
-  the macOS Swift 6 compile/import gates in correctness run 32619384577, while
-  real DPK behavior remains `X-PLATFORM-3` evidence. `AppIntents` is imported
+  secret generator imports `Security` only in `HistoryStorage`. The file-backed
+  custody behavior is exercised separately under `X-PLATFORM-3`. `AppIntents` is imported
   only in `ClipyApp` production sources, with the narrow hosted
   `ClipyIntegrationTests` exception needed to exercise those app-owned types;
   `HistoryCore` external-gateway types import only
@@ -3069,14 +3060,13 @@ on macOS 26:
   `OperationPayloadBlobV1` round-trip/corruption matrix belongs to X.4, where
   every admitted admin literal lands with atomic audit behavior; X.3 must not
   freeze the incomplete §4.4 illustration.
-- **X-PLATFORM-3 (F1 credential custody).** In the actual Developer-ID/profile
-  configuration, confirm `SecRandomCopyBytes` produces the 32-byte secret and
-  actor-confined `SecItemAdd`/`SecItemCopyMatching`/`SecItemDelete` round-trip
-  the exact 48-byte value in the app-private Data Protection Keychain. Separately
-  prove inherited-stdin provisioning, no-follow `0700`/`0600` client-file exact
-  readback, restart cleanup/retry, and the authority-last enrollment / authority-
-  first revocation order from §0.3. This remains open; F0A's ad-hoc signature and
-  no-credential hello do not exercise it.
+- **X-PLATFORM-3 (F1 credential custody).** Confirm `SecRandomCopyBytes`
+  generates the 32-byte secret and actual server/client files preserve the
+  exact 48-byte value with `0700`/`0600` permissions. Exercise fresh-owner
+  readback, duplicate add, corrupt/unsafe files, cleanup/retry, and the
+  authority-last enrollment / authority-first revocation order from §0.3.
+  Ordinary unsigned app and CLI tests exercise this product path; a fake
+  credential store alone is not positive custody evidence.
 - **X-BEHAVIOR-1 (admitted failure -> ExternalFailure mapping, §7.3.1).**
   Fixture-prove the frozen mapping end to end, none of which
   X.4's codec-corruption proof or `X-PERF-*` (mechanism
