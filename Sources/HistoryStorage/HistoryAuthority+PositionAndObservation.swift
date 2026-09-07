@@ -54,20 +54,6 @@ extension HistoryAuthority {
         )
     }
 
-    /// The loaded Content Version of one item in the capture facts, checking
-    /// the lineage hint first (it need not be a signature candidate,
-    /// §7.1 step 4). Returns `nil` when the ID is absent — a planner
-    /// contract violation for a chosen winner, never data.
-    internal static func loadedContentVersion(
-        of itemID: HistoryItemID,
-        in facts: IngestFacts
-    ) -> ContentVersion? {
-        if facts.hintedItem?.id == itemID {
-            return facts.hintedItem?.contentVersion
-        }
-        return facts.candidates.items.first { $0.id == itemID }?.contentVersion
-    }
-
     // MARK: Observation registration (docs/05-authority-kernel.md §14.4)
 
     /// Registers one invalidation continuation and returns its token and

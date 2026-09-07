@@ -93,7 +93,7 @@ internal actor SearchWorker {
     /// `defaultRegexpEngineDeadline` in production; `@testable` tests inject a
     /// zero or distant value along the `suspensionHandler` seam precedent.
     internal var regexpEngineDeadline: Duration
-    internal var snapshotLifetime = Self.maximumSnapshotLifetime
+    internal var snapshotLifetime = SearchWorker.maximumSnapshotLifetime
 
 #if DEBUG
     /// Opt-in aggregate tracing for the off-Authority half of the search

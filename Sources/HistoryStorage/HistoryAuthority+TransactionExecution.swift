@@ -249,7 +249,7 @@ extension HistoryAuthority {
                     policies.revisions?.maxRevisionsPerItem.map { .integer(Int64($0)) } ?? .null,
                     policies.revisions?.maxRevisionBytesPerItem.map { .integer(Int64($0)) } ?? .null,
                 ])
-            guard database.changedRowCount == 1 else { throw HistoryFailure.persistence(.invariantViolation) }
+            guard try database.changedRowCount == 1 else { throw HistoryFailure.persistence(.invariantViolation) }
         }
     }
 
@@ -294,7 +294,7 @@ extension HistoryAuthority {
                     .text(id.rawValue.uuidString), .text(itemID.rawValue.uuidString),
                     .text(itemID.rawValue.uuidString),
                 ])
-            guard database.changedRowCount == 1 else { throw HistoryFailure.persistence(.invariantViolation) }
+            guard try database.changedRowCount == 1 else { throw HistoryFailure.persistence(.invariantViolation) }
         }
     }
 
