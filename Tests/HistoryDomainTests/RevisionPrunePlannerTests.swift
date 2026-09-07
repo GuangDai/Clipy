@@ -307,3 +307,67 @@ private func revisionPolicies(
     #expect(first == second)
     #expect(first == [pruneRevisionID(1), pruneRevisionID(2)])
 }
+
+@Test func metadataRevisionRetentionUsesTheSameExplicitPrefixRules() {
+    // The active revision lies in the middle, and the final large inactive
+    // revision cannot displace smaller, older inactive revisions in the prune
+    // prefix. Separate expected IDs make the oracle independent of either
+    // planner entry point.
+    let revisions = [
+        pruneRevision(1, byteCounts: [4, 6]),
+        pruneRevision(2, byteCounts: [20]),
+        pruneRevision(3, byteCounts: [5]),
+        pruneRevision(4, byteCounts: [100]),
+    ]
+    let summaries = zip(revisions, [10, 20, 5, 100]).map {
+        RevisionRetentionSummary(id: $0.0.id, byteCount: $0.1)
+    }
+    let cases: [(maxCount: Int?, maxBytes: Int?, expected: [UInt8])] = [
+        (nil, nil, []),
+        (4, 135, []),
+        (3, nil, [1]),
+        (2, 105, [1, 2]),
+        (nil, 15, [1, 2, 4]),
+        (nil, 4, [1, 2, 4]),
+    ]
+    for scenario in cases {
+        let policies = revisionPolicies(
+            maxRevisions: scenario.maxCount,
+            maxRevisionBytes: scenario.maxBytes
+        )
+        let expected = scenario.expected.map(pruneRevisionID)
+        #expect(planRevisionRetentionExpansion(
+            revisions: summaries, activeRevisionID: revisions[2].id,
+            policies: policies
+        ) == expected)
+        #expect(planRevisionRetentionExpansion(
+            revisions: revisions,
+            target: .setRetentionPolicies(activeRevisionID: revisions[2].id),
+            policies: policies
+        ) == expected)
+    }
+}
+
+@Test func metadataRevisionRetentionHandlesAppendedActiveAndEmptyLineage() {
+    let revisions = [
+        pruneRevision(1, byteCounts: [10]),
+        pruneRevision(2, byteCounts: [20]),
+    ]
+    let appended = pruneRevision(3, byteCounts: [40, 10])
+    let summaries = [
+        RevisionRetentionSummary(id: revisions[0].id, byteCount: 10),
+        RevisionRetentionSummary(id: revisions[1].id, byteCount: 20),
+        RevisionRetentionSummary(id: appended.id, byteCount: 50),
+    ]
+    let policies = revisionPolicies(maxRevisions: 2, maxRevisionBytes: 55)
+    let expected = [revisions[0].id, revisions[1].id]
+    #expect(planRevisionRetentionExpansion(
+        revisions: summaries, activeRevisionID: appended.id, policies: policies
+    ) == expected)
+    #expect(planRevisionRetentionExpansion(
+        revisions: revisions, target: .revise(appended: appended), policies: policies
+    ) == expected)
+    #expect(planRevisionRetentionExpansion(
+        revisions: [], activeRevisionID: nil, policies: policies
+    ).isEmpty)
+}

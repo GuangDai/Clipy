@@ -203,6 +203,19 @@ package func planItemRetentionExpansion(
 
 // MARK: - R3 (docs/v2/V2-02-retention.md §5.1–§5.3, §6.5)
 
+/// R3 needs append order, revision identity, and the complete representation
+/// byte count (§3.2/§5.4), without retaining the revision's content bytes.
+/// Storage supplies these summaries in persisted append order.
+package struct RevisionRetentionSummary: Sendable {
+    package let id: RevisionID
+    package let byteCount: Int
+
+    package init(id: RevisionID, byteCount: Int) {
+        self.id = id
+        self.byteCount = byteCount
+    }
+}
+
 /// Plans the R3 prune set for one item's revision lineage (already loaded).
 /// docs/v2/V2-02-retention.md §5.1, §6.5
 ///
@@ -248,19 +261,40 @@ package func planRevisionRetentionExpansion(
     // §3.1/§7: a `RevisionRetention` with both thresholds nil is normalized
     // to `nil` at `HistoryRetentionPolicies.init`, so R3-disabled prunes
     // nothing and this planner is never the no-op's cause.
-    guard let revisionPolicy = policies.revisions else { return [] }
+    guard policies.revisions != nil else { return [] }
 
     // §6.5: the target fixes the effective list and active revision.
-    let effectiveRevisions: [ContentRevision]
+    var summaries = revisions.map {
+        RevisionRetentionSummary(id: $0.id, byteCount: revisionContentBytes($0))
+    }
     let activeRevisionID: RevisionID?
     switch target {
     case .setRetentionPolicies(let activeID):
-        effectiveRevisions = revisions
         activeRevisionID = activeID
     case .revise(let appended):
-        effectiveRevisions = revisions + [appended]
+        summaries.append(RevisionRetentionSummary(
+            id: appended.id, byteCount: revisionContentBytes(appended)
+        ))
         activeRevisionID = appended.id
     }
+    return planRevisionRetentionExpansion(
+        revisions: summaries,
+        activeRevisionID: activeRevisionID,
+        policies: policies
+    )
+}
+
+/// Selects the shortest oldest-inactive prefix from append-ordered metadata
+/// (V2-02 §5.1). Thresholds include the active revision's count and bytes;
+/// the active ID is never returned. Storage validates persisted byte counts
+/// when constructing the facts, so planning does not read content blobs.
+package func planRevisionRetentionExpansion(
+    revisions: [RevisionRetentionSummary],
+    activeRevisionID: RevisionID?,
+    policies: HistoryRetentionPolicies
+) -> [RevisionID] {
+    guard let revisionPolicy = policies.revisions else { return [] }
+
     // A nil active over a non-empty list is corrupt lineage Storage rejects
     // at fact load (D3, `02` §6/§11 step 3); with no active revision there
     // is simply no revision exempt from pruning, and the planner stays total
@@ -270,10 +304,10 @@ package func planRevisionRetentionExpansion(
     // included — `count(R)` and `bytes(R)` count the active revision, not
     // inactive-only. Bytes use the representation-byte measure of §3.2/§5.4
     // (sum of stored-revision representation bytes; checked, never wrapping).
-    var retainedCount = effectiveRevisions.count
+    var retainedCount = revisions.count
     var retainedBytes = 0
-    for revision in effectiveRevisions {
-        retainedBytes = checkedByteAdd(retainedBytes, revisionContentBytes(revision))
+    for revision in revisions {
+        retainedBytes = checkedByteAdd(retainedBytes, revision.byteCount)
     }
 
     // §5.1: take the shortest append-order prefix of inactive revisions —
@@ -281,7 +315,7 @@ package func planRevisionRetentionExpansion(
     // removal reduces both count and bytes, so the greedy prefix is the
     // shortest under oldest-inactive-first selection.
     var prunedIDs: [RevisionID] = []
-    for revision in effectiveRevisions where revision.id != activeRevisionID {
+    for revision in revisions where revision.id != activeRevisionID {
         let countSatisfied = revisionPolicy.maxRevisionsPerItem
             .map { retainedCount <= $0 } ?? true
         let bytesSatisfied = revisionPolicy.maxRevisionBytesPerItem
@@ -293,7 +327,7 @@ package func planRevisionRetentionExpansion(
         retainedCount -= 1
         retainedBytes = checkedByteSubtract(
             retainedBytes,
-            revisionContentBytes(revision)
+            revision.byteCount
         )
     }
     return prunedIDs

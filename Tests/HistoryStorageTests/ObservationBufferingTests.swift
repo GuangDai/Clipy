@@ -12,9 +12,9 @@ struct ObservationBufferingTests {
     /// pages are state already superseded by the final page, not events that
     /// need replaying.
     @Test func pausedObserverResumesAtNewestAuthoritativeSnapshot() async throws {
-        let history = try await SwiftDataHistory.open(
+        let history = try await SQLiteHistory.open(
             configuration: HistoryConfiguration(
-                persistence: .memory,
+                persistence: .temporary,
                 initialMaximumUnpinnedItems: 200
             )
         )

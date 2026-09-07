@@ -4,7 +4,6 @@
 /// they do not substitute a fake history writer for semantic behavior.
 import Foundation
 import HistoryCore
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
@@ -36,41 +35,30 @@ private static func seedRow(
         throw FixtureFailure.expectedInsert
     }
 
-    // Real capture creates every current singleton, journal, blob and byte
-    // projection. Mutate only the chosen scalar in an independent context;
-    // no startup compatibility or repair makes this fixture valid.
-    let context = ModelContext(try WSSupport.makeContainer(storeURL: storeURL))
-    context.autosaveEnabled = false
-    let rows = try context.fetch(FetchDescriptor<HistoryItemRow>())
-    let row = try #require(rows.count == 1 ? rows.first : nil)
-    #expect(row.id == reference.id.rawValue)
+    let database = try SQLiteDatabase(url: storeURL)
+    let column: String
+    let value: SQLiteValue
     switch corruption {
     case .title:
-        row.titleUTF8 = Data(
-            repeating: 0x74,
-            count: HistoryLimits.standard.maximumStoredTitleUTF8Bytes + 1
-        )
+        column = "titleUTF8"
+        value = .blob(Data(repeating: 0x74, count: HistoryLimits.standard.maximumStoredTitleUTF8Bytes + 1))
     case .malformedTitleUTF8:
-        row.titleUTF8 = Data([0xEF, 0xBB, 0xBF, 0xFF])
+        column = "titleUTF8"; value = .blob(Data([0xEF, 0xBB, 0xBF, 0xFF]))
     case .searchBody:
-        row.searchBodyUTF8 = Data(
-            repeating: 0x62,
-            count: HistoryLimits.standard.maximumStoredSearchBodyUTF8Bytes + 1
-        )
+        column = "searchBodyUTF8"
+        value = .blob(Data(repeating: 0x62, count: HistoryLimits.standard.maximumStoredSearchBodyUTF8Bytes + 1))
     case .malformedSearchBodyUTF8:
-        row.searchBodyUTF8 = Data("projection corruption control".utf8) + Data([0xFF])
+        column = "searchBodyUTF8"; value = .blob(Data("projection corruption control".utf8) + Data([0xFF]))
     case .lastCopiedAt:
-        // SQLite binds NaN as NULL; Infinity reaches the durable validator.
-        row.lastCopiedAt = Date(timeIntervalSinceReferenceDate: .infinity)
+        column = "lastCopiedAt"; value = .real(.infinity)
     case .copyCount:
-        row.copyCount = 0
+        column = "copyCount"; value = .blob(sqliteUInt64(0))
     case .lastSource:
-        row.lastSource = String(
-            repeating: "s",
-            count: HistoryLimits.standard.maximumSourceApplicationObservationUTF8Bytes + 1
-        )
+        column = "lastSource"
+        value = .text(String(repeating: "s", count: HistoryLimits.standard.maximumSourceApplicationObservationUTF8Bytes + 1))
     }
-    try context.save()
+    try database.execute("UPDATE history_items SET \(column) = ? WHERE id = ?",
+                         bindings: [value, .text(reference.id.rawValue.uuidString)])
     return reference.id
 }
 
@@ -92,21 +80,21 @@ static func seedOverBoundSearchBodyRow(
     let storeURL = WSSupport.tempStoreURL("projection-corrupt-title")
     defer { WSSupport.removeStore(storeURL) }
     let itemID = try await Self.seedRow(at: storeURL, corruption: .title)
-    let authority = try await WSSupport.makeAuthority(storeURL: storeURL)
+    let history = try await WSSupport.openHistory(storeURL: storeURL)
 
     await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
-        _ = try await authority.recentPage(limit: 10, after: nil)
+        _ = try await history.browse(.init(kind: .recent, limit: 10))
     }
     await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
-        _ = try await authority.searchCorpusSnapshot(
-            for: HistoryBrowseRequest(
+        _ = try await history.browse(
+            HistoryBrowseRequest(
                 kind: .search(text: "projection", mode: .exact),
                 limit: 10
             )
         )
     }
     await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
-        _ = try await authority.details(for: itemID)
+        _ = try await history.details(for: itemID)
     }
 }
 
@@ -129,29 +117,28 @@ static func seedOverBoundSearchBodyRow(
     }
 }
 
-/// Recent browse deliberately does not fetch searchBodyUTF8, while search and
-/// lineage hydration do. This pins both fail-closed validation and the scalar
+/// Recent and details deliberately do not fetch searchBodyUTF8; only search
+/// consumes and validates that projection. This pins both fail-closed validation and the scalar
 /// isolation boundary: an unrelated recent read remains available.
 @Test func overBoundStoredSearchBodyFailsOnlyBodyConsumingReads() async throws {
     let storeURL = WSSupport.tempStoreURL("projection-corrupt-search-body")
     defer { WSSupport.removeStore(storeURL) }
     let itemID = try await Self.seedRow(at: storeURL, corruption: .searchBody)
-    let authority = try await WSSupport.makeAuthority(storeURL: storeURL)
+    let history = try await WSSupport.openHistory(storeURL: storeURL)
 
-    let recent = try await authority.recentPage(limit: 10, after: nil)
+    let recent = try await history.browse(.init(kind: .recent, limit: 10))
     #expect(recent.rows.map(\.item.id) == [itemID])
 
     await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
-        _ = try await authority.searchCorpusSnapshot(
-            for: HistoryBrowseRequest(
+        _ = try await history.browse(
+            HistoryBrowseRequest(
                 kind: .search(text: "projection", mode: .exact),
                 limit: 10
             )
         )
     }
-    await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
-        _ = try await authority.details(for: itemID)
-    }
+    let details = try await history.details(for: itemID)
+    #expect(details.effective.map(\.bytes) == [Data("projection corruption control".utf8)])
 }
 
 @Test func malformedStoredSearchBodyRejectsPublicSearchButLeavesRecentAvailable() async throws {
@@ -170,15 +157,14 @@ static func seedOverBoundSearchBodyRow(
             ))
         }
     }
-    await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
-        _ = try await history.details(for: itemID)
-    }
+    let details = try await history.details(for: itemID)
+    #expect(details.effective.map(\.bytes) == [Data("projection corruption control".utf8)])
     let afterFailure = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 10))
     #expect(afterFailure == recent)
 }
 
 /// Occurrence scalars are consumed without full lineage hydration by recent,
-/// search, and retention. Each path must apply the same fail-closed checks as
+/// search, and details. Each path must apply the same fail-closed checks as
 /// `decodeOccurrence` before sorting, cursor minting, or planning.
 @Test(
     arguments: [
@@ -193,26 +179,21 @@ private func occurrenceScalarCorruptionFailsEveryConsumingPath(
     let storeURL = WSSupport.tempStoreURL("projection-corrupt-occurrence-\(corruption)")
     defer { WSSupport.removeStore(storeURL) }
     let itemID = try await Self.seedRow(at: storeURL, corruption: corruption)
-    let authority = try await WSSupport.makeAuthority(storeURL: storeURL)
+    let history = try await WSSupport.openHistory(storeURL: storeURL)
 
     await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
-        _ = try await authority.recentPage(limit: 10, after: nil)
+        _ = try await history.browse(.init(kind: .recent, limit: 10))
     }
     await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
-        _ = try await authority.searchCorpusSnapshot(
-            for: HistoryBrowseRequest(
+        _ = try await history.browse(
+            HistoryBrowseRequest(
                 kind: .search(text: "projection", mode: .exact),
                 limit: 10
             )
         )
     }
     await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
-        _ = try await authority.details(for: itemID)
-    }
-    if corruption == .lastCopiedAt {
-        await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
-            _ = try await authority.commitRetentionPolicy(199)
-        }
+        _ = try await history.details(for: itemID)
     }
 }
 }

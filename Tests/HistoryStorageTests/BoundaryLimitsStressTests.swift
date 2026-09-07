@@ -33,9 +33,9 @@ struct BoundaryLimitsStressTests {
 // MARK: - Suite-local helpers
 
 /// Opens the real facade over an in-memory store (05 §2).
-private static func openMemoryHistory() async throws -> SwiftDataHistory {
-    try await SwiftDataHistory.open(
-        configuration: HistoryConfiguration(persistence: .memory)
+private static func openMemoryHistory() async throws -> SQLiteHistory {
+    try await SQLiteHistory.open(
+        configuration: HistoryConfiguration(persistence: .temporary)
     )
 }
 

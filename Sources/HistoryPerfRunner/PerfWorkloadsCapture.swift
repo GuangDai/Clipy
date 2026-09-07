@@ -135,11 +135,11 @@ func workloadPersistentStoreOpenScaling() async -> [WorkloadFixture] {
 
             // Phase 1: a dedicated untimed child populates through the public
             // facade and exits. The parent never owns this workload's
-            // ModelContainer, so no best-effort lexical teardown can overlap a
+            // database owner, so no best-effort lexical teardown can overlap a
             // measured open.
             // Phase 2: one discarded warmup and all five samples run in fresh
             // child processes. Each child clocks only its public
-            // `SwiftDataHistory.open`; parent-observed launch and teardown time
+            // `SQLiteHistory.open`; parent-observed launch and teardown time
             // never enters the sample value.
             let samples = try runPersistentOpenChildSequence(populate: {
                 try populatePersistentOpenStoreInChild(
@@ -166,7 +166,7 @@ func workloadPersistentStoreOpenScaling() async -> [WorkloadFixture] {
             ratio: ratio,
             bound: bound,
             pass: passed,
-            note: "Warm persistent-store opens over retained metadata run in fresh child processes; each child reports only its internal public SwiftDataHistory.open duration, excluding launch and teardown. The sample includes ModelContainer/SQLite open, singleton/startup validation, scalar metadata reads, and Signature Index rebuild (§9 bullet 3; 05 §13). This is not an isolated rebuild, cold-start, or G5 absolute-latency proof. \(envelope.scaleSpan)× items, \(bound)× bound = a \(envelope.headroomFactor)× bound over the measured span, rejecting quadratic scaling.",
+            note: "Warm persistent-store opens over retained metadata run in fresh child processes; each child reports only its internal public SQLiteHistory.open duration, excluding launch and teardown. The sample includes SQLite/blob-store open and current singleton validation; startup does not rebuild a full signature index (V2-09 §4). This is not a cold-start or absolute-latency proof. \(envelope.scaleSpan)× items, \(bound)× bound = a \(envelope.headroomFactor)× bound over the measured span, rejecting quadratic scaling.",
             medium: ".persistent"
         )
         printResult(key, bullet, ratio, bound, passed)
@@ -373,4 +373,3 @@ func workloadRecentBrowse() async -> [WorkloadFixture] {
         return [failureFixture(key: key, bullet: bullet, error: error)]
     }
 }
-

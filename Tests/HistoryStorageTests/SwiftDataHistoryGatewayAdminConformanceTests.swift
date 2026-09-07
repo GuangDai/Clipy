@@ -4,8 +4,8 @@ import HistoryCore
 import Testing
 import HistoryStorage
 
-@Suite("SwiftDataHistory Gateway administration conformance (X.4)")
-struct SwiftDataHistoryGatewayAdminConformanceTests {
+@Suite("SQLiteHistory Gateway administration conformance (X.4)")
+struct SQLiteHistoryGatewayAdminConformanceTests {
     private func requireGatewayAdminHistory<T: GatewayAdminHistory>(
         _ value: T
     ) -> T {
@@ -14,8 +14,8 @@ struct SwiftDataHistoryGatewayAdminConformanceTests {
 
     @Test("the public in-memory facade exposes explicit forwarding witnesses")
     func publicFacadeConformsAndForwards() async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let admin = requireGatewayAdminHistory(history)
 
@@ -41,8 +41,8 @@ struct SwiftDataHistoryGatewayAdminConformanceTests {
 
     @Test("generic facade rejects Local Automation before durable state")
     func genericFacadeCannotPublishLocalAutomationEnrollment() async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let admin = requireGatewayAdminHistory(history)
         let beforeConnections = try await admin.connections()

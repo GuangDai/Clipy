@@ -71,12 +71,12 @@ struct UnicodeSearchPresentationTests {
         try expectMatch(row, snippet: expected, location: 163, length: 6, literal: "NEEDLE")
     }
 
-    private func openHistory() async throws -> SwiftDataHistory {
-        try await SwiftDataHistory.open(configuration: HistoryConfiguration(persistence: .memory))
+    private func openHistory() async throws -> SQLiteHistory {
+        try await SQLiteHistory.open(configuration: HistoryConfiguration(persistence: .temporary))
     }
 
     private func capture(
-        _ text: String, in history: SwiftDataHistory, at seconds: Double = 1
+        _ text: String, in history: SQLiteHistory, at seconds: Double = 1
     ) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.capture(WSSupport.textCapture(
             text, observedAt: Date(timeIntervalSinceReferenceDate: seconds)
@@ -89,7 +89,7 @@ struct UnicodeSearchPresentationTests {
         return item
     }
 
-    private func singleResult(_ query: String, in history: SwiftDataHistory) async throws -> HistoryRow {
+    private func singleResult(_ query: String, in history: SQLiteHistory) async throws -> HistoryRow {
         let page = try await history.browse(HistoryBrowseRequest(
             kind: .search(text: query, mode: .exact), limit: 10
         ))

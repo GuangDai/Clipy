@@ -11,8 +11,8 @@ import Testing
 struct UnicodeSearchIntentTests {
     @Test(arguments: [SearchMode.exact, .regexp])
     func canonicallyEquivalentQueryEditsRefreshLiteralHighlights(mode: SearchMode) async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let composed = "é"
         let decomposed = "e\u{301}"

@@ -7,7 +7,6 @@
 /// publish one separate audit barrier because they produce no History Commit.
 import Foundation
 import HistoryCore
-import SwiftData
 
 internal struct ExternalWriteCommitContext: Sendable {
     internal let connection: ExternalConnectionID
@@ -155,12 +154,12 @@ extension HistoryAuthority {
     /// runs in its own small transaction and advances no History position.
     internal func commitExternalWriteNoOpAudit(
         _ write: ExternalWriteCommitContext,
-        in context: ModelContext
+        in context: SQLiteDatabase
     ) throws {
         let committedAt = storageClock.now()
         var publishedFailure: ExternalFailure?
         do {
-            try context.transaction {
+            try context.writeTransaction {
                 let config = try Self.loadGatewayConfig(in: context)
                 let decision = try Self.targetedExternalAuthorizationDecision(
                     write.descriptor,
@@ -234,12 +233,11 @@ extension HistoryAuthority {
         _ original: ExternalWriteFailurePublication,
         write: ExternalWriteCommitContext
     ) throws -> ExternalFailure {
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
+        let context = database
         let committedAt = storageClock.now()
         var publishedFailure = original.failure
         do {
-            try context.transaction {
+            try context.writeTransaction {
                 let config = try Self.loadGatewayConfig(in: context)
                 let decision = try Self.targetedExternalAuthorizationDecision(
                     write.descriptor,

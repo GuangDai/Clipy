@@ -24,7 +24,7 @@ struct WS17ComposedSearchModesTests {
     /// deterministic.
     @MainActor
     private static func populate(
-        _ history: SwiftDataHistory
+        _ history: SQLiteHistory
     ) async throws -> (alpha: HistoryItemID, betaAlpha: HistoryItemID, body: HistoryItemID) {
         let base = Date(timeIntervalSinceReferenceDate: 700_202_300)
         let alphaReceipt = try await history.perform(.capture(

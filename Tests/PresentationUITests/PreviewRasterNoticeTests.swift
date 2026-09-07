@@ -11,8 +11,8 @@ import Testing
 struct PreviewRasterNoticeTests {
     @Test(arguments: ["com.compuserve.gif", "public.tiff"])
     func multiImageNoticeClearsForSingleImageAndText(_ type: String) async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let bytes = try multiImageData(type: type)
         let multiple = try await capture(bytes, type: type, in: history)
@@ -38,8 +38,8 @@ struct PreviewRasterNoticeTests {
     }
 
     @Test func pdfPageFactsFollowOnlyTheirLoadedDocument() async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let bytes = try twoPagePDF()
         let pdf = try await capture(bytes, type: "com.adobe.pdf", in: history)
@@ -123,7 +123,7 @@ struct PreviewRasterNoticeTests {
         return data as Data
     }
 
-    private func capture(_ bytes: Data, type: String, in history: SwiftDataHistory) async throws -> HistoryItemReference {
+    private func capture(_ bytes: Data, type: String, in history: SQLiteHistory) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.capture(ClipboardCapture(
             representations: [CapturedRepresentation(typeIdentifier: type, bytes: bytes)],
             origin: CopyOriginObservation(sourceApplication: nil, lineageHint: nil),

@@ -7,7 +7,7 @@
 /// This file is ALSO the public-side §7.2 fresh-context-visibility evidence
 /// (docs/06-cross-cutting.md §7.2; docs/roadmap/03-historystorage.md §7.2):
 /// a read that begins after a `.committed` receipt, through a fresh
-/// `ModelContext` over the same store, sees the committed transaction
+/// SQLite read transaction over the same store, sees the committed transaction
 /// immediately — the BLOCKER proof WS11 rests on. It is the public-facade
 /// companion to `FreshContextVisibilityProofTests` (storage-side).
 ///

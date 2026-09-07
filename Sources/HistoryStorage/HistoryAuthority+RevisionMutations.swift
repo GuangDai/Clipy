@@ -1,91 +1,85 @@
-/// Revision and retention-policy mutations (roadmap step 6).
-/// Split out of HistoryAuthority.swift (file-size hygiene); same target, unchanged semantics.
+/// SQL revision preparation, OCC commit, and count-retention mutations.
+/// Canonical/current bytes and requested revert bytes are loaded on demand;
+/// all other revisions remain summaries (05 §6.2/§9; V2-09 §4/§6).
 import Foundation
 import HistoryCore
 import HistoryDomain
-import SwiftData
 
 extension HistoryAuthority {
-    /// The phase-1 inputs of the V2-extended two-phase revise (`V2-02` §4.3
-    /// PHASE 1; `V2-roadmap` §6 R.5): the v1 OCC snapshot plus the current
-    /// retention policies, both captured inside ONE serialized Authority
-    /// interval over one operation-local context — Record 2's
-    /// policy-sourcing mechanism ("the `HistoryAuthority` reads the current
-    /// `RetentionExpansionConfigRow` R3 policies in the same serialized
-    /// Authority interval that captures the snapshot ... and threads them as
-    /// a sibling V2 input to the V2-extended preparation call"). The
-    /// off-Authority preparation actor performs no durable-state read of its
-    /// own.
-    ///
-    /// The policy read uses the revise-lane gate (`loadReviseLanePolicies`):
-    /// `nil` for an R1-only or all-disabled config means phase 1 runs the
-    /// v1 preparation unchanged. Phase 2 re-reads the policies
-    /// independently (`commitRevision`'s composition), never this copy
-    /// (§4.3 "Phase-2 policy re-read").
-    ///
-    /// - Throws: exactly `revisionPreparationSnapshot`'s failures plus the
-    ///   config loader's typed failures (`.temporarilyUnavailable(
-    ///   .factProof)` / `.persistence(...)`).
     internal func revisionPreparationInputs(
         _ request: RevisionRequest
     ) async throws -> (
         snapshot: RevisionPreparationSnapshot,
         retentionPolicies: HistoryRetentionPolicies?
     ) {
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
+        let revertedRevisionID: RevisionID?
+        if case .revert(.revision(let id)) = request.intent {
+            revertedRevisionID = id
+        } else {
+            revertedRevisionID = nil
+        }
         return try revisionPreparationInputs(
-            itemID: request.itemID, expected: request.expected, in: context
+            itemID: request.itemID,
+            expected: request.expected,
+            revertedRevisionID: revertedRevisionID,
+            in: database
         )
     }
 
     private func revisionPreparationInputs(
         itemID: HistoryItemID,
         expected: ContentVersion,
-        in context: ModelContext
+        revertedRevisionID: RevisionID? = nil,
+        in database: SQLiteDatabase
     ) throws -> (
         snapshot: RevisionPreparationSnapshot,
         retentionPolicies: HistoryRetentionPolicies?
     ) {
-
-        // ── Non-suspending read interval (§5): no `await` past this line
-        //    while the context or fetched row is live. ──
-
-        // §7.3: fetch and decode exactly the target item.
-        guard let row = try HistoryItemRowHydration.fetchRow(
-            businessID: itemID,
-            in: context
+        guard let metadata = try HistoryItemRowHydration.metadata(
+            itemID: itemID, in: database, limits: limits
         ) else {
             throw HistoryFailure.notFound(itemID)
         }
-        let item = try HistoryItemRowHydration.hydrate(row, limits: limits)
-
-        // §6.2: reject immediately when the OCC token is already stale —
-        // the expensive resolution/projection phase never runs for a
-        // proposal that cannot commit.
-        guard expected == item.contentVersion else {
+        // Reject stale requests before opening any immutable content file.
+        guard expected == metadata.contentVersion else {
             throw HistoryFailure.staleContent(
                 expected: expected,
-                current: item.contentVersion
+                current: metadata.contentVersion
             )
+        }
+        let facts = try MutationFactLoaders.loadRevisionFacts(
+            itemID: itemID, in: database, blobStore: blobStore, limits: limits
+        )
+        let revertedContent: EffectiveContent?
+        if let revertedRevisionID,
+           facts.revisions.contains(where: { $0.id == revertedRevisionID }) {
+            if revertedRevisionID == facts.activeRevisionID {
+                revertedContent = facts.current
+            } else {
+                revertedContent = try HistoryItemRowHydration.content(
+                    id: revertedRevisionID.rawValue, itemID: itemID,
+                    in: database, blobStore: blobStore, limits: limits
+                ).content
+            }
+        } else {
+            revertedContent = nil
         }
 
         return (
             snapshot: RevisionPreparationSnapshot(
-                canonical: item.canonical,
-                revisions: item.revisions,
-                activeRevisionID: item.activeRevisionID,
-                contentVersion: item.contentVersion
+                canonical: facts.canonical,
+                current: facts.current,
+                revisions: facts.revisions,
+                activeRevisionID: facts.activeRevisionID,
+                contentVersion: facts.contentVersion,
+                revertedContent: revertedContent
             ),
             retentionPolicies: try RetentionConfigLoading.loadReviseLanePolicies(
-                in: context
+                in: database
             )
         )
     }
 
-    /// The external replacement is a complete desired Effective set. Hidden
-    /// Canonical types are resolved here into `.hide` decisions; the client
-    /// never needs a Canonical or revision-list read to construct its draft.
     internal func localAutomationRevisionPreparationInputs(
         itemID: HistoryItemID,
         expected: ContentVersion,
@@ -96,12 +90,10 @@ extension HistoryAuthority {
         snapshot: RevisionPreparationSnapshot,
         retentionPolicies: HistoryRetentionPolicies?
     ) {
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
-        let config = try Self.loadGatewayConfig(in: context)
+        let config = try Self.loadGatewayConfig(in: database)
         switch try Self.targetedExternalAuthorizationDecision(
             write.descriptor, connection: write.connection,
-            expectedConnectionKind: .localAutomation, config: config, in: context
+            expectedConnectionKind: .localAutomation, config: config, in: database
         ) {
         case .authorized: break
         case .unknownConnection, .inadmissibleConnection:
@@ -115,7 +107,9 @@ extension HistoryAuthority {
               representations.count <= limits.maximumRepresentationsPerCaptureOrRevision else {
             throw HistoryFailure.invalidInput(.incoherentRevisionDraft)
         }
-        let inputs = try revisionPreparationInputs(itemID: itemID, expected: expected, in: context)
+        let inputs = try revisionPreparationInputs(itemID: itemID, expected: expected, in: database)
+        // A complete Effective replacement supplies hidden Canonical types
+        // as internal hide decisions without disclosing them to the client.
         let canonicalTypes = Set(inputs.snapshot.canonical.representations.map(\.content.typeIdentifier))
         var bytesByType: [String: Data] = [:]
         for representation in representations {
@@ -139,80 +133,32 @@ extension HistoryAuthority {
         )
     }
 
-    /// The v1 phase-1 snapshot entry (docs/05-authority-kernel.md §6.2),
-    /// retained as the v1 seam the WS20 harness drives; it is the snapshot
-    /// half of `revisionPreparationInputs` (the V2 sibling-input read is
-    /// simply skipped for callers that do not thread policies).
     internal func revisionPreparationSnapshot(
         _ request: RevisionRequest
     ) async throws -> RevisionPreparationSnapshot {
         try await revisionPreparationInputs(request).snapshot
     }
 
-    /// Phase two of the OCC-safe revision commit (§6.2): reload the
-    /// target's complete lineage, recheck the OCC token through pure
-    /// planning, stamp from the reloaded facts, then run the shared commit
-    /// tail.
-    /// docs/05-authority-kernel.md §6.2, §9 (the exact flow), §7.3, §10,
-    /// §11; docs/02-domain.md §11 (revision planning and OCC)
-    ///
-    /// Flow (§9): create operation-local context → read the singleton
-    /// position → load `RevisionFacts` via `MutationFactLoaders` — exactly
-    /// the target item, fully decoded (§7.3); a missing target fails the
-    /// load as `.notFound` → `planRevision` (OCC, base-version, and
-    /// normalization rechecks; a byte-identical proposal is `.unchanged`)
-    /// → the V2-02 §4.3 revise composition when R2/R3 is active (roadmap
-    /// R.5; prune recomputed over the reloaded lineage, R2 planned over the
-    /// projected post-prune post-append inventory, one merged plan)
-    /// → stamp with `.revision` inputs taken from the reloaded facts →
-    /// `executeStampedPlan` (the transaction executor re-verifies
-    /// `expectedCurrentVersion`, §10).
-    ///
-    /// The single-writer interval contains no `await`: the only suspension
-    /// is the roadmap-owned WS20 test point at entry, before the context
-    /// exists (§5).
-    ///
-    /// - Throws: the fact loader's typed failures (`.notFound`,
-    ///   `.temporarilyUnavailable(.factProof)`, `.persistence(...)`); the
-    ///   mapped `DomainRejection` vocabulary — `.staleContent` on the OCC
-    ///   recheck, `.invalidInput(.incoherentRevisionDraft)` on a draft
-    ///   failing Domain revalidation (docs/02-domain.md §6, §11);
-    ///   `StampingRejection` / `CodecRejection.encodingFailed` via their
-    ///   §16 mappings; `.persistence(.transaction)` for any
-    ///   transaction-closure failure (§16).
     internal func commitRevision(
         _ request: RevisionRequest,
         _ bundle: PreparedRevisionBundle,
         externalWrite: ExternalWriteCommitContext? = nil
     ) async throws -> HistoryReceipt {
-        // Roadmap-owned WS20 test seam: the one legal suspension point of
-        // this path — no context, row, fact, or plan is live yet (§5).
         await suspendIfRequested(.revisionCommitEntry)
 
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
-
-        // ── Non-suspending commit interval (§5): no `await` past this
-        //    line while the context, facts, or commit plan is live. ──
-
-        // The singleton supplies the current position (for stamping and the
-        // §10 closure guard).
-        let positionRow = try Self.fetchExactlyOnePositionRow(in: context)
+        let positionRow = try Self.fetchExactlyOnePositionRow(in: database)
         let (currentPosition, _) = try Self.decodePositionRow(
             positionRow,
             limits: limits
         )
 
-        // §7.3: fetch and decode exactly the target item.
         let facts = try MutationFactLoaders.loadRevisionFacts(
             itemID: request.itemID,
-            in: context,
+            in: database,
+            blobStore: blobStore,
             limits: limits
         )
 
-        // Pure planning (docs/02-domain.md §8, §11): the Domain rechecks
-        // the OCC token and the preparation's base version against the
-        // reloaded facts.
         let planningResult: PlanningResult
         do {
             planningResult = try planRevision(
@@ -225,39 +171,19 @@ extension HistoryAuthority {
         }
 
         guard case .commit(let v1Plan) = planningResult else {
-            // §9: release the context and return — nothing is retained
-            // across the operation (§5), and a no-op yields no receipt,
-            // index delta, or invalidation (docs/04-coherence.md §4).
             if let externalWrite {
-                try commitExternalWriteNoOpAudit(externalWrite, in: context)
+                try commitExternalWriteNoOpAudit(externalWrite, in: database)
             }
             return .unchanged
         }
 
-        // V2-02 §4.3 revise composition (roadmap R.5): when R2 or R3 is
-        // active, recompute the prune set over the RELOADED lineage, project
-        // the R2 inventory to the post-prune post-append state, and merge
-        // the prune + R2 retirements after the v1 mutations — one Domain
-        // plan below, so the existing tail still stamps ONE ChangePosition
-        // and the stamper's compose-with-append fold (§6.3, RET-STAMP-1)
-        // emits ONE `.appendRevision` blob write for the revised item. An
-        // R1-only or all-disabled config returns the v1 plan untouched (§7);
-        // the §8.3 revise-time failures (`.capacityExceeded(.revisionBytes)`
-        // unsatisfiable prune, `.capacityExceeded(.storageBytes)`
-        // irreducible budget) throw here — before any stamp or transaction,
-        // so nothing durable exists.
         let mutationPlan = try composeRetentionExpansionForRevision(
             v1Plan,
             bundle: bundle,
             facts: facts,
-            in: context
+            in: database
         )
 
-        // §9: mechanical stamping from the reloaded facts — the item's
-        // current Content Version, its complete existing revision list,
-        // and the prepared revision projection (§6.2). The §6.3
-        // compose-with-append fold reads the prune set from the Domain plan
-        // itself, so these inputs are exactly the v1 shape.
         let stamped: StampedCommitPlan
         do {
             let committedAt = storageClock.now()
@@ -265,8 +191,8 @@ extension HistoryAuthority {
                 mutationPlan,
                 currentPosition: currentPosition,
                 inputs: .revision(
-                    currentVersion: facts.item.contentVersion,
-                    existingRevisions: facts.item.revisions,
+                    currentVersion: facts.contentVersion,
+                    existingRevisions: facts.revisions,
                     projection: bundle.projection
                 ),
                 createdAt: committedAt
@@ -283,80 +209,67 @@ extension HistoryAuthority {
         return try executeStampedPlan(
             stamped,
             expectedPreviousPosition: currentPosition,
-            in: context
+            in: database
         )
     }
 
-    /// Commits one retention-policy change: validate the value against the
-    /// fixed Part VI user range at the boundary (§2, D19), load the
-    /// complete retained-set inventory, plan purely, stamp mechanically,
-    /// then run the shared commit tail.
-    /// docs/05-authority-kernel.md §9 (the exact flow), §7.3, §10, §11;
-    /// docs/02-domain.md §12 (retention)
-    ///
-    /// Flow (§9): boundary validation → create operation-local context →
-    /// read the singleton position and the authoritative current policy
-    /// (§3.2) → load `RetentionFacts` via `MutationFactLoaders` (§7.3) →
-    /// `planRetention` (non-throwing — a same-value no-victim set is
-    /// `.unchanged` before stamping, §9; docs/02-domain.md §12) → stamp
-    /// (inputs `.none`) → `executeStampedPlan`.
-    ///
-    /// The single-writer interval contains no `await` (§5).
-    ///
-    /// - Throws: `.invalidInput(.invalidRetentionPolicy)` for an
-    ///   out-of-range value (§2, §16); the fact loader's typed failures;
-    ///   `StampingRejection` / `CodecRejection.encodingFailed` via their
-    ///   §16 mappings; `.persistence(.transaction)` for any
-    ///   transaction-closure failure (§16).
     internal func commitRetentionPolicy(
         _ maximumUnpinnedItems: Int
     ) async throws -> HistoryReceipt {
-        // §2, §16, D19: boundary validation before any context — the value
-        // must lie in the fixed Part VI user range (which always permits at
-        // least one unpinned item).
         guard limits.userMaximumUnpinnedRange.contains(maximumUnpinnedItems) else {
             throw HistoryFailure.invalidInput(.invalidRetentionPolicy)
         }
 
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
-
-        // ── Non-suspending commit interval (§5): no `await` past this
-        //    line while the context, facts, or commit plan is live. ──
-
-        // The singleton supplies the current position (for stamping and the
-        // §10 closure guard) and the authoritative current retention policy
-        // (§3.2).
-        let positionRow = try Self.fetchExactlyOnePositionRow(in: context)
+        let positionRow = try Self.fetchExactlyOnePositionRow(in: database)
         let (currentPosition, currentPolicy) = try Self.decodePositionRow(
             positionRow,
             limits: limits
         )
 
-        // §7.3: every retained ID, last-copied time, and pin ordinal.
-        let facts = try MutationFactLoaders.loadRetentionFacts(
-            currentPolicy: currentPolicy,
-            in: context,
-            limits: limits
-        )
-
-        // Pure planning (docs/02-domain.md §8, §12): the policy write plus
-        // any eviction victims, or `.unchanged` for a same-value no-victim
-        // set.
+        // V2-09 §4: the aggregate determines the complete victim count.
+        // Fetch only that ordered prefix; retained survivors stay in SQLite.
+        let state = try database.prepare("""
+            SELECT retainedItemCount, pinnedItemCount
+            FROM history_state WHERE key = ?
+            """, bindings: [.text(Self.positionSingletonKey)])
+        defer { state.finalize() }
+        guard try state.step() else {
+            throw HistoryFailure.persistence(.invariantViolation)
+        }
+        let retainedCount = try HistoryItemRowHydration.integer(state, 0)
+        let pinnedCount = try HistoryItemRowHydration.integer(state, 1)
+        guard retainedCount >= 0,
+              pinnedCount >= 0, pinnedCount <= retainedCount else {
+            throw HistoryFailure.persistence(.invariantViolation)
+        }
+        let victimCount = max(0, retainedCount - pinnedCount - maximumUnpinnedItems)
+        state.finalize()
+        var victims: [HistoryItemID] = []
+        if victimCount > 0 {
+            let rows = try database.prepare("""
+                SELECT id FROM history_items WHERE pinOrdinal IS NULL
+                ORDER BY lastCopiedAt, id LIMIT ?
+                """, bindings: [.integer(Int64(victimCount))])
+            defer { rows.finalize() }
+            while try rows.step() {
+                victims.append(HistoryItemID(
+                    rawValue: try HistoryItemRowHydration.uuid(rows.text(at: 0))
+                ))
+            }
+            guard victims.count == victimCount else {
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
+        }
         let planningResult = planRetention(
-            facts: facts,
-            policy: RetentionPolicy(maximumUnpinnedItems: maximumUnpinnedItems)
+            currentPolicy: currentPolicy,
+            policy: RetentionPolicy(maximumUnpinnedItems: maximumUnpinnedItems),
+            victimIDs: victims
         )
 
         guard case .commit(let mutationPlan) = planningResult else {
-            // §9: release the context and return — nothing is retained
-            // across the operation (§5), and a no-op yields no receipt,
-            // index delta, or invalidation (docs/04-coherence.md §4).
             return .unchanged
         }
 
-        // §9: mechanical stamping — the Domain never mints tokens
-        // (docs/02-domain.md §4, §13).
         let stamped: StampedCommitPlan
         do {
             stamped = try CommitPlanStamper.stamp(
@@ -374,8 +287,7 @@ extension HistoryAuthority {
         return try executeStampedPlan(
             stamped,
             expectedPreviousPosition: currentPosition,
-            in: context
+            in: database
         )
     }
-
 }

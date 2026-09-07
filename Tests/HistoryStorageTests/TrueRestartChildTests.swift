@@ -1,16 +1,9 @@
 /// Evidence Card 1C-1 plus the REVIEW §4.3 Retention-config restart tail —
 /// public-open, normally terminated process tracers over one StoreRoot.
 ///
-/// The normal restart paths leave every `ModelContainer`, model, facade, item
-/// ID, and content manifest in a child process. The corruption-only retention
-/// fixture temporarily owns a `ModelContainer` solely to create an impossible
-/// stored shape between two terminated public-API probe owners. The
-/// Package.swift test-target dependency guarantees the probe is already built;
-/// the test launches the same `.build/debug` product convention used by the
-/// existing migration-abort child, without nesting another SwiftPM process
-/// inside `swift test`.
+/// Children use the production SQLite/blob store. Only the corruption fixture
+/// opens an independent SQLite connection between terminated child owners.
 import Foundation
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
@@ -59,19 +52,19 @@ struct TrueRestartChildTests {
     }
 
     private enum RetentionConfigDamage: CaseIterable {
-        case malformedVersion
+        case malformedValue
         case wrongKey
 
         var label: String {
             switch self {
-            case .malformedVersion: "malformed-version"
+            case .malformedValue: "malformed-value"
             case .wrongKey: "wrong-key"
             }
         }
 
         var rejectionPhase: String {
             switch self {
-            case .malformedVersion: "retentionRejectMalformed"
+            case .malformedValue: "retentionRejectMalformed"
             case .wrongKey: "retentionRejectWrongKey"
             }
         }
@@ -81,29 +74,15 @@ struct TrueRestartChildTests {
         _ damage: RetentionConfigDamage,
         at storeURL: URL
     ) throws {
-        let schema = historySchema
-        let container = try ModelContainer(
-            for: schema,
-            configurations: [ModelConfiguration(
-                schema: schema,
-                url: storeURL,
-                cloudKitDatabase: .none
-            )]
-        )
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
-        let rows = try context.fetch(
-            FetchDescriptor<RetentionExpansionConfigRow>()
-        )
-        let config = try #require(rows.first)
-        #expect(rows.count == 1)
+        let database = try SQLiteDatabase(url: storeURL)
+        try database.execute("PRAGMA ignore_check_constraints = ON")
         switch damage {
-        case .malformedVersion:
-            config.configSchemaVersion = 2
+        case .malformedValue:
+            try database.execute("UPDATE retention_policies SET ageMaxSeconds = ?",
+                                 bindings: [.real(.infinity)])
         case .wrongKey:
-            config.key = "wrong-retention-config"
+            try database.execute("UPDATE retention_policies SET key = 'wrong-retention-config'")
         }
-        try context.save()
     }
 
     @Test("seed, operate, and verify use three terminated owners")
@@ -144,7 +123,7 @@ struct TrueRestartChildTests {
     /// and D fresh-opens and reads the updated values. Every child has
     /// normally terminated before the next starts; this proves reopen
     /// persistence, not migration, full-disk, SIGKILL, crash/power-loss, or
-    /// external-storage durability.
+    /// power-loss durability.
     @Test("retention write, read, update, and read use four terminated owners")
     func retentionWriteReadUpdateReadAcrossFourProcesses() throws {
         let storeRoot = FileManager.default.temporaryDirectory
@@ -175,7 +154,7 @@ struct TrueRestartChildTests {
     }
 
     /// This adds only the missing process boundary to the existing singleton
-    /// validation matrix. A first child creates and configures a current V4
+    /// validation matrix. A first child creates and configures a current SQLite
     /// store through public History actions, then terminates. The test fixture
     /// changes one stored scalar, and a second fresh child must receive the
     /// exact public-open failure. Same-process owner tests separately prove

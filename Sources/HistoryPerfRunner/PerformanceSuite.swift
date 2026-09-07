@@ -1,6 +1,6 @@
 /// HistoryPerfRunner — release-like performance runner for the Part VI §9
 /// performance proofs (docs/06-cross-cutting.md §9). Drives the PUBLIC
-/// ClipboardHistory surface via the production SwiftDataHistory facade. Each
+/// ClipboardHistory surface via the production SQLiteHistory facade. Each
 /// workload records fixture data (medians, complexity ratios, bounds) and
 /// exits non-zero if any complexity check fails.
 ///
@@ -15,14 +15,11 @@
 /// Machine metadata accompanies every fixture (§9: "recorded fixtures and
 /// machine metadata").
 ///
-/// Store medium: §9 measures algorithmic complexity (rows/bytes scaling), not
-/// durability. Workloads that never reopen durable state run on `.memory`
-/// stores — Part V §2 states `.memory` changes the durability medium only and
-/// uses the same Authority, planners, codecs, and transaction path — so the
-/// measured algorithm is identical without paying per-commit fsync during
-/// (untimed) population. Bullet 3 measures the complete warm persistent-open
-/// construct, whose startup includes Signature Index rebuild, and therefore
-/// uses `.persistent` stores. Each fixture records its medium.
+/// Store medium: workloads without reopen use disposable `.temporary`
+/// SQLite/blob directories, with the same WAL and synchronization settings
+/// as `.persistent`. Bullet 3 uses persistent stores across child processes
+/// and measures warm open over durable metadata. Startup does not rebuild a
+/// process-wide Signature Index. Each fixture records its actual medium.
 ///
 /// Fixture sizes: §9 pins complexity envelopes, not absolute sizes. The 5,000
 /// retained-item value is the hard bound, not a required per-PR measurement
@@ -44,7 +41,7 @@
 ///
 /// Import confinement (Part I §8): the runner imports Foundation, HistoryCore,
 /// and HistoryStorage — HistoryStorage was added to the HistoryPerfRunner
-/// allowlist because the runner drives the public SwiftDataHistory concrete
+/// allowlist because the runner drives the public SQLiteHistory concrete
 /// facade. WL8 additionally uses the package-only `ThumbnailService` proof
 /// seam so it measures single-flight decode sharing without conflating the
 /// Authority's intentionally serialized source-fetch prefix.

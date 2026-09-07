@@ -1,4 +1,4 @@
-/// SwiftDataHistory — the production `ClipboardHistory` adapter: the public
+/// SQLiteHistory — the production `ClipboardHistory` adapter: the public
 /// facade over the six internal actors, owning closed action dispatch
 /// (Part V §8), read forwarding and the subscribe-before-query observation
 /// loop (Part V §14; Part IV §5), `open` startup (Part V §13), and public
@@ -7,7 +7,7 @@
 /// internal actors); coherence: docs/04-coherence.md (Part IV); implementation
 /// sequence: docs/roadmap/03-historystorage.md (steps 5–8).
 ///
-/// `SwiftDataHistory` is a value of six actor references plus the immutable,
+/// `SQLiteHistory` is a value of six actor references plus the immutable,
 /// `Sendable` App Intents connection identity accepted during startup and,
 /// for a persistent store, the held cross-process StoreRoot lease
 /// (`StoreRootLease`, REVIEW DATA-7). Its `Sendable`
@@ -15,7 +15,6 @@
 /// conformance or other escape hatch appears here (Part V §2; Part VI §6).
 import Foundation
 import HistoryCore
-import SwiftData
 
 #if DEBUG
 /// Operation-local observation hook for deterministic outer-buffer tests.
@@ -34,9 +33,10 @@ internal enum ObservationDebugInstrumentation {
 }
 #endif
 
-// MARK: - SwiftDataHistory (docs/05-authority-kernel.md §2)
+// MARK: - SQLiteHistory (docs/v2/V2-09-multilevel-storage.md §2)
 
-/// The production `ClipboardHistory` adapter, backed by SwiftData.
+/// The production `ClipboardHistory` adapter, backed by SQLite metadata and
+/// immutable content files (V2-09 §2–§6).
 ///
 /// Owning spec: docs/05-authority-kernel.md §2.
 ///
@@ -52,7 +52,7 @@ internal enum ObservationDebugInstrumentation {
 /// dispatches actions through one closed switch (§8), forwards reads to the
 /// purpose-specific read paths (§14) and owns the Part IV §5 observation
 /// loop, and lets actor-thrown `HistoryFailure`s propagate.
-public struct SwiftDataHistory: ClipboardHistory, Sendable {
+public struct SQLiteHistory: ClipboardHistory, Sendable {
     /// Total candidate-ID mint attempts admitted for one capture, including
     /// the initial candidate. UUID collisions should be vanishingly rare in
     /// production; eight keeps a broken/injected source strictly bounded
@@ -81,9 +81,13 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     /// commit interval (docs/05-authority-kernel.md §6.2).
     internal let revisionPreparation: RevisionPreparationActor
 
-    /// Evaluates search over a Sendable corpus snapshot off the Authority;
-    /// never reads SwiftData (docs/05-authority-kernel.md §14.2).
+    /// Evaluates bounded search batches on its own SQLite read connection.
+    /// Only Sendable store locations and result values cross actors.
     internal let searchWorker: SearchWorker
+
+    /// Search and Authority retain the same disposable directory lifetime;
+    /// no database or statement handle is shared between them (V2-09 §4).
+    private let storeLocation: HistoryStoreLocation
 
     /// Owns the thumbnail flight table and its worker
     /// (docs/05-authority-kernel.md §14.5; docs/04-coherence.md §9).
@@ -100,14 +104,14 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
 
     /// The cross-process single-writer lease held for a persistent store's
     /// whole facade lifetime (REVIEW DATA-7 / PLAY-DISK-0B); `nil` for the
-    /// `.memory` medium, which has no StoreRoot to lease. The facade's last
+    /// `.temporary` medium, which owns a private directory. The facade's last
     /// release closes the descriptor and with it the record lock.
     private let storeRootLease: StoreRootLease?
 
     /// Assembles the facade from its six actors and startup-validated external
     /// identity. Construction is internal to
     /// `open(configuration:)` — there is no other way to obtain a
-    /// `SwiftDataHistory` (docs/05-authority-kernel.md §2).
+    /// `SQLiteHistory` (docs/05-authority-kernel.md §2).
     private init(
         authority: HistoryAuthority,
         ingestPreparation: IngestPreparationActor,
@@ -116,6 +120,7 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         thumbnailService: ThumbnailService,
         externalGateway: ExternalGateway,
         appIntentsConnectionID: ExternalConnectionID,
+        storeLocation: HistoryStoreLocation,
         storeRootLease: StoreRootLease?
     ) {
         self.authority = authority
@@ -125,6 +130,7 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         self.thumbnailService = thumbnailService
         self.externalGateway = externalGateway
         self.appIntentsConnectionID = appIntentsConnectionID
+        self.storeLocation = storeLocation
         self.storeRootLease = storeRootLease
     }
 
@@ -132,29 +138,12 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
 
     /// Opens (or creates) the store and returns the ready facade.
     ///
-    /// Performs the docs/05-authority-kernel.md §13 startup sequence,
-    /// using only the current product schema:
-    ///
-    /// 1. validates `configuration.initialMaximumUnpinnedItems` against the
-    ///    fixed Part VI user range (`HistoryLimits.standard`, §2);
-    /// 2. acquires the StoreRoot's cross-process single-writer lease for a
-    ///    persistent store (`StoreRootLease`; REVIEW DATA-7 / PLAY-DISK-0B)
-    ///    and only then opens/creates the `ModelContainer` over `historySchema`.
-    ///    No historical schemas, migration stages, or repair writers exist.
-    ///    `.memory` changes the medium only and uses the same
-    ///    Authority, planners, codecs, and transaction path (§2);
-    /// 3. constructs `HistoryAuthority` over the container and asks it to
-    ///    perform the store-side startup (create the position/retention
-    ///    singleton for a new store, validate it, bootstrap/validate the
-    ///    retention-expansion config singleton, bootstrap/validate the X.3
-    ///    Gateway config plus deny-by-default App Intents connection, bound
-    ///    the retained row count, then rebuild the complete Signature Index from authoritative
-    ///    Canonical/signature coverage without decoding revision state —
-    ///    and validate retained-byte correspondence);
-    /// 4. constructs the X.5/X.6 Gateway actor only after every startup
-    ///    validation succeeds, sharing the facade's SearchWorker and the
-    ///    Authority's Storage clock, then publishes the facade with its six
-    ///    actors (current roadmap step 14; v1 `05` §13 step 12).
+    /// Validates the initial retention setting, resolves the persistent or
+    /// disposable directory, then lets Authority open its own SQLite
+    /// connection and immutable blob store. Startup creates or reads the
+    /// current metadata schema without loading all retained content. Gateway
+    /// construction follows successful startup, sharing its clock and search
+    /// worker with ordinary History calls (V2-09 §2/§4/§6).
     ///
     /// Failure translation at this boundary (§16, §2): an out-of-range
     /// initial retention value throws `.invalidInput(.invalidRetentionPolicy)`;
@@ -168,7 +157,7 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     /// for corrupted data (§13).
     public static func open(
         configuration: HistoryConfiguration
-    ) async throws -> SwiftDataHistory {
+    ) async throws -> SQLiteHistory {
         try await open(
             configuration: configuration,
             makeCandidateID: { HistoryItemID(rawValue: UUID()) }
@@ -182,7 +171,7 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     internal static func open(
         configuration: HistoryConfiguration,
         makeCandidateID: @escaping @Sendable () -> HistoryItemID
-    ) async throws -> SwiftDataHistory {
+    ) async throws -> SQLiteHistory {
         // §13 step 1: configuration validation against the fixed Part VI
         // safety profile (§2: "always uses the fixed HistoryLimits.standard
         // safety profile").
@@ -193,100 +182,41 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
             throw HistoryFailure.invalidInput(.invalidRetentionPolicy)
         }
 
-        // §13 step 2: both media use the same current schema without a
-        // migration plan. Disable managed CloudKit discovery: clipboard
-        // history is local-only, independent of future app entitlements.
-        let schema = historySchema
-        let modelConfiguration: ModelConfiguration
-        switch configuration.persistence {
-        case .persistent(let storeURL):
-            modelConfiguration = ModelConfiguration(
-                schema: schema,
-                url: storeURL,
-                cloudKitDatabase: .none
-            )
-        case .memory:
-            modelConfiguration = ModelConfiguration(
-                schema: schema,
-                isStoredInMemoryOnly: true,
-                cloudKitDatabase: .none
-            )
-        }
-        // §13 step 2's DATA-7 lease half: a persistent store's StoreRoot is
-        // leased nonblocking BEFORE any `ModelContainer` exists
-        // (PLAY-DISK-0B). A contending live owner process fails the open here
-        // with `.persistence(.storeAlreadyOpen)`; a later startup failure
-        // releases the lease with the throwing scope. The `.memory` medium
-        // has no StoreRoot and leases nothing.
+        let storeLocation = try HistoryStoreLocation(persistence: configuration.persistence)
+        // Persistent ownership is established before SQLite opens. Disposable
+        // directories are unique and need no cross-process ownership lease.
         let storeRootLease: StoreRootLease?
-        if case .persistent(let storeURL) = configuration.persistence {
-            storeRootLease = try StoreRootLease.acquire(storeURL: storeURL)
+        if case .persistent = configuration.persistence {
+            storeRootLease = try StoreRootLease.acquire(storeURL: storeLocation.databaseURL)
         } else {
             storeRootLease = nil
         }
-        let container: ModelContainer
-        do {
-            container = try ModelContainer(
-                for: schema,
-                configurations: [modelConfiguration]
-            )
-        } catch {
-            throw HistoryFailure.persistence(.openStore)
-        }
 
-        // §13: the Authority owns every store-side startup check,
-        // including Gateway bootstrap and retained-byte correspondence.
-        // The current hard-capped Signature Index build additionally decodes
-        // Canonical and recomputes xxh3 coverage; revision bytes remain
-        // untouched (§13, §15).
-        // The V2-02 §6.4 Storage clock is wired HERE, internally — the
-        // production `SystemStorageClock` witness (the `{ Date.now }`
-        // default) — so the public `open(configuration:)` signature and the
-        // frozen `HistoryConfiguration` carry no clock parameter
-        // (`RET-COMPILE-1`); tests inject a fixed clock only through the
-        // `@testable` `HistoryAuthority` initializer.
+        // The same clock is used for History and externally requested work;
+        // entropy and clock injection remain internal implementation details.
         let storageClock = SystemStorageClock()
         let searchWorker = SearchWorker()
-        // §16 capacity admission reads the store volume's spare capacity.
-        // The raw available-capacity fact, not the important-usage variant:
-        // the OS maintains purgeable-space accounting only on the boot
-        // volume, and dispatch run 32634051113 observed the
-        // important-usage fact return zero on the dedicated mounted probe
-        // volume (254 MiB free), refusing every capture. The raw fact
-        // matches the filesystem's own accounting on every volume and only
-        // errs conservative on the boot volume, where it ignores purgeable
-        // space a typed, retryable refusal already governs. An in-memory
-        // store (or any unreadable fact) keeps the reader nil and
-        // admission fail-open.
-        // The read must bypass URL's resource-value cache: the values are
-        // cached on the shared NSURL at first read, so a process that
-        // admitted one write while the volume had room would keep seeing
-        // that stale capacity after the volume filled — observed on the
-        // Card 6B revise cell (dispatch run 33687222086): the child's
-        // pre-fill capture read 254 MiB, the post-fill revise then passed
-        // admission on the cached value and died on the uncatchable
-        // external-storage NSException. A fresh URL per read has no cache.
-        let volumeAvailableCapacityReader: @Sendable () -> Int64?
-        if case .persistent(let storeURL) = configuration.persistence {
-            volumeAvailableCapacityReader = {
-                let freshURL = URL(fileURLWithPath: storeURL.path)
-                guard let values = try? freshURL.resourceValues(
-                    forKeys: [.volumeAvailableCapacityKey]
-                ), let capacity = values.volumeAvailableCapacity else {
-                    return nil
-                }
-                return Int64(capacity)
+        // Both media now use files. Construct a fresh URL per observation so
+        // cached NSURL resource values cannot outlive an intervening write.
+        let storePath = storeLocation.databaseURL.path
+        let volumeAvailableCapacityReader: @Sendable () -> Int64? = {
+            let freshURL = URL(fileURLWithPath: storePath)
+            guard let values = try? freshURL.resourceValues(
+                forKeys: [.volumeAvailableCapacityKey]
+            ), let capacity = values.volumeAvailableCapacity else {
+                return nil
             }
-        } else {
-            volumeAvailableCapacityReader = { nil }
+            return Int64(capacity)
         }
-        let authority = HistoryAuthority(
-            container: container,
-            storageClock: storageClock,
-            volumeAvailableCapacityReader: volumeAvailableCapacityReader
-        )
+        let authority: HistoryAuthority
         let appIntentsConnectionID: ExternalConnectionID
         do {
+            authority = try HistoryAuthority(
+                storeLocation: storeLocation,
+                limits: limits,
+                storageClock: storageClock,
+                volumeAvailableCapacityReader: volumeAvailableCapacityReader
+            )
             appIntentsConnectionID = try await authority.performStartup(
                 initialMaximumUnpinnedItems: configuration.initialMaximumUnpinnedItems
             )
@@ -294,14 +224,15 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
             // Already translated by the Authority (§16): corrupt stored
             // values and invariant violations reject open without repair (§13).
             throw failure
+        } catch let failure as SQLiteFailure {
+            throw failure.openFailure
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw HistoryFailure.persistence(.openStore)
         }
 
-        // Current roadmap step 14 (v1 §13 step 12): startup has accepted the
-        // complete V4 HCR and Gateway state, so construct the X.5/X.6 actor
-        // from the SAME SearchWorker and Storage clock witnesses, then publish
-        // the six-actor History facade and its bound X.6 accessor.
+        // No facade escapes until the History and Gateway state is ready.
         let revisionPreparation = RevisionPreparationActor()
         let externalGateway = ExternalGateway(
             authority: authority,
@@ -310,7 +241,7 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
             storageClock: storageClock,
             revisionPreparation: revisionPreparation
         )
-        return SwiftDataHistory(
+        return SQLiteHistory(
             authority: authority,
             ingestPreparation: IngestPreparationActor(
                 makeCandidateID: makeCandidateID
@@ -320,6 +251,7 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
             thumbnailService: ThumbnailService(),
             externalGateway: externalGateway,
             appIntentsConnectionID: appIntentsConnectionID,
+            storeLocation: storeLocation,
             storeRootLease: storeRootLease
         )
     }
@@ -349,65 +281,69 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     /// `.setRetentionPolicies` case is implemented by the R.6 policy sweep
     /// (`V2-02` §4.4; `V2-roadmap` §6).
     public func perform(_ action: HistoryAction) async throws -> HistoryReceipt {
-        switch action {
-        case .capture(let raw):
-            var prepared = try await ingestPreparation.prepare(raw)
-            var attempts = 1
-            while true {
-                do {
-                    return try await authority.commitCapture(prepared)
-                } catch is CaptureCandidateIDCollision {
-                    guard attempts < Self.captureCandidateIDAttemptLimit else {
-                        // No new public failure case is needed: an internal ID
-                        // source unable to produce a valid business identity
-                        // is a Storage invariant failure, and every collision
-                        // was rejected before transaction/publish.
-                        throw HistoryFailure.persistence(.invariantViolation)
+        do {
+            switch action {
+            case .capture(let raw):
+                var prepared = try await ingestPreparation.prepare(raw)
+                var attempts = 1
+                while true {
+                    do {
+                        return try await authority.commitCapture(prepared)
+                    } catch is CaptureCandidateIDCollision {
+                        guard attempts < Self.captureCandidateIDAttemptLimit else {
+                            // No new public failure case is needed: an internal ID
+                            // source unable to produce a valid business identity
+                            // is a Storage invariant failure, and every collision
+                            // was rejected before transaction/publish.
+                            throw HistoryFailure.persistence(.invariantViolation)
+                        }
+                        attempts += 1
+                        prepared = await ingestPreparation.remintCandidateID(
+                            in: prepared
+                        )
                     }
-                    attempts += 1
-                    prepared = await ingestPreparation.remintCandidateID(
-                        in: prepared
-                    )
                 }
+
+            case .placePinned(let id, let placement):
+                return try await authority.commitPinnedPlacement(id, placement)
+
+            case .unpin(let id):
+                return try await authority.commitUnpin(id)
+
+            case .remove(let id):
+                return try await authority.commitRemove(id)
+
+            case .clear(let scope):
+                return try await authority.commitClear(scope)
+
+            case .revise(let request):
+                // V2-02 §4.3 PHASE 1 (roadmap R.5): the Authority captures the
+                // OCC snapshot AND the current revise-lane policies in one
+                // serialized interval (Record 2's policy-sourcing mechanism),
+                // then threads the policies as the sibling R3 input to the
+                // V2-extended preparation call. A nil policy value (R1-only or
+                // all-disabled config) leaves the preparation byte-for-byte v1.
+                let inputs = try await authority.revisionPreparationInputs(request)
+                let bundle = try await revisionPreparation.prepare(
+                    request,
+                    from: inputs.snapshot,
+                    retentionPolicies: inputs.retentionPolicies
+                )
+                return try await authority.commitRevision(request, bundle)
+
+            case .setRetentionPolicy(let maximum):
+                return try await authority.commitRetentionPolicy(maximum)
+
+            case .setRetentionPolicies(let policies):
+                // V2-02 §8.1 case (roadmap R.6, policy sweep): the full R1/R2/R3
+                // sweep — boundary validation, R3 prunes per exceeding item, the
+                // projected R1/R2 pass, the survivor-scoped unsatisfiable-R3 veto,
+                // and the same-value/satisfied `.unchanged` no-op — all inside
+                // the Authority's one serialized commit interval (`V2-02` §4.4).
+                return try await authority.commitRetentionPolicies(policies)
             }
-
-        case .placePinned(let id, let placement):
-            return try await authority.commitPinnedPlacement(id, placement)
-
-        case .unpin(let id):
-            return try await authority.commitUnpin(id)
-
-        case .remove(let id):
-            return try await authority.commitRemove(id)
-
-        case .clear(let scope):
-            return try await authority.commitClear(scope)
-
-        case .revise(let request):
-            // V2-02 §4.3 PHASE 1 (roadmap R.5): the Authority captures the
-            // OCC snapshot AND the current revise-lane policies in one
-            // serialized interval (Record 2's policy-sourcing mechanism),
-            // then threads the policies as the sibling R3 input to the
-            // V2-extended preparation call. A nil policy value (R1-only or
-            // all-disabled config) leaves the preparation byte-for-byte v1.
-            let inputs = try await authority.revisionPreparationInputs(request)
-            let bundle = try await revisionPreparation.prepare(
-                request,
-                from: inputs.snapshot,
-                retentionPolicies: inputs.retentionPolicies
-            )
-            return try await authority.commitRevision(request, bundle)
-
-        case .setRetentionPolicy(let maximum):
-            return try await authority.commitRetentionPolicy(maximum)
-
-        case .setRetentionPolicies(let policies):
-            // V2-02 §8.1 case (roadmap R.6, policy sweep): the full R1/R2/R3
-            // sweep — boundary validation, R3 prunes per exceeding item, the
-            // projected R1/R2 pass, the survivor-scoped unsatisfiable-R3 veto,
-            // and the same-value/satisfied `.unchanged` no-op — all inside
-            // the Authority's one serialized commit interval (`V2-02` §4.4).
-            return try await authority.commitRetentionPolicies(policies)
+        } catch {
+            throw Self.translatedFailure(error)
         }
     }
 
@@ -417,37 +353,34 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     ///
     /// A `.recent` page, including the recent-equivalent empty-search shape,
     /// is read entirely inside one Authority interval from scalar projection
-    /// fields only (§14.1; 03b §8). A non-empty `.search` page follows the
-    /// two-step value pipeline: the Authority captures a bounded
-    /// `SearchCorpusSnapshot` plus the continuation anchor the next-page
-    /// cursor is minted from, then `SearchWorker` evaluates the request over
-    /// the snapshot off-actor — receiving the Authority's process marker so
-    /// the minted cursor binds this process instance
-    /// (docs/04-coherence.md §6) — and returns the bounded page stamped with
-    /// the corpus position; the worker never reads SwiftData (§14.2;
-    /// docs/04-coherence.md §7).
+    /// fields only (§14.1; 03b §8). A non-empty `.search` opens a consistent
+    /// SQLite read transaction inside SearchWorker and scans bounded batches
+    /// with a bounded result set (V2-09 §4). The process marker still binds
+    /// every continuation cursor to this History instance (04 §6).
     public func browse(
         _ request: HistoryBrowseRequest
     ) async throws -> HistoryPage {
-        switch request.kind {
-        case .recent:
-            return try await authority.recentPage(
-                limit: request.limit,
-                after: request.after
-            )
-        case .search(let text, _) where text.isEmpty:
-            return try await authority.recentPage(
-                limit: request.limit,
-                after: request.after
-            )
-        case .search:
-            let captured = try await authority.searchCorpusSnapshot(for: request)
-            return try await searchWorker.page(
-                request,
-                in: captured.snapshot,
-                continuationAnchor: captured.continuationAnchor,
-                processMarker: authority.cursorProcessMarker
-            )
+        do {
+            switch request.kind {
+            case .recent:
+                return try await authority.recentPage(
+                    limit: request.limit,
+                    after: request.after
+                )
+            case .search(let text, _) where text.isEmpty:
+                return try await authority.recentPage(
+                    limit: request.limit,
+                    after: request.after
+                )
+            case .search:
+                return try await searchWorker.page(
+                    request,
+                    store: storeLocation,
+                    processMarker: authority.cursorProcessMarker
+                )
+            }
+        } catch {
+            throw Self.translatedFailure(error)
         }
     }
 
@@ -534,7 +467,7 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
                 } catch {
                     // §5: the loop repeats until cancellation or failure —
                     // any query failure finishes the stream with that error.
-                    continuation.finish(throwing: error)
+                    continuation.finish(throwing: Self.translatedFailure(error))
                 }
             }
             // §5: "Cancellation unregisters the continuation and releases
@@ -561,7 +494,11 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     public func details(
         for id: HistoryItemID
     ) async throws -> HistoryDetails {
-        try await authority.details(for: id)
+        do {
+            return try await authority.details(for: id)
+        } catch {
+            throw Self.translatedFailure(error)
+        }
     }
 
     /// The paste payload for one retained item
@@ -571,13 +508,21 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     public func pastePayload(
         for id: HistoryItemID
     ) async throws -> PastePayload {
-        try await authority.pastePayload(for: id)
+        do {
+            return try await authority.pastePayload(for: id)
+        } catch {
+            throw Self.translatedFailure(error)
+        }
     }
 
     /// One authoritative snapshot of retained counts and logical content
     /// bytes. The Authority owns aggregation and snapshot coherence.
     public func usage() async throws -> HistoryUsage {
-        try await authority.usage()
+        do {
+            return try await authority.usage()
+        } catch {
+            throw Self.translatedFailure(error)
+        }
     }
 
     /// The authoritative configured retention state (docs/v2/V2-07-ux.md
@@ -588,7 +533,11 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     /// loader (`V2-02` §3.3). Retained counts and content bytes are read
     /// separately through `usage()`.
     public func retentionConfiguration() async throws -> HistoryRetentionConfiguration {
-        try await authority.retentionConfiguration()
+        do {
+            return try await authority.retentionConfiguration()
+        } catch {
+            throw Self.translatedFailure(error)
+        }
     }
 
     /// An encoded thumbnail for one item at one Effective Content state,
@@ -601,30 +550,41 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
     /// fence and then decodes off the Authority; an existing-flight caller
     /// performs only a scalar dimension/existence/version fence before sharing
     /// that task. Thus concurrent identical requests hydrate one bounded image
-    /// source, no SwiftData value crosses an actor boundary, and completed
+    /// source, no database handle crosses an actor boundary, and completed
     /// bytes are not retained (docs/04-coherence.md §9).
     public func thumbnail(
         for item: HistoryItemReference,
         pixels: PixelSize
     ) async throws -> ThumbnailPayload? {
-        let authority = authority
-        return try await thumbnailService.thumbnail(
-            for: item,
-            pixels: pixels,
-            loadSource: {
-                let selection = try await authority.thumbnailSource(
-                    for: item,
-                    pixels: pixels
-                )
-                return selection?.bytes
-            },
-            validateJoin: {
-                try await authority.validateThumbnailFlightJoin(
-                    for: item,
-                    pixels: pixels
-                )
-            }
-        )
+        do {
+            let authority = authority
+            return try await thumbnailService.thumbnail(
+                for: item,
+                pixels: pixels,
+                loadSource: {
+                    let selection = try await authority.thumbnailSource(
+                        for: item,
+                        pixels: pixels
+                    )
+                    return selection?.bytes
+                },
+                validateJoin: {
+                    try await authority.validateThumbnailFlightJoin(
+                        for: item,
+                        pixels: pixels
+                    )
+                }
+            )
+        } catch {
+            throw Self.translatedFailure(error)
+        }
+    }
+
+    /// Translate only the internal SQL error. Domain, History, cancellation
+    /// and decoding failures keep the semantics chosen by their owning code.
+    private static func translatedFailure(_ error: any Error) -> any Error {
+        if let failure = error as? SQLiteFailure { return failure.historyFailure }
+        return error
     }
 
     // MARK: Observation first page (docs/04-coherence.md §5)

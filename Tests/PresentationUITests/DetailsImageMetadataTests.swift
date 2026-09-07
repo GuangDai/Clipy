@@ -9,8 +9,8 @@ import Testing
 @MainActor
 struct DetailsImageMetadataTests {
     @Test func imageRevisionKeepsCanonicalMetadataIndependentOfTheNewItemThumbnail() async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let originalBytes = Data("original opaque PNG bytes".utf8)
         let original = try await capture([
@@ -61,8 +61,8 @@ struct DetailsImageMetadataTests {
     }
 
     @Test func multipleImageRowsDoNotClaimTheSuccessfulItemThumbnailAsTheirOwnPreview() async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let png = fixturePNGData
         let tiff = Data("not the selected PNG representation".utf8)
@@ -98,7 +98,7 @@ struct DetailsImageMetadataTests {
     }
 
     private func capture(
-        _ representations: [CapturedRepresentation], into history: SwiftDataHistory
+        _ representations: [CapturedRepresentation], into history: SQLiteHistory
     ) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.capture(ClipboardCapture(
             representations: representations,

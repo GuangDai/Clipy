@@ -1,8 +1,9 @@
 # 多级存储目标设计：历史数量与常驻内存解耦
 
-状态：2026-09-07 设计建议，尚未实现或完成规模验证。本文按用户最新的多级存储方向
-设计终态；正在 CI 中的功能批仍使用当前 SwiftData 存储。下文建议的 SQLite 实现
-会替换当前 SwiftData/十模型的内部持久化表达，不能把它默认为当前规范已经变更。
+状态：2026-09-07 用户明确批准实施，正在替换，尚未完成或通过规模验证。本文按用户
+最新的多级存储方向设计终态；已合入 master 的实现仍使用 SwiftData。SQLite 元数据
+和不可变 blob 文件将整体替换 SwiftData/十模型的内部持久化表达；这一最新决定取代
+旧文档中保留 SwiftData 十模型的要求，其他公开业务语义继续有效。
 这里不增加迁移、旧存储读取、SHA 内容身份、签名机制或实施审批框架。
 
 ## 1. 要达到的结果
@@ -70,11 +71,14 @@ NSPasteboard → 冻结一次新值 → HistoryAuthority
 ```text
 Clipy/
   history.sqlite
-  blobs/ab/<random-uuid>.blob
-  staging/<random-uuid>.partial
+  history.sqlite-content/
+    blobs/ab/<random-uuid>.blob
+    staging/<random-uuid>.partial
 ```
 
 `ab` 来自随机标识的固定前缀，只用于分散目录项，不来自内容摘要。
+每个数据库文件使用自己的 `文件名-content` 目录，避免同一父目录的多个数据库
+共享文件、相互将对方的数据当作孤儿回收。维护页统计二者共同的应用专属父目录。
 同一 blob 可被不可变内容版本引用，引用关系由数据库负责。
 原始内容、HTML/RTF 和 PDF 都不属于系统可随意删除的 Caches 目录。
 磁盘派生缓存不是首版必需层；当前没有这种落盘缓存，维护页如实显示未使用。

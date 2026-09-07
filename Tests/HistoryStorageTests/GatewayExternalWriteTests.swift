@@ -1,8 +1,7 @@
-/// X.6 Authority positive-write proofs through the real in-memory V4 store.
+/// X.6 Authority positive-write proofs through the real disposable SQLite store.
 /// Owning spec: `V2-05` §5.1/§6.4 and roadmap X.6.
 import Foundation
 import HistoryCore
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
@@ -12,22 +11,22 @@ struct GatewayExternalWriteTests {
         timeIntervalSinceReferenceDate: 700_000_000
     )
 
-    private struct Fixture {
-        let history: SwiftDataHistory
+    private struct Fixture: Sendable {
+        let history: SQLiteHistory
         let authority: HistoryAuthority
-        let container: ModelContainer
         let connection: ExternalConnectionID
         let item: HistoryItemReference
     }
 
-    private struct HCRSnapshot: Equatable {
+    private struct HCRSnapshot: Equatable, Sendable {
         let sequence: UInt64
         let changePosition: UInt64
         let kind: HistoryChangeKindRawV1
         let affected: [HistoryItemID]
     }
 
-    private struct DurableSnapshot {
+    private struct DurableSnapshot: Sendable {
+        let history: GatewayHistoryTestSnapshot
         let position: UInt64
         let pinOrdinal: Int?
         let itemCount: Int
@@ -38,7 +37,7 @@ struct GatewayExternalWriteTests {
     @Test("pin, no-op, unpin, and remove preserve HCR/audit/position equality")
     func successfulManageSubsetUsesOneAtomicKernel() async throws {
         let fixture = try await Self.makeFixture(text: "private clipboard body")
-        let baseline = try Self.snapshot(fixture)
+        let baseline = try await Self.snapshot(fixture)
 
         let pinned = try await fixture.authority.commitExternal(
             request: .pin(fixture.item.id),
@@ -50,7 +49,7 @@ struct GatewayExternalWriteTests {
             return
         }
         #expect(pinnedID == fixture.item.id)
-        let afterPin = try Self.snapshot(fixture)
+        let afterPin = try await Self.snapshot(fixture)
         try Self.expectCommittedWrite(
             afterPin,
             prior: baseline,
@@ -71,7 +70,7 @@ struct GatewayExternalWriteTests {
             Issue.record("expected repeated external pin to be unchanged")
             return
         }
-        let afterNoOp = try Self.snapshot(fixture)
+        let afterNoOp = try await Self.snapshot(fixture)
         #expect(afterNoOp.position == afterPin.position)
         #expect(afterNoOp.hcrs == afterPin.hcrs)
         #expect(afterNoOp.gateway.operations.count
@@ -95,7 +94,7 @@ struct GatewayExternalWriteTests {
             return
         }
         #expect(unpinnedID == fixture.item.id)
-        let afterUnpin = try Self.snapshot(fixture)
+        let afterUnpin = try await Self.snapshot(fixture)
         try Self.expectCommittedWrite(
             afterUnpin,
             prior: afterNoOp,
@@ -117,7 +116,7 @@ struct GatewayExternalWriteTests {
             return
         }
         #expect(count == 1)
-        let afterRemove = try Self.snapshot(fixture)
+        let afterRemove = try await Self.snapshot(fixture)
         try Self.expectCommittedWrite(
             afterRemove,
             prior: afterUnpin,
@@ -136,7 +135,7 @@ struct GatewayExternalWriteTests {
         let absent = HistoryItemID(rawValue: UUID(
             uuidString: "00000000-0000-0000-0000-000000001301"
         )!)
-        var prior = try Self.snapshot(fixture)
+        var prior = try await Self.snapshot(fixture)
 
         await #expect(throws: ExternalFailure.history(
             .invalidPinnedPlacement(.targetMissing)
@@ -147,7 +146,7 @@ struct GatewayExternalWriteTests {
                 requestedAt: Self.requestedAt
             )
         }
-        var after = try Self.snapshot(fixture)
+        var after = try await Self.snapshot(fixture)
         try Self.expectFailedAttempt(
             after,
             prior: prior,
@@ -164,7 +163,7 @@ struct GatewayExternalWriteTests {
                 requestedAt: Self.requestedAt.addingTimeInterval(1)
             )
         }
-        after = try Self.snapshot(fixture)
+        after = try await Self.snapshot(fixture)
         try Self.expectFailedAttempt(
             after,
             prior: prior,
@@ -181,7 +180,7 @@ struct GatewayExternalWriteTests {
                 requestedAt: Self.requestedAt.addingTimeInterval(2)
             )
         }
-        after = try Self.snapshot(fixture)
+        after = try await Self.snapshot(fixture)
         try Self.expectFailedAttempt(
             after,
             prior: prior,
@@ -202,9 +201,8 @@ struct GatewayExternalWriteTests {
             operationKind: .manageUnpin,
             requestSummary: .unpin(itemID: fixture.item.id.rawValue)
         )
-        do {
-            let context = ModelContext(fixture.container)
-            context.autosaveEnabled = false
+        try await fixture.authority.withTestDatabase { authority in
+            let context = authority.database
             let config = try HistoryAuthority.loadGatewayConfig(in: context)
             guard case .authorized = try HistoryAuthority.targetedExternalAuthorizationDecision(
                 descriptor,
@@ -221,7 +219,7 @@ struct GatewayExternalWriteTests {
             .manage,
             of: fixture.connection
         )
-        let prior = try Self.snapshot(fixture)
+        let prior = try await Self.snapshot(fixture)
 
         await #expect(throws: ExternalFailure.unauthorized(
             requestedCapability: .manage,
@@ -234,7 +232,7 @@ struct GatewayExternalWriteTests {
             )
         }
 
-        let after = try Self.snapshot(fixture)
+        let after = try await Self.snapshot(fixture)
         #expect(after.position == prior.position)
         #expect(after.pinOrdinal == 0)
         #expect(after.hcrs == prior.hcrs)
@@ -263,7 +261,7 @@ struct GatewayExternalWriteTests {
                 requestedAt: Self.requestedAt.addingTimeInterval(1)
             )
         }
-        let afterNoOp = try Self.snapshot(fixture)
+        let afterNoOp = try await Self.snapshot(fixture)
         #expect(afterNoOp.position == after.position)
         #expect(afterNoOp.pinOrdinal == 0)
         #expect(afterNoOp.hcrs == after.hcrs)
@@ -294,7 +292,7 @@ struct GatewayExternalWriteTests {
                 requestedAt: Self.requestedAt.addingTimeInterval(2)
             )
         }
-        let afterAbsent = try Self.snapshot(fixture)
+        let afterAbsent = try await Self.snapshot(fixture)
         #expect(afterAbsent.position == afterNoOp.position)
         #expect(afterAbsent.hcrs == afterNoOp.hcrs)
         #expect(afterAbsent.gateway.operations.count
@@ -362,7 +360,7 @@ struct GatewayExternalWriteTests {
             .invalidInput(.invalidSearchTerm),
             .invalidInput(.invalidRegularExpression),
         ]
-        var prior = try Self.snapshot(fixture)
+        var prior = try await Self.snapshot(fixture)
 
         for source in failures {
             do {
@@ -379,7 +377,7 @@ struct GatewayExternalWriteTests {
                 #expect(failure == .persistence(.invariantViolation))
             }
 
-            let after = try Self.snapshot(fixture)
+            let after = try await Self.snapshot(fixture)
             try Self.expectFailedAttempt(
                 after,
                 prior: prior,
@@ -398,7 +396,7 @@ struct GatewayExternalWriteTests {
     @Test("out-of-space rolls back the write and publishes one retryable failure")
     func outOfSpaceMapsTruthfullyAfterAtomicRollback() async throws {
         let fixture = try await Self.makeFixture(text: "disk-full private body")
-        let prior = try Self.snapshot(fixture)
+        let prior = try await Self.snapshot(fixture)
         await fixture.authority.setTransactionFailureInjection(
             .insufficientDiskSpace
         )
@@ -413,7 +411,7 @@ struct GatewayExternalWriteTests {
             )
         }
 
-        let after = try Self.snapshot(fixture)
+        let after = try await Self.snapshot(fixture)
         try Self.expectFailedAttempt(
             after,
             prior: prior,
@@ -426,8 +424,8 @@ struct GatewayExternalWriteTests {
     @Test("exhausted ChangePosition stays unchanged and audits raw history failure")
     func exhaustedCoherenceTokenIsHistoryFailure() async throws {
         let fixture = try await Self.makeFixture(text: "coherence private body")
-        try Self.exhaustCoherencePosition(fixture)
-        let prior = try Self.snapshot(fixture)
+        try await Self.exhaustCoherencePosition(fixture)
+        let prior = try await Self.snapshot(fixture)
 
         await #expect(throws: ExternalFailure.history(
             .capacityExceeded(.coherenceToken)
@@ -439,7 +437,7 @@ struct GatewayExternalWriteTests {
             )
         }
 
-        let after = try Self.snapshot(fixture)
+        let after = try await Self.snapshot(fixture)
         try Self.expectFailedAttempt(
             after,
             prior: prior,
@@ -452,11 +450,10 @@ struct GatewayExternalWriteTests {
     }
 
     private static func makeFixture(text: String) async throws -> Fixture {
-        let history = try await SwiftDataHistory.open(configuration:
-            HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(configuration:
+            HistoryConfiguration(persistence: .temporary)
         )
         let authority = history.authority
-        let container = await authority.container
         let connection = try #require(try await history.connections().first)
         try await history.grantCapability(.manage, to: connection.id)
         let receipt = try await history.perform(.capture(
@@ -473,62 +470,46 @@ struct GatewayExternalWriteTests {
         return Fixture(
             history: history,
             authority: authority,
-            container: container,
             connection: connection.id,
             item: item
         )
     }
 
-    private static func snapshot(_ fixture: Fixture) throws -> DurableSnapshot {
-        let context = ModelContext(fixture.container)
-        let position = try #require(
-            context.fetch(FetchDescriptor<LastChangePositionRow>()).first
-        )
-        let items = try context.fetch(FetchDescriptor<HistoryItemRow>())
-        let hcrRows = try context.fetch(FetchDescriptor<HistoryChangeRecordRow>(
-            sortBy: [SortDescriptor(\.sequence)]
-        ))
-        let hcrs = try hcrRows.map { row in
-            let kind = try #require(
-                HistoryChangeKindRawV1(rawValue: row.changeKindRaw)
-            )
-            return HCRSnapshot(
-                sequence: row.sequence,
-                changePosition: row.changePositionRaw,
-                kind: kind,
-                affected: try AffectedItemsBlobCodec.decode(
-                    row.affectedItemsBlob,
-                    for: kind
+    private static func snapshot(_ fixture: Fixture) async throws -> DurableSnapshot {
+        try await fixture.authority.withTestDatabase { authority in
+            try authority.database.readTransaction {
+                let history = try GatewayHistoryTestSnapshot.read(in: authority)
+                let hcrs = try history.changes.map { row in
+                    let kind = try #require(HistoryChangeKindRawV1(rawValue: row.changeKindRaw))
+                    return HCRSnapshot(
+                        sequence: row.sequence, changePosition: row.changePositionRaw, kind: kind,
+                        affected: try AffectedItemsBlobCodec.decode(row.affectedItemsBlob, for: kind)
+                    )
+                }
+                return DurableSnapshot(
+                    history: history, position: history.position,
+                    pinOrdinal: history.items.first(where: { $0.id == fixture.item.id.rawValue })?.pinOrdinal,
+                    itemCount: history.items.count, hcrs: hcrs,
+                    gateway: try GatewayStoreSnapshot.read(in: authority.database)
                 )
-            )
+            }
         }
-        return DurableSnapshot(
-            position: position.rawValue,
-            pinOrdinal: items.first(where: {
-                $0.id == fixture.item.id.rawValue
-            })?.pinOrdinal,
-            itemCount: items.count,
-            hcrs: hcrs,
-            gateway: try GatewayStoreSnapshot.read(in: context)
-        )
     }
 
-    private static func exhaustCoherencePosition(_ fixture: Fixture) throws {
-        let context = ModelContext(fixture.container)
-        let position = try #require(
-            context.fetch(FetchDescriptor<LastChangePositionRow>()).first
-        )
-        let journal = try #require(
-            context.fetch(FetchDescriptor<JournalConfigRow>()).first
-        )
-        let records = try context.fetch(FetchDescriptor<HistoryChangeRecordRow>())
-        for record in records {
-            context.delete(record)
+    private static func exhaustCoherencePosition(_ fixture: Fixture) async throws {
+        try await fixture.authority.withTestDatabase { authority in
+            try authority.database.writeTransaction {
+                try authority.database.execute("DELETE FROM history_change_records")
+                try authority.database.execute(
+                    "UPDATE history_state SET changePosition = ? WHERE key = ?",
+                    bindings: [.blob(sqliteUInt64(UInt64.max)), .text(HistoryAuthority.positionSingletonKey)]
+                )
+                try authority.database.execute(
+                    "UPDATE journal_config SET compactionFloorRaw = ?, journalBytes = ?",
+                    bindings: [.blob(sqliteUInt64(UInt64.max)), .blob(sqliteUInt64(0))]
+                )
+            }
         }
-        position.rawValue = UInt64.max
-        journal.compactionFloorRaw = UInt64.max
-        journal.journalBytes = 0
-        try context.save()
     }
 
     private static func expectCommittedWrite(
@@ -571,6 +552,7 @@ struct GatewayExternalWriteTests {
         failureKind: ExternalFailureKindRaw,
         request: RequestSummaryV1
     ) throws {
+        #expect(snapshot.history == prior.history)
         #expect(snapshot.position == prior.position)
         #expect(snapshot.pinOrdinal == prior.pinOrdinal)
         #expect(snapshot.itemCount == prior.itemCount)
@@ -594,7 +576,7 @@ struct GatewayExternalWriteTests {
         let fixture = try await Self.makeFixture(
             text: "injection \(injection) private bytes"
         )
-        let prior = try Self.snapshot(fixture)
+        let prior = try await Self.snapshot(fixture)
         await fixture.authority.setTransactionFailureInjection(injection)
 
         await #expect(throws: ExternalFailure.persistence(.transaction)) {
@@ -605,7 +587,7 @@ struct GatewayExternalWriteTests {
             )
         }
 
-        let after = try Self.snapshot(fixture)
+        let after = try await Self.snapshot(fixture)
         try Self.expectFailedAttempt(
             after,
             prior: prior,

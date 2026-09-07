@@ -2,7 +2,6 @@
 /// Owning spec: `V2-05` §3.1/§4.5/§8 and roadmap X.5.
 import Foundation
 import HistoryCore
-import SwiftData
 import Synchronization
 import Testing
 @testable import HistoryStorage
@@ -23,18 +22,6 @@ struct ExternalGatewayDenialTests {
         let fixed: Date
 
         func now() -> Date { fixed }
-    }
-
-    private final class UUIDSource: Sendable {
-        private let values: Mutex<[UUID]>
-
-        init(_ values: [UUID]) {
-            self.values = Mutex(values)
-        }
-
-        func next() -> UUID {
-            values.withLock { $0.removeFirst() }
-        }
     }
 
 #if DEBUG
@@ -129,88 +116,13 @@ struct ExternalGatewayDenialTests {
     }
 #endif
 
-    private struct HistoryValueSnapshot: Equatable {
-        struct Item: Equatable {
-            let id: UUID
-            let contentVersionRaw: UInt64
-            let canonicalBlob: Data
-            let revisionStateBlob: Data
-            let canonicalSignatureBlob: Data
-
-            init(_ row: HistoryItemRow) {
-                id = row.id
-                contentVersionRaw = row.contentVersionRaw
-                canonicalBlob = row.canonicalBlob
-                revisionStateBlob = row.revisionStateBlob
-                canonicalSignatureBlob = row.canonicalSignatureBlob
-            }
-        }
-
-        struct RetainedBytes: Equatable {
-            let itemID: UUID
-            let canonicalBytes: Int
-            let revisionCount: Int
-            let revisionBytes: Int
-            let bytesSchemaVersion: UInt16
-
-            init(_ row: RetainedBytesRow) {
-                itemID = row.itemID
-                canonicalBytes = row.canonicalBytes
-                revisionCount = row.revisionCount
-                revisionBytes = row.revisionBytes
-                bytesSchemaVersion = row.bytesSchemaVersion
-            }
-        }
-
-        let position: UInt64
-        let items: [Item]
-        let retainedBytes: [RetainedBytes]
-    }
-
-    private struct JournalValueSnapshot: Equatable {
-        struct Config: Equatable {
-            let key: String
-            let compactionFloorRaw: UInt64
-            let journalBytes: UInt64
-            let configSchemaVersion: UInt16
-
-            init(_ row: JournalConfigRow) {
-                key = row.key
-                compactionFloorRaw = row.compactionFloorRaw
-                journalBytes = row.journalBytes
-                configSchemaVersion = row.configSchemaVersion
-            }
-        }
-
-        struct Record: Equatable {
-            let sequence: UInt64
-            let changePositionRaw: UInt64
-            let changeKindRaw: Int16
-            let affectedItemsBlob: Data
-            let createdAt: Date
-
-            init(_ row: HistoryChangeRecordRow) {
-                sequence = row.sequence
-                changePositionRaw = row.changePositionRaw
-                changeKindRaw = row.changeKindRaw
-                affectedItemsBlob = row.affectedItemsBlob
-                createdAt = row.createdAt
-            }
-        }
-
-        let configs: [Config]
-        let records: [Record]
-    }
-
-    private struct DurableValueSnapshot: Equatable {
-        let history: HistoryValueSnapshot
-        let journal: JournalValueSnapshot
+    private struct DurableValueSnapshot: Equatable, Sendable {
+        let history: GatewayHistoryTestSnapshot
         let gateway: GatewayStoreSnapshot
     }
 
-    private struct Fixture {
+    private struct Fixture: Sendable {
         let authority: HistoryAuthority
-        let container: ModelContainer
         let connection: ExternalConnectionID
         let gateway: ExternalGateway
     }
@@ -236,23 +148,11 @@ struct ExternalGatewayDenialTests {
         limits: ExternalLimits = .standard,
         rateLimiter: ExternalRateLimiter? = nil
     ) async throws -> Fixture {
-        let schema = historySchema
-        let container = try ModelContainer(
-            for: schema,
-            configurations: [ModelConfiguration(
-                schema: schema,
-                isStoredInMemoryOnly: true,
-                cloudKitDatabase: .none
-            )]
-        )
-        let idSource = UUIDSource([
-            Self.appIntentsUUID,
-        ])
         let storageClock = FixedClock(fixed: Self.epoch)
-        let authority = HistoryAuthority(
-            container: container,
+        let authority = try HistoryAuthority(
+            storeLocation: HistoryStoreLocation(persistence: .temporary),
             storageClock: storageClock,
-            gatewayConnectionIDSource: { idSource.next() }
+            gatewayConnectionIDSource: { Self.appIntentsUUID }
         )
         try await authority.performStartup(initialMaximumUnpinnedItems: 200)
 
@@ -277,53 +177,34 @@ struct ExternalGatewayDenialTests {
         )
         return Fixture(
             authority: authority,
-            container: container,
             connection: ExternalConnectionID(rawValue: Self.appIntentsUUID),
             gateway: gateway
         )
     }
 
     private static func historySnapshot(
-        in container: ModelContainer
-    ) throws -> HistoryValueSnapshot {
-        let context = ModelContext(container)
-        let position = try #require(
-            context.fetch(FetchDescriptor<LastChangePositionRow>()).first
-        )
-        let items = try context.fetch(FetchDescriptor<HistoryItemRow>())
-            .map(HistoryValueSnapshot.Item.init)
-            .sorted { $0.id.uuidString < $1.id.uuidString }
-        let retainedBytes = try context.fetch(FetchDescriptor<RetainedBytesRow>())
-            .map(HistoryValueSnapshot.RetainedBytes.init)
-            .sorted { $0.itemID.uuidString < $1.itemID.uuidString }
-        return HistoryValueSnapshot(
-            position: position.rawValue,
-            items: items,
-            retainedBytes: retainedBytes
-        )
+        in authority: HistoryAuthority
+    ) async throws -> GatewayHistoryTestSnapshot {
+        try await GatewayHistoryTestSnapshot.read(from: authority)
     }
 
     private static func gatewaySnapshot(
-        in container: ModelContainer
-    ) throws -> GatewayStoreSnapshot {
-        try GatewayStoreSnapshot.read(in: ModelContext(container))
+        in authority: HistoryAuthority
+    ) async throws -> GatewayStoreSnapshot {
+        try await GatewayStoreSnapshot.read(from: authority)
     }
 
     private static func durableSnapshot(
-        in container: ModelContainer
-    ) throws -> DurableValueSnapshot {
-        let context = ModelContext(container)
-        let configs = try context.fetch(FetchDescriptor<JournalConfigRow>())
-            .map(JournalValueSnapshot.Config.init)
-            .sorted { $0.key < $1.key }
-        let records = try context.fetch(FetchDescriptor<HistoryChangeRecordRow>())
-            .map(JournalValueSnapshot.Record.init)
-            .sorted { $0.sequence < $1.sequence }
-        return DurableValueSnapshot(
-            history: try historySnapshot(in: container),
-            journal: JournalValueSnapshot(configs: configs, records: records),
-            gateway: try GatewayStoreSnapshot.read(in: context)
-        )
+        in authority: HistoryAuthority
+    ) async throws -> DurableValueSnapshot {
+        try await authority.withTestDatabase { authority in
+            try authority.database.readTransaction {
+                DurableValueSnapshot(
+                    history: try GatewayHistoryTestSnapshot.read(in: authority),
+                    gateway: try GatewayStoreSnapshot.read(in: authority.database)
+                )
+            }
+        }
     }
 
     private static func rateLimiterWithTwoTokensRemaining()
@@ -370,8 +251,8 @@ struct ExternalGatewayDenialTests {
 
     @Test("public open constructs the internal Gateway only after startup")
     func publicOpenWiresTheInternalGateway() async throws {
-        let history = try await SwiftDataHistory.open(configuration:
-            HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(configuration:
+            HistoryConfiguration(persistence: .temporary)
         )
         let connections = try await history.connections()
         let connection = try #require(connections.first).id
@@ -394,8 +275,8 @@ struct ExternalGatewayDenialTests {
     @Test("missing browse grant denies before History and audits no content")
     func missingGrantDeniesBeforeHistoryWithoutContentLeakage() async throws {
         let fixture = try await Self.makeFixture()
-        let historyBefore = try Self.historySnapshot(in: fixture.container)
-        let gatewayBefore = try Self.gatewaySnapshot(in: fixture.container)
+        let historyBefore = try await Self.historySnapshot(in: fixture.authority)
+        let gatewayBefore = try await Self.gatewaySnapshot(in: fixture.authority)
 #if DEBUG
         let phases = await Self.installHistoryReadProbe(on: fixture.authority)
 #endif
@@ -411,8 +292,8 @@ struct ExternalGatewayDenialTests {
             )
         }
 
-        #expect(try Self.historySnapshot(in: fixture.container) == historyBefore)
-        let gatewayAfter = try Self.gatewaySnapshot(in: fixture.container)
+        #expect(try await Self.historySnapshot(in: fixture.authority) == historyBefore)
+        let gatewayAfter = try await Self.gatewaySnapshot(in: fixture.authority)
         #expect(gatewayAfter.operations.count == gatewayBefore.operations.count + 1)
         let operation = try #require(gatewayAfter.operations.last)
         #expect(operation.operationKindRaw == ExternalOperationKind.readSearch.rawValue)
@@ -473,7 +354,7 @@ struct ExternalGatewayDenialTests {
                 operationKind: .readPastePayload
             ),
         ]
-        let before = try Self.gatewaySnapshot(in: fixture.container)
+        let before = try await Self.gatewaySnapshot(in: fixture.authority)
 
         for candidate in expected {
             await #expect(throws: ExternalFailure.unauthorized(
@@ -487,7 +368,7 @@ struct ExternalGatewayDenialTests {
             }
         }
 
-        let after = try Self.gatewaySnapshot(in: fixture.container)
+        let after = try await Self.gatewaySnapshot(in: fixture.authority)
         #expect(after.operations.count == before.operations.count + expected.count)
         let appended = after.operations.suffix(expected.count)
         for (operation, candidate) in zip(appended, expected) {
@@ -504,8 +385,8 @@ struct ExternalGatewayDenialTests {
     func revokedConnectionDeniesBeforeHistory() async throws {
         let fixture = try await Self.makeFixture()
         try await fixture.authority.revokeConnection(fixture.connection)
-        let historyBefore = try Self.historySnapshot(in: fixture.container)
-        let gatewayBefore = try Self.gatewaySnapshot(in: fixture.container)
+        let historyBefore = try await Self.historySnapshot(in: fixture.authority)
+        let gatewayBefore = try await Self.gatewaySnapshot(in: fixture.authority)
 #if DEBUG
         let phases = await Self.installHistoryReadProbe(on: fixture.authority)
 #endif
@@ -519,8 +400,8 @@ struct ExternalGatewayDenialTests {
             )
         }
 
-        #expect(try Self.historySnapshot(in: fixture.container) == historyBefore)
-        let gatewayAfter = try Self.gatewaySnapshot(in: fixture.container)
+        #expect(try await Self.historySnapshot(in: fixture.authority) == historyBefore)
+        let gatewayAfter = try await Self.gatewaySnapshot(in: fixture.authority)
         #expect(gatewayAfter.operations.count == gatewayBefore.operations.count + 1)
         let operation = try #require(gatewayAfter.operations.last)
         #expect(operation.failureKindRaw
@@ -542,8 +423,8 @@ struct ExternalGatewayDenialTests {
             .browse,
             of: fixture.connection
         )
-        let historyBefore = try Self.historySnapshot(in: fixture.container)
-        let gatewayBefore = try Self.gatewaySnapshot(in: fixture.container)
+        let historyBefore = try await Self.historySnapshot(in: fixture.authority)
+        let gatewayBefore = try await Self.gatewaySnapshot(in: fixture.authority)
 #if DEBUG
         let phases = await Self.installHistoryReadProbe(on: fixture.authority)
 #endif
@@ -558,8 +439,8 @@ struct ExternalGatewayDenialTests {
             )
         }
 
-        #expect(try Self.historySnapshot(in: fixture.container) == historyBefore)
-        let gatewayAfter = try Self.gatewaySnapshot(in: fixture.container)
+        #expect(try await Self.historySnapshot(in: fixture.authority) == historyBefore)
+        let gatewayAfter = try await Self.gatewaySnapshot(in: fixture.authority)
         #expect(gatewayAfter.operations.count == gatewayBefore.operations.count + 1)
         let operation = try #require(gatewayAfter.operations.last)
         #expect(operation.failureKindRaw
@@ -580,7 +461,7 @@ struct ExternalGatewayDenialTests {
             .search(text: String(repeating: "a", count: 65), mode: .fuzzy, limit: 1),
             .search(text: String(repeating: "a", count: 513), mode: .regexp, limit: 1),
         ]
-        let beforeInvalidInput = try Self.gatewaySnapshot(in: fixture.container)
+        let beforeInvalidInput = try await Self.gatewaySnapshot(in: fixture.authority)
         for read in invalidReads {
             await #expect(throws: ExternalFailure.requestDenied(.invalidInput)) {
                 _ = try await fixture.gateway.read(read, as: fixture.connection)
@@ -594,7 +475,7 @@ struct ExternalGatewayDenialTests {
                 )
             }
         }
-        #expect(try Self.gatewaySnapshot(in: fixture.container) == beforeInvalidInput)
+        #expect(try await Self.gatewaySnapshot(in: fixture.authority) == beforeInvalidInput)
 
         // Thirty malformed reads consume no token. The next thirty
         // well-formed calls exhaust the bucket, and only the following call
@@ -623,7 +504,7 @@ struct ExternalGatewayDenialTests {
     func unknownConnectionIsUnaudited() async throws {
         let fixture = try await Self.makeFixture()
         let unknown = ExternalConnectionID(rawValue: Self.unknownUUID)
-        let before = try Self.gatewaySnapshot(in: fixture.container)
+        let before = try await Self.gatewaySnapshot(in: fixture.authority)
 
         await #expect(throws: ExternalFailure.unauthorized(
             requestedCapability: .browse,
@@ -638,13 +519,13 @@ struct ExternalGatewayDenialTests {
             _ = try await fixture.gateway.read(.recent(limit: 0), as: unknown)
         }
 
-        #expect(try Self.gatewaySnapshot(in: fixture.container) == before)
+        #expect(try await Self.gatewaySnapshot(in: fixture.authority) == before)
     }
 
     @Test("the same-time thirty-first request is rate denied and audited")
     func rateLimitDenialUsesAuthorityAuditBarrier() async throws {
         let fixture = try await Self.makeFixture()
-        let historyBefore = try Self.historySnapshot(in: fixture.container)
+        let historyBefore = try await Self.historySnapshot(in: fixture.authority)
 #if DEBUG
         let phases = await Self.installHistoryReadProbe(on: fixture.authority)
 #endif
@@ -660,7 +541,7 @@ struct ExternalGatewayDenialTests {
                 )
             }
         }
-        let beforeRateDenial = try Self.gatewaySnapshot(in: fixture.container)
+        let beforeRateDenial = try await Self.gatewaySnapshot(in: fixture.authority)
         await #expect(throws: ExternalFailure.requestDenied(.rateLimited)) {
             _ = try await fixture.gateway.read(
                 .recent(limit: 1),
@@ -668,8 +549,8 @@ struct ExternalGatewayDenialTests {
             )
         }
 
-        #expect(try Self.historySnapshot(in: fixture.container) == historyBefore)
-        let afterRateDenial = try Self.gatewaySnapshot(in: fixture.container)
+        #expect(try await Self.historySnapshot(in: fixture.authority) == historyBefore)
+        let afterRateDenial = try await Self.gatewaySnapshot(in: fixture.authority)
         #expect(afterRateDenial.operations.count
             == beforeRateDenial.operations.count + 1)
         let operation = try #require(afterRateDenial.operations.last)
@@ -707,7 +588,7 @@ struct ExternalGatewayDenialTests {
             .manage,
             to: fixture.connection
         )
-        let before = try Self.durableSnapshot(in: fixture.container)
+        let before = try await Self.durableSnapshot(in: fixture.authority)
         let itemUUID = try #require(before.history.items.first).id
         let itemID = HistoryItemID(rawValue: itemUUID)
         await fixture.authority.setTransactionFailureInjection(
@@ -720,7 +601,7 @@ struct ExternalGatewayDenialTests {
                 as: fixture.connection
             )
         }
-        #expect(try Self.durableSnapshot(in: fixture.container) == before)
+        #expect(try await Self.durableSnapshot(in: fixture.authority) == before)
 
         guard case .removed(count: 1) = try await fixture.gateway.perform(
             .remove(itemID),
@@ -729,8 +610,8 @@ struct ExternalGatewayDenialTests {
             Issue.record("expected identical retry to remove one item")
             return
         }
-        #expect(try Self.historySnapshot(in: fixture.container).items.isEmpty)
-        let afterRetry = try Self.gatewaySnapshot(in: fixture.container)
+        #expect(try await Self.historySnapshot(in: fixture.authority).items.isEmpty)
+        let afterRetry = try await Self.gatewaySnapshot(in: fixture.authority)
         #expect(afterRetry.operations.last?.operationKindRaw
             == ExternalOperationKind.manageRemove.rawValue)
         #expect(afterRetry.operations.dropLast().last?.operationKindRaw
@@ -755,7 +636,7 @@ struct ExternalGatewayDenialTests {
             .recent(limit: 1),
             as: fixture.connection
         )
-        let before = try Self.durableSnapshot(in: fixture.container)
+        let before = try await Self.durableSnapshot(in: fixture.authority)
         let expectedItemID = HistoryItemID(
             rawValue: try #require(before.history.items.first).id
         )
@@ -772,7 +653,7 @@ struct ExternalGatewayDenialTests {
                 as: fixture.connection
             )
         }
-        #expect(try Self.durableSnapshot(in: fixture.container) == before)
+        #expect(try await Self.durableSnapshot(in: fixture.authority) == before)
 #if DEBUG
         Self.expectNoRecentHistoryRead(phases)
 #endif
@@ -785,7 +666,7 @@ struct ExternalGatewayDenialTests {
             return
         }
         #expect(page.rows.map(\.row.item.id) == [expectedItemID])
-        let afterRetry = try Self.gatewaySnapshot(in: fixture.container)
+        let afterRetry = try await Self.gatewaySnapshot(in: fixture.authority)
         #expect(afterRetry.operations.last?.operationKindRaw
             == ExternalOperationKind.readRecent.rawValue)
         #expect(afterRetry.operations.dropLast().last?.operationKindRaw
@@ -912,7 +793,7 @@ struct ExternalGatewayDenialTests {
         // Each follower now completes a real read, not authorization-only
         // staging. The initial read plus these three reads each publish one
         // successful audit despite sharing two maintenance attempts.
-        let completedReads = try Self.gatewaySnapshot(in: fixture.container).operations.filter {
+        let completedReads = try await Self.gatewaySnapshot(in: fixture.authority).operations.filter {
             $0.operationKindRaw == ExternalOperationKind.readRecent.rawValue
         }
         #expect(completedReads.count == 4)
@@ -946,7 +827,7 @@ struct ExternalGatewayDenialTests {
             )
         }
 
-        let snapshot = try Self.gatewaySnapshot(in: fixture.container)
+        let snapshot = try await Self.gatewaySnapshot(in: fixture.authority)
         let config = try #require(snapshot.configs.first)
         #expect(config.compactionFloor > 1)
         #expect(snapshot.operations.last?.operationKindRaw
@@ -984,7 +865,7 @@ struct ExternalGatewayDenialTests {
             )
         }
 
-        let snapshot = try Self.gatewaySnapshot(in: fixture.container)
+        let snapshot = try await Self.gatewaySnapshot(in: fixture.authority)
         let config = try #require(snapshot.configs.first)
         #expect(config.compactionFloor > 1)
         #expect(snapshot.operations.last?.operationKindRaw

@@ -141,12 +141,12 @@ struct ReferenceSearchJourneyTests {
         try await expectBytes(original, effective: original, item: captured, in: history)
     }
 
-    private func openHistory() async throws -> SwiftDataHistory {
-        try await SwiftDataHistory.open(configuration: HistoryConfiguration(persistence: .memory))
+    private func openHistory() async throws -> SQLiteHistory {
+        try await SQLiteHistory.open(configuration: HistoryConfiguration(persistence: .temporary))
     }
 
     private func capture(
-        _ bytes: Data, type: String, in history: SwiftDataHistory
+        _ bytes: Data, type: String, in history: SQLiteHistory
     ) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.capture(ClipboardCapture(
             representations: [CapturedRepresentation(typeIdentifier: type, bytes: bytes)],
@@ -161,13 +161,13 @@ struct ReferenceSearchJourneyTests {
         return item
     }
 
-    private func search(_ query: String, in history: SwiftDataHistory) async throws -> HistoryPage {
+    private func search(_ query: String, in history: SQLiteHistory) async throws -> HistoryPage {
         try await history.browse(HistoryBrowseRequest(
             kind: .search(text: query, mode: .exact), limit: 10
         ))
     }
 
-    private func singleResult(_ query: String, in history: SwiftDataHistory) async throws -> HistoryRow {
+    private func singleResult(_ query: String, in history: SQLiteHistory) async throws -> HistoryRow {
         let page = try await search(query, in: history)
         try #require(page.rows.count == 1)
         #expect(page.next == nil)
@@ -185,7 +185,7 @@ struct ReferenceSearchJourneyTests {
     }
 
     private func expectBytes(
-        _ canonical: Data, effective: Data, item: HistoryItemReference, in history: SwiftDataHistory
+        _ canonical: Data, effective: Data, item: HistoryItemReference, in history: SQLiteHistory
     ) async throws {
         let details = try await history.details(for: item.id)
         #expect(details.item == item)

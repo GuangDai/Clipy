@@ -58,7 +58,7 @@ public final class HistoryViewState {
     // MARK: - Injected state
 
     /// The public History seam (docs/03a-instruction-set.md §3). Production
-    /// passes `SwiftDataHistory`; SwiftUI previews pass the scripted
+    /// passes `SQLiteHistory`; SwiftUI previews pass the scripted
     /// `PreviewClipboardHistory`.
     public let history: any ClipboardHistory
 
@@ -247,7 +247,7 @@ public final class HistoryViewState {
 
 #if DEBUG
     /// One narrow running-app Card 3B ordering seam. It never substitutes
-    /// History: the real `SwiftDataHistory` remains this state's sole facade,
+    /// History: the real `SQLiteHistory` remains this state's sole facade,
     /// and both mutations still reach its sole `HistoryAuthority` writer. The
     /// first editor revision is preceded by one distinct real revision; the
     /// next details read then returns one typed transient failure before all

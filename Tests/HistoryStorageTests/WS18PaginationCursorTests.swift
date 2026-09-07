@@ -5,10 +5,10 @@
 /// pinned/unpinned two-lane fetch with anchor-based continuation.
 ///
 /// Facade-driven (the WS1 stance): every path crosses the public
-/// `SwiftDataHistory.browse(_:)` interface and the real `HistoryAuthority`
+/// `SQLiteHistory.browse(_:)` interface and the real `HistoryAuthority`
 /// read path. Page-level assertions use the `HistoryRow.item.id` values
 /// directly — the page is the authoritative read result (04 §2), so no
-/// independent second `ModelContainer` is needed for read-page assertions.
+/// independent second `SQLite connection` is needed for read-page assertions.
 ///
 /// Spec: docs/06-cross-cutting.md §8 WS18; cursor semantics:
 /// docs/04-coherence.md §6 (cursor binds complete query shape + page
@@ -27,7 +27,7 @@ struct WS18PaginationCursorTests {
 /// `observedAt` values and returns their item IDs in capture order (oldest
 /// first). Each capture is a History Commit advancing the Change Position by 1.
 private static func captureItems(
-    _ history: SwiftDataHistory,
+    _ history: SQLiteHistory,
     count: Int,
     base: Double = 700_018_000
 ) async throws -> [HistoryItemID] {

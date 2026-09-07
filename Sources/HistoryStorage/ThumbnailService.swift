@@ -1,7 +1,7 @@
 /// Thumbnail single-flight service + its owned decode worker
 /// (docs/04-coherence.md §9; docs/05-authority-kernel.md §14.5).
 ///
-/// The `SwiftDataHistory` facade's `thumbnail(for:pixels:)` pipeline enters
+/// The `SQLiteHistory` facade's `thumbnail(for:pixels:)` pipeline enters
 /// this service before source hydration. The service atomically joins or
 /// installs one exact-key source-to-decode task. The creator task asks
 /// `HistoryAuthority.thumbnailSource` to validate dimensions, fetch and fully
@@ -130,7 +130,7 @@ package actor ThumbnailService {
     /// receive old bytes, without re-materializing the content blob.
     ///
     /// `loadSource` and `validateJoin` are production dependency operations
-    /// supplied by `SwiftDataHistory`, not a second storage implementation.
+    /// supplied by `SQLiteHistory`, not a second storage implementation.
     /// The former returns only immutable `Data`, and the latter returns no
     /// model value; focused tests substitute these operations at this seam.
     internal func thumbnail(

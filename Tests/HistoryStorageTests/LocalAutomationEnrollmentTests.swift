@@ -174,7 +174,7 @@ struct LocalAutomationEnrollmentTests {
     }
 
     private struct Fixture {
-        let history: SwiftDataHistory
+        let history: SQLiteHistory
         let credentials: CredentialStore
         let ingress: LocalAutomationIngress
         let root: URL
@@ -186,7 +186,7 @@ struct LocalAutomationEnrollmentTests {
     private func fixture(credentials: CredentialStore? = nil) async throws -> Fixture {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let history = try await SwiftDataHistory.open(configuration: HistoryConfiguration(persistence: .memory))
+        let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(persistence: .temporary))
         let credentials = credentials ?? CredentialStore(directoryURL: root.appendingPathComponent("ServerCredentials"))
         return Fixture(
             history: history, credentials: credentials,

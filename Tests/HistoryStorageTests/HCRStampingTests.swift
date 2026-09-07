@@ -281,15 +281,15 @@ struct HCRStampingTests {
         )
     }
 
-    private func storedItem(_ id: HistoryItemID) -> StoredNewItem {
+    private func storedItem(_ id: HistoryItemID) throws -> StoredNewItem {
         StoredNewItem(
             id: id,
             contentVersion: ContentVersion(rawValue: 1),
-            canonicalBlob: Data(),
-            revisionStateBlob: Data(),
-            canonicalSignatureBlob: Data(),
+            canonical: try CanonicalContent(representations: [CanonicalRepresentation(
+                content: ContentRepresentation(typeIdentifier: "public.text", bytes: Data([1])),
+                fingerprint: ContentFingerprint(rawValue: 1)
+            )]),
             projection: projection,
-            effectiveTypeIdentifiersBlob: Data(),
             occurrence: occurrence
         )
     }
@@ -299,9 +299,15 @@ struct HCRStampingTests {
             itemID: id,
             expectedCurrentVersion: ContentVersion(rawValue: 1),
             nextVersion: ContentVersion(rawValue: 2),
-            revisionStateBlob: Data(),
+            revision: ContentRevision(
+                id: RevisionID(rawValue: id.rawValue),
+                createdAt: timestamp,
+                content: EffectiveContent(representations: [
+                    ContentRepresentation(typeIdentifier: "public.text", bytes: Data([1])),
+                ])
+            ),
+            removedRevisionIDs: [],
             projection: projection,
-            effectiveTypeIdentifiersBlob: Data(),
             retainedRevisionScalars: RetainedRevisionScalars(count: 1, bytes: 1)
         )
     }
@@ -317,7 +323,7 @@ struct HCRStampingTests {
     private func prune(_ id: HistoryItemID) -> StampedMutation {
         .pruneRevisions(
             itemID: id,
-            revisionStateBlob: Data(),
+            removedRevisionIDs: [RevisionID(rawValue: id.rawValue)],
             retainedRevisionScalars: RetainedRevisionScalars(count: 1, bytes: 1)
         )
     }

@@ -24,7 +24,7 @@ private static func modeName(_ mode: SearchMode) -> String {
 /// fuzzy hits consequently have equal scores and are ordered by recency,
 /// while exact/regexp retain the same default unpinned order.
 private static func captureMatchingRows(
-    _ history: SwiftDataHistory,
+    _ history: SQLiteHistory,
     count: Int,
     base: Double
 ) async throws -> [HistoryItemID] {

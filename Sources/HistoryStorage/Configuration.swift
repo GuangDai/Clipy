@@ -1,23 +1,24 @@
 /// HistoryPersistence / HistoryConfiguration — the public configuration
-/// values for opening a `SwiftDataHistory`.
+/// values for opening a `SQLiteHistory`.
 /// Owning spec: docs/05-authority-kernel.md §2 (Part V — public concrete
 /// adapter); bounds validated against docs/06-cross-cutting.md §2 (Part VI)
-/// at `SwiftDataHistory.open` time.
+/// at `SQLiteHistory.open` time.
 import Foundation
 
 /// The durability medium of a History store (docs/05-authority-kernel.md §2).
 ///
-/// `.memory` changes the durability medium only: it uses the same Authority,
-/// planners, codecs, and transaction path as a persistent store (§2).
+/// Both modes use the same SQLite/blob implementation and transaction path.
+/// Disposable stores use a private temporary directory, allowing independent
+/// read connections to observe a consistent snapshot just like production.
 public enum HistoryPersistence: Sendable, Hashable {
     /// A durable store at the given file URL, created when absent.
     case persistent(storeURL: URL)
 
-    /// An in-memory store with identical semantics and no durability.
-    case memory
+    /// A disposable store removed after its last owner/read has finished.
+    case temporary
 }
 
-/// Configuration for `SwiftDataHistory.open(configuration:)`
+/// Configuration for `SQLiteHistory.open(configuration:)`
 /// (docs/05-authority-kernel.md §2).
 ///
 /// `initialMaximumUnpinnedItems` is the initial retention value for a *new*
@@ -40,7 +41,7 @@ public struct HistoryConfiguration: Sendable, Hashable {
 
     /// Creates a configuration (docs/05-authority-kernel.md §2).
     ///
-    /// Validation is deferred to `SwiftDataHistory.open(configuration:)`,
+    /// Validation is deferred to `SQLiteHistory.open(configuration:)`,
     /// which throws the typed failure — this initializer only stores values.
     public init(
         persistence: HistoryPersistence,

@@ -20,9 +20,9 @@
 /// silent skip on CI is impossible. `.serialized` keeps the suite's peak
 /// memory independent of other suites' timing.
 ///
-/// Row-level assertions use an INDEPENDENT second `ModelContainer` over the
+/// Row-level assertions use an INDEPENDENT SQLite read connection over the
 /// same on-disk store (the `WSSupport` stance): mutations always cross the
-/// public `ClipboardHistory` facade; the second container only reads.
+/// public `ClipboardHistory` facade; the second connection only reads.
 import Foundation
 import HistoryCore
 import Testing
@@ -122,7 +122,7 @@ private static func substring(_ text: String, utf16Range: UTF16TextRange) -> Str
 /// inserted reference (arrange helper; a non-insert receipt is a test
 /// harness failure — record and trap, the WS17 arrange-helper stance).
 private static func captureText(
-    _ history: SwiftDataHistory,
+    _ history: SQLiteHistory,
     text: String,
     observedAt: Date,
     source: String
@@ -204,7 +204,7 @@ private static func captureText(
     #expect(recaptureCommit.position.rawValue == UInt64(captureCount) + 1)
 
     // Storage side, through the INDEPENDENT container (WSSupport stance).
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
     // 180 inserts, one coalesce: still exactly 180 rows.
     #expect(rows.count == captureCount)
@@ -299,13 +299,13 @@ private static func captureText(
     // 262,144-byte body), while the Canonical representation retains ALL
     // 307,200 bytes (05 §14.3 detail hydration; the projection never
     // rewrites content).
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let row = try #require(
         try WSSupport.fetchRows(container).first { $0.id == reference.id.rawValue }
     )
     #expect(row.searchBodyUTF8.count == bound)
     #expect(row.titleUTF8.count <= HistoryLimits.standard.maximumStoredTitleUTF8Bytes)
-    let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
+    let canonical = try WSSupport.fetchCanonical(itemID: reference.id.rawValue, in: container)
     #expect(canonical.representations.map(\.content.bytes) == [Data(fullText.utf8)])
 }
 
@@ -338,7 +338,7 @@ private static func captureText(
     // UTF-8 bytes at a Character boundary — for this ASCII fixture, exactly
     // the first 1,024 bytes.
     let expectedTitle = String(fullText.prefix(bound))
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let row = try #require(
         try WSSupport.fetchRows(container).first { $0.id == reference.id.rawValue }
     )
@@ -356,7 +356,7 @@ private static func captureText(
 /// Captures one image fixture through the public facade as a single
 /// representation of the given type identifier (arrange helper).
 private static func captureImage(
-    _ history: SwiftDataHistory,
+    _ history: SQLiteHistory,
     path: String,
     typeIdentifier: String,
     observedAt: Date,
@@ -556,7 +556,7 @@ private static func expectThumbnailPayload(
     }
 
     // Storage side, through the INDEPENDENT container.
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
 
     // Exactly 53 rows survive: 50 unpinned + 3 pinned (02 §12, D13).

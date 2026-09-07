@@ -134,6 +134,7 @@ private func boundaryRetentionVictims(
             hint: hinted.id
         ),
         facts: captureFacts(
+            incoming: incomingCanonical,
             hintedItem: hinted,
             candidates: [],
             retained: [hinted]
@@ -190,6 +191,7 @@ private func boundaryRetentionVictims(
             hint: hinted.id
         ),
         facts: captureFacts(
+            incoming: incomingCanonical,
             hintedItem: hinted,
             candidates: [],
             retained: [hinted]

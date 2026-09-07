@@ -1,72 +1,11 @@
-/// R.4 — capture-composition proofs (`V2-roadmap` §6 R.4 "Capture
-/// composition": "Run v1 count planning first; when R1/R2 is active, plan
-/// over projected post-primary/post-count state, protect
-/// primary/pinned/count victims, and commit one merged plan/position.
-/// Coalesce uses the winner's stored bytes"; exit fixtures: count+age+byte
-/// composition, pinned-over-budget hard failure, one-position, and
-/// disabled-public-semantics proofs).
-///
-/// Owning spec: `V2-02` §4.1 (composition principle), §4.2 (the capture
-/// pseudocode: v1 plan first, projected post-primary post-count inventory,
-/// `protected` = pinned ∪ {primary} ∪ count victims, `now` = `observedAt`,
-/// merge with unchanged outcome), §3.2 (the insert/coalesce lanes: in-memory
-/// postings for the new primary, the winner's STORED scalars on coalesce),
-/// §7 (trigger matrix: capture fires R1+R2 ONLY — an R3-only config takes
-/// the v1 route with no expansion load), §8.3 (pinned + primary bytes >
-/// `maxTotalBytes` → `.capacityExceeded(.storageBytes)` at capture,
-/// atomically), §11 D24(a)/(b)/(c) (single commit, victim safety, the
-/// byte-budget failure producer).
-///
-/// Product-composition fixtures cross the public `SwiftDataHistory.perform` /
-/// real `HistoryAuthority.commitCapture` path. The DEC-CAPTURE-CLOCK skew
-/// discriminator directly constructs the same real Authority solely to
-/// inject a fixed `StorageClock`, the internal §6.4 test seam, and prove the
-/// capture lane does not consume it. Fixtures seed policies by writing the
-/// `RetentionExpansionConfigRow` through an INDEPENDENT container
-/// (`WSSupport.seedRetentionConfig` — behind the Authority's back, the R.3
-/// corruption-fixture stance, because the production `.setRetentionPolicies`
-/// writer is the R.6 slice), and asserts rows/position/projection through
-/// that same independent container.
-///
-/// Hand-worked fixture values (single-representation ASCII text captures:
-/// one `public.utf8-plain-text` representation whose `canonicalBytes` is the
-/// UTF-8 length of the text; times are `timeIntervalSinceReferenceDate`
-/// seconds):
-/// - "r4 count victim x" — 17 bytes (2+1+5+1+6+1+1);
-/// - "r4 age victim yy" — 16 bytes (2+1+3+1+6+1+2);
-/// - "r4 byte victim zzz" — 18 bytes (2+1+4+1+6+1+3);
-/// - "r4 survivor wwww" — 16 bytes (2+1+8+1+4);
-/// - "r4 primary payload" — 18 bytes (2+1+7+1+7);
-/// - "r4 age-only victim aa" — 21 bytes (2+1+8+1+6+1+2);
-/// - "r4 age-only keeper bbb" — 22 bytes (2+1+8+1+6+1+3);
-/// - 30/10/20/25-char single-letter strings — 30/10/20/25 bytes;
-/// - "r4 coalesce winner base" — 23 bytes plain; + a 16-byte `public.html`
-///   extra representation → 39 canonical bytes for the rich winner;
-/// - zero-decode fixture — B = 10, A = 10 + [5] = 15 (the corrupted
-///   non-primary), P = 20, under `maxTotalBytes = 35`: 10 + 15 + 20 = 45 >
-///   35 retires B (the oldest) to exactly 35; without A's scalars the
-///   projected total would be 30 ≤ 35 and nothing would retire.
-///
-/// RET-PLATFORM-2 note (zero blob decodes on the planning path): the repo's
-/// probe seams (`SearchDebugProbe`, `StorageLifecycleDebugProbe`) trace
-/// search/lifecycle phases, not codec invocations — the codecs carry no
-/// decode counter — so the zero-decode property is NOT asserted by
-/// instrumentation here. It is proven BEHAVIORALLY by
-/// `capturePlanningNeverDecodesNonPrimaryRevisionBlob` (the mirror of the
-/// R.6 sweep's corrupted-blob survivor fixture): with R2 active, a
-/// NON-primary item's corrupted `revisionStateBlob` that any planning-path
-/// decode would surface as `.persistence(.corruptStoredValue)` instead
-/// emerges byte-identical from a successful commit, while the retirement
-/// arithmetic proves that item's stored scalars were planned over. That
-/// fixture plus the structural guarantee — the planning path fetches
-/// `RetainedBytesRow` scalar columns only
-/// (`RetentionConfigLoading.fetchProjectedScalars`) and never touches the
-/// `.externalStorage` blob columns — carry the `V2-02` §3.2/Record 3
-/// `RET-PLATFORM-2`/`RET-PERF-3` claim.
+/// V2-02 §4.1–§4.2: real SQLite capture composition across count, age
+/// and byte retention. Fixtures retain strict age boundaries, pinned/primary
+/// protection, coalesce byte accounting, one-position commits and failures.
+/// SQL fixture mutations run on the existing Authority. A missing non-primary
+/// representation payload proves planning consumes scalar bytes only.
 import Foundation
 import HistoryCore
 import HistoryDomain
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
@@ -89,9 +28,8 @@ struct RetentionCaptureCompositionTests {
         storeURL: URL,
         storageNow: Date
     ) async throws -> HistoryAuthority {
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        let authority = HistoryAuthority(
-            container: container,
+        let authority = try HistoryAuthority(
+            storeLocation: HistoryStoreLocation(persistence: .persistent(storeURL: storeURL)),
             storageClock: FixedCaptureClock(fixed: storageNow)
         )
         try await authority.performStartup(initialMaximumUnpinnedItems: 200)
@@ -131,7 +69,7 @@ struct RetentionCaptureCompositionTests {
         _ text: String,
         at seconds: Double,
         source: String,
-        in history: SwiftDataHistory,
+        in history: SQLiteHistory,
         extra: [(typeIdentifier: String, bytes: [UInt8])] = []
     ) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.capture(
@@ -152,10 +90,37 @@ struct RetentionCaptureCompositionTests {
 
     /// The retained row IDs, deterministically ordered.
     private static func retainedIDs(
-        _ container: ModelContainer
-    ) throws -> [HistoryItemID] {
-        try WSSupport.fetchRows(container)
+        _ container: HistoryAuthority
+    ) async throws -> [HistoryItemID] {
+        try await rows(container)
             .map { HistoryItemID(rawValue: $0.id) }
+    }
+
+    private static func rows(_ authority: HistoryAuthority) async throws -> [WSSupport.StoredItem] {
+        try await authority.withTestDatabase { try WSSupport.fetchRows($0.database) }
+    }
+
+    private static func position(_ authority: HistoryAuthority) async throws -> WSSupport.PositionState {
+        try await authority.withTestDatabase { try WSSupport.fetchPosition($0.database) }
+    }
+
+    /// Seed an upcoming capture policy without running the policy-set sweep.
+    private static func seedRetentionConfig(
+        authority: HistoryAuthority, age: AgeRetention? = nil,
+        storage: StorageRetention? = nil, revisions: RevisionRetention? = nil
+    ) async throws {
+        try await authority.withTestDatabase { owner in
+            try owner.database.execute("""
+                UPDATE retention_policies SET ageMaxSeconds=?,storageMaxBytes=?,revisionMaxCount=?,revisionMaxBytes=?
+                WHERE key='retention-expansion'
+                """, bindings: [
+                    age.map { .real($0.maxAge) } ?? .null,
+                    storage.map { .integer(Int64($0.maxTotalBytes)) } ?? .null,
+                    (revisions?.maxRevisionsPerItem).map { .integer(Int64($0)) } ?? .null,
+                    (revisions?.maxRevisionBytesPerItem).map { .integer(Int64($0)) } ?? .null
+                ])
+            #expect(try owner.database.changedRowCount == 1)
+        }
     }
 
     /// Performs one public byte-changing `.replace` revision for the single
@@ -168,7 +133,7 @@ struct RetentionCaptureCompositionTests {
         _ itemID: HistoryItemID,
         expected: Int,
         bytes: Int,
-        in history: SwiftDataHistory
+        in history: SQLiteHistory
     ) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.revise(
             RevisionRequest(
@@ -192,33 +157,20 @@ struct RetentionCaptureCompositionTests {
         return reference
     }
 
-    /// Every `RetainedBytesRow`, deterministically ordered by item ID.
+    /// Every `history_items byte scalar`, deterministically ordered by item ID.
     private static func fetchBytesRows(
-        _ container: ModelContainer
-    ) throws -> [RetainedBytesRow] {
-        let context = ModelContext(container)
-        let rows = try context.fetch(FetchDescriptor<RetainedBytesRow>())
-        return rows.sorted { $0.itemID.uuidString < $1.itemID.uuidString }
+        _ container: HistoryAuthority
+    ) async throws -> [WSSupport.StoredItem] {
+        try await rows(container)
     }
 
     /// The unique projection row for `itemID`, or `nil` (0 or 1 rows; 2+
     /// fails the fixture loudly — the 1:1 law is a precondition here).
     private static func fetchBytesRow(
         for itemID: HistoryItemID,
-        in container: ModelContainer
-    ) throws -> RetainedBytesRow? {
-        let context = ModelContext(container)
-        let uuid = itemID.rawValue
-        var descriptor = FetchDescriptor<RetainedBytesRow>(
-            predicate: #Predicate { row in row.itemID == uuid }
-        )
-        descriptor.fetchLimit = 2
-        let rows = try context.fetch(descriptor)
-        precondition(
-            rows.count <= 1,
-            "RetainedBytesRow 1:1 law violated in fixture: \(rows.count) rows"
-        )
-        return rows.first
+        in container: HistoryAuthority
+    ) async throws -> WSSupport.StoredItem? {
+        try await rows(container).first { $0.id == itemID.rawValue }
     }
 
     // MARK: - Count + age + byte composition (V2-02 §4.2)
@@ -264,16 +216,15 @@ struct RetentionCaptureCompositionTests {
             in: history
         )
 
-        // Policies land only now (the R.6 writer does not exist yet; the
-        // capture lane re-reads the singleton inside every capture).
-        try WSSupport.seedRetentionConfig(
-            storeURL: storeURL,
+        // Seed after the captures so a separate policy-set sweep does not
+        // consume the victims before the capture composition under test.
+        try await Self.seedRetentionConfig(authority: history.authority,
             age: AgeRetention(maxAge: 300),
             storage: StorageRetention(maxTotalBytes: 34)
         )
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        let positionBefore = try WSSupport.fetchPosition(container).rawValue
+        let container = history.authority
+        let positionBefore = try await Self.position(container).rawValue
         #expect(positionBefore == 4)
 
         let receipt = try await history.perform(.capture(
@@ -296,19 +247,19 @@ struct RetentionCaptureCompositionTests {
         // primary survive; the count victim (X), the R1 victim (Y), and the
         // R2 victim (Z) are all gone, and the projection rows went with
         // their items (R.3 delete extension).
-        let survivors = Set(try Self.retainedIDs(container))
+        let survivors = Set(try await Self.retainedIDs(container))
         #expect(survivors == Set([w.id, primary.id]))
         #expect(!survivors.contains(x.id))
         #expect(!survivors.contains(y.id))
         #expect(!survivors.contains(z.id))
-        #expect(try Self.fetchBytesRows(container).count == 2)
-        #expect(try WSSupport.fetchPosition(container).rawValue == positionBefore + 1)
+        #expect(try await Self.fetchBytesRows(container).count == 2)
+        #expect(try await Self.position(container).rawValue == positionBefore + 1)
 
         // The index no longer finds the retired items' signatures: disable
         // the policies (isolating this clause from any new retirement) and
         // re-capture X's exact content — it INSERTS, because X's postings
         // left the index with the same-commit delta.
-        try WSSupport.seedRetentionConfig(storeURL: storeURL)
+        try await Self.seedRetentionConfig(authority: history.authority)
         let reinsert = try await history.perform(.capture(
             WSSupport.textCapture(
                 "r4 count victim x",
@@ -343,8 +294,7 @@ struct RetentionCaptureCompositionTests {
             "r4 age-only keeper bbb", at: 700_300_300, source: "com.example.r4.r1",
             in: history
         )
-        try WSSupport.seedRetentionConfig(
-            storeURL: storeURL,
+        try await Self.seedRetentionConfig(authority: history.authority,
             age: AgeRetention(maxAge: 100)
         )
 
@@ -361,8 +311,8 @@ struct RetentionCaptureCompositionTests {
             return
         }
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        let survivors = Set(try Self.retainedIDs(container))
+        let container = history.authority
+        let survivors = Set(try await Self.retainedIDs(container))
         #expect(survivors == Set([b.id, primary.id]))
         #expect(!survivors.contains(a.id))
     }
@@ -391,34 +341,36 @@ struct RetentionCaptureCompositionTests {
         let newer = try await Self.authorityCapture(
             "r4 clock newer", at: 9_900, in: authority
         )
-        try WSSupport.seedRetentionConfig(
-            storeURL: storeURL,
-            age: AgeRetention(maxAge: 100)
-        )
+        try await Self.seedRetentionConfig(authority: authority, age: AgeRetention(maxAge: 100))
 
         let pastPrimary = try await Self.authorityCapture(
             "r4 clock past primary", at: 9_800, in: authority
         )
-        let verification = try WSSupport.makeContainer(storeURL: storeURL)
+        let verification = authority
         #expect(
-            Set(try Self.retainedIDs(verification))
+            Set(try await Self.retainedIDs(verification))
                 == Set([boundary.id, newer.id, pastPrimary.id])
         )
 
         let futurePrimary = try await Self.authorityCapture(
             "r4 clock future primary", at: 10_200, in: authority
         )
-        #expect(Set(try Self.retainedIDs(verification)) == Set([futurePrimary.id]))
+        #expect(Set(try await Self.retainedIDs(verification)) == Set([futurePrimary.id]))
 
         // The same four commits stamp their HCR facts from StorageClock,
         // proving observedAt controls R1 without taking ownership of
         // Storage-minted timestamps.
-        let journalContext = ModelContext(verification)
-        let journalRows = try journalContext.fetch(
-            FetchDescriptor<HistoryChangeRecordRow>()
-        )
-        #expect(journalRows.count == 4)
-        #expect(journalRows.allSatisfy { $0.createdAt == storageNow })
+        let journalDates = try await authority.withTestDatabase { owner in
+            let statement = try owner.database.prepare("SELECT createdAt FROM history_change_records")
+            defer { statement.finalize() }
+            var dates: [Date] = []
+            while try statement.step() {
+                dates.append(Date(timeIntervalSinceReferenceDate: try statement.real(at: 0)))
+            }
+            return dates
+        }
+        #expect(journalDates.count == 4)
+        #expect(journalDates.allSatisfy { $0 == storageNow })
     }
 
     // MARK: - R2-only minimal fixture (V2-02 §4.2 R2 bullet)
@@ -441,8 +393,7 @@ struct RetentionCaptureCompositionTests {
             String(repeating: "b", count: 10), at: 700_400_100, source: "com.example.r4.r2",
             in: history
         )
-        try WSSupport.seedRetentionConfig(
-            storeURL: storeURL,
+        try await Self.seedRetentionConfig(authority: history.authority,
             storage: StorageRetention(maxTotalBytes: 45)
         )
 
@@ -459,8 +410,8 @@ struct RetentionCaptureCompositionTests {
             return
         }
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        let survivors = Set(try Self.retainedIDs(container))
+        let container = history.authority
+        let survivors = Set(try await Self.retainedIDs(container))
         #expect(survivors == Set([b.id, primary.id]))
         #expect(!survivors.contains(a.id))
     }
@@ -498,13 +449,12 @@ struct RetentionCaptureCompositionTests {
             Issue.record("R.4 setup: expected the second pin to commit, got \(pin2)")
             return
         }
-        try WSSupport.seedRetentionConfig(
-            storeURL: storeURL,
+        try await Self.seedRetentionConfig(authority: history.authority,
             storage: StorageRetention(maxTotalBytes: 50)
         )
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        let positionBefore = try WSSupport.fetchPosition(container).rawValue
+        let container = history.authority
+        let positionBefore = try await Self.position(container).rawValue
         #expect(positionBefore == 4)
 
         await #expect(throws: HistoryFailure.capacityExceeded(.storageBytes)) {
@@ -519,10 +469,10 @@ struct RetentionCaptureCompositionTests {
 
         // Atomicity: nothing landed — same position, same rows, same
         // projection rows (no row exists for the rejected primary).
-        #expect(try WSSupport.fetchPosition(container).rawValue == positionBefore)
-        let survivors = Set(try Self.retainedIDs(container))
+        #expect(try await Self.position(container).rawValue == positionBefore)
+        let survivors = Set(try await Self.retainedIDs(container))
         #expect(survivors == Set([heavy1.id, heavy2.id]))
-        #expect(try Self.fetchBytesRows(container).count == 2)
+        #expect(try await Self.fetchBytesRows(container).count == 2)
     }
 
     // MARK: - R3-only config takes the exact v1 route (V2-02 §4.2 note, §7)
@@ -562,8 +512,7 @@ struct RetentionCaptureCompositionTests {
                 return
             }
         }
-        try WSSupport.seedRetentionConfig(
-            storeURL: storeURL,
+        try await Self.seedRetentionConfig(authority: history.authority,
             revisions: RevisionRetention(
                 maxRevisionsPerItem: 1,
                 maxRevisionBytesPerItem: nil
@@ -582,18 +531,15 @@ struct RetentionCaptureCompositionTests {
             return
         }
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let container = history.authority
         // No retirement: the over-threshold item AND the new primary remain.
-        let survivors = try Self.retainedIDs(container)
+        let survivors = try await Self.retainedIDs(container)
         #expect(survivors.count == 2)
         #expect(survivors.contains(base.id))
         // No prune: the item still carries its 2 stored revisions — capture
         // never prunes (§7); R3's sweep lane is R.6.
-        let facts = try MutationFactLoaders.loadRevisionFacts(
-            itemID: base.id,
-            in: ModelContext(container)
-        )
-        #expect(facts.item.revisions.count == 2)
+        let details = try await history.details(for: base.id)
+        #expect(details.revisions.count == 2)
     }
 
     // MARK: - Disabled (all-nil) config: identical v1 behavior (V2-02 §4.1/§7)
@@ -622,7 +568,7 @@ struct RetentionCaptureCompositionTests {
             in: history
         )
         // Explicit all-nil seed: flags false, dormant values zeroed.
-        try WSSupport.seedRetentionConfig(storeURL: storeURL)
+        try await Self.seedRetentionConfig(authority: history.authority)
 
         let receipt = try await history.perform(.capture(
             WSSupport.textCapture(
@@ -636,32 +582,28 @@ struct RetentionCaptureCompositionTests {
             return
         }
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        #expect(try Self.retainedIDs(container).count == 4)
+        let container = history.authority
+        #expect(try await Self.retainedIDs(container).count == 4)
         // The capture path never writes the config singleton (the writer is
         // the R.6 `.setRetentionPolicies` stamping).
-        let configs = try ModelContext(container)
-            .fetch(FetchDescriptor<RetentionExpansionConfigRow>())
-        #expect(configs.count == 1)
-        let config = try #require(configs.first)
-        #expect(config.agePolicyEnabled == false)
-        #expect(config.storagePolicyEnabled == false)
-        #expect(config.revisionPolicyEnabled == false)
+        let config = try await container.withTestDatabase {
+            try RetentionConfigLoading.loadValidatedPolicies(in: $0.database)
+        }
+        #expect(config.age == nil)
+        #expect(config.storage == nil)
+        #expect(config.revisions == nil)
     }
 
     // MARK: - Capture-lane config re-validation (V2-02 §3.3, §8.3)
 
     /// The capture lane re-validates the freshly fetched singleton on EVERY
-    /// capture: a row corrupted between `open` and a later capture (here:
-    /// `configSchemaVersion` bumped to an unknown version behind the
-    /// Authority's back) fails the capture closed as
+    /// capture: a non-finite age persisted after `open` fails closed as
     /// `.persistence(.corruptStoredValue)` — the open-time bootstrap's exact
     /// producer, re-run per capture by
     /// `RetentionConfigLoading.loadCaptureLanePolicies` — never
     /// `.invalidInput` (reserved for the caller-facing policy-set boundary,
     /// R.6) and never a silently-disabled read (§3.3/§8.3). The re-validation
-    /// runs even on the would-be-v1 route (all lanes disabled here), and the
-    /// failure is pre-stamp: the position does not move and no projection
+    /// failure is pre-stamp: the position does not move and no item
     /// row lands for the rejected probe.
     @Test("config corrupted mid-run fails the next capture as corruptStoredValue")
     func corruptedConfigFailsNextCaptureClosed() async throws {
@@ -674,22 +616,18 @@ struct RetentionCaptureCompositionTests {
             in: history
         )
 
-        // Damage the singleton behind the Authority's back: an unknown
-        // `configSchemaVersion` is forward-incompatible (the 05 §4 codec
-        // discipline; the same mutation the bootstrap corruption matrix
-        // drives). Same-context fetch-mutate-save — a `@Model` is bound to
-        // the context that fetched it (the R.3 fixture stance).
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        let context = ModelContext(container)
-        let rows = try context.fetch(FetchDescriptor<RetentionExpansionConfigRow>())
-        precondition(
-            rows.count == 1,
-            "config singleton must exist exactly once, got \(rows.count)"
-        )
-        rows[0].configSchemaVersion = 2
-        try context.save()
+        // Deliberately bypass the public policy validator inside the real
+        // writer's isolated database; this is persisted-data corruption.
+        let container = history.authority
+        try await container.withTestDatabase { owner in
+            // Positive infinity satisfies SQL's positive-value check but
+            // remains corrupt persisted data under the finite-age contract.
+            try owner.database.execute("UPDATE retention_policies SET ageMaxSeconds=?",
+                bindings: [.real(.infinity)])
+            #expect(try owner.database.changedRowCount == 1)
+        }
 
-        let positionBefore = try WSSupport.fetchPosition(container).rawValue
+        let positionBefore = try await Self.position(container).rawValue
         #expect(positionBefore == 1)
 
         await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
@@ -702,8 +640,8 @@ struct RetentionCaptureCompositionTests {
             ))
         }
         // Pre-stamp failure: nothing landed.
-        #expect(try WSSupport.fetchPosition(container).rawValue == positionBefore)
-        #expect(try Self.fetchBytesRows(container).count == 1)
+        #expect(try await Self.position(container).rawValue == positionBefore)
+        #expect(try await Self.fetchBytesRows(container).count == 1)
     }
 
     // MARK: - Zero blob decodes on the planning path (RET-PLATFORM-2, RET-PERF-3)
@@ -712,16 +650,14 @@ struct RetentionCaptureCompositionTests {
     /// (`V2-02` §3.2/Record 3 `RET-PLATFORM-2`/`RET-PERF-3` — the mirror of
     /// the R.6 sweep fixture
     /// `r3SweepPrunesExceedingItemsOnlyWithoutDecodingNonExceeding`): with
-    /// R2 active, a NON-primary item's `revisionStateBlob` is corrupted
-    /// behind the Authority's back (independent container, the R.3 fixture
+    /// R2 active, a NON-primary item's `representation payload` is corrupted
+    /// behind the Authority's back (Authority database, the R.3 fixture
     /// stance) BEFORE the capture. The capture's expansion planning must
-    /// read ONLY that item's `RetainedBytesRow` scalar columns
-    /// (`RetentionConfigLoading.fetchProjectedScalars` — the
-    /// `.externalStorage` blob columns are never touched); any
-    /// `revisionStateBlob` decode on the planning path would fail the whole
+    /// read ONLY that item's stored byte totals. A missing representation
+    /// payload read on the planning path would fail the whole
     /// commit `.persistence(.corruptStoredValue)` (the 05 §4 codec
     /// discipline: never skip, never invent). The commit SUCCEEDS, the
-    /// corrupt blob emerges byte-identical, and the corrupt item's stored
+    /// missing payload reference remains unchanged, and the item's stored
     /// scalars are provably planned over.
     ///
     /// Arithmetic (single-representation ASCII: canonicalBytes = UTF-8
@@ -735,8 +671,8 @@ struct RetentionCaptureCompositionTests {
     /// retire — B's retirement is exactly the evidence that the corrupt
     /// item's SCALARS entered the projected inventory while its blob was
     /// never decoded.
-    @Test("capture planning never decodes a non-primary item's revision blob (RET-PLATFORM-2)")
-    func capturePlanningNeverDecodesNonPrimaryRevisionBlob() async throws {
+    @Test("capture planning never reads a non-primary revision payload (RET-PLATFORM-2)")
+    func capturePlanningNeverReadsNonPrimaryRevisionPayload() async throws {
         let storeURL = WSSupport.tempStoreURL("r4-zero-decode-capture")
         defer { WSSupport.removeStore(storeURL) }
         let history = try await WSSupport.openHistory(storeURL: storeURL)
@@ -756,26 +692,27 @@ struct RetentionCaptureCompositionTests {
 
         // R2 lands now (capture fires R1+R2 only; the lane re-reads the
         // singleton inside every capture).
-        try WSSupport.seedRetentionConfig(
-            storeURL: storeURL,
+        try await Self.seedRetentionConfig(authority: history.authority,
             storage: StorageRetention(maxTotalBytes: 35)
         )
 
-        // Corrupt A's revision blob through an INDEPENDENT container (the
-        // R.3/R.6 fixture stance): a 1-byte blob fails every decode shape.
-        // A is NOT the capture's primary — the incoming P is.
-        let corruptBlob = Data([0x00])
-        let damageContainer = try WSSupport.makeContainer(storeURL: storeURL)
-        let damageContext = ModelContext(damageContainer)
-        let damageRow = try #require(
-            try damageContext.fetch(FetchDescriptor<HistoryItemRow>())
-                .first { $0.id == a.id.rawValue }
-        )
-        damageRow.revisionStateBlob = corruptBlob
-        try damageContext.save()
+        // Replace A's current payload source with a missing immutable file.
+        // A is NOT the capture's primary — the incoming P is. Its scalar
+        // accounting stays intact, while an actual content read must fail.
+        let missingBlobID = UUID().uuidString
+        try await history.authority.withTestDatabase { owner in
+            try owner.database.execute("""
+                UPDATE representations SET inlineBytes=NULL,blobID=?
+                WHERE contentID=(SELECT currentContentID FROM history_items WHERE id=?)
+                """, bindings: [.text(missingBlobID), .text(a.id.rawValue.uuidString)])
+            #expect(try owner.database.changedRowCount == 1)
+        }
+        await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+            _ = try await history.pastePayload(for: a.id)
+        }
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        let positionBefore = try WSSupport.fetchPosition(container).rawValue
+        let container = history.authority
+        let positionBefore = try await Self.position(container).rawValue
         #expect(positionBefore == 3)
 
         // The public capture MUST succeed — a planning-path decode of A's
@@ -797,27 +734,32 @@ struct RetentionCaptureCompositionTests {
         // retired exactly as the arithmetic pins; ONE position advance for
         // the merged insert+retirement commit (D6/D24(a)).
         #expect(commit.position.rawValue == positionBefore + 1)
-        let survivors = Set(try Self.retainedIDs(container))
+        let survivors = Set(try await Self.retainedIDs(container))
         #expect(survivors == Set([a.id, primary.id]))
         #expect(!survivors.contains(b.id))
-        #expect(try Self.fetchBytesRows(container).count == 2)
-        #expect(try WSSupport.fetchPosition(container).rawValue == positionBefore + 1)
+        #expect(try await Self.fetchBytesRows(container).count == 2)
+        #expect(try await Self.position(container).rawValue == positionBefore + 1)
 
-        // The corrupt blob is byte-identical — zero decodes AND zero writes
-        // for the non-primary item — and its projection row still carries
+        // The missing payload reference is unchanged — no repair or read
+        // of the non-primary payload — and its item still carries
         // the stored scalars the plan consumed (10 / 1 / 5).
-        let untouchedRow = try #require(
-            try WSSupport.fetchRows(container)
-                .first { $0.id == a.id.rawValue }
-        )
-        #expect(untouchedRow.revisionStateBlob == corruptBlob)
-        let aRow = try #require(try Self.fetchBytesRow(for: a.id, in: container))
+        let survivingBlobID = try await container.withTestDatabase { owner in
+            let row = try owner.database.prepare("""
+                SELECT blobID FROM representations
+                WHERE contentID=(SELECT currentContentID FROM history_items WHERE id=?)
+                """, bindings: [.text(a.id.rawValue.uuidString)])
+            defer { row.finalize() }
+            try #require(try row.step())
+            return try row.text(at: 0)
+        }
+        #expect(survivingBlobID == missingBlobID)
+        let aRow = try #require(try await Self.fetchBytesRow(for: a.id, in: container))
         #expect(aRow.canonicalBytes == 10)
         #expect(aRow.revisionCount == 1)
         #expect(aRow.revisionBytes == 5)
         // The primary's row was stamped at 20 / 0 / 0 (R.3 insert stamping).
         let primaryRow = try #require(
-            try Self.fetchBytesRow(for: primary.id, in: container)
+            try await Self.fetchBytesRow(for: primary.id, in: container)
         )
         #expect(primaryRow.canonicalBytes == 20)
         #expect(primaryRow.revisionCount == 0)
@@ -831,7 +773,7 @@ struct RetentionCaptureCompositionTests {
     /// canonical bytes) coalesced by a plain-only subset capture (23 bytes)
     /// succeeds under `maxTotalBytes = 40` — the projected inventory credits
     /// the winner's 39 STORED bytes, never the incoming 23 — and the
-    /// winner's `RetainedBytesRow` scalars are identical before and after
+    /// winner's `history_items byte scalar` scalars are identical before and after
     /// (coalesce stamps only `.updateOccurrence`; no new projection stamp,
     /// the R.3 law). With R1 also active and the winner captured 500 s
     /// before the coalesce, the coalesced primary survives: its post-primary
@@ -851,14 +793,13 @@ struct RetentionCaptureCompositionTests {
             // extra → canonicalBytes = 23 + 16 = 39.
             extra: [("public.html", Array("0123456789abcdef".utf8))]
         )
-        try WSSupport.seedRetentionConfig(
-            storeURL: storeURL,
+        try await Self.seedRetentionConfig(authority: history.authority,
             age: AgeRetention(maxAge: 300),
             storage: StorageRetention(maxTotalBytes: 40)
         )
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        let rowBefore = try Self.fetchBytesRow(for: winner.id, in: container)
+        let container = history.authority
+        let rowBefore = try await Self.fetchBytesRow(for: winner.id, in: container)
         let before = try #require(rowBefore)
         #expect(before.canonicalBytes == 39)
         #expect(before.revisionCount == 0)
@@ -883,13 +824,13 @@ struct RetentionCaptureCompositionTests {
         // The winner's row is unchanged (R.3 law: no restamp on coalesce),
         // the winner survives as the protected primary, and exactly one row
         // plus one item remain.
-        let rowAfter = try Self.fetchBytesRow(for: winner.id, in: container)
+        let rowAfter = try await Self.fetchBytesRow(for: winner.id, in: container)
         let after = try #require(rowAfter)
         #expect(after.canonicalBytes == before.canonicalBytes)
         #expect(after.revisionCount == before.revisionCount)
         #expect(after.revisionBytes == before.revisionBytes)
-        #expect(try Self.retainedIDs(container) == [winner.id])
-        #expect(try Self.fetchBytesRows(container).count == 1)
+        #expect(try await Self.retainedIDs(container) == [winner.id])
+        #expect(try await Self.fetchBytesRows(container).count == 1)
     }
 
     /// The stored-bytes discriminator: the same rich winner (39 stored
@@ -914,13 +855,12 @@ struct RetentionCaptureCompositionTests {
             in: history,
             extra: [("public.html", Array("0123456789abcdef".utf8))]
         )
-        try WSSupport.seedRetentionConfig(
-            storeURL: storeURL,
+        try await Self.seedRetentionConfig(authority: history.authority,
             storage: StorageRetention(maxTotalBytes: 30)
         )
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        let positionBefore = try WSSupport.fetchPosition(container).rawValue
+        let container = history.authority
+        let positionBefore = try await Self.position(container).rawValue
         #expect(positionBefore == 1)
 
         await #expect(throws: HistoryFailure.capacityExceeded(.storageBytes)) {
@@ -936,11 +876,11 @@ struct RetentionCaptureCompositionTests {
         // Atomic: the winner (and only the winner) survives, its projection
         // row still carries the 39 stored bytes, and the position did not
         // move — the occurrence fold never landed.
-        #expect(try Self.retainedIDs(container) == [winner.id])
-        let rowAfter = try Self.fetchBytesRow(for: winner.id, in: container)
+        #expect(try await Self.retainedIDs(container) == [winner.id])
+        let rowAfter = try await Self.fetchBytesRow(for: winner.id, in: container)
         let row = try #require(rowAfter)
         #expect(row.canonicalBytes == 39)
-        #expect(try WSSupport.fetchPosition(container).rawValue == positionBefore)
+        #expect(try await Self.position(container).rawValue == positionBefore)
     }
 
     // MARK: - Post-count exclusion (V2-02 §4.2 projected inventory)
@@ -966,8 +906,7 @@ struct RetentionCaptureCompositionTests {
             String(repeating: "y", count: 5), at: 700_800_100, source: "com.example.r4.excl",
             in: history
         )
-        try WSSupport.seedRetentionConfig(
-            storeURL: storeURL,
+        try await Self.seedRetentionConfig(authority: history.authority,
             storage: StorageRetention(maxTotalBytes: 30)
         )
 
@@ -983,13 +922,13 @@ struct RetentionCaptureCompositionTests {
             return
         }
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        let survivors = Set(try Self.retainedIDs(container))
+        let container = history.authority
+        let survivors = Set(try await Self.retainedIDs(container))
         // X is the count victim; Y and the primary survive — nothing else
         // was retired for bytes.
         #expect(!survivors.contains(x.id))
         #expect(survivors.contains(y.id))
         #expect(survivors.count == 2)
-        #expect(try Self.fetchBytesRows(container).count == 2)
+        #expect(try await Self.fetchBytesRows(container).count == 2)
     }
 }

@@ -1,60 +1,11 @@
-/// R.6 — policy-sweep proofs (`V2-roadmap` §6 R.6 "Policy sweep"):
-/// `HistoryAction.setRetentionPolicies` end to end through the PUBLIC
-/// `SwiftDataHistory.perform(_:)` — boundary validation, the R3-then-R2
-/// projected sweep, the DC-27 survivor-scoped unsatisfiable-R3 veto, the
-/// retire-subsumes-prune drop, the same-value/satisfied `.unchanged` no-op,
-/// the §6.4 clock seam, and config persistence across reopen.
-///
-/// Owning spec: `V2-02` §4.4 (the authoritative sweep pseudocode and its
-/// DC-27 resolution), §3.2 (the post-R3-prune projection — R2 never credits
-/// soon-to-be-pruned revision bytes, `RET-PRUNE-2`), §5.5/§5.6 (R3 with no
-/// append; the explicit policy-persisting mutation, D18), §6.3
-/// (retire-subsumes-prune — the composer drops prunes for items the same
-/// commit retires BEFORE stamping, `RET-STAMP-2`), §6.4 (the Storage clock
-/// is the sweep lane's seam), §8.1 (`retiredItems` = R1∪R2 count;
-/// `prunedRevisions` = SURVIVORS' prunes only), §8.3 (boundary validation →
-/// `.invalidInput(.invalidRetentionPolicy)` before any store work; the
-/// PHASE-C veto; the same-value satisfied `.unchanged` — the v1 WS21
-/// posture), §11 D24; Record 3 gates `RET-PERF-2` (lineages decoded only
-/// for exceeding items — proven behaviorally here through a corrupted
-/// non-exceeding blob and plausible scalar mismatch the sweep must never
-/// inspect), `RET-SECURITY-1`
-/// (deletion atomicity — a vetoed sweep commits nothing).
-///
-/// Every fixture crosses the public `perform(.setRetentionPolicies(...))`
-/// seam; the two clock-dependent R1 fixtures instead drive a directly
-/// constructed Authority with a fixed `StorageClock` (§6.4's only
-/// injection point — the public `open` wires the system witness), and
-/// assert rows/position/config through an INDEPENDENT container.
-///
-/// Hand-worked fixture values (single-representation ASCII text: one
-/// `public.utf8-plain-text` representation, so a revision's representation
-/// bytes equal its UTF-8 length and an item's `canonicalBytes` equal the
-/// capture text's UTF-8 length; an item's R2 footprint is `canonicalBytes +
-/// revisionBytes`; times are `timeIntervalSinceReferenceDate` seconds):
-/// - boundary fixtures — 0 / NaN / ±∞ / 3,650 d + 1 s ages; 0 and
-///   5,000 × 384 MiB + 1 budgets; 0 / 101 counts; 0 / 256 MiB + 1 bytes;
-/// - R1 (fixed now 800,000,000, maxAge 100 → cutoff 799,999,900): P
-///   (pinned, …800), A (…850), B (…880) aged; D (…900) exactly AT the
-///   cutoff — the strict `<` boundary (RET-SELECT-1(a)); C (…950) fresh;
-/// - retire-subsumes-prune: H = 30 canonical + [10, 10] revisions
-///   (footprint 50) under budget 40 retires (T = 10 survives alone at
-///   10 ≤ 40) while R3 count 1 plans H's [rev1] prune — dropped, so the
-///   receipt's `prunedRevisions` is 0;
-/// - R3 sweep: A = 30 + [10, 10, 10] (count 3 > 2 prunes [rev1] → 2/20),
-///   B = 20 + [30, 10] (bytes 40 > 35 prunes [rev1] → 1/10), T = 10 +
-///   [5] non-exceeding (corrupted blob, never decoded);
-/// - RET-PRUNE-2: A = 30 + [30, 10] prunes [rev1] (bytes 40 → 10 ≤ 35);
-///   projected total 40 + 10 = 50 ≤ budget 50 → ZERO retirements (unpruned
-///   70 + 10 = 80 > 50 would retire A);
-/// - DC-27: H = 30 + [25] (footprint 55, active alone 25 > 20), T = 10;
-///   budget 60 of total 65 retires the unpinned H in variant A (sweep
-///   succeeds) but only T once H is pinned in variant B (survivors 55 ≤ 60
-///   pass the budget check; PHASE C alone fires `.invalidRetentionPolicy`).
+/// V2-02 §4.4: real SQLite policy sweeps preserve age ordering, pinned
+/// protection, R3-before-R2 composition, survivor-scoped vetoes, atomic
+/// policy updates, no-op positions and persisted reopen behavior. Assertions
+/// inspect immutable SQL values or public Details; only the actual Authority
+/// database is mutated for corruption fixtures.
 import Foundation
 import HistoryCore
 import HistoryDomain
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
@@ -78,9 +29,8 @@ struct RetentionPolicySweepTests {
         storeURL: URL,
         now: Date
     ) async throws -> HistoryAuthority {
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        let authority = HistoryAuthority(
-            container: container,
+        let authority = try HistoryAuthority(
+            storeLocation: HistoryStoreLocation(persistence: .persistent(storeURL: storeURL)),
             storageClock: FixedSweepClock(fixed: now)
         )
         try await authority.performStartup(initialMaximumUnpinnedItems: 200)
@@ -118,7 +68,7 @@ struct RetentionPolicySweepTests {
         _ text: String,
         at seconds: Double,
         source: String,
-        in history: SwiftDataHistory
+        in history: SQLiteHistory
     ) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.capture(
             WSSupport.textCapture(
@@ -172,7 +122,7 @@ struct RetentionPolicySweepTests {
         _ itemID: HistoryItemID,
         expected: Int,
         bytes: Int,
-        in history: SwiftDataHistory
+        in history: SQLiteHistory
     ) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.revise(
             Self.replaceRequest(itemID: itemID, expected: expected, bytes: bytes)
@@ -191,7 +141,7 @@ struct RetentionPolicySweepTests {
     private static func seedRevisions(
         _ itemID: HistoryItemID,
         byteCounts: [Int],
-        in history: SwiftDataHistory
+        in history: SQLiteHistory
     ) async throws {
         for (index, count) in byteCounts.enumerated() {
             _ = try await Self.revise(
@@ -204,74 +154,55 @@ struct RetentionPolicySweepTests {
     }
 
     /// The reloaded revision lineage of `itemID` through the production
-    /// fact loader (05 §7.3), over the independent assertion container.
+    /// fact loader (05 §7.3), over the Authority database.
     private static func lineage(
         of itemID: HistoryItemID,
-        in container: ModelContainer
-    ) throws -> RevisionFacts {
-        try MutationFactLoaders.loadRevisionFacts(
-            itemID: itemID,
-            in: ModelContext(container)
-        )
+        in container: HistoryAuthority
+    ) async throws -> HistoryDetails {
+        try await container.details(for: itemID)
+    }
+
+    private static func rows(_ authority: HistoryAuthority) async throws -> [WSSupport.StoredItem] {
+        try await authority.withTestDatabase { try WSSupport.fetchRows($0.database) }
+    }
+
+    private static func position(_ authority: HistoryAuthority) async throws -> WSSupport.PositionState {
+        try await authority.withTestDatabase { try WSSupport.fetchPosition($0.database) }
     }
 
     /// The unique projection row for `itemID`, or `nil` (0 or 1 rows; 2+
     /// fails the fixture loudly — the 1:1 law is a precondition here).
     private static func fetchBytesRow(
         for itemID: HistoryItemID,
-        in container: ModelContainer
-    ) throws -> RetainedBytesRow? {
-        let context = ModelContext(container)
-        let uuid = itemID.rawValue
-        var descriptor = FetchDescriptor<RetainedBytesRow>(
-            predicate: #Predicate { row in row.itemID == uuid }
-        )
-        descriptor.fetchLimit = 2
-        let rows = try context.fetch(descriptor)
-        precondition(
-            rows.count <= 1,
-            "RetainedBytesRow 1:1 law violated in fixture: \(rows.count) rows"
-        )
-        return rows.first
+        in container: HistoryAuthority
+    ) async throws -> WSSupport.StoredItem? {
+        try await rows(container).first { $0.id == itemID.rawValue }
     }
 
-    /// Every `RetainedBytesRow`, deterministically ordered by item ID.
+    /// Every `history_items byte scalar`, deterministically ordered by item ID.
     private static func fetchBytesRows(
-        _ container: ModelContainer
-    ) throws -> [RetainedBytesRow] {
-        let context = ModelContext(container)
-        let rows = try context.fetch(FetchDescriptor<RetainedBytesRow>())
-        return rows.sorted { $0.itemID.uuidString < $1.itemID.uuidString }
+        _ container: HistoryAuthority
+    ) async throws -> [WSSupport.StoredItem] {
+        try await rows(container)
     }
 
     /// The unique config singleton (fails the fixture loudly otherwise).
     private static func fetchConfigRow(
-        _ container: ModelContainer
-    ) throws -> RetentionExpansionConfigRow {
-        let context = ModelContext(container)
-        let rows = try context.fetch(FetchDescriptor<RetentionExpansionConfigRow>())
-        precondition(
-            rows.count == 1,
-            "config singleton must exist exactly once, got \(rows.count)"
-        )
-        return rows[0]
+        _ container: HistoryAuthority
+    ) async throws -> HistoryRetentionPolicies {
+        try await container.withTestDatabase { try RetentionConfigLoading.loadValidatedPolicies(in: $0.database) }
     }
 
     /// Asserts the config singleton is exactly the all-disabled bootstrap
     /// shape (the `open` default; also the atomicity reference for vetoed
     /// sweeps).
     private static func expectAllDisabledConfig(
-        _ container: ModelContainer
-    ) throws {
-        let config = try Self.fetchConfigRow(container)
-        #expect(config.agePolicyEnabled == false)
-        #expect(config.ageMaxSeconds == 0)
-        #expect(config.storagePolicyEnabled == false)
-        #expect(config.storageMaxBytes == 0)
-        #expect(config.revisionPolicyEnabled == false)
-        #expect(config.revisionMaxCount == nil)
-        #expect(config.revisionMaxBytes == nil)
-        #expect(config.configSchemaVersion == 1)
+        _ container: HistoryAuthority
+    ) async throws {
+        let config = try await Self.fetchConfigRow(container)
+        #expect(config.age == nil)
+        #expect(config.storage == nil)
+        #expect(config.revisions == nil)
     }
 
     // MARK: - Boundary validation (V2-02 §8.3)
@@ -365,10 +296,10 @@ struct RetentionPolicySweepTests {
         }
 
         // Nothing durable (§8.3 "at the boundary" — before any store work).
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        #expect(try WSSupport.fetchPosition(container).rawValue == 1)
-        #expect(try WSSupport.fetchRows(container).count == 1)
-        try Self.expectAllDisabledConfig(container)
+        let container = history.authority
+        #expect(try await Self.position(container).rawValue == 1)
+        #expect(try await Self.rows(container).count == 1)
+        try await Self.expectAllDisabledConfig(container)
     }
 
     // MARK: - R1 sweep (V2-02 §4.4 PHASE B, §6.4 clock)
@@ -413,8 +344,8 @@ struct RetentionPolicySweepTests {
             return
         }
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        #expect(try WSSupport.fetchPosition(container).rawValue == 6)
+        let container = authority
+        #expect(try await Self.position(container).rawValue == 6)
 
         let receipt = try await authority.commitRetentionPolicies(
             HistoryRetentionPolicies(
@@ -441,23 +372,23 @@ struct RetentionPolicySweepTests {
         // Storage side: A and B retired; P (pinned), D (exactly at the
         // strict cutoff), and C survive; the pinned lane is untouched.
         let survivors = Set(
-            try WSSupport.fetchRows(container).map { HistoryItemID(rawValue: $0.id) }
+            try await Self.rows(container).map { HistoryItemID(rawValue: $0.id) }
         )
         #expect(survivors == Set([pinned.id, d.id, c.id]))
         #expect(!survivors.contains(a.id))
         #expect(!survivors.contains(b.id))
         let pinnedRow = try #require(
-            try WSSupport.fetchRows(container)
+            try await Self.rows(container)
                 .first { $0.id == pinned.id.rawValue }
         )
         #expect(pinnedRow.pinOrdinal == 0)
 
         // §5.6 persistence: the age lane landed on the config singleton.
-        let config = try Self.fetchConfigRow(container)
-        #expect(config.agePolicyEnabled == true)
-        #expect(config.ageMaxSeconds == 100)
-        #expect(config.storagePolicyEnabled == false)
-        #expect(config.revisionPolicyEnabled == false)
+        let config = try await Self.fetchConfigRow(container)
+        #expect(config.age != nil)
+        #expect(config.age?.maxAge == 100)
+        #expect(config.storage == nil)
+        #expect(config.revisions == nil)
     }
 
     // MARK: - Clock seam (V2-02 §6.4)
@@ -499,9 +430,9 @@ struct RetentionPolicySweepTests {
         #expect(retiredItems == 1)
         #expect(sweepCommit.position.rawValue == 3)
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let container = authority
         let survivors = Set(
-            try WSSupport.fetchRows(container).map { HistoryItemID(rawValue: $0.id) }
+            try await Self.rows(container).map { HistoryItemID(rawValue: $0.id) }
         )
         #expect(survivors == Set([fresh.id]))
         #expect(!survivors.contains(old.id))
@@ -516,10 +447,10 @@ struct RetentionPolicySweepTests {
     /// restoring 10 ≤ 40). Retirement SUBSUMES the prune (§6.3): the
     /// composer drops H's `.pruneRevisions` BEFORE stamping, so the receipt
     /// reports `prunedRevisions == 0` — H's revisions are deleted by the
-    /// retirement, not pruned — and H's `revisionStateBlob` disappears WITH
-    /// the row (no orphan `RetainedBytesRow`, `RET-SECURITY-1`).
+    /// retirement, not pruned — and H's `representation payload` disappears WITH
+    /// the row (no orphan `history_items byte scalar`, `RET-SECURITY-1`).
     @Test("R2 retirement subsumes the planned prune; retired item contributes zero prunedRevisions")
-    func r2RetirementSubsumesPruneAndDeletesBlobWithRow() async throws {
+    func r2RetirementSubsumesPruneAndDeletesContentsWithItem() async throws {
         let storeURL = WSSupport.tempStoreURL("r6-retire-subsumes")
         defer { WSSupport.removeStore(storeURL) }
         let history = try await WSSupport.openHistory(storeURL: storeURL)
@@ -535,10 +466,10 @@ struct RetentionPolicySweepTests {
             source: source, in: history
         )
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        #expect(try WSSupport.fetchPosition(container).rawValue == 4)
-        let before = try Self.lineage(of: heavy.id, in: container)
-        #expect(before.item.revisions.count == 2)
+        let container = history.authority
+        #expect(try await Self.position(container).rawValue == 4)
+        let before = try await Self.lineage(of: heavy.id, in: container)
+        #expect(before.revisions.count == 2)
 
         let receipt = try await history.perform(.setRetentionPolicies(
             HistoryRetentionPolicies(
@@ -566,26 +497,36 @@ struct RetentionPolicySweepTests {
         #expect(retiredItems == 1)
         #expect(prunedRevisions == 0)
 
-        // Storage side: H's row AND its blob are gone with the retirement
-        // (no prune rewrite of a deleted row); the 1:1 projection row went
-        // with it; T survives alone within the restored budget.
+        // Storage side: H and all of its immutable contents are gone with
+        // retirement. Only T's single representation remains.
         let survivors = Set(
-            try WSSupport.fetchRows(container).map { HistoryItemID(rawValue: $0.id) }
+            try await Self.rows(container).map { HistoryItemID(rawValue: $0.id) }
         )
         #expect(survivors == Set([tiny.id]))
         #expect(!survivors.contains(heavy.id))
-        #expect(try Self.fetchBytesRows(container).count == 1)
-        let tinyRow = try #require(try Self.fetchBytesRow(for: tiny.id, in: container))
+        #expect(try await Self.fetchBytesRows(container).count == 1)
+        try await container.withTestDatabase { owner in
+            let contents = try owner.database.prepare("SELECT count(*) FROM contents WHERE itemID=?",
+                bindings: [.text(heavy.id.rawValue.uuidString)])
+            defer { contents.finalize() }
+            try #require(try contents.step())
+            #expect(try contents.integer(at: 0) == 0)
+            let representations = try owner.database.prepare("SELECT count(*) FROM representations")
+            defer { representations.finalize() }
+            try #require(try representations.step())
+            #expect(try representations.integer(at: 0) == 1)
+        }
+        let tinyRow = try #require(try await Self.fetchBytesRow(for: tiny.id, in: container))
         #expect(tinyRow.canonicalBytes == 10)
         #expect(tinyRow.revisionCount == 0)
         #expect(tinyRow.revisionBytes == 0)
 
         // §5.6 persistence: both active lanes landed on the singleton.
-        let config = try Self.fetchConfigRow(container)
-        #expect(config.storagePolicyEnabled == true)
-        #expect(config.storageMaxBytes == 40)
-        #expect(config.revisionPolicyEnabled == true)
-        #expect(config.revisionMaxCount == 1)
+        let config = try await Self.fetchConfigRow(container)
+        #expect(config.storage != nil)
+        #expect(config.storage?.maxTotalBytes == 40)
+        #expect(config.revisions != nil)
+        #expect(config.revisions?.maxRevisionsPerItem == 1)
     }
 
     // MARK: - R3 sweep (V2-02 §4.4 PHASE A, §5.5; RET-PERF-2)
@@ -596,7 +537,7 @@ struct RetentionPolicySweepTests {
     /// non-exceeding in both dimensions. No R1/R2 lane is active, so the
     /// receipt carries `retiredItems == 0` / `prunedRevisions == 2` and ONE
     /// position advance. The zero-decode law (`RET-PERF-2`) is proven
-    /// behaviorally: T's `revisionStateBlob` and its plausible-but-wrong
+    /// behaviorally: T's `representation payload` and its plausible-but-wrong
     /// `canonicalBytes` scalar are corrupted behind the Authority's back
     /// BEFORE the sweep — a lineage decode of T would fail the whole sweep
     /// `.corruptStoredValue`, while an exact projection cross-check would
@@ -624,34 +565,33 @@ struct RetentionPolicySweepTests {
         )
         try await Self.seedRevisions(t.id, byteCounts: [5], in: history)
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        #expect(try WSSupport.fetchPosition(container).rawValue == 9)
-        let aBefore = try Self.lineage(of: a.id, in: container)
-        let aRev1ID = aBefore.item.revisions[0].id
-        let aRev2ID = aBefore.item.revisions[1].id
-        let aRev3ID = aBefore.item.revisions[2].id
-        let bBefore = try Self.lineage(of: b.id, in: container)
-        let bRev1ID = bBefore.item.revisions[0].id
-        let bRev2ID = bBefore.item.revisions[1].id
+        let container = history.authority
+        #expect(try await Self.position(container).rawValue == 9)
+        let aBefore = try await Self.lineage(of: a.id, in: container)
+        let aRev1ID = aBefore.revisions[0].id
+        let aRev2ID = aBefore.revisions[1].id
+        let aRev3ID = aBefore.revisions[2].id
+        let bBefore = try await Self.lineage(of: b.id, in: container)
+        let bRev1ID = bBefore.revisions[0].id
+        let bRev2ID = bBefore.revisions[1].id
 
-        // Corrupt T's revision blob through an INDEPENDENT container (the
-        // R.3 fixture stance) — the sweep must never decode it.
-        let corruptBlob = Data([0x00])
-        let damageContainer = try WSSupport.makeContainer(storeURL: storeURL)
-        let damageContext = ModelContext(damageContainer)
-        let damageRow = try #require(
-            try damageContext.fetch(FetchDescriptor<HistoryItemRow>())
-                .first { $0.id == t.id.rawValue }
-        )
-        damageRow.revisionStateBlob = corruptBlob
-        let tRawID = t.id.rawValue
-        let damageBytesRow = try #require(
-            try damageContext.fetch(FetchDescriptor<RetainedBytesRow>(
-                predicate: #Predicate { row in row.itemID == tRawID }
-            )).first
-        )
-        damageBytesRow.canonicalBytes = 9
-        try damageContext.save()
+        // T has a missing current payload and a plausible-but-wrong scalar.
+        // A non-exceeding item must not be read or silently repaired by R3.
+        let missingBlobID = UUID().uuidString
+        try await container.withTestDatabase { owner in
+            try owner.database.writeTransaction {
+                try owner.database.execute("""
+                    UPDATE representations SET inlineBytes=NULL,blobID=?
+                    WHERE contentID=(SELECT currentContentID FROM history_items WHERE id=?)
+                    """, bindings: [.text(missingBlobID), .text(t.id.rawValue.uuidString)])
+                #expect(try owner.database.changedRowCount == 1)
+                try owner.database.execute("UPDATE history_items SET canonicalBytes=9 WHERE id=?",
+                    bindings: [.text(t.id.rawValue.uuidString)])
+            }
+        }
+        await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+            _ = try await history.pastePayload(for: t.id)
+        }
 
         let receipt = try await history.perform(.setRetentionPolicies(
             HistoryRetentionPolicies(
@@ -681,34 +621,39 @@ struct RetentionPolicySweepTests {
         // A: oldest-inactive prefix [rev1] pruned; survivors keep append
         // order; the active (rev3) survives (D3/D23); the projection row
         // restamped to 2 / 20 in the same transaction.
-        let aAfter = try Self.lineage(of: a.id, in: container)
-        #expect(aAfter.item.revisions.map(\.id) == [aRev2ID, aRev3ID])
-        #expect(aAfter.item.activeRevisionID == aRev3ID)
-        #expect(!aAfter.item.revisions.map(\.id).contains(aRev1ID))
+        let aAfter = try await Self.lineage(of: a.id, in: container)
+        #expect(aAfter.revisions.map(\.id) == [aRev2ID, aRev3ID])
+        #expect(aAfter.revisions.first(where: \.isActive)?.id == aRev3ID)
+        #expect(!aAfter.revisions.map(\.id).contains(aRev1ID))
         #expect(aAfter.item.contentVersion.rawValue == 4)
-        let aRow = try #require(try Self.fetchBytesRow(for: a.id, in: container))
+        let aRow = try #require(try await Self.fetchBytesRow(for: a.id, in: container))
         #expect(aRow.canonicalBytes == 30)
         #expect(aRow.revisionCount == 2)
         #expect(aRow.revisionBytes == 20)
 
         // B: the byte dimension pruned [rev1(30)] (40 → 10 ≤ 35).
-        let bAfter = try Self.lineage(of: b.id, in: container)
-        #expect(bAfter.item.revisions.map(\.id) == [bRev2ID])
-        #expect(bAfter.item.activeRevisionID == bRev2ID)
-        #expect(!bAfter.item.revisions.map(\.id).contains(bRev1ID))
-        let bRow = try #require(try Self.fetchBytesRow(for: b.id, in: container))
+        let bAfter = try await Self.lineage(of: b.id, in: container)
+        #expect(bAfter.revisions.map(\.id) == [bRev2ID])
+        #expect(bAfter.revisions.first(where: \.isActive)?.id == bRev2ID)
+        #expect(!bAfter.revisions.map(\.id).contains(bRev1ID))
+        let bRow = try #require(try await Self.fetchBytesRow(for: b.id, in: container))
         #expect(bRow.canonicalBytes == 20)
         #expect(bRow.revisionCount == 1)
         #expect(bRow.revisionBytes == 10)
 
-        // T: byte-identical corrupt blob and untouched projection row —
-        // zero decodes and zero writes for the non-exceeding item.
-        let untouchedRow = try #require(
-            try WSSupport.fetchRows(container)
-                .first { $0.id == t.id.rawValue }
-        )
-        #expect(untouchedRow.revisionStateBlob == corruptBlob)
-        let tRow = try #require(try Self.fetchBytesRow(for: t.id, in: container))
+        // T: the missing payload reference and its deliberately wrong
+        // scalar survive unchanged; neither was consulted or repaired.
+        let survivingBlobID = try await container.withTestDatabase { owner in
+            let row = try owner.database.prepare("""
+                SELECT blobID FROM representations
+                WHERE contentID=(SELECT currentContentID FROM history_items WHERE id=?)
+                """, bindings: [.text(t.id.rawValue.uuidString)])
+            defer { row.finalize() }
+            try #require(try row.step())
+            return try row.text(at: 0)
+        }
+        #expect(survivingBlobID == missingBlobID)
+        let tRow = try #require(try await Self.fetchBytesRow(for: t.id, in: container))
         #expect(tRow.canonicalBytes == 9)
         #expect(tRow.revisionCount == 1)
         #expect(tRow.revisionBytes == 5)
@@ -740,10 +685,10 @@ struct RetentionPolicySweepTests {
             source: source, in: history
         )
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        let before = try Self.lineage(of: prunable.id, in: container)
-        let rev1ID = before.item.revisions[0].id
-        let rev2ID = before.item.revisions[1].id
+        let container = history.authority
+        let before = try await Self.lineage(of: prunable.id, in: container)
+        let rev1ID = before.revisions[0].id
+        let rev2ID = before.revisions[1].id
 
         let receipt = try await history.perform(.setRetentionPolicies(
             HistoryRetentionPolicies(
@@ -773,15 +718,15 @@ struct RetentionPolicySweepTests {
         // Both items survive; A carries the pruned lineage and the
         // restamped projection (30 canonical / 1 revision / 10 bytes).
         let survivors = Set(
-            try WSSupport.fetchRows(container).map { HistoryItemID(rawValue: $0.id) }
+            try await Self.rows(container).map { HistoryItemID(rawValue: $0.id) }
         )
         #expect(survivors == Set([prunable.id, tiny.id]))
-        let after = try Self.lineage(of: prunable.id, in: container)
-        #expect(after.item.revisions.map(\.id) == [rev2ID])
-        #expect(after.item.activeRevisionID == rev2ID)
-        #expect(!after.item.revisions.map(\.id).contains(rev1ID))
+        let after = try await Self.lineage(of: prunable.id, in: container)
+        #expect(after.revisions.map(\.id) == [rev2ID])
+        #expect(after.revisions.first(where: \.isActive)?.id == rev2ID)
+        #expect(!after.revisions.map(\.id).contains(rev1ID))
         let row = try #require(
-            try Self.fetchBytesRow(for: prunable.id, in: container)
+            try await Self.fetchBytesRow(for: prunable.id, in: container)
         )
         #expect(row.canonicalBytes == 30)
         #expect(row.revisionCount == 1)
@@ -847,12 +792,12 @@ struct RetentionPolicySweepTests {
             #expect(retiredItems == 1)
             #expect(prunedRevisions == 0)
 
-            let container = try WSSupport.makeContainer(storeURL: storeURL)
+            let container = history.authority
             let survivors = Set(
-                try WSSupport.fetchRows(container).map { HistoryItemID(rawValue: $0.id) }
+                try await Self.rows(container).map { HistoryItemID(rawValue: $0.id) }
             )
             #expect(survivors == Set([tiny.id]))
-            #expect(try Self.fetchBytesRows(container).count == 1)
+            #expect(try await Self.fetchBytesRows(container).count == 1)
         }
 
         // ── Variant B: pinned — H survives PHASE B, PHASE C vetoes. ──
@@ -879,10 +824,10 @@ struct RetentionPolicySweepTests {
                 return
             }
 
-            let container = try WSSupport.makeContainer(storeURL: storeURL)
-            #expect(try WSSupport.fetchPosition(container).rawValue == 4)
+            let container = history.authority
+            #expect(try await Self.position(container).rawValue == 4)
             let heavyRev1ID = try #require(
-                try Self.lineage(of: heavy.id, in: container).item.activeRevisionID
+                try await Self.lineage(of: heavy.id, in: container).revisions.first(where: \.isActive)?.id
             )
 
             await #expect(throws: HistoryFailure.invalidInput(.invalidRetentionPolicy)) {
@@ -900,18 +845,18 @@ struct RetentionPolicySweepTests {
             // Atomicity (§4.4/§2.2/§8.3): the veto precedes the merge, so
             // NOTHING is durable — no policy, no retirement (T survives
             // even though PHASE B selected it), no prune, no position.
-            #expect(try WSSupport.fetchPosition(container).rawValue == 4)
+            #expect(try await Self.position(container).rawValue == 4)
             let survivors = Set(
-                try WSSupport.fetchRows(container).map { HistoryItemID(rawValue: $0.id) }
+                try await Self.rows(container).map { HistoryItemID(rawValue: $0.id) }
             )
             #expect(survivors == Set([heavy.id, tiny.id]))
-            try Self.expectAllDisabledConfig(container)
-            let heavyAfter = try Self.lineage(of: heavy.id, in: container)
-            #expect(heavyAfter.item.revisions.map(\.id) == [heavyRev1ID])
-            #expect(heavyAfter.item.activeRevisionID == heavyRev1ID)
+            try await Self.expectAllDisabledConfig(container)
+            let heavyAfter = try await Self.lineage(of: heavy.id, in: container)
+            #expect(heavyAfter.revisions.map(\.id) == [heavyRev1ID])
+            #expect(heavyAfter.revisions.first(where: \.isActive)?.id == heavyRev1ID)
             #expect(heavyAfter.item.contentVersion.rawValue == 2)
             let heavyRow = try #require(
-                try Self.fetchBytesRow(for: heavy.id, in: container)
+                try await Self.fetchBytesRow(for: heavy.id, in: container)
             )
             #expect(heavyRow.canonicalBytes == 30)
             #expect(heavyRow.revisionCount == 1)
@@ -976,18 +921,18 @@ struct RetentionPolicySweepTests {
             )
             return
         }
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        #expect(try WSSupport.fetchPosition(container).rawValue == 3)
-        #expect(try WSSupport.fetchRows(container).count == 2)
-        let config = try Self.fetchConfigRow(container)
-        #expect(config.revisionPolicyEnabled == true)
-        #expect(config.revisionMaxCount == 5)
+        let container = history.authority
+        #expect(try await Self.position(container).rawValue == 3)
+        #expect(try await Self.rows(container).count == 2)
+        let config = try await Self.fetchConfigRow(container)
+        #expect(config.revisions != nil)
+        #expect(config.revisions?.maxRevisionsPerItem == 5)
     }
 
     // MARK: - Config persistence across reopen (V2-02 §3.3/§5.6)
 
     /// A successful sweep persists exactly the new policies on the config
-    /// singleton (`configSchemaVersion` stays 1); a fresh `open` over the
+    /// singleton; a fresh `open` over the
     /// same store reads them back — proven both through the row (the
     /// independent-container fetch) and behaviorally (re-setting the same
     /// value through the REOPENED facade is `.unchanged`, which only a
@@ -1019,19 +964,19 @@ struct RetentionPolicySweepTests {
             #expect(retired == 0)
             #expect(pruned == 0)
 
-            let container = try WSSupport.makeContainer(storeURL: storeURL)
-            let config = try Self.fetchConfigRow(container)
-            #expect(config.agePolicyEnabled == true)
-            #expect(config.ageMaxSeconds == 3_600)
-            #expect(config.storagePolicyEnabled == true)
-            #expect(config.storageMaxBytes == 4_096)
-            #expect(config.revisionPolicyEnabled == true)
-            #expect(config.revisionMaxCount == 2)
-            #expect(config.revisionMaxBytes == 2_048)
-            #expect(config.configSchemaVersion == 1)
+            let container = history.authority
+            let config = try await Self.fetchConfigRow(container)
+            #expect(config.age != nil)
+            #expect(config.age?.maxAge == 3_600)
+            #expect(config.storage != nil)
+            #expect(config.storage?.maxTotalBytes == 4_096)
+            #expect(config.revisions != nil)
+            #expect(config.revisions?.maxRevisionsPerItem == 2)
+            #expect(config.revisions?.maxRevisionBytesPerItem == 2_048)
 
             // Reopen: the durable row rules; re-setting the same value is a
             // true no-op through the REOPENED facade (position unchanged).
+            try await history.authority.withTestDatabase { try $0.database.close() }
             let reopened = try await WSSupport.openHistory(storeURL: storeURL)
             let reopenedReceipt = try await reopened.perform(
                 .setRetentionPolicies(policies)
@@ -1042,8 +987,8 @@ struct RetentionPolicySweepTests {
                 )
                 return
             }
-            let reopenContainer = try WSSupport.makeContainer(storeURL: storeURL)
-            #expect(try WSSupport.fetchPosition(reopenContainer).rawValue == 1)
+            let reopenContainer = reopened.authority
+            #expect(try await Self.position(reopenContainer).rawValue == 1)
         }
 
         // ── All-disabled lanes persist too. ──
@@ -1074,9 +1019,10 @@ struct RetentionPolicySweepTests {
             }
             #expect(commit.position.rawValue == 2)
 
-            _ = try await WSSupport.openHistory(storeURL: storeURL)
-            let container = try WSSupport.makeContainer(storeURL: storeURL)
-            try Self.expectAllDisabledConfig(container)
+            try await history.authority.withTestDatabase { try $0.database.close() }
+            let reopened = try await WSSupport.openHistory(storeURL: storeURL)
+            let container = reopened.authority
+            try await Self.expectAllDisabledConfig(container)
         }
     }
 }

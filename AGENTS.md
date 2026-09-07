@@ -28,16 +28,20 @@ Gateway's admitted operations, and xxh3's clipboard-dedup candidate lookup may
 be maintained when directly required by behavior; this paragraph forbids
 inventing new enforcement or orchestration around them.
 
-**Current storage direction (user direction, 2026-09-06):** this is a new
-project with no legacy-store compatibility requirement. Keep one current
-SwiftData schema with ten models; remove historical model variants,
-`VersionedSchema`/migration plans, legacy projection columns and recipe tags,
-startup projection rebuilds, and retained-byte backfill paths. Titles and
-search bodies persist only as `titleUTF8: Data` and `searchBodyUTF8: Data`.
-This does not retire current blob codecs, corrupt-value rejection, immutable
-content revisions, `ContentVersion`, or `ChangePosition`. Historical migration
-chapters and progress entries are records, not instructions to restore those
-paths. Do not replace them with new compatibility or enforcement machinery.
+**Current storage direction (user approval, 2026-09-07):** implement
+`docs/v2/V2-09-multilevel-storage.md`: replace SwiftData and its ten-model
+schema with system SQLite3 metadata/indexes and immutable UUID-named blob
+files. Keep one HistoryAuthority writer and atomic History/Gateway commits;
+do not add dual writing, an ORM emulating ModelContext, legacy-store reading,
+migrations, or automatic deletion of an existing store. Titles/search bodies
+remain exact UTF-8 Data. Preserve byte-exact candidate confirmation, corrupt-
+value rejection, immutable revisions, ContentVersion and ChangePosition.
+Remove full-store resident signature/ID indexes and search corpora; use bounded
+queries and purpose-specific content reads. NSCache/NSPurgeableData hold only
+rebuildable derived values; mappedIfSafe is a hint, not a zero-copy guarantee.
+The SwiftData references elsewhere in this map describe the pre-replacement
+implementation, not a requirement to retain it. Historical migration chapters
+remain records, not instructions to restore compatibility machinery.
 
 **Platform and toolchain:**
 

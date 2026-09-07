@@ -10,7 +10,6 @@
 import Foundation
 import HistoryCore
 import HistoryDomain
-import SwiftData
 
 extension SearchWorker {
     // MARK: - Regexp mode (03b §8)
@@ -32,29 +31,33 @@ extension SearchWorker {
     internal func evaluateRegexp(
         term: String,
         in corpus: SearchCorpusSnapshot,
-        directive: ScanDirective
+        directive: ScanDirective,
+        preparedPattern: NSRegularExpression? = nil,
+        sharedEngineDeadline: ContinuousClock.Instant? = nil
     ) async throws -> EvaluationResult {
         // Admission (03b §8), every rejection is
         // `.invalidInput(.invalidRegularExpression)`: a pattern over the
         // Part VI 512-Character limit; a conservative textual guard for
         // the catastrophic-backtracking shapes; an `NSRegularExpression`
         // compilation failure.
-        guard term.count <= limits.maximumRegexpPatternCharacters else {
-            throw HistoryFailure.invalidInput(.invalidRegularExpression)
-        }
-        guard !Self.containsRejectedPatternShape(term) else {
-            throw HistoryFailure.invalidInput(.invalidRegularExpression)
-        }
         let regex: NSRegularExpression
-        do {
-            regex = try NSRegularExpression(pattern: term)
-        } catch {
-            throw HistoryFailure.invalidInput(.invalidRegularExpression)
+        if let preparedPattern {
+            regex = preparedPattern
+        } else {
+            guard term.count <= limits.maximumRegexpPatternCharacters,
+                  !Self.containsRejectedPatternShape(term) else {
+                throw HistoryFailure.invalidInput(.invalidRegularExpression)
+            }
+            do {
+                regex = try NSRegularExpression(pattern: term)
+            } catch {
+                throw HistoryFailure.invalidInput(.invalidRegularExpression)
+            }
         }
 
         // One engine deadline per evaluateRegexp request (03b §8 Card 11C):
         // both bounded-prefix scans below observe the same monotonic instant.
-        let engineDeadline = ContinuousClock().now.advanced(
+        let engineDeadline = sharedEngineDeadline ?? ContinuousClock().now.advanced(
             by: regexpEngineDeadline
         )
 

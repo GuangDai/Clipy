@@ -1,16 +1,13 @@
-/// Search evaluation worker for the two-step value pipeline
-/// (docs/05-authority-kernel.md §14.2; docs/04-coherence.md §7).
+/// Search evaluation worker for request-owned SQLite snapshots (V2-09 §4).
 /// Owning spec: docs/03b-instruction-set.md §8 (frozen search behavior);
 /// bounds: docs/06-cross-cutting.md §2; fixtures: docs/06-cross-cutting.md
 /// §8 WS17.
 ///
-/// The facade wires the pipeline: `HistoryAuthority` captures a bounded
-/// Sendable `SearchCorpusSnapshot` inside one non-suspending interval, then
-/// this worker evaluates the request over it off the Authority and returns
-/// the bounded `HistoryPage` stamped with the corpus position. The worker
-/// never reads SwiftData and never uses dedup Candidate Rank (§14.2); it is
-/// pure evaluation over the Sendable corpus, and only immutable `Sendable`
-/// values cross its boundary (docs/01-architecture.md §6).
+/// The facade supplies only an immutable store location. Each request opens
+/// its own read-only connection here, captures the position inside one read
+/// transaction, and scans bounded batches while keeping finite candidate
+/// metadata. No database handle crosses an actor, and no complete corpus is
+/// retained. The array entry below also serves direct matcher fixtures.
 ///
 /// The actor exists to confine the non-Sendable Fuse 1.4.0 matcher: `Fuse`
 /// is a pre-concurrency class with no `Sendable` conformance, so it lives
@@ -32,6 +29,7 @@ internal enum SearchWorkerSuspensionPoint: String, Sendable {
     case exactScanChunk = "SearchWorker.page.exactScanChunk"
     case regexpScanChunk = "SearchWorker.page.regexpScanChunk"
     case fuzzyScanChunk = "SearchWorker.page.fuzzyScanChunk"
+    case sqliteBatchComplete = "SearchWorker.page.sqliteBatchComplete"
 #endif
 }
 
@@ -95,6 +93,7 @@ internal actor SearchWorker {
     /// `defaultRegexpEngineDeadline` in production; `@testable` tests inject a
     /// zero or distant value along the `suspensionHandler` seam precedent.
     internal var regexpEngineDeadline: Duration
+    internal var snapshotLifetime = SearchWorker.maximumSnapshotLifetime
 
 #if DEBUG
     /// Opt-in aggregate tracing for the off-Authority half of the search
@@ -129,6 +128,10 @@ internal actor SearchWorker {
     /// never calls it, so the fixed default stays in force there.
     internal func setRegexpEngineDeadline(_ deadline: Duration) {
         regexpEngineDeadline = deadline
+    }
+
+    internal func setSnapshotLifetime(_ lifetime: Duration) {
+        snapshotLifetime = lifetime
     }
 
     /// Cooperative checkpoint shared by the three scan loops. Production's
@@ -198,7 +201,7 @@ internal actor SearchWorker {
     ///
     /// - Parameter request: The caller's browse request. Only `.search`
     ///   kinds reach this worker: the facade routes `.recent` to the
-    ///   Authority's own §14.1 interval (`SwiftDataHistory.browse`), so a
+    ///   Authority's own §14.1 interval (`SQLiteHistory.browse`), so a
     ///   `.recent` kind here is a wiring violation — the §16 defensive
     ///   internal-invariant mapping, never a caller-observable case.
     /// - Parameter corpus: The bounded Sendable snapshot the Authority
@@ -341,76 +344,9 @@ internal actor SearchWorker {
 #endif
 
         let pageSlice = survivors.prefix(request.limit)
-        let rows = pageSlice.map { evaluatedRow -> HistoryRow in
-            let corpusRow = evaluatedRow.corpusRow
-            // Deferred presentations materialize here and only here —
-            // bounded O(returned page) excerpt/translation work instead of
-            // O(every matched row) per scan (03b §8; the corpus row already
-            // carries the stored body, so nothing extra crosses a boundary).
-            let search: SearchPresentation?
-            switch evaluatedRow.search {
-            case nil:
-                search = nil
-            case .ready(let presentation):
-                search = presentation
-            case .titleRanges(let characterRanges):
-                search = SearchPresentation(
-                    snippet: nil,
-                    matchedRanges: Self.utf16Ranges(
-                        from: characterRanges,
-                        in: corpusRow.title
-                    )
-                )
-            case .bodyExcerpt(
-                let characterRanges,
-                let maximumCharacters,
-                let bodySuffixWasOmitted,
-                let utf16Range
-            ):
-                let excerpt: (snippet: String, ranges: [UTF16TextRange])
-                if let maximumCharacters {
-                    // Fuzzy/regexp windows: the lane's bounded scan prefix
-                    // (03b §8), borrowed from the stored body. The excerpt
-                    // owns only its final window, not a second scan-prefix copy.
-                    let scan = Self.boundedCharacterPrefix(
-                        of: corpusRow.searchBody,
-                        maximumCharacters: maximumCharacters
-                    )
-                    excerpt = Self.bodyExcerpt(
-                        body: scan.text,
-                        characterRanges: characterRanges,
-                        snippetLimit: limits.maximumBodySearchSnippetCharacters,
-                        bodySuffixWasOmitted: bodySuffixWasOmitted,
-                        utf16Range: utf16Range
-                    )
-                } else {
-                    // Exact mode windows the complete bounded projection.
-                    excerpt = Self.bodyExcerpt(
-                        body: corpusRow.searchBody,
-                        characterRanges: characterRanges,
-                        snippetLimit: limits.maximumBodySearchSnippetCharacters,
-                        bodySuffixWasOmitted: bodySuffixWasOmitted,
-                        utf16Range: utf16Range
-                    )
-                }
-                search = SearchPresentation(
-                    snippet: excerpt.snippet,
-                    matchedRanges: excerpt.ranges
-                )
-            }
-            return HistoryRow(
-                item: HistoryItemReference(
-                    id: corpusRow.id,
-                    contentVersion: corpusRow.contentVersion
-                ),
-                title: corpusRow.title,
-                typeIdentifiers: corpusRow.typeIdentifiers,
-                lastCopiedAt: corpusRow.lastCopiedAt,
-                copyCount: corpusRow.copyCount,
-                lastSource: corpusRow.lastSource,
-                pinnedPosition: corpusRow.pinOrdinal?.rawValue,
-                search: search
-            )
+        let rows = try pageSlice.map { row in
+            try Task.checkCancellation()
+            return materialize(row)
         }
         try Task.checkCancellation()
 
@@ -468,6 +404,46 @@ internal actor SearchWorker {
     }
 
     // MARK: - Default-order anchor (docs/04-coherence.md §6)
+
+    /// Both SQLite streaming and the pure matcher fixtures materialize only
+    /// returned rows, using the same frozen Unicode/window construction.
+    internal func materialize(_ evaluatedRow: EvaluatedRow) -> HistoryRow {
+        let row = evaluatedRow.corpusRow
+        let search: SearchPresentation?
+        switch evaluatedRow.search {
+        case nil:
+            search = nil
+        case .ready(let presentation):
+            search = presentation
+        case .titleRanges(let characterRanges):
+            search = SearchPresentation(
+                snippet: nil,
+                matchedRanges: Self.utf16Ranges(from: characterRanges, in: row.title)
+            )
+        case .bodyExcerpt(let ranges, let maximumCharacters, let omitted, let utf16Range):
+            let body: Substring
+            if let maximumCharacters {
+                body = Self.boundedCharacterPrefix(
+                    of: row.searchBody, maximumCharacters: maximumCharacters
+                ).text
+            } else {
+                body = row.searchBody[...]
+            }
+            let excerpt = Self.bodyExcerpt(
+                body: body, characterRanges: ranges,
+                snippetLimit: limits.maximumBodySearchSnippetCharacters,
+                bodySuffixWasOmitted: omitted, utf16Range: utf16Range
+            )
+            search = SearchPresentation(snippet: excerpt.snippet, matchedRanges: excerpt.ranges)
+        }
+        return HistoryRow(
+            item: HistoryItemReference(id: row.id, contentVersion: row.contentVersion),
+            title: row.title, typeIdentifiers: row.typeIdentifiers,
+            lastCopiedAt: row.lastCopiedAt, copyCount: row.copyCount,
+            lastSource: row.lastSource, pinnedPosition: row.pinOrdinal?.rawValue,
+            search: search
+        )
+    }
 
     /// The `.defaultOrder` anchor family: used by the recent-equivalent,
     /// exact, and regexp lanes for every row, and by the fuzzy lane for

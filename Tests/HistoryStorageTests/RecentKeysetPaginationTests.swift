@@ -10,8 +10,8 @@ struct RecentKeysetPaginationTests {
     /// cursor size and fetch work must not accumulate previously visited IDs.
     @Test(arguments: [0, 5, 12])
     func everyPagePreservesGlobalOrderWithBoundedFetchAndCursor(pinnedCount: Int) async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let suffixes: [UInt8] = [0x20, 0x0A, 0x10, 0x02, 0x0B, 0x01, 0x03, 0x0C, 0x04, 0x0D, 0x05, 0x0E]
         var ids: [HistoryItemID] = []
@@ -85,8 +85,8 @@ struct RecentKeysetPaginationTests {
     }
 
     @Test func missingUnpinnedAnchorExpiresInsteadOfSkippingToNextUUID() async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         for index in 0..<3 {
             _ = try await history.perform(.capture(WSSupport.textCapture(

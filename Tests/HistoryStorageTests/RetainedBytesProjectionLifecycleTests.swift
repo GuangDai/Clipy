@@ -1,799 +1,212 @@
-/// Current retained-byte projection lifecycle: capture, coalesce, revise,
-/// prune and removal preserve the one-to-one scalar rows (V2-02 §3.3b/§6.3).
-/// Real History operations and independent contexts prove maintenance even
-/// with policies disabled. Missing, orphaned or invalid rows reject public
-/// reopen without repair; raw content remains unchanged after rejection.
+/// V2-09 §6: item scalars, normalized immutable contents and the aggregate
+/// change in the same SQLite transaction. There is no separate byte projection.
 import Foundation
 import HistoryCore
-import HistoryDomain
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
-@Suite("RetainedBytesRow projection lifecycle (R.3)")
 struct RetainedBytesProjectionLifecycleTests {
-
-    // MARK: - Fixtures
-
-    /// Every `RetainedBytesRow`, deterministically ordered by item ID.
-    private static func fetchBytesRows(
-        _ container: ModelContainer
-    ) throws -> [RetainedBytesRow] {
-        let context = ModelContext(container)
-        let rows = try context.fetch(FetchDescriptor<RetainedBytesRow>())
-        return rows.sorted { $0.itemID.uuidString < $1.itemID.uuidString }
-    }
-
-    /// The unique projection row for `itemID`, or `nil` (0 or 1 rows;
-    /// 2+ fails the fixture loudly — the 1:1 law is exactly what these
-    /// tests establish).
-    private static func fetchBytesRow(
-        for itemID: HistoryItemID,
-        in container: ModelContainer
-    ) throws -> RetainedBytesRow? {
-        let context = ModelContext(container)
-        let uuid = itemID.rawValue
-        var descriptor = FetchDescriptor<RetainedBytesRow>(
-            predicate: #Predicate { row in row.itemID == uuid }
+    @Test func captureAndCoalescingCountRepresentationBytesWithoutDuplicatingStorage() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let text = Data("r3 canonical base".utf8)
+        let opaque = Data(repeating: 0xA7, count: 70_000)
+        let capture = ClipboardCapture(
+            representations: [
+                CapturedRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: text),
+                CapturedRepresentation(typeIdentifier: "com.example.opaque", bytes: opaque),
+            ], origin: CopyOriginObservation(sourceApplication: nil, lineageHint: nil),
+            observedAt: Date(timeIntervalSinceReferenceDate: 700_100_000)
         )
-        descriptor.fetchLimit = 2
-        let rows = try context.fetch(descriptor)
-        precondition(
-            rows.count <= 1,
-            "RetainedBytesRow 1:1 law violated in fixture: \(rows.count) rows"
-        )
-        return rows.first
-    }
-
-    /// The four projection scalars compared across a commit.
-    private struct ProjectionScalars: Equatable {
-        let canonicalBytes: Int
-        let revisionCount: Int
-        let revisionBytes: Int
-        let bytesSchemaVersion: UInt16
-    }
-
-    private static func scalars(
-        of row: RetainedBytesRow
-    ) -> ProjectionScalars {
-        ProjectionScalars(
-            canonicalBytes: row.canonicalBytes,
-            revisionCount: row.revisionCount,
-            revisionBytes: row.revisionBytes,
-            bytesSchemaVersion: row.bytesSchemaVersion
-        )
-    }
-
-    /// Performs one raw text capture and returns the inserted reference.
-    @discardableResult
-    private static func capture(
-        _ text: String,
-        at seconds: Double,
-        source: String,
-        in history: SwiftDataHistory
-    ) async throws -> HistoryItemReference {
-        let receipt = try await history.perform(.capture(
-            WSSupport.textCapture(
-                text,
-                observedAt: Date(timeIntervalSinceReferenceDate: seconds),
-                source: source
-            )
-        ))
-        guard case let .committed(commit) = receipt,
-              case let .inserted(reference) = commit.outcome else {
-            Issue.record("R.3 setup: expected .committed with .inserted, got \(receipt)")
-            throw HistoryFailure.notFound(HistoryItemID(rawValue: UUID()))
+        let receipt = try await history.perform(.capture(capture))
+        guard case .committed(let commit) = receipt, case .inserted(let item) = commit.outcome else {
+            Issue.record("Expected capture insertion"); return
         }
-        return reference
-    }
-
-    // MARK: - (a) Insert (V2-02 §3.3b)
-
-    /// Capture-insert creates exactly one 1:1 row: `canonicalBytes` equals
-    /// the recomputed signature-entry byte-count sum of the item's durable
-    /// `canonicalSignatureBlob` (independently re-decoded here, the §3.2
-    /// signature-envelope measure), `revisionCount == 0` and
-    /// `revisionBytes == 0` (a v1 insert carries an empty revision list,
-    /// `02` §2 — DC-04), and `bytesSchemaVersion == 1` (§3.3b fence).
-    @Test("capture insert stamps the 1:1 row with signature byte sum and zero revision scalars")
-    func captureInsertStampsOneToOneRow() async throws {
-        let storeURL = WSSupport.tempStoreURL("r3-insert-stamp")
-        defer { WSSupport.removeStore(storeURL) }
-        let history = try await WSSupport.openHistory(storeURL: storeURL)
-
-        // 17 UTF-8 bytes (see the file header's hand-worked values).
-        let text = "r3 canonical base"
-        let reference = try await Self.capture(
-            text,
-            at: 700_100_000,
-            source: "com.example.r3.insert",
-            in: history
-        )
-
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        let allRows = try Self.fetchBytesRows(container)
-        #expect(allRows.count == 1)
-        let row = try #require(allRows.first)
-        #expect(row.itemID == reference.id.rawValue)
-
-        // §3.3b insert stamp: zero revision scalars, version-1 fence.
-        #expect(row.revisionCount == 0)
-        #expect(row.revisionBytes == 0)
-        #expect(row.bytesSchemaVersion == 1)
-
-        // canonicalBytes: the recomputed signature-entry byte-count sum over
-        // the durable blob (never the JSON framing of the blob itself), and
-        // the hand-worked literal for the single ASCII representation.
-        let items = try WSSupport.fetchRows(container)
-        let itemRow = try #require(items.first(where: { $0.id == reference.id.rawValue }))
-        let entries = try SignatureBlobCodec.decode(itemRow.canonicalSignatureBlob)
-        var recomputed = 0
-        for entry in entries {
-            recomputed += entry.byteCount
+        let original = try await RetainedBytesTestSupport.counts(item.id, in: history)
+        #expect(original == RetainedBytesTestSupport.Counts(canonical: 70_017, revisions: 0, revisionBytes: 0))
+        let usage = try await history.usage()
+        #expect(usage.canonicalBytes == text.count + opaque.count)
+        #expect(usage.revisionBytes == 0)
+        #expect(usage.itemCount == 1)
+        let repeated = try await history.perform(.capture(capture))
+        guard case .committed(let repeatedCommit) = repeated, case .coalesced(let winner) = repeatedCommit.outcome else {
+            Issue.record("Expected coalescing"); return
         }
-        #expect(recomputed == 17)
-        #expect(row.canonicalBytes == recomputed)
-        #expect(row.canonicalBytes == 17)
+        #expect(winner.id == item.id)
+        #expect(try await RetainedBytesTestSupport.counts(item.id, in: history) == original)
+        #expect(try await history.usage().totalContentBytes == usage.totalContentBytes)
+        let details = try await history.details(for: item.id)
+        #expect(details.canonical.reduce(0) { $0 + $1.bytes.count } == 70_017)
+        #expect(details.occurrence.count == 2)
+        try await RetainedBytesTestSupport.assertAccounting(in: history)
     }
 
-    // MARK: - (b) Coalesce (V2-02 §3.3b / §6.3)
-
-    /// Coalesce does not restamp: a coalesce stamps only `.updateOccurrence`
-    /// (occurrence fields; no byte-changing blob write), so the winner's
-    /// existing row is present and unchanged — the byte-projection analog
-    /// of v1's "occurrence mutations preserve projections" rule (§6.3).
-    @Test("coalesce leaves the projection row unchanged")
-    func coalesceLeavesProjectionRowUnchanged() async throws {
-        let storeURL = WSSupport.tempStoreURL("r3-coalesce-unchanged")
-        defer { WSSupport.removeStore(storeURL) }
-        let history = try await WSSupport.openHistory(storeURL: storeURL)
-
-        let text = "r3 coalesce winner"
-        let reference = try await Self.capture(
-            text,
-            at: 700_101_000,
-            source: "com.example.r3.coalesce",
-            in: history
-        )
-
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        let before = try Self.fetchBytesRow(for: reference.id, in: container)
-        let scalarsBefore = Self.scalars(of: try #require(before))
-
-        // Same content, later observation: the planner coalesces onto the
-        // winner (docs/02-domain.md §9; equal content never inserts).
-        let receipt = try await history.perform(.capture(
-            WSSupport.textCapture(
-                text,
-                observedAt: Date(timeIntervalSinceReferenceDate: 700_101_500),
-                source: "com.example.r3.coalesce"
-            )
-        ))
-        guard case let .committed(commit) = receipt,
-              case .coalesced(let winner) = commit.outcome else {
-            Issue.record("R.3: expected .committed with .coalesced, got \(receipt)")
-            return
-        }
-        #expect(winner.id == reference.id)
-
-        // Still exactly one unchanged row for the one retained item.
-        let after = try Self.fetchBytesRow(for: reference.id, in: container)
-        #expect(Self.scalars(of: try #require(after)) == scalarsBefore)
-        #expect(try Self.fetchBytesRows(container).count == 1)
-    }
-
-    // MARK: - (c) Revise restamp (V2-02 §3.3b / §6.3)
-
-    /// Each appended revision restamps the row in the same transaction:
-    /// `revisionCount` grows by one and `revisionBytes` by the appended
-    /// representation bytes, while `canonicalBytes` never moves (Canonical
-    /// Content is immutable, D2 — the append touches only Effective state).
-    /// Hand-worked values: 17-byte canonical; first revision 26 bytes;
-    /// second revision 18 bytes; post-second-append summary 2 / 44.
-    @Test("revise append restamps revision scalars and never touches canonicalBytes")
-    func reviseAppendRestampsRevisionScalars() async throws {
-        let storeURL = WSSupport.tempStoreURL("r3-revise-restamp")
-        defer { WSSupport.removeStore(storeURL) }
-        let history = try await WSSupport.openHistory(storeURL: storeURL)
-
-        let reference = try await Self.capture(
-            "r3 canonical base",
-            at: 700_102_000,
-            source: "com.example.r3.revise",
-            in: history
-        )
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-
-        // First append: replace the single Canonical type's Effective bytes
-        // with 26 new bytes (docs/02-domain.md §11; OCC token = version 1).
-        let firstRevisionText = "r3 revised effective bytes"
-        var receipt = try await history.perform(.revise(RevisionRequest(
-            itemID: reference.id,
-            expected: ContentVersion(rawValue: 1),
-            intent: .replace(RevisionDraft(decisions: [
-                RevisionDecision(
-                    typeIdentifier: "public.utf8-plain-text",
-                    action: .replace(bytes: Data(firstRevisionText.utf8))
-                ),
-            ]))
+    @Test func appendAndPrunePreserveCanonicalAndCurrentImmutableContent() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let original = try await RetainedBytesTestSupport.capture("r3 canonical base", in: history)
+        let first = try await RetainedBytesTestSupport.revise(original, text: "r3 revised effective bytes", in: history)
+        let current = try await RetainedBytesTestSupport.revise(first, text: "r3 second revision", in: history)
+        #expect(try await RetainedBytesTestSupport.counts(original.id, in: history)
+            == RetainedBytesTestSupport.Counts(canonical: 17, revisions: 2, revisionBytes: 44))
+        let before = try await history.details(for: original.id)
+        let usage = try await history.usage()
+        let receipt = try await history.perform(.setRetentionPolicies(HistoryRetentionPolicies(
+            age: nil, storage: nil,
+            revisions: RevisionRetention(maxRevisionsPerItem: 1, maxRevisionBytesPerItem: nil)
         )))
-        guard case .committed = receipt else {
-            Issue.record("R.3: expected a committed first revise, got \(receipt)")
-            return
+        guard case .committed(let commit) = receipt,
+              case .retentionPoliciesSet(let retired, let pruned) = commit.outcome else {
+            Issue.record("Expected a revision-pruning policy commit"); return
         }
-        var fetchedRow = try Self.fetchBytesRow(for: reference.id, in: container)
-        var row = try #require(fetchedRow)
-        #expect(row.revisionCount == 1)
-        #expect(row.revisionBytes == 26)
-
-        // Second append (OCC token = version 2): 18 more bytes.
-        let secondRevisionText = "r3 second revision"
-        receipt = try await history.perform(.revise(RevisionRequest(
-            itemID: reference.id,
-            expected: ContentVersion(rawValue: 2),
-            intent: .replace(RevisionDraft(decisions: [
-                RevisionDecision(
-                    typeIdentifier: "public.utf8-plain-text",
-                    action: .replace(bytes: Data(secondRevisionText.utf8))
-                ),
-            ]))
-        )))
-        guard case .committed = receipt else {
-            Issue.record("R.3: expected a committed second revise, got \(receipt)")
-            return
-        }
-        fetchedRow = try Self.fetchBytesRow(for: reference.id, in: container)
-        row = try #require(fetchedRow)
-        // Canonical never moves (D2; §5.2): still the 17-byte signature sum.
-        #expect(row.revisionCount == 2)
-        #expect(row.revisionBytes == 44)
-        #expect(row.canonicalBytes == 17)
-        #expect(row.bytesSchemaVersion == 1)
+        #expect(retired == 0)
+        #expect(pruned == 1)
+        let after = try await history.details(for: original.id)
+        #expect(after.item == current)
+        #expect(after.canonical == before.canonical)
+        #expect(after.effective == before.effective)
+        #expect(after.revisions.count == 1)
+        #expect(after.revisions.map(\.id) == Array(before.revisions.suffix(1)).map(\.id))
+        #expect(try await RetainedBytesTestSupport.counts(original.id, in: history)
+            == RetainedBytesTestSupport.Counts(canonical: 17, revisions: 1, revisionBytes: 18))
+        #expect(try await history.usage().totalContentBytes == usage.totalContentBytes - 26)
+        #expect(commit.position.rawValue == usage.position.rawValue + 1)
+        try await RetainedBytesTestSupport.assertAccounting(in: history)
     }
 
-    // MARK: - (d) Delete with the item (V2-02 §3.3/§3.4)
-
-    /// User removal deletes the removed item's projection row in the same
-    /// transaction — no orphan survives the item (§3.4's explicit step).
-    @Test("remove deletes the projection row with its item")
-    func removeDeletesProjectionRowWithItem() async throws {
-        let storeURL = WSSupport.tempStoreURL("r3-remove-row")
-        defer { WSSupport.removeStore(storeURL) }
-        let history = try await WSSupport.openHistory(storeURL: storeURL)
-
-        let removed = try await Self.capture(
-            "r3 remove target alpha",
-            at: 700_103_000,
-            source: "com.example.r3.remove",
-            in: history
-        )
-        let survivor = try await Self.capture(
-            "r3 remove survivor beta",
-            at: 700_103_100,
-            source: "com.example.r3.remove",
-            in: history
-        )
-
-        let receipt = try await history.perform(.remove(removed.id))
-        guard case let .committed(commit) = receipt,
-              case .removed(let count) = commit.outcome else {
-            Issue.record("R.3: expected .committed with .removed, got \(receipt)")
-            return
-        }
-        #expect(count == 1)
-
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        #expect(try Self.fetchBytesRow(for: removed.id, in: container) == nil)
-        #expect(try Self.fetchBytesRow(for: survivor.id, in: container) != nil)
-        #expect(try Self.fetchBytesRows(container).count == 1)
-    }
-
-    /// `.clear(.all)` removes every remaining projection row with its item
-    /// — no orphan survives a clear-all.
-    @Test("clear all deletes every projection row")
-    func clearAllDeletesEveryProjectionRow() async throws {
-        let storeURL = WSSupport.tempStoreURL("r3-clear-rows")
-        defer { WSSupport.removeStore(storeURL) }
-        let history = try await WSSupport.openHistory(storeURL: storeURL)
-
-        _ = try await Self.capture(
-            "r3 clear target gamma",
-            at: 700_104_000,
-            source: "com.example.r3.clear",
-            in: history
-        )
-        _ = try await Self.capture(
-            "r3 clear target delta",
-            at: 700_104_100,
-            source: "com.example.r3.clear",
-            in: history
-        )
-
-        let receipt = try await history.perform(.clear(.all))
-        guard case let .committed(commit) = receipt,
-              case .cleared(let count) = commit.outcome else {
-            Issue.record("R.3: expected .committed with .cleared, got \(receipt)")
-            return
-        }
-        #expect(count == 2)
-
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        #expect(try WSSupport.fetchRows(container).isEmpty)
-        #expect(try Self.fetchBytesRows(container).isEmpty)
-    }
-
-    /// The retention reason shares the same explicit row deletion: a count
-    /// retirement (v1 `.retire(itemID:, .retention)`, WS21's same-commit
-    /// eviction) leaves no orphan behind either — the V2 `.delete`
-    /// extension is reason-agnostic (§3.4).
-    @Test("retirement deletes the projection row with its victim")
-    func retirementDeletesProjectionRowWithVictim() async throws {
-        let storeURL = WSSupport.tempStoreURL("r3-retire-row")
-        defer { WSSupport.removeStore(storeURL) }
-        let history = try await WSSupport.openHistory(storeURL: storeURL)
-
-        let victim = try await Self.capture(
-            "r3 retention victim",
-            at: 700_105_000,
-            source: "com.example.r3.retire",
-            in: history
-        )
-        let survivor = try await Self.capture(
-            "r3 retention survivor",
-            at: 700_105_100,
-            source: "com.example.r3.retire",
-            in: history
-        )
-
-        // Lowering the count policy retires the oldest unpinned item in the
-        // same History Commit (WS21; docs/02-domain.md §12).
-        let receipt = try await history.perform(.setRetentionPolicy(maximumUnpinnedItems: 1))
-        guard case let .committed(commit) = receipt,
-              case .retentionPolicySet(let removedCount) = commit.outcome else {
-            Issue.record("R.3: expected .committed with .retentionPolicySet, got \(receipt)")
-            return
-        }
-        #expect(removedCount == 1)
-
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        #expect(try Self.fetchBytesRow(for: victim.id, in: container) == nil)
-        #expect(try Self.fetchBytesRow(for: survivor.id, in: container) != nil)
-        #expect(try Self.fetchBytesRows(container).count == 1)
-    }
-
-    // MARK: - (e) Restart 1:1 enforcement (V2-roadmap §5 step 11)
-
-    private enum ProjectionCorruption: Equatable {
-        /// Direction 1 violation: a retained item with no projection row.
-        case missingRow
-        /// Direction 2 violation: a projection row naming no retained item.
-        case orphanRow
-        /// Fence violation: an unknown `bytesSchemaVersion`.
-        case unknownBytesSchemaVersion
-    }
-
-    /// Current stores reject every broken correspondence without recreating
-    /// or deleting a projection row. Damage is written independently.
-    @Test(
-        "re-open rejects missing, orphaned and invalid projection rows without repair",
-        arguments: [
-            ProjectionCorruption.missingRow,
-            ProjectionCorruption.orphanRow,
-            ProjectionCorruption.unknownBytesSchemaVersion,
-        ]
-    )
-    private func reOpenRejectsEveryBrokenCorrespondenceWithoutRepair(
-        corruption: ProjectionCorruption
-    ) async throws {
-        let storeURL = WSSupport.tempStoreURL("r3-reopen-\(corruption)")
-        defer { WSSupport.removeStore(storeURL) }
-        let history = try await WSSupport.openHistory(storeURL: storeURL)
-        _ = try await Self.capture(
-            "r3 corruption matrix item",
-            at: 700_106_000,
-            source: "com.example.r3.corruption",
-            in: history
-        )
-
-        // Damage the projection behind the Authority's back. The target row
-        // is fetched through the SAME context that is saved — a `@Model` is
-        // bound to the context that fetched it, so a mutation through
-        // another context would never persist.
-        let (canonicalBefore, revisionsBefore) = try autoreleasepool {
-            let container = try WSSupport.makeContainer(storeURL: storeURL)
-            let storedItem = try #require(try WSSupport.fetchRows(container).first)
-            let canonicalBefore = storedItem.canonicalBlob
-            let revisionsBefore = storedItem.revisionStateBlob
-            let canonical = try CanonicalBlobCodec.decode(canonicalBefore)
-            #expect(canonical.representations.map(\.content.bytes)
-                == [Data("r3 corruption matrix item".utf8)])
-            let lineage = try RevisionStateBlobCodec.decode(revisionsBefore, canonical: canonical)
-            #expect(lineage.revisions.isEmpty && lineage.activeRevisionID == nil)
-            let context = ModelContext(container)
-            switch corruption {
-            case .missingRow:
-                let rows = try context.fetch(FetchDescriptor<RetainedBytesRow>())
-                context.delete(try #require(rows.first))
-            case .orphanRow:
-                context.insert(RetainedBytesRow(
-                    itemID: UUID(),
-                    canonicalBytes: 1,
-                    revisionCount: 0,
-                    revisionBytes: 0,
-                    bytesSchemaVersion: 1
-                ))
-            case .unknownBytesSchemaVersion:
-                let rows = try context.fetch(FetchDescriptor<RetainedBytesRow>())
-                try #require(rows.first).bytesSchemaVersion = 2
+    @Test func failedRevisionAndRemovalLeaveAllAccountingAndContentUnchanged() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let item = try await RetainedBytesTestSupport.capture("canonical", in: history)
+        let before = try await history.details(for: item.id)
+        let usage = try await history.usage()
+        for action in [RetainedBytesTestSupport.revisionAction(item, text: "new content"), .remove(item.id)] {
+            await history.authority.setTransactionFailureInjection(.beforeSingletonUpdate)
+            await #expect(throws: HistoryFailure.persistence(.transaction)) {
+                try await history.perform(action)
             }
-            try context.save()
-            return (canonicalBefore, revisionsBefore)
-        }
-
-        await #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
-            _ = try await WSSupport.openHistory(storeURL: storeURL)
-        }
-        let verification = try WSSupport.makeContainer(storeURL: storeURL)
-        let itemsAfter = try WSSupport.fetchRows(verification)
-        let itemAfter = try #require(itemsAfter.count == 1 ? itemsAfter.first : nil)
-        #expect(itemAfter.canonicalBlob == canonicalBefore)
-        #expect(itemAfter.revisionStateBlob == revisionsBefore)
-        #expect(try WSSupport.fetchPosition(verification).rawValue == 1)
-        let rowsAfter = try Self.fetchBytesRows(verification)
-        switch corruption {
-        case .missingRow:
-            #expect(rowsAfter.isEmpty, "failed open must not recreate the missing projection")
-        case .orphanRow:
-            #expect(rowsAfter.count == 2, "failed open must not delete an orphan")
-        case .unknownBytesSchemaVersion:
-            #expect(rowsAfter.count == 1)
-            #expect(rowsAfter.first?.bytesSchemaVersion == 2)
+            #expect(try await history.usage() == usage)
+            #expect(try await history.details(for: item.id) == before)
+            try await RetainedBytesTestSupport.assertAccounting(in: history)
         }
     }
 
-    /// A valid row plus an orphan also fails without deleting or restamping
-    /// either projection. Both pre-existing scalar values remain observable.
-    ///
-    /// Fixture arithmetic: one capture — "r3 orphan discrimination" is 24
-    /// UTF-8 bytes (2 + 1 + 6 + 1 + 14) of signature byte count — plus one
-    /// planted orphan row (canonicalBytes 1, revisionCount 0,
-    /// revisionBytes 0, bytesSchemaVersion 1): 2 rows total, before and
-    /// after the failed open.
-    @Test("orphan row never recovers and is never delete-as-repaired")
-    func orphanRowNeverRecoversAndIsNeverDeleteAsRepaired() async throws {
-        let storeURL = WSSupport.tempStoreURL("r3-orphan-no-repair")
-        defer { WSSupport.removeStore(storeURL) }
-        let history = try await WSSupport.openHistory(storeURL: storeURL)
-        let reference = try await Self.capture(
-            "r3 orphan discrimination",
-            at: 700_111_000,
-            source: "com.example.r3.orphan",
-            in: history
-        )
+    enum Removal: CaseIterable, Sendable { case remove, clearAll, countRetention }
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        let itemRowBefore = try Self.fetchBytesRow(for: reference.id, in: container)
-        let scalarsBefore = Self.scalars(of: try #require(itemRowBefore))
-
-        // Plant the orphan behind the Authority's back: a fresh UUID naming
-        // no retained item, valid fence, planted scalars.
-        let orphanID = UUID()
-        let damageContext = ModelContext(container)
-        damageContext.insert(RetainedBytesRow(
-            itemID: orphanID,
-            canonicalBytes: 1,
-            revisionCount: 0,
-            revisionBytes: 0,
-            bytesSchemaVersion: 1
-        ))
-        try damageContext.save()
-        #expect(try Self.fetchBytesRows(container).count == 2)
-
-        await #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
-            _ = try await WSSupport.openHistory(storeURL: storeURL)
+    @Test(arguments: Removal.allCases)
+    func deletionRemovesContentAndAccountingTogether(_ removal: Removal) async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let older = try await RetainedBytesTestSupport.capture("older", at: 700_100_000, in: history)
+        _ = try await RetainedBytesTestSupport.revise(older, text: "old revision", in: history)
+        let newer = try await RetainedBytesTestSupport.capture("newer", at: 700_100_100, in: history)
+        let action: HistoryAction
+        switch removal {
+        case .remove: action = .remove(older.id)
+        case .clearAll: action = .clear(.all)
+        case .countRetention: action = .setRetentionPolicy(maximumUnpinnedItems: 1)
         }
-
-        // No delete-as-repair: the orphan SURVIVES the failed open with its
-        // planted scalars, and the item's row is byte-for-byte unchanged.
-        let rowsAfter = try Self.fetchBytesRows(container)
-        #expect(rowsAfter.count == 2)
-        let orphanAfter = try #require(
-            rowsAfter.first(where: { $0.itemID == orphanID })
-        )
-        #expect(orphanAfter.canonicalBytes == 1)
-        #expect(orphanAfter.revisionCount == 0)
-        #expect(orphanAfter.revisionBytes == 0)
-        #expect(orphanAfter.bytesSchemaVersion == 1)
-        let itemRowAfter = try Self.fetchBytesRow(for: reference.id, in: container)
-        #expect(Self.scalars(of: try #require(itemRowAfter)) == scalarsBefore)
+        _ = try await history.perform(action)
+        #expect(try await RetainedBytesTestSupport.counts(older.id, in: history) == nil)
+        let usage = try await history.usage()
+        #expect(usage.itemCount == (removal == .clearAll ? 0 : 1))
+        #expect(usage.canonicalBytes == (removal == .clearAll ? 0 : 5))
+        #expect(usage.revisionBytes == 0)
+        if removal != .clearAll {
+            #expect(try await history.pastePayload(for: newer.id).representations.first?.bytes == Data("newer".utf8))
+        }
+        try await RetainedBytesTestSupport.assertAccounting(in: history)
     }
 
-    /// The step-7 check holds vacuously on a fresh store (zero items; rows
-    /// arrive via the capture-insert stamping) — an empty store re-opens.
-    @Test("fresh store re-opens: the 1:1 check holds vacuously")
-    func freshStoreReOpensVacuously() async throws {
-        let storeURL = WSSupport.tempStoreURL("r3-fresh-vacuous")
-        defer { WSSupport.removeStore(storeURL) }
-        _ = try await WSSupport.openHistory(storeURL: storeURL)
-
-        _ = try await WSSupport.openHistory(storeURL: storeURL)
-    }
-
-    // MARK: - (f) Disabled policies (V2-02 §4.1/§7, DC-04)
-
-    /// The projection is maintained while EVERY V2 policy is disabled: the
-    /// persisted config singleton is the all-disabled default (a migrated
-    /// store starts v1-faithful, §3.3), yet capture still stamps the 1:1
-    /// row — mandatory maintenance, not policy-driven (`V2-02` §4.1/§7:
-    /// "public behavior and v1 rows are exactly v1's, not byte-identical
-    /// durable state — the `RetainedBytesRow` projection is mandatorily
-    /// maintained 1:1 even while every policy is disabled").
-    @Test("projection is maintained while all V2 policies are disabled")
-    func projectionMaintainedWhileAllPoliciesDisabled() async throws {
-        let storeURL = WSSupport.tempStoreURL("r3-disabled-maintenance")
-        defer { WSSupport.removeStore(storeURL) }
-        let history = try await WSSupport.openHistory(storeURL: storeURL)
-
-        let reference = try await Self.capture(
-            "r3 disabled maintenance",
-            at: 700_107_000,
-            source: "com.example.r3.disabled",
-            in: history
-        )
-
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        // The persisted policies really are all-disabled (§3.3 defaults).
-        let configContext = ModelContext(container)
-        let configs = try configContext.fetch(
-            FetchDescriptor<RetentionExpansionConfigRow>()
-        )
-        #expect(configs.count == 1)
-        let config = try #require(configs.first)
-        #expect(config.agePolicyEnabled == false)
-        #expect(config.storagePolicyEnabled == false)
-        #expect(config.revisionPolicyEnabled == false)
-
-        // ... and the projection row exists anyway, with the insert stamp.
-        let projectionRow = try Self.fetchBytesRow(for: reference.id, in: container)
-        let row = try #require(projectionRow)
-        #expect(row.revisionCount == 0)
-        #expect(row.revisionBytes == 0)
-        // 23 UTF-8 bytes: "r3 disabled maintenance" is
-        // 2 + 1 + 8 + 1 + 11 ("disabled" = 8, "maintenance" = 11).
-        #expect(row.canonicalBytes == 23)
-    }
-
-    // MARK: - Prune payload seam (V2-02 §5.3)
-
-    /// The prune re-encode over a real loaded lineage: removing the oldest
-    /// inactive revision produces the shorter `RevisionStateBlobV1`
-    /// (survivor order preserved, same `activeRevisionID`, decodable by the
-    /// unchanged v1 codec against the item's Canonical) plus the post-prune
-    /// scalars — 1 surviving revision / 18 representation bytes (the second
-    /// revision's bytes; see the file header).
-    ///
-    /// Storage-side seam proof (the R.5/R.6 compositions that EMIT
-    /// `.pruneRevisions` are not landed): the lineage is loaded through the
-    /// real `MutationFactLoaders.loadRevisionFacts` from a store built by
-    /// the public capture/revise path, then pruned through the exact
-    /// static the stamping arm calls.
-    @Test("prune re-encodes the shorter same-active blob and post-prune scalars")
-    func pruneReencodesShorterBlobAndPostPruneScalars() async throws {
-        let storeURL = WSSupport.tempStoreURL("r3-prune-payload")
-        defer { WSSupport.removeStore(storeURL) }
-        let history = try await WSSupport.openHistory(storeURL: storeURL)
-
-        let reference = try await Self.capture(
-            "r3 canonical base",
-            at: 700_108_000,
-            source: "com.example.r3.prune",
-            in: history
-        )
-        for (version, text) in zip(
-            [ContentVersion(rawValue: 1), ContentVersion(rawValue: 2)],
-            ["r3 revised effective bytes", "r3 second revision"]
-        ) {
-            let receipt = try await history.perform(.revise(RevisionRequest(
-                itemID: reference.id,
-                expected: version,
-                intent: .replace(RevisionDraft(decisions: [
-                    RevisionDecision(
-                        typeIdentifier: "public.utf8-plain-text",
-                        action: .replace(bytes: Data(text.utf8))
-                    ),
-                ]))
-            )))
-            guard case .committed = receipt else {
-                Issue.record("R.3 setup: expected a committed revise, got \(receipt)")
-                return
-            }
-        }
-
-        // Load the real lineage (05 §7.3: exactly the target item).
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        let context = ModelContext(container)
-        let facts = try MutationFactLoaders.loadRevisionFacts(
-            itemID: reference.id,
-            in: context
-        )
-        #expect(facts.item.revisions.count == 2)
-        let active = try #require(facts.item.activeRevisionID)
-        #expect(active == facts.item.revisions[1].id)
-        let oldestInactive = facts.item.revisions[0].id
-
-        let pruned = try RetainedBytesStamping.prunedRevisionState(
-            loadedRevisions: facts.item.revisions,
-            activeRevisionID: facts.item.activeRevisionID,
-            removedRevisionIDs: [oldestInactive]
-        )
-
-        // §5.3: the v1 codec decodes the shorter blob unchanged — survivors
-        // in append order, same active, formatVersion 1.
-        let decoded = try RevisionStateBlobCodec.decode(
-            pruned.revisionStateBlob,
-            canonical: facts.item.canonical
-        )
-        #expect(decoded.revisions.map(\.id) == [active])
-        #expect(decoded.activeRevisionID == active)
-
-        // §6.3 restamp inputs: the post-prune summary (1 revision, 18
-        // representation bytes — the surviving second revision).
-        #expect(pruned.retainedRevisionScalars == RetainedRevisionScalars(
-            count: 1,
-            bytes: 18
-        ))
-    }
-
-    /// The §5.1/§5.2 safety laws the prune re-encode re-guards: an empty
-    /// removal set, the active revision, an unknown revision ID, and a
-    /// Canonical-state (nil-active) lineage are all incoherent prune
-    /// payloads — `StampingRejection.incoherentPlan`, never a blob write.
-    @Test("prune re-encode rejects incoherent removal sets")
-    func pruneReencodeRejectsIncoherentRemovalSets() async throws {
-        let storeURL = WSSupport.tempStoreURL("r3-prune-rejections")
-        defer { WSSupport.removeStore(storeURL) }
-        let history = try await WSSupport.openHistory(storeURL: storeURL)
-
-        let reference = try await Self.capture(
-            "r3 canonical base",
-            at: 700_109_000,
-            source: "com.example.r3.prune-reject",
-            in: history
-        )
-        let receipt = try await history.perform(.revise(RevisionRequest(
-            itemID: reference.id,
-            expected: ContentVersion(rawValue: 1),
-            intent: .replace(RevisionDraft(decisions: [
-                RevisionDecision(
-                    typeIdentifier: "public.utf8-plain-text",
-                    action: .replace(bytes: Data("r3 revised effective bytes".utf8))
-                ),
-            ]))
-        )))
-        guard case .committed = receipt else {
-            Issue.record("R.3 setup: expected a committed revise, got \(receipt)")
-            return
-        }
-
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        let context = ModelContext(container)
-        let facts = try MutationFactLoaders.loadRevisionFacts(
-            itemID: reference.id,
-            in: context
-        )
-        let active = try #require(facts.item.activeRevisionID)
-
-        // Empty removal set (§5.3: a no-op prune never reaches stamping).
-        #expect(throws: StampingRejection.incoherentPlan) {
-            _ = try RetainedBytesStamping.prunedRevisionState(
-                loadedRevisions: facts.item.revisions,
-                activeRevisionID: facts.item.activeRevisionID,
-                removedRevisionIDs: []
-            )
-        }
-        // The active revision is never prunable (D3/D23).
-        #expect(throws: StampingRejection.incoherentPlan) {
-            _ = try RetainedBytesStamping.prunedRevisionState(
-                loadedRevisions: facts.item.revisions,
-                activeRevisionID: facts.item.activeRevisionID,
-                removedRevisionIDs: [active]
-            )
-        }
-        // A removed ID naming no loaded revision is incoherent.
-        #expect(throws: StampingRejection.incoherentPlan) {
-            _ = try RetainedBytesStamping.prunedRevisionState(
-                loadedRevisions: facts.item.revisions,
-                activeRevisionID: facts.item.activeRevisionID,
-                removedRevisionIDs: [RevisionID(rawValue: UUID())]
-            )
-        }
-        // A Canonical-state lineage (nil active) has nothing to prune.
-        #expect(throws: StampingRejection.incoherentPlan) {
-            _ = try RetainedBytesStamping.prunedRevisionState(
-                loadedRevisions: [],
-                activeRevisionID: nil,
-                removedRevisionIDs: [RevisionID(rawValue: UUID())]
-            )
-        }
-    }
-
-    /// The missing-row clauses of the lifecycle primitives: `restamp` and
-    /// `deleteRow` fail closed as `.persistence(.invariantViolation)` when
-    /// the 1:1 row is absent — never a zero read, never a silent skip or
-    /// delete-as-repair (`V2-02` §3.2 / Record 5). Driven on a store whose
-    /// projection row was removed behind the Authority's back.
-    @Test("restamp and deleteRow fail closed on a missing projection row")
-    func restampAndDeleteRowFailClosedOnMissingRow() async throws {
-        let storeURL = WSSupport.tempStoreURL("r3-missing-row-closed")
-        defer { WSSupport.removeStore(storeURL) }
-        let history = try await WSSupport.openHistory(storeURL: storeURL)
-        let reference = try await Self.capture(
-            "r3 missing row target",
-            at: 700_110_000,
-            source: "com.example.r3.missing",
-            in: history
-        )
-
-        // Remove the projection row behind the Authority's back (fetched and
-        // saved through the SAME context — a `@Model` is bound to the
-        // context that fetched it).
-        let damageContainer = try WSSupport.makeContainer(storeURL: storeURL)
-        let damageContext = ModelContext(damageContainer)
-        let damageRows = try damageContext.fetch(FetchDescriptor<RetainedBytesRow>())
-        damageContext.delete(try #require(damageRows.first))
-        try damageContext.save()
-
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        let context = ModelContext(container)
-        #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
-            try RetainedBytesStamping.restamp(
-                itemID: reference.id,
-                revisionScalars: RetainedRevisionScalars(count: 0, bytes: 0),
-                in: context
-            )
-        }
-        #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
-            try RetainedBytesStamping.deleteRow(
-                itemID: reference.id,
-                in: context
-            )
-        }
-    }
-
-    // MARK: - Storage clock seam (V2-02 §6.4)
-
-    /// A fixed-`Date` clock witness injected through the `@testable`
-    /// `HistoryAuthority` initializer is stored and read back unchanged,
-    /// and the public `open` path wires the production `SystemStorageClock`
-    /// witness. Seam/compile proof (the §6.4 posture: the public
-    /// `open(configuration:)` signature and `HistoryConfiguration` carry no
-    /// clock, `RET-COMPILE-1`); the clock's retention-policy consumer — the
-    /// R.6 `.setRetentionPolicies` sweep's R1 reference time — is covered by
-    /// the RetentionPolicySweepTests clock fixtures.
-    @Test("StorageClock seam: @testable injection compiles; open wires the system witness")
-    func storageClockSeamAcceptsInjectionWhileOpenWiresSystemClock() async throws {
-        struct FixedStorageClock: StorageClock {
+    @Test func storageClockInjectionUsesTheCurrentSQLiteAuthority() async throws {
+        struct FixedClock: StorageClock {
             let fixed: Date
             func now() -> Date { fixed }
         }
         let epoch = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        let authority = try HistoryAuthority(storeLocation: HistoryStoreLocation(persistence: .temporary),
+                                             storageClock: FixedClock(fixed: epoch))
+        _ = try await authority.performStartup(initialMaximumUnpinnedItems: 200)
+        let clock = await authority.storageClock
+        #expect(clock.now() == epoch)
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let systemClock = await history.authority.storageClock
+        #expect(systemClock is SystemStorageClock)
+    }
+}
 
-        // Injection: the internal init accepts a fixed witness; the actor
-        // stores it and reads it back.
-        let storeURL = WSSupport.tempStoreURL("r3-clock-seam")
-        defer { WSSupport.removeStore(storeURL) }
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        let authority = HistoryAuthority(
-            container: container,
-            storageClock: FixedStorageClock(fixed: epoch)
-        )
-        let injected = await authority.storageClock
-        #expect(injected.now() == epoch)
+/// Shared direct fixtures for this accounting test group. All mutations use
+/// the actual public writer; SQL only observes or deliberately damages facts.
+enum RetainedBytesTestSupport {
+    struct Counts: Equatable, Sendable {
+        let canonical: Int
+        let revisions: Int
+        let revisionBytes: Int
+    }
 
-        // Production default: `open` wires the system witness internally —
-        // no clock parameter on the public seam (V2-02 §6.4).
-        let history = try await WSSupport.openHistory(storeURL: storeURL)
-        let productionClock = await history.authority.storageClock
-        #expect(productionClock is SystemStorageClock)
+    static func capture(_ text: String, at seconds: Double = 700_100_000,
+                        in history: SQLiteHistory) async throws -> HistoryItemReference {
+        let receipt = try await history.perform(.capture(WSSupport.textCapture(
+            text, observedAt: Date(timeIntervalSinceReferenceDate: seconds))))
+        guard case .committed(let commit) = receipt, case .inserted(let item) = commit.outcome else {
+            throw HistoryFailure.persistence(.invariantViolation)
+        }
+        return item
+    }
+
+    static func revisionAction(_ item: HistoryItemReference, text: String) -> HistoryAction {
+        .revise(RevisionRequest(itemID: item.id, expected: item.contentVersion,
+            intent: .replace(RevisionDraft(decisions: [RevisionDecision(
+                typeIdentifier: "public.utf8-plain-text", action: .replace(bytes: Data(text.utf8))
+            )]))))
+    }
+
+    static func revise(_ item: HistoryItemReference, text: String,
+                       in history: SQLiteHistory) async throws -> HistoryItemReference {
+        let receipt = try await history.perform(revisionAction(item, text: text))
+        guard case .committed(let commit) = receipt, case .revised(let revised) = commit.outcome else {
+            throw HistoryFailure.persistence(.invariantViolation)
+        }
+        return revised
+    }
+
+    static func counts(_ id: HistoryItemID, in history: SQLiteHistory) async throws -> Counts? {
+        try await history.authority.withTestDatabase { authority in
+            let row = try authority.database.prepare(
+                "SELECT canonicalBytes,revisionCount,revisionBytes FROM history_items WHERE id=?",
+                bindings: [.text(id.rawValue.uuidString)])
+            defer { row.finalize() }
+            guard try row.step() else { return nil }
+            return try Counts(canonical: Int(row.integer(at: 0)), revisions: Int(row.integer(at: 1)),
+                              revisionBytes: Int(row.integer(at: 2)))
+        }
+    }
+
+    static func replaceCounts(_ id: HistoryItemID, with value: Counts, in history: SQLiteHistory) async throws {
+        try await history.authority.withTestDatabase { authority in
+            try authority.database.execute("""
+                UPDATE history_items SET canonicalBytes=?,revisionCount=?,revisionBytes=? WHERE id=?
+                """, bindings: [.integer(Int64(value.canonical)), .integer(Int64(value.revisions)),
+                                 .integer(Int64(value.revisionBytes)), .text(id.rawValue.uuidString)])
+        }
+    }
+
+    static func assertAccounting(in history: SQLiteHistory) async throws {
+        let usage = try await history.usage()
+        let totals = try await history.authority.withTestDatabase { authority -> [Int64] in
+            let row = try authority.database.prepare("""
+                SELECT (SELECT count(*) FROM history_items),
+                    (SELECT coalesce(sum(canonicalBytes),0) FROM history_items),
+                    (SELECT coalesce(sum(revisionBytes),0) FROM history_items),
+                    (SELECT coalesce(sum(contentByteCount),0) FROM contents WHERE revisionOrdinal=0),
+                    (SELECT coalesce(sum(contentByteCount),0) FROM contents WHERE revisionOrdinal>0),
+                    (SELECT coalesce(sum(byteCount),0) FROM representations)
+                """)
+            defer { row.finalize() }
+            guard try row.step() else { throw HistoryFailure.persistence(.invariantViolation) }
+            return try (0..<6).map { try row.integer(at: Int32($0)) }
+        }
+        #expect(totals[0] == Int64(usage.itemCount))
+        #expect(totals[1] == Int64(usage.canonicalBytes))
+        #expect(totals[2] == Int64(usage.revisionBytes))
+        #expect(totals[3] == totals[1])
+        #expect(totals[4] == totals[2])
+        #expect(totals[5] == Int64(usage.totalContentBytes))
     }
 }

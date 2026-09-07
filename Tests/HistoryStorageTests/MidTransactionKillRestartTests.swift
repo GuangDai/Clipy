@@ -3,32 +3,17 @@
 /// `01-findings.md`): the mid-transaction process-kill atomicity cell, one
 /// proof cycle per kill point.
 ///
-/// Every earlier kill witness dies OUTSIDE the commit transaction boundary —
-/// `crashCommit` and `largeBlobCrashCommit` after the commit receipt,
-/// `gatewayAuditCrash` post-commit at the publication seam, the migration
-/// abort seam BEFORE any transaction begins — and the WS13 /
-/// `TransactionBoundaryProofTests` evidence only throws (the process
-/// survives). Each cycle below terminates the child strictly INSIDE the
-/// in-flight `ModelContext.transaction` of one 8 MiB capture:
+/// Each cycle terminates inside the real SQLite write transaction for an
+/// 8 MiB capture: once before the position UPDATE, once immediately before
+/// COMMIT. Both must leave complete old History state after restart; neither
+/// interrupts the COMMIT syscall itself. Published but unreferenced immutable
+/// files may remain for cleanup (V2-09 §6).
 ///
-/// - window A (`largeBlobMidTransactionKillClosure`): inside the closure at
-///   the X-HCR.2 WS-J1-5 window (b) interleave — rows, HCR, and audit
-///   staged as in-memory pending changes, singleton unwritten, save not yet
-///   attempted — so the outcome is deterministically complete-OLD;
-/// - window B (`largeBlobMidTransactionKillSave`): anchored at the save
-///   interval's start via the `ModelContext.willSave` notification of the
-///   operation-local context — the closest public API anchor to the SQLite
-///   commit and any externalStorage write-out — where only an old-or-new
-///   verdict is admissible (Apple publishes no write-time contract).
-///
-/// The fresh verify child then accepts exactly one complete outcome — no
-/// orphan row, duplicate, or half-written external blob — and proves the
-/// reopened store still commits (DATA-13). The killed child must die at the
-/// seam: the fixed stderr marker distinguishes "died at the kill point" from
-/// "died anywhere", so a silent seam (e.g. an unposted `willSave`) fails the
-/// cycle instead of greening it. Process-kill evidence on the pinned
-/// macOS/SwiftData lane only — no fsync, sudden-power-loss, or sidecar-layout
-/// claim (the `largeBlobCrashCommit` ceiling).
+/// The fresh child checks all original fields and continued writability.
+/// A fixed stderr marker proves the child reached the selected instruction.
+/// Existing receipt-following crash tests prove complete new state. These
+/// are process-death tests, not sudden-power-loss or filesystem durability
+/// measurements.
 import Foundation
 import Testing
 
@@ -48,14 +33,14 @@ struct MidTransactionKillRestartTests {
     }
 
     /// The fixed kill-seam stderr markers, duplicated across the process
-    /// boundary like the migration-abort argv literal (the probe and this
+    /// boundary (the probe and this
     /// bundle intentionally keep no shared symbol for them).
-    private static let closureKillMarker = "[CLIPY_TX_KILL] point=inClosurePreSave"
-    private static let saveKillMarker = "[CLIPY_TX_KILL] point=saveAttemptWillSave"
+    private static let closureKillMarker = "[CLIPY_TX_KILL] point=beforePositionWrite"
+    private static let saveKillMarker = "[CLIPY_TX_KILL] point=beforeCommit"
 
     // MARK: - One proof cycle per kill point (Card 1C-2)
 
-    @Test("closure kill before the save attempt leaves complete old state and a writable store")
+    @Test("kill before the position write leaves complete old state and a writable store")
     func closureKillBeforeSaveIsAtomicAcrossRestart() throws {
         let fixture = try Self.makeFixtureRoot(prefix: "midtx-kill-closure")
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -78,8 +63,8 @@ struct MidTransactionKillRestartTests {
         )
     }
 
-    @Test("save-anchored kill leaves complete old or complete new state and a writable store")
-    func saveAnchoredKillIsOldOrNewAcrossRestart() throws {
+    @Test("kill immediately before COMMIT leaves complete old state and a writable store")
+    func preCommitKillLeavesOldStateAcrossRestart() throws {
         let fixture = try Self.makeFixtureRoot(prefix: "midtx-kill-save")
         defer { try? FileManager.default.removeItem(at: fixture.root) }
 
@@ -123,7 +108,7 @@ struct MidTransactionKillRestartTests {
         )
         return (
             root,
-            root.appendingPathComponent("history.store"),
+            root.appendingPathComponent("history.sqlite"),
             packageRoot.appendingPathComponent(
                 ".build/debug/HistoryRestartProbe"
             )

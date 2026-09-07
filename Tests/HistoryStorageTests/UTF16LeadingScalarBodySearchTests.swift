@@ -22,8 +22,8 @@ struct UTF16LeadingScalarBodySearchTests {
         #expect(body.utf8.count == 1_203)
         #expect(body.utf8.count <= HistoryLimits.standard.maximumSearchTermUTF8Bytes)
 
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let receipt = try await history.perform(.capture(ClipboardCapture(
             representations: [CapturedRepresentation(typeIdentifier: identifier, bytes: wire)],

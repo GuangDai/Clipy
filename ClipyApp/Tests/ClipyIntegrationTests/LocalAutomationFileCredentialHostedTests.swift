@@ -10,8 +10,8 @@ struct LocalAutomationFileCredentialHostedTests {
     @Test func defaultFileCredentialPersistsAcrossActorsAndDeletesExactlyItsEntry() async throws {
         // Hosted code cannot mint package-scoped IDs. An isolated real store
         // supplies a fresh bootstrap UUID through its public admin read.
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let connection = try #require(try await history.connections().first).id
         let credential = try LocalAutomationCredential(

@@ -25,13 +25,24 @@ import SwiftUI
 @MainActor @Observable
 public final class ThumbnailStore {
 
-    /// One retained entry: a decoded image WITH its decoded-byte cost, or a
-    /// recorded negative result (fetched; nothing decodable at that exact
-    /// reference — zero decoded bytes).
+    /// One entry's scalar layout and byte cost, or a recorded negative result
+    /// (nil width, zero bytes). Pixel ownership is separate below.
     private struct Entry {
-        let raster: PreviewRaster?
+        let width: Int?
+        let height: Int
+        let rowBytes: Int
+        let sourceImageCount: Int
         let decodedBytes: Int
         var recency: UInt64
+
+        init(raster: PreviewRaster?, recency: UInt64) {
+            width = raster?.width
+            height = raster?.height ?? 0
+            rowBytes = raster?.rowBytes ?? 0
+            sourceImageCount = raster?.sourceImageCount ?? 0
+            decodedBytes = raster?.pixels.count ?? 0
+            self.recency = recency
+        }
     }
 
     // MARK: - Injected state
@@ -45,15 +56,22 @@ public final class ThumbnailStore {
 
     // MARK: - Bounded per-surface retention
 
-    /// Decoded images and negative results keyed by exact reference.
+    /// Layouts and negative results keyed by exact reference.
     private var entries: [HistoryItemReference: Entry] = [:]
+
+    /// Visible images own ordinary immutable Data independently of the
+    /// discardable cache. Cold entries keep only metadata above and pixels
+    /// here; no PreviewRaster template pins an otherwise purgeable buffer.
+    private var activeRasters: [HistoryItemReference: PreviewRaster] = [:]
+    @ObservationIgnored private let coldPixels = NSCache<NSString, NSPurgeableData>()
 
     /// Only prefetch reuse and accepted new completions advance recency.
     /// Pixel/availability reads from View.body remain pure observations.
     @ObservationIgnored private var nextRecency: UInt64 = 0
 
-    /// The retained hits' summed decoded-byte cost — the byte half of the
-    /// admission bound (misses contribute zero).
+    /// Admitted byte cost, including cold metadata until the next explicit
+    /// bookkeeping pass notices system eviction. This conservative reservation
+    /// never understates the hard bound; misses contribute zero.
     private var retainedDecodedBytes = 0
 
     /// References with a fetch currently in flight, stamped by a unique
@@ -69,12 +87,36 @@ public final class ThumbnailStore {
     /// Actual row/header appearances distinguish display demand from cold
     /// retained results. These references own no pixels or History values.
     private var displayedItems: Set<HistoryItemReference> = []
-    package var isSurfaceActive = true
+    package var isSurfaceActive = true {
+        didSet {
+            if !isSurfaceActive {
+                for (item, raster) in activeRasters {
+                    retainColdPixels(raster.pixels, for: item)
+                }
+                activeRasters.removeAll()
+            }
+        }
+    }
     package private(set) var isPrefetchSuspended = false
 
     package func setDisplayed(_ item: HistoryItemReference, _ displayed: Bool) {
-        if displayed { displayedItems.insert(item) }
-        else { displayedItems.remove(item) }
+        if displayed {
+            displayedItems.insert(item)
+            if isSurfaceActive, entries[item]?.width != nil, activeRasters[item] == nil {
+                if let raster = readColdRaster(for: item) {
+                    activeRasters[item] = raster
+                    coldPixels.removeObject(forKey: cacheKey(item))
+                } else {
+                    removeEntries { $0 == item }
+                    prefetch(item)
+                }
+            }
+        } else {
+            displayedItems.remove(item)
+            if let raster = activeRasters.removeValue(forKey: item) {
+                retainColdPixels(raster.pixels, for: item)
+            }
+        }
     }
 
     package func respondToMemoryPressure(_ pressure: DisplayMemoryPressure) {
@@ -131,11 +173,21 @@ public final class ThumbnailStore {
 
     /// The number of retained entries (hits AND recorded misses) — the
     /// memory-eviction observability hook for owner tests.
-    package var cachedEntryCount: Int { entries.count }
+    package var cachedEntryCount: Int { entries.keys.filter(hasRetainedEntry).count }
 
     /// The retained decoded-byte total (misses count zero) — the byte half
     /// of the same observability hook.
-    package var cachedDecodedBytes: Int { retainedDecodedBytes }
+    package var cachedDecodedBytes: Int {
+        entries.reduce(0) { total, pair in
+            total + (hasRetainedEntry(pair.key) ? pair.value.decodedBytes : 0)
+        }
+    }
+
+    package var activeDecodedBytes: Int {
+        activeRasters.values.reduce(0) { $0 + $1.pixels.count }
+    }
+
+    package var coldDecodedBytes: Int { cachedDecodedBytes - activeDecodedBytes }
 
     /// The number of fetches currently in flight — the quiescence signal
     /// owner tests wait on before asserting retention state.
@@ -190,6 +242,7 @@ public final class ThumbnailStore {
         self.maximumEntries = maximumEntries
         self.maximumDecodedBytes = maximumDecodedBytes
         self.measurement = measurement
+        configureColdCache()
     }
     #else
     package init(
@@ -202,6 +255,7 @@ public final class ThumbnailStore {
         self.pixels = pixels
         self.maximumEntries = maximumEntries
         self.maximumDecodedBytes = maximumDecodedBytes
+        configureColdCache()
     }
     #endif
 
@@ -211,10 +265,10 @@ public final class ThumbnailStore {
     /// Pixel bytes stay internal to this module (`raster(for:)` below);
     /// callers outside SwiftPM see dimensions only.
     public func imagePixelSize(for item: HistoryItemReference) -> PixelSize? {
-        guard let raster = entries[item]?.raster else {
+        guard hasRetainedEntry(item), let entry = entries[item], let width = entry.width else {
             return nil
         }
-        return PixelSize(width: raster.width, height: raster.height)
+        return PixelSize(width: width, height: entry.height)
     }
 
     /// Internal render edge (GOV-3 tail: only this module's row and details
@@ -223,14 +277,14 @@ public final class ThumbnailStore {
     /// immutable Sendable pixels, never a framework object, and this pure
     /// read never fetches.
     internal func raster(for item: HistoryItemReference) -> PreviewRaster? {
-        entries[item]?.raster
+        activeRasters[item] ?? readColdRaster(for: item)
     }
 
     /// A completed unavailable result for this exact reference. Unrequested
     /// and pending work are not failures; the read never starts a request.
     internal func isUnavailable(for item: HistoryItemReference) -> Bool {
         guard let entry = entries[item] else { return false }
-        return entry.raster == nil
+        return entry.width == nil
     }
 
     /// Starts one fetch for the exact reference if none is retained or in
@@ -248,6 +302,15 @@ public final class ThumbnailStore {
         // It no longer expresses demand: neither start independent work nor
         // promote a retained entry on behalf of that retired caller.
         guard !Task.isCancelled, !isPrefetchSuspended, isSurfaceActive else { return }
+        removeEntries { !hasRetainedEntry($0) }
+        if displayedItems.contains(item), entries[item]?.width != nil, activeRasters[item] == nil {
+            if let raster = readColdRaster(for: item) {
+                activeRasters[item] = raster
+                coldPixels.removeObject(forKey: cacheKey(item))
+            } else {
+                removeEntries { $0 == item }
+            }
+        }
         if entries[item] != nil {
             nextRecency += 1
             entries[item]?.recency = nextRecency
@@ -392,6 +455,8 @@ public final class ThumbnailStore {
     public func reset() {
         purgeGeneration += 1
         entries.removeAll()
+        activeRasters.removeAll()
+        coldPixels.removeAllObjects()
         retainedDecodedBytes = 0
         for flight in inFlight.values { flight.task.cancel() }
         inFlight.removeAll()
@@ -546,15 +611,23 @@ public final class ThumbnailStore {
         guard maximumEntries > 0, cost <= maximumDecodedBytes else {
             return .accepted
         }
+        removeEntries { !hasRetainedEntry($0) }
         // A same-key overwrite cannot happen (`prefetch` refuses to start
         // when an entry exists), but keep the byte total exact even so.
         if let replaced = entries[item] {
             retainedDecodedBytes -= replaced.decodedBytes
         }
         nextRecency += 1
-        entries[item] = Entry(raster: raster, decodedBytes: cost, recency: nextRecency)
+        entries[item] = Entry(raster: raster, recency: nextRecency)
         retainedDecodedBytes += cost
         evictColdEntriesIfNeeded()
+        if entries[item] != nil, let raster {
+            if isSurfaceActive, displayedItems.contains(item) {
+                activeRasters[item] = raster
+            } else {
+                retainColdPixels(raster.pixels, for: item)
+            }
+        }
         return .accepted
     }
 
@@ -564,10 +637,14 @@ public final class ThumbnailStore {
     /// request and would otherwise remain permanent fallbacks.
     private func evictColdEntriesIfNeeded() {
         while entries.count > maximumEntries || retainedDecodedBytes > maximumDecodedBytes {
-            guard let coldest = entries.min(by: { $0.value.recency < $1.value.recency }) else {
+            let cold = entries.filter { !displayedItems.contains($0.key) }
+            let candidates = cold.isEmpty ? entries : cold
+            guard let coldest = candidates.min(by: { $0.value.recency < $1.value.recency }) else {
                 return
             }
             entries.removeValue(forKey: coldest.key)
+            activeRasters.removeValue(forKey: coldest.key)
+            coldPixels.removeObject(forKey: cacheKey(coldest.key))
             retainedDecodedBytes -= coldest.value.decodedBytes
         }
     }
@@ -605,8 +682,8 @@ public final class ThumbnailStore {
         return true
     }
 
-    /// Removes matching retained entries while keeping the decoded-byte
-    /// ledger exact. Flights are handled separately because they retain no
+    /// Removes matching retained entries while keeping admitted byte cost
+    /// exact. Flights are handled separately because they retain no
     /// decoded pixels.
     private func removeEntries(
         where shouldRemove: (HistoryItemReference) -> Bool
@@ -614,10 +691,61 @@ public final class ThumbnailStore {
         let removedKeys = entries.keys.filter(shouldRemove)
         for key in removedKeys {
             if let removed = entries.removeValue(forKey: key) {
+                activeRasters.removeValue(forKey: key)
+                coldPixels.removeObject(forKey: cacheKey(key))
                 retainedDecodedBytes -= removed.decodedBytes
             }
         }
     }
+
+    private func configureColdCache() {
+        // NSCache limits are eviction hints. The explicit metadata count,
+        // byte accounting and LRU above enforce both hard surface bounds.
+        coldPixels.countLimit = max(0, maximumEntries)
+        coldPixels.totalCostLimit = max(0, maximumDecodedBytes)
+        coldPixels.evictsObjectsWithDiscardedContent = true
+    }
+
+    private func cacheKey(_ item: HistoryItemReference) -> NSString {
+        "\(item.id.rawValue.uuidString):\(item.contentVersion.rawValue)" as NSString
+    }
+
+    private func hasRetainedEntry(_ item: HistoryItemReference) -> Bool {
+        guard let entry = entries[item] else { return false }
+        if entry.width == nil || activeRasters[item] != nil { return true }
+        return coldPixels.object(forKey: cacheKey(item))?.isContentDiscarded() == false
+    }
+
+    private func retainColdPixels(_ bytes: Data, for item: HistoryItemReference) {
+        let data = NSPurgeableData(data: bytes)
+        // Creation starts with one content access. Balance it immediately so
+        // an offscreen cache entry is actually eligible for discarding.
+        data.endContentAccess()
+        coldPixels.setObject(data, forKey: cacheKey(item), cost: bytes.count)
+    }
+
+    private func readColdRaster(for item: HistoryItemReference) -> PreviewRaster? {
+        guard let entry = entries[item], let width = entry.width,
+              let data = coldPixels.object(forKey: cacheKey(item)),
+              data.beginContentAccess() else { return nil }
+        defer { data.endContentAccess() }
+        // Never bridge the mutable/purgeable object to Data: that can retain
+        // its backing store. Only this independently copied value leaves here.
+        let pixels = Data(bytes: data.bytes, count: data.length)
+        return PreviewRaster(pixels: pixels, width: width, height: entry.height,
+                             rowBytes: entry.rowBytes, sourceImageCount: entry.sourceImageCount)
+    }
+
+    #if DEBUG
+    /// Deterministic cache-loss proofs; these do not simulate system pressure.
+    package func discardColdPixelsForTesting(_ item: HistoryItemReference) {
+        coldPixels.object(forKey: cacheKey(item))?.discardContentIfPossible()
+    }
+
+    package func removeColdEntryForTesting(_ item: HistoryItemReference) {
+        coldPixels.removeObject(forKey: cacheKey(item))
+    }
+    #endif
 }
 
 #if DEBUG

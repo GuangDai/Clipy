@@ -7,7 +7,6 @@
 /// schema.
 import Foundation
 import HistoryCore
-import SwiftData
 
 extension HistoryAuthority {
     internal static let gatewayConfigKey = "external-gateway"
@@ -33,13 +32,14 @@ extension HistoryAuthority {
     /// the startup `.openStore` producer, matching the other startup
     /// singletons. (`V2-05` §4.1/§4.6; `05` §13/§16.)
     internal func ensureGatewayBootstrap(
-        in context: ModelContext
+        in context: SQLiteDatabase
     ) throws -> ExternalConnectionID {
-        var configDescriptor = FetchDescriptor<GatewayConfigRow>()
-        configDescriptor.fetchLimit = 2
-        let configs: [GatewayConfigRow]
+        var configs: [GatewayConfigRow] = []
         do {
-            configs = try context.fetch(configDescriptor)
+            let statement = try context.prepare("SELECT \(GatewayConfigRow.columns) FROM gateway_config LIMIT 2")
+            while try statement.step() { configs.append(try GatewayConfigRow(statement: statement)) }
+        } catch let failure as HistoryFailure {
+            throw failure
         } catch {
             throw HistoryFailure.persistence(.openStore)
         }
@@ -48,15 +48,20 @@ extension HistoryAuthority {
         case 0:
             let historyIsEmpty: Bool
             do {
-                var positionDescriptor = FetchDescriptor<LastChangePositionRow>()
-                positionDescriptor.fetchLimit = 2
-                let positions = try context.fetch(positionDescriptor)
-                let itemCount = try context.fetchCount(FetchDescriptor<HistoryItemRow>())
-                let byteRowCount = try context.fetchCount(FetchDescriptor<RetainedBytesRow>())
-                historyIsEmpty = positions.count == 1
-                    && positions[0].key == Self.positionSingletonKey
-                    && positions[0].rawValue == 0
-                    && itemCount == 0 && byteRowCount == 0
+                let state = try context.prepare("SELECT key, changePosition, retainedItemCount, canonicalBytes, revisionBytes FROM history_state LIMIT 2")
+                let hasState = try state.step()
+                if hasState {
+                    let emptyState = try state.text(at: 0) == "retained-history"
+                        && sqliteUInt64(state.blob(at: 1)) == 0
+                        && state.integer(at: 2) == 0
+                        && state.integer(at: 3) == 0
+                        && state.integer(at: 4) == 0
+                    let extraState = try state.step()
+                    let item = try context.prepare("SELECT 1 FROM history_items LIMIT 1")
+                    historyIsEmpty = try emptyState && !extraState && !item.step()
+                } else {
+                    historyIsEmpty = false
+                }
             } catch {
                 throw HistoryFailure.persistence(.openStore)
             }
@@ -68,25 +73,24 @@ extension HistoryAuthority {
             let connectionID = gatewayConnectionIDSource()
             let enrolledAt = storageClock.now()
             do {
-                try context.transaction {
-                    context.insert(GatewayConfigRow(
-                        key: Self.gatewayConfigKey,
-                        appIntentsConnectionID: connectionID,
-                        nextAuditSequence: 1,
-                        auditBytes: 0,
-                        compactionFloor: 1,
-                        configSchemaVersion: Self.gatewayConfigSchemaVersion
-                    ))
-                    context.insert(ConnectionRow(
-                        id: connectionID,
-                        displayNameRaw: Self.gatewayConnectionDisplayName,
-                        enrollKindRaw: ConnectionEnrollKind.appIntents.rawValue,
-                        statusRaw: ConnectionStatus.active.rawValue,
-                        enrolledAt: enrolledAt,
-                        revokedAt: nil,
-                        configSchemaVersion: Self.gatewayConfigSchemaVersion
-                    ))
-                }
+                try context.execute(
+                    "INSERT INTO gateway_config (key, appIntentsConnectionID, nextAuditSequence, auditBytes, compactionFloor, configSchemaVersion) VALUES (?, ?, ?, ?, ?, ?)",
+                    bindings: [
+                        .text(Self.gatewayConfigKey), .text(connectionID.uuidString),
+                        .blob(sqliteUInt64(1)), .blob(sqliteUInt64(0)), .blob(sqliteUInt64(1)),
+                        .integer(Int64(Self.gatewayConfigSchemaVersion))
+                    ]
+                )
+                try context.execute(
+                    "INSERT INTO connections (id, displayNameRaw, enrollKindRaw, statusRaw, enrolledAt, revokedAt, configSchemaVersion) VALUES (?, ?, ?, ?, ?, NULL, ?)",
+                    bindings: [
+                        .text(connectionID.uuidString), .text(Self.gatewayConnectionDisplayName),
+                        .integer(Int64(ConnectionEnrollKind.appIntents.rawValue)),
+                        .integer(Int64(ConnectionStatus.active.rawValue)),
+                        .real(enrolledAt.timeIntervalSinceReferenceDate),
+                        .integer(Int64(Self.gatewayConfigSchemaVersion))
+                    ]
+                )
             } catch {
                 throw HistoryFailure.persistence(.openStore)
             }
@@ -112,25 +116,19 @@ extension HistoryAuthority {
     /// the earlier position and retention singleton classifiers can reject a
     /// post-X3 durable shape before either attempts a default-row repair.
     internal static func gatewayTablesAreEmpty(
-        in context: ModelContext
+        in context: SQLiteDatabase
     ) throws -> Bool {
-        var configDescriptor = FetchDescriptor<GatewayConfigRow>()
-        configDescriptor.fetchLimit = 1
-        var connectionDescriptor = FetchDescriptor<ConnectionRow>()
-        connectionDescriptor.fetchLimit = 1
-        var grantDescriptor = FetchDescriptor<GrantRow>()
-        grantDescriptor.fetchLimit = 1
-        var operationDescriptor = FetchDescriptor<OperationRecordRow>()
-        operationDescriptor.fetchLimit = 1
         do {
-            let configs = try context.fetch(configDescriptor)
-            let connections = try context.fetch(connectionDescriptor)
-            let grants = try context.fetch(grantDescriptor)
-            let operations = try context.fetch(operationDescriptor)
-            return configs.isEmpty
-                && connections.isEmpty
-                && grants.isEmpty
-                && operations.isEmpty
+            let statement = try context.prepare("""
+                SELECT EXISTS(SELECT 1 FROM gateway_config)
+                    OR EXISTS(SELECT 1 FROM connections)
+                    OR EXISTS(SELECT 1 FROM grants)
+                    OR EXISTS(SELECT 1 FROM operation_records)
+                """)
+            guard try statement.step() else { throw HistoryFailure.persistence(.invariantViolation) }
+            return try statement.integer(at: 0) == 0
+        } catch let failure as HistoryFailure {
+            throw failure
         } catch {
             throw HistoryFailure.persistence(.openStore)
         }
@@ -139,7 +137,7 @@ extension HistoryAuthority {
     /// Validates the current-release exact table shape without repair.
     private static func validateExistingGatewayBootstrap(
         _ config: GatewayConfigRow,
-        in context: ModelContext
+        in context: SQLiteDatabase
     ) throws {
         guard config.key == gatewayConfigKey else {
             throw HistoryFailure.persistence(.invariantViolation)

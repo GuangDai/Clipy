@@ -12,7 +12,7 @@ struct LocalAutomationRevisionTests {
     ]
 
     private struct Fixture: Sendable {
-        let history: SwiftDataHistory
+        let history: SQLiteHistory
         let ingress: LocalAutomationIngress
         let credential: LocalAutomationCredential
         let item: HistoryItemReference
@@ -211,7 +211,7 @@ struct LocalAutomationRevisionTests {
         grantRevision: Bool = true, seedOlderItem: Bool = false,
         onCommittedRevision: (@Sendable (HistoryItemReference, HistoryCommit) async -> Void)? = nil
     ) async throws -> Fixture {
-        let history = try await SwiftDataHistory.open(configuration: HistoryConfiguration(persistence: .memory))
+        let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(persistence: .temporary))
         let connection = ExternalConnectionID(rawValue: UUID())
         try await history.authority.publishVerifiedLocalAutomationEnrollment(connection, displayName: "Revision test")
         for capability in [ExternalCapability.browsePreview, .readEffectiveContent] {

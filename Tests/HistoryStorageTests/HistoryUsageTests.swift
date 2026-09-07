@@ -5,14 +5,14 @@ import Testing
 
 @Suite("Retained content usage")
 struct HistoryUsageTests {
-    private func openHistory() async throws -> SwiftDataHistory {
-        try await SwiftDataHistory.open(configuration: HistoryConfiguration(persistence: .memory))
+    private func openHistory() async throws -> SQLiteHistory {
+        try await SQLiteHistory.open(configuration: HistoryConfiguration(persistence: .temporary))
     }
 
     private func capture(
         _ text: String,
         at seconds: Double,
-        in history: SwiftDataHistory
+        in history: SQLiteHistory
     ) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.capture(WSSupport.textCapture(
             text, observedAt: Date(timeIntervalSinceReferenceDate: seconds)
@@ -28,7 +28,7 @@ struct HistoryUsageTests {
     private func replace(
         _ item: HistoryItemReference,
         with text: String,
-        in history: SwiftDataHistory
+        in history: SQLiteHistory
     ) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.revise(RevisionRequest(
             itemID: item.id,
@@ -49,7 +49,7 @@ struct HistoryUsageTests {
     // Expected quantities are hand-counted from the fixtures below, not
     // derived from storage rows, projection helpers, or the returned DTO.
     private func expectUsage(
-        _ history: SwiftDataHistory,
+        _ history: SQLiteHistory,
         position: UInt64,
         items: Int,
         pinned: Int,

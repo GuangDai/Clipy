@@ -2,8 +2,8 @@
 /// X-HCR post-success crash fixture, and the REVIEW §4.3 Retention-config
 /// restart tail. Its separate Card 11C phase is a store-free Foundation regexp
 /// engine child used only for process-bounded characterization. Every storage
-/// invocation owns one `SwiftDataHistory` for one short process; no SwiftData
-/// object or generated identity crosses a phase boundary.
+/// invocation owns one `SQLiteHistory` for one short process; no database
+/// handle or storage identity crosses a phase boundary.
 /// The Retention phases prove exact configured-value persistence across
 /// terminated owners only; they do not prove crash durability
 /// (`11-ai-todo-map-2026-08-23.md` §4.3; `V2-02-retention.md` §8.1/§12).
@@ -18,8 +18,8 @@
 /// writes only SQLite/WAL scalar files that never pass admission, so the
 /// open cells record the observed branch of a closed typed-or-opened
 /// disjunction instead of a single outcome. Nowhere proven here:
-/// post-admission mid-transaction exhaustion (the Apple framework crash
-/// ceiling), remove/clear full-disk tails (zero-demand plans are never
+/// post-admission mid-transaction exhaustion,
+/// remove/clear full-disk tails (zero-demand plans are never
 /// admission-refused).
 /// The validateSeed/validateAll pair closes doc 11 §4.3's "External-clone
 /// 验证子进程" row and the 05 blind spot
@@ -28,25 +28,22 @@
 /// commits the fixed six-fixture table, then a fresh validator child
 /// hydrates every canonical, effective, and revision payload through the
 /// public browse/details/pastePayload reads and compares full bytes —
-/// never digests — with the deterministic fixtures. As with largeBlob, the
-/// schema's `@Attribute(.externalStorage)` is only an opaque placement
-/// hint (Apple documents that a value *may* be externalized, with no
-/// threshold or locator contract), so this evidence asserts neither an
-/// external file nor any sidecar on disk.
+/// never digests — with the deterministic fixtures. Raw representations use
+/// inline SQLite bytes or immutable files; these public-API phases prove
+/// byte fidelity and restart behavior, not physical allocation.
 /// The largeBlobMidTransactionKill*/largeBlobMidTransactionVerify trio
 /// closes 05-OQ9/05-CE26 (Card 1C-2): the two kill children terminate
 /// strictly INSIDE the in-flight capture commit transaction — window A in
-/// the transaction closure after staging (deterministic complete-OLD),
-/// window B anchored at the save interval's start via `ModelContext.willSave`
-/// (old-or-new binary) — and the fresh verify child accepts only a complete
-/// old or complete new state, then proves the reopened store still writes
+/// the transaction before the position UPDATE, window B after that UPDATE
+/// immediately before COMMIT — and the fresh verify child requires complete
+/// old state for both, then proves the reopened store still writes
 /// (DATA-13). Process-kill evidence only, with largeBlobCrashCommit's same
 /// ceiling: no fsync, sudden-power-loss, or sidecar-layout claim.
 /// The leaseHold/openRejectLeasedStore pair closes DATA-7a's cross-process
 /// single-writer lease (REVIEW 01-findings.md DATA-7; PLAY-DISK-0B): a live
 /// owner child parked on stdin holds the StoreRoot lease, a second process's
 /// open of the same root must fail `.persistence(.storeAlreadyOpen)` before
-/// any `ModelContainer` exists, and after the owner's clean exit a fresh
+/// any database connection exists, and after the owner's clean exit a fresh
 /// child reacquires.
 import Foundation
 import HistoryCore
@@ -925,15 +922,15 @@ private func validationFixtureTable() throws -> [ValidationFixture] {
     ]
 }
 
-private func openHistory(at storeURL: URL) async throws -> SwiftDataHistory {
-    try await SwiftDataHistory.open(configuration: HistoryConfiguration(
+private func openHistory(at storeURL: URL) async throws -> SQLiteHistory {
+    try await SQLiteHistory.open(configuration: HistoryConfiguration(
         persistence: .persistent(storeURL: storeURL),
         initialMaximumUnpinnedItems: 200
     ))
 }
 
 private func requireEmptyHistory(
-    _ history: SwiftDataHistory,
+    _ history: SQLiteHistory,
     position: UInt64
 ) async throws {
     let page = try await history.browse(HistoryBrowseRequest(
@@ -948,7 +945,7 @@ private func requireEmptyHistory(
 }
 
 private func requireRetentionConfigurationAndEmptyHistoryPosition(
-    _ history: SwiftDataHistory,
+    _ history: SQLiteHistory,
     maximumUnpinnedItems: Int,
     policies: HistoryRetentionPolicies,
     position: UInt64
@@ -962,7 +959,7 @@ private func requireRetentionConfigurationAndEmptyHistoryPosition(
 }
 
 private func setRetentionConfiguration(
-    _ history: SwiftDataHistory,
+    _ history: SQLiteHistory,
     maximumUnpinnedItems: Int,
     policies: HistoryRetentionPolicies,
     maximumUnpinnedItemsPosition: UInt64,
@@ -1050,15 +1047,10 @@ private func retentionVerifyUpdated(storeURL: URL) async throws {
 
 /// REVIEW §4.3 Retention-config restart tail, extended to the DATA-14
 /// open-failure fixtures (REVIEW 05 §7 Q13): the fixture process must
-/// observe the production public-open classifier itself. Every
-/// `ModelContainer` construction failure — an impossible stored shape,
-/// non-SQLite bytes, an existing read-only store
-/// directory — currently surfaces as one
-/// `.persistence(.openStore)` (03b §10); until a classification proof
-/// exists, no caller may auto-quarantine or silently recreate a store on
-/// that single outcome. The test owner creates the impossible on-disk shape
-/// before launching this process; this executable neither imports SwiftData
-/// nor repairs/inspects storage.
+/// observe the production public-open classifier itself. Invalid stored
+/// values and SQLITE_NOTADB map to corruptStoredValue; path/access failures
+/// map to openStore. The parent creates each invalid on-disk shape before
+/// launching this process; the child only checks the public typed failure.
 private func requirePublicOpenFailure(
     at storeURL: URL,
     expected: HistoryFailure
@@ -1110,7 +1102,7 @@ private func requireInserted(
 }
 
 private func requireInitialProjection(
-    _ history: SwiftDataHistory,
+    _ history: SQLiteHistory,
     manifest: ProbeManifest
 ) async throws {
     let page = try await history.browse(HistoryBrowseRequest(
@@ -1150,7 +1142,7 @@ private func requireInitialProjection(
 }
 
 private func requireSeedState(
-    _ history: SwiftDataHistory,
+    _ history: SQLiteHistory,
     manifest: ProbeManifest
 ) async throws {
     let page = try await history.browse(HistoryBrowseRequest(
@@ -1273,7 +1265,7 @@ private func requireSeedTextDetails(
 /// Version the rejection left behind.
 @discardableResult
 private func requireBlobSeedState(
-    _ history: SwiftDataHistory,
+    _ history: SQLiteHistory,
     manifest: ProbeManifest,
     blobItemID: UUID
 ) async throws -> HistoryItemReference {
@@ -1400,7 +1392,7 @@ private func operate(
     }
     if crashAfterCommit {
         // Keep the concrete History facade (and therefore its Authority and
-        // ModelContainer ownership) alive through the abnormal termination.
+        // database ownership) alive through the abnormal termination.
         // Without this explicit lifetime fence, an optimizer may release the
         // last local owner before the intentional fatal signal.
         withExtendedLifetime(history) {
@@ -1489,11 +1481,9 @@ private func gatewayAuditVerify(storeURL: URL) async throws {
     }
 }
 
-/// Commits one payload large enough for the schema's opaque
-/// `@Attribute(.externalStorage)` placement hint, records only its public
-/// business identity, then terminates abnormally with the facade/container
-/// owner kept alive. This is process-crash evidence, not a file-layout, fsync,
-/// sudden-power-loss, or permanent external-placement claim.
+/// Commits one payload larger than the inline threshold, records its public
+/// business identity, then terminates with the database owner kept alive.
+/// This is process-crash evidence, not sudden-power-loss or fsync evidence.
 private func largeBlobCrashCommit(storeURL: URL) async throws -> Never {
     let history = try await openHistory(at: storeURL)
     let reference = try requireInserted(
@@ -1509,7 +1499,7 @@ private func largeBlobCrashCommit(storeURL: URL) async throws -> Never {
 
 /// A new process forces the large value through each public V1 projection and
 /// compares the hydrated bytes directly with the independent deterministic
-/// fixture. No SwiftData model or sidecar path crosses the process boundary.
+/// fixture. No database handle or blob path crosses the process boundary.
 private func largeBlobVerify(storeURL: URL) async throws {
     let manifest = try LargeBlobManifest.read(siblingOf: storeURL)
     let history = try await openHistory(at: storeURL)
@@ -1571,10 +1561,8 @@ private func largeBlobVerify(storeURL: URL) async throws {
 /// Lifetime fence argument (the `crashCommit`/`largeBlobCrashCommit`
 /// precedents): no explicit `withExtendedLifetime` is needed because the
 /// kill fires synchronously inside the pending `history.perform(...)`
-/// call — window A inside the Authority actor's own method (the actor, and
-/// with it the container owner, is necessarily live), window B inside the
-/// `willSave` notification callback before `perform` can return (the live
-/// call frame keeps the facade owner retained). The optimizer cannot
+/// call — both windows are inside Authority's transaction closure, so the
+/// actor and its database remain live before `perform` can return. The optimizer cannot
 /// release the owner out from under a call it is executing in.
 private func largeBlobMidTransactionKill(
     storeURL: URL,
@@ -1595,56 +1583,42 @@ private func largeBlobMidTransactionKill(
 }
 #endif
 
-/// Window A of the mid-transaction kill cell: death inside the
-/// `ModelContext.transaction` closure at the X-HCR.2 WS-J1-5 window (b)
-/// interleave — after all staging, before the singleton write, with the
-/// save not yet attempted — so the following verify child must observe the
-/// deterministic complete-OLD outcome. DEBUG TaskLocal seam, absent from
-/// Release builds.
+/// Window A: death inside the SQL transaction after item/HCR writes and
+/// before the position UPDATE. SQLite has not committed, so restart must
+/// observe complete old state. DEBUG-only process interruption evidence.
 private func largeBlobMidTransactionKillClosure(
     storeURL: URL
 ) async throws -> Never {
 #if DEBUG
     return try await largeBlobMidTransactionKill(
         storeURL: storeURL,
-        at: .inClosurePreSave
+        at: .beforePositionWrite
     )
 #else
     fatalError("mid-transaction kill phase requires a Debug build")
 #endif
 }
 
-/// Window B of the mid-transaction kill cell: death anchored at the save
-/// interval's start through the `ModelContext.willSave` notification of the
-/// capture's operation-local context — the closest public anchor to the
-/// SQLite commit and any externalStorage write-out. Only an old-or-new
-/// verdict is admissible afterwards (Apple publishes no write-time
-/// contract), so the verify child adjudicates the binary. DEBUG TaskLocal
-/// seam, absent from Release builds.
+/// Window B: position has been updated inside the transaction, but COMMIT
+/// has not run. Restart must still observe complete old state; this does
+/// not interrupt SQLite's COMMIT syscall or simulate sudden power loss.
 private func largeBlobMidTransactionKillSave(
     storeURL: URL
 ) async throws -> Never {
 #if DEBUG
     return try await largeBlobMidTransactionKill(
         storeURL: storeURL,
-        at: .saveAttemptWillSave
+        at: .beforeCommit
     )
 #else
     fatalError("mid-transaction kill phase requires a Debug build")
 #endif
 }
 
-/// Adjudication half of the mid-transaction kill cell (Card 1C-2: "fresh
-/// child重开只能看到完整old或完整new state，不能有orphan、duplicate或半个
-/// external blob"). A fresh child reopens the store and accepts exactly one
-/// of the two complete outcomes; every torn residue — a third row under the
-/// seed position, a short or overlong table under position 3, a row whose
-/// fields or hydrated bytes miss the deterministic fixture — fails closed.
-/// The durable Change Position is the adjudication input; the large blob's
-/// item identity is taken from this browse (the fixture bytes are the
-/// oracle — no ID crosses the process boundary, the validateAll stance).
-/// The tail capture then proves the reopened store still commits new writes
-/// at exactly the next position (DATA-13's recovery concern).
+/// Reopens after either pre-COMMIT death and requires the exact old History
+/// state. Unreferenced published files may remain for bounded cleanup; they
+/// are not retained items. The tail capture proves the reopened store still
+/// accepts writes at the next position (V2-09 §6; DATA-13).
 private func largeBlobMidTransactionVerify(storeURL: URL) async throws {
     let manifest = try ProbeManifest.read(siblingOf: storeURL)
     let history = try await openHistory(at: storeURL)
@@ -1656,85 +1630,13 @@ private func largeBlobMidTransactionVerify(storeURL: URL) async throws {
         throw ProbeFailure.unexpectedState
     }
 
-    // complete-OLD = position 2 (the seed's last commit, capture absent);
-    // complete-NEW = position 3 (the killed child's capture landed whole).
-    let captureCommitted: Bool
-    switch page.position.rawValue {
-    case 2:
-        captureCommitted = false
-    case 3:
-        captureCommitted = true
-    default:
-        throw ProbeFailure.unexpectedState
-    }
-
-    if !captureCommitted {
-        // complete-OLD, field-for-field the seed projection — including
-        // that exactly two rows remain, so the blob row is provably absent
-        // (no orphan survived the in-flight death).
-        try await requireInitialProjection(history, manifest: manifest)
-    } else {
-        // complete-NEW: the blob row first, then the untouched seed rows.
-        guard page.rows.count == 3,
-              page.rows[0].item.contentVersion.rawValue == 1,
-              page.rows[0].title == largeBlobType,
-              page.rows[0].typeIdentifiers == [largeBlobType],
-              page.rows[0].lastCopiedAt == largeBlobDate,
-              page.rows[0].copyCount == 1,
-              page.rows[0].lastSource == largeBlobSource,
-              page.rows[0].pinnedPosition == nil,
-              page.rows[0].search == nil,
-              page.rows[1].item.id.rawValue == manifest.bravo,
-              page.rows[1].title == bravoText,
-              page.rows[1].typeIdentifiers == [textType],
-              page.rows[1].lastCopiedAt == bravoDate,
-              page.rows[1].copyCount == 1,
-              page.rows[1].lastSource == bravoSource,
-              page.rows[1].pinnedPosition == nil,
-              page.rows[1].search == nil,
-              page.rows[2].item.id.rawValue == manifest.alpha,
-              page.rows[2].title == alphaText,
-              page.rows[2].typeIdentifiers == [textType],
-              page.rows[2].lastCopiedAt == alphaFirstDate,
-              page.rows[2].copyCount == 1,
-              page.rows[2].lastSource == alphaFirstSource,
-              page.rows[2].pinnedPosition == nil,
-              page.rows[2].search == nil else {
-            throw ProbeFailure.unexpectedState
-        }
-
-        // Byte-level oracle: regenerate the deterministic fixture and
-        // compare directly — never a digest.
-        let blobItemID = page.rows[0].item.id
-        let expected = largeBlobBytes()
-        let details = try await history.details(for: blobItemID)
-        guard details.item == page.rows[0].item,
-              details.canonical.count == 1,
-              details.canonical[0].typeIdentifier == largeBlobType,
-              details.canonical[0].bytes == expected,
-              details.effective == details.canonical,
-              details.revisions.isEmpty,
-              details.occurrence.firstCopiedAt == largeBlobDate,
-              details.occurrence.lastCopiedAt == largeBlobDate,
-              details.occurrence.count == 1,
-              details.occurrence.firstSource == largeBlobSource,
-              details.occurrence.lastSource == largeBlobSource,
-              details.pinnedPosition == nil else {
-            throw ProbeFailure.unexpectedState
-        }
-
-        let paste = try await history.pastePayload(for: blobItemID)
-        guard paste.item == details.item,
-              paste.lineageHint == blobItemID,
-              paste.representations.count == 1,
-              paste.representations[0].typeIdentifier == largeBlobType,
-              paste.representations[0].bytes == expected else {
-            throw ProbeFailure.unexpectedState
-        }
-    }
-
+    // Both injected deaths happen before SQLite COMMIT. A newly published
+    // unreferenced blob file may await cleanup, but no part of its item,
+    // candidate postings, HCR or ChangePosition may become visible.
+    guard page.position.rawValue == 2 else { throw ProbeFailure.unexpectedState }
+    try await requireInitialProjection(history, manifest: manifest)
     // DATA-13 writability tail: one distinct small capture must commit at
-    // exactly the next position — OLD → 3, NEW → 4 — proving the reopened
+    // exactly the next position — OLD → 3 — proving the reopened
     // store accepts new writes after the mid-transaction death.
     _ = try requireInserted(
         try await history.perform(.capture(capture(
@@ -1742,7 +1644,7 @@ private func largeBlobMidTransactionVerify(storeURL: URL) async throws {
             at: midTransactionWritabilityDate,
             source: midTransactionWritabilitySource
         ))),
-        position: captureCommitted ? 4 : 3
+        position: 3
     )
 }
 
@@ -2160,21 +2062,23 @@ private func publishOpenCharacterizationToken(_ token: String) -> Never {
 }
 
 /// Maps one caught open failure onto the closed typed-or-opened
-/// disjunction: `.persistence(.openStore)` (ModelContainer construction,
-/// DATA-14's flat exit) and `.persistence(.transaction)` (the startup
-/// singleton transaction failing on ENOSPC) are the only accepted typed
-/// branches on a full volume. Any other typed failure is a closed-set
-/// violation and fails the cell rather than silently widening the set.
+/// disjunction: construction failure, generic transaction failure, or the
+/// explicit insufficientDiskSpace result from SQLite FULL/file ENOSPC.
+/// Each observed typed branch gets its own token; none establishes another
+/// branch or a successful reopen.
 private func fullVolumeOpenToken(
     for failure: HistoryFailure,
     refusedOpenStore: String,
-    refusedTransaction: String
+    refusedTransaction: String,
+    refusedInsufficientSpace: String
 ) throws -> String {
     switch failure {
     case .persistence(.openStore):
         return refusedOpenStore
     case .persistence(.transaction):
         return refusedTransaction
+    case .temporarilyUnavailable(.insufficientDiskSpace):
+        return refusedInsufficientSpace
     default:
         throw ProbeFailure.unexpectedState
     }
@@ -2196,7 +2100,8 @@ private func openFullVolume(storeURL: URL) async throws -> Never {
         publishOpenCharacterizationToken(try fullVolumeOpenToken(
             for: failure,
             refusedOpenStore: "OPENFULLVOLUME_OPENSTORE_REFUSED",
-            refusedTransaction: "OPENFULLVOLUME_TRANSACTION_REFUSED"
+            refusedTransaction: "OPENFULLVOLUME_TRANSACTION_REFUSED",
+            refusedInsufficientSpace: "OPENFULLVOLUME_INSUFFICIENT_SPACE_REFUSED"
         ))
     } catch {
         throw ProbeFailure.unexpectedState
@@ -2212,14 +2117,15 @@ private func openFullVolume(storeURL: URL) async throws -> Never {
 /// hit ENOSPC, so both refusal branches are equally legal recorded facts.
 private func openSeededFullVolume(storeURL: URL) async throws -> Never {
     let manifest = try ProbeManifest.read(siblingOf: storeURL)
-    let history: SwiftDataHistory
+    let history: SQLiteHistory
     do {
         history = try await openHistory(at: storeURL)
     } catch let failure as HistoryFailure {
         publishOpenCharacterizationToken(try fullVolumeOpenToken(
             for: failure,
             refusedOpenStore: "OPENSEEDEDONFULLVOLUME_OPENSTORE_REFUSED",
-            refusedTransaction: "OPENSEEDEDONFULLVOLUME_TRANSACTION_REFUSED"
+            refusedTransaction: "OPENSEEDEDONFULLVOLUME_TRANSACTION_REFUSED",
+            refusedInsufficientSpace: "OPENSEEDEDONFULLVOLUME_INSUFFICIENT_SPACE_REFUSED"
         ))
     } catch {
         throw ProbeFailure.unexpectedState
@@ -2413,7 +2319,7 @@ private struct HistoryRestartProbe {
             case .openRejectCorruptBytes:
                 try await requirePublicOpenFailure(
                     at: storeURL,
-                    expected: .persistence(.openStore)
+                    expected: .persistence(.corruptStoredValue)
                 )
             case .openRejectReadOnlyDirectory:
                 try await requirePublicOpenFailure(

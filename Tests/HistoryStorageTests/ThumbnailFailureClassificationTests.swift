@@ -40,8 +40,8 @@ import Testing
     ]),
 ])
 func undecodableImageIsStillReadableAndPasteable(_ bytes: Data) async throws {
-    let history = try await SwiftDataHistory.open(
-        configuration: HistoryConfiguration(persistence: .memory)
+    let history = try await SQLiteHistory.open(
+        configuration: HistoryConfiguration(persistence: .temporary)
     )
     let receipt = try await history.perform(.capture(ClipboardCapture(
         representations: [CapturedRepresentation(typeIdentifier: "public.png", bytes: bytes)],
@@ -71,8 +71,8 @@ func undecodableImageIsStillReadableAndPasteable(_ bytes: Data) async throws {
 }
 
 @Test func undecodableSelectedImageDoesNotFallBackToALaterValidImage() async throws {
-    let history = try await SwiftDataHistory.open(
-        configuration: HistoryConfiguration(persistence: .memory)
+    let history = try await SQLiteHistory.open(
+        configuration: HistoryConfiguration(persistence: .temporary)
     )
     let png = try #require(Data(base64Encoded:
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="

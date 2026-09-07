@@ -1,285 +1,164 @@
-/// Startup validation for an existing retention-expansion config singleton.
-/// A correct key and cardinality do not make the row trusted: the complete
-/// stored unit must pass the V2-02 §3.3 decoder before the facade is
-/// published (05 §13). This is the same-process public-open wiring proof;
-/// Card 1C's true child-process restart evidence remains a separate gate.
 import Foundation
 import HistoryCore
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
+/// V2-09 §6: the public open validates the current policy unit and rolls back
+/// startup on corruption. Used stores never receive replacement defaults.
 struct RetentionConfigSingletonStartupValidationTests {
-    private enum Corruption: CaseIterable {
-        case olderSchemaVersion
-        case newerSchemaVersion
-        case positiveInfiniteAge
-        case negativeInfiniteAge
-        case ageBelowRange
-        case ageAboveRange
-        case storageBelowRange
-        case storageAboveRange
-        case enabledRevisionsWithoutThreshold
-        case revisionCountBelowRange
-        case revisionCountAboveRange
-        case revisionBytesBelowRange
-        case revisionBytesAboveRange
-
-        var label: String {
-            switch self {
-            case .olderSchemaVersion: "schema-version-0"
-            case .newerSchemaVersion: "schema-version-2"
-            case .positiveInfiniteAge: "age-positive-infinity"
-            case .negativeInfiniteAge: "age-negative-infinity"
-            case .ageBelowRange: "age-below-range"
-            case .ageAboveRange: "age-above-range"
-            case .storageBelowRange: "storage-below-range"
-            case .storageAboveRange: "storage-above-range"
-            case .enabledRevisionsWithoutThreshold: "revision-enabled-without-threshold"
-            case .revisionCountBelowRange: "revision-count-below-range"
-            case .revisionCountAboveRange: "revision-count-above-range"
-            case .revisionBytesBelowRange: "revision-bytes-below-range"
-            case .revisionBytesAboveRange: "revision-bytes-above-range"
-            }
-        }
+    private enum Corruption: String, CaseIterable, Sendable {
+        case positiveInfiniteAge, negativeInfiniteAge
+        case ageBelowRange, ageAboveRange, storageBelowRange, storageAboveRange
+        case revisionCountBelowRange, revisionCountAboveRange
+        case revisionBytesBelowRange, revisionBytesAboveRange
+        case missingConfiguration
 
         var expectedFailure: HistoryFailure {
             switch self {
-            case .olderSchemaVersion,
-                 .newerSchemaVersion,
-                 .positiveInfiniteAge,
-                 .negativeInfiniteAge:
+            case .positiveInfiniteAge, .negativeInfiniteAge:
                 .persistence(.corruptStoredValue)
             default:
                 .persistence(.invariantViolation)
             }
         }
 
-        func apply(to row: RetentionExpansionConfigRow) {
+        func apply(in database: SQLiteDatabase) throws {
+            let column: String
+            let value: SQLiteValue
             switch self {
-            case .olderSchemaVersion:
-                row.configSchemaVersion = 0
-            case .newerSchemaVersion:
-                row.configSchemaVersion = 2
-            case .positiveInfiniteAge:
-                row.ageMaxSeconds = .infinity
-            case .negativeInfiniteAge:
-                row.ageMaxSeconds = -.infinity
-            case .ageBelowRange:
-                row.ageMaxSeconds = 0.5
-            case .ageAboveRange:
-                row.ageMaxSeconds = 315_360_001
-            case .storageBelowRange:
-                row.storageMaxBytes = 0
-            case .storageAboveRange:
-                row.storageMaxBytes = 2_013_265_920_001
-            case .enabledRevisionsWithoutThreshold:
-                row.revisionMaxCount = nil
-                row.revisionMaxBytes = nil
-            case .revisionCountBelowRange:
-                row.revisionMaxCount = 0
-            case .revisionCountAboveRange:
-                row.revisionMaxCount = 101
-            case .revisionBytesBelowRange:
-                row.revisionMaxBytes = 0
-            case .revisionBytesAboveRange:
-                row.revisionMaxBytes = 268_435_457
+            case .positiveInfiniteAge: (column, value) = ("ageMaxSeconds", .real(.infinity))
+            case .negativeInfiniteAge: (column, value) = ("ageMaxSeconds", .real(-.infinity))
+            case .ageBelowRange: (column, value) = ("ageMaxSeconds", .real(0.5))
+            case .ageAboveRange: (column, value) = ("ageMaxSeconds", .real(315_360_001))
+            case .storageBelowRange: (column, value) = ("storageMaxBytes", .integer(0))
+            case .storageAboveRange: (column, value) = ("storageMaxBytes", .integer(2_013_265_920_001))
+            case .revisionCountBelowRange: (column, value) = ("revisionMaxCount", .integer(0))
+            case .revisionCountAboveRange: (column, value) = ("revisionMaxCount", .integer(101))
+            case .revisionBytesBelowRange: (column, value) = ("revisionMaxBytes", .integer(0))
+            case .revisionBytesAboveRange: (column, value) = ("revisionMaxBytes", .integer(268_435_457))
+            case .missingConfiguration:
+                try database.execute("DELETE FROM retention_policies")
+                return
             }
+            // Corruption fixture only: bypass CHECK to exercise the actual
+            // startup decoder even for values ordinary SQL writes reject.
+            try database.execute("PRAGMA ignore_check_constraints = ON")
+            defer { try? database.execute("PRAGMA ignore_check_constraints = OFF") }
+            try database.execute("UPDATE retention_policies SET \(column) = ?", bindings: [value])
         }
     }
 
-    private struct ConfigScalars: Equatable {
-        let key: String
-        let agePolicyEnabled: Bool
-        let ageMaxSeconds: Double
-        let storagePolicyEnabled: Bool
-        let storageMaxBytes: Int
-        let revisionPolicyEnabled: Bool
-        let revisionMaxCount: Int?
-        let revisionMaxBytes: Int?
-        let configSchemaVersion: UInt16
-
-        init(_ row: RetentionExpansionConfigRow) {
-            key = row.key
-            agePolicyEnabled = row.agePolicyEnabled
-            ageMaxSeconds = row.ageMaxSeconds
-            storagePolicyEnabled = row.storagePolicyEnabled
-            storageMaxBytes = row.storageMaxBytes
-            revisionPolicyEnabled = row.revisionPolicyEnabled
-            revisionMaxCount = row.revisionMaxCount
-            revisionMaxBytes = row.revisionMaxBytes
-            configSchemaVersion = row.configSchemaVersion
-        }
+    private struct StoredState: Equatable, Sendable {
+        let policies: [SQLiteValue]
+        let position: Data
+        let maximumUnpinnedItems: Int64
+        let retainedItemCount: Int64
+        let canonicalBytes: Int64
+        let items: [WSSupport.StoredItem]
+        let journalRows: Int64
+        let operationRows: Int64
+        let gatewayRows: Int64
     }
 
-    private struct SeededState {
-        let config: ConfigScalars
-        let itemID: UUID
+    private static func readState(in database: SQLiteDatabase) throws -> StoredState {
+        let config = try database.prepare("""
+            SELECT ageMaxSeconds, storageMaxBytes, revisionMaxCount, revisionMaxBytes
+            FROM retention_policies
+            """)
+        defer { config.finalize() }
+        var policies: [SQLiteValue] = []
+        if try config.step() {
+            policies.append(try config.isNull(at: 0) ? .null : .real(config.real(at: 0)))
+            for column in Int32(1)...Int32(3) {
+                policies.append(try config.isNull(at: column) ? .null : .integer(config.integer(at: column)))
+            }
+            #expect(try !config.step())
+        }
+        let state = try database.prepare("""
+            SELECT changePosition, maximumUnpinnedItems, retainedItemCount, canonicalBytes,
+                (SELECT count(*) FROM history_change_records),
+                (SELECT count(*) FROM operation_records),
+                (SELECT count(*) FROM gateway_config)
+            FROM history_state
+            """)
+        defer { state.finalize() }
+        try #require(try state.step())
+        return try StoredState(
+            policies: policies, position: state.blob(at: 0),
+            maximumUnpinnedItems: state.integer(at: 1),
+            retainedItemCount: state.integer(at: 2), canonicalBytes: state.integer(at: 3),
+            items: WSSupport.fetchRows(database), journalRows: state.integer(at: 4),
+            operationRows: state.integer(at: 5), gatewayRows: state.integer(at: 6)
+        )
     }
 
     private static func seedSingletons(
-        at storeURL: URL,
-        corruption: Corruption? = nil
-    ) async throws -> SeededState {
-        // Start with the current complete singleton set, never a partial
-        // historical store whose later bootstrap would manufacture owners.
-        _ = try await SwiftDataHistory.open(configuration: HistoryConfiguration(
+        at storeURL: URL, corruption: Corruption? = nil
+    ) async throws -> StoredState {
+        let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(
             persistence: .persistent(storeURL: storeURL), initialMaximumUnpinnedItems: 321
         ))
-        // Prepare immutable values before any ModelContext/@Model exists;
-        // no SwiftData object survives a suspension point (05 §2).
-        let source = "com.example.migration"
-        let observedAt = Date(timeIntervalSinceReferenceDate: 700_000_000)
-        let prepared = try await IngestPreparationActor().prepare(
-            WSSupport.textCapture(
-                "migration item alpha", observedAt: observedAt, source: source
-            )
-        )
-        let canonicalBlob = try CanonicalBlobCodec.encode(prepared.domain.canonical)
-        let revisionStateBlob = try RevisionStateBlobCodec.encode(
-            revisions: [], activeRevisionID: nil
-        )
-        let signatureBlob = try SignatureBlobCodec.encode(prepared.signatureEntries)
-        let typeIdentifiersBlob = try EffectiveTypeIdentifiersBlobCodec.encode(
-            prepared.projection.effectiveTypeIdentifiers
-        )
-        let schema = historySchema
-        let configuration = ModelConfiguration(
-            schema: schema,
-            url: storeURL,
-            cloudKitDatabase: .none
-        )
-        let container = try ModelContainer(
-            for: schema,
-            configurations: [configuration]
-        )
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
-        let position = try #require(context.fetch(FetchDescriptor<LastChangePositionRow>()).first)
-        position.rawValue = 17
-        let config = try Self.fetchConfig(from: context)
-        config.agePolicyEnabled = true
-        config.ageMaxSeconds = 86_400
-        config.storagePolicyEnabled = true
-        config.storageMaxBytes = 536_870_912
-        config.revisionPolicyEnabled = true
-        config.revisionMaxCount = 20
-        config.revisionMaxBytes = 16_777_216
-        // The literal position represents an already-compacted prefix. Its
-        // existing journal remains complete and coherent with that position.
-        let journal = try #require(context.fetch(FetchDescriptor<JournalConfigRow>()).first)
-        journal.compactionFloorRaw = 17
-        corruption?.apply(to: config)
-        // Every case supplies current required accounting. The chosen config
-        // corruption is the only invalid state, never a missing-row repair test.
-        let item = HistoryItemRow(
-            id: prepared.domain.candidateID.rawValue,
-            contentVersionRaw: 1,
-            canonicalBlob: canonicalBlob,
-            revisionStateBlob: revisionStateBlob,
-            canonicalSignatureBlob: signatureBlob,
-            title: prepared.projection.title,
-            searchBody: prepared.projection.searchBody,
-            effectiveTypeIdentifiersBlob: typeIdentifiersBlob,
-            firstCopiedAt: observedAt,
-            lastCopiedAt: observedAt,
-            copyCount: 1,
-            firstSource: source,
-            lastSource: source,
-            pinOrdinal: nil
-        )
-        context.insert(item)
-        context.insert(RetainedBytesRow(
-            itemID: item.id,
-            canonicalBytes: prepared.signatureEntries.reduce(0) { $0 + $1.byteCount },
-            revisionCount: 0,
-            revisionBytes: 0,
-            bytesSchemaVersion: 1
-        ))
-        try context.save()
-        return SeededState(config: ConfigScalars(config), itemID: item.id)
-    }
-
-    private static func fetchConfig(
-        from context: ModelContext
-    ) throws -> RetentionExpansionConfigRow {
-        let rows = try context.fetch(FetchDescriptor<RetentionExpansionConfigRow>())
-        #expect(rows.count == 1)
-        return try #require(rows.first)
-    }
-
-    @Test("invalid existing config fails before publication without repair")
-    func invalidExistingConfigFailsClosedWithoutRepair() async throws {
-        for corruption in Corruption.allCases {
-            let storeURL = WSSupport.tempStoreURL(
-                "config-singleton-corrupt-\(corruption.label)"
-            )
-            defer { WSSupport.removeStore(storeURL) }
-            let seeded = try await Self.seedSingletons(
-                at: storeURL,
-                corruption: corruption
-            )
-
-            do {
-                _ = try await SwiftDataHistory.open(
-                    configuration: HistoryConfiguration(
-                        persistence: .persistent(storeURL: storeURL),
-                        initialMaximumUnpinnedItems: 200
-                    )
-                )
-                Issue.record("\(corruption.label): expected startup failure")
-            } catch let failure as HistoryFailure {
-                #expect(failure == corruption.expectedFailure)
-            } catch {
-                Issue.record("\(corruption.label): unexpected error \(error)")
-            }
-
-            // Inspect through an independent container after the public open
-            // failed. Startup must preserve both authoritative singletons and
-            // must not insert any unrelated bootstrap row.
-            let context = ModelContext(try WSSupport.makeContainer(storeURL: storeURL))
-            let positions = try context.fetch(FetchDescriptor<LastChangePositionRow>())
-            let position = try #require(positions.first)
-            #expect(positions.count == 1)
-            #expect(position.key == "retained-history")
-            #expect(position.rawValue == 17)
-            #expect(position.maximumUnpinnedItems == 321)
-            #expect(ConfigScalars(try Self.fetchConfig(from: context)) == seeded.config)
-            let items = try context.fetch(FetchDescriptor<HistoryItemRow>())
-            #expect(items.count == 1)
-            #expect(items.first?.id == seeded.itemID)
-            let bytes = try context.fetch(FetchDescriptor<RetainedBytesRow>())
-            #expect(bytes.count == 1)
-            #expect(bytes.first?.itemID == seeded.itemID)
+        _ = try await history.perform(.capture(WSSupport.textCapture(
+            "retained item alpha", observedAt: Date(), source: "com.example.retention"
+        )))
+        return try await history.authority.withTestDatabase { authority in
+            try authority.database.execute("""
+                UPDATE retention_policies SET ageMaxSeconds = ?, storageMaxBytes = ?,
+                    revisionMaxCount = ?, revisionMaxBytes = ?
+                """, bindings: [
+                    .real(86_400), .integer(536_870_912), .integer(20), .integer(16_777_216),
+                ])
+            try corruption?.apply(in: authority.database)
+            return try readState(in: authority.database)
         }
     }
 
-    @Test("valid existing config is published and never replaced by defaults")
+    @Test("invalid existing policy prevents publication without repair or unrelated writes")
+    func invalidExistingConfigFailsClosedWithoutRepair() async throws {
+        for corruption in Corruption.allCases {
+            let storeURL = WSSupport.tempStoreURL("config-corrupt-\(corruption.rawValue)")
+            defer { WSSupport.removeStore(storeURL) }
+            let seeded = try await Self.seedSingletons(at: storeURL, corruption: corruption)
+            do {
+                _ = try await SQLiteHistory.open(configuration: HistoryConfiguration(
+                    persistence: .persistent(storeURL: storeURL),
+                    initialMaximumUnpinnedItems: 200
+                ))
+                Issue.record("\(corruption.rawValue): expected startup failure")
+            } catch let failure as HistoryFailure {
+                #expect(failure == corruption.expectedFailure)
+            } catch {
+                Issue.record("\(corruption.rawValue): unexpected error \(error)")
+            }
+            let database = try SQLiteDatabase(url: storeURL, readOnly: true)
+            #expect(try Self.readState(in: database) == seeded)
+            #expect(seeded.maximumUnpinnedItems == 321)
+            #expect(seeded.retainedItemCount == 1)
+            #expect(seeded.items.count == 1)
+            try database.close()
+        }
+    }
+
+    @Test("valid existing policy is published and never replaced by defaults")
     func validExistingConfigIsPreserved() async throws {
-        let storeURL = WSSupport.tempStoreURL("config-singleton-valid-existing")
+        let storeURL = WSSupport.tempStoreURL("config-valid-existing")
         defer { WSSupport.removeStore(storeURL) }
         let seeded = try await Self.seedSingletons(at: storeURL)
-
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(
-                persistence: .persistent(storeURL: storeURL),
-                initialMaximumUnpinnedItems: 200
-            )
-        )
-
+        let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(
+            persistence: .persistent(storeURL: storeURL), initialMaximumUnpinnedItems: 200
+        ))
         let published = try await history.retentionConfiguration()
         #expect(published.maximumUnpinnedItems == 321)
         #expect(published.policies == HistoryRetentionPolicies(
             age: AgeRetention(maxAge: 86_400),
             storage: StorageRetention(maxTotalBytes: 536_870_912),
             revisions: RevisionRetention(
-                maxRevisionsPerItem: 20,
-                maxRevisionBytesPerItem: 16_777_216
+                maxRevisionsPerItem: 20, maxRevisionBytesPerItem: 16_777_216
             )
         ))
-
-        let context = ModelContext(try WSSupport.makeContainer(storeURL: storeURL))
-        #expect(ConfigScalars(try Self.fetchConfig(from: context)) == seeded.config)
-        #expect(try context.fetchCount(FetchDescriptor<RetainedBytesRow>()) == 1)
+        let persisted = try await history.authority.withTestDatabase { authority in
+            try Self.readState(in: authority.database)
+        }
+        #expect(persisted == seeded)
     }
 }

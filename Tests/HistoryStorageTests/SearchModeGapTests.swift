@@ -18,7 +18,7 @@ private struct FuzzyUnicodeFixture: Sendable {
 }
 
 private static func captureText(
-    _ history: SwiftDataHistory,
+    _ history: SQLiteHistory,
     text: String,
     observedAt: Date,
     source: String

@@ -35,8 +35,8 @@ package struct PreviewText: Equatable, Sendable {
 }
 
 /// Fixed eager display artifact: premultiplied BGRA8 in the sRGB color space.
-/// Its initializer is module-internal so callers cannot fabricate unchecked
-/// dimensions or byte counts.
+/// The renderer constructs it after validation; the per-surface pixel cache
+/// may reconstruct the same layout from independently copied cached bytes.
 package struct PreviewRaster: Equatable, Sendable {
     package let pixels: Data
     package let width: Int
@@ -44,7 +44,7 @@ package struct PreviewRaster: Equatable, Sendable {
     package let rowBytes: Int
     package let sourceImageCount: Int
 
-    internal init(pixels: Data, width: Int, height: Int, rowBytes: Int, sourceImageCount: Int = 1) {
+    package init(pixels: Data, width: Int, height: Int, rowBytes: Int, sourceImageCount: Int = 1) {
         self.pixels = pixels
         self.width = width
         self.height = height

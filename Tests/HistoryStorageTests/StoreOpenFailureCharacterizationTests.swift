@@ -1,6 +1,6 @@
 /// Public open-failure characterization through one fresh process per
 /// invalid current store. Non-SQLite bytes and a read-only store directory
-/// both fail closed as persistence/openStore; neither permits automatic
+/// fail closed as corruptStoredValue and openStore respectively; neither permits automatic
 /// empty-store recreation. No migration or historical schema is involved.
 import Foundation
 import Testing
@@ -52,7 +52,7 @@ struct StoreOpenFailureCharacterizationTests {
             .appendingPathComponent(".build/debug/HistoryRestartProbe")
     }
 
-    @Test("fresh owner maps non-SQLite store bytes to the public open failure")
+    @Test("fresh owner rejects non-SQLite bytes without replacing the file")
     func corruptBytesStoreFailsOpenInFreshChild() throws {
         let probeURL = Self.probeURL()
         let storeRoot = FileManager.default.temporaryDirectory
@@ -85,6 +85,7 @@ struct StoreOpenFailureCharacterizationTests {
             storeURL: storeURL,
             probeURL: probeURL
         )
+        #expect(try Data(contentsOf: storeURL) == corruptBytes)
     }
 
     @Test("fresh owner maps a read-only store directory to the public open failure")
@@ -104,7 +105,7 @@ struct StoreOpenFailureCharacterizationTests {
         // cannot leak the fixture directory.
         defer { try? FileManager.default.removeItem(at: storeRoot) }
         // The store directory EXISTS but its owner write bit is removed, so
-        // `ModelContainer` cannot create the SQLite file inside it — the
+        // SQLite cannot create the database file inside it — the
         // storage-layer permission shape. 0500 keeps read+execute: the
         // refusal is "cannot write", not an unstatable path (0000 would make
         // EACCES and ENOENT indistinguishable). Teardown restores write

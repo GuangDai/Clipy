@@ -1,9 +1,8 @@
 /// Batch 12 durable HCR coverage for every reachable commit family.
-/// Every mutation crosses the public `SwiftDataHistory.perform` seam; the
-/// assertions then read the real in-memory V4 journal as the durable oracle.
+/// Every mutation crosses the public `SQLiteHistory.perform` seam; the
+/// assertions then read the real temporary SQLite journal as the durable oracle.
 import Foundation
 import HistoryCore
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
@@ -25,27 +24,19 @@ struct HCRCommitFamilyTests {
         let records: [StoredRecord]
     }
 
-    private static func makeHistory() async throws -> SwiftDataHistory {
-        try await SwiftDataHistory.open(configuration: HistoryConfiguration(
-            persistence: .memory
+    private static func makeHistory() async throws -> SQLiteHistory {
+        try await SQLiteHistory.open(configuration: HistoryConfiguration(
+            persistence: .temporary
         ))
     }
 
     private static func journalState(
-        in history: SwiftDataHistory
+        in history: SQLiteHistory
     ) async throws -> JournalState {
-        let container = await history.authority.container
-        let context = ModelContext(container)
-        let position = try #require(
-            context.fetch(FetchDescriptor<LastChangePositionRow>()).first
-        )
-        let records = try context.fetch(
-            FetchDescriptor<HistoryChangeRecordRow>(
-                sortBy: [SortDescriptor(\.sequence)]
-            )
-        )
+        let snapshot = try await history.authority.hcrTestSnapshot()
+        let records = snapshot.records
         return JournalState(
-            position: position.rawValue,
+            position: snapshot.position,
             records: records.map {
                 StoredRecord(
                     sequence: $0.sequence,
@@ -62,7 +53,7 @@ struct HCRCommitFamilyTests {
     private static func performCommitted(
         _ action: HistoryAction,
         expecting expectedKind: HistoryChangeKindRawV1,
-        in history: SwiftDataHistory
+        in history: SQLiteHistory
     ) async throws -> (commit: HistoryCommit, affected: [HistoryItemID]) {
         let before = try await journalState(in: history)
 

@@ -1,5 +1,13 @@
 # Greenfield Clipboard Manager — v1 Design Specification
 
+> **Current storage implementation direction (2026-09-07):** the user approved
+> [SQLite metadata + immutable blob storage](v2/V2-09-multilevel-storage.md).
+> It replaces the SwiftData layout and full-store in-memory indexes described
+> in this historical v1 specification. There is no dual writer or migration.
+> History actions, immutable content revisions and coherence semantics remain;
+> SQLite read transactions now own search snapshots. Implementation and CI
+> validation of this replacement are in progress, not completed scale evidence.
+
 > **Status (2026-08-09):** consolidated design candidate; **executable-specification acceptance in progress** (Part VI §11). M1 (pure compile) is complete. M2 implementation through thumbnail is present; WS1–WS21 and the correctness jobs are green, while the dedicated D1–D19 suite and corrected WL8 performance proof remain open. Step 9 product wiring has not started. The current Maccy repository is product-behavior reference material only; it is not the implementation described here. This specification becomes implementation-authoritative ("executable v1 specification") only after all of Part VI §6–§9 and WS1–WS21 pass on the supported runner.
 
 ## 1. Purpose
@@ -16,7 +24,7 @@ The repository outside `docs/` may inform product behavior, terminology, and kno
 
 - `HistoryCore`: the public caller interface, public identity/coherence values, closed `HistoryAction` instruction set, purpose-specific read DTOs, receipts, and typed failures.
 - `HistoryDomain`: package-only, Foundation-only content lineage, complete action facts, pure planners, and strongly typed mutation plans.
-- `HistoryStorage`: the sole SwiftData authority, schema, fact loaders, ingest preparation, xxh3-backed candidate index, scalar read projections, transient observation plumbing, and thumbnail single-flight.
+- `HistoryStorage`: the sole SQLite writer, immutable blob files, indexed candidate queries, action-specific fact loading, scalar read projections, transient observation plumbing, and thumbnail single-flight.
 - `ContentPreview`: one package-only concrete preview renderer owning exact
   source selection, fixed resource profiles, and bounded inert text/raster or
   copied-address metadata; it never reads History or owns UI lifecycle/thumbnail semantics.

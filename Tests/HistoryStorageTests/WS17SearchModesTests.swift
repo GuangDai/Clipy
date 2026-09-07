@@ -26,7 +26,7 @@ struct WS17SearchModesTests {
 /// reference; each item's title == searchBody for single-line text
 /// (§15 projection determinism).
 internal static func captureText(
-    _ history: SwiftDataHistory,
+    _ history: SQLiteHistory,
     text: String,
     observedAt: Date,
     source: String
@@ -79,7 +79,7 @@ internal struct SearchFixture {
 }
 
 internal static func populateFixture(
-    _ history: SwiftDataHistory
+    _ history: SQLiteHistory
 ) async throws -> SearchFixture {
     // Item 1: pinned, title "Alpha Project Notes" — newest by observation time.
     let alphaRef = try await Self.captureText(

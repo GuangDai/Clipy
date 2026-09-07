@@ -148,7 +148,7 @@ struct FileCredentialStoreTests {
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let credentials = fixture.store
         try await credentials.storeCredential(bytes(for: Self.first), for: Self.first)
-        let history = try await SwiftDataHistory.open(configuration: HistoryConfiguration(persistence: .memory))
+        let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(persistence: .temporary))
         let ingress = LocalAutomationIngress(
             authority: history.authority, gateway: history.externalGateway, credentialStore: credentials
         )

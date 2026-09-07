@@ -37,11 +37,11 @@ struct WorkloadFixture: Codable, Sendable {
     let pass: Bool
     /// Human-readable note (spec citations, explanation).
     let note: String
-    /// Store medium (Part V §2): `.memory` for algorithmic workloads,
+    /// Store medium (Part V §2): `.temporary` for algorithmic workloads,
     /// `.persistent` for bullet 3's durable reopen. Recorded per §9's
     /// "recorded fixtures" requirement. `var` so Codable decodes it and the
     /// memberwise initializer accepts the `.persistent` override.
-    var medium: String = ".memory"
+    var medium: String = ".temporary"
 }
 
 /// The complete fixture document written as JSON.
@@ -310,4 +310,3 @@ let section9WorkloadEnvelopes: [String: WorkloadComplexityEnvelope] = [
         headroomPolicy: .standard
     ),
 ]
-

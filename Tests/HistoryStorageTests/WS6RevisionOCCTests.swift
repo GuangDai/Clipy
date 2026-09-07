@@ -1,7 +1,7 @@
 /// WS6 — Revision OCC and append-only revert (docs/06-cross-cutting.md §8
 /// WS6): the commit/receipt/storage side of the two-phase revision path
 /// (docs/05-authority-kernel.md §6.2) driven through the public
-/// `SwiftDataHistory.perform(.revise(_:))` facade — a changing revision
+/// `SQLiteHistory.perform(.revise(_:))` facade — a changing revision
 /// commits once at the checked-successor Content Version, a stale draft is
 /// rejected `.staleContent` with no commit, and a revert to Canonical
 /// appends a NEW active revision while the old one stays byte-identical.
@@ -13,7 +13,7 @@
 /// advancing exactly once per commit (docs/02-domain.md §13), the
 /// `.staleContent(expected:current:)` OCC rejection producing no commit, and
 /// the durable append-only revision lineage plus the §15 Effective-derived
-/// projection as seen through an INDEPENDENT second `ModelContainer` over
+/// projection as seen through an INDEPENDENT second `SQLite connection` over
 /// the same on-disk store (see `WSSupport`).
 import Foundation
 import HistoryCore
@@ -112,18 +112,15 @@ private static func replaceTextRequest(
     // changes Canonical Content, docs/02-domain.md §2.6), and exactly ONE
     // revision carrying the new Effective bytes as the active revision
     // (docs/02-domain.md §2.5 rules 1/6).
-    let reviseContainer = try WSSupport.makeContainer(storeURL: storeURL)
+    let reviseContainer = try WSSupport.makeDatabase(storeURL: storeURL)
     let reviseRows = try WSSupport.fetchRows(reviseContainer)
     #expect(reviseRows.count == 1)
     let reviseRow = try #require(reviseRows.first)
     #expect(reviseRow.id == itemID.rawValue)
     #expect(reviseRow.contentVersionRaw == 2)
-    let reviseCanonical = try CanonicalBlobCodec.decode(reviseRow.canonicalBlob)
+    let reviseCanonical = try WSSupport.fetchCanonical(itemID: reviseRow.id, in: reviseContainer)
     #expect(reviseCanonical.representations.map(\.content.bytes) == [Data(canonicalText.utf8)])
-    let reviseState = try RevisionStateBlobCodec.decode(
-        reviseRow.revisionStateBlob,
-        canonical: reviseCanonical
-    )
+    let reviseState = try WSSupport.fetchLineage(itemID: reviseRow.id, in: reviseContainer)
     #expect(reviseState.revisions.count == 1)
     let firstRevision = try #require(reviseState.revisions.first)
     #expect(firstRevision.content.representations.map(\.typeIdentifier) == ["public.utf8-plain-text"])
@@ -159,18 +156,16 @@ private static func replaceTextRequest(
     // WS6: "with no commit" — the row, the lineage, the projection, and the
     // position singleton are exactly the post-revision state
     // (docs/02-domain.md §13: no commit, no advance; docs/04-coherence.md §4).
-    let staleContainer = try WSSupport.makeContainer(storeURL: storeURL)
+    let staleContainer = try WSSupport.makeDatabase(storeURL: storeURL)
     let staleRows = try WSSupport.fetchRows(staleContainer)
     #expect(staleRows.count == 1)
     let staleRow = try #require(staleRows.first)
     #expect(staleRow.contentVersionRaw == 2)
     #expect(staleRow.titleUTF8 == Data(revisedText.utf8))
     #expect(staleRow.searchBodyUTF8 == Data(revisedText.utf8))
-    let staleCanonical = try CanonicalBlobCodec.decode(staleRow.canonicalBlob)
-    let staleState = try RevisionStateBlobCodec.decode(
-        staleRow.revisionStateBlob,
-        canonical: staleCanonical
-    )
+    let staleCanonical = try WSSupport.fetchCanonical(itemID: staleRow.id, in: staleContainer)
+    #expect(staleCanonical == reviseCanonical)
+    let staleState = try WSSupport.fetchLineage(itemID: staleRow.id, in: staleContainer)
     #expect(staleState.revisions.map(\.id) == [firstRevision.id])
     #expect(staleState.activeRevisionID == firstRevision.id)
     let stalePosition = try WSSupport.fetchPosition(staleContainer)
@@ -203,17 +198,14 @@ private static func replaceTextRequest(
     // first byte- and ID-identical to the pre-revert state, the second a NEW
     // Revision ID whose complete snapshot equals the Canonical bytes — and
     // the new revision is the active one.
-    let revertContainer = try WSSupport.makeContainer(storeURL: storeURL)
+    let revertContainer = try WSSupport.makeDatabase(storeURL: storeURL)
     let revertRows = try WSSupport.fetchRows(revertContainer)
     #expect(revertRows.count == 1)
     let revertRow = try #require(revertRows.first)
     #expect(revertRow.contentVersionRaw == 3)
-    let revertCanonical = try CanonicalBlobCodec.decode(revertRow.canonicalBlob)
+    let revertCanonical = try WSSupport.fetchCanonical(itemID: revertRow.id, in: revertContainer)
     #expect(revertCanonical.representations.map(\.content.bytes) == [Data(canonicalText.utf8)])
-    let revertState = try RevisionStateBlobCodec.decode(
-        revertRow.revisionStateBlob,
-        canonical: revertCanonical
-    )
+    let revertState = try WSSupport.fetchLineage(itemID: revertRow.id, in: revertContainer)
     #expect(revertState.revisions.count == 2)
     let preservedRevision = try #require(revertState.revisions.first)
     let appendedRevision = try #require(revertState.revisions.dropFirst().first)

@@ -1,156 +1,229 @@
 import Foundation
-import SwiftData
-@testable import HistoryStorage
 import HistoryCore
+import HistoryDomain
+import Testing
+@testable import HistoryStorage
 
-/// Shared walking-skeleton test support (docs/06-cross-cutting.md §8: each
-/// path crosses the public `ClipboardHistory` interface and the real
-/// `SwiftDataHistory` implementation; row-level assertions use an
-/// INDEPENDENT second `ModelContainer` over the same on-disk store, so no
-/// production test seam is needed for reads).
+/// Real SQLite persistence and independent persisted-value assertions (06 §8).
 enum WSSupport {
-    /// A unique temporary store URL for one test; the caller removes the
-    /// directory in a `defer` (see `removeStore`). The parent directory is
-    /// created up front — CoreData otherwise logs file-status diagnostics
-    /// when it has to create it implicitly.
     static func tempStoreURL(_ testName: String) -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("clipy-ws-\(testName)-\(UUID().uuidString)")
-        try? FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true
-        )
-        return directory.appendingPathComponent("store.sqlite")
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent("history.sqlite")
     }
 
-    /// Removes the store directory created for `url` (its parent directory).
     static func removeStore(_ url: URL) {
         try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
     }
 
-    /// Opens the real public facade over a persistent temp store.
-    static func openHistory(
-        storeURL: URL,
-        maximumUnpinned: Int = 200
-    ) async throws -> SwiftDataHistory {
-        try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(
-                persistence: .persistent(storeURL: storeURL),
-                initialMaximumUnpinnedItems: maximumUnpinned
-            )
-        )
+    static func makeHistory(maximumUnpinned: Int = 200) async throws -> SQLiteHistory {
+        try await SQLiteHistory.open(configuration: HistoryConfiguration(
+            persistence: .temporary, initialMaximumUnpinnedItems: maximumUnpinned
+        ))
     }
 
-    /// An INDEPENDENT container over the same store file, used only for
-    /// row-level assertions (never for mutations in these tests).
-    ///
-    /// Uses the same current `historySchema` as public open. No versioned
-    /// schema or compatibility migration is involved in an assertion read.
-    static func makeContainer(storeURL: URL) throws -> ModelContainer {
-        let schema = historySchema
-        return try ModelContainer(
-            for: schema,
-            configurations: [ModelConfiguration(schema: schema, url: storeURL)]
-        )
+    static func openHistory(storeURL: URL, maximumUnpinned: Int = 200) async throws -> SQLiteHistory {
+        try await SQLiteHistory.open(configuration: HistoryConfiguration(
+            persistence: .persistent(storeURL: storeURL), initialMaximumUnpinnedItems: maximumUnpinned
+        ))
     }
 
-    /// A directly-constructed Authority (storage-side proofs: WS5, §7.1,
-    /// §7.6) over its own persistent container; startup has been performed.
+    static func makeDatabase(storeURL: URL) throws -> SQLiteDatabase {
+        try SQLiteDatabase(url: storeURL)
+    }
+
     static func makeAuthority(
-        storeURL: URL,
-        limits: HistoryLimits = .standard,
-        maximumUnpinned: Int = 200
+        storeURL: URL, limits: HistoryLimits = .standard, maximumUnpinned: Int = 200
     ) async throws -> HistoryAuthority {
-        let container = try makeContainer(storeURL: storeURL)
-        let authority = HistoryAuthority(container: container, limits: limits)
+        let authority = try HistoryAuthority(
+            storeLocation: HistoryStoreLocation(persistence: .persistent(storeURL: storeURL)),
+            limits: limits
+        )
         try await authority.performStartup(initialMaximumUnpinnedItems: maximumUnpinned)
         return authority
     }
 
-    /// A normalized raw text capture (docs/06 §8 WS1), with optional extra
-    /// representations (e.g. rich text for WS3) and origin observation.
     static func textCapture(
-        _ text: String,
-        observedAt: Date,
-        source: String? = nil,
+        _ text: String, observedAt: Date, source: String? = nil,
         lineageHint: HistoryItemID? = nil,
         extra: [(typeIdentifier: String, bytes: [UInt8])] = []
     ) -> ClipboardCapture {
         var representations = [CapturedRepresentation(
-            typeIdentifier: "public.utf8-plain-text",
-            bytes: Data(text.utf8)
+            typeIdentifier: "public.utf8-plain-text", bytes: Data(text.utf8)
         )]
-        for item in extra {
-            representations.append(CapturedRepresentation(
-                typeIdentifier: item.typeIdentifier,
-                bytes: Data(item.bytes)
-            ))
-        }
+        representations += extra.map { CapturedRepresentation(typeIdentifier: $0.typeIdentifier, bytes: Data($0.bytes)) }
         return ClipboardCapture(
             representations: representations,
-            origin: CopyOriginObservation(
-                sourceApplication: source,
-                lineageHint: lineageHint
-            ),
+            origin: CopyOriginObservation(sourceApplication: source, lineageHint: lineageHint),
             observedAt: observedAt
         )
     }
 
-    /// Fetches every retained item row, sorted by id bytes for determinism.
-    static func fetchRows(_ container: ModelContainer) throws -> [HistoryItemRow] {
-        let context = ModelContext(container)
-        let rows = try context.fetch(FetchDescriptor<HistoryItemRow>())
-        return rows.sorted {
-            HistoryItemID(rawValue: $0.id) < HistoryItemID(rawValue: $1.id)
+    struct StoredItem: Equatable, Sendable {
+        let id: UUID
+        let contentVersionRaw: UInt64
+        let titleUTF8: Data
+        let searchBodyUTF8: Data
+        let effectiveTypeIdentifiersBlob: Data
+        let firstCopiedAt: Date
+        let lastCopiedAt: Date
+        let copyCount: UInt64
+        let firstSource: String?
+        let lastSource: String?
+        let pinOrdinal: Int?
+        let canonicalBytes: Int
+        let revisionCount: Int
+        let revisionBytes: Int
+        let currentContentID: UUID
+        let canonicalContentID: UUID
+    }
+
+    static func fetchRows(_ database: SQLiteDatabase) throws -> [StoredItem] {
+        let rows = try database.prepare("""
+            SELECT i.id,i.contentVersion,i.titleUTF8,i.searchBodyUTF8,i.effectiveTypeIdentifiersBlob,
+                   i.firstCopiedAt,i.lastCopiedAt,i.copyCount,i.firstSource,i.lastSource,i.pinOrdinal,
+                   i.canonicalBytes,i.revisionCount,i.revisionBytes,i.currentContentID,c.id
+            FROM history_items i LEFT JOIN contents c ON c.itemID=i.id AND c.revisionOrdinal=0
+            ORDER BY i.id
+            """)
+        var result: [StoredItem] = []
+        while try rows.step() {
+            result.append(try StoredItem(
+                id: #require(UUID(uuidString: rows.text(at: 0))),
+                contentVersionRaw: sqliteUInt64(rows.blob(at: 1)),
+                titleUTF8: rows.blob(at: 2), searchBodyUTF8: rows.blob(at: 3),
+                effectiveTypeIdentifiersBlob: rows.blob(at: 4),
+                firstCopiedAt: Date(timeIntervalSinceReferenceDate: rows.real(at: 5)),
+                lastCopiedAt: Date(timeIntervalSinceReferenceDate: rows.real(at: 6)),
+                copyCount: sqliteUInt64(rows.blob(at: 7)),
+                firstSource: rows.optionalText(at: 8), lastSource: rows.optionalText(at: 9),
+                pinOrdinal: rows.isNull(at: 10) ? nil : Int(rows.integer(at: 10)),
+                canonicalBytes: Int(rows.integer(at: 11)), revisionCount: Int(rows.integer(at: 12)),
+                revisionBytes: Int(rows.integer(at: 13)),
+                currentContentID: #require(UUID(uuidString: rows.text(at: 14))),
+                canonicalContentID: #require(UUID(uuidString: rows.text(at: 15)))
+            ))
         }
+        return result
     }
 
-    /// Fetches the position singleton (fails the test via `try` if absent
-    /// or duplicated — the store always violates loudly here).
-    static func fetchPosition(_ container: ModelContainer) throws -> LastChangePositionRow {
-        let context = ModelContext(container)
-        let rows = try context.fetch(FetchDescriptor<LastChangePositionRow>())
-        precondition(rows.count == 1, "position singleton must exist exactly once, got \(rows.count)")
-        return rows[0]
+    struct PositionState: Equatable, Sendable {
+        let key: String
+        let rawValue: UInt64
+        let maximumUnpinnedItems: Int
+        let retainedItemCount: Int
+        let pinnedItemCount: Int
+        let canonicalBytes: Int
+        let revisionBytes: Int
     }
 
-    /// Seeds the retention-expansion config singleton's policy lanes for the
-    /// R.4 capture-composition fixtures: the row is written through an
-    /// INDEPENDENT container over the same store — behind the Authority's
-    /// back, the same stance the R.3 corruption fixtures take — so a fixture
-    /// enables policies WITHOUT the `.setRetentionPolicies` sweep commit the
-    /// production path would run (which would advance `ChangePosition` and
-    /// potentially retire/prune fixture state). The capture lane re-reads
-    /// and re-validates the singleton inside every capture interval
-    /// (`RetentionConfigLoading.loadCaptureLanePolicies`), so the next
-    /// capture enforces exactly these policies. The row must already exist
-    /// (`SwiftDataHistory.open` bootstraps it all-disabled); a `nil` lane
-    /// maps to the disabled shape with its dormant value zeroed, the exact
-    /// normalization the `.setRetentionPolicies` stamping persists
-    /// (`V2-02` §5.6).
+    static func fetchPosition(_ database: SQLiteDatabase) throws -> PositionState {
+        let row = try database.prepare("SELECT key,changePosition,maximumUnpinnedItems,retainedItemCount,pinnedItemCount,canonicalBytes,revisionBytes FROM history_state")
+        #expect(try row.step())
+        let result = try PositionState(
+            key: row.text(at: 0), rawValue: sqliteUInt64(row.blob(at: 1)),
+            maximumUnpinnedItems: Int(row.integer(at: 2)), retainedItemCount: Int(row.integer(at: 3)),
+            pinnedItemCount: Int(row.integer(at: 4)), canonicalBytes: Int(row.integer(at: 5)),
+            revisionBytes: Int(row.integer(at: 6))
+        )
+        #expect(try !row.step())
+        return result
+    }
+
+    static func fetchCanonical(itemID: UUID, in database: SQLiteDatabase) throws -> CanonicalContent {
+        let rows = try database.prepare("""
+            SELECT r.exactType,r.fingerprint,r.byteCount,r.inlineBytes,r.blobID
+            FROM representations r JOIN contents c ON c.id=r.contentID
+            WHERE c.itemID=? AND c.revisionOrdinal=0 ORDER BY r.ordinal
+            """, bindings: [.text(itemID.uuidString)])
+        var values: [CanonicalRepresentation] = []
+        while try rows.step() {
+            values.append(try CanonicalRepresentation(
+                content: ContentRepresentation(typeIdentifier: rows.text(at: 0), bytes: payload(
+                    rows, countColumn: 2, inlineColumn: 3, blobColumn: 4, in: database
+                )),
+                fingerprint: ContentFingerprint(rawValue: sqliteUInt64(rows.blob(at: 1)))
+            ))
+        }
+        return try CanonicalContent(representations: values)
+    }
+
+    static func fetchSignatureEntries(itemID: UUID, in database: SQLiteDatabase) throws -> [ContentSignatureEntry] {
+        let rows = try database.prepare("""
+            SELECT r.exactType,r.fingerprint,r.byteCount FROM representations r
+            JOIN contents c ON c.id=r.contentID WHERE c.itemID=? AND c.revisionOrdinal=0 ORDER BY r.ordinal
+            """, bindings: [.text(itemID.uuidString)])
+        var values: [ContentSignatureEntry] = []
+        while try rows.step() {
+            values.append(try ContentSignatureEntry(
+                typeIdentifier: rows.text(at: 0),
+                fingerprint: ContentFingerprint(rawValue: sqliteUInt64(rows.blob(at: 1))),
+                byteCount: Int(rows.integer(at: 2))
+            ))
+        }
+        return values
+    }
+
+    struct StoredLineage: Equatable, Sendable {
+        let revisions: [ContentRevision]
+        let activeRevisionID: RevisionID?
+    }
+
+    static func fetchLineage(itemID: UUID, in database: SQLiteDatabase) throws -> StoredLineage {
+        let item = try database.prepare("SELECT currentContentID FROM history_items WHERE id=?", bindings: [.text(itemID.uuidString)])
+        #expect(try item.step())
+        let currentID = try #require(UUID(uuidString: item.text(at: 0)))
+        let rows = try database.prepare("SELECT id,createdAt FROM contents WHERE itemID=? AND revisionOrdinal>0 ORDER BY revisionOrdinal", bindings: [.text(itemID.uuidString)])
+        var revisions: [ContentRevision] = []
+        while try rows.step() {
+            let id = try #require(UUID(uuidString: rows.text(at: 0)))
+            let representations = try database.prepare("SELECT exactType,byteCount,inlineBytes,blobID FROM representations WHERE contentID=? ORDER BY ordinal", bindings: [.text(id.uuidString)])
+            var values: [ContentRepresentation] = []
+            while try representations.step() {
+                values.append(try ContentRepresentation(typeIdentifier: representations.text(at: 0), bytes: payload(
+                    representations, countColumn: 1, inlineColumn: 2, blobColumn: 3, in: database
+                )))
+            }
+            revisions.append(try ContentRevision(id: RevisionID(rawValue: id),
+                createdAt: Date(timeIntervalSinceReferenceDate: rows.real(at: 1)),
+                content: EffectiveContent(representations: values)))
+        }
+        return StoredLineage(revisions: revisions, activeRevisionID: revisions.first { $0.id.rawValue == currentID }?.id)
+    }
+
+    private static func payload(
+        _ row: SQLiteStatement, countColumn: Int32, inlineColumn: Int32, blobColumn: Int32,
+        in database: SQLiteDatabase
+    ) throws -> Data {
+        let count = try Int(row.integer(at: countColumn))
+        if let bytes = try row.optionalBlob(at: inlineColumn) {
+            #expect(bytes.count == count)
+            return bytes
+        }
+        let id = try #require(UUID(uuidString: row.text(at: blobColumn)))
+        let location = try database.prepare("PRAGMA database_list")
+        #expect(try location.step())
+        let url = try URL(fileURLWithPath: location.text(at: 2))
+        let store = try HistoryStoreLocation(persistence: .persistent(storeURL: url))
+        return try ImmutableBlobStore(root: store.rootURL).read(id: id, expectedByteCount: count)
+    }
+
+    /// Explicit fixture policy writes avoid the public sweep before the capture under test.
     static func seedRetentionConfig(
-        storeURL: URL,
-        age: AgeRetention? = nil,
-        storage: StorageRetention? = nil,
+        storeURL: URL, age: AgeRetention? = nil, storage: StorageRetention? = nil,
         revisions: RevisionRetention? = nil
     ) throws {
-        let container = try makeContainer(storeURL: storeURL)
-        let context = ModelContext(container)
-        let rows = try context.fetch(FetchDescriptor<RetentionExpansionConfigRow>())
-        precondition(
-            rows.count == 1,
-            "config singleton must exist exactly once, got \(rows.count)"
-        )
-        // A `@Model` is bound to the context that fetched it — mutate and
-        // save through the SAME context (the R.3 fixture discipline).
-        let row = rows[0]
-        row.agePolicyEnabled = age != nil
-        row.ageMaxSeconds = age?.maxAge ?? 0
-        row.storagePolicyEnabled = storage != nil
-        row.storageMaxBytes = storage?.maxTotalBytes ?? 0
-        row.revisionPolicyEnabled = revisions != nil
-        row.revisionMaxCount = revisions?.maxRevisionsPerItem
-        row.revisionMaxBytes = revisions?.maxRevisionBytesPerItem
-        try context.save()
+        let database = try makeDatabase(storeURL: storeURL)
+        try database.execute("""
+            UPDATE retention_policies SET ageMaxSeconds=?,storageMaxBytes=?,revisionMaxCount=?,revisionMaxBytes=?
+            WHERE key='retention-expansion'
+            """, bindings: [
+                age.map { .real($0.maxAge) } ?? .null,
+                storage.map { .integer(Int64($0.maxTotalBytes)) } ?? .null,
+                (revisions?.maxRevisionsPerItem).map { .integer(Int64($0)) } ?? .null,
+                (revisions?.maxRevisionBytesPerItem).map { .integer(Int64($0)) } ?? .null
+            ])
+        #expect(try database.changedRowCount == 1)
     }
 }

@@ -8,8 +8,8 @@ import Testing
 
 struct RegexpScalarRangeTests {
     @Test func titleMatchesWithinGraphemesKeepTheirExactUTF16Ranges() async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let title = "cafe\u{301} 👩‍💻"
         let receipt = try await history.perform(.capture(WSSupport.textCapture(

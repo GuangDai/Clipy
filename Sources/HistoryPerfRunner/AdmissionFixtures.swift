@@ -67,7 +67,7 @@ struct AdmissionExactSearchProbeFixture: Codable, Sendable, Equatable {
 }
 
 /// Record-only Release A/B for IND-07's scalar matcher baseline. It never
-/// opens SwiftData and cannot be used as G2/G8 or candidate-index evidence.
+/// opens SQLite and cannot be used as G2/G8 or candidate-index evidence.
 struct AdmissionExactMatcherABFixture: Codable, Sendable {
     let schemaVersion: UInt16
     let mode: String
@@ -176,4 +176,3 @@ func admissionPercentilesIfSupported(
             : nil
     )
 }
-

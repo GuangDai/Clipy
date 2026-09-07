@@ -259,7 +259,7 @@ struct PanelKeepOpenAndStatusMenuHostedTests {
 
     private static func waitForRows(
         _ count: Int,
-        in history: SwiftDataHistory
+        in history: SQLiteHistory
     ) async -> Bool {
         for _ in 0..<200 {
             if let page = try? await history.browse(

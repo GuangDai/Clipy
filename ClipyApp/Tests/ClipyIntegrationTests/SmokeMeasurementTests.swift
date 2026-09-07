@@ -3,7 +3,7 @@
 /// timing capture (HistoryViewState row/page arrival, not NSHostingView
 /// frame timing), and the PREVIEW pane
 /// end-to-end. Each test proves the behavioral path against the real
-/// composed stack (real `SwiftDataHistory`, real `HistoryViewState`,
+/// composed stack (real `SQLiteHistory`, real `HistoryViewState`,
 /// `ThumbnailStore`, `PreviewPaneState`) and prints its measurements as
 /// structured `clipy.smoke.measurement` JSON lines so a later budget lane
 /// can mine the CI logs without re-deriving the scenarios.

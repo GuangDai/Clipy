@@ -1,7 +1,7 @@
 /// Fresh-process support for WL2's warm persistent-open complexity envelope.
-/// The parent never owns a ModelContainer for this workload: one child builds
+/// The parent never owns a database connection for this workload: one child builds
 /// the untimed corpus, then one warmup child and five measured children each
-/// execute the public `SwiftDataHistory.open` path and terminate independently.
+/// execute the public `SQLiteHistory.open` path and terminate independently.
 import Foundation
 
 internal let persistentOpenChildSampleCount = 5
@@ -53,7 +53,7 @@ internal func decodePersistentOpenChildDuration(_ data: Data) throws -> Double {
 /// Runs the complete per-size lifecycle: one untimed population child, one
 /// discarded warmup child, then exactly five measured children. Keeping this
 /// orchestration injectable makes process-count and ordering drift testable
-/// without launching SwiftData from a helper test.
+/// without opening a database from a helper test.
 internal func runPersistentOpenChildSequence(
     populate: () throws -> Void,
     measure: () throws -> Double
@@ -114,7 +114,7 @@ private func runPersistentOpenChildProcess(
     process.arguments = [mode.rawValue] + arguments
     process.standardInput = FileHandle.nullDevice
     // Drain one combined stream while the child is alive. Waiting before
-    // draining separate stdout/stderr pipes can deadlock when CoreData emits
+    // draining separate stdout/stderr pipes can deadlock when a child emits
     // enough diagnostics to fill either pipe's kernel buffer.
     process.standardOutput = combinedOutput
     process.standardError = combinedOutput

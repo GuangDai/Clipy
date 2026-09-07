@@ -1,13 +1,9 @@
 /// Package-only bounded fixture seeding for the manual performance-admission
 /// runner. This is not a second writer: raw captures still pass through the
 /// production ingest preparation and codecs, while `HistoryAuthority` remains
-/// the only owner of writable ModelContexts and transaction commits.
+/// the only owner of the writable SQLite connection and transaction commits.
 ///
-/// The seam exists because replaying 5,000 public captures is intentionally
-/// proportional to the retained scalar inventory on every call. That is the
-/// production semantic path, but it makes untimed corpus construction
-/// cumulative O(N²) and creates thousands of short-lived SwiftData contexts.
-/// Fixture seeding instead uses fixed-size physical batches, keeping transient
+/// Fixture seeding uses fixed-size physical batches, keeping transient
 /// space O(batch × bounded item bytes) and transaction count O(N / batch).
 import Foundation
 import HistoryCore
@@ -30,7 +26,7 @@ package struct PerformanceFixtureSeedReceipt: Sendable, Equatable {
     package let batchSize: Int
 }
 
-extension SwiftDataHistory {
+extension SQLiteHistory {
     /// A bounded compromise for the 256 KiB admission rows: at most roughly
     /// tens of MiB of prepared/encoded values are live, while 5,000 rows need
     /// only 79 transactions instead of 5,000. Keep this fixed so fixture JSON
@@ -40,8 +36,8 @@ extension SwiftDataHistory {
     /// Seeds a new, empty store for performance measurement.
     ///
     /// Every raw value uses the production preparation/projector/fingerprint
-    /// and wire codecs. `HistoryAuthority` commits each bounded batch, updates
-    /// its real Signature Index, and advances Change Position once per batch.
+    /// and wire codecs. `HistoryAuthority` commits each bounded batch, writes
+    /// its durable signature candidates, and advances Change Position once per batch.
     /// Callers should finish with one ordinary public capture; that validates
     /// the seeded index and high-retained-count capture path before measuring.
     ///

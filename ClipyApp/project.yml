@@ -96,7 +96,7 @@ targets:
     dependencies:
       - target: ClipyApp
       # Package products the composed suites import directly (real
-      # SwiftDataHistory + PasteboardAdapter + PresentationUI); ClipyApp
+      # SQLiteHistory + PasteboardAdapter + PresentationUI); ClipyApp
       # itself already links all four (docs/roadmap/06-clipyapp.md step 9c).
       - package: Clipy
         product: HistoryCore

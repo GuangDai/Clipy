@@ -5,11 +5,11 @@ import Testing
 
 struct RecentScalarPaginationTests {
     /// Exercise normal slices, the pinned/unpinned join, and UUID-tie
-    /// fallback in the real in-memory store. Expected order is independent
+    /// fallback in the real disposable SQLite store. Expected order is independent
     /// of the store's date-tie order and the production scalar comparator.
     @Test func smallPagesPreserveMixedDateTiesAndPinnedLookahead() async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let dates = [3, 3, 3, 2, 2, 1, 1, 1]
         var captured: [(id: HistoryItemID, date: Int)] = []

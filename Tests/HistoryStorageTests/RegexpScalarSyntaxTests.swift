@@ -15,8 +15,8 @@ struct RegexpScalarSyntaxTests {
     ])
     func combiningMarksCannotHideRejectedSyntax(pattern: String) async throws {
         _ = try NSRegularExpression(pattern: pattern)
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         await #expect(throws: HistoryFailure.invalidInput(.invalidRegularExpression)) {
             _ = try await history.browse(HistoryBrowseRequest(
@@ -31,8 +31,8 @@ struct RegexpScalarSyntaxTests {
         ("(?:a\u{301})+", "a\u{301}a\u{301}"),
     ])
     func quotedAndClassLiteralsRemainSearchable(pattern: String, text: String) async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         _ = try await history.perform(.capture(WSSupport.textCapture(
             text, observedAt: Date(timeIntervalSinceReferenceDate: 1)

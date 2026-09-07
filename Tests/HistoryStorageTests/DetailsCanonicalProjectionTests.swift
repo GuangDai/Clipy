@@ -8,8 +8,8 @@ import Testing
 
 struct DetailsCanonicalProjectionTests {
     @Test func canonicalAndEffectiveStayIndependentAcrossRevisionAndRevert() async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let textType = "public.utf8-plain-text"
         let opaqueType = "com.example.details.opaque"

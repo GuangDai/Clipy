@@ -572,18 +572,18 @@ struct AppPasteOrchestrationTests {
     #endif
 }
 
-/// Test-only scheduling control around the real `SwiftDataHistory`: every
+/// Test-only scheduling control around the real `SQLiteHistory`: every
 /// operation delegates unchanged, and only the first paste-payload read is
 /// suspended. This is not a second writer or a scripted History substitute;
 /// it makes the production copy-lane race reproducible without sleeps.
 private actor PausingPastePayloadHistory: ClipboardHistory {
-    private let base: SwiftDataHistory
+    private let base: SQLiteHistory
     private var didPause = false
     private var pauseContinuation: CheckedContinuation<Void, Never>?
     private var observerContinuations: [CheckedContinuation<Void, Never>] = []
     private(set) var resolvedPastePayloadItem: HistoryItemReference?
 
-    init(base: SwiftDataHistory) {
+    init(base: SQLiteHistory) {
         self.base = base
     }
 

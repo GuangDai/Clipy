@@ -4,7 +4,6 @@
 /// Owning spec: `V2-05` §5.2/§7.1/§9 X-PERF-3.
 import Foundation
 import HistoryCore
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
@@ -17,13 +16,13 @@ struct GatewayBrowseProjectionIsolationTests {
         uuidString: "00000000-0000-0000-0000-000000004410"
     )!)
 
-    @Test("App Intent pages ignore malformed and missing non-result count facts")
+    @Test("App Intent pages ignore malformed and out-of-range non-result count facts")
     func appIntentPagesIgnoreUnrelatedRevisionCountDamage() async throws {
-        let history = try await SwiftDataHistory.open(configuration:
-            HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(configuration:
+            HistoryConfiguration(persistence: .temporary)
         )
-        let missing = try await Self.capture(
-            "gateway-projection-unrelated-missing",
+        let noninteger = try await Self.capture(
+            "gateway-projection-unrelated-noninteger",
             at: Self.epoch,
             in: history
         )
@@ -45,14 +44,14 @@ struct GatewayBrowseProjectionIsolationTests {
         )
         let connection = try #require(try await history.connections().first)
         try await history.grantCapability(.browse, to: connection.id)
-        try Self.deleteRevisionCount(
-            for: missing.id,
-            in: await history.authority.container
+        try await Self.setNonintegerRevisionCount(
+            for: noninteger.id,
+            in: history.authority
         )
-        try Self.setRevisionCount(
-            -1,
+        try await Self.setRevisionCount(
+            HistoryLimits.standard.maximumRevisionsPerItem + 1,
             for: malformed.id,
-            in: await history.authority.container
+            in: history.authority
         )
 
         let facade = history.makeAppIntentsHistoryFacade()
@@ -83,12 +82,12 @@ struct GatewayBrowseProjectionIsolationTests {
         #expect(row.revisionCount == 1)
     }
 
-    @Test("selected missing count fails only after its failed audit commits")
-    func appIntentSearchAuditsSelectedMissingRevisionCount() async throws {
-        let history = try await SwiftDataHistory.open(configuration:
-            HistoryConfiguration(persistence: .memory)
+    @Test("selected noninteger count fails only after its failed audit commits")
+    func appIntentSearchAuditsSelectedNonintegerRevisionCount() async throws {
+        let history = try await SQLiteHistory.open(configuration:
+            HistoryConfiguration(persistence: .temporary)
         )
-        let privateQuery = "gateway-projection-selected-missing"
+        let privateQuery = "gateway-projection-selected-noninteger"
         let matched = try await Self.capture(
             privateQuery,
             at: Self.epoch,
@@ -96,9 +95,9 @@ struct GatewayBrowseProjectionIsolationTests {
         )
         let connection = try #require(try await history.connections().first)
         try await history.grantCapability(.browse, to: connection.id)
-        let container = await history.authority.container
-        let before = try GatewayStoreSnapshot.read(in: ModelContext(container))
-        try Self.deleteRevisionCount(for: matched.id, in: container)
+        let authority = history.authority
+        let before = try await GatewayStoreSnapshot.read(from: authority)
+        try await Self.setNonintegerRevisionCount(for: matched.id, in: authority)
 
         await #expect(throws:
             ExternalFailure.persistence(.invariantViolation)
@@ -108,8 +107,8 @@ struct GatewayBrowseProjectionIsolationTests {
             )
         }
 
-        try Self.expectFailedSearchAudit(
-            in: container,
+        try await Self.expectFailedSearchAudit(
+            in: authority,
             appendedAfter: before.operations.count,
             connection: connection.id,
             privateQuery: privateQuery
@@ -118,8 +117,8 @@ struct GatewayBrowseProjectionIsolationTests {
 
     @Test("App Intent search still fails closed for a returned corrupt count")
     func appIntentSearchRejectsSelectedCorruptRevisionCount() async throws {
-        let history = try await SwiftDataHistory.open(configuration:
-            HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(configuration:
+            HistoryConfiguration(persistence: .temporary)
         )
         let matched = try await Self.capture(
             "gateway-projection-selected-corrupt",
@@ -129,12 +128,12 @@ struct GatewayBrowseProjectionIsolationTests {
         let privateQuery = "selected-corrupt"
         let connection = try #require(try await history.connections().first)
         try await history.grantCapability(.browse, to: connection.id)
-        let container = await history.authority.container
-        let before = try GatewayStoreSnapshot.read(in: ModelContext(container))
-        try Self.setRevisionCount(
-            -1,
+        let authority = history.authority
+        let before = try await GatewayStoreSnapshot.read(from: authority)
+        try await Self.setRevisionCount(
+            HistoryLimits.standard.maximumRevisionsPerItem + 1,
             for: matched.id,
-            in: container
+            in: authority
         )
 
         await #expect(throws:
@@ -148,8 +147,8 @@ struct GatewayBrowseProjectionIsolationTests {
                 )
             )
         }
-        try Self.expectFailedSearchAudit(
-            in: container,
+        try await Self.expectFailedSearchAudit(
+            in: authority,
             appendedAfter: before.operations.count,
             connection: connection.id,
             privateQuery: privateQuery
@@ -158,8 +157,8 @@ struct GatewayBrowseProjectionIsolationTests {
 
     @Test("Local Automation recent and search do not consume revision counts")
     func localAutomationKeepsV1Projection() async throws {
-        let history = try await SwiftDataHistory.open(configuration:
-            HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(configuration:
+            HistoryConfiguration(persistence: .temporary)
         )
         let item = try await Self.capture(
             "gateway-local-projection-isolation",
@@ -174,10 +173,10 @@ struct GatewayBrowseProjectionIsolationTests {
             .browsePreview,
             to: Self.localConnection
         )
-        try Self.setRevisionCount(
-            -1,
+        try await Self.setRevisionCount(
+            HistoryLimits.standard.maximumRevisionsPerItem + 1,
             for: item.id,
-            in: await history.authority.container
+            in: history.authority
         )
 
         let recent = try await history.authority
@@ -203,10 +202,33 @@ struct GatewayBrowseProjectionIsolationTests {
         #expect(search.rows.map(\.item.id) == [item.id])
     }
 
+    @Test("the current item schema rejects an absent revision count")
+    func revisionCountCannotBeNull() async throws {
+        let history = try await SQLiteHistory.open(configuration:
+            HistoryConfiguration(persistence: .temporary)
+        )
+        let item = try await Self.capture("required-revision-count", at: Self.epoch, in: history)
+        try await history.authority.withTestDatabase { authority in
+            let before = try GatewayHistoryTestSnapshot.read(in: authority)
+            do {
+                try authority.database.writeTransaction {
+                    try authority.database.execute(
+                        "UPDATE history_items SET revisionCount = NULL WHERE id = ?",
+                        bindings: [.text(item.id.rawValue.uuidString)]
+                    )
+                }
+                Issue.record("revisionCount unexpectedly accepted NULL")
+            } catch let failure as SQLiteFailure {
+                #expect(failure.isConstraint)
+            }
+            #expect(try GatewayHistoryTestSnapshot.read(in: authority) == before)
+        }
+    }
+
     private static func capture(
         _ text: String,
         at observedAt: Date,
-        in history: SwiftDataHistory
+        in history: SQLiteHistory
     ) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.capture(WSSupport.textCapture(
             text,
@@ -223,7 +245,7 @@ struct GatewayBrowseProjectionIsolationTests {
     private static func revise(
         _ reference: HistoryItemReference,
         to text: String,
-        in history: SwiftDataHistory
+        in history: SQLiteHistory
     ) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.revise(RevisionRequest(
             itemID: reference.id,
@@ -244,45 +266,43 @@ struct GatewayBrowseProjectionIsolationTests {
     }
 
     private static func setRevisionCount(
-        _ count: Int,
-        for item: HistoryItemID,
-        in container: ModelContainer
-    ) throws {
-        let rawID = item.rawValue
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
-        let rows = try context.fetch(FetchDescriptor<RetainedBytesRow>(
-            predicate: #Predicate { $0.itemID == rawID }
-        ))
-        let row = try #require(rows.first)
-        #expect(rows.count == 1)
-        row.revisionCount = count
-        try context.save()
+        _ count: Int, for item: HistoryItemID, in authority: HistoryAuthority
+    ) async throws {
+        try await authority.withTestDatabase { authority in
+            try authority.database.writeTransaction {
+                try authority.database.execute(
+                    "UPDATE history_items SET revisionCount = ? WHERE id = ?",
+                    bindings: [.integer(Int64(count)), .text(item.rawValue.uuidString)]
+                )
+                #expect(try authority.database.changedRowCount == 1)
+            }
+        }
     }
 
-    private static func deleteRevisionCount(
-        for item: HistoryItemID,
-        in container: ModelContainer
-    ) throws {
-        let rawID = item.rawValue
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
-        let rows = try context.fetch(FetchDescriptor<RetainedBytesRow>(
-            predicate: #Predicate { $0.itemID == rawID }
-        ))
-        let row = try #require(rows.first)
-        #expect(rows.count == 1)
-        context.delete(row)
-        try context.save()
+    private static func setNonintegerRevisionCount(
+        for item: HistoryItemID, in authority: HistoryAuthority
+    ) async throws {
+        // Revision counts now live on the item and cannot be absent. A wrong
+        // SQLite storage class exercises an unreadable selected count without
+        // reconstructing the removed byte-accounting table.
+        try await authority.withTestDatabase { authority in
+            try authority.database.writeTransaction {
+                try authority.database.execute(
+                    "UPDATE history_items SET revisionCount = ? WHERE id = ?",
+                    bindings: [.text("missing"), .text(item.rawValue.uuidString)]
+                )
+                #expect(try authority.database.changedRowCount == 1)
+            }
+        }
     }
 
     private static func expectFailedSearchAudit(
-        in container: ModelContainer,
+        in authority: HistoryAuthority,
         appendedAfter previousCount: Int,
         connection: ExternalConnectionID,
         privateQuery: String
-    ) throws {
-        let after = try GatewayStoreSnapshot.read(in: ModelContext(container))
+    ) async throws {
+        let after = try await GatewayStoreSnapshot.read(from: authority)
         let appended = Array(after.operations.dropFirst(previousCount))
         #expect(appended.count == 1)
         let audit = try #require(appended.first)

@@ -5,6 +5,68 @@ import HistoryCore
 import Testing
 @testable import HistoryDomain
 
+/// Test fixtures can start with a complete lineage; product planning keeps
+/// only the validated current content and old revision metadata (02 §11).
+private func revisionFacts(_ item: HistoryItemState) throws -> RevisionFacts {
+    RevisionFacts(
+        itemID: item.id,
+        contentVersion: item.contentVersion,
+        canonical: item.canonical,
+        current: try effectiveContent(of: item),
+        revisions: item.revisions.map { revision in
+            RevisionRetentionSummary(
+                id: revision.id,
+                byteCount: revision.content.representations.reduce(0) { $0 + $1.bytes.count }
+            )
+        },
+        activeRevisionID: item.activeRevisionID
+    )
+}
+
+@Test func revisionMetadataUsesCurrentContentBeforeRejectingDuplicateCandidate() throws {
+    let canonical = try pinRevisionCanonical()
+    let current = EffectiveContent(representations: [ContentRepresentation(
+        typeIdentifier: "public.utf8-plain-text", bytes: Data("active bytes".utf8)
+    )])
+    let itemID = pinRevisionItemID(1)
+    let activeID = pinRevisionRevisionID(2)
+    let duplicateID = pinRevisionRevisionID(1)
+    let facts = RevisionFacts(
+        itemID: itemID, contentVersion: .initial, canonical: canonical,
+        current: current,
+        revisions: [
+            RevisionRetentionSummary(id: duplicateID, byteCount: 1_000_000),
+            RevisionRetentionSummary(id: activeID, byteCount: 12),
+        ],
+        activeRevisionID: activeID
+    )
+    let request = RevisionRequest(itemID: itemID, expected: .initial, intent: .revert(to: .canonical))
+    let unchanged = try planRevision(
+        request: request,
+        prepared: PreparedRevision(
+            candidateRevisionID: duplicateID,
+            createdAt: Date(timeIntervalSinceReferenceDate: 300),
+            basedOn: .initial, proposedContent: current
+        ),
+        facts: facts
+    )
+    if case .commit = unchanged {
+        Issue.record("Equal current content must remain unchanged before duplicate-ID validation")
+    }
+    #expect(throws: DomainRejection.invalidRevisionDraft) {
+        try planRevision(
+            request: request,
+            prepared: PreparedRevision(
+                candidateRevisionID: duplicateID,
+                createdAt: Date(timeIntervalSinceReferenceDate: 300),
+                basedOn: .initial,
+                proposedContent: EffectiveContent(representations: canonical.representations.map(\.content))
+            ),
+            facts: facts
+        )
+    }
+}
+
 @Test(arguments: [false, true])
 func equivalentTypeSpellingsDoNotAppendARevision(_ useDecomposedCanonical: Bool) throws {
     let canonicalType = useDecomposedCanonical ? "e\u{301}" : "\u{e9}"
@@ -26,7 +88,7 @@ func equivalentTypeSpellingsDoNotAppendARevision(_ useDecomposedCanonical: Bool)
                 basedOn: item.contentVersion,
                 proposedContent: EffectiveContent(representations: proposed.representations.map(\.content))
             ),
-            facts: RevisionFacts(item: item)
+            facts: revisionFacts(item)
         )
         switch result {
         case .unchanged:
@@ -103,7 +165,7 @@ func equivalentTypeSpellingsDoNotAppendARevision(_ useDecomposedCanonical: Bool)
     switch try planRevision(
         request: request,
         prepared: samePrepared,
-        facts: RevisionFacts(item: item)
+        facts: revisionFacts(item)
     ) {
     case .unchanged:
         break
@@ -127,7 +189,7 @@ func equivalentTypeSpellingsDoNotAppendARevision(_ useDecomposedCanonical: Bool)
     let changedResult = try planRevision(
         request: request,
         prepared: changedPrepared,
-        facts: RevisionFacts(item: item)
+        facts: revisionFacts(item)
     )
 
     guard case .commit(let plan) = changedResult,
@@ -210,7 +272,7 @@ func equivalentTypeSpellingsDoNotAppendARevision(_ useDecomposedCanonical: Bool)
         try planRevision(
             request: request,
             prepared: prepared,
-            facts: RevisionFacts(item: item)
+            facts: revisionFacts(item)
         )
     }
 }
@@ -240,7 +302,7 @@ func equivalentTypeSpellingsDoNotAppendARevision(_ useDecomposedCanonical: Bool)
                 basedOn: ContentVersion(rawValue: 2),
                 proposedContent: validChangedContent
             ),
-            facts: RevisionFacts(item: item)
+            facts: revisionFacts(item)
         )
     }
     #expect(throws: DomainRejection.invalidRevisionDraft) {
@@ -257,7 +319,7 @@ func equivalentTypeSpellingsDoNotAppendARevision(_ useDecomposedCanonical: Bool)
                     ),
                 ])
             ),
-            facts: RevisionFacts(item: item)
+            facts: revisionFacts(item)
         )
     }
 }
@@ -288,12 +350,12 @@ func equivalentTypeSpellingsDoNotAppendARevision(_ useDecomposedCanonical: Bool)
         try planRevision(
             request: request,
             prepared: prepared,
-            facts: RevisionFacts(item: item)
+            facts: revisionFacts(item)
         )
     }
 }
 
-@Test func revisionPlannerMapsCorruptCurrentLineageToDomainRejection() throws {
+@Test func effectiveContentRejectsCorruptLineageBeforeRevisionFacts() throws {
     let itemID = pinRevisionItemID(1)
     let canonical = try pinRevisionCanonical()
     let orphanedRevision = ContentRevision(
@@ -309,29 +371,8 @@ func equivalentTypeSpellingsDoNotAppendARevision(_ useDecomposedCanonical: Bool)
         revisions: [orphanedRevision],
         activeRevisionID: nil
     )
-    let request = RevisionRequest(
-        itemID: itemID,
-        expected: .initial,
-        intent: .revert(to: .canonical)
-    )
-    let prepared = PreparedRevision(
-        candidateRevisionID: pinRevisionRevisionID(2),
-        createdAt: Date(timeIntervalSinceReferenceDate: 200),
-        basedOn: .initial,
-        proposedContent: EffectiveContent(representations: [
-            ContentRepresentation(
-                typeIdentifier: "public.utf8-plain-text",
-                bytes: Data("changed".utf8)
-            ),
-        ])
-    )
-
     #expect(throws: DomainRejection.corruptLineage) {
-        try planRevision(
-            request: request,
-            prepared: prepared,
-            facts: RevisionFacts(item: corruptItem)
-        )
+        try effectiveContent(of: corruptItem)
     }
 }
 
@@ -381,8 +422,8 @@ func equivalentTypeSpellingsDoNotAppendARevision(_ useDecomposedCanonical: Bool)
                     basedOn: .initial,
                     proposedContent: invalidContent
                 ),
-                facts: RevisionFacts(
-                    item: pinRevisionState(id: itemID, canonical: canonical)
+                facts: revisionFacts(
+                    pinRevisionState(id: itemID, canonical: canonical)
                 )
             )
         }
@@ -439,8 +480,8 @@ func equivalentTypeSpellingsDoNotAppendARevision(_ useDecomposedCanonical: Bool)
         try planRevision(
             request: request,
             prepared: prepared,
-            facts: RevisionFacts(
-                item: pinRevisionState(id: itemID, canonical: canonical)
+            facts: revisionFacts(
+                pinRevisionState(id: itemID, canonical: canonical)
             )
         )
     }

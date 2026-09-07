@@ -1,7 +1,7 @@
 /// WS15 — Thumbnail version fence (docs/06-cross-cutting.md §8 WS15;
 /// docs/04-coherence.md §9 thumbnail single-flight; §16 failure
 /// translation): the version-fence semantics of the
-/// `SwiftDataHistory.thumbnail(for:pixels:)` pipeline driven through the
+/// `SQLiteHistory.thumbnail(for:pixels:)` pipeline driven through the
 /// PUBLIC facade and the real `HistoryAuthority` + `ThumbnailService`.
 ///
 /// The fence (04 §9): steps 2–3 of the thumbnail pipeline run inside one

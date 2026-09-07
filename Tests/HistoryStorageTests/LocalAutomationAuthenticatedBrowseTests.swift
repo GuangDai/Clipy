@@ -3,7 +3,6 @@
 /// peer identity, client file, or wire result is constructed here.
 import Foundation
 import HistoryCore
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
@@ -16,8 +15,8 @@ struct LocalAutomationAuthenticatedBrowseTests {
     private static let capturedText = "batch39-authenticated-browse-sentinel"
 
     private struct Fixture {
-        let history: SwiftDataHistory
-        let container: ModelContainer
+        let history: SQLiteHistory
+        var authority: HistoryAuthority { history.authority }
         let credential: LocalAutomationCredential
         let browse: LocalAutomationAuthenticatedBrowse
     }
@@ -25,9 +24,7 @@ struct LocalAutomationAuthenticatedBrowseTests {
     @Test("exact granted credential reads recent and search as browse preview")
     func exactCredentialUsesTheUniqueGatewayReadAndAuditLane() async throws {
         let fixture = try await Self.makeFixture(granted: true)
-        let before = try GatewayStoreSnapshot.read(
-            in: ModelContext(fixture.container)
-        )
+        let before = try await GatewayStoreSnapshot.read(from: fixture.authority)
 
         let recent = try #require(try await fixture.browse.browsePreview(
             .recent(limit: 10),
@@ -41,9 +38,7 @@ struct LocalAutomationAuthenticatedBrowseTests {
         #expect(recent.rows.contains { $0.title == Self.capturedText })
         #expect(search.rows.contains { $0.title == Self.capturedText })
 
-        let after = try GatewayStoreSnapshot.read(
-            in: ModelContext(fixture.container)
-        )
+        let after = try await GatewayStoreSnapshot.read(from: fixture.authority)
         let appended = after.operations.suffix(
             after.operations.count - before.operations.count
         )
@@ -84,9 +79,7 @@ struct LocalAutomationAuthenticatedBrowseTests {
     @Test("wrong credential stops unaudited while exact no-grant is audited")
     func authenticationAndGatewayAuthorizationStayDistinct() async throws {
         let fixture = try await Self.makeFixture(granted: false)
-        let before = try GatewayStoreSnapshot.read(
-            in: ModelContext(fixture.container)
-        )
+        let before = try await GatewayStoreSnapshot.read(from: fixture.authority)
         var wrong = fixture.credential.exactBytes
         wrong[LocalAutomationCredential.byteCount - 1] ^= 0x01
 
@@ -94,9 +87,7 @@ struct LocalAutomationAuthenticatedBrowseTests {
             .recent(limit: 1),
             presenting: wrong
         ) == nil)
-        #expect(try GatewayStoreSnapshot.read(
-            in: ModelContext(fixture.container)
-        ) == before)
+        #expect(try await GatewayStoreSnapshot.read(from: fixture.authority) == before)
 
         await #expect(throws: ExternalFailure.unauthorized(
             requestedCapability: .browsePreview,
@@ -108,9 +99,7 @@ struct LocalAutomationAuthenticatedBrowseTests {
             )
         }
 
-        let after = try GatewayStoreSnapshot.read(
-            in: ModelContext(fixture.container)
-        )
+        let after = try await GatewayStoreSnapshot.read(from: fixture.authority)
         #expect(after.operations.dropLast() == before.operations[...])
         let denial = try #require(after.operations.last)
         #expect(denial.connectionIDRaw == Self.connection.rawValue)
@@ -134,9 +123,7 @@ struct LocalAutomationAuthenticatedBrowseTests {
     func revokedCredentialStillResolvesBeforeTheLiveGatewayGate() async throws {
         let fixture = try await Self.makeFixture(granted: true)
         try await fixture.history.revokeConnection(Self.connection)
-        let before = try GatewayStoreSnapshot.read(
-            in: ModelContext(fixture.container)
-        )
+        let before = try await GatewayStoreSnapshot.read(from: fixture.authority)
 
         await #expect(throws: ExternalFailure.connectionRevoked(
             connectionID: Self.connection
@@ -147,9 +134,7 @@ struct LocalAutomationAuthenticatedBrowseTests {
             )
         }
 
-        let after = try GatewayStoreSnapshot.read(
-            in: ModelContext(fixture.container)
-        )
+        let after = try await GatewayStoreSnapshot.read(from: fixture.authority)
         #expect(after.operations.dropLast() == before.operations[...])
         let denial = try #require(after.operations.last)
         #expect(denial.connectionIDRaw == Self.connection.rawValue)
@@ -170,8 +155,8 @@ struct LocalAutomationAuthenticatedBrowseTests {
     }
 
     private static func makeFixture(granted: Bool) async throws -> Fixture {
-        let history = try await SwiftDataHistory.open(configuration:
-            HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(configuration:
+            HistoryConfiguration(persistence: .temporary)
         )
         let authority = history.authority
         try await authority.publishVerifiedLocalAutomationEnrollment(
@@ -203,7 +188,6 @@ struct LocalAutomationAuthenticatedBrowseTests {
         )
         return Fixture(
             history: history,
-            container: await authority.container,
             credential: credential,
             browse: LocalAutomationAuthenticatedBrowse(
                 authenticator: authenticator,

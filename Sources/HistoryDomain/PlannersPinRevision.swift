@@ -196,28 +196,26 @@ package func planClear(
 ///
 /// 1. OCC: `request.expected` must equal the item's current Content Version.
 /// 2. The preparation result is built for exactly one base version.
-/// 3. Current Effective Content is derived; inconsistent lineage is corrupt.
+/// 3. Current Effective Content comes from validated Storage facts.
 /// 4. The proposed content is revalidated against Domain-level invariants.
 /// 5. Byte-identical proposed content is a no-op.
 /// 6. Otherwise require a new candidate Revision ID, append, and make it active.
 ///
 /// - Throws: `DomainRejection.staleContent(expected:current:)` on an OCC
 ///   mismatch, `.invalidRevisionDraft` on a base-version mismatch or
-///   invalid prepared content/duplicate candidate ID, and `.corruptLineage`
-///   as the defensive backstop for inconsistent lineage (§6).
+///   invalid prepared content/duplicate candidate ID. Storage rejects corrupt
+///   active lineage before constructing `RevisionFacts` (§6).
 package func planRevision(
     request: RevisionRequest,
     prepared: PreparedRevision,
     facts: RevisionFacts
 ) throws -> PlanningResult {
-    let item = facts.item
-
     // §11 step 1: optimistic concurrency — the editor's base version must
     // still be the item's current Content Version.
-    guard request.expected == item.contentVersion else {
+    guard request.expected == facts.contentVersion else {
         throw DomainRejection.staleContent(
             expected: request.expected,
-            current: item.contentVersion
+            current: facts.contentVersion
         )
     }
 
@@ -227,21 +225,10 @@ package func planRevision(
         throw DomainRejection.invalidRevisionDraft
     }
 
-    // §11 step 3: derive current Effective Content. Storage validated lineage
-    // at fact load; this is the defensive backstop (§6) for a missing or
-    // duplicated active revision, or a non-empty revision list with a nil
-    // active ID (D3). Planners throw only the §6 vocabulary.
-    let current: EffectiveContent
-    do {
-        current = try effectiveContent(of: item)
-    } catch {
-        throw DomainRejection.corruptLineage
-    }
-
     // §11 step 4: revalidate Domain-level invariants on the proposed content.
     // Numeric byte/count bounds were already enforced by Storage preparation
     // and are not re-asserted here (the Domain does not receive them).
-    guard isNormalizedRevisionContent(prepared.proposedContent, canonical: item.canonical) else {
+    guard isNormalizedRevisionContent(prepared.proposedContent, canonical: facts.canonical) else {
         throw DomainRejection.invalidRevisionDraft
     }
 
@@ -249,13 +236,13 @@ package func planRevision(
     // Effective Content is a no-op — no redundant revision, commit, version,
     // or invalidation. Compare representation sets because equivalent type
     // identifier spellings can change their normalized scalar order (§2.1).
-    guard !prepared.proposedContent.hasSameRepresentations(as: current) else {
+    guard !prepared.proposedContent.hasSameRepresentations(as: facts.current) else {
         return .unchanged
     }
 
     // §2.5 rule 2: a successful append must add one new lineage identity.
     // A duplicate candidate is invalid preparation, not corrupt stored state.
-    guard !item.revisions.contains(where: { $0.id == prepared.candidateRevisionID }) else {
+    guard !facts.revisions.contains(where: { $0.id == prepared.candidateRevisionID }) else {
         throw DomainRejection.invalidRevisionDraft
     }
 

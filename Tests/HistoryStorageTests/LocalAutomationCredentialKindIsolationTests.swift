@@ -3,7 +3,6 @@
 /// cross into Local Automation, and rejection remains before Gateway audit.
 import Foundation
 import HistoryCore
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
@@ -15,17 +14,8 @@ struct LocalAutomationCredentialKindIsolationTests {
 
     @Test("exact App Intents bytes cannot authenticate as Local Automation")
     func appIntentsCredentialRejectsWithoutGatewayEffects() async throws {
-        let schema = historySchema
-        let container = try ModelContainer(
-            for: schema,
-            configurations: [ModelConfiguration(
-                schema: schema,
-                isStoredInMemoryOnly: true,
-                cloudKitDatabase: .none
-            )]
-        )
-        let authority = HistoryAuthority(
-            container: container,
+        let authority = try HistoryAuthority(
+            storeLocation: try HistoryStoreLocation(persistence: .temporary),
             gatewayConnectionIDSource: { Self.appIntentsID.rawValue }
         )
         try await authority.performStartup(initialMaximumUnpinnedItems: 200)
@@ -44,17 +34,13 @@ struct LocalAutomationCredentialKindIsolationTests {
             ),
             authority: authority
         )
-        let before = try GatewayStoreSnapshot.read(
-            in: ModelContext(container)
-        )
+        let before = try await GatewayStoreSnapshot.read(from: authority)
         try before.expectX3DenyByDefaultBootstrap()
 
         #expect(try await authenticator.authenticate(
             credential.exactBytes
         ) == nil)
-        #expect(try GatewayStoreSnapshot.read(
-            in: ModelContext(container)
-        ) == before)
+        #expect(try await GatewayStoreSnapshot.read(from: authority) == before)
     }
 }
 

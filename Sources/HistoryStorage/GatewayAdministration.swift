@@ -7,10 +7,9 @@
 /// file never inserts/deletes audit rows or advances audit counters itself.
 import Foundation
 import HistoryCore
-import SwiftData
 
 /// Immutable, bounded projection of the validated Gateway authorization
-/// state. SwiftData models never leave the owning context.
+/// state. Persistence uses explicit SQL; these values own no change tracking.
 internal struct GatewayCurrentState: Sendable {
     internal let connections: [ConnectionDTO]
     internal let grants: [GrantDTO]
@@ -76,7 +75,7 @@ internal enum GatewayAdministration {
     /// or be coherently revoked; startup must not reactivate it.
     internal static func loadCurrentState(
         appIntentsConnectionID: UUID,
-        in context: ModelContext,
+        in context: SQLiteDatabase,
         limits: ExternalLimits = .standard
     ) throws -> GatewayCurrentState {
         let connectionFetchLimit = limits.maximumConnections
@@ -84,8 +83,6 @@ internal enum GatewayAdministration {
         guard !connectionFetchLimit.overflow else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
-        var connectionDescriptor = FetchDescriptor<ConnectionRow>()
-        connectionDescriptor.fetchLimit = connectionFetchLimit.partialValue
 
         let maximumGrantRows = limits.maximumConnections
             .multipliedReportingOverflow(
@@ -97,14 +94,15 @@ internal enum GatewayAdministration {
               !grantFetchLimit.overflow else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
-        var grantDescriptor = FetchDescriptor<GrantRow>()
-        grantDescriptor.fetchLimit = grantFetchLimit.partialValue
-
-        let connectionRows: [ConnectionRow]
-        let grantRows: [GrantRow]
+        var connectionRows: [ConnectionRow] = []
+        var grantRows: [GrantRow] = []
         do {
-            connectionRows = try context.fetch(connectionDescriptor)
-            grantRows = try context.fetch(grantDescriptor)
+            let connections = try context.prepare("SELECT \(ConnectionRow.columns) FROM connections LIMIT ?", bindings: [.integer(Int64(connectionFetchLimit.partialValue))])
+            while try connections.step() { connectionRows.append(try ConnectionRow(statement: connections)) }
+            let grants = try context.prepare("SELECT \(GrantRow.columns) FROM grants LIMIT ?", bindings: [.integer(Int64(grantFetchLimit.partialValue))])
+            while try grants.step() { grantRows.append(try GrantRow(statement: grants)) }
+        } catch let failure as HistoryFailure {
+            throw failure
         } catch {
             throw HistoryFailure.persistence(.openStore)
         }
@@ -250,9 +248,11 @@ internal enum GatewayAdministration {
     internal static func regrantCurrentRow(
         _ row: GrantRow,
         at grantedAt: Date
-    ) {
+    ) -> GrantRow {
+        var row = row
         row.grantedAt = grantedAt
         row.revokedAt = nil
+        return row
     }
 
     private static func isLifecycleCoherent(
@@ -331,8 +331,7 @@ extension HistoryAuthority {
         }
 
         let now = storageClock.now()
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
+        let context = database
 
         let config = try Self.loadGatewayConfig(in: context)
         let state = try Self.loadGatewayState(
@@ -405,7 +404,7 @@ extension HistoryAuthority {
             throw ExternalFailure.persistence(.invariantViolation)
         }
 
-        let row = ConnectionRow(
+        var row = ConnectionRow(
             id: connectionID.rawValue,
             displayNameRaw: displayName,
             enrollKindRaw: kind.rawValue,
@@ -433,7 +432,11 @@ extension HistoryAuthority {
             in: context
         ) { committedAt in
             row.enrolledAt = committedAt
-            context.insert(row)
+            try context.execute("INSERT INTO connections (\(ConnectionRow.columns)) VALUES (?, ?, ?, ?, ?, ?, ?)", bindings: [
+                .text(row.id.uuidString), .text(row.displayNameRaw), .integer(Int64(row.enrollKindRaw)),
+                .integer(Int64(row.statusRaw)), .real(row.enrolledAt.timeIntervalSinceReferenceDate), .null,
+                .integer(Int64(row.configSchemaVersion))
+            ])
         }
         return connectionID
     }
@@ -445,8 +448,7 @@ extension HistoryAuthority {
         _ id: ExternalConnectionID
     ) async throws {
         let now = storageClock.now()
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
+        let context = database
 
         let config = try Self.loadGatewayConfig(in: context)
         let state = try Self.loadGatewayState(
@@ -496,7 +498,7 @@ extension HistoryAuthority {
             return
         }
 
-        let connectionRow = try Self.fetchConnectionRow(id, in: context)
+        _ = try Self.fetchConnectionRow(id, in: context)
         let liveGrantRows = try Self.fetchGrantRows(
             connectionID: id,
             in: context
@@ -524,11 +526,12 @@ extension HistoryAuthority {
             payload: payload,
             in: context
         ) { committedAt in
-            connectionRow.statusRaw = ConnectionStatus.revoked.rawValue
-            connectionRow.revokedAt = committedAt
-            for grantRow in liveGrantRows {
-                grantRow.revokedAt = committedAt
-            }
+            try context.execute("UPDATE connections SET statusRaw = ?, revokedAt = ? WHERE id = ?", bindings: [
+                .integer(Int64(ConnectionStatus.revoked.rawValue)), .real(committedAt.timeIntervalSinceReferenceDate), .text(id.rawValue.uuidString)
+            ])
+            try context.execute("UPDATE grants SET revokedAt = ? WHERE connectionIDRaw = ? AND revokedAt IS NULL", bindings: [
+                .real(committedAt.timeIntervalSinceReferenceDate), .text(id.rawValue.uuidString)
+            ])
         }
     }
 
@@ -539,8 +542,7 @@ extension HistoryAuthority {
         to id: ExternalConnectionID
     ) async throws {
         let now = storageClock.now()
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
+        let context = database
 
         let config = try Self.loadGatewayConfig(in: context)
         let state = try Self.loadGatewayState(
@@ -653,10 +655,13 @@ extension HistoryAuthority {
                 payload: payload,
                 in: context
             ) { committedAt in
-                GatewayAdministration.regrantCurrentRow(
+                let updated = GatewayAdministration.regrantCurrentRow(
                     grantRow,
                     at: committedAt
                 )
+                try context.execute("UPDATE grants SET grantedAt = ?, revokedAt = NULL WHERE grantKey = ?", bindings: [
+                    .real(updated.grantedAt.timeIntervalSinceReferenceDate), .text(updated.grantKey)
+                ])
             }
         } else {
             let existingGrantCount = state.grants.lazy.filter {
@@ -680,7 +685,7 @@ extension HistoryAuthority {
                 )
                 throw ExternalFailure.requestDenied(.invalidInput)
             }
-            let grantRow = GrantRow(
+            var grantRow = GrantRow(
                 grantKey: GatewayAdministration.canonicalGrantKey(
                     connectionID: id.rawValue,
                     capability: capability
@@ -697,7 +702,10 @@ extension HistoryAuthority {
                 in: context
             ) { committedAt in
                 grantRow.grantedAt = committedAt
-                context.insert(grantRow)
+                try context.execute("INSERT INTO grants (\(GrantRow.columns)) VALUES (?, ?, ?, ?, ?, ?)", bindings: [
+                    .text(grantRow.grantKey), .text(grantRow.connectionIDRaw.uuidString), .integer(Int64(grantRow.capabilityRaw)),
+                    .real(grantRow.grantedAt.timeIntervalSinceReferenceDate), .null, .integer(Int64(grantRow.configSchemaVersion))
+                ])
             }
         }
     }
@@ -709,8 +717,7 @@ extension HistoryAuthority {
         of id: ExternalConnectionID
     ) async throws {
         let now = storageClock.now()
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
+        let context = database
 
         let config = try Self.loadGatewayConfig(in: context)
         let state = try Self.loadGatewayState(
@@ -789,20 +796,23 @@ extension HistoryAuthority {
             payload: payload,
             in: context
         ) { committedAt in
-            grantRow.revokedAt = committedAt
+            try context.execute("UPDATE grants SET revokedAt = ? WHERE grantKey = ?", bindings: [
+                .real(committedAt.timeIntervalSinceReferenceDate), .text(grantRow.grantKey)
+            ])
         }
     }
 
     // MARK: Operation-local composition
 
     internal static func loadGatewayConfig(
-        in context: ModelContext
+        in context: SQLiteDatabase
     ) throws -> GatewayConfigRow {
-        var descriptor = FetchDescriptor<GatewayConfigRow>()
-        descriptor.fetchLimit = 2
-        let rows: [GatewayConfigRow]
+        var rows: [GatewayConfigRow] = []
         do {
-            rows = try context.fetch(descriptor)
+            let statement = try context.prepare("SELECT \(GatewayConfigRow.columns) FROM gateway_config LIMIT 2")
+            while try statement.step() { rows.append(try GatewayConfigRow(statement: statement)) }
+        } catch is HistoryFailure {
+            throw ExternalFailure.persistence(.corruptStoredValue)
         } catch {
             throw ExternalFailure.persistence(.transaction)
         }
@@ -819,7 +829,7 @@ extension HistoryAuthority {
 
     internal static func loadGatewayState(
         appIntentsConnectionID: UUID,
-        in context: ModelContext
+        in context: SQLiteDatabase
     ) throws -> GatewayCurrentState {
         do {
             return try GatewayAdministration.loadCurrentState(
@@ -850,13 +860,14 @@ extension HistoryAuthority {
 
     private static func fetchConnectionRow(
         _ id: ExternalConnectionID,
-        in context: ModelContext
+        in context: SQLiteDatabase
     ) throws -> ConnectionRow {
-        var descriptor = FetchDescriptor<ConnectionRow>()
-        descriptor.fetchLimit = ExternalLimits.standard.maximumConnections + 1
-        let rows: [ConnectionRow]
+        var rows: [ConnectionRow] = []
         do {
-            rows = try context.fetch(descriptor).filter { $0.id == id.rawValue }
+            let statement = try context.prepare("SELECT \(ConnectionRow.columns) FROM connections WHERE id = ? LIMIT 2", bindings: [.text(id.rawValue.uuidString)])
+            while try statement.step() { rows.append(try ConnectionRow(statement: statement)) }
+        } catch is HistoryFailure {
+            throw ExternalFailure.persistence(.corruptStoredValue)
         } catch {
             throw ExternalFailure.persistence(.transaction)
         }
@@ -868,17 +879,16 @@ extension HistoryAuthority {
 
     private static func fetchGrantRows(
         connectionID: ExternalConnectionID,
-        in context: ModelContext
+        in context: SQLiteDatabase
     ) throws -> [GrantRow] {
-        let maximumRows = ExternalLimits.standard.maximumConnections
-            * ExternalLimits.standard.maximumGrantRowsPerConnection
-        var descriptor = FetchDescriptor<GrantRow>()
-        descriptor.fetchLimit = maximumRows + 1
-        let rows: [GrantRow]
+        var rows: [GrantRow] = []
         do {
-            rows = try context.fetch(descriptor).filter {
-                $0.connectionIDRaw == connectionID.rawValue
-            }
+            let statement = try context.prepare("SELECT \(GrantRow.columns) FROM grants WHERE connectionIDRaw = ? LIMIT ?", bindings: [
+                .text(connectionID.rawValue.uuidString), .integer(Int64(ExternalLimits.standard.maximumGrantRowsPerConnection + 1))
+            ])
+            while try statement.step() { rows.append(try GrantRow(statement: statement)) }
+        } catch is HistoryFailure {
+            throw ExternalFailure.persistence(.corruptStoredValue)
         } catch {
             throw ExternalFailure.persistence(.transaction)
         }
@@ -892,7 +902,7 @@ extension HistoryAuthority {
     private static func fetchGrantRow(
         connectionID: ExternalConnectionID,
         capability: ExternalCapability,
-        in context: ModelContext
+        in context: SQLiteDatabase
     ) throws -> GrantRow {
         let rows = try fetchGrantRows(
             connectionID: connectionID,
@@ -931,7 +941,7 @@ extension HistoryAuthority {
     internal func commitGatewayAudit(
         _ payload: OperationRecordPayload,
         config: GatewayConfigRow,
-        in context: ModelContext
+        in context: SQLiteDatabase
     ) throws {
         try commitGatewayMutation(
             config: config,
@@ -944,14 +954,14 @@ extension HistoryAuthority {
     private func commitGatewayMutation(
         config: GatewayConfigRow,
         payload: OperationRecordPayload,
-        in context: ModelContext,
-        mutation: (Date) -> Void
+        in context: SQLiteDatabase,
+        mutation: (Date) throws -> Void
     ) throws {
         let committedAt = storageClock.now()
         let committedPayload = payload.committing(at: committedAt)
         do {
-            try context.transaction {
-                mutation(committedAt)
+            try context.writeTransaction {
+                try mutation(committedAt)
                 _ = try GatewayAuditStore.append(
                     committedPayload,
                     config: config,

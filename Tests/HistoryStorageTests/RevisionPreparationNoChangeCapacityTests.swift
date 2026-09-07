@@ -19,7 +19,7 @@ struct RevisionPreparationNoChangeCapacityTests {
         ))
         let unchanged = try await preparation.prepare(request(bytes: currentBytes), from: source)
         #expect(unchanged.domain.basedOn == source.contentVersion)
-        #expect(unchanged.domain.proposedContent == source.revisions[0].content)
+        #expect(unchanged.domain.proposedContent == source.current)
         #expect(unchanged.domain.proposedContent.representations[0].bytes == currentBytes)
 
         await #expect(throws: HistoryFailure.capacityExceeded(capacity)) {
@@ -42,7 +42,7 @@ struct RevisionPreparationNoChangeCapacityTests {
         let same = try await preparation.prepare(
             request(bytes: currentBytes), from: source, retentionPolicies: policies
         )
-        #expect(same.domain.proposedContent == source.revisions[0].content)
+        #expect(same.domain.proposedContent == source.current)
         let changedBytes = Data([0x00, 0xFE, 0x01, 0x02])
         let changed = try await preparation.prepare(
             request(bytes: changedBytes), from: source, retentionPolicies: policies
@@ -76,8 +76,10 @@ struct RevisionPreparationNoChangeCapacityTests {
             })
         )
         let source = RevisionPreparationSnapshot(
-            canonical: captured.domain.canonical, revisions: [active],
-            activeRevisionID: active.id, contentVersion: ContentVersion(rawValue: 2)
+            canonical: captured.domain.canonical, current: active.content,
+            revisions: [RevisionRetentionSummary(id: active.id, byteCount: 4)],
+            activeRevisionID: active.id, contentVersion: ContentVersion(rawValue: 2),
+            revertedContent: nil
         )
         let preparation = RevisionPreparationActor(limits: try limits(
             count: capacity == .revisionCount ? 1 : 10,
@@ -124,8 +126,10 @@ struct RevisionPreparationNoChangeCapacityTests {
             )])
         )
         return RevisionPreparationSnapshot(
-            canonical: captured.domain.canonical, revisions: [revision],
-            activeRevisionID: revision.id, contentVersion: ContentVersion(rawValue: 2)
+            canonical: captured.domain.canonical, current: revision.content,
+            revisions: [RevisionRetentionSummary(id: revision.id, byteCount: currentBytes.count)],
+            activeRevisionID: revision.id, contentVersion: ContentVersion(rawValue: 2),
+            revertedContent: nil
         )
     }
 

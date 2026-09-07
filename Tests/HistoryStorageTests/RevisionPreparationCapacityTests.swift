@@ -71,9 +71,11 @@ private func oneRevisionLimits() -> HistoryLimits {
     )
     let snapshot = RevisionPreparationSnapshot(
         canonical: canonical,
-        revisions: [existingRevision],
+        current: existingRevision.content,
+        revisions: [RevisionRetentionSummary(id: existingRevisionID, byteCount: 8)],
         activeRevisionID: existingRevisionID,
-        contentVersion: .initial
+        contentVersion: .initial,
+        revertedContent: nil
     )
     let preparation = RevisionPreparationActor(limits: oneRevisionLimits())
 
@@ -111,13 +113,70 @@ private func oneRevisionLimits() -> HistoryLimits {
     )
     let snapshot = RevisionPreparationSnapshot(
         canonical: canonical,
+        current: EffectiveContent(representations: canonical.representations.map(\.content)),
         revisions: [],
         activeRevisionID: nil,
-        contentVersion: .initial
+        contentVersion: .initial,
+        revertedContent: nil
     )
 
     let bundle = try await preparation.prepare(request, from: snapshot)
 
     #expect(bundle.domain.candidateRevisionID == fixedRevisionID)
     #expect(bundle.domain.createdAt == fixedDate)
+}
+
+/// Preparation can admit an append only because R3 will prune. If the user
+/// disables R3 before phase two, the current hard bound still applies (V2-02
+/// §4.3/§5.4), and rejection must leave both content and position unchanged.
+@Test func disablingR3BetweenRevisionPhasesCannotBypassHardCapacity() async throws {
+    let location = try HistoryStoreLocation(persistence: .temporary)
+    let authority = try HistoryAuthority(storeLocation: location, limits: oneRevisionLimits())
+    try await authority.performStartup(initialMaximumUnpinnedItems: 200)
+    let type = "public.utf8-plain-text"
+    let capture = try await IngestPreparationActor().prepare(ClipboardCapture(
+        representations: [CapturedRepresentation(typeIdentifier: type, bytes: Data("canonical".utf8))],
+        origin: CopyOriginObservation(sourceApplication: nil, lineageHint: nil),
+        observedAt: Date(timeIntervalSinceReferenceDate: 700_300_200)
+    ))
+    _ = try await authority.commitCapture(capture)
+    let preparation = RevisionPreparationActor(limits: oneRevisionLimits())
+    let firstRequest = RevisionRequest(
+        itemID: capture.domain.candidateID,
+        expected: .initial,
+        intent: .replace(RevisionDraft(decisions: [
+            RevisionDecision(typeIdentifier: type, action: .replace(bytes: Data("revision".utf8))),
+        ]))
+    )
+    let firstInputs = try await authority.revisionPreparationInputs(firstRequest)
+    let firstBundle = try await preparation.prepare(firstRequest, from: firstInputs.snapshot)
+    _ = try await authority.commitRevision(firstRequest, firstBundle)
+    _ = try await authority.commitRetentionPolicies(HistoryRetentionPolicies(
+        age: nil, storage: nil,
+        revisions: RevisionRetention(maxRevisionsPerItem: 1, maxRevisionBytesPerItem: nil)
+    ))
+
+    let parkedRequest = RevisionRequest(
+        itemID: capture.domain.candidateID,
+        expected: ContentVersion(rawValue: 2),
+        intent: .revert(to: .canonical)
+    )
+    let parkedInputs = try await authority.revisionPreparationInputs(parkedRequest)
+    let parkedBundle = try await preparation.prepare(
+        parkedRequest, from: parkedInputs.snapshot,
+        retentionPolicies: parkedInputs.retentionPolicies
+    )
+    _ = try await authority.commitRetentionPolicies(HistoryRetentionPolicies(age: nil, storage: nil, revisions: nil))
+    let positionBefore = try await authority.currentPosition()
+
+    await #expect(throws: HistoryFailure.capacityExceeded(.revisionCount)) {
+        try await authority.commitRevision(parkedRequest, parkedBundle)
+    }
+
+    #expect(try await authority.currentPosition() == positionBefore)
+    let after = try await authority.revisionPreparationInputs(parkedRequest)
+    #expect(after.snapshot.contentVersion == parkedInputs.snapshot.contentVersion)
+    #expect(after.snapshot.current == parkedInputs.snapshot.current)
+    #expect(after.snapshot.revisions.map(\.id) == parkedInputs.snapshot.revisions.map(\.id))
+    #expect(after.retentionPolicies == nil)
 }

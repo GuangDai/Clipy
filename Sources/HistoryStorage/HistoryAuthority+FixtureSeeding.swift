@@ -3,7 +3,6 @@
 import Foundation
 import HistoryCore
 import HistoryDomain
-import SwiftData
 
 extension HistoryAuthority {
     // MARK: Package performance-fixture seeding
@@ -16,26 +15,15 @@ extension HistoryAuthority {
         finalRetainedCount: Int
     ) async throws -> ChangePosition {
         try autoreleasepool {
-            let context = ModelContext(container)
-            context.autosaveEnabled = false
-            let positionRow = try Self.fetchExactlyOnePositionRow(in: context)
+            let positionRow = try Self.fetchExactlyOnePositionRow(in: database)
             let (position, retention) = try Self.decodePositionRow(
                 positionRow,
                 limits: limits
             )
-            let retainedCount: Int
-            do {
-                retainedCount = try context.fetchCount(
-                    FetchDescriptor<HistoryItemRow>()
-                )
-            } catch {
-                throw HistoryFailure.persistence(.openStore)
-            }
+            let retainedCount = try performanceFixtureRetainedCount()
 
             guard retainedCount == 0,
-                  position.rawValue == 0,
-                  signatureIndex.state == .ready,
-                  signatureIndex.itemCount == 0
+                  position.rawValue == 0
             else {
                 throw PerformanceFixtureSeedError.storeNotEmpty
             }
@@ -49,7 +37,7 @@ extension HistoryAuthority {
     }
 
     /// Commits one bounded fixture batch through the same stamped mutation,
-    /// transaction, Signature Index, invalidation, and position tail as an
+    /// SQLite transaction, invalidation, and position tail as an
     /// ordinary History Commit. Each batch is one non-empty commit and thus
     /// advances Change Position exactly once, regardless of row count.
     internal func commitPerformanceFixtureSeedBatch(
@@ -59,7 +47,7 @@ extension HistoryAuthority {
     ) async throws -> ChangePosition {
         try autoreleasepool {
             guard !preparedItems.isEmpty,
-                  preparedItems.count <= SwiftDataHistory.performanceFixtureSeedBatchSize
+                  preparedItems.count <= SQLiteHistory.performanceFixtureSeedBatchSize
             else {
                 throw PerformanceFixtureSeedError.invalidRowCount
             }
@@ -70,8 +58,6 @@ extension HistoryAuthority {
             }
 
             var seenIDs = Set<HistoryItemID>(minimumCapacity: preparedItems.count)
-            var additions: [HistoryItemID: [ContentSignatureEntry]] = [:]
-            additions.reserveCapacity(preparedItems.count)
             var mutations: [StampedMutation] = []
             mutations.reserveCapacity(preparedItems.count)
             for prepared in preparedItems {
@@ -86,37 +72,26 @@ extension HistoryAuthority {
                     firstSource: capture.origin.sourceApplication,
                     lastSource: capture.origin.sourceApplication
                 )
-                let encoded: EncodedNewItem
-                do {
-                    encoded = try CommitPlanStamper.encodeNewItem(
-                        id: capture.candidateID,
-                        canonical: capture.canonical,
-                        projection: prepared.projection,
-                        occurrence: occurrence
-                    )
-                } catch let rejection as CodecRejection {
-                    throw rejection.historyFailure
-                }
-                let stored = encoded.stored
-                guard prepared.signatureEntries == encoded.signatureEntries,
-                      seenIDs.insert(stored.id).inserted
+                let stored = CommitPlanStamper.prepareNewItem(
+                    id: capture.candidateID,
+                    canonical: capture.canonical,
+                    projection: prepared.projection,
+                    occurrence: occurrence
+                )
+                guard seenIDs.insert(stored.id).inserted
                 else {
                     throw PerformanceFixtureSeedError.stateChanged
                 }
-                additions[stored.id] = encoded.signatureEntries
                 mutations.append(.create(stored))
             }
 
-            let context = ModelContext(container)
-            context.autosaveEnabled = false
-            let positionRow = try Self.fetchExactlyOnePositionRow(in: context)
+            let positionRow = try Self.fetchExactlyOnePositionRow(in: database)
             let (position, retention) = try Self.decodePositionRow(
                 positionRow,
                 limits: limits
             )
             guard position == expectedPreviousPosition,
-                  signatureIndex.state == .ready,
-                  signatureIndex.itemCount == expectedRetainedCount
+                  try performanceFixtureRetainedCount() == expectedRetainedCount
             else {
                 throw PerformanceFixtureSeedError.stateChanged
             }
@@ -151,20 +126,31 @@ extension HistoryAuthority {
                 position: nextPosition,
                 mutations: mutations,
                 receiptOutcome: receiptOutcome,
-                indexDelta: SignatureIndexDelta(
-                    additions: additions,
-                    removals: []
-                ),
                 hcrAppend: hcrAppend
             )
             _ = try executeStampedPlan(
                 stamped,
                 expectedPreviousPosition: expectedPreviousPosition,
-                in: context,
-                createExistenceProof: .readySignatureIndex
+                in: database
             )
             return nextPosition
         }
+    }
+
+    /// The same durable aggregate changed by the production transaction;
+    /// batch setup never materializes a process-wide retained ID collection.
+    private func performanceFixtureRetainedCount() throws -> Int {
+        let statement = try database.prepare(
+            "SELECT retainedItemCount FROM history_state WHERE key = ?",
+            bindings: [.text(Self.positionSingletonKey)]
+        )
+        defer { statement.finalize() }
+        guard try statement.step(),
+              let count = Int(exactly: try statement.integer(at: 0)),
+              count >= 0 else {
+            throw HistoryFailure.persistence(.corruptStoredValue)
+        }
+        return count
     }
 
 }

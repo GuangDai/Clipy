@@ -3,7 +3,6 @@
 /// Owning spec: `V2-roadmap` X-HCR.2 and `V2-03` §5.1/§17 WS-J1-5.
 import Foundation
 import HistoryCore
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
@@ -40,7 +39,7 @@ struct HCRTransactionBoundaryTests {
     }
 
     /// `TransactionStoreSnapshot` carries every item/blob/projection,
-    /// RetainedBytes, position, and retention-config scalar. The two arrays
+    /// content accounting, position, and retention-config scalar. The two arrays
     /// below add the complete X-HCR singleton and record columns.
     private struct DurableSnapshot: Equatable, Sendable {
         let history: TransactionStoreSnapshot
@@ -49,15 +48,11 @@ struct HCRTransactionBoundaryTests {
 
         static func read(from storeURL: URL) throws -> DurableSnapshot {
             let history = try TransactionStoreSnapshot.read(from: storeURL)
-            let container = try WSSupport.makeContainer(storeURL: storeURL)
-            let context = ModelContext(container)
-            let configs = try context.fetch(FetchDescriptor<JournalConfigRow>())
-                .map(JournalConfigSnapshot.init)
+            let database = try SQLiteDatabase(url: storeURL, readOnly: true)
+            let state = try database.readTransaction { try HCRTestSnapshot.read(in: database) }
+            let configs = state.configs.map(JournalConfigSnapshot.init)
                 .sorted { $0.key < $1.key }
-            let records = try context.fetch(FetchDescriptor<
-                HistoryChangeRecordRow
-            >(sortBy: [SortDescriptor(\.sequence)]))
-                .map(RecordSnapshot.init)
+            let records = state.records.map(RecordSnapshot.init)
             return DurableSnapshot(
                 history: history,
                 journalConfigs: configs,

@@ -6,15 +6,13 @@
 /// either value. `GatewayAuditStore` remains the sole audit row/counter owner.
 import Foundation
 import HistoryCore
-import SwiftData
 
 extension HistoryAuthority {
     /// Returns the bounded validated connection projection after committing
     /// one global raw-17 administration-read record.
     internal func connections() async throws -> [ConnectionDTO] {
         let now = storageClock.now()
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
+        let context = database
         let config = try Self.loadGatewayConfig(in: context)
         let request = RequestSummaryV1.readConnections
 
@@ -75,8 +73,7 @@ extension HistoryAuthority {
         for id: ExternalConnectionID
     ) async throws -> [GrantDTO] {
         let now = storageClock.now()
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
+        let context = database
         let config = try Self.loadGatewayConfig(in: context)
         let request = RequestSummaryV1.readGrants(
             connectionID: id.rawValue
@@ -156,8 +153,7 @@ extension HistoryAuthority {
         since auditSequence: UInt64
     ) async throws -> [OperationRecordDTO] {
         let now = storageClock.now()
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
+        let context = database
         let config = try Self.loadGatewayConfig(in: context)
         let snapshotHead = config.nextAuditSequence
         let limit = ExternalLimits.standard.maxAuditReadBatchSize
@@ -251,8 +247,7 @@ extension HistoryAuthority {
 
         switch reason {
         case .corruptionDetected:
-            let context = ModelContext(container)
-            context.autosaveEnabled = false
+            let context = database
             let config = try Self.loadGatewayConfig(in: context)
             let failure = ExternalFailure.requestDenied(.invalidInput)
             try commitGatewayAudit(
@@ -294,8 +289,7 @@ private extension HistoryAuthority {
                 committedAt: committedAt
             )
         } catch let failure as ExternalFailure {
-            let auditContext = ModelContext(container)
-            auditContext.autosaveEnabled = false
+            let auditContext = database
             let auditConfig = try Self.loadGatewayConfig(in: auditContext)
             try commitGatewayAudit(
                 Self.failedAdminReadPayload(

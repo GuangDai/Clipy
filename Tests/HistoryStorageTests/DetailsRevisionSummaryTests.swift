@@ -9,8 +9,8 @@ import Testing
 
 struct DetailsRevisionSummaryTests {
     @Test func revisionTitlesFollowTheirOwnContentAcrossReplaceAndRevert() async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let canonical = " \r\n Original title \r\noriginal body"
         let capture = try await history.perform(.capture(

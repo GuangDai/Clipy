@@ -1,12 +1,12 @@
 /// WS2 — Copy Coalescing (docs/06-cross-cutting.md §8 WS2): the
 /// commit/receipt/storage side of submitting the same capture value a second
-/// time through the public `SwiftDataHistory.perform(.capture(_:))` and the
+/// time through the public `SQLiteHistory.perform(.capture(_:))` and the
 /// real dedup/coalesce commit path.
 ///
 /// Phasing (docs/roadmap/README.md §3, WS-clause phasing note): WS2's
 /// public-read clauses defer to step 7; the occurrence-count and
 /// no-second-row clauses are asserted here through the INDEPENDENT second
-/// `ModelContainer` over the same on-disk store (see `WSSupport`), and the
+/// `SQLite connection` over the same on-disk store (see `WSSupport`), and the
 /// `.coalesced` receipt/position side is asserted directly.
 import Foundation
 import HistoryCore
@@ -71,7 +71,7 @@ struct WS2CopyCoalescingTests {
     #expect(reference.contentVersion.rawValue == 1)
 
     // Storage side, through the INDEPENDENT container.
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
     // WS2: "no second row" — still exactly one retained item.
     #expect(rows.count == 1)
@@ -94,7 +94,7 @@ struct WS2CopyCoalescingTests {
     // Canonical Content is preserved byte-exactly by coalescing
     // (docs/02-domain.md D2): the stored blob still decodes to the original
     // capture bytes.
-    let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
+    let canonical = try WSSupport.fetchCanonical(itemID: row.id, in: container)
     #expect(canonical.representations.map(\.content.typeIdentifier) == ["public.utf8-plain-text"])
     #expect(canonical.representations.map(\.content.bytes) == [Data(text.utf8)])
 

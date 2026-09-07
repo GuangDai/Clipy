@@ -32,8 +32,8 @@ struct ThumbnailSourceQueueTests {
     )!
 
     @Test func anotherKeyDoesNotLoadSourceWhileTheCurrentSourceAwaitsDecode() async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         var references: [HistoryItemReference] = []
         for title in ["first", "second", "third", "fourth", "fifth", "sixth"] {

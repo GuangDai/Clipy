@@ -1,8 +1,18 @@
 ## Part V — Authority Commit Kernel
 
+> **2026-09-07:** [V2-09](v2/V2-09-multilevel-storage.md) supersedes the
+> SwiftData models, aggregate Canonical/revision persistence, context lifecycle
+> and full Signature Index described below. The replacement uses normalized
+> SQLite rows and immutable blob files. File publication precedes reference
+> insertion; item mutations, accounting, HCR, Gateway audit and ChangePosition
+> share one SQL transaction. Failed commits preserve old History; cleanup only
+> unlinks files after checking committed references. The two process-death test
+> points now precede SQL COMMIT and prove complete-old recovery, not physical
+> power-loss or interruption inside the COMMIT syscall.
+
 ### 1. Role
 
-`HistoryStorage` is the only target that imports SwiftData and xxh3. It provides `SwiftDataHistory`, the production `ClipboardHistory` adapter, and hides all persistence types.
+`HistoryStorage` is the only product target that imports SQLite3 and xxh3. It provides `SQLiteHistory`, the production `ClipboardHistory` adapter, and hides all persistence types.
 
 Its responsibilities are deliberately asymmetric:
 
@@ -10,8 +20,7 @@ Its responsibilities are deliberately asymmetric:
 - load action-specific facts with proved completeness;
 - invoke pure Domain planners;
 - mechanically stamp semantic plans with versions and durable projections;
-- apply one atomic SwiftData transaction;
-- update the complete in-memory Signature Index;
+- apply one atomic SQLite transaction including persistent candidate postings;
 - publish a process-local invalidation;
 - project purpose-specific read values.
 

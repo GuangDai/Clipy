@@ -12,8 +12,8 @@ import Testing
 struct RealHistoryReferencePreviewTests {
     @Test(arguments: [false, true])
     func previewPreservesStoredReferenceBytesAndReadableTitle(isFile: Bool) async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let directoryName = UUID().uuidString
         let address = isFile
@@ -53,8 +53,8 @@ struct RealHistoryReferencePreviewTests {
     }
 
     @Test func revisedURLRetargetsTheLoaderWithoutPublishingNewBytesUnderTheOldReference() async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let originalBytes = Data("https://example.invalid/old%20address?x=%2F".utf8)
         let revisedAddress = "https://EXAMPLE.invalid/new%20address?x=%25#new"
@@ -111,8 +111,8 @@ struct RealHistoryReferencePreviewTests {
     }
 
     @Test func clearingLoadedFileReferenceSurvivesCancelledQueuedReloadAndCanReopen() async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let address = "file:///clipy-preview-uncreated/\(UUID().uuidString)/Private%20notes.txt"
         let bytes = Data(address.utf8)
@@ -155,7 +155,7 @@ struct RealHistoryReferencePreviewTests {
         return artifact
     }
 
-    private func capture(_ bytes: Data, type: String, in history: SwiftDataHistory) async throws -> HistoryItemReference {
+    private func capture(_ bytes: Data, type: String, in history: SQLiteHistory) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.capture(ClipboardCapture(
             representations: [CapturedRepresentation(typeIdentifier: type, bytes: bytes)],
             origin: CopyOriginObservation(sourceApplication: nil, lineageHint: nil),

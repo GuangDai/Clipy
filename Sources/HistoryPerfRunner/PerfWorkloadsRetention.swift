@@ -65,7 +65,7 @@ private func activeCaptureLanePolicies(
 /// The R-active revise-lane policy (V2-02 §4.3/§7: revise fires R2+R3 only).
 /// R2's budget is twice the steady-state footprint (per item: 64 Canonical +
 /// 2 × 32 revision bytes), so the lane always runs its O(retained) scalar
-/// sweep (`RET-PERF-1` revise half: RetainedBytesRow fetch + sweep + the
+/// sweep (`RET-PERF-1` revise half: SQL retained-byte metadata fetch + sweep + the
 /// revised item's row restamp) yet never retires anything — the measured
 /// revise cost is the expansion pass plus the R3 prune, not eviction noise.
 /// R3 maxRevisionsPerItem = 2 (§8.3 admits 1 … 100): a pre-warmed item
@@ -121,8 +121,8 @@ func workloadActiveRetentionExpansion() async -> [WorkloadFixture] {
 
     // --- Capture with R1+R2 active (RET-PERF-1 capture half / RET-PERF-3) ---
     // §9 bullets 1-2: the capture commit's composition cost with the
-    // expansion pass live. The planning path reads `RetainedBytesRow` scalar
-    // columns and decodes ZERO revisionStateBlobs (V2-02 §3.3b/§4.2;
+    // expansion pass live. The planning path reads SQL retained-byte metadata scalar
+    // columns and decodes ZERO retained content payloads (V2-02 §3.3b/§4.2;
     // RET-PERF-3's adopted-projection posture), so the measured delta over
     // WL1a is the projection-maintenance overhead: the inserted item's row
     // create + the O(retained) scalar sweep + one R2 retirement per capture.
@@ -191,7 +191,7 @@ func workloadActiveRetentionExpansion() async -> [WorkloadFixture] {
             ratio: captureRatio,
             bound: captureEnvelope.bound,
             pass: capturePassed,
-            note: "Capture composition with R1+R2 active (V2-02 §4.2/§7; Record 3 RET-PERF-1/RET-PERF-3): the planning path reads RetainedBytesRow scalar columns and decodes zero revisionStateBlobs, so the delta over WL1a is projection maintenance — the inserted item's row create, the O(retained) scalar sweep plus its eviction-order sort, and exactly one R2 retirement per capture (budget pinned at the seeded footprint; R1 maxAge 3,600 s §8.3 never fires on the 60-s-fresh seeds). §9 bullets 1-2. \(captureEnvelope.scaleSpan)× retained and \(captureEnvelope.bound)× bound leave a \(captureEnvelope.headroomFactor)× bound over the measured span while rejecting quadratic scaling — no-quadratic-observed, not a linear proof (the planner's eviction-order sort is O(N log N))."
+            note: "Capture composition with R1+R2 active (V2-02 §4.2/§7; Record 3 RET-PERF-1/RET-PERF-3): the planning path reads SQL retained-byte metadata scalar columns and decodes zero retained content payloads, so the delta over WL1a is projection maintenance — the inserted item's row create, the O(retained) scalar sweep plus its eviction-order sort, and exactly one R2 retirement per capture (budget pinned at the seeded footprint; R1 maxAge 3,600 s §8.3 never fires on the 60-s-fresh seeds). §9 bullets 1-2. \(captureEnvelope.scaleSpan)× retained and \(captureEnvelope.bound)× bound leave a \(captureEnvelope.headroomFactor)× bound over the measured span while rejecting quadratic scaling — no-quadratic-observed, not a linear proof (the planner's eviction-order sort is O(N log N))."
         ))
         printResult(
             captureKey,
@@ -210,7 +210,7 @@ func workloadActiveRetentionExpansion() async -> [WorkloadFixture] {
 
     // --- Revise with R2+R3 active (RET-PERF-1 revise half, §4.3) ---
     // §9 bullets 1-2: the revise-path expansion reuses the same O(retained)
-    // scalar sweep (V2-02 §4.3: RetainedBytesRow fetch + sweep + the revised
+    // scalar sweep (V2-02 §4.3: SQL retained-byte metadata fetch + sweep + the revised
     // item's row restamp) and is measured in RET-PERF-1 alongside capture.
     // R2 active (generous budget, retires nothing) keeps the sweep on every
     // commit; R3 count 2 prunes exactly one oldest inactive revision per
@@ -283,7 +283,7 @@ func workloadActiveRetentionExpansion() async -> [WorkloadFixture] {
             ratio: reviseRatio,
             bound: reviseEnvelope.bound,
             pass: revisePassed,
-            note: "Revise-path expansion with R2+R3 active (V2-02 §4.3/§7; Record 3 RET-PERF-1 revise half): the revision append runs the same O(retained) scalar sweep plus eviction-order sort as capture — RetainedBytesRow fetch, planner pass, and the revised item's row restamp, zero blob decodes for the non-primary items (RET-PLATFORM-2) — and R3 maxRevisionsPerItem 2 (§8.3) prunes exactly one oldest inactive revision per measured append over distinct round-robin items. R2's twice-footprint budget retires nothing, so eviction noise stays out of the measurement. §9 bullets 1-2. \(reviseEnvelope.scaleSpan)× retained and \(reviseEnvelope.bound)× bound leave a \(reviseEnvelope.headroomFactor)× bound over the measured span while rejecting quadratic scaling — no-quadratic-observed, not a linear proof (the planner's eviction-order sort is O(N log N))."
+            note: "Revise-path expansion with R2+R3 active (V2-02 §4.3/§7; Record 3 RET-PERF-1 revise half): the revision append runs the same O(retained) scalar sweep plus eviction-order sort as capture — SQL retained-byte metadata fetch, planner pass, and the revised item's row restamp, zero blob decodes for the non-primary items (RET-PLATFORM-2) — and R3 maxRevisionsPerItem 2 (§8.3) prunes exactly one oldest inactive revision per measured append over distinct round-robin items. R2's twice-footprint budget retires nothing, so eviction noise stays out of the measurement. §9 bullets 1-2. \(reviseEnvelope.scaleSpan)× retained and \(reviseEnvelope.bound)× bound leave a \(reviseEnvelope.headroomFactor)× bound over the measured span while rejecting quadratic scaling — no-quadratic-observed, not a linear proof (the planner's eviction-order sort is O(N log N))."
         ))
         printResult(
             reviseKey,
@@ -302,7 +302,7 @@ func workloadActiveRetentionExpansion() async -> [WorkloadFixture] {
 
     // --- .setRetentionPolicies scalar sweep (RET-PERF-2, §4.4) ---
     // §9 bullet 5: the full-sweep scalar pass is O(retained). Exceedance is
-    // detected from the RetainedBytesRow projection (V2-02 §3.3b), so the
+    // detected from the SQL retained-byte metadata projection (V2-02 §3.3b), so the
     // sweep decodes a lineage ONLY for an exceeding item — none here — while
     // the R1/R2 scalar sweep over the inventory and the PHASE-A per-item
     // threshold walk still touch every retained row. A fresh store per

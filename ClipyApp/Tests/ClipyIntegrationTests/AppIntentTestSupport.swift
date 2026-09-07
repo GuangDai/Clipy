@@ -9,7 +9,7 @@ import Testing
 @testable import ClipyApp
 
 struct AppIntentTestSupport {
-    let history: SwiftDataHistory
+    let history: SQLiteHistory
     let ingress: AppIntentHistoryIngress
     let manager: AppDependencyManager
     let itemID: HistoryItemID
@@ -18,8 +18,8 @@ struct AppIntentTestSupport {
         grants: [ExternalCapability] = [],
         revisedText: String? = nil
     ) async throws -> Self {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let receipt = try await history.perform(.capture(ClipboardCapture(
             representations: [CapturedRepresentation(

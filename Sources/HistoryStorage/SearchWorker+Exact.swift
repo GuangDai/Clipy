@@ -3,7 +3,6 @@
 import Foundation
 import HistoryCore
 import HistoryDomain
-import SwiftData
 
 extension SearchWorker {
     // MARK: - Exact mode (03b §8)
@@ -16,12 +15,13 @@ extension SearchWorker {
     internal func evaluateExact(
         term: String,
         in corpus: SearchCorpusSnapshot,
-        directive: ScanDirective
+        directive: ScanDirective,
+        preparedMatcher: ExactLiteralMatcher? = nil
     ) async throws -> EvaluationResult {
         // Preprocess the eligible-ASCII needle once for this public request.
         // The scalar baseline has a linear worst-case bound and delegates
         // every fallback comparison to Foundation's frozen §8 semantics.
-        let matcher = ExactLiteralMatcher(term: term)
+        let matcher = preparedMatcher ?? ExactLiteralMatcher(term: term)
         var evaluated: [EvaluatedRow] = []
         var scanTracker = OrderPreservingScanTracker(directive: directive)
 #if DEBUG

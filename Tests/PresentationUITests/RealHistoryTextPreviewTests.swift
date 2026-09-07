@@ -7,8 +7,8 @@ import Testing
 @MainActor
 struct RealHistoryTextPreviewTests {
     @Test func switchingTextPreviewsUpdatesTruncationWithoutChangingPasteBytes() async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let displayedPrefix = String(repeating: "x", count: 50_000)
         let completeLongBytes = Data((displayedPrefix + "z").utf8)
@@ -51,7 +51,7 @@ struct RealHistoryTextPreviewTests {
     }
 
     private func capture(
-        _ bytes: Data, at seconds: Double, in history: SwiftDataHistory
+        _ bytes: Data, at seconds: Double, in history: SQLiteHistory
     ) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.capture(ClipboardCapture(
             representations: [CapturedRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: bytes)],

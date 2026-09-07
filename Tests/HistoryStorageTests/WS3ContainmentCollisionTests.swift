@@ -1,14 +1,14 @@
 /// WS3 — Rich-to-plain containment and collision safety
 /// (docs/06-cross-cutting.md §8 WS3), plus the two §7.6 signature proofs:
-/// a forced xxh3 collision still requires byte confirmation, and startup
-/// Signature Index postings cover every retained Canonical signature entry
+/// a forced xxh3 collision still requires byte confirmation, and persistent
+/// Canonical candidate postings remain queryable after reopening
 /// (docs/06-cross-cutting.md §7.6; docs/02-domain.md §9.1–§9.2, D7).
 ///
 /// Phasing (docs/roadmap/README.md §3, WS-clause phasing note): WS3's public
 /// read/observation clauses defer to step 7; this file closes the step-5
 /// clauses — the `.coalesced` receipt into the richer Canonical item, the
 /// no-second-row storage proof through the INDEPENDENT second
-/// `ModelContainer` over the same on-disk store (see `WSSupport`), and the
+/// `SQLite connection` over the same on-disk store (see `WSSupport`), and the
 /// two §7.6 proofs.
 ///
 /// Part 2 drives `IngestPreparationActor` + `HistoryAuthority` directly
@@ -23,7 +23,6 @@
 import Foundation
 import HistoryCore
 import HistoryDomain
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
@@ -91,7 +90,7 @@ struct WS3ContainmentCollisionTests {
     #expect(reference.contentVersion.rawValue == 1)
 
     // Storage side, through the INDEPENDENT container.
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
     // WS3: still one row — containment absorbed the plain-only copy.
     #expect(rows.count == 1)
@@ -113,7 +112,7 @@ struct WS3ContainmentCollisionTests {
     // before "public.utf8-plain-text" in Unicode scalar order,
     // docs/02-domain.md §2.1). Coalescing never rewrites Canonical Content
     // (docs/02-domain.md D2).
-    let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
+    let canonical = try WSSupport.fetchCanonical(itemID: row.id, in: container)
     #expect(
         canonical.representations.map(\.content.typeIdentifier)
             == ["public.html", "public.utf8-plain-text"]
@@ -199,7 +198,7 @@ struct WS3ContainmentCollisionTests {
     #expect(secondReference.contentVersion.rawValue == 1)
 
     // Storage side, through the INDEPENDENT container: TWO distinct rows.
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
     // §7.6: "forced xxh3 collision still requires byte confirmation" — the
     // collision produced a candidate, confirmation rejected it, and both
@@ -213,7 +212,7 @@ struct WS3ContainmentCollisionTests {
         #expect(row.contentVersionRaw == 1)
         // Each row retains its OWN distinct bytes under the plain-text type.
         let expectedText = row.id == firstReference.id.rawValue ? firstText : secondText
-        let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
+        let canonical = try WSSupport.fetchCanonical(itemID: row.id, in: container)
         #expect(canonical.representations.map(\.content.typeIdentifier) == ["public.utf8-plain-text"])
         #expect(canonical.representations.map(\.content.bytes) == [Data(expectedText.utf8)])
     }
@@ -222,7 +221,7 @@ struct WS3ContainmentCollisionTests {
     // both rows' durable signature entries are EQUAL (same type identifier,
     // same forced fingerprint, same byte count), so the second capture's
     // candidacy provably contained the first item before byte confirmation.
-    let signatureEntries = try rows.map { try SignatureBlobCodec.decode($0.canonicalSignatureBlob) }
+    let signatureEntries = try rows.map { try WSSupport.fetchSignatureEntries(itemID: $0.id, in: container) }
     #expect(signatureEntries.count == 2)
     #expect(signatureEntries[0] == signatureEntries[1])
     #expect(signatureEntries[0].map(\.fingerprint.rawValue) == [ForcedCollisionFingerprint.collisionValue])
@@ -235,11 +234,10 @@ struct WS3ContainmentCollisionTests {
 
 /// Part 3 — §7.6 startup completeness, behavioral
 /// (docs/06-cross-cutting.md §7.6): the rich item is inserted through the
-/// public facade, the facade is dropped, and `SwiftDataHistory` is REOPENED
-/// on the same store — startup rebuilds the Signature Index from the stored
-/// signature blobs (docs/05-authority-kernel.md §13 step 8). Submitting the
+/// public facade, the facade is dropped, and `SQLiteHistory` is REOPENED
+/// on the same store without rebuilding an in-memory index. Submitting the
 /// matching plain-only capture again still coalesces into the original item,
-/// proving the rebuilt postings cover the retained signature entries.
+/// proving native postings still find the retained containment candidate.
 @Test func reopenedHistoryCoalescesPlainOnlyCaptureIntoRetainedRichItem() async throws {
     let storeURL = WSSupport.tempStoreURL("ws3-startup-completeness")
     defer { WSSupport.removeStore(storeURL) }
@@ -252,7 +250,7 @@ struct WS3ContainmentCollisionTests {
     let plainSource = "com.example.ws3.restart.plain"
 
     // Arrange: insert the rich+plain item, then DROP the facade so the
-    // reopened history starts with an empty in-memory Signature Index.
+    // reopened history must query the durable candidate postings.
     let insertedReference: HistoryItemReference
     do {
         let history = try await WSSupport.openHistory(storeURL: storeURL)
@@ -273,8 +271,7 @@ struct WS3ContainmentCollisionTests {
         insertedReference = reference
     }
 
-    // Act: REOPEN on the same store (§13 startup rebuilds postings from
-    // durable signature blobs — no content bytes are decoded) and submit the
+    // Act: REOPEN on the same store and query persistent postings with the
     // matching plain-only capture through the new facade.
     let reopened = try await WSSupport.openHistory(storeURL: storeURL)
     let receipt = try await reopened.perform(.capture(
@@ -289,12 +286,11 @@ struct WS3ContainmentCollisionTests {
     #expect(commit.position.rawValue == 2)
     guard case let .coalesced(reference) = commit.outcome else {
         Issue.record(
-            "§7.6: expected .coalesced(reference) — rebuilt startup postings must cover the retained signature entries — got \(commit.outcome)"
+            "§7.6: expected .coalesced(reference) from retained Canonical postings — got \(commit.outcome)"
         )
         return
     }
-    // §7.6: "startup postings cover every retained Canonical signature
-    // entry" — the rebuilt index found the rich item as a containment
+    // §7.6: the persistent index found the rich item as a containment
     // candidate and byte confirmation coalesced into the ORIGINAL item.
     #expect(reference.id == insertedReference.id)
     #expect(reference.contentVersion == insertedReference.contentVersion)
@@ -302,7 +298,7 @@ struct WS3ContainmentCollisionTests {
 
     // Storage side, through the INDEPENDENT container: still one row, the
     // occurrence folded, and the richer Canonical set intact.
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
     #expect(rows.count == 1)
     let row = try #require(rows.first)
@@ -312,7 +308,7 @@ struct WS3ContainmentCollisionTests {
     #expect(row.firstCopiedAt == richObservedAt)
     #expect(row.lastCopiedAt == plainObservedAt)
 
-    let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
+    let canonical = try WSSupport.fetchCanonical(itemID: row.id, in: container)
     #expect(
         canonical.representations.map(\.content.typeIdentifier)
             == ["public.html", "public.utf8-plain-text"]

@@ -2,8 +2,8 @@
 /// Owning spec: docs/roadmap/03-historystorage.md step-5 note; facade field
 /// list: docs/05-authority-kernel.md §2 (Part V).
 ///
-/// `SwiftDataHistory.open` constructs all five facade fields; every field is
-/// an `actor`, so `SwiftDataHistory: Sendable` is derivable without escape
+/// `SQLiteHistory.open` constructs all five facade fields; every field is
+/// an `actor`, so `SQLiteHistory: Sendable` is derivable without escape
 /// hatches. `ThumbnailService` moved to ThumbnailService.swift at roadmap
 /// step 8 (its flight table and owned `ThumbnailWorker` live there); this
 /// file now hosts only `RevisionPreparationActor` and the four value types
@@ -38,8 +38,9 @@ internal struct PreparedRevisionBundle: Sendable {
 }
 
 /// The OCC-safe two-phase revision input: the target's validated Canonical
-/// Content, complete revision list, active ID, and Content Version, captured
-/// by `HistoryAuthority` as a Sendable value — no row or context escapes
+/// Content, current Effective Content, revision metadata, active ID, and
+/// Content Version, captured by `HistoryAuthority` as a Sendable value —
+/// no row or context escapes
 /// (docs/05-authority-kernel.md §6.2).
 ///
 /// Defined at roadmap step 5 to pin the `RevisionPreparationActor` step-6
@@ -47,27 +48,28 @@ internal struct PreparedRevisionBundle: Sendable {
 internal struct RevisionPreparationSnapshot: Sendable {
     /// The target's validated Canonical Content (docs/02-domain.md §2.3).
     let canonical: CanonicalContent
-    /// The target's complete stored revision list (docs/02-domain.md §2.5).
-    let revisions: [ContentRevision]
+    /// Validated current bytes used for the no-op comparison (02 §11 step 5).
+    let current: EffectiveContent
+    /// Append-ordered revision identities and byte counts (V2-02 §5.1).
+    let revisions: [RevisionRetentionSummary]
     /// The active Revision ID; `nil` only for a Canonical-state item (D3).
     let activeRevisionID: RevisionID?
     /// The Content Version the preparation is based on; rechecked by Domain
     /// planning against the reloaded facts (Part V §6.2).
     let contentVersion: ContentVersion
+    /// Only the requested revert revision's content, when it exists. Other
+    /// inactive revisions remain metadata throughout preparation (§6.2).
+    let revertedContent: EffectiveContent?
 }
 
-/// A bounded, Sendable snapshot of the search corpus: the Change Position the
-/// rows were captured at plus every retained row's scalar projection fields.
-/// Captured within one `HistoryAuthority` interval
-/// (docs/05-authority-kernel.md §14.2).
-///
-/// Defined at roadmap step 5 to pin the `SearchWorker` step-7 signature and
-/// retained as the immutable Authority-to-worker transfer value.
+/// One bounded batch from a request-owned SQLite snapshot, or a pure matcher
+/// test fixture. Production never constructs this with the complete store:
+/// SearchWorker reads at most 32 rows/1 MiB before evaluating and releasing
+/// each batch (V2-09 §4). The old name remains local to the matcher vocabulary.
 internal struct SearchCorpusSnapshot: Sendable {
     /// The durable position the corpus was read at; stamps the returned page.
     let position: ChangePosition
-    /// Scalar projection rows for every retained item (bounded by the hard
-    /// retained-item maximum, docs/06-cross-cutting.md §2).
+    /// Only this batch's projection rows; no Canonical/revision bytes.
     let rows: [SearchCorpusRow]
 #if DEBUG
     /// Correlates privacy-safe Authority and SearchWorker checkpoints. The
@@ -193,9 +195,9 @@ internal actor RevisionPreparationActor {
     /// policy-sourcing mechanism: the Authority reads the current
     /// `RetentionExpansionConfigRow` in the same serialized interval that
     /// captures `source` and threads the R3 lane here — the off-Authority
-    /// preparation actor performs no durable-state read of its own (the v1
-    /// `RevisionPreparationSnapshot` value is unchanged and carries no
-    /// policies).
+    /// preparation actor performs no durable-state read of its own; the
+    /// `RevisionPreparationSnapshot` carries content and metadata, while
+    /// policies remain a separate input.
     ///
     /// The speculative prune set produces no mutation and performs no
     /// pruning itself (`V2-02` §4.3: preparation "only *speculatively*
@@ -296,10 +298,10 @@ internal actor RevisionPreparationActor {
                 // content (§6.2); an absent target fails before the second
                 // Authority entry (§16: revision target absence →
                 // `.revisionNotFound`).
-                guard let revision = source.revisions.first(where: { $0.id == revisionID }) else {
+                guard let content = source.revertedContent else {
                     throw HistoryFailure.revisionNotFound(revisionID)
                 }
-                proposed = revision.content
+                proposed = content
             }
         }
 
@@ -331,7 +333,7 @@ internal actor RevisionPreparationActor {
         // snapshot, and Domain planning rechecks both tokens against the
         // reloaded facts (§6.2; docs/02-domain.md §11 steps 1–2). The mint
         // is hoisted above the R3 block below so the speculative prune
-        // target (`.revise(appended:)`) carries the exact revision this
+        // metadata carries the exact revision identity this
         // preparation will propose; the mint is one opaque call with no
         // side effects, so hoisting it changes nothing observable on the
         // R3-disabled (byte-for-byte v1) path.
@@ -339,28 +341,11 @@ internal actor RevisionPreparationActor {
         let createdAt = now()
 
         // An unchanged proposal consumes no append capacity (02 §11 step 5).
-        // The snapshot's lineage was validated by the Authority; select its
-        // current bytes without converting an opaque sibling to text. Keep
+        // The snapshot's current bytes were validated by the Authority. Keep
         // input validation above, and return a normal preparation bundle:
         // phase two still reloads facts and lets Domain recheck OCC before it
         // alone decides `.unchanged`. No receipt is inferred from this read.
-        let current: EffectiveContent
-        if let activeRevisionID = source.activeRevisionID {
-            guard let active = source.revisions.first(where: {
-                $0.id == activeRevisionID
-            }) else {
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
-            current = active.content
-        } else {
-            guard source.revisions.isEmpty else {
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
-            current = EffectiveContent(
-                representations: source.canonical.representations.map(\.content)
-            )
-        }
-        if proposed.hasSameRepresentations(as: current) {
+        if proposed.hasSameRepresentations(as: source.current) {
             return PreparedRevisionBundle(
                 domain: PreparedRevision(
                     candidateRevisionID: candidateRevisionID,
@@ -378,20 +363,20 @@ internal actor RevisionPreparationActor {
         // set BEFORE the per-item hard-bound check so the check below sees
         // the POST-PRUNE POST-APPEND state. The prune relation is pure
         // (D16): `planRevisionRetentionExpansion` over the pre-append loaded
-        // lineage with the revise-path target (§6.5) — the effective list is
+        // metadata with the revise-path target (§6.5) — the effective list is
         // `revisions + [appended]` and the active is the appended ID. With
         // the R3 lane disabled this block is skipped and the hard-bound
         // checks below run over the full loaded lineage, exactly as v1.
         var prunedInactiveRevisionIDs = Set<RevisionID>()
         if let revisionPolicy = retentionPolicies?.revisions {
-            let appendedRevision = ContentRevision(
+            var postAppendRevisions = source.revisions
+            postAppendRevisions.append(RevisionRetentionSummary(
                 id: candidateRevisionID,
-                createdAt: createdAt,
-                content: proposed
-            )
+                byteCount: proposedTotalBytes
+            ))
             let speculativePruneSet = planRevisionRetentionExpansion(
-                revisions: source.revisions,
-                target: .revise(appended: appendedRevision),
+                revisions: postAppendRevisions,
+                activeRevisionID: candidateRevisionID,
                 policies: HistoryRetentionPolicies(
                     age: nil,
                     storage: nil,
@@ -412,15 +397,18 @@ internal actor RevisionPreparationActor {
             // for any admitted `maxRevisionsPerItem >= 1`, §4.3), so only
             // the byte dimension is checked.
             if let maxRevisionBytes = revisionPolicy.maxRevisionBytesPerItem {
-                var postPruneRevisions: [ContentRevision] = []
-                postPruneRevisions.reserveCapacity(source.revisions.count + 1)
+                var postPruneBytes = proposedTotalBytes
                 for revision in source.revisions
                 where !prunedIDs.contains(revision.id) {
-                    postPruneRevisions.append(revision)
+                    let (total, overflow) = postPruneBytes.addingReportingOverflow(
+                        revision.byteCount
+                    )
+                    guard !overflow else {
+                        throw HistoryFailure.capacityExceeded(.revisionBytes)
+                    }
+                    postPruneBytes = total
                 }
-                postPruneRevisions.append(appendedRevision)
-                if RetainedBytesStamping.revisionScalars(of: postPruneRevisions).bytes
-                    > maxRevisionBytes {
+                if postPruneBytes > maxRevisionBytes {
                     throw HistoryFailure.capacityExceeded(.revisionBytes)
                 }
             }
@@ -443,15 +431,13 @@ internal actor RevisionPreparationActor {
         var itemRevisionBytes = proposedTotalBytes
         for revision in source.revisions
         where !prunedInactiveRevisionIDs.contains(revision.id) {
-            for representation in revision.content.representations {
-                let (newTotal, overflow) = itemRevisionBytes.addingReportingOverflow(
-                    representation.bytes.count
-                )
-                guard !overflow, newTotal <= limits.maximumTotalRevisionBytesPerItem else {
-                    throw HistoryFailure.capacityExceeded(.revisionBytes)
-                }
-                itemRevisionBytes = newTotal
+            let (newTotal, overflow) = itemRevisionBytes.addingReportingOverflow(
+                revision.byteCount
+            )
+            guard !overflow, newTotal <= limits.maximumTotalRevisionBytesPerItem else {
+                throw HistoryFailure.capacityExceeded(.revisionBytes)
             }
+            itemRevisionBytes = newTotal
         }
 
         // Step 4 — revision projection uses the prepared proposed Effective

@@ -1,7 +1,7 @@
 /// WS7 — Same-content revision no-op (docs/06-cross-cutting.md §8 WS7): the
 /// commit/receipt/storage side of submitting a replace or revert whose
 /// proposed Effective Content equals the item's current bytes through the
-/// public `SwiftDataHistory.perform(.revise(_:))` and the real two-phase
+/// public `SQLiteHistory.perform(.revise(_:))` and the real two-phase
 /// OCC-safe revision path (docs/05-authority-kernel.md §6.2, §9) whose Domain
 /// planning turns a byte-equal proposal into `.unchanged` (docs/02-domain.md
 /// §2.5 rule 7, §11 step 5).
@@ -13,7 +13,7 @@
 /// invalidation, not a History Commit), no appended revision, and no Content
 /// Version / Change Position advance (docs/02-domain.md §13 `.unchanged` row:
 /// preserve, no commit, no advance) — with the durable row/singleton state
-/// seen through an INDEPENDENT second `ModelContainer` over the same on-disk
+/// seen through an INDEPENDENT second `SQLite connection` over the same on-disk
 /// store (see `WSSupport`).
 import Foundation
 import HistoryCore
@@ -22,17 +22,6 @@ import Testing
 @testable import HistoryStorage
 
 struct WS7SameContentRevisionTests {
-
-/// Decodes one retained row's revision lineage through the production
-/// codecs: the Canonical blob first (it supplies the Canonical type set for
-/// the §4 containment check), then the revision-state blob with the full §4
-/// check set (docs/05-authority-kernel.md §4).
-private static func decodeLineage(
-    of row: HistoryItemRow
-) throws -> (revisions: [ContentRevision], activeRevisionID: RevisionID?) {
-    let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
-    return try RevisionStateBlobCodec.decode(row.revisionStateBlob, canonical: canonical)
-}
 
 /// WS7 scenario A (docs/06-cross-cutting.md §8): a `.replace` draft whose
 /// single `.inheritCanonical` decision proposes exactly the current
@@ -83,7 +72,7 @@ private static func decodeLineage(
     }
 
     // Storage side, through the INDEPENDENT container: still exactly one row.
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
     #expect(rows.count == 1)
     let row = try #require(rows.first)
@@ -91,7 +80,7 @@ private static func decodeLineage(
 
     // WS7: "no appended revision" — the lineage is still the empty
     // Canonical-state list with a nil active Revision ID (D3).
-    let lineage = try Self.decodeLineage(of: row)
+    let lineage = try WSSupport.fetchLineage(itemID: row.id, in: container)
     #expect(lineage.revisions.isEmpty)
     #expect(lineage.activeRevisionID == nil)
 
@@ -148,7 +137,7 @@ private static func decodeLineage(
     }
 
     // Storage side, through the INDEPENDENT container: still exactly one row.
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
     #expect(rows.count == 1)
     let row = try #require(rows.first)
@@ -156,7 +145,7 @@ private static func decodeLineage(
 
     // WS7: "no appended revision" — the lineage is still the empty
     // Canonical-state list with a nil active Revision ID (D3).
-    let lineage = try Self.decodeLineage(of: row)
+    let lineage = try WSSupport.fetchLineage(itemID: row.id, in: container)
     #expect(lineage.revisions.isEmpty)
     #expect(lineage.activeRevisionID == nil)
 
@@ -239,7 +228,7 @@ private static func decodeLineage(
     }
 
     // Storage side, through the INDEPENDENT container: still exactly one row.
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
     #expect(rows.count == 1)
     let row = try #require(rows.first)
@@ -248,7 +237,7 @@ private static func decodeLineage(
     // WS7: "no appended revision" — exactly the one revision the
     // byte-changing replace appended: it stores the replacement bytes and is
     // still the active revision (§2.5 rules 5–6; D4 append-only).
-    let lineage = try Self.decodeLineage(of: row)
+    let lineage = try WSSupport.fetchLineage(itemID: row.id, in: container)
     #expect(lineage.revisions.count == 1)
     let revision = try #require(lineage.revisions.first)
     #expect(revision.content.representations.map(\.typeIdentifier) == ["public.utf8-plain-text"])

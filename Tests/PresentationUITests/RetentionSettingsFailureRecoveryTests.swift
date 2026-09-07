@@ -9,7 +9,7 @@ struct RetentionSettingsFailureRecoveryTests {
     @Test("an unpinned active revision gets revision-specific recovery and the edited limit can retry")
     @MainActor
     func oversizedActiveRevisionPreservesTheDraftAndRecoversWithAHigherLimit() async throws {
-        let history = try await SwiftDataHistory.open(configuration: HistoryConfiguration(persistence: .memory))
+        let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(persistence: .temporary))
         let capture = try await history.perform(.capture(ClipboardCapture(
             representations: [CapturedRepresentation(typeIdentifier: "com.example.payload", bytes: Data([1]))],
             origin: CopyOriginObservation(sourceApplication: nil, lineageHint: nil),

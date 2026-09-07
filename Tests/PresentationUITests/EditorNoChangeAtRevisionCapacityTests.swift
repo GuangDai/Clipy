@@ -9,8 +9,8 @@ import Testing
 
 struct EditorNoChangeAtRevisionCapacityTests {
     @Test func keepCurrentAtBothPolicyThresholdsDoesNotPruneAnInactiveRevision() async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let type = "public.utf8-plain-text"
         let capture = try await history.perform(.capture(ClipboardCapture(
@@ -58,8 +58,8 @@ struct EditorNoChangeAtRevisionCapacityTests {
     }
 
     @Test func keepCurrentAtFullCapacityPreservesEveryEffectiveByteAndHistoryToken() async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let textType = "public.utf8-plain-text"
         let opaqueType = "com.example.binary"

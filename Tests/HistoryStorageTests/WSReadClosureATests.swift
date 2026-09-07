@@ -5,7 +5,7 @@
 /// only at step 7 (reads + observation)").
 ///
 /// All six tests are facade-driven: they replay each gate's core arrange
-/// through the public `SwiftDataHistory` facade and then assert the read clause
+/// through the public `SQLiteHistory` facade and then assert the read clause
 /// that was deferred from the step-5/6 commit-side tests:
 ///
 /// - WS1 (§8 WS1): "an observed page containing the same reference" —

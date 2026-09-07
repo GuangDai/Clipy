@@ -1,60 +1,31 @@
-/// R.5 — revise-composition proofs (`V2-roadmap` §6 R.5 "Revise
-/// composition": v1 two-phase preparation/recheck unchanged; when R2 or R3
-/// is active, recompute the prune over the reloaded lineage, check the hard
-/// bounds on the POST-PRUNE POST-APPEND state, plan R2 over the projected
-/// post-append store, and commit ONE merged plan/position with the prune
-/// folded into the append's single blob write).
+/// R.5 revise-composition proofs over the current SQLite/immutable-content
+/// store (V2-09 §4/§6; V2-02 §4.3/§5/§6/§7).
 ///
-/// Owning spec: `V2-02` §4.3 (the authoritative revise pseudocode and its
-/// phase-2 policy re-read, prune recomputation, projected R2 inventory,
-/// `protected` = pinned ∪ {revised item}, and merge order), §5.1/§5.4 (the
-/// prune relation; the ordering rule — prune computed BEFORE the per-item
-/// hard-bound check, `maxRevisionsPerItem == hard bound` is a no-op for
-/// every state below the bound), §6.3 (compose-with-append: ONE blob write,
-/// ONE ContentVersion successor; retire-subsumes-prune never arises on
-/// revise, §7), §6.5 (`.revise(appended:)`), §7 (revise fires R2+R3 ONLY —
-/// an R1-only config takes the exact v1 route), §8.3 (revise-time
-/// unsatisfiable → `.capacityExceeded(.revisionBytes)` atomic; R2
-/// irreducible → `.capacityExceeded(.storageBytes)`), §11 D24; Record 3
-/// gates `RET-STAMP-1` (one stamped write for the revised item),
-/// `RET-PLATFORM-3b` (the composed blob round-trips through the unchanged
-/// v1 codec), `RET-CONCUR-1` (all three Record 3 cases: the R3-flavored
-/// stale interleaving, the coalescing interleave with R3 active, and the
-/// same-item `.setRetentionPolicies` interleave), `RET-PRUNE-2` (the
-/// revise-lane half: R2 plans over the projected post-prune state).
+/// R3 prunes inactive revisions before the post-append hard-bound check;
+/// R2 plans against that projected result while protecting the revised item
+/// and pinned items. Prune, append, retirement, stored byte totals and the
+/// single ChangePosition advance commit atomically. Surviving revision
+/// representation rows retain their immutable bytes.
 ///
-/// Every public-path fixture crosses `SwiftDataHistory.perform(.revise)`
-/// (the real two-phase flow: `revisionPreparationInputs` → the V2-extended
-/// `RevisionPreparationActor.prepare` → `commitRevision`'s composition),
-/// seeds policies by writing the `RetentionExpansionConfigRow` through an
-/// INDEPENDENT container (`WSSupport.seedRetentionConfig` — behind the
-/// Authority's back, the R.3/R.4 fixture stance, because the production
-/// `.setRetentionPolicies` writer is the R.6 slice), and asserts rows/
-/// position/projection through that same independent container. The
-/// hard-bound ordering fixture (§5.4) drives the directly constructed
-/// `RevisionPreparationActor` with injected limits — the
-/// `RevisionPreparationCapacityTests` seam — because the public path pins
-/// `HistoryLimits.standard`; the stale-interleaving and the other two
-/// RET-CONCUR-1 interleave fixtures drive directly constructed Authorities
-/// with the WS20 `SuspensionGate` harness.
+/// Public cases exercise SQLiteHistory.perform(.revise). Policy fixtures
+/// write the actual retention_policies singleton without running a sweep
+/// before the operation under test. Independent SQL reads assert metadata,
+/// full canonical/revision bytes and current-content selection. Direct
+/// preparation cases retain the smaller injected bounds; concurrency cases
+/// retain the two-phase Authority/SuspensionGate interleavings.
 ///
-/// Record 3 also gates `RET-PLATFORM-2` (zero blob decodes on the planning
-/// path) — proven BEHAVIORALLY by
-/// `revisePlanningNeverDecodesNonRevisedRevisionBlob`: with R2 active, a
-/// corrupted NON-revised item's `revisionStateBlob` that any planning-path
-/// decode would surface as `.persistence(.corruptStoredValue)` instead
-/// emerges byte-identical from a successful revise commit, while the
-/// retirement arithmetic proves that item's stored scalars were planned
-/// over (the mirror of the R.6 sweep's corrupted-blob survivor fixture and
-/// the R.4 capture twin).
+/// Coverage includes count/byte pruning, active-content and primary/pinned
+/// protection, unsatisfiable budgets, no-change and rollback, stale OCC,
+/// coalescing between phases, and a policy sweep between phases. A revert
+/// resolved during preparation survives a later prune of its source revision
+/// when ContentVersion is unchanged (DEC-REVERT-RACE). Unpin itself does not
+/// run retention and preserves recency (DEC-UNPIN-SWEEP).
 ///
-/// The suite also pins the two resolved retention DEC discriminators:
-/// `DEC-REVERT-RACE` (§4.3 — a revert target resolved from the phase-1
-/// snapshot survives an interleaving same-item R3 prune that preserved
-/// `ContentVersion`, D5; target absence stays a preparation-time check) and
-/// `DEC-UNPIN-SWEEP` (§7 — `.unpin` loads no retention facts and retires
-/// nothing, and the just-unpinned item keeps its `lastCopiedAt` and is
-/// immediately the next count victim).
+/// The non-target payload test damages a real representation via the isolated
+/// Authority test closure. An explicit payload read rejects its length
+/// mismatch; a different item's revise still computes R2 using its retained
+/// byte metadata and preserves the damaged payload untouched.
+///
 ///
 /// Hand-worked fixture values (single-representation ASCII text: one
 /// `public.utf8-plain-text` representation, so a revision's representation
@@ -82,7 +53,6 @@
 import Foundation
 import HistoryCore
 import HistoryDomain
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
@@ -97,7 +67,7 @@ struct RetentionReviseCompositionTests {
         _ text: String,
         at seconds: Double,
         source: String,
-        in history: SwiftDataHistory
+        in history: SQLiteHistory
     ) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.capture(
             WSSupport.textCapture(
@@ -141,7 +111,7 @@ struct RetentionReviseCompositionTests {
         _ itemID: HistoryItemID,
         expected: Int,
         bytes: Int,
-        in history: SwiftDataHistory
+        in history: SQLiteHistory
     ) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.revise(
             Self.replaceRequest(
@@ -158,46 +128,42 @@ struct RetentionReviseCompositionTests {
         return reference
     }
 
-    /// The reloaded revision lineage of `itemID` through the production
-    /// fact loader (05 §7.3: exactly the target item), over the independent
-    /// assertion container.
+    /// Exact stored revision bytes and their current selection, read from
+    /// normalized SQL rows through the independent read-only test helpers.
     private static func lineage(
         of itemID: HistoryItemID,
-        in container: ModelContainer
-    ) throws -> RevisionFacts {
-        try MutationFactLoaders.loadRevisionFacts(
-            itemID: itemID,
-            in: ModelContext(container)
-        )
+        in database: SQLiteDatabase
+    ) throws -> (
+        contentVersion: ContentVersion,
+        revisions: [ContentRevision],
+        activeRevisionID: RevisionID?
+    ) {
+        try database.readTransaction {
+            let item = try #require(
+                WSSupport.fetchRows(database).first { $0.id == itemID.rawValue }
+            )
+            let state = try WSSupport.fetchLineage(itemID: itemID.rawValue, in: database)
+            return (
+                ContentVersion(rawValue: item.contentVersionRaw),
+                state.revisions,
+                state.activeRevisionID
+            )
+        }
     }
 
-    /// The unique projection row for `itemID`, or `nil` (0 or 1 rows; 2+
-    /// fails the fixture loudly — the 1:1 law is a precondition here).
+    /// Byte totals are current history_items columns, not a second model.
     private static func fetchBytesRow(
         for itemID: HistoryItemID,
-        in container: ModelContainer
-    ) throws -> RetainedBytesRow? {
-        let context = ModelContext(container)
-        let uuid = itemID.rawValue
-        var descriptor = FetchDescriptor<RetainedBytesRow>(
-            predicate: #Predicate { row in row.itemID == uuid }
-        )
-        descriptor.fetchLimit = 2
-        let rows = try context.fetch(descriptor)
-        precondition(
-            rows.count <= 1,
-            "RetainedBytesRow 1:1 law violated in fixture: \(rows.count) rows"
-        )
-        return rows.first
+        in database: SQLiteDatabase
+    ) throws -> WSSupport.StoredItem? {
+        try WSSupport.fetchRows(database).first { $0.id == itemID.rawValue }
     }
 
-    /// Every `RetainedBytesRow`, deterministically ordered by item ID.
+    /// The independent helper orders current item metadata by business ID.
     private static func fetchBytesRows(
-        _ container: ModelContainer
-    ) throws -> [RetainedBytesRow] {
-        let context = ModelContext(container)
-        let rows = try context.fetch(FetchDescriptor<RetainedBytesRow>())
-        return rows.sorted { $0.itemID.uuidString < $1.itemID.uuidString }
+        _ database: SQLiteDatabase
+    ) throws -> [WSSupport.StoredItem] {
+        try WSSupport.fetchRows(database)
     }
 
     /// Appends revisions of the given byte counts to `itemID` through the
@@ -206,7 +172,7 @@ struct RetentionReviseCompositionTests {
     private static func seedRevisions(
         _ itemID: HistoryItemID,
         byteCounts: [Int],
-        in history: SwiftDataHistory
+        in history: SQLiteHistory
     ) async throws {
         for (index, count) in byteCounts.enumerated() {
             _ = try await Self.revise(
@@ -227,13 +193,13 @@ struct RetentionReviseCompositionTests {
     /// [rev2, rev3, rev4]. ONE commit: one position advance (4 → 5), ONE
     /// ContentVersion successor (4 → 5, `RET-STAMP-1`'s single
     /// `contentVersionRaw` write), survivor order preserved, the appended
-    /// revision active, and the stored blob decodes to EXACTLY
+    /// revision active, and the stored content rows contain EXACTLY
     /// survivors + [appended] (`RET-PLATFORM-3b`: the composed
-    /// `(loaded \ removed) + [appended]` shape round-trips the unchanged
-    /// v1 codec — one write, asserted on the decoded FINAL state). The
+    /// `(loaded \ removed) + [appended]` shape is asserted using actual
+    /// representations in the final committed state). The
     /// projection row carries the post-prune post-append scalars (3 / 57 =
     /// 18 + 19 + 20).
-    @Test("R3 count prune on revise: one commit, one position, one version successor, folded blob")
+    @Test("R3 count prune on revise: one commit, one position, one version successor")
     func countPruneFoldsIntoOneCommitWithFoldedBlob() async throws {
         let storeURL = WSSupport.tempStoreURL("r5-count-prune")
         defer { WSSupport.removeStore(storeURL) }
@@ -254,13 +220,13 @@ struct RetentionReviseCompositionTests {
             )
         )
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let container = try WSSupport.makeDatabase(storeURL: storeURL)
         let before = try Self.lineage(of: target.id, in: container)
-        #expect(before.item.revisions.count == 3)
-        #expect(before.item.contentVersion.rawValue == 4)
-        let rev1ID = before.item.revisions[0].id
-        let rev2ID = before.item.revisions[1].id
-        let rev3ID = before.item.revisions[2].id
+        #expect(before.revisions.count == 3)
+        #expect(before.contentVersion.rawValue == 4)
+        let rev1ID = before.revisions[0].id
+        let rev2ID = before.revisions[1].id
+        let rev3ID = before.revisions[2].id
         let positionBefore = try WSSupport.fetchPosition(container).rawValue
         #expect(positionBefore == 4)
 
@@ -284,23 +250,21 @@ struct RetentionReviseCompositionTests {
         // Survivor order preserved (§5.2: pruning never reorders), the
         // appended revision (the lineage's new last) active, the oldest
         // inactive gone.
-        let survivors = after.item.revisions
+        let survivors = after.revisions
         let appendedID = try #require(survivors.last?.id)
         #expect(survivors.count == 3)
         #expect(survivors.dropLast().map(\.id) == [rev2ID, rev3ID])
         #expect(!survivors.map(\.id).contains(rev1ID))
-        #expect(after.item.activeRevisionID == appendedID)
+        #expect(after.activeRevisionID == appendedID)
         // Canonical Content and the item's identity are untouched (D2/D5);
-        // the decoded FINAL blob is exactly survivors + [appended].
+        // the final stored lineage is exactly survivors + [appended].
         let itemRow = try #require(
             try WSSupport.fetchRows(container)
                 .first { $0.id == target.id.rawValue }
         )
-        let canonical = try CanonicalBlobCodec.decode(itemRow.canonicalBlob)
-        let decoded = try RevisionStateBlobCodec.decode(
-            itemRow.revisionStateBlob,
-            canonical: canonical
-        )
+        let canonical = try WSSupport.fetchCanonical(itemID: itemRow.id, in: container)
+        #expect(canonical.representations.map(\.content.bytes) == [Data("r5 target base".utf8)])
+        let decoded = try WSSupport.fetchLineage(itemID: itemRow.id, in: container)
         #expect(decoded.revisions.count == 3)
         #expect(decoded.revisions.dropLast().map(\.id) == [rev2ID, rev3ID])
         #expect(decoded.revisions.last?.id == appendedID)
@@ -315,7 +279,6 @@ struct RetentionReviseCompositionTests {
         #expect(row.revisionCount == 3)
         #expect(row.revisionBytes == 57)
         #expect(row.canonicalBytes == 14)
-        #expect(row.bytesSchemaVersion == 1)
     }
 
     // MARK: - R3 bytes prune on revise (V2-02 §5.1)
@@ -345,10 +308,10 @@ struct RetentionReviseCompositionTests {
             )
         )
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let container = try WSSupport.makeDatabase(storeURL: storeURL)
         let before = try Self.lineage(of: target.id, in: container)
-        let rev1ID = before.item.revisions[0].id
-        let rev2ID = before.item.revisions[1].id
+        let rev1ID = before.revisions[0].id
+        let rev2ID = before.revisions[1].id
 
         let reference = try await Self.revise(
             target.id, expected: 3, bytes: 10, in: history
@@ -356,10 +319,10 @@ struct RetentionReviseCompositionTests {
         #expect(reference.contentVersion.rawValue == 4)
 
         let after = try Self.lineage(of: target.id, in: container)
-        #expect(after.item.revisions.count == 2)
-        #expect(after.item.revisions.first?.id == rev2ID)
-        #expect(!after.item.revisions.map(\.id).contains(rev1ID))
-        #expect(after.item.activeRevisionID == after.item.revisions.last?.id)
+        #expect(after.revisions.count == 2)
+        #expect(after.revisions.first?.id == rev2ID)
+        #expect(!after.revisions.map(\.id).contains(rev1ID))
+        #expect(after.activeRevisionID == after.revisions.last?.id)
         let row = try #require(try Self.fetchBytesRow(for: target.id, in: container))
         #expect(row.revisionCount == 2)
         #expect(row.revisionBytes == 28)
@@ -393,10 +356,10 @@ struct RetentionReviseCompositionTests {
             )
         )
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let container = try WSSupport.makeDatabase(storeURL: storeURL)
         let before = try Self.lineage(of: target.id, in: container)
-        let rev1ID = before.item.revisions[0].id
-        let rev2ID = before.item.revisions[1].id
+        let rev1ID = before.revisions[0].id
+        let rev2ID = before.revisions[1].id
 
         let reference = try await Self.revise(
             target.id, expected: 3, bytes: 8, in: history
@@ -407,10 +370,10 @@ struct RetentionReviseCompositionTests {
         // Count alone would have stopped after rev1 (count 2 ≤ 2); the byte
         // threshold forced the walk through rev2, leaving the appended
         // revision alone (count 1, bytes 8).
-        #expect(after.item.revisions.count == 1)
-        #expect(after.item.activeRevisionID == after.item.revisions.last?.id)
-        #expect(!after.item.revisions.map(\.id).contains(rev1ID))
-        #expect(!after.item.revisions.map(\.id).contains(rev2ID))
+        #expect(after.revisions.count == 1)
+        #expect(after.activeRevisionID == after.revisions.last?.id)
+        #expect(!after.revisions.map(\.id).contains(rev1ID))
+        #expect(!after.revisions.map(\.id).contains(rev2ID))
         let row = try #require(try Self.fetchBytesRow(for: target.id, in: container))
         #expect(row.revisionCount == 1)
         #expect(row.revisionBytes == 8)
@@ -445,10 +408,10 @@ struct RetentionReviseCompositionTests {
             )
         )
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let container = try WSSupport.makeDatabase(storeURL: storeURL)
         let before = try Self.lineage(of: target.id, in: container)
-        let rev1ID = before.item.revisions[0].id
-        let rev2ID = before.item.revisions[1].id
+        let rev1ID = before.revisions[0].id
+        let rev2ID = before.revisions[1].id
 
         let reference = try await Self.revise(
             target.id, expected: 3, bytes: 19, in: history
@@ -458,9 +421,9 @@ struct RetentionReviseCompositionTests {
         let after = try Self.lineage(of: target.id, in: container)
         // No prune: the full lineage survives, order preserved, the appended
         // revision (the new last) active.
-        #expect(after.item.revisions.count == 3)
-        #expect(after.item.revisions.dropLast().map(\.id) == [rev1ID, rev2ID])
-        #expect(after.item.activeRevisionID == after.item.revisions.last?.id)
+        #expect(after.revisions.count == 3)
+        #expect(after.revisions.dropLast().map(\.id) == [rev1ID, rev2ID])
+        #expect(after.activeRevisionID == after.revisions.last?.id)
         let row = try #require(try Self.fetchBytesRow(for: target.id, in: container))
         #expect(row.revisionCount == 3)
         #expect(row.revisionBytes == 54)
@@ -532,9 +495,11 @@ struct RetentionReviseCompositionTests {
         )
         let snapshot = RevisionPreparationSnapshot(
             canonical: canonical,
-            revisions: revisions,
+            current: try #require(revisions.last).content,
+            revisions: revisions.map { RevisionRetentionSummary(id: $0.id, byteCount: revisionBytes) },
             activeRevisionID: revisions.last?.id,
-            contentVersion: .initial
+            contentVersion: .initial,
+            revertedContent: nil
         )
         let preparation = RevisionPreparationActor(limits: HistoryLimits(
             maximumRepresentationsPerCaptureOrRevision: 32,
@@ -645,9 +610,12 @@ struct RetentionReviseCompositionTests {
         )
         let snapshot = RevisionPreparationSnapshot(
             canonical: canonical,
-            revisions: [older, active],
+            current: active.content,
+            revisions: [RevisionRetentionSummary(id: older.id, byteCount: 15),
+                        RevisionRetentionSummary(id: active.id, byteCount: 5)],
             activeRevisionID: active.id,
-            contentVersion: .initial
+            contentVersion: .initial,
+            revertedContent: nil
         )
         let preparation = RevisionPreparationActor(limits: HistoryLimits(
             maximumRepresentationsPerCaptureOrRevision: 32,
@@ -725,9 +693,9 @@ struct RetentionReviseCompositionTests {
             )
         )
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let container = try WSSupport.makeDatabase(storeURL: storeURL)
         let before = try Self.lineage(of: target.id, in: container)
-        let rev1ID = try #require(before.item.activeRevisionID)
+        let rev1ID = try #require(before.activeRevisionID)
         let positionBefore = try WSSupport.fetchPosition(container).rawValue
         #expect(positionBefore == 2)
 
@@ -743,9 +711,9 @@ struct RetentionReviseCompositionTests {
         // same single-revision lineage with rev1 still active, same version,
         // same projection scalars.
         let after = try Self.lineage(of: target.id, in: container)
-        #expect(after.item.revisions.map(\.id) == [rev1ID])
-        #expect(after.item.activeRevisionID == rev1ID)
-        #expect(after.item.contentVersion.rawValue == 2)
+        #expect(after.revisions.map(\.id) == [rev1ID])
+        #expect(after.activeRevisionID == rev1ID)
+        #expect(after.contentVersion.rawValue == 2)
         #expect(try WSSupport.fetchPosition(container).rawValue == positionBefore)
         let row = try #require(try Self.fetchBytesRow(for: target.id, in: container))
         #expect(row.revisionCount == 1)
@@ -786,7 +754,7 @@ struct RetentionReviseCompositionTests {
             storage: StorageRetention(maxTotalBytes: 45)
         )
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let container = try WSSupport.makeDatabase(storeURL: storeURL)
         let positionBefore = try WSSupport.fetchPosition(container).rawValue
         #expect(positionBefore == 3)
 
@@ -881,11 +849,11 @@ struct RetentionReviseCompositionTests {
             )
         )
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let container = try WSSupport.makeDatabase(storeURL: storeURL)
         let positionBefore = try WSSupport.fetchPosition(container).rawValue
         #expect(positionBefore == 5)
         let before = try Self.lineage(of: target.id, in: container)
-        let rev1ID = try #require(before.item.activeRevisionID)
+        let rev1ID = try #require(before.activeRevisionID)
 
         let reference = try await Self.revise(
             target.id, expected: 2, bytes: 10, in: history
@@ -908,9 +876,9 @@ struct RetentionReviseCompositionTests {
         // revision alone and active (§6.3 / RET-PLATFORM-3b shape); the
         // projection row restamped to the post-prune post-append scalars.
         let after = try Self.lineage(of: target.id, in: container)
-        #expect(after.item.revisions.count == 1)
-        #expect(!after.item.revisions.map(\.id).contains(rev1ID))
-        #expect(after.item.activeRevisionID == after.item.revisions.first?.id)
+        #expect(after.revisions.count == 1)
+        #expect(!after.revisions.map(\.id).contains(rev1ID))
+        #expect(after.activeRevisionID == after.revisions.first?.id)
         let row = try #require(try Self.fetchBytesRow(for: target.id, in: container))
         #expect(row.canonicalBytes == 5)
         #expect(row.revisionCount == 1)
@@ -957,7 +925,7 @@ struct RetentionReviseCompositionTests {
             storage: StorageRetention(maxTotalBytes: 50)
         )
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let container = try WSSupport.makeDatabase(storeURL: storeURL)
         let positionBefore = try WSSupport.fetchPosition(container).rawValue
         #expect(positionBefore == 3)
 
@@ -978,8 +946,8 @@ struct RetentionReviseCompositionTests {
         #expect(survivors == Set([pinned.id, target.id]))
         #expect(try Self.fetchBytesRows(container).count == 2)
         let after = try Self.lineage(of: target.id, in: container)
-        #expect(after.item.revisions.isEmpty)
-        #expect(after.item.contentVersion.rawValue == 1)
+        #expect(after.revisions.isEmpty)
+        #expect(after.contentVersion.rawValue == 1)
         let row = try #require(try Self.fetchBytesRow(for: target.id, in: container))
         #expect(row.revisionCount == 0)
         #expect(row.revisionBytes == 0)
@@ -1012,11 +980,11 @@ struct RetentionReviseCompositionTests {
             age: AgeRetention(maxAge: 100)
         )
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let container = try WSSupport.makeDatabase(storeURL: storeURL)
         let positionBefore = try WSSupport.fetchPosition(container).rawValue
         #expect(positionBefore == 3)
         let before = try Self.lineage(of: target.id, in: container)
-        let rev1ID = before.item.revisions[0].id
+        let rev1ID = before.revisions[0].id
 
         let reference = try await Self.revise(
             target.id, expected: 2, bytes: 18, in: history
@@ -1031,9 +999,9 @@ struct RetentionReviseCompositionTests {
         #expect(survivors == Set([aged.id, target.id]))
         // No prune: the lineage grew by exactly the append.
         let after = try Self.lineage(of: target.id, in: container)
-        #expect(after.item.revisions.count == 2)
-        #expect(after.item.revisions.first?.id == rev1ID)
-        #expect(after.item.activeRevisionID == after.item.revisions.last?.id)
+        #expect(after.revisions.count == 2)
+        #expect(after.revisions.first?.id == rev1ID)
+        #expect(after.activeRevisionID == after.revisions.last?.id)
         #expect(try WSSupport.fetchPosition(container).rawValue == 4)
         let row = try #require(try Self.fetchBytesRow(for: target.id, in: container))
         #expect(row.revisionCount == 2)
@@ -1152,7 +1120,7 @@ struct RetentionReviseCompositionTests {
     /// active and the lineage over threshold, a content-changing revision
     /// interleaved between the two phases of a first revision makes the
     /// first reject `.staleContent` at the second OCC check — with NO prune
-    /// mutation emitted and no `revisionStateBlob` write from the stale
+    /// mutation emitted and no content write from the stale
     /// proposal. The INTERFERING revision itself composes its own R3 prune
     /// over the reloaded lineage (the phase-2 recomputation: lineage
     /// [rev1(8), rev2(9)] + its 11-byte append prunes rev1, landing
@@ -1220,11 +1188,11 @@ struct RetentionReviseCompositionTests {
             )
         )
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let container = try WSSupport.makeDatabase(storeURL: storeURL)
         let seeded = try Self.lineage(of: target.id, in: container)
-        #expect(seeded.item.revisions.count == 2)
-        let rev1ID = seeded.item.revisions[0].id
-        let rev2ID = seeded.item.revisions[1].id
+        #expect(seeded.revisions.count == 2)
+        let rev1ID = seeded.revisions[0].id
+        let rev2ID = seeded.revisions[1].id
 
         // Two preparations at the SAME base version 3 proposing DIFFERENT
         // bytes: the parked first revision and the interfering second.
@@ -1288,9 +1256,9 @@ struct RetentionReviseCompositionTests {
         // lineage [rev1, rev2]: effective 3 > 2 pruned rev1, landing
         // [rev2, interfering] — the phase-2 recomputation (§4.3).
         let afterInterference = try Self.lineage(of: target.id, in: container)
-        #expect(afterInterference.item.revisions.map(\.id) == [rev2ID, interferingBundle.domain.candidateRevisionID])
-        #expect(!afterInterference.item.revisions.map(\.id).contains(rev1ID))
-        #expect(afterInterference.item.contentVersion.rawValue == 4)
+        #expect(afterInterference.revisions.map(\.id) == [rev2ID, interferingBundle.domain.candidateRevisionID])
+        #expect(!afterInterference.revisions.map(\.id).contains(rev1ID))
+        #expect(afterInterference.contentVersion.rawValue == 4)
         #expect(try WSSupport.fetchPosition(container).rawValue == 4)
 
         // A subsequent legitimate revise (expected 4) prunes over THAT
@@ -1314,11 +1282,11 @@ struct RetentionReviseCompositionTests {
         #expect(finalCommit.position.rawValue == 5)
         #expect(finalReference.contentVersion.rawValue == 5)
         let finalLineage = try Self.lineage(of: target.id, in: container)
-        #expect(finalLineage.item.revisions.map(\.id) == [
+        #expect(finalLineage.revisions.map(\.id) == [
             interferingBundle.domain.candidateRevisionID,
             finalBundle.domain.candidateRevisionID
         ])
-        #expect(finalLineage.item.activeRevisionID == finalBundle.domain.candidateRevisionID)
+        #expect(finalLineage.activeRevisionID == finalBundle.domain.candidateRevisionID)
         let row = try #require(try Self.fetchBytesRow(for: target.id, in: container))
         #expect(row.revisionCount == 2)
         #expect(row.revisionBytes == 23)
@@ -1329,7 +1297,7 @@ struct RetentionReviseCompositionTests {
     /// The R3-flavored RET-CONCUR-1 case (1) over the WS20 harness
     /// (Record 3: "a coalescing / lineage-preserving interleave between
     /// phase 1 and phase 2 asserts `speculativePruneSet == committed
-    /// pruneSet` and the fused compose-with-append blob is built from
+    /// pruneSet` and the composed prune/append transaction is built from
     /// phase-2 (reloaded) facts"): a Copy Coalescing commit on the SAME item
     /// interleaved between the two phases of a revise folds one occurrence
     /// and preserves ContentVersion (02 §13), leaving the revision list
@@ -1339,7 +1307,7 @@ struct RetentionReviseCompositionTests {
     /// inputs). The discriminator is computed INDEPENDENTLY in the test: the
     /// §5.1 walk (`expectedPrunePrefix`) runs over (a) the phase-1 snapshot
     /// lineage and (b) the lineage reloaded between park and resume — the
-    /// exact fact set phase 2 will load — and the durable final blob is
+    /// exact fact set phase 2 will load — and the durable final lineage is
     /// asserted to be exactly (reloaded survivors − committed prune) +
     /// [appended], i.e. a function of phase-2 facts.
     ///
@@ -1395,12 +1363,12 @@ struct RetentionReviseCompositionTests {
             )
         )
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let container = try WSSupport.makeDatabase(storeURL: storeURL)
         let seeded = try Self.lineage(of: target.id, in: container)
-        #expect(seeded.item.revisions.count == 2)
-        #expect(seeded.item.contentVersion.rawValue == 3)
-        let rev1ID = seeded.item.revisions[0].id
-        let rev2ID = seeded.item.revisions[1].id
+        #expect(seeded.revisions.count == 2)
+        #expect(seeded.contentVersion.rawValue == 3)
+        let rev1ID = seeded.revisions[0].id
+        let rev2ID = seeded.revisions[1].id
 
         // Phase one of the parked revise (append rev3, 10 bytes): the
         // snapshot carries the SAME lineage the coalesce is about to
@@ -1424,7 +1392,7 @@ struct RetentionReviseCompositionTests {
         // never-prunable active once it lands.
         let phase1Effective: [(id: RevisionID, bytes: Int, inactive: Bool)] =
             parkedInputs.snapshot.revisions.map {
-                (id: $0.id, bytes: Self.representationBytes(of: $0.content), inactive: true)
+                (id: $0.id, bytes: $0.byteCount, inactive: true)
             } + [(id: appendedID, bytes: appendedBytes, inactive: false)]
         let speculativePrune = Self.expectedPrunePrefix(
             effective: phase1Effective,
@@ -1471,15 +1439,15 @@ struct RetentionReviseCompositionTests {
                 // version preserved by the coalesce.
                 let reloaded = try Self.lineage(
                     of: target.id,
-                    in: WSSupport.makeContainer(storeURL: storeURL)
+                    in: WSSupport.makeDatabase(storeURL: storeURL)
                 )
                 let reloadedEffective: [(id: RevisionID, bytes: Int, inactive: Bool)] =
-                    reloaded.item.revisions.map {
+                    reloaded.revisions.map {
                         (id: $0.id, bytes: Self.representationBytes(of: $0.content), inactive: true)
                     } + [(id: appendedID, bytes: appendedBytes, inactive: false)]
                 return InterleavedCoalesce(
                     receipt: receipt,
-                    reloadedRevisionIDs: reloaded.item.revisions.map(\.id),
+                    reloadedRevisionIDs: reloaded.revisions.map(\.id),
                     reloadedPrune: Self.expectedPrunePrefix(
                         effective: reloadedEffective,
                         maxRevisions: 2,
@@ -1531,7 +1499,7 @@ struct RetentionReviseCompositionTests {
         // BOTH the folded occurrence and the composed prune+append lineage
         // built from phase-2 facts — (reloaded − committed prune) +
         // [appended].
-        let verification = try WSSupport.makeContainer(storeURL: storeURL)
+        let verification = try WSSupport.makeDatabase(storeURL: storeURL)
         let rows = try WSSupport.fetchRows(verification)
         #expect(rows.count == 1)
         let row = try #require(rows.first)
@@ -1544,16 +1512,12 @@ struct RetentionReviseCompositionTests {
         #expect(row.lastSource == coalesceSource)
 
         // Canonical Content is preserved byte-exactly by every commit (02
-        // D2); the durable final blob is EXACTLY the phase-2 function —
+        // D2); the durable final lineage is EXACTLY the phase-2 function —
         // reloaded survivors [rev2] + [appended], the appended active (05
-        // §4; the RET-PLATFORM-3b composed shape through the unchanged v1
-        // codec).
-        let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
+        // §4; the RET-PLATFORM-3b composed shape read from SQL content rows).
+        let canonical = try WSSupport.fetchCanonical(itemID: row.id, in: verification)
         #expect(canonical.representations.map(\.content.bytes) == [Data(targetText.utf8)])
-        let decoded = try RevisionStateBlobCodec.decode(
-            row.revisionStateBlob,
-            canonical: canonical
-        )
+        let decoded = try WSSupport.fetchLineage(itemID: row.id, in: verification)
         let expectedSurvivorIDs = [rev1ID, rev2ID]
             .filter { !results.interfering.reloadedPrune.contains($0) } + [appendedID]
         #expect(decoded.revisions.map(\.id) == expectedSurvivorIDs)
@@ -1580,7 +1544,7 @@ struct RetentionReviseCompositionTests {
     /// same item ... asserts the committed prune set is correct for the
     /// reloaded post-interleave-prune lineage (not necessarily equal to
     /// `speculativePruneSet`), no stale prune is applied, phase 2 uses the
-    /// re-read current `RetentionExpansionConfigRow` policies (not
+    /// re-read current retention_policies values (not
     /// phase-1-cached) so an interleaving threshold change is respected, and
     /// the active revision survives (D3)"; §4.3's phase-2 policy re-read;
     /// §5.2: R3 never changes ContentVersion): a same-item sweep commits
@@ -1647,13 +1611,13 @@ struct RetentionReviseCompositionTests {
             )
         )
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let container = try WSSupport.makeDatabase(storeURL: storeURL)
         let seeded = try Self.lineage(of: target.id, in: container)
-        #expect(seeded.item.revisions.count == 3)
-        #expect(seeded.item.contentVersion.rawValue == 4)
-        let rev1ID = seeded.item.revisions[0].id
-        let rev2ID = seeded.item.revisions[1].id
-        let rev3ID = seeded.item.revisions[2].id
+        #expect(seeded.revisions.count == 3)
+        #expect(seeded.contentVersion.rawValue == 4)
+        let rev1ID = seeded.revisions[0].id
+        let rev2ID = seeded.revisions[1].id
+        let rev3ID = seeded.revisions[2].id
 
         // Phase one of the parked revise (append rev4, 11 bytes) at the
         // threshold-3 view.
@@ -1697,17 +1661,17 @@ struct RetentionReviseCompositionTests {
             whileCommitting: { () async throws -> InterleavedSweep in
                 let preSweep = try Self.lineage(
                     of: target.id,
-                    in: WSSupport.makeContainer(storeURL: storeURL)
+                    in: WSSupport.makeDatabase(storeURL: storeURL)
                 )
                 // The sweep's own §5.1 walk (§5.5
                 // `.setRetentionPolicies(activeRevisionID:)` flavor): the
                 // stored active is the never-prunable element.
                 let sweepEffective: [(id: RevisionID, bytes: Int, inactive: Bool)] =
-                    preSweep.item.revisions.map {
+                    preSweep.revisions.map {
                         (
                             id: $0.id,
                             bytes: Self.representationBytes(of: $0.content),
-                            inactive: $0.id != preSweep.item.activeRevisionID
+                            inactive: $0.id != preSweep.activeRevisionID
                         )
                     }
                 let sweepPrune = Self.expectedPrunePrefix(
@@ -1722,16 +1686,16 @@ struct RetentionReviseCompositionTests {
                 // revision is inactive once the append lands, §6.5).
                 let reloaded = try Self.lineage(
                     of: target.id,
-                    in: WSSupport.makeContainer(storeURL: storeURL)
+                    in: WSSupport.makeDatabase(storeURL: storeURL)
                 )
                 let reloadedEffective: [(id: RevisionID, bytes: Int, inactive: Bool)] =
-                    reloaded.item.revisions.map {
+                    reloaded.revisions.map {
                         (id: $0.id, bytes: Self.representationBytes(of: $0.content), inactive: true)
                     } + [(id: appendedID, bytes: 11, inactive: false)]
                 return InterleavedSweep(
                     receipt: receipt,
                     sweepPrune: sweepPrune,
-                    reloadedRevisionIDs: reloaded.item.revisions.map(\.id),
+                    reloadedRevisionIDs: reloaded.revisions.map(\.id),
                     reloadedPrune: Self.expectedPrunePrefix(
                         effective: reloadedEffective,
                         maxRevisions: 2,
@@ -1774,22 +1738,19 @@ struct RetentionReviseCompositionTests {
         #expect(results.interfering.reloadedRevisionIDs == [rev2ID, rev3ID])
         #expect(results.interfering.reloadedPrune == [rev2ID])
 
-        // (b) The final durable lineage is coherent: the blob decodes
-        // through the unchanged v1 codec, the appended revision is active
+        // (b) The final durable lineage is coherent: stored representations
+        // form the expected content, the appended revision is active
         // (D3), the pruned IDs never resurrect, one position per commit.
-        let verification = try WSSupport.makeContainer(storeURL: storeURL)
+        let verification = try WSSupport.makeDatabase(storeURL: storeURL)
         let rows = try WSSupport.fetchRows(verification)
         #expect(rows.count == 1)
         let row = try #require(rows.first)
         #expect(row.id == target.id.rawValue)
         #expect(row.contentVersionRaw == 5)
         #expect(row.copyCount == 1)
-        let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
+        let canonical = try WSSupport.fetchCanonical(itemID: row.id, in: verification)
         #expect(canonical.representations.map(\.content.bytes) == [Data(targetText.utf8)])
-        let decoded = try RevisionStateBlobCodec.decode(
-            row.revisionStateBlob,
-            canonical: canonical
-        )
+        let decoded = try WSSupport.fetchLineage(itemID: row.id, in: verification)
         #expect(decoded.revisions.map(\.id) == [rev3ID, appendedID])
         #expect(decoded.activeRevisionID == appendedID)
         #expect(!decoded.revisions.map(\.id).contains(rev1ID))
@@ -1808,14 +1769,12 @@ struct RetentionReviseCompositionTests {
 
         // §5.6: the tightened threshold is what phase 2 re-read — the
         // durable singleton carries it.
-        let configContext = ModelContext(verification)
-        let configRows = try configContext.fetch(
-            FetchDescriptor<RetentionExpansionConfigRow>()
+        let config = try verification.prepare(
+            "SELECT revisionMaxCount FROM retention_policies WHERE key = 'retention-expansion'"
         )
-        #expect(configRows.count == 1)
-        let config = try #require(configRows.first)
-        #expect(config.revisionPolicyEnabled == true)
-        #expect(config.revisionMaxCount == 2)
+        #expect(try config.step())
+        #expect(try config.integer(at: 0) == 2)
+        #expect(try !config.step())
     }
 
     // MARK: - Revert-target race between the phases (DEC-REVERT-RACE)
@@ -1890,15 +1849,15 @@ struct RetentionReviseCompositionTests {
             )
         )
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let container = try WSSupport.makeDatabase(storeURL: storeURL)
         let seeded = try Self.lineage(of: target.id, in: container)
-        #expect(seeded.item.revisions.count == 3)
-        #expect(seeded.item.contentVersion.rawValue == 4)
+        #expect(seeded.revisions.count == 3)
+        #expect(seeded.contentVersion.rawValue == 4)
         #expect(try WSSupport.fetchPosition(container).rawValue == 4)
-        let rev1ID = seeded.item.revisions[0].id
-        let rev2ID = seeded.item.revisions[1].id
-        let rev3ID = seeded.item.revisions[2].id
-        let targetContent = seeded.item.revisions[0].content
+        let rev1ID = seeded.revisions[0].id
+        let rev2ID = seeded.revisions[1].id
+        let rev3ID = seeded.revisions[2].id
+        let targetContent = seeded.revisions[0].content
 
         // Phase one of the parked revert: resolve rev1's bytes FROM THE
         // SNAPSHOT (`05` §6.2) at expected version 4.
@@ -1974,22 +1933,19 @@ struct RetentionReviseCompositionTests {
         #expect(revertCommit.position.rawValue == 6)
 
         // The final durable state through the INDEPENDENT container and the
-        // production codec: lineage [appended] alone — phase 2 recomputed
+        // actual stored representations: lineage [appended] alone — phase 2 recomputed
         // its own prune over the RELOADED [rev3] + [appended] (count 2 > 1)
         // — the appended revision active carrying EXACTLY rev1's snapshot
         // bytes, and no pruned ID resurrected.
-        let verification = try WSSupport.makeContainer(storeURL: storeURL)
+        let verification = try WSSupport.makeDatabase(storeURL: storeURL)
         let rows = try WSSupport.fetchRows(verification)
         #expect(rows.count == 1)
         let row = try #require(rows.first)
         #expect(row.id == target.id.rawValue)
         #expect(row.contentVersionRaw == 5)
-        let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
+        let canonical = try WSSupport.fetchCanonical(itemID: row.id, in: verification)
         #expect(canonical.representations.map(\.content.bytes) == [Data(targetText.utf8)])
-        let decoded = try RevisionStateBlobCodec.decode(
-            row.revisionStateBlob,
-            canonical: canonical
-        )
+        let decoded = try WSSupport.fetchLineage(itemID: row.id, in: verification)
         #expect(decoded.revisions.map(\.id) == [appendedID])
         #expect(decoded.activeRevisionID == appendedID)
         #expect(decoded.revisions.first?.content == targetContent)
@@ -2107,7 +2063,7 @@ struct RetentionReviseCompositionTests {
         #expect(removedCount == 0)
         #expect(policyCommit.position.rawValue == 6)
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let container = try WSSupport.makeDatabase(storeURL: storeURL)
         let positionAfterArrange = try WSSupport.fetchPosition(container).rawValue
         #expect(positionAfterArrange == 6)
 
@@ -2178,24 +2134,19 @@ struct RetentionReviseCompositionTests {
         #expect(try WSSupport.fetchPosition(container).rawValue == 8)
     }
 
-    // MARK: - Zero blob decodes on the planning path (RET-PLATFORM-2, RET-PERF-3)
+    // MARK: - No unrelated payload reads during planning (RET-PLATFORM-2)
 
     /// The behavioral zero-decode proof for the REVISE planning lane
     /// (`V2-02` §3.2/Record 3 `RET-PLATFORM-2`/`RET-PERF-3` — the mirror of
     /// the R.6 sweep fixture
     /// `r3SweepPrunesExceedingItemsOnlyWithoutDecodingNonExceeding` and the
-    /// R.4 capture twin): with R2 active, a NON-revised item's
-    /// `revisionStateBlob` is corrupted behind the Authority's back
-    /// (independent container, the R.3 fixture stance) BEFORE a public
-    /// revise on a DIFFERENT item. The revise's expansion planning must read
-    /// ONLY the corrupt item's `RetainedBytesRow` scalar columns
-    /// (`RetentionConfigLoading.fetchProjectedScalars` — the
-    /// `.externalStorage` blob columns are never touched); any
-    /// `revisionStateBlob` decode on the planning path would fail the whole
-    /// commit `.persistence(.corruptStoredValue)` (the 05 §4 codec
-    /// discipline). The REVISED item's own lineage IS legitimately loaded
-    /// (the two-phase revise needs it); the corrupt victim is not that
-    /// item. The commit SUCCEEDS, the corrupt blob emerges byte-identical,
+    /// R.4 capture twin): with R2 active, a NON-revised item's current
+    /// representation is made inconsistent with its stored length before
+    /// revising a DIFFERENT item. Planning uses the unrelated item's stored
+    /// byte totals. Reading its content would throw corruptStoredValue,
+    /// demonstrated by the explicit payload read before the tested revise.
+    /// The revised item's own current content is legitimately read during
+    /// preparation. The commit SUCCEEDS, the damaged bytes stay identical,
     /// and the corrupt item's stored scalars are provably planned over.
     ///
     /// Arithmetic (single-representation ASCII: a revision's representation
@@ -2209,8 +2160,8 @@ struct RetentionReviseCompositionTests {
     /// If A's stored scalars were NOT planned over (the discriminator), the
     /// projected total would be 10 + 25 = 35 ≤ 40 and B would SURVIVE — B's
     /// retirement is exactly the evidence that the corrupt item's SCALARS
-    /// entered the projected inventory while its blob was never decoded.
-    @Test("revise planning never decodes a non-revised item's revision blob (RET-PLATFORM-2)")
+    /// entered the projected inventory while its payload was never loaded.
+    @Test("revise planning leaves a non-revised item's corrupt payload unread (RET-PLATFORM-2)")
     func revisePlanningNeverDecodesNonRevisedRevisionBlob() async throws {
         let storeURL = WSSupport.tempStoreURL("r5-zero-decode-revise")
         defer { WSSupport.removeStore(storeURL) }
@@ -2240,20 +2191,27 @@ struct RetentionReviseCompositionTests {
             storage: StorageRetention(maxTotalBytes: 40)
         )
 
-        // Corrupt A's revision blob through an INDEPENDENT container (the
-        // R.3/R.6 fixture stance): a 1-byte blob fails every decode shape.
-        // A is NOT the revised item — T is.
+        // Damage A's actual current representation inside its Authority.
+        // The byteCount remains five while the inline payload becomes one;
+        // ordinary content reads must reject this stored-length mismatch.
         let corruptBlob = Data([0x00])
-        let damageContainer = try WSSupport.makeContainer(storeURL: storeURL)
-        let damageContext = ModelContext(damageContainer)
-        let damageRow = try #require(
-            try damageContext.fetch(FetchDescriptor<HistoryItemRow>())
-                .first { $0.id == a.id.rawValue }
-        )
-        damageRow.revisionStateBlob = corruptBlob
-        try damageContext.save()
+        try await history.authority.withTestDatabase { authority in
+            try authority.database.execute("PRAGMA ignore_check_constraints = ON")
+            defer { try? authority.database.execute("PRAGMA ignore_check_constraints = OFF") }
+            try authority.database.writeTransaction {
+                try authority.database.execute("""
+                    UPDATE representations SET inlineBytes = ?
+                    WHERE contentID = (SELECT currentContentID FROM history_items WHERE id = ?)
+                      AND ordinal = 0
+                    """, bindings: [.blob(corruptBlob), .text(a.id.rawValue.uuidString)])
+                #expect(try authority.database.changedRowCount == 1)
+            }
+        }
+        await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+            try await history.pastePayload(for: a.id)
+        }
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
+        let container = try WSSupport.makeDatabase(storeURL: storeURL)
         let positionBefore = try WSSupport.fetchPosition(container).rawValue
         #expect(positionBefore == 4)
 
@@ -2280,11 +2238,15 @@ struct RetentionReviseCompositionTests {
         // for the non-revised item — and its projection row keeps the stored
         // scalars the plan consumed (10 / 1 / 5); T's row carries the
         // post-append scalars (5 / 1 / 20).
-        let untouchedRow = try #require(
-            try WSSupport.fetchRows(container)
-                .first { $0.id == a.id.rawValue }
-        )
-        #expect(untouchedRow.revisionStateBlob == corruptBlob)
+        let untouched = try container.prepare("""
+            SELECT inlineBytes, byteCount FROM representations
+            WHERE contentID = (SELECT currentContentID FROM history_items WHERE id = ?)
+              AND ordinal = 0
+            """, bindings: [.text(a.id.rawValue.uuidString)])
+        #expect(try untouched.step())
+        #expect(try untouched.blob(at: 0) == corruptBlob)
+        #expect(try untouched.integer(at: 1) == 5)
+        #expect(try !untouched.step())
         let aRow = try #require(try Self.fetchBytesRow(for: a.id, in: container))
         #expect(aRow.canonicalBytes == 10)
         #expect(aRow.revisionCount == 1)

@@ -1,5 +1,5 @@
 /// AppComposition.swift — the composed application object: the sole place
-/// that constructs the production `SwiftDataHistory`, the pasteboard
+/// that constructs the production `SQLiteHistory`, the pasteboard
 /// adapter and observer, and the panel view state, and the ONLY coordinator
 /// of the History → pasteboard hand-off.
 /// Owning spec: docs/01-architecture.md §2 (ClipyApp composition-root row),
@@ -25,7 +25,7 @@ import PresentationUI
 enum ClipyCompositionError: Error, Equatable {
     /// `AppComposition.open` was asked to open a store URL this process has
     /// already opened. A second PROCESS opening the same StoreRoot instead
-    /// fails one layer down in `SwiftDataHistory.open` with
+    /// fails one layer down in `SQLiteHistory.open` with
     /// `HistoryFailure.persistence(.storeAlreadyOpen)` (REVIEW DATA-7).
     case storeAlreadyOpen(URL)
 }
@@ -308,16 +308,16 @@ final class AppComposition {
     /// half of the no-second-writer rule (01 §8): `open(storeURL:)`
     /// standardizes the path and resolves filesystem symlinks before it
     /// consults and reserves here. Thus `..` and symlink spellings of one
-    /// StoreRoot cannot create a second facade/`ModelContainer` (REVIEW
+    /// StoreRoot cannot create a second facade/writer (REVIEW
     /// PLAY-DISK-0A; roadmap 06 acceptance). The cross-process half lives
-    /// one layer down: `SwiftDataHistory.open` holds the StoreRoot's
+    /// one layer down: `SQLiteHistory.open` holds the StoreRoot's
     /// single-writer lease for the facade's lifetime and refuses a second
     /// owner process with `.persistence(.storeAlreadyOpen)` (REVIEW DATA-7 /
     /// PLAY-DISK-0B).
     private static var openedStoreIdentities: Set<URL> = []
 
     /// The identity used only by the same-process pre-open reservation.
-    /// SwiftData still receives the caller's URL; this does not relocate the
+    /// SQLite still receives the caller's URL; this does not relocate the
     /// production store (V2-00 §3.1). The cross-process lease needs no path
     /// normalization here: it locks the lease artifact's inode, where
     /// spelling aliases already converge.
@@ -328,7 +328,7 @@ final class AppComposition {
     }
 
     /// The production store location:
-    /// `~/Library/Application Support/Clipy/history.store` (roadmap 06).
+    /// `~/Library/Application Support/Clipy/history.sqlite` (V2-09 §3).
     ///
     /// The user-domain Application Support search on macOS always resolves
     /// to `~/Library/Application Support`; if it ever came back empty the
@@ -339,10 +339,10 @@ final class AppComposition {
         .urls(for: .applicationSupportDirectory, in: .userDomainMask)
         .first!
         .appendingPathComponent("Clipy", isDirectory: true)
-        .appendingPathComponent("history.store")
+        .appendingPathComponent("history.sqlite")
 
     /// Optional automation is composed only after the real store opens.
-    /// Test-only memory compositions never acquire the user's fixed socket.
+    /// Test-only temporary compositions never acquire the user's fixed socket.
     private(set) var localAutomation: LocalAutomationController?
 
     /// Assembles one coherent app graph from the two true boundary values.
@@ -401,7 +401,7 @@ final class AppComposition {
     ///    reservation so a launch-time retry remains possible;
     /// 2. create the store's parent directory
     ///    (`~/Library/Application Support/Clipy` for the default URL);
-    /// 3. `SwiftDataHistory.open(configuration:)` with the persistent
+    /// 3. `SQLiteHistory.open(configuration:)` with the persistent
     ///    medium and the Part VI default retention (200) — the facade
     ///    validates and runs the whole §13 startup itself;
     /// 4. construct adapter, view state, and observer, then `start()` the
@@ -514,7 +514,7 @@ final class AppComposition {
             throw HistoryFailure.persistence(.openStore)
         }
 
-        let history = try await SwiftDataHistory.open(
+        let history = try await SQLiteHistory.open(
             configuration: HistoryConfiguration(
                 persistence: .persistent(storeURL: storeURL)
             )

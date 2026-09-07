@@ -1,522 +1,260 @@
-/// Fact loading for the capture path, plus the shared row→Domain hydration
-/// helpers every other action-specific fact loader reuses (pin/unpin,
-/// revision, remove, clear, and retention at roadmap step 6).
-/// Owning spec: docs/05-authority-kernel.md §7 (complete fact loading, §7.1
-/// capture), §5 (context confinement — bounded business-ID fetch, never
-/// `registeredModel(for:)`), §4 (decode checks, applied through the step-4
-/// versioned codecs), §12 (Signature Index lifecycle), §16 (failure
-/// translation); docs/02-domain.md §5.1 (IngestFacts construction guarantees
-/// and the `.temporarilyUnavailable(.factProof)` / `.dedupIndexRebuild`
-/// mapping).
-///
-/// Every function here is synchronous and runs inside one serialized
-/// `HistoryAuthority` interval on an operation-local `ModelContext`
-/// (docs/05 §5): there is no `await` while a context, fetched row, complete
-/// fact, or commit plan is live, and no row or context is retained after
-/// return. Failures are thrown already mapped to the public §16 vocabulary:
-/// codec rejections via their `historyFailure`, framework fetch failures as
-/// `.temporarilyUnavailable(...)` for the proof the caller was constructing
-/// (`.factProof` normally, `.dedupIndexRebuild` for capture inventory), and
-/// durable-state invariant violations as `.persistence(.invariantViolation)`.
-/// Platform error strings are never used as semantic discriminators (§16).
+/// Direct SQLite facts. Candidate iteration retains only its current bytes
+/// and the confirmed winner's scalars, never a history-sized content array.
 import Foundation
 import HistoryCore
 import HistoryDomain
-import SwiftData
 
-// MARK: - Row → Domain hydration (docs/05-authority-kernel.md §7, §4)
-
-/// Shared helpers that fetch `HistoryItemRow` values and reconstruct
-/// validated Domain values through the step-4 versioned codecs.
-/// docs/05-authority-kernel.md §7 (each action's loader), §5 (all
-/// business-ID lookup uses a bounded fetch predicate on `HistoryItemRow.id`;
-/// exactly zero or one row is valid — duplicates are persistence corruption
-/// even though the schema also declares uniqueness).
-///
-/// These are the hydration entry points the step-6 loaders (pin/unpin,
-/// revision, remove, clear, retention) reuse; the projection fields
-/// (`titleUTF8`, `searchBody`) are validated before lineage hydration;
-/// presentation of these fields and the effective-type projection belongs
-/// to the read paths (§14), not to Domain action facts.
-internal enum HistoryItemRowHydration {
-    /// Fetches the unique row carrying `businessID`, or `nil` when no
-    /// retained row carries it. docs/05-authority-kernel.md §5
-    ///
-    /// The fetch is bounded (`fetchLimit = 2`): a business ID names at most
-    /// one row, so the fetch only ever needs to distinguish absence, the one
-    /// valid row, and corruption. A duplicate business ID is a schema
-    /// invariant failure mapped to `.persistence(.invariantViolation)` (§5,
-    /// §16). A framework fetch failure means the fact cannot be proven
-    /// complete and maps to `.temporarilyUnavailable(.factProof)`
-    /// (docs/02-domain.md §5.1).
-    internal static func fetchRow(
-        businessID: HistoryItemID,
-        in context: ModelContext
-    ) throws -> HistoryItemRow? {
-        let uuid = businessID.rawValue
-        var descriptor = FetchDescriptor<HistoryItemRow>(
-            predicate: #Predicate { row in row.id == uuid }
-        )
-        descriptor.fetchLimit = 2
-        let rows: [HistoryItemRow]
-        do {
-            rows = try context.fetch(descriptor)
-        } catch {
-            throw HistoryFailure.temporarilyUnavailable(.factProof)
-        }
-        guard rows.count <= 1 else {
-            throw HistoryFailure.persistence(.invariantViolation)
-        }
-        return rows.first
-    }
-
-    /// Fully hydrates one row into a `HistoryItemState`, applying every §4
-    /// decode check through the versioned codecs:
-    ///
-    /// - `canonicalBlob` → validated `CanonicalContent`;
-    /// - `revisionStateBlob` → the complete revision list and active
-    ///   Revision ID, checked against the Canonical type set and D3
-    ///   active-ID coherence;
-    /// - `canonicalSignatureBlob` → signature entries plus the §4
-    ///   bidirectional fingerprint/signature coverage check against the
-    ///   Canonical representations;
-    /// - `contentVersionRaw` → a valid (≥1) Content Version;
-    /// - the occurrence fields → a valid `CopyOccurrence` (count ≥ 1,
-    ///   monotone recency, bounded source observations);
-    /// - `pinOrdinal` → non-negative or `nil`.
-    ///
-    /// Any violation throws the codec rejection's §16 mapping
-    /// (`.persistence(.corruptStoredValue)`); the decoder never repairs,
-    /// drops, or guesses (§4). docs/05-authority-kernel.md §7, §4
-    internal static func hydrate(
-        _ row: HistoryItemRow,
-        limits: HistoryLimits = .standard
-    ) throws -> HistoryItemState {
-        try hydrateWithTitle(row, limits: limits).item
-    }
-
-    /// Details also needs the current projection. Return the title decoded
-    /// during the same validation interval, without hydrating lineage twice.
-    internal static func hydrateWithTitle(
-        _ row: HistoryItemRow,
-        limits: HistoryLimits = .standard
-    ) throws -> (item: HistoryItemState, title: String) {
-        let titleUTF8 = row.titleUTF8
-        let title = try mapCodecFailure {
-            try ContentProjector.decodeStoredTitle(titleUTF8, limits: limits)
-        }
-        let searchBodyUTF8 = row.searchBodyUTF8
-        _ = try mapCodecFailure {
-            let searchBody = try ContentProjector.decodeStoredSearchBody(searchBodyUTF8, limits: limits)
-            return try ContentProjector.validateStoredProjection(
-                title: title,
-                searchBody: searchBody,
-                limits: limits
-            )
-        }
-        let canonical = try mapCodecFailure {
-            try CanonicalBlobCodec.decode(row.canonicalBlob, limits: limits)
-        }
-        let lineage = try mapCodecFailure {
-            try RevisionStateBlobCodec.decode(
-                row.revisionStateBlob,
-                canonical: canonical,
-                limits: limits
-            )
-        }
-        let signatureEntries = try mapCodecFailure {
-            try SignatureBlobCodec.decode(row.canonicalSignatureBlob, limits: limits)
-        }
-        try mapCodecFailure {
-            try SignatureBlobCodec.validateCoverage(
-                canonical: canonical,
-                entries: signatureEntries
-            )
-        }
-        let contentVersion = try mapCodecFailure {
-            try RevisionStateBlobCodec.decodeContentVersion(row.contentVersionRaw)
-        }
-        let occurrence = try mapCodecFailure {
-            try RevisionStateBlobCodec.decodeOccurrence(
-                firstCopiedAt: row.firstCopiedAt,
-                lastCopiedAt: row.lastCopiedAt,
-                copyCount: row.copyCount,
-                firstSource: row.firstSource,
-                lastSource: row.lastSource,
-                limits: limits
-            )
-        }
-        let pinOrdinal = try mapCodecFailure {
-            try RevisionStateBlobCodec.decodePinOrdinal(row.pinOrdinal)
-        }
-        let item = HistoryItemState(
-            id: HistoryItemID(rawValue: row.id),
-            contentVersion: contentVersion,
-            canonical: canonical,
-            revisions: lineage.revisions,
-            activeRevisionID: lineage.activeRevisionID,
-            occurrence: occurrence,
-            pinOrdinal: pinOrdinal
-        )
-        return (item, title)
-    }
-
-    /// Projects one already-fetched row to its retention-relevant scalar
-    /// summary. docs/05-authority-kernel.md §7.1 step 5, docs/02-domain.md
-    /// §5.1 (`RetainedItemSummary`). The pin ordinal is validated
-    /// non-negative (§4); the collection-wide unique-contiguous pinned-order
-    /// proof is the pin loader's separate job (§7.2).
-    internal static func retainedSummary(
-        of row: HistoryItemRow
-    ) throws -> RetainedItemSummary {
-        let lastCopiedAt = row.lastCopiedAt
-        try mapCodecFailure {
-            try RevisionStateBlobCodec.validateFiniteLastCopiedAt(lastCopiedAt)
-        }
-        let pinOrdinal = try mapCodecFailure {
-            try RevisionStateBlobCodec.decodePinOrdinal(row.pinOrdinal)
-        }
-        return RetainedItemSummary(
-            id: HistoryItemID(rawValue: row.id),
-            lastCopiedAt: lastCopiedAt,
-            pinOrdinal: pinOrdinal
-        )
-    }
-
-    /// Fetches the complete retention inventory: a scalar summary of every
-    /// retained row, exactly once each. docs/05-authority-kernel.md §7.1
-    /// step 5, §7.3 ("All collection-wide loads are bounded by the hard
-    /// retained-item maximum"); docs/02-domain.md §5.1
-    /// (`CompleteRetentionInventory`).
-    ///
-    /// The fetch requests only `id`, `lastCopiedAt`, and `pinOrdinal`; this
-    /// function never accesses or decodes Canonical/revision blobs. Whether
-    /// SwiftData also suppresses `.externalStorage` faulting is the separate
-    /// supported-platform performance proof in docs/06-cross-cutting.md §7.5.
-    /// The result is sorted by History Item ID so identical stores yield
-    /// identical fact values.
-    ///
-    /// By default, a row count above the hard retained-item bound or a
-    /// duplicate business ID is a durable-state invariant violation (matching
-    /// the startup stance of §13 step 5), while a framework fetch failure is
-    /// `.temporarilyUnavailable(.factProof)`. The loader never labels an
-    /// incomplete result as complete (§7.3).
-    internal static func fetchRetainedInventory(
-        in context: ModelContext,
-        limits: HistoryLimits = .standard
-    ) throws -> [RetainedItemSummary] {
-        var descriptor = FetchDescriptor<HistoryItemRow>()
-        descriptor.propertiesToFetch = [\.id, \.lastCopiedAt, \.pinOrdinal]
-        descriptor.fetchLimit = limits.hardMaximumRetainedItems + 1
-        let rows: [HistoryItemRow]
-        do {
-            rows = try context.fetch(descriptor)
-        } catch {
-            throw HistoryFailure.temporarilyUnavailable(.factProof)
-        }
-        if rows.count > limits.hardMaximumRetainedItems {
-            throw HistoryFailure.persistence(.invariantViolation)
-        }
-        var seen = Set<HistoryItemID>(minimumCapacity: rows.count)
-        var summaries: [RetainedItemSummary] = []
-        summaries.reserveCapacity(rows.count)
-        for row in rows {
-            let summary = try retainedSummary(of: row)
-            guard seen.insert(summary.id).inserted else {
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
-            summaries.append(summary)
-        }
-        summaries.sort { $0.id < $1.id }
-        return summaries
+internal struct HistoryItemMetadata: Sendable {
+    internal let id: HistoryItemID
+    internal let contentVersion: ContentVersion
+    internal let currentContentID: UUID
+    internal let occurrence: CopyOccurrence
+    internal let pinOrdinal: PinOrdinal?
+    internal let canonicalBytes: Int
+    internal let revisionCount: Int
+    internal let revisionBytes: Int
+    internal var summary: RetainedItemSummary {
+        RetainedItemSummary(id: id, lastCopiedAt: occurrence.lastCopiedAt, pinOrdinal: pinOrdinal)
     }
 }
 
-// MARK: - Capture fact loading (docs/05-authority-kernel.md §7.1)
+internal struct HistoryContentMetadata: Sendable {
+    internal let id: UUID
+    internal let ordinal: Int
+    internal let createdAt: Date
+    internal let byteCount: Int
+    internal let representationCount: Int
+    internal var revisionSummary: RevisionRetentionSummary {
+        RevisionRetentionSummary(id: RevisionID(rawValue: id), byteCount: byteCount)
+    }
+}
 
-/// The complete fact loader for the capture path (`HistoryAction.capture`).
-/// docs/05-authority-kernel.md §7.1; construction guarantees:
-/// docs/02-domain.md §5.1.
-///
-/// One load performs §7.1's six steps in order inside one serialized
-/// `HistoryAuthority` interval (no suspension, so the sole writer cannot
-/// interleave a commit mid-load):
-///
-/// 1. Fetch retained/unpinned counts without materializing rows. Require a
-///    ready Signature Index, maintained by startup and isolated commit deltas;
-///    an unready index or count mismatch triggers its complete rebuild.
-/// 2. Intersect posting sets for all incoming signature entries (derived
-///    from the prepared Canonical Content, the same entries preparation
-///    constructed at §6.1 step 6) via `SignatureIndex.candidateIDs`.
-/// 3. Fetch and fully decode every candidate ID.
-/// 4. Fetch the lineage hint separately by business ID when a hint exists,
-///    even when it is absent from the candidate intersection.
-/// 5. Point-read candidate-ID occupancy and fetch only the oldest unpinned
-///    prefix needed by count retention, with one extra primary-exclusion row.
-/// 6. Return exact counts and that bounded prefix as `CaptureRetentionFacts`.
-///
-/// If any step cannot prove completeness the capture is rejected — there is
-/// no "scan the first N and insert if absent" path (§7.1, D8).
+internal enum HistoryItemRowHydration {
+    internal static func metadata(itemID: HistoryItemID, in database: SQLiteDatabase,
+                                  limits: HistoryLimits = .standard) throws -> HistoryItemMetadata? {
+        let row = try database.prepare("""
+            SELECT contentVersion,currentContentID,firstCopiedAt,lastCopiedAt,copyCount,
+                   firstSource,lastSource,pinOrdinal,canonicalBytes,revisionCount,revisionBytes
+            FROM history_items WHERE id=?
+            """, bindings: [.text(itemID.rawValue.uuidString)])
+        defer { row.finalize() }
+        guard try row.step() else { return nil }
+        let first = try Date(timeIntervalSinceReferenceDate: row.real(at: 2))
+        let last = try Date(timeIntervalSinceReferenceDate: row.real(at: 3))
+        let count = try sqliteUInt64(row.blob(at: 4))
+        let firstSource = try row.optionalText(at: 5)
+        let lastSource = try row.optionalText(at: 6)
+        let version = try sqliteUInt64(row.blob(at: 0))
+        let canonicalBytes = try integer(row, 8)
+        let revisionCount = try integer(row, 9)
+        let revisionBytes = try integer(row, 10)
+        guard first.timeIntervalSinceReferenceDate.isFinite, last.timeIntervalSinceReferenceDate.isFinite,
+              first <= last, count > 0, version > 0, canonicalBytes > 0,
+              canonicalBytes <= limits.maximumCaptureBytes,
+              revisionCount >= 0, revisionCount <= limits.maximumRevisionsPerItem,
+              revisionBytes >= 0, revisionBytes <= limits.maximumTotalRevisionBytesPerItem,
+              (revisionCount == 0 ? revisionBytes == 0 : revisionBytes >= revisionCount),
+              [firstSource, lastSource].allSatisfy({ ($0?.utf8.count ?? 0) <= limits.maximumSourceApplicationObservationUTF8Bytes })
+        else { throw corrupt }
+        return HistoryItemMetadata(id: itemID, contentVersion: ContentVersion(rawValue: version),
+            currentContentID: try uuid(row.text(at: 1)),
+            occurrence: CopyOccurrence(firstCopiedAt: first, lastCopiedAt: last, count: count,
+                                       firstSource: firstSource, lastSource: lastSource),
+            pinOrdinal: try pin(row, 7), canonicalBytes: canonicalBytes,
+            revisionCount: revisionCount, revisionBytes: revisionBytes)
+    }
+
+    internal static func canonical(itemID: HistoryItemID, in database: SQLiteDatabase,
+                                   blobStore: ImmutableBlobStore, limits: HistoryLimits = .standard) throws -> CanonicalContent {
+        let query = try database.prepare("SELECT id FROM contents WHERE itemID=? AND revisionOrdinal=0",
+                                         bindings: [.text(itemID.rawValue.uuidString)])
+        defer { query.finalize() }
+        guard try query.step() else { throw corrupt }
+        let loaded = try content(id: uuid(query.text(at: 0)), itemID: itemID,
+                                 in: database, blobStore: blobStore, limits: limits)
+        var representations: [CanonicalRepresentation] = []
+        for (representation, fingerprint) in zip(loaded.content.representations, loaded.fingerprints) {
+            guard let fingerprint else { throw corrupt }
+            representations.append(CanonicalRepresentation(content: representation, fingerprint: fingerprint))
+        }
+        do { return try CanonicalContent(representations: representations) }
+        catch { throw corrupt }
+    }
+
+    internal static func effective(itemID: HistoryItemID, in database: SQLiteDatabase,
+                                   blobStore: ImmutableBlobStore, limits: HistoryLimits = .standard)
+        throws -> (item: HistoryItemReference, content: EffectiveContent) {
+        guard let metadata = try metadata(itemID: itemID, in: database, limits: limits) else {
+            throw HistoryFailure.notFound(itemID)
+        }
+        let loaded = try content(id: metadata.currentContentID, itemID: itemID,
+                                 in: database, blobStore: blobStore, limits: limits)
+        // The same current-lineage relationships as purpose-specific reads
+        // (SQLiteContentReads.currentContent). A valid FK to Canonical is
+        // not a valid active pointer once any immutable revision exists.
+        guard metadata.revisionCount == 0 ? loaded.metadata.ordinal == 0 : loaded.metadata.ordinal > 0,
+              loaded.metadata.ordinal == 0 ? loaded.metadata.byteCount == metadata.canonicalBytes
+                : loaded.metadata.byteCount <= metadata.revisionBytes else { throw corrupt }
+        return (HistoryItemReference(id: itemID, contentVersion: metadata.contentVersion), loaded.content)
+    }
+
+    internal static func contentMetadata(id: UUID, itemID: HistoryItemID, in database: SQLiteDatabase) throws -> HistoryContentMetadata {
+        let row = try database.prepare("""
+            SELECT revisionOrdinal,createdAt,contentByteCount,representationCount
+            FROM contents WHERE id=? AND itemID=?
+            """, bindings: [.text(id.uuidString), .text(itemID.rawValue.uuidString)])
+        defer { row.finalize() }
+        guard try row.step() else { throw corrupt }
+        let ordinal = try integer(row, 0)
+        let createdAt = try Date(timeIntervalSinceReferenceDate: row.real(at: 1))
+        let bytes = try integer(row, 2)
+        let count = try integer(row, 3)
+        guard ordinal >= 0, createdAt.timeIntervalSinceReferenceDate.isFinite, bytes > 0, count > 0 else { throw corrupt }
+        return HistoryContentMetadata(id: id, ordinal: ordinal, createdAt: createdAt, byteCount: bytes, representationCount: count)
+    }
+
+    internal static func content(id: UUID, itemID: HistoryItemID, in database: SQLiteDatabase,
+                                 blobStore: ImmutableBlobStore, limits: HistoryLimits = .standard)
+        throws -> (metadata: HistoryContentMetadata, content: EffectiveContent, fingerprints: [ContentFingerprint?]) {
+        let metadata = try contentMetadata(id: id, itemID: itemID, in: database)
+        guard metadata.representationCount <= limits.maximumRepresentationsPerCaptureOrRevision,
+              metadata.byteCount <= (metadata.ordinal == 0 ? limits.maximumCaptureBytes : limits.maximumProposedRevisionBytes)
+        else { throw corrupt }
+        let rows = try database.prepare("""
+            SELECT ordinal,exactType,typeKey,byteCount,fingerprint,inlineBytes,blobID
+            FROM representations WHERE contentID=? ORDER BY ordinal
+            """, bindings: [.text(id.uuidString)])
+        defer { rows.finalize() }
+        var representations: [ContentRepresentation] = []
+        var fingerprints: [ContentFingerprint?] = []
+        var types = Set<String>()
+        var total = 0
+        while try rows.step() {
+            let type = try rows.text(at: 1)
+            let count = try integer(rows, 3)
+            guard try integer(rows, 0) == representations.count,
+                  !type.isEmpty, type.utf8.count <= limits.maximumTypeIdentifierUTF8Bytes,
+                  try rows.text(at: 2) == type.precomposedStringWithCanonicalMapping,
+                  types.insert(type).inserted, count > 0, count <= limits.maximumRepresentationBytes,
+                  representations.count < metadata.representationCount else { throw corrupt }
+            if let previous = representations.last {
+                guard previous.typeIdentifier.unicodeScalars.lexicographicallyPrecedes(type.unicodeScalars) else { throw corrupt }
+            }
+            let inline = try rows.optionalBlob(at: 5)
+            let blobID = try rows.optionalText(at: 6)
+            let bytes: Data
+            switch (inline, blobID) {
+            case (.some(let value), .none): bytes = value
+            case (.none, .some(let value)): bytes = try blobStore.read(id: uuid(value), expectedByteCount: count)
+            default: throw corrupt
+            }
+            guard bytes.count == count else { throw corrupt }
+            let fingerprint = try rows.optionalBlob(at: 4).map { ContentFingerprint(rawValue: try sqliteUInt64($0)) }
+            guard (metadata.ordinal == 0) == (fingerprint != nil) else { throw corrupt }
+            representations.append(ContentRepresentation(typeIdentifier: type, bytes: bytes))
+            fingerprints.append(fingerprint)
+            total += count
+        }
+        guard representations.count == metadata.representationCount, total == metadata.byteCount else { throw corrupt }
+        if metadata.ordinal > 0 {
+            let canonicalTypes = try database.prepare("""
+                SELECT r.typeKey FROM representations r JOIN contents c ON c.id=r.contentID
+                WHERE c.itemID=? AND c.revisionOrdinal=0
+                """, bindings: [.text(itemID.rawValue.uuidString)])
+            defer { canonicalTypes.finalize() }
+            var allowed = Set<String>()
+            while try canonicalTypes.step() { allowed.insert(try canonicalTypes.text(at: 0)) }
+            guard types.isSubset(of: allowed) else { throw corrupt }
+        }
+        return (metadata, EffectiveContent(representations: representations), fingerprints)
+    }
+
+    internal static func retainedSummary(_ row: SQLiteStatement) throws -> RetainedItemSummary {
+        let date = try Date(timeIntervalSinceReferenceDate: row.real(at: 1))
+        guard date.timeIntervalSinceReferenceDate.isFinite else { throw corrupt }
+        return RetainedItemSummary(id: HistoryItemID(rawValue: try uuid(row.text(at: 0))), lastCopiedAt: date, pinOrdinal: try pin(row, 2))
+    }
+    internal static func uuid(_ value: String) throws -> UUID {
+        guard let id = UUID(uuidString: value), id.uuidString == value else { throw corrupt }
+        return id
+    }
+    internal static func integer(_ row: SQLiteStatement, _ column: Int32) throws -> Int {
+        guard let value = Int(exactly: try row.integer(at: column)) else { throw corrupt }
+        return value
+    }
+    private static func pin(_ row: SQLiteStatement, _ column: Int32) throws -> PinOrdinal? {
+        guard try !row.isNull(at: column) else { return nil }
+        let ordinal = try integer(row, column)
+        guard ordinal >= 0 else { throw corrupt }
+        return PinOrdinal(rawValue: ordinal)
+    }
+    private static var corrupt: HistoryFailure { .persistence(.corruptStoredValue) }
+}
+
 internal enum IngestFactLoader {
-    /// The result of one capture fact load.
-    internal struct LoadResult: Sendable {
-        /// The proven-complete facts for `planCapture` (docs/02-domain.md
-        /// §5.1). The Domain planner is never invoked with a partial fact.
-        internal let facts: IngestFacts
-
-        /// The Signature Index value the Authority retains after this load:
-        /// the input index unchanged when it was already `.ready` for the
-        /// current retained count, otherwise the complete rebuild this load
-        /// performed (§7.1 step 1, §12). The load itself applies no delta and
-        /// marks nothing unready; index mutation on commit stays on the §11
-        /// post-commit path.
-        internal let signatureIndex: SignatureIndex
-    }
-
-    /// Loads the complete capture facts for one prepared capture.
-    /// docs/05-authority-kernel.md §7.1
-    ///
-    /// - Parameters:
-    ///   - context: the operation-local `ModelContext` created by
-    ///     `HistoryAuthority` for this commit interval (§5).
-    ///   - prepared: the off-Authority prepared capture; supplies the
-    ///     incoming Canonical Content (for signature entries) and the
-    ///     lineage-hint observation and minted `candidateID` whose occupancy
-    ///     is read independently of signature candidacy (docs/02 §7).
-    ///   - signatureIndex: the Authority-owned index value at interval start;
-    ///     a rebuild is a wholesale value constructed by
-    ///     `SignatureIndex.build` (§12).
-    ///   - retention: current count policy, read in this same interval.
-    ///   - limits: the fixed `HistoryLimits.standard` safety profile
-    ///     (docs/06-cross-cutting.md §2).
-    /// - Throws: `.temporarilyUnavailable(.dedupIndexRebuild)` when the index
-    ///   cannot be rebuilt to a proved-complete state (§16, WS5);
-    ///   `.temporarilyUnavailable(.factProof)` when a fact fetch cannot
-    ///   complete (docs/02 §5.1); codec-mapped
-    ///   `.persistence(.corruptStoredValue)` for corrupt stored values;
-    ///   `.persistence(.invariantViolation)` for durable-state invariant
-    ///   violations other than capture's WS5 over-bound set (duplicate
-    ///   business IDs or same-interval store/index divergence).
-    internal static func loadFacts(
-        in context: ModelContext,
-        prepared: PreparedCapture,
-        signatureIndex: SignatureIndex,
-        retention: RetentionPolicy,
-        limits: HistoryLimits = .standard
-    ) throws -> LoadResult {
-        // Counts do not materialize the retained inventory. Startup and each
-        // isolated post-commit delta own complete index membership; the normal
-        // capture path only fetches actual candidates and possible victims.
-        let retainedCount: Int
-        let unpinnedCount: Int
-        do {
-            retainedCount = try context.fetchCount(FetchDescriptor<HistoryItemRow>())
-            unpinnedCount = try context.fetchCount(FetchDescriptor<HistoryItemRow>(
-                predicate: #Predicate { $0.pinOrdinal == nil }
-            ))
-        } catch {
-            throw HistoryFailure.temporarilyUnavailable(.dedupIndexRebuild)
+    internal static func loadFacts(in database: SQLiteDatabase, blobStore: ImmutableBlobStore,
+                                   prepared: PreparedCapture, retention: RetentionPolicy,
+                                   limits: HistoryLimits = .standard) throws -> IngestFacts {
+        var match: CaptureMatch?
+        if let hintedID = prepared.origin.lineageHint,
+           let metadata = try HistoryItemRowHydration.metadata(itemID: hintedID, in: database, limits: limits) {
+            let effective = try HistoryItemRowHydration.effective(itemID: hintedID, in: database, blobStore: blobStore, limits: limits)
+            match = confirmLineageCapture(incoming: prepared.canonical, effective: effective.content,
+                                          id: hintedID, occurrence: metadata.occurrence, pinOrdinal: metadata.pinOrdinal)
         }
-        guard retainedCount <= limits.hardMaximumRetainedItems else {
-            throw HistoryFailure.temporarilyUnavailable(.dedupIndexRebuild)
+        if match == nil {
+            var sql = """
+                SELECT c.itemID FROM representations r JOIN contents c ON c.id=r.contentID
+                WHERE c.revisionOrdinal=0 AND r.typeKey=? AND r.byteCount=? AND r.fingerprint=?
+                """
+            var bindings: [SQLiteValue] = []
+            for (index, representation) in prepared.canonical.representations.enumerated() {
+                if index > 0 {
+                    sql += " AND EXISTS(SELECT 1 FROM representations s WHERE s.contentID=c.id AND s.typeKey=? AND s.byteCount=? AND s.fingerprint=?)"
+                }
+                bindings += [.text(representation.content.typeIdentifier.precomposedStringWithCanonicalMapping),
+                             .integer(Int64(representation.content.bytes.count)), .blob(sqliteUInt64(representation.fingerprint.rawValue))]
+            }
+            let candidates = try database.prepare(sql, bindings: bindings)
+            defer { candidates.finalize() }
+            var winner: CanonicalCaptureMatch?
+            while try candidates.step() {
+                let itemID = HistoryItemID(rawValue: try HistoryItemRowHydration.uuid(candidates.text(at: 0)))
+                let confirmed = try autoreleasepool {
+                    guard let metadata = try HistoryItemRowHydration.metadata(itemID: itemID, in: database, limits: limits) else {
+                        throw HistoryFailure.persistence(.invariantViolation)
+                    }
+                    let canonical = try HistoryItemRowHydration.canonical(itemID: itemID, in: database, blobStore: blobStore, limits: limits)
+                    return confirmCanonicalCapture(incoming: prepared.canonical, existing: canonical,
+                        id: itemID, occurrence: metadata.occurrence, pinOrdinal: metadata.pinOrdinal)
+                }
+                if let confirmed {
+                    winner = winner.map { preferredCanonicalCaptureMatch($0, confirmed) } ?? confirmed
+                }
+            }
+            match = winner?.value
         }
-
-        // §7.1 step 1: require a ready index at the retained count;
-        // otherwise attempt one complete authoritative rebuild (§12). The
-        // current hard-capped rebuild decodes Canonical and recomputes xxh3;
-        // this full hydration runs ONLY on the unready/stale branch and must
-        // not survive the U-scale index replacement (DATA-11).
-        let index: SignatureIndex
-        if case .ready = signatureIndex.state, signatureIndex.itemCount == retainedCount {
-            index = signatureIndex
-        } else {
-            index = try rebuildSignatureIndex(
-                in: context,
-                expectedRetainedCount: retainedCount,
-                limits: limits
-            )
-        }
-
-        // §7.1 step 2 (docs/02-domain.md §9.1): intersect the posting sets
-        // of all incoming signature entries — the complete
-        // Canonical-containment candidate ID set for a ready index. The
-        // entries derive from the prepared Canonical Content exactly as at
-        // §6.1 step 6. `nil` (index unready) is unreachable after the
-        // readiness resolution above and would be an internal contradiction.
-        let incomingEntries = prepared.canonical.representations.map { representation in
-            ContentSignatureEntry(
-                typeIdentifier: representation.content.typeIdentifier,
-                fingerprint: representation.fingerprint,
-                byteCount: representation.content.bytes.count
-            )
-        }
-        guard let candidateIDs = index.candidateIDs(matching: incomingEntries) else {
+        let state = try database.prepare("SELECT retainedItemCount,pinnedItemCount FROM history_state WHERE key='retained-history'")
+        defer { state.finalize() }
+        guard try state.step() else { throw HistoryFailure.persistence(.invariantViolation) }
+        let retained = try HistoryItemRowHydration.integer(state, 0)
+        let pinned = try HistoryItemRowHydration.integer(state, 1)
+        guard retained >= 0, retained <= limits.hardMaximumRetainedItems, pinned >= 0, pinned <= retained else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
-
-        // §7.1 step 3: fetch and fully decode every candidate in
-        // deterministic ID order (D9's tie-breaker must never depend on
-        // fetch or dictionary iteration order).
-        var candidates: [HistoryItemState] = []
-        candidates.reserveCapacity(candidateIDs.count)
-        for candidateID in candidateIDs.sorted() {
-            guard let row = try HistoryItemRowHydration.fetchRow(
-                businessID: candidateID,
-                in: context
-            ) else {
-                // The index named an item the store does not retain:
-                // index/store divergence is an internal invariant failure.
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
-            candidates.append(try HistoryItemRowHydration.hydrate(row, limits: limits))
+        let unpinned = retained - pinned
+        let possibleVictims = max(0, max(unpinned + 1 - retention.maximumUnpinnedItems,
+                                       retained + 1 - limits.hardMaximumRetainedItems))
+        var oldest: [RetainedItemSummary] = []
+        if possibleVictims > 0 {
+            let rows = try database.prepare("SELECT id,lastCopiedAt,pinOrdinal FROM history_items WHERE pinOrdinal IS NULL ORDER BY lastCopiedAt,id LIMIT ?",
+                                            bindings: [.integer(Int64(possibleVictims + 1))])
+            defer { rows.finalize() }
+            while try rows.step() { oldest.append(try HistoryItemRowHydration.retainedSummary(rows)) }
         }
-
-        // §7.1 step 4: the lineage hint is fetched separately by business ID
-        // even when it is absent from the candidate intersection
-        // (docs/01-architecture.md §5.1). A hint naming no retained row
-        // decodes to `nil` — the lineage lane simply has no candidate.
-        var hintedItem: HistoryItemState?
-        if let hint = prepared.origin.lineageHint {
-            if let candidate = candidates.first(where: { $0.id == hint }) {
-                hintedItem = candidate
-            } else if let row = try HistoryItemRowHydration.fetchRow(businessID: hint, in: context) {
-                hintedItem = try HistoryItemRowHydration.hydrate(row, limits: limits)
-            }
-        }
-
-        let candidateUUID = prepared.candidateID.rawValue
-        let candidateIDExists: Bool
-        do {
-            candidateIDExists = try context.fetchCount(FetchDescriptor<HistoryItemRow>(
-                predicate: #Predicate { $0.id == candidateUUID }
-            )) > 0
-        } catch {
-            throw HistoryFailure.temporarilyUnavailable(.factProof)
-        }
-        // An insertion is the largest possible count increase. One extra
-        // oldest row lets the planner exclude a coalescing primary without
-        // reading the next slice. With a satisfied policy this is at most two
-        // scalar rows, independent of retained history size (02 §12).
-        let maximumVictims = max(
-            0,
-            max(
-                unpinnedCount + 1 - retention.maximumUnpinnedItems,
-                retainedCount + 1 - limits.hardMaximumRetainedItems
-            )
-        )
-        let oldest: [RetainedItemSummary]
-        if maximumVictims > 0 {
-            var descriptor = FetchDescriptor<HistoryItemRow>(
-                predicate: #Predicate { $0.pinOrdinal == nil },
-                sortBy: [
-                    SortDescriptor(\.lastCopiedAt),
-                    SortDescriptor(\.idOrder, comparator: .lexical),
-                ]
-            )
-            descriptor.propertiesToFetch = [\.id, \.lastCopiedAt, \.pinOrdinal]
-            descriptor.fetchLimit = maximumVictims + 1
-            let rows: [HistoryItemRow]
-            do {
-                rows = try context.fetch(descriptor)
-            } catch {
-                throw HistoryFailure.temporarilyUnavailable(.factProof)
-            }
-            oldest = try rows.map { try HistoryItemRowHydration.retainedSummary(of: $0) }
-        } else {
-            oldest = []
-        }
-        let facts = IngestFacts(
-            hintedItem: hintedItem,
-            candidates: CompleteDedupCandidates(items: candidates),
-            candidateIDExists: candidateIDExists,
-            retention: CaptureRetentionFacts(
-                retainedCount: retainedCount,
-                unpinnedCount: unpinnedCount,
-                oldestUnpinnedItems: oldest
-            )
-        )
-        return LoadResult(facts: facts, signatureIndex: index)
-    }
-
-    /// Rebuilds the complete Signature Index from every retained row's
-    /// Canonical and signature blobs within the hard item bound, recomputing
-    /// xxh3 before declaring the entries authoritative negative evidence.
-    /// docs/05-authority-kernel.md §7.1 step 1, §12 ("Ready means every
-    /// retained row contributes every Canonical signature entry exactly
-    /// once"), §13; DATA-11.
-    ///
-    /// This full Canonical pass occurs only when the existing index is
-    /// unready/stale, remains capped by `hardMaximumRetainedItems`, never
-    /// decodes revision blobs, and must not survive the U-scale index
-    /// replacement. Failure mapping (§16, docs/02-domain.md §5.1, and
-    /// `SignatureIndexRejection`'s documented capture-path mapping):
-    ///
-    /// - a framework fetch failure, an over-bound retained set, or a
-    ///   `SignatureIndex.build` rejection means the index cannot be rebuilt
-    ///   to a proved-complete state →
-    ///   `.temporarilyUnavailable(.dedupIndexRebuild)` (the WS5 path,
-    ///   docs/06-cross-cutting.md §8);
-    /// - a corrupt Canonical/signature blob or authoritative fingerprint
-    ///   coverage failure is a decode failure →
-    ///   `.persistence(.corruptStoredValue)` via the codec mapping (the §13
-    ///   stance: corrupt durable signature metadata fails closed rather than
-    ///   enabling writes from an unproved state);
-    /// - a duplicate business ID, or a rebuild row set that disagrees with
-    ///   the retained set fetched earlier in the same interval, is
-    ///   `.persistence(.invariantViolation)`.
-    private static func rebuildSignatureIndex(
-        in context: ModelContext,
-        expectedRetainedCount: Int,
-        limits: HistoryLimits
-    ) throws -> SignatureIndex {
-        var descriptor = FetchDescriptor<HistoryItemRow>()
-        descriptor.propertiesToFetch = [
-            \.id,
-            \.canonicalBlob,
-            \.canonicalSignatureBlob,
-        ]
-        descriptor.fetchLimit = limits.hardMaximumRetainedItems + 1
-        let rows: [HistoryItemRow]
-        do {
-            rows = try context.fetch(descriptor)
-        } catch {
-            throw HistoryFailure.temporarilyUnavailable(.dedupIndexRebuild)
-        }
-        guard rows.count <= limits.hardMaximumRetainedItems else {
-            throw HistoryFailure.temporarilyUnavailable(.dedupIndexRebuild)
-        }
-        var signatures: [HistoryItemID: [ContentSignatureEntry]] = [:]
-        signatures.reserveCapacity(rows.count)
-        for row in rows {
-            let itemID = HistoryItemID(rawValue: row.id)
-            // DATA-11 capped-only proof: an unready/stale index cannot use
-            // structurally valid signature metadata as negative evidence
-            // until xxh3 has been recomputed from authoritative Canonical
-            // bytes. The ready fast path above never enters this full scan;
-            // revision blobs remain untouched.
-            let entries = try mapCodecFailure {
-                try SignatureBlobCodec.decodeAuthoritativeEntries(
-                    canonicalBlob: row.canonicalBlob,
-                    signatureBlob: row.canonicalSignatureBlob,
-                    limits: limits
-                )
-            }
-            guard signatures.updateValue(entries, forKey: itemID) == nil else {
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
-        }
-        // The complete rebuild fetch and earlier count share one isolated
-        // interval. Unique IDs plus equal counts establish its coverage.
-        guard signatures.count == expectedRetainedCount else {
-            throw HistoryFailure.persistence(.invariantViolation)
-        }
-        do {
-            return try SignatureIndex.build(from: signatures, limits: limits)
-        } catch is SignatureIndexRejection {
-            // A build rejection on the capture-time rebuild path means the
-            // index could not be rebuilt to a proved-complete state (§16) —
-            // the WS5 failure producer (docs/06-cross-cutting.md §8).
-            throw HistoryFailure.temporarilyUnavailable(.dedupIndexRebuild)
-        }
+        let occupancy = try database.prepare("SELECT 1 FROM history_items WHERE id=?", bindings: [.text(prepared.candidateID.rawValue.uuidString)])
+        defer { occupancy.finalize() }
+        return IngestFacts(confirmedMatch: match, candidateIDExists: try occupancy.step(),
+            retention: CaptureRetentionFacts(retainedCount: retained, unpinnedCount: unpinned, oldestUnpinnedItems: oldest))
     }
 }

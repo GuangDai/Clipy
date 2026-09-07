@@ -5,7 +5,7 @@
 ///
 /// A live probe child owns the store through the public facade (holding the
 /// StoreRoot lease); a second process's open of the SAME root must fail with
-/// the typed `.persistence(.storeAlreadyOpen)` before any `ModelContainer`
+/// the typed `.persistence(.storeAlreadyOpen)` before any database connection
 /// exists; after the owner's CLEAN exit — stdin EOF, ordinary process
 /// termination — a fresh child reacquires. The record lock is released by
 /// the kernel on any process exit, so no stale-lease reclamation exists to
@@ -46,14 +46,14 @@ struct StoreRootLeaseTests {
             withIntermediateDirectories: false
         )
         defer { try? FileManager.default.removeItem(at: storeRoot) }
-        let storeURL = storeRoot.appendingPathComponent("history.store")
+        let storeURL = storeRoot.appendingPathComponent("history.sqlite")
 
         let first = try StoreRootLease.acquire(storeURL: storeURL)
         let second = try StoreRootLease.acquire(storeURL: storeURL)
         withExtendedLifetime((first, second)) {
             #expect(FileManager.default.fileExists(
                 atPath: storeURL.deletingLastPathComponent()
-                    .appendingPathComponent("history.store.lease").path
+                    .appendingPathComponent("history.sqlite.lease").path
             ))
         }
     }
@@ -76,7 +76,7 @@ struct StoreRootLeaseTests {
             withIntermediateDirectories: false
         )
         defer { try? FileManager.default.removeItem(at: storeRoot) }
-        let storeURL = storeRoot.appendingPathComponent("history.store")
+        let storeURL = storeRoot.appendingPathComponent("history.sqlite")
 
         // Owner child: opens through the public facade, reports the held
         // lease with the READY marker, then parks until stdin EOF.

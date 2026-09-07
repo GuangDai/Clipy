@@ -16,7 +16,7 @@
 /// step-5 clauses — the `.coalesced` receipt with the unchanged winner ID
 /// and Content Version, the incremented occurrence count, and the monotone
 /// recency/source durability as seen through the INDEPENDENT second
-/// `ModelContainer` over the same on-disk store (see `WSSupport`).
+/// `SQLite connection` over the same on-disk store (see `WSSupport`).
 import Foundation
 import HistoryCore
 import HistoryDomain
@@ -77,7 +77,7 @@ struct WS19OutOfOrderCaptureTests {
     #expect(reference.contentVersion.rawValue == 1)
 
     // Storage side, through the INDEPENDENT container: no second row.
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
     #expect(rows.count == 1)
     let row = try #require(rows.first)
@@ -100,7 +100,7 @@ struct WS19OutOfOrderCaptureTests {
     #expect(row.firstSource == source)
 
     // Canonical Content is untouched by the fold (docs/02-domain.md D2).
-    let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
+    let canonical = try WSSupport.fetchCanonical(itemID: row.id, in: container)
     #expect(canonical.representations.map(\.content.typeIdentifier) == ["public.utf8-plain-text"])
     #expect(canonical.representations.map(\.content.bytes) == [Data(text.utf8)])
 
@@ -155,7 +155,7 @@ struct WS19OutOfOrderCaptureTests {
     #expect(reference.contentVersion.rawValue == 1)
 
     // Storage side, through the INDEPENDENT container.
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
     #expect(rows.count == 1)
     let row = try #require(rows.first)

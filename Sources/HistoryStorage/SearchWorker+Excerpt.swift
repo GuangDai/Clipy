@@ -3,7 +3,6 @@
 import Foundation
 import HistoryCore
 import HistoryDomain
-import SwiftData
 
 extension SearchWorker {
     // MARK: - Body excerpt (03b §8)

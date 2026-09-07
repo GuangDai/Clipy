@@ -10,8 +10,8 @@ import Testing
 @MainActor
 struct DragItemProviderHistoryTests {
     @Test func hiddenTypeFailsWhileNULAndOpaqueSiblingsKeepTheFirstCurrentPayload() async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let original = try await Self.capture(history)
         let state = HistoryViewState(history: history)
@@ -56,8 +56,8 @@ struct DragItemProviderHistoryTests {
     }
 
     @Test func removedItemFailsEveryAdvertisedFormatWithoutChangingThePanelBanner() async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let original = try await Self.capture(history)
         let state = HistoryViewState(history: history)
@@ -79,7 +79,7 @@ struct DragItemProviderHistoryTests {
         "public.utf8-plain-text", "com.clipy.tests.drag-nul", "com.clipy.tests.drag-opaque",
     ]
 
-    private static func capture(_ history: SwiftDataHistory) async throws -> HistoryItemReference {
+    private static func capture(_ history: SQLiteHistory) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.capture(ClipboardCapture(
             representations: [
                 CapturedRepresentation(typeIdentifier: types[0], bytes: Data("original text".utf8)),
@@ -99,7 +99,7 @@ struct DragItemProviderHistoryTests {
     }
 
     private static func revise(
-        _ history: SwiftDataHistory,
+        _ history: SQLiteHistory,
         reference: HistoryItemReference,
         hidden: Bool,
         nulBytes: Data,

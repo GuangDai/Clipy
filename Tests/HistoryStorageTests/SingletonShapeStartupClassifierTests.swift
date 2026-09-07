@@ -1,401 +1,160 @@
-/// DATA-1 startup-shape proofs (`05` §13; deep review Card 1A-1).
-///
-/// The production seam is a persistent `SwiftDataHistory.open`: each fixture
-/// first creates a real current store and captures one item through the public
-/// boundary, then an independent container damages only one singleton shape.
-/// A second public open must reject the shape. A fresh independent inspector
-/// compares durable singleton, item/blob, retained-byte, and Gateway values
-/// before and after that rejection; this is a durable-value oracle, not
-/// instrumentation claiming that no framework transaction was attempted.
-/// This is a same-process reopen proof; coordinator teardown in a true child
-/// process remains Card 1C evidence rather than an implied claim here.
-///
-/// Surviving item, byte-accounting, Gateway, or journal facts prohibit
-/// restoring a missing config to defaults. Only an empty current-store
-/// bootstrap may create absent configuration.
+/// Missing or malformed authoritative configuration is never bootstrapped
+/// over existing SQLite History/Gateway facts (V2-09 §4).
 import Foundation
 import HistoryCore
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
-@Suite("Authoritative singleton startup shape (DATA-1)")
 struct SingletonShapeStartupClassifierTests {
-    private enum Damage: CaseIterable {
-        case deletePosition
-        case deleteConfig
-        case wrongKeyPosition
-        case extraWrongKeyPosition
-        case wrongKeyConfig
-        case extraWrongKeyConfig
+    enum Damage: CaseIterable, Sendable {
+        case deletePosition, deleteConfig, wrongKeyPosition, extraWrongKeyPosition, wrongKeyConfig, extraWrongKeyConfig
+    }
+    enum SurvivingFact: CaseIterable, Sendable { case item, content, representation }
 
-        var label: String {
-            switch self {
-            case .deletePosition: "missing-position"
-            case .deleteConfig: "missing-config"
-            case .wrongKeyPosition: "wrong-key-position"
-            case .extraWrongKeyPosition: "extra-wrong-key-position"
-            case .wrongKeyConfig: "wrong-key-config"
-            case .extraWrongKeyConfig: "extra-wrong-key-config"
+    @Test(arguments: Damage.allCases)
+    func nonFreshConfigurationDamageFailsWithoutRepair(damage: Damage) async throws {
+        let url = WSSupport.tempStoreURL("sqlite-singleton-damage")
+        defer { WSSupport.removeStore(url) }
+        try await Self.seed(at: url)
+        do {
+            let database = try SQLiteDatabase(url: url)
+            try database.execute("PRAGMA ignore_check_constraints = ON")
+            switch damage {
+            case .deletePosition: try database.execute("DELETE FROM history_state")
+            case .deleteConfig: try database.execute("DELETE FROM retention_policies")
+            case .wrongKeyPosition: try database.execute("UPDATE history_state SET key = 'wrong-position'")
+            case .extraWrongKeyPosition:
+                try database.execute("INSERT INTO history_state SELECT 'wrong-position',changePosition,maximumUnpinnedItems,retainedItemCount,pinnedItemCount,canonicalBytes,revisionBytes FROM history_state")
+            case .wrongKeyConfig: try database.execute("UPDATE retention_policies SET key = 'wrong-config'")
+            case .extraWrongKeyConfig:
+                try database.execute("INSERT INTO retention_policies SELECT 'wrong-config',ageMaxSeconds,storageMaxBytes,revisionMaxCount,revisionMaxBytes FROM retention_policies")
             }
         }
+        let before = try Self.snapshot(at: url)
+        await #expect(throws: HistoryFailure.persistence(.invariantViolation)) { try await WSSupport.openHistory(storeURL: url) }
+        #expect(try Self.snapshot(at: url) == before)
     }
 
-    private struct PositionSnapshot: Equatable {
-        let key: String
-        let rawValue: UInt64
-        let maximumUnpinnedItems: Int
+    @Test(arguments: SurvivingFact.allCases)
+    func anySurvivingHistoryFactPreventsFreshDefaults(fact: SurvivingFact) async throws {
+        let url = WSSupport.tempStoreURL("sqlite-singleton-surviving-fact")
+        defer { WSSupport.removeStore(url) }
+        try await Self.seed(at: url)
+        do {
+            let database = try SQLiteDatabase(url: url)
+            // Fault injection isolates each table's surviving fact instead of
+            // allowing FK cascade to erase the very evidence under test.
+            try database.execute("PRAGMA foreign_keys = OFF")
+            try Self.removeLaterConfiguration(in: database)
+            try database.execute("DELETE FROM history_state")
+            try database.execute("DELETE FROM retention_policies")
+            switch fact {
+            case .item:
+                try database.execute("DELETE FROM representations"); try database.execute("DELETE FROM contents")
+            case .content:
+                try database.execute("DELETE FROM representations"); try database.execute("DELETE FROM history_items")
+            case .representation:
+                try database.execute("DELETE FROM contents"); try database.execute("DELETE FROM history_items")
+            }
+        }
+        let before = try Self.snapshot(at: url)
+        #expect(before.positions.isEmpty && before.policies.isEmpty)
+        #expect(!before.itemIDs.isEmpty || !before.contentIDs.isEmpty || !before.representations.isEmpty)
+        await #expect(throws: HistoryFailure.persistence(.invariantViolation)) { try await WSSupport.openHistory(storeURL: url) }
+        #expect(try Self.snapshot(at: url) == before)
+    }
 
-        init(_ row: LastChangePositionRow) {
-            key = row.key
-            rawValue = row.rawValue
-            maximumUnpinnedItems = row.maximumUnpinnedItems
+    @Test(arguments: [false, true])
+    func clearedHistoryStillCannotBootstrapMissingConfiguration(removePolicies: Bool) async throws {
+        let url = WSSupport.tempStoreURL("sqlite-singleton-cleared")
+        defer { WSSupport.removeStore(url) }
+        try await Self.seed(at: url, clear: true)
+        do {
+            let database = try SQLiteDatabase(url: url)
+            try Self.removeLaterConfiguration(in: database)
+            if removePolicies { try database.execute("DELETE FROM retention_policies") }
+        }
+        let before = try Self.snapshot(at: url)
+        #expect(before.itemIDs.isEmpty && before.contentIDs.isEmpty && before.representations.isEmpty)
+        #expect(before.positions.first?[1] == .blob(sqliteUInt64(2)))
+        await #expect(throws: HistoryFailure.persistence(.invariantViolation)) { try await WSSupport.openHistory(storeURL: url) }
+        #expect(try Self.snapshot(at: url) == before)
+    }
+
+    @Test func gatewayOnlyStatePreventsMissingPositionRepair() async throws {
+        let url = WSSupport.tempStoreURL("sqlite-singleton-gateway-only")
+        defer { WSSupport.removeStore(url) }
+        _ = try await WSSupport.openHistory(storeURL: url)
+        do {
+            let database = try SQLiteDatabase(url: url)
+            try database.execute("DELETE FROM history_state")
+            try database.execute("DELETE FROM retention_policies")
+        }
+        let before = try Self.snapshot(at: url)
+        #expect(before.itemIDs.isEmpty && !before.gateway.connections.isEmpty)
+        await #expect(throws: HistoryFailure.persistence(.invariantViolation)) { try await WSSupport.openHistory(storeURL: url) }
+        #expect(try Self.snapshot(at: url) == before)
+    }
+
+    private static func seed(at url: URL, clear: Bool = false) async throws {
+        let history = try await WSSupport.openHistory(storeURL: url)
+        _ = try await history.perform(.capture(WSSupport.textCapture("retained singleton evidence", observedAt: Date(timeIntervalSinceReferenceDate: 1000))))
+        if clear { _ = try await history.perform(.clear(.all)) }
+    }
+
+    private static func removeLaterConfiguration(in database: SQLiteDatabase) throws {
+        for table in ["grants", "operation_records", "connections", "gateway_config", "history_change_records", "journal_config"] {
+            try database.execute("DELETE FROM \(table)")
         }
     }
 
-    private struct ConfigSnapshot: Equatable {
-        let key: String
-        let agePolicyEnabled: Bool
-        let ageMaxSeconds: Double
-        let storagePolicyEnabled: Bool
-        let storageMaxBytes: Int
-        let revisionPolicyEnabled: Bool
-        let revisionMaxCount: Int?
-        let revisionMaxBytes: Int?
-        let configSchemaVersion: UInt16
-
-        init(_ row: RetentionExpansionConfigRow) {
-            key = row.key
-            agePolicyEnabled = row.agePolicyEnabled
-            ageMaxSeconds = row.ageMaxSeconds
-            storagePolicyEnabled = row.storagePolicyEnabled
-            storageMaxBytes = row.storageMaxBytes
-            revisionPolicyEnabled = row.revisionPolicyEnabled
-            revisionMaxCount = row.revisionMaxCount
-            revisionMaxBytes = row.revisionMaxBytes
-            configSchemaVersion = row.configSchemaVersion
-        }
-    }
-
-    private struct ItemSnapshot: Equatable {
-        let id: UUID
-        let contentVersionRaw: UInt64
-        let canonicalBlob: Data
-        let revisionStateBlob: Data
-        let canonicalSignatureBlob: Data
-
-        init(_ row: HistoryItemRow) {
-            id = row.id
-            contentVersionRaw = row.contentVersionRaw
-            canonicalBlob = row.canonicalBlob
-            revisionStateBlob = row.revisionStateBlob
-            canonicalSignatureBlob = row.canonicalSignatureBlob
-        }
-    }
-
-    private struct RetainedBytesSnapshot: Equatable {
-        let itemID: UUID
-        let canonicalBytes: Int
-        let revisionCount: Int
-        let revisionBytes: Int
-        let bytesSchemaVersion: UInt16
-
-        init(_ row: RetainedBytesRow) {
-            itemID = row.itemID
-            canonicalBytes = row.canonicalBytes
-            revisionCount = row.revisionCount
-            revisionBytes = row.revisionBytes
-            bytesSchemaVersion = row.bytesSchemaVersion
-        }
-    }
-
-    private struct StoreSnapshot: Equatable {
-        let positions: [PositionSnapshot]
-        let configs: [ConfigSnapshot]
-        let items: [ItemSnapshot]
-        let retainedBytes: [RetainedBytesSnapshot]
+    private struct Snapshot: Equatable {
+        let positions: [[SQLiteValue]]
+        let policies: [[SQLiteValue]]
+        let itemIDs: [String]
+        let contentIDs: [String]
+        let representations: [[SQLiteValue]]
         let gateway: GatewayStoreSnapshot
     }
 
-    private static func makeContainer(at storeURL: URL) throws -> ModelContainer {
-        let schema = historySchema
-        return try ModelContainer(
-            for: schema,
-            configurations: [ModelConfiguration(
-                schema: schema,
-                url: storeURL,
-                cloudKitDatabase: .none
-            )]
-        )
-    }
-
-    private static func seedExistingCurrentStore(
-        at storeURL: URL, clearAfterCapture: Bool = false
-    ) async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(
-                persistence: .persistent(storeURL: storeURL),
-                initialMaximumUnpinnedItems: 321
-            )
-        )
-        _ = try await history.perform(.capture(WSSupport.textCapture(
-            "singleton-shape",
-            observedAt: Date(timeIntervalSince1970: 1_700_000_000)
-        )))
-        if clearAfterCapture {
-            _ = try await history.perform(.clear(.all))
-        }
-    }
-
-    private static func seedFreshCurrentStore(at storeURL: URL) async throws {
-        _ = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(
-                persistence: .persistent(storeURL: storeURL),
-                initialMaximumUnpinnedItems: 321
-            )
-        )
-    }
-
-    /// Remove later-owner evidence to isolate the retained item / byte row
-    /// guards. The source store was created and captured through real History.
-    private static func leaveHistoryFactWithoutConfiguration(
-        at storeURL: URL,
-        removeRetentionConfig: Bool,
-        keepItem: Bool,
-        forceFreshPosition: Bool = false
-    ) throws {
-        let context = ModelContext(try makeContainer(at: storeURL))
-        context.autosaveEnabled = false
-        if forceFreshPosition {
-            let position = try #require(context.fetch(FetchDescriptor<LastChangePositionRow>()).first)
-            position.rawValue = 0
-        }
-        if removeRetentionConfig {
-            for row in try context.fetch(FetchDescriptor<RetentionExpansionConfigRow>()) {
-                context.delete(row)
+    private static func snapshot(at url: URL) throws -> Snapshot {
+        let database = try SQLiteDatabase(url: url, readOnly: true)
+        return try database.readTransaction {
+            let position = try database.prepare("SELECT key,changePosition,maximumUnpinnedItems,retainedItemCount,pinnedItemCount,canonicalBytes,revisionBytes FROM history_state ORDER BY key")
+            defer { position.finalize() }
+            var positions: [[SQLiteValue]] = []
+            while try position.step() {
+                positions.append(try [.text(position.text(at: 0)), .blob(position.blob(at: 1)), .integer(position.integer(at: 2)),
+                    .integer(position.integer(at: 3)), .integer(position.integer(at: 4)), .integer(position.integer(at: 5)), .integer(position.integer(at: 6))])
             }
-        }
-        for row in try context.fetch(FetchDescriptor<GatewayConfigRow>()) { context.delete(row) }
-        for row in try context.fetch(FetchDescriptor<ConnectionRow>()) { context.delete(row) }
-        for row in try context.fetch(FetchDescriptor<GrantRow>()) { context.delete(row) }
-        for row in try context.fetch(FetchDescriptor<OperationRecordRow>()) { context.delete(row) }
-        for row in try context.fetch(FetchDescriptor<HistoryChangeRecordRow>()) { context.delete(row) }
-        for row in try context.fetch(FetchDescriptor<JournalConfigRow>()) { context.delete(row) }
-        if keepItem {
-            for row in try context.fetch(FetchDescriptor<RetainedBytesRow>()) { context.delete(row) }
-        } else {
-            for row in try context.fetch(FetchDescriptor<HistoryItemRow>()) { context.delete(row) }
-        }
-        try context.save()
-    }
-
-    private static func deletePositionAndRetentionConfig(
-        at storeURL: URL
-    ) throws {
-        let context = ModelContext(try makeContainer(at: storeURL))
-        context.autosaveEnabled = false
-        let position = try #require(
-            context.fetch(FetchDescriptor<LastChangePositionRow>()).first
-        )
-        let config = try #require(
-            context.fetch(FetchDescriptor<RetentionExpansionConfigRow>()).first
-        )
-        context.delete(position)
-        context.delete(config)
-        try context.save()
-    }
-
-    private static func damage(_ damage: Damage, at storeURL: URL) throws {
-        let context = ModelContext(try makeContainer(at: storeURL))
-        context.autosaveEnabled = false
-        let positions = try context.fetch(FetchDescriptor<LastChangePositionRow>())
-        let position = try #require(positions.first)
-        let configs = try context.fetch(FetchDescriptor<RetentionExpansionConfigRow>())
-        let config = try #require(configs.first)
-
-        switch damage {
-        case .deletePosition:
-            context.delete(position)
-        case .deleteConfig:
-            context.delete(config)
-        case .wrongKeyPosition:
-            position.key = "wrong-position"
-        case .extraWrongKeyPosition:
-            context.insert(LastChangePositionRow(
-                key: "wrong-position",
-                rawValue: 41,
-                maximumUnpinnedItems: 444
-            ))
-        case .wrongKeyConfig:
-            config.key = "wrong-config"
-        case .extraWrongKeyConfig:
-            context.insert(RetentionExpansionConfigRow(
-                key: "wrong-config",
-                agePolicyEnabled: true,
-                ageMaxSeconds: 86_400,
-                storagePolicyEnabled: false,
-                storageMaxBytes: 0,
-                revisionPolicyEnabled: false,
-                revisionMaxCount: nil,
-                revisionMaxBytes: nil,
-                configSchemaVersion: 1
-            ))
-        }
-        try context.save()
-    }
-
-    private static func snapshot(at storeURL: URL) throws -> StoreSnapshot {
-        let context = ModelContext(try makeContainer(at: storeURL))
-        let positions = try context.fetch(FetchDescriptor<LastChangePositionRow>())
-            .map(PositionSnapshot.init)
-            .sorted { $0.key < $1.key }
-        let configs = try context.fetch(FetchDescriptor<RetentionExpansionConfigRow>())
-            .map(ConfigSnapshot.init)
-            .sorted { $0.key < $1.key }
-        let items = try context.fetch(FetchDescriptor<HistoryItemRow>())
-            .map(ItemSnapshot.init)
-            .sorted { $0.id.uuidString < $1.id.uuidString }
-        let retainedBytes = try context.fetch(FetchDescriptor<RetainedBytesRow>())
-            .map(RetainedBytesSnapshot.init)
-            .sorted { $0.itemID.uuidString < $1.itemID.uuidString }
-        return StoreSnapshot(
-            positions: positions,
-            configs: configs,
-            items: items,
-            retainedBytes: retainedBytes,
-            gateway: try GatewayStoreSnapshot.read(in: context)
-        )
-    }
-
-    @Test("retained facts prohibit missing configuration defaults even without later tables",
-          arguments: [false, true], [false, true])
-    func retainedFactsPreventMissingConfigurationRepair(
-        removeRetentionConfig: Bool, keepItem: Bool
-    ) async throws {
-        let storeURL = WSSupport.tempStoreURL("missing-config-retained-fact")
-        defer { WSSupport.removeStore(storeURL) }
-        try await Self.seedExistingCurrentStore(at: storeURL)
-        try Self.leaveHistoryFactWithoutConfiguration(
-            at: storeURL, removeRetentionConfig: removeRetentionConfig, keepItem: keepItem,
-            forceFreshPosition: true
-        )
-        let before = try Self.snapshot(at: storeURL)
-        #expect(before.items.count == (keepItem ? 1 : 0))
-        #expect(before.retainedBytes.count == (keepItem ? 0 : 1))
-        #expect(before.configs.count == (removeRetentionConfig ? 0 : 1))
-        // Even a zeroed counter cannot disguise retained facts as fresh.
-        #expect(before.positions.map(\.rawValue) == [0])
-        #expect(before.gateway.configs.isEmpty && before.gateway.connections.isEmpty)
-
-        await #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
-            _ = try await SwiftDataHistory.open(configuration: HistoryConfiguration(
-                persistence: .persistent(storeURL: storeURL), initialMaximumUnpinnedItems: 200
-            ))
-        }
-        // A later orphan check could also fail after incorrectly creating
-        // defaults. Compare durable state, not merely the thrown failure.
-        #expect(try Self.snapshot(at: storeURL) == before)
-        let inspection = ModelContext(try Self.makeContainer(at: storeURL))
-        #expect(try inspection.fetchCount(FetchDescriptor<JournalConfigRow>()) == 0)
-        #expect(try inspection.fetchCount(FetchDescriptor<HistoryChangeRecordRow>()) == 0)
-    }
-
-    @Test("cleared history is not a fresh configuration bootstrap",
-          arguments: [false, true])
-    func nonzeroPositionPreventsMissingConfigurationRepair(removeRetentionConfig: Bool) async throws {
-        let storeURL = WSSupport.tempStoreURL("missing-config-cleared-history")
-        defer { WSSupport.removeStore(storeURL) }
-        try await Self.seedExistingCurrentStore(at: storeURL, clearAfterCapture: true)
-        try Self.leaveHistoryFactWithoutConfiguration(
-            at: storeURL, removeRetentionConfig: removeRetentionConfig, keepItem: true
-        )
-        let before = try Self.snapshot(at: storeURL)
-        #expect(before.items.isEmpty && before.retainedBytes.isEmpty)
-        #expect(before.positions.map(\.rawValue) == [2])
-        #expect(before.configs.count == (removeRetentionConfig ? 0 : 1))
-        #expect(before.gateway.configs.isEmpty && before.gateway.connections.isEmpty)
-        await #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
-            _ = try await SwiftDataHistory.open(configuration: HistoryConfiguration(
-                persistence: .persistent(storeURL: storeURL), initialMaximumUnpinnedItems: 200
-            ))
-        }
-        #expect(try Self.snapshot(at: storeURL) == before)
-        let inspection = ModelContext(try Self.makeContainer(at: storeURL))
-        #expect(try inspection.fetchCount(FetchDescriptor<JournalConfigRow>()) == 0)
-        #expect(try inspection.fetchCount(FetchDescriptor<HistoryChangeRecordRow>()) == 0)
-    }
-
-    @Test("non-fresh singleton corruption is rejected without durable mutation")
-    func nonFreshSingletonCorruptionIsRejectedWithoutDurableMutation() async throws {
-        for damage in Damage.allCases {
-            let storeURL = WSSupport.tempStoreURL(
-                "singleton-shape-\(damage.label)"
-            )
-            defer { WSSupport.removeStore(storeURL) }
-            try await Self.seedExistingCurrentStore(at: storeURL)
-            try Self.damage(damage, at: storeURL)
-            let before = try Self.snapshot(at: storeURL)
-            #expect(before.gateway.configs.count == 1)
-            #expect(before.gateway.connections.count == 1)
-
-            do {
-                _ = try await SwiftDataHistory.open(
-                    configuration: HistoryConfiguration(
-                        persistence: .persistent(storeURL: storeURL),
-                        initialMaximumUnpinnedItems: 200
-                    )
-                )
-                Issue.record("\(damage.label): expected startup rejection")
-            } catch let failure as HistoryFailure {
-                #expect(
-                    failure == .persistence(.invariantViolation),
-                    "\(damage.label): wrong typed failure \(failure)"
-                )
-            } catch {
-                Issue.record("\(damage.label): unexpected error \(error)")
+            let policy = try database.prepare("SELECT key,ageMaxSeconds,storageMaxBytes,revisionMaxCount,revisionMaxBytes FROM retention_policies ORDER BY key")
+            defer { policy.finalize() }
+            var policies: [[SQLiteValue]] = []
+            while try policy.step() {
+                policies.append(try [.text(policy.text(at: 0)),
+                    policy.isNull(at: 1) ? .null : .real(policy.real(at: 1)),
+                    policy.isNull(at: 2) ? .null : .integer(policy.integer(at: 2)),
+                    policy.isNull(at: 3) ? .null : .integer(policy.integer(at: 3)),
+                    policy.isNull(at: 4) ? .null : .integer(policy.integer(at: 4))])
             }
-
-            let after = try Self.snapshot(at: storeURL)
-            #expect(
-                after == before,
-                "\(damage.label): rejected startup must not repair or mutate durable state"
-            )
+            let itemQuery = try database.prepare("SELECT id FROM history_items ORDER BY id")
+            defer { itemQuery.finalize() }
+            var itemIDs: [String] = []
+            while try itemQuery.step() { itemIDs.append(try itemQuery.text(at: 0)) }
+            let contentQuery = try database.prepare("SELECT id FROM contents ORDER BY id")
+            defer { contentQuery.finalize() }
+            var contentIDs: [String] = []
+            while try contentQuery.step() { contentIDs.append(try contentQuery.text(at: 0)) }
+            let representationQuery = try database.prepare("SELECT contentID,ordinal,inlineBytes,blobID FROM representations ORDER BY contentID,ordinal")
+            defer { representationQuery.finalize() }
+            var representations: [[SQLiteValue]] = []
+            while try representationQuery.step() {
+                representations.append(try [.text(representationQuery.text(at: 0)), .integer(representationQuery.integer(at: 1)),
+                    representationQuery.optionalBlob(at: 2).map(SQLiteValue.blob) ?? .null,
+                    representationQuery.optionalText(at: 3).map(SQLiteValue.text) ?? .null])
+            }
+            return try Snapshot(positions: positions, policies: policies, itemIDs: itemIDs, contentIDs: contentIDs,
+                                representations: representations, gateway: GatewayStoreSnapshot.read(in: database))
         }
-    }
-
-    @Test("Gateway-only facts prevent missing-position repair")
-    func gatewayOnlyFactsPreventMissingPositionRepair() async throws {
-        let storeURL = WSSupport.tempStoreURL(
-            "singleton-shape-gateway-only-missing-position"
-        )
-        defer { WSSupport.removeStore(storeURL) }
-        try await Self.seedFreshCurrentStore(at: storeURL)
-        try Self.deletePositionAndRetentionConfig(at: storeURL)
-        let before = try Self.snapshot(at: storeURL)
-        #expect(before.positions.isEmpty)
-        #expect(before.configs.isEmpty)
-        #expect(before.items.isEmpty)
-        #expect(before.retainedBytes.isEmpty)
-        #expect(before.gateway.configs.count == 1)
-        #expect(before.gateway.connections.count == 1)
-
-        do {
-            _ = try await SwiftDataHistory.open(
-                configuration: HistoryConfiguration(
-                    persistence: .persistent(storeURL: storeURL),
-                    initialMaximumUnpinnedItems: 200
-                )
-            )
-            Issue.record("expected Gateway-only position shape to reject")
-        } catch let failure as HistoryFailure {
-            #expect(failure == .persistence(.invariantViolation))
-        } catch {
-            Issue.record("unexpected Gateway-only position error: \(error)")
-        }
-
-        #expect(
-            try Self.snapshot(at: storeURL) == before,
-            "rejected startup must not recreate either missing singleton"
-        )
     }
 }

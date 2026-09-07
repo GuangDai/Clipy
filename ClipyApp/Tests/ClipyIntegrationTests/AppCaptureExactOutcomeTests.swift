@@ -1,7 +1,7 @@
 /// Hosted Card 5B characterization through the complete production capture
 /// boundary: a real named private NSPasteboard, its public lazy-data-provider
 /// API, PasteboardObserver, AppComposition, and the real in-memory
-/// SwiftDataHistory. No failure hook substitutes for the unavailable payload.
+/// SQLiteHistory. No failure hook substitutes for the unavailable payload.
 import AppKit
 import Foundation
 import HistoryCore

@@ -1,23 +1,7 @@
-/// Retention-expansion config bootstrap: load-or-create exactly
-/// one `RetentionExpansionConfigRow` and validate it fail-closed.
-/// Owning spec: `V2-02` §3.3 (`RetentionExpansionConfigRow` singleton,
-/// `configSchemaVersion` contract) and §8.3 (the policy bounds); open order:
-/// `V2-roadmap` §5 M1 total open order step 5 (immediately after the v1
-/// position singleton steps 3–4, before the retained-row scan); DC-21
-/// (persisted non-finite `ageMaxSeconds` never silently reads as
-/// disabled/infinite).
-///
-/// The create is one `ModelContext.transaction` whose success is the durable
-/// boundary, and a store that cannot be read or written fails as
-/// `.persistence(.openStore)` (§2's startup vocabulary). Startup fetches the
-/// complete singleton table: a wrong/extra key or duplicate row is
-/// `.persistence(.invariantViolation)`, never absence followed by repair.
-/// Defaults are created only at position zero before any retained history, byte-accounting,
-/// Gateway, or journal facts exist. Missing config in a populated store is
-/// corruption, never an invitation to replace the user's policy with defaults.
+/// V2-02 §3.3/§8.3; V2-09 §6: retention defaults join the one startup
+/// transaction. Missing configuration in a used store is never repaired.
 import Foundation
 import HistoryCore
-import SwiftData
 
 // MARK: - V2-02 §8.3 policy bounds (package-internal single owner)
 
@@ -117,170 +101,52 @@ internal enum RetentionPolicyBounds {
     }
 }
 
-// MARK: - Config bootstrap (V2-roadmap §5 total open order step 5)
-
 extension HistoryAuthority {
-
-    /// The config singleton's well-known key (`V2-02` §3.3: always
-    /// "retention-expansion").
     internal static let retentionExpansionConfigKey = "retention-expansion"
 
-    /// The only config schema version this reader understands (`V2-02` §3.3;
-    /// the codec discipline of a blob `formatVersion`, `05` §4).
-    internal static let retentionConfigSchemaVersion: UInt16 = 1
-
-    /// Bootstraps/validates the retention-expansion config singleton
-    /// (`V2-roadmap` §5 total open order step 5, M1.3).
-    ///
-    /// An absent row is created with disabled policies only for empty current
-    /// history before later startup owners have durable facts. A present row
-    /// is validated as one unit and fails closed:
-    ///
-    /// - `configSchemaVersion != 1` → `.persistence(.corruptStoredValue)`
-    ///   (forward-incompatible; the codec-discipline analog of an unknown
-    ///   blob `formatVersion`, `05` §4);
-    /// - a non-finite `ageMaxSeconds` → `.persistence(.corruptStoredValue)`
-    ///   (DC-21: out-of-range comparisons cannot catch `NaN`, and a persisted
-    ///   non-finite age never silently reads as disabled/infinite);
-    /// - an out-of-range or contradictory combination →
-    ///   `.persistence(.invariantViolation)`, using the `V2-02` §8.3 bounds:
-    ///   `agePolicyEnabled` with an out-of-range `ageMaxSeconds`;
-    ///   `storagePolicyEnabled` with an out-of-range `storageMaxBytes`;
-    ///   `revisionPolicyEnabled` with BOTH thresholds nil (the named
-    ///   contradiction); any non-nil threshold outside its range.
-    ///
-    /// Cardinality mirrors the v1 singleton (`05` §13 step 4): a wrong key,
-    /// extra row, or duplicate rows are `.persistence(.invariantViolation)`.
-    /// A store that cannot be read or written fails as
-    /// `.persistence(.openStore)` — §2's startup failure vocabulary, which
-    /// does not include `.transaction`.
-    ///
-    /// A history item, retained-byte row, Gateway fact, or HCR fact makes
-    /// absence an invariant violation. A present wrong-key row is likewise
-    /// never treated as absence. These checks inspect current store contents,
-    /// without a provenance marker or a repair path for missing configuration.
+    /// The caller owns the startup write transaction. Present policies use
+    /// the same validator as capture, revise, and the Settings read.
     internal static func ensureRetentionExpansionConfig(
-        in context: ModelContext
+        in database: SQLiteDatabase
     ) throws {
-        let key = retentionExpansionConfigKey
-        var descriptor = FetchDescriptor<RetentionExpansionConfigRow>()
-        descriptor.fetchLimit = 2
-        let rows: [RetentionExpansionConfigRow]
         do {
-            rows = try context.fetch(descriptor)
+            let config = try database.prepare(
+                "SELECT key FROM retention_policies LIMIT 2"
+            )
+            defer { config.finalize() }
+            if try config.step() {
+                guard try config.text(at: 0) == retentionExpansionConfigKey,
+                      try !config.step() else {
+                    throw HistoryFailure.persistence(.invariantViolation)
+                }
+                _ = try RetentionConfigLoading.loadValidatedPolicies(in: database)
+                return
+            }
+
+            let state = try database.prepare("""
+                SELECT key, changePosition, retainedItemCount,
+                    EXISTS(SELECT 1 FROM history_items LIMIT 1)
+                FROM history_state LIMIT 2
+                """)
+            defer { state.finalize() }
+            guard try state.step(),
+                  try state.text(at: 0) == positionSingletonKey,
+                  try sqliteUInt64(state.blob(at: 1)) == 0,
+                  try state.integer(at: 2) == 0,
+                  try state.integer(at: 3) == 0,
+                  try !state.step() else {
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
+            try database.execute("""
+                INSERT INTO retention_policies
+                    (key, ageMaxSeconds, storageMaxBytes,
+                     revisionMaxCount, revisionMaxBytes)
+                VALUES (?, NULL, NULL, NULL, NULL)
+                """, bindings: [.text(retentionExpansionConfigKey)])
+        } catch let failure as HistoryFailure {
+            throw failure
         } catch {
             throw HistoryFailure.persistence(.openStore)
-        }
-        switch rows.count {
-        case 0:
-            let historyIsEmpty: Bool
-            do {
-                var positionDescriptor = FetchDescriptor<LastChangePositionRow>()
-                positionDescriptor.fetchLimit = 2
-                let positions = try context.fetch(positionDescriptor)
-                let itemCount = try context.fetchCount(FetchDescriptor<HistoryItemRow>())
-                let byteRowCount = try context.fetchCount(FetchDescriptor<RetainedBytesRow>())
-                historyIsEmpty = positions.count == 1
-                    && positions[0].key == positionSingletonKey
-                    && positions[0].rawValue == 0
-                    && itemCount == 0 && byteRowCount == 0
-            } catch {
-                throw HistoryFailure.persistence(.openStore)
-            }
-            guard historyIsEmpty,
-                  try gatewayTablesAreEmpty(in: context),
-                  try HCRBootstrap.tablesAreEmpty(in: context) else {
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
-            // Created at fresh open with all policies disabled. One
-            // `ModelContext.transaction`,
-            // exactly like the v1 singleton create (§10: closure success is
-            // the durable boundary; no `save()` follows it).
-            do {
-                try context.transaction {
-                    context.insert(RetentionExpansionConfigRow(
-                        key: key,
-                        agePolicyEnabled: false,
-                        ageMaxSeconds: 0,
-                        storagePolicyEnabled: false,
-                        storageMaxBytes: 0,
-                        revisionPolicyEnabled: false,
-                        revisionMaxCount: nil,
-                        revisionMaxBytes: nil,
-                        configSchemaVersion: retentionConfigSchemaVersion
-                    ))
-                }
-            } catch {
-                throw HistoryFailure.persistence(.openStore)
-            }
-        case 1:
-            guard rows[0].key == key else {
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
-            try validateRetentionExpansionConfig(rows[0])
-        default:
-            // Duplicate singletons (05 §13 step 4 vocabulary): corruption,
-            // never a choose-one repair.
-            throw HistoryFailure.persistence(.invariantViolation)
-        }
-    }
-
-    /// The fail-closed unit validation of one already-stored config row
-    /// (`V2-02` §3.3 "configSchemaVersion contract"). Order is fixed:
-    /// version fence, then DC-21 finiteness, then the §8.3
-    /// range/contradiction checks — so a row violating several contracts
-    /// reports the first in this order.
-    ///
-    /// Internal (not private) because it is the single owner of the stored-row
-    /// validation vocabulary: the R.4 capture-lane config loader re-runs this
-    /// exact unit validation on every capture's freshly fetched singleton, so
-    /// a row corrupted between `open` and a later capture fails closed with
-    /// the SAME typed producers the open-time bootstrap uses
-    /// (`RetentionConfigLoading.loadCaptureLanePolicies`, `V2-roadmap` §6
-    /// R.4) — never a second, drifting copy of the checks.
-    internal static func validateRetentionExpansionConfig(
-        _ row: RetentionExpansionConfigRow
-    ) throws {
-        // The version fence (05 §4 codec discipline): an unknown version is
-        // forward-incompatible and is never read as a possibly-different
-        // policy set.
-        guard row.configSchemaVersion == retentionConfigSchemaVersion else {
-            throw HistoryFailure.persistence(.corruptStoredValue)
-        }
-        // DC-21: a persisted non-finite ageMaxSeconds never silently reads
-        // as disabled (comparison guards alone cannot catch NaN).
-        guard row.ageMaxSeconds.isFinite else {
-            throw HistoryFailure.persistence(.corruptStoredValue)
-        }
-        // V2-02 §8.3 bounds gate every ENABLED policy value and every
-        // non-nil R3 threshold; a disabled policy's dormant value is not
-        // range-checked (the all-disabled default itself carries 0s).
-        if row.agePolicyEnabled {
-            guard RetentionPolicyBounds.ageSeconds.contains(row.ageMaxSeconds) else {
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
-        }
-        if row.storagePolicyEnabled {
-            guard RetentionPolicyBounds.totalBytes.contains(row.storageMaxBytes) else {
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
-        }
-        if row.revisionPolicyEnabled {
-            // The named contradiction (§3.3): enabled with no threshold in
-            // either dimension is incoherent, not a no-op.
-            guard row.revisionMaxCount != nil || row.revisionMaxBytes != nil else {
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
-        }
-        if let revisionMaxCount = row.revisionMaxCount {
-            guard RetentionPolicyBounds.revisionsPerItem.contains(revisionMaxCount) else {
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
-        }
-        if let revisionMaxBytes = row.revisionMaxBytes {
-            guard RetentionPolicyBounds.revisionBytesPerItem.contains(revisionMaxBytes) else {
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
         }
     }
 }

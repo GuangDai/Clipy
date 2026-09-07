@@ -71,7 +71,7 @@ func validateAdmissionSeedFixture(
           fixture.corpusRows == profile.retainedRows,
           fixture.bodyBytesPerRow == profile.searchBodyBytes,
           fixture.seededRows == profile.retainedRows - 1,
-          fixture.seedBatchSize == SwiftDataHistory.performanceFixtureSeedBatchSize
+          fixture.seedBatchSize == SQLiteHistory.performanceFixtureSeedBatchSize
     else {
         throw AdmissionError.unexpectedSeedFixture
     }
@@ -86,4 +86,3 @@ func validateAdmissionSeedFixture(
     }
     return fixture
 }
-

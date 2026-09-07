@@ -2,7 +2,7 @@
 /// (docs/06-cross-cutting.md §8 WS1; docs/roadmap/06-clipyapp.md
 /// "Acceptance"; docs/roadmap/README.md §3 M3 re-verification): a REAL
 /// `PasteboardAdapter.capture` freeze over a private `NSPasteboard` fed to
-/// the REAL in-memory `SwiftDataHistory` through the public
+/// the REAL in-memory `SQLiteHistory` through the public
 /// `ClipboardHistory.perform(.capture(_:))` seam, then read back through the
 /// public reads (`browse`, `details`, `pastePayload`) — the composed form of
 /// the storage-side WS1 suite, which asserts row/singleton state through an

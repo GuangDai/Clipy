@@ -3,24 +3,21 @@
 /// multiple revisions, reopen the store." One on-disk store accumulates an
 /// insert, a Copy Coalescing fold, three first-pins and a `.before` reorder,
 /// and two byte-changing `.replace` revisions of the same item through the
-/// public `SwiftDataHistory.perform` and the real step-6 mutation commit
+/// public `SQLiteHistory.perform` and the real step-6 mutation commit
 /// paths (docs/02-domain.md §10/§11, docs/05-authority-kernel.md §9); the
-/// facade is then REOPENED over the same store, rerunning the
-/// docs/05-authority-kernel.md §13 startup, whose steps 5–9 recompute
-/// authoritative Canonical/signature coverage, rebuild the complete Signature
-/// Index without decoding revision state, and revalidate the pinned order.
+/// facade is then REOPENED over the same store. Reads and candidate queries
+/// use durable SQLite metadata and immutable content, without startup rebuilds.
 ///
 /// This file closes WS14's step-6 durable-reconstruction clauses; the
 /// separately landed step-7 read suites own the public-result clauses. All
-/// assertions are seen through an INDEPENDENT second `ModelContainer` over the same on-disk
+/// assertions are seen through an INDEPENDENT second `SQLite connection` over the same on-disk
 /// store (see `WSSupport`): (i) the position singleton equals the
 /// pre-restart commit count; (ii) every row's Content Version, occurrence
 /// fields, §15 projection fields, and pin ordinal match the pre-restart
 /// values, with stored pin ordinals unique and exactly `0 ..< pinnedCount`
-/// (D12); (iii) the revision blob decodes to the full append-only list with
+/// (D12); (iii) persisted revisions retain the full append-only list with
 /// the correct active Revision ID, Effective Content (docs/02-domain.md
-/// §2.6) being the active revision's complete snapshot; and (iv) the rebuilt
-/// Signature Index is COMPLETE — a post-restart capture of the revised
+/// §2.6) being the active revision's complete snapshot; and (iv) a post-restart capture of the revised
 /// item's Canonical bytes coalesces into it (receipt `.coalesced` with the
 /// same History Item ID at the preserved Content Version) instead of
 /// inserting a duplicate row, proving candidacy was re-proven from durable
@@ -103,7 +100,7 @@ private static func revisedReference(
 /// pin all three and move C `.before` A, then replace A's Effective Content
 /// twice; reopen the store and assert position, rows, revision lineage, pin
 /// order, and Effective Content against the pre-restart receipts and
-/// scenario values, and prove the rebuilt Signature Index complete by
+/// scenario values, and prove retained Canonical candidacy by
 /// coalescing a fresh capture of A's Canonical bytes into A. Every receipt's
 /// Change Position is asserted against its scenario commit ordinal (1…10),
 /// so the post-restart singleton comparison is against the proven
@@ -277,14 +274,11 @@ private static func revisedReference(
     // above: ten non-empty History Commits (docs/02-domain.md §13).
     let preRestartCommitCount: UInt64 = 10
 
-    // ── RESTART: reopen the facade over the same on-disk store. The
-    // docs/05-authority-kernel.md §13 startup (steps 5–9) rebuilds the
-    // complete Signature Index from authoritative Canonical/signature
-    // coverage WITHOUT decoding revision state and revalidates the full pinned ordinal set, so
-    // a successful open re-proves both from durable state.
+    // RESTART: reopen the same on-disk store without rebuilding projections
+    // or a resident candidate index. Assert durable values and behavior below.
     let restartedHistory = try await WSSupport.openHistory(storeURL: storeURL)
 
-    // ── Post-restart durable state and rebuilt-index proofs (WS14 i–iv)
+    // Post-restart durable state and candidate-query proofs (WS14 i–iv)
     // live in WS14RestartDurableStateTests.swift: the verification body
     // moved verbatim into a static helper parameterized by the scenario
     // facts proven above (file-size split only).

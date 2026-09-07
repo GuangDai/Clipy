@@ -2,7 +2,6 @@
 /// Owning spec: `V2-05` §5.2 and X-BEHAVIOR-1.
 import Foundation
 import HistoryCore
-import SwiftData
 import Synchronization
 import Testing
 @testable import HistoryStorage
@@ -47,25 +46,12 @@ struct GatewayExternalReadTests {
 
     private struct Fixture {
         let authority: HistoryAuthority
-        let container: ModelContainer
         let connection: ExternalConnectionID
         let searchWorker: SearchWorker
         let item: HistoryItemReference?
     }
 
-    private struct HistoryState: Equatable {
-        struct Item: Equatable {
-            let id: UUID
-            let contentVersionRaw: UInt64
-            let canonicalBlob: Data
-            let revisionStateBlob: Data
-            let copyCount: UInt64
-            let pinOrdinal: Int?
-        }
-
-        let position: UInt64
-        let items: [Item]
-    }
+    private typealias HistoryState = GatewayHistoryTestSnapshot
 
     private static func makeFixture(
         seedItem: Bool = true,
@@ -74,17 +60,8 @@ struct GatewayExternalReadTests {
     ) async throws
         -> Fixture
     {
-        let schema = historySchema
-        let container = try ModelContainer(
-            for: schema,
-            configurations: [ModelConfiguration(
-                schema: schema,
-                isStoredInMemoryOnly: true,
-                cloudKitDatabase: .none
-            )]
-        )
-        let authority = HistoryAuthority(
-            container: container,
+        let authority = try HistoryAuthority(
+            storeLocation: try HistoryStoreLocation(persistence: .temporary),
             storageClock: storageClock,
             gatewayConnectionIDSource: { connectionUUID }
         )
@@ -121,7 +98,6 @@ struct GatewayExternalReadTests {
         }
         return Fixture(
             authority: authority,
-            container: container,
             connection: connection,
             searchWorker: SearchWorker(),
             item: item
@@ -181,42 +157,24 @@ struct GatewayExternalReadTests {
         return revisedReference
     }
 
-    private static func snapshot(_ fixture: Fixture) throws
+    private static func snapshot(_ fixture: Fixture) async throws
         -> GatewayStoreSnapshot
     {
-        try GatewayStoreSnapshot.read(in: ModelContext(fixture.container))
+        try await GatewayStoreSnapshot.read(from: fixture.authority)
     }
 
     private static func externalReadOperations(
         _ fixture: Fixture
-    ) throws -> [GatewayStoreSnapshot.Operation] {
-        try snapshot(fixture).operations.filter { operation in
+    ) async throws -> [GatewayStoreSnapshot.Operation] {
+        try await snapshot(fixture).operations.filter { operation in
             operation.operationKindRaw >= ExternalOperationKind.readRecent.rawValue
                 && operation.operationKindRaw
                     <= ExternalOperationKind.readPastePayload.rawValue
         }
     }
 
-    private static func historyState(_ fixture: Fixture) throws
-        -> HistoryState
-    {
-        let context = ModelContext(fixture.container)
-        let position = try #require(
-            context.fetch(FetchDescriptor<LastChangePositionRow>()).first
-        )
-        let items = try context.fetch(FetchDescriptor<HistoryItemRow>())
-            .map {
-                HistoryState.Item(
-                    id: $0.id,
-                    contentVersionRaw: $0.contentVersionRaw,
-                    canonicalBlob: $0.canonicalBlob,
-                    revisionStateBlob: $0.revisionStateBlob,
-                    copyCount: $0.copyCount,
-                    pinOrdinal: $0.pinOrdinal
-                )
-            }
-            .sorted { $0.id.uuidString < $1.id.uuidString }
-        return HistoryState(position: position.rawValue, items: items)
+    private static func historyState(_ fixture: Fixture) async throws -> HistoryState {
+        try await GatewayHistoryTestSnapshot.read(from: fixture.authority)
     }
 
     private static func cancelParkedSearch(
@@ -361,8 +319,8 @@ struct GatewayExternalReadTests {
         #expect(paste.representations.first?.bytes
             == Data(Self.privateText.utf8))
 
-        let snapshot = try Self.snapshot(fixture)
-        let operations = try Self.externalReadOperations(fixture)
+        let snapshot = try await Self.snapshot(fixture)
+        let operations = try await Self.externalReadOperations(fixture)
         #expect(operations.count == 4)
         Self.expectSucceeded(operations[0], capability: .browse, kind: .readRecent)
         Self.expectSucceeded(operations[1], capability: .browse, kind: .readSearch)
@@ -462,9 +420,9 @@ struct GatewayExternalReadTests {
             return
         }
         #expect(page.rows.isEmpty)
-        let snapshot = try Self.snapshot(fixture)
+        let snapshot = try await Self.snapshot(fixture)
         let operation = try #require(
-            try Self.externalReadOperations(fixture).first
+            try await Self.externalReadOperations(fixture).first
         )
         #expect(try Self.decodedPayload(operation, snapshot: snapshot)
             == OperationPayloadBlobV1(
@@ -497,7 +455,7 @@ struct GatewayExternalReadTests {
             requestedAt: searchRequestedAt
         )
 
-        let operations = try Self.externalReadOperations(fixture)
+        let operations = try await Self.externalReadOperations(fixture)
         #expect(operations.count == 2)
         #expect(operations[0].requestedAt == recentRequestedAt)
         #expect(operations[0].committedAt > recentRequestedAt)
@@ -514,9 +472,9 @@ struct GatewayExternalReadTests {
             _ = try await Self.read(.details(Self.absentItemID), in: fixture)
         }
 
-        let snapshot = try Self.snapshot(fixture)
+        let snapshot = try await Self.snapshot(fixture)
         let operation = try #require(
-            try Self.externalReadOperations(fixture).first
+            try await Self.externalReadOperations(fixture).first
         )
         #expect(operation.outcomeRaw == ExternalOutcome.failed.rawValue)
         #expect(operation.failureKindRaw
@@ -544,9 +502,9 @@ struct GatewayExternalReadTests {
             )
         }
 
-        let snapshot = try Self.snapshot(fixture)
+        let snapshot = try await Self.snapshot(fixture)
         let operation = try #require(
-            try Self.externalReadOperations(fixture).first
+            try await Self.externalReadOperations(fixture).first
         )
         #expect(operation.outcomeRaw == ExternalOutcome.denied.rawValue)
         #expect(operation.failureKindRaw
@@ -569,7 +527,7 @@ struct GatewayExternalReadTests {
     func auditFailureBarrier() async throws {
         let fixture = try await Self.makeFixture()
         try await Self.grant(.browse, in: fixture)
-        let before = try Self.externalReadOperations(fixture)
+        let before = try await Self.externalReadOperations(fixture)
         await fixture.authority.setTransactionFailureInjection(
             .beforeSingletonUpdate
         )
@@ -578,7 +536,7 @@ struct GatewayExternalReadTests {
             _ = try await Self.read(.recent(limit: 10), in: fixture)
         }
 
-        #expect(try Self.externalReadOperations(fixture) == before)
+        #expect(try await Self.externalReadOperations(fixture) == before)
         let position = try await fixture.authority.currentPosition()
         #expect(position.rawValue == 1)
     }
@@ -588,7 +546,7 @@ struct GatewayExternalReadTests {
     func notProducibleReadFailureSentinel() async throws {
         let fixture = try await Self.makeFixture()
         try await Self.grant(.browse, in: fixture)
-        let before = try Self.historyState(fixture)
+        let before = try await Self.historyState(fixture)
         let privateMarker = "batch13-not-producible-private-marker"
         let revisionID = RevisionID(rawValue: UUID(
             uuidString: "00000000-0000-0000-0000-000000001363"
@@ -638,7 +596,7 @@ struct GatewayExternalReadTests {
                 #expect(failure == .persistence(.invariantViolation))
             }
 
-            let operations = try Self.externalReadOperations(fixture)
+            let operations = try await Self.externalReadOperations(fixture)
             #expect(operations.count == index + 1)
             let operation = try #require(operations.last)
             #expect(operation.operationKindRaw
@@ -650,13 +608,13 @@ struct GatewayExternalReadTests {
             #expect(operation.changePositionRaw == nil)
             #expect(operation.payloadBlob.range(of: Data(privateMarker.utf8))
                 == nil)
-            let snapshot = try Self.snapshot(fixture)
+            let snapshot = try await Self.snapshot(fixture)
             #expect(try Self.decodedPayload(operation, snapshot: snapshot)
                 == OperationPayloadBlobV1(
                     request: .recent(limit: 10),
                     result: .none
                 ))
-            #expect(try Self.historyState(fixture) == before)
+            #expect(try await Self.historyState(fixture) == before)
         }
     }
 #endif
@@ -774,7 +732,7 @@ struct GatewayExternalReadTests {
             _ = try await Self.read(.recent(limit: 10), in: fixture)
         }
 
-        let operations = try Self.externalReadOperations(fixture)
+        let operations = try await Self.externalReadOperations(fixture)
         #expect(operations.count == 2)
         #expect(operations[0].operationKindRaw
             == ExternalOperationKind.readSearch.rawValue)
@@ -790,14 +748,14 @@ struct GatewayExternalReadTests {
     func searchCancellationIsAudited() async throws {
         let fixture = try await Self.makeFixture()
         try await Self.grant(.browse, in: fixture)
-        let before = try Self.historyState(fixture)
+        let before = try await Self.historyState(fixture)
 
         let failure = try await Self.cancelParkedSearch(in: fixture)
 
         #expect(failure == .temporarilyUnavailable(.cancelled))
-        #expect(try Self.historyState(fixture) == before)
-        let snapshot = try Self.snapshot(fixture)
-        let operations = try Self.externalReadOperations(fixture)
+        #expect(try await Self.historyState(fixture) == before)
+        let snapshot = try await Self.snapshot(fixture)
+        let operations = try await Self.externalReadOperations(fixture)
         let operation = try #require(operations.first)
         #expect(operations.count == 1)
         #expect(operation.operationKindRaw
@@ -824,7 +782,7 @@ struct GatewayExternalReadTests {
     func searchCancellationAuditFailureWins() async throws {
         let fixture = try await Self.makeFixture()
         try await Self.grant(.browse, in: fixture)
-        let before = try Self.historyState(fixture)
+        let before = try await Self.historyState(fixture)
 
         let failure = try await Self.cancelParkedSearch(
             in: fixture,
@@ -832,7 +790,7 @@ struct GatewayExternalReadTests {
         )
 
         #expect(failure == .persistence(.transaction))
-        #expect(try Self.externalReadOperations(fixture).isEmpty)
-        #expect(try Self.historyState(fixture) == before)
+        #expect(try await Self.externalReadOperations(fixture).isEmpty)
+        #expect(try await Self.historyState(fixture) == before)
     }
 }

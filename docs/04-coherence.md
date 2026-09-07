@@ -2,13 +2,15 @@
 
 ### 1. v1 coherence model
 
-v1 has one semantic source of truth: durable SwiftData state accessed through `HistoryAuthority`. It has no list cache, search-result cache, detail cache, version map, durable change journal, or generic materialization tier.
+Current persistence follows [V2-09](v2/V2-09-multilevel-storage.md): one SQLite
+database references immutable blob files, and HistoryAuthority is its sole
+writer. Cached preview pixels are rebuildable derivatives, never History truth.
 
 The coherence contract is therefore stated in terms of commits and snapshots rather than cache invalidation:
 
 1. Every non-empty History Commit persists one new `ChangePosition` in the same transaction as its item mutations.
-2. Every read captures its source values and position during one non-suspending Authority interval.
-3. A committed receipt is returned only after durable state, required Signature Index updates, and internal invalidation publication are complete.
+2. Ordinary reads capture their values and position in an Authority read interval. Search captures both in one request-owned SQLite read transaction: every batch and final excerpt reads that same snapshot, even if a concurrent writer commits. Cancellation and a bounded request lifetime release the reader; batches from different snapshots are never combined.
+3. A committed receipt is returned only after durable state, indexed candidate postings and internal invalidation publication are complete. The postings are database rows in that same commit, not a separately updated in-memory index.
 4. A read whose invocation begins after that receipt sees the commit or a later one.
 5. Derived work identifies the snapshot/version from which it was produced and is never relabeled as newer state.
 

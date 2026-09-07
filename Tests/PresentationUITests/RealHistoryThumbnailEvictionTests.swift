@@ -317,11 +317,11 @@ struct RealHistoryThumbnailEvictionTests {
         #expect(detailsThumbnails.inFlightCount == 0)
     }
 
-    private func memoryHistory() async throws -> SwiftDataHistory {
-        try await SwiftDataHistory.open(configuration: HistoryConfiguration(persistence: .memory))
+    private func memoryHistory() async throws -> SQLiteHistory {
+        try await SQLiteHistory.open(configuration: HistoryConfiguration(persistence: .temporary))
     }
 
-    private func capture(_ label: String, png: Data, into history: SwiftDataHistory) async throws -> HistoryItemReference {
+    private func capture(_ label: String, png: Data, into history: SQLiteHistory) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.capture(ClipboardCapture(
             representations: [
                 CapturedRepresentation(typeIdentifier: "public.png", bytes: png),

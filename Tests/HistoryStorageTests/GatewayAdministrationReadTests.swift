@@ -2,7 +2,6 @@
 /// Owning spec: `V2-05` §3.3/§4.3/§5.4 and roadmap X.4/GW3.
 import Foundation
 import HistoryCore
-import SwiftData
 import Synchronization
 import Testing
 @testable import HistoryStorage
@@ -51,59 +50,39 @@ struct GatewayAdministrationReadTests {
 
     private struct Fixture {
         let authority: HistoryAuthority
-        let container: ModelContainer
     }
 
     private static func makeFixture() async throws -> Fixture {
-        let schema = historySchema
-        let container = try ModelContainer(
-            for: schema,
-            configurations: [ModelConfiguration(
-                schema: schema,
-                isStoredInMemoryOnly: true,
-                cloudKitDatabase: .none
-            )]
-        )
         let idSource = UUIDSource([appIntentsID])
         let clock = StepClock(epoch: epoch)
-        let authority = HistoryAuthority(
-            container: container,
+        let authority = try HistoryAuthority(
+            storeLocation: try HistoryStoreLocation(persistence: .temporary),
             storageClock: clock,
             gatewayConnectionIDSource: { idSource.next() }
         )
         try await authority.performStartup(initialMaximumUnpinnedItems: 200)
         return Fixture(
             authority: authority,
-            container: container
         )
     }
 
-    private static func snapshot(_ fixture: Fixture) throws
+    private static func snapshot(_ fixture: Fixture) async throws
         -> GatewayStoreSnapshot
     {
-        try GatewayStoreSnapshot.read(in: ModelContext(fixture.container))
+        try await GatewayStoreSnapshot.read(from: fixture.authority)
     }
 
-    private static func historyPosition(_ fixture: Fixture) throws -> UInt64 {
-        let context = ModelContext(fixture.container)
-        return try #require(
-            context.fetch(FetchDescriptor<LastChangePositionRow>()).first
-        ).rawValue
+    private static func historyPosition(_ fixture: Fixture) async throws -> UInt64 {
+        try await fixture.authority.currentPosition().rawValue
     }
 
     private static func decodedPayload(
         at sequence: UInt64,
         in fixture: Fixture
-    ) throws -> OperationPayloadBlobV1 {
-        let context = ModelContext(fixture.container)
-        let config = try #require(
-            context.fetch(FetchDescriptor<GatewayConfigRow>()).first
-        )
-        let row = try #require(
-            context.fetch(FetchDescriptor<OperationRecordRow>()).first {
-                $0.auditSequence == sequence
-            }
-        )
+    ) async throws -> OperationPayloadBlobV1 {
+        let snapshot = try await Self.snapshot(fixture)
+        let config = try #require(snapshot.configs.first)
+        let row = try #require(snapshot.operations.first { $0.auditSequence == sequence })
         let operationKind = try #require(
             ExternalOperationKind(rawValue: row.operationKindRaw)
         )
@@ -142,7 +121,7 @@ struct GatewayAdministrationReadTests {
         #expect(bootstrapped.enrollKind == .appIntents)
         #expect(bootstrapped.status == .active)
 
-        var snapshot = try Self.snapshot(fixture)
+        var snapshot = try await Self.snapshot(fixture)
         let connectionRead = try #require(snapshot.operations.first)
         #expect(connectionRead.auditSequence == 1)
         #expect(connectionRead.operationKindRaw == 17)
@@ -154,7 +133,7 @@ struct GatewayAdministrationReadTests {
             == Self.epoch.addingTimeInterval(1))
         #expect(connectionRead.committedAt
             == Self.epoch.addingTimeInterval(2))
-        #expect(try Self.decodedPayload(at: 1, in: fixture)
+        #expect(try await Self.decodedPayload(at: 1, in: fixture)
             == OperationPayloadBlobV1(
                 request: .readConnections,
                 result: .connections(returnedCount: 1)
@@ -174,19 +153,19 @@ struct GatewayAdministrationReadTests {
         #expect(grant.capability == .organize)
         #expect(grant.revokedAt == nil)
 
-        snapshot = try Self.snapshot(fixture)
+        snapshot = try await Self.snapshot(fixture)
         let grantRead = try #require(snapshot.operations.last)
         #expect(grantRead.auditSequence == 4)
         #expect(grantRead.operationKindRaw == 18)
         #expect(grantRead.connectionIDRaw == id.rawValue)
         #expect(grantRead.capabilityRaw == nil)
         #expect(grantRead.changePositionRaw == nil)
-        #expect(try Self.decodedPayload(at: 4, in: fixture)
+        #expect(try await Self.decodedPayload(at: 4, in: fixture)
             == OperationPayloadBlobV1(
                 request: .readGrants(connectionID: id.rawValue),
                 result: .grants(returnedCount: 1)
             ))
-        #expect(try Self.historyPosition(fixture) == 0)
+        #expect(try await Self.historyPosition(fixture) == 0)
     }
 
     @Test("audit read freezes an exclusive head and never returns its own row")
@@ -204,7 +183,7 @@ struct GatewayAdministrationReadTests {
         ])
         #expect(!page.contains(where: { $0.auditSequence == 3 }))
 
-        let snapshot = try Self.snapshot(fixture)
+        let snapshot = try await Self.snapshot(fixture)
         let ownRow = try #require(snapshot.operations.last)
         #expect(ownRow.auditSequence == 3)
         #expect(ownRow.operationKindRaw == 19)
@@ -212,12 +191,12 @@ struct GatewayAdministrationReadTests {
         #expect(ownRow.capabilityRaw == nil)
         #expect(ownRow.changePositionRaw == nil)
         #expect(snapshot.configs.first?.nextAuditSequence == 4)
-        #expect(try Self.decodedPayload(at: 3, in: fixture)
+        #expect(try await Self.decodedPayload(at: 3, in: fixture)
             == OperationPayloadBlobV1(
                 request: .readAudit(since: 1, limit: 500),
                 result: .auditPage(returnedCount: 2, snapshotHead: 3)
             ))
-        #expect(try Self.historyPosition(fixture) == 0)
+        #expect(try await Self.historyPosition(fixture) == 0)
     }
 
     @Test("audit since equal to head is empty; above head is an audited denial")
@@ -226,7 +205,7 @@ struct GatewayAdministrationReadTests {
 
         let emptyPage = try await fixture.authority.auditLog(since: 1)
         #expect(emptyPage.isEmpty)
-        #expect(try Self.decodedPayload(at: 1, in: fixture)
+        #expect(try await Self.decodedPayload(at: 1, in: fixture)
             == OperationPayloadBlobV1(
                 request: .readAudit(since: 1, limit: 500),
                 result: .auditPage(returnedCount: 0, snapshotHead: 1)
@@ -236,7 +215,7 @@ struct GatewayAdministrationReadTests {
             _ = try await fixture.authority.auditLog(since: 3)
         }
 
-        let snapshot = try Self.snapshot(fixture)
+        let snapshot = try await Self.snapshot(fixture)
         let denial = try #require(snapshot.operations.last)
         #expect(snapshot.operations.map(\.auditSequence) == [1, 2])
         #expect(denial.operationKindRaw == 19)
@@ -256,7 +235,7 @@ struct GatewayAdministrationReadTests {
 
         try await fixture.authority.rebaseAuditLog(reason: .adminForced)
 
-        var snapshot = try Self.snapshot(fixture)
+        var snapshot = try await Self.snapshot(fixture)
         #expect(snapshot.operations.map(\.auditSequence) == [3])
         #expect(snapshot.operations[0].operationKindRaw
             == ExternalOperationKind.adminRebase.rawValue)
@@ -271,7 +250,7 @@ struct GatewayAdministrationReadTests {
             )
         }
 
-        snapshot = try Self.snapshot(fixture)
+        snapshot = try await Self.snapshot(fixture)
         let denial = try #require(snapshot.operations.last)
         #expect(snapshot.operations.map(\.auditSequence) == [3, 4])
         #expect(denial.operationKindRaw
@@ -281,7 +260,7 @@ struct GatewayAdministrationReadTests {
             == ExternalFailureKindRaw.requestDenied.rawValue)
         #expect(denial.denialReasonRaw
             == ExternalDenialReason.invalidInput.rawValue)
-        #expect(try Self.historyPosition(fixture) == 0)
+        #expect(try await Self.historyPosition(fixture) == 0)
     }
 
     @Test("below-floor failure is appended before the typed failure escapes")
@@ -294,7 +273,7 @@ struct GatewayAdministrationReadTests {
             _ = try await fixture.authority.auditLog(since: 1)
         }
 
-        let snapshot = try Self.snapshot(fixture)
+        let snapshot = try await Self.snapshot(fixture)
         let failure = try #require(snapshot.operations.last)
         #expect(snapshot.operations.map(\.auditSequence) == [2, 3])
         #expect(failure.operationKindRaw == 19)
@@ -304,7 +283,7 @@ struct GatewayAdministrationReadTests {
         #expect(failure.connectionIDRaw == nil)
         #expect(failure.capabilityRaw == nil)
         #expect(failure.changePositionRaw == nil)
-        #expect(try Self.historyPosition(fixture) == 0)
+        #expect(try await Self.historyPosition(fixture) == 0)
     }
 
     @Test("audit failure publishes neither a prepared DTO nor an underlying read failure")
@@ -317,15 +296,11 @@ struct GatewayAdministrationReadTests {
         await #expect(throws: ExternalFailure.persistence(.transaction)) {
             _ = try await fixture.authority.connections()
         }
-        #expect(try Self.snapshot(fixture).operations.isEmpty)
+        #expect(try await Self.snapshot(fixture).operations.isEmpty)
 
-        let context = ModelContext(fixture.container)
-        context.autosaveEnabled = false
-        let connection = try #require(
-            context.fetch(FetchDescriptor<ConnectionRow>()).first
-        )
-        connection.statusRaw = 0
-        try context.save()
+        try await fixture.authority.withTestDatabase { authority in
+            try authority.database.execute("UPDATE connections SET statusRaw = 0 WHERE id = ?", bindings: [.text(Self.appIntentsID.uuidString)])
+        }
 
         await fixture.authority.setTransactionFailureInjection(
             .beforeSingletonUpdate
@@ -333,14 +308,14 @@ struct GatewayAdministrationReadTests {
         await #expect(throws: ExternalFailure.persistence(.transaction)) {
             _ = try await fixture.authority.connections()
         }
-        #expect(try Self.snapshot(fixture).operations.isEmpty)
+        #expect(try await Self.snapshot(fixture).operations.isEmpty)
 
         await #expect(
             throws: ExternalFailure.persistence(.corruptStoredValue)
         ) {
             _ = try await fixture.authority.connections()
         }
-        let failure = try #require(Self.snapshot(fixture).operations.first)
+        let failure = try #require(try await Self.snapshot(fixture).operations.first)
         #expect(failure.operationKindRaw == 17)
         #expect(failure.outcomeRaw == ExternalOutcome.failed.rawValue)
         #expect(failure.failureKindRaw

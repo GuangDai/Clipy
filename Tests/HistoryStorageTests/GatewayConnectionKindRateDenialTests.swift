@@ -2,7 +2,6 @@
 /// external rate-denial audit seam (`V2-05` §3.1/§4.5 and roadmap X.9/F1).
 import Foundation
 import HistoryCore
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
@@ -31,52 +30,17 @@ struct GatewayConnectionKindRateDenialTests {
 
     private struct Fixture {
         let authority: HistoryAuthority
-        let container: ModelContainer
         let appIntentsConnection: ExternalConnectionID
         let localAutomationConnection: ExternalConnectionID
     }
 
-    private struct HistorySnapshot: Equatable {
-        struct Item: Equatable {
-            let id: UUID
-            let contentVersionRaw: UInt64
-            let canonicalBlob: Data
-            let revisionStateBlob: Data
-            let pinOrdinal: Int?
-
-            init(_ row: HistoryItemRow) {
-                id = row.id
-                contentVersionRaw = row.contentVersionRaw
-                canonicalBlob = row.canonicalBlob
-                revisionStateBlob = row.revisionStateBlob
-                pinOrdinal = row.pinOrdinal
-            }
-        }
-
-        struct Change: Equatable {
-            let sequence: UInt64
-            let changePositionRaw: UInt64
-            let changeKindRaw: Int16
-            let affectedItemsBlob: Data
-
-            init(_ row: HistoryChangeRecordRow) {
-                sequence = row.sequence
-                changePositionRaw = row.changePositionRaw
-                changeKindRaw = row.changeKindRaw
-                affectedItemsBlob = row.affectedItemsBlob
-            }
-        }
-
-        let position: UInt64
-        let items: [Item]
-        let changes: [Change]
-    }
+    private typealias HistorySnapshot = GatewayHistoryTestSnapshot
 
     @Test("wrong durable kind is unauthorized before rate audit or History")
     func wrongKindRateDenialIsUnaudited() async throws {
         let fixture = try await Self.makeFixture()
-        let historyBefore = try Self.historySnapshot(in: fixture.container)
-        let gatewayBefore = try Self.gatewaySnapshot(in: fixture.container)
+        let historyBefore = try await Self.historySnapshot(in: fixture.authority)
+        let gatewayBefore = try await Self.gatewaySnapshot(in: fixture.authority)
 
         await #expect(throws: ExternalFailure.unauthorized(
             requestedCapability: .browsePreview,
@@ -102,15 +66,15 @@ struct GatewayConnectionKindRateDenialTests {
             )
         }
 
-        #expect(try Self.historySnapshot(in: fixture.container) == historyBefore)
-        #expect(try Self.gatewaySnapshot(in: fixture.container) == gatewayBefore)
+        #expect(try await Self.historySnapshot(in: fixture.authority) == historyBefore)
+        #expect(try await Self.gatewaySnapshot(in: fixture.authority) == gatewayBefore)
     }
 
     @Test("correct durable kind appends exactly one rate-denial audit")
     func correctKindRateDenialIsAuditedOnce() async throws {
         let fixture = try await Self.makeFixture()
-        let historyBefore = try Self.historySnapshot(in: fixture.container)
-        let gatewayBefore = try Self.gatewaySnapshot(in: fixture.container)
+        let historyBefore = try await Self.historySnapshot(in: fixture.authority)
+        let gatewayBefore = try await Self.gatewaySnapshot(in: fixture.authority)
 
         try await fixture.authority.commitExternalRateDenial(
             Self.localRecentDescriptor,
@@ -119,8 +83,8 @@ struct GatewayConnectionKindRateDenialTests {
             requestedAt: Self.epoch
         )
 
-        #expect(try Self.historySnapshot(in: fixture.container) == historyBefore)
-        let gatewayAfter = try Self.gatewaySnapshot(in: fixture.container)
+        #expect(try await Self.historySnapshot(in: fixture.authority) == historyBefore)
+        let gatewayAfter = try await Self.gatewaySnapshot(in: fixture.authority)
         #expect(gatewayAfter.connections == gatewayBefore.connections)
         #expect(gatewayAfter.grants == gatewayBefore.grants)
         #expect(gatewayAfter.operations.dropLast() == gatewayBefore.operations[...])
@@ -158,11 +122,10 @@ struct GatewayConnectionKindRateDenialTests {
     }
 
     private static func makeFixture() async throws -> Fixture {
-        let history = try await SwiftDataHistory.open(configuration:
-            HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(configuration:
+            HistoryConfiguration(persistence: .temporary)
         )
         let authority = history.authority
-        let container = await authority.container
         let appIntentsConnection = try #require(
             try await history.connections().first
         ).id
@@ -177,35 +140,16 @@ struct GatewayConnectionKindRateDenialTests {
         )))
         return Fixture(
             authority: authority,
-            container: container,
             appIntentsConnection: appIntentsConnection,
             localAutomationConnection: localAutomationConnection
         )
     }
 
-    private static func historySnapshot(
-        in container: ModelContainer
-    ) throws -> HistorySnapshot {
-        let context = ModelContext(container)
-        let position = try #require(
-            context.fetch(FetchDescriptor<LastChangePositionRow>()).first
-        )
-        let items = try context.fetch(FetchDescriptor<HistoryItemRow>())
-            .map(HistorySnapshot.Item.init)
-            .sorted { $0.id.uuidString < $1.id.uuidString }
-        let changes = try context.fetch(FetchDescriptor<HistoryChangeRecordRow>())
-            .map(HistorySnapshot.Change.init)
-            .sorted { $0.sequence < $1.sequence }
-        return HistorySnapshot(
-            position: position.rawValue,
-            items: items,
-            changes: changes
-        )
+    private static func historySnapshot(in authority: HistoryAuthority) async throws -> HistorySnapshot {
+        try await GatewayHistoryTestSnapshot.read(from: authority)
     }
 
-    private static func gatewaySnapshot(
-        in container: ModelContainer
-    ) throws -> GatewayStoreSnapshot {
-        try GatewayStoreSnapshot.read(in: ModelContext(container))
+    private static func gatewaySnapshot(in authority: HistoryAuthority) async throws -> GatewayStoreSnapshot {
+        try await GatewayStoreSnapshot.read(from: authority)
     }
 }

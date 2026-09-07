@@ -12,9 +12,8 @@
 /// `RevisionPreparationActor` for the off-Authority phase of every revision
 /// (`revisionPreparationSnapshot(_:)` → `prepare(_:from:)` →
 /// `commitRevision(_:_:)`, 05 §6.2). Row-level assertions go through the
-/// INDEPENDENT second `ModelContainer` over the same on-disk store (see
-/// `WSSupport`), decoded with the production `CanonicalBlobCodec` /
-/// `RevisionStateBlobCodec`.
+/// INDEPENDENT second `SQLite connection` over the same on-disk store (see
+/// `WSSupport`), reading the actual content rows and representation bytes.
 ///
 /// Handler wiring note: the seam handler fires for BOTH commit entry points,
 /// and in the second scenario the interference enters the SAME
@@ -197,7 +196,7 @@ private static func replaceRequest(
 
     // Storage side, through the INDEPENDENT container: one row carrying BOTH
     // the folded occurrence and the committed revision (06 §8 WS20).
-    let verification = try WSSupport.makeContainer(storeURL: storeURL)
+    let verification = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(verification)
     #expect(rows.count == 1)
     let row = try #require(rows.first)
@@ -217,9 +216,9 @@ private static func replaceRequest(
     // Canonical Content is preserved byte-exactly by both commits (02 D2);
     // the lineage holds exactly one revision — the resumed one — active and
     // carrying the revised bytes (05 §4, §10 `.appendRevision`).
-    let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
+    let canonical = try WSSupport.fetchCanonical(itemID: row.id, in: verification)
     #expect(canonical.representations.map(\.content.bytes) == [Data(originalText.utf8)])
-    let lineage = try RevisionStateBlobCodec.decode(row.revisionStateBlob, canonical: canonical)
+    let lineage = try WSSupport.fetchLineage(itemID: row.id, in: verification)
     #expect(lineage.revisions.count == 1)
     #expect(lineage.activeRevisionID == bundle.domain.candidateRevisionID)
     let activeRevision = try #require(lineage.revisions.first)
@@ -321,7 +320,7 @@ private static func replaceRequest(
     // version 2, with the SECOND revision's bytes active — the stale first
     // revision appended nothing and advanced nothing (05 §10: closure
     // failure — here the pre-transaction OCC rejection — commits nothing).
-    let verification = try WSSupport.makeContainer(storeURL: storeURL)
+    let verification = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(verification)
     #expect(rows.count == 1)
     let row = try #require(rows.first)
@@ -334,9 +333,9 @@ private static func replaceRequest(
     // Canonical Content is untouched by either revision (02 D2); the lineage
     // holds exactly ONE revision — the second — active and carrying its
     // bytes (05 §4).
-    let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
+    let canonical = try WSSupport.fetchCanonical(itemID: row.id, in: verification)
     #expect(canonical.representations.map(\.content.bytes) == [Data(originalText.utf8)])
-    let lineage = try RevisionStateBlobCodec.decode(row.revisionStateBlob, canonical: canonical)
+    let lineage = try WSSupport.fetchLineage(itemID: row.id, in: verification)
     #expect(lineage.revisions.count == 1)
     #expect(lineage.activeRevisionID == secondBundle.domain.candidateRevisionID)
     let activeRevision = try #require(lineage.revisions.first)

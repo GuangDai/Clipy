@@ -16,8 +16,8 @@ struct ExternalHistoryFacadePublicTests {
 
     @Test("normal package import constructs and calls the bound facade")
     func publicFactoryAndFacadeAreCallable() async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let facade: ExternalHistoryFacade = requirePublicExternalHistory(
             history.makeAppIntentsHistoryFacade()

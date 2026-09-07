@@ -4,7 +4,6 @@
 /// facade is introduced or claimed.
 import Foundation
 import HistoryCore
-import SwiftData
 import Synchronization
 import Testing
 @testable import HistoryStorage
@@ -32,7 +31,6 @@ struct LocalAutomationBrowseAdmissionTests {
 
     private struct Fixture {
         let authority: HistoryAuthority
-        let container: ModelContainer
         let credential: LocalAutomationCredential
         let browse: LocalAutomationAuthenticatedBrowse
     }
@@ -64,9 +62,7 @@ struct LocalAutomationBrowseAdmissionTests {
     @Test("exact credential rejects invalid bounds before audit, History, or cadence")
     func exactCredentialStillRequiresStructuralAdmission() async throws {
         let fixture = try await Self.makeFixture(compactionCadenceOps: 1)
-        let before = try GatewayStoreSnapshot.read(
-            in: ModelContext(fixture.container)
-        )
+        let before = try await GatewayStoreSnapshot.read(from: fixture.authority)
 #if DEBUG
         let readProbe = ReadProbe()
         await fixture.authority.setStorageLifecycleDebugProbe(
@@ -117,9 +113,7 @@ struct LocalAutomationBrowseAdmissionTests {
             }
         }
 
-        #expect(try GatewayStoreSnapshot.read(
-            in: ModelContext(fixture.container)
-        ) == before)
+        #expect(try await GatewayStoreSnapshot.read(from: fixture.authority) == before)
 #if DEBUG
         #expect(!readProbe.didReachHistoryRead)
 #endif
@@ -133,9 +127,7 @@ struct LocalAutomationBrowseAdmissionTests {
                 presenting: fixture.credential.exactBytes
             )
         }
-        #expect(try GatewayStoreSnapshot.read(
-            in: ModelContext(fixture.container)
-        ) == before)
+        #expect(try await GatewayStoreSnapshot.read(from: fixture.authority) == before)
 #if DEBUG
         #expect(!readProbe.didReachHistoryRead)
 #endif
@@ -144,9 +136,7 @@ struct LocalAutomationBrowseAdmissionTests {
     @Test("malformed and wrong credentials stay nil and unaudited")
     func rejectedCredentialsNeverBecomeGatewayRequests() async throws {
         let fixture = try await Self.makeFixture()
-        let before = try GatewayStoreSnapshot.read(
-            in: ModelContext(fixture.container)
-        )
+        let before = try await GatewayStoreSnapshot.read(from: fixture.authority)
         let exact = fixture.credential.exactBytes
         var wrongSecret = exact
         wrongSecret[LocalAutomationCredential.byteCount - 1] ^= 0x01
@@ -165,17 +155,15 @@ struct LocalAutomationBrowseAdmissionTests {
             #expect(page == nil)
         }
 
-        #expect(try GatewayStoreSnapshot.read(
-            in: ModelContext(fixture.container)
-        ) == before)
+        #expect(try await GatewayStoreSnapshot.read(from: fixture.authority) == before)
     }
 
     private static func makeFixture(
         compactionCadenceOps: Int = ExternalLimits.standard
             .compactionCadenceOps
     ) async throws -> Fixture {
-        let history = try await SwiftDataHistory.open(configuration:
-            HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(configuration:
+            HistoryConfiguration(persistence: .temporary)
         )
         let authority = history.authority
         try await authority.publishVerifiedLocalAutomationEnrollment(
@@ -213,7 +201,6 @@ struct LocalAutomationBrowseAdmissionTests {
         )
         return Fixture(
             authority: authority,
-            container: await authority.container,
             credential: credential,
             browse: LocalAutomationAuthenticatedBrowse(
                 authenticator: authenticator,

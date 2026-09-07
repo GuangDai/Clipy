@@ -16,8 +16,7 @@ struct CaptureRetentionPrefixTests {
         let result = try planCapture(
             preparedCapture(canonical: canonical, observedAt: 500),
             facts: IngestFacts(
-                hintedItem: nil,
-                candidates: CompleteDedupCandidates(items: []),
+                confirmedMatch: nil,
                 candidateIDExists: false,
                 retention: CaptureRetentionFacts(
                     retainedCount: 1_000, unpinnedCount: 1_000,
@@ -45,8 +44,13 @@ struct CaptureRetentionPrefixTests {
         let result = try planCapture(
             preparedCapture(canonical: canonical, observedAt: 500),
             facts: IngestFacts(
-                hintedItem: nil,
-                candidates: CompleteDedupCandidates(items: [winner]),
+                confirmedMatch: confirmCanonicalCapture(
+                    incoming: canonical,
+                    existing: winner.canonical,
+                    id: winner.id,
+                    occurrence: winner.occurrence,
+                    pinOrdinal: winner.pinOrdinal
+                )?.value,
                 candidateIDExists: false,
                 retention: CaptureRetentionFacts(
                     retainedCount: 1_001, unpinnedCount: 1_001,

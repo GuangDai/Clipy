@@ -9,7 +9,7 @@ import Testing
 /// moved verbatim; the scenario facts it reads are packaged by the test.
 internal struct WS14ScenarioFacts {
     let storeURL: URL
-    let restartedHistory: SwiftDataHistory
+    let restartedHistory: SQLiteHistory
     let preRestartCommitCount: UInt64
     let idA: HistoryItemID
     let idB: HistoryItemID
@@ -37,10 +37,8 @@ internal struct WS14ScenarioFacts {
 
 extension WS14RestartReconstructionTests {
     /// WS14 (i)–(iv): asserts the restarted durable rows, singleton position,
-    /// projection/lineage decodes, pin order, and the rebuilt Signature Index
-    /// against the pre-restart scenario receipts. Verbatim relocation of the
-    /// original in-test verification block; every expectation and message is
-    /// unchanged.
+    /// projection/lineage reads, pin order, and Canonical candidate queries
+    /// against the pre-restart scenario receipts.
     internal static func assertRestartedDurableState(
         _ facts: WS14ScenarioFacts
     ) async throws {
@@ -71,7 +69,7 @@ extension WS14RestartReconstructionTests {
         let sourceA3 = facts.sourceA3
 
     // ── Post-restart durable state, through the INDEPENDENT container. ──
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
     #expect(
         rows.count == 3,
@@ -237,12 +235,11 @@ extension WS14RestartReconstructionTests {
         "WS14 (pin order): stored pin ordinals are exactly 0 ..< pinnedCount (D12)"
     )
 
-    // WS14 (iii): A's revision-state blob decodes (production codec,
-    // docs/05-authority-kernel.md §4) to the FULL append-only list in mint
+    // WS14 (iii): A's persisted content rows retain the FULL append-only list in mint
     // order — revisions are immutable and append-only in v1
     // (docs/02-domain.md §2.5 rule 5) — with the second revision active.
     // Canonical Content is untouched by the revisions (docs/02-domain.md D2).
-    let canonicalA = try CanonicalBlobCodec.decode(rowA.canonicalBlob)
+    let canonicalA = try WSSupport.fetchCanonical(itemID: rowA.id, in: container)
     #expect(
         canonicalA.representations.map(\.content.typeIdentifier) == [plainText],
         "WS14 (lineage): A's Canonical type survives revisions"
@@ -251,7 +248,7 @@ extension WS14RestartReconstructionTests {
         canonicalA.representations.map(\.content.bytes) == [Data(textA.utf8)],
         "WS14 (lineage): revisions never rewrite Canonical Content (docs/02-domain.md D2)"
     )
-    let lineageA = try RevisionStateBlobCodec.decode(rowA.revisionStateBlob, canonical: canonicalA)
+    let lineageA = try WSSupport.fetchLineage(itemID: rowA.id, in: container)
     #expect(
         lineageA.revisions.count == 2,
         "WS14 (lineage): the full append-only revision list survives the restart (docs/02-domain.md §2.5)"
@@ -305,8 +302,8 @@ extension WS14RestartReconstructionTests {
     // WS14 (iii): B and C are Canonical-state items (D3) — empty revision
     // list, nil active ID — so their Effective Content is the Canonical
     // content with fingerprints stripped (docs/02-domain.md §2.6).
-    let canonicalB = try CanonicalBlobCodec.decode(rowB.canonicalBlob)
-    let lineageB = try RevisionStateBlobCodec.decode(rowB.revisionStateBlob, canonical: canonicalB)
+    let canonicalB = try WSSupport.fetchCanonical(itemID: rowB.id, in: container)
+    let lineageB = try WSSupport.fetchLineage(itemID: rowB.id, in: container)
     #expect(
         lineageB.revisions.isEmpty,
         "WS14 (lineage): B has no revisions (D3)"
@@ -319,8 +316,8 @@ extension WS14RestartReconstructionTests {
         canonicalB.representations.map(\.content.bytes) == [Data(textB.utf8)],
         "WS14 (effective content): B's Effective Content is its Canonical bytes (docs/02-domain.md §2.6)"
     )
-    let canonicalC = try CanonicalBlobCodec.decode(rowC.canonicalBlob)
-    let lineageC = try RevisionStateBlobCodec.decode(rowC.revisionStateBlob, canonical: canonicalC)
+    let canonicalC = try WSSupport.fetchCanonical(itemID: rowC.id, in: container)
+    let lineageC = try WSSupport.fetchLineage(itemID: rowC.id, in: container)
     #expect(
         lineageC.revisions.isEmpty,
         "WS14 (lineage): C has no revisions (D3)"
@@ -334,17 +331,17 @@ extension WS14RestartReconstructionTests {
         "WS14 (effective content): C's Effective Content is its Canonical bytes (docs/02-domain.md §2.6)"
     )
 
-    // ── WS14 (iv): the rebuilt Signature Index is COMPLETE. A post-restart
+    // WS14 (iv): persistent Canonical postings remain usable. A post-restart
     // capture of A's CANONICAL bytes (never rewritten by the revisions,
-    // §2.6) must coalesce into A — candidacy re-proven from durable
-    // signature metadata at startup (§13) — not insert a duplicate row.
+    // §2.6) must coalesce into A through the durable candidate query,
+    // not insert a duplicate row.
     let probeReceipt = try await restartedHistory.perform(.capture(
         WSSupport.textCapture(textA, observedAt: postRestartCopyA, source: sourceA3)
     ))
     guard case let .committed(probeCommit) = probeReceipt,
           case let .coalesced(probeReference) = probeCommit.outcome
     else {
-        Issue.record("WS14 (rebuilt index): expected .committed(.coalesced) for A's Canonical bytes post-restart, got \(probeReceipt)")
+        Issue.record("WS14 (durable candidates): expected .committed(.coalesced) for A's Canonical bytes post-restart, got \(probeReceipt)")
         return
     }
     #expect(
@@ -364,7 +361,7 @@ extension WS14RestartReconstructionTests {
     // advanced (count 3, new last time/source, first observation untouched),
     // Content Version preserved (docs/02-domain.md D2), and the singleton
     // moved exactly once.
-    let verification = try WSSupport.makeContainer(storeURL: storeURL)
+    let verification = try WSSupport.makeDatabase(storeURL: storeURL)
     let verifiedRows = try WSSupport.fetchRows(verification)
     #expect(
         verifiedRows.count == 3,

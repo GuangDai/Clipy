@@ -10,8 +10,8 @@ import Testing
 @MainActor
 struct RealHistoryThumbnailRecoveryTests {
     @Test func validImageRevisionRecoversWithoutReusingTheOldUnavailableResult() async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let malformed = Data("not a PNG image".utf8)
         let capture = try await history.perform(.capture(ClipboardCapture(
