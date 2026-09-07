@@ -33,10 +33,10 @@ struct SQLiteScaleSample: Codable, Sendable {
     let elapsedMilliseconds: Double
     let before: SQLiteScaleMemory
     let after: SQLiteScaleMemory?
-    let rowsVisited: Int
+    let rowsVisited: Int?
     /// Bytes explicitly returned by purpose-specific content reads. This is
     /// neither total process-owned memory nor retained logical store bytes.
-    let returnedContentBytes: Int
+    let returnedContentBytes: Int?
     let failure: String?
 }
 
@@ -129,7 +129,7 @@ func measureSQLiteScale<T>(
         samples.append(SQLiteScaleSample(
             phase: phase, elapsedMilliseconds: elapsed,
             before: before, after: try? SQLiteScaleMemory.read(),
-            rowsVisited: 0, returnedContentBytes: 0,
+            rowsVisited: nil, returnedContentBytes: nil,
             failure: String(describing: error)
         ))
         print("sqlite-scale phase=\(phase) failed=\(error)")

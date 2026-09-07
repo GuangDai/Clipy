@@ -42,6 +42,8 @@ struct SQLiteScaleTests {
             #expect(samples.map(\.phase) == ["complete", "failed"])
             #expect(samples[0].failure == nil)
             #expect(samples[1].failure != nil)
+            #expect(samples[1].rowsVisited == nil)
+            #expect(samples[1].returnedContentBytes == nil)
         }
     }
 }
