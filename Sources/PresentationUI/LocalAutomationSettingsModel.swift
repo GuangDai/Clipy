@@ -25,7 +25,7 @@ final class LocalAutomationSettingsModel {
     func revoke() async { await perform(settings.revoke) }
 
     func requestCapability(_ capability: ExternalCapability, enabled: Bool) async {
-        guard !isWorking else { return }
+        guard !isWorking, !Task.isCancelled else { return }
         if capability == .deleteItem, enabled {
             confirmsDeletionGrant = true
         } else if capability == .reviseContent, enabled {
@@ -53,16 +53,20 @@ final class LocalAutomationSettingsModel {
     }
 
     private func perform(_ action: @MainActor () async throws -> LocalAutomationSettingsState) async {
-        guard !isWorking else { return }
+        guard !isWorking, !Task.isCancelled else { return }
         isWorking = true
         defer { isWorking = false }
         do {
             let updated = try await action()
-            guard !Task.isCancelled else { return }
+            // The model outlives a tab's cancelled .task. An entered action
+            // can still finish (including an already-committed mutation),
+            // and isWorking prevents a later operation from overtaking it.
+            // Accept its actual result rather than leaving the tab loading.
             state = updated
             failed = false
         } catch {
-            guard !Task.isCancelled else { return }
+            // Cancellation may leave a mutation's outcome unknown. Expose
+            // the existing Retry, which reads state and never replays it.
             failed = true
         }
     }

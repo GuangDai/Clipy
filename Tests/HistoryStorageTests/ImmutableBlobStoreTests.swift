@@ -30,7 +30,7 @@ struct ImmutableBlobStoreTests {
             // Publication happened before failure. Its unreferenced file is
             // reclaimed normally; no old or referenced content was removed.
             var removed = 0
-            for _ in 0..<4 { removed += try store.cleanupBatch(limit: 8) { _ in false } }
+            for _ in 0..<4 { removed += try store.cleanupBatch(limit: 8) { _ in false }.removedCount }
             #expect(removed == 1)
         }
     }
@@ -136,10 +136,11 @@ struct ImmutableBlobStoreTests {
             var removed = 0
             for _ in 0..<16 {
                 var lookups = 0
-                removed += try store.cleanupBatch(limit: 2) { id in
+                let result = try store.cleanupBatch(limit: 2) { id in
                     lookups += 1
                     return id == kept.id
                 }
+                removed += result.removedCount
                 #expect(lookups <= 2)
             }
             #expect(removed == 2)

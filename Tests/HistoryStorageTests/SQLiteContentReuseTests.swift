@@ -24,7 +24,7 @@ struct SQLiteContentReuseTests {
             age: nil, storage: nil,
             revisions: RevisionRetention(maxRevisionsPerItem: 1, maxRevisionBytesPerItem: nil)
         )))
-        try await history.authority.finishContentReuseCleanupForTest()
+        await history.authority.waitForBlobCleanup()
         let pruned = try await history.authority.contentReuseFactsForTest(reference.id, type: largeType)
         #expect(pruned.blobIDs == [before.blobIDs[0], before.blobIDs[0]])
         #expect(pruned.fileCount == 1)
@@ -32,7 +32,7 @@ struct SQLiteContentReuseTests {
         #expect(try await history.pastePayload(for: reference.id).representations.contains { $0.bytes == bytes })
 
         _ = try await history.perform(.remove(reference.id))
-        try await history.authority.finishContentReuseCleanupForTest()
+        await history.authority.waitForBlobCleanup()
         let removed = try await history.authority.contentReuseFactsForTest(reference.id, type: largeType)
         #expect(removed.blobIDs.isEmpty)
         #expect(removed.fileCount == 0)
@@ -59,7 +59,7 @@ struct SQLiteContentReuseTests {
             age: nil, storage: nil,
             revisions: RevisionRetention(maxRevisionsPerItem: 1, maxRevisionBytesPerItem: nil)
         )))
-        try await history.authority.finishContentReuseCleanupForTest()
+        await history.authority.waitForBlobCleanup()
         let pruned = try await history.authority.contentReuseFactsForTest(reference.id, type: largeType)
         #expect(pruned.fileCount == 1)
         #expect(pruned.blobIDs.count == 2)
@@ -157,16 +157,6 @@ private extension HistoryAuthority {
         var fileCount = 0
         while let url = files?.nextObject() as? URL { if url.pathExtension == "blob" { fileCount += 1 } }
         return ContentReuseFacts(blobIDs: identifiers, exactTypes: exactTypes, revisionBytes: revisionBytes, fileCount: fileCount)
-    }
-
-    func finishContentReuseCleanupForTest() throws {
-        for _ in 0..<4 {
-            try blobStore.cleanupBatch { id in
-                let statement = try database.prepare("SELECT 1 FROM representations WHERE blobID = ? LIMIT 1", bindings: [.text(id.uuidString)])
-                defer { statement.finalize() }
-                return try statement.step()
-            }
-        }
     }
 
     func removeContentReuseBlobForTest(_ id: UUID) throws { try blobStore.remove(id: id) }

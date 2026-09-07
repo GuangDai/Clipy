@@ -113,7 +113,10 @@ struct OpaquePasteboardRoundTripTests {
         let payload = try await history.pastePayload(for: inserted.id)
         #expect(payload.item == inserted)
         #expect(payload.lineageHint == inserted.id)
-        expectRepresentations(payload.representations, equalTo: expected)
+        #expect(payload.representations.count == expected.count)
+        #expect(Set(payload.representations.map {
+            CapturedRepresentation(typeIdentifier: $0.typeIdentifier, bytes: $0.bytes)
+        }) == Set(expected))
         ComposedSupport.setPasteboardContents("previous destination content", on: destination)
         let destinationAdapter = PasteboardAdapter(pasteboard: destination)
         try destinationAdapter.write(payload)
