@@ -165,6 +165,22 @@ struct SQLiteDatabaseTests {
         try writer.close()
     }
 
+    @Test(arguments: [false, true])
+    func openingWaitDoesNotChangeNormalConnectionContention(readOnly: Bool) throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.sqlite")
+        let initial = try SQLiteDatabase(url: url)
+        try initial.execute("CREATE TABLE items (value INTEGER)")
+        try initial.close()
+        let reopened = try SQLiteDatabase(url: url, readOnly: readOnly)
+        let timeout = try reopened.prepare("PRAGMA busy_timeout")
+        #expect(try timeout.step())
+        #expect(try timeout.integer(at: 0) == 0)
+        timeout.finalize()
+        try reopened.close()
+    }
+
     @Test func competingWriterReportsBusyWithoutLosingFirstTransaction() throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
