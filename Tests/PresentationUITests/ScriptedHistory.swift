@@ -14,6 +14,7 @@
 /// SwiftPM test target.
 import Foundation
 import HistoryCore
+import Testing
 
 // MARK: - ScriptedHistory (view-state double)
 

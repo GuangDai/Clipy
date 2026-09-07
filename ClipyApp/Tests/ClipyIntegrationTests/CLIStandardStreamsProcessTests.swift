@@ -47,7 +47,7 @@ final class CLIStandardStreamsProcessTests: XCTestCase {
         try await invocation.waitForInputToBeConsumed()
         try invocation.input.fileHandleForReading.close()
         XCTAssertTrue(invocation.process.isRunning)
-        XCTAssertEqual(try invocation.availableOutputBytes(), 0,
+        XCTAssertFalse(try invocation.hasAvailableOutput(),
                        "An incomplete UTF-8 prefix is not yet a complete stdin request")
         var suffix = Data([0x9F, 0x8C, 0x8D])
         suffix.append(Data("\",\"arguments\":{}}".utf8))
@@ -123,7 +123,7 @@ final class CLIStandardStreamsProcessTests: XCTestCase {
             process.executableURL = try XCTUnwrap(Bundle.main.executableURL)
                 .deletingLastPathComponent().appendingPathComponent("clipyctl")
             // Only the fragmented-input case retains a parent read handle
-            // for FIONREAD. Otherwise child exit must expose EPIPE to the
+            // for readiness observations. Otherwise child exit must expose EPIPE to the
             // producer. Close output writers so child exit produces EOF.
             process.standardInput = input.fileHandleForReading
             process.standardOutput = output.fileHandleForWriting
@@ -168,7 +168,7 @@ final class CLIStandardStreamsProcessTests: XCTestCase {
                     throw ProcessFailure.inputClosed
                 }
                 try await Task.sleep(
-                    until: min(deadline, .now.advanced(by: .milliseconds(5))), clock: .continuous
+                    until: min(deadline, ContinuousClock.now.advanced(by: .milliseconds(5))), clock: .continuous
                 )
             }
         }
@@ -176,23 +176,26 @@ final class CLIStandardStreamsProcessTests: XCTestCase {
         func waitForInputToBeConsumed() async throws {
             var observationFailure: Error?
             let consumed = await ComposedSupport.waitFor(timeout: 5) {
-                do { return try Self.availableBytes(in: self.input.fileHandleForReading) == 0 }
+                do { return try !Self.hasReadableBytes(in: self.input.fileHandleForReading) }
                 catch { observationFailure = error; return true }
             }
             if let observationFailure { throw observationFailure }
             guard consumed else { throw ProcessFailure.inputNotConsumed }
         }
 
-        func availableOutputBytes() throws -> Int32 {
-            try Self.availableBytes(in: output.fileHandleForReading)
+        func hasAvailableOutput() throws -> Bool {
+            try Self.hasReadableBytes(in: output.fileHandleForReading)
         }
 
-        private static func availableBytes(in handle: FileHandle) throws -> Int32 {
-            var count: Int32 = 0
-            guard Darwin.ioctl(handle.fileDescriptor, UInt(FIONREAD), &count) == 0 else {
+        private static func hasReadableBytes(in handle: FileHandle) throws -> Bool {
+            // Only empty/nonempty is needed. poll observes that without
+            // consuming the child's input or relying on an unimported ioctl macro.
+            var descriptor = pollfd(fd: handle.fileDescriptor, events: Int16(POLLIN), revents: 0)
+            guard Darwin.poll(&descriptor, 1, 0) >= 0,
+                  descriptor.revents & Int16(POLLERR | POLLNVAL) == 0 else {
                 throw ProcessFailure.pipeUnavailable
             }
-            return count
+            return descriptor.revents & Int16(POLLIN) != 0
         }
 
         func finish() async throws -> Output {
