@@ -1,12 +1,11 @@
 /// F1 server credential custody (`V2-05` §0.3/§3.4/§6.7).
 ///
-/// `CredentialStore` serializes the blocking Security calls and exposes only
+/// `CredentialStore` serializes the credential-file operations and exposes only
 /// exact immutable bytes plus content-free failures. The injected operations
 /// protocol is the true external-system seam; it is not a second credential
 /// store or a product-facing interface.
 import Foundation
 import HistoryCore
-import Security
 
 internal enum CredentialStoreAddResult: Sendable {
     case stored
@@ -17,6 +16,7 @@ internal enum CredentialStoreAddResult: Sendable {
 internal enum CredentialStoreCopyResult: Sendable {
     case value(Data)
     case missing
+    case corruptValue
     case unavailable
 }
 
@@ -44,14 +44,25 @@ internal protocol CredentialStoreExternalOperations: Sendable {
 
 /// Actor-confined server copy of Local Automation credentials.
 ///
-/// The production operations use the app-private Data Protection Keychain.
+/// Production uses a separate current-user-only server directory; client-file
+/// removal cannot destroy the verifier of a revoked connection.
 /// LocalAutomationIngress's enrollment extension coordinates this server
 /// copy with client-file custody and the Authority's connection transaction.
 internal actor CredentialStore {
     private var operations: any CredentialStoreExternalOperations
 
+    internal static var defaultDirectoryURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Clipy", isDirectory: true)
+            .appendingPathComponent("LocalAutomationServer", isDirectory: true)
+    }
+
     internal init() {
-        operations = DataProtectionKeychainCredentialOperations()
+        operations = FileCredentialOperations(directoryURL: Self.defaultDirectoryURL)
+    }
+
+    internal init(directoryURL: URL) {
+        operations = FileCredentialOperations(directoryURL: directoryURL)
     }
 
     internal init(operations: any CredentialStoreExternalOperations) {
@@ -98,6 +109,8 @@ internal actor CredentialStore {
             }
         case .missing:
             return nil
+        case .corruptValue:
+            throw CredentialStoreFailure.corruptStoredValue
         case .unavailable:
             throw CredentialStoreFailure.unavailable
         }
@@ -112,100 +125,5 @@ internal actor CredentialStore {
         case .unavailable:
             throw CredentialStoreFailure.unavailable
         }
-    }
-}
-
-/// Stateless Security adapter. Every query explicitly selects the Data
-/// Protection Keychain; omitting an access group keeps the item app-private.
-private struct DataProtectionKeychainCredentialOperations:
-    CredentialStoreExternalOperations
-{
-    private static let service =
-        "com.clipy.Clipy.local-automation.server-credential"
-
-    func connectionIDs() throws -> [ExternalConnectionID] {
-        let query: [CFString: Any] = [
-            kSecClass: kSecClassGenericPassword,
-            kSecAttrService: Self.service,
-            kSecUseDataProtectionKeychain: true,
-            kSecMatchLimit: kSecMatchLimitAll,
-            kSecReturnAttributes: true,
-        ]
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        if status == errSecItemNotFound { return [] }
-        guard status == errSecSuccess,
-              let items = result as? [[String: Any]] else {
-            throw CredentialStoreFailure.unavailable
-        }
-        return try items.map { item in
-            guard let account = item[kSecAttrAccount as String] as? String,
-                  let id = UUID(uuidString: account) else {
-                throw CredentialStoreFailure.corruptStoredValue
-            }
-            return ExternalConnectionID(rawValue: id)
-        }
-    }
-
-    func addCredential(
-        _ data: Data,
-        for connection: ExternalConnectionID
-    ) -> CredentialStoreAddResult {
-        var query = lookupQuery(for: connection)
-        query[kSecAttrAccessible] =
-            kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        query[kSecValueData] = data
-
-        switch SecItemAdd(query as CFDictionary, nil) {
-        case errSecSuccess:
-            return .stored
-        case errSecDuplicateItem:
-            return .duplicate
-        default:
-            return .unavailable
-        }
-    }
-
-    func copyCredential(
-        for connection: ExternalConnectionID
-    ) -> CredentialStoreCopyResult {
-        var query = lookupQuery(for: connection)
-        query[kSecMatchLimit] = kSecMatchLimitOne
-        query[kSecReturnData] = true
-
-        var result: CFTypeRef?
-        switch SecItemCopyMatching(query as CFDictionary, &result) {
-        case errSecSuccess:
-            guard let data = result as? Data else {
-                return .unavailable
-            }
-            return .value(data)
-        case errSecItemNotFound:
-            return .missing
-        default:
-            return .unavailable
-        }
-    }
-
-    func deleteCredential(
-        for connection: ExternalConnectionID
-    ) -> CredentialStoreDeleteResult {
-        switch SecItemDelete(lookupQuery(for: connection) as CFDictionary) {
-        case errSecSuccess, errSecItemNotFound:
-            return .deletedOrMissing
-        default:
-            return .unavailable
-        }
-    }
-
-    private func lookupQuery(
-        for connection: ExternalConnectionID
-    ) -> [CFString: Any] {
-        [
-            kSecClass: kSecClassGenericPassword,
-            kSecAttrService: Self.service,
-            kSecAttrAccount: connection.rawValue.uuidString,
-            kSecUseDataProtectionKeychain: true,
-        ]
     }
 }

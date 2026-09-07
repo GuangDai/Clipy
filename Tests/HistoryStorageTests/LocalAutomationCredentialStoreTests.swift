@@ -1,8 +1,8 @@
 /// F1 server-custody tracer (`V2-05` §0.3/§3.4/§6.7).
 ///
-/// These tests observe the actor seam with literal credential bytes and an
-/// in-memory substitute for the true Keychain boundary. They deliberately do
-/// not claim signed-artifact Data Protection Keychain evidence.
+/// Literal grammar and injected external-failure checks complement
+/// FileCredentialStoreTests, which exercises production file custody in real
+/// temporary directories, including cross-instance reads and enrollment.
 import Foundation
 import HistoryCore
 import Testing
@@ -59,44 +59,6 @@ struct LocalAutomationCredentialStoreTests {
         #expect(
             Data(credential.exactBytes.prefix(16)) == Self.connectionPrefix
         )
-    }
-
-    @Test("store load and delete preserve exact bytes")
-    func exactRoundTripAndIdempotentDelete() async throws {
-        let store = CredentialStore(
-            operations: MemoryCredentialStoreOperations()
-        )
-
-        try await store.storeCredential(
-            Self.exactCredential,
-            for: Self.connection
-        )
-        #expect(
-            try await store.loadCredential(for: Self.connection)
-                == Self.exactCredential
-        )
-
-        try await store.deleteCredential(for: Self.connection)
-        #expect(try await store.loadCredential(for: Self.connection) == nil)
-        try await store.deleteCredential(for: Self.connection)
-    }
-
-    @Test("duplicate add reports a content-free failure")
-    func duplicateAddIsRejected() async throws {
-        let store = CredentialStore(
-            operations: MemoryCredentialStoreOperations()
-        )
-        try await store.storeCredential(
-            Self.exactCredential,
-            for: Self.connection
-        )
-
-        await #expect(throws: CredentialStoreFailure.duplicateCredential) {
-            try await store.storeCredential(
-                Self.exactCredential,
-                for: Self.connection
-            )
-        }
     }
 
     @Test("malformed or mismatched bytes never reach storage")

@@ -8,8 +8,8 @@ import XCTest
 @testable import ClipyApp
 
 /// Actual bundled processes against the app's listener and sole History
-/// writer. Credential calls use a deterministic fixture here; the separate
-/// LocalAutomationKeychainHostedTests exercise the actual Keychain store.
+/// writer. The real server credential files use an isolated test directory;
+/// client custody, socket paths and the bundled CLI remain the product paths.
 /// XCTest runs these cases serially; occupied production paths are skipped
 /// rather than modifying a developer's existing automation installation.
 @MainActor
@@ -35,6 +35,13 @@ final class LocalAutomationClientRuntimeTests: XCTestCase {
             try? FileManager.default.removeItem(at: clientDirectory)
             try? FileManager.default.removeItem(at: socketDirectory)
         }
+        let serverDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clipy-server-credentials-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: serverDirectory, withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+        defer { try? FileManager.default.removeItem(at: serverDirectory) }
         let history = try await ComposedSupport.openMemoryHistory()
         _ = try await history.perform(.capture(ComposedSupport.textCapture(
             "cli-original", observedAt: Date(timeIntervalSinceReferenceDate: 12)
@@ -51,14 +58,18 @@ final class LocalAutomationClientRuntimeTests: XCTestCase {
         }
         let ingress = LocalAutomationIngress(
             authority: history.authority, gateway: history.externalGateway,
-            credentialStore: CredentialStore(operations: ClientRuntimeCredentials()),
+            credentialStore: CredentialStore(directoryURL: serverDirectory),
             onCommittedRevision: { old, commit in
                 await relay.acceptCommittedExternalRevision(from: old, commit: commit)
             }
         )
         let state = try await ingress.enable(clientDirectory: clientDirectory)
-        XCTAssertNotNil(state.connection)
+        let connection = try XCTUnwrap(state.connection)
         XCTAssertTrue(state.grants.isEmpty)
+        let credential = try XCTUnwrap(try LocalAutomationPaths.readCredential())
+        let serverCopy = try await CredentialStore(directoryURL: serverDirectory)
+            .loadCredential(for: connection)
+        XCTAssertEqual(serverCopy, credential)
         let controller = LocalAutomationController(ingress: ingress)
         do {
             try await controller.startIfEnabled()
@@ -174,6 +185,17 @@ final class LocalAutomationClientRuntimeTests: XCTestCase {
             let revoked = try await runClient(browse)
             XCTAssertEqual(revoked.exitCode, 3)
             XCTAssertEqual(revoked.stderr, Data("clipyctl: not_enrolled\n".utf8))
+            XCTAssertNil(try LocalAutomationPaths.readCredential())
+            let retainedServerCopy = try await CredentialStore(directoryURL: serverDirectory)
+                .loadCredential(for: connection)
+            XCTAssertEqual(retainedServerCopy, credential,
+                           "Revocation removes client custody but retains server verification bytes")
+            let retainedClient = try await LocalAutomationClient.connect(
+                endpointURL: LocalAutomationPaths.endpointURL
+            )
+            let revokedPresentation = await retainedClient.request(browse, credential: credential)
+            XCTAssertEqual(revokedPresentation.exitCode, 3)
+            XCTAssertEqual(revokedPresentation.stderr, Data("clipyctl: connection_revoked\n".utf8))
         } catch {
             await controller.stop()
             throw error
@@ -284,21 +306,4 @@ final class LocalAutomationClientRuntimeTests: XCTestCase {
     }
 
     private enum ProcessFailure: Error { case didNotExit, pipeUnavailable, initialPageUnavailable }
-}
-
-private struct ClientRuntimeCredentials: CredentialStoreExternalOperations {
-    private var values: [ExternalConnectionID: Data] = [:]
-    init() {}
-    func connectionIDs() throws -> [ExternalConnectionID] { Array(values.keys) }
-    mutating func addCredential(_ data: Data, for connection: ExternalConnectionID) -> CredentialStoreAddResult {
-        values[connection] = data
-        return .stored
-    }
-    func copyCredential(for connection: ExternalConnectionID) -> CredentialStoreCopyResult {
-        values[connection].map(CredentialStoreCopyResult.value) ?? .missing
-    }
-    mutating func deleteCredential(for connection: ExternalConnectionID) -> CredentialStoreDeleteResult {
-        values.removeValue(forKey: connection)
-        return .deletedOrMissing
-    }
 }

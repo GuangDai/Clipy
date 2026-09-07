@@ -268,7 +268,12 @@ final class LocalAutomationSocketTests: XCTestCase {
     private func withFixture(_ body: @MainActor @Sendable (Fixture) async throws -> Void) async throws {
         let directory = URL(fileURLWithPath: "/tmp/clipy-wire-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: false,
+            attributes: [.posixPermissions: NSNumber(value: 0o700)]
+        )
         let endpoint = directory.appendingPathComponent("automation.sock")
+        let serverDirectory = directory.appendingPathComponent("server-credentials", isDirectory: true)
         let history = try await SwiftDataHistory.open(configuration: .init(persistence: .memory))
         for index in 0..<3 {
             _ = try await history.perform(.capture(.init(
@@ -282,10 +287,17 @@ final class LocalAutomationSocketTests: XCTestCase {
         }
         let connection = ExternalConnectionID(rawValue: UUID())
         let credential = try LocalAutomationCredential(connection: connection, secret: Data(repeating: 0x57, count: 32))
+        let credentialWriter = CredentialStore(directoryURL: serverDirectory)
+        try await credentialWriter.storeCredential(credential.exactBytes, for: connection)
+        // Authentication uses a second actor opening the real server files,
+        // not an in-memory map or the writer's retained state.
+        let credentialReader = CredentialStore(directoryURL: serverDirectory)
+        let restoredCredential = try await credentialReader.loadCredential(for: connection)
+        XCTAssertEqual(restoredCredential, credential.exactBytes)
         try await history.authority.publishVerifiedLocalAutomationEnrollment(connection, displayName: "Real socket test")
         let ingress = LocalAutomationIngress(
             authority: history.authority, gateway: history.externalGateway,
-            credentialStore: CredentialStore(operations: MemoryCredentials(values: [connection: credential.exactBytes]))
+            credentialStore: credentialReader
         )
         let service = LocalAutomationService(ingress: ingress, endpointURL: endpoint)
         try await service.start()
@@ -311,21 +323,5 @@ final class LocalAutomationSocketTests: XCTestCase {
         XCTAssertEqual(output.stderr, Data())
         let envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: output.stdout) as? [String: Any])
         return try XCTUnwrap(envelope["result"] as? [String: Any])
-    }
-}
-
-private struct MemoryCredentials: CredentialStoreExternalOperations {
-    var values: [ExternalConnectionID: Data]
-    func connectionIDs() throws -> [ExternalConnectionID] { Array(values.keys) }
-    mutating func addCredential(_ data: Data, for connection: ExternalConnectionID) -> CredentialStoreAddResult {
-        values[connection] = data
-        return .stored
-    }
-    func copyCredential(for connection: ExternalConnectionID) -> CredentialStoreCopyResult {
-        values[connection].map(CredentialStoreCopyResult.value) ?? .missing
-    }
-    mutating func deleteCredential(for connection: ExternalConnectionID) -> CredentialStoreDeleteResult {
-        values.removeValue(forKey: connection)
-        return .deletedOrMissing
     }
 }
