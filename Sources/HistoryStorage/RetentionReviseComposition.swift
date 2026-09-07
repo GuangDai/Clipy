@@ -70,16 +70,14 @@ extension HistoryAuthority {
             let currentTotal = try RetentionConfigLoading.totalRetainedBytes(in: database)
             let withoutOldRevisions = try RetentionConfigLoading.checkedSubtract(currentTotal, oldRevisionBytes)
             let projectedTotal = try RetentionConfigLoading.checkedAdd(withoutOldRevisions, projectedRevisionBytes)
-            let victims = try RetentionConfigLoading.itemRetirements(
+            let prefix = try RetentionConfigLoading.retirementPrefix(
                 in: database,
                 policies: HistoryRetentionPolicies(age: nil, storage: storagePolicy, revisions: nil),
                 now: bundle.domain.createdAt,
                 protectedItemID: revisedItemID,
-                alreadyRemoved: [],
-                projectedTotalBytes: projectedTotal,
-                revisionByteOverrides: [revisedItemID: projectedRevisionBytes]
+                projectedTotalBytes: projectedTotal
             )
-            mutations.append(contentsOf: victims.map { .retire(itemID: $0, reason: .retention) })
+            if let prefix { mutations.append(.retirePrefix(prefix)) }
         }
         return MutationPlan(outcome: v1Plan.outcome, mutations: mutations)
     }

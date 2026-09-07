@@ -204,7 +204,10 @@ struct PerformanceFixtureSeedingTests {
         #expect(Set(page.rows.map(\.item.id)).count == 66)
 
         let details = try await history.details(for: coalescedReference.id)
-        let canonicalBytes = try #require(details.canonical.first?.bytes)
+        let canonicalType = try #require(details.canonical.first?.typeIdentifier)
+        let canonicalBytes = try await history.representation(.init(
+            item: details.item, basis: .canonical, typeIdentifier: canonicalType
+        )).bytes
         #expect(canonicalBytes.count == Self.batchedFixtureBodyBytes)
         let payload = try await history.pastePayload(for: coalescedReference.id)
         #expect(payload.representations.first?.bytes == canonicalBytes)

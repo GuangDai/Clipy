@@ -71,9 +71,18 @@ struct UTF16RevisionJourneyTests {
         let details = try await history.details(for: item.id)
         #expect(details.item == item)
         #expect(details.canonical.map(\.typeIdentifier) == [fixture.typeIdentifier])
-        #expect(details.canonical.map(\.bytes) == [fixture.canonical])
+        #expect(details.canonical.map(\.byteCount) == [fixture.canonical.count])
         #expect(details.effective.map(\.typeIdentifier) == [fixture.typeIdentifier])
-        #expect(details.effective.map(\.bytes) == [bytes])
+        #expect(details.effective.map(\.byteCount) == [bytes.count])
+        #expect(details.effectiveMatchesCanonical == (fixture.canonical == bytes))
+        let canonicalValue = try await history.representation(.init(
+            item: item, basis: .canonical, typeIdentifier: fixture.typeIdentifier
+        ))
+        let effectiveValue = try await history.representation(.init(
+            item: item, basis: .effective, typeIdentifier: fixture.typeIdentifier
+        ))
+        #expect(canonicalValue.bytes == fixture.canonical)
+        #expect(effectiveValue.bytes == bytes)
         #expect(details.revisions.count == stage)
 
         let recent = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 10))

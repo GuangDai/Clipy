@@ -696,6 +696,10 @@ private actor FirstCaptureLowDiskFailingHistory: ClipboardHistory {
         try await base.details(for: id)
     }
 
+    func representation(_ request: HistoryRepresentationRequest) async throws -> HistoryRepresentation {
+        try await base.representation(request)
+    }
+
     func pastePayload(for id: HistoryItemID) async throws -> PastePayload {
         try await base.pastePayload(for: id)
     }
@@ -855,6 +859,10 @@ actor FirstCaptureSuspendingHistory: ClipboardHistory {
 
     func details(for id: HistoryItemID) async throws -> HistoryDetails {
         try await base.details(for: id)
+    }
+
+    func representation(_ request: HistoryRepresentationRequest) async throws -> HistoryRepresentation {
+        try await base.representation(request)
     }
 
     func pastePayload(for id: HistoryItemID) async throws -> PastePayload {

@@ -302,10 +302,10 @@ struct GatewayExternalReadTests {
         #expect(details.details.item == item)
         #expect(details.title == Self.privateText)
         #expect(details.revisionCount == 0)
-        #expect(
-            details.details.effective.first?.bytes
-                == Data(Self.privateText.utf8)
-        )
+        #expect(details.details.effective == [HistoryRepresentationMetadata(
+            typeIdentifier: "public.utf8-plain-text",
+            byteCount: Data(Self.privateText.utf8).count
+        )])
 
         let pasteResult = try await Self.read(
             .pastePayload(item.id),

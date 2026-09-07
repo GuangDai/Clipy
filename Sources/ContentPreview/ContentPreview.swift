@@ -22,6 +22,41 @@ package struct PreviewRepresentation: Equatable, Sendable {
     }
 }
 
+/// Payload-free source facts. Preparation never reads or retains content.
+package struct PreviewRepresentationMetadata: Sendable, Equatable {
+    package let typeIdentifier: String
+    package let byteCount: Int
+
+    package init(typeIdentifier: String, byteCount: Int) {
+        self.typeIdentifier = typeIdentifier
+        self.byteCount = byteCount
+    }
+}
+
+/// One candidate chosen by the concrete preview owner. Callers only fetch its
+/// bytes; source priority, resource limits and fallback stay in ContentPreview.
+package struct PreviewSource: Sendable {
+    package let representationIndex: Int
+    package let typeIdentifier: String
+    package let byteCount: Int
+    fileprivate let maximumInputBytes: Int
+    fileprivate let kind: Kind
+
+    fileprivate enum Kind: Sendable {
+        case image, text(PreviewTextCodec), rtf, html, pdf, reference
+    }
+
+    package var preflightFailure: PreviewOutcome? {
+        guard byteCount >= 0 else { return .failed(.malformedRepresentation) }
+        return byteCount > maximumInputBytes ? .failed(.resourceLimit) : nil
+    }
+
+    package func permitsFallback(after outcome: PreviewOutcome) -> Bool {
+        if case .text = kind { return outcome == .failed(.malformedRepresentation) }
+        return false
+    }
+}
+
 package struct PreviewText: Equatable, Sendable {
     package static let maximumCharacters = 50_000
 
@@ -125,148 +160,121 @@ package actor ContentPreview {
 
     package init() {}
 
-    /// Common-caller preset: history-owned Effective Content bytes, the
-    /// image/exact-text/RTF/HTML/PDF/reference selection and fixed history-pane
-    /// resource profile. No History identity or lifecycle enters this actor.
-    package func renderHistoryPane(
-        _ representations: [PreviewRepresentation]
-    ) async -> PreviewOutcome {
-        await render(representations, operation: .historyPane)
+    /// Metadata-only preparation. An image is authoritative; otherwise exact
+    /// text candidates may fail decoding before one rich/PDF/reference source
+    /// applies. Unrelated representation bytes never enter the preview job.
+    package static func prepareHistoryPane(
+        _ representations: [PreviewRepresentationMetadata]
+    ) -> [PreviewSource] {
+        func source(_ index: Int, _ kind: PreviewSource.Kind, maximum: Int = 64 * 1_048_576) -> PreviewSource {
+            PreviewSource(
+                representationIndex: index, typeIdentifier: representations[index].typeIdentifier,
+                byteCount: representations[index].byteCount, maximumInputBytes: maximum, kind: kind
+            )
+        }
+        if let index = representations.firstIndex(where: { imageTypeIdentifiers.contains($0.typeIdentifier) }) {
+            return [source(index, .image)]
+        }
+        var candidates: [PreviewSource] = []
+        for (index, representation) in representations.enumerated() {
+            if let codec = PreviewTextCodec(typeIdentifier: representation.typeIdentifier) {
+                candidates.append(source(index, .text(codec)))
+            }
+        }
+        if let index = representations.firstIndex(where: { $0.typeIdentifier == ClipboardFormatIdentifier.rtf.rawValue }) {
+            candidates.append(source(index, .rtf, maximum: 1_048_576))
+        } else if let index = representations.firstIndex(where: { $0.typeIdentifier == ClipboardFormatIdentifier.html.rawValue }) {
+            candidates.append(source(index, .html, maximum: 1_048_576))
+        } else if let index = representations.firstIndex(where: { $0.typeIdentifier == ClipboardFormatIdentifier.pdf.rawValue }) {
+            candidates.append(source(index, .pdf))
+        } else if let index = representations.firstIndex(where: {
+            $0.typeIdentifier == ClipboardFormatIdentifier.url.rawValue
+                || $0.typeIdentifier == ClipboardFormatIdentifier.fileURL.rawValue
+        }) {
+            candidates.append(source(index, .reference, maximum: 16 * 1_024))
+        }
+        return candidates
     }
 
-    /// Display-only PNG materialization for an encoded payload whose semantic
-    /// owner already selected, version-fenced, and bounded it. In particular,
-    /// ThumbnailStore/HistoryStorage retain all row-thumbnail request/source/
-    /// cache policy; this method knows only inert PNG bytes.
-    package func rasterizePNGForDisplay(_ bytes: Data) async -> PreviewOutcome {
-        await render(
-            [PreviewRepresentation(typeIdentifier: "public.png", bytes: bytes)],
-            operation: .displayPNG
+    /// In-memory convenience for explicitly loaded files and direct fixtures.
+    /// It uses exactly the same metadata preparation and selected renderer as
+    /// History's lazy representation reader; it owns no second source policy.
+    package func renderHistoryPane(_ representations: [PreviewRepresentation]) async -> PreviewOutcome {
+        guard !Task.isCancelled else { return .failed(.cancelled) }
+        let sources = Self.prepareHistoryPane(representations.map {
+            PreviewRepresentationMetadata(typeIdentifier: $0.typeIdentifier, byteCount: $0.bytes.count)
+        })
+        var outcome = PreviewOutcome.unavailable(.unsupported)
+        for source in sources {
+            outcome = await renderSelectedHistoryPane(source, representation: representations[source.representationIndex])
+            if !source.permitsFallback(after: outcome) { return outcome }
+        }
+        return outcome
+    }
+
+    package func renderSelectedHistoryPane(
+        _ source: PreviewSource, representation: PreviewRepresentation
+    ) async -> PreviewOutcome {
+        if let failure = source.preflightFailure { return failure }
+        guard representation.typeIdentifier.utf8.elementsEqual(source.typeIdentifier.utf8),
+              representation.bytes.count == source.byteCount else { return .failed(.malformedRepresentation) }
+        return await renderRepresentation(
+            representation, kind: source.kind, maximumInputBytes: source.maximumInputBytes, profile: .historyPane
         )
     }
 
-    private func render(
-        _ representations: [PreviewRepresentation],
-        operation: RenderOperation
+    /// Display-only PNG materialization. Thumbnail request/source/version
+    /// ownership remains entirely with HistoryStorage/ThumbnailStore.
+    package func rasterizePNGForDisplay(_ bytes: Data) async -> PreviewOutcome {
+        await renderRepresentation(
+            PreviewRepresentation(typeIdentifier: "public.png", bytes: bytes),
+            kind: .image, maximumInputBytes: ResourceProfile.displayPNG.maximumInputBytes, profile: .displayPNG
+        )
+    }
+
+    private func renderRepresentation(
+        _ representation: PreviewRepresentation, kind: PreviewSource.Kind,
+        maximumInputBytes: Int, profile: ResourceProfile
     ) async -> PreviewOutcome {
+        guard representation.bytes.count <= maximumInputBytes else { return .failed(.resourceLimit) }
         #if DEBUG
-        guard let sourceBytes = checkedSourceByteCount(
-            representations,
-            maximum: operation.resourceProfile.maximumInputBytes
-        ) else {
-            return .failed(.resourceLimit)
-        }
         debugActiveJobs += 1
-        debugRetainedSourceBytes += sourceBytes
+        debugRetainedSourceBytes += representation.bytes.count
         defer {
             debugActiveJobs -= 1
-            debugRetainedSourceBytes -= sourceBytes
-        }
-        #else
-        guard checkedSourceByteCount(
-            representations,
-            maximum: operation.resourceProfile.maximumInputBytes
-        ) != nil else {
-            return .failed(.resourceLimit)
+            debugRetainedSourceBytes -= representation.bytes.count
         }
         #endif
-
         guard !Task.isCancelled else { return .failed(.cancelled) }
-        switch operation {
-        case .historyPane:
-            return await resolveHistoryPane(representations)
-        case .displayPNG:
-            return await renderRasterOffActor(
-                representations[0],
-                profile: operation.resourceProfile
+        switch kind {
+        case .image, .pdf:
+            return await renderRasterOffActor(representation, profile: profile)
+        case .text(let codec):
+            guard let decoded = codec.decode(representation.bytes), !decoded.isEmpty else {
+                return .failed(.malformedRepresentation)
+            }
+            let end = decoded.index(decoded.startIndex, offsetBy: PreviewText.maximumCharacters,
+                                    limitedBy: decoded.endIndex) ?? decoded.endIndex
+            return .content(.text(PreviewText(
+                text: String(decoded[..<end]), wasTruncated: end != decoded.endIndex
+            )))
+        case .rtf:
+            return PreviewRTFRenderer.render(representation.bytes)
+        case .html:
+            return PreviewHTMLRenderer.render(
+                representation.bytes, maximumInputBytes: maximumInputBytes, maximumOutputBytes: 1_048_576
             )
+        case .reference:
+            return PreviewReference.resolve(representation) ?? .unavailable(.unsupported)
         }
     }
 
     #if DEBUG
     package func debugSnapshot() -> ContentPreviewDebugSnapshot {
-        ContentPreviewDebugSnapshot(
-            activeJobs: debugActiveJobs,
-            retainedSourceBytes: debugRetainedSourceBytes,
-            queuedRasterJobs: rasterizationWaiters.count
-        )
+        ContentPreviewDebugSnapshot(activeJobs: debugActiveJobs, retainedSourceBytes: debugRetainedSourceBytes,
+                                    queuedRasterJobs: rasterizationWaiters.count)
     }
     #endif
-
-    private func resolveHistoryPane(
-        _ representations: [PreviewRepresentation]
-    ) async -> PreviewOutcome {
-        if let image = representations.first(where: {
-            Self.imageTypeIdentifiers.contains($0.typeIdentifier)
-        }) {
-            return await renderRasterOffActor(image, profile: .historyPane)
-        }
-
-        var sawTextCandidate = false
-        for representation in representations {
-            guard let codec = PreviewTextCodec(
-                typeIdentifier: representation.typeIdentifier
-            ) else { continue }
-            sawTextCandidate = true
-            guard representation.bytes.count <= ResourceProfile.historyPane.maximumInputBytes,
-                  let decoded = codec.decode(representation.bytes),
-                  !decoded.isEmpty
-            else { continue }
-            // Find the display cutoff once. Counting every Character first
-            // needlessly walks the undisplayed suffix of a large text value.
-            let end = decoded.index(
-                decoded.startIndex,
-                offsetBy: PreviewText.maximumCharacters,
-                limitedBy: decoded.endIndex
-            ) ?? decoded.endIndex
-            let wasTruncated = end != decoded.endIndex
-            // Keep selectable text an exact source prefix. Presentation owns
-            // a separate truncation notice; it must not become copied text.
-            let body = wasTruncated
-                ? String(decoded[..<end])
-                : decoded
-            return .content(.text(PreviewText(
-                text: body,
-                wasTruncated: wasTruncated
-            )))
-        }
-        // Rich formats contribute derived plain text only (06 §5). Their
-        // concrete parsers never import attachments, execute fields/scripts,
-        // or follow copied addresses. Exact plain text above remains preferred.
-        if let rtf = representations.first(where: {
-            $0.typeIdentifier == ClipboardFormatIdentifier.rtf.rawValue
-        }) {
-            return PreviewRTFRenderer.render(rtf.bytes)
-        }
-        if let html = representations.first(where: {
-            $0.typeIdentifier == ClipboardFormatIdentifier.html.rawValue
-        }) {
-            return PreviewHTMLRenderer.render(
-                html.bytes,
-                maximumInputBytes: 1_048_576,
-                maximumOutputBytes: 1_048_576
-            )
-        }
-        // A PDF supplies an inert first-page raster when no preferred image
-        // or text applies. Keep the first exact PDF authoritative
-        // for this purpose; a malformed one does not skip to a later sibling.
-        if let pdf = representations.first(where: {
-            $0.typeIdentifier == ClipboardFormatIdentifier.pdf.rawValue
-        }) {
-            return await renderRasterOffActor(pdf, profile: .historyPane)
-        }
-        // A reference is useful when no existing image/text/PDF preview applies.
-        // Parsing the first exact URL candidate never opens its destination;
-        // its bounded address/path artifact carries no loading capability.
-        for representation in representations {
-            if let reference = PreviewReference.resolve(representation) {
-                return reference
-            }
-        }
-        return sawTextCandidate
-            ? .failed(.malformedRepresentation)
-            : .unavailable(.unsupported)
-    }
 
     /// One production suspension exists around native raster work in every
     /// build: the actor remains available to resolve a newer text preview,
@@ -424,24 +432,6 @@ package actor ContentPreview {
         )))
     }
 
-    /// Admit the complete immutable source snapshot before route selection.
-    /// Opaque siblings still consume the fixed profile; otherwise a tiny
-    /// selected artifact could hide unbounded retained input (REVIEW 08 §6.2).
-    private func checkedSourceByteCount(
-        _ representations: [PreviewRepresentation],
-        maximum: Int
-    ) -> Int? {
-        var total = 0
-        for representation in representations {
-            let (next, overflow) = total.addingReportingOverflow(
-                representation.bytes.count
-            )
-            guard !overflow, next <= maximum else { return nil }
-            total = next
-        }
-        return total
-    }
-
     private static func checkedMultiply(_ lhs: Int, _ rhs: Int) -> Int? {
         let (result, overflow) = lhs.multipliedReportingOverflow(by: rhs)
         return overflow ? nil : result
@@ -449,20 +439,6 @@ package actor ContentPreview {
 }
 
 private extension ContentPreview {
-    enum RenderOperation: Sendable {
-        case historyPane
-        case displayPNG
-
-        var resourceProfile: ResourceProfile {
-            switch self {
-            case .historyPane:
-                .historyPane
-            case .displayPNG:
-                .displayPNG
-            }
-        }
-    }
-
     struct ResourceProfile: Sendable {
         let maximumInputBytes: Int
         let maximumPixelExtent: Int
@@ -491,7 +467,7 @@ private extension ContentPreview {
     ]
 }
 
-private enum PreviewTextCodec: Sendable {
+fileprivate enum PreviewTextCodec: Sendable {
     case declared(DeclaredStringCodec)
 
     init?(typeIdentifier: String) {

@@ -1,7 +1,6 @@
-/// Detail, paste, and thumbnail DTOs — the caller-facing result values of the
-/// detail/paste/thumbnail queries. Detail is the only general UI query that
-/// returns content lineage bytes; paste returns current Effective Content
-/// only; thumbnail returns encoded, `Sendable` bytes rather than
+/// Purpose-specific detail and content DTOs. Details carry metadata only;
+/// explicit representation reads return one requested payload, paste returns
+/// current Effective Content, and thumbnail returns encoded bytes rather than
 /// `NSImage`/`CGImage`.
 /// Owning spec: docs/03b-instruction-set.md §9 (Part III — Caller Interface B).
 /// Foundation-only.
@@ -16,6 +15,38 @@ public struct HistoryRepresentation: Sendable, Hashable {
     public init(typeIdentifier: String, bytes: Data) {
         self.typeIdentifier = typeIdentifier
         self.bytes = bytes
+    }
+}
+
+/// Metadata for one stored representation. No payload is read to produce it.
+/// The identifier preserves its exact persisted spelling (V2-09 §5).
+public struct HistoryRepresentationMetadata: Sendable, Hashable {
+    public let typeIdentifier: String
+    public let byteCount: Int
+
+    public init(typeIdentifier: String, byteCount: Int) {
+        self.typeIdentifier = typeIdentifier
+        self.byteCount = byteCount
+    }
+}
+
+/// Which content state an explicit representation request addresses.
+public enum HistoryContentBasis: Sendable, Hashable {
+    case canonical
+    case effective
+}
+
+/// One purpose-selected payload at an exact current item version. Even a
+/// Canonical request rejects a stale version rather than mixing UI snapshots.
+public struct HistoryRepresentationRequest: Sendable, Hashable {
+    public let item: HistoryItemReference
+    public let basis: HistoryContentBasis
+    public let typeIdentifier: String
+
+    public init(item: HistoryItemReference, basis: HistoryContentBasis, typeIdentifier: String) {
+        self.item = item
+        self.basis = basis
+        self.typeIdentifier = typeIdentifier
     }
 }
 
@@ -70,29 +101,36 @@ public struct CopyOccurrenceSummary: Sendable, Hashable {
     }
 }
 
-/// Full detail for one item: canonical and effective content lineage bytes,
-/// revision summaries, occurrence facts, and pin placement.
-/// The only general UI query that returns content lineage bytes.
-/// docs/03b-instruction-set.md §9
+/// Metadata for one item, including immutable revision summaries. No content
+/// payload is materialized by this read, including Canonical/current payloads.
+/// Explicit reads use `HistoryRepresentationRequest` (V2-09 §5).
 public struct HistoryDetails: Sendable, Hashable {
     public let item: HistoryItemReference
-    public let canonical: [HistoryRepresentation]
-    public let effective: [HistoryRepresentation]
+    public let title: String
+    public let canonical: [HistoryRepresentationMetadata]
+    public let effective: [HistoryRepresentationMetadata]
+    /// Byte-exact equality computed when content is prepared and committed;
+    /// metadata equality alone cannot establish this fact.
+    public let effectiveMatchesCanonical: Bool
     public let revisions: [RevisionSummary]
     public let occurrence: CopyOccurrenceSummary
     public let pinnedPosition: Int?
 
     package init(
         item: HistoryItemReference,
-        canonical: [HistoryRepresentation],
-        effective: [HistoryRepresentation],
+        title: String,
+        canonical: [HistoryRepresentationMetadata],
+        effective: [HistoryRepresentationMetadata],
+        effectiveMatchesCanonical: Bool,
         revisions: [RevisionSummary],
         occurrence: CopyOccurrenceSummary,
         pinnedPosition: Int?
     ) {
         self.item = item
+        self.title = title
         self.canonical = canonical
         self.effective = effective
+        self.effectiveMatchesCanonical = effectiveMatchesCanonical
         self.revisions = revisions
         self.occurrence = occurrence
         self.pinnedPosition = pinnedPosition

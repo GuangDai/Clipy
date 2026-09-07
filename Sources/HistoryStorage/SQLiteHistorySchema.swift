@@ -50,6 +50,7 @@ internal enum SQLiteHistorySchema {
             titleUTF8 BLOB NOT NULL,
             searchBodyUTF8 BLOB NOT NULL,
             effectiveTypeIdentifiersBlob BLOB NOT NULL,
+            effectiveMatchesCanonical INTEGER NOT NULL CHECK (effectiveMatchesCanonical IN (0, 1)),
             firstCopiedAt REAL NOT NULL,
             lastCopiedAt REAL NOT NULL,
             copyCount BLOB NOT NULL CHECK (length(copyCount) = 8),

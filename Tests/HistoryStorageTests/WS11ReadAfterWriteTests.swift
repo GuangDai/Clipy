@@ -195,21 +195,31 @@ private static func replaceTextRequest(
         activeRevision.isActive,
         "WS11 (d): the single revision is the active one"
     )
-    // WS11 (d): effective carries the NEW bytes; canonical keeps the ORIGINAL.
+    #expect(detailsAfterRevise.title == revisedTextA)
+    #expect(!detailsAfterRevise.effectiveMatchesCanonical)
+    // WS11 (d): metadata exposes exact lengths; explicit reads establish bytes.
     #expect(
         detailsAfterRevise.effective.contains {
             $0.typeIdentifier == "public.utf8-plain-text"
-                && $0.bytes == Data(revisedTextA.utf8)
+                && $0.byteCount == revisedTextA.utf8.count
         },
-        "WS11 (d): details effective carries the revised bytes"
+        "WS11 (d): details effective describes the revised representation"
     )
     #expect(
         detailsAfterRevise.canonical.contains {
             $0.typeIdentifier == "public.utf8-plain-text"
-                && $0.bytes == Data(textA.utf8)
+                && $0.byteCount == textA.utf8.count
         },
-        "WS11 (d): details canonical keeps the original bytes"
+        "WS11 (d): details canonical describes the original representation"
     )
+    let effectiveRepresentation = try await history.representation(HistoryRepresentationRequest(
+        item: detailsAfterRevise.item, basis: .effective, typeIdentifier: "public.utf8-plain-text"
+    ))
+    let canonicalRepresentation = try await history.representation(HistoryRepresentationRequest(
+        item: detailsAfterRevise.item, basis: .canonical, typeIdentifier: "public.utf8-plain-text"
+    ))
+    #expect(effectiveRepresentation.bytes == Data(revisedTextA.utf8))
+    #expect(canonicalRepresentation.bytes == Data(textA.utf8))
 
     // WS11 (d): pastePayload returns the NEW (revised) bytes.
     let payloadAfterRevise = try await history.pastePayload(for: alphaRef.id)

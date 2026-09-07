@@ -1,5 +1,15 @@
 ## Part III — Caller Interface (B): DTOs, failures & caller examples
 
+> **2026-09-07:** [V2-09](v2/V2-09-multilevel-storage.md) replaces the raw
+> `HistoryDetails` DTO below with metadata-only Canonical/Effective arrays,
+> `title` and `effectiveMatchesCanonical`. Explicit version-bound
+> `representation` reads return one original representation without truncation;
+> missing requested payload is an error, while unrelated payload files are not
+> read. Details previews and Save As request only the chosen representation.
+> Editor Replace loads its selected text source; Keep Current uses
+> `inheritCurrent`. Metadata reload preserves an already valid authored draft
+> and codec without reading unrelated Canonical or new Effective bytes.
+
 ### 8. Browse DTOs
 
 ```swift

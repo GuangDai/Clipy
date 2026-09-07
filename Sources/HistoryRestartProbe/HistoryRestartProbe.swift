@@ -648,11 +648,7 @@ private func pressureReviseRequest(
     ))
 }
 
-/// Expected bytes for one projection slot of the validation table.
-/// `HistoryRepresentation`'s initializer is package-only, so the probe
-/// compares field-by-field (`map(\.typeIdentifier)` / `map(\.bytes)`)
-/// instead of constructing the public DTO — the same stance as
-/// `largeBlobVerify`.
+/// Expected bytes for one explicit representation read in the validation table.
 private struct ValidationRepresentation {
     let typeIdentifier: String
     let bytes: Data
@@ -661,6 +657,23 @@ private struct ValidationRepresentation {
         self.typeIdentifier = typeIdentifier
         self.bytes = bytes
     }
+}
+
+/// Validation walks explicit representation reads one at a time. Metadata
+/// stays payload-free and no replacement all-content Details value is built.
+private func representationBytesMatch(
+    _ details: HistoryDetails, basis: HistoryContentBasis,
+    expected: [ValidationRepresentation], in history: SQLiteHistory
+) async throws -> Bool {
+    let metadata = basis == .canonical ? details.canonical : details.effective
+    guard metadata.map(\.typeIdentifier) == expected.map(\.typeIdentifier) else { return false }
+    for value in expected {
+        let actual = try await history.representation(.init(
+            item: details.item, basis: basis, typeIdentifier: value.typeIdentifier
+        ))
+        guard actual.bytes == value.bytes else { return false }
+    }
+    return true
 }
 
 /// One fixed row of the external-clone validation table: the capture the
@@ -1177,8 +1190,8 @@ private func requireSeedState(
     guard bravo.item.id.rawValue == manifest.bravo,
           bravo.item == page.rows[0].item,
           bravo.canonical.map(\.typeIdentifier) == [textType],
-          bravo.canonical.map(\.bytes) == [Data(bravoText.utf8)],
-          bravo.effective == bravo.canonical,
+          try await history.representation(.init(item: bravo.item, basis: .canonical, typeIdentifier: textType)).bytes == Data(bravoText.utf8),
+          bravo.effectiveMatchesCanonical,
           bravo.revisions.isEmpty,
           bravo.occurrence.firstCopiedAt == bravoDate,
           bravo.occurrence.lastCopiedAt == bravoDate,
@@ -1193,8 +1206,8 @@ private func requireSeedState(
     guard alpha.item.id.rawValue == manifest.alpha,
           alpha.item == page.rows[1].item,
           alpha.canonical.map(\.typeIdentifier) == [textType],
-          alpha.canonical.map(\.bytes) == [Data(alphaText.utf8)],
-          alpha.effective == alpha.canonical,
+          try await history.representation(.init(item: alpha.item, basis: .canonical, typeIdentifier: textType)).bytes == Data(alphaText.utf8),
+          alpha.effectiveMatchesCanonical,
           alpha.revisions.isEmpty,
           alpha.occurrence.firstCopiedAt == alphaFirstDate,
           alpha.occurrence.lastCopiedAt == alphaFirstDate,
@@ -1244,8 +1257,8 @@ private func requireSeedTextDetails(
     guard details.item.id.rawValue == id,
           details.item == row.item,
           details.canonical.map(\.typeIdentifier) == [textType],
-          details.canonical.map(\.bytes) == [Data(text.utf8)],
-          details.effective == details.canonical,
+          try await history.representation(.init(item: details.item, basis: .canonical, typeIdentifier: textType)).bytes == Data(text.utf8),
+          details.effectiveMatchesCanonical,
           details.revisions.isEmpty,
           details.occurrence.firstCopiedAt == date,
           details.occurrence.lastCopiedAt == date,
@@ -1309,8 +1322,8 @@ private func requireBlobSeedState(
     guard blobDetails.item == page.rows[0].item,
           blobDetails.canonical.count == 1,
           blobDetails.canonical[0].typeIdentifier == largeBlobType,
-          blobDetails.canonical[0].bytes == expected,
-          blobDetails.effective == blobDetails.canonical,
+          try await history.representation(.init(item: blobDetails.item, basis: .canonical, typeIdentifier: largeBlobType)).bytes == expected,
+          blobDetails.effectiveMatchesCanonical,
           blobDetails.revisions.isEmpty,
           blobDetails.occurrence.firstCopiedAt == pressureReviseDate,
           blobDetails.occurrence.lastCopiedAt == pressureReviseDate,
@@ -1527,8 +1540,8 @@ private func largeBlobVerify(storeURL: URL) async throws {
     guard details.item == page.rows[0].item,
           details.canonical.count == 1,
           details.canonical[0].typeIdentifier == largeBlobType,
-          details.canonical[0].bytes == expected,
-          details.effective == details.canonical,
+          try await history.representation(.init(item: details.item, basis: .canonical, typeIdentifier: largeBlobType)).bytes == expected,
+          details.effectiveMatchesCanonical,
           details.revisions.isEmpty,
           details.occurrence.firstCopiedAt == largeBlobDate,
           details.occurrence.lastCopiedAt == largeBlobDate,
@@ -1738,13 +1751,14 @@ private func validateAll(storeURL: URL) async throws {
         let itemID = row.item.id
         let details = try await history.details(for: itemID)
         guard details.item == row.item,
+              details.title == fixture.title,
               details.item.id.rawValue == manifest.itemIDs[fixtureIndex],
               details.canonical.map(\.typeIdentifier)
                   == fixture.canonical.map(\.typeIdentifier),
-              details.canonical.map(\.bytes) == fixture.canonical.map(\.bytes),
+              try await representationBytesMatch(details, basis: .canonical, expected: fixture.canonical, in: history),
               details.effective.map(\.typeIdentifier)
                   == fixture.effective.map(\.typeIdentifier),
-              details.effective.map(\.bytes) == fixture.effective.map(\.bytes),
+              try await representationBytesMatch(details, basis: .effective, expected: fixture.effective, in: history),
               details.revisions.count == fixture.expectedRevisionCount,
               details.occurrence.firstCopiedAt == fixture.capture.observedAt,
               details.occurrence.lastCopiedAt == fixture.capture.observedAt,
@@ -1767,9 +1781,12 @@ private func validateAll(storeURL: URL) async throws {
         }
 
         let paste = try await history.pastePayload(for: itemID)
+        let pasteMetadata = paste.representations.map {
+            HistoryRepresentationMetadata(typeIdentifier: $0.typeIdentifier, byteCount: $0.bytes.count)
+        }
         guard paste.item == details.item,
               paste.lineageHint == itemID,
-              paste.representations == details.effective,
+              pasteMetadata == details.effective,
               paste.representations.count == fixture.effective.count,
               paste.representations.map(\.typeIdentifier)
                   == fixture.effective.map(\.typeIdentifier),
@@ -2015,10 +2032,10 @@ private func pressureReviseVerify(storeURL: URL) async throws {
     guard blobDetails.item == page.rows[0].item,
           blobDetails.canonical.count == 1,
           blobDetails.canonical[0].typeIdentifier == largeBlobType,
-          blobDetails.canonical[0].bytes == canonicalBytes,
+          try await history.representation(.init(item: blobDetails.item, basis: .canonical, typeIdentifier: largeBlobType)).bytes == canonicalBytes,
           blobDetails.effective.count == 1,
           blobDetails.effective[0].typeIdentifier == largeBlobType,
-          blobDetails.effective[0].bytes == revisedBytes,
+          try await history.representation(.init(item: blobDetails.item, basis: .effective, typeIdentifier: largeBlobType)).bytes == revisedBytes,
           blobDetails.revisions.count == 1,
           blobDetails.revisions[0].isActive,
           blobDetails.revisions[0].byteCount == largeBlobByteCount,
@@ -2169,8 +2186,8 @@ private func verify(storeURL: URL) async throws {
     guard alpha.item.id.rawValue == manifest.alpha,
           alpha.item == page.rows[0].item,
           alpha.canonical.map(\.typeIdentifier) == [textType],
-          alpha.canonical.map(\.bytes) == [Data(alphaText.utf8)],
-          alpha.effective == alpha.canonical,
+          try await history.representation(.init(item: alpha.item, basis: .canonical, typeIdentifier: textType)).bytes == Data(alphaText.utf8),
+          alpha.effectiveMatchesCanonical,
           alpha.revisions.isEmpty,
           alpha.occurrence.firstCopiedAt == alphaFirstDate,
           alpha.occurrence.lastCopiedAt == alphaSecondDate,
@@ -2185,8 +2202,8 @@ private func verify(storeURL: URL) async throws {
     guard bravo.item.id.rawValue == manifest.bravo,
           bravo.item == page.rows[1].item,
           bravo.canonical.map(\.typeIdentifier) == [textType],
-          bravo.canonical.map(\.bytes) == [Data(bravoText.utf8)],
-          bravo.effective == bravo.canonical,
+          try await history.representation(.init(item: bravo.item, basis: .canonical, typeIdentifier: textType)).bytes == Data(bravoText.utf8),
+          bravo.effectiveMatchesCanonical,
           bravo.revisions.isEmpty,
           bravo.occurrence.firstCopiedAt == bravoDate,
           bravo.occurrence.lastCopiedAt == bravoDate,

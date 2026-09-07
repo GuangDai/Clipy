@@ -20,7 +20,8 @@ struct StampedPlanTests {
             plan, currentPosition: ChangePosition(rawValue: 40),
             inputs: .revision(
                 currentVersion: ContentVersion(rawValue: 7),
-                existingRevisions: [old, survivor], projection: projection
+                existingRevisions: [old, survivor], projection: projection,
+                effectiveMatchesCanonical: false
             ), createdAt: timestamp
         )
         #expect(stamped.mutations.count == 1)
@@ -32,12 +33,17 @@ struct StampedPlanTests {
         #expect(payload.removedRevisionIDs == [old.id])
         #expect(payload.expectedCurrentVersion.rawValue == 7)
         #expect(payload.nextVersion.rawValue == 8)
+        #expect(!payload.effectiveMatchesCanonical)
         #expect(payload.retainedRevisionScalars == RetainedRevisionScalars(count: 2, bytes: 7))
         #expect(stamped.position.rawValue == 41)
         #expect(stamped.hasDestructiveRetentionEffects)
         #expect(stamped.hcrAppend.changePositionRaw == 41)
-        #expect(stamped.hcrAppend.affectedItemIDs == [itemID])
-        #expect(stamped.receiptOutcome == .revised(HistoryItemReference(id: itemID, contentVersion: ContentVersion(rawValue: 8))))
+        #expect(stamped.hcrAppend.affectedItems == .explicit([itemID]))
+        guard case .revised(let reference) = stamped.receiptOutcome else {
+            Issue.record("Expected revised receipt")
+            return
+        }
+        #expect(reference == HistoryItemReference(id: itemID, contentVersion: ContentVersion(rawValue: 8)))
     }
 
     @Test
@@ -51,7 +57,7 @@ struct StampedPlanTests {
         )
         let stamped = try CommitPlanStamper.stamp(
             plan, currentPosition: ChangePosition(rawValue: 8),
-            inputs: .prune(lineagesByItem: [itemID: PruneLineage(revisions: [removed, active], activeRevisionID: active.id)]),
+            inputs: .prune(itemID: itemID, lineage: PruneLineage(revisions: [removed, active], activeRevisionID: active.id)),
             createdAt: timestamp
         )
         guard case .pruneRevisions(let target, let removedIDs, let scalars) = stamped.mutations.first else {
@@ -64,7 +70,12 @@ struct StampedPlanTests {
         #expect(stamped.position.rawValue == 9)
         #expect(!stamped.requiresFinalPinOrderValidation)
         #expect(stamped.hasDestructiveRetentionEffects)
-        #expect(stamped.receiptOutcome == .retentionPoliciesSet(retiredItems: 0, prunedRevisions: 1))
+        guard case .retentionPoliciesSet(let retired, let pruned) = stamped.receiptOutcome else {
+            Issue.record("Expected retention policies receipt")
+            return
+        }
+        #expect(retired == 0)
+        #expect(pruned == 1)
     }
 
     @Test
@@ -78,7 +89,7 @@ struct StampedPlanTests {
         #expect(throws: StampingRejection.incoherentPlan) {
             try CommitPlanStamper.stamp(
                 plan, currentPosition: ChangePosition(rawValue: 8),
-                inputs: .prune(lineagesByItem: [itemID: PruneLineage(revisions: [active], activeRevisionID: active.id)]),
+                inputs: .prune(itemID: itemID, lineage: PruneLineage(revisions: [active], activeRevisionID: active.id)),
                 createdAt: timestamp
             )
         }

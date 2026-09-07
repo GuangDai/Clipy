@@ -98,7 +98,7 @@ struct WS6ComposedRevisionOCCAndRevertTests {
         // shows no phantom advance.
         let afterStale = try await history.details(for: inserted.id)
         #expect(afterStale.item.contentVersion.rawValue == 2)
-        #expect(afterStale.effective.first?.bytes == Data(revisedText.utf8))
+        #expect((try await ComposedSupport.firstRepresentation(in: history, details: afterStale, basis: .effective)).bytes == Data(revisedText.utf8))
 
         // Revert from the current version to Canonical (docs/03a-instruction-set.md
         // §5 `.revert(to: .canonical)`): one successor Content Version, a
@@ -133,8 +133,8 @@ struct WS6ComposedRevisionOCCAndRevertTests {
 
         // Effective-derived reads updated: Effective and paste payload
         // carry the CANONICAL bytes again (docs/03b-instruction-set.md §9).
-        #expect(details.effective.first?.bytes == Data(originalText.utf8))
-        #expect(details.canonical.first?.bytes == Data(originalText.utf8))
+        #expect((try await ComposedSupport.firstRepresentation(in: history, details: details, basis: .effective)).bytes == Data(originalText.utf8))
+        #expect((try await ComposedSupport.firstRepresentation(in: history, details: details, basis: .canonical)).bytes == Data(originalText.utf8))
         let payload = try await history.pastePayload(for: inserted.id)
         #expect(payload.representations.first?.bytes == Data(originalText.utf8))
         #expect(payload.item.contentVersion == reverted.contentVersion)

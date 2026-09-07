@@ -150,15 +150,15 @@ package func planRemove(
 
 /// Plans the removal of the complete item set selected by a clear scope.
 ///
-/// docs/02-domain.md §8. `facts.affected` is the complete set selected by
+/// docs/02-domain.md §8. `facts.affectedCount` counts the complete scope selected by
 /// `scope` at the Authority linearization point (§5.4), so the planner does
 /// not re-interpret the scope: it retires exactly the affected set in one
 /// commit. There is no partial clear. `scope` is part of the planner surface
 /// (§8) and documents which selection the fact value proves complete.
 ///
 /// - Returns: `.unchanged` when the affected set is empty (a commit's mutation
-///   list is non-empty by invariant — §7); otherwise one `.retire` mutation
-///   per affected item with reason `.clear`.
+///   list is non-empty by invariant — §7); otherwise one `.bulkClear` mutation
+///   for the complete scope, without per-item mutation allocation.
 package func planClear(
     scope: ClearScope,
     facts: ClearFacts
@@ -166,21 +166,17 @@ package func planClear(
     // Both v1 scopes select a set whose remaining pinned lane is trivially
     // contiguous. Keep the switch here as an evolution forcing function: a
     // future partial-pinned scope must revisit D12 at the planner seam.
-    let affected: [RetainedItemSummary]
     switch scope {
     case .unpinned, .all:
-        affected = facts.affected
+        break
     }
 
-    guard !affected.isEmpty else {
+    guard facts.affectedCount > 0 else {
         return .unchanged
     }
-    let mutations = affected.map {
-        HistoryMutation.retire(itemID: $0.id, reason: .clear)
-    }
     return .commit(MutationPlan(
-        outcome: .cleared(count: affected.count),
-        mutations: mutations
+        outcome: .cleared(count: facts.affectedCount),
+        mutations: [.bulkClear(scope: scope, affectedCount: facts.affectedCount)]
     ))
 }
 

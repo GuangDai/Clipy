@@ -40,14 +40,12 @@ internal struct JournalLimits: Sendable {
     }()
 }
 
-internal struct AffectedItemsBlobV1: Sendable, Equatable {
-    internal let formatVersion: UInt16
-    internal let itemIDs: [UUID]
-}
-
 internal enum AffectedItemsBlobRejection: Error, Sendable, Equatable {
     case malformedBlob
     case unknownFormatVersion(found: UInt16)
+    case unknownScope(found: UInt8)
+    case invalidScope
+    case invalidScopeValue
     case blobExceedsDecodeEnvelope(found: Int, bound: Int)
     case countExceedsBound(found: Int, bound: Int)
     case invalidLength(found: Int, expected: Int)
@@ -58,175 +56,229 @@ internal enum AffectedItemsBlobRejection: Error, Sendable, Equatable {
         switch self {
         case .emptyList:
             .persistence(.invariantViolation)
-        case .malformedBlob,
-             .unknownFormatVersion,
-             .blobExceedsDecodeEnvelope,
-             .countExceedsBound,
-             .invalidLength,
-             .nonAscendingOrDuplicateItemIDs:
+        case .malformedBlob, .unknownFormatVersion, .unknownScope,
+             .invalidScope, .invalidScopeValue, .blobExceedsDecodeEnvelope,
+             .countExceedsBound, .invalidLength, .nonAscendingOrDuplicateItemIDs:
             .persistence(.corruptStoredValue)
         }
     }
 }
 
+/// One current tagged format, with no historical decoding path. Explicit
+/// membership is bounded independently of constant-size bulk scope counts.
 internal enum AffectedItemsBlobCodec {
-    private static let formatVersion: UInt16 = 1
-    private static let headerBytes = 4
-    private static let uuidBytes = 16
+    private static let formatVersion: UInt16 = 2
 
-    /// Normalizes payload-derived IDs into the frozen raw-byte order, then
-    /// writes version/count as network-order UInt16 values followed by UUIDs.
-    /// Duplicates are collapsed before the 5,001-ID admission check; no valid
-    /// affected ID is truncated.
     internal static func encode(
-        _ itemIDs: [HistoryItemID],
+        _ affectedItems: HistoryAffectedItems,
         for changeKind: HistoryChangeKindRawV1,
         limits: JournalLimits = .standard
     ) throws -> Data {
-        let normalized = normalize(itemIDs)
-        try validateCount(normalized.count, limits: limits)
-        try validateEmptiness(normalized, for: changeKind)
-
-        var data = Data()
-        data.reserveCapacity(encodedLength(for: normalized.count))
-        appendNetworkUInt16(formatVersion, to: &data)
-        appendNetworkUInt16(UInt16(normalized.count), to: &data)
-        for itemID in normalized {
-            data.append(contentsOf: rawBytes(of: itemID.rawValue))
+        let scope: HistoryAffectedItems
+        if case .explicit(let ids) = affectedItems {
+            var unique: [HistoryItemID] = []
+            for id in ids.sorted() where unique.last != id { unique.append(id) }
+            scope = .explicit(unique)
+        } else {
+            scope = affectedItems
+        }
+        try validate(scope, for: changeKind, limits: limits)
+        var data = Data([0, UInt8(formatVersion)])
+        switch scope {
+        case .explicit(let ids):
+            data.append(1)
+            data.append(UInt8(truncatingIfNeeded: ids.count >> 8))
+            data.append(UInt8(truncatingIfNeeded: ids.count))
+            for id in ids { append(id, to: &data) }
+        case .all(let count):
+            data.append(2)
+            append(UInt64(count), to: &data)
+        case .unpinned(let count):
+            data.append(3)
+            append(UInt64(count), to: &data)
+        case .unpinnedPrefix(let through, let excluded, let count, let primary):
+            data.append(4)
+            append(UInt64(count), to: &data)
+            append(through.lastCopiedAt.timeIntervalSinceReferenceDate.bitPattern, to: &data)
+            append(through.itemID, to: &data)
+            appendOptional(excluded, to: &data)
+            appendOptional(primary, to: &data)
+        case .retention(let retired, let pruned):
+            data.append(5)
+            append(UInt64(retired), to: &data)
+            append(UInt64(pruned), to: &data)
         }
         return data
     }
 
-    /// Validates the fixed envelope and count before reserving output, then
-    /// requires exact length and strictly ascending unique raw UUID bytes.
     internal static func decode(
         _ data: Data,
         for changeKind: HistoryChangeKindRawV1,
         limits: JournalLimits = .standard
-    ) throws -> [HistoryItemID] {
-        let envelope = maximumBlobBytes(limits: limits)
-        guard data.count <= envelope else {
-            throw AffectedItemsBlobRejection.blobExceedsDecodeEnvelope(
-                found: data.count,
-                bound: envelope
-            )
+    ) throws -> HistoryAffectedItems {
+        let bound = maximumBlobBytes(limits: limits)
+        guard data.count <= bound else {
+            throw AffectedItemsBlobRejection.blobExceedsDecodeEnvelope(found: data.count, bound: bound)
         }
-        guard data.count >= headerBytes else {
-            throw AffectedItemsBlobRejection.malformedBlob
-        }
-
-        let version = readNetworkUInt16(data, at: 0)
+        var reader = ScopeReader(bytes: Array(data))
+        let version = UInt16(try reader.byte()) << 8 | UInt16(try reader.byte())
         guard version == formatVersion else {
             throw AffectedItemsBlobRejection.unknownFormatVersion(found: version)
         }
-        let count = Int(readNetworkUInt16(data, at: 2))
-        try validateCount(count, limits: limits)
-        let expectedLength = encodedLength(for: count)
-        guard data.count == expectedLength else {
-            throw AffectedItemsBlobRejection.invalidLength(
-                found: data.count,
-                expected: expectedLength
-            )
-        }
-
-        var itemIDs: [HistoryItemID] = []
-        itemIDs.reserveCapacity(count)
-        var previousBytes: [UInt8]?
-        for index in 0..<count {
-            let start = headerBytes + index * uuidBytes
-            let bytes = Array(data[start..<(start + uuidBytes)])
-            if let previousBytes,
-               !previousBytes.lexicographicallyPrecedes(bytes) {
-                throw AffectedItemsBlobRejection
-                    .nonAscendingOrDuplicateItemIDs
+        let scope: HistoryAffectedItems
+        switch try reader.byte() {
+        case 1:
+            let count = Int(try reader.byte()) << 8 | Int(try reader.byte())
+            guard count <= limits.maxAffectedItemsPerRecord else {
+                throw AffectedItemsBlobRejection.countExceedsBound(
+                    found: count, bound: limits.maxAffectedItemsPerRecord)
             }
-            itemIDs.append(HistoryItemID(rawValue: uuid(from: bytes)))
-            previousBytes = bytes
+            let expected = 5 + 16 * count
+            guard data.count == expected else {
+                throw AffectedItemsBlobRejection.invalidLength(found: data.count, expected: expected)
+            }
+            var ids: [HistoryItemID] = []
+            ids.reserveCapacity(count)
+            for _ in 0..<count {
+                let id = try reader.itemID()
+                if let last = ids.last, !(last < id) {
+                    throw AffectedItemsBlobRejection.nonAscendingOrDuplicateItemIDs
+                }
+                ids.append(id)
+            }
+            scope = .explicit(ids)
+        case 2:
+            scope = .all(retiredItems: try reader.count())
+        case 3:
+            scope = .unpinned(retiredItems: try reader.count())
+        case 4:
+            let count = try reader.count()
+            let date = Date(timeIntervalSinceReferenceDate: Double(bitPattern: try reader.uint64()))
+            let boundary = try reader.itemID()
+            let excluded = try reader.optionalItemID()
+            let primary = try reader.optionalItemID()
+            scope = .unpinnedPrefix(through: .init(lastCopiedAt: date, itemID: boundary),
+                excluding: excluded, retiredItems: count, primaryItemID: primary)
+        case 5:
+            scope = .retention(retiredItems: try reader.count(), prunedRevisions: try reader.count())
+        case let tag:
+            throw AffectedItemsBlobRejection.unknownScope(found: tag)
         }
-        try validateEmptiness(itemIDs, for: changeKind)
-        return itemIDs
+        guard reader.offset == data.count else {
+            throw AffectedItemsBlobRejection.invalidLength(found: data.count, expected: reader.offset)
+        }
+        try validate(scope, for: changeKind, limits: limits)
+        return scope
     }
 
-    internal static func maximumBlobBytes(
-        limits: JournalLimits = .standard
-    ) -> Int {
-        encodedLength(for: limits.maxAffectedItemsPerRecord)
+    internal static func maximumBlobBytes(limits: JournalLimits = .standard) -> Int {
+        max(5 + 16 * limits.maxAffectedItemsPerRecord, 69)
     }
 
-    private static func normalize(
-        _ itemIDs: [HistoryItemID]
-    ) -> [HistoryItemID] {
-        let sorted = itemIDs.sorted {
-            rawBytes(of: $0.rawValue).lexicographicallyPrecedes(
-                rawBytes(of: $1.rawValue)
-            )
-        }
-        var normalized: [HistoryItemID] = []
-        normalized.reserveCapacity(sorted.count)
-        for itemID in sorted where normalized.last != itemID {
-            normalized.append(itemID)
-        }
-        return normalized
-    }
-
-    private static func validateCount(
-        _ count: Int,
+    internal static func validate(
+        _ scope: HistoryAffectedItems,
+        for kind: HistoryChangeKindRawV1,
         limits: JournalLimits
     ) throws {
-        guard count <= limits.maxAffectedItemsPerRecord else {
-            throw AffectedItemsBlobRejection.countExceedsBound(
-                found: count,
-                bound: limits.maxAffectedItemsPerRecord
-            )
+        switch scope {
+        case .explicit(let ids):
+            guard ids.count <= limits.maxAffectedItemsPerRecord else {
+                throw AffectedItemsBlobRejection.countExceedsBound(
+                    found: ids.count, bound: limits.maxAffectedItemsPerRecord)
+            }
+            guard kind != .clearAll, kind != .clearUnpinned else {
+                throw AffectedItemsBlobRejection.invalidScope
+            }
+            if kind == .policySet {
+                guard ids.isEmpty else { throw AffectedItemsBlobRejection.invalidScope }
+            } else if ids.isEmpty {
+                throw AffectedItemsBlobRejection.emptyList(changeKind: kind)
+            }
+        case .all(let count):
+            guard kind == .clearAll else { throw AffectedItemsBlobRejection.invalidScope }
+            guard count > 0 else { throw AffectedItemsBlobRejection.invalidScopeValue }
+        case .unpinned(let count):
+            guard kind == .clearUnpinned else { throw AffectedItemsBlobRejection.invalidScope }
+            guard count > 0 else { throw AffectedItemsBlobRejection.invalidScopeValue }
+        case .unpinnedPrefix(let through, let excluded, let count, let primary):
+            guard count > 0, through.lastCopiedAt.timeIntervalSinceReferenceDate.isFinite else {
+                throw AffectedItemsBlobRejection.invalidScopeValue
+            }
+            guard through.itemID != excluded else { throw AffectedItemsBlobRejection.invalidScope }
+            switch kind {
+            case .insert, .coalesce, .revise:
+                guard primary != nil, excluded == primary else {
+                    throw AffectedItemsBlobRejection.invalidScope
+                }
+            case .retire:
+                guard primary == nil else { throw AffectedItemsBlobRejection.invalidScope }
+            default:
+                throw AffectedItemsBlobRejection.invalidScope
+            }
+        case .retention(let retired, let pruned):
+            guard retired >= 0, pruned >= 0 else { throw AffectedItemsBlobRejection.invalidScopeValue }
+            let expected: HistoryChangeKindRawV1 = retired > 0 ? .retire
+                : pruned > 0 ? .retireRevision : .policySet
+            guard kind == expected else { throw AffectedItemsBlobRejection.invalidScope }
         }
     }
 
-    private static func validateEmptiness(
-        _ itemIDs: [HistoryItemID],
-        for changeKind: HistoryChangeKindRawV1
-    ) throws {
-        guard itemIDs.isEmpty else { return }
-        switch changeKind {
-        case .clearAll, .clearUnpinned, .policySet:
-            return
-        case .insert, .coalesce, .pin, .unpin, .remove, .revise, .retire,
-             .retireRevision:
-            throw AffectedItemsBlobRejection.emptyList(changeKind: changeKind)
+    private static func append(_ value: UInt64, to data: inout Data) {
+        for shift in stride(from: 56, through: 0, by: -8) {
+            data.append(UInt8(truncatingIfNeeded: value >> shift))
         }
     }
 
-    private static func encodedLength(for count: Int) -> Int {
-        CodecValidation.clampedEnvelopeSum([
-            headerBytes,
-            CodecValidation.clampedEnvelopeProduct(count, uuidBytes),
-        ])
+    private static func append(_ id: HistoryItemID, to data: inout Data) {
+        let u = id.rawValue.uuid
+        data.append(contentsOf: [u.0, u.1, u.2, u.3, u.4, u.5, u.6, u.7,
+                                 u.8, u.9, u.10, u.11, u.12, u.13, u.14, u.15])
     }
 
-    private static func appendNetworkUInt16(_ value: UInt16, to data: inout Data) {
-        data.append(UInt8(truncatingIfNeeded: value >> 8))
-        data.append(UInt8(truncatingIfNeeded: value))
+    private static func appendOptional(_ id: HistoryItemID?, to data: inout Data) {
+        data.append(id == nil ? 0 : 1)
+        if let id { append(id, to: &data) }
     }
 
-    private static func readNetworkUInt16(_ data: Data, at offset: Int) -> UInt16 {
-        UInt16(data[offset]) << 8 | UInt16(data[offset + 1])
-    }
+    /// Local cursor for this fixed scope grammar; checks before every read.
+    private struct ScopeReader {
+        let bytes: [UInt8]
+        var offset = 0
 
-    private static func rawBytes(of uuid: UUID) -> [UInt8] {
-        let value = uuid.uuid
-        return [
-            value.0, value.1, value.2, value.3,
-            value.4, value.5, value.6, value.7,
-            value.8, value.9, value.10, value.11,
-            value.12, value.13, value.14, value.15,
-        ]
-    }
+        mutating func byte() throws -> UInt8 {
+            guard offset < bytes.count else { throw AffectedItemsBlobRejection.malformedBlob }
+            defer { offset += 1 }
+            return bytes[offset]
+        }
 
-    private static func uuid(from bytes: [UInt8]) -> UUID {
-        UUID(uuid: (
-            bytes[0], bytes[1], bytes[2], bytes[3],
-            bytes[4], bytes[5], bytes[6], bytes[7],
-            bytes[8], bytes[9], bytes[10], bytes[11],
-            bytes[12], bytes[13], bytes[14], bytes[15]
-        ))
+        mutating func uint64() throws -> UInt64 {
+            var value: UInt64 = 0
+            for _ in 0..<8 { value = (value << 8) | UInt64(try byte()) }
+            return value
+        }
+
+        mutating func count() throws -> Int {
+            guard let count = Int(exactly: try uint64()) else {
+                throw AffectedItemsBlobRejection.invalidScopeValue
+            }
+            return count
+        }
+
+        mutating func itemID() throws -> HistoryItemID {
+            guard bytes.count - offset >= 16 else { throw AffectedItemsBlobRejection.malformedBlob }
+            let b = Array(bytes[offset..<(offset + 16)])
+            offset += 16
+            return HistoryItemID(rawValue: UUID(uuid: (
+                b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+                b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15])))
+        }
+
+        mutating func optionalItemID() throws -> HistoryItemID? {
+            switch try byte() {
+            case 0: nil
+            case 1: try itemID()
+            default: throw AffectedItemsBlobRejection.invalidScopeValue
+            }
+        }
     }
 }

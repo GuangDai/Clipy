@@ -100,6 +100,10 @@ struct ReviseEditorView: View {
 
     @State private var isSaving = false
     @State private var isReloading = false
+    @State private var replacementTask: Task<Void, Never>?
+    @State private var replacementFailure: String?
+    @State private var replacementType: String?
+    @State private var readFence: HistoryDetailsLoadFence
     /// A fixed product-copy key, localized at render time rather than
     /// retaining the language active when the reload completed.
     @State private var reloadNotice: String?
@@ -112,6 +116,7 @@ struct ReviseEditorView: View {
         self.layout = .standaloneSheet
 
         _draft = State(initialValue: ReviseEditorDraft(details: details))
+        _readFence = State(initialValue: HistoryDetailsLoadFence(baselinePurgeGeneration: viewState.surfacePurge?.generation ?? 0))
     }
 
     /// The production floating panel's main column is user-resizable within
@@ -131,6 +136,7 @@ struct ReviseEditorView: View {
         self.layout = .embeddedInDetails
 
         _draft = State(initialValue: ReviseEditorDraft(details: details))
+        _readFence = State(initialValue: HistoryDetailsLoadFence(baselinePurgeGeneration: viewState.surfacePurge?.generation ?? 0))
     }
 
     var body: some View {
@@ -161,6 +167,18 @@ struct ReviseEditorView: View {
             Divider()
             revisionDisclosure
             reloadStatus
+            if replacementTask != nil {
+                ProgressView(PanelActionsCopy.text("Loading…", bundle: copyBundle))
+                    .padding(.horizontal)
+            }
+            if let replacementFailure {
+                HStack {
+                    Text(replacementFailure).font(.caption)
+                    Button(PanelActionsCopy.text("Retry", bundle: copyBundle)) {
+                        if let replacementType { loadReplacement(for: replacementType) }
+                    }
+                }.padding(.horizontal)
+            }
             footer
         }
         .frame(
@@ -169,6 +187,7 @@ struct ReviseEditorView: View {
             minHeight: layout == .standaloneSheet ? 440 : nil,
             maxHeight: layout == .embeddedInDetails ? .infinity : 440
         )
+        .onDisappear { cancelReplacementLoad() }
         .alert(
             alertTitle,
             isPresented: Binding(
@@ -320,7 +339,7 @@ struct ReviseEditorView: View {
                 }
             }
             .keyboardShortcut("s", modifiers: .command)
-            .disabled(!canSave || isSaving || isReloading)
+            .disabled(!canSave || isSaving || isReloading || replacementTask != nil)
             .accessibilityLabel(isSaving ? PanelActionsCopy.text("Saving revision", bundle: copyBundle) : PanelActionsCopy.text("Save Revision", bundle: copyBundle))
             .accessibilityIdentifier("clipy.editor.save")
             .accessibilityHint(
@@ -366,7 +385,7 @@ struct ReviseEditorView: View {
     // MARK: Rows
 
     private func decisionRow(
-        for representation: HistoryRepresentation
+        for representation: HistoryRepresentationMetadata
     ) -> some View {
         let typeIdentifier = representation.typeIdentifier
         let replacementIsAvailable = draft.canReplace(representation)
@@ -385,7 +404,7 @@ struct ReviseEditorView: View {
                         .truncationMode(.middle)
                         .textSelection(.enabled)
                     Text(verbatim:
-                        EditorFormat.bytes(representation.bytes.count, locale: locale)
+                        EditorFormat.bytes(representation.byteCount, locale: locale)
                     )
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -399,14 +418,14 @@ struct ReviseEditorView: View {
                     Text(PanelActionsCopy.text("Use Original", bundle: copyBundle)).tag(ReviseEditorDraft.Choice.useOriginal)
                     Text(PanelActionsCopy.text("Hide", bundle: copyBundle)).tag(ReviseEditorDraft.Choice.hide)
                     if replacementIsAvailable {
-                        // The draft admits only the three exact UTF-8/UTF-16
-                        // plain-text identifiers with valid paired codecs.
-                        // Displayability alone never enables replacement.
+                        // Metadata offers only exact declared encodings. The
+                        // selected source must load and validate before the
+                        // TextEditor or a replacement decision is installed.
                         Text(PanelActionsCopy.text("Replace", bundle: copyBundle)).tag(ReviseEditorDraft.Choice.replace)
                     }
                 }
                 .pickerStyle(.menu)
-                .disabled(isSaving)
+                .disabled(isSaving || isReloading || replacementTask != nil)
                 .labelsHidden()
                 .fixedSize()
                 .accessibilityLabel(PanelActionsCopy.format("Editing decision for %@", typeIdentifier, bundle: copyBundle))
@@ -429,7 +448,7 @@ struct ReviseEditorView: View {
             }
             if draft.choice(for: typeIdentifier) == .replace {
                 TextEditor(text: textBinding(for: typeIdentifier))
-                    .disabled(isSaving)
+                    .disabled(isSaving || isReloading || replacementTask != nil)
                     .font(.system(.body, design: .monospaced))
                     // Grows vertically with the draft; the 96-point minimum
                     // keeps the one-line Replace state compact.
@@ -464,8 +483,12 @@ struct ReviseEditorView: View {
         Binding(
             get: { draft.choice(for: typeIdentifier) },
             set: {
-                guard !isSaving else { return }
-                draft.setChoice($0, for: typeIdentifier)
+                guard !isSaving, !isReloading, replacementTask == nil else { return }
+                if $0 == .replace, !draft.hasReplacementSource(for: typeIdentifier) {
+                    loadReplacement(for: typeIdentifier)
+                } else {
+                    draft.setChoice($0, for: typeIdentifier)
+                }
             }
         )
     }
@@ -474,7 +497,7 @@ struct ReviseEditorView: View {
         Binding(
             get: { draft.replacementText(for: typeIdentifier) },
             set: {
-                guard !isSaving else { return }
+                guard !isSaving, !isReloading, replacementTask == nil else { return }
                 draft.setReplacementText($0, for: typeIdentifier)
             }
         )
@@ -482,13 +505,69 @@ struct ReviseEditorView: View {
 
     // MARK: Save
 
+    @MainActor
+    private func loadReplacement(for typeIdentifier: String) {
+        guard replacementTask == nil, !isSaving, !isReloading,
+              let request = draft.replacementRequest(for: typeIdentifier) else { return }
+        _ = readFence.reconcile(viewState.surfacePurge, item: request.item)
+        guard !readFence.isPurged else { return }
+        replacementFailure = nil
+        replacementType = typeIdentifier
+        let snapshot = draft
+        replacementTask = Task {
+            do {
+                let source = try await viewState.history.representation(request)
+                _ = readFence.reconcile(viewState.surfacePurge, item: request.item)
+                guard !readFence.isPurged else { cancelReplacementLoad(); return }
+                guard !Task.isCancelled, draft.itemReference == request.item else { return }
+                let decoding = Task.detached {
+                    var loaded = snapshot
+                    guard !Task.isCancelled, loaded.installReplacementSource(source) else { return Optional<ReviseEditorDraft>.none }
+                    return loaded
+                }
+                let loaded = await withTaskCancellationHandler {
+                    await decoding.value
+                } onCancel: { decoding.cancel() }
+                _ = readFence.reconcile(viewState.surfacePurge, item: request.item)
+                guard !readFence.isPurged else { cancelReplacementLoad(); return }
+                guard !Task.isCancelled, draft.itemReference == request.item else { return }
+                replacementTask = nil
+                guard let loaded else {
+                    replacementFailure = PanelActionsCopy.text("Replace requires valid UTF-8 or UTF-16 plain text.", bundle: copyBundle)
+                    return
+                }
+                draft = loaded
+                draft.setChoice(.replace, for: typeIdentifier)
+            } catch {
+                guard !Task.isCancelled else { return }
+                _ = readFence.reconcile(viewState.surfacePurge, item: request.item)
+                guard !readFence.isPurged else { cancelReplacementLoad(); return }
+                replacementTask = nil
+                if let failure = error as? HistoryFailure, case .staleContent = failure {
+                    draft.markStale()
+                    activeAlert = .stale
+                    return
+                }
+                replacementFailure = (error as? HistoryFailure).map {
+                    FailurePresentation.message(for: $0, bundle: copyBundle)
+                } ?? PanelActionsCopy.text("Clipy couldn't load this item.", bundle: copyBundle)
+            }
+        }
+    }
+
+    @MainActor
+    private func cancelReplacementLoad() {
+        replacementTask?.cancel()
+        replacementTask = nil
+    }
+
     /// Saves the draft as one `.replace` revision. `.staleContent` leaves the
     /// editor and byte-exact draft intact, then blocks another save until the
     /// user explicitly reloads. Success dismisses and observation refreshes
     /// the row list (03b §10; 04 §5; review Card 3B).
     @MainActor
     private func save() async {
-        guard !isSaving, draft.canSubmit else { return }
+        guard !isSaving, replacementTask == nil, draft.canSubmit else { return }
         // The submitted request is a snapshot. Keep its draft controls fixed
         // until it settles, so successful dismissal cannot discard later
         // input that was never included in the committed revision.
@@ -519,6 +598,7 @@ struct ReviseEditorView: View {
 
     @MainActor
     private func completeDismissal() {
+        cancelReplacementLoad()
         if let onDismiss {
             onDismiss()
         } else {
@@ -532,6 +612,8 @@ struct ReviseEditorView: View {
     @MainActor
     private func reloadLatest() async {
         guard !isReloading, draft.isAwaitingLatestContent else { return }
+        cancelReplacementLoad()
+        replacementFailure = nil
         isReloading = true
         defer { isReloading = false }
         do {
@@ -579,22 +661,13 @@ private func editorPreviewDetails() -> HistoryDetails {
             id: HistoryItemID(rawValue: UUID()),
             contentVersion: ContentVersion(rawValue: 2)
         ),
+        title: "Meeting notes — first line",
         canonical: [
-            HistoryRepresentation(
-                typeIdentifier: ClipboardFormatIdentifier.utf8PlainText.rawValue,
-                bytes: Data("Meeting notes — first line\nSecond line".utf8)
-            ),
-            HistoryRepresentation(
-                typeIdentifier: ClipboardFormatIdentifier.html.rawValue,
-                bytes: Data("<p>Meeting notes</p>".utf8)
-            ),
+            HistoryRepresentationMetadata(typeIdentifier: ClipboardFormatIdentifier.utf8PlainText.rawValue, byteCount: 39),
+            HistoryRepresentationMetadata(typeIdentifier: ClipboardFormatIdentifier.html.rawValue, byteCount: 20),
         ],
-        effective: [
-            HistoryRepresentation(
-                typeIdentifier: ClipboardFormatIdentifier.utf8PlainText.rawValue,
-                bytes: Data("Meeting notes — first line".utf8)
-            ),
-        ],
+        effective: [HistoryRepresentationMetadata(typeIdentifier: ClipboardFormatIdentifier.utf8PlainText.rawValue, byteCount: 27)],
+        effectiveMatchesCanonical: false,
         revisions: [
             RevisionSummary(
                 id: RevisionID(rawValue: UUID()),

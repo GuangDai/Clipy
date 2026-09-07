@@ -137,9 +137,13 @@ struct RichTextRevisionConsumerTests {
         #expect(freshConsumer.string == "After")
         let details = try await history.details(for: inserted.id)
         #expect(details.item == plainOnly)
-        #expect(Set(details.canonical.map {
-            CapturedRepresentation(typeIdentifier: $0.typeIdentifier, bytes: $0.bytes)
-        }) == Set(capture.representations))
+        #expect(Set(details.canonical.map(\.typeIdentifier)) == Set(capture.representations.map(\.typeIdentifier)))
+        for expected in capture.representations {
+            let actual = try await history.representation(HistoryRepresentationRequest(
+                item: details.item, basis: .canonical, typeIdentifier: expected.typeIdentifier
+            ))
+            #expect(actual.bytes == expected.bytes)
+        }
         #expect(details.revisions.count == 2)
     }
 }

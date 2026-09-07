@@ -76,6 +76,8 @@ struct HistoryStoreLocationTests {
             #expect(try isReferenced(content.id, in: reader))
             try writer.close()
             owner = nil
+            // Observe the remaining search owner after releasing the facade.
+            releasedLocation = searchLocation
             #expect(releasedLocation != nil)
             #expect(FileManager.default.fileExists(atPath: ownedDirectory.path))
             #expect(try isReferenced(content.id, in: reader))
@@ -100,8 +102,8 @@ struct HistoryStoreLocationTests {
                 INSERT INTO history_items (
                     id, contentVersion, currentContentID, titleUTF8, searchBodyUTF8,
                     effectiveTypeIdentifiersBlob, firstCopiedAt, lastCopiedAt, copyCount,
-                    canonicalBytes, revisionCount, revisionBytes
-                ) VALUES (?, ?, ?, ?, ?, ?, 1.0, 1.0, ?, ?, 0, 0)
+                    canonicalBytes, revisionCount, revisionBytes, effectiveMatchesCanonical
+                ) VALUES (?, ?, ?, ?, ?, ?, 1.0, 1.0, ?, ?, 0, 0, 1)
                 """, bindings: [
                     .text(item), .blob(sqliteUInt64(1)), .text(content),
                     .blob(Data("blob".utf8)), .blob(Data("blob".utf8)), .blob(Data()),

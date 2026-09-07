@@ -226,7 +226,7 @@ struct SmokeMeasurementTests {
         #expect(imageSnapshot.kind == .raster)
         #expect(imageSnapshot.rasterWidth == 512)
         #expect(imageSnapshot.rasterHeight == 512)
-        let imageBytes = try #require(imageDetails.effective.first?.bytes)
+        let imageBytes = try #require(imageDetails.effective.first).byteCount
 
         // Manual toggle closes and suppresses; a selection change re-arms.
         previewState.togglePreview(for: imageReference)
@@ -240,8 +240,8 @@ struct SmokeMeasurementTests {
         SmokeMeasurement.record(
             name: "preview",
             fields: [
-                "textBytes": Double(textDetails.effective.first?.bytes.count ?? 0),
-                "imageBytes": Double(imageBytes.count),
+                "textBytes": Double(textDetails.effective.first?.byteCount ?? 0),
+                "imageBytes": Double(imageBytes),
             ]
         )
     }

@@ -40,6 +40,12 @@ package enum HistoryMutation: Sendable {
         activeRevisionID: RevisionID
     )
     case retire(itemID: HistoryItemID, reason: RetirementReason)
+    /// Deletes the whole stated scope in this commit, without expanding its
+    /// membership into one mutation per item (02 §10).
+    case bulkClear(scope: ClearScope, affectedCount: Int)
+    /// Deletes the complete eligible oldest prefix. The primary exclusion
+    /// and unpinned requirement are part of its semantic predicate (02 §12).
+    case retirePrefix(RetentionRetirementPrefix)
     case setRetentionPolicy(maximumUnpinnedItems: Int)
     /// R3 revision pruning (V2-02 §5.3): `removedRevisionIDs` is non-empty
     /// (a no-op prune returns `.unchanged` before planning), lists inactive

@@ -83,7 +83,10 @@ struct CaptureCapacityAdmissionTests {
         let details = try await history.details(for: item.id)
         #expect(details.item == item)
         #expect(details.revisions.map(\.title) == ["second revision"])
-        #expect(details.effective.map(\.bytes) == [Data("second revision".utf8)])
+        let effective = try await history.representation(.init(
+            item: item, basis: .effective, typeIdentifier: "public.utf8-plain-text"
+        ))
+        #expect(effective.bytes == Data("second revision".utf8))
     }
 
     @Test func insertRefusalIsTypedAndLeavesDurableStateUntouched() async throws {
@@ -105,6 +108,9 @@ struct CaptureCapacityAdmissionTests {
         }
         let before = try await history.browse(.init(kind: .recent, limit: 10))
         let beforeDetails = try await history.details(for: seedReference.id)
+        let beforeBytes = try await history.representation(.init(
+            item: seedReference, basis: .canonical, typeIdentifier: "public.utf8-plain-text"
+        ))
         let beforeUsage = try await history.usage()
 
         await authority.setVolumeAvailableCapacityOverride(1)
@@ -122,6 +128,9 @@ struct CaptureCapacityAdmissionTests {
         let after = try await history.browse(.init(kind: .recent, limit: 10))
         #expect(after == before)
         #expect(try await history.details(for: seedReference.id) == beforeDetails)
+        #expect(try await history.representation(.init(
+            item: seedReference, basis: .canonical, typeIdentifier: "public.utf8-plain-text"
+        )) == beforeBytes)
         #expect(try await history.usage() == beforeUsage)
 
         // Clearing the witness restores the fail-open reader: the same
@@ -201,6 +210,9 @@ struct CaptureCapacityAdmissionTests {
         }
         let before = try await history.browse(.init(kind: .recent, limit: 10))
         let beforeDetails = try await history.details(for: reference.id)
+        let beforeBytes = try await history.representation(.init(
+            item: reference, basis: .canonical, typeIdentifier: "public.utf8-plain-text"
+        ))
         let beforeUsage = try await history.usage()
 
         // A replace revision introduces raw Effective Content payloads;
@@ -225,6 +237,11 @@ struct CaptureCapacityAdmissionTests {
         let after = try await history.browse(.init(kind: .recent, limit: 10))
         #expect(after == before)
         #expect(try await history.details(for: reference.id) == beforeDetails)
+        for basis in [HistoryContentBasis.canonical, .effective] {
+            #expect(try await history.representation(.init(
+                item: reference, basis: basis, typeIdentifier: "public.utf8-plain-text"
+            )) == beforeBytes)
+        }
         #expect(try await history.usage() == beforeUsage)
         await authority.setVolumeAvailableCapacityOverride(nil)
     }

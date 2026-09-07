@@ -154,11 +154,11 @@ struct GatewayStoreSnapshot: Equatable, Sendable {
             rows.append(try OperationRecordRow(
                 auditSequence: sqliteUInt64(statement.blob(at: 0)),
                 connectionIDRaw: connectionID,
-                capabilityRaw: statement.isNull(at: 2) ? nil : #require(Int16(exactly: statement.integer(at: 2))),
+                capabilityRaw: optionalInt16(in: statement, at: 2),
                 operationKindRaw: #require(Int16(exactly: statement.integer(at: 3))),
                 outcomeRaw: #require(Int16(exactly: statement.integer(at: 4))),
-                failureKindRaw: statement.isNull(at: 5) ? nil : #require(Int16(exactly: statement.integer(at: 5))),
-                denialReasonRaw: statement.isNull(at: 6) ? nil : #require(Int16(exactly: statement.integer(at: 6))),
+                failureKindRaw: optionalInt16(in: statement, at: 5),
+                denialReasonRaw: optionalInt16(in: statement, at: 6),
                 payloadBlob: statement.blob(at: 7),
                 requestedAt: Date(timeIntervalSinceReferenceDate: statement.real(at: 8)),
                 committedAt: Date(timeIntervalSinceReferenceDate: statement.real(at: 9)),
@@ -167,6 +167,15 @@ struct GatewayStoreSnapshot: Equatable, Sendable {
             ))
         }
         return rows
+    }
+
+    private static func optionalInt16(in statement: SQLiteStatement, at column: Int32) throws -> Int16? {
+        if try statement.isNull(at: column) { return nil }
+        let raw = try statement.integer(at: column)
+        guard let value = Int16(exactly: raw) else {
+            throw HistoryFailure.persistence(.corruptStoredValue)
+        }
+        return value
     }
 
     func expectX3DenyByDefaultBootstrap() throws {

@@ -15,95 +15,21 @@ extension HistoryAuthority {
         do {
             let published = try publishHistoryContent(for: plan)
             try database.writeTransaction {
-                let meta = try Self.fetchExactlyOnePositionRow(in: database)
-                guard !consumeTransactionFailureInjection(.positionChanged),
-                      meta.rawValue == expectedPreviousPosition.rawValue else {
-                    throw StorageInvariant.positionChanged
-                }
-                let externalAuditConfig: GatewayConfigRow?
-                if let auditAppend = plan.auditAppend {
-                    guard let connection = auditAppend.connectionID,
-                          let capability = auditAppend.capability else {
-                        throw ExternalWriteGateRejection.incoherentPlan
-                    }
-                    // The admitted write capabilities are disjoint between
-                    // connection kinds; retain that kind in the final live
-                    // check without trusting an earlier grant observation.
-                    let connectionKind: ConnectionEnrollKind
-                    switch capability {
-                    case .manage:
-                        connectionKind = .appIntents
-                    case .organize, .deleteItem, .reviseContent:
-                        connectionKind = .localAutomation
-                    case .browse, .readContent, .browsePreview,
-                         .readEffectiveContent:
-                        throw ExternalWriteGateRejection.incoherentPlan
-                    }
-                    let config = try Self.loadGatewayConfig(in: database)
-                    let descriptor = ExternalOperationDescriptor(
-                        capability: capability,
-                        operationKind: auditAppend.operationKind,
-                        requestSummary: auditAppend.requestSummary
-                    )
-                    let decision = try Self.targetedExternalAuthorizationDecision(
-                        descriptor,
-                        connection: connection,
-                        expectedConnectionKind: connectionKind,
-                        config: config,
-                        in: database
-                    )
-                    switch decision {
-                    case .authorized:
-                        externalAuditConfig = config
-                    case .unknownConnection:
-                        throw ExternalWriteGateRejection.unknownConnection(
-                            requestedCapability: capability,
-                            connectionID: connection
-                        )
-                    case .inadmissibleConnection:
-                        throw ExternalWriteGateRejection.inadmissibleConnection(
-                            requestedCapability: capability,
-                            connectionID: connection
-                        )
-                    case .denied(let failure):
-                        throw ExternalWriteGateRejection.denied(failure)
-                    }
-                } else {
-                    externalAuditConfig = nil
-                }
+                let auditConfig = try validateHistoryCommit(
+                    expectedPreviousPosition: expectedPreviousPosition,
+                    auditAppend: plan.auditAppend, in: database
+                )
                 for (index, mutation) in plan.mutations.enumerated() {
                     try apply(mutation, published: published[index], in: database)
                 }
                 if plan.requiresFinalPinOrderValidation {
                     try validateFinalPinOrder(in: database)
                 }
-                if consumeTransactionFailureInjection(.beforeHCRAppend) {
-                    throw InjectedTransactionFailure.beforeHCRAppend
-                }
-                try HCRStore.append(
-                    plan.hcrAppend,
+                try finishHistoryCommit(
+                    position: plan.position, hcrAppend: plan.hcrAppend,
                     expectedPreviousPosition: expectedPreviousPosition,
-                    in: database
+                    auditAppend: plan.auditAppend, auditConfig: auditConfig, in: database
                 )
-                if let auditAppend = plan.auditAppend, let externalAuditConfig {
-                    _ = try GatewayAuditStore.append(auditAppend, config: externalAuditConfig, in: database)
-                }
-                if consumeTransactionFailureInjection(.beforeSingletonUpdate) {
-                    throw InjectedTransactionFailure.beforeSingletonUpdate
-                }
-#if DEBUG
-                TransactionKillDebugInstrumentation.terminateIfArmed(.beforePositionWrite)
-#endif
-                if consumeTransactionFailureInjection(.insufficientDiskSpace) {
-                    throw HistoryFailure.temporarilyUnavailable(.insufficientDiskSpace)
-                }
-                try database.execute(
-                    "UPDATE history_state SET changePosition = ? WHERE key = ?",
-                    bindings: [.blob(sqliteUInt64(plan.position.rawValue)), .text(Self.positionSingletonKey)]
-                )
-#if DEBUG
-                TransactionKillDebugInstrumentation.terminateIfArmed(.beforeCommit)
-#endif
             }
         } catch let rejection as ExternalWriteGateRejection {
             throw rejection
@@ -114,7 +40,94 @@ extension HistoryAuthority {
         }
     }
 
-    private func apply(
+    /// Called inside the real transaction before its first History mutation.
+    /// Streaming sweeps and ordinary stamped actions share this position and
+    /// live external authorization check; neither opens a nested transaction.
+    internal func validateHistoryCommit(
+        expectedPreviousPosition: ChangePosition,
+        auditAppend: OperationRecordPayload? = nil,
+        in database: SQLiteDatabase
+    ) throws -> GatewayConfigRow? {
+        let meta = try Self.fetchExactlyOnePositionRow(in: database)
+        guard !consumeTransactionFailureInjection(.positionChanged),
+              meta.rawValue == expectedPreviousPosition.rawValue else {
+            throw StorageInvariant.positionChanged
+        }
+        guard let auditAppend else { return nil }
+        guard let connection = auditAppend.connectionID,
+              let capability = auditAppend.capability else {
+            throw ExternalWriteGateRejection.incoherentPlan
+        }
+        let connectionKind: ConnectionEnrollKind
+        switch capability {
+        case .manage:
+            connectionKind = .appIntents
+        case .organize, .deleteItem, .reviseContent:
+            connectionKind = .localAutomation
+        case .browse, .readContent, .browsePreview, .readEffectiveContent:
+            throw ExternalWriteGateRejection.incoherentPlan
+        }
+        let config = try Self.loadGatewayConfig(in: database)
+        let descriptor = ExternalOperationDescriptor(
+            capability: capability, operationKind: auditAppend.operationKind,
+            requestSummary: auditAppend.requestSummary
+        )
+        switch try Self.targetedExternalAuthorizationDecision(
+            descriptor, connection: connection, expectedConnectionKind: connectionKind,
+            config: config, in: database
+        ) {
+        case .authorized:
+            return config
+        case .unknownConnection:
+            throw ExternalWriteGateRejection.unknownConnection(
+                requestedCapability: capability, connectionID: connection
+            )
+        case .inadmissibleConnection:
+            throw ExternalWriteGateRejection.inadmissibleConnection(
+                requestedCapability: capability, connectionID: connection
+            )
+        case .denied(let failure):
+            throw ExternalWriteGateRejection.denied(failure)
+        }
+    }
+
+    /// The one HCR/audit/position tail inside an already-open SQL transaction.
+    /// No observation or immutable-file cleanup happens before COMMIT returns.
+    internal func finishHistoryCommit(
+        position: ChangePosition,
+        hcrAppend: HistoryChangeRecordPayload,
+        expectedPreviousPosition: ChangePosition,
+        auditAppend: OperationRecordPayload? = nil,
+        auditConfig: GatewayConfigRow? = nil,
+        in database: SQLiteDatabase
+    ) throws {
+        if consumeTransactionFailureInjection(.beforeHCRAppend) {
+            throw InjectedTransactionFailure.beforeHCRAppend
+        }
+        try HCRStore.append(
+            hcrAppend, expectedPreviousPosition: expectedPreviousPosition, in: database
+        )
+        if let auditAppend, let auditConfig {
+            _ = try GatewayAuditStore.append(auditAppend, config: auditConfig, in: database)
+        }
+        if consumeTransactionFailureInjection(.beforeSingletonUpdate) {
+            throw InjectedTransactionFailure.beforeSingletonUpdate
+        }
+#if DEBUG
+        TransactionKillDebugInstrumentation.terminateIfArmed(.beforePositionWrite)
+#endif
+        if consumeTransactionFailureInjection(.insufficientDiskSpace) {
+            throw HistoryFailure.temporarilyUnavailable(.insufficientDiskSpace)
+        }
+        try database.execute(
+            "UPDATE history_state SET changePosition = ? WHERE key = ?",
+            bindings: [.blob(sqliteUInt64(position.rawValue)), .text(Self.positionSingletonKey)]
+        )
+#if DEBUG
+        TransactionKillDebugInstrumentation.terminateIfArmed(.beforeCommit)
+#endif
+    }
+    internal func apply(
         _ mutation: StampedMutation, published: PublishedHistoryContent?, in database: SQLiteDatabase
     ) throws {
         switch mutation {
@@ -129,8 +142,9 @@ extension HistoryAuthority {
                 INSERT INTO history_items
                     (id, contentVersion, currentContentID, titleUTF8, searchBodyUTF8,
                      effectiveTypeIdentifiersBlob, firstCopiedAt, lastCopiedAt, copyCount,
-                     firstSource, lastSource, pinOrdinal, canonicalBytes, revisionCount, revisionBytes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 0, 0)
+                     firstSource, lastSource, pinOrdinal, canonicalBytes, revisionCount, revisionBytes,
+                     effectiveMatchesCanonical)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 0, 0, 1)
                 """, bindings: [
                     .text(item.id.rawValue.uuidString), .blob(sqliteUInt64(item.contentVersion.rawValue)),
                     .text(contentID.uuidString), .blob(Data(item.projection.title.utf8)),
@@ -202,11 +216,12 @@ extension HistoryAuthority {
             )
             try database.execute("""
                 UPDATE history_items SET currentContentID = ?, contentVersion = ?, titleUTF8 = ?,
-                    searchBodyUTF8 = ?, effectiveTypeIdentifiersBlob = ? WHERE id = ?
+                    searchBodyUTF8 = ?, effectiveTypeIdentifiersBlob = ?, effectiveMatchesCanonical = ? WHERE id = ?
                 """, bindings: [
                     .text(update.revision.id.rawValue.uuidString), .blob(sqliteUInt64(update.nextVersion.rawValue)),
                     .blob(Data(update.projection.title.utf8)), .blob(Data(update.projection.searchBody.utf8)),
                     .blob(try EffectiveTypeIdentifiersBlobCodec.encode(update.projection.effectiveTypeIdentifiers)),
+                    .integer(update.effectiveMatchesCanonical ? 1 : 0),
                     .text(update.itemID.rawValue.uuidString),
                 ])
             try deleteRevisions(update.removedRevisionIDs, itemID: update.itemID, in: database)
@@ -227,6 +242,48 @@ extension HistoryAuthority {
                     .integer(old.pinned ? 1 : 0), .integer(Int64(old.canonicalBytes)),
                     .integer(Int64(old.revisionBytes)), .text(Self.positionSingletonKey),
                 ])
+
+        case .bulkClear(let scope, let affectedCount):
+            let predicate = scope == .all ? "" : " WHERE pinOrdinal IS NULL"
+            let totals = try database.prepare("""
+                SELECT count(*), count(pinOrdinal), COALESCE(sum(canonicalBytes), 0),
+                       COALESCE(sum(revisionBytes), 0)
+                FROM history_items\(predicate)
+                """)
+            defer { totals.finalize() }
+            guard try totals.step(), try totals.integer(at: 0) == Int64(affectedCount) else {
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
+            let pinned = try totals.integer(at: 1)
+            let canonical = try totals.integer(at: 2)
+            let revisions = try totals.integer(at: 3)
+            totals.finalize()
+            try database.execute("DELETE FROM history_items" + predicate)
+            guard try database.changedRowCount == Int64(affectedCount) else {
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
+            try subtractRetiredAccounting(
+                count: affectedCount, pinned: pinned, canonical: canonical, revisions: revisions,
+                in: database
+            )
+
+        case .retirePrefix(let prefix):
+            try database.execute("""
+                DELETE FROM history_items WHERE pinOrdinal IS NULL AND id != ?
+                  AND (lastCopiedAt < ? OR (lastCopiedAt = ? AND id <= ?))
+                """, bindings: [
+                    .text(prefix.excludedItemID?.rawValue.uuidString ?? ""),
+                    .real(prefix.through.lastCopiedAt.timeIntervalSinceReferenceDate),
+                    .real(prefix.through.lastCopiedAt.timeIntervalSinceReferenceDate),
+                    .text(prefix.through.itemID.rawValue.uuidString),
+                ])
+            guard try database.changedRowCount == Int64(prefix.itemCount) else {
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
+            try subtractRetiredAccounting(
+                count: prefix.itemCount, pinned: 0, canonical: Int64(prefix.canonicalBytes),
+                revisions: Int64(prefix.revisionBytes), in: database
+            )
 
         case .setRetentionPolicy(let maximum):
             try database.execute(
@@ -251,6 +308,20 @@ extension HistoryAuthority {
                 ])
             guard try database.changedRowCount == 1 else { throw HistoryFailure.persistence(.invariantViolation) }
         }
+    }
+
+    private func subtractRetiredAccounting(
+        count: Int, pinned: Int64, canonical: Int64, revisions: Int64,
+        in database: SQLiteDatabase
+    ) throws {
+        try database.execute("""
+            UPDATE history_state SET retainedItemCount = retainedItemCount - ?,
+                pinnedItemCount = pinnedItemCount - ?, canonicalBytes = canonicalBytes - ?,
+                revisionBytes = revisionBytes - ? WHERE key = ?
+            """, bindings: [
+                .integer(Int64(count)), .integer(pinned), .integer(canonical),
+                .integer(revisions), .text(Self.positionSingletonKey),
+            ])
     }
 
     /// SQL writes consume only published locators and small inline values.

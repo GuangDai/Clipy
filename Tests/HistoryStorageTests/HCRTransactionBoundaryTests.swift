@@ -139,7 +139,7 @@ struct HCRTransactionBoundaryTests {
             try AffectedItemsBlobCodec.decode(
                 pinRecord.affectedItemsBlob,
                 for: .pin
-            ) == [reference.id]
+            ) == .explicit([reference.id])
         )
         let journal = try #require(afterRetry.journalConfigs.first)
         #expect(afterRetry.journalConfigs.count == 1)

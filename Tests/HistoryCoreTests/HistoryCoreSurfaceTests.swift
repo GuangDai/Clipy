@@ -248,3 +248,17 @@ import Testing
     #expect(size.width == 128)
     #expect(size.height == 96)
 }
+
+@Test func detailMetadataAndRepresentationRequestPreserveExactValues() {
+    let item = HistoryItemReference(id: HistoryItemID(rawValue: UUID()), contentVersion: .initial)
+    let exactType = "\u{FEFF}com.example.e\u{301}"
+    let descriptor = HistoryRepresentationMetadata(typeIdentifier: exactType, byteCount: 1_024)
+    let canonical = HistoryRepresentationRequest(item: item, basis: .canonical, typeIdentifier: exactType)
+    let effective = HistoryRepresentationRequest(item: item, basis: .effective, typeIdentifier: exactType)
+    #expect(descriptor.typeIdentifier.utf8.elementsEqual(exactType.utf8))
+    #expect(descriptor.byteCount == 1_024)
+    #expect(canonical.item == item)
+    #expect(canonical.basis == .canonical)
+    #expect(canonical.typeIdentifier.utf8.elementsEqual(exactType.utf8))
+    #expect(canonical != effective)
+}

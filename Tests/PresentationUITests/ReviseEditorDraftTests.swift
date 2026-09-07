@@ -10,6 +10,27 @@ struct ReviseEditorDraftTests {
     private let textType = "public.utf8-plain-text"
     private let siblingType = "com.example.sibling"
 
+    @Test func metadataDoesNotDownloadOrDecodeAnyReplacementUntilExplicitlyLoaded() {
+        var draft = ReviseEditorDraft(details: details(
+            canonicalText: Data("original".utf8), effectiveText: Data("current".utf8)
+        ))
+        #expect(!draft.hasReplacementSource(for: textType))
+        #expect(draft.replacementText(for: textType).isEmpty)
+        #expect(!draft.hasReplacementSource(for: siblingType))
+        #expect(draft.replacementRequest(for: siblingType) == nil)
+        draft.setChoice(.replace, for: textType)
+        draft.setReplacementText("not yet authorized by a loaded source", for: textType)
+        #expect(draft.choice(for: textType) == .keepCurrent)
+        #expect(draft.replacementText(for: textType).isEmpty)
+        #expect(!draft.isDirty)
+        #expect(decisions(from: draft.revisionRequest())[textType] == .inheritCurrent)
+        installSource(Data("current".utf8), for: textType, in: &draft)
+        #expect(!draft.isDirty)
+        #expect(!draft.hasReplacementSource(for: siblingType))
+        draft.setChoice(.replace, for: textType)
+        #expect(draft.isDirty)
+    }
+
     @Test func keepCurrentPreservesPreviouslyRevisedBytes() {
         let currentText = Data("current revision".utf8)
         let draft = ReviseEditorDraft(
@@ -23,9 +44,9 @@ struct ReviseEditorDraftTests {
 
         #expect(
             decisions[textType]
-                == .replace(bytes: currentText)
+                == .inheritCurrent
         )
-        #expect(decisions[siblingType] == .inheritCanonical)
+        #expect(decisions[siblingType] == .inheritCurrent)
     }
 
     @Test func hidingSiblingDoesNotRestorePreviouslyRevisedBytes() {
@@ -40,7 +61,7 @@ struct ReviseEditorDraftTests {
 
         let decisions = decisions(from: draft.revisionRequest())
 
-        #expect(decisions[textType] == .replace(bytes: currentText))
+        #expect(decisions[textType] == .inheritCurrent)
         #expect(decisions[siblingType] == .hide)
     }
 
@@ -56,7 +77,7 @@ struct ReviseEditorDraftTests {
         let decisions = decisions(from: draft.revisionRequest())
 
         #expect(decisions[textType] == .inheritCanonical)
-        #expect(decisions[siblingType] == .inheritCanonical)
+        #expect(decisions[siblingType] == .inheritCurrent)
     }
 
     @Test func keepCurrentPreservesHiddenStateUntilUseOriginalIsChosen() {
@@ -64,9 +85,11 @@ struct ReviseEditorDraftTests {
             typeIdentifier: siblingType,
             bytes: Data([0x10, 0x20])
         )
-        var draft = ReviseEditorDraft(
-            details: details(canonical: [canonical], effective: [])
-        )
+        let visible = HistoryRepresentation(typeIdentifier: textType, bytes: Data("visible".utf8))
+        var draft = ReviseEditorDraft(details: details(
+            canonical: [canonical, visible], effective: [visible]
+        ))
+        draft.setChoice(.hide, for: textType)
 
         #expect(draft.allRepresentationsHidden)
         #expect(
@@ -121,6 +144,7 @@ struct ReviseEditorDraftTests {
             )
         )
 
+        installSource(Data([0xC3, 0xA9]), for: textType, in: &draft)
         draft.setReplacementText("e\u{301}", for: textType)
 
         #expect(draft.isDirty)
@@ -145,6 +169,7 @@ struct ReviseEditorDraftTests {
                 effectiveText: Data("current revision".utf8)
             )
         )
+        installSource(Data("current revision".utf8), for: textType, in: &draft)
         draft.setChoice(.replace, for: textType)
         draft.setReplacementText("draft-A", for: textType)
 
@@ -166,6 +191,7 @@ struct ReviseEditorDraftTests {
                 effectiveText: Data("current revision".utf8)
             )
         )
+        installSource(Data("current revision".utf8), for: textType, in: &draft)
         draft.setChoice(.replace, for: textType)
         draft.setReplacementText("draft-A", for: textType)
 
@@ -188,6 +214,7 @@ struct ReviseEditorDraftTests {
                 effectiveText: Data("effective-v1".utf8)
             )
         )
+        installSource(Data("effective-v1".utf8), for: textType, in: &draft)
         draft.setChoice(.replace, for: textType)
         draft.setReplacementText("draft-A", for: textType)
         draft.markStale()
@@ -230,11 +257,11 @@ struct ReviseEditorDraftTests {
         )
         #expect(
             revisionDecisions[siblingType]
-                == .replace(bytes: Data("sibling-effective-v3".utf8))
+                == .inheritCurrent
         )
         #expect(
-            draft.canonicalRepresentations.first?.bytes
-                == Data("original-v1".utf8)
+            draft.canonicalRepresentations.first?.byteCount
+                == Data("original-v1".utf8).count
         )
     }
 
@@ -259,7 +286,7 @@ struct ReviseEditorDraftTests {
         #expect(draft.dismissalDecision == .dismiss)
         #expect(
             decisions(from: draft.revisionRequest())[textType]
-                == .replace(bytes: Data("effective-v3".utf8))
+                == .inheritCurrent
         )
     }
 
@@ -270,6 +297,7 @@ struct ReviseEditorDraftTests {
                 effectiveText: Data("current revision".utf8)
             )
         )
+        installSource(Data("current revision".utf8), for: textType, in: &draft)
         draft.setChoice(.replace, for: textType)
         draft.setReplacementText("draft-A", for: textType)
         draft.setChoice(.hide, for: siblingType)
@@ -309,6 +337,48 @@ struct ReviseEditorDraftTests {
         #expect(revisionDecisions[siblingType] == .hide)
     }
 
+    @Test func newlyHiddenTextDropsOnlyAnInspectedSourceAndNextReplaceReadsCanonical() {
+        let original = HistoryRepresentation(typeIdentifier: textType, bytes: Data("original".utf8))
+        let current = HistoryRepresentation(typeIdentifier: textType, bytes: Data("current".utf8))
+        let sibling = HistoryRepresentation(typeIdentifier: siblingType, bytes: Data([0x10, 0x20]))
+        var draft = ReviseEditorDraft(details: details(
+            canonical: [original, sibling], effective: [current, sibling]
+        ))
+        installSource(current.bytes, for: textType, in: &draft)
+        #expect(!draft.isDirty)
+        draft.markStale()
+        #expect(draft.reloadLatest(details: details(
+            canonical: [original, sibling], effective: [sibling], version: 3
+        )))
+        #expect(!draft.isAwaitingLatestContent)
+        #expect(!draft.isDirty)
+        #expect(!draft.hasReplacementSource(for: textType))
+        #expect(draft.replacementText(for: textType).isEmpty)
+        #expect(decisions(from: draft.revisionRequest())[textType] == .hide)
+        #expect(decisions(from: draft.revisionRequest())[siblingType] == .inheritCurrent)
+        installSource(original.bytes, for: textType, in: &draft, basis: .canonical)
+        draft.setChoice(.replace, for: textType)
+        #expect(decisions(from: draft.revisionRequest())[textType] == .replace(bytes: original.bytes))
+        #expect(draft.revisionRequest().expected == ContentVersion(rawValue: 3))
+    }
+
+    @Test func olderMetadataCannotResetTheStaleBaseOrAuthoredText() {
+        var draft = ReviseEditorDraft(details: details(
+            canonicalText: Data("original".utf8), effectiveText: Data("current".utf8), version: 4
+        ))
+        installSource(Data("current".utf8), for: textType, in: &draft)
+        draft.setChoice(.replace, for: textType)
+        draft.setReplacementText("draft-A", for: textType)
+        draft.markStale()
+        #expect(!draft.reloadLatest(details: details(
+            canonicalText: Data("original".utf8), effectiveText: Data("older".utf8), version: 3
+        )))
+        #expect(draft.isAwaitingLatestContent)
+        #expect(!draft.canSubmit)
+        #expect(draft.revisionRequest().expected == ContentVersion(rawValue: 4))
+        #expect(decisions(from: draft.revisionRequest())[textType] == .replace(bytes: Data("draft-A".utf8)))
+    }
+
     @Test func reloadConflictPreservesEntireAuthoredDraftAndOldBase() throws {
         var draft = ReviseEditorDraft(
             details: details(
@@ -316,6 +386,7 @@ struct ReviseEditorDraftTests {
                 effectiveText: Data("current revision".utf8)
             )
         )
+        installSource(Data("current revision".utf8), for: textType, in: &draft)
         draft.setChoice(.replace, for: textType)
         draft.setReplacementText("draft-A", for: textType)
         draft.markStale()
@@ -363,6 +434,7 @@ struct ReviseEditorDraftTests {
                 effectiveText: Data("current revision".utf8)
             )
         )
+        installSource(Data("current revision".utf8), for: textType, in: &draft)
         draft.setChoice(.replace, for: textType)
         draft.setReplacementText("", for: textType)
 
@@ -382,7 +454,7 @@ struct ReviseEditorDraftTests {
             details: details(canonical: [utf8], effective: [utf8])
         )
 
-        #expect(utf8Draft.canReplace(utf8))
+        #expect(utf8Draft.canReplace(metadata(utf8)))
 
         for fixture in nonReplaceableFormatFixtures() {
             let representation = HistoryRepresentation(
@@ -396,7 +468,9 @@ struct ReviseEditorDraftTests {
                 )
             )
 
-            #expect(!draft.canReplace(representation))
+            #expect(!draft.canReplace(metadata(representation)))
+            #expect(draft.replacementRequest(for: fixture.typeIdentifier) == nil)
+            #expect(!draft.hasReplacementSource(for: fixture.typeIdentifier))
         }
     }
 
@@ -422,7 +496,7 @@ struct ReviseEditorDraftTests {
             #expect(
                 decisions(from: draft.revisionRequest())[
                     fixture.typeIdentifier
-                ] == .replace(bytes: fixture.effectiveBytes)
+                ] == .inheritCurrent
             )
         }
     }
@@ -458,7 +532,7 @@ struct ReviseEditorDraftTests {
             #expect(
                 decisions(from: draft.revisionRequest())[
                     fixture.typeIdentifier
-                ] == .replace(bytes: fixture.effectiveBytes)
+                ] == .inheritCurrent
             )
         }
     }
@@ -471,6 +545,7 @@ struct ReviseEditorDraftTests {
             )
         )
 
+        installSource(Data("current revision".utf8), for: textType, in: &draft)
         draft.setChoice(.replace, for: textType)
         draft.setReplacementText("replacement 🌿", for: textType)
 
@@ -488,14 +563,16 @@ struct ReviseEditorDraftTests {
         var draft = ReviseEditorDraft(details: utf16Details(
             type: type, canonical: original, effective: current
         ))
-        #expect(decisions(from: draft.revisionRequest())[type] == .replace(bytes: current))
+        #expect(decisions(from: draft.revisionRequest())[type] == .inheritCurrent)
         draft.setChoice(.useOriginal, for: type)
         #expect(decisions(from: draft.revisionRequest())[type] == .inheritCanonical)
         draft.setChoice(.hide, for: type)
         #expect(decisions(from: draft.revisionRequest())[type] == .hide)
         #expect(draft.allRepresentationsHidden)
         draft.setChoice(.keepCurrent, for: type)
-        #expect(decisions(from: draft.revisionRequest())[type] == .replace(bytes: current))
+        #expect(decisions(from: draft.revisionRequest())[type] == .inheritCurrent)
+        #expect(!draft.hasReplacementSource(for: type))
+        installSource(current, for: type, in: &draft)
         draft.setChoice(.replace, for: type)
         #expect(draft.replacementText(for: type) == "B")
         #expect(decisions(from: draft.revisionRequest())[type] == .replace(bytes: current))
@@ -508,6 +585,8 @@ struct ReviseEditorDraftTests {
         ))
         let representation = try #require(draft.canonicalRepresentations.first)
         #expect(draft.canReplace(representation))
+        #expect(draft.replacementText(for: fixture.type).isEmpty)
+        installSource(fixture.initial, for: fixture.type, in: &draft)
         #expect(draft.replacementText(for: fixture.type) == "A")
         #expect(!draft.isDirty)
 
@@ -523,6 +602,7 @@ struct ReviseEditorDraftTests {
         var draft = ReviseEditorDraft(details: utf16Details(
             type: type, canonical: original, effective: original
         ))
+        installSource(original, for: type, in: &draft)
         draft.setChoice(.replace, for: type)
         draft.setReplacementText("B🌿", for: type)
 
@@ -552,12 +632,18 @@ struct ReviseEditorDraftTests {
         var draft = ReviseEditorDraft(details: utf16Details(
             type: type, canonical: original, effective: original
         ))
+        installSource(original, for: type, in: &draft)
+        #expect(draft.replacementText(for: type) == "A")
         draft.markStale()
         let reloaded = draft.reloadLatest(details: utf16Details(
             type: type, canonical: original, effective: latest, version: 3
         ))
         #expect(reloaded)
         #expect(!draft.isDirty)
+        #expect(!draft.hasReplacementSource(for: type))
+        #expect(draft.replacementText(for: type).isEmpty)
+        #expect(draft.replacementRequest(for: type)?.item.contentVersion == ContentVersion(rawValue: 3))
+        installSource(latest, for: type, in: &draft)
         #expect(draft.replacementText(for: type) == "A")
         draft.setChoice(.replace, for: type)
         draft.setReplacementText("B", for: type)
@@ -571,21 +657,25 @@ struct ReviseEditorDraftTests {
         let canonical = HistoryRepresentation(
             typeIdentifier: type, bytes: Data([0xFE, 0xFF, 0x00, 0x41])
         )
-        var draft = ReviseEditorDraft(details: details(canonical: [canonical], effective: []))
+        let visible = HistoryRepresentation(typeIdentifier: siblingType, bytes: Data([0x10]))
+        var draft = ReviseEditorDraft(details: details(canonical: [canonical, visible], effective: [visible]))
+        draft.setChoice(.hide, for: siblingType)
         #expect(draft.allRepresentationsHidden)
-        #expect(draft.canReplace(canonical))
+        #expect(draft.canReplace(metadata(canonical)))
+        installSource(canonical.bytes, for: type, in: &draft, basis: .canonical)
         #expect(draft.replacementText(for: type) == "A")
         draft.setChoice(.replace, for: type)
         #expect(draft.canSubmit)
         #expect(decisions(from: draft.revisionRequest())[type] == .replace(bytes: canonical.bytes))
     }
 
-    @Test func malformedUTF16ReloadLeavesAuthoredBytesAndOldBaseIntact() {
+    @Test func metadataReloadPreservesAuthoredUTF16WithoutReadingNewMalformedBytes() {
         let type = "public.utf16-plain-text"
         let original = Data([0xFF, 0xFE, 0x41, 0x00])
         var draft = ReviseEditorDraft(details: utf16Details(
             type: type, canonical: original, effective: original
         ))
+        installSource(original, for: type, in: &draft)
         draft.setChoice(.replace, for: type)
         draft.setReplacementText("B", for: type)
         draft.markStale()
@@ -596,10 +686,10 @@ struct ReviseEditorDraftTests {
             effective: Data([0xFF, 0xFE, 0x00, 0xD8]), // unpaired high surrogate
             version: 3
         ))
-        #expect(!reloaded)
-        #expect(draft.isAwaitingLatestContent)
-        #expect(!draft.canSubmit)
-        #expect(draft.revisionRequest().expected == ContentVersion(rawValue: 2))
+        #expect(reloaded)
+        #expect(!draft.isAwaitingLatestContent)
+        #expect(draft.canSubmit)
+        #expect(draft.revisionRequest().expected == ContentVersion(rawValue: 3))
         #expect(draft.choice(for: type) == .replace)
         #expect(draft.replacementText(for: type) == "B")
         #expect(decisions(from: draft.revisionRequest())[type] == .replace(
@@ -614,6 +704,7 @@ struct ReviseEditorDraftTests {
         var draft = ReviseEditorDraft(details: utf16Details(
             type: type, canonical: canonical, effective: current
         ))
+        installSource(current, for: type, in: &draft)
         #expect(draft.replacementText(for: type).unicodeScalars.map(\.value) == [0x65, 0x301])
         #expect(!draft.isDirty)
         draft.setChoice(.replace, for: type)
@@ -624,7 +715,7 @@ struct ReviseEditorDraftTests {
         ))
     }
 
-    @Test func initialReplacementStillRequiresValidCanonicalAndEffectiveText() throws {
+    @Test func replacementValidatesOnlyTheExplicitlySelectedEffectiveSource() throws {
         let type = "public.utf16-external-plain-text"
         let valid = Data([0x00, 0x41])
         let malformed = Data([0xD8, 0x00]) // unpaired high surrogate
@@ -635,10 +726,39 @@ struct ReviseEditorDraftTests {
                 type: type, canonical: canonical, effective: current
             ))
             let representation = try #require(draft.canonicalRepresentations.first)
-            #expect(!draft.canReplace(representation))
+            #expect(draft.canReplace(representation))
+            #expect(draft.replacementRequest(for: type)?.basis == .effective)
+            #expect(!draft.hasReplacementSource(for: type))
+            let installed = draft.installReplacementSource(HistoryRepresentation(typeIdentifier: type, bytes: current))
+            #expect(installed == (current == valid))
             draft.setChoice(.replace, for: type)
-            #expect(draft.choice(for: type) == .keepCurrent)
+            #expect(draft.choice(for: type) == (current == valid ? .replace : .keepCurrent))
         }
+    }
+
+    @Test(arguments: [Data([0xFF]), Data([0xC3]), Data([0xED, 0xA0, 0x80])])
+    func malformedUTF8SourceDoesNotEnableReplacementOrEraseAuthoredText(malformed: Data) {
+        var draft = ReviseEditorDraft(details: details(
+            canonicalText: Data("original".utf8), effectiveText: malformed
+        ))
+        let source = HistoryRepresentation(typeIdentifier: textType, bytes: malformed)
+        #expect(!draft.installReplacementSource(source))
+        #expect(!draft.hasReplacementSource(for: textType))
+        draft.setChoice(.replace, for: textType)
+        #expect(draft.choice(for: textType) == .keepCurrent)
+        #expect(!draft.isDirty)
+
+        // A later failed source result cannot clobber an already-authored
+        // draft; the UI also owns its separate request-reference check.
+        #expect(draft.reloadLatest(details: details(
+            canonicalText: Data("original".utf8), effectiveText: Data("current".utf8), version: 3
+        )))
+        installSource(Data("current".utf8), for: textType, in: &draft)
+        draft.setChoice(.replace, for: textType)
+        draft.setReplacementText("authored 🌿", for: textType)
+        #expect(!draft.installReplacementSource(source))
+        #expect(draft.replacementText(for: textType) == "authored 🌿")
+        #expect(decisions(from: draft.revisionRequest())[textType] == .replace(bytes: Data("authored 🌿".utf8)))
     }
 
     @Test func utf16DirtyComparisonPreservesCanonicallyEquivalentSpellings() {
@@ -647,6 +767,7 @@ struct ReviseEditorDraftTests {
         var draft = ReviseEditorDraft(details: utf16Details(
             type: type, canonical: composed, effective: composed
         ))
+        installSource(composed, for: type, in: &draft)
         draft.setReplacementText("e\u{301}", for: type)
         #expect(draft.isDirty)
         draft.setChoice(.replace, for: type)
@@ -664,6 +785,7 @@ struct ReviseEditorDraftTests {
         var draft = ReviseEditorDraft(details: utf16Details(
             type: type, canonical: original, effective: original
         ))
+        installSource(original, for: type, in: &draft)
         draft.setChoice(.replace, for: type)
         draft.setReplacementText("", for: type)
         #expect(draft.hasEmptyReplacement)
@@ -752,8 +874,10 @@ struct ReviseEditorDraftTests {
                 ),
                 contentVersion: ContentVersion(rawValue: version)
             ),
-            canonical: canonical,
-            effective: effective,
+            title: "Metadata fixture",
+            canonical: canonical.map(metadata),
+            effective: effective.map(metadata),
+            effectiveMatchesCanonical: canonical == effective,
             revisions: [],
             occurrence: CopyOccurrenceSummary(
                 firstCopiedAt: Date(timeIntervalSinceReferenceDate: 1),
@@ -764,6 +888,22 @@ struct ReviseEditorDraftTests {
             ),
             pinnedPosition: nil
         )
+    }
+
+    private func metadata(_ representation: HistoryRepresentation) -> HistoryRepresentationMetadata {
+        HistoryRepresentationMetadata(typeIdentifier: representation.typeIdentifier, byteCount: representation.bytes.count)
+    }
+
+    /// Simulate only the UI's explicit one-representation read result. The
+    /// initial Details fixture carries sizes/type facts, never payloads.
+    private func installSource(
+        _ bytes: Data, for type: String, in draft: inout ReviseEditorDraft,
+        basis: HistoryContentBasis = .effective
+    ) {
+        #expect(draft.replacementRequest(for: type) == HistoryRepresentationRequest(
+            item: draft.itemReference, basis: basis, typeIdentifier: type
+        ))
+        #expect(draft.installReplacementSource(HistoryRepresentation(typeIdentifier: type, bytes: bytes)))
     }
 
     private func decisions(

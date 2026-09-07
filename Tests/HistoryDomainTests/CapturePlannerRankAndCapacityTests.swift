@@ -221,7 +221,8 @@ func equivalentTypeSpellingsKeepExactCanonicalRank(_ useDecomposedIncoming: Bool
             observedAt: 200,
             candidateID: candidateID
         ),
-        facts: captureFacts(incoming: incoming, candidates: [], retained: [eligible]),
+        facts: captureFacts(incoming: incoming, candidates: [], retained: [eligible],
+            candidateID: candidateID, maximumUnpinnedItems: 1, hardMaximumRetainedItems: 1),
         retention: RetentionPolicy(maximumUnpinnedItems: 1),
         hardMaximumRetainedItems: 1
     )
@@ -229,19 +230,15 @@ func equivalentTypeSpellingsKeepExactCanonicalRank(_ useDecomposedIncoming: Bool
     guard case .commit(let boundaryPlan) = boundaryResult,
           boundaryPlan.mutations.count == 2,
           case .create(let created) = boundaryPlan.mutations[0],
-          case .retire(let victimID, let reason) = boundaryPlan.mutations[1]
+          case .retirePrefix(let prefix) = boundaryPlan.mutations[1]
     else {
         Issue.record("The just-satisfiable hard-cap boundary did not insert and retire")
         return
     }
     #expect(created.id == candidateID)
-    #expect(victimID == eligible.id)
-    #expect(victimID != candidateID)
-    if case .retention = reason {
-        // Expected semantic reason.
-    } else {
-        Issue.record("The hard-cap victim carried the wrong retirement reason")
-    }
+    #expect(prefix.through.itemID == eligible.id)
+    #expect(prefix.through.itemID != candidateID)
+    #expect(prefix.itemCount == 1)
 
     let pinned = captureItem(
         id: capturePlannerID(2),
@@ -321,7 +318,8 @@ func equivalentTypeSpellingsKeepExactCanonicalRank(_ useDecomposedIncoming: Bool
         facts: captureFacts(
             incoming: incoming,
             candidates: [primary],
-            retained: [primary, nextOldest, newest, pinnedOldest]
+            retained: [primary, nextOldest, newest, pinnedOldest],
+            maximumUnpinnedItems: 2, hardMaximumRetainedItems: 10
         ),
         retention: RetentionPolicy(maximumUnpinnedItems: 2),
         hardMaximumRetainedItems: 10
@@ -330,20 +328,16 @@ func equivalentTypeSpellingsKeepExactCanonicalRank(_ useDecomposedIncoming: Bool
     guard case .commit(let plan) = result,
           plan.mutations.count == 2,
           case .recordCopy(let primaryID, _) = plan.mutations[0],
-          case .retire(let victimID, let reason) = plan.mutations[1]
+          case .retirePrefix(let prefix) = plan.mutations[1]
     else {
         Issue.record("Projected retention did not produce copy + one retirement")
         return
     }
     #expect(primaryID == primary.id)
-    #expect(victimID == nextOldest.id)
-    if case .retention = reason {
-        // Expected semantic reason.
-    } else {
-        Issue.record("The projected victim was not retired for retention")
-    }
-    #expect(victimID != pinnedOldest.id)
-    #expect(victimID != primary.id)
+    #expect(prefix.through.itemID == nextOldest.id)
+    #expect(prefix.itemCount == 1)
+    #expect(prefix.through.itemID != pinnedOldest.id)
+    #expect(prefix.through.itemID != primary.id)
 }
 
 @Test func effectiveContentRejectsEveryCorruptActiveLineageShape() throws {

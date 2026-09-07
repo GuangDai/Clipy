@@ -22,7 +22,7 @@ struct SchemaSmokeTests {
             CROSS JOIN history_state s WHERE s.key = 'retained-history'
             """)
         defer { statement.finalize() }
-        try #require(statement.step())
+        try #require(try statement.step())
         #expect(try statement.blob(at: 0) == Data(title.utf8))
         #expect(try sqliteUInt64(statement.blob(at: 1)) == 1)
         #expect(try sqliteUInt64(statement.blob(at: 2)) == 1)
@@ -48,11 +48,11 @@ struct SchemaSmokeTests {
         let reader = try SQLiteDatabase(url: url)
         let original = try reader.prepare("SELECT payload FROM Z_METADATA")
         defer { original.finalize() }
-        try #require(original.step())
+        try #require(try original.step())
         #expect(try original.blob(at: 0) == Data([0x01, 0x02]))
         let current = try reader.prepare("SELECT count(*) FROM sqlite_master WHERE name = 'history_items'")
         defer { current.finalize() }
-        try #require(current.step())
+        try #require(try current.step())
         #expect(try current.integer(at: 0) == 0)
     }
 }

@@ -78,8 +78,16 @@ struct RealHistoryThumbnailRecoveryTests {
 
         let details = try await history.details(for: original.id)
         #expect(details.item == revised)
-        #expect(details.canonical.map(\.bytes) == [malformed])
-        #expect(details.effective.map(\.bytes) == [validPNG])
+        #expect(details.canonical.map(\.typeIdentifier) == ["public.png"])
+        #expect(details.effective.map(\.typeIdentifier) == ["public.png"])
+        let canonical = try await history.representation(HistoryRepresentationRequest(
+            item: revised, basis: .canonical, typeIdentifier: "public.png"
+        ))
+        let effective = try await history.representation(HistoryRepresentationRequest(
+            item: revised, basis: .effective, typeIdentifier: "public.png"
+        ))
+        #expect(canonical == HistoryRepresentation(typeIdentifier: "public.png", bytes: malformed))
+        #expect(effective == HistoryRepresentation(typeIdentifier: "public.png", bytes: validPNG))
         let paste = try await history.pastePayload(for: original.id)
         #expect(paste.item == revised)
         #expect(paste.representations.map(\.bytes) == [validPNG])

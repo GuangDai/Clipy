@@ -24,7 +24,7 @@ struct PositionSingletonStartupValidationTests {
         #expect(row.maximumUnpinnedItems == storedMaximum)
         let policies = try reader.prepare("SELECT count(*) FROM retention_policies")
         defer { policies.finalize() }
-        try #require(policies.step())
+        try #require(try policies.step())
         #expect(try policies.integer(at: 0) == 1)
     }
 

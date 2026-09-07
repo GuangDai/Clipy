@@ -1,5 +1,16 @@
 ## Part III — Caller Interface (A): identity, protocol, actions & receipts
 
+> **2026-09-07, V2-09:** `details(for:)` now returns representation metadata
+> (type and byte count), title, revision summaries and authoritative
+> `effectiveMatchesCanonical`, not payload arrays. Read bytes explicitly with
+> `representation(HistoryRepresentationRequest(item:basis:typeIdentifier:))`.
+> The request names an exact item/version and Canonical or Effective basis;
+> stale references fail before payload I/O. Copy still uses `pastePayload`.
+> This replaces the historical raw-Details signatures below without a legacy
+> overload. Revision decisions also admit `inheritCurrent`, resolved against
+> the OCC-checked current snapshot without requiring UI to download binary
+> content merely to preserve it.
+
 ### 1. Role and ownership
 
 `HistoryCore` owns the complete public interface between callers and retained History. It is Foundation-only and contains no persistence, Domain aggregate, fingerprint, framework object, or service locator.

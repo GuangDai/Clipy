@@ -10,6 +10,7 @@
 /// docs/01-architecture.md §5.7 / docs/04-coherence.md §9; roadmap:
 /// docs/roadmap/05-presentationui.md (step 9).
 import ClipboardFormats
+import ContentPreview
 import Foundation
 import HistoryCore
 import SwiftUI
@@ -167,6 +168,11 @@ struct HistoryDetailsView: View {
     @State private var isRevising = false
     @State private var isExporting = false
     @State private var exportTask: Task<Void, Never>?
+    @State private var representationTask: Task<Void, Never>?
+    @State private var previewRequest: HistoryRepresentationRequest?
+    @State private var representationPreview: DetailsRepresentationPresentation?
+    @State private var representationFailure: String?
+    @State private var representationRenderer = ContentPreview()
     @State private var loadFence = HistoryDetailsLoadFence()
 
     /// The details surface's live measured width — the signal for
@@ -275,12 +281,26 @@ struct HistoryDetailsView: View {
             .accessibilityIdentifier("clipy.details.confirm-remove")
             Button(PanelActionsCopy.text("Cancel", bundle: copyBundle), role: .cancel) {}
         }
-        .onDisappear(perform: cancelExport)
+        .onDisappear {
+            cancelExport()
+            cancelRepresentationPreview()
+        }
+        .onChange(of: basis) { _, _ in
+            cancelExport()
+            cancelRepresentationPreview()
+        }
+        .onChange(of: showsEditor) { _, opened in
+            if opened {
+                cancelExport()
+                cancelRepresentationPreview()
+            }
+        }
         .onChange(of: viewState.surfacePurge, initial: true) { _, _ in
             _ = reconcileSurfacePurge(viewState.surfacePurge)
         }
         .onChange(of: memoryPressureGeneration, initial: true) { _, _ in
             thumbnails.respondToMemoryPressure(memoryPressure)
+            if memoryPressure == .critical { cancelRepresentationPreview() }
         }
         // The browsing column's user resize (PanelGeometry 360…720) is this
         // view's live width signal; `onGeometryChange` reports it without
@@ -338,7 +358,10 @@ struct HistoryDetailsView: View {
         guard loadFence.advanceReference(from: previous, to: latest) else {
             return
         }
-        if latest != previous { cancelExport() }
+        if latest != previous {
+            cancelExport()
+            cancelRepresentationPreview()
+        }
         currentItem = latest
         if latest != previous {
             thumbnails.purge(.revision(old: previous, new: latest))
@@ -389,7 +412,12 @@ struct HistoryDetailsView: View {
                     }
                 },
                 onExport: startExport,
-                isExporting: isExporting
+                isExporting: isExporting,
+                onPreview: startRepresentationPreview,
+                previewRequest: previewRequest,
+                representationPreview: representationPreview,
+                isLoadingRepresentation: representationTask != nil,
+                representationFailure: representationFailure
             )
             .disabled(isRevising)
             Divider()
@@ -499,38 +527,118 @@ struct HistoryDetailsView: View {
     /// Cancellation leaves the surface untouched; a write failure is shown
     /// here independently of History's mutation failures (V2-07 §4.1.1).
     @MainActor
-    private func startExport(_ representation: HistoryRepresentation) {
-        guard !isExporting else { return }
+    private func startExport(_ request: HistoryRepresentationRequest) {
+        guard !isExporting, !showsEditor else { return }
+        guard request.item == currentItem else { return }
         guard reconcileSurfacePurge(viewState.surfacePurge) else { return }
         let reference = currentItem
         let generation = loadFence.generation
         isExporting = true
         failureNotice = nil
         exportTask = Task {
-            guard !Task.isCancelled else { return }
-            let result = await viewState.onExportRepresentation(representation)
-            guard !Task.isCancelled else { return }
-            exportTask = nil
-            isExporting = false
-            // A closed/purged or retargeted Details surface cannot accept a
-            // late export result, even if an app callback ignores cancellation.
-            guard reconcileSurfacePurge(viewState.surfacePurge),
-                  loadFence.accepts(
-                    generation, returned: reference, expected: currentItem,
-                    isCancelled: Task.isCancelled
-                  ) else { return }
-            switch result {
-            case .success:
-                break
-            case .failure(let failure):
-                switch failure {
-                case .unavailable:
-                    failureNotice = PanelActionsCopy.text("The Save dialog is unavailable. Try again.", bundle: copyBundle)
-                case .writeFailed:
-                    failureNotice = PanelActionsCopy.text("Clipy couldn't save this file. Choose another location and try again.", bundle: copyBundle)
+            do {
+                guard !Task.isCancelled else { return }
+                let representation = try await viewState.history.representation(request)
+                guard !showsEditor else { cancelExport(); return }
+                guard !Task.isCancelled, reconcileSurfacePurge(viewState.surfacePurge),
+                      loadFence.accepts(generation, returned: request.item, expected: currentItem, isCancelled: Task.isCancelled)
+                else { return }
+                let result = await viewState.onExportRepresentation(representation)
+                guard !Task.isCancelled else { return }
+                exportTask = nil
+                isExporting = false
+                // A closed/purged or retargeted Details surface cannot accept a
+                // late export result, even if an app callback ignores cancellation.
+                guard reconcileSurfacePurge(viewState.surfacePurge),
+                      loadFence.accepts(
+                        generation, returned: reference, expected: currentItem,
+                        isCancelled: Task.isCancelled
+                      ) else { return }
+                switch result {
+                case .success:
+                    break
+                case .failure(let failure):
+                    switch failure {
+                    case .unavailable:
+                        failureNotice = PanelActionsCopy.text("The Save dialog is unavailable. Try again.", bundle: copyBundle)
+                    case .writeFailed:
+                        failureNotice = PanelActionsCopy.text("Clipy couldn't save this file. Choose another location and try again.", bundle: copyBundle)
+                    }
                 }
+            } catch {
+                guard !Task.isCancelled, reconcileSurfacePurge(viewState.surfacePurge),
+                      loadFence.owns(generation) else { return }
+                exportTask = nil
+                isExporting = false
+                failureNotice = (error as? HistoryFailure).map {
+                    FailurePresentation.message(for: $0, bundle: copyBundle)
+                } ?? PanelActionsCopy.text("Clipy couldn't load this item.", bundle: copyBundle)
             }
         }
+    }
+
+    @MainActor
+    private func startRepresentationPreview(_ request: HistoryRepresentationRequest) {
+        if previewRequest == request, representationPreview != nil || representationTask != nil {
+            cancelRepresentationPreview()
+            return
+        }
+        cancelRepresentationPreview()
+        guard request.item == currentItem, reconcileSurfacePurge(viewState.surfacePurge) else { return }
+        previewRequest = request
+        let generation = loadFence.generation
+        representationTask = Task {
+            do {
+                let raw = try await viewState.history.representation(request)
+                guard !Task.isCancelled, previewRequest == request,
+                      reconcileSurfacePurge(viewState.surfacePurge),
+                      loadFence.accepts(generation, returned: request.item, expected: currentItem, isCancelled: Task.isCancelled)
+                else { return }
+                let presentation: DetailsRepresentationPresentation
+                let type = ClipboardFormatIdentifier(rawValue: raw.typeIdentifier)
+                if type == .utf8PlainText || type == .utf16PlainText || type == .utf16ExternalPlainText {
+                    let decoding = Task.detached {
+                        guard !Task.isCancelled else { return DetailsRepresentationPresentation.metadataOnly }
+                        return DetailsRepresentationPresentation.resolve(raw)
+                    }
+                    presentation = await withTaskCancellationHandler {
+                        await decoding.value
+                    } onCancel: { decoding.cancel() }
+                } else {
+                    let outcome = await representationRenderer.renderHistoryPane([
+                        PreviewRepresentation(typeIdentifier: raw.typeIdentifier, bytes: raw.bytes)
+                    ])
+                    switch outcome {
+                    case .content(.text(let text)): presentation = .plainText(String(text.text.prefix(500)))
+                    case .content(.raster(let raster)): presentation = .image(raster)
+                    case .content(.pdf(let pdf)): presentation = .image(pdf.raster)
+                    default: presentation = .metadataOnly
+                    }
+                }
+                guard !Task.isCancelled, previewRequest == request,
+                      reconcileSurfacePurge(viewState.surfacePurge),
+                      loadFence.accepts(generation, returned: request.item, expected: currentItem, isCancelled: Task.isCancelled)
+                else { return }
+                representationTask = nil
+                representationPreview = presentation
+            } catch {
+                guard !Task.isCancelled, previewRequest == request,
+                      reconcileSurfacePurge(viewState.surfacePurge), loadFence.owns(generation) else { return }
+                representationTask = nil
+                representationFailure = (error as? HistoryFailure).map {
+                    FailurePresentation.message(for: $0, bundle: copyBundle)
+                } ?? PanelActionsCopy.text("Clipy couldn't load this item.", bundle: copyBundle)
+            }
+        }
+    }
+
+    @MainActor
+    private func cancelRepresentationPreview() {
+        representationTask?.cancel()
+        representationTask = nil
+        previewRequest = nil
+        representationPreview = nil
+        representationFailure = nil
     }
 
     @MainActor
@@ -545,6 +653,8 @@ struct HistoryDetailsView: View {
     /// user-facing `FailurePresentation` message (03b §10).
     @MainActor
     private func load(presentingTransition: Bool = true) async {
+        cancelRepresentationPreview()
+        cancelExport()
         guard reconcileSurfacePurge(viewState.surfacePurge) else { return }
         guard var generation = loadFence.begin() else {
             phase = .removed
@@ -582,17 +692,9 @@ struct HistoryDetailsView: View {
                 }
                 return
             }
-            // Resolve all text rows once per immutable details snapshot,
-            // away from MainActor body evaluation. Cancellation can retire
-            // work between representations, not preempt a synchronous decode.
-            let preparation = Task.detached(priority: .userInitiated) {
-                try DetailsContentPresentation(details: details)
-            }
-            let content = try await withTaskCancellationHandler {
-                try await preparation.value
-            } onCancel: {
-                preparation.cancel()
-            }
+            // The overview prepares only scalar metadata. Representation bytes
+            // are read only by explicit preview, replacement or Save As actions.
+            let content = try DetailsContentPresentation(details: details)
             guard reconcileSurfacePurge(viewState.surfacePurge) else { return }
             guard loadFence.accepts(
                 generation,
@@ -631,6 +733,7 @@ struct HistoryDetailsView: View {
     ) -> Bool {
         if let scope = loadFence.reconcile(purge, item: currentItem) {
             cancelExport()
+            cancelRepresentationPreview()
             thumbnails.purge(scope)
             showsEditor = false
             phase = .removed
@@ -745,8 +848,13 @@ private struct DetailsBody: View {
     @Binding var basis: ContentBasis
     let usesTwoColumnLayout: Bool
     let onRevise: (RevisionIntent) -> Void
-    var onExport: (HistoryRepresentation) -> Void = { _ in }
+    var onExport: (HistoryRepresentationRequest) -> Void = { _ in }
     var isExporting = false
+    var onPreview: (HistoryRepresentationRequest) -> Void = { _ in }
+    var previewRequest: HistoryRepresentationRequest?
+    var representationPreview: DetailsRepresentationPresentation?
+    var isLoadingRepresentation = false
+    var representationFailure: String?
 
     var body: some View {
         if usesTwoColumnLayout {
@@ -797,29 +905,6 @@ private struct DetailsBody: View {
             HStack(alignment: .top, spacing: PanelTheme.spacingLarge) {
                 thumbnail
                     .frame(width: 64, height: 64)
-                    .onAppear { thumbnails.setDisplayed(details.item, true) }
-                    .onDisappear { thumbnails.setDisplayed(details.item, false) }
-                    .onChange(of: details.item) { old, new in
-                        thumbnails.setDisplayed(old, false)
-                        thumbnails.setDisplayed(new, true)
-                    }
-                    .onChange(of: thumbnails.isPrefetchSuspended) { _, suspended in
-                        if !suspended, ThumbnailStore.likelyThumbnailable(
-                            details.effective.map(\.typeIdentifier)
-                        ) {
-                            thumbnails.prefetch(details.item)
-                        }
-                    }
-                    .task(id: details.item) {
-                        // Prefetch is gated by the same cheap UTI heuristic
-                        // the row list uses (04 §9); the store applies a
-                        // result only under the exact requesting reference.
-                        if ThumbnailStore.likelyThumbnailable(
-                            details.effective.map(\.typeIdentifier)
-                        ) {
-                            thumbnails.prefetch(details.item)
-                        }
-                    }
                 VStack(
                     alignment: .leading,
                     spacing: PanelTheme.spacingXXSmall
@@ -940,6 +1025,8 @@ private struct DetailsBody: View {
             )
 
             ForEach(representations, id: \.typeIdentifier) { representation in
+                let request = basis.representation(typeIdentifier: representation.typeIdentifier, in: details)
+                let selected = previewRequest == request
                 RepresentationRow(
                     representation: representation,
                     // "Hidden" is a Canonical-lane fact: a retained canonical
@@ -950,6 +1037,10 @@ private struct DetailsBody: View {
                             representation.typeIdentifier
                         ),
                     isExporting: isExporting,
+                    preview: selected ? representationPreview : nil,
+                    isLoading: selected && isLoadingRepresentation,
+                    failure: selected ? representationFailure : nil,
+                    onPreview: { if let request { onPreview(request) } },
                     onExport: {
                         if let raw = basis.representation(
                             typeIdentifier: representation.typeIdentifier,
@@ -1037,10 +1128,13 @@ private struct RepresentationRow: View {
     let representation: DetailsContentPresentation.Representation
     let isHiddenFromEffective: Bool
     let isExporting: Bool
+    let preview: DetailsRepresentationPresentation?
+    let isLoading: Bool
+    let failure: String?
+    let onPreview: () -> Void
     let onExport: () -> Void
 
     var body: some View {
-        let presentation = representation.presentation
         VStack(alignment: .leading, spacing: PanelTheme.spacingXSmall) {
             HStack(alignment: .firstTextBaseline) {
                 if representation.isImage {
@@ -1081,7 +1175,16 @@ private struct RepresentationRow: View {
             .accessibilityIdentifier("clipy.details.save-as." + representation.typeIdentifier)
             .accessibilityLabel(PanelActionsCopy.format("Save %@ As…", representation.typeIdentifier, bundle: copyBundle))
             .accessibilityHint(PanelActionsCopy.text("Saves the complete bytes of this displayed representation to a file you choose.", bundle: copyBundle))
-            if case .plainText(let preview) = presentation {
+            Button(action: onPreview) {
+                Label(PanelActionsCopy.text(isLoading ? "Cancel" : (preview == nil ? "Show Preview" : "Hide Preview"), bundle: copyBundle),
+                      systemImage: isLoading ? "xmark.circle" : "eye")
+            }
+            .accessibilityIdentifier("clipy.details.show-preview." + representation.typeIdentifier)
+            .accessibilityLabel(PanelActionsCopy.text(isLoading ? "Cancel" : (preview == nil ? "Show Preview" : "Hide Preview"), bundle: copyBundle)
+                + ": " + representation.typeIdentifier)
+            if isLoading { ProgressView().controlSize(.small) }
+            if let failure { Text(failure).font(.caption).foregroundStyle(.secondary) }
+            if case .some(.plainText(let preview)) = preview {
                 ScrollView {
                     Text(preview)
                         .font(.system(.callout, design: .monospaced))
@@ -1117,7 +1220,13 @@ private struct RepresentationRow: View {
                     PanelActionsCopy.format("Text preview of %@", representation.typeIdentifier, bundle: copyBundle)
                 )
             }
-            if representation.showsUnavailablePreviewNotice {
+            if case .some(.image(let raster)) = preview,
+               let image = PreviewRasterDisplay.image(raster, scale: 1,
+                   label: Text(PanelActionsCopy.format("Preview of %@", representation.typeIdentifier, bundle: copyBundle))) {
+                image.resizable().scaledToFit().frame(maxHeight: 160)
+                    .accessibilityIdentifier("clipy.details.image-preview." + representation.typeIdentifier)
+            }
+            if preview == .metadataOnly {
                 Label(PanelActionsCopy.text("Preview unavailable", bundle: copyBundle), systemImage: "doc")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -1202,9 +1311,11 @@ internal enum ContentBasis: String, Hashable {
     /// later History read. Canonical includes representations hidden by edits.
     func representation(
         typeIdentifier: String, in details: HistoryDetails
-    ) -> HistoryRepresentation? {
+    ) -> HistoryRepresentationRequest? {
         let values = self == .effective ? details.effective : details.canonical
-        return values.first { $0.typeIdentifier == typeIdentifier }
+        guard values.contains(where: { $0.typeIdentifier == typeIdentifier }) else { return nil }
+        return HistoryRepresentationRequest(item: details.item,
+            basis: self == .effective ? .effective : .canonical, typeIdentifier: typeIdentifier)
     }
 }
 
@@ -1219,6 +1330,7 @@ internal enum ContentBasis: String, Hashable {
 /// content-types review §3.4).
 package enum DetailsRepresentationPresentation: Equatable, Sendable {
     case plainText(String)
+    case image(PreviewRaster)
     case metadataOnly
 
     package static func resolve(
@@ -1236,9 +1348,9 @@ package enum DetailsRepresentationPresentation: Equatable, Sendable {
     }
 }
 
-/// Immutable display values prepared once for one Details load. Rows retain
-/// bounded text and byte counts, never another copy of the source Data. This
-/// is owned by the loaded phase and discarded with that snapshot.
+/// The initial Details overview contains only scalar metadata. Opening it
+/// neither validates nor retains representation bytes; explicit selection owns
+/// the separate, bounded preview artifact.
 package struct DetailsContentPresentation: Sendable {
     package struct Representation: Sendable {
         package let typeIdentifier: String
@@ -1246,12 +1358,6 @@ package struct DetailsContentPresentation: Sendable {
         package let presentation: DetailsRepresentationPresentation
         package let isImage: Bool
 
-        /// Item-thumbnail success or failure does not classify an individual
-        /// image representation. Its row retains metadata without claiming
-        /// that the source image was decoded or found unavailable (04 §9).
-        package var showsUnavailablePreviewNotice: Bool {
-            presentation == .metadataOnly && !isImage
-        }
     }
 
     package let canonical: [Representation]
@@ -1265,41 +1371,22 @@ package struct DetailsContentPresentation: Sendable {
     package init(details: HistoryDetails) throws {
         canonical = try Self.prepare(details.canonical)
         try Task.checkCancellation()
-        effectiveMatchesCanonical = details.effective == details.canonical
-        // Domain equality deliberately accepts canonically equivalent type
-        // identifiers (02 §2.1), but display rows retain each DTO's spelling.
-        // Only share prepared rows when that spelling is byte-identical too.
-        if effectiveMatchesCanonical,
-           zip(details.canonical, details.effective).allSatisfy({ pair in
-               pair.0.typeIdentifier.utf8.elementsEqual(pair.1.typeIdentifier.utf8)
-           }) {
-            effective = canonical
-        } else {
-            effective = try Self.prepare(details.effective)
-        }
+        effectiveMatchesCanonical = details.effectiveMatchesCanonical
+        effective = try Self.prepare(details.effective)
         symbolName = typeSymbol(for: details.effective.map(\.typeIdentifier))
-        if let active = details.revisions.first(where: \.isActive) {
-            title = active.title
-        } else {
-            title = effective.lazy.compactMap { representation -> String? in
-                guard case .plainText(let text) = representation.presentation else { return nil }
-                let firstLine = text.split(whereSeparator: \.isNewline).first?
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                return firstLine.isEmpty ? nil : String(firstLine.prefix(100))
-            }.first
-        }
+        title = details.title
         try Task.checkCancellation()
     }
 
     private static func prepare(
-        _ representations: [HistoryRepresentation]
+        _ representations: [HistoryRepresentationMetadata]
     ) throws -> [Representation] {
         try representations.map { representation in
             try Task.checkCancellation()
             return Representation(
                 typeIdentifier: representation.typeIdentifier,
-                byteCount: representation.bytes.count,
-                presentation: DetailsRepresentationPresentation.resolve(representation),
+                byteCount: representation.byteCount,
+                presentation: .metadataOnly,
                 isImage: isImageType(representation.typeIdentifier)
             )
         }
@@ -1430,32 +1517,13 @@ private func detailsPreviewDetails() -> HistoryDetails {
             id: HistoryItemID(rawValue: UUID()),
             contentVersion: ContentVersion(rawValue: 3)
         ),
+        title: "Meeting notes — Clipy design review",
         canonical: [
-            HistoryRepresentation(
-                typeIdentifier: ClipboardFormatIdentifier.html.rawValue,
-                bytes: Data("<p>Meeting notes</p>".utf8)
-            ),
-            HistoryRepresentation(
-                typeIdentifier: ClipboardFormatIdentifier.utf8PlainText.rawValue,
-                bytes: Data(
-                    (
-                        "Meeting notes — Clipy design review\n"
-                            + "Second line of the bounded preview."
-                    ).utf8
-                )
-            ),
+            HistoryRepresentationMetadata(typeIdentifier: ClipboardFormatIdentifier.html.rawValue, byteCount: 20),
+            HistoryRepresentationMetadata(typeIdentifier: ClipboardFormatIdentifier.utf8PlainText.rawValue, byteCount: 71),
         ],
-        effective: [
-            HistoryRepresentation(
-                typeIdentifier: ClipboardFormatIdentifier.utf8PlainText.rawValue,
-                bytes: Data(
-                    (
-                        "Meeting notes — Clipy design review\n"
-                            + "Second line of the bounded preview."
-                    ).utf8
-                )
-            ),
-        ],
+        effective: [HistoryRepresentationMetadata(typeIdentifier: ClipboardFormatIdentifier.utf8PlainText.rawValue, byteCount: 71)],
+        effectiveMatchesCanonical: false,
         revisions: [
             RevisionSummary(
                 id: RevisionID(rawValue: UUID()),

@@ -5,8 +5,8 @@ import Foundation
 /// One durable record per non-empty History Commit. `sequence` and
 /// `changePositionRaw` are equal by construction; keeping both makes the
 /// commit-to-journal cross-reference independently checkable at startup.
-/// Affected item IDs remain inside the versioned bounded blob and therefore
-/// reference History business identity by value, never by relationship.
+/// The bounded blob carries complete explicit IDs or a bulk affected scope
+/// with actual counts. Identity and predicate cutoffs are values, not relations.
 internal struct HistoryChangeRecordRow: Sendable {
     var sequence: UInt64
 

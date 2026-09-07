@@ -234,56 +234,62 @@ struct ContentPreviewTests {
         #expect(outcome == .failed(.malformedRepresentation))
     }
 
-    @Test("history-pane aggregate input is admitted through 64 MiB before routing")
-    func historyPaneAggregateInputEnvelope() async {
-        let maximumInputBytes = 64 * 1_048_576
+    @Test(arguments: [
+        ("public.utf8-plain-text", 64 * 1_048_576),
+        ("public.png", 64 * 1_048_576),
+        ("com.adobe.pdf", 64 * 1_048_576),
+        ("public.rtf", 1_048_576),
+        ("public.html", 1_048_576),
+        ("public.file-url", 16 * 1_024),
+    ])
+    func sourceBudgetIsCheckedFromMetadataWithoutAllocatingPayload(type: String, maximum: Int) throws {
+        let accepted = try #require(ContentPreview.prepareHistoryPane([
+            PreviewRepresentationMetadata(typeIdentifier: type, byteCount: maximum),
+        ]).first)
+        #expect(accepted.preflightFailure == nil)
+        let rejected = try #require(ContentPreview.prepareHistoryPane([
+            PreviewRepresentationMetadata(typeIdentifier: type, byteCount: maximum + 1),
+        ]).first)
+        #expect(rejected.preflightFailure == .failed(.resourceLimit))
+    }
 
-        do {
-            let oversized = Data(repeating: 0x61, count: maximumInputBytes + 1)
-            for identifier in [
-                "public.utf8-plain-text",
-                "public.png",
-                "com.adobe.pdf",
-            ] {
-                let outcome = await renderer.renderHistoryPane([
-                    PreviewRepresentation(
-                        typeIdentifier: identifier,
-                        bytes: oversized
-                    ),
-                ])
-                #expect(outcome == .failed(.resourceLimit))
-            }
-        }
-
-        let boundaryPadding = Data(repeating: 0, count: maximumInputBytes - 1)
-        let aggregateOverBoundary = await renderer.renderHistoryPane([
-            PreviewRepresentation(
-                typeIdentifier: "com.adobe.pdf",
-                bytes: boundaryPadding
-            ),
-            PreviewRepresentation(
-                typeIdentifier: "public.png",
-                bytes: Self.onePixelPNG
-            ),
+    @Test func largeUnselectedRepresentationDoesNotConsumeSelectedSourceBudget() async throws {
+        let sources = ContentPreview.prepareHistoryPane([
+            PreviewRepresentationMetadata(typeIdentifier: "com.adobe.pdf", byteCount: 64 * 1_048_576),
+            PreviewRepresentationMetadata(typeIdentifier: "public.png", byteCount: Self.onePixelPNG.count),
         ])
-        #expect(aggregateOverBoundary == .failed(.resourceLimit))
-
-        let exactBoundary = await renderer.renderHistoryPane([
-            PreviewRepresentation(
-                typeIdentifier: "com.adobe.pdf",
-                bytes: boundaryPadding
-            ),
-            PreviewRepresentation(
-                typeIdentifier: "public.utf8-plain-text",
-                bytes: Data("a".utf8)
-            ),
-        ])
-        guard case let .content(.text(text)) = exactBoundary else {
-            Issue.record("expected exact-boundary text, got \(exactBoundary)")
+        let selected = try #require(sources.first)
+        #expect(sources.count == 1)
+        #expect(selected.representationIndex == 1)
+        #expect(selected.preflightFailure == nil)
+        let outcome = await renderer.renderSelectedHistoryPane(selected, representation: PreviewRepresentation(
+            typeIdentifier: "public.png", bytes: Self.onePixelPNG
+        ))
+        guard case .content(.raster(let raster)) = outcome else {
+            Issue.record("Expected only the selected PNG to render, got \(outcome)")
             return
         }
-        #expect(text.text == "a")
-        #expect(!text.wasTruncated)
+        #expect(raster.width == 1 && raster.height == 1)
+    }
+
+    @Test func selectionRejectsMismatchedPayloadAndOnlyMalformedTextCanFallThrough() async throws {
+        let sources = ContentPreview.prepareHistoryPane([
+            PreviewRepresentationMetadata(typeIdentifier: "public.utf8-plain-text", byteCount: 1),
+            PreviewRepresentationMetadata(typeIdentifier: "public.html", byteCount: 8),
+        ])
+        let text = try #require(sources.first)
+        let html = try #require(sources.last)
+        let mismatch = await renderer.renderSelectedHistoryPane(text, representation: PreviewRepresentation(
+            typeIdentifier: "public.utf8-plain-text", bytes: Data("too many bytes".utf8)
+        ))
+        #expect(mismatch == .failed(.malformedRepresentation))
+        #expect(text.permitsFallback(after: .failed(.malformedRepresentation)))
+        #expect(!text.permitsFallback(after: .failed(.cancelled)))
+        #expect(!text.permitsFallback(after: .failed(.resourceLimit)))
+        #expect(!html.permitsFallback(after: .failed(.malformedRepresentation)))
+        #expect(ContentPreview.prepareHistoryPane([
+            PreviewRepresentationMetadata(typeIdentifier: "dyn.unrecognized", byteCount: Int.max),
+        ]).isEmpty)
     }
 
     #if DEBUG

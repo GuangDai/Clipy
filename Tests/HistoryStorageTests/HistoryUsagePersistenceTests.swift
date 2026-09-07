@@ -13,7 +13,7 @@ struct HistoryUsagePersistenceTests {
 
     @Test("reopened usage preserves pruned lineage bytes and decreases after removal")
     func usageSurvivesOwnerReleaseAndContinuesWithDeletion() async throws {
-        // The shared fixture creates the directory before SwiftData opens it.
+        // The shared fixture creates the directory before SQLite opens it.
         let storeURL = WSSupport.tempStoreURL("usage-owner-release")
         defer { WSSupport.removeStore(storeURL) }
         let seeded = try await seedFirstOwner(at: storeURL)
@@ -28,8 +28,14 @@ struct HistoryUsagePersistenceTests {
         #expect(recent.rows.map(\.item.id) == [seeded.pinnedID, seeded.retainedID])
 
         let details = try await reopened.details(for: seeded.pinnedID)
-        #expect(details.canonical.map(\.bytes) == [Data([0x70, 0x69, 0x6E])])
-        #expect(details.effective.map(\.bytes) == [Data([0x74, 0x68, 0x69, 0x72, 0x64, 0x3F])])
+        let canonical = try await reopened.representation(.init(
+            item: details.item, basis: .canonical, typeIdentifier: "public.utf8-plain-text"
+        ))
+        let effective = try await reopened.representation(.init(
+            item: details.item, basis: .effective, typeIdentifier: "public.utf8-plain-text"
+        ))
+        #expect(canonical.bytes == Data([0x70, 0x69, 0x6E]))
+        #expect(effective.bytes == Data([0x74, 0x68, 0x69, 0x72, 0x64, 0x3F]))
         #expect(details.revisions.map(\.id) == seeded.revisionIDs)
         #expect(details.revisions.map(\.title) == ["second!", "third?"])
         #expect(details.revisions.map(\.byteCount) == [7, 6])

@@ -116,6 +116,11 @@ struct SettingsClearSurfacePurgeTests {
 /// Presentation view-state tests (01-architecture §4). It does not stand in
 /// for a writer or assert storage semantics.
 private actor SettingsClearReceiptHistory: ClipboardHistory {
+    func representation(_ request: HistoryRepresentationRequest) async throws -> HistoryRepresentation {
+        Issue.record("Clear receipt tests must not read representation bytes")
+        throw HistoryFailure.notFound(request.item.id)
+    }
+
     func usage() async throws -> HistoryUsage {
         // This receipt/observation script does not configure usage reads.
         throw HistoryFailure.temporarilyUnavailable(.factProof)

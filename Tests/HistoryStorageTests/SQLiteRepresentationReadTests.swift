@@ -6,21 +6,40 @@ import Testing
 @testable import HistoryStorage
 
 struct SQLiteRepresentationReadTests {
-    @Test func detailsReadInactiveRevisionSummariesWithoutTheirPayloads() async throws {
+    @Test func detailsReadAllMetadataWhenEveryPayloadIsUnavailable() async throws {
         let fixture = try await makeFixture()
-        try await fixture.history.authority.makePayloadUnavailable(
-            itemID: fixture.current.id, revisionOrdinal: 1, typeIdentifier: "public.utf8-plain-text"
-        )
+        let position = try await fixture.history.authority.readPositionInLocalContext()
+        for ordinal in [0, 1, 2] {
+            for type in ["public.png", "public.utf8-plain-text"] {
+                try await fixture.history.authority.makePayloadUnavailable(
+                    itemID: fixture.current.id, revisionOrdinal: ordinal, typeIdentifier: type
+                )
+            }
+        }
         let details = try await fixture.history.details(for: fixture.current.id)
         #expect(details.item == fixture.current)
-        #expect(details.canonical.map(\.bytes) == [fixture.image, Data("canonical text".utf8)])
-        #expect(details.effective.map(\.bytes) == [fixture.image, Data("current text".utf8)])
+        #expect(details.title == "current text")
+        #expect(!details.effectiveMatchesCanonical)
+        #expect(details.canonical == [
+            HistoryRepresentationMetadata(typeIdentifier: "public.png", byteCount: fixture.image.count),
+            HistoryRepresentationMetadata(typeIdentifier: "public.utf8-plain-text", byteCount: "canonical text".utf8.count),
+        ])
+        #expect(details.effective == [
+            HistoryRepresentationMetadata(typeIdentifier: "public.png", byteCount: fixture.image.count),
+            HistoryRepresentationMetadata(typeIdentifier: "public.utf8-plain-text", byteCount: "current text".utf8.count),
+        ])
         #expect(details.revisions.map(\.title) == ["older revision", "current text"])
         #expect(details.revisions.map(\.isActive) == [false, true])
         #expect(details.revisions.map(\.byteCount) == [
             fixture.image.count + fixture.olderText.count,
             fixture.image.count + "current text".utf8.count,
         ])
+        #expect(try await fixture.history.authority.readPositionInLocalContext() == position)
+        await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+            try await fixture.history.representation(HistoryRepresentationRequest(
+                item: fixture.current, basis: .effective, typeIdentifier: "public.utf8-plain-text"
+            ))
+        }
     }
 
     @Test func pasteReadsOnlyCurrentEffectiveRepresentationBytes() async throws {
@@ -34,9 +53,9 @@ struct SQLiteRepresentationReadTests {
         #expect(payload.item == fixture.current)
         #expect(payload.lineageHint == fixture.current.id)
         #expect(payload.representations.map(\.bytes) == [fixture.image, Data("current text".utf8)])
-        await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
-            try await fixture.history.details(for: fixture.current.id)
-        }
+        let details = try await fixture.history.details(for: fixture.current.id)
+        #expect(details.item == fixture.current)
+        #expect(details.title == "current text")
     }
 
     @Test func thumbnailOpensOnlyItsSelectedImageIncludingWhenSiblingsAreInline() async throws {
@@ -60,18 +79,75 @@ struct SQLiteRepresentationReadTests {
         }
     }
 
-    @Test func exactRepresentationReadChecksVersionAndKeepsCanonicalSpelling() async throws {
+    @Test func explicitReadSelectsOnlyRequestedBasisAndRepresentation() async throws {
         let fixture = try await makeFixture()
-        let value = try await fixture.history.authority.rawRepresentation(
-            for: fixture.current, basis: .canonical, typeIdentifier: "public.utf8-plain-text"
-        )
+        // Neither canonical nor current image is needed for a text request.
+        for ordinal in [0, 1, 2] {
+            try await fixture.history.authority.makePayloadUnavailable(
+                itemID: fixture.current.id, revisionOrdinal: ordinal, typeIdentifier: "public.png"
+            )
+        }
+        let value = try await fixture.history.representation(HistoryRepresentationRequest(
+            item: fixture.current, basis: .canonical, typeIdentifier: "public.utf8-plain-text"
+        ))
         #expect(value == HistoryRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data("canonical text".utf8)))
+        let effective = try await fixture.history.representation(HistoryRepresentationRequest(
+            item: fixture.current, basis: .effective, typeIdentifier: "public.utf8-plain-text"
+        ))
+        #expect(effective.bytes == Data("current text".utf8))
+        await #expect(throws: HistoryFailure.invalidInput(.unsupportedRepresentationType("public.pdf"))) {
+            try await fixture.history.representation(HistoryRepresentationRequest(
+                item: fixture.current, basis: .effective, typeIdentifier: "public.pdf"
+            ))
+        }
+    }
+
+    @Test(arguments: [HistoryContentBasis.canonical, .effective])
+    func staleExplicitReadRejectsBeforeAccessingMissingPayload(basis: HistoryContentBasis) async throws {
+        let fixture = try await makeFixture()
+        for ordinal in [0, 2] {
+            try await fixture.history.authority.makePayloadUnavailable(
+                itemID: fixture.current.id, revisionOrdinal: ordinal, typeIdentifier: "public.utf8-plain-text"
+            )
+        }
         await #expect(throws: HistoryFailure.staleContent(
             expected: fixture.original.contentVersion, current: fixture.current.contentVersion
         )) {
-            try await fixture.history.authority.rawRepresentation(
-                for: fixture.original, basis: .effective, typeIdentifier: "public.utf8-plain-text"
-            )
+            try await fixture.history.representation(HistoryRepresentationRequest(
+                item: fixture.original, basis: basis, typeIdentifier: "public.utf8-plain-text"
+            ))
+        }
+        await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+            try await fixture.history.representation(HistoryRepresentationRequest(
+                item: fixture.current, basis: basis, typeIdentifier: "public.utf8-plain-text"
+            ))
+        }
+    }
+
+    @Test func explicitReadPreservesStoredUnicodeSpellingAndRejectsRemovedItem() async throws {
+        let history = try await WSSupport.makeHistory()
+        let exactType = "\u{FEFF}com.example.e\u{301}"
+        let bytes = Data([0, 0xEF, 0xBB, 0xBF, 0x41])
+        let receipt = try await history.perform(.capture(ClipboardCapture(
+            representations: [CapturedRepresentation(typeIdentifier: exactType, bytes: bytes)],
+            origin: CopyOriginObservation(sourceApplication: nil, lineageHint: nil),
+            observedAt: Date(timeIntervalSinceReferenceDate: 850_000_000)
+        )))
+        guard case .committed(let commit) = receipt, case .inserted(let item) = commit.outcome else {
+            throw HistoryFailure.persistence(.invariantViolation)
+        }
+        let details = try await history.details(for: item.id)
+        #expect(details.effectiveMatchesCanonical)
+        #expect(details.canonical.first?.typeIdentifier.utf8.elementsEqual(exactType.utf8) == true)
+        let request = HistoryRepresentationRequest(
+            item: item, basis: .canonical, typeIdentifier: exactType.precomposedStringWithCanonicalMapping
+        )
+        let value = try await history.representation(request)
+        #expect(value.typeIdentifier.utf8.elementsEqual(exactType.utf8))
+        #expect(value.bytes == bytes)
+        _ = try await history.perform(.remove(item.id))
+        await #expect(throws: HistoryFailure.notFound(item.id)) {
+            try await history.representation(request)
         }
     }
 

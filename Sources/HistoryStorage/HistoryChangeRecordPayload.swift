@@ -21,12 +21,24 @@ internal enum HistoryChangeKindRawV1: Int16, Sendable, Equatable {
     case retireRevision = 11
 }
 
+/// Exact membership for bounded changes and bulk predicates. `retention` is
+/// deliberately conservative: it covers the whole pre-commit History, while
+/// its counts report only actual retirements and revision prunes (V2-03 §4.4).
+internal enum HistoryAffectedItems: Sendable, Equatable {
+    case explicit([HistoryItemID])
+    case all(retiredItems: Int)
+    case unpinned(retiredItems: Int)
+    case unpinnedPrefix(through: RetentionEvictionKey, excluding: HistoryItemID?,
+                        retiredItems: Int, primaryItemID: HistoryItemID?)
+    case retention(retiredItems: Int, prunedRevisions: Int)
+}
+
 /// The complete immutable input for one same-transaction HCR append.
 internal struct HistoryChangeRecordPayload: Sendable, Equatable {
     internal let sequence: UInt64
     internal let changePositionRaw: UInt64
     internal let changeKind: HistoryChangeKindRawV1
-    internal let affectedItemIDs: [HistoryItemID]
+    internal let affectedItems: HistoryAffectedItems
     internal let createdAt: Date
 
     /// Derives one record from the explicit stamped plan. The outcome selects
@@ -50,10 +62,16 @@ internal struct HistoryChangeRecordPayload: Sendable, Equatable {
             receiptOutcome: receiptOutcome,
             clearScope: clearScope
         )
-        let affectedItemIDs: [HistoryItemID]
+        let affectedItems: HistoryAffectedItems
         switch changeKind {
-        case .clearAll, .clearUnpinned, .policySet:
-            affectedItemIDs = []
+        case .clearAll, .clearUnpinned:
+            guard case .cleared(let count) = receiptOutcome else {
+                throw StampingRejection.incoherentPlan
+            }
+            affectedItems = changeKind == .clearAll
+                ? .all(retiredItems: count) : .unpinned(retiredItems: count)
+        case .policySet:
+            affectedItems = .explicit([])
         case .insert,
              .coalesce,
              .pin,
@@ -62,17 +80,43 @@ internal struct HistoryChangeRecordPayload: Sendable, Equatable {
              .revise,
              .retire,
              .retireRevision:
-            affectedItemIDs = try sortedUniqueAffectedItemIDs(
-                mutations,
-                limits: limits
-            )
+            if let prefix = try retirementPrefix(in: mutations) {
+                let primary: HistoryItemID?
+                switch receiptOutcome {
+                case .inserted(let reference), .coalesced(let reference), .revised(let reference):
+                    primary = reference.id
+                default:
+                    primary = nil
+                }
+                // A prefix plus unrelated explicit changes cannot claim to
+                // describe complete membership. Only the protected primary
+                // and policy changes may accompany this compact predicate.
+                let explicit = try sortedUniqueAffectedItemIDs(
+                    mutations.filter { if case .retirePrefix = $0 { return false }; return true },
+                    limits: limits
+                )
+                guard explicit == (primary.map({ [$0] }) ?? []) else {
+                    throw StampingRejection.incoherentPlan
+                }
+                affectedItems = .unpinnedPrefix(through: prefix.through,
+                    excluding: prefix.excludedItemID, retiredItems: prefix.itemCount,
+                    primaryItemID: primary)
+            } else {
+                affectedItems = .explicit(try sortedUniqueAffectedItemIDs(mutations, limits: limits))
+            }
+        }
+
+        do {
+            try AffectedItemsBlobCodec.validate(affectedItems, for: changeKind, limits: limits)
+        } catch {
+            throw StampingRejection.incoherentPlan
         }
 
         return HistoryChangeRecordPayload(
             sequence: position.rawValue,
             changePositionRaw: position.rawValue,
             changeKind: changeKind,
-            affectedItemIDs: affectedItemIDs,
+            affectedItems: affectedItems,
             createdAt: createdAt
         )
     }
@@ -118,13 +162,23 @@ internal struct HistoryChangeRecordPayload: Sendable, Equatable {
             }
             return .remove
 
-        case .cleared:
+        case .cleared(let count):
             guard let clearScope,
+                  count > 0,
                   mutations.allSatisfy({ mutation in
                       if case .delete(_, .clear) = mutation { return true }
+                      if case .bulkClear(let scope, let affectedCount) = mutation {
+                          return mutations.count == 1 && scope == clearScope && affectedCount == count
+                      }
                       return false
                   }) else {
                 throw StampingRejection.incoherentPlan
+            }
+            if case .delete = mutations[0] {
+                let ids = try sortedUniqueAffectedItemIDs(mutations, limits: .standard)
+                guard ids.count == count, mutations.count == count else {
+                    throw StampingRejection.incoherentPlan
+                }
             }
             switch clearScope {
             case .all:
@@ -197,6 +251,8 @@ internal struct HistoryChangeRecordPayload: Sendable, Equatable {
                 itemIDs.append(update.itemID)
             case .setRetentionPolicy, .setRetentionPolicies:
                 break
+            case .bulkClear, .retirePrefix:
+                throw StampingRejection.incoherentPlan
             }
         }
         // `HistoryItemID.<` is the literal UUID-byte ordering. Adjacent
@@ -267,6 +323,7 @@ internal struct HistoryChangeRecordPayload: Sendable, Equatable {
         in mutations: [StampedMutation]
     ) -> Bool {
         mutations.contains { mutation in
+            if case .retirePrefix = mutation, case .retention = reason { return true }
             guard case .delete(_, let found) = mutation else { return false }
             switch (reason, found) {
             case (.userRemoval, .userRemoval),
@@ -282,5 +339,16 @@ internal struct HistoryChangeRecordPayload: Sendable, Equatable {
                 return false
             }
         }
+    }
+
+    private static func retirementPrefix(in mutations: [StampedMutation]) throws -> RetentionRetirementPrefix? {
+        var result: RetentionRetirementPrefix?
+        for mutation in mutations {
+            if case .retirePrefix(let prefix) = mutation {
+                guard result == nil else { throw StampingRejection.incoherentPlan }
+                result = prefix
+            }
+        }
+        return result
     }
 }

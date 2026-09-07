@@ -1,87 +1,35 @@
-/// Boundary proofs for the algorithmic-shape decisions that the planners
-/// deliberately split across two code paths (docs/02-domain.md §9, §12):
-/// the eviction heap/sort quarter-threshold, lane-1 multi-representation
-/// byte-set equality, and max-revision-count lineage resolution.
+/// Constant-size retention planning, lane-1 byte equality, and bounded
+/// revision lineage resolution (02 §9, §12).
 import Foundation
 import HistoryCore
 import Testing
 @testable import HistoryDomain
 
-private enum ComplexityBoundaryTestError: Error {
-    case expectedCommit
-    case unexpectedMutation
-}
-
-/// Extracts the retirement victim IDs from a retention plan, mirroring the
-/// production commit shape: one policy mutation followed by the victims in
-/// eviction order.
-private func boundaryRetentionVictims(
-    inventory: [RetainedItemSummary],
-    policy: RetentionPolicy
-) throws -> [HistoryItemID] {
-    let result = planRetention(
-        facts: RetentionFacts(
-            inventory: CompleteRetentionInventory(allItems: inventory),
-            currentPolicy: RetentionPolicy(maximumUnpinnedItems: 1)
-        ),
-        policy: policy
-    )
-    guard case .commit(let plan) = result,
-          case .retentionPolicySet(let removedCount) = plan.outcome,
-          plan.mutations.count == removedCount + 1
-    else {
-        throw ComplexityBoundaryTestError.expectedCommit
-    }
-    return try plan.mutations.dropFirst().map { mutation in
-        guard case .retire(let itemID, .retention) = mutation else {
-            throw ComplexityBoundaryTestError.unexpectedMutation
-        }
-        return itemID
-    }
-}
-
-/// `evictionVictims` (docs/02-domain.md §12) deliberately runs two code
-/// paths: a bounded max-heap while victims stay at or under a quarter of
-/// the eligible inventory, a full sort above it. With 100 eligible rows,
-/// 25 victims (policy 75) rides the heap and 26 (policy 74) the sort; both
-/// must produce the identical deterministic eviction order, independent of
-/// inventory input order.
-@Test func evictionHeapAndSortPathsAgreeAcrossTheQuarterThreshold() throws {
+@Test func largeRetentionPrefixStillProducesOneRetirementMutation() {
     let inventory: [RetainedItemSummary] = (1...100).map { index in
         RetainedItemSummary(
             id: capturePlannerID(UInt8(index)),
-            lastCopiedAt: Date(
-                timeIntervalSinceReferenceDate: Double(100 + index)
-            ),
+            lastCopiedAt: Date(timeIntervalSinceReferenceDate: Double(index)),
             pinOrdinal: nil
         )
     }
-    let expectedOldest26 = inventory
-        .sorted {
-            ($0.lastCopiedAt, $0.id)
-                < ($1.lastCopiedAt, $1.id)
+    for maximum in [75, 74, 1] {
+        let prefix = retentionTestPrefix(inventory: inventory.reversed(), maximumUnpinnedItems: maximum)
+        let result = planRetention(
+            currentPolicy: RetentionPolicy(maximumUnpinnedItems: 100),
+            policy: RetentionPolicy(maximumUnpinnedItems: maximum),
+            retirementPrefix: prefix
+        )
+        guard case .commit(let plan) = result,
+              plan.mutations.count == 2,
+              case .retirePrefix(let selected) = plan.mutations[1] else {
+            Issue.record("Many victims must not expand into per-item mutations")
+            continue
         }
-        .prefix(26)
-        .map(\.id)
-
-    let heapPath = try boundaryRetentionVictims(
-        inventory: inventory,
-        policy: RetentionPolicy(maximumUnpinnedItems: 75)
-    )
-    let sortPath = try boundaryRetentionVictims(
-        inventory: inventory,
-        policy: RetentionPolicy(maximumUnpinnedItems: 74)
-    )
-    let shuffledPath = try boundaryRetentionVictims(
-        inventory: inventory.reversed(),
-        policy: RetentionPolicy(maximumUnpinnedItems: 74)
-    )
-
-    #expect(heapPath.count == 25)
-    #expect(sortPath.count == 26)
-    #expect(Array(sortPath.prefix(25)) == heapPath)
-    #expect(sortPath == Array(expectedOldest26))
-    #expect(shuffledPath == sortPath)
+        #expect(selected.itemCount == 100 - maximum)
+        #expect(selected.through.itemID == capturePlannerID(UInt8(100 - maximum)))
+        #expect(inventory.filter { selected.contains($0) }.count == selected.itemCount)
+    }
 }
 
 /// Lane-1 equality (docs/02-domain.md §9.3.1) must hold for hinted items

@@ -73,6 +73,13 @@ actor ScriptedHistory: ClipboardHistory {
     private let pastePayloadRead:
         (@Sendable (HistoryItemID) async throws -> PastePayload)?
 
+    /// Exact-reference and basis-specific byte answers are independent of
+    /// metadata. An absent script is a fixture error, never fabricated bytes.
+    private var representations: [
+        HistoryRepresentationRequest: Result<HistoryRepresentation, HistoryFailure>
+    ] = [:]
+    private(set) var representationRequests: [HistoryRepresentationRequest] = []
+
     /// Recorded `observe` requests, in order.
     private(set) var observeRequests: [HistoryObservationRequest] = []
 
@@ -173,6 +180,13 @@ actor ScriptedHistory: ClipboardHistory {
         performFailure = failure
     }
 
+    func scriptRepresentation(
+        _ result: Result<HistoryRepresentation, HistoryFailure>,
+        for request: HistoryRepresentationRequest
+    ) {
+        representations[request] = result
+    }
+
     /// Whether the scripted browse for `cursor` has reached its deterministic
     /// suspension point.
     func isBrowsePaused(after cursor: HistoryPageCursor) -> Bool {
@@ -243,6 +257,15 @@ actor ScriptedHistory: ClipboardHistory {
         throw HistoryFailure.notFound(id)
     }
 
+    func representation(_ request: HistoryRepresentationRequest) async throws -> HistoryRepresentation {
+        representationRequests.append(request)
+        guard let result = representations[request] else {
+            Issue.record("Unexpected representation read without an explicit byte fixture")
+            throw HistoryFailure.notFound(request.item.id)
+        }
+        return try result.get()
+    }
+
     func pastePayload(for id: HistoryItemID) async throws -> PastePayload {
         if let pastePayloadRead {
             return try await pastePayloadRead(id)
@@ -276,6 +299,11 @@ actor ScriptedHistory: ClipboardHistory {
 /// unscripted references, or throws a scripted failure — and records every
 /// request so prefetch idempotence and negative caching are observable.
 actor ThumbnailScriptHistory: ClipboardHistory {
+
+    func representation(_ request: HistoryRepresentationRequest) async throws -> HistoryRepresentation {
+        Issue.record("Thumbnail scripts must not read representation bytes")
+        throw HistoryFailure.notFound(request.item.id)
+    }
 
     /// Encoded PNG bytes per exact reference (docs/03b-instruction-set.md §9).
     private let pngByReference: [HistoryItemReference: Data]
@@ -361,10 +389,10 @@ actor ThumbnailScriptHistory: ClipboardHistory {
 /// A scripted `ClipboardHistory` for `PreviewContentLoader` fence tests
 /// (audit docs/reviews/2026-08-20-clipy-maccy-audit/
 /// 02-spec-implementation.md §SPEC-IMPL-007;
-/// 05-recommended-target-design.md §4.1 PREVIEW-FENCE-1): `pastePayload(for:)`
-/// records the request, then SUSPENDS until the test resumes it with the
-/// scripted `PastePayload` (or a typed failure) — so two in-flight payload
-/// reads can be completed in REVERSE order deterministically, with no sleeps
+/// 05-recommended-target-design.md §4.1 PREVIEW-FENCE-1): `details(for:)`
+/// records the request, then SUSPENDS until the test resumes it. The fixture's
+/// `PastePayload` supplies metadata and separately requested bytes, but never
+/// crosses the metadata read. Reads complete in REVERSE order, with no sleeps
 /// on the deciding path. One in-flight read per item ID: the pane never
 /// loads the same item twice concurrently, and a second read for an ID
 /// already suspended would replace the first continuation (leaking it), so
@@ -379,13 +407,15 @@ actor PausablePreviewHistory: ClipboardHistory {
     /// Scripted Effective payloads by item ID.
     private var payloadsByID: [HistoryItemID: PastePayload] = [:]
 
-    /// Suspended payload reads by item ID.
+    /// Suspended metadata reads by item ID; complete payloads stay in fixtures.
     private var continuations: [HistoryItemID: CheckedContinuation<PastePayload, Error>] = [:]
 
-    /// Recorded `pastePayload` request IDs, in order.
+    /// Recorded metadata request IDs, in order. Payload fixtures supply the
+    /// metadata spelling/size plus independently requested bytes below.
     private(set) var payloadRequests: [HistoryItemID] = []
+    private(set) var representationRequests: [HistoryRepresentationRequest] = []
 
-    /// Scripts the answer `pastePayload(for:)` completes with once resumed.
+    /// Scripts the metadata and explicit representation answers for this item.
     func scriptPayload(_ payload: PastePayload) {
         payloadsByID[payload.item.id] = payload
     }
@@ -424,15 +454,26 @@ actor PausablePreviewHistory: ClipboardHistory {
     }
 
     func details(for id: HistoryItemID) async throws -> HistoryDetails {
-        Issue.record("Preview must not request full Details")
-        throw HistoryFailure.notFound(id)
+        payloadRequests.append(id)
+        let payload = try await withCheckedThrowingContinuation { continuation in
+            continuations[id] = continuation
+        }
+        return previewMetadata(for: payload)
     }
 
     func pastePayload(for id: HistoryItemID) async throws -> PastePayload {
-        payloadRequests.append(id)
-        return try await withCheckedThrowingContinuation { continuation in
-            continuations[id] = continuation
+        Issue.record("Preview must not request the complete paste payload")
+        throw HistoryFailure.notFound(id)
+    }
+
+    func representation(_ request: HistoryRepresentationRequest) async throws -> HistoryRepresentation {
+        representationRequests.append(request)
+        guard let payload = payloadsByID[request.item.id], payload.item == request.item,
+              let value = payload.representations.first(where: { $0.typeIdentifier == request.typeIdentifier }) else {
+            Issue.record("Preview requested representation bytes absent from its exact fixture")
+            throw HistoryFailure.notFound(request.item.id)
         }
+        return value
     }
 
     func thumbnail(
@@ -450,6 +491,21 @@ actor PausablePreviewHistory: ClipboardHistory {
 }
 
 // MARK: - PasteCallRecorder
+
+/// Preview lifecycle scripts keep complete immutable values only in the
+/// fixture; the metadata read returns no representation bytes to the loader.
+func previewMetadata(for payload: PastePayload) -> HistoryDetails {
+    let values = payload.representations.map {
+        HistoryRepresentationMetadata(typeIdentifier: $0.typeIdentifier, byteCount: $0.bytes.count)
+    }
+    return HistoryDetails(
+        item: payload.item, title: "", canonical: values, effective: values, effectiveMatchesCanonical: true,
+        revisions: [], occurrence: CopyOccurrenceSummary(
+            firstCopiedAt: Date(timeIntervalSinceReferenceDate: 0), lastCopiedAt: Date(timeIntervalSinceReferenceDate: 0),
+            count: 1, firstSource: nil, lastSource: nil
+        ), pinnedPosition: nil
+    )
+}
 
 /// Records the references handed to `HistoryViewState.onPaste`
 /// (docs/01-architecture.md §5.6): the closure is synchronous and `@Sendable`,

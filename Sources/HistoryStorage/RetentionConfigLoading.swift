@@ -45,69 +45,54 @@ internal enum RetentionConfigLoading {
         return try checkedAdd(HistoryItemRowHydration.integer(row, 0), HistoryItemRowHydration.integer(row, 1))
     }
 
-    /// R1's strict age prefix always precedes R2's additional oldest prefix.
-    /// A single indexed cursor can therefore implement the same pure order
-    /// without keeping, filtering, or sorting the unaffected inventory.
-    /// Overrides describe only R3-affected items; total is already post-prune
-    /// and post-primary/count. Pinned ∪ primary feasibility precedes selection.
-    internal static func itemRetirements(
+    /// Fold the indexed eligible lane into one cutoff and scalar totals.
+    /// A projection callback is needed only for the R3-before-R2 sweep.
+    internal static func retirementPrefix(
         in database: SQLiteDatabase,
         policies: HistoryRetentionPolicies,
         now: Date,
         protectedItemID: HistoryItemID?,
-        alreadyRemoved: Set<HistoryItemID>,
         projectedTotalBytes: Int,
-        revisionByteOverrides: [HistoryItemID: Int] = [:],
-        additionalProtectedBytes: Int = 0
-    ) throws -> [HistoryItemID] {
-        guard projectedTotalBytes >= 0 else { throw corrupt }
-        if let storage = policies.storage {
-            let protectedRows = try database.prepare("""
-                SELECT id,canonicalBytes,revisionBytes FROM history_items
-                WHERE pinOrdinal IS NOT NULL OR id=?
-                """, bindings: [.text(protectedItemID?.rawValue.uuidString ?? "")])
-            defer { protectedRows.finalize() }
-            var irreducible = additionalProtectedBytes
-            while try protectedRows.step() {
-                let id = HistoryItemID(rawValue: try HistoryItemRowHydration.uuid(protectedRows.text(at: 0)))
-                guard !alreadyRemoved.contains(id) else { throw corrupt }
-                let revisions = try revisionByteOverrides[id] ?? HistoryItemRowHydration.integer(protectedRows, 2)
-                irreducible = try checkedAdd(irreducible,
-                    checkedAdd(HistoryItemRowHydration.integer(protectedRows, 1), revisions))
-            }
-            guard irreducible <= storage.maxTotalBytes else {
-                throw HistoryFailure.capacityExceeded(.storageBytes)
-            }
-        }
-        let cutoff = policies.age.map { now.addingTimeInterval(-$0.maxAge).timeIntervalSinceReferenceDate }
-        let requiresBytes = policies.storage.map { projectedTotalBytes > $0.maxTotalBytes } ?? false
-        guard cutoff != nil || requiresBytes else { return [] }
-        let agePredicate = requiresBytes ? "" : " AND lastCopiedAt < ?"
+        minimumRetiredItems: Int = 0,
+        projectRevisionBytes: ((RetentionExpansionItemSummary) throws -> Int)? = nil
+    ) throws -> RetentionRetirementPrefix? {
+        guard projectedTotalBytes >= 0, minimumRetiredItems >= 0 else { throw corrupt }
+        let overBudget = policies.storage.map { projectedTotalBytes > $0.maxTotalBytes } ?? false
+        guard policies.age != nil || overBudget || minimumRetiredItems > 0 else { return nil }
         let rows = try database.prepare("""
-            SELECT id,lastCopiedAt,canonicalBytes,revisionBytes FROM history_items
-            WHERE pinOrdinal IS NULL\(agePredicate)
+            SELECT id,lastCopiedAt,canonicalBytes,revisionCount,revisionBytes
+            FROM history_items WHERE pinOrdinal IS NULL AND id != ?
             ORDER BY lastCopiedAt,id
-            """, bindings: requiresBytes ? [] : [cutoff.map(SQLiteValue.real) ?? .null])
+            """, bindings: [.text(protectedItemID?.rawValue.uuidString ?? "")])
         defer { rows.finalize() }
-        var remaining = projectedTotalBytes
-        var victims: [HistoryItemID] = []
-        while try rows.step() {
-            let id = HistoryItemID(rawValue: try HistoryItemRowHydration.uuid(rows.text(at: 0)))
-            if id == protectedItemID || alreadyRemoved.contains(id) { continue }
-            let copiedAt = try rows.real(at: 1)
-            guard copiedAt.isFinite else { throw corrupt }
-            let aged = cutoff.map { copiedAt < $0 } ?? false
-            let overBudget = policies.storage.map { remaining > $0.maxTotalBytes } ?? false
-            guard aged || overBudget else { break }
-            let revisions = try revisionByteOverrides[id] ?? HistoryItemRowHydration.integer(rows, 3)
-            remaining = try checkedSubtract(remaining,
-                checkedAdd(HistoryItemRowHydration.integer(rows, 2), revisions))
-            victims.append(id)
+        var selection = OrderedRetentionSelection(
+            policies: policies, now: now, protectedItemID: protectedItemID,
+            projectedTotalBytes: projectedTotalBytes, minimumRetiredItems: minimumRetiredItems
+        )
+        do {
+            while try rows.step() {
+                let candidate = try RetentionExpansionItemSummary(
+                    id: HistoryItemID(rawValue: HistoryItemRowHydration.uuid(rows.text(at: 0))),
+                    lastCopiedAt: Date(timeIntervalSinceReferenceDate: rows.real(at: 1)),
+                    pinOrdinal: nil,
+                    canonicalBytes: HistoryItemRowHydration.integer(rows, 2),
+                    revisionCount: HistoryItemRowHydration.integer(rows, 3),
+                    revisionBytes: HistoryItemRowHydration.integer(rows, 4)
+                )
+                let revisions = try projectRevisionBytes?(candidate)
+                if try !selection.consider(candidate, projectedRevisionBytes: revisions) { break }
+            }
+        } catch let rejection as DomainRejection {
+            throw rejection.historyFailure
         }
-        if let storage = policies.storage, remaining > storage.maxTotalBytes { throw corrupt }
-        return victims
+        guard selection.remainingRequiredItems == 0 else {
+            throw HistoryFailure.capacityExceeded(.retainedItems)
+        }
+        if let budget = policies.storage?.maxTotalBytes, selection.remainingBytes > budget {
+            throw HistoryFailure.capacityExceeded(.storageBytes)
+        }
+        return selection.prefix
     }
-
     internal static func checkedAdd(_ lhs: Int, _ rhs: Int) throws -> Int {
         let (result, overflow) = lhs.addingReportingOverflow(rhs)
         guard lhs >= 0, rhs >= 0, !overflow else { throw corrupt }
@@ -144,22 +129,24 @@ extension HistoryAuthority {
             insertedBytes = 0
         default: throw HistoryFailure.persistence(.invariantViolation)
         }
-        var total = try RetentionConfigLoading.checkedAdd(
+        let total = try RetentionConfigLoading.checkedAdd(
             RetentionConfigLoading.totalRetainedBytes(in: database), insertedBytes)
-        var countVictims = Set<HistoryItemID>()
-        for mutation in v1Plan.mutations {
-            guard case .retire(let id, _) = mutation else { continue }
-            guard id != primaryID, countVictims.insert(id).inserted,
-                  let item = try HistoryItemRowHydration.metadata(itemID: id, in: database, limits: limits),
-                  item.pinOrdinal == nil else { throw HistoryFailure.persistence(.invariantViolation) }
-            total = try RetentionConfigLoading.checkedSubtract(total,
-                RetentionConfigLoading.checkedAdd(item.canonicalBytes, item.revisionBytes))
+        var countVictims = 0
+        let primaryMutations = v1Plan.mutations.filter { mutation in
+            if case .retirePrefix(let prefix) = mutation {
+                countVictims = prefix.itemCount
+                return false
+            }
+            return true
         }
-        let victims = try RetentionConfigLoading.itemRetirements(
+        let prefix = try RetentionConfigLoading.retirementPrefix(
             in: database, policies: policies, now: prepared.domain.observedAt,
-            protectedItemID: primaryID, alreadyRemoved: countVictims,
-            projectedTotalBytes: total, additionalProtectedBytes: insertedBytes)
-        return MutationPlan(outcome: v1Plan.outcome,
-            mutations: v1Plan.mutations + victims.map { .retire(itemID: $0, reason: .retention) })
+            protectedItemID: primaryID, projectedTotalBytes: total,
+            minimumRetiredItems: countVictims
+        )
+        return MutationPlan(
+            outcome: v1Plan.outcome,
+            mutations: primaryMutations + (prefix.map { [.retirePrefix($0)] } ?? [])
+        )
     }
 }

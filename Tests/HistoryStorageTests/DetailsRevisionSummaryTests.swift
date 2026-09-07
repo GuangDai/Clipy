@@ -53,8 +53,17 @@ struct DetailsRevisionSummaryTests {
             expectedByteCounts.append(body.utf8.count)
 
             #expect(details.item.contentVersion.rawValue == version.rawValue + 1)
-            #expect(details.canonical.map(\.bytes) == [Data(canonical.utf8)])
-            #expect(details.effective.map(\.bytes) == [Data(body.utf8)])
+            #expect(details.canonical.map(\.byteCount) == [canonical.utf8.count])
+            #expect(details.effective.map(\.byteCount) == [body.utf8.count])
+            #expect(details.effectiveMatchesCanonical == (body == canonical))
+            let canonicalValue = try await history.representation(.init(
+                item: details.item, basis: .canonical, typeIdentifier: typeIdentifier
+            ))
+            let effectiveValue = try await history.representation(.init(
+                item: details.item, basis: .effective, typeIdentifier: typeIdentifier
+            ))
+            #expect(canonicalValue.bytes == Data(canonical.utf8))
+            #expect(effectiveValue.bytes == Data(body.utf8))
             #expect(details.revisions.map(\.title) == expectedTitles)
             #expect(details.revisions.map(\.byteCount) == expectedByteCounts)
             #expect(details.revisions.allSatisfy { $0.typeIdentifiers == [typeIdentifier] })

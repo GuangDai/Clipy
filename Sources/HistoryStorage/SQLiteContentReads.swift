@@ -13,6 +13,7 @@ internal struct SQLiteContentItem: Sendable {
     let canonicalBytes: Int
     let revisionCount: Int
     let revisionBytes: Int
+    let effectiveMatchesCanonical: Bool
 }
 
 internal struct SQLiteStoredContent: Sendable {
@@ -30,8 +31,6 @@ internal struct SQLiteRepresentationSource: Sendable {
     let typeIdentifier: String
     let byteCount: Int
 }
-
-internal enum SQLiteContentBasis: Sendable { case canonical, effective }
 
 /// Concrete SQL reads; no model hydration, decoder routing or retained row
 /// objects. Statements and file reads stay inside their owning actor call.
@@ -62,7 +61,8 @@ internal struct SQLiteContentReads {
     func item(for id: HistoryItemID) throws -> SQLiteContentItem {
         let statement = try database.prepare("""
             SELECT contentVersion, currentContentID, titleUTF8, firstCopiedAt, lastCopiedAt,
-                   copyCount, firstSource, lastSource, pinOrdinal, canonicalBytes, revisionCount, revisionBytes
+                   copyCount, firstSource, lastSource, pinOrdinal, canonicalBytes, revisionCount, revisionBytes,
+                   effectiveMatchesCanonical
             FROM history_items WHERE id = ?
             """, bindings: [.text(id.rawValue.uuidString)])
         defer { statement.finalize() }
@@ -78,10 +78,13 @@ internal struct SQLiteContentReads {
         let canonicalBytes = try nonnegativeInt(statement.integer(at: 9))
         let revisionCount = try nonnegativeInt(statement.integer(at: 10))
         let revisionBytes = try nonnegativeInt(statement.integer(at: 11))
+        let matchesCanonical = try statement.integer(at: 12)
         guard canonicalBytes > 0, canonicalBytes <= limits.maximumCaptureBytes,
               revisionCount <= limits.maximumRevisionsPerItem,
               revisionBytes <= limits.maximumTotalRevisionBytesPerItem,
-              (revisionCount == 0) == (revisionBytes == 0) else { throw corrupt }
+              (revisionCount == 0) == (revisionBytes == 0),
+              matchesCanonical == 0 || matchesCanonical == 1,
+              revisionCount > 0 || matchesCanonical == 1 else { throw corrupt }
         let version = try mapCodecFailure {
             try RevisionStateBlobCodec.decodeContentVersion(sqliteUInt64(statement.blob(at: 0)))
         }
@@ -97,7 +100,8 @@ internal struct SQLiteContentReads {
                 firstCopiedAt: occurrence.firstCopiedAt, lastCopiedAt: occurrence.lastCopiedAt,
                 count: occurrence.count, firstSource: occurrence.firstSource, lastSource: occurrence.lastSource
             ), pinOrdinal: pin, canonicalBytes: canonicalBytes,
-            revisionCount: revisionCount, revisionBytes: revisionBytes
+            revisionCount: revisionCount, revisionBytes: revisionBytes,
+            effectiveMatchesCanonical: matchesCanonical == 1
         )
     }
 

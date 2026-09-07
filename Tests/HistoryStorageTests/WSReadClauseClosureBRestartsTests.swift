@@ -57,6 +57,13 @@ extension WSReadClauseClosureBTests {
     let preRestartPage = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 10))
     let preRestartDetailsA = try await history.details(for: refA.id)
     let preRestartDetailsB = try await history.details(for: refB.id)
+    var preRestartRepresentations: [(HistoryRepresentationRequest, HistoryRepresentation)] = []
+    for item in [preRestartDetailsA.item, preRestartDetailsB.item] {
+        for basis in [HistoryContentBasis.canonical, .effective] {
+            let request = HistoryRepresentationRequest(item: item, basis: basis, typeIdentifier: plainText)
+            preRestartRepresentations.append((request, try await history.representation(request)))
+        }
+    }
 
     // RESTART: reopen the facade over the same on-disk store
     // (docs/05-authority-kernel.md §13 startup reruns).
@@ -72,8 +79,8 @@ extension WSReadClauseClosureBTests {
     )
 
     // WS14: post-restart `details` for A equals the pre-restart result —
-    // canonical bytes, effective bytes, revision lineage, occurrence, and pin
-    // position all reconstruct from durable blobs and scalar fields.
+    // Canonical/Effective descriptors, revision summaries, occurrence and pin
+    // position all reconstruct from durable scalar fields.
     let postRestartDetailsA = try await restartedHistory.details(for: refA.id)
     #expect(
         postRestartDetailsA == preRestartDetailsA,
@@ -87,6 +94,9 @@ extension WSReadClauseClosureBTests {
         postRestartDetailsB == preRestartDetailsB,
         "WS14: details(for: B) results equal pre-restart public results"
     )
+    for (request, before) in preRestartRepresentations {
+        #expect(try await restartedHistory.representation(request) == before)
+    }
 }
 
 // MARK: - WS16 (docs/06-cross-cutting.md §8, step-7 read clause)

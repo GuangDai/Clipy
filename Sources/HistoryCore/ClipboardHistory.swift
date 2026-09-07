@@ -64,18 +64,24 @@ public protocol ClipboardHistory: Sendable {
         _ request: HistoryObservationRequest
     ) async -> AsyncThrowingStream<HistoryPage, Error>
 
-    /// Full detail for one retained item: Canonical and Effective Content,
-    /// revision summaries, occurrence summary, and pin position.
-    ///
-    /// Detail is the only general UI query that returns content lineage
-    /// bytes. It resolves the requested current item or throws a typed
-    /// not-found failure.
+    /// Metadata for one retained item: title, Canonical/Effective representation
+    /// descriptors, revision summaries, occurrence and pin position. This read
+    /// opens no content payloads; it resolves the current item or fails typed.
     ///
     /// docs/03a-instruction-set.md §3; docs/03b-instruction-set.md §9;
     /// guarantee docs/03b-instruction-set.md §11 item 7.
     func details(
         for id: HistoryItemID
     ) async throws -> HistoryDetails
+
+    /// Reads only the requested representation. The item must still exist at
+    /// the supplied Content Version before any payload access. A stale request
+    /// throws `.staleContent`; an absent representation throws
+    /// `.invalidInput(.unsupportedRepresentationType(...))`. The returned type
+    /// identifier retains its stored spelling. V2-09 §5.
+    func representation(
+        _ request: HistoryRepresentationRequest
+    ) async throws -> HistoryRepresentation
 
     /// The paste payload for one retained item: current Effective Content
     /// only, plus the item's lineage hint.

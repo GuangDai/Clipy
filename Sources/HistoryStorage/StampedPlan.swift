@@ -26,6 +26,9 @@ internal enum StampedMutation: Sendable {
         reason: RetirementReason
     )
 
+    case bulkClear(scope: ClearScope, affectedCount: Int)
+    case retirePrefix(RetentionRetirementPrefix)
+
     case setRetentionPolicy(maximumUnpinnedItems: Int)
 
     case pruneRevisions(
@@ -58,6 +61,7 @@ internal struct StoredRevisionUpdate: Sendable {
     internal let revision: ContentRevision
     internal let removedRevisionIDs: [RevisionID]
     internal let projection: ContentProjection
+    internal let effectiveMatchesCanonical: Bool
     internal let retainedRevisionScalars: RetainedRevisionScalars
 }
 
@@ -121,7 +125,7 @@ internal struct StampedCommitPlan: Sendable {
                 }
             case .create, .updateOccurrence, .appendRevision, .setRetentionPolicy:
                 return false
-            case .pruneRevisions, .setRetentionPolicies:
+            case .pruneRevisions, .setRetentionPolicies, .bulkClear, .retirePrefix:
                 return false
             }
         }
@@ -145,10 +149,11 @@ internal enum StampingInputs: Sendable {
     case revision(
         currentVersion: ContentVersion,
         existingRevisions: [RevisionRetentionSummary],
-        projection: ContentProjection
+        projection: ContentProjection,
+        effectiveMatchesCanonical: Bool
     )
 
-    case prune(lineagesByItem: [HistoryItemID: PruneLineage])
+    case prune(itemID: HistoryItemID, lineage: PruneLineage)
 
     case none
 }
@@ -240,7 +245,8 @@ internal enum CommitPlanStamper {
                 guard case .revision(
                     let currentVersion,
                     let existingRevisions,
-                    let projection
+                    let projection,
+                    let effectiveMatchesCanonical
                 ) = inputs else {
                     throw StampingRejection.missingStampingInputs
                 }
@@ -281,6 +287,7 @@ internal enum CommitPlanStamper {
                     revision: revision,
                     removedRevisionIDs: pruneIDsByItem[itemID] ?? [],
                     projection: projection,
+                    effectiveMatchesCanonical: effectiveMatchesCanonical,
                     retainedRevisionScalars: RetainedRevisionScalars(
                         count: composedRevisions.count + 1,
                         bytes: composedRevisions.reduce(0) { $0 + $1.byteCount }
@@ -292,6 +299,12 @@ internal enum CommitPlanStamper {
                 retiredItemIDs.insert(itemID)
                 mutations.append(.delete(itemID: itemID, reason: reason))
 
+            case .bulkClear(let scope, let affectedCount):
+                mutations.append(.bulkClear(scope: scope, affectedCount: affectedCount))
+
+            case .retirePrefix(let prefix):
+                mutations.append(.retirePrefix(prefix))
+
             case .setRetentionPolicy(let maximumUnpinnedItems):
                 mutations.append(.setRetentionPolicy(
                     maximumUnpinnedItems: maximumUnpinnedItems
@@ -300,8 +313,8 @@ internal enum CommitPlanStamper {
             case .pruneRevisions(let itemID, let removedRevisionIDs):
                 // Fold regardless of the explicit Domain mutations' order.
                 guard !appendedRevisionItemIDs.contains(itemID) else { continue }
-                guard case .prune(let lineagesByItem) = inputs,
-                      let lineage = lineagesByItem[itemID] else {
+                guard case .prune(let suppliedItemID, let lineage) = inputs,
+                      suppliedItemID == itemID else {
                     throw StampingRejection.missingStampingInputs
                 }
                 let removed = Set(removedRevisionIDs)
@@ -359,13 +372,14 @@ internal enum CommitPlanStamper {
             hcrAppend: hcrAppend,
             hasDestructiveRetentionEffects: plan.mutations.contains { mutation in
                 switch mutation {
-                case .retire(_, .retention), .pruneRevisions:
+                case .retire(_, .retention), .retirePrefix, .pruneRevisions:
                     return true
                 case .create,
                      .recordCopy,
                      .assignPin,
                      .appendRevision,
                      .retire,
+                     .bulkClear,
                      .setRetentionPolicy,
                      .setRetentionPolicies:
                     return false

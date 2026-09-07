@@ -9,7 +9,7 @@ struct SQLiteMetadataReadTests {
         let values = try Self.validValues()
         let statement = try database.prepare("SELECT ?, ?, ?, ?, ?, ?, ?, ?", bindings: values)
         defer { statement.finalize() }
-        try #require(statement.step())
+        try #require(try statement.step())
         let row = try ScalarReadRow(statement, limits: .standard).toHistoryRow(limits: .standard)
         #expect(row.item.contentVersion.rawValue == UInt64.max)
         #expect(row.copyCount == UInt64.max)
@@ -39,7 +39,7 @@ struct SQLiteMetadataReadTests {
             values[column] = value
             let statement = try database.prepare("SELECT ?, ?, ?, ?, ?, ?, ?, ?", bindings: values)
             defer { statement.finalize() }
-            try #require(statement.step())
+            try #require(try statement.step())
             #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
                 try ScalarReadRow(statement, limits: .standard).toHistoryRow(limits: .standard)
             }

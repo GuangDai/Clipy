@@ -44,6 +44,14 @@ History 的同事务提交，不能只替换普通 capture/paste 路径。
 输入，不保留一个不断增长的原始 Data 数组；这不意味着能强制系统 pasteboard 释放
 自己的内容。检测 metadata 也不能绕过原始内容访问权限。
 
+当前不新增无消费者的 detection 循环。Apple 的 `detectedMetadata(for:)` 只提供
+有限元数据，其中 [`contentType`](https://developer.apple.com/documentation/appkit/nspasteboard/detectedmetadata/contenttype)
+是首项文件 URL 所指文件的类型，不是通用 payload 字节数或完整表示清单；
+[`detectedValues(for:)`](https://developer.apple.com/documentation/appkit/nspasteboard/detectedvalues(for:))
+则会在命中时读取内容并可能提示。
+若未来 UI 需要文件/链接提示，可在用户明确操作时做一次检测，返回时重查 ownership
+与生命周期；不得把检测成功当作捕获授权。
+
 ```text
 NSPasteboard → 冻结一次新值 → HistoryAuthority
                                │

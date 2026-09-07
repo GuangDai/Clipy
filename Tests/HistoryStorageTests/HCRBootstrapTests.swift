@@ -136,7 +136,7 @@ struct HCRBootstrapTests {
         let state = try await Self.snapshot(in: authority)
         #expect(state.floor == 1)
         #expect(state.sequences == [2, 3])
-        #expect(state.journalBytes == 40)
+        #expect(state.journalBytes == UInt64(try Self.singleItemBlobBytes()) * 2)
     }
 
     @Test("failure inside age-prefix compaction commits no delete or floor change")
@@ -158,7 +158,7 @@ struct HCRBootstrapTests {
         let authority = try await Self.makeSuffixFixture(position: 3, floor: 0)
         let limits = try #require(JournalLimits(
             maxAffectedItemsPerRecord: 5_001, maxJournalRecordCount: 10,
-            maxJournalAgeSeconds: 10, maxJournalBytes: 40, compactionCadenceCommits: 2
+            maxJournalAgeSeconds: 10, maxJournalBytes: UInt64(try Self.singleItemBlobBytes()) * 2, compactionCadenceCommits: 2
         ))
         let before = try await Self.snapshot(in: authority)
         await #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
@@ -189,7 +189,7 @@ struct HCRBootstrapTests {
         try await Self.expectDamage(expected: .persistence(.invariantViolation),
             sql: "UPDATE journal_config SET compactionFloorRaw = ?", bindings: [.blob(sqliteUInt64(4))])
         try await Self.expectDamage(expected: .persistence(.invariantViolation),
-            sql: "UPDATE journal_config SET journalBytes = ?", bindings: [.blob(sqliteUInt64(61))])
+            sql: "UPDATE journal_config SET journalBytes = ?", bindings: [.blob(sqliteUInt64(UInt64(try Self.singleItemBlobBytes()) * 3 + 1))])
         try await Self.expectDamage(expected: .persistence(.invariantViolation),
             sql: "DELETE FROM history_change_records WHERE sequence = ?", bindings: [.blob(sqliteUInt64(2))])
         try await Self.expectDamage(expected: .persistence(.invariantViolation),
@@ -285,7 +285,7 @@ struct HCRBootstrapTests {
                 var journalBytes: UInt64 = 0
                 if floor < position {
                     for sequence in (floor + 1)...position {
-                        let blob = try AffectedItemsBlobCodec.encode([itemID(Int(sequence))], for: .insert)
+                        let blob = try AffectedItemsBlobCodec.encode(.explicit([itemID(Int(sequence))]), for: .insert)
                         journalBytes += UInt64(blob.count)
                         let date = createdAt?[Int(sequence - floor - 1)] ?? now
                         try owner.database.execute("""
@@ -313,10 +313,14 @@ struct HCRBootstrapTests {
         ])
     }
 
+    private static func singleItemBlobBytes() throws -> Int {
+        try AffectedItemsBlobCodec.encode(.explicit([itemID(1)]), for: .insert).count
+    }
+
     private static func ageLimits() throws -> JournalLimits {
         try #require(JournalLimits(
             maxAffectedItemsPerRecord: 5_001, maxJournalRecordCount: 10,
-            maxJournalAgeSeconds: 10, maxJournalBytes: 80, compactionCadenceCommits: 2
+            maxJournalAgeSeconds: 10, maxJournalBytes: UInt64(try Self.singleItemBlobBytes()) * 4, compactionCadenceCommits: 2
         ))
     }
 

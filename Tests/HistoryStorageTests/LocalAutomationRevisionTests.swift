@@ -32,9 +32,14 @@ struct LocalAutomationRevisionTests {
         #expect(content.representations == proposed)
         let details = try await fixture.history.details(for: fixture.item.id)
         #expect(details.canonical.count == 2)
-        #expect(details.canonical.contains { $0.bytes == Data("original".utf8) })
+        let canonicalText = try await fixture.history.representation(HistoryRepresentationRequest(
+            item: details.item, basis: .canonical, typeIdentifier: "public.utf8-plain-text"
+        ))
+        #expect(canonicalText.bytes == Data("original".utf8))
         #expect(details.revisions.count == 1)
-        #expect(details.effective == proposed)
+        #expect(details.effective == proposed.map {
+            HistoryRepresentationMetadata(typeIdentifier: $0.typeIdentifier, byteCount: $0.bytes.count)
+        })
         let committed = try await fixture.history.browse(HistoryBrowseRequest(kind: .recent, limit: 10))
         #expect(committed.position.rawValue == before.position.rawValue + 1)
         await #expect(throws: ExternalFailure.history(.staleContent(
@@ -74,7 +79,14 @@ struct LocalAutomationRevisionTests {
         )) {
             _ = try await fixture.ingress.execute(.delete(locator: fixture.locator), presenting: fixture.credential.exactBytes)
         }
-        #expect(try await fixture.history.details(for: fixture.item.id).effective == proposed)
+        let details = try await fixture.history.details(for: fixture.item.id)
+        #expect(details.effective == proposed.map {
+            HistoryRepresentationMetadata(typeIdentifier: $0.typeIdentifier, byteCount: $0.bytes.count)
+        })
+        let actual = try await fixture.history.representation(HistoryRepresentationRequest(
+            item: details.item, basis: .effective, typeIdentifier: Self.opaqueType
+        ))
+        #expect([actual] == proposed)
     }
 
     @Test func emptyDuplicateAndForeignSetsNeverCreateARevision() async throws {
@@ -139,7 +151,10 @@ struct LocalAutomationRevisionTests {
         }
         let details = try await fixture.history.details(for: fixture.item.id)
         #expect(details.revisions.count == 1)
-        #expect(details.effective.contains { $0.bytes == Data("UI wins".utf8) })
+        let currentText = try await fixture.history.representation(HistoryRepresentationRequest(
+            item: details.item, basis: .effective, typeIdentifier: "public.utf8-plain-text"
+        ))
+        #expect(currentText.bytes == Data("UI wins".utf8))
         let audit = try await fixture.history.auditLog(since: 1).filter { $0.operationKind == .reviseContent }
         #expect(audit.map(\.outcome) == [.failed])
     }

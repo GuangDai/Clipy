@@ -87,7 +87,7 @@ struct WS20ComposedConcurrentRevisionAndCoalesceTests {
         #expect(finalDetails.occurrence.count == 2, "WS20: the occurrence folded")
         #expect(finalDetails.item.contentVersion.rawValue == 2)
         #expect(
-            finalDetails.effective.first?.bytes == Data("ws20 composed revised".utf8)
+            (try await ComposedSupport.firstRepresentation(in: history, details: finalDetails, basis: .effective)).bytes == Data("ws20 composed revised".utf8)
         )
         #expect(viewState.failure == nil)
     }
@@ -164,7 +164,7 @@ struct WS20ComposedConcurrentRevisionAndCoalesceTests {
         let finalDetails = try await viewState.details(for: inserted.id)
         #expect(finalDetails.revisions.count == 1)
         #expect(
-            finalDetails.effective.first?.bytes == Data("ws20 composed winner".utf8)
+            (try await ComposedSupport.firstRepresentation(in: history, details: finalDetails, basis: .effective)).bytes == Data("ws20 composed winner".utf8)
         )
     }
 }

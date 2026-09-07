@@ -43,6 +43,8 @@ struct EditorNoChangeAtRevisionCapacityTests {
             revisions: RevisionRetention(maxRevisionsPerItem: 2, maxRevisionBytesPerItem: 6)
         )))
         let before = try await history.details(for: current.id)
+        let canonicalBefore = try await representations(before.canonical, basis: .canonical, item: current, in: history)
+        let effectiveBefore = try await representations(before.effective, basis: .effective, item: current, in: history)
         let usageBefore = try await history.usage()
         #expect(before.revisions.count == 2)
         #expect(before.revisions.map(\.isActive) == [false, true])
@@ -55,6 +57,8 @@ struct EditorNoChangeAtRevisionCapacityTests {
         }
         #expect(try await history.details(for: current.id) == before)
         #expect(try await history.usage() == usageBefore)
+        #expect(try await representations(before.canonical, basis: .canonical, item: current, in: history) == canonicalBefore)
+        #expect(try await representations(before.effective, basis: .effective, item: current, in: history) == effectiveBefore)
     }
 
     @Test func keepCurrentAtFullCapacityPreservesEveryEffectiveByteAndHistoryToken() async throws {
@@ -98,6 +102,7 @@ struct EditorNoChangeAtRevisionCapacityTests {
             current = reference
         }
         let before = try await history.details(for: current.id)
+        let effectiveBefore = try await representations(before.effective, basis: .effective, item: current, in: history)
         let usageBefore = try await history.usage()
         #expect(before.revisions.count == maximum)
         #expect(before.item.contentVersion.rawValue == UInt64(maximum + 1))
@@ -110,8 +115,13 @@ struct EditorNoChangeAtRevisionCapacityTests {
             return
         }
         let actions = Dictionary(uniqueKeysWithValues: proposal.decisions.map { ($0.typeIdentifier, $0.action) })
-        #expect(actions[opaqueType] == .replace(bytes: Data([0x00, 0xFF]) + Data("\(maximum)".utf8)))
+        #expect(actions[textType] == .inheritCurrent)
+        #expect(actions[opaqueType] == .inheritCurrent)
         #expect(actions[hiddenType] == .hide)
+        #expect(draft.replacementRequest(for: opaqueType) == nil)
+        #expect(!draft.hasReplacementSource(for: opaqueType))
+        #expect(effectiveBefore.first { $0.typeIdentifier == opaqueType }?.bytes
+            == Data([0x00, 0xFF]) + Data("\(maximum)".utf8))
 
         let unchanged = try await history.perform(.revise(request))
         guard case .unchanged = unchanged else {
@@ -119,7 +129,20 @@ struct EditorNoChangeAtRevisionCapacityTests {
             return
         }
         var changedDraft = draft
+        let sourceRequest = try #require(changedDraft.replacementRequest(for: textType))
+        #expect(sourceRequest == HistoryRepresentationRequest(item: current, basis: .effective, typeIdentifier: textType))
+        let source = try await history.representation(sourceRequest)
+        #expect(source.bytes == Data("revision \(maximum)".utf8))
+        #expect(changedDraft.installReplacementSource(source))
+        #expect(!changedDraft.hasReplacementSource(for: opaqueType))
         changedDraft.setChoice(.replace, for: textType)
+        // Merely opening Replace must still submit byte-identical current
+        // text as a no-op, even when appending would exceed revision capacity.
+        let loadedButUnedited = try await history.perform(.revise(changedDraft.revisionRequest()))
+        guard case .unchanged = loadedButUnedited else {
+            Issue.record("an explicitly loaded but unedited replacement consumes no revision capacity")
+            return
+        }
         changedDraft.setReplacementText("a genuinely new revision", for: textType)
         let changedRequest = changedDraft.revisionRequest()
         await #expect(throws: HistoryFailure.capacityExceeded(.revisionCount)) {
@@ -130,8 +153,25 @@ struct EditorNoChangeAtRevisionCapacityTests {
         #expect(try await history.usage() == usageBefore)
         let payload = try await history.pastePayload(for: current.id)
         #expect(payload.item == current)
-        #expect(payload.representations == before.effective)
+        #expect(payload.representations == effectiveBefore)
         #expect(!payload.representations.contains { $0.typeIdentifier == hiddenType })
-        #expect(after.canonical.map(\.bytes) == [Data([0x00, 0xFF]), Data([0x7F]), Data("original".utf8)])
+        let canonicalAfter = try await representations(after.canonical, basis: .canonical, item: current, in: history)
+        #expect(canonicalAfter.map(\.bytes) == [Data([0x00, 0xFF]), Data([0x7F]), Data("original".utf8)])
+        #expect(try await representations(after.effective, basis: .effective, item: current, in: history) == effectiveBefore)
+    }
+
+    /// Payload assertions explicitly read each selected representation from
+    /// the real store; these oracle bytes never become editor draft inputs.
+    private func representations(
+        _ metadata: [HistoryRepresentationMetadata], basis: HistoryContentBasis,
+        item: HistoryItemReference, in history: SQLiteHistory
+    ) async throws -> [HistoryRepresentation] {
+        var values: [HistoryRepresentation] = []
+        for representation in metadata {
+            values.append(try await history.representation(HistoryRepresentationRequest(
+                item: item, basis: basis, typeIdentifier: representation.typeIdentifier
+            )))
+        }
+        return values
     }
 }

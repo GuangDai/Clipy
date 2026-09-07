@@ -25,8 +25,8 @@ struct SQLiteHistorySchemaTests {
             INSERT INTO history_items (
                 id, contentVersion, currentContentID, titleUTF8, searchBodyUTF8,
                 effectiveTypeIdentifiersBlob, firstCopiedAt, lastCopiedAt, copyCount,
-                canonicalBytes, revisionCount, revisionBytes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1)
+                canonicalBytes, revisionCount, revisionBytes, effectiveMatchesCanonical
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1, 0)
             """, bindings: [
                 .text(id), .blob(sqliteUInt64(2)), .text(current), .blob(title),
                 .blob(title), .blob(Data()), .real(1), .real(2), .blob(sqliteUInt64(1)),

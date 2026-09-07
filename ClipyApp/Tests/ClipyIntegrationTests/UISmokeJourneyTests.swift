@@ -351,7 +351,7 @@ struct UISmokeJourneyTests {
         #expect(details.effective.count == 1)
         #expect(details.effective.first?.typeIdentifier == "public.jpeg")
         #expect(
-            details.effective.first?.bytes == jpegBytes,
+            (try await ComposedSupport.firstRepresentation(in: history, details: details, basis: .effective)).bytes == jpegBytes,
             "image smoke (03b §9): details return the captured bytes unchanged"
         )
 
@@ -464,11 +464,11 @@ struct UISmokeJourneyTests {
         #expect(details.item.contentVersion == revised.contentVersion)
         #expect(details.effective.count == 1)
         #expect(
-            details.effective.first?.bytes == newBytes,
+            (try await ComposedSupport.firstRepresentation(in: history, details: details, basis: .effective)).bytes == newBytes,
             "revise smoke (03b §9): details show the new effective bytes"
         )
         #expect(
-            details.canonical.first?.bytes == Data(codeText.utf8),
+            (try await ComposedSupport.firstRepresentation(in: history, details: details, basis: .canonical)).bytes == Data(codeText.utf8),
             "revise smoke (03a §5): canonical lineage keeps the captured bytes"
         )
         #expect(details.revisions.count == 1)
