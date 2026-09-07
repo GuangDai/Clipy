@@ -508,12 +508,12 @@ struct HistoryPreviewView: View {
                     Text(PreviewCopy.text("Showing the file’s current contents. Copying still copies the original file reference."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("clipy.preview.file.disclosure")
                     Button(PreviewCopy.text("Back to File Reference")) { loader.showFileReference() }
                         .accessibilityIdentifier("clipy.preview.file.back")
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(10)
-                .accessibilityIdentifier("clipy.preview.file.disclosure")
                 Divider()
             }
             previewBody

@@ -268,7 +268,7 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         }, app.debugDescription)
         let back = preview.buttons["clipy.preview.file.back"]
         XCTAssertTrue(back.exists && back.isHittable, app.debugDescription)
-        XCTAssertTrue(preview.descendants(matching: .any)["clipy.preview.file.disclosure"].exists)
+        XCTAssertTrue(preview.staticTexts["clipy.preview.file.disclosure"].exists)
         XCTAssertEqual(rows.count, 1)
         back.click()
         XCTAssertTrue(waitUntil(timeout: 5) {
