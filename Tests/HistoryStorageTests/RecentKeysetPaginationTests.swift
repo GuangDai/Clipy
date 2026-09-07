@@ -138,13 +138,15 @@ struct RecentKeysetPaginationTests {
             #expect(page.rows.count == 1)
             #expect(page.next == nil)
             for index in stride(from: pages.count - 2, through: 0, by: -1) {
+                let previousCursor = try #require(page.previous)
                 page = try await history.browse(HistoryBrowseRequest(
-                    kind: kind, limit: 2, cursor: try #require(page.previous)
+                    kind: kind, limit: 2, cursor: previousCursor
                 ))
                 #expect(page.rows.count == 2)
                 #expect(page == pages[index])
+                let nextCursor = try #require(page.next)
                 let forward = try await history.browse(HistoryBrowseRequest(
-                    kind: kind, limit: 2, cursor: try #require(page.next)
+                    kind: kind, limit: 2, cursor: nextCursor
                 ))
                 #expect(forward == pages[index + 1])
             }
@@ -162,8 +164,9 @@ struct RecentKeysetPaginationTests {
             )))
         }
         let first = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 1))
+        let nextCursor = try #require(first.next)
         let second = try await history.browse(HistoryBrowseRequest(
-            kind: .recent, limit: 1, cursor: try #require(first.next)
+            kind: .recent, limit: 1, cursor: nextCursor
         ))
         let cursor = try #require(second.previous)
         let marker = await history.authority.cursorProcessMarker

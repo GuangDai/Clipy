@@ -145,7 +145,9 @@ struct PinnedOrderSQLTests {
     }
 
     private func capture(_ text: String, in history: SQLiteHistory) async throws -> HistoryItemReference {
-        let receipt = try await history.perform(.capture(WSSupport.textCapture(text)))
+        let receipt = try await history.perform(.capture(WSSupport.textCapture(
+            text, observedAt: Date(timeIntervalSince1970: 1_000)
+        )))
         guard case .committed(let commit) = receipt, case .inserted(let item) = commit.outcome else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
