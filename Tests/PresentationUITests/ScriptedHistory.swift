@@ -41,7 +41,7 @@ actor ScriptedHistory: ClipboardHistory {
     enum BrowseOutcome {
         case page(HistoryPage)
         case failure(HistoryFailure)
-        /// Returns only after the test calls `resumeBrowse(after:)`. The
+        /// Returns only after the test calls `resumeBrowse(cursor:)`. The
         /// suspension deliberately ignores task cancellation, matching an
         /// adapter whose underlying operation cannot be cancelled.
         case paused(HistoryPage)
@@ -189,13 +189,13 @@ actor ScriptedHistory: ClipboardHistory {
 
     /// Whether the scripted browse for `cursor` has reached its deterministic
     /// suspension point.
-    func isBrowsePaused(after cursor: HistoryPageCursor) -> Bool {
+    func isBrowsePaused(cursor: HistoryPageCursor) -> Bool {
         pausedBrowses[cursor] != nil
     }
 
     /// Releases a parked browse with the page carried by its `.paused`
     /// outcome. Cancellation is intentionally not consulted.
-    func resumeBrowse(after cursor: HistoryPageCursor) {
+    func resumeBrowse(cursor: HistoryPageCursor) {
         guard let paused = pausedBrowses.removeValue(forKey: cursor) else {
             return
         }
@@ -214,8 +214,8 @@ actor ScriptedHistory: ClipboardHistory {
 
     func browse(_ request: HistoryBrowseRequest) async throws -> HistoryPage {
         browseRequests.append(request)
-        if request.after == nil, let observedFirstPage { return observedFirstPage }
-        guard let cursor = request.after,
+        if request.cursor == nil, let observedFirstPage { return observedFirstPage }
+        guard let cursor = request.cursor,
               let outcome = browseScript[cursor]
         else {
             return HistoryPage(

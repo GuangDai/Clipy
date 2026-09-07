@@ -23,7 +23,7 @@ struct AffectedItemsBlobV1Tests {
     func exactManualWire() throws {
         let source = HistoryAffectedItems.explicit([Self.second, Self.first, Self.second])
         let blob = try AffectedItemsBlobCodec.encode(source, for: .insert)
-        var expected = Data([0, 2, 1, 0, 2])
+        var expected = Data([0, 3, 1, 0, 2])
         expected.append(Self.uuidBytes(Self.first))
         expected.append(Self.uuidBytes(Self.second))
         #expect(blob == expected)
@@ -35,7 +35,7 @@ struct AffectedItemsBlobV1Tests {
     @Test("only policySet admits an empty explicit scope and it cannot claim item changes")
     func emptyListKindMatrix() throws {
         let blob = try AffectedItemsBlobCodec.encode(.explicit([]), for: .policySet)
-        #expect(blob == Data([0, 2, 1, 0, 0]))
+        #expect(blob == Data([0, 3, 1, 0, 0]))
         #expect(try AffectedItemsBlobCodec.decode(blob, for: .policySet) == .explicit([]))
         for kind in Self.kinds where kind != .policySet {
             #expect(throws: AffectedItemsBlobRejection.self) {
@@ -72,8 +72,8 @@ struct AffectedItemsBlobV1Tests {
     func clearScopesHaveExactConstantWire() throws {
         let all = try AffectedItemsBlobCodec.encode(.all(retiredItems: 1_000_000), for: .clearAll)
         let unpinned = try AffectedItemsBlobCodec.encode(.unpinned(retiredItems: 1_000_000), for: .clearUnpinned)
-        #expect(all == Data([0, 2, 2, 0, 0, 0, 0, 0, 15, 66, 64]))
-        #expect(unpinned == Data([0, 2, 3, 0, 0, 0, 0, 0, 15, 66, 64]))
+        #expect(all == Data([0, 3, 2, 0, 0, 0, 0, 0, 15, 66, 64]))
+        #expect(unpinned == Data([0, 3, 3, 0, 0, 0, 0, 0, 15, 66, 64]))
         #expect(try AffectedItemsBlobCodec.decode(all, for: .clearAll) == .all(retiredItems: 1_000_000))
         #expect(try AffectedItemsBlobCodec.decode(unpinned, for: .clearUnpinned) == .unpinned(retiredItems: 1_000_000))
         for count in [1, 1_000_000, Int.max] {
@@ -113,7 +113,7 @@ struct AffectedItemsBlobV1Tests {
             }
         }
         for (tag, kind) in [(UInt8(2), HistoryChangeKindRawV1.clearAll), (3, .clearUnpinned)] {
-            var empty = Data([0, 2, tag])
+            var empty = Data([0, 3, tag])
             empty.append(Self.uint64Bytes(0))
             #expect(throws: AffectedItemsBlobRejection.self) {
                 try AffectedItemsBlobCodec.decode(empty, for: kind)
@@ -128,7 +128,7 @@ struct AffectedItemsBlobV1Tests {
             retiredItems: 1_000_000, primaryItemID: Self.first
         )
         let blob = try AffectedItemsBlobCodec.encode(scope, for: .insert)
-        var expected = Data([0, 2, 4, 0, 0, 0, 0, 0, 15, 66, 64])
+        var expected = Data([0, 3, 4, 0, 0, 0, 0, 0, 15, 66, 64])
         expected.append(contentsOf: [0x3f, 0xf0, 0, 0, 0, 0, 0, 0]) // Double(1).bitPattern
         expected.append(Self.uuidBytes(Self.second))
         expected.append(1)
@@ -243,7 +243,7 @@ struct AffectedItemsBlobV1Tests {
             let scope = HistoryAffectedItems.retention(retiredItems: retired, prunedRevisions: pruned)
             let wire = try AffectedItemsBlobCodec.encode(scope, for: permitted)
             #expect(wire.count == 19)
-            #expect(Array(wire.prefix(3)) == [0, 2, 5])
+            #expect(Array(wire.prefix(3)) == [0, 3, 5])
             #expect(Data(wire[3..<11]) == Self.uint64Bytes(UInt64(retired)))
             #expect(Data(wire[11..<19]) == Self.uint64Bytes(UInt64(pruned)))
             #expect(try AffectedItemsBlobCodec.decode(wire, for: permitted) == scope)
@@ -268,7 +268,10 @@ struct AffectedItemsBlobV1Tests {
     @Test("retired and pruned network counters cannot overflow Int")
     func unsignedCountOverflowFailsClosed() throws {
         for (scope, kind) in Self.validScopes {
-            if case .explicit = scope { continue }
+            switch scope {
+            case .explicit, .pinOrderChange: continue
+            default: break
+            }
             var wire = try AffectedItemsBlobCodec.encode(scope, for: kind)
             wire.replaceSubrange(3..<11, with: Self.uint64Bytes(UInt64.max))
             #expect(throws: AffectedItemsBlobRejection.invalidScopeValue) {
@@ -286,20 +289,20 @@ struct AffectedItemsBlobV1Tests {
 
     @Test("only the current version and known scope tags are accepted")
     func versionAndScopeRejections() {
-        for prefix in [Data(), Data([0]), Data([0, 2])] {
+        for prefix in [Data(), Data([0]), Data([0, 3])] {
             #expect(throws: AffectedItemsBlobRejection.malformedBlob) {
                 try AffectedItemsBlobCodec.decode(prefix, for: .policySet)
             }
         }
-        for version in [UInt16(0), 1, 3, .max] {
+        for version in [UInt16(0), 1, 2, 4, .max] {
             let data = Data([UInt8(version >> 8), UInt8(truncatingIfNeeded: version), 1, 0, 0])
             #expect(throws: AffectedItemsBlobRejection.unknownFormatVersion(found: version)) {
                 try AffectedItemsBlobCodec.decode(data, for: .policySet)
             }
         }
-        for tag in [UInt8(0), 6, .max] {
+        for tag in [UInt8(0), 7, .max] {
             #expect(throws: AffectedItemsBlobRejection.unknownScope(found: tag)) {
-                try AffectedItemsBlobCodec.decode(Data([0, 2, tag]), for: .policySet)
+                try AffectedItemsBlobCodec.decode(Data([0, 3, tag]), for: .policySet)
             }
         }
     }
@@ -382,7 +385,7 @@ struct AffectedItemsBlobV1Tests {
     @Test("count bounds precede output allocation and envelope includes all scopes")
     func decodeBounds() throws {
         let limits = JournalLimits(maxAffectedItemsPerRecord: 1)!
-        var countAboveBound = Data([0, 2, 1, 0, 2])
+        var countAboveBound = Data([0, 3, 1, 0, 2])
         countAboveBound.append(Self.uuidBytes(Self.first))
         #expect(throws: AffectedItemsBlobRejection.countExceedsBound(found: 2, bound: 1)) {
             try AffectedItemsBlobCodec.decode(countAboveBound, for: .insert, limits: limits)
@@ -394,11 +397,145 @@ struct AffectedItemsBlobV1Tests {
         }
     }
 
+    @Test("pin-order scope preserves the target and exact pre-commit ordinal interval")
+    func pinOrderScopeHasExactWire() throws {
+        let targetOnly = HistoryAffectedItems.pinOrderChange(
+            itemID: Self.first, shiftedOrdinals: nil, affectedCount: 1
+        )
+        var expectedTargetOnly = Data([0, 3, 6])
+        expectedTargetOnly.append(Self.uuidBytes(Self.first))
+        expectedTargetOnly.append(0)
+        expectedTargetOnly.append(Self.uint64Bytes(1))
+        let targetWire = try AffectedItemsBlobCodec.encode(targetOnly, for: .pin)
+        #expect(targetWire == expectedTargetOnly)
+        #expect(targetWire.count == 28)
+        #expect(try AffectedItemsBlobCodec.decode(targetWire, for: .pin) == targetOnly)
+
+        let shifted = HistoryAffectedItems.pinOrderChange(
+            itemID: Self.first, shiftedOrdinals: 2...4, affectedCount: 4
+        )
+        var expectedShifted = Data([0, 3, 6])
+        expectedShifted.append(Self.uuidBytes(Self.first))
+        expectedShifted.append(1)
+        expectedShifted.append(Self.uint64Bytes(2))
+        expectedShifted.append(Self.uint64Bytes(4))
+        expectedShifted.append(Self.uint64Bytes(4))
+        let shiftedWire = try AffectedItemsBlobCodec.encode(shifted, for: .unpin)
+        #expect(shiftedWire == expectedShifted)
+        #expect(shiftedWire.count == 44)
+        #expect(try AffectedItemsBlobCodec.decode(shiftedWire, for: .unpin) == shifted)
+    }
+
+    @Test("pin-order scopes belong only to pin, unpin, and remove")
+    func pinOrderScopeKindMatrix() throws {
+        for range in [Optional<ClosedRange<Int>>.none, 2...4] {
+            let scope = HistoryAffectedItems.pinOrderChange(
+                itemID: Self.first, shiftedOrdinals: range, affectedCount: range == nil ? 1 : 4
+            )
+            let wire = try AffectedItemsBlobCodec.encode(scope, for: .pin)
+            for kind in Self.kinds {
+                if [.pin, .unpin, .remove].contains(kind) {
+                    #expect(try AffectedItemsBlobCodec.decode(wire, for: kind) == scope)
+                    #expect(try AffectedItemsBlobCodec.encode(scope, for: kind) == wire)
+                } else {
+                    #expect(throws: AffectedItemsBlobRejection.invalidScope) {
+                        try AffectedItemsBlobCodec.encode(scope, for: kind)
+                    }
+                    #expect(throws: AffectedItemsBlobRejection.invalidScope) {
+                        try AffectedItemsBlobCodec.decode(wire, for: kind)
+                    }
+                }
+            }
+        }
+    }
+
+    @Test("pin-order counts equal the target plus the shifted interval width")
+    func pinOrderScopeCountAndRangeValidation() throws {
+        for (range, count) in [
+            (Optional<ClosedRange<Int>>.none, 0), (nil, -1), (nil, 2),
+            (2...4, -1), (2...4, 0), (2...4, 3), (2...4, 5),
+            (-1...0, 3), (Int.max...Int.max, 2), (0...(Int.max - 1), Int.max)
+        ] {
+            #expect(throws: AffectedItemsBlobRejection.invalidScopeValue) {
+                try AffectedItemsBlobCodec.encode(.pinOrderChange(
+                    itemID: Self.first, shiftedOrdinals: range, affectedCount: count
+                ), for: .pin)
+            }
+        }
+        for (range, count) in [
+            (0...0, 2), (3...3, 2),
+            ((Int.max - 1)...(Int.max - 1), 2), (1...(Int.max - 1), Int.max)
+        ] {
+            let scope = HistoryAffectedItems.pinOrderChange(
+                itemID: Self.first, shiftedOrdinals: range, affectedCount: count
+            )
+            let wire = try AffectedItemsBlobCodec.encode(scope, for: .remove)
+            #expect(try AffectedItemsBlobCodec.decode(wire, for: .remove) == scope)
+        }
+    }
+
+    @Test("pin-order decoding rejects wrong flags, reversed ranges, overflow, and count mismatch")
+    func pinOrderMalformedWireIsRejected() throws {
+        let targetWire = try AffectedItemsBlobCodec.encode(.pinOrderChange(
+            itemID: Self.first, shiftedOrdinals: nil, affectedCount: 1
+        ), for: .pin)
+        let rangeWire = try AffectedItemsBlobCodec.encode(.pinOrderChange(
+            itemID: Self.first, shiftedOrdinals: 2...4, affectedCount: 4
+        ), for: .pin)
+        for source in [targetWire, rangeWire] {
+            for flag in [UInt8(2), .max] {
+                var invalid = source
+                invalid[19] = flag
+                #expect(throws: AffectedItemsBlobRejection.invalidScopeValue) {
+                    try AffectedItemsBlobCodec.decode(invalid, for: .pin)
+                }
+            }
+            let countOffset = source.count - 8
+            for count in [UInt64(0), 2, UInt64.max] {
+                var invalid = source
+                invalid.replaceSubrange(countOffset..<source.count, with: Self.uint64Bytes(count))
+                #expect(throws: AffectedItemsBlobRejection.invalidScopeValue) {
+                    try AffectedItemsBlobCodec.decode(invalid, for: .pin)
+                }
+            }
+        }
+        for (lower, upper, count) in [
+            (UInt64(4), UInt64(2), UInt64(4)),
+            (UInt64.max, UInt64.max, 2),
+            (0, UInt64(Int.max), UInt64(Int.max)),
+            (0, UInt64(Int.max - 1), UInt64(Int.max)),
+            (2, UInt64.max, 4)
+        ] {
+            var invalid = rangeWire
+            invalid.replaceSubrange(20..<28, with: Self.uint64Bytes(lower))
+            invalid.replaceSubrange(28..<36, with: Self.uint64Bytes(upper))
+            invalid.replaceSubrange(36..<44, with: Self.uint64Bytes(count))
+            #expect(throws: AffectedItemsBlobRejection.invalidScopeValue) {
+                try AffectedItemsBlobCodec.decode(invalid, for: .pin)
+            }
+        }
+    }
+
+    @Test("a hundred thousand pin-order changes use 44 bytes without widening explicit IDs")
+    func largePinOrderScopeRemainsConstantSize() throws {
+        #expect(JournalLimits.standard.maxAffectedItemsPerRecord == 5_001)
+        let scope = HistoryAffectedItems.pinOrderChange(
+            itemID: Self.first, shiftedOrdinals: 0...99_998, affectedCount: 100_000
+        )
+        let limits = JournalLimits(maxAffectedItemsPerRecord: 1)!
+        let wire = try AffectedItemsBlobCodec.encode(scope, for: .pin, limits: limits)
+        #expect(wire.count == 44)
+        #expect(try AffectedItemsBlobCodec.decode(wire, for: .pin, limits: limits) == scope)
+        #expect(throws: AffectedItemsBlobRejection.countExceedsBound(found: 5_002, bound: 5_001)) {
+            try AffectedItemsBlobCodec.encode(.explicit((0..<5_002).map(Self.itemID)), for: .pin)
+        }
+    }
+
     @Test("scope shape rejections map to corrupt stored values")
     func rejectionMapping() {
         for rejection in [
             AffectedItemsBlobRejection.malformedBlob, .invalidScope,
-            .invalidScopeValue, .unknownScope(found: 6)
+            .invalidScopeValue, .unknownScope(found: 7)
         ] {
             #expect(rejection.historyFailure == .persistence(.corruptStoredValue))
         }
@@ -414,7 +551,9 @@ struct AffectedItemsBlobV1Tests {
             (.unpinnedPrefix(through: cutoff, excluding: nil, retiredItems: 1, primaryItemID: nil), .retire),
             (.unpinnedPrefix(through: cutoff, excluding: first, retiredItems: 1, primaryItemID: nil), .retire),
             (.unpinnedPrefix(through: cutoff, excluding: first, retiredItems: 1, primaryItemID: first), .insert),
-            (.retention(retiredItems: 1, prunedRevisions: 2), .retire)
+            (.retention(retiredItems: 1, prunedRevisions: 2), .retire),
+            (.pinOrderChange(itemID: first, shiftedOrdinals: nil, affectedCount: 1), .pin),
+            (.pinOrderChange(itemID: first, shiftedOrdinals: 2...4, affectedCount: 4), .unpin)
         ]
     }
 

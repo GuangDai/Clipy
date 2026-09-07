@@ -377,16 +377,16 @@ public struct HistoryPageCursor: Sendable, Hashable {
 public struct HistoryBrowseRequest: Sendable, Hashable {
     public let kind: HistoryBrowseKind
     public let limit: Int
-    public let after: HistoryPageCursor?
+    public let cursor: HistoryPageCursor?
 
     public init(
         kind: HistoryBrowseKind,
         limit: Int,
-        after: HistoryPageCursor? = nil
+        cursor: HistoryPageCursor? = nil
     ) {
         self.kind = kind
         self.limit = limit
-        self.after = after
+        self.cursor = cursor
     }
 }
 
@@ -401,6 +401,6 @@ public struct HistoryObservationRequest: Sendable, Hashable {
 }
 ```
 
-Observation intentionally has no cursor: it tracks the current first page for one query. Additional pages are one-shot `browse` requests. A cursor is opaque, bound to the complete query shape and snapshot position, and has process-local v1 validity.
+Observation intentionally has no cursor: it tracks the current first page for one query. Additional pages are one-shot `browse` requests. A caller passes either `HistoryPage.previous` or `next` as `cursor`; direction is encoded inside that opaque value, not supplied separately. Both directions bind the complete query shape and snapshot position and have process-local validity. A nil cursor requests the first page.
 
 Invalid regular expressions and out-of-range limits are typed input failures. Search evaluation has exactly the three v1 modes above; dedup ranking is unrelated and not public.

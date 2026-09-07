@@ -39,7 +39,7 @@ struct RecentScalarPaginationTests {
             var seen: [HistoryItemID] = []
             for _ in 0..<captured.count {
                 let page = try await history.browse(HistoryBrowseRequest(
-                    kind: .recent, limit: limit, after: cursor
+                    kind: .recent, limit: limit, cursor: cursor
                 ))
                 if let position {
                     #expect(page.position == position)

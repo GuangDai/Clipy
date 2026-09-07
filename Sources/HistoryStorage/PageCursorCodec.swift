@@ -1,7 +1,7 @@
 /// PageCursorCodec / cursor wire types — the versioned, fail-closed codec for
 /// the opaque `HistoryPageCursor` payload.
 /// Owning spec: docs/04-coherence.md §6 (cursor semantics: complete normalized
-/// query shape + page ChangePosition + complete last-row ordering anchor +
+/// query shape + page ChangePosition + direction + complete boundary-row anchor +
 /// process-instance marker), §16 (failure translation: cursor shape,
 /// generation, or position mismatch → `.snapshotExpired`); bounds:
 /// docs/06-cross-cutting.md §2.
@@ -23,9 +23,16 @@ import HistoryCore
 
 // MARK: - Resolved cursor value (docs/04-coherence.md §6)
 
+/// Which adjacent range to read. Rows always return in the query's normal
+/// order; this direction changes selection, not the displayed ordering.
+internal enum HistoryPageDirection: String, Codable, Sendable, Hashable {
+    case forward
+    case backward
+}
+
 /// The fully validated cursor the read paths resume from: the complete
 /// normalized query shape, the page's Change Position, and the complete
-/// last-row ordering anchor. docs/04-coherence.md §6
+/// boundary-row ordering anchor and direction. docs/04-coherence.md §6
 ///
 /// The Authority captures the position inside one non-suspending read
 /// interval (§2) and the `SearchWorker` mints the continuation cursor
@@ -34,15 +41,18 @@ internal struct ResolvedPageCursor: Sendable, Hashable {
     internal let queryShape: StoredQueryShape
     internal let position: ChangePosition
     internal let anchor: StoredOrderingAnchor
+    internal let direction: HistoryPageDirection
 
     internal init(
         queryShape: StoredQueryShape,
         position: ChangePosition,
-        anchor: StoredOrderingAnchor
+        anchor: StoredOrderingAnchor,
+        direction: HistoryPageDirection = .forward
     ) {
         self.queryShape = queryShape
         self.position = position
         self.anchor = anchor
+        self.direction = direction
     }
 }
 
@@ -89,12 +99,12 @@ internal enum StoredQueryShape: Sendable, Hashable {
     }
 }
 
-/// The complete last-row ordering anchor a continuation cursor binds to
-/// (§6: "the complete last-row ordering anchor"). Each case is one ordering
+/// The complete boundary-row ordering anchor a continuation cursor binds to.
+/// Forward uses the last row; backward uses the first. Each case is one ordering
 /// lane; decode reproduces the exact lane the encode chose.
 internal enum StoredOrderingAnchor: Sendable, Hashable {
     /// Default-order anchor (recent browse; exact/regexp search; fuzzy pinned
-    /// lane): the last row's pin group, ordinal-or-recency key, and final ID
+    /// lane): the boundary row's pin group, ordinal-or-recency key, and final ID
     /// (04 §6).
     case defaultOrder(pinnedOrdinal: Int?, lastCopiedAt: Date, id: HistoryItemID)
     /// Fuzzy unpinned lane: the last row's full sort key (score is internal,
@@ -110,10 +120,10 @@ internal enum StoredOrderingAnchor: Sendable, Hashable {
 /// mismatch → `.snapshotExpired`"); the encode-side case maps to an internal
 /// invariant violation at the minting boundary.
 internal enum PageCursorRejection: Error, Sendable, Equatable {
-    /// The payload is not a decodable v1 container at all — foreign bytes,
+    /// The payload is not a decodable current container at all — foreign bytes,
     /// truncation, or a well-formed container of the wrong shape.
     case malformedCursor
-    /// `formatVersion` is not exactly 1.
+    /// `formatVersion` is not exactly 2.
     case unknownCursorVersion(found: UInt16)
     /// The process-instance marker does not match this Authority.
     case processMarkerMismatch
@@ -266,16 +276,17 @@ private extension StoredOrderingAnchor {
 // MARK: - Wire value (docs/05-authority-kernel.md §4 style)
 
 /// Versioned wire value of the opaque cursor payload. `formatVersion` is
-/// exactly 1 for every cursor `PageCursorCodec` writes; decode rejects any
+/// exactly 2 for every cursor `PageCursorCodec` writes; decode rejects any
 /// other version. The `processMarker` is the Authority's process-instance
 /// marker (04 §6). The query shape and anchor are carried as their Codable
 /// wire forms.
-private struct PageCursorBlobV1: Codable, Sendable {
+private struct PageCursorBlobV2: Codable, Sendable {
     let formatVersion: UInt16
     let processMarker: UUID
     let rawValue: UInt64
     let queryShape: StoredQueryShapeWire
     let anchor: StoredOrderingAnchorWire
+    let direction: HistoryPageDirection
 }
 
 // MARK: - Codec (docs/04-coherence.md §6)
@@ -285,7 +296,7 @@ private struct PageCursorBlobV1: Codable, Sendable {
 /// exactly. docs/04-coherence.md §6
 internal enum PageCursorCodec {
     /// The only cursor version this codec reads or writes.
-    private static let formatVersion: UInt16 = 1
+    private static let formatVersion: UInt16 = 2
 
     /// Pre-parse cursor envelope. A valid search term may consume 4,096 UTF-8
     /// bytes and JSON escaping can expand one input byte to six ASCII bytes;
@@ -304,12 +315,13 @@ internal enum PageCursorCodec {
         _ resolved: ResolvedPageCursor,
         processMarker: UUID
     ) throws -> HistoryPageCursor {
-        let blob = PageCursorBlobV1(
+        let blob = PageCursorBlobV2(
             formatVersion: formatVersion,
             processMarker: processMarker,
             rawValue: resolved.position.rawValue,
             queryShape: resolved.queryShape.wire,
-            anchor: resolved.anchor.wire
+            anchor: resolved.anchor.wire,
+            direction: resolved.direction
         )
         do {
             let payload = try CodecWireFormat.makeEncoder().encode(blob)
@@ -335,10 +347,10 @@ internal enum PageCursorCodec {
         guard cursor.payload.count <= maximumPayloadBytes else {
             throw PageCursorRejection.malformedCursor
         }
-        let blob: PageCursorBlobV1
+        let blob: PageCursorBlobV2
         do {
             blob = try CodecWireFormat.makeDecoder().decode(
-                PageCursorBlobV1.self,
+                PageCursorBlobV2.self,
                 from: cursor.payload
             )
         } catch {
@@ -355,7 +367,8 @@ internal enum PageCursorCodec {
         return ResolvedPageCursor(
             queryShape: queryShape,
             position: ChangePosition(rawValue: blob.rawValue),
-            anchor: anchor
+            anchor: anchor,
+            direction: blob.direction
         )
     }
 }

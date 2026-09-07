@@ -26,9 +26,9 @@ struct HistoryListPaginationTriggerTests {
         state.prefetchNextPageIfNeeded(appearingRowID: first.item.id)
         #expect(!state.isLoadingPage)
         state.prefetchNextPageIfNeeded(appearingRowID: last.item.id)
-        try #require(await pollUntil { await history.isBrowsePaused(after: cursor) })
+        try #require(await pollUntil { await history.isBrowsePaused(cursor: cursor) })
         state.prefetchNextPageIfNeeded(appearingRowID: last.item.id)
-        await history.resumeBrowse(after: cursor)
+        await history.resumeBrowse(cursor: cursor)
         try #require(await pollUntil { !state.isLoadingPage })
 
         #expect(await history.browseRequests.count == 1)

@@ -170,14 +170,14 @@ struct HCRCommitFamilyTests {
             expecting: .pin,
             in: history
         )
-        #expect(pinned.affected == .explicit([item.id]))
+        #expect(pinned.affected == .pinOrderChange(itemID: item.id, shiftedOrdinals: nil, affectedCount: 1))
 
         let unpinned = try await Self.performCommitted(
             .unpin(item.id),
             expecting: .unpin,
             in: history
         )
-        #expect(unpinned.affected == .explicit([item.id]))
+        #expect(unpinned.affected == .pinOrderChange(itemID: item.id, shiftedOrdinals: nil, affectedCount: 1))
 
         let removed = try await Self.performCommitted(
             .remove(item.id),

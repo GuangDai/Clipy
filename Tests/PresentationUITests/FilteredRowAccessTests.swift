@@ -80,9 +80,9 @@ struct FilteredRowAccessTests {
         }
         #expect(await history.browseRequests.isEmpty)
         state.prefetchNextPageIfNeeded(appearingRowID: lastVisible.item.id)
-        try #require(await pollUntil { await history.isBrowsePaused(after: cursor) })
+        try #require(await pollUntil { await history.isBrowsePaused(cursor: cursor) })
         state.prefetchNextPageIfNeeded(appearingRowID: lastVisible.item.id)
-        await history.resumeBrowse(after: cursor)
+        await history.resumeBrowse(cursor: cursor)
         try #require(await pollUntil { !state.hasNextPage && !state.isLoadingPage })
         #expect(await history.browseRequests.count == 1)
         #expect(state.rows == raw)

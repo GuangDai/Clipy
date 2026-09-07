@@ -50,7 +50,7 @@ struct RecentBoundaryTieFetchTests {
             }
         )
         let page = try await history.browse(HistoryBrowseRequest(
-            kind: .recent, limit: 1, after: cursor
+            kind: .recent, limit: 1, cursor: cursor
         ))
         await history.authority.setStorageLifecycleDebugProbe(
             StorageLifecycleDebugProbe(isEnabled: false)
@@ -70,7 +70,7 @@ struct RecentBoundaryTieFetchTests {
 
         for _ in 0..<captured.count {
             let nextPage = try await history.browse(HistoryBrowseRequest(
-                kind: .recent, limit: 1, after: cursor
+                kind: .recent, limit: 1, cursor: cursor
             ))
             seen.append(contentsOf: nextPage.rows.map(\.item.id))
             cursor = nextPage.next

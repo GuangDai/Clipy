@@ -197,6 +197,70 @@ struct LocalAutomationIngressTests {
         #expect(try await page(fixture, limit: 1, cursor: latest).rows.count == 1)
     }
 
+    @Test func locatorCapacityIsSharedAcrossConnectionsAndEvictsBothDirectionsInFIFOOrder() async throws {
+        // A locator belongs to (connection, item), so 100 real retained items
+        // are enough to exercise 5,001 targets through the ordinary ingress.
+        // This stays below the default History retention count of 200.
+        let fixture = try await makeFixture(itemCount: 100, connectionCount: 51)
+        let firstPage = try await page(fixture, limit: 100)
+        try #require(firstPage.rows.count == 100)
+        let oldest = try #require(firstPage.rows.first?.locator)
+        let secondOldest = firstPage.rows[1].locator
+        var issued = Set(firstPage.rows.map(\.locator))
+        for connection in 1..<50 {
+            let next = try await page(fixture, limit: 100, connection: connection)
+            #expect(next.rows.count == 100)
+            issued.formUnion(next.rows.map(\.locator))
+        }
+        #expect(issued.count == 5_000)
+        // Reuse neither consumes another slot nor promotes the FIFO head.
+        #expect(try await page(fixture, limit: 1).rows.first?.locator == oldest)
+        let newest = try #require(
+            try await page(fixture, limit: 1, connection: 50).rows.first?.locator
+        )
+        #expect(!issued.contains(newest))
+        await #expect(throws: LocalAutomationIngressFailure.locatorInvalidated) {
+            _ = try await fixture.ingress.execute(
+                .detailsEffective(locator: oldest), presenting: fixture.credentials[0].exactBytes
+            )
+        }
+        // Lack of a read grant is reached only after the locator resolves:
+        // the second-oldest and newest bindings survived this one eviction.
+        await #expect(throws: ExternalFailure.unauthorized(
+            requestedCapability: .readEffectiveContent, connectionID: fixture.credentials[0].connection
+        )) {
+            _ = try await fixture.ingress.execute(
+                .detailsEffective(locator: secondOldest), presenting: fixture.credentials[0].exactBytes
+            )
+        }
+        await #expect(throws: ExternalFailure.unauthorized(
+            requestedCapability: .readEffectiveContent, connectionID: fixture.credentials[50].connection
+        )) {
+            _ = try await fixture.ingress.execute(
+                .detailsEffective(locator: newest), presenting: fixture.credentials[50].exactBytes
+            )
+        }
+
+        // The reverse lookup must also have lost the evicted target. Its
+        // next browse mints a fresh token and evicts exactly the next head.
+        let reminted = try #require(try await page(fixture, limit: 1).rows.first?.locator)
+        #expect(reminted != oldest)
+        #expect(try await page(fixture, limit: 1).rows.first?.locator == reminted)
+        await #expect(throws: ExternalFailure.unauthorized(
+            requestedCapability: .readEffectiveContent, connectionID: fixture.credentials[0].connection
+        )) {
+            _ = try await fixture.ingress.execute(
+                .detailsEffective(locator: reminted), presenting: fixture.credentials[0].exactBytes
+            )
+        }
+        await #expect(throws: LocalAutomationIngressFailure.locatorInvalidated) {
+            _ = try await fixture.ingress.execute(
+                .detailsEffective(locator: secondOldest), presenting: fixture.credentials[0].exactBytes
+            )
+        }
+        #expect(try await fixture.history.usage().itemCount == 100)
+    }
+
     @Test func unavailableServerCustodyIsRetryableRatherThanAuthenticationFailure() async throws {
         let fixture = try await makeFixture()
         let ingress = LocalAutomationIngress(
@@ -256,9 +320,11 @@ struct LocalAutomationIngressTests {
     }
 #endif
 
-    private func page(_ fixture: Fixture, limit: Int = 10, cursor: String? = nil) async throws -> LocalAutomationPage {
+    private func page(
+        _ fixture: Fixture, limit: Int = 10, cursor: String? = nil, connection: Int = 0
+    ) async throws -> LocalAutomationPage {
         let result = try await fixture.ingress.execute(
-            .recent(limit: limit, cursor: cursor), presenting: fixture.credentials[0].exactBytes
+            .recent(limit: limit, cursor: cursor), presenting: fixture.credentials[connection].exactBytes
         )
         guard case .page(let page) = result else { throw ExternalFailure.persistence(.invariantViolation) }
         return page

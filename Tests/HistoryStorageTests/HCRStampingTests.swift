@@ -56,18 +56,24 @@ struct HCRStampingTests {
     @Test("Pin, unpin, and remove use their explicit stamped payloads")
     func placementAndRemovalKinds() throws {
         let pinned = try derive(
-            mutations: [.setPinOrdinal(itemID: second, ordinal: 0)],
+            mutations: [.relocatePin(PinRelocation(
+                itemID: second, previousOrdinal: nil, destinationOrdinal: PinOrdinal(rawValue: 0),
+                pinnedCountBefore: 0, shift: nil
+            ))],
             outcome: .placedPinned(second)
         )
         #expect(pinned.changeKind == .pin)
-        #expect(pinned.affectedItems == .explicit([second]))
+        #expect(pinned.affectedItems == .pinOrderChange(itemID: second, shiftedOrdinals: nil, affectedCount: 1))
 
         let unpinned = try derive(
-            mutations: [.setPinOrdinal(itemID: second, ordinal: nil)],
+            mutations: [.relocatePin(PinRelocation(
+                itemID: second, previousOrdinal: PinOrdinal(rawValue: 0), destinationOrdinal: nil,
+                pinnedCountBefore: 1, shift: nil
+            ))],
             outcome: .unpinned(second)
         )
         #expect(unpinned.changeKind == .unpin)
-        #expect(unpinned.affectedItems == .explicit([second]))
+        #expect(unpinned.affectedItems == .pinOrderChange(itemID: second, shiftedOrdinals: nil, affectedCount: 1))
 
         let removed = try derive(
             mutations: [.delete(itemID: second, reason: .userRemoval)],
@@ -110,7 +116,10 @@ struct HCRStampingTests {
         }
         #expect(throws: StampingRejection.incoherentPlan) {
             try derive(
-                mutations: [.setPinOrdinal(itemID: first, ordinal: 0)],
+                mutations: [.relocatePin(PinRelocation(
+                    itemID: first, previousOrdinal: nil, destinationOrdinal: PinOrdinal(rawValue: 0),
+                    pinnedCountBefore: 0, shift: nil
+                ))],
                 outcome: .placedPinned(first),
                 clearScope: .all
             )
@@ -180,26 +189,17 @@ struct HCRStampingTests {
         #expect(mixed.affectedItems == .explicit([second, third]))
     }
 
-    @Test("Affected IDs are deduplicated and sorted without truncation")
+    @Test("Explicit retention IDs are deduplicated and sorted without truncation")
     func affectedIDsAreBoundedWithoutLoss() throws {
         let maximum = JournalLimits.standard.maxAffectedItemsPerRecord
-        let mutations = (1 ... maximum)
-            .reversed()
-            .map { value in
-                StampedMutation.setPinOrdinal(
-                    itemID: Self.itemID(value),
-                    ordinal: value
-                )
-            } + [
-                .setPinOrdinal(itemID: first, ordinal: 0),
-            ]
-
+        let mutations = (1 ... maximum).reversed().map { value in
+            StampedMutation.delete(itemID: Self.itemID(value), reason: .retention)
+        } + [.delete(itemID: first, reason: .retention)]
         let payload = try derive(
-            mutations: mutations,
-            outcome: .placedPinned(first)
+            mutations: mutations, outcome: .retentionPolicySet(removedCount: maximum)
         )
         guard case .explicit(let ids) = payload.affectedItems else {
-            Issue.record("expected explicit pin identities")
+            Issue.record("expected explicit retention identities")
             return
         }
         #expect(ids.count == maximum)
@@ -207,18 +207,79 @@ struct HCRStampingTests {
         #expect(ids.last == Self.itemID(maximum))
     }
 
-    @Test("An impossible affected-ID excess fails instead of truncating")
+    @Test("An impossible explicit affected-ID excess fails instead of truncating")
     func affectedIDExcessFailsClosed() {
         let maximum = JournalLimits.standard.maxAffectedItemsPerRecord
         let mutations = (1 ... (maximum + 1)).map { value in
-            StampedMutation.setPinOrdinal(
-                itemID: Self.itemID(value),
-                ordinal: value
-            )
+            StampedMutation.delete(itemID: Self.itemID(value), reason: .retention)
         }
         #expect(throws: StampingRejection.incoherentPlan) {
             try derive(
-                mutations: mutations,
+                mutations: mutations, outcome: .retentionPolicySet(removedCount: maximum + 1)
+            )
+        }
+    }
+
+    @Test("Pin relocation describes every shifted member in constant-size bytes")
+    func pinScopeKeepsTheFullOrdinalRange() throws {
+        for pinnedCount in [2, 1_000_001] {
+            let finalOrdinal = pinnedCount - 1
+            let relocation = PinRelocation(
+                itemID: first, previousOrdinal: PinOrdinal(rawValue: 0),
+                destinationOrdinal: PinOrdinal(rawValue: finalOrdinal),
+                pinnedCountBefore: pinnedCount,
+                shift: PinOrdinalShift(range: 1...finalOrdinal, delta: -1)
+            )
+            let payload = try derive(
+                mutations: [.relocatePin(relocation)], outcome: .placedPinned(first)
+            )
+            let expected = HistoryAffectedItems.pinOrderChange(
+                itemID: first, shiftedOrdinals: 1...finalOrdinal, affectedCount: pinnedCount
+            )
+            #expect(payload.affectedItems == expected)
+            let blob = try AffectedItemsBlobCodec.encode(payload.affectedItems, for: .pin)
+            #expect(blob.count == 44)
+            #expect(try AffectedItemsBlobCodec.decode(blob, for: .pin) == expected)
+        }
+    }
+
+    @Test("Pinned removal records its target and the complete shifted suffix")
+    func pinnedRemovalScopeIncludesSurvivorShifts() throws {
+        let relocation = PinRelocation(
+            itemID: first, previousOrdinal: PinOrdinal(rawValue: 1), destinationOrdinal: nil,
+            pinnedCountBefore: 4, shift: PinOrdinalShift(range: 2...3, delta: -1)
+        )
+        let payload = try derive(
+            mutations: [.relocatePin(relocation), .delete(itemID: first, reason: .userRemoval)],
+            outcome: .removed(count: 1)
+        )
+        #expect(payload.changeKind == .remove)
+        #expect(payload.affectedItems == .pinOrderChange(
+            itemID: first, shiftedOrdinals: 2...3, affectedCount: 3
+        ))
+        #expect(throws: StampingRejection.incoherentPlan) {
+            try derive(mutations: [.relocatePin(relocation)], outcome: .removed(count: 1))
+        }
+        #expect(throws: StampingRejection.incoherentPlan) {
+            try derive(
+                mutations: [.relocatePin(relocation), .delete(itemID: second, reason: .userRemoval)],
+                outcome: .removed(count: 1)
+            )
+        }
+    }
+
+    @Test("Pin scope cannot omit an unrelated mutation or report a different primary")
+    func pinScopeRejectsUnreportedChanges() {
+        let relocation = PinRelocation(
+            itemID: first, previousOrdinal: nil, destinationOrdinal: PinOrdinal(rawValue: 0),
+            pinnedCountBefore: 0, shift: nil
+        )
+        #expect(throws: StampingRejection.incoherentPlan) {
+            try derive(mutations: [.relocatePin(relocation)], outcome: .placedPinned(second))
+        }
+        #expect(throws: StampingRejection.incoherentPlan) {
+            try derive(
+                mutations: [.relocatePin(relocation), .delete(itemID: third, reason: .retention)],
                 outcome: .placedPinned(first)
             )
         }
@@ -227,7 +288,10 @@ struct HCRStampingTests {
     @Test("Payload reuses one position and preserves the supplied clock sample")
     func payloadTokensAndTimestamp() throws {
         let payload = try derive(
-            mutations: [.setPinOrdinal(itemID: first, ordinal: 0)],
+            mutations: [.relocatePin(PinRelocation(
+                itemID: first, previousOrdinal: nil, destinationOrdinal: PinOrdinal(rawValue: 0),
+                pinnedCountBefore: 0, shift: nil
+            ))],
             outcome: .placedPinned(first)
         )
         #expect(payload.sequence == 41)
@@ -240,7 +304,10 @@ struct HCRStampingTests {
         let plan = MutationPlan(
             outcome: .placedPinned(first),
             mutations: [
-                .assignPin(itemID: first, ordinal: PinOrdinal(rawValue: 0)),
+                .relocatePin(PinRelocation(
+                    itemID: first, previousOrdinal: nil, destinationOrdinal: PinOrdinal(rawValue: 0),
+                    pinnedCountBefore: 0, shift: nil
+                )),
             ]
         )
         let stamped = try CommitPlanStamper.stamp(
@@ -253,7 +320,7 @@ struct HCRStampingTests {
         #expect(stamped.hcrAppend.sequence == 41)
         #expect(stamped.hcrAppend.changePositionRaw == 41)
         #expect(stamped.hcrAppend.changeKind == .pin)
-        #expect(stamped.hcrAppend.affectedItems == .explicit([first]))
+        #expect(stamped.hcrAppend.affectedItems == .pinOrderChange(itemID: first, shiftedOrdinals: nil, affectedCount: 1))
         #expect(stamped.hcrAppend.createdAt == timestamp)
     }
 

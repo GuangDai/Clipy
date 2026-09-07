@@ -22,7 +22,7 @@ public enum HistoryBrowseKind: Sendable, Hashable {
 }
 
 /// An opaque pagination cursor. It is bound to the complete query shape
-/// and snapshot position, and has process-local v1 validity.
+/// and snapshot position, and has process-local validity.
 /// Minted by the implementation, never by callers.
 ///
 /// docs/03a-instruction-set.md §7
@@ -35,22 +35,23 @@ public struct HistoryPageCursor: Sendable, Hashable {
 }
 
 /// A one-shot request for a page of History rows. Additional pages use
-/// further `browse` requests carrying the cursor of the previous page.
+/// further `browse` requests carrying either adjacent-page cursor. Direction
+/// belongs to the opaque cursor; callers never reverse the returned row order.
 ///
 /// docs/03a-instruction-set.md §7
 public struct HistoryBrowseRequest: Sendable, Hashable {
     public let kind: HistoryBrowseKind
     public let limit: Int
-    public let after: HistoryPageCursor?
+    public let cursor: HistoryPageCursor?
 
     public init(
         kind: HistoryBrowseKind,
         limit: Int,
-        after: HistoryPageCursor? = nil
+        cursor: HistoryPageCursor? = nil
     ) {
         self.kind = kind
         self.limit = limit
-        self.after = after
+        self.cursor = cursor
     }
 }
 

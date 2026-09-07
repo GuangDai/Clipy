@@ -106,7 +106,8 @@ Cancellation unregisters the continuation and releases query/search tasks. An ob
 
 - the complete normalized query shape;
 - the page's `ChangePosition`;
-- the complete last-row ordering anchor;
+- traversal direction (forward or backward);
+- the complete boundary-row ordering anchor (last row for next, first for previous);
 - a process-instance marker.
 
 For recent history, the anchor includes pin group, pin ordinal or last-copied timestamp, and final History Item ID. Search cursors additionally bind the normalized term and mode-specific ordering anchor.
@@ -115,7 +116,8 @@ Before serving a continuation page, `browse` verifies:
 
 1. the request shape matches the cursor;
 2. the cursor belongs to this process instance;
-3. current durable `ChangePosition` equals the cursor position.
+3. current durable `ChangePosition` equals the cursor position;
+4. the complete anchor is still present in the matching result with the same ordering facts.
 
 Any intervening commit expires the cursor with `.snapshotExpired(current:)`. This intentionally favors simple, explicit snapshot semantics over trying to merge writes into an old paginated view.
 
@@ -124,14 +126,15 @@ hash. A schema deployment necessarily replaces the process and its
 `HistoryAuthority`, which mints a new random marker, so process binding already
 invalidates every pre-deployment cursor. V1 has no in-process schema transition.
 
-The opaque v1 JSON payload is deterministically encoded with sorted keys,
+The current opaque v2 JSON payload requires direction and is deterministically encoded with sorted keys,
 explicit base64-`Data` and deferred-to-`Date` strategies. Decode applies a
 pre-parse envelope of `6 × maximumSearchTermUTF8Bytes + 2 KiB` (the sixfold
 term allowance covers worst-case JSON escaping), then validates every known
 shape/anchor field: page limit, term byte bound, mutually exclusive optional
 slots, non-negative pin ordinal, and finite dates/scores. Unknown JSON keys are
-ignored for forward-compatible metadata only; they cannot alter v1 semantics,
+ignored for metadata only; they cannot alter the current semantics,
 and any evolution that relies on one must increment the cursor format version.
+There is one current decoder, with no v1 compatibility path.
 
 Observation is limited to the first page. Additional pages are explicit one-shot browse calls and restart from page one after expiration.
 
@@ -140,12 +143,13 @@ Observation is limited to the first page. Additional pages are explicit one-shot
 Search uses a two-step value pipeline:
 
 ```text
-HistoryAuthority captures SearchCorpusSnapshot(position, scalar rows)
-→ SearchWorker evaluates exact / fuzzy / regexp off-actor
+SearchWorker opens one bounded-lifetime SQLite read transaction
+→ reads scalar batches under one ChangePosition
+→ evaluates exact / fuzzy / regexp with bounded page selection
 → bounded HistoryPage(position, ordered rows)
 ```
 
-The source snapshot contains only scalar projection data required for search and row display. It does not contain Canonical Content, revision blobs, model instances, or dedup ranks.
+Each source batch contains only scalar projection data required for search and row display. It does not contain Canonical Content, revision blobs, model instances, or dedup ranks. Backward exact/regexp retains only a page-sized rolling predecessor window; fuzzy retains only the nearest page-sized ranked candidates. Both directions validate later stored projections even after matching is complete, preserving corrupt-tail rejection without retaining the full corpus.
 
 For one-shot browse, a commit during evaluation does not corrupt the result; the returned page is correctly labeled with its older position. For observation, an invalidation newer than that position causes the result to be discarded and recomputed before it is yielded.
 

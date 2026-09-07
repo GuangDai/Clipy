@@ -62,7 +62,7 @@ struct HCRRestartTests {
         #expect(reopenedSnapshot.records.map(\.affectedItems) == [
             .explicit([seeded.first.id]),
             .explicit([seeded.second.id]),
-            .explicit([seeded.first.id]),
+            .pinOrderChange(itemID: seeded.first.id, shiftedOrdinals: nil, affectedCount: 1),
         ])
         #expect(reopenedSnapshot.journalBytes
             == reopenedSnapshot.records.reduce(UInt64(0)) { partial, record in
@@ -97,8 +97,8 @@ struct HCRRestartTests {
         #expect(continuedSnapshot.records.map(\.affectedItems) == [
             .explicit([seeded.first.id]),
             .explicit([seeded.second.id]),
-            .explicit([seeded.first.id]),
-            .explicit([seeded.first.id]),
+            .pinOrderChange(itemID: seeded.first.id, shiftedOrdinals: nil, affectedCount: 1),
+            .pinOrderChange(itemID: seeded.first.id, shiftedOrdinals: nil, affectedCount: 1),
         ])
         #expect(continuedSnapshot.journalBytes
             == continuedSnapshot.records.reduce(UInt64(0)) { partial, record in

@@ -173,7 +173,7 @@ struct HistoryViewStateReceiptOrderingTests {
         let live = await history.observations[0]
         try await deliver(page([first], position: 1, next: "old-page"), to: live)
         state.loadNextPage()
-        try #require(await pollUntil { await backing.isBrowsePaused(after: oldCursor) })
+        try #require(await pollUntil { await backing.isBrowsePaused(cursor: oldCursor) })
         // No destructive purge invalidates the task here: the receipt floor
         // itself must prevent the still-owned browse from appending old rows.
         state.acceptCaptureReceipt(.committed(HistoryCommit(
@@ -183,10 +183,13 @@ struct HistoryViewStateReceiptOrderingTests {
         try await deliver(page([obsolete], position: 1, next: "stale-observe"), to: live)
         #expect(state.isLoadingPage)
         #expect(state.rows == [first])
-        await backing.resumeBrowse(after: oldCursor)
+        await backing.resumeBrowse(cursor: oldCursor)
         try #require(await pollUntil { !state.isLoadingPage })
         #expect(state.rows == [first])
         #expect(!state.hasNextPage)
+        #expect(!state.hasPreviousPage)
+        #expect(state.loadedPageCount == 0)
+        #expect(state.displayedCountIsLowerBound)
         #expect(state.failure == nil)
 
         try await deliver(page([first], position: 2, next: "new-page"), to: live)

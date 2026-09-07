@@ -193,9 +193,9 @@ private static func expectCreateGuardRollback(
     #expect(try WSSupport.fetchPosition(verification).rawValue == 1)
 }
 
-/// Pinning first writes ordinal zero in the transaction. The validator then
-/// adds one impossible value only to its local scalar proof, making the real
-/// contiguity guard throw; rollback restores the durable nil ordinal.
+/// Pinning first writes ordinal zero in the real transaction. A failure at
+/// the final order check must roll back that assignment and its pinned-count
+/// update before any publication; no corrupted ordinal is committed.
 @Test func finalPinOrderGuardMapsToTransactionAndRollsBack() async throws {
     let storeURL = WSSupport.tempStoreURL("tx-guard-final-pin-order")
     defer { WSSupport.removeStore(storeURL) }

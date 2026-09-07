@@ -21,9 +21,9 @@ internal enum HistoryChangeKindRawV1: Int16, Sendable, Equatable {
     case retireRevision = 11
 }
 
-/// Exact membership for bounded changes and bulk predicates. `retention` is
-/// deliberately conservative: it covers the whole pre-commit History, while
-/// its counts report only actual retirements and revision prunes (V2-03 §4.4).
+/// Exact membership for bounded changes and bulk predicates (V2-03 §4.4).
+/// Retention's whole pre-commit History coverage is deliberately conservative;
+/// its counts report actual retirements/prunes, not the size of that coverage.
 internal enum HistoryAffectedItems: Sendable, Equatable {
     case explicit([HistoryItemID])
     case all(retiredItems: Int)
@@ -31,6 +31,10 @@ internal enum HistoryAffectedItems: Sendable, Equatable {
     case unpinnedPrefix(through: RetentionEvictionKey, excluding: HistoryItemID?,
                         retiredItems: Int, primaryItemID: HistoryItemID?)
     case retention(retiredItems: Int, prunedRevisions: Int)
+    /// Target plus the inclusive PRE-COMMIT ordinal range. The range excludes
+    /// the target's original ordinal; nil means only the target changed.
+    /// affectedCount includes the target exactly once.
+    case pinOrderChange(itemID: HistoryItemID, shiftedOrdinals: ClosedRange<Int>?, affectedCount: Int)
 }
 
 /// The complete immutable input for one same-transaction HCR append.
@@ -80,7 +84,9 @@ internal struct HistoryChangeRecordPayload: Sendable, Equatable {
              .revise,
              .retire,
              .retireRevision:
-            if let prefix = try retirementPrefix(in: mutations) {
+            if let pinChange = try pinOrderChange(in: mutations, outcome: receiptOutcome) {
+                affectedItems = pinChange
+            } else if let prefix = try retirementPrefix(in: mutations) {
                 let primary: HistoryItemID?
                 switch receiptOutcome {
                 case .inserted(let reference), .coalesced(let reference), .revised(let reference):
@@ -243,7 +249,6 @@ internal struct HistoryChangeRecordPayload: Sendable, Equatable {
             case .create(let item):
                 itemIDs.append(item.id)
             case .updateOccurrence(let itemID, _),
-                 .setPinOrdinal(let itemID, _),
                  .delete(let itemID, _),
                  .pruneRevisions(let itemID, _, _):
                 itemIDs.append(itemID)
@@ -251,7 +256,7 @@ internal struct HistoryChangeRecordPayload: Sendable, Equatable {
                 itemIDs.append(update.itemID)
             case .setRetentionPolicy, .setRetentionPolicies:
                 break
-            case .bulkClear, .retirePrefix:
+            case .bulkClear, .retirePrefix, .relocatePin:
                 throw StampingRejection.incoherentPlan
             }
         }
@@ -300,9 +305,9 @@ internal struct HistoryChangeRecordPayload: Sendable, Equatable {
         in mutations: [StampedMutation]
     ) -> Bool {
         mutations.contains { mutation in
-            guard case .setPinOrdinal(let found, let ordinal) = mutation,
-                  found == itemID else { return false }
-            return (ordinal != nil) == pinned
+            guard case .relocatePin(let relocation) = mutation,
+                  relocation.itemID == itemID else { return false }
+            return (relocation.destinationOrdinal != nil) == pinned
         }
     }
 
@@ -350,5 +355,60 @@ internal struct HistoryChangeRecordPayload: Sendable, Equatable {
             }
         }
         return result
+    }
+
+    /// A compact pin plan describes every shifted item in its original dense
+    /// ordinal interval. The target is separate, including when its subsequent
+    /// deletion removes it from the pinned lane (02 §7/§10; V2-03 §4.4).
+    private static func pinOrderChange(
+        in mutations: [StampedMutation], outcome: HistoryCommitOutcome
+    ) throws -> HistoryAffectedItems? {
+        var relocation: PinRelocation?
+        for mutation in mutations {
+            if case .relocatePin(let found) = mutation {
+                guard relocation == nil else { throw StampingRejection.incoherentPlan }
+                relocation = found
+            }
+        }
+        guard let relocation else { return nil }
+        guard relocation.previousOrdinal != relocation.destinationOrdinal,
+              relocation.pinnedCountBefore >= 0 else {
+            throw StampingRejection.incoherentPlan
+        }
+        if let previous = relocation.previousOrdinal?.rawValue {
+            guard previous >= 0, previous < relocation.pinnedCountBefore else {
+                throw StampingRejection.incoherentPlan
+            }
+        }
+        switch outcome {
+        case .placedPinned(let id):
+            guard id == relocation.itemID, relocation.destinationOrdinal != nil,
+                  mutations.count == 1 else { throw StampingRejection.incoherentPlan }
+        case .unpinned(let id):
+            guard id == relocation.itemID, relocation.destinationOrdinal == nil,
+                  mutations.count == 1 else { throw StampingRejection.incoherentPlan }
+        case .removed(let count):
+            guard count == 1, relocation.destinationOrdinal == nil, mutations.count == 2,
+                  mutations.contains(where: {
+                      if case .delete(let id, .userRemoval) = $0 { return id == relocation.itemID }
+                      return false
+                  }) else { throw StampingRejection.incoherentPlan }
+        default:
+            throw StampingRejection.incoherentPlan
+        }
+        let range = relocation.shift?.range
+        let count: Int
+        if let range {
+            guard range.lowerBound >= 0, range.upperBound < relocation.pinnedCountBefore,
+                  relocation.previousOrdinal.map({ !range.contains($0.rawValue) }) ?? true else {
+                throw StampingRejection.incoherentPlan
+            }
+            let (affected, overflow) = (range.upperBound - range.lowerBound).addingReportingOverflow(2)
+            guard !overflow else { throw StampingRejection.incoherentPlan }
+            count = affected
+        } else {
+            count = 1
+        }
+        return .pinOrderChange(itemID: relocation.itemID, shiftedOrdinals: range, affectedCount: count)
     }
 }

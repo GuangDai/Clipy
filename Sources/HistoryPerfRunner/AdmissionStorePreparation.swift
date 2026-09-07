@@ -222,7 +222,7 @@ func traverseAdmissionRecent(
         let page = try await history.browse(HistoryBrowseRequest(
             kind: .recent,
             limit: admissionPageLimit,
-            after: cursor
+            cursor: cursor
         ))
         if let authoritativePosition {
             guard page.position == authoritativePosition else {
@@ -282,7 +282,7 @@ func measureAdmissionBrowseTies(
         let page = try await history.browse(HistoryBrowseRequest(
             kind: .recent,
             limit: admissionPageLimit,
-            after: cursor
+            cursor: cursor
         ))
         guard page.position == validation.position,
               page.rows.count == admissionPageLimit

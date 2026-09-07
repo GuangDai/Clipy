@@ -39,31 +39,31 @@ extension SearchWorker {
                     anchorRow = row
                     return
                 }
-                guard Self.precedes(anchor, row.anchor) else { return }
+                guard isPreferred(anchor, row.anchor) else { return }
             }
             if hits.count < directive.maximumSurvivors {
                 hits.append(row)
                 var child = hits.count - 1
                 while child > 0 {
                     let parent = (child - 1) / 2
-                    guard Self.precedes(hits[parent].anchor, hits[child].anchor) else {
+                    guard isPreferred(hits[parent].anchor, hits[child].anchor) else {
                         break
                     }
                     hits.swapAt(parent, child)
                     child = parent
                 }
             } else if let worst = hits.first,
-                      Self.precedes(row.anchor, worst.anchor) {
+                      isPreferred(row.anchor, worst.anchor) {
                 hits[0] = row
                 var parent = 0
                 while parent * 2 + 1 < hits.count {
                     var child = parent * 2 + 1
                     let right = child + 1
                     if right < hits.count,
-                       Self.precedes(hits[child].anchor, hits[right].anchor) {
+                       isPreferred(hits[child].anchor, hits[right].anchor) {
                         child = right
                     }
-                    guard Self.precedes(hits[parent].anchor, hits[child].anchor) else {
+                    guard isPreferred(hits[parent].anchor, hits[child].anchor) else {
                         break
                     }
                     hits.swapAt(parent, child)
@@ -81,8 +81,16 @@ extension SearchWorker {
             // window, not the corpus; the §9 bullet 7 envelope still only
             // rejects quadratic over the measured scales.
             let ordered = hits.sorted { Self.precedes($0.anchor, $1.anchor) }
-            if let anchorRow { return [anchorRow] + ordered }
+            if let anchorRow {
+                return directive.direction == .forward ? [anchorRow] + ordered : ordered + [anchorRow]
+            }
             return ordered
+        }
+
+        /// Forward keeps the earliest successors; backward keeps the latest
+        /// predecessors. Final output still uses the ordinary display order.
+        private func isPreferred(_ lhs: StoredOrderingAnchor, _ rhs: StoredOrderingAnchor) -> Bool {
+            directive.direction == .forward ? Self.precedes(lhs, rhs) : Self.precedes(rhs, lhs)
         }
 
         /// Only bounded candidate IDs, including a separately retained

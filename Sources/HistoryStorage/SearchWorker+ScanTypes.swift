@@ -41,6 +41,17 @@ extension SearchWorker {
     internal struct ScanDirective: Sendable {
         let continuationAnchor: StoredOrderingAnchor?
         let maximumSurvivors: Int
+        let direction: HistoryPageDirection
+
+        internal init(
+            continuationAnchor: StoredOrderingAnchor?,
+            maximumSurvivors: Int,
+            direction: HistoryPageDirection = .forward
+        ) {
+            self.continuationAnchor = continuationAnchor
+            self.maximumSurvivors = maximumSurvivors
+            self.direction = direction
+        }
     }
 
     /// Mutable companion of `ScanDirective`: feed one matched row's anchor
@@ -50,20 +61,43 @@ extension SearchWorker {
     internal struct OrderPreservingScanTracker: Sendable {
         private let anchor: StoredOrderingAnchor?
         private let maximumSurvivors: Int
+        private let direction: HistoryPageDirection
         private var anchorSeen = false
         private var postAnchorSurvivors = 0
+        /// Backward scans retain the nearest predecessors in a fixed ring.
+        /// Advancing through many matches never shifts K metadata rows.
+        private var oldestPredecessor = 0
 
         internal init(directive: ScanDirective) {
             self.anchor = directive.continuationAnchor
             self.maximumSurvivors = directive.maximumSurvivors
+            self.direction = directive.direction
         }
 
         /// Keep the anchor for `page`'s exact validation and its successors;
         /// earlier matches cannot contribute to this page's presentation.
-        internal func appendIfRetained(
+        internal mutating func appendIfRetained(
             _ row: EvaluatedRow,
             to rows: inout [EvaluatedRow]
         ) {
+            if direction == .backward {
+                guard !anchorSeen else { return }
+                if row.anchor == anchor {
+                    // Restore normal display order once, then retain the
+                    // actual matched anchor as the exclusive page boundary.
+                    if oldestPredecessor != 0 {
+                        rows = Array(rows[oldestPredecessor...]) + rows[..<oldestPredecessor]
+                        oldestPredecessor = 0
+                    }
+                    rows.append(row)
+                } else if rows.count < maximumSurvivors {
+                    rows.append(row)
+                } else {
+                    rows[oldestPredecessor] = row
+                    oldestPredecessor = (oldestPredecessor + 1) % maximumSurvivors
+                }
+                return
+            }
             if anchor == nil || anchorSeen || row.anchor == anchor {
                 rows.append(row)
             }
@@ -72,6 +106,10 @@ extension SearchWorker {
         internal mutating func recordMatch(
             ofRow rowAnchor: StoredOrderingAnchor
         ) -> Bool {
+            if direction == .backward {
+                if rowAnchor == anchor { anchorSeen = true }
+                return !anchorSeen
+            }
             if let anchor, !anchorSeen {
                 guard rowAnchor == anchor else { return true }
                 anchorSeen = true
@@ -79,6 +117,46 @@ extension SearchWorker {
             }
             postAnchorSurvivors += 1
             return postAnchorSurvivors < maximumSurvivors
+        }
+    }
+
+    /// Cursor links describe adjacent nonempty regions of this same ordered
+    /// result set. The input anchor proves a row exists on the opposite side;
+    /// the retained lookahead/lookbehind proves the requested side continues.
+    internal static func pageWindow(
+        in evaluated: [EvaluatedRow], anchor: StoredOrderingAnchor?,
+        direction: HistoryPageDirection, limit: Int, position: ChangePosition
+    ) throws -> (rows: ArraySlice<EvaluatedRow>, hasPrevious: Bool, hasNext: Bool) {
+        let survivors: ArraySlice<EvaluatedRow>
+        if let anchor {
+            guard let index = evaluated.firstIndex(where: { $0.anchor == anchor }) else {
+                throw HistoryFailure.snapshotExpired(current: position)
+            }
+            survivors = direction == .forward ? evaluated[(index + 1)...] : evaluated[..<index]
+        } else {
+            survivors = evaluated[...]
+        }
+        let rows = direction == .forward ? survivors.prefix(limit) : survivors.suffix(limit)
+        guard !rows.isEmpty else { return (rows, false, false) }
+        return (
+            rows,
+            direction == .forward ? anchor != nil : survivors.count > limit,
+            direction == .backward ? anchor != nil : survivors.count > limit
+        )
+    }
+
+    internal static func mintSearchCursor(
+        at anchor: StoredOrderingAnchor, direction: HistoryPageDirection,
+        request: HistoryBrowseRequest, position: ChangePosition, processMarker: UUID
+    ) throws -> HistoryPageCursor {
+        do {
+            return try PageCursorCodec.encode(
+                ResolvedPageCursor(queryShape: StoredQueryShape(request: request), position: position,
+                                   anchor: anchor, direction: direction),
+                processMarker: processMarker
+            )
+        } catch {
+            throw HistoryFailure.persistence(.invariantViolation)
         }
     }
 }

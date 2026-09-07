@@ -255,7 +255,7 @@ struct SearchAdmissionBeforeIOTests {
             recentContinuation = try await history.browse(HistoryBrowseRequest(
                 kind: .recent,
                 limit: request.limit,
-                after: next
+                cursor: next
             ))
         } else {
             recentContinuation = nil
