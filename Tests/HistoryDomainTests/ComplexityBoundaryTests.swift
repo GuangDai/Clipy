@@ -5,6 +5,72 @@ import HistoryCore
 import Testing
 @testable import HistoryDomain
 
+/// Only scalar count/ordinal facts represent these large lanes. There is no
+/// fixture array of pinned IDs and no per-item mutation list to expand.
+@Test(arguments: [100_000, 1_000_000])
+func largePinnedCountStillProducesConstantSizeRelocations(pinnedCount: Int) throws {
+    let target = pinRevisionItemID(1)
+    let insertion = try planPinnedPlacement(itemID: target, placement: .first, facts: PinFacts(
+        targetExists: true, targetOrdinal: nil, anchorOrdinal: nil, pinnedCount: pinnedCount
+    ))
+    guard case .commit(let insertPlan) = insertion, insertPlan.mutations.count == 1,
+          case .relocatePin(let inserted) = insertPlan.mutations[0] else {
+        Issue.record("A large first pin must remain one interval relocation")
+        return
+    }
+    #expect(inserted.itemID == target)
+    #expect(inserted.previousOrdinal == nil)
+    #expect(inserted.destinationOrdinal?.rawValue == 0)
+    #expect(inserted.pinnedCountBefore == pinnedCount)
+    #expect(inserted.shift?.range == 0...(pinnedCount - 1))
+    #expect(inserted.shift?.delta == 1)
+
+    let firstFacts = PinFacts(targetExists: true, targetOrdinal: PinOrdinal(rawValue: 0),
+        anchorOrdinal: nil, pinnedCount: pinnedCount)
+    let reordered = try planPinnedPlacement(itemID: target, placement: .last, facts: firstFacts)
+    guard case .commit(let reorderPlan) = reordered, reorderPlan.mutations.count == 1,
+          case .relocatePin(let moved) = reorderPlan.mutations[0] else {
+        Issue.record("Moving across a large pinned lane must remain one relocation")
+        return
+    }
+    #expect(moved.itemID == target)
+    #expect(moved.previousOrdinal?.rawValue == 0)
+    #expect(moved.destinationOrdinal?.rawValue == pinnedCount - 1)
+    #expect(moved.pinnedCountBefore == pinnedCount)
+    #expect(moved.shift?.range == 1...(pinnedCount - 1))
+    #expect(moved.shift?.delta == -1)
+
+    let unpinned = try planUnpin(itemID: target, facts: firstFacts)
+    guard case .commit(let unpinPlan) = unpinned, unpinPlan.mutations.count == 1,
+          case .relocatePin(let unpin) = unpinPlan.mutations[0] else {
+        Issue.record("Unpinning a large lane must remain one relocation")
+        return
+    }
+    #expect(unpin.itemID == target)
+    #expect(unpin.previousOrdinal?.rawValue == 0)
+    #expect(unpin.destinationOrdinal == nil)
+    #expect(unpin.pinnedCountBefore == pinnedCount)
+    #expect(unpin.shift?.range == 1...(pinnedCount - 1))
+    #expect(unpin.shift?.delta == -1)
+
+    let removed = try planRemove(itemID: target, facts: RemoveFacts(item: RetainedItemSummary(
+        id: target, lastCopiedAt: Date(timeIntervalSinceReferenceDate: 100), pinOrdinal: PinOrdinal(rawValue: 0)
+    ), pinnedCount: pinnedCount))
+    guard case .commit(let removePlan) = removed, removePlan.mutations.count == 2,
+          case .relocatePin(let cleared) = removePlan.mutations[0],
+          case .retire(let retiredID, .userRemoval) = removePlan.mutations[1] else {
+        Issue.record("Large pinned removal must remain relocation plus one retirement")
+        return
+    }
+    #expect(cleared.itemID == target)
+    #expect(cleared.previousOrdinal?.rawValue == 0)
+    #expect(cleared.destinationOrdinal == nil)
+    #expect(cleared.pinnedCountBefore == pinnedCount)
+    #expect(cleared.shift?.range == 1...(pinnedCount - 1))
+    #expect(cleared.shift?.delta == -1)
+    #expect(retiredID == target)
+}
+
 @Test func largeRetentionPrefixStillProducesOneRetirementMutation() {
     let inventory: [RetainedItemSummary] = (1...100).map { index in
         RetainedItemSummary(

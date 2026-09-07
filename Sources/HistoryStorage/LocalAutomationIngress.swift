@@ -73,6 +73,9 @@ public actor LocalAutomationIngress {
 
     // These values contain no clipboard content. FIFO eviction bounds the
     // process-local state; evicted or pre-restart tokens fail explicitly.
+    // Locator capacity is independent of how many History items are retained:
+    // distinct connections can hold distinct locators for the same item.
+    private static let maximumLocatorCount = 5_000
     private var locators: [String: LocatorTarget] = [:]
     private var locatorByTarget: [LocatorTarget: String] = [:]
     private var locatorOrder: [String] = []
@@ -240,7 +243,7 @@ public actor LocalAutomationIngress {
     private func locator(for itemID: HistoryItemID, connection: ExternalConnectionID) -> String {
         let target = LocatorTarget(connection: connection, itemID: itemID)
         if let existing = locatorByTarget[target] { return existing }
-        if locatorOrder.count == HistoryLimits.standard.hardMaximumRetainedItems {
+        if locatorOrder.count == Self.maximumLocatorCount {
             let expired = locatorOrder.removeFirst()
             if let oldTarget = locators.removeValue(forKey: expired) {
                 locatorByTarget.removeValue(forKey: oldTarget)

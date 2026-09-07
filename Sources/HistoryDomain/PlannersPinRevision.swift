@@ -13,84 +13,68 @@ import HistoryCore
 
 // MARK: - Pin placement (docs/02-domain.md §10)
 
-/// Plans a first pin or a reorder of an already pinned item.
-///
-/// docs/02-domain.md §8, §10. The caller expresses a placement, never a
-/// numeric slot; the complete ordered ID list in `facts.order` is the proven
-/// pin state (§5.2).
-///
-/// - Throws: `DomainRejection.invalidPinnedPlacement(.targetMissing)` when the
-///   target is not retained, `.targetEqualsAnchor` when a `.before` anchor
-///   names the target itself, and `.anchorMissingOrUnpinned` when the anchor
-///   is not another retained pinned item. (Placement uses this dedicated
-///   vocabulary rather than `.notFound` by design — docs/03b-instruction-set.md
-///   §10, docs/06-cross-cutting.md WS16.)
-/// - Returns: `.unchanged` when the placement reproduces the existing order
-///   (§10 step 5); otherwise a commit whose `.assignPin` mutations cover
-///   exactly the IDs whose ordinal changed, including the target (§10 step 6,
-///   plan invariant 4).
+/// Plans first pin or reorder from target/anchor ordinal point facts. Error
+/// priority stays target missing, self anchor, then invalid anchor (02 §10;
+/// WS16). An unchanged destination is a true no-op; every other placement
+/// describes the target and one shifted ordinal interval, regardless of P.
 package func planPinnedPlacement(
     itemID: HistoryItemID,
     placement: PinnedPlacement,
     facts: PinFacts
 ) throws -> PlanningResult {
-    // §10 step 1: reject a missing target.
     guard facts.targetExists else {
         throw DomainRejection.invalidPinnedPlacement(.targetMissing)
     }
-
-    // §10 step 2: copy the complete ordered ID list and remove the target if
-    // already pinned.
-    let originalOrder = facts.order.itemIDs
-    var finalOrder = originalOrder
-    finalOrder.removeAll { $0 == itemID }
-
-    // §10 steps 3–4: insert at the requested explicit position. `.before`
-    // requires an anchor that is another retained pinned item.
+    let anchorOrdinal: Int?
     switch placement {
-    case .first:
-        finalOrder.insert(itemID, at: 0)
-    case .last:
-        finalOrder.append(itemID)
     case .before(let anchor):
         guard anchor != itemID else {
             throw DomainRejection.invalidPinnedPlacement(.targetEqualsAnchor)
         }
-        guard let anchorIndex = finalOrder.firstIndex(of: anchor) else {
+        guard let ordinal = facts.anchorOrdinal else {
             throw DomainRejection.invalidPinnedPlacement(.anchorMissingOrUnpinned)
         }
-        finalOrder.insert(itemID, at: anchorIndex)
+        anchorOrdinal = ordinal.rawValue
+    case .first, .last:
+        anchorOrdinal = nil
     }
-
-    // §10 step 5: a placement producing the existing order is a no-op.
-    guard finalOrder != originalOrder else {
-        return .unchanged
+    try validatePinOrdinal(facts.targetOrdinal, count: facts.pinnedCount)
+    if let anchorOrdinal {
+        try validatePinOrdinal(PinOrdinal(rawValue: anchorOrdinal), count: facts.pinnedCount)
+        // Distinct retained pinned items cannot occupy the same ordinal.
+        guard facts.targetOrdinal?.rawValue != anchorOrdinal else {
+            throw DomainRejection.corruptLineage
+        }
     }
-
-    // §10 step 6: zip the final order with 0 ..< count and emit `.assignPin`
-    // only for changed ordinals. The target is always among them: it either
-    // moved within the order or enters from the unpinned state (old ordinal
-    // `nil` never equals its new ordinal).
+    if facts.targetOrdinal == nil,
+       facts.pinnedCount.addingReportingOverflow(1).overflow {
+        throw DomainRejection.capacityExceeded(.retainedItems)
+    }
+    let source = facts.targetOrdinal?.rawValue
+    let destination: Int
+    switch placement {
+    case .first:
+        destination = 0
+    case .last:
+        destination = facts.pinnedCount - (source == nil ? 0 : 1)
+    case .before:
+        guard let anchorOrdinal else { throw DomainRejection.corruptLineage }
+        // Removing a target that precedes its anchor moves that anchor one
+        // slot earlier. This also makes an adjacent .before a no-op.
+        destination = anchorOrdinal - (source.map { $0 < anchorOrdinal } == true ? 1 : 0)
+    }
+    guard source != destination else { return .unchanged }
     return .commit(MutationPlan(
         outcome: .placedPinned(itemID),
-        mutations: pinShiftMutations(from: originalOrder, to: finalOrder)
+        mutations: [.relocatePin(pinRelocation(
+            itemID: itemID, previous: source, destination: destination, count: facts.pinnedCount))]
     ))
 }
 
 // MARK: - Unpin (docs/02-domain.md §10)
 
-/// Plans removing an item from the pinned lane.
-///
-/// docs/02-domain.md §8, §10: unpin removes the target and shifts later
-/// ordinals; the remaining order is zipped against `0 ..< count` exactly like
-/// a placement.
-///
-/// - Throws: `DomainRejection.notFound(itemID)` when the target is not
-///   retained (remove/unpin/revise use `.notFound`, placement alone uses
-///   `.targetMissing` — docs/06-cross-cutting.md WS16, docs/AUDIT.md S1-R2).
-/// - Returns: `.unchanged` when the target exists but is not pinned
-///   (docs/03a-instruction-set.md §5); otherwise a commit assigning the target
-///   a `nil` ordinal and shifting every later pinned item.
+/// Unpin changes the target and the later ordinal suffix only (02 §10).
+/// Missing target remains .notFound; an existing unpinned item is unchanged.
 package func planUnpin(
     itemID: HistoryItemID,
     facts: PinFacts
@@ -98,49 +82,31 @@ package func planUnpin(
     guard facts.targetExists else {
         throw DomainRejection.notFound(itemID)
     }
-
-    let originalOrder = facts.order.itemIDs
-    guard originalOrder.contains(itemID) else {
-        return .unchanged
-    }
-
-    let finalOrder = originalOrder.filter { $0 != itemID }
-    let mutations =
-        [HistoryMutation.assignPin(itemID: itemID, ordinal: nil)]
-        + pinShiftMutations(from: originalOrder, to: finalOrder)
-    return .commit(MutationPlan(outcome: .unpinned(itemID), mutations: mutations))
+    try validatePinOrdinal(facts.targetOrdinal, count: facts.pinnedCount)
+    guard let source = facts.targetOrdinal?.rawValue else { return .unchanged }
+    return .commit(MutationPlan(outcome: .unpinned(itemID), mutations: [
+        .relocatePin(pinRelocation(itemID: itemID, previous: source,
+                                  destination: nil, count: facts.pinnedCount))
+    ]))
 }
 
 // MARK: - Remove (docs/02-domain.md §5.4, §8)
 
-/// Plans the removal of one retained item.
-///
-/// docs/02-domain.md §8, §10. Removal is absence from the retained set (D15);
-/// there is no tombstone. When the target is pinned, the plan first compacts
-/// the pinned lane exactly as unpin does — the remaining order zipped against
-/// `0 ..< count`, emitting `.assignPin` only for changed ordinals — so the
-/// one commit preserves D12 and the final-order revalidation (Part V §10)
-/// cannot fail on a gap (AUDIT IMP6-01); the `.retire` mutation with reason
-/// `.userRemoval` comes last.
-///
-/// - Throws: `DomainRejection.notFound(itemID)` when the fact load found no
-///   retained item with this ID (docs/06-cross-cutting.md WS16).
+/// Pinned removal first unpins/compacts with the same compact relocation,
+/// then retires the now-unpinned target (02 §10, D12/D15). Relocation changes
+/// pinned count once; deletion owns retained count and content-byte removal.
 package func planRemove(
     itemID: HistoryItemID,
     facts: RemoveFacts
 ) throws -> PlanningResult {
-    guard facts.item != nil else {
+    guard let item = facts.item else {
         throw DomainRejection.notFound(itemID)
     }
-    // §10 (AUDIT IMP6-01): removing a pinned item compacts the lane in the
-    // same commit. `pinShiftMutations` emits nothing for the removed target
-    // (absent from the final order) and a shift for every later pinned item
-    // whose ordinal changes; an unpinned target produces no pin mutations.
-    let originalOrder = facts.pinnedOrder.itemIDs
+    try validatePinOrdinal(item.pinOrdinal, count: facts.pinnedCount)
     var mutations: [HistoryMutation] = []
-    if originalOrder.contains(itemID) {
-        let finalOrder = originalOrder.filter { $0 != itemID }
-        mutations = pinShiftMutations(from: originalOrder, to: finalOrder)
+    if let source = item.pinOrdinal?.rawValue {
+        mutations.append(.relocatePin(pinRelocation(
+            itemID: itemID, previous: source, destination: nil, count: facts.pinnedCount)))
     }
     mutations.append(.retire(itemID: itemID, reason: .userRemoval))
     return .commit(MutationPlan(outcome: .removed(count: 1), mutations: mutations))
@@ -262,31 +228,38 @@ package func planRevision(
 
 // MARK: - File-private helpers
 
-/// Emits `.assignPin` for every ID whose ordinal differs between the original
-/// and the final pinned order.
-///
-/// docs/02-domain.md §10 step 6: the final order is zipped with `0 ..< count`;
-/// only changed ordinals are emitted, and the final set plus unchanged pinned
-/// items produces exactly one contiguous order (plan invariant 4, D12). An ID
-/// entering the lane has no original ordinal, so `nil` never equals its new
-/// ordinal and it is always emitted. Emission follows the final order, which
-/// keeps planning deterministic (D16).
-private func pinShiftMutations(
-    from originalOrder: [HistoryItemID],
-    to finalOrder: [HistoryItemID]
-) -> [HistoryMutation] {
-    var originalOrdinals: [HistoryItemID: PinOrdinal] = [:]
-    for (index, id) in originalOrder.enumerated() {
-        originalOrdinals[id] = PinOrdinal(rawValue: index)
-    }
-    var mutations: [HistoryMutation] = []
-    for (index, id) in finalOrder.enumerated() {
-        let ordinal = PinOrdinal(rawValue: index)
-        if originalOrdinals[id] != ordinal {
-            mutations.append(.assignPin(itemID: id, ordinal: ordinal))
+/// Storage proves the complete lane; these constant-size checks reject an
+/// internally contradictory scalar fact before constructing a range.
+private func validatePinOrdinal(_ ordinal: PinOrdinal?, count: Int) throws {
+    guard count >= 0 else { throw DomainRejection.corruptLineage }
+    if let ordinal {
+        guard ordinal.rawValue >= 0, ordinal.rawValue < count else {
+            throw DomainRejection.corruptLineage
         }
     }
-    return mutations
+}
+
+private func pinRelocation(itemID: HistoryItemID, previous: Int?,
+                           destination: Int?, count: Int) -> PinRelocation {
+    let shift: PinOrdinalShift?
+    switch (previous, destination) {
+    case (.none, .some(let destination)):
+        shift = destination < count
+            ? PinOrdinalShift(range: destination...(count - 1), delta: 1) : nil
+    case (.some(let source), .none):
+        shift = source < count - 1
+            ? PinOrdinalShift(range: (source + 1)...(count - 1), delta: -1) : nil
+    case (.some(let source), .some(let destination)) where destination < source:
+        shift = PinOrdinalShift(range: destination...(source - 1), delta: 1)
+    case (.some(let source), .some(let destination)) where source < destination:
+        shift = PinOrdinalShift(range: (source + 1)...destination, delta: -1)
+    default:
+        shift = nil
+    }
+    return PinRelocation(itemID: itemID,
+        previousOrdinal: previous.map { PinOrdinal(rawValue: $0) },
+        destinationOrdinal: destination.map { PinOrdinal(rawValue: $0) },
+        pinnedCountBefore: count, shift: shift)
 }
 
 /// Revalidates proposed Effective Content at the Domain level.

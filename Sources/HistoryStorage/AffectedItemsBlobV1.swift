@@ -32,12 +32,9 @@ internal struct JournalLimits: Sendable {
         self.compactionCadenceCommits = compactionCadenceCommits
     }
 
-    internal static let standard: JournalLimits = {
-        let retained = HistoryLimits.standard.hardMaximumRetainedItems
-        let (maximum, overflow) = retained.addingReportingOverflow(1)
-        precondition(!overflow)
-        return JournalLimits(maxAffectedItemsPerRecord: maximum)!
-    }()
+    /// Explicit membership is independently bounded. A larger retained store
+    /// uses compact scopes, never an expanded array or a UInt16-overflowing cap.
+    internal static let standard = JournalLimits(maxAffectedItemsPerRecord: 5_001)!
 }
 
 internal enum AffectedItemsBlobRejection: Error, Sendable, Equatable {
@@ -67,7 +64,7 @@ internal enum AffectedItemsBlobRejection: Error, Sendable, Equatable {
 /// One current tagged format, with no historical decoding path. Explicit
 /// membership is bounded independently of constant-size bulk scope counts.
 internal enum AffectedItemsBlobCodec {
-    private static let formatVersion: UInt16 = 2
+    private static let formatVersion: UInt16 = 3
 
     internal static func encode(
         _ affectedItems: HistoryAffectedItems,
@@ -107,6 +104,15 @@ internal enum AffectedItemsBlobCodec {
             data.append(5)
             append(UInt64(retired), to: &data)
             append(UInt64(pruned), to: &data)
+        case .pinOrderChange(let id, let range, let count):
+            data.append(6)
+            append(id, to: &data)
+            data.append(range == nil ? 0 : 1)
+            if let range {
+                append(UInt64(range.lowerBound), to: &data)
+                append(UInt64(range.upperBound), to: &data)
+            }
+            append(UInt64(count), to: &data)
         }
         return data
     }
@@ -161,6 +167,21 @@ internal enum AffectedItemsBlobCodec {
                 excluding: excluded, retiredItems: count, primaryItemID: primary)
         case 5:
             scope = .retention(retiredItems: try reader.count(), prunedRevisions: try reader.count())
+        case 6:
+            let id = try reader.itemID()
+            let range: ClosedRange<Int>?
+            switch try reader.byte() {
+            case 0:
+                range = nil
+            case 1:
+                let lower = try reader.count()
+                let upper = try reader.count()
+                guard lower <= upper else { throw AffectedItemsBlobRejection.invalidScopeValue }
+                range = lower...upper
+            default:
+                throw AffectedItemsBlobRejection.invalidScopeValue
+            }
+            scope = .pinOrderChange(itemID: id, shiftedOrdinals: range, affectedCount: try reader.count())
         case let tag:
             throw AffectedItemsBlobRejection.unknownScope(found: tag)
         }
@@ -200,6 +221,22 @@ internal enum AffectedItemsBlobCodec {
         case .unpinned(let count):
             guard kind == .clearUnpinned else { throw AffectedItemsBlobRejection.invalidScope }
             guard count > 0 else { throw AffectedItemsBlobRejection.invalidScopeValue }
+        case .pinOrderChange(_, let range, let count):
+            guard kind == .pin || kind == .unpin || kind == .remove else {
+                throw AffectedItemsBlobRejection.invalidScope
+            }
+            let expected: Int
+            if let range {
+                guard range.lowerBound >= 0, range.upperBound < Int.max else {
+                    throw AffectedItemsBlobRejection.invalidScopeValue
+                }
+                let (total, overflow) = (range.upperBound - range.lowerBound).addingReportingOverflow(2)
+                guard !overflow else { throw AffectedItemsBlobRejection.invalidScopeValue }
+                expected = total
+            } else {
+                expected = 1
+            }
+            guard count == expected else { throw AffectedItemsBlobRejection.invalidScopeValue }
         case .unpinnedPrefix(let through, let excluded, let count, let primary):
             guard count > 0, through.lastCopiedAt.timeIntervalSinceReferenceDate.isFinite else {
                 throw AffectedItemsBlobRejection.invalidScopeValue

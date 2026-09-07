@@ -14,10 +14,7 @@ internal enum StampedMutation: Sendable {
         occurrence: CopyOccurrence
     )
 
-    case setPinOrdinal(
-        itemID: HistoryItemID,
-        ordinal: Int?
-    )
+    case relocatePin(PinRelocation)
 
     case appendRevision(StoredRevisionUpdate)
 
@@ -114,7 +111,7 @@ internal struct StampedCommitPlan: Sendable {
     internal var requiresFinalPinOrderValidation: Bool {
         mutations.contains { mutation in
             switch mutation {
-            case .setPinOrdinal:
+            case .relocatePin:
                 return true
             case .delete(_, let reason):
                 switch reason {
@@ -235,11 +232,8 @@ internal enum CommitPlanStamper {
                     occurrence: occurrence
                 ))
 
-            case .assignPin(let itemID, let ordinal):
-                mutations.append(.setPinOrdinal(
-                    itemID: itemID,
-                    ordinal: ordinal?.rawValue
-                ))
+            case .relocatePin(let relocation):
+                mutations.append(.relocatePin(relocation))
 
             case .appendRevision(let itemID, let revision, let activeRevisionID):
                 guard case .revision(
@@ -376,7 +370,7 @@ internal enum CommitPlanStamper {
                     return true
                 case .create,
                      .recordCopy,
-                     .assignPin,
+                     .relocatePin,
                      .appendRevision,
                      .retire,
                      .bulkClear,

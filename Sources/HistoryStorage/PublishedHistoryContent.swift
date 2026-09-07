@@ -46,7 +46,7 @@ extension HistoryAuthority {
                         ($0, nil as UInt64?)
                     }, newPayloadBytes: &newPayloadBytes, available: available, didPublish: didPublish
                 )
-            case .updateOccurrence, .setPinOrdinal, .delete, .setRetentionPolicy,
+            case .updateOccurrence, .relocatePin, .delete, .setRetentionPolicy,
                     .pruneRevisions, .setRetentionPolicies, .bulkClear, .retirePrefix:
                 break
             }

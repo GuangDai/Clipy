@@ -5,24 +5,33 @@ import HistoryCore
 import HistoryDomain
 
 internal enum MutationFactLoaders {
-    internal static func loadCompletePinnedOrder(in database: SQLiteDatabase,
-                                                 limits: HistoryLimits = .standard) throws -> CompletePinnedOrder {
-        let rows = try database.prepare("SELECT id,pinOrdinal FROM history_items WHERE pinOrdinal IS NOT NULL ORDER BY pinOrdinal")
-        defer { rows.finalize() }
-        var ids: [HistoryItemID] = []
-        while try rows.step() {
-            guard try HistoryItemRowHydration.integer(rows, 1) == ids.count,
-                  ids.count < limits.hardMaximumRetainedItems else { throw corrupt }
-            ids.append(HistoryItemID(rawValue: try HistoryItemRowHydration.uuid(rows.text(at: 0))))
+    internal static func loadPinFacts(itemID: HistoryItemID, placement: PinnedPlacement? = nil,
+                                     in database: SQLiteDatabase,
+                                     limits: HistoryLimits = .standard) throws -> PinFacts {
+        let count = try PinnedOrderSQL.validatedCount(in: database, limits: limits)
+        let target = try pinLocation(itemID: itemID, pinnedCount: count, in: database)
+        let anchor: PinOrdinal?
+        if case .before(let anchorID)? = placement {
+            anchor = try anchorID == itemID ? target.ordinal
+                : pinLocation(itemID: anchorID, pinnedCount: count, in: database).ordinal
+        } else {
+            anchor = nil
         }
-        return CompletePinnedOrder(itemIDs: ids)
+        return PinFacts(targetExists: target.exists, targetOrdinal: target.ordinal,
+                        anchorOrdinal: anchor, pinnedCount: count)
     }
 
-    internal static func loadPinFacts(itemID: HistoryItemID, in database: SQLiteDatabase,
-                                     limits: HistoryLimits = .standard) throws -> PinFacts {
-        let row = try database.prepare("SELECT 1 FROM history_items WHERE id=?", bindings: [.text(itemID.rawValue.uuidString)])
+    private static func pinLocation(
+        itemID: HistoryItemID, pinnedCount: Int, in database: SQLiteDatabase
+    ) throws -> (exists: Bool, ordinal: PinOrdinal?) {
+        let row = try database.prepare("SELECT pinOrdinal FROM history_items WHERE id=?",
+                                       bindings: [.text(itemID.rawValue.uuidString)])
         defer { row.finalize() }
-        return PinFacts(targetExists: try row.step(), order: try loadCompletePinnedOrder(in: database, limits: limits))
+        guard try row.step() else { return (false, nil) }
+        guard try !row.isNull(at: 0) else { return (true, nil) }
+        let ordinal = try HistoryItemRowHydration.integer(row, 0)
+        guard ordinal >= 0, ordinal < pinnedCount else { throw corrupt }
+        return (true, PinOrdinal(rawValue: ordinal))
     }
 
     internal static func loadRemoveFacts(itemID: HistoryItemID, in database: SQLiteDatabase,
@@ -31,8 +40,8 @@ internal enum MutationFactLoaders {
                                        bindings: [.text(itemID.rawValue.uuidString)])
         defer { row.finalize() }
         let item = try row.step() ? HistoryItemRowHydration.retainedSummary(row) : nil
-        let order = try item?.pinOrdinal == nil ? CompletePinnedOrder(itemIDs: []) : loadCompletePinnedOrder(in: database, limits: limits)
-        return RemoveFacts(item: item, pinnedOrder: order)
+        let count = try PinnedOrderSQL.validatedCount(in: database, limits: limits)
+        return RemoveFacts(item: item, pinnedCount: count)
     }
 
     internal static func loadClearFacts(scope: ClearScope, in database: SQLiteDatabase,
