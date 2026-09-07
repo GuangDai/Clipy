@@ -8,6 +8,8 @@ import HistoryCore
 /// descriptions are presentation text and never determine behavior.
 internal enum PersistenceErrorClassification {
     internal static func transactionFailure(for error: any Error) -> HistoryFailure {
+        if let failure = error as? SQLiteFailure { return failure.historyFailure }
+        if let failure = error as? HistoryFailure { return failure }
         emitRuntimeDiagnostics(for: error)
         let platformError = error as NSError
         if isInsufficientDiskSpace(platformError) {

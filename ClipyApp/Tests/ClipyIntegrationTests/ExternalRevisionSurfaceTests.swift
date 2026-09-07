@@ -93,7 +93,7 @@ struct ExternalRevisionSurfaceTests {
         #expect(surface.appliedPurgeGeneration == 1)
     }
 
-    private func insert(_ text: String, into history: SwiftDataHistory, at time: TimeInterval) async throws -> HistoryItemReference {
+    private func insert(_ text: String, into history: SQLiteHistory, at time: TimeInterval) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.capture(ComposedSupport.textCapture(
             text, observedAt: Date(timeIntervalSinceReferenceDate: time)
         )))
@@ -104,7 +104,7 @@ struct ExternalRevisionSurfaceTests {
     }
 
     private func revise(
-        _ item: HistoryItemReference, text: String, in history: SwiftDataHistory
+        _ item: HistoryItemReference, text: String, in history: SQLiteHistory
     ) async throws -> HistoryCommit {
         let receipt = try await history.perform(.revise(RevisionRequest(
             itemID: item.id, expected: item.contentVersion,

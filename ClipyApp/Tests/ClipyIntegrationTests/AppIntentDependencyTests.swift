@@ -20,10 +20,10 @@ struct AppIntentDependencyTests {
     @Test("registered provider works cold and observes later grants when warm")
     func registeredProviderUsesOneLiveFacadeAcrossColdAndWarmCalls() async throws {
         let openGate = AppIntentDependencyOpenGate()
-        let historyTask = Task<SwiftDataHistory, Error> {
+        let historyTask = Task<SQLiteHistory, Error> {
             await openGate.park()
-            return try await SwiftDataHistory.open(
-                configuration: HistoryConfiguration(persistence: .memory)
+            return try await SQLiteHistory.open(
+                configuration: HistoryConfiguration(persistence: .temporary)
             )
         }
         let manager = AppDependencyManager()
@@ -146,8 +146,8 @@ private actor AppIntentDependencyOpenGate {
     /// method reaches `task.value` and suspends, a resumed test waiter knows
     /// the provider really is waiting on that task before releasing startup.
     func awaitHistory(
-        _ task: Task<SwiftDataHistory, Error>
-    ) async throws -> SwiftDataHistory {
+        _ task: Task<SQLiteHistory, Error>
+    ) async throws -> SQLiteHistory {
         isProviderWaiting = true
         providerWaiter?.resume()
         providerWaiter = nil

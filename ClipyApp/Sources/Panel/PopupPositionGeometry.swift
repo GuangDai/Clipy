@@ -96,9 +96,9 @@ enum PopupPositionGeometry {
     ///     screen coordinates; `nil` when unavailable (falls back to
     ///     `.cursor`, Maccy's behavior).
     ///   - mouseLocation: `NSEvent.mouseLocation` at summon time.
-    ///   - screenVisibleFrames: the visible frames of all screens (the
-    ///     "active" screen is the one containing the mouse — Maccy's
-    ///     user-selectable `popupScreen` simplified to follow the pointer).
+    ///   - screens: each screen's full frame and current safe drawing frame.
+    ///     Menu-bar and Dock points belong to the full frame, even though the
+    ///     resulting panel must fit within that screen's visible frame.
     ///   - lastPositionAnchor: the persisted normalized anchor (top-middle
     ///     of the stable main surface within its screen's visible frame) for
     ///     `.lastPosition`; `nil` falls back to `.cursor`.
@@ -107,50 +107,66 @@ enum PopupPositionGeometry {
         panelSize: NSSize,
         statusItemButtonScreenFrame: NSRect?,
         mouseLocation: NSPoint,
-        screenVisibleFrames: [NSRect],
+        screens: [(frame: NSRect, visibleFrame: NSRect)],
         lastPositionAnchor: NSPoint?
     ) -> NSPoint {
-        let mouseScreen = frame(containing: mouseLocation, in: screenVisibleFrames)
-            ?? screenVisibleFrames.first
-            ?? .zero
+        let targetFrame = targetVisibleFrame(
+            for: mode, statusItemButtonScreenFrame: statusItemButtonScreenFrame,
+            mouseLocation: mouseLocation, screens: screens
+        ) ?? .zero
 
         switch mode {
         case .statusItem:
             guard let buttonFrame = statusItemButtonScreenFrame else {
-                return cursorOrigin(panelSize: panelSize, mouseLocation: mouseLocation, frame: mouseScreen)
+                return cursorOrigin(panelSize: panelSize, mouseLocation: mouseLocation, frame: targetFrame)
             }
-            let buttonScreen = frame(
-                containing: NSPoint(x: buttonFrame.midX, y: buttonFrame.midY),
-                in: screenVisibleFrames
-            ) ?? mouseScreen
             // Under the button's left edge, hanging below the menu bar —
             // Maccy's `screenRect.minY - size.height` (Maccy clamps the
             // right edge; the shared clamp covers it).
             let raw = NSPoint(x: buttonFrame.minX, y: buttonFrame.minY - panelSize.height)
-            return clamped(raw, size: panelSize, into: buttonScreen)
+            return clamped(raw, size: panelSize, into: targetFrame)
 
         case .center:
             let raw = NSPoint(
-                x: mouseScreen.minX + (mouseScreen.width - panelSize.width) / 2,
-                y: mouseScreen.minY + (mouseScreen.height - panelSize.height) / 2
+                x: targetFrame.minX + (targetFrame.width - panelSize.width) / 2,
+                y: targetFrame.minY + (targetFrame.height - panelSize.height) / 2
             )
-            return clamped(raw, size: panelSize, into: mouseScreen)
+            return clamped(raw, size: panelSize, into: targetFrame)
 
         case .lastPosition:
             guard let anchor = lastPositionAnchor else {
-                return cursorOrigin(panelSize: panelSize, mouseLocation: mouseLocation, frame: mouseScreen)
+                return cursorOrigin(panelSize: panelSize, mouseLocation: mouseLocation, frame: targetFrame)
             }
             // The anchor is the stable main surface's TOP-MIDDLE point. A
             // main-only reopen makes that surface identical to the panel.
             let raw = NSPoint(
-                x: mouseScreen.minX + mouseScreen.width * anchor.x - panelSize.width / 2,
-                y: mouseScreen.minY + mouseScreen.height * anchor.y - panelSize.height
+                x: targetFrame.minX + targetFrame.width * anchor.x - panelSize.width / 2,
+                y: targetFrame.minY + targetFrame.height * anchor.y - panelSize.height
             )
-            return clamped(raw, size: panelSize, into: mouseScreen)
+            return clamped(raw, size: panelSize, into: targetFrame)
 
         case .cursor:
-            return cursorOrigin(panelSize: panelSize, mouseLocation: mouseLocation, frame: mouseScreen)
+            return cursorOrigin(panelSize: panelSize, mouseLocation: mouseLocation, frame: targetFrame)
         }
+    }
+
+    /// AppKit excludes menu bars and the Dock from visibleFrame. Use full
+    /// screen bounds to choose the display, then share its safe drawing area
+    /// between origin placement and FloatingPanel's shrink-to-fit size.
+    static func targetVisibleFrame(
+        for mode: PopupPositionMode,
+        statusItemButtonScreenFrame: NSRect?,
+        mouseLocation: NSPoint,
+        screens: [(frame: NSRect, visibleFrame: NSRect)]
+    ) -> NSRect? {
+        if mode == .statusItem, let button = statusItemButtonScreenFrame,
+           let screen = screens.first(where: {
+               $0.frame.contains(NSPoint(x: button.midX, y: button.midY))
+           }) {
+            return screen.visibleFrame
+        }
+        return screens.first(where: { $0.frame.contains(mouseLocation) })?.visibleFrame
+            ?? screens.first?.visibleFrame
     }
 
     /// The `.cursor` origin shared by the fallbacks: top edge at the
@@ -191,11 +207,6 @@ enum PopupPositionGeometry {
                 / screenVisibleFrame.width,
             y: (panelFrame.maxY - screenVisibleFrame.minY) / screenVisibleFrame.height
         )
-    }
-
-    /// The visible frame containing a screen-space point, if any.
-    private static func frame(containing point: NSPoint, in frames: [NSRect]) -> NSRect? {
-        frames.first { $0.contains(point) }
     }
 
     /// Clamps the origin so the panel stays fully inside the frame; a panel

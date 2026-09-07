@@ -10,8 +10,8 @@ struct SearchObservationReplacementCoherenceTests {
     /// public newest-page buffer from hiding a stale intermediate result.
     @Test(arguments: [SearchMode.exact, .fuzzy, .regexp])
     func removalDuringReplacementEvaluationDiscardsSupersededPage(mode: SearchMode) async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let initialReceipt = try await history.perform(.capture(WSSupport.textCapture(
             "needle original", observedAt: Date(timeIntervalSinceReferenceDate: 820_000_000)

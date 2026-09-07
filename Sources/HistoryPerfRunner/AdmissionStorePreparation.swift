@@ -14,7 +14,7 @@ func seedAdmissionStore(
     let seededRows = profile.retainedRows - 1
     let start = clock.now
     // This facade lives until the dedicated seed CLI process exits. Process
-    // termination, not lexical scope, is the deterministic ModelContainer
+    // termination, not lexical scope, is the deterministic database-owner
     // teardown boundary before validation reopens the persistent store.
     let history = try await openStore(
         url: storeURL,
@@ -75,8 +75,8 @@ func prepareAdmissionStore(
     }
 
     // This invocation starts only after the seed process has exited. Public
-    // captures therefore prove durable startup reconstruction without two
-    // live CoreData coordinators sharing external-storage references.
+    // captures therefore prove durable startup reads after the writer has
+    // terminated, using independent SQLite and immutable-file ownership.
     let clock = ContinuousClock()
     let validationStart = clock.now
     let openStart = clock.now
@@ -209,7 +209,7 @@ func prepareAdmissionStore(
 }
 
 func traverseAdmissionRecent(
-    _ history: SwiftDataHistory,
+    _ history: SQLiteHistory,
     validateUniqueIDs: Bool
 ) async throws -> (rows: Int, pages: Int, position: ChangePosition) {
     var cursor: HistoryPageCursor?
@@ -341,4 +341,3 @@ func admissionExactSearchRequest() -> HistoryBrowseRequest {
         limit: admissionPageLimit
     )
 }
-

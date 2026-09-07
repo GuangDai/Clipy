@@ -8,23 +8,29 @@ import HistoryCore
 
 // MARK: - Ingest facts (docs/02-domain.md §5.1)
 
-/// Complete Canonical-containment candidacy for one capture.
-/// docs/02-domain.md §5.1
-///
-/// `items` contains every retained item whose Canonical signature can cover
-/// every incoming signature entry; every candidate is loaded sufficiently to
-/// perform byte-exact confirmation (D7, D8). Completeness is established by
-/// `HistoryStorage` fact loading: failure is a Storage fact-loading failure
-/// mapped to `.temporarilyUnavailable(.factProof)`, or
-/// `.temporarilyUnavailable(.dedupIndexRebuild)` when the Signature Index
-/// cannot be rebuilt to a proved-complete state, or a persistence-corruption
-/// failure. There is no `.bounded` state; a planner never sees a partial
-/// candidate set.
-package struct CompleteDedupCandidates: Sendable {
-    package let items: [HistoryItemState]
+/// Byte-confirmed capture winner facts (02 §9). Content is consumed during
+/// confirmation; coalescing needs only identity, occurrence, and pin state.
+package struct CaptureMatch: Sendable {
+    package let id: HistoryItemID
+    package let occurrence: CopyOccurrence
+    package let pinOrdinal: PinOrdinal?
 
-    package init(items: [HistoryItemState]) {
-        self.items = items
+    package init(id: HistoryItemID, occurrence: CopyOccurrence, pinOrdinal: PinOrdinal?) {
+        self.id = id
+        self.occurrence = occurrence
+        self.pinOrdinal = pinOrdinal
+    }
+}
+
+/// Canonical confirmation retains only the rank needed for a streaming
+/// winner reduction (02 §9.4). Zero extras denotes exact set equality.
+package struct CanonicalCaptureMatch: Sendable {
+    package let value: CaptureMatch
+    package let extraRepresentationCount: Int
+
+    package init(value: CaptureMatch, extraRepresentationCount: Int) {
+        self.value = value
+        self.extraRepresentationCount = extraRepresentationCount
     }
 }
 
@@ -78,24 +84,21 @@ package struct CaptureRetentionFacts: Sendable {
 /// The complete facts capture planning requires.
 /// docs/02-domain.md §5.1
 ///
-/// `hintedItem` is fetched directly by business ID when a hint exists; it is
-/// independent of signature candidacy. A fact loader either constructs this
-/// complete value or fails the History Action before planning — the Domain
-/// planner is never invoked with a partial fact.
+/// Storage confirms a direct lineage hint first, then reduces every Canonical
+/// signature candidate with the pure confirmation helpers. A nil match means
+/// both lanes completed without a winner; any loading failure aborts before
+/// planning. Candidate content never accumulates in this fact (02 §9, D7–D9).
 package struct IngestFacts: Sendable {
-    package let hintedItem: HistoryItemState?
-    package let candidates: CompleteDedupCandidates
+    package let confirmedMatch: CaptureMatch?
     package let candidateIDExists: Bool
     package let retention: CaptureRetentionFacts
 
     package init(
-        hintedItem: HistoryItemState?,
-        candidates: CompleteDedupCandidates,
+        confirmedMatch: CaptureMatch?,
         candidateIDExists: Bool,
         retention: CaptureRetentionFacts
     ) {
-        self.hintedItem = hintedItem
-        self.candidates = candidates
+        self.confirmedMatch = confirmedMatch
         self.candidateIDExists = candidateIDExists
         self.retention = retention
     }
@@ -132,16 +135,34 @@ package struct PinFacts: Sendable {
 
 // MARK: - Revision facts (docs/02-domain.md §5.3)
 
-/// The complete lineage of the revision target.
+/// Content and revision metadata needed to plan against the revision target.
 /// docs/02-domain.md §5.3
 ///
-/// The fact loader returns the complete target lineage or fails with
-/// `notFound`; it does not synthesize a missing active revision.
+/// Storage derives and validates `current` from the active lineage before
+/// constructing these facts. Older revision bytes are unnecessary for draft
+/// validation, duplicate-ID rejection, and revision-retention planning.
 package struct RevisionFacts: Sendable {
-    package let item: HistoryItemState
+    package let itemID: HistoryItemID
+    package let contentVersion: ContentVersion
+    package let canonical: CanonicalContent
+    package let current: EffectiveContent
+    package let revisions: [RevisionRetentionSummary]
+    package let activeRevisionID: RevisionID?
 
-    package init(item: HistoryItemState) {
-        self.item = item
+    package init(
+        itemID: HistoryItemID,
+        contentVersion: ContentVersion,
+        canonical: CanonicalContent,
+        current: EffectiveContent,
+        revisions: [RevisionRetentionSummary],
+        activeRevisionID: RevisionID?
+    ) {
+        self.itemID = itemID
+        self.contentVersion = contentVersion
+        self.canonical = canonical
+        self.current = current
+        self.revisions = revisions
+        self.activeRevisionID = activeRevisionID
     }
 }
 

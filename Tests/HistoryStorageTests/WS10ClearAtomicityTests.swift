@@ -1,6 +1,6 @@
 /// WS10 — Clear atomicity (docs/06-cross-cutting.md §8 WS10): the
 /// commit/receipt/storage side of `.clear(.unpinned)` and `.clear(.all)`
-/// through the public `SwiftDataHistory.perform(_:)` facade and the real
+/// through the public `SQLiteHistory.perform(_:)` facade and the real
 /// `HistoryAuthority` clear commit path.
 ///
 /// Phasing (docs/roadmap/README.md §3, WS-clause phasing note): WS10's
@@ -17,7 +17,7 @@
 /// docs/05-authority-kernel.md §3.2); and a clear whose affected set is
 /// empty is `.unchanged` with NO position advance (docs/02-domain.md §7: a
 /// commit's mutation list is non-empty; §8 `planClear`). Row-level state is
-/// asserted through the INDEPENDENT second `ModelContainer` over the same
+/// asserted through the INDEPENDENT second `SQLite connection` over the same
 /// on-disk store (see `WSSupport`).
 import Foundation
 import HistoryCore
@@ -56,7 +56,7 @@ private static let sources = [
 /// 1 in pin order (docs/02-domain.md §10 steps 3–4). Returns `nil` after
 /// recording an issue if any arrange receipt is not the expected commit.
 private static func arrangeFourItemsTwoPinned(
-    on history: SwiftDataHistory
+    on history: SQLiteHistory
 ) async throws -> (pinnedIDs: [HistoryItemID], unpinnedIDs: [HistoryItemID])? {
     var insertedIDs: [HistoryItemID] = []
     for index in texts.indices {
@@ -127,7 +127,7 @@ private static func arrangeFourItemsTwoPinned(
     // Storage side, through the INDEPENDENT container: ONLY the two pinned
     // rows survive — the complete unpinned set is gone, no partial clear
     // (docs/02-domain.md §5.4).
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
     #expect(rows.count == 2)
     #expect(Set(rows.map(\.id)) == Set(arranged.pinnedIDs.map(\.rawValue)))
@@ -143,14 +143,14 @@ private static func arrangeFourItemsTwoPinned(
     // The survivors are fully intact — initial Content Version, one
     // occurrence, Canonical bytes byte-exact: a clear touches only its
     // affected set (docs/02-domain.md §5.4, §8 `planClear`).
-    let survivors: [(row: HistoryItemRow, text: String)] = [
+    let survivors: [(row: WSSupport.StoredItem, text: String)] = [
         (bravoRow, Self.texts[1]),
         (deltaRow, Self.texts[3]),
     ]
     for survivor in survivors {
         #expect(survivor.row.contentVersionRaw == 1)
         #expect(survivor.row.copyCount == 1)
-        let canonical = try CanonicalBlobCodec.decode(survivor.row.canonicalBlob)
+        let canonical = try WSSupport.fetchCanonical(itemID: survivor.row.id, in: container)
         #expect(canonical.representations.map(\.content.typeIdentifier) == ["public.utf8-plain-text"])
         #expect(canonical.representations.map(\.content.bytes) == [Data(survivor.text.utf8)])
     }
@@ -207,7 +207,7 @@ private static func arrangeFourItemsTwoPinned(
     #expect(count == 2)
 
     // Storage side, through the INDEPENDENT container: ZERO rows remain.
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rowsAfterClearAll = try WSSupport.fetchRows(container)
     #expect(rowsAfterClearAll.isEmpty)
     // WS10: the durable singleton matches the receipt's position.

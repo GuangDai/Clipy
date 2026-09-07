@@ -1058,6 +1058,7 @@ require_one_of_literals \
   "$log_dir/open-full.stdout.log" \
   "OPENFULLVOLUME_OPENSTORE_REFUSED" \
   "OPENFULLVOLUME_TRANSACTION_REFUSED" \
+  "OPENFULLVOLUME_INSUFFICIENT_SPACE_REFUSED" \
   "OPENFULLVOLUME_OPENED"
 case "$matched_literal" in
   OPENFULLVOLUME_OPENSTORE_REFUSED)
@@ -1065,6 +1066,9 @@ case "$matched_literal" in
     ;;
   OPENFULLVOLUME_TRANSACTION_REFUSED)
     open_full_volume_branch="refused-transaction"
+    ;;
+  OPENFULLVOLUME_INSUFFICIENT_SPACE_REFUSED)
+    open_full_volume_branch="refused-insufficient-space"
     ;;
   OPENFULLVOLUME_OPENED)
     open_full_volume_branch="opened"
@@ -1106,6 +1110,7 @@ require_one_of_literals \
   "$log_dir/open-seeded-full.stdout.log" \
   "OPENSEEDEDONFULLVOLUME_OPENSTORE_REFUSED" \
   "OPENSEEDEDONFULLVOLUME_TRANSACTION_REFUSED" \
+  "OPENSEEDEDONFULLVOLUME_INSUFFICIENT_SPACE_REFUSED" \
   "OPENSEEDEDONFULLVOLUME_OK"
 case "$matched_literal" in
   OPENSEEDEDONFULLVOLUME_OPENSTORE_REFUSED)
@@ -1113,6 +1118,9 @@ case "$matched_literal" in
     ;;
   OPENSEEDEDONFULLVOLUME_TRANSACTION_REFUSED)
     open_seeded_full_volume_branch="refused-transaction"
+    ;;
+  OPENSEEDEDONFULLVOLUME_INSUFFICIENT_SPACE_REFUSED)
+    open_seeded_full_volume_branch="refused-insufficient-space"
     ;;
   OPENSEEDEDONFULLVOLUME_OK)
     open_seeded_full_volume_branch="readable"

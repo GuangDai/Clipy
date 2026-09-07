@@ -166,8 +166,8 @@ struct AccessibilityAnnouncementTests {
     @Test("committed panel remove announces once; later not-found is silent")
     @MainActor
     func committedPanelRemovalAnnouncesOnce() async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let receipt = try await history.perform(.capture(ClipboardCapture(
             representations: [CapturedRepresentation(
@@ -235,8 +235,8 @@ struct AccessibilityAnnouncementTests {
     @Test("installed settled-search callback announces the bounded count")
     @MainActor
     func settledSearchCountUsesTheAppOwnedAnnouncementBoundary() async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let composition = AppComposition.makeForTesting(
             history: history,

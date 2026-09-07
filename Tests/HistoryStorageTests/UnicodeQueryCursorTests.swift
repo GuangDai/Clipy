@@ -26,8 +26,8 @@ struct UnicodeQueryCursorTests {
     func equivalentSpellingCannotReuseAnotherQueryCursor(
         mode: SearchMode, reversed: Bool
     ) async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         for index in 0..<3 {
             _ = try await history.perform(.capture(WSSupport.textCapture(

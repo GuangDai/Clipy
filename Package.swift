@@ -50,7 +50,8 @@ let package = Package(
                 "ClipboardFormats",
                 "xxh3",
                 .product(name: "Fuse", package: "fuse-swift"),
-            ]
+            ],
+            linkerSettings: [.linkedLibrary("sqlite3")]
         ),
         .target(
             name: "PasteboardAdapter",

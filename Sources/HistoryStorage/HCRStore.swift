@@ -5,14 +5,12 @@
 /// or second transaction boundary.
 import Foundation
 import HistoryCore
-import SwiftData
 
 internal enum HCRStore {
     /// Pure structural decision for whether append-time retention needs HCR
-    /// rows at all. Tests lock this value instead of instrumenting SwiftData:
-    /// `.none` returns before a descriptor exists, count-only pressure reads
-    /// exactly its oldest prefix, and age/byte pressure needs the full bounded
-    /// suffix.
+    /// rows at all. `.none` returns before preparing a statement; count-only
+    /// pressure reads exactly its oldest prefix, and age/byte pressure needs
+    /// the full bounded suffix.
     internal enum PrefixReadScope: Sendable, Equatable {
         case none
         case oldestPrefix(count: Int)
@@ -41,7 +39,7 @@ internal enum HCRStore {
     internal static func append(
         _ payload: HistoryChangeRecordPayload,
         expectedPreviousPosition: ChangePosition,
-        in context: ModelContext,
+        in database: SQLiteDatabase,
         limits: JournalLimits = .standard
     ) throws {
         guard payload.createdAt.timeIntervalSinceReferenceDate.isFinite else {
@@ -55,7 +53,7 @@ internal enum HCRStore {
             throw HistoryFailure.persistence(.invariantViolation)
         }
 
-        let config = try loadConfig(in: context)
+        let config = try loadConfig(in: database)
         guard config.key == HCRBootstrap.configKey,
               config.configSchemaVersion == HCRBootstrap.configSchemaVersion,
               config.compactionFloorRaw <= expectedPreviousPosition.rawValue,
@@ -111,15 +109,15 @@ internal enum HCRStore {
             scansAge: scansAge,
             now: payload.createdAt,
             config: config,
-            in: context,
+            in: database,
             limits: limits
         )
 
-        for row in trim.rows {
-            context.delete(row)
-        }
         if let newFloor = trim.rows.last?.sequence {
-            config.compactionFloorRaw = newFloor
+            try database.execute(
+                "DELETE FROM history_change_records WHERE sequence <= ?",
+                bindings: [.blob(sqliteUInt64(newFloor))]
+            )
         }
         let (retainedBytes, byteUnderflow) = untrimmedBytes
             .subtractingReportingOverflow(trim.deletedBytes)
@@ -127,14 +125,22 @@ internal enum HCRStore {
               retainedBytes <= limits.maxJournalBytes else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
-        config.journalBytes = retainedBytes
-        context.insert(HistoryChangeRecordRow(
-            sequence: payload.sequence,
-            changePositionRaw: payload.changePositionRaw,
-            changeKindRaw: payload.changeKind.rawValue,
-            affectedItemsBlob: blob,
-            createdAt: payload.createdAt
-        ))
+        try database.execute("""
+            UPDATE journal_config SET compactionFloorRaw = ?, journalBytes = ? WHERE key = ?
+            """, bindings: [
+                .blob(sqliteUInt64(trim.rows.last?.sequence ?? config.compactionFloorRaw)),
+                .blob(sqliteUInt64(retainedBytes)), .text(config.key)
+            ])
+        try database.execute("""
+            INSERT INTO history_change_records
+                (sequence, changePositionRaw, changeKindRaw, affectedItemsBlob, createdAt)
+            VALUES (?, ?, ?, ?, ?)
+            """, bindings: [
+                .blob(sqliteUInt64(payload.sequence)),
+                .blob(sqliteUInt64(payload.changePositionRaw)),
+                .integer(Int64(payload.changeKind.rawValue)), .blob(blob),
+                .real(payload.createdAt.timeIntervalSinceReferenceDate)
+            ])
     }
 }
 
@@ -144,12 +150,12 @@ private extension HCRStore {
         let deletedBytes: UInt64
     }
 
-    static func loadConfig(in context: ModelContext) throws -> JournalConfigRow {
-        var descriptor = FetchDescriptor<JournalConfigRow>()
-        descriptor.fetchLimit = 2
+    static func loadConfig(in database: SQLiteDatabase) throws -> JournalConfigRow {
         let rows: [JournalConfigRow]
         do {
-            rows = try context.fetch(descriptor)
+            rows = try HCRBootstrap.loadConfigs(in: database)
+        } catch let failure as HistoryFailure {
+            throw failure
         } catch {
             throw HistoryFailure.persistence(.transaction)
         }
@@ -166,7 +172,7 @@ private extension HCRStore {
         scansAge: Bool,
         now: Date,
         config: JournalConfigRow,
-        in context: ModelContext,
+        in database: SQLiteDatabase,
         limits: JournalLimits
     ) throws -> PrefixTrim {
         let readScope = HCRStore.prefixReadScope(
@@ -192,13 +198,11 @@ private extension HCRStore {
             fetchLimit = fullFetchLimit
             expectedFetchedCount = existingCount
         }
-        var descriptor = FetchDescriptor<HistoryChangeRecordRow>(
-            sortBy: [SortDescriptor(\.sequence)]
-        )
-        descriptor.fetchLimit = fetchLimit
         let rows: [HistoryChangeRecordRow]
         do {
-            rows = try context.fetch(descriptor)
+            rows = try HCRBootstrap.loadRecords(in: database, limit: fetchLimit)
+        } catch let failure as HistoryFailure {
+            throw failure
         } catch {
             throw HistoryFailure.persistence(.transaction)
         }

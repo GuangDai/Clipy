@@ -3,7 +3,6 @@
 /// Owning spec: `V2-03` §0.3 and the M1 total open order.
 import Foundation
 import HistoryCore
-import SwiftData
 
 internal enum HCRBootstrap {
     internal static let configKey = "change-journal"
@@ -12,49 +11,53 @@ internal enum HCRBootstrap {
     /// One-row probes used by earlier startup singleton classifiers. Any
     /// HCR fact proves that those earlier owners have already bootstrapped;
     /// their missing rows must therefore fail closed instead of being repaired.
-    internal static func tablesAreEmpty(in context: ModelContext) throws -> Bool {
-        var configDescriptor = FetchDescriptor<JournalConfigRow>()
-        configDescriptor.fetchLimit = 1
-        var recordDescriptor = FetchDescriptor<HistoryChangeRecordRow>()
-        recordDescriptor.fetchLimit = 1
+    internal static func tablesAreEmpty(in database: SQLiteDatabase) throws -> Bool {
         do {
-            let configs = try context.fetch(configDescriptor)
-            let records = try context.fetch(recordDescriptor)
-            return configs.isEmpty && records.isEmpty
+            let statement = try database.prepare("""
+                SELECT 1 FROM journal_config
+                UNION ALL SELECT 1 FROM history_change_records LIMIT 1
+                """)
+            defer { statement.finalize() }
+            return try !statement.step()
         } catch {
             throw HistoryFailure.persistence(.openStore)
         }
     }
 
+    /// Runs inside the Authority's startup write transaction, so bootstrap,
+    /// prefix deletion, and coverage-floor accounting roll back together.
     internal static func ensureReady(
-        in context: ModelContext,
+        in database: SQLiteDatabase,
         now: @autoclosure () -> Date,
-        historyLimits: HistoryLimits = .standard,
         journalLimits: JournalLimits = .standard,
         compactionInjection: (() throws -> Void)? = nil
     ) throws {
-        let position = try loadCurrentPosition(
-            in: context,
-            limits: historyLimits
-        )
-        let configs = try loadConfigs(in: context)
+        let position = try loadCurrentPosition(in: database)
+        let configs: [JournalConfigRow]
+        do {
+            configs = try loadConfigs(in: database)
+        } catch let failure as HistoryFailure {
+            throw failure
+        } catch {
+            throw HistoryFailure.persistence(.openStore)
+        }
         switch configs.count {
         case 0:
             // Only a never-used, empty History may create the singleton.
             // Clearing retained items does not erase committed history or
             // permit reconstruction of a missing journal coverage floor.
-            guard position == 0, try historyRowsAreEmpty(in: context) else {
+            guard position == 0, try historyRowsAreEmpty(in: database) else {
                 throw HistoryFailure.persistence(.invariantViolation)
             }
             do {
-                try context.transaction {
-                    context.insert(JournalConfigRow(
-                        key: configKey,
-                        compactionFloorRaw: 0,
-                        journalBytes: 0,
-                        configSchemaVersion: configSchemaVersion
-                    ))
-                }
+                try database.execute("""
+                    INSERT INTO journal_config
+                        (key, compactionFloorRaw, journalBytes, configSchemaVersion)
+                    VALUES (?, ?, ?, ?)
+                    """, bindings: [
+                        .text(configKey), .blob(sqliteUInt64(0)),
+                        .blob(sqliteUInt64(0)), .integer(Int64(configSchemaVersion))
+                    ])
             } catch {
                 throw HistoryFailure.persistence(.openStore)
             }
@@ -62,7 +65,7 @@ internal enum HCRBootstrap {
             try validateAndCompact(
                 config: configs[0],
                 position: position,
-                in: context,
+                in: database,
                 now: now(),
                 limits: journalLimits,
                 compactionInjection: compactionInjection
@@ -75,7 +78,7 @@ internal enum HCRBootstrap {
     private static func validateAndCompact(
         config: JournalConfigRow,
         position: UInt64,
-        in context: ModelContext,
+        in database: SQLiteDatabase,
         now: Date,
         limits: JournalLimits,
         compactionInjection: (() throws -> Void)?
@@ -83,7 +86,7 @@ internal enum HCRBootstrap {
         let validated = try validate(
             config: config,
             position: position,
-            in: context,
+            in: database,
             limits: limits
         )
         let deleteCount = try prefixDeleteCount(
@@ -114,22 +117,31 @@ internal enum HCRBootstrap {
         }
 
         do {
-            try context.transaction {
-                for row in deletedRows {
-                    context.delete(row)
-                }
-                try compactionInjection?()
-                config.compactionFloorRaw = newFloor
-                config.journalBytes = remainingBytes
-            }
+            try database.execute(
+                "DELETE FROM history_change_records WHERE sequence <= ?",
+                bindings: [.blob(sqliteUInt64(newFloor))]
+            )
+            try compactionInjection?()
+            try database.execute("""
+                UPDATE journal_config SET compactionFloorRaw = ?, journalBytes = ?
+                WHERE key = ?
+                """, bindings: [
+                    .blob(sqliteUInt64(newFloor)), .blob(sqliteUInt64(remainingBytes)),
+                    .text(config.key)
+                ])
         } catch {
             throw HistoryFailure.persistence(.transaction)
         }
 
         _ = try validate(
-            config: config,
+            config: JournalConfigRow(
+                key: config.key,
+                compactionFloorRaw: newFloor,
+                journalBytes: remainingBytes,
+                configSchemaVersion: config.configSchemaVersion
+            ),
             position: position,
-            in: context,
+            in: database,
             limits: limits
         )
     }
@@ -142,7 +154,7 @@ internal enum HCRBootstrap {
     private static func validate(
         config: JournalConfigRow,
         position: UInt64,
-        in context: ModelContext,
+        in database: SQLiteDatabase,
         limits: JournalLimits
     ) throws -> ValidatedSuffix {
         guard config.key == configKey else {
@@ -155,9 +167,6 @@ internal enum HCRBootstrap {
             throw HistoryFailure.persistence(.invariantViolation)
         }
 
-        var descriptor = FetchDescriptor<HistoryChangeRecordRow>(
-            sortBy: [SortDescriptor(\.sequence)]
-        )
         // J3 keeps count/bytes strictly capped inside each append transaction;
         // cadence 50 only schedules the age scan. The extra row distinguishes
         // an impossible overflow without an unbounded startup fetch.
@@ -166,10 +175,11 @@ internal enum HCRBootstrap {
         guard !fetchLimitOverflow else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
-        descriptor.fetchLimit = fetchLimit
         let rows: [HistoryChangeRecordRow]
         do {
-            rows = try context.fetch(descriptor)
+            rows = try loadRecords(in: database, limit: fetchLimit)
+        } catch let failure as HistoryFailure {
+            throw failure
         } catch {
             throw HistoryFailure.persistence(.openStore)
         }
@@ -242,51 +252,90 @@ internal enum HCRBootstrap {
     }
 
     private static func loadCurrentPosition(
-        in context: ModelContext,
-        limits: HistoryLimits
+        in database: SQLiteDatabase
     ) throws -> UInt64 {
-        var descriptor = FetchDescriptor<LastChangePositionRow>()
-        descriptor.fetchLimit = 2
-        let rows: [LastChangePositionRow]
+        var positions: [(key: String, rawValue: UInt64)] = []
         do {
-            rows = try context.fetch(descriptor)
+            let statement = try database.prepare(
+                "SELECT key, changePosition FROM history_state LIMIT 2"
+            )
+            defer { statement.finalize() }
+            while try statement.step() {
+                positions.append((
+                    key: try statement.text(at: 0),
+                    rawValue: try sqliteUInt64(statement.blob(at: 1))
+                ))
+            }
+        } catch let failure as HistoryFailure {
+            throw failure
         } catch {
             throw HistoryFailure.persistence(.openStore)
         }
-        guard rows.count == 1, rows[0].key == HistoryAuthority.positionSingletonKey else {
+        guard positions.count == 1,
+              positions[0].key == HistoryAuthority.positionSingletonKey else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
-        return try HistoryAuthority.decodePositionRow(rows[0], limits: limits)
-            .position.rawValue
+        return positions[0].rawValue
     }
 
-    private static func loadConfigs(
-        in context: ModelContext
+    internal static func loadConfigs(
+        in database: SQLiteDatabase
     ) throws -> [JournalConfigRow] {
-        var descriptor = FetchDescriptor<JournalConfigRow>()
-        descriptor.fetchLimit = 2
-        do {
-            return try context.fetch(descriptor)
-        } catch {
-            throw HistoryFailure.persistence(.openStore)
+        let statement = try database.prepare("""
+            SELECT key, compactionFloorRaw, journalBytes, configSchemaVersion
+            FROM journal_config LIMIT 2
+            """)
+        defer { statement.finalize() }
+        var rows: [JournalConfigRow] = []
+        while try statement.step() {
+            guard let version = UInt16(exactly: try statement.integer(at: 3)) else {
+                throw HistoryFailure.persistence(.corruptStoredValue)
+            }
+            rows.append(JournalConfigRow(
+                key: try statement.text(at: 0),
+                compactionFloorRaw: try sqliteUInt64(statement.blob(at: 1)),
+                journalBytes: try sqliteUInt64(statement.blob(at: 2)),
+                configSchemaVersion: version
+            ))
         }
+        return rows
+    }
+
+    internal static func loadRecords(
+        in database: SQLiteDatabase,
+        limit: Int
+    ) throws -> [HistoryChangeRecordRow] {
+        let statement = try database.prepare("""
+            SELECT sequence, changePositionRaw, changeKindRaw, affectedItemsBlob, createdAt
+            FROM history_change_records ORDER BY sequence LIMIT ?
+            """, bindings: [.integer(Int64(limit))])
+        defer { statement.finalize() }
+        var rows: [HistoryChangeRecordRow] = []
+        while try statement.step() {
+            guard let kind = Int16(exactly: try statement.integer(at: 2)) else {
+                throw HistoryFailure.persistence(.corruptStoredValue)
+            }
+            rows.append(HistoryChangeRecordRow(
+                sequence: try sqliteUInt64(statement.blob(at: 0)),
+                changePositionRaw: try sqliteUInt64(statement.blob(at: 1)),
+                changeKindRaw: kind,
+                affectedItemsBlob: try statement.blob(at: 3),
+                createdAt: Date(timeIntervalSinceReferenceDate: try statement.real(at: 4))
+            ))
+        }
+        return rows
     }
 
     private static func historyRowsAreEmpty(
-        in context: ModelContext
+        in database: SQLiteDatabase
     ) throws -> Bool {
-        var records = FetchDescriptor<HistoryChangeRecordRow>()
-        records.fetchLimit = 1
-        var items = FetchDescriptor<HistoryItemRow>()
-        items.propertiesToFetch = [\.id]
-        items.fetchLimit = 1
-        var byteRows = FetchDescriptor<RetainedBytesRow>()
-        byteRows.propertiesToFetch = [\.itemID]
-        byteRows.fetchLimit = 1
         do {
-            return try context.fetch(records).isEmpty
-                && context.fetch(items).isEmpty
-                && context.fetch(byteRows).isEmpty
+            let statement = try database.prepare("""
+                SELECT 1 FROM history_change_records
+                UNION ALL SELECT 1 FROM history_items LIMIT 1
+                """)
+            defer { statement.finalize() }
+            return try !statement.step()
         } catch {
             throw HistoryFailure.persistence(.openStore)
         }

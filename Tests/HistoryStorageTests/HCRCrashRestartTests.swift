@@ -2,10 +2,9 @@
 ///
 /// Child A seeds, child B receives a committed coalesce and then terminates by
 /// an intentional fatal signal, and child C fresh-opens through the public
-/// facade. Only after every child has terminated does this test inspect the V4
-/// HCR rows, config, and position with an assertion-only container.
+/// facade. Only after every child has terminated does this test inspect the SQLite
+/// HCR rows, config, and position with an independent read transaction.
 import Foundation
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
@@ -51,18 +50,11 @@ struct HCRCrashRestartTests {
             probeURL: probeURL
         )
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        let context = ModelContext(container)
-        let position = try #require(
-            context.fetch(FetchDescriptor<LastChangePositionRow>()).first
-        )
-        let config = try #require(
-            context.fetch(FetchDescriptor<JournalConfigRow>()).first
-        )
-        let records = try context.fetch(FetchDescriptor<HistoryChangeRecordRow>(
-            sortBy: [SortDescriptor(\.sequence)]
-        ))
-        #expect(position.rawValue == 3)
+        let database = try SQLiteDatabase(url: storeURL, readOnly: true)
+        let state = try database.readTransaction { try HCRTestSnapshot.read(in: database) }
+        let config = try #require(state.configs.first)
+        let records = state.records
+        #expect(state.position == 3)
         #expect(config.key == HCRBootstrap.configKey)
         #expect(config.compactionFloorRaw == 0)
         #expect(config.configSchemaVersion == HCRBootstrap.configSchemaVersion)

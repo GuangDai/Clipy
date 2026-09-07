@@ -1,12 +1,11 @@
 /// DC-25/X-HCR same-process owner-release/reopen proof.
 ///
 /// This test uses a real persistent StoreRoot and two sequential public
-/// `SwiftDataHistory.open` owners. It proves durable HCR reconstruction across
+/// `SQLiteHistory.open` owners. It proves durable HCR reconstruction across
 /// that bounded reopen journey; it is not a child-process, crash, or power-loss
 /// durability claim.
 import Foundation
 import HistoryCore
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
@@ -40,11 +39,11 @@ struct HCRRestartTests {
         defer { WSSupport.removeStore(storeURL) }
 
         // The seeding helper returns only immutable HistoryCore values. Its
-        // public facade, Authority actor, and ModelContainer owner leave scope
+        // public facade, Authority actor, and SQLite connection owner leave scope
         // before the second public open begins.
         let seeded = try await Self.seedFirstOwner(at: storeURL)
 
-        let reopened = try await SwiftDataHistory.open(configuration:
+        let reopened = try await SQLiteHistory.open(configuration:
             HistoryConfiguration(persistence: .persistent(storeURL: storeURL))
         )
         let reopenedSnapshot = try Self.snapshot(at: storeURL)
@@ -110,7 +109,7 @@ struct HCRRestartTests {
     private static func seedFirstOwner(
         at storeURL: URL
     ) async throws -> SeededReferences {
-        let history = try await SwiftDataHistory.open(configuration:
+        let history = try await SQLiteHistory.open(configuration:
             HistoryConfiguration(persistence: .persistent(storeURL: storeURL))
         )
         let first = try await capture(
@@ -141,7 +140,7 @@ struct HCRRestartTests {
     private static func capture(
         _ text: String,
         observedAt: Date,
-        in history: SwiftDataHistory,
+        in history: SQLiteHistory,
         expectedPosition: UInt64
     ) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.capture(
@@ -157,20 +156,11 @@ struct HCRRestartTests {
     }
 
     private static func snapshot(at storeURL: URL) throws -> Snapshot {
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        let context = ModelContext(container)
-        let positions = try context.fetch(FetchDescriptor<LastChangePositionRow>())
-        let configs = try context.fetch(FetchDescriptor<JournalConfigRow>())
-        guard positions.count == 1,
-              let position = positions.first,
-              configs.count == 1,
-              let config = configs.first else {
-            throw HistoryFailure.persistence(.invariantViolation)
-        }
-        let storedRows = try context.fetch(FetchDescriptor<HistoryChangeRecordRow>(
-            sortBy: [SortDescriptor(\.sequence)]
-        ))
-        let records = try storedRows.map { row in
+        let database = try SQLiteDatabase(url: storeURL, readOnly: true)
+        let state = try database.readTransaction { try HCRTestSnapshot.read(in: database) }
+        let config = try #require(state.configs.first)
+        #expect(state.configs.count == 1)
+        let records = try state.records.map { row in
             guard let kind = HistoryChangeKindRawV1(rawValue: row.changeKindRaw)
             else {
                 throw HistoryFailure.persistence(.corruptStoredValue)
@@ -187,7 +177,7 @@ struct HCRRestartTests {
             )
         }
         return Snapshot(
-            position: position.rawValue,
+            position: state.position,
             configKey: config.key,
             floor: config.compactionFloorRaw,
             journalBytes: config.journalBytes,

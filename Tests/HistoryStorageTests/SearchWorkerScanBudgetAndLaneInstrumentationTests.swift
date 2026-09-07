@@ -16,7 +16,7 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
     /// caller. Array order is the corpus's default order: observedAt
     /// decreases with index.
     private static func seedCorpus(
-        _ history: SwiftDataHistory,
+        _ history: SQLiteHistory,
         bodies: [String]
     ) async throws {
         for (index, body) in bodies.enumerated() {
@@ -29,7 +29,7 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
     }
 
     private static func captureProbe(
-        into history: SwiftDataHistory
+        into history: SQLiteHistory
     ) async -> (
         stream: AsyncStream<SearchDebugEvent>,
         continuation: AsyncStream<SearchDebugEvent>.Continuation,
@@ -47,7 +47,7 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
     }
 
     private static func finishCapture(
-        _ history: SwiftDataHistory,
+        _ history: SQLiteHistory,
         stream: AsyncStream<SearchDebugEvent>,
         continuation: AsyncStream<SearchDebugEvent>.Continuation
     ) async -> [SearchDebugEvent] {

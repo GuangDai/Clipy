@@ -28,7 +28,7 @@ struct SearchDebugInstrumentationTests {
         )
     }
 
-    @Test func exactSearchEmitsCorrelatedAuthorityAndWorkerStages() async throws {
+    @Test func exactSearchEmitsCorrelatedSQLiteBatchAndMatcherStages() async throws {
         let storeURL = WSSupport.tempStoreURL("search-debug-stages")
         defer { WSSupport.removeStore(storeURL) }
         let history = try await WSSupport.openHistory(storeURL: storeURL)
@@ -79,19 +79,8 @@ struct SearchDebugInstrumentationTests {
 
         let phases = Set(captured.map { "\($0.component).\($0.phase)" })
         let expectedPhases: Set<String> = [
-            "authority.entry",
-            "authority.request-admission",
-            "authority.context-create",
-            "authority.position-read",
-            "authority.corpus-fetch-begin",
-            "authority.corpus-fetch",
-            "authority.corpus-projection-begin",
-            "authority.corpus-projection-progress",
-            "authority.corpus-projection-complete",
-            "authority.corpus-sort-begin",
-            "authority.corpus-sort",
-            "authority.complete",
             "worker.entry",
+            "worker.sqlite-batch",
             "worker.exact-scan-begin",
             "worker.exact-scan-progress",
             "worker.exact-title-scan",
@@ -105,10 +94,11 @@ struct SearchDebugInstrumentationTests {
         #expect(expectedPhases.isSubset(of: phases))
 
         let fetch = try #require(captured.first {
-            $0.component == "authority" && $0.phase == "corpus-fetch"
+            $0.component == "worker" && $0.phase == "sqlite-batch"
         })
         #expect(fetch.rowsProcessed == 3)
         #expect(fetch.rowsTotal == 3)
+        #expect(fetch.sourceUTF8Bytes > 0)
 
         let bodyScan = try #require(captured.first {
             $0.component == "worker" && $0.phase == "exact-body-scan"

@@ -6,8 +6,8 @@ import HistoryStorage
 
 // MARK: - Store helpers
 
-/// A unique temp store URL (parent directory created upfront to suppress
-/// CoreData file-status diagnostics — same pattern as WS tests,
+/// A unique temp store URL with its parent directory created upfront,
+/// matching the WS tests in
 /// Tests/HistoryStorageTests/Support/WalkingSkeletonSupport.swift).
 func makeStoreURL(_ label: String) -> URL {
     let dir = FileManager.default.temporaryDirectory
@@ -27,8 +27,8 @@ func removeStoreDir(_ url: URL) {
 /// Opens the public facade over a persistent temp store with a generous
 /// initial retention cap (avoids eviction during population). 05 §2: the
 /// initial value is written to the durable singleton for a new store.
-func openStore(url: URL, maxUnpinned: Int = 5_000) async throws -> SwiftDataHistory {
-    try await SwiftDataHistory.open(
+func openStore(url: URL, maxUnpinned: Int = 5_000) async throws -> SQLiteHistory {
+    try await SQLiteHistory.open(
         configuration: HistoryConfiguration(
             persistence: .persistent(storeURL: url),
             initialMaximumUnpinnedItems: maxUnpinned
@@ -36,20 +36,14 @@ func openStore(url: URL, maxUnpinned: Int = 5_000) async throws -> SwiftDataHist
     )
 }
 
-/// Opens the public facade over an in-memory store.
-///
-/// §9 measures algorithmic complexity (rows/bytes scaling), not durability:
-/// Part V §2 states `.memory` changes the durability medium only and uses
-/// the same Authority, planners, codecs, and transaction path, so a workload
-/// that does not need to REOPEN durable state runs against the identical
-/// algorithm without paying per-commit fsync — population is the runner's
-/// dominant cost and is never part of a measurement. Only bullet 3 (index
-/// rebuild across a durable reopen) keeps `.persistent`; every fixture note
-/// records the medium.
-func openMemoryStore(maxUnpinned: Int = 5_000) async throws -> SwiftDataHistory {
-    try await SwiftDataHistory.open(
+/// Opens the public facade over a disposable on-disk SQLite/blob store.
+/// Both modes use production durability settings, including WAL commits.
+/// Untimed population remains outside the measurement; workloads needing
+/// independent reopen use an explicitly retained `.persistent` location.
+func openMemoryStore(maxUnpinned: Int = 5_000) async throws -> SQLiteHistory {
+    try await SQLiteHistory.open(
         configuration: HistoryConfiguration(
-            persistence: .memory,
+            persistence: .temporary,
             initialMaximumUnpinnedItems: maxUnpinned
         )
     )
@@ -90,7 +84,7 @@ func deterministicTextCapture(
 /// into an accidental mass retirement once wall-clock time drifts far enough
 /// past them.
 func captureItem(
-    _ history: SwiftDataHistory,
+    _ history: SQLiteHistory,
     index: Int,
     bodyBytes: Int = 64,
     baseTime: Double = 600_000_000
@@ -112,7 +106,7 @@ func captureItem(
 /// Performs one already-built capture so a workload can keep String/Data
 /// fixture construction outside its timed interval.
 func capturePreparedItem(
-    _ history: SwiftDataHistory,
+    _ history: SQLiteHistory,
     capture: ClipboardCapture
 ) async throws -> HistoryItemReference {
     let receipt = try await history.perform(.capture(capture))
@@ -132,10 +126,10 @@ func capturePreparedItem(
 /// one item's lineage every append differs from the current Effective bytes
 /// (a byte-identical repeat would be `.unchanged` under D4 — only
 /// effective-content-changing revisions append), and the fixed length keeps
-/// the item's `RetainedBytesRow` revision scalars (V2-02 §3.3b) deterministic
+/// the item's SQL retained-byte metadata revision scalars (V2-02 §3.3b) deterministic
 /// for R2/R3 budget arithmetic.
 func reviseItem(
-    _ history: SwiftDataHistory,
+    _ history: SQLiteHistory,
     reference: HistoryItemReference,
     itemIndex: Int,
     appendSequence: Int,
@@ -163,7 +157,7 @@ func reviseItem(
 
 /// Populates a store with `count` distinct unpinned items (untimed).
 func populateItems(
-    _ history: SwiftDataHistory,
+    _ history: SQLiteHistory,
     count: Int,
     bodyBytes: Int = 64,
     baseTime: Double = 600_000_000
@@ -180,7 +174,7 @@ func populateItems(
 
 /// Populates a store and returns the first item's reference for later queries.
 func populateAndReturnFirstRef(
-    _ history: SwiftDataHistory,
+    _ history: SQLiteHistory,
     count: Int,
     bodyBytes: Int = 64
 ) async throws -> HistoryItemReference {
@@ -217,4 +211,3 @@ func failureFixture(key: String, bullet: String, error: Error) -> WorkloadFixtur
         note: "workload threw \(error)"
     )
 }
-

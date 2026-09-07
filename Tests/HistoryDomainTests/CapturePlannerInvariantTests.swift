@@ -103,12 +103,37 @@ internal func preparedCapture(
 }
 
 internal func captureFacts(
+    incoming: CanonicalContent,
     hintedItem: HistoryItemState? = nil,
     candidates: [HistoryItemState],
     retained: [HistoryItemState]? = nil,
     additionalSummaries: [RetainedItemSummary] = [],
     candidateID: HistoryItemID = capturePlannerID(250)
-) -> IngestFacts {
+) throws -> IngestFacts {
+    var confirmedMatch: CaptureMatch?
+    if let hintedItem {
+        confirmedMatch = confirmLineageCapture(
+            incoming: incoming,
+            effective: try effectiveContent(of: hintedItem),
+            id: hintedItem.id,
+            occurrence: hintedItem.occurrence,
+            pinOrdinal: hintedItem.pinOrdinal
+        )
+    }
+    if confirmedMatch == nil {
+        var best: CanonicalCaptureMatch?
+        for item in candidates {
+            guard let match = confirmCanonicalCapture(
+                incoming: incoming,
+                existing: item.canonical,
+                id: item.id,
+                occurrence: item.occurrence,
+                pinOrdinal: item.pinOrdinal
+            ) else { continue }
+            best = best.map { preferredCanonicalCaptureMatch($0, match) } ?? match
+        }
+        confirmedMatch = best?.value
+    }
     let retainedItems = retained ?? candidates
     let summaries = retainedItems.map(captureSummary) + additionalSummaries
     let unpinned = summaries.filter { $0.pinOrdinal == nil }.sorted {
@@ -116,8 +141,7 @@ internal func captureFacts(
         return $0.id < $1.id
     }
     return IngestFacts(
-        hintedItem: hintedItem,
-        candidates: CompleteDedupCandidates(items: candidates),
+        confirmedMatch: confirmedMatch,
         candidateIDExists: summaries.contains { $0.id == candidateID },
         retention: CaptureRetentionFacts(
             retainedCount: summaries.count,
@@ -134,7 +158,7 @@ internal func capturePlan(
 ) throws -> MutationPlan {
     let result = try planCapture(
         preparedCapture(canonical: incoming, observedAt: observedAt),
-        facts: captureFacts(candidates: candidates),
+        facts: captureFacts(incoming: incoming, candidates: candidates),
         retention: RetentionPolicy(maximumUnpinnedItems: 100),
         hardMaximumRetainedItems: 100
     )
@@ -242,7 +266,7 @@ internal func coalescedWinner(
             observedAt: 200,
             candidateID: candidateID
         ),
-        facts: captureFacts(candidates: [existing]),
+        facts: captureFacts(incoming: incoming, candidates: [existing]),
         retention: RetentionPolicy(maximumUnpinnedItems: 10),
         hardMaximumRetainedItems: 10
     )
@@ -280,6 +304,7 @@ internal func coalescedWinner(
                 candidateID: occupiedID
             ),
             facts: captureFacts(
+                incoming: incoming,
                 candidates: [],
                 retained: [retained],
                 candidateID: occupiedID
@@ -313,6 +338,7 @@ internal func coalescedWinner(
             candidateID: occupiedCandidate.id
         ),
         facts: captureFacts(
+            incoming: canonical,
             candidates: [existing],
             retained: [existing, occupiedCandidate],
             candidateID: occupiedCandidate.id
@@ -349,7 +375,7 @@ internal func coalescedWinner(
             ),
             observedAt: observedAt
         ),
-        facts: captureFacts(candidates: [], retained: []),
+        facts: captureFacts(incoming: canonical, candidates: [], retained: []),
         retention: RetentionPolicy(maximumUnpinnedItems: 1),
         hardMaximumRetainedItems: 1
     )
@@ -406,6 +432,7 @@ internal func coalescedWinner(
             hint: hinted.id
         ),
         facts: captureFacts(
+            incoming: incoming,
             hintedItem: hinted,
             candidates: [canonicalCandidate],
             retained: [hinted, canonicalCandidate]
@@ -450,6 +477,7 @@ internal func coalescedWinner(
             hint: hinted.id
         ),
         facts: captureFacts(
+            incoming: incoming,
             hintedItem: hinted,
             candidates: [confirmed],
             retained: [hinted, confirmed]
@@ -471,7 +499,7 @@ internal func coalescedWinner(
     #expect(mutatedID != hinted.id)
 }
 
-@Test func corruptHintedLineageIsRejectedBeforeCanonicalFallback() throws {
+@Test func effectiveContentRejectsMissingActiveRevisionBeforeHintConfirmation() throws {
     let canonical = try captureCanonical([
         ("public.utf8-plain-text", "text", 1),
     ])
@@ -491,20 +519,7 @@ internal func coalescedWinner(
     )
 
     #expect(throws: DomainRejection.corruptLineage) {
-        try planCapture(
-            preparedCapture(
-                canonical: canonical,
-                observedAt: 200,
-                hint: corruptHint.id
-            ),
-            facts: captureFacts(
-                hintedItem: corruptHint,
-                candidates: [],
-                retained: [corruptHint]
-            ),
-            retention: RetentionPolicy(maximumUnpinnedItems: 10),
-            hardMaximumRetainedItems: 10
-        )
+        try effectiveContent(of: corruptHint)
     }
 }
 
@@ -533,4 +548,49 @@ internal func coalescedWinner(
             candidates: [newerSuperset, exactItem]
         ) == exactItem.id
     )
+}
+
+@Test func canonicalContainmentDoesNotAuthorizePartialLineageMatch() throws {
+    let incoming = try captureCanonical([("public.utf8-plain-text", "text", 1)])
+    let rich = try captureCanonical([
+        ("public.html", "<p>text</p>", 2),
+        ("public.utf8-plain-text", "text", 99),
+    ])
+    let item = captureItem(
+        id: capturePlannerID(7), canonical: rich, lastCopiedAt: 100,
+        count: 9, pinOrdinal: PinOrdinal(rawValue: 2)
+    )
+    let canonicalMatch = try #require(confirmCanonicalCapture(
+        incoming: incoming, existing: rich, id: item.id,
+        occurrence: item.occurrence, pinOrdinal: item.pinOrdinal
+    ))
+    #expect(canonicalMatch.extraRepresentationCount == 1)
+    #expect(canonicalMatch.value.id == item.id)
+    #expect(canonicalMatch.value.occurrence == item.occurrence)
+    #expect(canonicalMatch.value.pinOrdinal == item.pinOrdinal)
+    #expect(confirmLineageCapture(
+        incoming: incoming,
+        effective: EffectiveContent(representations: rich.representations.map(\.content)),
+        id: item.id, occurrence: item.occurrence, pinOrdinal: item.pinOrdinal
+    ) == nil)
+}
+
+@Test(arguments: [false, true])
+func lineageConfirmationUsesRepresentationSetsAcrossUnicodeOrder(_ decomposedIncoming: Bool) throws {
+    let incomingType = decomposedIncoming ? "e\u{301}" : "\u{e9}"
+    let existingType = decomposedIncoming ? "\u{e9}" : "e\u{301}"
+    let incoming = try captureCanonical([(incomingType, "accent", 1), ("f", "other", 2)])
+    let existing = try captureCanonical([(existingType, "accent", 3), ("f", "other", 4)])
+    let item = captureItem(
+        id: capturePlannerID(7), canonical: existing, lastCopiedAt: 100,
+        count: 9, pinOrdinal: PinOrdinal(rawValue: 2)
+    )
+    let match = try #require(confirmLineageCapture(
+        incoming: incoming,
+        effective: EffectiveContent(representations: existing.representations.map(\.content)),
+        id: item.id, occurrence: item.occurrence, pinOrdinal: item.pinOrdinal
+    ))
+    #expect(match.id == item.id)
+    #expect(match.occurrence == item.occurrence)
+    #expect(match.pinOrdinal == item.pinOrdinal)
 }

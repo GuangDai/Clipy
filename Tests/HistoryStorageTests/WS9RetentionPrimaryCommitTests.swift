@@ -12,7 +12,7 @@
 /// clauses — the `.inserted` receipts at Change Positions 1–3, the
 /// once-per-commit position advance, the retired ID's absence, and the two
 /// surviving unpinned rows as seen through an INDEPENDENT second
-/// `ModelContainer` over the same on-disk store (see `WSSupport`).
+/// `SQLite connection` over the same on-disk store (see `WSSupport`).
 ///
 /// PLANNER-SEAM CAPACITY PROOF (06 §8 WS9's own note): the fixed 5,000-item
 /// `HistoryLimits.standard` hard retained-item bound makes a full end-to-end
@@ -85,7 +85,7 @@ struct WS9RetentionPrimaryCommitTests {
     // exactly satisfied, so both rows and the position singleton at 2 are
     // durable before the third capture (the retirement below belongs to the
     // third commit, not to an earlier one).
-    let midway = try WSSupport.makeContainer(storeURL: storeURL)
+    let midway = try WSSupport.makeDatabase(storeURL: storeURL)
     #expect(try WSSupport.fetchRows(midway).count == 2)
     #expect(try WSSupport.fetchPosition(midway).rawValue == 2)
 
@@ -108,7 +108,7 @@ struct WS9RetentionPrimaryCommitTests {
     #expect(thirdCommit.hasDestructiveRetentionEffects)
 
     // Storage side, through the INDEPENDENT container.
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
     // WS9: "leaving two unpinned items" — the third commit retired exactly
     // one item.
@@ -129,7 +129,7 @@ struct WS9RetentionPrimaryCommitTests {
         #expect(row.contentVersionRaw == 1)
         #expect(row.copyCount == 1)
         let expectedText = try #require(expectedTextByID[row.id])
-        let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
+        let canonical = try WSSupport.fetchCanonical(itemID: row.id, in: container)
         #expect(canonical.representations.map(\.content.bytes) == [Data(expectedText.utf8)])
     }
 
@@ -158,8 +158,7 @@ struct WS9RetentionPrimaryCommitTests {
         )
     }
     let facts = IngestFacts(
-        hintedItem: nil,
-        candidates: CompleteDedupCandidates(items: []),
+        confirmedMatch: nil,
         candidateIDExists: false,
         retention: CaptureRetentionFacts(
             retainedCount: pinnedSummaries.count,

@@ -1,121 +1,80 @@
-/// Usage consumes retained scalar projections, not content lineage. Poisoned
-/// blobs distinguish that contract from a full detail scan; they do not prove
-/// that SwiftData avoids physically faulting external-storage attributes.
+/// Usage reads the committed aggregate only. Missing content files must not
+/// trigger lineage reads, while impossible aggregate facts remain failures.
 import Foundation
 import HistoryCore
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
-private enum UsageFixtureDamage: Sendable, Equatable {
-    case canonicalBlob
-    case revisionBlob
-    case negativeCanonicalBytes
-    case overLimitCanonicalBytes
-    case negativeRevisionBytes
-    case bytesWithoutRevisions
-    case unknownBytesVersion
-    case missingProjection
-    case orphanProjectionID
-    case invalidPinOrdinal
-}
-
 struct HistoryUsageReadValidationTests {
-    @Test(arguments: [UsageFixtureDamage.canonicalBlob, .revisionBlob])
-    fileprivate func usageDoesNotDecodeContentBlobs(_ damage: UsageFixtureDamage) async throws {
-        let (history, reference, position) = try await makeFixture()
-        try await history.authority.damageUsageFixture(damage)
-
-        let usage = try await history.usage()
-        #expect(usage.position == position)
-        #expect(usage.itemCount == 1)
-        #expect(usage.pinnedItemCount == 0)
-        #expect(usage.canonicalBytes == 5)
-        #expect(usage.revisionBytes == 0)
-        #expect(usage.totalContentBytes == 5)
-        #expect(try await history.usage() == usage)
-        #expect(try await history.authority.currentPosition() == position)
-
-        // The damage is real: successful statistics do not declare the
-        // content healthy. The ordinary lineage-reading path still fails.
+    @Test(arguments: [false, true])
+    func usageDoesNotReadCanonicalOrRevisionPayloads(damageRevision: Bool) async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let original = try await RetainedBytesTestSupport.capture("alpha", in: history)
+        let item = try await RetainedBytesTestSupport.revise(original, text: "beta", in: history)
+        let before = try await history.usage()
+        try await history.authority.withTestDatabase { authority in
+            try authority.database.execute("""
+                UPDATE representations SET inlineBytes=NULL,blobID=?
+                WHERE contentID IN (SELECT id FROM contents WHERE itemID=? AND revisionOrdinal=?)
+                """, bindings: [.text(UUID().uuidString), .text(item.id.rawValue.uuidString),
+                                 .integer(damageRevision ? 1 : 0)])
+        }
+        #expect(try await history.usage() == before)
+        #expect(before.itemCount == 1)
+        #expect(before.pinnedItemCount == 0)
+        #expect(before.canonicalBytes == 5)
+        #expect(before.revisionBytes == 4)
+        #expect(before.totalContentBytes == 9)
         await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
-            try await history.details(for: reference.id)
+            try await history.details(for: item.id)
         }
+        #expect(try await history.usage() == before)
     }
 
-    @Test(arguments: [
-        UsageFixtureDamage.negativeCanonicalBytes,
-        .overLimitCanonicalBytes,
-        .negativeRevisionBytes,
-        .bytesWithoutRevisions,
-        .unknownBytesVersion,
-        .missingProjection,
-        .orphanProjectionID,
-        .invalidPinOrdinal,
-    ])
-    fileprivate func damagedUsageFactsNeverBecomeNormalTotals(_ damage: UsageFixtureDamage) async throws {
-        let (history, _, position) = try await makeFixture()
-        try await history.authority.damageUsageFixture(damage)
-        let failure: HistoryFailure = damage == .invalidPinOrdinal
-            ? .persistence(.corruptStoredValue)
-            : .persistence(.invariantViolation)
+    enum Damage: CaseIterable, Sendable {
+        case missingState, tooManyPinned, overflowingBytes, wrongScalarType
+        case itemWithoutCanonicalBytes, revisionsWithoutItems
 
-        await #expect(throws: failure) { try await history.usage() }
-        #expect(try await history.authority.currentPosition() == position)
-    }
-
-    private func makeFixture() async throws -> (SwiftDataHistory, HistoryItemReference, ChangePosition) {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
-        )
-        let receipt = try await history.perform(.capture(WSSupport.textCapture(
-            "alpha", observedAt: Date(timeIntervalSinceReferenceDate: 700_060_000)
-        )))
-        guard case let .committed(commit) = receipt,
-              case let .inserted(reference) = commit.outcome else {
-            Issue.record("Expected the five-byte usage fixture to be inserted")
-            throw HistoryFailure.persistence(.invariantViolation)
-        }
-        return (history, reference, commit.position)
-    }
-}
-
-private extension HistoryAuthority {
-    /// Test-only corruption of the real, already-open in-memory store. The
-    /// writable context stays inside its Authority, like the existing
-    /// SignatureIndexAuthoritativeCoverageTests owner-local arrangement.
-    func damageUsageFixture(_ damage: UsageFixtureDamage) throws {
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
-        let items = try context.fetch(FetchDescriptor<HistoryItemRow>())
-        let projections = try context.fetch(FetchDescriptor<RetainedBytesRow>())
-        let item = try #require(items.first)
-        let projection = try #require(projections.first)
-        try context.transaction {
-            switch damage {
-            case .canonicalBlob:
-                item.canonicalBlob = Data([0x01])
-            case .revisionBlob:
-                item.revisionStateBlob = Data([0x01])
-            case .negativeCanonicalBytes:
-                projection.canonicalBytes = -1
-            case .overLimitCanonicalBytes:
-                projection.canonicalBytes = Int.max
-            case .negativeRevisionBytes:
-                projection.revisionBytes = -1
-            case .bytesWithoutRevisions:
-                projection.revisionBytes = 1
-            case .unknownBytesVersion:
-                projection.bytesSchemaVersion = UInt16.max
-            case .missingProjection:
-                context.delete(projection)
-            case .orphanProjectionID:
-                // Counts remain equal. A count-only join would wrongly return
-                // five bytes for a projection belonging to no retained item.
-                projection.itemID = UUID()
-            case .invalidPinOrdinal:
-                item.pinOrdinal = -1
+        var sql: String {
+            switch self {
+            case .missingState: "DELETE FROM history_state"
+            case .tooManyPinned: "UPDATE history_state SET pinnedItemCount=2"
+            case .overflowingBytes: "UPDATE history_state SET canonicalBytes=9223372036854775807,revisionBytes=1"
+            case .wrongScalarType: "UPDATE history_state SET canonicalBytes='not an integer'"
+            case .itemWithoutCanonicalBytes: "UPDATE history_state SET canonicalBytes=0"
+            case .revisionsWithoutItems:
+                "UPDATE history_state SET retainedItemCount=0,canonicalBytes=0,revisionBytes=1"
             }
         }
+    }
+
+    @Test(arguments: Damage.allCases)
+    func impossibleAggregateIsNotPublishedAsNormalUsage(_ damage: Damage) async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        _ = try await RetainedBytesTestSupport.capture("alpha", in: history)
+        try await history.authority.withTestDatabase { authority in
+            try authority.database.execute(damage.sql)
+        }
+        let failure: HistoryFailure = damage == .wrongScalarType
+            ? .persistence(.corruptStoredValue) : .persistence(.invariantViolation)
+        await #expect(throws: failure) { try await history.usage() }
+        // Repeating the read must not repair the bad aggregate into defaults.
+        await #expect(throws: failure) { try await history.usage() }
+    }
+
+    @Test(arguments: ["retainedItemCount", "pinnedItemCount", "canonicalBytes", "revisionBytes"])
+    func negativeAggregateIsRejectedByTheActualSQLiteConstraint(_ column: String) async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        _ = try await RetainedBytesTestSupport.capture("alpha", in: history)
+        let before = try await history.usage()
+        do {
+            try await history.authority.withTestDatabase { authority in
+                try authority.database.execute("UPDATE history_state SET \(column)=-1")
+            }
+            Issue.record("Negative aggregate must fail its CHECK constraint")
+        } catch let failure as SQLiteFailure {
+            #expect(failure.isConstraint)
+        }
+        #expect(try await history.usage() == before)
     }
 }

@@ -10,8 +10,8 @@ struct RecentBoundaryTieFetchTests {
     /// older dates are materialized to determine a single page (05 §14.1).
     @Test(arguments: [false, true])
     func boundaryTiesKeepFetchBounded(withNewestSingleton: Bool) async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         var captured: [(id: HistoryItemID, date: Int)] = []
         let dates = Array(repeating: 1, count: 6)

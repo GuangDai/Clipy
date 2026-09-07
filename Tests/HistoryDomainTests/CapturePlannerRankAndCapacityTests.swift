@@ -164,7 +164,7 @@ func equivalentTypeSpellingsKeepExactCanonicalRank(_ useDecomposedIncoming: Bool
             observedAt: 200,
             source: "older.source"
         ),
-        facts: captureFacts(candidates: [winner]),
+        facts: captureFacts(incoming: incoming, candidates: [winner]),
         retention: RetentionPolicy(maximumUnpinnedItems: 10),
         hardMaximumRetainedItems: 10
     )
@@ -195,7 +195,7 @@ func equivalentTypeSpellingsKeepExactCanonicalRank(_ useDecomposedIncoming: Bool
     #expect(throws: DomainRejection.capacityExceeded(.copyCount)) {
         try planCapture(
             preparedCapture(canonical: incoming, observedAt: 200),
-            facts: captureFacts(candidates: [saturated]),
+            facts: captureFacts(incoming: incoming, candidates: [saturated]),
             retention: RetentionPolicy(maximumUnpinnedItems: 10),
             hardMaximumRetainedItems: 10
         )
@@ -221,7 +221,7 @@ func equivalentTypeSpellingsKeepExactCanonicalRank(_ useDecomposedIncoming: Bool
             observedAt: 200,
             candidateID: candidateID
         ),
-        facts: captureFacts(candidates: [], retained: [eligible]),
+        facts: captureFacts(incoming: incoming, candidates: [], retained: [eligible]),
         retention: RetentionPolicy(maximumUnpinnedItems: 1),
         hardMaximumRetainedItems: 1
     )
@@ -256,7 +256,7 @@ func equivalentTypeSpellingsKeepExactCanonicalRank(_ useDecomposedIncoming: Bool
                 observedAt: 200,
                 candidateID: candidateID
             ),
-            facts: captureFacts(candidates: [], retained: [pinned]),
+            facts: captureFacts(incoming: incoming, candidates: [], retained: [pinned]),
             retention: RetentionPolicy(maximumUnpinnedItems: 1),
             hardMaximumRetainedItems: 1
         )
@@ -274,7 +274,7 @@ func equivalentTypeSpellingsKeepExactCanonicalRank(_ useDecomposedIncoming: Bool
     )
     let result = try planCapture(
         preparedCapture(canonical: incoming, observedAt: 200),
-        facts: captureFacts(candidates: [winner], retained: [winner]),
+        facts: captureFacts(incoming: incoming, candidates: [winner], retained: [winner]),
         retention: RetentionPolicy(maximumUnpinnedItems: 1),
         hardMaximumRetainedItems: 1
     )
@@ -319,6 +319,7 @@ func equivalentTypeSpellingsKeepExactCanonicalRank(_ useDecomposedIncoming: Bool
     let result = try planCapture(
         preparedCapture(canonical: incoming, observedAt: 400),
         facts: captureFacts(
+            incoming: incoming,
             candidates: [primary],
             retained: [primary, nextOldest, newest, pinnedOldest]
         ),

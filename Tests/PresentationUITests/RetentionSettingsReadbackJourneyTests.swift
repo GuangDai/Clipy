@@ -3,7 +3,7 @@
 /// and byte values, and the resulting action crosses the production
 /// `HistoryViewState` intent seam. Storage durability and `.unchanged`
 /// semantics remain covered by `RetentionConfigurationReadTests` using the
-/// real `SwiftDataHistory`; this suite owns Presentation consumption only.
+/// real `SQLiteHistory`; this suite owns Presentation consumption only.
 import HistoryCore
 import Testing
 @testable import PresentationUI

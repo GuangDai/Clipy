@@ -38,7 +38,7 @@ struct UTF16RevisionJourneyTests {
     private func revise(
         _ item: HistoryItemReference,
         intent: RevisionIntent,
-        in history: SwiftDataHistory
+        in history: SQLiteHistory
     ) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.revise(RevisionRequest(
             itemID: item.id, expected: item.contentVersion, intent: intent
@@ -66,7 +66,7 @@ struct UTF16RevisionJourneyTests {
         stage: Int,
         previousText: String?,
         fixture: Fixture,
-        history: SwiftDataHistory
+        history: SQLiteHistory
     ) async throws -> HistoryDetails {
         let details = try await history.details(for: item.id)
         #expect(details.item == item)
@@ -112,8 +112,8 @@ struct UTF16RevisionJourneyTests {
     @Test("encoded edits update every read surface and retain canonical and prior revision bytes",
           arguments: UTF16RevisionJourneyTests.fixtures)
     func replacementAndRevertPreserveUTF16Lineage(_ fixture: Fixture) async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let capture = ClipboardCapture(
             representations: [CapturedRepresentation(

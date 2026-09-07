@@ -2,7 +2,6 @@
 /// Owning spec: `V2-05` §4.1/§4.2/§4.5 and roadmap X.4/GW3.
 import Foundation
 import HistoryCore
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
@@ -18,7 +17,7 @@ struct GatewayCurrentStateValidationTests {
         timeIntervalSinceReferenceDate: 800_100_000
     )
 
-    private enum Damage: CaseIterable {
+    private enum Damage: CaseIterable, Sendable {
         case connectionVersion
         case connectionKindRaw
         case connectionStatusRaw
@@ -46,19 +45,13 @@ struct GatewayCurrentStateValidationTests {
         }
     }
 
-    private static func makeContext() throws -> ModelContext {
-        let schema = historySchema
-        let container = try ModelContainer(
-            for: schema,
-            configurations: [ModelConfiguration(
-                schema: schema,
-                isStoredInMemoryOnly: true,
-                cloudKitDatabase: .none
-            )]
-        )
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
-        return context
+    private static func makeAuthority() throws -> HistoryAuthority {
+        try HistoryAuthority(storeLocation: HistoryStoreLocation(persistence: .temporary))
+    }
+
+    private static func resetFixture(in context: SQLiteDatabase) throws {
+        try context.execute("DELETE FROM grants")
+        try context.execute("DELETE FROM connections")
     }
 
     @discardableResult
@@ -67,8 +60,8 @@ struct GatewayCurrentStateValidationTests {
         kind: ConnectionEnrollKind = .appIntents,
         status: ConnectionStatus = .active,
         revokedAt: Date? = nil,
-        in context: ModelContext
-    ) -> ConnectionRow {
+        in context: SQLiteDatabase
+    ) throws -> ConnectionRow {
         let row = ConnectionRow(
             id: id,
             displayNameRaw: id == appIntentsID
@@ -80,7 +73,16 @@ struct GatewayCurrentStateValidationTests {
             revokedAt: revokedAt,
             configSchemaVersion: HistoryAuthority.gatewayConfigSchemaVersion
         )
-        context.insert(row)
+        try context.execute("""
+            INSERT INTO connections (id, displayNameRaw, enrollKindRaw, statusRaw, enrolledAt, revokedAt, configSchemaVersion)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, bindings: [
+                .text(row.id.uuidString), .text(row.displayNameRaw),
+                .integer(Int64(row.enrollKindRaw)), .integer(Int64(row.statusRaw)),
+                .real(row.enrolledAt.timeIntervalSinceReferenceDate),
+                row.revokedAt.map { .real($0.timeIntervalSinceReferenceDate) } ?? .null,
+                .integer(Int64(row.configSchemaVersion))
+            ])
         return row
     }
 
@@ -90,8 +92,8 @@ struct GatewayCurrentStateValidationTests {
         capability: ExternalCapability = .browse,
         grantedAt: Date = Date(timeIntervalSinceReferenceDate: 800_100_010),
         revokedAt: Date? = nil,
-        in context: ModelContext
-    ) -> GrantRow {
+        in context: SQLiteDatabase
+    ) throws -> GrantRow {
         let row = GrantRow(
             grantKey: GatewayAdministration.canonicalGrantKey(
                 connectionID: connectionID,
@@ -103,7 +105,15 @@ struct GatewayCurrentStateValidationTests {
             revokedAt: revokedAt,
             configSchemaVersion: HistoryAuthority.gatewayConfigSchemaVersion
         )
-        context.insert(row)
+        try context.execute("""
+            INSERT INTO grants (grantKey, connectionIDRaw, capabilityRaw, grantedAt, revokedAt, configSchemaVersion)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """, bindings: [
+                .text(row.grantKey), .text(row.connectionIDRaw.uuidString), .integer(Int64(row.capabilityRaw)),
+                .real(row.grantedAt.timeIntervalSinceReferenceDate),
+                row.revokedAt.map { .real($0.timeIntervalSinceReferenceDate) } ?? .null,
+                .integer(Int64(row.configSchemaVersion))
+            ])
         return row
     }
 
@@ -142,235 +152,266 @@ struct GatewayCurrentStateValidationTests {
     }
 
     @Test("valid rows produce bounded deterministic immutable projections")
-    func validRowsProjectDeterministically() throws {
-        let context = try Self.makeContext()
-        Self.insertConnection(
-            id: Self.localAutomationID,
-            kind: .localAutomation,
-            in: context
-        )
-        Self.insertConnection(in: context)
-        Self.insertGrant(
-            connectionID: Self.localAutomationID,
-            capability: .organize,
-            in: context
-        )
-        Self.insertGrant(capability: .manage, in: context)
-        try context.save()
-
-        let state = try GatewayAdministration.loadCurrentState(
-            appIntentsConnectionID: Self.appIntentsID,
-            in: context,
-            limits: Self.makeLimits(
-                maximumConnections: 2,
-                maximumGrantRowsPerConnection: 1
+    func validRowsProjectDeterministically() async throws {
+        let authority = try Self.makeAuthority()
+        try await authority.withTestDatabase { owner in
+            let context = owner.database
+            try context.writeTransaction { try SQLiteHistorySchema.create(in: context) }
+            try Self.resetFixture(in: context)
+            try Self.insertConnection(
+                id: Self.localAutomationID,
+                kind: .localAutomation,
+                in: context
             )
-        )
+            try Self.insertConnection(in: context)
+            try Self.insertGrant(
+                connectionID: Self.localAutomationID,
+                capability: .organize,
+                in: context
+            )
+            try Self.insertGrant(capability: .manage, in: context)
 
-        #expect(state.connections.map(\.id.rawValue) == [
-            Self.appIntentsID,
-            Self.localAutomationID,
-        ])
-        #expect(state.connections.map(\.enrollKind) == [
-            .appIntents,
-            .localAutomation,
-        ])
-        #expect(state.grants.map(\.connectionID.rawValue) == [
-            Self.appIntentsID,
-            Self.localAutomationID,
-        ])
-        #expect(state.grants.map(\.capability) == [.manage, .organize])
+            let state = try GatewayAdministration.loadCurrentState(
+                appIntentsConnectionID: Self.appIntentsID,
+                in: context,
+                limits: Self.makeLimits(
+                    maximumConnections: 2,
+                    maximumGrantRowsPerConnection: 1
+                )
+            )
+
+            #expect(state.connections.map(\.id.rawValue) == [
+                Self.appIntentsID,
+                Self.localAutomationID,
+            ])
+            #expect(state.connections.map(\.enrollKind) == [
+                .appIntents,
+                .localAutomation,
+            ])
+            #expect(state.grants.map(\.connectionID.rawValue) == [
+                Self.appIntentsID,
+                Self.localAutomationID,
+            ])
+            #expect(state.grants.map(\.capability) == [.manage, .organize])
+        }
     }
 
     @Test("the durable default App Intents identity may be coherently revoked")
-    func revokedDefaultIdentityIsValidCurrentState() throws {
-        let context = try Self.makeContext()
-        let revokedAt = Date(timeIntervalSinceReferenceDate: 800_100_020)
-        Self.insertConnection(
-            status: .revoked,
-            revokedAt: revokedAt,
-            in: context
-        )
-        Self.insertGrant(revokedAt: revokedAt, in: context)
-        try context.save()
+    func revokedDefaultIdentityIsValidCurrentState() async throws {
+        let authority = try Self.makeAuthority()
+        try await authority.withTestDatabase { owner in
+            let context = owner.database
+            try context.writeTransaction { try SQLiteHistorySchema.create(in: context) }
+            try Self.resetFixture(in: context)
+            let revokedAt = Date(timeIntervalSinceReferenceDate: 800_100_020)
+            try Self.insertConnection(
+                status: .revoked,
+                revokedAt: revokedAt,
+                in: context
+            )
+            try Self.insertGrant(revokedAt: revokedAt, in: context)
 
-        let state = try GatewayAdministration.loadCurrentState(
-            appIntentsConnectionID: Self.appIntentsID,
-            in: context
-        )
+            let state = try GatewayAdministration.loadCurrentState(
+                appIntentsConnectionID: Self.appIntentsID,
+                in: context
+            )
 
-        #expect(state.connections.count == 1)
-        #expect(state.connections[0].status == .revoked)
-        #expect(state.connections[0].revokedAt == revokedAt)
-        #expect(state.grants[0].revokedAt == revokedAt)
+            #expect(state.connections.count == 1)
+            #expect(state.connections[0].status == .revoked)
+            #expect(state.connections[0].revokedAt == revokedAt)
+            #expect(state.grants[0].revokedAt == revokedAt)
+        }
     }
 
     @Test("connection and grant raw values, versions, and timestamps fail closed")
-    func primitiveStoredValuesFailClosed() throws {
-        for damage in Damage.allCases {
-            let context = try Self.makeContext()
-            let connection = Self.insertConnection(in: context)
-            let grant = Self.insertGrant(in: context)
+    func primitiveStoredValuesFailClosed() async throws {
+        let authority = try Self.makeAuthority()
+        try await authority.withTestDatabase { owner in
+            let context = owner.database
+            try context.writeTransaction { try SQLiteHistorySchema.create(in: context) }
+            for damage in Damage.allCases {
+                try Self.resetFixture(in: context)
+                var connection = try Self.insertConnection(in: context)
+                var grant = try Self.insertGrant(in: context)
 
-            switch damage {
-            case .connectionVersion:
-                connection.configSchemaVersion = 2
-            case .connectionKindRaw:
-                connection.enrollKindRaw = 0
-            case .connectionStatusRaw:
-                connection.statusRaw = 0
-            case .connectionEnrolledAt:
-                connection.enrolledAt = Date(
-                    timeIntervalSinceReferenceDate: .nan
-                )
-            case .connectionRevokedAt:
-                connection.statusRaw = ConnectionStatus.revoked.rawValue
-                connection.revokedAt = Date(
-                    timeIntervalSinceReferenceDate: .infinity
-                )
-                grant.revokedAt = Self.enrolledAt
-            case .grantVersion:
-                grant.configSchemaVersion = 2
-            case .grantCapabilityRaw:
-                grant.capabilityRaw = 0
-            case .grantGrantedAt:
-                grant.grantedAt = Date(
-                    timeIntervalSinceReferenceDate: -.infinity
-                )
-            case .grantRevokedAt:
-                grant.revokedAt = Date(
-                    timeIntervalSinceReferenceDate: .nan
-                )
-            }
+                switch damage {
+                case .connectionVersion:
+                    connection.configSchemaVersion = 2
+                case .connectionKindRaw:
+                    connection.enrollKindRaw = 0
+                case .connectionStatusRaw:
+                    connection.statusRaw = 0
+                case .connectionEnrolledAt:
+                    connection.enrolledAt = Date(
+                        timeIntervalSinceReferenceDate: .infinity
+                    )
+                case .connectionRevokedAt:
+                    connection.statusRaw = ConnectionStatus.revoked.rawValue
+                    connection.revokedAt = Date(
+                        timeIntervalSinceReferenceDate: .infinity
+                    )
+                    grant.revokedAt = Self.enrolledAt
+                case .grantVersion:
+                    grant.configSchemaVersion = 2
+                case .grantCapabilityRaw:
+                    grant.capabilityRaw = 0
+                case .grantGrantedAt:
+                    grant.grantedAt = Date(
+                        timeIntervalSinceReferenceDate: -.infinity
+                    )
+                case .grantRevokedAt:
+                    grant.revokedAt = Date(
+                        timeIntervalSinceReferenceDate: .infinity
+                    )
+                }
 
-            Self.expectFailure(damage.expectedFailure) {
-                _ = try GatewayAdministration.loadCurrentState(
-                    appIntentsConnectionID: Self.appIntentsID,
-                    in: context
-                )
+                try context.execute("""
+                    UPDATE connections SET configSchemaVersion = ?, enrollKindRaw = ?, statusRaw = ?, enrolledAt = ?, revokedAt = ?
+                    """, bindings: [
+                        .integer(Int64(connection.configSchemaVersion)), .integer(Int64(connection.enrollKindRaw)),
+                        .integer(Int64(connection.statusRaw)), .real(connection.enrolledAt.timeIntervalSinceReferenceDate),
+                        connection.revokedAt.map { .real($0.timeIntervalSinceReferenceDate) } ?? .null
+                    ])
+                try context.execute("""
+                    UPDATE grants SET configSchemaVersion = ?, capabilityRaw = ?, grantedAt = ?, revokedAt = ?
+                    """, bindings: [
+                        .integer(Int64(grant.configSchemaVersion)), .integer(Int64(grant.capabilityRaw)),
+                        .real(grant.grantedAt.timeIntervalSinceReferenceDate),
+                        grant.revokedAt.map { .real($0.timeIntervalSinceReferenceDate) } ?? .null
+                    ])
+                Self.expectFailure(damage.expectedFailure) {
+                    _ = try GatewayAdministration.loadCurrentState(
+                        appIntentsConnectionID: Self.appIntentsID,
+                        in: context
+                    )
+                }
             }
         }
     }
 
     @Test("connection status and revokedAt must describe the same lifecycle state")
-    func connectionStatusIsCoherentWithRevokedAt() throws {
-        let revokedAt = Date(timeIntervalSinceReferenceDate: 800_100_020)
+    func connectionStatusIsCoherentWithRevokedAt() async throws {
+        let authority = try Self.makeAuthority()
+        try await authority.withTestDatabase { owner in
+            let context = owner.database
+            try context.writeTransaction { try SQLiteHistorySchema.create(in: context) }
+            let revokedAt = Date(timeIntervalSinceReferenceDate: 800_100_020)
 
-        for (status, storedRevokedAt) in [
-            (ConnectionStatus.active, Optional(revokedAt)),
-            (ConnectionStatus.revoked, Optional<Date>.none),
-            (
-                ConnectionStatus.revoked,
-                Optional(Date(timeIntervalSinceReferenceDate: 800_099_999))
-            ),
-        ] {
-            let context = try Self.makeContext()
-            Self.insertConnection(
-                status: status,
-                revokedAt: storedRevokedAt,
-                in: context
-            )
-
-            Self.expectFailure(.persistence(.invariantViolation)) {
-                _ = try GatewayAdministration.loadCurrentState(
-                    appIntentsConnectionID: Self.appIntentsID,
+            for (status, storedRevokedAt) in [
+                (ConnectionStatus.active, Optional(revokedAt)),
+                (ConnectionStatus.revoked, Optional<Date>.none),
+                (
+                    ConnectionStatus.revoked,
+                    Optional(Date(timeIntervalSinceReferenceDate: 800_099_999))
+                ),
+            ] {
+                try Self.resetFixture(in: context)
+                try Self.insertConnection(
+                    status: status,
+                    revokedAt: storedRevokedAt,
                     in: context
                 )
+
+                Self.expectFailure(.persistence(.invariantViolation)) {
+                    _ = try GatewayAdministration.loadCurrentState(
+                        appIntentsConnectionID: Self.appIntentsID,
+                        in: context
+                    )
+                }
             }
         }
     }
 
     @Test("the durable default identity must still identify App Intents")
-    func defaultIdentityRelationFailsClosed() throws {
-        for damage in 0..<2 {
-            let context = try Self.makeContext()
-            if damage == 0 {
-                Self.insertConnection(
-                    id: Self.localAutomationID,
-                    kind: .localAutomation,
-                    in: context
-                )
-            } else {
-                Self.insertConnection(
-                    id: Self.appIntentsID,
-                    kind: .localAutomation,
-                    in: context
-                )
-            }
+    func defaultIdentityRelationFailsClosed() async throws {
+        let authority = try Self.makeAuthority()
+        try await authority.withTestDatabase { owner in
+            let context = owner.database
+            try context.writeTransaction { try SQLiteHistorySchema.create(in: context) }
+            for damage in 0..<2 {
+                try Self.resetFixture(in: context)
+                if damage == 0 {
+                    try Self.insertConnection(
+                        id: Self.localAutomationID,
+                        kind: .localAutomation,
+                        in: context
+                    )
+                } else {
+                    try Self.insertConnection(
+                        id: Self.appIntentsID,
+                        kind: .localAutomation,
+                        in: context
+                    )
+                }
 
-            Self.expectFailure(.persistence(.invariantViolation)) {
-                _ = try GatewayAdministration.loadCurrentState(
-                    appIntentsConnectionID: Self.appIntentsID,
-                    in: context
-                )
+                Self.expectFailure(.persistence(.invariantViolation)) {
+                    _ = try GatewayAdministration.loadCurrentState(
+                        appIntentsConnectionID: Self.appIntentsID,
+                        in: context
+                    )
+                }
             }
         }
     }
 
     @Test("connection count and per-connection grant count are bounded")
-    func rowCountsAreBounded() throws {
-        do {
-            let context = try Self.makeContext()
-            Self.insertConnection(in: context)
-            Self.insertConnection(
-                id: Self.localAutomationID,
-                kind: .localAutomation,
-                in: context
-            )
-            Self.expectFailure(.persistence(.invariantViolation)) {
-                _ = try GatewayAdministration.loadCurrentState(
-                    appIntentsConnectionID: Self.appIntentsID,
-                    in: context,
-                    limits: Self.makeLimits(maximumConnections: 1)
+    func rowCountsAreBounded() async throws {
+        let authority = try Self.makeAuthority()
+        try await authority.withTestDatabase { owner in
+            let context = owner.database
+            try context.writeTransaction { try SQLiteHistorySchema.create(in: context) }
+            do {
+                try Self.resetFixture(in: context)
+                try Self.insertConnection(in: context)
+                try Self.insertConnection(
+                    id: Self.localAutomationID,
+                    kind: .localAutomation,
+                    in: context
                 )
-            }
-        }
-
-        do {
-            let context = try Self.makeContext()
-            Self.insertConnection(in: context)
-            Self.insertGrant(capability: .browse, in: context)
-            Self.insertGrant(capability: .manage, in: context)
-            Self.expectFailure(.persistence(.invariantViolation)) {
-                _ = try GatewayAdministration.loadCurrentState(
-                    appIntentsConnectionID: Self.appIntentsID,
-                    in: context,
-                    limits: Self.makeLimits(
-                        maximumGrantRowsPerConnection: 1
+                Self.expectFailure(.persistence(.invariantViolation)) {
+                    _ = try GatewayAdministration.loadCurrentState(
+                        appIntentsConnectionID: Self.appIntentsID,
+                        in: context,
+                        limits: Self.makeLimits(maximumConnections: 1)
                     )
-                )
+                }
+            }
+
+            do {
+                try Self.resetFixture(in: context)
+                try Self.insertConnection(in: context)
+                try Self.insertGrant(capability: .browse, in: context)
+                try Self.insertGrant(capability: .manage, in: context)
+                Self.expectFailure(.persistence(.invariantViolation)) {
+                    _ = try GatewayAdministration.loadCurrentState(
+                        appIntentsConnectionID: Self.appIntentsID,
+                        in: context,
+                        limits: Self.makeLimits(
+                            maximumGrantRowsPerConnection: 1
+                        )
+                    )
+                }
             }
         }
     }
 
     @Test("grant keys are canonical strings derived directly from pair values")
-    func grantKeyIsCanonicalAndMismatchFailsClosed() throws {
-        let expected = "A0B1C2D3-E4F5-4678-9012-3456789ABCDE:3"
-        #expect(GatewayAdministration.canonicalGrantKey(
-            connectionID: Self.appIntentsID,
-            capability: .manage
-        ) == expected)
+    func grantKeyIsCanonicalAndMismatchFailsClosed() async throws {
+        let authority = try Self.makeAuthority()
+        try await authority.withTestDatabase { owner in
+            let context = owner.database
+            try context.writeTransaction { try SQLiteHistorySchema.create(in: context) }
+            let expected = "A0B1C2D3-E4F5-4678-9012-3456789ABCDE:3"
+            #expect(GatewayAdministration.canonicalGrantKey(
+                connectionID: Self.appIntentsID,
+                capability: .manage
+            ) == expected)
 
-        let context = try Self.makeContext()
-        Self.insertConnection(in: context)
-        let grant = Self.insertGrant(capability: .manage, in: context)
-        grant.grantKey = "opaque-or-hashed-key"
-
-        Self.expectFailure(.persistence(.invariantViolation)) {
-            _ = try GatewayAdministration.loadCurrentState(
-                appIntentsConnectionID: Self.appIntentsID,
-                in: context
-            )
-        }
-    }
-
-    @Test("duplicate pairs and orphan grants fail closed")
-    func duplicateAndOrphanRelationsFailClosed() throws {
-        do {
-            let context = try Self.makeContext()
-            Self.insertConnection(in: context)
-            Self.insertGrant(in: context)
-            Self.insertGrant(in: context)
+            try Self.resetFixture(in: context)
+            try Self.insertConnection(in: context)
+            let grant = try Self.insertGrant(capability: .manage, in: context)
+            try context.execute("UPDATE grants SET grantKey = ? WHERE grantKey = ?",
+                bindings: [.text("opaque-or-hashed-key"), .text(grant.grantKey)])
 
             Self.expectFailure(.persistence(.invariantViolation)) {
                 _ = try GatewayAdministration.loadCurrentState(
@@ -379,40 +420,73 @@ struct GatewayCurrentStateValidationTests {
                 )
             }
         }
+    }
 
-        do {
-            let context = try Self.makeContext()
-            Self.insertConnection(in: context)
-            Self.insertGrant(
-                connectionID: Self.localAutomationID,
-                capability: .organize,
-                in: context
-            )
+    @Test("duplicate pairs and orphan grants fail closed")
+    func duplicateAndOrphanRelationsFailClosed() async throws {
+        let authority = try Self.makeAuthority()
+        try await authority.withTestDatabase { owner in
+            let context = owner.database
+            try context.writeTransaction { try SQLiteHistorySchema.create(in: context) }
+            do {
+                try Self.resetFixture(in: context)
+                try Self.insertConnection(in: context)
+                try Self.insertGrant(in: context)
+                let before = try GatewayStoreSnapshot.read(in: context)
+                do {
+                    try Self.insertGrant(in: context)
+                    Issue.record("expected SQL uniqueness to reject a duplicate grant pair")
+                } catch let failure as SQLiteFailure {
+                    #expect(failure.isConstraint)
+                }
+                #expect(try GatewayStoreSnapshot.read(in: context) == before)
+                let state = try GatewayAdministration.loadCurrentState(
+                    appIntentsConnectionID: Self.appIntentsID, in: context
+                )
+                #expect(state.grants.count == 1)
+            }
 
-            Self.expectFailure(.persistence(.invariantViolation)) {
-                _ = try GatewayAdministration.loadCurrentState(
-                    appIntentsConnectionID: Self.appIntentsID,
+            do {
+                try Self.resetFixture(in: context)
+                try Self.insertConnection(in: context)
+                try context.execute("PRAGMA foreign_keys = OFF")
+                try Self.insertGrant(
+                    connectionID: Self.localAutomationID,
+                    capability: .organize,
                     in: context
                 )
+                try context.execute("PRAGMA foreign_keys = ON")
+
+                Self.expectFailure(.persistence(.invariantViolation)) {
+                    _ = try GatewayAdministration.loadCurrentState(
+                        appIntentsConnectionID: Self.appIntentsID,
+                        in: context
+                    )
+                }
             }
         }
     }
 
     @Test("revoked connections cannot retain a live grant")
-    func revokedConnectionCannotRetainLiveGrant() throws {
-        let context = try Self.makeContext()
-        Self.insertConnection(
-            status: .revoked,
-            revokedAt: Self.enrolledAt,
-            in: context
-        )
-        Self.insertGrant(in: context)
-
-        Self.expectFailure(.persistence(.invariantViolation)) {
-            _ = try GatewayAdministration.loadCurrentState(
-                appIntentsConnectionID: Self.appIntentsID,
+    func revokedConnectionCannotRetainLiveGrant() async throws {
+        let authority = try Self.makeAuthority()
+        try await authority.withTestDatabase { owner in
+            let context = owner.database
+            try context.writeTransaction { try SQLiteHistorySchema.create(in: context) }
+            try Self.resetFixture(in: context)
+            try Self.insertConnection(
+                status: .revoked,
+                revokedAt: Self.enrolledAt,
                 in: context
             )
+            try Self.insertGrant(in: context)
+
+            Self.expectFailure(.persistence(.invariantViolation)) {
+                _ = try GatewayAdministration.loadCurrentState(
+                    appIntentsConnectionID: Self.appIntentsID,
+                    in: context
+                )
+            }
         }
     }
 
@@ -457,45 +531,54 @@ struct GatewayCurrentStateValidationTests {
     }
 
     @Test("a stored cross-kind grant fails current-state validation")
-    func crossKindGrantFailsClosed() throws {
-        let context = try Self.makeContext()
-        Self.insertConnection(in: context)
-        Self.insertGrant(capability: .organize, in: context)
+    func crossKindGrantFailsClosed() async throws {
+        let authority = try Self.makeAuthority()
+        try await authority.withTestDatabase { owner in
+            let context = owner.database
+            try context.writeTransaction { try SQLiteHistorySchema.create(in: context) }
+            try Self.resetFixture(in: context)
+            try Self.insertConnection(in: context)
+            try Self.insertGrant(capability: .organize, in: context)
 
-        Self.expectFailure(.persistence(.invariantViolation)) {
-            _ = try GatewayAdministration.loadCurrentState(
-                appIntentsConnectionID: Self.appIntentsID,
-                in: context
-            )
+            Self.expectFailure(.persistence(.invariantViolation)) {
+                _ = try GatewayAdministration.loadCurrentState(
+                    appIntentsConnectionID: Self.appIntentsID,
+                    in: context
+                )
+            }
         }
     }
 
     @Test("regrant updates the one current row and does not create event history")
-    func regrantUpdatesExistingCurrentRow() throws {
-        let context = try Self.makeContext()
-        Self.insertConnection(in: context)
-        let firstGrantedAt = Date(
-            timeIntervalSinceReferenceDate: 800_100_010
-        )
-        let revokedAt = Date(timeIntervalSinceReferenceDate: 800_100_020)
-        let row = Self.insertGrant(
-            grantedAt: firstGrantedAt,
-            revokedAt: revokedAt,
-            in: context
-        )
-        try context.save()
+    func regrantUpdatesExistingCurrentRow() async throws {
+        let authority = try Self.makeAuthority()
+        try await authority.withTestDatabase { owner in
+            let context = owner.database
+            try context.writeTransaction { try SQLiteHistorySchema.create(in: context) }
+            try Self.resetFixture(in: context)
+            try Self.insertConnection(in: context)
+            let firstGrantedAt = Date(
+                timeIntervalSinceReferenceDate: 800_100_010
+            )
+            let revokedAt = Date(timeIntervalSinceReferenceDate: 800_100_020)
+            let row = try Self.insertGrant(
+                grantedAt: firstGrantedAt,
+                revokedAt: revokedAt,
+                in: context
+            )
 
-        let regrantedAt = Date(timeIntervalSinceReferenceDate: 800_100_030)
-        GatewayAdministration.regrantCurrentRow(row, at: regrantedAt)
-        try context.save()
+            let regrantedAt = Date(timeIntervalSinceReferenceDate: 800_100_030)
+            let updated = GatewayAdministration.regrantCurrentRow(row, at: regrantedAt)
+            try context.execute("UPDATE grants SET grantedAt = ?, revokedAt = NULL WHERE grantKey = ?",
+                bindings: [.real(updated.grantedAt.timeIntervalSinceReferenceDate), .text(updated.grantKey)])
 
-        let grants = try context.fetch(FetchDescriptor<GrantRow>())
-        let operations = try context.fetch(
-            FetchDescriptor<OperationRecordRow>()
-        )
-        #expect(grants.count == 1)
-        #expect(grants[0].grantedAt == regrantedAt)
-        #expect(grants[0].revokedAt == nil)
-        #expect(operations.isEmpty)
+            let snapshot = try GatewayStoreSnapshot.read(in: context)
+            let grants = snapshot.grants
+            let operations = snapshot.operations
+            #expect(grants.count == 1)
+            #expect(grants[0].grantedAt == regrantedAt)
+            #expect(grants[0].revokedAt == nil)
+            #expect(operations.isEmpty)
+        }
     }
 }

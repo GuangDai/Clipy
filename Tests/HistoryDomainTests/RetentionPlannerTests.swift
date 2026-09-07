@@ -19,6 +19,47 @@ private enum RetentionPlannerTestError: Error {
     case unexpectedMutation
 }
 
+@Test func exactRetentionVictimPrefixPreservesPolicyAndRemovalSemantics() throws {
+    let policy = RetentionPolicy(maximumUnpinnedItems: 2)
+    let unchanged = planRetention(currentPolicy: policy, policy: policy, victimIDs: [])
+    if case .commit = unchanged {
+        Issue.record("Same policy without required victims must not commit")
+    }
+
+    // SQL's time ordering can place a larger business ID first. The planner
+    // must preserve that prefix, not re-sort by identity or infer other victims.
+    let scenarios: [(oldLimit: Int, victims: [HistoryItemID])] = [
+        (3, []),
+        (3, [retentionID(9)]),
+        (3, [retentionID(9), retentionID(1)]),
+        (2, [retentionID(9), retentionID(1)]),
+    ]
+    for scenario in scenarios {
+        let result = planRetention(
+            currentPolicy: RetentionPolicy(maximumUnpinnedItems: scenario.oldLimit),
+            policy: policy,
+            victimIDs: scenario.victims
+        )
+        guard case .commit(let plan) = result,
+              case .retentionPolicySet(let count) = plan.outcome,
+              !plan.mutations.isEmpty,
+              case .setRetentionPolicy(let maximum) = plan.mutations[0] else {
+            Issue.record("A policy change or required victims must produce one complete plan")
+            continue
+        }
+        #expect(maximum == 2)
+        #expect(count == scenario.victims.count)
+        #expect(plan.mutations.count == scenario.victims.count + 1)
+        let victims = try plan.mutations.dropFirst().map { mutation in
+            guard case .retire(let id, .retention) = mutation else {
+                throw RetentionPlannerTestError.unexpectedMutation
+            }
+            return id
+        }
+        #expect(victims == scenario.victims)
+    }
+}
+
 private func retentionVictims(
     inventory: [RetainedItemSummary],
     policy: RetentionPolicy

@@ -2,7 +2,7 @@
 ///
 /// The seam is the real `AppComposition` entry plus its content-free health
 /// snapshot. Durable assertions always read through a real in-memory
-/// `SwiftDataHistory`. Test adapters only delay one real boundary operation;
+/// `SQLiteHistory`. Test adapters only delay one real boundary operation;
 /// every write and read still forwards to that authority.
 import AppKit
 import Foundation
@@ -614,7 +614,7 @@ struct AppCaptureLaneTests {
 
     private static func waitForRows(
         _ count: Int,
-        in history: SwiftDataHistory
+        in history: SQLiteHistory
     ) async -> Bool {
         for _ in 0..<200 {
             if let page = try? await history.browse(
@@ -632,12 +632,12 @@ struct AppCaptureLaneTests {
 /// capture, returns History's public low-disk failure when released, then
 /// forwards every later operation and every read to the same real store.
 private actor FirstCaptureLowDiskFailingHistory: ClipboardHistory {
-    private let base: SwiftDataHistory
+    private let base: SQLiteHistory
     private var captureAttempts = 0
     private var firstCaptureContinuation: CheckedContinuation<Void, Never>?
     private var firstCaptureWaiters: [CheckedContinuation<Void, Never>] = []
 
-    init(base: SwiftDataHistory) {
+    init(base: SQLiteHistory) {
         self.base = base
     }
 
@@ -777,14 +777,14 @@ private final class CaptureHealthProbe {
 /// detached forward makes capture 1 intentionally non-cooperative with the
 /// caller's cancellation so the stop fence is observable deterministically.
 actor FirstCaptureSuspendingHistory: ClipboardHistory {
-    private let base: SwiftDataHistory
+    private let base: SQLiteHistory
     private var captureCount = 0
     private var didCompleteSecondCapture = false
     private var firstCaptureContinuation: CheckedContinuation<Void, Never>?
     private var firstCaptureWaiters: [CheckedContinuation<Void, Never>] = []
     private var secondCaptureWaiters: [CheckedContinuation<Void, Never>] = []
 
-    init(base: SwiftDataHistory) {
+    init(base: SQLiteHistory) {
         self.base = base
     }
 

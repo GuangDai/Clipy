@@ -10,7 +10,7 @@ import Foundation
 ///
 /// Owning spec: docs/03a-instruction-set.md §3.
 ///
-/// `SwiftDataHistory` is the production implementation. UI previews may use a
+/// `SQLiteHistory` is the production implementation. UI previews may use a
 /// scripted implementation, which must itself conform to `Sendable` (because
 /// `ClipboardHistory: Sendable`) and must not be used as a substitute for
 /// storage semantic tests.

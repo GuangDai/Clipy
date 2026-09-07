@@ -189,7 +189,7 @@ struct PopupPositionGeometryTests {
             panelSize: panelSize,
             statusItemButtonScreenFrame: buttonFrame,
             mouseLocation: mouse,
-            screenVisibleFrames: [mainFrame, rightFrame],
+            screens: [mainFrame, rightFrame].map { (frame: $0, visibleFrame: $0) },
             lastPositionAnchor: anchor
         )
     }
@@ -228,7 +228,7 @@ struct PopupPositionGeometryTests {
             panelSize: expandedPanelSize,
             statusItemButtonScreenFrame: nil,
             mouseLocation: NSPoint(x: -5, y: -195),
-            screenVisibleFrames: [mainFrame, negativeOriginFrame],
+            screens: [mainFrame, negativeOriginFrame].map { (frame: $0, visibleFrame: $0) },
             lastPositionAnchor: nil
         )
 
@@ -577,7 +577,7 @@ struct PopupPositionGeometryTests {
             panelSize: NSSize(width: 5_000, height: 5_000),
             statusItemButtonScreenFrame: nil,
             mouseLocation: NSPoint(x: 100, y: 100),
-            screenVisibleFrames: [mainFrame],
+            screens: [(frame: mainFrame, visibleFrame: mainFrame)],
             lastPositionAnchor: nil
         )
         #expect(origin == mainFrame.origin)

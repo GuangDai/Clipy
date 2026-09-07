@@ -227,9 +227,9 @@ struct SearchWorkerCancellationTests {
     }
 
     @Test(
-        "cancelled Authority projection lets search B and capture finish before A returns"
+        "cancelled SQLite scan lets search B and capture finish before A returns"
     )
-    func authorityProjectionCancellationIsCooperative() async throws {
+    func SQLiteScanCancellationIsCooperative() async throws {
         let storeURL = WSSupport.tempStoreURL(
             "search-authority-cancellation"
         )
@@ -238,10 +238,8 @@ struct SearchWorkerCancellationTests {
             storeURL: storeURL,
             maximumUnpinned: 65
         )
-        // Two chunks are sufficient: cancel immediately after 32 projected
-        // rows, then require the production checkpoint before row 33 to stop
-        // the operation. A functional cancellation proof must not seed a
-        // scale fixture beside every MainActor UI test in the default lane.
+        // Two batches are sufficient. Park a cancelled read after its first
+        // batch; the independent reader and single writer must both progress.
         let seedReceipt = try await history.seedPerformanceFixture(
             rowCount: 64
         ) { index in
@@ -249,11 +247,13 @@ struct SearchWorkerCancellationTests {
         }
 
         let gate = SuspensionGate()
-        let cancellationExitPoint = AuthoritySuspensionPoint
-            .searchCancellationExit
+        let cancellationExitPoint = SearchWorkerSuspensionPoint
+            .sqliteBatchComplete
             .rawValue
-        await history.authority.setSuspensionHandler { point in
-            guard point == .searchCancellationExit else { return }
+        let latch = FirstChunkParkLatch()
+        await history.searchWorker.setSuspensionHandler { point in
+            guard point == .sqliteBatchComplete, await latch.consume() else { return }
+            withUnsafeCurrentTask { $0?.cancel() }
             await gate.park(at: point.rawValue)
         }
 
@@ -262,14 +262,6 @@ struct SearchWorkerCancellationTests {
         )
         let probe = SearchDebugProbe(isEnabled: true) { event in
             _ = continuation.yield(event)
-            guard event.phase
-                    == "corpus-projection-cancellation-checkpoint",
-                  event.rowsProcessed
-                    == SearchWorker.cancellationRowInterval
-            else { return }
-            withUnsafeCurrentTask { task in
-                task?.cancel()
-            }
         }
         await history.authority.setSearchDebugProbe(probe)
         await history.searchWorker.setSearchDebugProbe(probe)
@@ -283,10 +275,9 @@ struct SearchWorkerCancellationTests {
         await gate.waitForPark(cancellationExitPoint)
 
         do {
-            // A has unwound its operation-local context after the production
-            // row-33 cancellation check, but its public browse call is still
-            // parked. B must be able to capture and evaluate its own corpus
-            // before A is allowed to return to its caller.
+            // A's read transaction is still parked; B owns another read
+            // connection and the Authority can commit through WAL. Cancellation
+            // releases A's connection when the parked checkpoint returns.
             await history.authority.setSearchDebugProbe(
                 SearchDebugProbe(isEnabled: false)
             )
@@ -344,13 +335,13 @@ struct SearchWorkerCancellationTests {
             await #expect(throws: CancellationError.self) {
                 _ = try await cancelled.value
             }
-            await history.authority.setSuspensionHandler(nil)
+            await history.searchWorker.setSuspensionHandler(nil)
             continuation.finish()
         } catch {
             await gate.resume(cancellationExitPoint)
             cancelled.cancel()
             _ = try? await cancelled.value
-            await history.authority.setSuspensionHandler(nil)
+            await history.searchWorker.setSuspensionHandler(nil)
             await history.authority.setSearchDebugProbe(
                 SearchDebugProbe(isEnabled: false)
             )
@@ -368,16 +359,13 @@ struct SearchWorkerCancellationTests {
         #expect(
             captured
                 .filter {
-                    $0.phase
-                        == "corpus-projection-cancellation-checkpoint"
+                    $0.phase == "sqlite-batch"
                 }
                 .map(\.rowsProcessed)
                 == [SearchWorker.cancellationRowInterval]
         )
-        #expect(!captured.contains { $0.phase == "corpus-projection-complete" })
-        #expect(!captured.contains { $0.phase == "corpus-sort-begin" })
-        #expect(!captured.contains { $0.phase == "corpus-sort" })
-        #expect(!captured.contains { $0.component == "worker" })
+        #expect(!captured.contains { $0.phase == "page-materialization" })
+        #expect(!captured.contains { $0.phase == "complete" })
     }
 
     @Test("cancelled observed search cannot publish a completed stale page")

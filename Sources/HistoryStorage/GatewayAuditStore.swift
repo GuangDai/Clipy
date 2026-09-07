@@ -1,13 +1,12 @@
 /// Central X.4 audit persistence owner (`V2-05` §4.3–§4.6).
 ///
-/// These synchronous operations run only on an Authority-owned ModelContext.
+/// These synchronous operations run only on the Authority-owned SQLite connection.
 /// The caller supplies the transaction boundary so an external History/admin
 /// mutation, its audit append, and any triggered trim share one commit. This
 /// file is the sole owner of OperationRecordRow insertion/deletion and of the
 /// three durable audit-counter mutations.
 import Foundation
 import HistoryCore
-import SwiftData
 
 internal struct OperationRecordPayload: Sendable {
     internal let connectionID: ExternalConnectionID?
@@ -75,7 +74,7 @@ internal enum GatewayAuditStore {
     internal static func append(
         _ payload: OperationRecordPayload,
         config: GatewayConfigRow,
-        in context: ModelContext,
+        in context: SQLiteDatabase,
         limits: ExternalLimits = .standard
     ) throws -> UInt64 {
         do {
@@ -84,7 +83,8 @@ internal enum GatewayAuditStore {
                 config: config,
                 limits: limits
             )
-            applyAppend(prepared, config: config, in: context)
+            var updatedConfig = config
+            try applyAppend(prepared, config: &updatedConfig, in: context)
             return prepared.sequence
         } catch let rejection as StoreRejection {
             throw rejection.externalFailure
@@ -98,7 +98,7 @@ internal enum GatewayAuditStore {
         since: UInt64,
         snapshotHead: UInt64,
         config: GatewayConfigRow,
-        in context: ModelContext,
+        in context: SQLiteDatabase,
         limits: ExternalLimits = .standard
     ) throws -> [OperationRecordDTO] {
         do {
@@ -157,7 +157,7 @@ internal enum GatewayAuditStore {
     /// established HistoryFailure boundary rather than leaking ExternalFailure.
     internal static func validateRetainedState(
         config: GatewayConfigRow,
-        in context: ModelContext,
+        in context: SQLiteDatabase,
         limits: ExternalLimits = .standard
     ) throws {
         do {
@@ -189,7 +189,7 @@ internal enum GatewayAuditStore {
     internal static func compactIfNeeded(
         now: Date,
         config: GatewayConfigRow,
-        in context: ModelContext,
+        in context: SQLiteDatabase,
         limits: ExternalLimits = .standard
     ) throws -> Bool {
         do {
@@ -316,17 +316,19 @@ internal enum GatewayAuditStore {
                 discardedLogicalBytes
             )
 
-            // All validation and arithmetic precede mutation. Fetch/delete is
-            // batched and remains protected by the caller's transaction.
-            applyAppend(prepared, config: config, in: context)
+            // All validation and arithmetic precede mutation. The prefix
+            // delete remains protected by the caller's transaction.
+            var updatedConfig = config
+            try insert(prepared.row, in: context)
             try deletePrefix(
                 lowerBound: config.compactionFloor,
                 upperBound: newFloor,
-                in: context,
-                batchSize: limits.maxAuditReadBatchSize
+                in: context
             )
-            config.auditBytes = finalAuditBytes
-            config.compactionFloor = newFloor
+            updatedConfig.nextAuditSequence = prepared.nextSequence
+            updatedConfig.auditBytes = finalAuditBytes
+            updatedConfig.compactionFloor = newFloor
+            try persistCounters(updatedConfig, in: context)
             return true
         } catch let rejection as StoreRejection {
             throw rejection.externalFailure
@@ -337,8 +339,8 @@ internal enum GatewayAuditStore {
 
 extension HistoryAuthority {
     /// Owns the complete rebase interval. Only Sendable values enter this
-    /// actor method; its SwiftData context and rows are created, transacted,
-    /// and released without crossing an actor or suspension boundary.
+    /// actor method; the SQLite transaction and decoded values remain inside
+    /// one synchronous Authority interval.
     @discardableResult
     internal func rebaseGatewayAudit(
         reason: AuditRebaseReason,
@@ -357,7 +359,7 @@ extension HistoryAuthority {
 
         do {
             return try Self.executeGatewayRebase(
-                in: container,
+                in: database,
                 reason: reason,
                 requestedFloor: requestedFloor,
                 requestedAt: requestedAt,
@@ -377,11 +379,9 @@ extension HistoryAuthority {
         }
     }
 
-    /// The nonisolated executor creates every SwiftData value locally. The
-    /// actor calls it synchronously with Sendable inputs, so the transaction
-    /// closure never captures actor-isolated rows, contexts, or `self`.
+    /// Called synchronously on the Authority's sole writable connection.
     private static func executeGatewayRebase(
-        in container: ModelContainer,
+        in context: SQLiteDatabase,
         reason: AuditRebaseReason,
         requestedFloor: UInt64?,
         requestedAt: Date,
@@ -389,14 +389,11 @@ extension HistoryAuthority {
         limits: ExternalLimits,
         transactionInjection: InjectedTransactionFailure?
     ) throws -> UInt64 {
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
-        let config = try Self.loadGatewayConfig(in: context)
-        let newFloor = requestedFloor ?? config.nextAuditSequence
-        let markerSequence = config.nextAuditSequence
-
         do {
-            try context.transaction {
+            return try context.writeTransaction {
+                var config = try Self.loadGatewayConfig(in: context)
+                let newFloor = requestedFloor ?? config.nextAuditSequence
+                let markerSequence = config.nextAuditSequence
                 guard requestedAt.timeIntervalSinceReferenceDate.isFinite,
                       committedAt.timeIntervalSinceReferenceDate.isFinite else {
                     throw GatewayAuditStore.StoreRejection.invariantViolation
@@ -503,19 +500,16 @@ extension HistoryAuthority {
                     finalAuditBytes = prepared.resultingAuditBytes
                 }
 
-                GatewayAuditStore.applyAppend(
-                    prepared,
-                    config: config,
-                    in: context
-                )
+                try GatewayAuditStore.insert(prepared.row, in: context)
                 try GatewayAuditStore.deletePrefix(
                     lowerBound: oldFloor,
                     upperBound: newFloor,
-                    in: context,
-                    batchSize: limits.maxAuditReadBatchSize
+                    in: context
                 )
+                config.nextAuditSequence = prepared.nextSequence
                 config.auditBytes = finalAuditBytes
                 config.compactionFloor = newFloor
+                try GatewayAuditStore.persistCounters(config, in: context)
 
                 if transactionInjection == .beforeSingletonUpdate {
                     throw InjectedTransactionFailure.beforeSingletonUpdate
@@ -523,8 +517,8 @@ extension HistoryAuthority {
                 if transactionInjection == .insufficientDiskSpace {
                     throw InjectedTransactionFailure.insufficientDiskSpace
                 }
+                return markerSequence
             }
-            return markerSequence
         } catch let rejection as GatewayAuditStore.StoreRejection {
             throw rejection.externalFailure
         } catch let failure as ExternalFailure {
@@ -645,12 +639,13 @@ fileprivate extension GatewayAuditStore {
 
     static func applyAppend(
         _ prepared: PreparedAppend,
-        config: GatewayConfigRow,
-        in context: ModelContext
-    ) {
-        context.insert(prepared.row)
+        config: inout GatewayConfigRow,
+        in context: SQLiteDatabase
+    ) throws {
+        try insert(prepared.row, in: context)
         config.nextAuditSequence = prepared.nextSequence
         config.auditBytes = prepared.resultingAuditBytes
+        try persistCounters(config, in: context)
     }
 
     static func validateConfig(_ config: GatewayConfigRow) throws {
@@ -775,7 +770,7 @@ fileprivate extension GatewayAuditStore {
         lowerBound: UInt64,
         upperBound: UInt64,
         config: GatewayConfigRow,
-        in context: ModelContext,
+        in context: SQLiteDatabase,
         limits: ExternalLimits
     ) throws -> UInt64 {
         var cursor = lowerBound
@@ -811,7 +806,7 @@ fileprivate extension GatewayAuditStore {
     static func accountRawInterval(
         lowerBound: UInt64,
         upperBound: UInt64,
-        in context: ModelContext,
+        in context: SQLiteDatabase,
         limits: ExternalLimits
     ) throws -> UInt64 {
         var cursor = lowerBound
@@ -846,7 +841,7 @@ fileprivate extension GatewayAuditStore {
 
     static func requireNoRowsOutsideRetainedInterval(
         config: GatewayConfigRow,
-        in context: ModelContext
+        in context: SQLiteDatabase
     ) throws {
         try requireNoRowsBelowFloor(config: config, in: context)
         try requireNoRowsAtOrAboveHead(config: config, in: context)
@@ -854,15 +849,15 @@ fileprivate extension GatewayAuditStore {
 
     static func requireNoRowsBelowFloor(
         config: GatewayConfigRow,
-        in context: ModelContext
+        in context: SQLiteDatabase
     ) throws {
-        let floor = config.compactionFloor
-        var below = FetchDescriptor<OperationRecordRow>(
-            predicate: #Predicate { $0.auditSequence < floor }
-        )
-        below.fetchLimit = 1
         do {
-            guard try context.fetch(below).isEmpty else {
+            let statement = try context.prepare(
+                "SELECT 1 FROM operation_records WHERE auditSequence < ? LIMIT 1",
+                bindings: [.blob(sqliteUInt64(config.compactionFloor))]
+            )
+            defer { statement.finalize() }
+            guard try !statement.step() else {
                 throw StoreRejection.invariantViolation
             }
         } catch let rejection as StoreRejection {
@@ -874,15 +869,15 @@ fileprivate extension GatewayAuditStore {
 
     static func requireNoRowsAtOrAboveHead(
         config: GatewayConfigRow,
-        in context: ModelContext
+        in context: SQLiteDatabase
     ) throws {
-        let head = config.nextAuditSequence
-        var above = FetchDescriptor<OperationRecordRow>(
-            predicate: #Predicate { $0.auditSequence >= head }
-        )
-        above.fetchLimit = 1
         do {
-            guard try context.fetch(above).isEmpty else {
+            let statement = try context.prepare(
+                "SELECT 1 FROM operation_records WHERE auditSequence >= ? LIMIT 1",
+                bindings: [.blob(sqliteUInt64(config.nextAuditSequence))]
+            )
+            defer { statement.finalize() }
+            guard try !statement.step() else {
                 throw StoreRejection.invariantViolation
             }
         } catch let rejection as StoreRejection {
@@ -896,42 +891,140 @@ fileprivate extension GatewayAuditStore {
         lowerBound: UInt64,
         upperBound: UInt64,
         limit: Int,
-        in context: ModelContext
+        in context: SQLiteDatabase
     ) throws -> [OperationRecordRow] {
         guard limit > 0 else { throw StoreRejection.invariantViolation }
-        let lower = lowerBound
-        let upper = upperBound
-        var descriptor = FetchDescriptor<OperationRecordRow>(
-            predicate: #Predicate {
-                $0.auditSequence >= lower && $0.auditSequence < upper
-            },
-            sortBy: [SortDescriptor(\.auditSequence)]
-        )
-        descriptor.fetchLimit = limit
         do {
-            return try context.fetch(descriptor)
+            let statement = try context.prepare(
+                """
+                SELECT auditSequence, connectionIDRaw, capabilityRaw,
+                       operationKindRaw, outcomeRaw, failureKindRaw,
+                       denialReasonRaw, payloadBlob, requestedAt, committedAt,
+                       changePositionRaw, auditSchemaVersion
+                FROM operation_records
+                WHERE auditSequence >= ? AND auditSequence < ?
+                ORDER BY auditSequence LIMIT ?
+                """,
+                bindings: [
+                    .blob(sqliteUInt64(lowerBound)),
+                    .blob(sqliteUInt64(upperBound)),
+                    .integer(Int64(limit))
+                ]
+            )
+            defer { statement.finalize() }
+            var rows: [OperationRecordRow] = []
+            while try statement.step() {
+                rows.append(try decodeRow(statement))
+            }
+            return rows
+        } catch let rejection as StoreRejection {
+            throw rejection
+        } catch is HistoryFailure {
+            // Column storage classes, UUIDs and unsigned counters are typed
+            // persisted facts, just like the payload's raw discriminators.
+            throw StoreRejection.corruptStoredValue
         } catch {
             throw StoreRejection.persistenceRead
+        }
+    }
+
+    static func decodeRow(_ statement: SQLiteStatement) throws -> OperationRecordRow {
+        let connectionID: UUID?
+        if let raw = try statement.optionalText(at: 1) {
+            guard let decoded = UUID(uuidString: raw) else {
+                throw StoreRejection.corruptStoredValue
+            }
+            connectionID = decoded
+        } else {
+            connectionID = nil
+        }
+        guard let schemaVersion = UInt16(exactly: try statement.integer(at: 11)) else {
+            throw StoreRejection.corruptStoredValue
+        }
+        return try OperationRecordRow(
+            auditSequence: sqliteUInt64(statement.blob(at: 0)),
+            connectionIDRaw: connectionID,
+            capabilityRaw: optionalInt16(statement, at: 2),
+            operationKindRaw: int16(statement, at: 3),
+            outcomeRaw: int16(statement, at: 4),
+            failureKindRaw: optionalInt16(statement, at: 5),
+            denialReasonRaw: optionalInt16(statement, at: 6),
+            payloadBlob: statement.blob(at: 7),
+            requestedAt: Date(timeIntervalSinceReferenceDate: statement.real(at: 8)),
+            committedAt: Date(timeIntervalSinceReferenceDate: statement.real(at: 9)),
+            changePositionRaw: statement.optionalBlob(at: 10).map { try sqliteUInt64($0) },
+            auditSchemaVersion: schemaVersion
+        )
+    }
+
+    static func int16(_ statement: SQLiteStatement, at column: Int32) throws -> Int16 {
+        guard let value = Int16(exactly: try statement.integer(at: column)) else {
+            throw StoreRejection.corruptStoredValue
+        }
+        return value
+    }
+
+    static func optionalInt16(
+        _ statement: SQLiteStatement, at column: Int32
+    ) throws -> Int16? {
+        try statement.isNull(at: column) ? nil : int16(statement, at: column)
+    }
+
+    static func insert(_ row: OperationRecordRow, in context: SQLiteDatabase) throws {
+        try context.execute(
+            """
+            INSERT INTO operation_records (
+                auditSequence, connectionIDRaw, capabilityRaw, operationKindRaw,
+                outcomeRaw, failureKindRaw, denialReasonRaw, payloadBlob,
+                requestedAt, committedAt, changePositionRaw, auditSchemaVersion
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            bindings: [
+                .blob(sqliteUInt64(row.auditSequence)),
+                row.connectionIDRaw.map { .text($0.uuidString) } ?? .null,
+                row.capabilityRaw.map { .integer(Int64($0)) } ?? .null,
+                .integer(Int64(row.operationKindRaw)),
+                .integer(Int64(row.outcomeRaw)),
+                row.failureKindRaw.map { .integer(Int64($0)) } ?? .null,
+                row.denialReasonRaw.map { .integer(Int64($0)) } ?? .null,
+                .blob(row.payloadBlob),
+                .real(row.requestedAt.timeIntervalSinceReferenceDate),
+                .real(row.committedAt.timeIntervalSinceReferenceDate),
+                row.changePositionRaw.map { .blob(sqliteUInt64($0)) } ?? .null,
+                .integer(Int64(row.auditSchemaVersion))
+            ]
+        )
+    }
+
+    static func persistCounters(_ config: GatewayConfigRow, in context: SQLiteDatabase) throws {
+        try context.execute(
+            """
+            UPDATE gateway_config
+            SET nextAuditSequence = ?, auditBytes = ?, compactionFloor = ?
+            WHERE key = ?
+            """,
+            bindings: [
+                .blob(sqliteUInt64(config.nextAuditSequence)),
+                .blob(sqliteUInt64(config.auditBytes)),
+                .blob(sqliteUInt64(config.compactionFloor)),
+                .text(config.key)
+            ]
+        )
+        guard try context.changedRowCount == 1 else {
+            throw StoreRejection.invariantViolation
         }
     }
 
     static func deletePrefix(
         lowerBound: UInt64,
         upperBound: UInt64,
-        in context: ModelContext,
-        batchSize: Int
+        in context: SQLiteDatabase
     ) throws {
         guard lowerBound < upperBound else { return }
-        while true {
-            let rows = try fetchRows(
-                lowerBound: lowerBound,
-                upperBound: upperBound,
-                limit: batchSize,
-                in: context
-            )
-            guard !rows.isEmpty else { return }
-            for row in rows { context.delete(row) }
-        }
+        try context.execute(
+            "DELETE FROM operation_records WHERE auditSequence >= ? AND auditSequence < ?",
+            bindings: [.blob(sqliteUInt64(lowerBound)), .blob(sqliteUInt64(upperBound))]
+        )
     }
 
     static func logicalContribution(

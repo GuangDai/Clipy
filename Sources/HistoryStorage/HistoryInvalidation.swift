@@ -76,7 +76,7 @@ internal struct HistoryInvalidationSubscription: Sendable, Hashable {
 /// permission: a slow observer wakes to the latest position, and missed
 /// intermediate positions carry no information a re-read would need.
 ///
-/// Observation-race ordering (§5, WS12): `SwiftDataHistory.observe`
+/// Observation-race ordering (§5, WS12): `SQLiteHistory.observe`
 /// registers via `subscribe(onTermination:)` *before* its first
 /// authoritative query. Registration is a synchronous actor operation, so a
 /// commit that lands between registration and the first query is already

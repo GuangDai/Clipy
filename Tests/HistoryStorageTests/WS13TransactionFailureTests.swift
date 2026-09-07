@@ -1,16 +1,15 @@
 /// WS13 — Transaction failure (docs/06-cross-cutting.md §8 WS13): inject a
-/// failure inside the `ModelContext.transaction` closure AFTER row mutation
+/// failure inside the `SQLite write transaction` closure AFTER row mutation
 /// but BEFORE either singleton can advance. The failed attempt is inspected
 /// immediately, before any successful write can repair or obscure residue:
 /// every History row, retained-byte projection, position singleton, and
 /// retention-config singleton remains byte/scalar exact; the public browse
 /// and details reads still return the literal pre-attempt state; the rejected
-/// ID is absent from both 1:1 tables; and the registered invalidation stream
+/// ID has no committed content or representation rows; and the invalidation stream
 /// is empty (docs/05-authority-kernel.md §10–§11, §14).
 ///
-/// The package-internal value-typed Signature Index is compared directly
-/// across the failure while the existing forced-collision capture seam also
-/// proves its subsequent observable candidate behavior.
+/// The existing forced-collision capture seam proves subsequent SQL candidate
+/// lookup and byte-exact confirmation after rollback.
 import Foundation
 import HistoryCore
 import HistoryDomain
@@ -105,17 +104,18 @@ struct WS13TransactionFailureTests {
         #expect(Set(before.items.compactMap(\.firstSource)) == [firstSource, secondSource])
         #expect(Set(before.items.compactMap(\.lastSource)) == [firstSource, secondSource])
         #expect(before.items.allSatisfy { $0.pinOrdinal == nil })
+        let container = try WSSupport.makeDatabase(storeURL: storeURL)
         for item in before.items {
             let expectedText = item.id == firstReference.id.rawValue
                 ? firstText
                 : secondText
-            let canonical = try CanonicalBlobCodec.decode(item.canonicalBlob)
+            let canonical = try WSSupport.fetchCanonical(itemID: item.id, in: container)
             #expect(
                 canonical.representations.map(\.content.typeIdentifier)
                     == ["public.utf8-plain-text"]
             )
             #expect(canonical.representations.map(\.content.bytes) == [Data(expectedText.utf8)])
-            let signatures = try SignatureBlobCodec.decode(item.canonicalSignatureBlob)
+            let signatures = try WSSupport.fetchSignatureEntries(itemID: item.id, in: container)
             #expect(signatures.map(\.typeIdentifier) == ["public.utf8-plain-text"])
             #expect(signatures.map(\.fingerprint.rawValue) == [
                 ForcedCollisionFingerprint.collisionValue
@@ -127,32 +127,25 @@ struct WS13TransactionFailureTests {
                 ) == ["public.utf8-plain-text"]
             )
         }
-        #expect(before.retainedBytes.count == 2)
-        #expect(Set(before.retainedBytes.map(\.itemID)) == [
-            firstReference.id.rawValue,
-            secondReference.id.rawValue
-        ])
-        #expect(Set(before.retainedBytes.map(\.canonicalBytes)) == [16])
-        #expect(Set(before.retainedBytes.map(\.revisionCount)) == [0])
-        #expect(Set(before.retainedBytes.map(\.revisionBytes)) == [0])
-        #expect(Set(before.retainedBytes.map(\.bytesSchemaVersion)) == [1])
+        #expect(Set(before.items.map(\.canonicalBytes)) == [16])
+        #expect(Set(before.items.map(\.revisionCount)) == [0])
+        #expect(Set(before.items.map(\.revisionBytes)) == [0])
         #expect(before.positions == [TransactionPositionSnapshot(
             key: "retained-history",
             rawValue: 2,
-            maximumUnpinnedItems: 200
+            maximumUnpinnedItems: 200,
+            retainedItemCount: 2,
+            pinnedItemCount: 0,
+            canonicalBytes: 32,
+            revisionBytes: 0
         )])
         #expect(before.configs == [TransactionConfigSnapshot(
             key: "retention-expansion",
-            agePolicyEnabled: false,
-            ageMaxSeconds: 0,
-            storagePolicyEnabled: false,
-            storageMaxBytes: 0,
-            revisionPolicyEnabled: false,
+            ageMaxSeconds: nil,
+            storageMaxBytes: nil,
             revisionMaxCount: nil,
-            revisionMaxBytes: nil,
-            configSchemaVersion: 1
+            revisionMaxBytes: nil
         )])
-        let beforeIndex = await authority.signatureIndex
 
         // The test-only probe wraps exactly one Authority operation. The
         // shared commit tail can publish at most once per operation, so its
@@ -237,30 +230,25 @@ struct WS13TransactionFailureTests {
             try await history.details(for: rejectedBundle.domain.candidateID)
         }
 
-        // Immediate rollback oracle: compare every field of all four durable
-        // row classes before allowing any successful operation. Separately
-        // assert the rejected business ID is absent from both sides of the
-        // mandatory HistoryItemRow ↔ RetainedBytesRow 1:1 projection.
+        // Immediate rollback oracle: compare metadata, contents, representation
+        // locations, referenced bytes and singleton values before any success.
         let afterFailure = try autoreleasepool {
             try TransactionStoreSnapshot.read(from: storeURL)
         }
         #expect(afterFailure.items == before.items)
-        #expect(afterFailure.retainedBytes == before.retainedBytes)
+        #expect(afterFailure.contents == before.contents)
+        #expect(afterFailure.representations == before.representations)
+        #expect(afterFailure.referencedBlobs == before.referencedBlobs)
         #expect(afterFailure.positions == before.positions)
         #expect(afterFailure.configs == before.configs)
-        #expect(await authority.signatureIndex == beforeIndex)
         #expect(!afterFailure.items.map(\.id).contains(rejectedBundle.domain.candidateID.rawValue))
-        #expect(
-            !afterFailure.retainedBytes.map(\.itemID)
-                .contains(rejectedBundle.domain.candidateID.rawValue)
-        )
 
         let failedAttemptPublications = try await failedAttemptProbe.finish(
             on: authority
         )
         #expect(failedAttemptPublications.count == 0)
 
-        // Signature-Index behavioral control, only after every rollback and
+        // SQL-candidate behavioral control, only after every rollback and
         // zero-publish assertion above: retry the exact failed prepared value.
         // It must insert its original candidate ID at the next position;
         // forced-equal fingerprints with both seeds must not coalesce without

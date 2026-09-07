@@ -1,5 +1,5 @@
 /// RenderStormAndMemoryTests — real-scale tripwires for the COMPOSED stack
-/// (real `SwiftDataHistory` + real `HistoryViewState`/`ThumbnailStore` over
+/// (real `SQLiteHistory` + real `HistoryViewState`/`ThumbnailStore` over
 /// HistoryCore DTOs, per `ComposedSupport.swift`): render-storm observation
 /// coalescing, a search-debounce storm, a resident-memory leak tripwire,
 /// and activate/deactivate cancellation hygiene.

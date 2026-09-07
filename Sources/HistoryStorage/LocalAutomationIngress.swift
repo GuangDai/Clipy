@@ -254,7 +254,7 @@ public actor LocalAutomationIngress {
     }
 }
 
-public extension SwiftDataHistory {
+public extension SQLiteHistory {
     /// Call once per running app and share with its transport and Settings.
     func localAutomationIngress(
         onCommittedRemoval: (@Sendable (HistoryItemID) async -> Void)? = nil,

@@ -1,10 +1,9 @@
 /// Persistent proofs for the package-only bounded performance-fixture seeder.
 /// The seam is setup infrastructure, not a fake storage implementation: raw
-/// captures use production ingest preparation/codecs and every writable
-/// ModelContext remains owned by `HistoryAuthority`.
+/// captures use production ingest preparation/codecs and the writable
+/// SQLite connection remains owned by `HistoryAuthority`.
 import Foundation
 import HistoryCore
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
@@ -15,10 +14,8 @@ struct PerformanceFixtureSeedingTests {
         let storeURL = WSSupport.tempStoreURL("performance-fixture-seed")
         defer { WSSupport.removeStore(storeURL) }
 
-        // The cross-batch unit proof uses inline payloads so same-process
-        // framework teardown cannot emit external-storage diagnostics after
-        // the assertions finish. The admission smoke owns the 1,000-row,
-        // 256-KiB-per-row external-storage proof in its isolated process.
+        // Small inline payloads isolate batch/commit semantics; the admission
+        // smoke exercises 1,000 rows with 256-KiB file-backed payloads.
         try await Self.exerciseBatchedFixture(storeURL: storeURL)
     }
 
@@ -33,17 +30,15 @@ struct PerformanceFixtureSeedingTests {
         #expect(validated.coalescedPosition.rawValue == 3)
         #expect(validated.insertedPosition.rawValue == 4)
 
-        // Decode every stored value while its ModelContext is alive, then
-        // return only immutable proof values. Returning `@Model` rows from a
-        // short-lived context makes CoreData clone external references into
-        // `.LINKS` and is not a valid actor/context-boundary test pattern.
+        // An independent SQL connection reads the committed metadata and
+        // exact canonical representations, returning immutable proof values.
         let stored = try Self.storedProof(
             storeURL: storeURL,
             itemID: validated.coalescedReference.id
         )
         #expect(stored.rowCount == 66)
         #expect(stored.revisionCount == 0)
-        #expect(stored.activeRevisionID == nil)
+        #expect(stored.isCanonicalActive)
         #expect(stored.effectiveTypes == ["public.utf8-plain-text"])
 
         let reopened = try await WSSupport.openHistory(
@@ -63,7 +58,7 @@ struct PerformanceFixtureSeedingTests {
         guard case .committed(let finalCommit) = reopenedCoalesce,
               case .coalesced(let finalReference) = finalCommit.outcome
         else {
-            Issue.record("expected rebuilt startup index to coalesce seeded content")
+            Issue.record("expected durable signature candidates to coalesce seeded content")
             return
         }
         #expect(finalReference.id == validated.coalescedReference.id)
@@ -100,10 +95,8 @@ struct PerformanceFixtureSeedingTests {
     }
 
     private static func exerciseMultirowRollback(storeURL: URL) async throws {
-        // Rollback is representation-independent. Keep this proof inline: a
-        // deliberately failed external-storage transaction can leave CoreData
-        // teardown holding transient `.interim` references even though the
-        // durable rows, position, and index all rolled back correctly.
+        // Keep this transaction proof inline; blob publication/failure has
+        // separate real-file tests. Rows, candidates and position roll back.
         let history = try await WSSupport.openHistory(
             storeURL: storeURL,
             maximumUnpinned: 10
@@ -119,7 +112,7 @@ struct PerformanceFixtureSeedingTests {
         }
 
         do {
-            let failedContainer = try WSSupport.makeContainer(storeURL: storeURL)
+            let failedContainer = try WSSupport.makeDatabase(storeURL: storeURL)
             #expect(try WSSupport.fetchRows(failedContainer).isEmpty)
             #expect(try WSSupport.fetchPosition(failedContainer).rawValue == 0)
         }
@@ -152,7 +145,7 @@ struct PerformanceFixtureSeedingTests {
     private struct StoredProof: Sendable {
         let rowCount: Int
         let revisionCount: Int
-        let activeRevisionID: RevisionID?
+        let isCanonicalActive: Bool
         let effectiveTypes: [String]
     }
 
@@ -161,7 +154,7 @@ struct PerformanceFixtureSeedingTests {
         case missingStoredRow
     }
 
-    /// The facade and its ModelContainer leave scope before validation opens
+    /// The facade and its database connection leave scope before validation opens
     /// the same persistent store, matching an independent setup process.
     private static func seedBatchedFixture(
         storeURL: URL
@@ -223,31 +216,21 @@ struct PerformanceFixtureSeedingTests {
         )
     }
 
-    /// An independent container verifies durable codecs without allowing an
-    /// `@Model`, `ModelContext`, or external-data reference to escape scope.
+    /// An independent SQL connection verifies stored representation bytes
+    /// and candidate facts without inventing an aggregate blob fixture.
     private static func storedProof(
         storeURL: URL,
         itemID: HistoryItemID
     ) throws -> StoredProof {
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        let context = ModelContext(container)
-        let rowCount = try context.fetchCount(FetchDescriptor<HistoryItemRow>())
-        let uuid = itemID.rawValue
-        var descriptor = FetchDescriptor<HistoryItemRow>(
-            predicate: #Predicate { $0.id == uuid }
-        )
-        descriptor.fetchLimit = 2
-        let rows = try context.fetch(descriptor)
-        guard rows.count == 1, let row = rows.first else {
+        let database = try WSSupport.makeDatabase(storeURL: storeURL)
+        let rows = try WSSupport.fetchRows(database)
+        guard let row = rows.first(where: { $0.id == itemID.rawValue }),
+              row.currentContentID == row.canonicalContentID else {
             throw FixtureTestError.missingStoredRow
         }
-        let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
-        let revisionState = try RevisionStateBlobCodec.decode(
-            row.revisionStateBlob,
-            canonical: canonical
-        )
-        let signatures = try SignatureBlobCodec.decode(
-            row.canonicalSignatureBlob
+        let canonical = try WSSupport.fetchCanonical(itemID: itemID.rawValue, in: database)
+        let signatures = try WSSupport.fetchSignatureEntries(
+            itemID: itemID.rawValue, in: database
         )
         try SignatureBlobCodec.validateCoverage(
             canonical: canonical,
@@ -257,9 +240,9 @@ struct PerformanceFixtureSeedingTests {
             row.effectiveTypeIdentifiersBlob
         )
         return StoredProof(
-            rowCount: rowCount,
-            revisionCount: revisionState.revisions.count,
-            activeRevisionID: revisionState.activeRevisionID,
+            rowCount: rows.count,
+            revisionCount: row.revisionCount,
+            isCanonicalActive: row.currentContentID == row.canonicalContentID,
             effectiveTypes: effectiveTypes
         )
     }

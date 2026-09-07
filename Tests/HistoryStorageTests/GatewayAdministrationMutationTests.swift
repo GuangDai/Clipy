@@ -2,7 +2,6 @@
 /// Owning spec: `V2-05` §3.3/§5.3/§5.4 and roadmap X.4/GW3.
 import Foundation
 import HistoryCore
-import SwiftData
 import Synchronization
 import Testing
 @testable import HistoryStorage
@@ -65,48 +64,34 @@ struct GatewayAdministrationMutationTests {
 
     private struct Fixture {
         let authority: HistoryAuthority
-        let container: ModelContainer
         let idSource: UUIDSource
         let clock: StepClock
     }
 
     private static func makeFixture() async throws -> Fixture {
-        let schema = historySchema
-        let container = try ModelContainer(
-            for: schema,
-            configurations: [ModelConfiguration(
-                schema: schema,
-                isStoredInMemoryOnly: true,
-                cloudKitDatabase: .none
-            )]
-        )
         let idSource = UUIDSource([appIntentsID, enrolledID])
         let clock = StepClock(epoch: epoch)
-        let authority = HistoryAuthority(
-            container: container,
+        let authority = try HistoryAuthority(
+            storeLocation: try HistoryStoreLocation(persistence: .temporary),
             storageClock: clock,
             gatewayConnectionIDSource: { idSource.next() }
         )
         try await authority.performStartup(initialMaximumUnpinnedItems: 200)
         return Fixture(
             authority: authority,
-            container: container,
             idSource: idSource,
             clock: clock
         )
     }
 
-    private static func snapshot(_ fixture: Fixture) throws
+    private static func snapshot(_ fixture: Fixture) async throws
         -> GatewayStoreSnapshot
     {
-        try GatewayStoreSnapshot.read(in: ModelContext(fixture.container))
+        try await GatewayStoreSnapshot.read(from: fixture.authority)
     }
 
-    private static func historyPosition(_ fixture: Fixture) throws -> UInt64 {
-        let context = ModelContext(fixture.container)
-        return try #require(
-            context.fetch(FetchDescriptor<LastChangePositionRow>()).first
-        ).rawValue
+    private static func historyPosition(_ fixture: Fixture) async throws -> UInt64 {
+        try await fixture.authority.currentPosition().rawValue
     }
 
     @Test("verified local publication uses its preassigned ID and truthful audit")
@@ -123,7 +108,7 @@ struct GatewayAdministrationMutationTests {
         #expect(fixture.idSource.remainingCount == 1)
         #expect(fixture.clock.callCount == 3)
 
-        let snapshot = try Self.snapshot(fixture)
+        let snapshot = try await Self.snapshot(fixture)
         let connection = try #require(snapshot.connections.first(where: {
             $0.id == Self.enrolledID
         }))
@@ -174,7 +159,7 @@ struct GatewayAdministrationMutationTests {
         #expect(!expectedAuditBytes.overflow)
         #expect(snapshot.configs.first?.auditBytes
             == expectedAuditBytes.partialValue)
-        #expect(try Self.historyPosition(fixture) == 0)
+        #expect(try await Self.historyPosition(fixture) == 0)
     }
 
     @Test("generic Authority cannot bypass verified local publication")
@@ -189,7 +174,7 @@ struct GatewayAdministrationMutationTests {
                 credential: nil
             )
         }
-        #expect(try Self.snapshot(fixture).operations.isEmpty)
+        #expect(try await Self.snapshot(fixture).operations.isEmpty)
         #expect(fixture.clock.callCount == 1)
         #expect(fixture.idSource.remainingCount == 1)
 
@@ -199,30 +184,25 @@ struct GatewayAdministrationMutationTests {
                 displayName: oversized
             )
         }
-        var snapshot = try Self.snapshot(fixture)
+        var snapshot = try await Self.snapshot(fixture)
         #expect(snapshot.connections.count == 1)
         #expect(snapshot.operations.isEmpty)
         #expect(fixture.clock.callCount == 1)
         #expect(fixture.idSource.remainingCount == 1)
 
-        let context = ModelContext(fixture.container)
-        context.autosaveEnabled = false
-        for suffix in 1...499 {
-            let id = UUID(uuidString: String(
-                format: "10000000-0000-0000-0000-%012llX",
-                UInt64(suffix)
-            ))!
-            context.insert(ConnectionRow(
-                id: id,
-                displayNameRaw: "Connection \(suffix)",
-                enrollKindRaw: ConnectionEnrollKind.localAutomation.rawValue,
-                statusRaw: ConnectionStatus.active.rawValue,
-                enrolledAt: Self.epoch,
-                revokedAt: nil,
-                configSchemaVersion: HistoryAuthority.gatewayConfigSchemaVersion
-            ))
+        try await fixture.authority.withTestDatabase { authority in
+            try authority.database.writeTransaction {
+                for suffix in 1...499 {
+                    let id = UUID(uuidString: String(format: "10000000-0000-0000-0000-%012llX", UInt64(suffix)))!
+                    try authority.database.execute("INSERT INTO connections (id, displayNameRaw, enrollKindRaw, statusRaw, enrolledAt, revokedAt, configSchemaVersion) VALUES (?, ?, ?, ?, ?, NULL, ?)", bindings: [
+                        .text(id.uuidString), .text("Connection \(suffix)"),
+                        .integer(Int64(ConnectionEnrollKind.localAutomation.rawValue)),
+                        .integer(Int64(ConnectionStatus.active.rawValue)),
+                        .real(Self.epoch.timeIntervalSinceReferenceDate), .integer(1)
+                    ])
+                }
+            }
         }
-        try context.save()
 
         await #expect(throws: ExternalFailure.requestDenied(.invalidInput)) {
             try await fixture.authority.publishVerifiedLocalAutomationEnrollment(
@@ -230,7 +210,7 @@ struct GatewayAdministrationMutationTests {
                 displayName: "Connection 501"
             )
         }
-        snapshot = try Self.snapshot(fixture)
+        snapshot = try await Self.snapshot(fixture)
         #expect(snapshot.connections.count == 500)
         #expect(snapshot.operations.count == 1)
         #expect(snapshot.operations[0].connectionIDRaw == nil)
@@ -256,7 +236,7 @@ struct GatewayAdministrationMutationTests {
             credentialWasProvided: true
         ))
         #expect(fixture.idSource.remainingCount == 1)
-        #expect(try Self.historyPosition(fixture) == 0)
+        #expect(try await Self.historyPosition(fixture) == 0)
     }
 
     @Test("grant, revoke, and re-grant keep one canonical current-state row")
@@ -274,7 +254,7 @@ struct GatewayAdministrationMutationTests {
         try await fixture.authority.revokeCapability(.organize, of: id)
         try await fixture.authority.grantCapability(.organize, to: id)
 
-        let snapshot = try Self.snapshot(fixture)
+        let snapshot = try await Self.snapshot(fixture)
         let grant = try #require(snapshot.grants.first)
         #expect(snapshot.grants.count == 1)
         #expect(grant.grantKey == GatewayAdministration.canonicalGrantKey(
@@ -303,7 +283,7 @@ struct GatewayAdministrationMutationTests {
         ])
         #expect(snapshot.operations.allSatisfy { $0.changePositionRaw == nil })
         #expect(fixture.clock.callCount == 13)
-        #expect(try Self.historyPosition(fixture) == 0)
+        #expect(try await Self.historyPosition(fixture) == 0)
     }
 
     @Test("connection revoke closes every live grant and repeated revoke is audited noOp")
@@ -320,7 +300,7 @@ struct GatewayAdministrationMutationTests {
         try await fixture.authority.revokeConnection(id)
         try await fixture.authority.revokeConnection(id)
 
-        let snapshot = try Self.snapshot(fixture)
+        let snapshot = try await Self.snapshot(fixture)
         let connection = try #require(snapshot.connections.first(where: {
             $0.id == Self.enrolledID
         }))
@@ -337,7 +317,7 @@ struct GatewayAdministrationMutationTests {
         #expect(snapshot.operations.suffix(2).allSatisfy {
             $0.operationKindRaw == ExternalOperationKind.adminRevoke.rawValue
         })
-        #expect(try Self.historyPosition(fixture) == 0)
+        #expect(try await Self.historyPosition(fixture) == 0)
     }
 
     @Test("unknown targets, revoked connections, and cross-kind grants use exact typed failures")
@@ -364,7 +344,7 @@ struct GatewayAdministrationMutationTests {
             try await fixture.authority.grantCapability(.organize, to: id)
         }
 
-        let snapshot = try Self.snapshot(fixture)
+        let snapshot = try await Self.snapshot(fixture)
         #expect(snapshot.grants.isEmpty)
         #expect(snapshot.operations.count == 5)
         #expect(snapshot.operations[0].connectionIDRaw == missing.rawValue)
@@ -381,7 +361,7 @@ struct GatewayAdministrationMutationTests {
             id,
             displayName: "Local automation"
         )
-        let before = try Self.snapshot(fixture)
+        let before = try await Self.snapshot(fixture)
         await fixture.authority.setTransactionFailureInjection(
             .beforeSingletonUpdate
         )
@@ -390,14 +370,14 @@ struct GatewayAdministrationMutationTests {
             try await fixture.authority.grantCapability(.organize, to: id)
         }
 
-        #expect(try Self.snapshot(fixture) == before)
-        #expect(try Self.historyPosition(fixture) == 0)
+        #expect(try await Self.snapshot(fixture) == before)
+        #expect(try await Self.historyPosition(fixture) == 0)
     }
 
     @Test("verified local publication rolls back row, audit, and counters")
     func verifiedLocalPublicationRollsBackAtomically() async throws {
         let fixture = try await Self.makeFixture()
-        let before = try Self.snapshot(fixture)
+        let before = try await Self.snapshot(fixture)
         await fixture.authority.setTransactionFailureInjection(
             .beforeSingletonUpdate
         )
@@ -409,8 +389,8 @@ struct GatewayAdministrationMutationTests {
             )
         }
 
-        #expect(try Self.snapshot(fixture) == before)
+        #expect(try await Self.snapshot(fixture) == before)
         #expect(fixture.idSource.remainingCount == 1)
-        #expect(try Self.historyPosition(fixture) == 0)
+        #expect(try await Self.historyPosition(fixture) == 0)
     }
 }

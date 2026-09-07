@@ -14,8 +14,8 @@ import Testing
 struct AppIntentSurfaceInvalidationTests {
     @Test @MainActor
     func removePurgesExactSurfaceBeforeHeldObservationCatchesUp() async throws {
-        let base = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let base = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         let receipt = try await base.perform(.capture(ClipboardCapture(
             representations: [CapturedRepresentation(

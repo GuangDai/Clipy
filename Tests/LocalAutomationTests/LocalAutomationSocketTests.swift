@@ -253,7 +253,7 @@ final class LocalAutomationSocketTests: XCTestCase {
     }
 
     private struct Fixture: Sendable {
-        let history: SwiftDataHistory
+        let history: SQLiteHistory
         let connection: ExternalConnectionID
         let credential: Data
         let endpoint: URL
@@ -274,7 +274,7 @@ final class LocalAutomationSocketTests: XCTestCase {
         )
         let endpoint = directory.appendingPathComponent("automation.sock")
         let serverDirectory = directory.appendingPathComponent("server-credentials", isDirectory: true)
-        let history = try await SwiftDataHistory.open(configuration: .init(persistence: .memory))
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         for index in 0..<3 {
             _ = try await history.perform(.capture(.init(
                 representations: [

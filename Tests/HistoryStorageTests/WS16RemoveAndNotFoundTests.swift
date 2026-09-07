@@ -1,6 +1,6 @@
 /// WS16 — Remove and not-found failures (docs/06-cross-cutting.md §8 WS16):
 /// the commit/receipt/storage side of `perform(.remove(_:))` through the
-/// public `SwiftDataHistory` facade and the real step-6 mutation commit
+/// public `SQLiteHistory` facade and the real step-6 mutation commit
 /// paths, plus the `.notFound` / `.invalidPinnedPlacement` failure producers
 /// on an absent ID.
 ///
@@ -16,7 +16,7 @@
 /// `.invalidPinnedPlacement(.targetMissing)`, placement's own anchor-missing
 /// vocabulary by design (docs/03b-instruction-set.md §10
 /// `PinnedPlacementFailure`); and the durable row/singleton state as seen
-/// through an INDEPENDENT second `ModelContainer` over the same on-disk
+/// through an INDEPENDENT second `SQLite connection` over the same on-disk
 /// store (see `WSSupport`).
 import Foundation
 import HistoryCore
@@ -73,7 +73,7 @@ struct WS16RemoveAndNotFoundTests {
     // removal is absence from the retained set, there is no tombstone) and
     // the position singleton matches the receipt (one transaction,
     // docs/06-cross-cutting.md §7.1).
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
     #expect(rows.isEmpty)
     let position = try WSSupport.fetchPosition(container)
@@ -178,7 +178,7 @@ struct WS16RemoveAndNotFoundTests {
     // Pre-remove durable state through the INDEPENDENT container: the pinned
     // lane is exactly [first: 0, second: 1, third: 2] — the ordinals the
     // compaction below must shift from.
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let preRemovalRows = try WSSupport.fetchRows(container)
     #expect(preRemovalRows.count == 3)
     let preRemovalOrdinals = Dictionary(
@@ -298,7 +298,7 @@ struct WS16RemoveAndNotFoundTests {
 
     // No rejected action is a History Commit (docs/04-coherence.md §4): the
     // position singleton stays at 2 and the store stays empty.
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
     #expect(rows.isEmpty)
     let position = try WSSupport.fetchPosition(container)

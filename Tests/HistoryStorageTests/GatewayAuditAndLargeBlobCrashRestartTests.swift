@@ -4,13 +4,13 @@
 /// read audit has committed, but the immutable public result has not crossed
 /// the Authority method boundary. A fresh owner then sees exactly one matching
 /// audit through the public admin facade. The large-payload chain separately
-/// commits one schema-`externalStorage`-hinted representation, terminates
+/// commits one immutable content-file representation, terminates
 /// abnormally, and forces byte-exact hydration through public browse, details,
 /// and paste-payload calls in a fresh process.
 ///
 /// These fixtures establish process-crash/reopen behavior on the pinned
-/// macOS/SwiftData lane only. They do not inspect sidecar layout or claim fsync,
-/// sudden-power-loss atomicity, or permanent external placement.
+/// macOS/SQLite lane only. They do not inspect blob layout or claim
+/// sudden-power-loss atomicity.
 import Foundation
 import Testing
 

@@ -1,20 +1,19 @@
 /// DC-25/J.3 atomic History Change Record append proofs through the real
-/// Authority and in-memory V4 store.
+/// Authority and temporary SQLite store.
 import Foundation
 import HistoryCore
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
 @Suite("HCR atomic append (J.3)")
 struct HCRAtomicAppendTests {
-    private struct SeedRecord {
+    private struct SeedRecord: Sendable {
         let sequence: UInt64
         let itemID: HistoryItemID
         let createdAt: Date
     }
 
-    private struct StoredJournalState {
+    private struct StoredJournalState: Sendable {
         let floor: UInt64
         let bytes: UInt64
         let sequences: [UInt64]
@@ -42,37 +41,25 @@ struct HCRAtomicAppendTests {
     }
 
     private static func makeHistory() async throws -> (
-        history: SwiftDataHistory,
-        container: ModelContainer
+        history: SQLiteHistory,
+        authority: HistoryAuthority
     ) {
-        let history = try await SwiftDataHistory.open(configuration:
-            HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(configuration:
+            HistoryConfiguration(persistence: .temporary)
         )
-        let container = await history.authority.container
-        return (history, container)
+        return (history, history.authority)
     }
 
     private static func snapshot(
-        in container: ModelContainer
-    ) throws -> JournalSnapshot {
-        let context = ModelContext(container)
-        let position = try #require(
-            context.fetch(FetchDescriptor<LastChangePositionRow>()).first
-        )
-        let config = try #require(
-            context.fetch(FetchDescriptor<JournalConfigRow>()).first
-        )
-        let rows = try context.fetch(FetchDescriptor<HistoryChangeRecordRow>(
-            sortBy: [SortDescriptor(\.sequence)]
-        ))
-        let items = try context.fetch(FetchDescriptor<HistoryItemRow>())
-            .map { JournalSnapshot.Item(id: $0.id, pinOrdinal: $0.pinOrdinal) }
-            .sorted { $0.id.uuidString < $1.id.uuidString }
+        in authority: HistoryAuthority
+    ) async throws -> JournalSnapshot {
+        let state = try await authority.hcrTestSnapshot()
+        let config = try #require(state.configs.first)
         return JournalSnapshot(
-            position: position.rawValue,
+            position: state.position,
             floor: config.compactionFloorRaw,
             journalBytes: config.journalBytes,
-            records: rows.map {
+            records: state.records.map {
                 JournalSnapshot.Record(
                     sequence: $0.sequence,
                     changePosition: $0.changePositionRaw,
@@ -80,49 +67,46 @@ struct HCRAtomicAppendTests {
                     affectedItemsBlob: $0.affectedItemsBlob
                 )
             },
-            items: items
+            items: state.items.map { JournalSnapshot.Item(id: $0.id, pinOrdinal: $0.pinOrdinal) }
         )
     }
 
     private static func makeJournalStore(
         _ seeds: [SeedRecord],
         limits: JournalLimits
-    ) throws -> ModelContainer {
-        let schema = historySchema
-        let container = try ModelContainer(
-            for: schema,
-            configurations: [ModelConfiguration(
-                schema: schema,
-                isStoredInMemoryOnly: true,
-                cloudKitDatabase: .none
-            )]
+    ) async throws -> HistoryAuthority {
+        let history = try await SQLiteHistory.open(configuration:
+            HistoryConfiguration(persistence: .temporary)
         )
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
-        var logicalBytes: UInt64 = 0
-        for seed in seeds {
-            let blob = try AffectedItemsBlobCodec.encode(
-                [seed.itemID],
-                for: .insert,
-                limits: limits
-            )
-            logicalBytes += UInt64(blob.count)
-            context.insert(HistoryChangeRecordRow(
-                sequence: seed.sequence,
-                changePositionRaw: seed.sequence,
-                changeKindRaw: HistoryChangeKindRawV1.insert.rawValue,
-                affectedItemsBlob: blob,
-                createdAt: seed.createdAt
-            ))
+        try await history.authority.withTestDatabase { authority in
+            try authority.database.writeTransaction {
+                var logicalBytes: UInt64 = 0
+                for seed in seeds {
+                    let blob = try AffectedItemsBlobCodec.encode(
+                        [seed.itemID], for: .insert, limits: limits
+                    )
+                    logicalBytes += UInt64(blob.count)
+                    try authority.database.execute("""
+                        INSERT INTO history_change_records
+                            (sequence, changePositionRaw, changeKindRaw, affectedItemsBlob, createdAt)
+                        VALUES (?, ?, ?, ?, ?)
+                        """, bindings: [
+                            .blob(sqliteUInt64(seed.sequence)), .blob(sqliteUInt64(seed.sequence)),
+                            .integer(Int64(HistoryChangeKindRawV1.insert.rawValue)), .blob(blob),
+                            .real(seed.createdAt.timeIntervalSinceReferenceDate)
+                        ])
+                }
+                try authority.database.execute(
+                    "UPDATE journal_config SET journalBytes = ?",
+                    bindings: [.blob(sqliteUInt64(logicalBytes))]
+                )
+                try authority.database.execute(
+                    "UPDATE history_state SET changePosition = ?",
+                    bindings: [.blob(sqliteUInt64(seeds.last?.sequence ?? 0))]
+                )
+            }
         }
-        context.insert(JournalConfigRow(
-            key: HCRBootstrap.configKey,
-            compactionFloorRaw: 0,
-            journalBytes: logicalBytes,
-            configSchemaVersion: HCRBootstrap.configSchemaVersion
-        ))
-        try context.save()
-        return container
+        return history.authority
     }
 
     private static func append(
@@ -130,49 +114,46 @@ struct HCRAtomicAppendTests {
         itemID: HistoryItemID,
         createdAt: Date,
         limits: JournalLimits,
-        in container: ModelContainer
-    ) throws {
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
-        try context.transaction {
-            try HCRStore.append(
-                HistoryChangeRecordPayload(
-                    sequence: sequence,
-                    changePositionRaw: sequence,
-                    changeKind: .insert,
-                    affectedItemIDs: [itemID],
-                    createdAt: createdAt
-                ),
-                expectedPreviousPosition: ChangePosition(
-                    rawValue: sequence - 1
-                ),
-                in: context,
-                limits: limits
-            )
+        in authority: HistoryAuthority
+    ) async throws {
+        try await authority.withTestDatabase { authority in
+            try authority.database.writeTransaction {
+                try HCRStore.append(
+                    HistoryChangeRecordPayload(
+                        sequence: sequence,
+                        changePositionRaw: sequence,
+                        changeKind: .insert,
+                        affectedItemIDs: [itemID],
+                        createdAt: createdAt
+                    ),
+                    expectedPreviousPosition: ChangePosition(rawValue: sequence - 1),
+                    in: authority.database,
+                    limits: limits
+                )
+                try authority.database.execute(
+                    "UPDATE history_state SET changePosition = ?",
+                    bindings: [.blob(sqliteUInt64(sequence))]
+                )
+            }
         }
     }
 
     private static func journalRows(
-        in container: ModelContainer
-    ) throws -> StoredJournalState {
-        let context = ModelContext(container)
-        let config = try #require(
-            context.fetch(FetchDescriptor<JournalConfigRow>()).first
-        )
-        let rows = try context.fetch(FetchDescriptor<HistoryChangeRecordRow>(
-            sortBy: [SortDescriptor(\.sequence)]
-        ))
+        in authority: HistoryAuthority
+    ) async throws -> StoredJournalState {
+        let state = try await authority.hcrTestSnapshot()
+        let config = try #require(state.configs.first)
         return StoredJournalState(
             floor: config.compactionFloorRaw,
             bytes: config.journalBytes,
-            sequences: rows.map(\.sequence),
-            blobByteCounts: rows.map { $0.affectedItemsBlob.count }
+            sequences: state.records.map(\.sequence),
+            blobByteCounts: state.records.map { $0.affectedItemsBlob.count }
         )
     }
 
     private static func capture(
         _ text: String,
-        in history: SwiftDataHistory
+        in history: SQLiteHistory
     ) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.capture(
             WSSupport.textCapture(
@@ -192,7 +173,7 @@ struct HCRAtomicAppendTests {
     @Test("capture mutation, HCR, counter, and position share one save boundary")
     func captureAppendsOneAtomicRecord() async throws {
         let fixture = try await Self.makeHistory()
-        #expect(try Self.snapshot(in: fixture.container) == JournalSnapshot(
+        #expect(try await Self.snapshot(in: fixture.authority) == JournalSnapshot(
             position: 0,
             floor: 0,
             journalBytes: 0,
@@ -205,7 +186,7 @@ struct HCRAtomicAppendTests {
             in: fixture.history
         )
 
-        let snapshot = try Self.snapshot(in: fixture.container)
+        let snapshot = try await Self.snapshot(in: fixture.authority)
         #expect(snapshot.position == 1)
         #expect(snapshot.floor == 0)
         #expect(snapshot.records.count == 1)
@@ -225,7 +206,7 @@ struct HCRAtomicAppendTests {
         let fixture = try await Self.makeHistory()
         let reference = try await Self.capture("hcr no-op", in: fixture.history)
         _ = try await fixture.history.perform(.placePinned(reference.id, at: .first))
-        let before = try Self.snapshot(in: fixture.container)
+        let before = try await Self.snapshot(in: fixture.authority)
 
         let receipt = try await fixture.history.perform(
             .placePinned(reference.id, at: .first)
@@ -235,7 +216,7 @@ struct HCRAtomicAppendTests {
             Issue.record("expected unchanged repeated pin, got \(receipt)")
             return
         }
-        #expect(try Self.snapshot(in: fixture.container) == before)
+        #expect(try await Self.snapshot(in: fixture.authority) == before)
     }
 
     @Test("WS13 failure rolls back item, HCR, journal bytes, and position")
@@ -245,7 +226,7 @@ struct HCRAtomicAppendTests {
             "hcr rollback",
             in: fixture.history
         )
-        let before = try Self.snapshot(in: fixture.container)
+        let before = try await Self.snapshot(in: fixture.authority)
         await fixture.history.authority.setTransactionFailureInjection(
             .beforeSingletonUpdate
         )
@@ -256,11 +237,11 @@ struct HCRAtomicAppendTests {
             )
         }
 
-        #expect(try Self.snapshot(in: fixture.container) == before)
+        #expect(try await Self.snapshot(in: fixture.authority) == before)
     }
 
     @Test("count cap trims exactly the oldest prefix in the append transaction")
-    func countCapTrimsOldestPrefix() throws {
+    func countCapTrimsOldestPrefix() async throws {
         let limits = try #require(JournalLimits(
             maxAffectedItemsPerRecord: 3,
             maxJournalRecordCount: 2,
@@ -277,12 +258,12 @@ struct HCRAtomicAppendTests {
                 )
             )!)
         }
-        let container = try Self.makeJournalStore([
+        let container = try await Self.makeJournalStore([
             SeedRecord(sequence: 1, itemID: ids[0], createdAt: epoch),
             SeedRecord(sequence: 2, itemID: ids[1], createdAt: epoch),
         ], limits: limits)
 
-        try Self.append(
+        try await Self.append(
             sequence: 3,
             itemID: ids[2],
             createdAt: epoch,
@@ -290,7 +271,7 @@ struct HCRAtomicAppendTests {
             in: container
         )
 
-        let state = try Self.journalRows(in: container)
+        let state = try await Self.journalRows(in: container)
         #expect(state.floor == 1)
         #expect(state.sequences == [2, 3])
         #expect(state.bytes == state.blobByteCounts.reduce(UInt64(0)) {
@@ -299,7 +280,7 @@ struct HCRAtomicAppendTests {
     }
 
     @Test("byte cap trims the oldest rows until the exact counter is admitted")
-    func byteCapTrimsOldestPrefix() throws {
+    func byteCapTrimsOldestPrefix() async throws {
         let limits = try #require(JournalLimits(
             maxAffectedItemsPerRecord: 3,
             maxJournalRecordCount: 10,
@@ -314,11 +295,11 @@ struct HCRAtomicAppendTests {
         let newID = HistoryItemID(rawValue: UUID(
             uuidString: "00000000-0000-0000-0000-000000000B72"
         )!)
-        let container = try Self.makeJournalStore([
+        let container = try await Self.makeJournalStore([
             SeedRecord(sequence: 1, itemID: oldID, createdAt: epoch),
         ], limits: limits)
 
-        try Self.append(
+        try await Self.append(
             sequence: 2,
             itemID: newID,
             createdAt: epoch,
@@ -326,14 +307,14 @@ struct HCRAtomicAppendTests {
             in: container
         )
 
-        let state = try Self.journalRows(in: container)
+        let state = try await Self.journalRows(in: container)
         #expect(state.floor == 1)
         #expect(state.sequences == [2])
         #expect(state.bytes == UInt64(try #require(state.blobByteCounts.first)))
     }
 
     @Test("age expiry scans only on the configured ChangePosition cadence")
-    func ageExpiryUsesPositionCadence() throws {
+    func ageExpiryUsesPositionCadence() async throws {
         let cadenceLimits = try #require(JournalLimits(
             maxAffectedItemsPerRecord: 3,
             maxJournalRecordCount: 10,
@@ -348,11 +329,11 @@ struct HCRAtomicAppendTests {
         let newID = HistoryItemID(rawValue: UUID(
             uuidString: "00000000-0000-0000-0000-000000000B82"
         )!)
-        let cadenceContainer = try Self.makeJournalStore([
+        let cadenceContainer = try await Self.makeJournalStore([
             SeedRecord(sequence: 1, itemID: oldID, createdAt: epoch),
         ], limits: cadenceLimits)
 
-        try Self.append(
+        try await Self.append(
             sequence: 2,
             itemID: newID,
             createdAt: epoch.addingTimeInterval(11),
@@ -360,7 +341,7 @@ struct HCRAtomicAppendTests {
             in: cadenceContainer
         )
 
-        let cadenceState = try Self.journalRows(in: cadenceContainer)
+        let cadenceState = try await Self.journalRows(in: cadenceContainer)
         #expect(cadenceState.floor == 1)
         #expect(cadenceState.sequences == [2])
 
@@ -371,17 +352,17 @@ struct HCRAtomicAppendTests {
             maxJournalBytes: 1_000,
             compactionCadenceCommits: 3
         ))
-        let deferredContainer = try Self.makeJournalStore([
+        let deferredContainer = try await Self.makeJournalStore([
             SeedRecord(sequence: 1, itemID: oldID, createdAt: epoch),
         ], limits: deferredLimits)
-        try Self.append(
+        try await Self.append(
             sequence: 2,
             itemID: newID,
             createdAt: epoch.addingTimeInterval(11),
             limits: deferredLimits,
             in: deferredContainer
         )
-        let deferredState = try Self.journalRows(in: deferredContainer)
+        let deferredState = try await Self.journalRows(in: deferredContainer)
         #expect(deferredState.floor == 0)
         #expect(deferredState.sequences == [1, 2])
     }
@@ -440,5 +421,47 @@ struct HCRAtomicAppendTests {
             scansAge: false,
             maxJournalBytes: 20
         ) == .fullSuffix)
+    }
+}
+
+/// Raw durable journal values for owner tests; reads do not invoke bootstrap.
+struct HCRTestSnapshot: Sendable {
+    struct Item: Sendable {
+        let id: UUID
+        let pinOrdinal: Int?
+    }
+    let position: UInt64
+    let configs: [JournalConfigRow]
+    let records: [HistoryChangeRecordRow]
+    let items: [Item]
+
+    static func read(in database: SQLiteDatabase) throws -> Self {
+        let position = try database.prepare("SELECT changePosition FROM history_state LIMIT 2")
+        defer { position.finalize() }
+        #expect(try position.step())
+        let rawPosition = try sqliteUInt64(position.blob(at: 0))
+        #expect(try !position.step())
+        let itemQuery = try database.prepare("SELECT id, pinOrdinal FROM history_items ORDER BY id")
+        defer { itemQuery.finalize() }
+        var items: [Item] = []
+        while try itemQuery.step() {
+            let id = try #require(UUID(uuidString: itemQuery.text(at: 0)))
+            let ordinal = try itemQuery.isNull(at: 1) ? nil : Int(itemQuery.integer(at: 1))
+            items.append(Item(id: id, pinOrdinal: ordinal))
+        }
+        return Self(
+            position: rawPosition,
+            configs: try HCRBootstrap.loadConfigs(in: database),
+            records: try HCRBootstrap.loadRecords(
+                in: database, limit: JournalLimits.standard.maxJournalRecordCount + 1
+            ),
+            items: items
+        )
+    }
+}
+
+extension HistoryAuthority {
+    func hcrTestSnapshot() throws -> HCRTestSnapshot {
+        try database.readTransaction { try HCRTestSnapshot.read(in: database) }
     }
 }

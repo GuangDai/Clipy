@@ -40,7 +40,7 @@ internal actor ExternalGateway {
     private let uptimeNanoseconds: @Sendable () -> UInt64
 
     /// Production construction samples uptime once for the initially-full
-    /// bucket. `SwiftDataHistory.open` wires this only after startup succeeds.
+    /// bucket. `SQLiteHistory.open` wires this only after startup succeeds.
     internal init(
         authority: HistoryAuthority,
         appIntentsConnectionID: ExternalConnectionID,

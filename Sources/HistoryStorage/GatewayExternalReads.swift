@@ -9,7 +9,6 @@
 /// that documented window therefore takes effect on the next request.
 import Foundation
 import HistoryCore
-import SwiftData
 
 #if DEBUG
 /// Process-crash evidence seam for V2-05 §5.2 / PLAY-PY-D5. The callback
@@ -50,8 +49,7 @@ extension HistoryAuthority {
                 ) { context in
                     let page = try recentPageInLocalContext(
                         limit: limit,
-                        after: nil,
-                        context: context
+                        after: nil
                     )
                     let externalPage = try Self.externalPage(
                         from: page,
@@ -76,7 +74,7 @@ extension HistoryAuthority {
                     requestedAt: requestedAt,
                     operation: .readDetails
                 ) { context in
-                    let details = try externalDetails(for: id, in: context)
+                    let details = try externalDetails(for: id)
                     guard let representationCount = UInt16(
                         exactly: details.details.effective.count
                     ), let revisionCount = UInt16(
@@ -103,7 +101,7 @@ extension HistoryAuthority {
                     requestedAt: requestedAt,
                     operation: .readPastePayload
                 ) { context in
-                    let payload = try pastePayload(for: id, in: context)
+                    let payload = try pastePayloadInCurrentTransaction(for: id)
                     guard let representationCount = UInt16(
                         exactly: payload.representations.count
                     ) else {
@@ -127,24 +125,13 @@ extension HistoryAuthority {
             // then contains no await: live decision + scalar corpus capture.
             await suspendIfRequested(.readEntry)
             do {
-                let captured = try autoreleasepool {
-                    try captureExternalSearchCorpus(
-                        browseRequest,
-                        descriptor: facts.descriptor,
-                        connection: connection,
-                        expectedConnectionKind: expectedConnectionKind,
-                        requestedAt: requestedAt
-                    )
-                }
-                let page = try await searchWorker.page(
-                    browseRequest,
-                    in: captured.snapshot,
-                    continuationAnchor: captured.continuationAnchor,
-                    processMarker: cursorProcessMarker
+                let result = try await evaluateAuthorizedSearch(
+                    browseRequest, descriptor: facts.descriptor,
+                    connection: connection, expectedConnectionKind: expectedConnectionKind,
+                    requestedAt: requestedAt, searchWorker: searchWorker
                 )
                 let externalPage = try Self.externalPage(
-                    from: page,
-                    revisionCounts: captured.revisionCounts
+                    from: result.page, revisionCounts: result.revisionCounts
                 )
                 let summary = try Self.pageSummary(externalPage)
                 try commitExternalReadAudit(
@@ -202,8 +189,7 @@ extension HistoryAuthority {
                 ) { context in
                     let page = try recentPageInLocalContext(
                         limit: limit,
-                        after: after,
-                        context: context
+                        after: after
                     )
                     return (page, try Self.historyPageSummary(page))
                 }
@@ -215,20 +201,12 @@ extension HistoryAuthority {
             }
             await suspendIfRequested(.readEntry)
             do {
-                let captured = try autoreleasepool {
-                    try captureLocalAutomationSearchCorpus(
-                        browseRequest,
-                        descriptor: facts.descriptor,
-                        connection: connection,
-                        requestedAt: requestedAt
-                    )
-                }
-                let page = try await searchWorker.page(
-                    browseRequest,
-                    in: captured.snapshot,
-                    continuationAnchor: captured.continuationAnchor,
-                    processMarker: cursorProcessMarker
+                let result = try await evaluateAuthorizedSearch(
+                    browseRequest, descriptor: facts.descriptor,
+                    connection: connection, expectedConnectionKind: .localAutomation,
+                    requestedAt: requestedAt, searchWorker: searchWorker
                 )
+                let page = result.page
                 // Local Automation revocation takes effect before content
                 // publication, including while the search worker was away.
 #if DEBUG
@@ -236,8 +214,7 @@ extension HistoryAuthority {
                     .beforeLocalAutomationSearchPublication?()
 #endif
                 try Task.checkCancellation()
-                let context = ModelContext(container)
-                context.autosaveEnabled = false
+                let context = database
                 let config = try Self.loadGatewayConfig(in: context)
                 try authorizeExternal(
                     facts.descriptor, as: connection,
@@ -292,7 +269,7 @@ extension HistoryAuthority {
                 expectedConnectionKind: .localAutomation,
                 requestedAt: requestedAt, operation: .readPastePayload
             ) { context in
-                let payload = try pastePayload(for: itemID, in: context)
+                let payload = try pastePayloadInCurrentTransaction(for: itemID)
                 let representations = payload.representations
                 let totalBytes = representations.reduce(0) { $0 + $1.bytes.count }
                 // 24,000,000 raw bytes fit below the existing 32 MiB JSON
@@ -347,10 +324,9 @@ private extension HistoryAuthority {
         expectedConnectionKind: ConnectionEnrollKind,
         requestedAt: Date,
         operation: ExternalHistoryOperationContext,
-        projection: (ModelContext) throws -> (Result, ResultSummaryV1)
+        projection: (SQLiteDatabase) throws -> (Result, ResultSummaryV1)
     ) throws -> Result {
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
+        let context = database
         let config = try Self.loadGatewayConfig(in: context)
         try authorizeExternal(
             descriptor,
@@ -378,7 +354,7 @@ private extension HistoryAuthority {
 #endif
 
         do {
-            let (result, summary) = try projection(context)
+            let (result, summary) = try context.readTransaction { try projection(context) }
             try commitGatewayAudit(
                 Self.succeededExternalReadPayload(
                     descriptor: descriptor,
@@ -408,88 +384,66 @@ private extension HistoryAuthority {
         }
     }
 
-    func captureExternalSearchCorpus(
+    /// A fresh request retries only a snapshot invalidated before its reader
+    /// could start. Each attempt rechecks the grant; intermediate snapshots do
+    /// not publish an operation result or audit. Continuations never rebase.
+    func evaluateAuthorizedSearch(
         _ request: HistoryBrowseRequest,
         descriptor: ExternalOperationDescriptor,
         connection: ExternalConnectionID,
         expectedConnectionKind: ConnectionEnrollKind,
-        requestedAt: Date
-    ) throws -> (
-        snapshot: SearchCorpusSnapshot,
-        continuationAnchor: StoredOrderingAnchor?,
-        revisionCounts: [HistoryItemID: Int]
-    ) {
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
-        let config = try Self.loadGatewayConfig(in: context)
-        try authorizeExternal(
-            descriptor,
-            as: connection,
-            expectedConnectionKind: expectedConnectionKind,
-            requestedAt: requestedAt,
-            config: config,
-            in: context
-        )
-        do {
-            let captured = try searchCorpusSnapshotInLocalContext(
-                for: request,
-                context: context
+        requestedAt: Date,
+        searchWorker: SearchWorker
+    ) async throws -> SearchPageResult {
+        while true {
+            try Task.checkCancellation()
+            let position = try captureExternalSearchPosition(
+                descriptor: descriptor, connection: connection,
+                expectedConnectionKind: expectedConnectionKind, requestedAt: requestedAt
             )
-            return (
-                captured.snapshot,
-                captured.continuationAnchor,
-                try capturedExternalRevisionCounts(
-                    for: captured.snapshot.rows.map(\.id),
-                    in: context
-                )
-            )
-        } catch let failure as HistoryFailure {
-            try publishExternalSearchCaptureFailure(
-                failure,
-                descriptor: descriptor,
-                connection: connection,
-                requestedAt: requestedAt,
-                config: config,
-                in: context
-            )
+            do {
+                switch expectedConnectionKind {
+                case .appIntents:
+                    return try await searchWorker.searchPage(
+                        request, store: storeLocation, processMarker: cursorProcessMarker,
+                        expectedPosition: position
+                    )
+                case .localAutomation:
+                    let page = try await searchWorker.page(
+                        request, store: storeLocation, processMarker: cursorProcessMarker,
+                        expectedPosition: position
+                    )
+                    return SearchPageResult(page: page, revisionCounts: [:])
+                }
+            } catch HistoryFailure.snapshotExpired(_) where request.after == nil {
+                continue
+            }
         }
     }
 
-    func captureLocalAutomationSearchCorpus(
-        _ request: HistoryBrowseRequest,
+    /// Admission captures only the coherence position. SearchWorker owns the
+    /// separate request-local SQLite read transaction and streams bounded rows.
+    func captureExternalSearchPosition(
         descriptor: ExternalOperationDescriptor,
         connection: ExternalConnectionID,
+        expectedConnectionKind: ConnectionEnrollKind,
         requestedAt: Date
-    ) throws -> (
-        snapshot: SearchCorpusSnapshot,
-        continuationAnchor: StoredOrderingAnchor?
-    ) {
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
+    ) throws -> ChangePosition {
+        let context = database
         let config = try Self.loadGatewayConfig(in: context)
         try authorizeExternal(
-            descriptor,
-            as: connection,
-            expectedConnectionKind: .localAutomation,
-            requestedAt: requestedAt,
-            config: config,
-            in: context
+            descriptor, as: connection,
+            expectedConnectionKind: expectedConnectionKind,
+            requestedAt: requestedAt, config: config, in: context
         )
         do {
-            return try searchCorpusSnapshotInLocalContext(
-                for: request,
-                context: context
-            )
+            return try readPositionInLocalContext()
         } catch let failure as HistoryFailure {
             try publishExternalReadFailure(
-                failure,
-                descriptor: descriptor,
-                connection: connection,
-                requestedAt: requestedAt,
-                operation: .readSearch,
-                expectedConnectionKind: .localAutomation,
-                config: config,
-                in: context
+                failure, descriptor: descriptor, connection: connection,
+                requestedAt: requestedAt, operation: .readSearch,
+                expectedConnectionKind: expectedConnectionKind,
+                config: config, in: context
             )
         }
     }
@@ -500,7 +454,7 @@ private extension HistoryAuthority {
         connection: ExternalConnectionID,
         requestedAt: Date,
         config: GatewayConfigRow,
-        in context: ModelContext
+        in context: SQLiteDatabase
     ) throws -> Never {
         let mapping = mapExternalHistoryFailure(source, for: .readSearch)
         try commitGatewayAudit(
@@ -524,7 +478,7 @@ private extension HistoryAuthority {
         operation: ExternalHistoryOperationContext,
         expectedConnectionKind: ConnectionEnrollKind = .appIntents,
         config: GatewayConfigRow? = nil,
-        in callerContext: ModelContext? = nil
+        in callerContext: SQLiteDatabase? = nil
     ) throws -> Never {
         let mapping: ExternalHistoryFailureMapping
         switch (expectedConnectionKind, source) {
@@ -583,8 +537,7 @@ private extension HistoryAuthority {
     }
 
     func commitExternalReadAudit(_ payload: OperationRecordPayload) throws {
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
+        let context = database
         let config = try Self.loadGatewayConfig(in: context)
         try commitGatewayAudit(payload, config: config, in: context)
     }
@@ -636,121 +589,32 @@ private extension HistoryAuthority {
         )
     }
 
-    /// Captures the narrow X.7 count facts beside the immutable search corpus
-    /// so a revision landing during SearchWorker evaluation cannot pair an old
-    /// title with a new count. Validation is deliberately deferred to
-    /// `externalPage`: only IDs selected into the bounded result page are
-    /// consumers, so a malformed or missing fact on a non-result row does not
-    /// broaden that page's fail-closed scope.
-    func capturedExternalRevisionCounts(
-        for itemIDs: [HistoryItemID],
-        in context: ModelContext
-    ) throws -> [HistoryItemID: Int] {
-        let rawItemIDs = itemIDs.map(\.rawValue)
-        guard Set(rawItemIDs).count == rawItemIDs.count else {
-            throw HistoryFailure.persistence(.invariantViolation)
-        }
-        guard !rawItemIDs.isEmpty else { return [:] }
-        let expectedIDs = Set(itemIDs)
-        var descriptor = FetchDescriptor<RetainedBytesRow>()
-        descriptor.propertiesToFetch = [
-            \.itemID,
-            \.revisionCount,
-            \.bytesSchemaVersion
-        ]
-        descriptor.fetchLimit = limits.hardMaximumRetainedItems + 1
-        let rows: [RetainedBytesRow]
-        do {
-            rows = try context.fetch(descriptor)
-        } catch {
-            throw HistoryFailure.temporarilyUnavailable(.factProof)
-        }
-
-        var counts: [HistoryItemID: Int] = [:]
-        var seenIDs = Set<HistoryItemID>()
-        counts.reserveCapacity(rows.count)
-        for row in rows {
-            let id = HistoryItemID(rawValue: row.itemID)
-            guard expectedIDs.contains(id) else { continue }
-            guard seenIDs.insert(id).inserted else {
-                // `itemID` is unique and the projection is 1:1. A duplicate
-                // row is relational corruption, not one row's deferred X.7
-                // scalar validity, so it remains an immediate invariant
-                // failure.
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
-            guard row.bytesSchemaVersion
-                    == RetainedBytesStamping.bytesSchemaVersion,
-                  row.revisionCount >= 0,
-                  row.revisionCount <= limits.maximumRevisionsPerItem
-            else {
-                // A selected page row will observe the absent fact below and
-                // fail closed. Non-result rows are not X.7 count consumers.
-                continue
-            }
-            counts[id] = row.revisionCount
-        }
-        return counts
-    }
-
-    /// Reads only the revision-count projection rows named by one already
-    /// bounded external page. The UUID membership predicate and `fetchLimit`
-    /// keep a small recent request independent of total retained-history size;
-    /// the narrow validator below checks only X.7's schema/count facts.
+    /// Same-transaction counts only for the bounded recent page. SearchWorker
+    /// provides these values from its own read snapshot for search pages.
     func externalRevisionCounts(
         for itemIDs: [HistoryItemID],
-        in context: ModelContext
+        in context: SQLiteDatabase
     ) throws -> [HistoryItemID: Int] {
         guard !itemIDs.isEmpty else { return [:] }
-        let rawItemIDs = itemIDs.map(\.rawValue)
-        guard Set(rawItemIDs).count == rawItemIDs.count else {
+        guard Set(itemIDs).count == itemIDs.count else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
-        var descriptor = FetchDescriptor<RetainedBytesRow>(
-            predicate: #Predicate { row in
-                rawItemIDs.contains(row.itemID)
-            }
+        let placeholders = Array(repeating: "?", count: itemIDs.count).joined(separator: ",")
+        let statement = try context.prepare(
+            "SELECT id, revisionCount FROM history_items WHERE id IN (\(placeholders))",
+            bindings: itemIDs.map { .text($0.rawValue.uuidString) }
         )
-        descriptor.propertiesToFetch = [
-            \.itemID,
-            \.revisionCount,
-            \.bytesSchemaVersion
-        ]
-        descriptor.fetchLimit = rawItemIDs.count + 1
-        let rows: [RetainedBytesRow]
-        do {
-            rows = try context.fetch(descriptor)
-        } catch {
-            throw HistoryFailure.temporarilyUnavailable(.factProof)
-        }
-        guard rows.count == rawItemIDs.count else {
-            throw HistoryFailure.persistence(.invariantViolation)
-        }
-        return try externalRevisionCountMap(rows)
-    }
-
-    /// X.7 reads only the two scalar facts its entity projection consumes.
-    /// Retention's byte-accounting validation remains owned by retention;
-    /// unrelated canonical/revision byte corruption cannot broaden a browse
-    /// or search failure. The schema/count bounds still fail closed.
-    func externalRevisionCountMap(
-        _ rows: [RetainedBytesRow]
-    ) throws -> [HistoryItemID: Int] {
         var counts: [HistoryItemID: Int] = [:]
-        counts.reserveCapacity(rows.count)
-        for row in rows {
-            let id = HistoryItemID(rawValue: row.itemID)
-            guard counts[id] == nil else {
-                throw HistoryFailure.persistence(.invariantViolation)
+        while try statement.step() {
+            guard let uuid = UUID(uuidString: try statement.text(at: 0)),
+                  let count = Int(exactly: try statement.integer(at: 1)),
+                  count >= 0, count <= limits.maximumRevisionsPerItem else {
+                throw HistoryFailure.persistence(.corruptStoredValue)
             }
-            guard row.bytesSchemaVersion
-                    == RetainedBytesStamping.bytesSchemaVersion,
-                  row.revisionCount >= 0,
-                  row.revisionCount <= limits.maximumRevisionsPerItem
-            else {
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
-            counts[id] = row.revisionCount
+            counts[HistoryItemID(rawValue: uuid)] = count
+        }
+        guard counts.count == itemIDs.count else {
+            throw HistoryFailure.persistence(.invariantViolation)
         }
         return counts
     }

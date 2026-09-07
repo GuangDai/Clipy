@@ -3,7 +3,7 @@
 import Foundation
 import HistoryCore
 
-extension SwiftDataHistory: GatewayAdminHistory {
+extension SQLiteHistory: GatewayAdminHistory {
     public func enrollConnection(
         kind: ConnectionEnrollKind,
         displayName: String,

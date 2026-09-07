@@ -250,13 +250,13 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
             height: persisted.height
         )
         let mouseLocation = NSEvent.mouseLocation
-        let screenVisibleFrames = NSScreen.screens.map(\.visibleFrame)
-        // The target screen is the one PopupPositionGeometry places the
-        // panel on: the visible frame containing the pointer, else the
-        // first. Shrink only — placement-mode origins are untouched.
-        if let targetVisibleFrame = screenVisibleFrames
-            .first(where: { $0.contains(mouseLocation) })
-            ?? screenVisibleFrames.first {
+        let screens = NSScreen.screens.map { (frame: $0.frame, visibleFrame: $0.visibleFrame) }
+        // Size and origin use the same target display, including a status
+        // item summoned while the pointer remains on a different screen.
+        if let targetVisibleFrame = PopupPositionGeometry.targetVisibleFrame(
+            for: mode, statusItemButtonScreenFrame: statusItemButtonScreenFrame,
+            mouseLocation: mouseLocation, screens: screens
+        ) {
             size = NSSize(
                 width: min(size.width, targetVisibleFrame.width),
                 height: min(size.height, targetVisibleFrame.height)
@@ -267,7 +267,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
             panelSize: size,
             statusItemButtonScreenFrame: statusItemButtonScreenFrame,
             mouseLocation: mouseLocation,
-            screenVisibleFrames: screenVisibleFrames,
+            screens: screens,
             lastPositionAnchor: Self.savedAnchor()
         )
         setFrameProgrammatically(NSRect(origin: origin, size: size), display: false)

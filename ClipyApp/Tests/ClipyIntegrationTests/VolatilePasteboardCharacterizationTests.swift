@@ -3,7 +3,7 @@
 /// semantic contract, so this suite does not classify any identifier as
 /// ignorable. It records the current conservative product behavior through
 /// the composed path: private NSPasteboard -> real PasteboardAdapter freeze ->
-/// real in-memory SwiftDataHistory.
+/// real in-memory SQLiteHistory.
 ///
 /// The named candidates below come from third-party interoperability reports;
 /// the four requested cases use explicitly synthetic unknown-UTI labels in a

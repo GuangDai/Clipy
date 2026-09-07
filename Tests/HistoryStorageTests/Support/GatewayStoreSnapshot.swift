@@ -1,11 +1,10 @@
 import Foundation
 import HistoryCore
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
-struct GatewayStoreSnapshot: Equatable {
-    struct Config: Equatable {
+struct GatewayStoreSnapshot: Equatable, Sendable {
+    struct Config: Equatable, Sendable {
         let key: String
         let appIntentsConnectionID: UUID
         let nextAuditSequence: UInt64
@@ -23,7 +22,7 @@ struct GatewayStoreSnapshot: Equatable {
         }
     }
 
-    struct Connection: Equatable {
+    struct Connection: Equatable, Sendable {
         let id: UUID
         let displayNameRaw: String
         let enrollKindRaw: Int16
@@ -43,7 +42,7 @@ struct GatewayStoreSnapshot: Equatable {
         }
     }
 
-    struct Grant: Equatable {
+    struct Grant: Equatable, Sendable {
         let grantKey: String
         let connectionIDRaw: UUID
         let capabilityRaw: Int16
@@ -61,7 +60,7 @@ struct GatewayStoreSnapshot: Equatable {
         }
     }
 
-    struct Operation: Equatable {
+    struct Operation: Equatable, Sendable {
         let auditSequence: UInt64
         let connectionIDRaw: UUID?
         let capabilityRaw: Int16?
@@ -96,31 +95,78 @@ struct GatewayStoreSnapshot: Equatable {
     let grants: [Grant]
     let operations: [Operation]
 
-    static func read(from storeURL: URL) throws -> GatewayStoreSnapshot {
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        let context = ModelContext(container)
-        return try read(in: context)
+    static func read(from authority: HistoryAuthority) async throws -> GatewayStoreSnapshot {
+        try await authority.gatewayStoreSnapshot()
     }
 
-    static func read(in context: ModelContext) throws -> GatewayStoreSnapshot {
-        let configs = try context.fetch(FetchDescriptor<GatewayConfigRow>())
-            .map(Config.init)
-            .sorted { $0.key < $1.key }
-        let connections = try context.fetch(FetchDescriptor<ConnectionRow>())
-            .map(Connection.init)
-            .sorted { $0.id.uuidString < $1.id.uuidString }
-        let grants = try context.fetch(FetchDescriptor<GrantRow>())
-            .map(Grant.init)
-            .sorted { $0.grantKey < $1.grantKey }
-        let operations = try context.fetch(FetchDescriptor<OperationRecordRow>())
-            .map(Operation.init)
-            .sorted { $0.auditSequence < $1.auditSequence }
+    static func read(from storeURL: URL) throws -> GatewayStoreSnapshot {
+        let database = try SQLiteDatabase(url: storeURL, readOnly: true)
+        return try database.readTransaction { try read(in: database) }
+    }
+
+    static func read(in database: SQLiteDatabase) throws -> GatewayStoreSnapshot {
+        let configStatement = try database.prepare(
+            "SELECT \(GatewayConfigRow.columns) FROM gateway_config ORDER BY key"
+        )
+        defer { configStatement.finalize() }
+        var configs: [Config] = []
+        while try configStatement.step() {
+            configs.append(Config(try GatewayConfigRow(statement: configStatement)))
+        }
+        let connectionStatement = try database.prepare(
+            "SELECT \(ConnectionRow.columns) FROM connections ORDER BY id"
+        )
+        defer { connectionStatement.finalize() }
+        var connections: [Connection] = []
+        while try connectionStatement.step() {
+            connections.append(Connection(try ConnectionRow(statement: connectionStatement)))
+        }
+        let grantStatement = try database.prepare(
+            "SELECT \(GrantRow.columns) FROM grants ORDER BY grantKey"
+        )
+        defer { grantStatement.finalize() }
+        var grants: [Grant] = []
+        while try grantStatement.step() {
+            grants.append(Grant(try GrantRow(statement: grantStatement)))
+        }
+        let operations = try operationRows(in: database).map(Operation.init)
         return GatewayStoreSnapshot(
             configs: configs,
             connections: connections,
             grants: grants,
             operations: operations
         )
+    }
+
+    static func operationRows(in database: SQLiteDatabase) throws -> [OperationRecordRow] {
+        let statement = try database.prepare("""
+            SELECT auditSequence, connectionIDRaw, capabilityRaw, operationKindRaw,
+                   outcomeRaw, failureKindRaw, denialReasonRaw, payloadBlob,
+                   requestedAt, committedAt, changePositionRaw, auditSchemaVersion
+            FROM operation_records ORDER BY auditSequence
+            """)
+        defer { statement.finalize() }
+        var rows: [OperationRecordRow] = []
+        while try statement.step() {
+            let connectionID = try statement.optionalText(at: 1).map { raw in
+                try #require(UUID(uuidString: raw))
+            }
+            rows.append(try OperationRecordRow(
+                auditSequence: sqliteUInt64(statement.blob(at: 0)),
+                connectionIDRaw: connectionID,
+                capabilityRaw: statement.isNull(at: 2) ? nil : #require(Int16(exactly: statement.integer(at: 2))),
+                operationKindRaw: #require(Int16(exactly: statement.integer(at: 3))),
+                outcomeRaw: #require(Int16(exactly: statement.integer(at: 4))),
+                failureKindRaw: statement.isNull(at: 5) ? nil : #require(Int16(exactly: statement.integer(at: 5))),
+                denialReasonRaw: statement.isNull(at: 6) ? nil : #require(Int16(exactly: statement.integer(at: 6))),
+                payloadBlob: statement.blob(at: 7),
+                requestedAt: Date(timeIntervalSinceReferenceDate: statement.real(at: 8)),
+                committedAt: Date(timeIntervalSinceReferenceDate: statement.real(at: 9)),
+                changePositionRaw: statement.optionalBlob(at: 10).map { try sqliteUInt64($0) },
+                auditSchemaVersion: #require(UInt16(exactly: statement.integer(at: 11)))
+            ))
+        }
+        return rows
     }
 
     func expectX3DenyByDefaultBootstrap() throws {
@@ -142,4 +188,11 @@ struct GatewayStoreSnapshot: Equatable {
         #expect(grants.isEmpty)
         #expect(operations.isEmpty)
     }
+}
+
+extension HistoryAuthority {
+    func gatewayStoreSnapshot() throws -> GatewayStoreSnapshot {
+        try database.readTransaction { try GatewayStoreSnapshot.read(in: database) }
+    }
+
 }

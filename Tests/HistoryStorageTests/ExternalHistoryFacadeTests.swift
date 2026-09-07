@@ -17,8 +17,8 @@ struct ExternalHistoryFacadeTests {
 
     @Test("factory publishes one bound Sendable facade with real positive paths")
     func publicFactoryRunsTheApprovedJourney() async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         // A plain no-argument call proves this is a synchronous value accessor.
         let facade = requireSendable(

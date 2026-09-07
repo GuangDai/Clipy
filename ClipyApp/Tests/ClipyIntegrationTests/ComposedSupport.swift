@@ -1,7 +1,7 @@
 /// ComposedSupport — shared fixtures for the M3 re-verification suites
 /// (docs/roadmap/06-clipyapp.md "Acceptance"; docs/roadmap/README.md §3):
 /// every WS1–WS21 path re-run end-to-end through the COMPOSED app stack —
-/// the real `SwiftDataHistory` facade, the real `PasteboardAdapter` over a
+/// the real `SQLiteHistory` facade, the real `PasteboardAdapter` over a
 /// PRIVATE `NSPasteboard` (never `.general`), and the real PresentationUI
 /// `HistoryViewState` — instead of the storage-side seams the step-5–8
 /// suites use.
@@ -37,16 +37,16 @@ enum ComposedSupport {
 
     // MARK: Stores
 
-    /// Opens a REAL `SwiftDataHistory` over an in-memory store — same
+    /// Opens a REAL `SQLiteHistory` over a disposable store — same
     /// Authority, planners, codecs, and transaction path as a persistent
     /// store; only the durability medium differs (docs/05-authority-kernel.md
     /// §2). Used for every suite that needs no restart.
     static func openMemoryHistory(
         maximumUnpinned: Int = 200
-    ) async throws -> SwiftDataHistory {
-        try await SwiftDataHistory.open(
+    ) async throws -> SQLiteHistory {
+        try await SQLiteHistory.open(
             configuration: HistoryConfiguration(
-                persistence: .memory,
+                persistence: .temporary,
                 initialMaximumUnpinnedItems: maximumUnpinned
             )
         )
@@ -258,12 +258,12 @@ enum ComposedSupport {
 /// tests share this deterministic commit-receipt/observation gap instead of
 /// creating a second storage implementation.
 actor PostInitialObservationSuspendingHistory: ClipboardHistory {
-    private let base: SwiftDataHistory
+    private let base: SQLiteHistory
     private var heldObservationContinuation: CheckedContinuation<Void, Never>?
     private var holdWaiters: [CheckedContinuation<Void, Never>] = []
     private var isHoldingPostInitialObservation = false
 
-    init(base: SwiftDataHistory) {
+    init(base: SQLiteHistory) {
         self.base = base
     }
 

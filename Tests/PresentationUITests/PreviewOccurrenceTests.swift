@@ -8,7 +8,7 @@ import Testing
 @MainActor
 struct PreviewOccurrenceTests {
     @Test func coalescingUpdatesVisibleMetadataWithoutReloadingContent() async throws {
-        let history = try await SwiftDataHistory.open(configuration: .init(persistence: .memory))
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let item = try await capture("preview content", at: 1, source: "first.app", in: history)
         let viewState = HistoryViewState(history: history)
         viewState.activate()
@@ -38,7 +38,7 @@ struct PreviewOccurrenceTests {
     }
 
     @Test func missingUnrelatedAndDifferentVersionRowsHideMetadata() async throws {
-        let history = try await SwiftDataHistory.open(configuration: .init(persistence: .memory))
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let item = try await capture("original", at: 1, source: "first.app", in: history)
         _ = try await history.perform(.revise(.init(
             itemID: item.id, expected: item.contentVersion,
@@ -59,7 +59,7 @@ struct PreviewOccurrenceTests {
 
 #if DEBUG
     @Test func coalescingDuringRenderCannotBeOverwrittenByContentPublication() async throws {
-        let history = try await SwiftDataHistory.open(configuration: .init(persistence: .memory))
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let representations = [CapturedRepresentation(typeIdentifier: "public.png", bytes: fixturePNGData)]
         let receipt = try await history.perform(.capture(.init(
             representations: representations,
@@ -100,7 +100,7 @@ struct PreviewOccurrenceTests {
 #endif
 
     private func capture(
-        _ text: String, at offset: Int, source: String, in history: SwiftDataHistory
+        _ text: String, at offset: Int, source: String, in history: SQLiteHistory
     ) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.capture(.init(
             representations: [.init(typeIdentifier: "public.utf8-plain-text", bytes: Data(text.utf8))],

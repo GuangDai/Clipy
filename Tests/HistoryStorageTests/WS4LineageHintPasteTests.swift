@@ -1,6 +1,6 @@
 /// WS4 — Lineage hint for revised Effective Content
 /// (docs/06-cross-cutting.md §8 WS4), driven through the public
-/// `SwiftDataHistory` facade. After a revision produces a version-2 Effective
+/// `SQLiteHistory` facade. After a revision produces a version-2 Effective
 /// Content that is a strict subset of Canonical Content, the paste payload's
 /// `lineageHint` plus exact Effective-Content byte-set-equality must coalesce a
 /// re-capture into the SAME item — preserving Canonical Content and Content
@@ -224,7 +224,7 @@ private static func capture(
     // Storage side, through the INDEPENDENT container (no production test
     // seam): no new row, copyCount 2, Content Version still 2, and Canonical
     // Content unchanged (both representations retained, docs/02-domain.md D2).
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
     // WS4: "no new row" — the re-capture was absorbed.
     #expect(
@@ -250,7 +250,7 @@ private static func capture(
     // intact, byte-exact, in normalized order ("public.html" before
     // "public.utf8-plain-text", docs/02-domain.md §2.1). Coalescing never
     // rewrites Canonical Content (D2).
-    let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
+    let canonical = try WSSupport.fetchCanonical(itemID: row.id, in: container)
     #expect(
         canonical.representations.map(\.content.typeIdentifier)
             == ["public.html", "public.utf8-plain-text"],
@@ -373,7 +373,7 @@ private static func capture(
 
     // Storage side, through the INDEPENDENT container: TWO rows — the original
     // hinted item untouched, plus the new mismatched item.
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
     #expect(
         rows.count == 2,
@@ -390,7 +390,7 @@ private static func capture(
         originalRow.contentVersionRaw == 2,
         "WS4 (§9.3 lane 1): original hinted item retains Content Version 2"
     )
-    let originalCanonical = try CanonicalBlobCodec.decode(originalRow.canonicalBlob)
+    let originalCanonical = try WSSupport.fetchCanonical(itemID: originalRow.id, in: container)
     #expect(
         originalCanonical.representations.map(\.content.typeIdentifier)
             == ["public.html", "public.utf8-plain-text"],

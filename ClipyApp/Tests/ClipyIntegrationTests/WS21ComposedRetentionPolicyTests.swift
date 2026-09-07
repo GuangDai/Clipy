@@ -24,7 +24,7 @@ struct WS21ComposedRetentionPolicyTests {
     func satisfiedSetIsUnchangedLoweredSetRetiresOldestAndSurvivesRestart() async throws {
         let storeURL = ComposedSupport.tempStoreURL("ws21-composed-retention")
         defer { ComposedSupport.removeStore(storeURL) }
-        let history = try await SwiftDataHistory.open(
+        let history = try await SQLiteHistory.open(
             configuration: HistoryConfiguration(
                 persistence: .persistent(storeURL: storeURL)
             )
@@ -100,7 +100,7 @@ struct WS21ComposedRetentionPolicyTests {
         // initial value (200) is ignored for an existing store (05 §2),
         // proven behaviorally: a fresh two-item store on the same file
         // retires one immediately.
-        let restarted = try await SwiftDataHistory.open(
+        let restarted = try await SQLiteHistory.open(
             configuration: HistoryConfiguration(
                 persistence: .persistent(storeURL: storeURL)
             )

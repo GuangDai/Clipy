@@ -89,7 +89,7 @@ struct HistoryUsagePersistenceTests {
     }
 
     private func capture(
-        _ text: String, at seconds: Double, in history: SwiftDataHistory
+        _ text: String, at seconds: Double, in history: SQLiteHistory
     ) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.capture(WSSupport.textCapture(
             text, observedAt: Date(timeIntervalSinceReferenceDate: seconds)
@@ -103,7 +103,7 @@ struct HistoryUsagePersistenceTests {
     }
 
     private func replace(
-        _ item: HistoryItemReference, with text: String, in history: SwiftDataHistory
+        _ item: HistoryItemReference, with text: String, in history: SQLiteHistory
     ) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.revise(RevisionRequest(
             itemID: item.id, expected: item.contentVersion,
@@ -122,7 +122,7 @@ struct HistoryUsagePersistenceTests {
 
     private func expectCurrentTitle(
         _ title: String, item: HistoryItemReference, stage: String,
-        in history: SwiftDataHistory
+        in history: SQLiteHistory
     ) async throws {
         let page = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 10))
         let matches = page.rows.filter { $0.item.id == item.id }

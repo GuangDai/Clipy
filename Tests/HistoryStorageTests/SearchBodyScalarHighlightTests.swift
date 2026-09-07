@@ -56,8 +56,8 @@ struct SearchBodyScalarHighlightTests {
     private func search(
         _ body: String, query: String, mode: SearchMode
     ) async throws -> SearchPresentation {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
         _ = try await history.perform(.capture(WSSupport.textCapture(
             body, observedAt: Date(timeIntervalSinceReferenceDate: 1)

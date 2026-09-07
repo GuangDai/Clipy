@@ -2,7 +2,6 @@
 /// Owning spec: `V2-05` §3.1/§5.1/§5.2 and D33–D35.
 import Foundation
 import HistoryCore
-import SwiftData
 import Synchronization
 import Testing
 @testable import HistoryStorage
@@ -42,9 +41,8 @@ struct GatewayAuthorizationTests {
         }
     }
 
-    private struct Fixture {
+    private struct Fixture: Sendable {
         let authority: HistoryAuthority
-        let container: ModelContainer
         let clock: StepClock
     }
 
@@ -61,65 +59,58 @@ struct GatewayAuthorizationTests {
     )
 
     private static func makeFixture() async throws -> Fixture {
-        let schema = historySchema
-        let container = try ModelContainer(
-            for: schema,
-            configurations: [ModelConfiguration(
-                schema: schema,
-                isStoredInMemoryOnly: true,
-                cloudKitDatabase: .none
-            )]
-        )
         let clock = StepClock(epoch: epoch)
-        let authority = HistoryAuthority(
-            container: container,
+        let authority = try HistoryAuthority(
+            storeLocation: HistoryStoreLocation(persistence: .temporary),
             storageClock: clock,
             gatewayConnectionIDSource: { connectionID.rawValue }
         )
         try await authority.performStartup(initialMaximumUnpinnedItems: 200)
         return Fixture(
             authority: authority,
-            container: container,
             clock: clock
         )
     }
 
-    private static func snapshot(_ fixture: Fixture) throws
-        -> GatewayStoreSnapshot
-    {
-        try GatewayStoreSnapshot.read(in: ModelContext(fixture.container))
+    private static func snapshot(_ fixture: Fixture) async throws -> GatewayStoreSnapshot {
+        try await GatewayStoreSnapshot.read(from: fixture.authority)
     }
 
     private static func insertGrant(
         _ capability: ExternalCapability,
         revokedAt: Date? = nil,
         in fixture: Fixture
-    ) throws {
-        let context = ModelContext(fixture.container)
-        context.autosaveEnabled = false
-        context.insert(GrantRow(
-            grantKey: GatewayAdministration.canonicalGrantKey(
-                connectionID: connectionID.rawValue,
-                capability: capability
-            ),
-            connectionIDRaw: connectionID.rawValue,
-            capabilityRaw: capability.rawValue,
-            grantedAt: epoch.addingTimeInterval(1),
-            revokedAt: revokedAt,
-            configSchemaVersion: HistoryAuthority.gatewayConfigSchemaVersion
-        ))
-        try context.save()
+    ) async throws {
+        try await fixture.authority.withTestDatabase { authority in
+            try authority.database.writeTransaction {
+                try authority.database.execute("""
+                    INSERT INTO grants
+                        (grantKey, connectionIDRaw, capabilityRaw, grantedAt, revokedAt, configSchemaVersion)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """, bindings: [
+                        .text(GatewayAdministration.canonicalGrantKey(
+                            connectionID: connectionID.rawValue, capability: capability
+                        )),
+                        .text(connectionID.rawValue.uuidString), .integer(Int64(capability.rawValue)),
+                        .real(epoch.addingTimeInterval(1).timeIntervalSinceReferenceDate),
+                        revokedAt.map { .real($0.timeIntervalSinceReferenceDate) } ?? .null,
+                        .integer(Int64(HistoryAuthority.gatewayConfigSchemaVersion))
+                    ])
+            }
+        }
     }
 
-    private static func revokeConnection(in fixture: Fixture) throws {
-        let context = ModelContext(fixture.container)
-        context.autosaveEnabled = false
-        let row = try #require(
-            context.fetch(FetchDescriptor<ConnectionRow>()).first
-        )
-        row.statusRaw = ConnectionStatus.revoked.rawValue
-        row.revokedAt = epoch.addingTimeInterval(1)
-        try context.save()
+    private static func revokeConnection(in fixture: Fixture) async throws {
+        try await fixture.authority.withTestDatabase { authority in
+            try authority.database.writeTransaction {
+                try authority.database.execute(
+                    "UPDATE connections SET statusRaw = ?, revokedAt = ? WHERE id = ?",
+                    bindings: [.integer(Int64(ConnectionStatus.revoked.rawValue)),
+                               .real(epoch.addingTimeInterval(1).timeIntervalSinceReferenceDate),
+                               .text(connectionID.rawValue.uuidString)]
+                )
+            }
+        }
     }
 
     private static func expectHistoryPositionUnchanged(
@@ -191,7 +182,7 @@ struct GatewayAuthorizationTests {
             )
         }
 
-        #expect(try Self.snapshot(fixture).operations.isEmpty)
+        #expect(try await Self.snapshot(fixture).operations.isEmpty)
         #expect(fixture.clock.callCount == 2)
         try await Self.expectHistoryPositionUnchanged(fixture)
     }
@@ -213,7 +204,7 @@ struct GatewayAuthorizationTests {
             )
         }
 
-        let snapshot = try Self.snapshot(fixture)
+        let snapshot = try await Self.snapshot(fixture)
         let operation = try #require(snapshot.operations.first)
         #expect(snapshot.operations.count == 1)
         #expect(operation.requestedAt == Self.epoch.addingTimeInterval(1))
@@ -234,8 +225,8 @@ struct GatewayAuthorizationTests {
         let fixture = try await Self.makeFixture()
         // The connection lifecycle wins even if its formerly live grant row
         // has not yet been revoked by this deliberately damaged fixture.
-        try Self.insertGrant(.manage, in: fixture)
-        try Self.revokeConnection(in: fixture)
+        try await Self.insertGrant(.manage, in: fixture)
+        try await Self.revokeConnection(in: fixture)
 
         await #expect(throws: ExternalFailure.connectionRevoked(
             connectionID: Self.connectionID
@@ -247,7 +238,7 @@ struct GatewayAuthorizationTests {
             )
         }
 
-        let snapshot = try Self.snapshot(fixture)
+        let snapshot = try await Self.snapshot(fixture)
         let operation = try #require(snapshot.operations.first)
         #expect(snapshot.operations.count == 1)
         try Self.expectDeniedOperation(
@@ -263,7 +254,7 @@ struct GatewayAuthorizationTests {
     @Test("revoked matching grant is audited as unauthorized")
     func revokedGrantIsAudited() async throws {
         let fixture = try await Self.makeFixture()
-        try Self.insertGrant(
+        try await Self.insertGrant(
             .manage,
             revokedAt: Self.epoch.addingTimeInterval(2),
             in: fixture
@@ -280,7 +271,7 @@ struct GatewayAuthorizationTests {
             )
         }
 
-        let snapshot = try Self.snapshot(fixture)
+        let snapshot = try await Self.snapshot(fixture)
         let operation = try #require(snapshot.operations.first)
         #expect(snapshot.operations.count == 1)
         try Self.expectDeniedOperation(
@@ -296,12 +287,11 @@ struct GatewayAuthorizationTests {
     @Test("live matching grant authorizes without writing audit or History")
     func liveGrantAuthorizesWithoutWrites() async throws {
         let fixture = try await Self.makeFixture()
-        try Self.insertGrant(.manage, in: fixture)
+        try await Self.insertGrant(.manage, in: fixture)
 
         let clockCallsBefore = fixture.clock.callCount
-        do {
-            let context = ModelContext(fixture.container)
-            context.autosaveEnabled = false
+        try await fixture.authority.withTestDatabase { authority in
+            let context = authority.database
             let config = try HistoryAuthority.loadGatewayConfig(in: context)
             guard case .authorized = try HistoryAuthority.targetedExternalAuthorizationDecision(
                 Self.pinDescriptor,
@@ -315,7 +305,7 @@ struct GatewayAuthorizationTests {
             }
         }
 
-        #expect(try Self.snapshot(fixture).operations.isEmpty)
+        #expect(try await Self.snapshot(fixture).operations.isEmpty)
         #expect(fixture.clock.callCount == clockCallsBefore)
         try await Self.expectHistoryPositionUnchanged(fixture)
     }
@@ -323,7 +313,7 @@ struct GatewayAuthorizationTests {
     @Test("live manage grant permits a real browse with a successful audit")
     func manageGrantImpliesBrowse() async throws {
         let fixture = try await Self.makeFixture()
-        try Self.insertGrant(.manage, in: fixture)
+        try await Self.insertGrant(.manage, in: fixture)
 
         let result = try await fixture.authority.performExternalRead(
             .recent(limit: 1),
@@ -336,7 +326,7 @@ struct GatewayAuthorizationTests {
             return
         }
         #expect(page.rows.isEmpty)
-        let snapshot = try Self.snapshot(fixture)
+        let snapshot = try await Self.snapshot(fixture)
         #expect(snapshot.operations.count == 1)
         let operation = try #require(snapshot.operations.first)
         #expect(operation.connectionIDRaw == Self.connectionID.rawValue)
@@ -351,7 +341,7 @@ struct GatewayAuthorizationTests {
     @Test("rate denial precedes revoked status and grant checks")
     func rateDenialIsAuditedBeforeAuthorizationPolicy() async throws {
         let fixture = try await Self.makeFixture()
-        try Self.revokeConnection(in: fixture)
+        try await Self.revokeConnection(in: fixture)
         let requestedAt = fixture.clock.now()
 
         try await fixture.authority.commitExternalRateDenial(
@@ -360,7 +350,7 @@ struct GatewayAuthorizationTests {
             requestedAt: requestedAt
         )
 
-        let snapshot = try Self.snapshot(fixture)
+        let snapshot = try await Self.snapshot(fixture)
         let operation = try #require(snapshot.operations.first)
         #expect(snapshot.operations.count == 1)
         #expect(operation.requestedAt == requestedAt)

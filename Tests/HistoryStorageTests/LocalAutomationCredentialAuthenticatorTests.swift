@@ -2,7 +2,6 @@
 /// private server credential files. Only explicit custody failures are injected.
 import Foundation
 import HistoryCore
-import SwiftData
 import Synchronization
 import Testing
 @testable import HistoryStorage
@@ -19,7 +18,6 @@ struct LocalAutomationCredentialAuthenticatorTests {
 
     private struct Fixture {
         let authority: HistoryAuthority
-        let container: ModelContainer
         let credential: LocalAutomationCredential
         let credentials: CredentialStore
         let root: URL
@@ -43,18 +41,9 @@ struct LocalAutomationCredentialAuthenticatorTests {
     ) async throws -> Fixture {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let schema = historySchema
-        let container = try ModelContainer(
-            for: schema,
-            configurations: [ModelConfiguration(
-                schema: schema,
-                isStoredInMemoryOnly: true,
-                cloudKitDatabase: .none
-            )]
-        )
         let identifiers = UUIDSource([appIntentsID])
-        let authority = HistoryAuthority(
-            container: container,
+        let authority = try HistoryAuthority(
+            storeLocation: try HistoryStoreLocation(persistence: .temporary),
             gatewayConnectionIDSource: { identifiers.next() }
         )
         try await authority.performStartup(initialMaximumUnpinnedItems: 200)
@@ -69,7 +58,6 @@ struct LocalAutomationCredentialAuthenticatorTests {
         try await credentials.storeCredential(credential.exactBytes, for: connection)
         return Fixture(
             authority: authority,
-            container: container,
             credential: credential, credentials: credentials, root: root
         )
     }
@@ -89,32 +77,24 @@ struct LocalAutomationCredentialAuthenticatorTests {
         let fixture = try await Self.makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let authenticator = Self.authenticator(fixture)
-        let before = try GatewayStoreSnapshot.read(
-            in: ModelContext(fixture.container)
-        )
+        let before = try await GatewayStoreSnapshot.read(from: fixture.authority)
 
         #expect(try await authenticator.authenticate(
             fixture.credential.exactBytes
         ) == Self.connection)
-        #expect(try GatewayStoreSnapshot.read(
-            in: ModelContext(fixture.container)
-        ) == before)
+        #expect(try await GatewayStoreSnapshot.read(from: fixture.authority) == before)
 
         try await fixture.authority.revokeConnection(Self.connection)
-        let revokedBefore = try GatewayStoreSnapshot.read(
-            in: ModelContext(fixture.container)
-        )
+        let revokedBefore = try await GatewayStoreSnapshot.read(from: fixture.authority)
         #expect(try await authenticator.authenticate(
             fixture.credential.exactBytes
         ) == Self.connection)
-        #expect(try GatewayStoreSnapshot.read(
-            in: ModelContext(fixture.container)
-        ) == revokedBefore)
+        #expect(try await GatewayStoreSnapshot.read(from: fixture.authority) == revokedBefore)
         let reopenedCredentials = CredentialStore(directoryURL: fixture.serverDirectory)
         #expect(try await reopenedCredentials.loadCredential(for: Self.connection) == fixture.credential.exactBytes)
         let reopenedAuthenticator = Self.authenticator(fixture, credentials: reopenedCredentials)
         #expect(try await reopenedAuthenticator.authenticate(fixture.credential.exactBytes) == Self.connection)
-        #expect(try GatewayStoreSnapshot.read(in: ModelContext(fixture.container)) == revokedBefore)
+        #expect(try await GatewayStoreSnapshot.read(from: fixture.authority) == revokedBefore)
     }
 
     @Test("malformed, missing, wrong, and orphan credentials reject unaudited")
@@ -128,29 +108,21 @@ struct LocalAutomationCredentialAuthenticatorTests {
         let wrong = Self.authenticator(fixture)
         var wrongBytes = exact
         wrongBytes[LocalAutomationCredential.byteCount - 1] ^= 0x01
-        let before = try GatewayStoreSnapshot.read(
-            in: ModelContext(fixture.container)
-        )
+        let before = try await GatewayStoreSnapshot.read(from: fixture.authority)
 
         #expect(try await missing.authenticate(exact) == nil)
         #expect(try await wrong.authenticate(Data(exact.dropLast())) == nil)
         #expect(try await wrong.authenticate(wrongBytes) == nil)
-        #expect(try GatewayStoreSnapshot.read(
-            in: ModelContext(fixture.container)
-        ) == before)
+        #expect(try await GatewayStoreSnapshot.read(from: fixture.authority) == before)
 
         let orphan = try await Self.makeFixture(enroll: false)
         defer { try? FileManager.default.removeItem(at: orphan.root) }
         let orphanAuthenticator = Self.authenticator(orphan)
-        let orphanBefore = try GatewayStoreSnapshot.read(
-            in: ModelContext(orphan.container)
-        )
+        let orphanBefore = try await GatewayStoreSnapshot.read(from: orphan.authority)
         #expect(try await orphanAuthenticator.authenticate(
             orphan.credential.exactBytes
         ) == nil)
-        #expect(try GatewayStoreSnapshot.read(
-            in: ModelContext(orphan.container)
-        ) == orphanBefore)
+        #expect(try await GatewayStoreSnapshot.read(from: orphan.authority) == orphanBefore)
     }
 
     @Test("fixed traversal rejects a difference at every secret edge")
@@ -192,9 +164,7 @@ struct LocalAutomationCredentialAuthenticatorTests {
             ),
             authority: fixture.authority
         )
-        let before = try GatewayStoreSnapshot.read(
-            in: ModelContext(fixture.container)
-        )
+        let before = try await GatewayStoreSnapshot.read(from: fixture.authority)
 
         await #expect(throws: CredentialStoreFailure.corruptStoredValue) {
             _ = try await corrupt.authenticate(
@@ -206,9 +176,7 @@ struct LocalAutomationCredentialAuthenticatorTests {
                 fixture.credential.exactBytes
             )
         }
-        #expect(try GatewayStoreSnapshot.read(
-            in: ModelContext(fixture.container)
-        ) == before)
+        #expect(try await GatewayStoreSnapshot.read(from: fixture.authority) == before)
     }
 }
 

@@ -8,7 +8,7 @@ import Testing
 struct RealHistoryClearLifecycleTests {
     @Test(arguments: ["active", "closed", "settings"])
     func clearUnpinnedReceiptOnlyRestartsAnActiveSurface(lifecycle: String) async throws {
-        let base = try await SwiftDataHistory.open(configuration: HistoryConfiguration(persistence: .memory))
+        let base = try await SQLiteHistory.open(configuration: HistoryConfiguration(persistence: .temporary))
         for (index, text) in ["remove unpinned", "keep pinned"].enumerated() {
             _ = try await base.perform(.capture(ClipboardCapture(
                 representations: [CapturedRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data(text.utf8))],

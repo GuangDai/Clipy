@@ -3,7 +3,7 @@
 /// public-read / observation / no-emission clauses of WS9, WS10, WS13, WS14,
 /// WS16, WS19, WS21. Each clause below exercises the now-implemented public
 /// read/observation APIs (`browse`, `observe`, `details`, `pastePayload`)
-/// against the real `SwiftDataHistory` facade and the real `HistoryAuthority`.
+/// against the real `SQLiteHistory` facade and the real `HistoryAuthority`.
 /// The commit/storage side of every gate was closed in steps 5–6; this file
 /// closes the remaining step-7 side.
 ///
@@ -41,7 +41,7 @@ struct WSReadClauseClosureBTests {
 /// multiple scenarios to keep arrange blocks concise (same stance as WS10's
 /// `arrangeFourItemsTwoPinned`).
 internal static func captureText(
-    _ history: SwiftDataHistory,
+    _ history: SQLiteHistory,
     _ text: String,
     observedAt: Date,
     source: String,

@@ -1,6 +1,6 @@
 /// WS1 — Raw capture insert (docs/06-cross-cutting.md §8 WS1): the
 /// commit/receipt/storage side of submitting a normalized raw text capture to
-/// an empty store through the public `SwiftDataHistory.perform(.capture(_:))`
+/// an empty store through the public `SQLiteHistory.perform(.capture(_:))`
 /// and the real `HistoryAuthority` commit path.
 ///
 /// Phasing (docs/roadmap/README.md §3, WS-clause phasing note): WS1's
@@ -8,7 +8,7 @@
 /// asserted here; this file closes the step-5 clauses — the `.committed`
 /// receipt with `.inserted(reference)`, the initial Content Version, Change
 /// Position 1, and the durable row/singleton state as seen through an
-/// INDEPENDENT second `ModelContainer` over the same on-disk store (see
+/// INDEPENDENT second `SQLite connection` over the same on-disk store (see
 /// `WSSupport`).
 import Foundation
 import HistoryCore
@@ -58,7 +58,7 @@ struct WS1CaptureInsertTests {
 
     // Storage side, through the INDEPENDENT container (no production test
     // seam): exactly one durable row.
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
     // WS1: "Expect one row".
     #expect(rows.count == 1)
@@ -67,9 +67,9 @@ struct WS1CaptureInsertTests {
     #expect(row.id == reference.id.rawValue)
     #expect(row.contentVersionRaw == 1)
 
-    // WS1: "full Canonical bytes" — the stored Canonical blob decodes to the
+    // WS1: "full Canonical bytes" — the persisted representations contain the
     // exact capture bytes under the exact type identifier.
-    let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
+    let canonical = try WSSupport.fetchCanonical(itemID: row.id, in: container)
     #expect(canonical.representations.map(\.content.typeIdentifier) == ["public.utf8-plain-text"])
     #expect(canonical.representations.map(\.content.bytes) == [Data(text.utf8)])
 
@@ -83,7 +83,7 @@ struct WS1CaptureInsertTests {
     #expect(row.lastSource == source)
 
     // WS1: "correct initial … projection" — the §15 durable projection of the
-    // Canonical-as-Effective content, written with projection recipe v6,
+    // Canonical-as-Effective content, stored as exact UTF-8 data,
     // and the item starts unpinned (`nil` ordinal, §3.1).
     #expect(row.titleUTF8 == Data(text.utf8))
     #expect(row.searchBodyUTF8 == Data(text.utf8))

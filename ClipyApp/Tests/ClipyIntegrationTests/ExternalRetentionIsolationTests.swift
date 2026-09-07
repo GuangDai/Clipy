@@ -12,8 +12,8 @@ import Testing
 @Suite("External retention isolation (47-4 adjudication)")
 struct ExternalRetentionIsolationTests {
     @Test func externalGatewayOperationsCannotReachRetentionConfiguration() async throws {
-        let base = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
+        let base = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
         )
 
         // One real retained item, so pin/unpin/remove cross the committed

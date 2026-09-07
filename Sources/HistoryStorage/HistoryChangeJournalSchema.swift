@@ -1,16 +1,13 @@
 /// Durable History change records and journal accounting.
-/// Models remain internal to HistoryStorage (V2-roadmap J.2/J.3).
+/// Decoded SQLite values remain internal to HistoryStorage (V2-roadmap J.2/J.3).
 import Foundation
-import SwiftData
 
 /// One durable record per non-empty History Commit. `sequence` and
 /// `changePositionRaw` are equal by construction; keeping both makes the
 /// commit-to-journal cross-reference independently checkable at startup.
 /// Affected item IDs remain inside the versioned bounded blob and therefore
 /// reference History business identity by value, never by relationship.
-@Model
-internal final class HistoryChangeRecordRow {
-    @Attribute(.unique)
+internal struct HistoryChangeRecordRow: Sendable {
     var sequence: UInt64
 
     var changePositionRaw: UInt64
@@ -42,9 +39,7 @@ internal final class HistoryChangeRecordRow {
 /// `journalBytes` is the checked exact sum of each retained record's
 /// `affectedItemsBlob.count`. The later Authority bootstrap owns initial
 /// values and validation.
-@Model
-internal final class JournalConfigRow {
-    @Attribute(.unique)
+internal struct JournalConfigRow: Sendable {
     var key: String
 
     var compactionFloorRaw: UInt64

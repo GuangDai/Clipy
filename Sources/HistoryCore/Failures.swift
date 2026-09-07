@@ -118,9 +118,9 @@ public enum UnavailableReason: Sendable, Equatable {
     /// before any write because its external payload provably cannot fit
     /// (docs/05-authority-kernel.md §16).
     case insufficientDiskSpace
-    /// A regexp scan was stopped at its fixed engine deadline, or the
-    /// engine abandoned the match internally without examining the whole
-    /// search range; retryable (docs/03b-instruction-set.md §8/§10).
+    /// A regexp scan hit its fixed engine deadline or abandoned an incomplete
+    /// match, or a search exceeded its SQLite snapshot lifetime (V2-09 §4).
+    /// No partial or mixed-snapshot result is published; the query is retryable.
     case searchEngineDeadline
 }
 
@@ -132,7 +132,7 @@ public enum PersistenceFailure: Sendable, Equatable {
     case openStore
     /// The StoreRoot is already leased by another live owner process
     /// (REVIEW 01-findings.md DATA-7; 04-tdd-remediation-playbook.md
-    /// PLAY-DISK-0B): `SwiftDataHistory.open` could not acquire the
+    /// PLAY-DISK-0B): `SQLiteHistory.open` could not acquire the
     /// cross-process single-writer lease, so no `ModelContainer` was
     /// created. This is Clipy's own deterministic refusal, distinct from
     /// the flattened platform-cause `.openStore` (DATA-14); the

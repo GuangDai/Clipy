@@ -6,7 +6,6 @@
 /// fast-fail hint, but only this live targeted fetch is authoritative.
 import Foundation
 import HistoryCore
-import SwiftData
 
 /// The complete content-free classification needed to authorize and audit one
 /// closed external operation. It carries no query text or returned content.
@@ -210,7 +209,7 @@ extension HistoryAuthority {
         expectedConnectionKind: ConnectionEnrollKind,
         requestedAt: Date,
         config: GatewayConfigRow,
-        in context: ModelContext
+        in context: SQLiteDatabase
     ) throws {
         let decision = try Self.targetedExternalAuthorizationDecision(
             descriptor,
@@ -250,7 +249,7 @@ extension HistoryAuthority {
         connection: ExternalConnectionID,
         expectedConnectionKind: ConnectionEnrollKind,
         config: GatewayConfigRow,
-        in context: ModelContext
+        in context: SQLiteDatabase
     ) throws -> TargetedExternalAuthorizationDecision {
         guard let current = try loadExternalConnection(
             connection,
@@ -293,8 +292,7 @@ extension HistoryAuthority {
         connection: ExternalConnectionID,
         expectedConnectionKind: ConnectionEnrollKind
     ) throws {
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
+        let context = database
         let config = try Self.loadGatewayConfig(in: context)
         guard let current = try Self.loadExternalConnection(
             connection,
@@ -321,8 +319,7 @@ extension HistoryAuthority {
         expectedConnectionKind: ConnectionEnrollKind = .appIntents,
         requestedAt: Date
     ) throws {
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
+        let context = database
         let config = try Self.loadGatewayConfig(in: context)
 
         guard let current = try Self.loadExternalConnection(
@@ -366,7 +363,7 @@ extension HistoryAuthority {
                 : nil
         do {
             try Self.executeExternalAuditCompaction(
-                in: container,
+                in: database,
                 now: now,
                 limits: limits,
                 transactionInjection: transactionInjection
@@ -388,8 +385,7 @@ extension HistoryAuthority {
     internal func localAutomationCredentialState(
         for connection: ExternalConnectionID
     ) throws -> LocalAutomationDurableCredentialState? {
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
+        let context = database
         let config = try Self.loadGatewayConfig(in: context)
         guard let current = try Self.loadExternalConnection(
             connection,
@@ -406,20 +402,16 @@ extension HistoryAuthority {
 }
 
 private extension HistoryAuthority {
-    /// Creates and releases every SwiftData value synchronously inside this
-    /// nonisolated executor. The async actor wrapper above crosses its test
-    /// suspension point before calling here, so no row or context is captured
-    /// by an actor-isolated transaction closure (`01` §6; `V2-05` §6.3).
+    /// Runs after the actor's test suspension point, using its one connection.
+    /// The config snapshot and counter update share the compaction transaction.
     static func executeExternalAuditCompaction(
-        in container: ModelContainer,
+        in context: SQLiteDatabase,
         now: Date,
         limits: ExternalLimits,
         transactionInjection: InjectedTransactionFailure?
     ) throws {
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
-        let config = try loadGatewayConfig(in: context)
-        try context.transaction {
+        try context.writeTransaction {
+            let config = try loadGatewayConfig(in: context)
             if transactionInjection == .beforeGatewayAuditCompaction {
                 throw InjectedTransactionFailure.beforeGatewayAuditCompaction
             }
@@ -454,16 +446,15 @@ private extension HistoryAuthority {
     static func loadExternalConnection(
         _ connection: ExternalConnectionID,
         config: GatewayConfigRow,
-        in context: ModelContext
+        in context: SQLiteDatabase
     ) throws -> ValidatedExternalConnection? {
         let rawID = connection.rawValue
-        var descriptor = FetchDescriptor<ConnectionRow>(
-            predicate: #Predicate { row in row.id == rawID }
-        )
-        descriptor.fetchLimit = 2
-        let rows: [ConnectionRow]
+        var rows: [ConnectionRow] = []
         do {
-            rows = try context.fetch(descriptor)
+            let statement = try context.prepare("SELECT \(ConnectionRow.columns) FROM connections WHERE id = ? LIMIT 2", bindings: [.text(rawID.uuidString)])
+            while try statement.step() { rows.append(try ConnectionRow(statement: statement)) }
+        } catch is HistoryFailure {
+            throw ExternalFailure.persistence(.corruptStoredValue)
         } catch {
             throw ExternalFailure.persistence(.transaction)
         }
@@ -504,26 +495,23 @@ private extension HistoryAuthority {
         _ requestedCapability: ExternalCapability,
         for connectionFacts: ValidatedExternalConnection,
         connection: ExternalConnectionID,
-        in context: ModelContext
+        in context: SQLiteDatabase
     ) throws -> Bool {
         let rawID = connection.rawValue
         let requestedRaw = requestedCapability.rawValue
         let impliedRaw = requestedCapability == .browse
             ? ExternalCapability.manage.rawValue
             : requestedRaw
-        var descriptor = FetchDescriptor<GrantRow>(
-            predicate: #Predicate { row in
-                row.connectionIDRaw == rawID
-                    && (row.capabilityRaw == requestedRaw
-                        || row.capabilityRaw == impliedRaw)
-            }
-        )
         // At most the exact capability plus manage-implies-browse may match;
         // a third row proves a duplicate without loading unrelated grants.
-        descriptor.fetchLimit = 3
-        let rows: [GrantRow]
+        var rows: [GrantRow] = []
         do {
-            rows = try context.fetch(descriptor)
+            let statement = try context.prepare("SELECT \(GrantRow.columns) FROM grants WHERE connectionIDRaw = ? AND capabilityRaw IN (?, ?) LIMIT 3", bindings: [
+                .text(rawID.uuidString), .integer(Int64(requestedRaw)), .integer(Int64(impliedRaw))
+            ])
+            while try statement.step() { rows.append(try GrantRow(statement: statement)) }
+        } catch is HistoryFailure {
+            throw ExternalFailure.persistence(.corruptStoredValue)
         } catch {
             throw ExternalFailure.persistence(.transaction)
         }

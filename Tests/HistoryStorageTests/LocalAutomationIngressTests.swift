@@ -6,7 +6,7 @@ import Testing
 @Suite("Local Automation ingress", .serialized)
 struct LocalAutomationIngressTests {
     private struct Fixture: Sendable {
-        let history: SwiftDataHistory
+        let history: SQLiteHistory
         let ingress: LocalAutomationIngress
         let credentials: [LocalAutomationCredential]
         let credentialStore: CredentialStore
@@ -268,7 +268,7 @@ struct LocalAutomationIngressTests {
         itemCount: Int = 1, connectionCount: Int = 1,
         onCommittedRemoval: (@Sendable (HistoryItemID) async -> Void)? = nil
     ) async throws -> Fixture {
-        let history = try await SwiftDataHistory.open(configuration: HistoryConfiguration(persistence: .memory))
+        let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(persistence: .temporary))
         var credentials: [LocalAutomationCredential] = []
         for index in 0..<connectionCount {
             let connection = ExternalConnectionID(rawValue: UUID())

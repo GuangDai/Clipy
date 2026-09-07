@@ -31,7 +31,7 @@ struct WS8ComposedPinOrderTests {
     /// Asserts the current public pin ordinals are unique and exactly
     /// `0 ..< count` (D12) and match the expected pinned ID order.
     private static func expectPinnedOrder(
-        _ history: SwiftDataHistory,
+        _ history: SQLiteHistory,
         ids expectedOrder: [HistoryItemID],
         _ clause: String
     ) async throws {

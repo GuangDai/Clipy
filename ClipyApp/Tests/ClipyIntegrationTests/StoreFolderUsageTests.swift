@@ -63,7 +63,7 @@ struct StoreFolderUsageTests {
     func realStoreMeasurementIsReadOnly() async throws {
         let folder = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: folder) }
-        let history = try await SwiftDataHistory.open(configuration: HistoryConfiguration(
+        let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(
             persistence: .persistent(storeURL: folder.appendingPathComponent("history.store"))
         ))
         _ = try await history.perform(.capture(ComposedSupport.textCapture(

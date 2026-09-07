@@ -1,7 +1,7 @@
 /// ComposedRetentionLooseningTests — the Card 10 hosted journey for the
 /// non-strictening retention control paths (todo-map §4.1 Card 10 row: the
 /// loosen/count/storage/revision/equal controls and their hosted journey).
-/// Through the REAL `SwiftDataHistory` and the same `HistoryViewState` seams
+/// Through the REAL `SQLiteHistory` and the same `HistoryViewState` seams
 /// the Settings scene calls:
 ///
 /// - every control (count, age, storage, revision count/bytes) applies

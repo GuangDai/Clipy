@@ -8,7 +8,7 @@ import Testing
 @MainActor
 struct FilePreviewTests {
     @Test func referenceAndCancelledConfirmationPerformNoFileReads() async throws {
-        let history = try await SwiftDataHistory.open(configuration: .init(persistence: .memory))
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let item = try await capture("file:///not-opened/private.txt", type: "public.file-url", in: history)
         let probe = FileReadProbe()
         let loader = PreviewContentLoader(history: history, filePreviewSettings: .init(load: probe.read))
@@ -33,7 +33,7 @@ struct FilePreviewTests {
     func confirmedFileUsesExistingRendererAndKeepsOriginalPastePayload(
         type: String, source: String, expected: String
     ) async throws {
-        let history = try await SwiftDataHistory.open(configuration: .init(persistence: .memory))
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let address = "file:///not-opened/private.txt"
         let item = try await capture(address, type: "public.file-url", in: history)
         let probe = FileReadProbe(answer: HistoryRepresentation(typeIdentifier: type, bytes: Data(source.utf8)))
@@ -62,7 +62,7 @@ struct FilePreviewTests {
     }
 
     @Test func remoteURLNeverOffersOrStartsFileLoading() async throws {
-        let history = try await SwiftDataHistory.open(configuration: .init(persistence: .memory))
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let item = try await capture("https://example.invalid/private", type: "public.url", in: history)
         let probe = FileReadProbe()
         let loader = PreviewContentLoader(history: history, filePreviewSettings: .init(load: probe.read))
@@ -79,7 +79,7 @@ struct FilePreviewTests {
 
     @Test(arguments: [Retirement.selection, .close, .removal, .revision, .clearAll, .clearUnpinned, .back])
     func retiredFileReadCannotPublishLateContent(_ retirement: Retirement) async throws {
-        let history = try await SwiftDataHistory.open(configuration: .init(persistence: .memory))
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let item = try await capture("file:///not-opened/private.txt", type: "public.file-url", in: history)
         let other = try await capture("other selected text", type: "public.utf8-plain-text", in: history)
         let probe = FileReadProbe()
@@ -116,7 +116,7 @@ struct FilePreviewTests {
     }
 
     @Test func retargetBeforeConfirmationCannotOpenThePreviousFile() async throws {
-        let history = try await SwiftDataHistory.open(configuration: .init(persistence: .memory))
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let item = try await capture("file:///not-opened/first.txt", type: "public.file-url", in: history)
         let other = try await capture("file:///not-opened/second.txt", type: "public.file-url", in: history)
         let probe = FileReadProbe()
@@ -131,7 +131,7 @@ struct FilePreviewTests {
     }
 
     @Test func unrelatedRemovalDoesNotCancelTheConfirmedFileRead() async throws {
-        let history = try await SwiftDataHistory.open(configuration: .init(persistence: .memory))
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let item = try await capture("file:///not-opened/private.txt", type: "public.file-url", in: history)
         let other = try await capture("other item", type: "public.utf8-plain-text", in: history)
         let probe = FileReadProbe()
@@ -150,7 +150,7 @@ struct FilePreviewTests {
 
     #if DEBUG
     @Test func closingDuringFileRasterizationReleasesTheLateArtifact() async throws {
-        let history = try await SwiftDataHistory.open(configuration: .init(persistence: .memory))
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let item = try await capture("file:///not-opened/image.png", type: "public.file-url", in: history)
         let loader = PreviewContentLoader(history: history, filePreviewSettings: .init { _ in
             HistoryRepresentation(typeIdentifier: "public.png", bytes: fixturePNGData)
@@ -180,7 +180,7 @@ struct FilePreviewTests {
 
     @Test(arguments: [FilePreviewFailure.permissionDenied, .unavailable, .tooLarge, .unsupported, .invalidReference])
     func failedFileReadKeepsReferenceRecoveryExplicit(_ failure: FilePreviewFailure) async throws {
-        let history = try await SwiftDataHistory.open(configuration: .init(persistence: .memory))
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let item = try await capture("file:///not-opened/private.txt", type: "public.file-url", in: history)
         let loader = PreviewContentLoader(history: history, filePreviewSettings: .init { _ in throw failure })
         await loader.load(item: item)
@@ -194,7 +194,7 @@ struct FilePreviewTests {
         #expect(loader.filePreviewFailure == nil)
     }
 
-    private func capture(_ body: String, type: String, in history: SwiftDataHistory) async throws -> HistoryItemReference {
+    private func capture(_ body: String, type: String, in history: SQLiteHistory) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.capture(ClipboardCapture(
             representations: [CapturedRepresentation(typeIdentifier: type, bytes: Data(body.utf8))],
             origin: CopyOriginObservation(sourceApplication: nil, lineageHint: nil),

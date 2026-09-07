@@ -198,7 +198,7 @@ public struct HistoryLimits: Sendable, Hashable {
     }
 
     /// Exactly the docs/06-cross-cutting.md §2 table values — the only value
-    /// production and the `SwiftDataHistory` walking-skeleton tests use.
+    /// production and the `SQLiteHistory` walking-skeleton tests use.
     ///
     /// The force unwrap cannot fail: the table values satisfy every check in
     /// `init?`. A table edit that breaks a check is a specification violation

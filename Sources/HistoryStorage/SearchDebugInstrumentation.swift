@@ -27,6 +27,8 @@ internal struct SearchDebugEvent: Codable, Equatable, Sendable {
     let matchedRows: Int
     let titleUTF8Bytes: Int
     let bodyUTF8Bytes: Int
+    /// Complete SQL batch projection bytes, including type/source fields.
+    let sourceUTF8Bytes: Int
     let titleMatches: Int
     let bodyMatches: Int
     let exactASCIIEvaluations: Int
@@ -98,6 +100,7 @@ internal struct SearchDebugProbe: Sendable {
         matchedRows: Int = 0,
         titleUTF8Bytes: Int = 0,
         bodyUTF8Bytes: Int = 0,
+        sourceUTF8Bytes: Int = 0,
         titleMatches: Int = 0,
         bodyMatches: Int = 0,
         exactASCIIEvaluations: Int = 0,
@@ -117,6 +120,7 @@ internal struct SearchDebugProbe: Sendable {
             matchedRows: matchedRows,
             titleUTF8Bytes: titleUTF8Bytes,
             bodyUTF8Bytes: bodyUTF8Bytes,
+            sourceUTF8Bytes: sourceUTF8Bytes,
             titleMatches: titleMatches,
             bodyMatches: bodyMatches,
             exactASCIIEvaluations: exactASCIIEvaluations,

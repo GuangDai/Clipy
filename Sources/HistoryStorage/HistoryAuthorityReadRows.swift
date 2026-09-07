@@ -2,14 +2,11 @@
 import Foundation
 import HistoryCore
 import HistoryDomain
-import SwiftData
 
 // MARK: - Scalar read row helper (docs/05-authority-kernel.md §14.1)
 
-/// One scalar projection row extracted from a fetched `HistoryItemRow`, with
-/// the decoded scalar fields `recentPage` needs to assemble a `HistoryRow` and
-/// mint the continuation anchor. No `@Model` instance escapes the read
-/// interval (§5).
+/// One bounded metadata projection from a SQLite row. Canonical content,
+/// revisions, inline representation bytes and blob files are not selected.
 internal struct ScalarReadRow {
     internal let id: HistoryItemID
     internal let contentVersion: ContentVersion
@@ -20,33 +17,48 @@ internal struct ScalarReadRow {
     internal let lastSource: String?
     internal let pinOrdinal: PinOrdinal?
 
-    internal init(_ row: HistoryItemRow, limits: HistoryLimits) throws {
-        self.id = HistoryItemID(rawValue: row.id)
-        let titleUTF8 = row.titleUTF8
-        let lastCopiedAt = row.lastCopiedAt
-        let copyCount = row.copyCount
-        let lastSource = row.lastSource
-        let title = try mapCodecFailure {
-            let title = try ContentProjector.decodeStoredTitle(titleUTF8, limits: limits)
-            try RevisionStateBlobCodec.validateFiniteLastCopiedAt(lastCopiedAt)
-            try RevisionStateBlobCodec.validateCopyCount(copyCount)
-            try RevisionStateBlobCodec.validateSourceObservation(
-                lastSource,
-                limits: limits
-            )
-            return title
+    /// Both lanes select precisely this layout. Keeping payload columns out
+    /// of the SELECT prevents their materialization, including lookahead rows.
+    internal static let columns = """
+        id, contentVersion, titleUTF8, effectiveTypeIdentifiersBlob,
+        lastCopiedAt, copyCount, lastSource, pinOrdinal
+        """
+
+    internal init(_ statement: SQLiteStatement, limits: HistoryLimits) throws {
+        let rawID = try statement.text(at: 0)
+        guard let uuid = UUID(uuidString: rawID), uuid.uuidString == rawID,
+              try statement.blobByteCount(at: 2) <= limits.maximumStoredTitleUTF8Bytes,
+              try statement.blobByteCount(at: 3) <= EffectiveTypeIdentifiersBlobCodec.maximumBlobBytes(limits: limits) else {
+            throw HistoryFailure.persistence(.corruptStoredValue)
         }
-        self.contentVersion = try mapCodecFailure {
-            try RevisionStateBlobCodec.decodeContentVersion(row.contentVersionRaw)
+        id = HistoryItemID(rawValue: uuid)
+        let titleUTF8 = try statement.blob(at: 2)
+        let date = try Date(timeIntervalSinceReferenceDate: statement.real(at: 4))
+        let count = try sqliteUInt64(statement.blob(at: 5))
+        let source = try statement.optionalText(at: 6)
+        let ordinal: Int?
+        if try statement.isNull(at: 7) {
+            ordinal = nil
+        } else {
+            guard let value = try Int(exactly: statement.integer(at: 7)) else {
+                throw HistoryFailure.persistence(.corruptStoredValue)
+            }
+            ordinal = value
         }
-        self.title = title
-        self.effectiveTypeIdentifiersBlob = row.effectiveTypeIdentifiersBlob
-        self.lastCopiedAt = lastCopiedAt
-        self.copyCount = copyCount
-        self.lastSource = lastSource
-        self.pinOrdinal = try mapCodecFailure {
-            try RevisionStateBlobCodec.decodePinOrdinal(row.pinOrdinal)
+        contentVersion = try mapCodecFailure {
+            try RevisionStateBlobCodec.decodeContentVersion(sqliteUInt64(statement.blob(at: 1)))
         }
+        title = try mapCodecFailure {
+            try RevisionStateBlobCodec.validateFiniteLastCopiedAt(date)
+            try RevisionStateBlobCodec.validateCopyCount(count)
+            try RevisionStateBlobCodec.validateSourceObservation(source, limits: limits)
+            return try ContentProjector.decodeStoredTitle(titleUTF8, limits: limits)
+        }
+        effectiveTypeIdentifiersBlob = try statement.blob(at: 3)
+        lastCopiedAt = date
+        copyCount = count
+        lastSource = source
+        pinOrdinal = try mapCodecFailure { try RevisionStateBlobCodec.decodePinOrdinal(ordinal) }
     }
 
     /// The `.defaultOrder` anchor for this row (04 §6).
@@ -116,24 +128,6 @@ internal extension DomainRejection {
             return .persistence(.invariantViolation)
         case .capacityExceeded(let kind):
             return .capacityExceeded(kind)
-        }
-    }
-}
-
-internal extension SignatureIndexRejection {
-    /// The §13 startup mapping (§2, §16): corrupt durable signature metadata
-    /// fails open as `.persistence(.corruptStoredValue)` rather than
-    /// enabling writes from an unproved state; an over-bound retained count
-    /// is an invariant violation. Delta-prevalidation cases are unreachable
-    /// from `build(from:limits:)` and map defensively.
-    var startupFailure: HistoryFailure {
-        switch self {
-        case .retainedCountExceedsBound:
-            return .persistence(.invariantViolation)
-        case .emptySignatureEntries, .duplicateEntry, .duplicateTypeIdentifier:
-            return .persistence(.corruptStoredValue)
-        case .additionAlreadyIndexed, .removalNotIndexed, .overlappingAdditionAndRemoval:
-            return .persistence(.invariantViolation)
         }
     }
 }

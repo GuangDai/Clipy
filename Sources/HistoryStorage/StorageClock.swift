@@ -7,15 +7,15 @@
 /// planner as `now: Date` — the Domain mints no `Date()` (`02` §1). This
 /// seam is that witness: a `Sendable` clock injected into
 /// `HistoryAuthority`'s internal initializer, never a `@Model` field, never
-/// a stored mutable on `SwiftDataHistory`, and never a `.shared`/`.current`
+/// a stored mutable on `SQLiteHistory`, and never a `.shared`/`.current`
 /// service locator (`01` §8 gates).
 ///
 /// Injection mechanism (`V2-02` §6.4 "Injection mechanism",
 /// `RET-COMPILE-1`; `V2-05` §5.5): production constructs one witness inside
-/// `SwiftDataHistory.open` and injects that same value into `HistoryAuthority`
+/// `SQLiteHistory.open` and injects that same value into `HistoryAuthority`
 /// and `ExternalGateway`. Tests inject a fixed witness only through internal
 /// initializers. This adds no independent or public clock seam: the v1 public
-/// `SwiftDataHistory.open(configuration:)` signature and frozen
+/// `SQLiteHistory.open(configuration:)` signature and frozen
 /// `HistoryConfiguration` remain untouched.
 ///
 /// Slice boundary (`V2-roadmap` §6): the seam and its init plumbing landed
@@ -36,7 +36,7 @@ internal protocol StorageClock: Sendable {
     func now() -> Date
 }
 
-/// The production clock witness `SwiftDataHistory.open` wires to both Storage
+/// The production clock witness `SQLiteHistory.open` wires to both Storage
 /// actors: stateless, so every read is the machine clock at that instant.
 /// There is no static accessor (the banned service-locator spelling; `01` §8).
 internal struct SystemStorageClock: StorageClock {

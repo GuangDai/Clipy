@@ -5,7 +5,7 @@ import HistoryStorage
 
 /// The one app-owned Local Automation listener. It receives at most four
 /// requests concurrently and never opens History; every operation uses the
-/// ingress built from the application's existing SwiftDataHistory owner.
+/// ingress built from the application's existing SQLiteHistory owner.
 public actor LocalAutomationService {
     private let ingress: LocalAutomationIngress
     private let endpointURL: URL

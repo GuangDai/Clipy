@@ -1,5 +1,12 @@
 ## Part I — Architecture
 
+> **2026-09-07 storage replacement:** [V2-09](v2/V2-09-multilevel-storage.md)
+> replaces this document's SwiftData/container details. `SQLiteHistory` keeps
+> the public `ClipboardHistory` Interface; its Authority owns one SQLite writer
+> and immutable blob publication. Search owns request-local read-only SQLite
+> connections/snapshots, never the writer handle. System SQLite3 is the only
+> new dependency. No ORM, parallel legacy writer or migration is introduced.
+
 ### 1. System shape
 
 The architecture is a downward-only SwiftPM target graph with one public History boundary. Its depth comes from what callers do **not** need to know: Canonical Content, signatures, candidate completeness, SwiftData rows, pin ordinal shifts, retention victims, revision reconstruction, transaction order, and observation races all live behind `ClipboardHistory`.
@@ -14,6 +21,7 @@ ClipyApp
 └── HistoryStorage ────────→ HistoryCore + ClipboardFormats
           │                 → HistoryDomain
           ├────────────────→ xxh3
+          ├────────────────→ system SQLite3
           └────────────────→ Fuse
 
 HistoryDomain ─────────────→ HistoryCore

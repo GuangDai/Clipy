@@ -1,88 +1,64 @@
 import Foundation
 import HistoryCore
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
-private enum ThumbnailSourceDamage: Sendable {
-    case canonical
-    case revisions
-    case signature
-}
-
 struct ThumbnailStaleSourceAdmissionTests {
-    /// Old references need only a scalar version rejection. Poison each
-    /// content codec independently to distinguish that path from hydrating
-    /// first; the same current reference must still reject the real damage.
-    @Test(arguments: [ThumbnailSourceDamage.canonical, .revisions, .signature])
-    fileprivate func staleCreatorRejectsBeforeContentDecodeButCurrentCreatorStillValidates(
-        damage: ThumbnailSourceDamage
-    ) async throws {
-        let history = try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory)
-        )
-        let captureReceipt = try await history.perform(.capture(WSSupport.textCapture(
-            "before", observedAt: Date(timeIntervalSinceReferenceDate: 850_000_000)
+    @Test(arguments: [false, true])
+    func staleReferenceStopsBeforePayloadAccessAndCurrentReadsOnlyItsCandidate(hasImage: Bool) async throws {
+        let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(persistence: .temporary))
+        let image = Data(repeating: 0xAB, count: 128 * 1_024)
+        let receipt = try await history.perform(.capture(WSSupport.textCapture(
+            "before", observedAt: Date(timeIntervalSinceReferenceDate: 850_000_000),
+            extra: hasImage ? [(typeIdentifier: "public.png", bytes: Array(image))] : []
         )))
-        guard case .committed(let captureCommit) = captureReceipt,
-              case .inserted(let original) = captureCommit.outcome else {
-            Issue.record("Expected the original item")
-            return
+        guard case .committed(let commit) = receipt, case .inserted(let original) = commit.outcome else {
+            throw HistoryFailure.persistence(.invariantViolation)
+        }
+        var decisions = [RevisionDecision(typeIdentifier: "public.utf8-plain-text", action: .replace(bytes: Data("after".utf8)))]
+        if hasImage {
+            decisions.append(RevisionDecision(typeIdentifier: "public.png", action: .inheritCanonical))
         }
         let revisionReceipt = try await history.perform(.revise(RevisionRequest(
-            itemID: original.id,
-            expected: original.contentVersion,
-            intent: .replace(RevisionDraft(decisions: [RevisionDecision(
-                typeIdentifier: "public.utf8-plain-text",
-                action: .replace(bytes: Data("after".utf8))
-            )]))
+            itemID: original.id, expected: original.contentVersion,
+            intent: .replace(RevisionDraft(decisions: decisions))
         )))
         guard case .committed(let revisionCommit) = revisionReceipt,
               case .revised(let current) = revisionCommit.outcome else {
-            Issue.record("Expected a different current content version")
-            return
+            throw HistoryFailure.persistence(.invariantViolation)
         }
+        let damagedType = hasImage ? "public.png" : "public.utf8-plain-text"
+        try await history.authority.makePayloadUnavailable(
+            itemID: current.id, revisionOrdinal: 1, typeIdentifier: damagedType
+        )
         let pixels = PixelSize(width: 32, height: 32)
-
-        // Current valid reads still hydrate and return values that remain
-        // usable after their operation-local autorelease pools have drained.
-        #expect(try await history.thumbnail(for: current, pixels: pixels) == nil)
-        let details = try await history.details(for: current.id)
-        let paste = try await history.pastePayload(for: current.id)
-        #expect(details.canonical.first?.bytes == Data("before".utf8))
-        #expect(details.effective.first?.bytes == Data("after".utf8))
-        #expect(paste.representations == details.effective)
-
-        try await history.authority.damageThumbnailSource(current.id, damage: damage)
         await #expect(throws: HistoryFailure.staleContent(
             expected: original.contentVersion, current: current.contentVersion
         )) {
-            // There is no existing flight: this exercises creator admission.
-            try await history.thumbnail(for: original, pixels: pixels)
+            try await history.authority.thumbnailSource(for: original, pixels: pixels)
+        }
+        if hasImage {
+            await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+                try await history.authority.thumbnailSource(for: current, pixels: pixels)
+            }
+        } else {
+            #expect(try await history.authority.thumbnailSource(for: current, pixels: pixels) == nil)
         }
         await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
-            try await history.thumbnail(for: current, pixels: pixels)
+            try await history.authority.rawRepresentation(
+                for: current, basis: .effective, typeIdentifier: damagedType
+            )
         }
     }
-}
 
-private extension HistoryAuthority {
-    func damageThumbnailSource(
-        _ id: HistoryItemID,
-        damage: ThumbnailSourceDamage
-    ) throws {
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
-        let row = try #require(try HistoryItemRowHydration.fetchRow(businessID: id, in: context))
-        try context.transaction {
-            switch damage {
-            case .canonical:
-                row.canonicalBlob = Data([0xFF])
-            case .revisions:
-                row.revisionStateBlob = Data([0xFF])
-            case .signature:
-                row.canonicalSignatureBlob = Data([0xFF])
-            }
+    @Test func missingItemAndInvalidPixelSizeStayTyped() async throws {
+        let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(persistence: .temporary))
+        let item = HistoryItemReference(id: HistoryItemID(rawValue: UUID()), contentVersion: .initial)
+        await #expect(throws: HistoryFailure.invalidInput(.invalidPixelSize)) {
+            try await history.authority.thumbnailSource(for: item, pixels: PixelSize(width: 0, height: 32))
+        }
+        await #expect(throws: HistoryFailure.notFound(item.id)) {
+            try await history.authority.thumbnailSource(for: item, pixels: PixelSize(width: 32, height: 32))
         }
     }
 }

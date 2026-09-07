@@ -1,9 +1,8 @@
 /// X.4 central audit-store proofs (`V2-05` §4.3–§4.6 / D34 / D36).
-/// Tests use the real V3 SwiftData models and the package-only synchronous
+/// Tests use the real SQLite database and the package-only synchronous
 /// seam that the sole HistoryAuthority writer composes inside transactions.
 import Foundation
 import HistoryCore
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
@@ -16,37 +15,17 @@ enum GatewayAuditTestSupport {
     )!)
     static let requestedAt = Date(timeIntervalSinceReferenceDate: 900_000_000)
 
-    static func makeContainer() throws -> ModelContainer {
-        let schema = historySchema
-        return try ModelContainer(
-            for: schema,
-            configurations: [ModelConfiguration(
-                schema: schema,
-                isStoredInMemoryOnly: true,
-                cloudKitDatabase: .none
-            )]
-        )
-    }
-
-    static func makeContext(
+    static func setCounters(
         nextAuditSequence: UInt64 = 1,
         auditBytes: UInt64 = 0,
         compactionFloor: UInt64 = 1,
-        in container: ModelContainer? = nil
-    ) throws -> (ModelContext, GatewayConfigRow) {
-        let container = try container ?? makeContainer()
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
-        let config = GatewayConfigRow(
-            key: HistoryAuthority.gatewayConfigKey,
-            appIntentsConnectionID: connectionID.rawValue,
-            nextAuditSequence: nextAuditSequence,
-            auditBytes: auditBytes,
-            compactionFloor: compactionFloor,
-            configSchemaVersion: HistoryAuthority.gatewayConfigSchemaVersion
+        in database: SQLiteDatabase
+    ) throws {
+        try database.execute(
+            "UPDATE gateway_config SET nextAuditSequence = ?, auditBytes = ?, compactionFloor = ?",
+            bindings: [.blob(sqliteUInt64(nextAuditSequence)), .blob(sqliteUInt64(auditBytes)),
+                       .blob(sqliteUInt64(compactionFloor))]
         )
-        context.insert(config)
-        return (context, config)
     }
 
     static func recentPayload(
@@ -71,15 +50,14 @@ enum GatewayAuditTestSupport {
     static func appendRecent(
         count: Int,
         startingAt timestamp: Date = requestedAt,
-        config: GatewayConfigRow,
-        context: ModelContext,
+        context: SQLiteDatabase,
         limits: ExternalLimits = .standard
     ) throws {
         for offset in 0..<count {
             let date = timestamp.addingTimeInterval(TimeInterval(offset))
             _ = try GatewayAuditStore.append(
                 recentPayload(requestedAt: date, committedAt: date),
-                config: config,
+                config: HistoryAuthority.loadGatewayConfig(in: context),
                 in: context,
                 limits: limits
             )
@@ -108,12 +86,8 @@ enum GatewayAuditTestSupport {
         )!
     }
 
-    static func rows(in context: ModelContext) throws -> [OperationRecordRow] {
-        var descriptor = FetchDescriptor<OperationRecordRow>(
-            sortBy: [SortDescriptor(\.auditSequence)]
-        )
-        descriptor.fetchLimit = 10_000
-        return try context.fetch(descriptor)
+    static func rows(in context: SQLiteDatabase) throws -> [OperationRecordRow] {
+        try GatewayStoreSnapshot.operationRows(in: context)
     }
 
     static func contribution(
@@ -153,243 +127,233 @@ enum GatewayAuditTestSupport {
 
 @Suite("Gateway audit store append and read (X.4)")
 struct GatewayAuditStoreTests {
-    private enum RetainedDamage: CaseIterable {
-        case gap
-        case belowFloor
-        case aboveHead
-        case duplicate
-        case schemaRaw
-        case payload
-        case byteCounter
+    private enum RetainedDamage: CaseIterable, Sendable {
+        case gap, belowFloor, aboveHead, schemaRaw, payload, byteCounter
 
         var expectedFailure: HistoryFailure {
             switch self {
-            case .schemaRaw, .payload:
-                .persistence(.corruptStoredValue)
-            case .gap, .belowFloor, .aboveHead, .duplicate, .byteCounter:
-                .persistence(.invariantViolation)
+            case .schemaRaw, .payload: .persistence(.corruptStoredValue)
+            default: .persistence(.invariantViolation)
             }
         }
     }
 
     @Test("append mints N, advances once, and accounts exact logical bytes")
-    func appendMintsAndAccountsExactly() throws {
-        let (context, config) = try GatewayAuditTestSupport.makeContext()
-
-        let sequence = try GatewayAuditStore.append(
-            GatewayAuditTestSupport.recentPayload(),
-            config: config,
-            in: context
-        )
-
-        let row = try #require(GatewayAuditTestSupport.rows(in: context).first)
-        let expectedContribution = try GatewayAuditTestSupport.contribution(
-            of: row
-        )
-        #expect(sequence == 1)
-        #expect(row.auditSequence == 1)
-        #expect(config.nextAuditSequence == 2)
-        #expect(config.auditBytes == expectedContribution)
-        #expect(row.connectionIDRaw == GatewayAuditTestSupport.connectionID.rawValue)
-        #expect(row.capabilityRaw == ExternalCapability.browse.rawValue)
-        #expect(row.operationKindRaw == ExternalOperationKind.readRecent.rawValue)
-        #expect(row.outcomeRaw == ExternalOutcome.succeeded.rawValue)
+    func appendMintsAndAccountsExactly() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        try await history.authority.withTestDatabase { authority in
+            let database = authority.database
+            let sequence = try database.writeTransaction {
+                try GatewayAuditStore.append(
+                    GatewayAuditTestSupport.recentPayload(),
+                    config: HistoryAuthority.loadGatewayConfig(in: database), in: database
+                )
+            }
+            let row = try #require(GatewayAuditTestSupport.rows(in: database).first)
+            let config = try HistoryAuthority.loadGatewayConfig(in: database)
+            #expect(sequence == 1)
+            #expect(row.auditSequence == 1)
+            #expect(config.nextAuditSequence == 2)
+            #expect(try config.auditBytes == GatewayAuditTestSupport.contribution(of: row))
+            #expect(row.connectionIDRaw == GatewayAuditTestSupport.connectionID.rawValue)
+            #expect(row.capabilityRaw == ExternalCapability.browse.rawValue)
+            #expect(row.operationKindRaw == ExternalOperationKind.readRecent.rawValue)
+            #expect(row.outcomeRaw == ExternalOutcome.succeeded.rawValue)
+        }
     }
 
     @Test("append overflow rejects before row or counter mutation")
-    func appendOverflowHasNoPartialMutation() throws {
-        let (sequenceContext, sequenceConfig) = try GatewayAuditTestSupport.makeContext(
-            nextAuditSequence: .max,
-            compactionFloor: .max
-        )
-        #expect(throws: ExternalFailure.persistence(.invariantViolation)) {
-            try GatewayAuditStore.append(
-                GatewayAuditTestSupport.recentPayload(),
-                config: sequenceConfig,
-                in: sequenceContext
-            )
+    func appendOverflowHasNoPartialMutation() async throws {
+        for sequenceOverflow in [true, false] {
+            let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+            try await history.authority.withTestDatabase { authority in
+                let database = authority.database
+                try database.writeTransaction {
+                    try GatewayAuditTestSupport.setCounters(
+                        nextAuditSequence: sequenceOverflow ? .max : 1,
+                        auditBytes: sequenceOverflow ? 0 : .max,
+                        compactionFloor: sequenceOverflow ? .max : 1, in: database
+                    )
+                }
+                let before = try GatewayStoreSnapshot.read(in: database)
+                #expect(throws: ExternalFailure.persistence(.invariantViolation)) {
+                    try database.writeTransaction {
+                        try GatewayAuditStore.append(
+                            GatewayAuditTestSupport.recentPayload(),
+                            config: HistoryAuthority.loadGatewayConfig(in: database), in: database
+                        )
+                    }
+                }
+                #expect(try GatewayStoreSnapshot.read(in: database) == before)
+            }
         }
-        #expect(sequenceConfig.nextAuditSequence == .max)
-        #expect(sequenceConfig.auditBytes == 0)
-        #expect(try GatewayAuditTestSupport.rows(in: sequenceContext).isEmpty)
-
-        let (bytesContext, bytesConfig) = try GatewayAuditTestSupport.makeContext(
-            auditBytes: .max
-        )
-        #expect(throws: ExternalFailure.persistence(.invariantViolation)) {
-            try GatewayAuditStore.append(
-                GatewayAuditTestSupport.recentPayload(),
-                config: bytesConfig,
-                in: bytesContext
-            )
-        }
-        #expect(bytesConfig.nextAuditSequence == 1)
-        #expect(bytesConfig.auditBytes == .max)
-        #expect(try GatewayAuditTestSupport.rows(in: bytesContext).isEmpty)
     }
 
     @Test("bounded page is inclusive at since and exclusive at snapshot head")
-    func boundedPageUsesExclusiveSnapshotHead() throws {
+    func boundedPageUsesExclusiveSnapshotHead() async throws {
         let limits = GatewayAuditTestSupport.limits(maxAuditReadBatchSize: 2)
-        let (context, config) = try GatewayAuditTestSupport.makeContext()
-        try GatewayAuditTestSupport.appendRecent(
-            count: 3,
-            config: config,
-            context: context,
-            limits: limits
-        )
-
-        let firstPage = try GatewayAuditStore.readPage(
-            since: 1,
-            snapshotHead: 4,
-            config: config,
-            in: context,
-            limits: limits
-        )
-        #expect(firstPage.map(\.auditSequence) == [1, 2])
-
-        let frozenPage = try GatewayAuditStore.readPage(
-            since: 1,
-            snapshotHead: 3,
-            config: config,
-            in: context,
-            limits: limits
-        )
-        #expect(frozenPage.map(\.auditSequence) == [1, 2])
-        #expect(!frozenPage.contains(where: { $0.auditSequence == 3 }))
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        try await history.authority.withTestDatabase { authority in
+            let database = authority.database
+            try database.writeTransaction {
+                try GatewayAuditTestSupport.appendRecent(count: 3, context: database, limits: limits)
+            }
+            let config = try HistoryAuthority.loadGatewayConfig(in: database)
+            let first = try GatewayAuditStore.readPage(
+                since: 1, snapshotHead: 4, config: config, in: database, limits: limits
+            )
+            #expect(first.map(\.auditSequence) == [1, 2])
+            let frozen = try GatewayAuditStore.readPage(
+                since: 1, snapshotHead: 3, config: config, in: database, limits: limits
+            )
+            #expect(frozen.map(\.auditSequence) == [1, 2])
+            #expect(!frozen.contains(where: { $0.auditSequence == 3 }))
+        }
     }
 
     @Test("read below compaction floor returns the dedicated typed failure")
-    func readBelowFloorIsTyped() throws {
-        let (context, config) = try GatewayAuditTestSupport.makeContext(
-            nextAuditSequence: 4,
-            compactionFloor: 3
-        )
-
-        #expect(throws: ExternalFailure.auditCompactedBefore(floor: 3)) {
-            try GatewayAuditStore.readPage(
-                since: 2,
-                snapshotHead: 4,
-                config: config,
-                in: context
-            )
+    func readBelowFloorIsTyped() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        try await history.authority.withTestDatabase { authority in
+            let database = authority.database
+            try database.writeTransaction {
+                try GatewayAuditTestSupport.setCounters(nextAuditSequence: 4, compactionFloor: 3, in: database)
+            }
+            #expect(throws: ExternalFailure.auditCompactedBefore(floor: 3)) {
+                try GatewayAuditStore.readPage(
+                    since: 2, snapshotHead: 4,
+                    config: HistoryAuthority.loadGatewayConfig(in: database), in: database
+                )
+            }
         }
     }
 
     @Test("typed row decode projects affected IDs and rejects bad raw or blob")
-    func typedDecodeIsFailClosed() throws {
-        let (context, config) = try GatewayAuditTestSupport.makeContext()
-        let payload = OperationRecordPayload(
-            connectionID: GatewayAuditTestSupport.connectionID,
-            capability: .manage,
-            operationKind: .manageRemove,
-            outcome: .succeeded,
-            failureKind: nil,
-            denialReason: nil,
-            requestSummary: .remove(
-                itemID: GatewayAuditTestSupport.itemID.rawValue
-            ),
-            resultSummary: .affectedItemIDs([
-                GatewayAuditTestSupport.itemID.rawValue
-            ]),
-            requestedAt: GatewayAuditTestSupport.requestedAt,
-            committedAt: GatewayAuditTestSupport.requestedAt,
-            changePosition: ChangePosition(rawValue: 9)
-        )
-        _ = try GatewayAuditStore.append(payload, config: config, in: context)
-
-        let dto = try #require(GatewayAuditStore.readPage(
-            since: 1,
-            snapshotHead: 2,
-            config: config,
-            in: context
-        ).first)
-        #expect(dto.affectedItemIDs == [GatewayAuditTestSupport.itemID])
-        #expect(dto.changePosition == ChangePosition(rawValue: 9))
-
-        let row = try #require(GatewayAuditTestSupport.rows(in: context).first)
-        row.operationKindRaw = 0
-        #expect(throws: ExternalFailure.persistence(.corruptStoredValue)) {
-            try GatewayAuditStore.readPage(
-                since: 1,
-                snapshotHead: 2,
-                config: config,
-                in: context
+    func typedDecodeIsFailClosed() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        try await history.authority.withTestDatabase { authority in
+            let database = authority.database
+            let payload = OperationRecordPayload(
+                connectionID: GatewayAuditTestSupport.connectionID, capability: .manage,
+                operationKind: .manageRemove, outcome: .succeeded,
+                failureKind: nil, denialReason: nil,
+                requestSummary: .remove(itemID: GatewayAuditTestSupport.itemID.rawValue),
+                resultSummary: .affectedItemIDs([GatewayAuditTestSupport.itemID.rawValue]),
+                requestedAt: GatewayAuditTestSupport.requestedAt,
+                committedAt: GatewayAuditTestSupport.requestedAt,
+                changePosition: ChangePosition(rawValue: 9)
             )
-        }
-        row.operationKindRaw = ExternalOperationKind.manageRemove.rawValue
-        row.payloadBlob = Data([0])
-        #expect(throws: ExternalFailure.persistence(.corruptStoredValue)) {
-            try GatewayAuditStore.readPage(
-                since: 1,
-                snapshotHead: 2,
-                config: config,
-                in: context
-            )
+            try database.writeTransaction {
+                _ = try GatewayAuditStore.append(
+                    payload, config: HistoryAuthority.loadGatewayConfig(in: database), in: database
+                )
+            }
+            let config = try HistoryAuthority.loadGatewayConfig(in: database)
+            let dto = try #require(GatewayAuditStore.readPage(
+                since: 1, snapshotHead: 2, config: config, in: database
+            ).first)
+            #expect(dto.affectedItemIDs == [GatewayAuditTestSupport.itemID])
+            #expect(dto.changePosition == ChangePosition(rawValue: 9))
+
+            try database.writeTransaction {
+                try database.execute("UPDATE operation_records SET operationKindRaw = 0")
+            }
+            #expect(throws: ExternalFailure.persistence(.corruptStoredValue)) {
+                try GatewayAuditStore.readPage(since: 1, snapshotHead: 2, config: config, in: database)
+            }
+            try database.writeTransaction {
+                try database.execute(
+                    "UPDATE operation_records SET operationKindRaw = ?, payloadBlob = ?",
+                    bindings: [.integer(Int64(ExternalOperationKind.manageRemove.rawValue)), .blob(Data([0]))]
+                )
+            }
+            #expect(throws: ExternalFailure.persistence(.corruptStoredValue)) {
+                try GatewayAuditStore.readPage(since: 1, snapshotHead: 2, config: config, in: database)
+            }
         }
     }
 
     @Test("startup validation catches interval, payload, raw, and counter corruption")
-    func retainedStateCorruptionFailsClosed() throws {
+    func retainedStateCorruptionFailsClosed() async throws {
         for damage in RetainedDamage.allCases {
-            let (context, config) = try GatewayAuditTestSupport.makeContext()
-            try GatewayAuditTestSupport.appendRecent(
-                count: 3,
-                config: config,
-                context: context
-            )
-            let rows = try GatewayAuditTestSupport.rows(in: context)
-            switch damage {
-            case .gap:
-                let removedContribution = try GatewayAuditTestSupport.contribution(
-                    of: rows[1]
-                )
-                let remainingBytes = config.auditBytes
-                    .subtractingReportingOverflow(removedContribution)
-                #expect(!remainingBytes.overflow)
-                context.delete(rows[1])
-                config.auditBytes = remainingBytes.partialValue
-            case .belowFloor:
-                config.compactionFloor = 2
-            case .aboveHead:
-                rows[2].auditSequence = config.nextAuditSequence
-            case .duplicate:
-                rows[2].auditSequence = rows[1].auditSequence
-            case .schemaRaw:
-                rows[0].auditSchemaVersion = 2
-            case .payload:
-                rows[0].payloadBlob = Data([0])
-            case .byteCounter:
-                config.auditBytes = .max
-            }
-
-            #expect(throws: damage.expectedFailure, "damage: \(damage)") {
-                try GatewayAuditStore.validateRetainedState(
-                    config: config,
-                    in: context,
-                    limits: GatewayAuditTestSupport.limits(
-                        maxAuditReadBatchSize: 2
+            let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+            try await history.authority.withTestDatabase { authority in
+                let database = authority.database
+                try database.writeTransaction {
+                    try GatewayAuditTestSupport.appendRecent(count: 3, context: database)
+                    let config = try HistoryAuthority.loadGatewayConfig(in: database)
+                    let rows = try GatewayAuditTestSupport.rows(in: database)
+                    switch damage {
+                    case .gap:
+                        let bytes = config.auditBytes - (try GatewayAuditTestSupport.contribution(of: rows[1]))
+                        try database.execute("DELETE FROM operation_records WHERE auditSequence = ?",
+                                             bindings: [.blob(sqliteUInt64(2))])
+                        try GatewayAuditTestSupport.setCounters(nextAuditSequence: 4, auditBytes: bytes, in: database)
+                    case .belowFloor:
+                        try GatewayAuditTestSupport.setCounters(
+                            nextAuditSequence: 4, auditBytes: config.auditBytes, compactionFloor: 2, in: database
+                        )
+                    case .aboveHead:
+                        try database.execute(
+                            "UPDATE operation_records SET auditSequence = ? WHERE auditSequence = ?",
+                            bindings: [.blob(sqliteUInt64(4)), .blob(sqliteUInt64(3))]
+                        )
+                    case .schemaRaw:
+                        try database.execute("UPDATE operation_records SET auditSchemaVersion = 2 WHERE auditSequence = ?",
+                                             bindings: [.blob(sqliteUInt64(1))])
+                    case .payload:
+                        try database.execute("UPDATE operation_records SET payloadBlob = ? WHERE auditSequence = ?",
+                                             bindings: [.blob(Data([0])), .blob(sqliteUInt64(1))])
+                    case .byteCounter:
+                        try GatewayAuditTestSupport.setCounters(nextAuditSequence: 4, auditBytes: .max, in: database)
+                    }
+                }
+                #expect(throws: damage.expectedFailure, "damage: \(damage)") {
+                    try GatewayAuditStore.validateRetainedState(
+                        config: HistoryAuthority.loadGatewayConfig(in: database),
+                        in: database, limits: GatewayAuditTestSupport.limits(maxAuditReadBatchSize: 2)
                     )
-                )
+                }
             }
         }
     }
 
-    @Test("startup validation traverses sequence-keyed bounded batches")
-    func retainedStateValidationUsesMultipleBatches() throws {
-        let limits = GatewayAuditTestSupport.limits(maxAuditReadBatchSize: 2)
-        let (context, config) = try GatewayAuditTestSupport.makeContext()
-        try GatewayAuditTestSupport.appendRecent(
-            count: 5,
-            config: config,
-            context: context,
-            limits: limits
-        )
+    @Test("SQLite rejects duplicate audit sequences without changing durable records")
+    func duplicateSequenceIsRejected() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        try await history.authority.withTestDatabase { authority in
+            let database = authority.database
+            try database.writeTransaction {
+                try GatewayAuditTestSupport.appendRecent(count: 3, context: database)
+            }
+            let before = try GatewayStoreSnapshot.read(in: database)
+            do {
+                try database.writeTransaction {
+                    try database.execute(
+                        "UPDATE operation_records SET auditSequence = ? WHERE auditSequence = ?",
+                        bindings: [.blob(sqliteUInt64(2)), .blob(sqliteUInt64(3))]
+                    )
+                }
+                Issue.record("duplicate audit sequence unexpectedly accepted")
+            } catch let failure as SQLiteFailure {
+                #expect(failure.isConstraint)
+            }
+            #expect(try GatewayStoreSnapshot.read(in: database) == before)
+        }
+    }
 
-        try GatewayAuditStore.validateRetainedState(
-            config: config,
-            in: context,
-            limits: limits
-        )
+    @Test("startup validation traverses sequence-keyed bounded batches")
+    func retainedStateValidationUsesMultipleBatches() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        try await history.authority.withTestDatabase { authority in
+            let database = authority.database
+            let limits = GatewayAuditTestSupport.limits(maxAuditReadBatchSize: 2)
+            try database.writeTransaction {
+                try GatewayAuditTestSupport.appendRecent(count: 5, context: database, limits: limits)
+            }
+            try GatewayAuditStore.validateRetainedState(
+                config: HistoryAuthority.loadGatewayConfig(in: database), in: database, limits: limits
+            )
+        }
     }
 }

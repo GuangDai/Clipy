@@ -85,6 +85,14 @@ extension SearchWorker {
             return ordered
         }
 
+        /// Only bounded candidate IDs, including a separately retained
+        /// continuation anchor. Used to retain matching external count facts.
+        internal var retainedIDs: Set<HistoryItemID> {
+            var ids = Set(hits.map { $0.corpusRow.id })
+            if let anchorRow { ids.insert(anchorRow.corpusRow.id) }
+            return ids
+        }
+
         /// The frozen pinned/score/date/UUID total order, shared by heap
         /// selection and final ordering so equal scores keep cursor ties.
         private static func precedes(
@@ -125,7 +133,8 @@ extension SearchWorker {
     internal func evaluateFuzzy(
         term: String,
         in corpus: SearchCorpusSnapshot,
-        directive: ScanDirective
+        directive: ScanDirective,
+        preparedPattern: Fuse.Pattern? = nil
     ) async throws -> EvaluationResult {
         // Fuse 1.4.0 does not enforce its `maxPatternLength` option (the
         // parameter is unread in the pinned revision, so the documented
@@ -134,7 +143,7 @@ extension SearchWorker {
         // completion bit or can overflow inside Fuse. The worker therefore
         // enforces the Part VI 64-Character bound before Fuse is called
         // (03b §8; 06 §2; V1-Verified/03c).
-        guard term.prefix(limits.maximumFuzzyQueryCharacters + 1).count
+        guard preparedPattern != nil || term.prefix(limits.maximumFuzzyQueryCharacters + 1).count
                 <= limits.maximumFuzzyQueryCharacters else {
             throw HistoryFailure.invalidInput(.invalidSearchTerm)
         }
@@ -143,7 +152,7 @@ extension SearchWorker {
         // non-empty on this lane (03b §8 routes empty terms to the
         // recent-equivalent lane), so `nil` is purely defensive and means
         // no row can match.
-        guard let pattern = fuse.createPattern(from: term) else {
+        guard let pattern = preparedPattern ?? fuse.createPattern(from: term) else {
 #if DEBUG
             return EvaluationResult(rows: [], debugRowsProcessed: 0, debugMatchedRows: 0)
 #else

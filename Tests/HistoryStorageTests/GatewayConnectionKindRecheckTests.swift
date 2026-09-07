@@ -2,13 +2,12 @@
 /// Owning spec: `V2-05` §3.1/§4.5/§5.2 and roadmap X.9/F1.
 import Foundation
 import HistoryCore
-import SwiftData
 import Synchronization
 import Testing
 @testable import HistoryStorage
 
 // Every case opens and seeds a complete current store. Serializing this suite keeps
-// five ModelContainer startup paths from competing at once with the
+// five temporary SQLite startup paths from competing at once with the
 // MainActor-driven PresentationUI suites in the package-wide test process.
 @Suite("Gateway authoritative connection-kind recheck", .serialized)
 struct GatewayConnectionKindRecheckTests {
@@ -31,9 +30,8 @@ struct GatewayConnectionKindRecheckTests {
     )
 
     private struct Fixture {
-        let history: SwiftDataHistory
+        let history: SQLiteHistory
         let authority: HistoryAuthority
-        let container: ModelContainer
         let appIntentsConnection: ExternalConnectionID
         let localAutomationConnection: ExternalConnectionID
     }
@@ -53,51 +51,15 @@ struct GatewayConnectionKindRecheckTests {
     }
 #endif
 
-    private struct HistorySnapshot: Equatable {
-        struct Item: Equatable {
-            let id: UUID
-            let contentVersionRaw: UInt64
-            let canonicalBlob: Data
-            let revisionStateBlob: Data
-            let copyCount: UInt64
-            let pinOrdinal: Int?
-
-            init(_ row: HistoryItemRow) {
-                id = row.id
-                contentVersionRaw = row.contentVersionRaw
-                canonicalBlob = row.canonicalBlob
-                revisionStateBlob = row.revisionStateBlob
-                copyCount = row.copyCount
-                pinOrdinal = row.pinOrdinal
-            }
-        }
-
-        struct ChangeRecord: Equatable {
-            let sequence: UInt64
-            let changePositionRaw: UInt64
-            let changeKindRaw: Int16
-            let affectedItemsBlob: Data
-
-            init(_ row: HistoryChangeRecordRow) {
-                sequence = row.sequence
-                changePositionRaw = row.changePositionRaw
-                changeKindRaw = row.changeKindRaw
-                affectedItemsBlob = row.affectedItemsBlob
-            }
-        }
-
-        let position: UInt64
-        let items: [Item]
-        let changes: [ChangeRecord]
-    }
+    private typealias HistorySnapshot = GatewayHistoryTestSnapshot
 
     @Test("App Intents row cannot authorize a local browse-preview descriptor")
     func appIntentsRowRejectsLocalDescriptorWithoutDurableEffects()
         async throws
     {
         let fixture = try await Self.makeFixture()
-        let historyBefore = try Self.historySnapshot(in: fixture.container)
-        let gatewayBefore = try Self.gatewaySnapshot(in: fixture.container)
+        let historyBefore = try await Self.historySnapshot(in: fixture.authority)
+        let gatewayBefore = try await Self.gatewaySnapshot(in: fixture.authority)
 #if DEBUG
         let historyReadProbe = await Self.installHistoryReadProbe(
             on: fixture.authority
@@ -116,8 +78,8 @@ struct GatewayConnectionKindRecheckTests {
             )
         }
 
-        #expect(try Self.historySnapshot(in: fixture.container) == historyBefore)
-        #expect(try Self.gatewaySnapshot(in: fixture.container) == gatewayBefore)
+        #expect(try await Self.historySnapshot(in: fixture.authority) == historyBefore)
+        #expect(try await Self.gatewaySnapshot(in: fixture.authority) == gatewayBefore)
 #if DEBUG
         #expect(!historyReadProbe.didReachRecentFetch)
 #endif
@@ -126,8 +88,8 @@ struct GatewayConnectionKindRecheckTests {
     @Test("local row cannot authorize an App Intents browse descriptor")
     func localRowRejectsAppDescriptorWithoutDurableEffects() async throws {
         let fixture = try await Self.makeFixture()
-        let historyBefore = try Self.historySnapshot(in: fixture.container)
-        let gatewayBefore = try Self.gatewaySnapshot(in: fixture.container)
+        let historyBefore = try await Self.historySnapshot(in: fixture.authority)
+        let gatewayBefore = try await Self.gatewaySnapshot(in: fixture.authority)
 #if DEBUG
         let historyReadProbe = await Self.installHistoryReadProbe(
             on: fixture.authority
@@ -147,8 +109,8 @@ struct GatewayConnectionKindRecheckTests {
             )
         }
 
-        #expect(try Self.historySnapshot(in: fixture.container) == historyBefore)
-        #expect(try Self.gatewaySnapshot(in: fixture.container) == gatewayBefore)
+        #expect(try await Self.historySnapshot(in: fixture.authority) == historyBefore)
+        #expect(try await Self.gatewaySnapshot(in: fixture.authority) == gatewayBefore)
 #if DEBUG
         #expect(!historyReadProbe.didReachRecentFetch)
 #endif
@@ -157,12 +119,11 @@ struct GatewayConnectionKindRecheckTests {
     @Test("correct local kind retains granted and revoked audit behavior")
     func correctLocalKindRetainsAuthorizationSemantics() async throws {
         let fixture = try await Self.makeFixture()
-        let historyBeforeGrant = try Self.historySnapshot(in: fixture.container)
-        let gatewayBeforeGrant = try Self.gatewaySnapshot(in: fixture.container)
+        let historyBeforeGrant = try await Self.historySnapshot(in: fixture.authority)
+        let gatewayBeforeGrant = try await Self.gatewaySnapshot(in: fixture.authority)
 
-        do {
-            let context = ModelContext(fixture.container)
-            context.autosaveEnabled = false
+        try await fixture.authority.withTestDatabase { authority in
+            let context = authority.database
             let config = try HistoryAuthority.loadGatewayConfig(in: context)
             guard case .authorized = try HistoryAuthority.targetedExternalAuthorizationDecision(
                 Self.localRecentDescriptor,
@@ -176,16 +137,16 @@ struct GatewayConnectionKindRecheckTests {
             }
         }
 
-        #expect(try Self.historySnapshot(in: fixture.container)
+        #expect(try await Self.historySnapshot(in: fixture.authority)
             == historyBeforeGrant)
-        #expect(try Self.gatewaySnapshot(in: fixture.container)
+        #expect(try await Self.gatewaySnapshot(in: fixture.authority)
             == gatewayBeforeGrant)
 
         try await fixture.history.revokeConnection(
             fixture.localAutomationConnection
         )
-        let historyBeforeDenial = try Self.historySnapshot(in: fixture.container)
-        let gatewayBeforeDenial = try Self.gatewaySnapshot(in: fixture.container)
+        let historyBeforeDenial = try await Self.historySnapshot(in: fixture.authority)
+        let gatewayBeforeDenial = try await Self.gatewaySnapshot(in: fixture.authority)
 
         await #expect(throws: ExternalFailure.connectionRevoked(
             connectionID: fixture.localAutomationConnection
@@ -198,9 +159,9 @@ struct GatewayConnectionKindRecheckTests {
             )
         }
 
-        #expect(try Self.historySnapshot(in: fixture.container)
+        #expect(try await Self.historySnapshot(in: fixture.authority)
             == historyBeforeDenial)
-        let gatewayAfterDenial = try Self.gatewaySnapshot(in: fixture.container)
+        let gatewayAfterDenial = try await Self.gatewaySnapshot(in: fixture.authority)
         #expect(gatewayAfterDenial.connections == gatewayBeforeDenial.connections)
         #expect(gatewayAfterDenial.grants == gatewayBeforeDenial.grants)
         #expect(gatewayAfterDenial.operations.dropLast()
@@ -224,8 +185,8 @@ struct GatewayConnectionKindRecheckTests {
     @Test("wrong kind rejects a write before target facts and audit")
     func wrongKindWriteRejectsBeforeHistoryFacts() async throws {
         let fixture = try await Self.makeFixture()
-        let historyBefore = try Self.historySnapshot(in: fixture.container)
-        let gatewayBefore = try Self.gatewaySnapshot(in: fixture.container)
+        let historyBefore = try await Self.historySnapshot(in: fixture.authority)
+        let gatewayBefore = try await Self.gatewaySnapshot(in: fixture.authority)
 
         // The absent target is intentional: a write that reached History
         // facts could expose notFound. The kind mismatch must win first.
@@ -241,15 +202,15 @@ struct GatewayConnectionKindRecheckTests {
             )
         }
 
-        #expect(try Self.historySnapshot(in: fixture.container) == historyBefore)
-        #expect(try Self.gatewaySnapshot(in: fixture.container) == gatewayBefore)
+        #expect(try await Self.historySnapshot(in: fixture.authority) == historyBefore)
+        #expect(try await Self.gatewaySnapshot(in: fixture.authority) == gatewayBefore)
     }
 
     @Test("correct App Intents kind retains successful and revoked read audits")
     func correctAppKindRetainsReadAuditSemantics() async throws {
         let fixture = try await Self.makeFixture()
-        let historyBeforeRead = try Self.historySnapshot(in: fixture.container)
-        let gatewayBeforeRead = try Self.gatewaySnapshot(in: fixture.container)
+        let historyBeforeRead = try await Self.historySnapshot(in: fixture.authority)
+        let gatewayBeforeRead = try await Self.gatewaySnapshot(in: fixture.authority)
 
         let result = try await fixture.authority.performExternalRead(
             .recent(limit: 1),
@@ -263,9 +224,9 @@ struct GatewayConnectionKindRecheckTests {
             return
         }
         #expect(page.rows.count == 1)
-        #expect(try Self.historySnapshot(in: fixture.container)
+        #expect(try await Self.historySnapshot(in: fixture.authority)
             == historyBeforeRead)
-        let gatewayAfterRead = try Self.gatewaySnapshot(in: fixture.container)
+        let gatewayAfterRead = try await Self.gatewaySnapshot(in: fixture.authority)
         #expect(gatewayAfterRead.operations.dropLast()
             == gatewayBeforeRead.operations[...])
         let success = try #require(gatewayAfterRead.operations.last)
@@ -282,8 +243,8 @@ struct GatewayConnectionKindRecheckTests {
         try await fixture.history.revokeConnection(
             fixture.appIntentsConnection
         )
-        let historyBeforeDenial = try Self.historySnapshot(in: fixture.container)
-        let gatewayBeforeDenial = try Self.gatewaySnapshot(in: fixture.container)
+        let historyBeforeDenial = try await Self.historySnapshot(in: fixture.authority)
+        let gatewayBeforeDenial = try await Self.gatewaySnapshot(in: fixture.authority)
 
         await #expect(throws: ExternalFailure.connectionRevoked(
             connectionID: fixture.appIntentsConnection
@@ -297,9 +258,9 @@ struct GatewayConnectionKindRecheckTests {
             )
         }
 
-        #expect(try Self.historySnapshot(in: fixture.container)
+        #expect(try await Self.historySnapshot(in: fixture.authority)
             == historyBeforeDenial)
-        let gatewayAfterDenial = try Self.gatewaySnapshot(in: fixture.container)
+        let gatewayAfterDenial = try await Self.gatewaySnapshot(in: fixture.authority)
         #expect(gatewayAfterDenial.operations.dropLast()
             == gatewayBeforeDenial.operations[...])
         let denial = try #require(gatewayAfterDenial.operations.last)
@@ -317,11 +278,10 @@ struct GatewayConnectionKindRecheckTests {
     }
 
     private static func makeFixture() async throws -> Fixture {
-        let history = try await SwiftDataHistory.open(configuration:
-            HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(configuration:
+            HistoryConfiguration(persistence: .temporary)
         )
         let authority = history.authority
-        let container = await authority.container
         let appIntentsConnection = try #require(
             try await history.connections().first
         ).id
@@ -347,38 +307,17 @@ struct GatewayConnectionKindRecheckTests {
         return Fixture(
             history: history,
             authority: authority,
-            container: container,
             appIntentsConnection: appIntentsConnection,
             localAutomationConnection: localAutomationConnection
         )
     }
 
-    private static func historySnapshot(
-        in container: ModelContainer
-    ) throws -> HistorySnapshot {
-        let context = ModelContext(container)
-        let position = try #require(
-            context.fetch(FetchDescriptor<LastChangePositionRow>()).first
-        )
-        let items = try context.fetch(FetchDescriptor<HistoryItemRow>())
-            .map(HistorySnapshot.Item.init)
-            .sorted { $0.id.uuidString < $1.id.uuidString }
-        let changes = try context.fetch(
-            FetchDescriptor<HistoryChangeRecordRow>()
-        )
-            .map(HistorySnapshot.ChangeRecord.init)
-            .sorted { $0.sequence < $1.sequence }
-        return HistorySnapshot(
-            position: position.rawValue,
-            items: items,
-            changes: changes
-        )
+    private static func historySnapshot(in authority: HistoryAuthority) async throws -> HistorySnapshot {
+        try await GatewayHistoryTestSnapshot.read(from: authority)
     }
 
-    private static func gatewaySnapshot(
-        in container: ModelContainer
-    ) throws -> GatewayStoreSnapshot {
-        try GatewayStoreSnapshot.read(in: ModelContext(container))
+    private static func gatewaySnapshot(in authority: HistoryAuthority) async throws -> GatewayStoreSnapshot {
+        try await GatewayStoreSnapshot.read(from: authority)
     }
 
 #if DEBUG

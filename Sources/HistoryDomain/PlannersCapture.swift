@@ -39,24 +39,63 @@ package func canonicalContains(
     }
 }
 
-/// Plans one capture: lineage-lane and canonical-lane dedup, insert-or-
-/// coalesce, and same-commit retention victim selection.
+/// Confirms one Canonical signature candidate by content bytes (02 §9.2).
+/// Fingerprints never establish identity. Equal arrays use the common fast
+/// path; containment also handles equivalent Unicode type spellings whose
+/// scalar order differs. Equal cardinality then establishes exact set equality.
+package func confirmCanonicalCapture(
+    incoming: CanonicalContent,
+    existing: CanonicalContent,
+    id: HistoryItemID,
+    occurrence: CopyOccurrence,
+    pinOrdinal: PinOrdinal?
+) -> CanonicalCaptureMatch? {
+    guard existing == incoming || canonicalContains(existing: existing, incoming: incoming) else {
+        return nil
+    }
+    return CanonicalCaptureMatch(
+        value: CaptureMatch(id: id, occurrence: occurrence, pinOrdinal: pinOrdinal),
+        extraRepresentationCount: existing.representations.count - incoming.representations.count
+    )
+}
+
+/// Reduces confirmed candidates without retaining their content (02 §9.4):
+/// exact equality, fewest extras, newest copy, then smallest business ID.
+package func preferredCanonicalCaptureMatch(
+    _ lhs: CanonicalCaptureMatch,
+    _ rhs: CanonicalCaptureMatch
+) -> CanonicalCaptureMatch {
+    if lhs.extraRepresentationCount != rhs.extraRepresentationCount {
+        return lhs.extraRepresentationCount < rhs.extraRepresentationCount ? lhs : rhs
+    }
+    if lhs.value.occurrence.lastCopiedAt != rhs.value.occurrence.lastCopiedAt {
+        return lhs.value.occurrence.lastCopiedAt > rhs.value.occurrence.lastCopiedAt ? lhs : rhs
+    }
+    return lhs.value.id < rhs.value.id ? lhs : rhs
+}
+
+/// A retained lineage hint wins only for equal Effective representation sets
+/// (02 §9.3.1). Storage resolves and validates the active content before this
+/// comparison; Canonical containment cannot authorize a lineage match.
+package func confirmLineageCapture(
+    incoming: CanonicalContent,
+    effective: EffectiveContent,
+    id: HistoryItemID,
+    occurrence: CopyOccurrence,
+    pinOrdinal: PinOrdinal?
+) -> CaptureMatch? {
+    let incomingEffective = EffectiveContent(representations: incoming.representations.map(\.content))
+    guard incomingEffective.hasSameRepresentations(as: effective) else { return nil }
+    return CaptureMatch(id: id, occurrence: occurrence, pinOrdinal: pinOrdinal)
+}
+
+/// Plans one capture from the confirmed winner: insert-or-coalesce and
+/// same-commit retention victim selection.
 /// docs/02-domain.md §8, §9, §12
 ///
-/// Matching lanes (docs/02-domain.md §9.3), in fixed order:
-///
-/// 1. Lineage lane — a direct retained hint wins only when the incoming
-///    content is byte-set-equal to the hinted item's current Effective
-///    Content; containment is insufficient here so a spoofed hint cannot
-///    discard representations. Effective Content derivation is defensive:
-///    an internally inconsistent lineage fact throws `.corruptLineage`
-///    (docs/02-domain.md §6).
-/// 2. Canonical lane — every complete signature candidate is byte-confirmed
-///    with `canonicalContains`; Effective Content and inactive revisions do
-///    not participate. Multiple confirmed candidates resolve to the minimum
-///    rank of docs/02-domain.md §9.4 (D9).
-/// 3. Insert — only when both lanes confirm no winner (D8: candidacy
-///    completeness was proven before planning).
+/// Storage supplies the lineage winner or the complete Canonical reduction,
+/// using the pure helpers above in that order (02 §9.3, D8–D9). Insert occurs
+/// only when neither lane confirms a match.
 ///
 /// A coalescing winner receives one `.recordCopy` carrying the complete
 /// folded occurrence of docs/02-domain.md §3.1 (D11); count overflow throws
@@ -73,52 +112,7 @@ package func planCapture(
     retention: RetentionPolicy,
     hardMaximumRetainedItems: Int
 ) throws -> PlanningResult {
-    // Lane 1 — lineage (docs/02-domain.md §9.3.1): byte-set equality with the
-    // hinted item's current Effective Content.
-    var winner: HistoryItemState?
-    if let hinted = facts.hintedItem {
-        let hintedEffective: EffectiveContent
-        do {
-            hintedEffective = try effectiveContent(of: hinted)
-        } catch {
-            // Storage validates lineage at fact load; this is only the
-            // planner's defensive backstop (docs/02-domain.md §6).
-            throw DomainRejection.corruptLineage
-        }
-        let incomingEffective = EffectiveContent(
-            representations: capture.canonical.representations.map(\.content)
-        )
-        if incomingEffective.hasSameRepresentations(as: hintedEffective) {
-            winner = hinted
-        }
-    }
-
-    // Lane 2 — canonical (docs/02-domain.md §9.3.2): byte-confirm every
-    // complete candidate, cache the §9.4 facts established while doing so,
-    // then pick the deterministic winner. Canonical byte equality is paid
-    // once per candidate rather than once for each `min` comparison.
-    if winner == nil {
-        winner = facts.candidates.items.lazy
-            .compactMap { item -> ConfirmedCanonicalCandidate? in
-                guard item.canonical == capture.canonical || canonicalContains(
-                    existing: item.canonical,
-                    incoming: capture.canonical
-                ) else {
-                    return nil
-                }
-                // §2.1/§9.4: confirmed containment with equal cardinality
-                // is exact set equality. Scalar-sorted array equality can
-                // disagree when equivalent Unicode spellings change order.
-                let extraRepresentationCount = item.canonical.representations.count
-                    - capture.canonical.representations.count
-                return ConfirmedCanonicalCandidate(
-                    item: item,
-                    isExactCanonicalMatch: extraRepresentationCount == 0,
-                    extraRepresentationCount: extraRepresentationCount
-                )
-            }
-            .min(by: canonicalWinnerRanksBefore)?.item
-    }
+    let winner = facts.confirmedMatch
 
     // Primary mutation: coalesce (§9.5) or insert (§9.3.3).
     let primaryID: HistoryItemID
@@ -250,48 +244,34 @@ package func planRetention(
         count: victimCount,
         eligibleCount: unpinnedCount
     )
+    return planRetention(
+        currentPolicy: facts.currentPolicy,
+        policy: policy,
+        victimIDs: victims.map(\.id)
+    )
+}
 
+/// Plans a count-policy update from the complete selected victim prefix
+/// (02 §12). Storage computes the excess from authoritative unpinned count
+/// and fetches exactly that many oldest unpinned IDs, ordered by copy time
+/// then business ID. The prefix contains every required victim, not an
+/// arbitrary page of retained items; planning needs no other inventory.
+package func planRetention(
+    currentPolicy: RetentionPolicy,
+    policy: RetentionPolicy,
+    victimIDs: [HistoryItemID]
+) -> PlanningResult {
+    guard currentPolicy != policy || !victimIDs.isEmpty else { return .unchanged }
     var mutations: [HistoryMutation] = [
         .setRetentionPolicy(maximumUnpinnedItems: policy.maximumUnpinnedItems)
     ]
-    for victim in victims {
-        mutations.append(.retire(itemID: victim.id, reason: .retention))
+    for victimID in victimIDs {
+        mutations.append(.retire(itemID: victimID, reason: .retention))
     }
     return .commit(MutationPlan(
-        outcome: .retentionPolicySet(removedCount: victims.count),
+        outcome: .retentionPolicySet(removedCount: victimIDs.count),
         mutations: mutations
     ))
-}
-
-/// One byte-confirmed lane-2 candidate plus the rank facts computed during
-/// confirmation. Keeping these facts beside the item prevents the minimum
-/// reduction from repeatedly walking Canonical bytes (docs/02-domain.md §9.4).
-private struct ConfirmedCanonicalCandidate {
-    let item: HistoryItemState
-    let isExactCanonicalMatch: Bool
-    let extraRepresentationCount: Int
-}
-
-/// The deterministic winner rank of docs/02-domain.md §9.4: returns true when
-/// `lhs` ranks before `rhs` — exact Canonical equality first, then fewest
-/// extra representations, then most recent `lastCopiedAt`, then smallest
-/// `HistoryItemID` bytes (the stable final tie-breaker, D9).
-private func canonicalWinnerRanksBefore(
-    _ lhs: ConfirmedCanonicalCandidate,
-    _ rhs: ConfirmedCanonicalCandidate
-) -> Bool {
-    if lhs.isExactCanonicalMatch != rhs.isExactCanonicalMatch {
-        return lhs.isExactCanonicalMatch
-    }
-    if lhs.extraRepresentationCount != rhs.extraRepresentationCount {
-        return lhs.extraRepresentationCount < rhs.extraRepresentationCount
-    }
-
-    if lhs.item.occurrence.lastCopiedAt != rhs.item.occurrence.lastCopiedAt {
-        return lhs.item.occurrence.lastCopiedAt > rhs.item.occurrence.lastCopiedAt
-    }
-
-    return lhs.item.id < rhs.item.id
 }
 
 /// Selects the first `count` rows in the eviction order of docs/02-domain.md

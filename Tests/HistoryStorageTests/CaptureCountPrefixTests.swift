@@ -1,7 +1,6 @@
 import Foundation
 import HistoryCore
 import HistoryDomain
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
@@ -11,8 +10,8 @@ struct CaptureCountPrefixTests {
     /// the persisted UUID ordering column decide the bounded store fetch.
     @Test(arguments: [8, 32])
     func countCaptureLoadsBoundedOldestPrefixAndRetiresExactTieWinner(retainedCount: Int) async throws {
-        let history = try await SwiftDataHistory.open(configuration: HistoryConfiguration(
-            persistence: .memory, initialMaximumUnpinnedItems: retainedCount
+        let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(
+            persistence: .temporary, initialMaximumUnpinnedItems: retainedCount
         ))
         var ids: [HistoryItemID] = []
         // Reverse insertion order must not become the store's tie breaker.
@@ -40,7 +39,7 @@ struct CaptureCountPrefixTests {
         #expect(facts.retention.retainedCount == retainedCount)
         #expect(facts.retention.unpinnedCount == retainedCount)
         #expect(facts.retention.oldestUnpinnedItems.map(\.id) == Array(ids.prefix(2)))
-        #expect(facts.candidates.items.isEmpty)
+        #expect(facts.confirmedMatch == nil)
         #expect(!facts.candidateIDExists)
 
         let receipt = try await history.authority.commitCapture(incoming)
@@ -57,8 +56,8 @@ struct CaptureCountPrefixTests {
     }
 
     @Test func belowPolicyCaptureNeedsNoRetentionRowsAndCoalescingDoesNotEvict() async throws {
-        let history = try await SwiftDataHistory.open(configuration: HistoryConfiguration(
-            persistence: .memory, initialMaximumUnpinnedItems: 8
+        let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(
+            persistence: .temporary, initialMaximumUnpinnedItems: 8
         ))
         let raw = WSSupport.textCapture("same bytes", observedAt: Date(timeIntervalSinceReferenceDate: 830_000_100))
         _ = try await history.perform(.capture(raw))
@@ -67,7 +66,7 @@ struct CaptureCountPrefixTests {
         let facts = try await history.authority.countPrefixFacts(incoming, maximumUnpinned: 8)
         #expect(facts.retention.retainedCount == 1)
         #expect(facts.retention.oldestUnpinnedItems.isEmpty)
-        #expect(facts.candidates.items.count == 1)
+        #expect(facts.confirmedMatch != nil)
         let receipt = try await history.perform(.capture(raw))
         guard case .committed(let commit) = receipt,
               case .coalesced = commit.outcome else {
@@ -86,14 +85,12 @@ private extension HistoryAuthority {
         _ prepared: PreparedCaptureBundle,
         maximumUnpinned: Int
     ) throws -> IngestFacts {
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
         return try IngestFactLoader.loadFacts(
-            in: context,
+            in: database,
+            blobStore: blobStore,
             prepared: prepared.domain,
-            signatureIndex: signatureIndex,
             retention: RetentionPolicy(maximumUnpinnedItems: maximumUnpinned),
             limits: limits
-        ).facts
+        )
     }
 }

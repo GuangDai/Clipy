@@ -3,47 +3,46 @@
 import Foundation
 import HistoryCore
 import HistoryDomain
-import SwiftData
+
+internal struct SQLitePositionRow: Sendable {
+    internal let rawValue: UInt64
+    internal let maximumUnpinnedItems: Int
+}
 
 extension HistoryAuthority {
     // MARK: Singleton access (docs/05-authority-kernel.md §3.2, §10)
 
-    /// Fetches the one position/retention singleton row.
-    /// docs/05-authority-kernel.md §3.2, §10 (`fetchExactlyOnePositionRow`)
-    ///
-    /// The fetch is bounded (`fetchLimit = 2`): exactly one row is valid;
-    /// zero or duplicates are durable-state corruption
-    /// (`.persistence(.invariantViolation)`). A framework fetch failure
-    /// outside the transaction closure means the fact cannot be proven
-    /// (`.temporarilyUnavailable(.factProof)`, §16); inside the closure the
-    /// executor remaps it with every other closure failure to
-    /// `.persistence(.transaction)`.
+    /// A point read of the current singleton. The caller owns any surrounding
+    /// snapshot/write transaction; this helper never begins a nested one.
     internal static func fetchExactlyOnePositionRow(
-        in context: ModelContext
-    ) throws -> LastChangePositionRow {
-        let key = positionSingletonKey
-        var descriptor = FetchDescriptor<LastChangePositionRow>(
-            predicate: #Predicate { row in row.key == key }
-        )
-        descriptor.fetchLimit = 2
-        let rows: [LastChangePositionRow]
+        in database: SQLiteDatabase
+    ) throws -> SQLitePositionRow {
         do {
-            rows = try context.fetch(descriptor)
-        } catch {
-            throw HistoryFailure.temporarilyUnavailable(.factProof)
+            let statement = try database.prepare("""
+                SELECT changePosition, maximumUnpinnedItems
+                FROM history_state WHERE key = ? LIMIT 2
+                """, bindings: [.text(positionSingletonKey)])
+            defer { statement.finalize() }
+            guard try statement.step() else {
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
+            let position = try sqliteUInt64(statement.blob(at: 0))
+            guard let maximum = try Int(exactly: statement.integer(at: 1)) else {
+                throw HistoryFailure.persistence(.corruptStoredValue)
+            }
+            guard try !statement.step() else {
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
+            return SQLitePositionRow(rawValue: position, maximumUnpinnedItems: maximum)
+        } catch let failure as SQLiteFailure {
+            throw failure.historyFailure
         }
-        guard rows.count == 1, let row = rows.first else {
-            throw HistoryFailure.persistence(.invariantViolation)
-        }
-        return row
     }
 
-    /// Decodes the singleton's scalar values: the current Change Position
-    /// and the authoritative retention policy (§3.2). A stored policy
-    /// outside the fixed Part VI user range is a corrupt stored value (§16,
-    /// D19).
+    /// The same current retention validation applies to point reads, page
+    /// snapshots and commits; UInt64 ChangePosition keeps its complete range.
     internal static func decodePositionRow(
-        _ row: LastChangePositionRow,
+        _ row: SQLitePositionRow,
         limits: HistoryLimits
     ) throws -> (position: ChangePosition, retention: RetentionPolicy) {
         guard limits.userMaximumUnpinnedRange.contains(row.maximumUnpinnedItems) else {
@@ -84,7 +83,7 @@ extension HistoryAuthority {
     /// synchronous and cannot await an actor hop, so this short-lived Task owns
     /// exactly one idempotent dictionary removal; there is no result or longer
     /// operation that a parent task would need to join. Step 7's
-    /// `SwiftDataHistory.observe` loop is the caller.
+    /// `SQLiteHistory.observe` loop is the caller.
     internal func registerInvalidationSubscriber() -> (
         subscription: HistoryInvalidationSubscription,
         stream: HistoryInvalidationPublisher.Stream

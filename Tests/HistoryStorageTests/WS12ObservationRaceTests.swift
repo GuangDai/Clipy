@@ -8,13 +8,13 @@
 /// exactly one replacement page at the newest position.
 ///
 /// Facade-driven proof through the PUBLIC observe loop, not a storage-side
-/// path: every assertion goes through `SwiftDataHistory.observe` (Part V §14;
+/// path: every assertion goes through `SQLiteHistory.observe` (Part V §14;
 /// Part IV §5). The deterministic interleaving uses the `SuspensionGate`
 /// concurrency harness (Tests/HistoryStorageTests/ConcurrencyHarness/
 /// ConcurrencyHarness.swift) on the facade's OWN Authority — the five actor
-/// fields of `SwiftDataHistory` are `internal` for exactly this harness
+/// fields of `SQLiteHistory` are `internal` for exactly this harness
 /// (docs/roadmap/03-historystorage.md step-5 note; the comment in
-/// SwiftDataHistory.swift), so `history.authority` is reachable from
+/// SQLiteHistory.swift), so `history.authority` is reachable from
 /// `@testable` tests and the two observation-race seams are drivable:
 /// `AuthoritySuspensionPoint.readEntry` (parks between observer registration
 /// and the first authoritative query, 04 §5 step 1→step 2 gap) and

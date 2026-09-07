@@ -27,7 +27,7 @@ struct WS14ComposedRestartTests {
         defer { ComposedSupport.removeStore(storeURL) }
 
         // Phase 1 — build durable state over the persistent store.
-        let history = try await SwiftDataHistory.open(
+        let history = try await SQLiteHistory.open(
             configuration: HistoryConfiguration(
                 persistence: .persistent(storeURL: storeURL)
             )
@@ -102,7 +102,7 @@ struct WS14ComposedRestartTests {
         // Phase 2 — RESTART: reopen the facade over the same on-disk store
         // (the §13 startup rebuilds the Signature Index and revalidates the
         // pinned ordinals), and observe through a FRESH composed view state.
-        let restarted = try await SwiftDataHistory.open(
+        let restarted = try await SQLiteHistory.open(
             configuration: HistoryConfiguration(
                 persistence: .persistent(storeURL: storeURL)
             )

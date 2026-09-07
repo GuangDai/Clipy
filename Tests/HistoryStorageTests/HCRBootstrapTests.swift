@@ -1,615 +1,429 @@
 /// DC-25 X-HCR bootstrap/startup validation and fixed-prefix compaction proofs.
-/// Owning spec: `V2-03` §0.3 and the M1 total open order.
 import Foundation
 import HistoryCore
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
 @Suite("X-HCR bootstrap and startup validation")
 struct HCRBootstrapTests {
-    private static let now = Date(
-        timeIntervalSinceReferenceDate: 903_000_000
-    )
-
-    private struct FixedClock: StorageClock {
-        let fixed: Date
-        func now() -> Date { fixed }
-    }
+    private static let now = Date(timeIntervalSinceReferenceDate: 903_000_000)
 
     @Test("real Authority startup creates the exact empty config after Gateway")
     func authorityStartupWiresBootstrap() async throws {
-        let container = try Self.makeContainer()
-        let authority = HistoryAuthority(
-            container: container,
-            storageClock: FixedClock(fixed: Self.now)
-        )
-
-        _ = try await authority.performStartup(initialMaximumUnpinnedItems: 200)
-
-        let context = ModelContext(container)
-        let configs = try context.fetch(FetchDescriptor<JournalConfigRow>())
-        let config = try #require(configs.first)
-        #expect(configs.count == 1)
+        let authority = try await Self.makeAuthority()
+        let state = try await authority.hcrTestSnapshot()
+        let config = try #require(state.configs.first)
+        #expect(state.configs.count == 1)
         #expect(config.key == "change-journal")
         #expect(config.compactionFloorRaw == 0)
         #expect(config.journalBytes == 0)
         #expect(config.configSchemaVersion == 1)
-        #expect(try context.fetchCount(
-            FetchDescriptor<HistoryChangeRecordRow>()
-        ) == 0)
+        #expect(state.records.isEmpty)
     }
 
-    private enum SurvivingHistoryFact: Equatable {
-        case item, retainedBytes, record
+    private enum SurvivingHistoryFact: Equatable, Sendable {
+        case item, record
     }
 
     @Test("position zero cannot recreate a journal singleton over surviving history facts",
-          arguments: [SurvivingHistoryFact.item, .retainedBytes, .record])
+          arguments: [SurvivingHistoryFact.item, .record])
     private func zeroPositionWithHistoryFactsFailsClosed(_ fact: SurvivingHistoryFact) async throws {
-        let bundle = try await IngestPreparationActor().prepare(WSSupport.textCapture(
+        let history = try await SQLiteHistory.open(configuration:
+            HistoryConfiguration(persistence: .temporary)
+        )
+        _ = try await history.perform(.capture(WSSupport.textCapture(
             "journal current item", observedAt: Self.now, source: nil
-        ))
-        let container = try Self.makeContainer()
-        let context = ModelContext(container)
-        context.insert(LastChangePositionRow(
-            key: HistoryAuthority.positionSingletonKey, rawValue: 0,
-            maximumUnpinnedItems: 200
-        ))
-        switch fact {
-        case .item:
-            context.insert(try HistoryItemRow(
-                id: bundle.domain.candidateID.rawValue, contentVersionRaw: 1,
-                canonicalBlob: CanonicalBlobCodec.encode(bundle.domain.canonical),
-                revisionStateBlob: RevisionStateBlobCodec.encode(revisions: [], activeRevisionID: nil),
-                canonicalSignatureBlob: SignatureBlobCodec.encode(bundle.signatureEntries),
-                title: bundle.projection.title, searchBody: bundle.projection.searchBody,
-                effectiveTypeIdentifiersBlob: EffectiveTypeIdentifiersBlobCodec.encode(
-                    bundle.projection.effectiveTypeIdentifiers
-                ),
-                firstCopiedAt: Self.now, lastCopiedAt: Self.now, copyCount: 1,
-                firstSource: nil, lastSource: nil, pinOrdinal: nil
-            ))
-        case .retainedBytes:
-            context.insert(RetainedBytesRow(
-                itemID: bundle.domain.candidateID.rawValue, canonicalBytes: 20,
-                revisionCount: 0, revisionBytes: 0, bytesSchemaVersion: 1
-            ))
-        case .record:
-            context.insert(HistoryChangeRecordRow(
-                sequence: 1, changePositionRaw: 1, changeKindRaw: HistoryChangeKindRawV1.insert.rawValue,
-                affectedItemsBlob: try AffectedItemsBlobCodec.encode(
-                    [bundle.domain.candidateID], for: .insert
-                ),
-                createdAt: Self.now
-            ))
+        )))
+        let authority = history.authority
+        try await authority.withTestDatabase { owner in
+            try owner.database.writeTransaction {
+                try owner.database.execute("DELETE FROM journal_config")
+                try owner.database.execute(
+                    "UPDATE history_state SET changePosition = ?",
+                    bindings: [.blob(sqliteUInt64(0))]
+                )
+                switch fact {
+                case .item:
+                    try owner.database.execute("DELETE FROM history_change_records")
+                case .record:
+                    try owner.database.execute("DELETE FROM history_items")
+                }
+            }
         }
-        try context.save()
-        #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
-            try HCRBootstrap.ensureReady(in: context, now: Self.now)
+        let before = try await Self.snapshot(in: authority)
+        await #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
+            try await Self.bootstrap(authority)
         }
-        let verification = ModelContext(container)
-        #expect(try verification.fetchCount(FetchDescriptor<JournalConfigRow>()) == 0)
-        #expect(try verification.fetchCount(FetchDescriptor<HistoryItemRow>()) == (fact == .item ? 1 : 0))
-        #expect(try verification.fetchCount(FetchDescriptor<RetainedBytesRow>()) == (fact == .retainedBytes ? 1 : 0))
-        #expect(try verification.fetchCount(FetchDescriptor<HistoryChangeRecordRow>()) == (fact == .record ? 1 : 0))
+        #expect(try await Self.snapshot(in: authority) == before)
+        #expect(before.configCount == 0)
+        #expect(before.itemCount == (fact == .item ? 1 : 0))
+        #expect(before.sequences.count == (fact == .record ? 1 : 0))
     }
 
     @Test("Gateway validation failure occurs before absent HCR bootstrap")
     func gatewayValidationPrecedesHCRBootstrap() async throws {
-        let container = try Self.makeContainer()
-        let firstAuthority = HistoryAuthority(
-            container: container,
-            storageClock: FixedClock(fixed: Self.now)
-        )
-        _ = try await firstAuthority.performStartup(
-            initialMaximumUnpinnedItems: 200
-        )
-        let context = ModelContext(container)
-        let journal = try #require(
-            context.fetch(FetchDescriptor<JournalConfigRow>()).first
-        )
-        let gateway = try #require(
-            context.fetch(FetchDescriptor<GatewayConfigRow>()).first
-        )
-        context.delete(journal)
-        gateway.configSchemaVersion = 2
-        try context.save()
-
-        await #expect(
-            throws: HistoryFailure.persistence(.corruptStoredValue)
-        ) {
-            try await firstAuthority.performStartup(
-                initialMaximumUnpinnedItems: 200
-            )
+        let authority = try await Self.makeAuthority()
+        try await authority.withTestDatabase { owner in
+            try owner.database.writeTransaction {
+                try owner.database.execute("DELETE FROM journal_config")
+                try owner.database.execute("UPDATE gateway_config SET configSchemaVersion = 2")
+            }
         }
-        let oracle = ModelContext(container)
-        #expect(try oracle.fetchCount(FetchDescriptor<JournalConfigRow>()) == 0)
+        let before = try await Self.snapshot(in: authority)
+        await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+            try await authority.performStartup(initialMaximumUnpinnedItems: 200)
+        }
+        #expect(try await Self.snapshot(in: authority) == before)
+        #expect(before.configCount == 0)
     }
 
-    @Test("HCR validation failure occurs before retained-byte correspondence validation")
-    func hcrValidationPrecedesRetainedBytesValidation() async throws {
-        let container = try Self.makeContainer()
-        let firstAuthority = HistoryAuthority(
-            container: container,
-            storageClock: FixedClock(fixed: Self.now)
+    @Test("HCR startup rejection preserves item content and merged byte accounting")
+    func hcrValidationPreservesContentAndAccounting() async throws {
+        let history = try await SQLiteHistory.open(configuration:
+            HistoryConfiguration(persistence: .temporary)
         )
-        _ = try await firstAuthority.performStartup(
-            initialMaximumUnpinnedItems: 200
-        )
-        let prepared = try await IngestPreparationActor().prepare(
-            WSSupport.textCapture("hcr-open-order", observedAt: Self.now)
-        )
-        _ = try await firstAuthority.commitCapture(prepared)
-
-        let context = ModelContext(container)
-        let journal = try #require(
-            context.fetch(FetchDescriptor<JournalConfigRow>()).first
-        )
-        let item = try #require(
-            context.fetch(FetchDescriptor<HistoryItemRow>()).first
-        )
-        let originalContent = item.canonicalBlob
-        journal.configSchemaVersion = 2
-        // Missing accounting would independently fail with invariantViolation.
-        // The earlier malformed HCR config must instead report corruptStoredValue.
-        let bytes = try #require(context.fetch(FetchDescriptor<RetainedBytesRow>()).first)
-        context.delete(bytes)
-        try context.save()
-
-        await #expect(
-            throws: HistoryFailure.persistence(.corruptStoredValue)
-        ) {
-            try await firstAuthority.performStartup(
-                initialMaximumUnpinnedItems: 200
-            )
+        _ = try await history.perform(.capture(WSSupport.textCapture(
+            "hcr-open-order", observedAt: Self.now
+        )))
+        let authority = history.authority
+        let before = try await Self.itemContentAndAccounting(in: authority)
+        try await authority.withTestDatabase { owner in
+            try owner.database.execute("UPDATE journal_config SET configSchemaVersion = 2")
         }
-        let oracle = ModelContext(container)
-        let storedItem = try #require(
-            oracle.fetch(FetchDescriptor<HistoryItemRow>()).first
-        )
-        #expect(storedItem.canonicalBlob == originalContent)
-        #expect(try oracle.fetchCount(FetchDescriptor<RetainedBytesRow>()) == 0)
+        await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+            try await authority.performStartup(initialMaximumUnpinnedItems: 200)
+        }
+        let after = try await Self.itemContentAndAccounting(in: authority)
+        #expect(after.content == before.content)
+        #expect(after.canonicalBytes == before.canonicalBytes)
+        #expect(after.revisionCount == before.revisionCount)
+        #expect(after.revisionBytes == before.revisionBytes)
     }
 
     @Test("missing journal config at a committed position fails even when all records and items are gone",
           arguments: [UInt64(1), 19])
-    func committedPositionCannotRecreateMissingJournalConfig(_ position: UInt64) throws {
-        let container = try Self.makeContainer()
-        let context = ModelContext(container)
-        context.insert(LastChangePositionRow(
-            key: "retained-history",
-            rawValue: position,
-            maximumUnpinnedItems: 200
-        ))
-        try context.save()
-
-        #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
-            try HCRBootstrap.ensureReady(in: context, now: Self.now)
+    func committedPositionCannotRecreateMissingJournalConfig(_ position: UInt64) async throws {
+        let authority = try await Self.makeAuthority()
+        try await authority.withTestDatabase { owner in
+            try owner.database.writeTransaction {
+                try owner.database.execute("DELETE FROM journal_config")
+                try owner.database.execute("UPDATE history_state SET changePosition = ?",
+                    bindings: [.blob(sqliteUInt64(position))])
+            }
         }
-        let verification = ModelContext(container)
-        #expect(try verification.fetchCount(FetchDescriptor<JournalConfigRow>()) == 0)
-        #expect(try verification.fetch(FetchDescriptor<LastChangePositionRow>()).first?.rawValue == position)
-        #expect(try context.fetchCount(
-            FetchDescriptor<HistoryChangeRecordRow>()
-        ) == 0)
+        let before = try await Self.snapshot(in: authority)
+        await #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
+            try await Self.bootstrap(authority)
+        }
+        #expect(try await Self.snapshot(in: authority) == before)
+        #expect(before.configCount == 0)
+        #expect(before.positions.map(\.rawValue) == [position])
+        #expect(before.sequences.isEmpty)
     }
 
     @Test("coherent retained suffix reopens unchanged")
-    func coherentSuffixIsAccepted() throws {
-        let fixture = try Self.makeSuffixFixture(position: 3, floor: 0)
-        let before = try Self.snapshot(in: fixture.context)
-
-        try HCRBootstrap.ensureReady(
-            in: fixture.context,
-            now: Self.now
-        )
-
-        #expect(try Self.snapshot(in: fixture.context) == before)
+    func coherentSuffixIsAccepted() async throws {
+        let authority = try await Self.makeSuffixFixture(position: 3, floor: 0)
+        let before = try await Self.snapshot(in: authority)
+        try await Self.bootstrap(authority)
+        #expect(try await Self.snapshot(in: authority) == before)
     }
 
     @Test("startup compacts only the fixed oldest prefix and revalidates")
-    func startupPrefixCompaction() throws {
-        let fixture = try Self.makeSuffixFixture(
-            position: 3,
-            floor: 0,
-            createdAt: [
-                Self.now.addingTimeInterval(-11),
-                Self.now.addingTimeInterval(-5),
-                Self.now,
-            ]
-        )
-        let limits = JournalLimits(
-            maxAffectedItemsPerRecord: 5_001,
-            maxJournalRecordCount: 10,
-            maxJournalAgeSeconds: 10,
-            maxJournalBytes: 80,
-            compactionCadenceCommits: 2
-        )!
-
-        try HCRBootstrap.ensureReady(
-            in: fixture.context,
-            now: Self.now,
-            journalLimits: limits
-        )
-
-        let snapshot = try Self.snapshot(in: fixture.context)
-        #expect(snapshot.floor == 1)
-        #expect(snapshot.sequences == [2, 3])
-        #expect(snapshot.journalBytes == 40)
+    func startupPrefixCompaction() async throws {
+        let authority = try await Self.ageFixture()
+        try await Self.bootstrap(authority, limits: Self.ageLimits())
+        let state = try await Self.snapshot(in: authority)
+        #expect(state.floor == 1)
+        #expect(state.sequences == [2, 3])
+        #expect(state.journalBytes == 40)
     }
 
     @Test("failure inside age-prefix compaction commits no delete or floor change")
-    func startupPrefixCompactionRollsBack() throws {
-        struct InjectedFailure: Error {}
-        let fixture = try Self.makeSuffixFixture(
-            position: 3,
-            floor: 0,
-            createdAt: [
-                Self.now.addingTimeInterval(-11),
-                Self.now.addingTimeInterval(-5),
-                Self.now,
-            ]
-        )
-        let limits = JournalLimits(
-            maxAffectedItemsPerRecord: 5_001,
-            maxJournalRecordCount: 10,
-            maxJournalAgeSeconds: 10,
-            maxJournalBytes: 80,
-            compactionCadenceCommits: 2
-        )!
-        let before = try Self.snapshot(in: fixture.context)
-
-        #expect(throws: HistoryFailure.persistence(.transaction)) {
-            try HCRBootstrap.ensureReady(
-                in: fixture.context,
-                now: Self.now,
-                journalLimits: limits,
-                compactionInjection: { throw InjectedFailure() }
-            )
+    func startupPrefixCompactionRollsBack() async throws {
+        let authority = try await Self.ageFixture()
+        let before = try await Self.snapshot(in: authority)
+        await #expect(throws: HistoryFailure.persistence(.transaction)) {
+            try await Self.bootstrap(authority, limits: Self.ageLimits(), failCompaction: true)
         }
-        let independentContext = ModelContext(fixture.container)
-        #expect(try Self.snapshot(in: independentContext) == before)
+        // A separate reader observes only committed SQLite state.
+        let storeURL = await authority.withTestDatabase { $0.storeLocation.databaseURL }
+        let database = try SQLiteDatabase(url: storeURL, readOnly: true)
+        let after = try database.readTransaction { try Self.snapshot(in: database) }
+        #expect(after == before)
     }
 
     @Test("byte-over-cap durable state fails closed instead of startup repair")
-    func byteCapViolationFailsClosed() throws {
-        let fixture = try Self.makeSuffixFixture(position: 3, floor: 0)
-        let limits = JournalLimits(
-            maxAffectedItemsPerRecord: 5_001,
-            maxJournalRecordCount: 10,
-            maxJournalAgeSeconds: 10,
-            maxJournalBytes: 40,
-            compactionCadenceCommits: 2
-        )!
-        let before = try Self.snapshot(in: fixture.context)
-
-        #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
-            try HCRBootstrap.ensureReady(
-                in: fixture.context,
-                now: Self.now,
-                journalLimits: limits
-            )
+    func byteCapViolationFailsClosed() async throws {
+        let authority = try await Self.makeSuffixFixture(position: 3, floor: 0)
+        let limits = try #require(JournalLimits(
+            maxAffectedItemsPerRecord: 5_001, maxJournalRecordCount: 10,
+            maxJournalAgeSeconds: 10, maxJournalBytes: 40, compactionCadenceCommits: 2
+        ))
+        let before = try await Self.snapshot(in: authority)
+        await #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
+            try await Self.bootstrap(authority, limits: limits)
         }
-        #expect(try Self.snapshot(in: fixture.context) == before)
+        #expect(try await Self.snapshot(in: authority) == before)
     }
 
     @Test("missing config with a surviving HCR fails without repair")
-    func missingConfigWithRecordFailsClosed() throws {
-        let fixture = try Self.makeSuffixFixture(position: 1, floor: 0)
-        let config = try #require(
-            fixture.context.fetch(FetchDescriptor<JournalConfigRow>()).first
-        )
-        fixture.context.delete(config)
-        try fixture.context.save()
-        let before = try Self.snapshot(in: fixture.context)
-
-        #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
-            try HCRBootstrap.ensureReady(in: fixture.context, now: Self.now)
+    func missingConfigWithRecordFailsClosed() async throws {
+        let authority = try await Self.makeSuffixFixture(position: 1, floor: 0)
+        try await authority.withTestDatabase { owner in
+            try owner.database.execute("DELETE FROM journal_config")
         }
-        #expect(try Self.snapshot(in: fixture.context) == before)
+        let before = try await Self.snapshot(in: authority)
+        await #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
+            try await Self.bootstrap(authority)
+        }
+        #expect(try await Self.snapshot(in: authority) == before)
     }
 
     @Test("config scalar and retained interval corruption fail without repair")
-    func corruptShapesFailClosed() throws {
-        try Self.expectDamage(
-            expected: .persistence(.invariantViolation)
-        ) { config, _, _ in
-            config.key = "wrong-journal"
-        }
-        try Self.expectDamage(
-            expected: .persistence(.corruptStoredValue)
-        ) { config, _, _ in
-            config.configSchemaVersion = 2
-        }
-        try Self.expectDamage(
-            expected: .persistence(.invariantViolation)
-        ) { config, _, _ in
-            config.compactionFloorRaw = 4
-        }
-        try Self.expectDamage(
-            expected: .persistence(.invariantViolation)
-        ) { config, _, _ in
-            config.journalBytes += 1
-        }
-        try Self.expectDamage(
-            expected: .persistence(.invariantViolation)
-        ) { _, rows, context in
-            context.delete(rows[1])
-        }
-        try Self.expectDamage(
-            expected: .persistence(.invariantViolation)
-        ) { _, rows, _ in
-            rows[1].changePositionRaw = 99
-        }
-        try Self.expectDamage(
-            expected: .persistence(.corruptStoredValue)
-        ) { _, rows, _ in
-            rows[1].changeKindRaw = 0
-        }
-        try Self.expectDamage(
-            expected: .persistence(.corruptStoredValue)
-        ) { _, rows, _ in
-            rows[1].affectedItemsBlob = Data([0, 2, 0, 0])
-        }
-        try Self.expectDamage(
-            expected: .persistence(.corruptStoredValue)
-        ) { _, rows, _ in
-            rows[1].createdAt = Date(
-                timeIntervalSinceReferenceDate: .infinity
-            )
-        }
+    func corruptShapesFailClosed() async throws {
+        try await Self.expectDamage(expected: .persistence(.invariantViolation),
+            sql: "UPDATE journal_config SET key = ?", bindings: [.text("wrong-journal")])
+        try await Self.expectDamage(expected: .persistence(.corruptStoredValue),
+            sql: "UPDATE journal_config SET configSchemaVersion = 2")
+        try await Self.expectDamage(expected: .persistence(.invariantViolation),
+            sql: "UPDATE journal_config SET compactionFloorRaw = ?", bindings: [.blob(sqliteUInt64(4))])
+        try await Self.expectDamage(expected: .persistence(.invariantViolation),
+            sql: "UPDATE journal_config SET journalBytes = ?", bindings: [.blob(sqliteUInt64(61))])
+        try await Self.expectDamage(expected: .persistence(.invariantViolation),
+            sql: "DELETE FROM history_change_records WHERE sequence = ?", bindings: [.blob(sqliteUInt64(2))])
+        try await Self.expectDamage(expected: .persistence(.invariantViolation),
+            sql: "UPDATE history_change_records SET changePositionRaw = ? WHERE sequence = ?",
+            bindings: [.blob(sqliteUInt64(99)), .blob(sqliteUInt64(2))])
+        try await Self.expectDamage(expected: .persistence(.corruptStoredValue),
+            sql: "UPDATE history_change_records SET changeKindRaw = 0 WHERE sequence = ?",
+            bindings: [.blob(sqliteUInt64(2))])
+        try await Self.expectDamage(expected: .persistence(.corruptStoredValue),
+            sql: "UPDATE history_change_records SET affectedItemsBlob = ? WHERE sequence = ?",
+            bindings: [.blob(Data([0, 2, 0, 0])), .blob(sqliteUInt64(2))])
+        try await Self.expectDamage(expected: .persistence(.corruptStoredValue),
+            sql: "UPDATE history_change_records SET createdAt = ? WHERE sequence = ?",
+            bindings: [.real(.infinity), .blob(sqliteUInt64(2))])
     }
 
     @Test("strict post-commit count cap rejects an impossible overflow")
-    func countOverflowFailsBeforeCompaction() throws {
-        let fixture = try Self.makeSuffixFixture(position: 3, floor: 0)
-        let limits = JournalLimits(
-            maxAffectedItemsPerRecord: 5_001,
-            maxJournalRecordCount: 2,
-            maxJournalAgeSeconds: 10,
-            maxJournalBytes: 80 * 1_048_576,
-            compactionCadenceCommits: 2
-        )!
-        let before = try Self.snapshot(in: fixture.context)
-
-        #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
-            try HCRBootstrap.ensureReady(
-                in: fixture.context,
-                now: Self.now,
-                journalLimits: limits
-            )
+    func countOverflowFailsBeforeCompaction() async throws {
+        let authority = try await Self.makeSuffixFixture(position: 3, floor: 0)
+        let limits = try #require(JournalLimits(
+            maxAffectedItemsPerRecord: 5_001, maxJournalRecordCount: 2,
+            maxJournalAgeSeconds: 10, maxJournalBytes: 80 * 1_048_576, compactionCadenceCommits: 2
+        ))
+        let before = try await Self.snapshot(in: authority)
+        await #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
+            try await Self.bootstrap(authority, limits: limits)
         }
-        #expect(try Self.snapshot(in: fixture.context) == before)
+        #expect(try await Self.snapshot(in: authority) == before)
+    }
+
+    private enum EarlierOwnerDamage: CaseIterable, Equatable, Sendable {
+        case position, retention, gateway
     }
 
     @Test("surviving HCR facts prevent earlier singleton repair")
     func hcrFactsRejectMissingEarlierOwnersWithoutRepair() async throws {
         for damage in EarlierOwnerDamage.allCases {
-            let container = try Self.makeContainer()
-            let before: Snapshot
-            do {
-                let context = ModelContext(container)
-                context.autosaveEnabled = false
-                if damage != .position {
-                    Self.insertPosition(in: context)
+            let authority = try await Self.makeSuffixFixture(position: 1, floor: 0)
+            try await authority.withTestDatabase { owner in
+                try owner.database.writeTransaction {
+                    try owner.database.execute("DELETE FROM gateway_config")
+                    try owner.database.execute("DELETE FROM connections")
+                    if damage != .gateway {
+                        try owner.database.execute("DELETE FROM retention_policies")
+                    }
+                    if damage == .position {
+                        try owner.database.execute("DELETE FROM history_state")
+                    }
                 }
-                if damage == .gateway {
-                    Self.insertRetentionConfig(in: context)
-                }
-                try Self.insertHCRState(in: context)
-                try context.save()
-                before = try Self.snapshot(in: context)
             }
-            let authority = HistoryAuthority(
-                container: container,
-                storageClock: FixedClock(fixed: Self.now)
-            )
-
-            await #expect(
-                throws: HistoryFailure.persistence(.invariantViolation)
-            ) {
-                _ = try await authority.performStartup(
-                    initialMaximumUnpinnedItems: 200
-                )
+            let before = try await Self.snapshot(in: authority)
+            await #expect(throws: HistoryFailure.persistence(.invariantViolation)) {
+                try await authority.performStartup(initialMaximumUnpinnedItems: 200)
             }
-
-            let context = ModelContext(container)
-            #expect(try Self.snapshot(in: context) == before)
+            #expect(try await Self.snapshot(in: authority) == before)
         }
     }
 
-    private struct Fixture {
-        let container: ModelContainer
-        let context: ModelContext
-    }
-
-    private struct Snapshot: Equatable {
-        struct Position: Equatable {
+    private struct Snapshot: Equatable, Sendable {
+        struct Position: Equatable, Sendable {
             let key: String
             let rawValue: UInt64
-            let maximumUnpinnedItems: Int
+            let maximumUnpinnedItems: Int64
         }
-
         let positions: [Position]
-        let retentionConfigCount: Int
-        let gatewayConfigCount: Int
-        let connectionCount: Int
+        let retentionConfigCount: Int64
+        let gatewayConfigCount: Int64
+        let connectionCount: Int64
+        let itemCount: Int64
         let configCount: Int
         let floor: UInt64?
         let journalBytes: UInt64?
         let sequences: [UInt64]
-        let rowBytes: [Data]
+        let rawConfigs: [[SQLiteValue]]
+        let rawRecords: [[SQLiteValue]]
     }
 
-    private enum EarlierOwnerDamage: CaseIterable, Equatable {
-        case position
-        case retention
-        case gateway
-    }
-
-    private static func makeContainer() throws -> ModelContainer {
-        let schema = historySchema
-        return try ModelContainer(
-            for: schema,
-            configurations: [ModelConfiguration(
-                schema: schema,
-                isStoredInMemoryOnly: true,
-                cloudKitDatabase: .none
-            )]
+    private static func makeAuthority() async throws -> HistoryAuthority {
+        let history = try await SQLiteHistory.open(configuration:
+            HistoryConfiguration(persistence: .temporary)
         )
+        return history.authority
     }
 
     private static func makeSuffixFixture(
-        position: UInt64,
-        floor: UInt64,
-        createdAt: [Date]? = nil
-    ) throws -> Fixture {
-        let container = try makeContainer()
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
-        context.insert(LastChangePositionRow(
-            key: "retained-history",
-            rawValue: position,
-            maximumUnpinnedItems: 200
-        ))
-        var journalBytes: UInt64 = 0
-        if floor < position {
-            for sequence in (floor + 1)...position {
-                let blob = try AffectedItemsBlobCodec.encode(
-                    [itemID(Int(sequence))],
-                    for: .insert
-                )
-                journalBytes += UInt64(blob.count)
-                let date = createdAt?[Int(sequence - floor - 1)] ?? Self.now
-                context.insert(HistoryChangeRecordRow(
-                    sequence: sequence,
-                    changePositionRaw: sequence,
-                    changeKindRaw: HistoryChangeKindRawV1.insert.rawValue,
-                    affectedItemsBlob: blob,
-                    createdAt: date
-                ))
+        position: UInt64, floor: UInt64, createdAt: [Date]? = nil
+    ) async throws -> HistoryAuthority {
+        let authority = try await makeAuthority()
+        try await authority.withTestDatabase { owner in
+            try owner.database.writeTransaction {
+                try owner.database.execute("UPDATE history_state SET changePosition = ?",
+                    bindings: [.blob(sqliteUInt64(position))])
+                var journalBytes: UInt64 = 0
+                if floor < position {
+                    for sequence in (floor + 1)...position {
+                        let blob = try AffectedItemsBlobCodec.encode([itemID(Int(sequence))], for: .insert)
+                        journalBytes += UInt64(blob.count)
+                        let date = createdAt?[Int(sequence - floor - 1)] ?? now
+                        try owner.database.execute("""
+                            INSERT INTO history_change_records
+                                (sequence, changePositionRaw, changeKindRaw, affectedItemsBlob, createdAt)
+                            VALUES (?, ?, ?, ?, ?)
+                            """, bindings: [
+                                .blob(sqliteUInt64(sequence)), .blob(sqliteUInt64(sequence)),
+                                .integer(Int64(HistoryChangeKindRawV1.insert.rawValue)), .blob(blob),
+                                .real(date.timeIntervalSinceReferenceDate)
+                            ])
+                    }
+                }
+                try owner.database.execute("""
+                    UPDATE journal_config SET compactionFloorRaw = ?, journalBytes = ?
+                    """, bindings: [.blob(sqliteUInt64(floor)), .blob(sqliteUInt64(journalBytes))])
             }
         }
-        context.insert(JournalConfigRow(
-            key: "change-journal",
-            compactionFloorRaw: floor,
-            journalBytes: journalBytes,
-            configSchemaVersion: 1
+        return authority
+    }
+
+    private static func ageFixture() async throws -> HistoryAuthority {
+        try await makeSuffixFixture(position: 3, floor: 0, createdAt: [
+            now.addingTimeInterval(-11), now.addingTimeInterval(-5), now
+        ])
+    }
+
+    private static func ageLimits() throws -> JournalLimits {
+        try #require(JournalLimits(
+            maxAffectedItemsPerRecord: 5_001, maxJournalRecordCount: 10,
+            maxJournalAgeSeconds: 10, maxJournalBytes: 80, compactionCadenceCommits: 2
         ))
-        try context.save()
-        return Fixture(container: container, context: context)
+    }
+
+    private static func bootstrap(
+        _ authority: HistoryAuthority, limits: JournalLimits = .standard,
+        failCompaction: Bool = false
+    ) async throws {
+        struct InjectedFailure: Error {}
+        try await authority.withTestDatabase { owner in
+            try owner.database.writeTransaction {
+                try HCRBootstrap.ensureReady(
+                    in: owner.database, now: now, journalLimits: limits,
+                    compactionInjection: {
+                        if failCompaction { throw InjectedFailure() }
+                    }
+                )
+            }
+        }
     }
 
     private static func expectDamage(
-        expected: HistoryFailure,
-        mutate: (
-            JournalConfigRow,
-            [HistoryChangeRecordRow],
-            ModelContext
-        ) throws -> Void
-    ) throws {
-        let fixture = try makeSuffixFixture(position: 3, floor: 0)
-        let config = try #require(
-            fixture.context.fetch(FetchDescriptor<JournalConfigRow>()).first
-        )
-        let rows = try fixture.context.fetch(FetchDescriptor<
-            HistoryChangeRecordRow
-        >(sortBy: [SortDescriptor(\.sequence)]))
-        try mutate(config, rows, fixture.context)
-        try fixture.context.save()
-        let before = try snapshot(in: fixture.context)
-
-        #expect(throws: expected) {
-            try HCRBootstrap.ensureReady(in: fixture.context, now: Self.now)
+        expected: HistoryFailure, sql: String, bindings: [SQLiteValue] = []
+    ) async throws {
+        let authority = try await makeSuffixFixture(position: 3, floor: 0)
+        try await authority.withTestDatabase { owner in
+            // Corruption injection bypasses SQL CHECK only for this edit. The
+            // production decoder must reject the resulting durable value.
+            try owner.database.execute("PRAGMA ignore_check_constraints = ON")
+            defer { try? owner.database.execute("PRAGMA ignore_check_constraints = OFF") }
+            try owner.database.execute(sql, bindings: bindings)
         }
-        #expect(try snapshot(in: fixture.context) == before)
+        let before = try await snapshot(in: authority)
+        await #expect(throws: expected) { try await bootstrap(authority) }
+        #expect(try await snapshot(in: authority) == before)
     }
 
-    private static func snapshot(in context: ModelContext) throws -> Snapshot {
-        let positions = try context.fetch(FetchDescriptor<LastChangePositionRow>())
-        let configs = try context.fetch(FetchDescriptor<JournalConfigRow>())
-        let rows = try context.fetch(FetchDescriptor<HistoryChangeRecordRow>(
-            sortBy: [SortDescriptor(\.sequence)]
-        ))
+    private static func snapshot(in authority: HistoryAuthority) async throws -> Snapshot {
+        try await authority.withTestDatabase { owner in
+            try owner.database.readTransaction { try snapshot(in: owner.database) }
+        }
+    }
+
+    private static func snapshot(in database: SQLiteDatabase) throws -> Snapshot {
+        let positionQuery = try database.prepare(
+            "SELECT key, changePosition, maximumUnpinnedItems FROM history_state ORDER BY key"
+        )
+        defer { positionQuery.finalize() }
+        var positions: [Snapshot.Position] = []
+        while try positionQuery.step() {
+            positions.append(.init(
+                key: try positionQuery.text(at: 0),
+                rawValue: try sqliteUInt64(positionQuery.blob(at: 1)),
+                maximumUnpinnedItems: try positionQuery.integer(at: 2)
+            ))
+        }
+        let configs = try HCRBootstrap.loadConfigs(in: database)
+        let records = try HCRBootstrap.loadRecords(in: database, limit: 100)
+        func count(_ sql: String) throws -> Int64 {
+            let statement = try database.prepare(sql)
+            defer { statement.finalize() }
+            #expect(try statement.step())
+            return try statement.integer(at: 0)
+        }
         return Snapshot(
-            positions: positions.map {
-                Snapshot.Position(
-                    key: $0.key,
-                    rawValue: $0.rawValue,
-                    maximumUnpinnedItems: $0.maximumUnpinnedItems
-                )
-            },
-            retentionConfigCount: try context.fetchCount(
-                FetchDescriptor<RetentionExpansionConfigRow>()
-            ),
-            gatewayConfigCount: try context.fetchCount(
-                FetchDescriptor<GatewayConfigRow>()
-            ),
-            connectionCount: try context.fetchCount(
-                FetchDescriptor<ConnectionRow>()
-            ),
+            positions: positions,
+            retentionConfigCount: try count("SELECT count(*) FROM retention_policies"),
+            gatewayConfigCount: try count("SELECT count(*) FROM gateway_config"),
+            connectionCount: try count("SELECT count(*) FROM connections"),
+            itemCount: try count("SELECT count(*) FROM history_items"),
             configCount: configs.count,
             floor: configs.first?.compactionFloorRaw,
             journalBytes: configs.first?.journalBytes,
-            sequences: rows.map(\.sequence),
-            rowBytes: rows.map(\.affectedItemsBlob)
+            sequences: records.map(\.sequence),
+            rawConfigs: configs.map {
+                [.text($0.key), .blob(sqliteUInt64($0.compactionFloorRaw)),
+                 .blob(sqliteUInt64($0.journalBytes)), .integer(Int64($0.configSchemaVersion))]
+            },
+            rawRecords: records.map {
+                [.blob(sqliteUInt64($0.sequence)), .blob(sqliteUInt64($0.changePositionRaw)),
+                 .integer(Int64($0.changeKindRaw)), .blob($0.affectedItemsBlob),
+                 .real($0.createdAt.timeIntervalSinceReferenceDate)]
+            }
         )
     }
 
-    private static func insertPosition(in context: ModelContext) {
-        context.insert(LastChangePositionRow(
-            key: HistoryAuthority.positionSingletonKey,
-            rawValue: 1,
-            maximumUnpinnedItems: 200
-        ))
-    }
-
-    private static func insertRetentionConfig(in context: ModelContext) {
-        context.insert(RetentionExpansionConfigRow(
-            key: HistoryAuthority.retentionExpansionConfigKey,
-            agePolicyEnabled: false,
-            ageMaxSeconds: 0,
-            storagePolicyEnabled: false,
-            storageMaxBytes: 0,
-            revisionPolicyEnabled: false,
-            revisionMaxCount: nil,
-            revisionMaxBytes: nil,
-            configSchemaVersion: HistoryAuthority.retentionConfigSchemaVersion
-        ))
-    }
-
-    private static func insertHCRState(in context: ModelContext) throws {
-        let blob = try AffectedItemsBlobCodec.encode(
-            [itemID(901)],
-            for: .insert
-        )
-        context.insert(HistoryChangeRecordRow(
-            sequence: 1,
-            changePositionRaw: 1,
-            changeKindRaw: HistoryChangeKindRawV1.insert.rawValue,
-            affectedItemsBlob: blob,
-            createdAt: now
-        ))
-        context.insert(JournalConfigRow(
-            key: HCRBootstrap.configKey,
-            compactionFloorRaw: 0,
-            journalBytes: UInt64(blob.count),
-            configSchemaVersion: HCRBootstrap.configSchemaVersion
-        ))
+    private static func itemContentAndAccounting(
+        in authority: HistoryAuthority
+    ) async throws -> (content: Data, canonicalBytes: Int64, revisionCount: Int64, revisionBytes: Int64) {
+        try await authority.withTestDatabase { owner in
+            let statement = try owner.database.prepare("""
+                SELECT representations.inlineBytes, history_items.canonicalBytes,
+                    history_items.revisionCount, history_items.revisionBytes
+                FROM history_items
+                JOIN representations ON representations.contentID = history_items.currentContentID
+                """)
+            defer { statement.finalize() }
+            #expect(try statement.step())
+            return (
+                try statement.blob(at: 0), try statement.integer(at: 1),
+                try statement.integer(at: 2), try statement.integer(at: 3)
+            )
+        }
     }
 
     private static func itemID(_ value: Int) -> HistoryItemID {
-        let raw = UInt64(value).bigEndian
-        var bytes = [UInt8](repeating: 0, count: 16)
-        withUnsafeBytes(of: raw) { rawBytes in
-            bytes.replaceSubrange(8..<16, with: rawBytes)
-        }
-        return HistoryItemID(rawValue: UUID(uuid: (
-            bytes[0], bytes[1], bytes[2], bytes[3],
-            bytes[4], bytes[5], bytes[6], bytes[7],
-            bytes[8], bytes[9], bytes[10], bytes[11],
-            bytes[12], bytes[13], bytes[14], bytes[15]
-        )))
+        HistoryItemID(rawValue: UUID(uuidString:
+            String(format: "00000000-0000-0000-0000-%012d", value)
+        )!)
     }
 }

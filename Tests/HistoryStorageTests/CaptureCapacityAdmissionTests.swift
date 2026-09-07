@@ -1,17 +1,12 @@
 /// CaptureCapacityAdmissionTests — stamped-plan capacity admission at the
 /// shared §9–§11 commit tail (docs/05-authority-kernel.md §16).
 ///
-/// The physical Card 6B APFS runner (dispatch run 32632262141) proved Core
-/// Data raises an uncaught `NSInternalInconsistencyException` when an
-/// external-storage interim file cannot be created on a full volume, so
-/// admission must refuse the typed failure before any durable write. These
-/// tests pin the boundary math, the insert-refusal with durable-state
-/// invariance and recovery, the byte-exact coalesce exemption, and the
-/// revise refusal plus remove/clear zero-external-demand paths through the
-/// same tail.
+/// Capacity is an early refusal hint over new raw payload demand. Actual
+/// SQLite/filesystem failures still use their typed transaction mapping.
+/// These tests preserve boundary math, unchanged public state on refusal,
+/// recovery and the coalesce/remove/clear paths without new payload bytes.
 import Foundation
 import HistoryCore
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
@@ -46,6 +41,51 @@ struct CaptureCapacityAdmissionTests {
 
     // MARK: Through the production commit tail
 
+    @Test func exactRawPayloadDemandDoesNotIncludeBase64AggregateExpansion() async throws {
+        let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(persistence: .temporary))
+        let bytes = String(repeating: "x", count: 128 * 1_024)
+        await history.authority.setVolumeAvailableCapacityOverride(
+            Int64(bytes.utf8.count) + CaptureCapacityAdmission.marginBytes
+        )
+        let receipt = try await history.perform(.capture(WSSupport.textCapture(
+            bytes, observedAt: Date(timeIntervalSinceReferenceDate: 4_000)
+        )))
+        guard case .committed(let commit) = receipt, case .inserted(let item) = commit.outcome else {
+            throw HistoryFailure.persistence(.invariantViolation)
+        }
+        #expect(try await history.pastePayload(for: item.id).representations.map(\.bytes) == [Data(bytes.utf8)])
+    }
+
+    @Test func pruningRevisionsIntroducesNoPayloadDemand() async throws {
+        let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(persistence: .temporary))
+        let capture = try await history.perform(.capture(WSSupport.textCapture(
+            "canonical", observedAt: Date(timeIntervalSinceReferenceDate: 4_000)
+        )))
+        guard case .committed(let commit) = capture, case .inserted(var item) = commit.outcome else {
+            throw HistoryFailure.persistence(.invariantViolation)
+        }
+        for body in ["first revision", "second revision"] {
+            let receipt = try await history.perform(.revise(RevisionRequest(
+                itemID: item.id, expected: item.contentVersion,
+                intent: .replace(RevisionDraft(decisions: [RevisionDecision(
+                    typeIdentifier: "public.utf8-plain-text", action: .replace(bytes: Data(body.utf8))
+                )]))
+            )))
+            guard case .committed(let commit) = receipt, case .revised(let revised) = commit.outcome else {
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
+            item = revised
+        }
+        await history.authority.setVolumeAvailableCapacityOverride(0)
+        _ = try await history.perform(.setRetentionPolicies(HistoryRetentionPolicies(
+            age: nil, storage: nil, revisions: RevisionRetention(maxRevisionsPerItem: 1, maxRevisionBytesPerItem: nil)
+        )))
+        let details = try await history.details(for: item.id)
+        #expect(details.item == item)
+        #expect(details.revisions.map(\.title) == ["second revision"])
+        #expect(details.effective.map(\.bytes) == [Data("second revision".utf8)])
+    }
+
     @Test func insertRefusalIsTypedAndLeavesDurableStateUntouched() async throws {
         let url = WSSupport.tempStoreURL("capacity-admission-refusal")
         defer { WSSupport.removeStore(url) }
@@ -53,15 +93,19 @@ struct CaptureCapacityAdmissionTests {
         let history = try await WSSupport.openHistory(storeURL: url)
         let authority = history.authority
         let preparation = IngestPreparationActor()
-        _ = try await authority.commitCapture(try await preparation.prepare(
+        let seed = try await authority.commitCapture(try await preparation.prepare(
             WSSupport.textCapture(
                 "capacity admission seed",
                 observedAt: Date(timeIntervalSinceReferenceDate: 4_000)
             )
         ))
-        let before = try autoreleasepool {
-            try TransactionStoreSnapshot.read(from: url)
+        guard case .committed(let seedCommit) = seed,
+              case .inserted(let seedReference) = seedCommit.outcome else {
+            throw HistoryFailure.persistence(.invariantViolation)
         }
+        let before = try await history.browse(.init(kind: .recent, limit: 10))
+        let beforeDetails = try await history.details(for: seedReference.id)
+        let beforeUsage = try await history.usage()
 
         await authority.setVolumeAvailableCapacityOverride(1)
         let rejected = try await preparation.prepare(
@@ -75,10 +119,10 @@ struct CaptureCapacityAdmissionTests {
         ) {
             try await authority.commitCapture(rejected)
         }
-        let after = try autoreleasepool {
-            try TransactionStoreSnapshot.read(from: url)
-        }
+        let after = try await history.browse(.init(kind: .recent, limit: 10))
         #expect(after == before)
+        #expect(try await history.details(for: seedReference.id) == beforeDetails)
+        #expect(try await history.usage() == beforeUsage)
 
         // Clearing the witness restores the fail-open reader: the same
         // prepared capture commits on the healthy test volume.
@@ -155,13 +199,12 @@ struct CaptureCapacityAdmissionTests {
             Issue.record("seed capture did not insert")
             return
         }
-        let before = try autoreleasepool {
-            try TransactionStoreSnapshot.read(from: url)
-        }
+        let before = try await history.browse(.init(kind: .recent, limit: 10))
+        let beforeDetails = try await history.details(for: reference.id)
+        let beforeUsage = try await history.usage()
 
-        // A replace revision appends a complete Effective Content snapshot
-        // through the same `.externalStorage` column: admission must cover
-        // the revise lane, not just captures (§16).
+        // A replace revision introduces raw Effective Content payloads;
+        // admission covers revisions as well as captures (§16).
         await authority.setVolumeAvailableCapacityOverride(1)
         await #expect(
             throws: HistoryFailure.temporarilyUnavailable(.insufficientDiskSpace)
@@ -179,10 +222,10 @@ struct CaptureCapacityAdmissionTests {
                 ]))
             )))
         }
-        let after = try autoreleasepool {
-            try TransactionStoreSnapshot.read(from: url)
-        }
+        let after = try await history.browse(.init(kind: .recent, limit: 10))
         #expect(after == before)
+        #expect(try await history.details(for: reference.id) == beforeDetails)
+        #expect(try await history.usage() == beforeUsage)
         await authority.setVolumeAvailableCapacityOverride(nil)
     }
 
@@ -222,7 +265,7 @@ struct CaptureCapacityAdmissionTests {
         }
 
         // Remove and clear plans carry only delete/pin-compaction mutations.
-        // They write no new `.externalStorage` payload and therefore must
+        // They write no new representation payload and therefore must
         // remain available even when the fixed capacity witness is one byte
         // (§16). Removing the first pin also exercises the ordinal rewrite,
         // rather than only the simplest unpinned-delete plan.
@@ -252,10 +295,8 @@ struct CaptureCapacityAdmissionTests {
         }
         #expect(allCommit.position.rawValue == 8)
 
-        let rows = try WSSupport.fetchRows(
-            WSSupport.makeContainer(storeURL: url)
-        )
-        #expect(rows.isEmpty)
+        let page = try await history.browse(.init(kind: .recent, limit: 10))
+        #expect(page.rows.isEmpty)
         await authority.setVolumeAvailableCapacityOverride(nil)
     }
 }

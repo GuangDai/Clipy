@@ -3,7 +3,6 @@
 /// Owning spec: `V2-05` §5.2 and DEC-PY-READ-AUDIT.
 import Foundation
 import HistoryCore
-import SwiftData
 import Testing
 @testable import HistoryStorage
 
@@ -17,9 +16,8 @@ struct LocalAutomationBrowsePublicationBarrierTests {
         "batch43-local-automation-publication-barrier"
 
     private struct Fixture {
-        let history: SwiftDataHistory
+        let history: SQLiteHistory
         let authority: HistoryAuthority
-        let container: ModelContainer
         let credential: LocalAutomationCredential
         let browse: LocalAutomationAuthenticatedBrowse
     }
@@ -57,9 +55,7 @@ struct LocalAutomationBrowsePublicationBarrierTests {
         _ request: LocalAutomationBrowsePreviewRequest,
         in fixture: Fixture
     ) async throws {
-        let gatewayBefore = try GatewayStoreSnapshot.read(
-            in: ModelContext(fixture.container)
-        )
+        let gatewayBefore = try await GatewayStoreSnapshot.read(from: fixture.authority)
         let historyBefore = try await historySnapshot(fixture)
         await fixture.authority.setTransactionFailureInjection(
             .beforeSingletonUpdate
@@ -77,9 +73,7 @@ struct LocalAutomationBrowsePublicationBarrierTests {
         }
 
         #expect(publishedPage == nil)
-        #expect(try GatewayStoreSnapshot.read(
-            in: ModelContext(fixture.container)
-        ) == gatewayBefore)
+        #expect(try await GatewayStoreSnapshot.read(from: fixture.authority) == gatewayBefore)
         #expect(try await historySnapshot(fixture) == historyBefore)
     }
 
@@ -96,8 +90,8 @@ struct LocalAutomationBrowsePublicationBarrierTests {
     }
 
     private static func makeFixture() async throws -> Fixture {
-        let history = try await SwiftDataHistory.open(configuration:
-            HistoryConfiguration(persistence: .memory)
+        let history = try await SQLiteHistory.open(configuration:
+            HistoryConfiguration(persistence: .temporary)
         )
         let authority = history.authority
         try await authority.publishVerifiedLocalAutomationEnrollment(
@@ -128,7 +122,6 @@ struct LocalAutomationBrowsePublicationBarrierTests {
         return Fixture(
             history: history,
             authority: authority,
-            container: await authority.container,
             credential: credential,
             browse: LocalAutomationAuthenticatedBrowse(
                 authenticator: authenticator,

@@ -6,12 +6,11 @@
 /// The seam returns the persisted CONFIGURED retention state — the v1 count
 /// from the position singleton (docs/05-authority-kernel.md §3.2) plus the
 /// V2-02 dimensions from the retention-expansion config singleton (`V2-02`
-/// §3.3) — and never a live current-retained-bytes usage value, which the
-/// public surface deliberately does not expose (V2-07 §2.2 OPEN-2).
+/// §3.3). Live retained-byte totals belong to the independent usage read.
 ///
-/// The ordinary fixtures drive the PUBLIC `SwiftDataHistory` over an
-/// in-memory store (`HistoryPersistence.memory`, 05 §2: same Authority,
-/// planners, and transaction path, no durability). `RET-READ-1A` additionally
+/// The ordinary fixtures drive the PUBLIC `SQLiteHistory` over a
+/// disposable SQLite store (`HistoryPersistence.temporary`, 05 §2: same Authority,
+/// planners and durable transaction path, with disposable files). `RET-READ-1A` additionally
 /// releases a first owner and reopens a persistent store through the same
 /// public seam. There is no `@testable` import: the read and both writes exist
 /// on the public seam and the proof is exactly that the configured policy
@@ -27,14 +26,14 @@ import Testing
 
 struct RetentionConfigurationReadTests {
 
-    /// Opens the real facade over an in-memory store (05 §2) with the given
+    /// Opens the real facade over a disposable SQLite store (05 §2) with the given
     /// initial count — the Part VI default (200, 06 §2) unless overridden.
-    private func openMemoryHistory(
+    private func openTemporaryHistory(
         initialMaximumUnpinnedItems: Int = 200
-    ) async throws -> SwiftDataHistory {
-        try await SwiftDataHistory.open(
+    ) async throws -> SQLiteHistory {
+        try await SQLiteHistory.open(
             configuration: HistoryConfiguration(
-                persistence: .memory,
+                persistence: .temporary,
                 initialMaximumUnpinnedItems: initialMaximumUnpinnedItems
             )
         )
@@ -45,7 +44,7 @@ struct RetentionConfigurationReadTests {
     /// position singleton at bootstrap, 05 §13) and every V2-02 dimension
     /// disabled (`V2-02` §3.3's all-disabled bootstrap row).
     @Test func newStoreReadsBackTheDefaultConfiguration() async throws {
-        let history = try await openMemoryHistory()
+        let history = try await openTemporaryHistory()
 
         let configuration = try await history.retentionConfiguration()
 
@@ -61,7 +60,7 @@ struct RetentionConfigurationReadTests {
     /// ignored once the singleton exists) and the exact V2-02 dimensions
     /// the `.setRetentionPolicies` stamping persisted (`V2-02` §5.6).
     @Test func readReturnsThePersistedConfiguredPolicyAfterMutations() async throws {
-        let history = try await openMemoryHistory()
+        let history = try await openTemporaryHistory()
 
         // v1 count dimension: 200 → 42 (03a §5; receipt 03a §6).
         let countReceipt = try await history.perform(
@@ -99,7 +98,7 @@ struct RetentionConfigurationReadTests {
     /// are independently optional (`V2-02` §2.1): a count-only revision
     /// policy round-trips with its byte threshold `nil`.
     @Test func disabledDimensionsReadBackNilAndRevisionThresholdsAreIndependent() async throws {
-        let history = try await openMemoryHistory()
+        let history = try await openTemporaryHistory()
 
         let policies = HistoryRetentionPolicies(
             age: nil,
@@ -141,7 +140,7 @@ struct RetentionConfigurationReadTests {
     /// starts from the authoritative read can never silently wipe a real
     /// persisted policy.
     @Test func reapplyingTheReadBackConfigurationIsUnchanged() async throws {
-        let history = try await openMemoryHistory()
+        let history = try await openTemporaryHistory()
 
         let policies = HistoryRetentionPolicies(
             age: AgeRetention(maxAge: 7 * 86_400),
@@ -236,7 +235,7 @@ struct RetentionConfigurationReadTests {
     }
 
     /// Returns only an immutable business ID, so the first facade, Authority,
-    /// worker actors, and ModelContainer are all released before reopen.
+    /// worker actors, and SQLite connections are all released before reopen.
     private static func seedFirstOwner(
         at storeURL: URL
     ) async throws -> HistoryItemID {

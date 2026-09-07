@@ -6,7 +6,7 @@
 ///
 /// Where the WS1–WS21 composed suites pin frozen semantics with tiny
 /// synthetic values, these journeys drive the SAME composed stack — the real
-/// `SwiftDataHistory` over an in-memory store (docs/05-authority-kernel.md
+/// `SQLiteHistory` over an in-memory store (docs/05-authority-kernel.md
 /// §2), the real @MainActor `HistoryViewState` / `ThumbnailStore`
 /// (docs/01-architecture.md §6), and a PRIVATE `NSPasteboard` (never
 /// `.general`) where pasteboard I/O is needed — against real-scale payloads:

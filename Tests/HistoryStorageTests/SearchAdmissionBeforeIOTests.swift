@@ -1,7 +1,7 @@
 #if DEBUG
 /// REVIEW Card 11A — search request admission must reject an invalid query
-/// before the Authority creates a ModelContext or begins corpus fetch. The
-/// behavior seam is the public `SwiftDataHistory.browse`; the existing
+/// before the worker opens a read transaction or fetches a SQL batch. The
+/// behavior seam is the public `SQLiteHistory.browse`; the existing
 /// privacy-safe aggregate search probe is only the I/O oracle.
 import Foundation
 import HistoryCore
@@ -82,10 +82,16 @@ struct SearchAdmissionBeforeIOTests {
     func storedCorpusPoisonProvesInvalidRequestsDoNotReachCorpus() async throws {
         let storeURL = WSSupport.tempStoreURL("search-admission-corpus-poison")
         defer { WSSupport.removeStore(storeURL) }
-        _ = try await ProjectionCorruptionTests.seedOverBoundSearchBodyRow(
-            at: storeURL
-        )
         let history = try await WSSupport.openHistory(storeURL: storeURL)
+        _ = try await history.perform(.capture(WSSupport.textCapture(
+            "projection poison fixture", observedAt: Date(timeIntervalSinceReferenceDate: 1)
+        )))
+        try await history.authority.withTestDatabase { authority in
+            try authority.database.execute(
+                "UPDATE history_items SET searchBodyUTF8 = zeroblob(?)",
+                bindings: [.integer(Int64(HistoryLimits.standard.maximumStoredSearchBodyUTF8Bytes + 1))]
+            )
+        }
 
         // Positive control: a valid non-empty search traverses the real public
         // facade into corpus projection, consumes the stored over-bound body,

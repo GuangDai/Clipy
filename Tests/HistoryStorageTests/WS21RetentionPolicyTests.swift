@@ -1,7 +1,7 @@
 /// WS21 — Retention policy in the primary commit (docs/06-cross-cutting.md
 /// §8 WS21): the commit/receipt/storage side of
 /// `HistoryAction.setRetentionPolicy` through the public
-/// `SwiftDataHistory.perform(_:)` and the real `HistoryAuthority` commit
+/// `SQLiteHistory.perform(_:)` and the real `HistoryAuthority` commit
 /// path — the last previously path-less included behavior.
 ///
 /// This file closes, all on the commit/storage side:
@@ -29,7 +29,7 @@
 /// Phasing (docs/roadmap/README.md §3, WS-clause phasing note): WS21 carries
 /// no public-read or observation clause — every assertion here is
 /// commit/storage side: receipts plus the INDEPENDENT second
-/// `ModelContainer` over the same on-disk store (see `WSSupport`). The
+/// `SQLite connection` over the same on-disk store (see `WSSupport`). The
 /// public reads (`browse`, `details`, `pastePayload`, `observe`) are covered by
 /// the separate step-7 suites and are intentionally not called here.
 import Foundation
@@ -101,7 +101,7 @@ struct WS21RetentionPolicyTests {
     }
     // No commit, no advance (02 §13): the singleton still shows position 3
     // and the untouched policy value.
-    let afterNoOp = try WSSupport.makeContainer(storeURL: storeURL)
+    let afterNoOp = try WSSupport.makeDatabase(storeURL: storeURL)
     let noOpSingleton = try WSSupport.fetchPosition(afterNoOp)
     #expect(noOpSingleton.rawValue == 3)
     #expect(noOpSingleton.maximumUnpinnedItems == 200)
@@ -128,7 +128,7 @@ struct WS21RetentionPolicyTests {
 
     // Storage side, through the INDEPENDENT container: only the newest
     // item's row survives.
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
     #expect(rows.count == 1)
     let survivor = try #require(rows.first)
@@ -136,7 +136,7 @@ struct WS21RetentionPolicyTests {
     #expect(survivor.lastCopiedAt == charlieObservedAt)
     #expect(survivor.copyCount == 1)
     #expect(survivor.pinOrdinal == nil)
-    let survivorCanonical = try CanonicalBlobCodec.decode(survivor.canonicalBlob)
+    let survivorCanonical = try WSSupport.fetchCanonical(itemID: survivor.id, in: container)
     #expect(survivorCanonical.representations.map(\.content.bytes) == [Data(charlieText.utf8)])
 
     // 06 §8 WS21: "the policy value is persisted on the singleton" (05 §3.2)
@@ -151,7 +151,7 @@ struct WS21RetentionPolicyTests {
     // value (the `openHistory` default 200) is ignored for an existing store
     // (05 §13 steps 3–4, §2).
     let restartedHistory = try await WSSupport.openHistory(storeURL: storeURL)
-    let restartContainer = try WSSupport.makeContainer(storeURL: storeURL)
+    let restartContainer = try WSSupport.makeDatabase(storeURL: storeURL)
     let restartSingleton = try WSSupport.fetchPosition(restartContainer)
     #expect(restartSingleton.rawValue == 4)
     #expect(restartSingleton.maximumUnpinnedItems == 1)
@@ -206,7 +206,7 @@ struct WS21RetentionPolicyTests {
 
     // No commit and no advance for either rejection: the singleton and the
     // retained row are exactly as the setup capture left them.
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let singleton = try WSSupport.fetchPosition(container)
     #expect(singleton.rawValue == 1)
     #expect(singleton.maximumUnpinnedItems == 200)
@@ -300,7 +300,7 @@ struct WS21RetentionPolicyTests {
     // Storage side: the pinned row is intact (ordinal 0, version 1, full
     // Canonical bytes, original occurrence) and the only unpinned survivor
     // is the newest item.
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
     #expect(rows.count == 2)
 
@@ -309,7 +309,7 @@ struct WS21RetentionPolicyTests {
     #expect(pinnedRow.contentVersionRaw == 1)
     #expect(pinnedRow.copyCount == 1)
     #expect(pinnedRow.lastCopiedAt == pinnedObservedAt)
-    let pinnedCanonical = try CanonicalBlobCodec.decode(pinnedRow.canonicalBlob)
+    let pinnedCanonical = try WSSupport.fetchCanonical(itemID: pinnedRow.id, in: container)
     #expect(pinnedCanonical.representations.map(\.content.bytes) == [Data(pinnedText.utf8)])
 
     let unpinnedSurvivor = try #require(rows.first { $0.id == newerReference.id.rawValue })

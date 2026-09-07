@@ -1,6 +1,6 @@
 /// Card 2B-2 — Storage-generated History Item ID collision recovery.
 ///
-/// The behavior seam is the real `SwiftDataHistory` facade: a package-only
+/// The behavior seam is the real `SQLiteHistory` facade: a package-only
 /// deterministic ID source supplies collisions, while capture, browse, and
 /// details all cross the caller-visible History API. The existing Debug-only
 /// storage lifecycle probe proves retry happens before the transaction; the
@@ -191,7 +191,7 @@ struct CaptureItemIDCollisionRecoveryTests {
         }
         #expect(
             source.callCount
-                == SwiftDataHistory.captureCandidateIDAttemptLimit + 1
+                == SQLiteHistory.captureCandidateIDAttemptLimit + 1
         )
 
 #if DEBUG
@@ -229,9 +229,9 @@ struct CaptureItemIDCollisionRecoveryTests {
 
     private static func openHistory(
         candidateIDSource: @escaping @Sendable () -> HistoryItemID
-    ) async throws -> SwiftDataHistory {
-        try await SwiftDataHistory.open(
-            configuration: HistoryConfiguration(persistence: .memory),
+    ) async throws -> SQLiteHistory {
+        try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary),
             makeCandidateID: candidateIDSource
         )
     }

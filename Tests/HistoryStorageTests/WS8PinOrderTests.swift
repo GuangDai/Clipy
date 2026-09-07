@@ -1,7 +1,7 @@
 /// WS8 — Pin order (docs/06-cross-cutting.md §8 WS8): the
 /// commit/receipt/storage side of pinning three items, moving the last
 /// before the first, and unpinning the item now occupying the middle
-/// position, through the public `SwiftDataHistory.perform(.placePinned(_:at:))`
+/// position, through the public `SQLiteHistory.perform(.placePinned(_:at:))`
 /// / `.unpin(_:)` and the real step-6 mutation commit path
 /// (`HistoryAuthority.commitPinnedPlacement` / `commitUnpin`;
 /// docs/02-domain.md §10, docs/05-authority-kernel.md §9).
@@ -12,11 +12,9 @@
 /// `.unpinned(id)` receipt outcomes, exactly one Change Position advance per
 /// non-no-op action and no advance for a no-op placement (docs/02-domain.md
 /// §13), Content Version untouched by pin/reorder/unpin (§13: `.assignPin`
-/// preserves), a RESTART after each receipt (reopening the facade reruns the
-/// docs/05-authority-kernel.md §13 startup, whose step 10 revalidates the full
-/// pinned ordinal set from scalar fields), and stored pin ordinals unique and
+/// preserves), a RESTART after each receipt, and stored pin ordinals unique and
 /// exactly `0 ..< pinnedCount` (D12) with the expected id→ordinal mapping,
-/// all as seen through an INDEPENDENT second `ModelContainer` over the same
+/// all as seen through an INDEPENDENT second `SQLite connection` over the same
 /// on-disk store (see `WSSupport`).
 import Foundation
 import HistoryCore
@@ -83,9 +81,7 @@ private static func expectUnpinned(
 
 /// WS8: "After each receipt, restart and assert … stored ordinals are unique
 /// and exactly `0 ..< count`." Reopens the facade over the same on-disk store
-/// — the docs/05-authority-kernel.md §13 startup (step 10) revalidates the
-/// full pinned ordinal set, so a successful open re-proves the durable lane —
-/// then asserts the exact id→ordinal mapping (`nil` is unpinned,
+/// and asserts the exact persisted id→ordinal mapping (`nil` is unpinned,
 /// docs/05-authority-kernel.md §3.1), D12 uniqueness/contiguity, preserved
 /// Content Versions, and the durable position through the INDEPENDENT second
 /// container. Returns the restarted facade so the scenario continues through
@@ -95,10 +91,10 @@ private static func restartAndAssertStoredPinState(
     expectedOrdinals: [UUID: Int?],
     expectedPosition: UInt64,
     _ clause: String
-) async throws -> SwiftDataHistory {
+) async throws -> SQLiteHistory {
     let restarted = try await WSSupport.openHistory(storeURL: storeURL)
 
-    let container = try WSSupport.makeContainer(storeURL: storeURL)
+    let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
     #expect(
         rows.count == expectedOrdinals.count,
