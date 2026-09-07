@@ -201,11 +201,27 @@ package actor ContentPreview {
     /// History's lazy representation reader; it owns no second source policy.
     package func renderHistoryPane(_ representations: [PreviewRepresentation]) async -> PreviewOutcome {
         guard !Task.isCancelled else { return .failed(.cancelled) }
+        // Unlike metadata-only preparation, this call already owns every
+        // supplied payload throughout the candidate loop (01 §6).
+        var totalInputBytes = 0
+        for representation in representations {
+            guard representation.bytes.count <= ResourceProfile.historyPane.maximumInputBytes - totalInputBytes else {
+                return .failed(.resourceLimit)
+            }
+            totalInputBytes += representation.bytes.count
+        }
         let sources = Self.prepareHistoryPane(representations.map {
             PreviewRepresentationMetadata(typeIdentifier: $0.typeIdentifier, byteCount: $0.bytes.count)
         })
         var outcome = PreviewOutcome.unavailable(.unsupported)
         for source in sources {
+            #if DEBUG
+            // The selected renderer accounts for its own bytes. Include the
+            // siblings still retained by this wrapper, exactly once per await.
+            let siblingBytes = totalInputBytes - source.byteCount
+            debugRetainedSourceBytes += siblingBytes
+            defer { debugRetainedSourceBytes -= siblingBytes }
+            #endif
             outcome = await renderSelectedHistoryPane(source, representation: representations[source.representationIndex])
             if !source.permitsFallback(after: outcome) { return outcome }
         }

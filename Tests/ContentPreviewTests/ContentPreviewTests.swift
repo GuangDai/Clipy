@@ -272,6 +272,18 @@ struct ContentPreviewTests {
         #expect(raster.width == 1 && raster.height == 1)
     }
 
+    @Test func inMemoryInputBudgetIncludesUnselectedRepresentations() async {
+        // Shared immutable storage keeps the fixture small while its complete
+        // representation input exceeds the renderer's 64 MiB budget.
+        let opaque = PreviewRepresentation(
+            typeIdentifier: "com.example.opaque", bytes: Data(repeating: 0, count: 1_048_576)
+        )
+        let representations = [PreviewRepresentation(typeIdentifier: "public.png", bytes: Self.onePixelPNG)]
+            + Array(repeating: opaque, count: 64)
+        let outcome = await renderer.renderHistoryPane(representations)
+        #expect(outcome == .failed(.resourceLimit))
+    }
+
     @Test func selectionRejectsMismatchedPayloadAndOnlyMalformedTextCanFallThrough() async throws {
         let sources = ContentPreview.prepareHistoryPane([
             PreviewRepresentationMetadata(typeIdentifier: "public.utf8-plain-text", byteCount: 1),
@@ -359,9 +371,9 @@ struct ContentPreviewTests {
         #expect(settled.retainedSourceBytes == 0)
     }
 
-    @Test("cancelling queued raster work releases its source without releasing the occupied slot")
+    @Test("cancelling queued raster work releases its source without releasing the occupied slot", arguments: [false, true])
     @MainActor
-    func cancelledWaiterFinishesBeforeTheActiveRasterAndDoesNotAdmitTheNextWaiter() async {
+    func cancelledWaiterFinishesBeforeTheActiveRasterAndDoesNotAdmitTheNextWaiter(selectedOnly: Bool) async {
         let renderer = ContentPreview()
         let gate = RenderStartGate()
         let hook: @Sendable () async -> Void = { await gate.parkFirst() }
@@ -373,10 +385,21 @@ struct ContentPreviewTests {
 
             var cancelledOutcome: PreviewOutcome?
             let second = Task {
-                let outcome = await renderer.renderHistoryPane([
-                    PreviewRepresentation(typeIdentifier: "public.png", bytes: Self.onePixelPNG),
-                    PreviewRepresentation(typeIdentifier: "com.example.opaque", bytes: Data(repeating: 0, count: 4_096)),
-                ])
+                let outcome: PreviewOutcome
+                if selectedOnly {
+                    let source = ContentPreview.prepareHistoryPane([
+                        PreviewRepresentationMetadata(typeIdentifier: "public.png", byteCount: pngBytes),
+                        PreviewRepresentationMetadata(typeIdentifier: "com.example.opaque", byteCount: 4_096),
+                    ])[0]
+                    outcome = await renderer.renderSelectedHistoryPane(source, representation: PreviewRepresentation(
+                        typeIdentifier: "public.png", bytes: Self.onePixelPNG
+                    ))
+                } else {
+                    outcome = await renderer.renderHistoryPane([
+                        PreviewRepresentation(typeIdentifier: "public.png", bytes: Self.onePixelPNG),
+                        PreviewRepresentation(typeIdentifier: "com.example.opaque", bytes: Data(repeating: 0, count: 4_096)),
+                    ])
+                }
                 cancelledOutcome = outcome
                 return outcome
             }
@@ -417,7 +440,13 @@ struct ContentPreviewTests {
             let thirdOutcome = await third.value
 
             #expect(secondQueued)
-            #expect(withQueuedInput.retainedSourceBytes == 2 * pngBytes + 4_096)
+            // The full-data caller retains its whole array across the await;
+            // the metadata path never loads the opaque sibling at all.
+            if selectedOnly {
+                #expect(withQueuedInput.retainedSourceBytes == 2 * pngBytes)
+            } else {
+                #expect(withQueuedInput.retainedSourceBytes == 2 * pngBytes + 4_096)
+            }
             #expect(cancelledBeforeFirstFinished)
             #expect(afterCancellation.activeJobs == 1)
             #expect(afterCancellation.retainedSourceBytes == pngBytes)
