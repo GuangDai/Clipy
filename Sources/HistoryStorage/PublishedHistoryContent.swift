@@ -25,7 +25,7 @@ extension HistoryAuthority {
     /// Authority does not suspend between reuse lookup, file publication and
     /// the reference transaction, so current/Canonical sources cannot change.
     internal func publishHistoryContent(
-        for plan: StampedCommitPlan
+        for plan: StampedCommitPlan, didPublish: () -> Void = {}
     ) throws -> [Int: PublishedHistoryContent] {
         var published: [Int: PublishedHistoryContent] = [:]
         var newPayloadBytes: Int64 = 0
@@ -37,14 +37,14 @@ extension HistoryAuthority {
                     id: UUID(), itemID: item.id,
                     representations: item.canonical.representations.lazy.map {
                         ($0.content, Optional($0.fingerprint.rawValue))
-                    }, newPayloadBytes: &newPayloadBytes, available: available
+                    }, newPayloadBytes: &newPayloadBytes, available: available, didPublish: didPublish
                 )
             case .appendRevision(let update):
                 published[index] = try publishContent(
                     id: update.revision.id.rawValue, itemID: update.itemID,
                     representations: update.revision.content.representations.lazy.map {
                         ($0, nil as UInt64?)
-                    }, newPayloadBytes: &newPayloadBytes, available: available
+                    }, newPayloadBytes: &newPayloadBytes, available: available, didPublish: didPublish
                 )
             case .updateOccurrence, .setPinOrdinal, .delete, .setRetentionPolicy,
                     .pruneRevisions, .setRetentionPolicies, .bulkClear, .retirePrefix:
@@ -57,7 +57,7 @@ extension HistoryAuthority {
     private func publishContent(
         id: UUID, itemID: HistoryItemID,
         representations: some Sequence<(ContentRepresentation, UInt64?)>,
-        newPayloadBytes: inout Int64, available: Int64?
+        newPayloadBytes: inout Int64, available: Int64?, didPublish: () -> Void
     ) throws -> PublishedHistoryContent {
         var published: [PublishedHistoryRepresentation] = []
         for (representation, fingerprint) in representations {
@@ -81,7 +81,7 @@ extension HistoryAuthority {
                     inline = .blob(representation.bytes)
                     blobID = .null
                 } else {
-                    let blob = try blobStore.write(representation.bytes)
+                    let blob = try blobStore.write(representation.bytes, didPublish: didPublish)
                     inline = .null
                     blobID = .text(blob.id.uuidString)
                 }

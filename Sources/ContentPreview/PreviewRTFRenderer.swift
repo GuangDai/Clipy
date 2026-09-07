@@ -303,6 +303,9 @@ private struct Parser {
         case 2: -2
         case 77: 10000
         case 128: 932
+        case 129: 949
+        case 134: 936
+        case 136: 950
         case 161: 1253
         case 162: 1254
         case 204: 1251
@@ -320,9 +323,21 @@ private struct Parser {
         case 1254: .windowsCP1254
         case 10000: .macOSRoman
         case 932: .shiftJIS
+        case 936: foundationEncoding(.dosChineseSimplif)
+        case 949: foundationEncoding(.dosKorean)
+        case 950: foundationEncoding(.dosChineseTrad)
         case 65001: .utf8
         default: nil
         }
+    }
+
+    /// Apple's DOS-named constants specify these exact Windows code pages
+    /// (936/949/950), including their Windows extensions. Do not substitute
+    /// GB18030, EUC-KR or Big5-HKSCS, which accept different byte sequences.
+    private static func foundationEncoding(_ encoding: CFStringEncodings) -> String.Encoding {
+        String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(
+            CFStringEncoding(encoding.rawValue)
+        ))
     }
 
     private static let skippedDestinations: Set<String> = [

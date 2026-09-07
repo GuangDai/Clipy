@@ -62,9 +62,11 @@ internal final class SQLiteDatabase {
         handle = opened
         do {
             try check(sqlite3_extended_result_codes(opened, 1))
-            // No process-level connection pool or custom writer lock. SQLite
-            // owns contention; callers receive BUSY instead of indefinite waits.
-            try check(sqlite3_busy_timeout(opened, 0))
+            // A released owner's final GC batch can close its last connection
+            // while this connection configures WAL. SQLite briefly excludes
+            // new readers during that close/checkpoint (WAL documentation §9).
+            // Let SQLite wait only during construction, with a finite limit.
+            try check(sqlite3_busy_timeout(opened, 1_000))
             try execute("PRAGMA foreign_keys = ON")
             try execute("PRAGMA cache_size = -4096")
             try execute("PRAGMA mmap_size = 0")
@@ -77,6 +79,9 @@ internal final class SQLiteDatabase {
                 try execute("PRAGMA synchronous = FULL")
                 try execute("PRAGMA wal_autocheckpoint = 256")
             }
+            // Ordinary reads/transactions still report BUSY immediately; this
+            // is not a second writer coordinator or an application retry loop.
+            try check(sqlite3_busy_timeout(opened, 0))
         } catch {
             sqlite3_close_v2(opened)
             handle = nil

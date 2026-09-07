@@ -15,16 +15,23 @@ struct PublishedHistoryContentTests {
         let reference = try await insertOriginal(history)
         let before = try await history.authority.publicationSQLFactsForTest()
         #expect(try await history.authority.publicationBlobCountForTest() == 1)
+        let cleanup = await pauseCleanupForFailureProof(history)
         await history.authority.setTransactionFailureInjection(injection)
         await #expect(throws: HistoryFailure.persistence(.transaction)) {
             try await history.perform(.capture(capture(bytes: Data(repeating: 85, count: original.count), text: "new")))
         }
-        #expect(try await history.authority.publicationSQLFactsForTest() == before)
-        #expect(try await history.authority.publicationBlobCountForTest() == 2)
-        #expect(try await history.pastePayload(for: reference.id).representations.contains { $0.bytes == original })
-        try await history.authority.cleanPublicationOrphansForTest()
-        #expect(try await history.authority.publicationBlobCountForTest() == 1)
-        #expect(try await history.authority.publicationSQLFactsForTest() == before)
+        await cleanup.waitForPark(AuthoritySuspensionPoint.blobCleanupBatchEntry.rawValue)
+        do {
+            #expect(try await history.authority.publicationSQLFactsForTest() == before)
+            #expect(try await history.authority.publicationBlobCountForTest() == 2)
+            #expect(try await history.pastePayload(for: reference.id).representations.contains { $0.bytes == original })
+            await resumeCleanup(history, gate: cleanup)
+            #expect(try await history.authority.publicationBlobCountForTest() == 1)
+            #expect(try await history.authority.publicationSQLFactsForTest() == before)
+        } catch {
+            await resumeCleanup(history, gate: cleanup)
+            throw error
+        }
     }
 
     @Test
@@ -32,6 +39,7 @@ struct PublishedHistoryContentTests {
         let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(persistence: .temporary))
         let reference = try await insertOriginal(history)
         let before = try await history.authority.publicationSQLFactsForTest()
+        let cleanup = await pauseCleanupForFailureProof(history)
         // The same actual connection refuses BEGIN IMMEDIATE. The first
         // transaction-body injection must remain unconsumed, proving no body
         // was entered; no second writer or replacement database is involved.
@@ -40,14 +48,22 @@ struct PublishedHistoryContentTests {
         await #expect(throws: HistoryFailure.persistence(.transaction)) {
             try await history.perform(.capture(capture(bytes: Data(repeating: 86, count: original.count), text: "new")))
         }
-        #expect(await history.authority.injectedTransactionFailure == .positionChanged)
-        try await history.authority.setQueryOnlyForPublicationTest(false)
-        await history.authority.setTransactionFailureInjection(nil)
-        #expect(try await history.authority.publicationSQLFactsForTest() == before)
-        #expect(try await history.authority.publicationBlobCountForTest() == 2)
-        try await history.authority.cleanPublicationOrphansForTest()
-        #expect(try await history.authority.publicationBlobCountForTest() == 1)
-        #expect(try await history.pastePayload(for: reference.id).representations.contains { $0.bytes == original })
+        await cleanup.waitForPark(AuthoritySuspensionPoint.blobCleanupBatchEntry.rawValue)
+        do {
+            #expect(await history.authority.injectedTransactionFailure == .positionChanged)
+            try await history.authority.setQueryOnlyForPublicationTest(false)
+            await history.authority.setTransactionFailureInjection(nil)
+            #expect(try await history.authority.publicationSQLFactsForTest() == before)
+            #expect(try await history.authority.publicationBlobCountForTest() == 2)
+            await resumeCleanup(history, gate: cleanup)
+            #expect(try await history.authority.publicationBlobCountForTest() == 1)
+            #expect(try await history.pastePayload(for: reference.id).representations.contains { $0.bytes == original })
+        } catch {
+            try? await history.authority.setQueryOnlyForPublicationTest(false)
+            await history.authority.setTransactionFailureInjection(nil)
+            await resumeCleanup(history, gate: cleanup)
+            throw error
+        }
     }
 
     @Test
@@ -75,6 +91,21 @@ struct PublishedHistoryContentTests {
         }
         #expect(try await history.authority.publicationSQLFactsForTest() == beforeRefusal)
         #expect(try await history.authority.publicationBlobCountForTest() == 1)
+    }
+
+    private func pauseCleanupForFailureProof(_ history: SQLiteHistory) async -> SuspensionGate {
+        await history.authority.waitForBlobCleanup()
+        let gate = SuspensionGate()
+        await history.authority.setSuspensionHandler { point in
+            if point == .blobCleanupBatchEntry { await gate.park(at: point.rawValue) }
+        }
+        return gate
+    }
+
+    private func resumeCleanup(_ history: SQLiteHistory, gate: SuspensionGate) async {
+        await history.authority.setSuspensionHandler(nil)
+        await gate.resume(AuthoritySuspensionPoint.blobCleanupBatchEntry.rawValue)
+        await history.authority.waitForBlobCleanup()
     }
 
     private func insertOriginal(_ history: SQLiteHistory) async throws -> HistoryItemReference {
@@ -118,16 +149,6 @@ private extension HistoryAuthority {
         var count = 0
         while let url = enumerator?.nextObject() as? URL { if url.pathExtension == "blob" { count += 1 } }
         return count
-    }
-
-    func cleanPublicationOrphansForTest() throws {
-        for _ in 0..<4 {
-            try blobStore.cleanupBatch { id in
-                let statement = try database.prepare("SELECT 1 FROM representations WHERE blobID = ? LIMIT 1", bindings: [.text(id.uuidString)])
-                defer { statement.finalize() }
-                return try statement.step()
-            }
-        }
     }
 
     func setQueryOnlyForPublicationTest(_ enabled: Bool) throws {
