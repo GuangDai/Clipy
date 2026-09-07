@@ -1,6 +1,5 @@
-/// F1 in-process authentication kernel proofs. These use real V4 Authority
-/// state and an injected in-memory Keychain boundary; no transport, peer
-/// credential, signed Keychain profile, or Gateway result is claimed.
+/// F1 in-process authentication proofs using real current Authority state and
+/// private server credential files. Only explicit custody failures are injected.
 import Foundation
 import HistoryCore
 import SwiftData
@@ -22,6 +21,9 @@ struct LocalAutomationCredentialAuthenticatorTests {
         let authority: HistoryAuthority
         let container: ModelContainer
         let credential: LocalAutomationCredential
+        let credentials: CredentialStore
+        let root: URL
+        var serverDirectory: URL { root.appendingPathComponent("ServerCredentials") }
     }
 
     private final class UUIDSource: Sendable {
@@ -39,6 +41,8 @@ struct LocalAutomationCredentialAuthenticatorTests {
     private static func makeFixture(
         enroll: Bool = true
     ) async throws -> Fixture {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let schema = historySchema
         let container = try ModelContainer(
             for: schema,
@@ -60,27 +64,22 @@ struct LocalAutomationCredentialAuthenticatorTests {
                 displayName: "Authentication fixture"
             )
         }
+        let credential = try LocalAutomationCredential(connection: connection, secret: secret)
+        let credentials = CredentialStore(directoryURL: root.appendingPathComponent("ServerCredentials"))
+        try await credentials.storeCredential(credential.exactBytes, for: connection)
         return Fixture(
             authority: authority,
             container: container,
-            credential: try LocalAutomationCredential(
-                connection: connection,
-                secret: secret
-            )
+            credential: credential, credentials: credentials, root: root
         )
     }
 
     private static func authenticator(
         _ fixture: Fixture,
-        storedBytes: Data?
+        credentials: CredentialStore? = nil
     ) -> LocalAutomationCredentialAuthenticator {
-        let values = storedBytes.map { [Self.connection: $0] } ?? [:]
-        return LocalAutomationCredentialAuthenticator(
-            credentialStore: CredentialStore(
-                operations: AuthenticationMemoryCredentialOperations(
-                    values: values
-                )
-            ),
+        LocalAutomationCredentialAuthenticator(
+            credentialStore: credentials ?? fixture.credentials,
             authority: fixture.authority
         )
     }
@@ -88,10 +87,8 @@ struct LocalAutomationCredentialAuthenticatorTests {
     @Test("exact active and revoked credentials retain the durable ID")
     func exactActiveAndRevokedCredentialsAuthenticateWithoutAudit() async throws {
         let fixture = try await Self.makeFixture()
-        let authenticator = Self.authenticator(
-            fixture,
-            storedBytes: fixture.credential.exactBytes
-        )
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let authenticator = Self.authenticator(fixture)
         let before = try GatewayStoreSnapshot.read(
             in: ModelContext(fixture.container)
         )
@@ -113,14 +110,22 @@ struct LocalAutomationCredentialAuthenticatorTests {
         #expect(try GatewayStoreSnapshot.read(
             in: ModelContext(fixture.container)
         ) == revokedBefore)
+        let reopenedCredentials = CredentialStore(directoryURL: fixture.serverDirectory)
+        #expect(try await reopenedCredentials.loadCredential(for: Self.connection) == fixture.credential.exactBytes)
+        let reopenedAuthenticator = Self.authenticator(fixture, credentials: reopenedCredentials)
+        #expect(try await reopenedAuthenticator.authenticate(fixture.credential.exactBytes) == Self.connection)
+        #expect(try GatewayStoreSnapshot.read(in: ModelContext(fixture.container)) == revokedBefore)
     }
 
     @Test("malformed, missing, wrong, and orphan credentials reject unaudited")
     func rejectedPresentationsNeverReachGatewayOrAudit() async throws {
         let fixture = try await Self.makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
         let exact = fixture.credential.exactBytes
-        let missing = Self.authenticator(fixture, storedBytes: nil)
-        let wrong = Self.authenticator(fixture, storedBytes: exact)
+        let missing = Self.authenticator(fixture, credentials: CredentialStore(
+            directoryURL: fixture.root.appendingPathComponent("MissingCredentials")
+        ))
+        let wrong = Self.authenticator(fixture)
         var wrongBytes = exact
         wrongBytes[LocalAutomationCredential.byteCount - 1] ^= 0x01
         let before = try GatewayStoreSnapshot.read(
@@ -135,10 +140,8 @@ struct LocalAutomationCredentialAuthenticatorTests {
         ) == before)
 
         let orphan = try await Self.makeFixture(enroll: false)
-        let orphanAuthenticator = Self.authenticator(
-            orphan,
-            storedBytes: orphan.credential.exactBytes
-        )
+        defer { try? FileManager.default.removeItem(at: orphan.root) }
+        let orphanAuthenticator = Self.authenticator(orphan)
         let orphanBefore = try GatewayStoreSnapshot.read(
             in: ModelContext(orphan.container)
         )
@@ -174,9 +177,12 @@ struct LocalAutomationCredentialAuthenticatorTests {
     @Test("server custody failures stay typed and unaudited")
     func serverCustodyFailuresNeverBecomeAuthenticationDenials() async throws {
         let fixture = try await Self.makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
         let corrupt = Self.authenticator(
             fixture,
-            storedBytes: Data(fixture.credential.exactBytes.dropLast())
+            credentials: CredentialStore(operations: AuthenticationMemoryCredentialOperations(
+                values: [Self.connection: Data(fixture.credential.exactBytes.dropLast())]
+            ))
         )
         let unavailable = LocalAutomationCredentialAuthenticator(
             credentialStore: CredentialStore(

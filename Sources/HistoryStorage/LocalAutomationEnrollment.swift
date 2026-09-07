@@ -32,7 +32,7 @@ extension LocalAutomationIngress {
         defer { isChangingEnrollment = false }
         let current = try await enrollmentState(clientDirectory: clientDirectory)
         if current.connection != nil { return current }
-        // A disabled Settings read need not access the Keychain. Explicit
+        // A disabled Settings read need not access server credential files. Explicit
         // Enable cleans every server orphan, even if its client file vanished.
         let retained = Set(try await authority.connections().filter {
             $0.enrollKind == .localAutomation
