@@ -1248,12 +1248,13 @@ private func requireSeedTextRow(
 /// canonical, no revisions, occurrence facts and pin state unchanged.
 private func requireSeedTextDetails(
     _ details: HistoryDetails,
+    in history: SQLiteHistory,
     row: HistoryRow,
     id: UUID,
     text: String,
     date: Date,
     source: String
-) throws {
+) async throws {
     guard details.item.id.rawValue == id,
           details.item == row.item,
           details.canonical.map(\.typeIdentifier) == [textType],
@@ -1335,8 +1336,9 @@ private func requireBlobSeedState(
     }
 
     let bravoDetails = try await history.details(for: page.rows[1].item.id)
-    try requireSeedTextDetails(
+    try await requireSeedTextDetails(
         bravoDetails,
+        in: history,
         row: page.rows[1],
         id: manifest.bravo,
         text: bravoText,
@@ -1344,8 +1346,9 @@ private func requireBlobSeedState(
         source: bravoSource
     )
     let alphaDetails = try await history.details(for: page.rows[2].item.id)
-    try requireSeedTextDetails(
+    try await requireSeedTextDetails(
         alphaDetails,
+        in: history,
         row: page.rows[2],
         id: manifest.alpha,
         text: alphaText,
@@ -2049,8 +2052,9 @@ private func pressureReviseVerify(storeURL: URL) async throws {
     }
 
     let bravoDetails = try await history.details(for: page.rows[1].item.id)
-    try requireSeedTextDetails(
+    try await requireSeedTextDetails(
         bravoDetails,
+        in: history,
         row: page.rows[1],
         id: manifest.bravo,
         text: bravoText,
@@ -2058,8 +2062,9 @@ private func pressureReviseVerify(storeURL: URL) async throws {
         source: bravoSource
     )
     let alphaDetails = try await history.details(for: page.rows[2].item.id)
-    try requireSeedTextDetails(
+    try await requireSeedTextDetails(
         alphaDetails,
+        in: history,
         row: page.rows[2],
         id: manifest.alpha,
         text: alphaText,
