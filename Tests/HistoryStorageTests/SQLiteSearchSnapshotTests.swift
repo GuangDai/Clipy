@@ -193,7 +193,7 @@ struct SQLiteSearchSnapshotTests {
         let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(
             persistence: .temporary
         ))
-        let location = try await history.authority.withTestDatabase { $0.storeLocation }
+        let location = await history.authority.withTestDatabase { $0.storeLocation }
         var byID: [HistoryItemID: String] = [:]
         for (index, body) in bodies.enumerated() {
             let receipt = try await history.perform(.capture(WSSupport.textCapture(

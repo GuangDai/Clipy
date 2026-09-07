@@ -1,6 +1,6 @@
 #if DEBUG
 /// Debug-only proofs for the opt-in storage lifecycle checkpoints. The first
-/// test drives the real Authority, real operation-local contexts, and the
+/// test drives the real Authority, SQLite transactions, and the
 /// production capture transaction; the probe changes only the synchronous
 /// event sink and never substitutes persistence behavior.
 import Foundation
@@ -13,8 +13,8 @@ struct StorageLifecycleDebugInstrumentationTests {
         let storeURL = WSSupport.tempStoreURL("storage-lifecycle-trace")
         defer { WSSupport.removeStore(storeURL) }
 
-        let container = try WSSupport.makeContainer(storeURL: storeURL)
-        let authority = HistoryAuthority(container: container)
+        let location = try HistoryStoreLocation(persistence: .persistent(storeURL: storeURL))
+        let authority = try HistoryAuthority(storeLocation: location)
         let (events, continuation) = AsyncStream<StorageLifecycleDebugEvent>
             .makeStream(bufferingPolicy: .unbounded)
         await authority.setStorageLifecycleDebugProbe(
@@ -24,6 +24,9 @@ struct StorageLifecycleDebugInstrumentationTests {
         )
 
         try await authority.performStartup(initialMaximumUnpinnedItems: 200)
+        let initial = try WSSupport.fetchPosition(WSSupport.makeDatabase(storeURL: storeURL))
+        #expect(initial.rawValue == 0)
+        #expect(initial.retainedItemCount == 0)
         let privateText = "private storage lifecycle payload"
         let privateSource = "com.example.private-storage-source"
         let tiedObservedAt = Date(timeIntervalSinceReferenceDate: 710_200_000)
@@ -55,9 +58,6 @@ struct StorageLifecycleDebugInstrumentationTests {
         }
         let phases = Set(captured.map(\.phase))
         let expectedPhases: Set<StorageLifecycleDebugPhase> = [
-            .startupFetchBegin,
-            .startupFetchComplete,
-            .startupAutoreleasePoolDrained,
             .captureFactLoadBegin,
             .captureFactLoadComplete,
             .captureTransactionBegin,
@@ -68,8 +68,6 @@ struct StorageLifecycleDebugInstrumentationTests {
             .recentPinnedFetchComplete,
             .recentUnpinnedFetchBegin,
             .recentUnpinnedFetchComplete,
-            .recentUnpinnedOrderBegin,
-            .recentUnpinnedOrderComplete,
             .recentFetchComplete,
             .recentAutoreleasePoolDrained,
         ]
@@ -80,14 +78,6 @@ struct StorageLifecycleDebugInstrumentationTests {
                 && $0.elapsedMilliseconds >= 0
                 && $0.rows >= 0
         })
-
-        let startupCompleteIndex = try #require(captured.firstIndex {
-            $0.phase == .startupFetchComplete
-        })
-        let startupDrainedIndex = try #require(captured.firstIndex {
-            $0.phase == .startupAutoreleasePoolDrained
-        })
-        #expect(startupCompleteIndex < startupDrainedIndex)
 
         let captureTransactionCompleteIndex = try #require(captured.firstIndex {
             $0.phase == .captureTransactionComplete
@@ -104,14 +94,14 @@ struct StorageLifecycleDebugInstrumentationTests {
         let fetchCompleteIndex = try #require(captured.firstIndex {
             $0.phase == .recentUnpinnedFetchComplete
         })
-        let orderCompleteIndex = try #require(captured.firstIndex {
-            $0.phase == .recentUnpinnedOrderComplete
+        let recentCompleteIndex = try #require(captured.firstIndex {
+            $0.phase == .recentFetchComplete
         })
         let recentDrainedIndex = try #require(captured.firstIndex {
             $0.phase == .recentAutoreleasePoolDrained
         })
-        #expect(fetchCompleteIndex < orderCompleteIndex)
-        #expect(orderCompleteIndex < recentDrainedIndex)
+        #expect(fetchCompleteIndex < recentCompleteIndex)
+        #expect(recentCompleteIndex < recentDrainedIndex)
 
         let rendered = captured.compactMap(\.logLine).joined(separator: "\n")
         #expect(!rendered.isEmpty)

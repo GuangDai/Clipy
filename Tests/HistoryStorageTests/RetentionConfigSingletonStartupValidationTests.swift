@@ -156,7 +156,7 @@ struct RetentionConfigSingletonStartupValidationTests {
                 maxRevisionsPerItem: 20, maxRevisionBytesPerItem: 16_777_216
             )
         ))
-        try await history.authority.withTestDatabase { authority in
+        await history.authority.withTestDatabase { authority in
             #expect(try Self.readState(in: authority.database) == seeded)
         }
     }

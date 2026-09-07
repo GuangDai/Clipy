@@ -70,7 +70,7 @@ private static func expectCreateGuardRollback(
     let publications = try await publicationProbe.finish(on: authority)
     #expect(publications.count == 0)
 
-    let verification = try WSSupport.makeContainer(storeURL: storeURL)
+    let verification = try WSSupport.makeDatabase(storeURL: storeURL)
     #expect(try WSSupport.fetchRows(verification).isEmpty)
     #expect(try WSSupport.fetchPosition(verification).rawValue == 0)
 }
@@ -128,7 +128,7 @@ private static func expectCreateGuardRollback(
     let publications = try await publicationProbe.finish(on: authority)
     #expect(publications.count == 0)
 
-    let verification = try WSSupport.makeContainer(storeURL: storeURL)
+    let verification = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(verification)
     #expect(rows.count == 1)
     let row = try #require(rows.first)
@@ -139,7 +139,7 @@ private static func expectCreateGuardRollback(
 }
 
 /// A changing revision passes both public OCC checks, then the transaction's
-/// own version guard observes the injected mismatch. The revision blob,
+/// own version guard observes the injected mismatch. The revision rows,
 /// projection, Content Version, and Change Position all remain unchanged.
 @Test func contentVersionMismatchGuardMapsToTransactionAndRollsBack() async throws {
     let storeURL = WSSupport.tempStoreURL("tx-guard-version-mismatch")
@@ -178,18 +178,16 @@ private static func expectCreateGuardRollback(
     let publications = try await publicationProbe.finish(on: authority)
     #expect(publications.count == 0)
 
-    let verification = try WSSupport.makeContainer(storeURL: storeURL)
+    let verification = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(verification)
     #expect(rows.count == 1)
     let row = try #require(rows.first)
     #expect(row.id == reference.id.rawValue)
     #expect(row.contentVersionRaw == reference.contentVersion.rawValue)
     #expect(row.titleUTF8 == Data(canonicalText.utf8))
-    let canonical = try CanonicalBlobCodec.decode(row.canonicalBlob)
-    let lineage = try RevisionStateBlobCodec.decode(
-        row.revisionStateBlob,
-        canonical: canonical
-    )
+    let canonical = try WSSupport.fetchCanonical(itemID: row.id, in: verification)
+    #expect(canonical.representations.map(\.content.bytes) == [Data(canonicalText.utf8)])
+    let lineage = try WSSupport.fetchLineage(itemID: row.id, in: verification)
     #expect(lineage.revisions.isEmpty)
     #expect(lineage.activeRevisionID == nil)
     #expect(try WSSupport.fetchPosition(verification).rawValue == 1)
@@ -221,7 +219,7 @@ private static func expectCreateGuardRollback(
     let publications = try await publicationProbe.finish(on: authority)
     #expect(publications.count == 0)
 
-    let verification = try WSSupport.makeContainer(storeURL: storeURL)
+    let verification = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(verification)
     #expect(rows.count == 1)
     let row = try #require(rows.first)

@@ -29,9 +29,9 @@ struct TransactionBoundaryProofTests {
         let url = WSSupport.tempStoreURL("sqlite-transaction-rollback")
         defer { WSSupport.removeStore(url) }
         let history = try await WSSupport.openHistory(storeURL: url)
-        _ = try await history.perform(.capture(WSSupport.textCapture("retained seed")))
+        _ = try await history.perform(.capture(WSSupport.textCapture("retained seed", observedAt: Date(timeIntervalSinceReferenceDate: 1000))))
         let before = try TransactionStoreSnapshot.read(from: url)
-        let prepared = try await IngestPreparationActor().prepare(WSSupport.textCapture("must not persist"))
+        let prepared = try await IngestPreparationActor().prepare(WSSupport.textCapture("must not persist", observedAt: Date(timeIntervalSinceReferenceDate: 1001)))
         let registration = await history.authority.registerInvalidationSubscriber()
         await history.authority.setTransactionFailureInjection(.beforeSingletonUpdate)
         await #expect(throws: HistoryFailure.persistence(.transaction)) { try await history.authority.commitCapture(prepared) }
@@ -49,8 +49,8 @@ struct TransactionBoundaryProofTests {
 
     @Test func failureInjectionIsOneShotAndRecoveryUsesTheNextPosition() async throws {
         let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
-        _ = try await history.perform(.capture(WSSupport.textCapture("first")))
-        let prepared = try await IngestPreparationActor().prepare(WSSupport.textCapture("second"))
+        _ = try await history.perform(.capture(WSSupport.textCapture("first", observedAt: Date(timeIntervalSinceReferenceDate: 1000))))
+        let prepared = try await IngestPreparationActor().prepare(WSSupport.textCapture("second", observedAt: Date(timeIntervalSinceReferenceDate: 1001)))
         await history.authority.setTransactionFailureInjection(.beforeSingletonUpdate)
         await #expect(throws: HistoryFailure.persistence(.transaction)) { try await history.authority.commitCapture(prepared) }
         let recovered = try await history.authority.commitCapture(prepared)
@@ -65,12 +65,12 @@ struct TransactionBoundaryProofTests {
         let url = WSSupport.tempStoreURL("sqlite-transaction-full")
         defer { WSSupport.removeStore(url) }
         let history = try await WSSupport.openHistory(storeURL: url)
-        _ = try await history.perform(.capture(WSSupport.textCapture("disk seed")))
+        _ = try await history.perform(.capture(WSSupport.textCapture("disk seed", observedAt: Date(timeIntervalSinceReferenceDate: 1000))))
         let before = try TransactionStoreSnapshot.read(from: url)
         let registration = await history.authority.registerInvalidationSubscriber()
         await history.authority.setTransactionFailureInjection(.insufficientDiskSpace)
         await #expect(throws: HistoryFailure.temporarilyUnavailable(.insufficientDiskSpace)) {
-            try await history.perform(.capture(WSSupport.textCapture("disk rejected")))
+            try await history.perform(.capture(WSSupport.textCapture("disk rejected", observedAt: Date(timeIntervalSinceReferenceDate: 1001))))
         }
         #expect(try TransactionStoreSnapshot.read(from: url) == before)
         await history.authority.unregisterInvalidationSubscriber(registration.subscription)

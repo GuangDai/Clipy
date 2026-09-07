@@ -37,7 +37,11 @@ struct StampedPlanTests {
         #expect(stamped.hasDestructiveRetentionEffects)
         #expect(stamped.hcrAppend.changePositionRaw == 41)
         #expect(stamped.hcrAppend.affectedItemIDs == [itemID])
-        #expect(stamped.receiptOutcome == .revised(HistoryItemReference(id: itemID, contentVersion: ContentVersion(rawValue: 8))))
+        guard case .revised(let reference) = stamped.receiptOutcome else {
+            Issue.record("Expected revised receipt")
+            return
+        }
+        #expect(reference == HistoryItemReference(id: itemID, contentVersion: ContentVersion(rawValue: 8)))
     }
 
     @Test
@@ -64,7 +68,12 @@ struct StampedPlanTests {
         #expect(stamped.position.rawValue == 9)
         #expect(!stamped.requiresFinalPinOrderValidation)
         #expect(stamped.hasDestructiveRetentionEffects)
-        #expect(stamped.receiptOutcome == .retentionPoliciesSet(retiredItems: 0, prunedRevisions: 1))
+        guard case .retentionPoliciesSet(let retired, let pruned) = stamped.receiptOutcome else {
+            Issue.record("Expected retention policies receipt")
+            return
+        }
+        #expect(retired == 0)
+        #expect(pruned == 1)
     }
 
     @Test

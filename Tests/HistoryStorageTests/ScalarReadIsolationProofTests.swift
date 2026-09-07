@@ -55,7 +55,7 @@ struct ScalarReadIsolationProofTests {
 
     private static func seedRevision(at url: URL) async throws -> HistoryItemReference {
         let history = try await WSSupport.openHistory(storeURL: url)
-        let receipt = try await history.perform(.capture(WSSupport.textCapture("original bytes")))
+        let receipt = try await history.perform(.capture(WSSupport.textCapture("original bytes", observedAt: Date(timeIntervalSinceReferenceDate: 1000))))
         guard case let .committed(commit) = receipt, case let .inserted(item) = commit.outcome else {
             throw HistoryFailure.persistence(.invariantViolation)
         }

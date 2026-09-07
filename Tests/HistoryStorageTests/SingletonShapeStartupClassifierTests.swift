@@ -98,7 +98,7 @@ struct SingletonShapeStartupClassifierTests {
 
     private static func seed(at url: URL, clear: Bool = false) async throws {
         let history = try await WSSupport.openHistory(storeURL: url)
-        _ = try await history.perform(.capture(WSSupport.textCapture("retained singleton evidence")))
+        _ = try await history.perform(.capture(WSSupport.textCapture("retained singleton evidence", observedAt: Date(timeIntervalSinceReferenceDate: 1000))))
         if clear { _ = try await history.perform(.clear(.all)) }
     }
 
