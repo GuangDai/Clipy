@@ -218,6 +218,105 @@ struct RealHistoryThumbnailEvictionTests {
         #expect(store.purgeGeneration == 0)
     }
 
+    @Test func memoryWarningDropsOnlyColdThumbnailsAndCriticalWaitsForNormal() async throws {
+        let history = try await memoryHistory()
+        let hot = try await capture("visible", png: fixturePNGData, into: history)
+        let cold = try await capture("offscreen", png: fixturePNGData, into: history)
+        let store = ThumbnailStore(history: history)
+        try await complete(hot, in: store)
+        try await complete(cold, in: store)
+        store.setDisplayed(hot, true)
+        let before = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 10))
+        let retention = try await history.retentionConfiguration()
+
+        store.respondToMemoryPressure(.warning)
+        #expect(store.imagePixelSize(for: hot) != nil)
+        #expect(store.imagePixelSize(for: cold) == nil)
+        #expect(store.cachedEntryCount == 1)
+        #expect(store.cachedDecodedBytes == 4)
+        #expect(!store.isPrefetchSuspended)
+
+        store.respondToMemoryPressure(.critical)
+        #expect(store.cachedEntryCount == 0)
+        #expect(store.cachedDecodedBytes == 0)
+        store.prefetch(hot)
+        #expect(store.inFlightCount == 0)
+        store.respondToMemoryPressure(.warning)
+        store.prefetch(hot)
+        #expect(store.isPrefetchSuspended)
+        #expect(store.inFlightCount == 0)
+
+        store.respondToMemoryPressure(.normal)
+        try await complete(hot, in: store)
+        #expect(store.imagePixelSize(for: hot) != nil)
+        let after = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 10))
+        #expect(after.rows == before.rows)
+        #expect(try await history.retentionConfiguration() == retention)
+        #expect(try await history.pastePayload(for: hot.id).item == hot)
+    }
+
+    @Test func criticalPressureRetiresOutstandingThumbnailWorkBeforeItCanPublish() async throws {
+        let history = try await memoryHistory()
+        let item = try await capture("pending", png: fixturePNGData, into: history)
+        let store = ThumbnailStore(history: history)
+        store.prefetch(item)
+        #expect(store.inFlightCount == 1)
+        store.respondToMemoryPressure(.critical)
+        #expect(store.inFlightCount == 0)
+        try #require(await pollUntil { store.debugFetchCompletionCount == 1 })
+        #expect(store.debugDiscardedFetchCompletionCount == 1)
+        #expect(store.cachedEntryCount == 0)
+        #expect(store.cachedDecodedBytes == 0)
+        store.respondToMemoryPressure(.normal)
+        try await complete(item, in: store)
+        #expect(store.imagePixelSize(for: item) != nil)
+    }
+
+    @Test func hiddenSurfaceIsColdAndNormalDoesNotRestartItsPrefetch() async throws {
+        let history = try await memoryHistory()
+        let item = try await capture("hidden", png: fixturePNGData, into: history)
+        let store = ThumbnailStore(history: history)
+        store.setDisplayed(item, true)
+        try await complete(item, in: store)
+        // NSPanel ordering out can retain its SwiftUI rows. Session closure,
+        // not only row disappearance, must make all those entries cold.
+        store.isSurfaceActive = false
+        store.respondToMemoryPressure(.warning)
+        #expect(store.cachedEntryCount == 0)
+        store.respondToMemoryPressure(.critical)
+        store.respondToMemoryPressure(.normal)
+        store.prefetch(item)
+        #expect(store.inFlightCount == 0)
+        store.isSurfaceActive = true
+        try await complete(item, in: store)
+        #expect(store.imagePixelSize(for: item) != nil)
+    }
+
+    @Test func repeatedWarningPublishesANewSurfaceGenerationAndTrimsNewColdEntries() async throws {
+        let history = try await memoryHistory()
+        let item = try await capture("cold after warning", png: fixturePNGData, into: history)
+        let surface = HistoryPanelSurfaceState(history: history, previewState: PreviewPaneState())
+        let detailsThumbnails = ThumbnailStore(history: history, pixels: PixelSize(width: 128, height: 128))
+        surface.respondToMemoryPressure(.warning)
+        let firstGeneration = surface.memoryPressureGeneration
+        detailsThumbnails.respondToMemoryPressure(surface.memoryPressure)
+        try await complete(item, in: surface.thumbnails)
+        try await complete(item, in: detailsThumbnails)
+
+        surface.respondToMemoryPressure(.warning)
+        #expect(surface.memoryPressure == .warning)
+        #expect(surface.memoryPressureGeneration == firstGeneration + 1,
+                "Child environment consumers must receive the second warning too")
+        // Details uses the generation change to apply the latest level; row
+        // prefetch tasks still observe only suspension, so warning cannot
+        // automatically rebuild the cold entries it just released.
+        detailsThumbnails.respondToMemoryPressure(surface.memoryPressure)
+        #expect(surface.thumbnails.cachedEntryCount == 0)
+        #expect(detailsThumbnails.cachedEntryCount == 0)
+        #expect(surface.thumbnails.inFlightCount == 0)
+        #expect(detailsThumbnails.inFlightCount == 0)
+    }
+
     private func memoryHistory() async throws -> SwiftDataHistory {
         try await SwiftDataHistory.open(configuration: HistoryConfiguration(persistence: .memory))
     }

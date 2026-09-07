@@ -46,7 +46,7 @@ extension HistoryAuthority {
         let write = ExternalWriteCommitContext(
             connection: connection,
             expectedConnectionKind: expectedConnectionKind,
-            descriptor: .forRequest(request),
+            descriptor: .forRequest(request, expectedConnectionKind: expectedConnectionKind),
             requestedAt: requestedAt
         )
         try requireExternalKindAdmissionBeforeHistory(
@@ -81,23 +81,26 @@ extension HistoryAuthority {
                     externalWrite: write
                 )
             }
-        } catch let barrier as ExternalWriteAuditBarrierFailure {
-            throw barrier.failure
         } catch {
-            let publication = Self.externalWriteFailurePublication(
-                from: error,
-                write: write
-            )
-            guard publication.shouldAudit else {
-                throw publication.failure
-            }
-            let publishedFailure = try commitExternalWriteFailureAudit(
-                publication,
-                write: write
-            )
-            throw publishedFailure
+            try publishExternalWriteFailure(error, write: write)
         }
         return try Self.externalResponse(from: receipt, request: request)
+    }
+
+    /// Shared failure tail for the manage and two-phase revision entries.
+    /// No-op audit failures have already crossed their barrier; every other
+    /// admitted failure rechecks the current grant in its audit transaction.
+    internal func publishExternalWriteFailure(
+        _ error: any Error,
+        write: ExternalWriteCommitContext
+    ) throws -> Never {
+        if let barrier = error as? ExternalWriteAuditBarrierFailure {
+            throw barrier.failure
+        }
+        let publication = Self.externalWriteFailurePublication(from: error, write: write)
+        guard publication.shouldAudit else { throw publication.failure }
+        let failure = try commitExternalWriteFailureAudit(publication, write: write)
+        throw failure
     }
 
     /// Adds the successful OperationRecord payload to the already-stamped
@@ -123,7 +126,13 @@ extension HistoryAuthority {
                 throw StampingRejection.incoherentPlan
             }
             itemID = requestedID
-        case .inserted, .coalesced, .cleared, .revised,
+        case .revised(let reference):
+            guard reference.id.rawValue == requestedID,
+                  write.descriptor.operationKind == .reviseContent else {
+                throw StampingRejection.incoherentPlan
+            }
+            itemID = requestedID
+        case .inserted, .coalesced, .cleared,
              .retentionPolicySet, .retentionPoliciesSet:
             throw StampingRejection.incoherentPlan
         }
@@ -361,13 +370,38 @@ private extension HistoryAuthority {
         let failure: ExternalFailure
         let failureKind: ExternalFailureKindRaw
         let denialReason: ExternalDenialReason?
-        if let external = error as? ExternalFailure {
+        if error is CancellationError {
+            failure = .temporarilyUnavailable(.cancelled)
+            failureKind = .temporarilyUnavailable
+            denialReason = nil
+        } else if let external = error as? ExternalFailure {
             failure = external
             let facts = external.auditFacts
             failureKind = facts.kind
             denialReason = facts.denialReason
         } else if let history = error as? HistoryFailure {
-            if let operation = write.descriptor.manageOperationContext {
+            if write.descriptor.operationKind == .reviseContent {
+                switch history {
+                case .notFound(let itemID):
+                    failure = .notFound(itemID)
+                    failureKind = .notFound
+                case .persistence(let reason):
+                    failure = .persistence(reason)
+                    failureKind = .persistence
+                case .temporarilyUnavailable(.factProof):
+                    failure = .temporarilyUnavailable(.storeLocked)
+                    failureKind = .temporarilyUnavailable
+                case .temporarilyUnavailable(.insufficientDiskSpace):
+                    failure = .temporarilyUnavailable(.insufficientDiskSpace)
+                    failureKind = .temporarilyUnavailable
+                default:
+                    // OCC, draft and capacity rejections retain their exact
+                    // existing History vocabulary without exposing content.
+                    failure = .history(history)
+                    failureKind = .history
+                }
+                denialReason = nil
+            } else if let operation = write.descriptor.manageOperationContext {
                 let mapping = mapExternalHistoryFailure(
                     history,
                     for: operation
@@ -479,6 +513,8 @@ private extension RequestSummaryV1 {
     var itemID: UUID? {
         switch self {
         case .pin(let itemID), .unpin(let itemID), .remove(let itemID):
+            itemID
+        case .reviseContent(let itemID, _):
             itemID
         case .recent, .search, .details, .pastePayload, .enroll, .grant,
              .revokeConnection, .rebase, .compact, .readEffectiveContent,

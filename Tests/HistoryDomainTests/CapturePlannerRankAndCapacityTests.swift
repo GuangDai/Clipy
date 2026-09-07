@@ -5,6 +5,29 @@ import HistoryCore
 import Testing
 @testable import HistoryDomain
 
+@Test(arguments: [false, true])
+func equivalentTypeSpellingsKeepExactCanonicalRank(_ useDecomposedIncoming: Bool) throws {
+    // §2.1: these spellings are equal Strings but straddle "f" in scalar
+    // order. Both canonical arrays are normalized and describe the same set.
+    let incomingType = useDecomposedIncoming ? "e\u{301}" : "\u{e9}"
+    let candidateType = useDecomposedIncoming ? "\u{e9}" : "e\u{301}"
+    let incoming = try captureCanonical([(incomingType, "accent", 1), ("f", "other", 2)])
+    let equivalent = try captureCanonical([(candidateType, "accent", 1), ("f", "other", 2)])
+    let sameSpelling = captureItem(
+        id: capturePlannerID(2), canonical: incoming, lastCopiedAt: 100
+    )
+    // An exact set match must reach the recency and ID tie-breaks regardless
+    // of identifier spelling, input order, or the normalized array order.
+    for lastCopiedAt in [100.0, 200.0] {
+        let expected = captureItem(
+            id: capturePlannerID(1), canonical: equivalent, lastCopiedAt: lastCopiedAt
+        )
+        for candidates in [[sameSpelling, expected], [expected, sameSpelling]] {
+            #expect(try coalescedWinner(incoming: incoming, candidates: candidates) == expected.id)
+        }
+    }
+}
+
 @Test func fewerCanonicalExtrasBeatRecency() throws {
     let incoming = try captureCanonical([
         ("public.utf8-plain-text", "text", 1),

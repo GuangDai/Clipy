@@ -15,3 +15,16 @@
 "Showing one image from a multi-image item. Copying the item keeps its complete content." = "仅显示多图条目中的一张图像，复制历史条目仍保留完整内容。";
 "Showing PDF page 1 of %@. Copying the item keeps its complete content." = "正在显示 PDF 的第 1 页，共 %@ 页。复制历史条目仍保留完整内容。";
 "PDF preview, page 1 of %@" = "PDF 预览，第 1 页，共 %@ 页";
+"Preview File Contents…" = "预览文件内容…";
+"Load File Contents?" = "加载文件内容？";
+"Load File" = "加载文件";
+"Cancel" = "取消";
+"Back to File Reference" = "返回文件引用";
+"Showing the file’s current contents. Copying still copies the original file reference." = "当前显示文件的现有内容。复制操作仍会复制原始文件引用。";
+"Clipy will read this local file once to show a preview. Its current contents are not added to clipboard history. No website will be opened." = "Clipy 将读取一次此本地文件以显示预览。文件的现有内容不会加入剪贴板历史，也不会打开任何网站。";
+"This is not a local file reference." = "这不是本地文件引用。";
+"The file could not be read. It may have moved or been deleted." = "无法读取文件。文件可能已移动或删除。";
+"Clipy does not have permission to read this file." = "Clipy 没有读取此文件的权限。";
+"The file is too large to preview." = "文件过大，无法预览。";
+"This file type cannot be previewed." = "无法预览此文件类型。";
+"Only the reference is shown. Loading its contents requires confirmation." = "当前仅显示文件引用。加载文件内容需要确认。";

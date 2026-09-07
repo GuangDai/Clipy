@@ -106,14 +106,23 @@ internal func captureFacts(
     hintedItem: HistoryItemState? = nil,
     candidates: [HistoryItemState],
     retained: [HistoryItemState]? = nil,
-    additionalSummaries: [RetainedItemSummary] = []
+    additionalSummaries: [RetainedItemSummary] = [],
+    candidateID: HistoryItemID = capturePlannerID(250)
 ) -> IngestFacts {
     let retainedItems = retained ?? candidates
+    let summaries = retainedItems.map(captureSummary) + additionalSummaries
+    let unpinned = summaries.filter { $0.pinOrdinal == nil }.sorted {
+        if $0.lastCopiedAt != $1.lastCopiedAt { return $0.lastCopiedAt < $1.lastCopiedAt }
+        return $0.id < $1.id
+    }
     return IngestFacts(
         hintedItem: hintedItem,
         candidates: CompleteDedupCandidates(items: candidates),
-        retention: CompleteRetentionInventory(
-            allItems: retainedItems.map(captureSummary) + additionalSummaries
+        candidateIDExists: summaries.contains { $0.id == candidateID },
+        retention: CaptureRetentionFacts(
+            retainedCount: summaries.count,
+            unpinnedCount: unpinned.count,
+            oldestUnpinnedItems: unpinned
         )
     )
 }
@@ -272,7 +281,8 @@ internal func coalescedWinner(
             ),
             facts: captureFacts(
                 candidates: [],
-                retained: [retained]
+                retained: [retained],
+                candidateID: occupiedID
             ),
             retention: RetentionPolicy(maximumUnpinnedItems: 10),
             hardMaximumRetainedItems: 10
@@ -304,7 +314,8 @@ internal func coalescedWinner(
         ),
         facts: captureFacts(
             candidates: [existing],
-            retained: [existing, occupiedCandidate]
+            retained: [existing, occupiedCandidate],
+            candidateID: occupiedCandidate.id
         ),
         retention: RetentionPolicy(maximumUnpinnedItems: 10),
         hardMaximumRetainedItems: 10

@@ -29,9 +29,11 @@ internal struct ThumbnailSourceSelection: Sendable {
 
 extension HistoryAuthority {
     internal func details(for id: HistoryItemID) async throws -> HistoryDetails {
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
-        return try details(for: id, in: context)
+        try autoreleasepool {
+            let context = ModelContext(container)
+            context.autosaveEnabled = false
+            return try details(for: id, in: context)
+        }
     }
 
     /// Synchronous V1 detail projection for an Authority caller that already
@@ -165,9 +167,11 @@ extension HistoryAuthority {
     ///   `.persistence(.invariantViolation)` for corrupt lineage
     ///   (`effectiveContent` → `DomainRejection.corruptLineage`).
     internal func pastePayload(for id: HistoryItemID) async throws -> PastePayload {
-        let context = ModelContext(container)
-        context.autosaveEnabled = false
-        return try pastePayload(for: id, in: context)
+        try autoreleasepool {
+            let context = ModelContext(container)
+            context.autosaveEnabled = false
+            return try pastePayload(for: id, in: context)
+        }
     }
 
     /// Synchronous V1 paste projection for a caller-owned Authority context.
@@ -252,6 +256,17 @@ extension HistoryAuthority {
 
         let context = ModelContext(container)
         context.autosaveEnabled = false
+        _ = try thumbnailRow(for: item, in: context)
+    }
+
+    /// Creator and joiner reject an already-stale reference from scalars in
+    /// the caller's isolated interval. Current content still proceeds through
+    /// the creator's complete codec validation; no content byte is consulted
+    /// merely to establish that an old reference cannot be served (04 §9).
+    private func thumbnailRow(
+        for item: HistoryItemReference,
+        in context: ModelContext
+    ) throws -> HistoryItemRow {
         let uuid = item.id.rawValue
         var descriptor = FetchDescriptor<HistoryItemRow>(
             predicate: #Predicate { row in row.id == uuid }
@@ -283,6 +298,7 @@ extension HistoryAuthority {
                 current: current
             )
         }
+        return row
     }
 
     /// Thumbnail source (docs/05-authority-kernel.md §14.5; docs/04-coherence.md
@@ -294,9 +310,9 @@ extension HistoryAuthority {
     /// Canonical/revision encoded aggregates to choose it.
     ///
     /// The §9 creator flow, steps 2–4 (the Authority's full-load part):
-    /// 2. Validate both `pixels` axes before any context, fetch and fully
-    ///    hydrate exactly one row, then require
-    ///    `hydrated.contentVersion == item.contentVersion` — the version fence.
+    /// 2. Validate both `pixels` axes before any context and require the
+    ///    fetched scalar ContentVersion to equal the requested version before
+    ///    accessing blobs. Then fully hydrate exactly this current row.
     /// 3. Derive current Effective Content (§9 step 3) — the same pure
     ///    derivation as `details(for:)` and `pastePayload(for:)`.
     /// 4. Select the first representation (in the Effective Content's
@@ -331,6 +347,16 @@ extension HistoryAuthority {
         // Part VI thumbnail-dimension interval (docs/06-cross-cutting.md §2).
         try validateThumbnailDimensions(pixels)
 
+        return try autoreleasepool {
+            try thumbnailSourceInLocalContext(for: item)
+        }
+    }
+
+    /// Keep framework temporaries from full lineage hydration inside one
+    /// operation-local pool; only the selected immutable source escapes.
+    private func thumbnailSourceInLocalContext(
+        for item: HistoryItemReference
+    ) throws -> ThumbnailSourceSelection? {
         let context = ModelContext(container)
         context.autosaveEnabled = false
 
@@ -339,13 +365,9 @@ extension HistoryAuthority {
         //    interleave between the version check and Effective-Content
         //    derivation (docs/04-coherence.md §9). ──
 
-        // §9 step 2: fetch and fully hydrate exactly the target item.
-        guard let row = try HistoryItemRowHydration.fetchRow(
-            businessID: item.id,
-            in: context
-        ) else {
-            throw HistoryFailure.notFound(item.id)
-        }
+        // §9 step 2: stale requests stop at the scalar version check. This
+        // same fetched row is hydrated below only for a current request.
+        let row = try thumbnailRow(for: item, in: context)
         // PLAY-TIER-2A-THUMB: the current row layout exposes Canonical and
         // revision content as two encoded aggregate values. Record both exact
         // encoded byte counts before full hydration; this counter deliberately
@@ -356,15 +378,6 @@ extension HistoryAuthority {
             throw HistoryFailure.persistence(.corruptStoredValue)
         }
         let hydrated = try HistoryItemRowHydration.hydrate(row, limits: limits)
-
-        // §9 step 2: the version fence — a reference already stale before this
-        // point fails here; current bytes are never returned under an old key.
-        guard hydrated.contentVersion == item.contentVersion else {
-            throw HistoryFailure.staleContent(
-                expected: item.contentVersion,
-                current: hydrated.contentVersion
-            )
-        }
 
         // §9 step 3: derive current Effective Content — the same pure
         // derivation as `details(for:)`. A lineage inconsistency maps to

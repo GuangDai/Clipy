@@ -57,6 +57,8 @@ public struct ClipySettingsView: View {
     /// placement the user can configure (the geometry lives in ClipyApp —
     /// PresentationUI carries the mode value only).
     private let popupPosition: Binding<PopupPositionMode>?
+    private let storageLocation: StorageLocationSettings?
+    private let localAutomation: LocalAutomationSettings?
 
     /// One panel-owned configured snapshot and edit generation shared by the
     /// v1 count control and all V2 dimensions (DEC-RET-READ / Card 10A).
@@ -66,6 +68,7 @@ public struct ClipySettingsView: View {
     @State private var retentionDraft = RetentionSettingsDraft()
     @State private var hasLoadedRetentionConfiguration = false
     @State private var retentionConfigurationFailure: String?
+    @State private var retentionConfigurationRefreshGeneration = 0
 
     /// - Parameters:
     ///   - viewState: the shared interaction-state object (contract §3).
@@ -76,16 +79,24 @@ public struct ClipySettingsView: View {
     ///     binding or unavailable candidate plus Change/Retry/Reset recovery.
     ///   - popupPosition: when non-`nil`, the Appearance tab shows the panel
     ///     position picker bound to it; `nil` omits the picker entirely.
+    ///   - storageLocation: when non-`nil`, Maintenance displays logical
+    ///     content and approximate folder allocation with read-only intents.
+    ///   - localAutomation: when non-`nil`, Automation exposes the app-owned
+    ///     explicit enrollment, independent grants and revocation controls.
     public init(
         viewState: HistoryViewState,
         launchAtLogin: LaunchAtLoginSettings? = nil,
         summonShortcut: SummonShortcutSettings? = nil,
-        popupPosition: Binding<PopupPositionMode>? = nil
+        popupPosition: Binding<PopupPositionMode>? = nil,
+        storageLocation: StorageLocationSettings? = nil,
+        localAutomation: LocalAutomationSettings? = nil
     ) {
         self.viewState = viewState
         self.launchAtLogin = launchAtLogin
         self.summonShortcut = summonShortcut
         self.popupPosition = popupPosition
+        self.storageLocation = storageLocation
+        self.localAutomation = localAutomation
     }
 
     public var body: some View {
@@ -106,12 +117,31 @@ public struct ClipySettingsView: View {
                 viewState: viewState,
                 draft: $retentionDraft,
                 hasLoadedRetentionConfiguration: hasLoadedRetentionConfiguration,
-                retentionConfigurationFailure: retentionConfigurationFailure
+                retentionConfigurationFailure: retentionConfigurationFailure,
+                retryRetentionConfiguration: {
+                    retentionConfigurationRefreshGeneration += 1
+                }
             )
                 .tabItem { Label(RetentionSettingsCopy.tabTitle, systemImage: "clock.arrow.circlepath") }
                 .frame(width: 480, height: 560)
+            if let localAutomation {
+                LocalAutomationSettingsView(settings: localAutomation)
+                    .tabItem {
+                        Label(LocalAutomationSettingsCopy.text("Automation"), systemImage: "terminal")
+                    }
+                    .frame(width: 480, height: 480)
+            }
+            if let storageLocation {
+                MaintenanceSettingsView(history: viewState.history, location: storageLocation)
+                    .tabItem {
+                        Label(MaintenanceSettingsCopy.text("Maintenance"), systemImage: "internaldrive")
+                    }
+                    .frame(width: 480, height: 560)
+            }
         }
-        .task { await loadRetentionConfiguration() }
+        .task(id: retentionConfigurationRefreshGeneration) {
+            await loadRetentionConfiguration()
+        }
         .onDisappear {
             retentionDraft.invalidateLoadRequest()
             hasLoadedRetentionConfiguration = false
@@ -616,6 +646,7 @@ private struct RetentionSettingsTab: View {
     @Binding private var draft: RetentionSettingsDraft
     private let hasLoadedRetentionConfiguration: Bool
     private let retentionConfigurationFailure: String?
+    private let retryRetentionConfiguration: () -> Void
     @State private var countStatus: SettingStatus?
     @State private var policyStatus: SettingStatus?
     @State private var usageRefreshGeneration = 0
@@ -632,17 +663,31 @@ private struct RetentionSettingsTab: View {
         viewState: HistoryViewState,
         draft: Binding<RetentionSettingsDraft>,
         hasLoadedRetentionConfiguration: Bool,
-        retentionConfigurationFailure: String?
+        retentionConfigurationFailure: String?,
+        retryRetentionConfiguration: @escaping () -> Void
     ) {
         self.viewState = viewState
         _draft = draft
         self.hasLoadedRetentionConfiguration = hasLoadedRetentionConfiguration
         self.retentionConfigurationFailure = retentionConfigurationFailure
+        self.retryRetentionConfiguration = retryRetentionConfiguration
     }
 
     var body: some View {
         ScrollView {
             Form {
+                if let retentionConfigurationFailure {
+                    Section {
+                        SettingStatusView(status: .failure(retentionConfigurationFailure))
+                            .accessibilityIdentifier(
+                                "clipy.settings.retention.configuration-failure"
+                            )
+                        Button(SettingsCopy.text("Retry"), action: retryRetentionConfiguration)
+                            .accessibilityIdentifier(
+                                "clipy.settings.retention.retry-configuration"
+                            )
+                    }
+                }
                 HistoryUsageView(
                     usage: usage,
                     failed: usageFailed,
@@ -724,8 +769,6 @@ private struct RetentionSettingsTab: View {
                             .accessibilityIdentifier(
                                 "clipy.settings.retention.item-limit-status"
                             )
-                    } else if let retentionConfigurationFailure {
-                        SettingStatusView(status: .failure(retentionConfigurationFailure))
                     }
                 } header: {
                     Text(RetentionSettingsCopy.itemsSection)
@@ -853,8 +896,6 @@ private struct RetentionSettingsTab: View {
                             .accessibilityIdentifier(
                                 "clipy.settings.retention.policy-status"
                             )
-                    } else if let retentionConfigurationFailure {
-                        SettingStatusView(status: .failure(retentionConfigurationFailure))
                     }
                     Text(RetentionSettingsCopy.applyNote)
                         .font(.footnote)
@@ -869,6 +910,12 @@ private struct RetentionSettingsTab: View {
         // replace the task; tab/window disappearance cancels it.
         .task(id: usageRefreshGeneration) {
             await refreshUsage()
+        }
+        // Clear can finish after the user has already returned from General.
+        // The existing receipt-confirmed purge also covers destructive Apply
+        // and external removals, without another History subscription.
+        .onChange(of: viewState.surfacePurge?.generation) { _, _ in
+            usageRefreshGeneration += 1
         }
         .onDisappear {
             usageRefreshGeneration += 1
@@ -890,6 +937,16 @@ private struct RetentionSettingsTab: View {
             guard !Task.isCancelled, requestGeneration == usageRefreshGeneration else { return }
             usageFailed = true
         }
+    }
+
+    private func refreshUsageAfterApply(_ receipt: HistoryReceipt) {
+        // Destructive retention already publishes the purge observed above.
+        // Only non-destructive/no-op Apply needs its own refresh request.
+        if case .committed(let commit) = receipt,
+           commit.hasDestructiveRetentionEffects {
+            return
+        }
+        usageRefreshGeneration += 1
     }
 
     /// The parsed count, or `nil` when the text is not a whole number
@@ -959,7 +1016,7 @@ private struct RetentionSettingsTab: View {
             )
             switch maximumUnpinnedStatusFeedback(receipt) {
             case .success(let successMessage):
-                usageRefreshGeneration += 1
+                refreshUsageAfterApply(receipt)
                 guard draft.acceptApplied(
                     submission,
                     successMessage: successMessage
@@ -1089,7 +1146,7 @@ private struct RetentionSettingsTab: View {
             let receipt = try await viewState.applyRetentionPolicies(submission.policies)
             switch retentionPoliciesStatusFeedback(receipt) {
             case .success(let successMessage):
-                usageRefreshGeneration += 1
+                refreshUsageAfterApply(receipt)
                 guard draft.acceptApplied(
                     submission,
                     successMessage: successMessage
@@ -1105,25 +1162,12 @@ private struct RetentionSettingsTab: View {
             }
         } catch let failure as HistoryFailure {
             guard draft.isCurrent(submission) else { return }
-            policyStatus = .failure(Self.retentionFailureMessage(failure))
+            policyStatus = .failure(RetentionSettingsCopy.failureMessage(
+                for: failure, policies: submission.policies
+            ))
         } catch {
             guard draft.isCurrent(submission) else { return }
             policyStatus = .failure(RetentionSettingsCopy.policiesSaveFailure)
-        }
-    }
-
-    /// Retention-specific recovery guidance (V2-07 §5.2): the set-time
-    /// pinned-over-budget rejection and the unsatisfiable R2 budget carry
-    /// their own text; every other failure falls through to the shared
-    /// `FailurePresentation` mapping (03b §10).
-    private static func retentionFailureMessage(_ failure: HistoryFailure) -> String {
-        switch failure {
-        case .invalidInput(.invalidRetentionPolicy):
-            return RetentionSettingsCopy.pinnedOverBudget
-        case .capacityExceeded(.storageBytes):
-            return RetentionSettingsCopy.budgetUnsatisfiable
-        default:
-            return FailurePresentation.message(for: failure)
         }
     }
 }

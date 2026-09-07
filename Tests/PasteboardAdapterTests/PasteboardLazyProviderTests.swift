@@ -29,6 +29,92 @@ private final class LazyPasteboardProvider: NSObject, NSPasteboardItemDataProvid
 }
 
 struct PasteboardLazyProviderTests {
+    enum PromisedLineage: CaseIterable, Equatable, Sendable {
+        case valid
+        case malformed
+        case unavailable
+    }
+
+    /// Unknown/private identifiers remain raw data when supplied lazily.
+    /// Lineage is optional metadata: an unavailable promised hint must not
+    /// turn otherwise complete opaque content into a partial freeze (03a §4).
+    @Test(arguments: PromisedLineage.allCases) @MainActor
+    func promisedOpaqueBytesReplayIndependentlyOfOptionalLineage(
+        lineage: PromisedLineage
+    ) throws {
+        let source = Self.makePasteboard()
+        let destination = Self.makePasteboard()
+        defer {
+            source.releaseGlobally()
+            destination.releaseGlobally()
+        }
+        let expected = [
+            CapturedRepresentation(
+                typeIdentifier: "com.clipy.fixture.lazy.unknown", bytes: Data([0xFF, 0x00, 0x80])
+            ),
+            CapturedRepresentation(
+                typeIdentifier: "dyn.clipy-lazy-opaque", bytes: Data([0x00])
+            ),
+            CapturedRepresentation(
+                typeIdentifier: "com.clipy.fixture.lazy.private", bytes: Data([0xFE, 0x42, 0x00, 0x0A])
+            ),
+        ]
+        let sourceID = HistoryItemID(rawValue: UUID())
+        var bytesByType = Dictionary(uniqueKeysWithValues: expected.map { ($0.typeIdentifier, $0.bytes) })
+        switch lineage {
+        case .valid:
+            bytesByType[PasteboardLineageHint.typeIdentifier] = PasteboardLineageHint.encode(sourceID)
+        case .malformed:
+            bytesByType[PasteboardLineageHint.typeIdentifier] = Data([0xFF, 0x00])
+        case .unavailable:
+            break // The provider declares this type but never supplies it.
+        }
+        let provider = LazyPasteboardProvider(bytesByType: bytesByType)
+        let item = NSPasteboardItem()
+        let declaredTypes = expected.map(\.typeIdentifier) + [PasteboardLineageHint.typeIdentifier]
+        try #require(item.setDataProvider(provider, forTypes: declaredTypes.map {
+            NSPasteboard.PasteboardType($0)
+        }))
+        source.clearContents()
+        try #require(source.writeObjects([item]))
+        let generation = source.changeCount
+        let outcome = try #require(withExtendedLifetime(provider) {
+            PasteboardAdapter(pasteboard: source).captureOutcome()
+        })
+        guard case let .complete(complete) = outcome else {
+            Issue.record("optional promised lineage must not prevent complete opaque capture")
+            return
+        }
+        #expect(complete.changeCount == generation)
+        #expect(source.changeCount == generation)
+        #expect(complete.capture.representations.count == expected.count)
+        #expect(Set(complete.capture.representations) == Set(expected))
+        #expect(complete.capture.origin.lineageHint == (lineage == .valid ? sourceID : nil))
+
+        // The source no longer publishes this promised item before replay.
+        // The destination must contain the frozen bytes, plus its new hint.
+        source.clearContents()
+        let pastedID = HistoryItemID(rawValue: UUID())
+        let destinationAdapter = PasteboardAdapter(pasteboard: destination)
+        try destinationAdapter.write(PastePayload(
+            item: HistoryItemReference(id: pastedID, contentVersion: ContentVersion(rawValue: 1)),
+            representations: complete.capture.representations.map {
+                HistoryRepresentation(typeIdentifier: $0.typeIdentifier, bytes: $0.bytes)
+            },
+            lineageHint: pastedID
+        ))
+        let pastedItems = try #require(destination.pasteboardItems)
+        #expect(pastedItems.count == 1)
+        let pastedItem = try #require(pastedItems.first)
+        #expect(Set(pastedItem.types.map(\.rawValue)) == Set(declaredTypes))
+        for representation in expected {
+            #expect(pastedItem.data(forType: NSPasteboard.PasteboardType(representation.typeIdentifier)) == representation.bytes)
+        }
+        let replay = try #require(destinationAdapter.capture())
+        #expect(Set(replay.representations) == Set(expected))
+        #expect(replay.origin.lineageHint == pastedID)
+    }
+
     @Test @MainActor
     func promisedStringAndURLFreezeAndReplayAsNativeObjects() throws {
         let source = Self.makePasteboard()

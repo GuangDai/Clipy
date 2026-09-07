@@ -39,19 +39,6 @@ import SwiftData
 /// presentation of these fields and the effective-type projection belongs
 /// to the read paths (§14), not to Domain action facts.
 internal enum HistoryItemRowHydration {
-    /// Selects the §16 availability vocabulary for the one complete retained
-    /// inventory fetch. Most mutation loaders need the inventory as an action
-    /// fact, so an unavailable fetch is `.factProof` and an over-bound durable
-    /// set is an invariant violation. Capture uses the same scalar inventory to
-    /// prove Signature Index coverage; there, either condition means candidacy
-    /// cannot be proved and follows the frozen WS5 `.dedupIndexRebuild` path.
-    /// Duplicate business IDs and corrupt row scalars remain persistence
-    /// failures under both purposes.
-    internal enum InventoryFailurePurpose: Sendable {
-        case factProof
-        case dedupIndexRebuild
-    }
-
     /// Fetches the unique row carrying `businessID`, or `nil` when no
     /// retained row carries it. docs/05-authority-kernel.md §5
     ///
@@ -212,15 +199,11 @@ internal enum HistoryItemRowHydration {
     /// By default, a row count above the hard retained-item bound or a
     /// duplicate business ID is a durable-state invariant violation (matching
     /// the startup stance of §13 step 5), while a framework fetch failure is
-    /// `.temporarilyUnavailable(.factProof)`. Capture passes
-    /// `.dedupIndexRebuild` because this same fetch supplies its retained-ID
-    /// coverage proof: an unavailable or over-bound result cannot establish
-    /// complete candidacy (WS5). The loader never labels an incomplete result
-    /// as complete (§7.3).
+    /// `.temporarilyUnavailable(.factProof)`. The loader never labels an
+    /// incomplete result as complete (§7.3).
     internal static func fetchRetainedInventory(
         in context: ModelContext,
-        limits: HistoryLimits = .standard,
-        failurePurpose: InventoryFailurePurpose = .factProof
+        limits: HistoryLimits = .standard
     ) throws -> [RetainedItemSummary] {
         var descriptor = FetchDescriptor<HistoryItemRow>()
         descriptor.propertiesToFetch = [\.id, \.lastCopiedAt, \.pinOrdinal]
@@ -229,20 +212,10 @@ internal enum HistoryItemRowHydration {
         do {
             rows = try context.fetch(descriptor)
         } catch {
-            switch failurePurpose {
-            case .factProof:
-                throw HistoryFailure.temporarilyUnavailable(.factProof)
-            case .dedupIndexRebuild:
-                throw HistoryFailure.temporarilyUnavailable(.dedupIndexRebuild)
-            }
+            throw HistoryFailure.temporarilyUnavailable(.factProof)
         }
         if rows.count > limits.hardMaximumRetainedItems {
-            switch failurePurpose {
-            case .factProof:
-                throw HistoryFailure.persistence(.invariantViolation)
-            case .dedupIndexRebuild:
-                throw HistoryFailure.temporarilyUnavailable(.dedupIndexRebuild)
-            }
+            throw HistoryFailure.persistence(.invariantViolation)
         }
         var seen = Set<HistoryItemID>(minimumCapacity: rows.count)
         var summaries: [RetainedItemSummary] = []
@@ -269,24 +242,18 @@ internal enum HistoryItemRowHydration {
 /// `HistoryAuthority` interval (no suspension, so the sole writer cannot
 /// interleave a commit mid-load):
 ///
-/// 1. Fetch the complete scalar retention inventory once, derive its retained
-///    ID set, and require Signature Index state `.ready` for exactly that set.
-///    An unavailable or over-bound inventory cannot prove candidacy and maps
-///    to `.temporarilyUnavailable(.dedupIndexRebuild)` (WS5, §16). An
-///    `.unready` index or a ready index whose `itemIDs` differs from the
-///    derived set triggers one complete hard-capped rebuild from every
-///    retained row's Canonical and signature blobs, including recomputed xxh3
-///    coverage (§12, DATA-11).
+/// 1. Fetch retained/unpinned counts without materializing rows. Require a
+///    ready Signature Index, maintained by startup and isolated commit deltas;
+///    an unready index or count mismatch triggers its complete rebuild.
 /// 2. Intersect posting sets for all incoming signature entries (derived
 ///    from the prepared Canonical Content, the same entries preparation
 ///    constructed at §6.1 step 6) via `SignatureIndex.candidateIDs`.
 /// 3. Fetch and fully decode every candidate ID.
 /// 4. Fetch the lineage hint separately by business ID when a hint exists,
 ///    even when it is absent from the candidate intersection.
-/// 5. Use the same step-1 inventory as the complete retention fact; there is
-///    no second overlapping table scan or independently rebuilt ID set.
-/// 6. Verify candidate IDs, retained IDs, and the returned actor-owned index
-///    value agree before constructing `IngestFacts`.
+/// 5. Point-read candidate-ID occupancy and fetch only the oldest unpinned
+///    prefix needed by count retention, with one extra primary-exclusion row.
+/// 6. Return exact counts and that bounded prefix as `CaptureRetentionFacts`.
 ///
 /// If any step cannot prove completeness the capture is rejected — there is
 /// no "scan the first N and insert if absent" path (§7.1, D8).
@@ -299,7 +266,7 @@ internal enum IngestFactLoader {
 
         /// The Signature Index value the Authority retains after this load:
         /// the input index unchanged when it was already `.ready` for the
-        /// current retained ID set, otherwise the complete rebuild this load
+        /// current retained count, otherwise the complete rebuild this load
         /// performed (§7.1 step 1, §12). The load itself applies no delta and
         /// marks nothing unready; index mutation on commit stays on the §11
         /// post-commit path.
@@ -314,12 +281,12 @@ internal enum IngestFactLoader {
     ///     `HistoryAuthority` for this commit interval (§5).
     ///   - prepared: the off-Authority prepared capture; supplies the
     ///     incoming Canonical Content (for signature entries) and the
-    ///     lineage-hint observation. The minted `candidateID` is a planning
-    ///     input, not a fact-load input — plan invariant 2 (docs/02 §7)
-    ///     checks it against these facts.
+    ///     lineage-hint observation and minted `candidateID` whose occupancy
+    ///     is read independently of signature candidacy (docs/02 §7).
     ///   - signatureIndex: the Authority-owned index value at interval start;
     ///     a rebuild is a wholesale value constructed by
     ///     `SignatureIndex.build` (§12).
+    ///   - retention: current count policy, read in this same interval.
     ///   - limits: the fixed `HistoryLimits.standard` safety profile
     ///     (docs/06-cross-cutting.md §2).
     /// - Throws: `.temporarilyUnavailable(.dedupIndexRebuild)` when the index
@@ -334,35 +301,38 @@ internal enum IngestFactLoader {
         in context: ModelContext,
         prepared: PreparedCapture,
         signatureIndex: SignatureIndex,
+        retention: RetentionPolicy,
         limits: HistoryLimits = .standard
     ) throws -> LoadResult {
-        // §7.1 steps 1 and 5: one complete scalar inventory supplies both the
-        // retention fact and the retained-ID coverage set used to resolve
-        // Signature Index readiness. A framework failure or over-bound result
-        // therefore means candidacy cannot be proved and follows WS5's
-        // `.dedupIndexRebuild` vocabulary. Duplicate IDs and corrupt scalars
-        // remain persistence failures inside `fetchRetainedInventory`.
-        let inventory = try HistoryItemRowHydration.fetchRetainedInventory(
-            in: context,
-            limits: limits,
-            failurePurpose: .dedupIndexRebuild
-        )
-        // The inventory loader has already proved every business ID unique,
-        // so this set is complete without a second agreement scan.
-        let retainedIDs = Set(inventory.map(\.id))
+        // Counts do not materialize the retained inventory. Startup and each
+        // isolated post-commit delta own complete index membership; the normal
+        // capture path only fetches actual candidates and possible victims.
+        let retainedCount: Int
+        let unpinnedCount: Int
+        do {
+            retainedCount = try context.fetchCount(FetchDescriptor<HistoryItemRow>())
+            unpinnedCount = try context.fetchCount(FetchDescriptor<HistoryItemRow>(
+                predicate: #Predicate { $0.pinOrdinal == nil }
+            ))
+        } catch {
+            throw HistoryFailure.temporarilyUnavailable(.dedupIndexRebuild)
+        }
+        guard retainedCount <= limits.hardMaximumRetainedItems else {
+            throw HistoryFailure.temporarilyUnavailable(.dedupIndexRebuild)
+        }
 
-        // §7.1 step 1: require a ready index for exactly that retained set;
+        // §7.1 step 1: require a ready index at the retained count;
         // otherwise attempt one complete authoritative rebuild (§12). The
         // current hard-capped rebuild decodes Canonical and recomputes xxh3;
         // this full hydration runs ONLY on the unready/stale branch and must
         // not survive the U-scale index replacement (DATA-11).
         let index: SignatureIndex
-        if case .ready = signatureIndex.state, signatureIndex.itemIDs == retainedIDs {
+        if case .ready = signatureIndex.state, signatureIndex.itemCount == retainedCount {
             index = signatureIndex
         } else {
             index = try rebuildSignatureIndex(
                 in: context,
-                expectedRetainedIDs: retainedIDs,
+                expectedRetainedCount: retainedCount,
                 limits: limits
             )
         }
@@ -381,14 +351,6 @@ internal enum IngestFactLoader {
             )
         }
         guard let candidateIDs = index.candidateIDs(matching: incomingEntries) else {
-            throw HistoryFailure.persistence(.invariantViolation)
-        }
-
-        // §7.1 step 6, candidate side: a ready-and-current index posts only
-        // retained IDs; anything else is index/store divergence, not a
-        // partial fact (§12: "every fact-load checks that candidate IDs
-        // remain retained in its serialized Authority interval").
-        guard candidateIDs.isSubset(of: retainedIDs) else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
 
@@ -414,21 +376,64 @@ internal enum IngestFactLoader {
         // (docs/01-architecture.md §5.1). A hint naming no retained row
         // decodes to `nil` — the lineage lane simply has no candidate.
         var hintedItem: HistoryItemState?
-        if let hint = prepared.origin.lineageHint,
-           let row = try HistoryItemRowHydration.fetchRow(businessID: hint, in: context) {
-            hintedItem = try HistoryItemRowHydration.hydrate(row, limits: limits)
+        if let hint = prepared.origin.lineageHint {
+            if let candidate = candidates.first(where: { $0.id == hint }) {
+                hintedItem = candidate
+            } else if let row = try HistoryItemRowHydration.fetchRow(businessID: hint, in: context) {
+                hintedItem = try HistoryItemRowHydration.hydrate(row, limits: limits)
+            }
         }
 
-        // §7.1 step 6: every agreement check has passed — the index covers
-        // exactly the retained ID set, candidate IDs are a subset of it,
-        // every candidate and the hint decoded fully, the inventory contains
-        // every retained item exactly once, and the actor-owned index value
-        // used for candidacy is returned with the facts (value semantics
-        // inside one non-suspending interval make mid-load drift impossible).
+        let candidateUUID = prepared.candidateID.rawValue
+        let candidateIDExists: Bool
+        do {
+            candidateIDExists = try context.fetchCount(FetchDescriptor<HistoryItemRow>(
+                predicate: #Predicate { $0.id == candidateUUID }
+            )) > 0
+        } catch {
+            throw HistoryFailure.temporarilyUnavailable(.factProof)
+        }
+        // An insertion is the largest possible count increase. One extra
+        // oldest row lets the planner exclude a coalescing primary without
+        // reading the next slice. With a satisfied policy this is at most two
+        // scalar rows, independent of retained history size (02 §12).
+        let maximumVictims = max(
+            0,
+            max(
+                unpinnedCount + 1 - retention.maximumUnpinnedItems,
+                retainedCount + 1 - limits.hardMaximumRetainedItems
+            )
+        )
+        let oldest: [RetainedItemSummary]
+        if maximumVictims > 0 {
+            var descriptor = FetchDescriptor<HistoryItemRow>(
+                predicate: #Predicate { $0.pinOrdinal == nil },
+                sortBy: [
+                    SortDescriptor(\.lastCopiedAt),
+                    SortDescriptor(\.idOrder, comparator: .lexical),
+                ]
+            )
+            descriptor.propertiesToFetch = [\.id, \.lastCopiedAt, \.pinOrdinal]
+            descriptor.fetchLimit = maximumVictims + 1
+            let rows: [HistoryItemRow]
+            do {
+                rows = try context.fetch(descriptor)
+            } catch {
+                throw HistoryFailure.temporarilyUnavailable(.factProof)
+            }
+            oldest = try rows.map { try HistoryItemRowHydration.retainedSummary(of: $0) }
+        } else {
+            oldest = []
+        }
         let facts = IngestFacts(
             hintedItem: hintedItem,
             candidates: CompleteDedupCandidates(items: candidates),
-            retention: CompleteRetentionInventory(allItems: inventory)
+            candidateIDExists: candidateIDExists,
+            retention: CaptureRetentionFacts(
+                retainedCount: retainedCount,
+                unpinnedCount: unpinnedCount,
+                oldestUnpinnedItems: oldest
+            )
         )
         return LoadResult(facts: facts, signatureIndex: index)
     }
@@ -461,7 +466,7 @@ internal enum IngestFactLoader {
     ///   `.persistence(.invariantViolation)`.
     private static func rebuildSignatureIndex(
         in context: ModelContext,
-        expectedRetainedIDs: Set<HistoryItemID>,
+        expectedRetainedCount: Int,
         limits: HistoryLimits
     ) throws -> SignatureIndex {
         var descriptor = FetchDescriptor<HistoryItemRow>()
@@ -500,10 +505,9 @@ internal enum IngestFactLoader {
                 throw HistoryFailure.persistence(.invariantViolation)
             }
         }
-        // Completeness proof: the rebuild input covers exactly the retained
-        // set fetched in the same serialized interval — no row missing, no
-        // row extra (§12, §7.1 step 6).
-        guard Set(signatures.keys) == expectedRetainedIDs else {
+        // The complete rebuild fetch and earlier count share one isolated
+        // interval. Unique IDs plus equal counts establish its coverage.
+        guard signatures.count == expectedRetainedCount else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
         do {

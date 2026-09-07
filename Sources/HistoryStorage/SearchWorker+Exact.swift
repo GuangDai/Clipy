@@ -187,24 +187,22 @@ extension SearchWorker {
 #endif
                 continue
             }
-            // The matcher already returns Character coordinates. The ASCII
-            // fast path obtains them directly from byte offsets; the Unicode
-            // fallback performs the Foundation-to-Character translation once.
-            // The 03b §8 excerpt itself is deferred to page materialization
-            // (`DeferredSearchPresentation.bodyExcerpt`): a query matching
-            // many rows pays the O(matched-window) construction only for
-            // returned rows, and continuation pages never rebuild the
+            // Preserve the matcher's original UTF-16 range: literal matches
+            // can cover only part of a Character, which Character offsets
+            // cannot express. The 03b §8 window and highlight construction
+            // defer to returned rows only; continuation pages never rebuild
             // dropped rows' excerpts.
             scanTracker.appendIfRetained(
                 EvaluatedRow(
                     corpusRow: row,
                     search: .bodyExcerpt(
-                        characterRanges: [
-                            found.characterOffset ..<
-                                (found.characterOffset + found.characterLength),
-                        ],
+                        characterRanges: [],
                         maximumCharacters: nil,
-                        bodySuffixWasOmitted: false
+                        bodySuffixWasOmitted: false,
+                        utf16Range: UTF16TextRange(
+                            location: found.utf16Offset,
+                            length: found.utf16Length
+                        )
                     ),
                     anchor: Self.defaultOrderAnchor(for: row)
                 ),

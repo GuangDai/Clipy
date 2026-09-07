@@ -1,32 +1,16 @@
-/// F1 client-side credential-file custody (`V2-05` §0.3/§3.4/§6.7;
-/// `07-python-local-automation.md` §5.1).
+/// Exact credential-file custody for the account-wide Local Automation
+/// connection (`V2-05` §0.3). The client keeps one active 48-byte credential;
+/// CredentialStore reuses this owner for each separate server verifier.
 ///
-/// This is the client half of the §0.3 custody decision for the future
-/// first-party `clipyctl`: the exact 48-byte credential (preassigned
-/// connection UUID16 + `SecRandomCopyBytes` secret32, minted app-side by
-/// `LocalAutomationCredential.generate`) is kept in ONE owner-only no-follow
-/// regular file beneath a validated owner-only directory — directory mode
-/// `0700`, file mode `0600`, byte-exact length and readback.
-///
-/// Deliberate scope boundaries:
-///
-/// - No executable/product placement and no fixed production path are chosen
-///   here: the §6.7 client leaf is still BLOCKED-SPEC on both, so the custody
-///   directory is an injected `URL` and only custody at that URL is enforced.
-/// - The §0.3 publication order is honored from the client side only.
-///   `installCredential` returns solely after an exact post-replace readback,
-///   the client-file precondition the app-side enrollment coordinator must
-///   hold BEFORE it asks the Authority to publish the preassigned
-///   `.localAutomation` row last. `removeCredential` is the revocation-side
-///   best-effort deletion: the Authority revokes first, and client-file
-///   deletion can never make revocation succeed or fail.
-/// - §0.3 startup reconciliation of client-file/Keychain orphans against
-///   durable rows is app-side and is NOT implemented here. The only cleanup
-///   this component owns is reclaim of its OWN interrupted atomic-write
-///   temporaries, on the next load or install.
-/// - Per §0.3/§5.2 these checks exclude other UIDs and accidental path
-///   substitution; they claim no confidentiality against a malicious
-///   same-EUID process.
+/// Directories belong to the current effective user with mode 0700; files
+/// are regular, mode 0600, and contain exactly UUID16 + secret32. Reads reject
+/// symbolic links and validate the opened descriptor before reading at most
+/// 49 bytes. Client installation replaces the old active file; server
+/// installation inserts a new verifier without overwriting an existing one.
+/// Enrollment/revocation and orphan-connection cleanup remain in the existing
+/// ingress coordinator. This helper only cleans its own temporary siblings.
+/// None of this promises confidentiality from a malicious same-EUID process.
+import Darwin
 import Foundation
 
 /// Content-free custody failures: no path, byte fragment, or underlying
@@ -43,6 +27,8 @@ package enum LocalAutomationClientCredentialCustodyFailure: Error, Sendable, Equ
     case malformedCredential
     /// The post-install readback did not return the installed bytes.
     case readbackMismatch
+    /// The server's insert-only install found an existing credential.
+    case credentialAlreadyExists
     /// The underlying filesystem operation failed.
     case unavailable
 }
@@ -115,55 +101,36 @@ package struct LocalAutomationClientCredentialCustody: Sendable {
     /// exist. The §0.3 load-time rule is fail-closed: a symbolic-link or
     /// group/other-accessible directory or file is refused, never followed
     /// or repaired; the file must be regular, must belong to the same
-    /// account that owns the custody directory (the FileManager-only form
-    /// of the §0.3 owner check), and must read back at byte-exact length.
+    /// effective user as the custody directory, and must read back at exact
+    /// length. The final file's ownership/type/mode are checked on its descriptor.
     /// Own interrupted-write temporaries are reclaimed first.
     package func loadCredential() throws -> Data? {
-        let fileManager = FileManager.default
-        if Self.isSymbolicLink(atPath: directoryURL.path) {
-            throw LocalAutomationClientCredentialCustodyFailure.unsafeDirectory
-        }
-        var isDirectory = ObjCBool(false)
-        guard fileManager.fileExists(
-            atPath: directoryURL.path,
-            isDirectory: &isDirectory
-        ) else { return nil }
-        guard isDirectory.boolValue else {
-            throw LocalAutomationClientCredentialCustodyFailure.unsafeDirectory
-        }
-        let directoryAttributes = try Self.attributes(atPath: directoryURL.path)
-        guard let directoryMode = directoryAttributes[.posixPermissions] as? NSNumber else {
-            throw LocalAutomationClientCredentialCustodyFailure.unavailable
-        }
-        guard directoryMode.intValue & 0o077 == 0 else {
-            throw LocalAutomationClientCredentialCustodyFailure.unsafeDirectory
-        }
-
+        guard try validateDirectoryIfPresent() else { return nil }
         try cleanOrphanedTemporaryFiles()
-
         if Self.isSymbolicLink(atPath: credentialFileURL.path) {
             throw LocalAutomationClientCredentialCustodyFailure.unsafeCredentialFile
         }
-        guard fileManager.fileExists(atPath: credentialFileURL.path) else {
-            return nil
+        // Inspect the opened file, never a followed link. Read at most one
+        // byte beyond the exact credential grammar, even for a corrupt file.
+        let descriptor = Darwin.open(credentialFileURL.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+        guard descriptor >= 0 else {
+            if errno == ENOENT { return nil }
+            throw LocalAutomationClientCredentialCustodyFailure.unavailable
         }
-        let fileAttributes = try Self.attributes(atPath: credentialFileURL.path)
-        guard let fileType = fileAttributes[.type] as? FileAttributeType,
-              fileType == .typeRegular else {
-            throw LocalAutomationClientCredentialCustodyFailure.unsafeCredentialFile
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer { try? handle.close() }
+        var metadata = stat()
+        guard fstat(descriptor, &metadata) == 0 else {
+            throw LocalAutomationClientCredentialCustodyFailure.unavailable
         }
-        guard let fileMode = fileAttributes[.posixPermissions] as? NSNumber,
-              fileMode.intValue & 0o077 == 0 else {
-            throw LocalAutomationClientCredentialCustodyFailure.unsafeCredentialFile
-        }
-        guard let fileOwner = fileAttributes[.ownerAccountID] as? NSNumber,
-              let directoryOwner = directoryAttributes[.ownerAccountID] as? NSNumber,
-              fileOwner == directoryOwner else {
+        guard metadata.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+              metadata.st_mode & 0o077 == 0,
+              metadata.st_uid == geteuid() else {
             throw LocalAutomationClientCredentialCustodyFailure.unsafeCredentialFile
         }
         let bytes: Data
         do {
-            bytes = try Data(contentsOf: credentialFileURL)
+            bytes = try handle.read(upToCount: LocalAutomationCredential.byteCount + 1) ?? Data()
         } catch {
             throw LocalAutomationClientCredentialCustodyFailure.unavailable
         }
@@ -179,6 +146,16 @@ package struct LocalAutomationClientCredentialCustody: Sendable {
     /// passes full load validation AND reads back byte-exact — the client
     /// half of the §0.3 authority-last publication order.
     package func installCredential(_ exactBytes: Data) throws {
+        try installCredential(exactBytes, replacingExisting: true)
+    }
+
+    /// Server verifiers are inserted, never replaced. Publishing the prepared
+    /// file by link refuses an entry created after the initial existence check.
+    internal func installNewCredential(_ exactBytes: Data) throws {
+        try installCredential(exactBytes, replacingExisting: false)
+    }
+
+    private func installCredential(_ exactBytes: Data, replacingExisting: Bool) throws {
         _ = try Self.validatedCredentialBytes(exactBytes)
         try prepareDirectory()
         try cleanOrphanedTemporaryFiles()
@@ -189,6 +166,9 @@ package struct LocalAutomationClientCredentialCustody: Sendable {
             throw LocalAutomationClientCredentialCustodyFailure.unsafeCredentialFile
         }
         if fileManager.fileExists(atPath: credentialPath) {
+            guard replacingExisting else {
+                throw LocalAutomationClientCredentialCustodyFailure.credentialAlreadyExists
+            }
             let existing = try Self.attributes(atPath: credentialPath)
             guard (existing[.type] as? FileAttributeType) == .typeRegular else {
                 throw LocalAutomationClientCredentialCustodyFailure.unsafeCredentialFile
@@ -217,7 +197,15 @@ package struct LocalAutomationClientCredentialCustody: Sendable {
             throw LocalAutomationClientCredentialCustodyFailure.unavailable
         }
         do {
-            if fileManager.fileExists(atPath: credentialPath) {
+            if !replacingExisting {
+                guard Darwin.link(temporaryURL.path, credentialPath) == 0 else {
+                    if errno == EEXIST {
+                        throw LocalAutomationClientCredentialCustodyFailure.credentialAlreadyExists
+                    }
+                    throw LocalAutomationClientCredentialCustodyFailure.unavailable
+                }
+                try fileManager.removeItem(at: temporaryURL)
+            } else if fileManager.fileExists(atPath: credentialPath) {
                 _ = try fileManager.replaceItemAt(
                     credentialFileURL,
                     withItemAt: temporaryURL,
@@ -230,6 +218,9 @@ package struct LocalAutomationClientCredentialCustody: Sendable {
             } else {
                 try fileManager.moveItem(at: temporaryURL, to: credentialFileURL)
             }
+        } catch LocalAutomationClientCredentialCustodyFailure.credentialAlreadyExists {
+            try? fileManager.removeItem(at: temporaryURL)
+            throw LocalAutomationClientCredentialCustodyFailure.credentialAlreadyExists
         } catch {
             try? fileManager.removeItem(at: temporaryURL)
             throw LocalAutomationClientCredentialCustodyFailure.unavailable
@@ -249,6 +240,9 @@ package struct LocalAutomationClientCredentialCustody: Sendable {
     /// a non-regular occupant is left in place and reported as not removed.
     @discardableResult
     package func removeCredential() -> Bool {
+        do {
+            guard try validateDirectoryIfPresent() else { return true }
+        } catch { return false }
         let fileManager = FileManager.default
         let credentialPath = credentialFileURL.path
         if Self.isSymbolicLink(atPath: credentialPath) {
@@ -256,7 +250,8 @@ package struct LocalAutomationClientCredentialCustody: Sendable {
         }
         guard fileManager.fileExists(atPath: credentialPath) else { return true }
         let attributes = try? Self.attributes(atPath: credentialPath)
-        guard (attributes?[.type] as? FileAttributeType) == .typeRegular else {
+        guard (attributes?[.type] as? FileAttributeType) == .typeRegular,
+              (attributes?[.ownerAccountID] as? NSNumber)?.uint32Value == geteuid() else {
             return false
         }
         return (try? fileManager.removeItem(atPath: credentialPath)) != nil
@@ -270,14 +265,7 @@ package struct LocalAutomationClientCredentialCustody: Sendable {
     /// cleanup failure blocks publication.
     package func cleanOrphanedTemporaryFiles() throws {
         let fileManager = FileManager.default
-        if Self.isSymbolicLink(atPath: directoryURL.path) {
-            throw LocalAutomationClientCredentialCustodyFailure.unsafeDirectory
-        }
-        var isDirectory = ObjCBool(false)
-        guard fileManager.fileExists(
-            atPath: directoryURL.path,
-            isDirectory: &isDirectory
-        ), isDirectory.boolValue else { return }
+        guard try validateDirectoryIfPresent() else { return }
         let names: [String]
         do {
             names = try fileManager.contentsOfDirectory(atPath: directoryURL.path)
@@ -298,13 +286,33 @@ package struct LocalAutomationClientCredentialCustody: Sendable {
         }
     }
 
-    // MARK: - Filesystem primitives (FileManager-only)
+    // MARK: - Credential directory ownership
+
+    /// Shared by the server root and each client/server credential directory.
+    /// Reading does not create paths or repair permissions.
+    internal func validateDirectoryIfPresent() throws -> Bool {
+        if Self.isSymbolicLink(atPath: directoryURL.path) {
+            throw LocalAutomationClientCredentialCustodyFailure.unsafeDirectory
+        }
+        var isDirectory = ObjCBool(false)
+        guard FileManager.default.fileExists(atPath: directoryURL.path, isDirectory: &isDirectory) else {
+            return false
+        }
+        let attributes = try Self.attributes(atPath: directoryURL.path)
+        guard isDirectory.boolValue,
+              (attributes[.ownerAccountID] as? NSNumber)?.uint32Value == geteuid(),
+              let mode = attributes[.posixPermissions] as? NSNumber,
+              mode.intValue & 0o077 == 0 else {
+            throw LocalAutomationClientCredentialCustodyFailure.unsafeDirectory
+        }
+        return true
+    }
 
     /// Creates the custody directory at mode `0700` when absent; when it
     /// already exists group/other-accessible, installation tightens it to
     /// owner-only rather than serving a loose container. A symbolic-link or
     /// non-directory occupant is refused.
-    private func prepareDirectory() throws {
+    internal func prepareDirectory() throws {
         let fileManager = FileManager.default
         if Self.isSymbolicLink(atPath: directoryURL.path) {
             throw LocalAutomationClientCredentialCustodyFailure.unsafeDirectory
@@ -333,6 +341,9 @@ package struct LocalAutomationClientCredentialCustody: Sendable {
             throw LocalAutomationClientCredentialCustodyFailure.unsafeDirectory
         }
         let attributes = try Self.attributes(atPath: directoryURL.path)
+        guard (attributes[.ownerAccountID] as? NSNumber)?.uint32Value == geteuid() else {
+            throw LocalAutomationClientCredentialCustodyFailure.unsafeDirectory
+        }
         guard let mode = attributes[.posixPermissions] as? NSNumber else {
             throw LocalAutomationClientCredentialCustodyFailure.unavailable
         }

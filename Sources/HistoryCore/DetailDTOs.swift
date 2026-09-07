@@ -13,7 +13,7 @@ public struct HistoryRepresentation: Sendable, Hashable {
     public let typeIdentifier: String
     public let bytes: Data
 
-    package init(typeIdentifier: String, bytes: Data) {
+    public init(typeIdentifier: String, bytes: Data) {
         self.typeIdentifier = typeIdentifier
         self.bytes = bytes
     }

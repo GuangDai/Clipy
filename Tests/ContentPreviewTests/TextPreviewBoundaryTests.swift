@@ -3,6 +3,45 @@ import Foundation
 import Testing
 
 struct TextPreviewBoundaryTests {
+    @Test(arguments: ["\u{FEFF}", "\u{FEFF}B🦊", "\u{FEFF}\u{FEFF}B🦊"])
+    func utf8ContentMarkersRemainSelectableSourceText(source: String) async {
+        let bytes = Data(source.utf8)
+        let outcome = await ContentPreview().renderHistoryPane([
+            PreviewRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: bytes),
+        ])
+        guard case .content(.text(let text)) = outcome else {
+            Issue.record("Expected UTF-8 text preserving its content markers, got \(outcome)")
+            return
+        }
+        #expect(Data(text.text.utf8) == bytes)
+        #expect(!text.wasTruncated)
+    }
+
+    @Test func leadingUTF8ContentMarkerCountsTowardTheDisplayLimit() async {
+        let prefix = "\u{FEFF}" + String(repeating: "x", count: 49_999)
+        let outcome = await ContentPreview().renderHistoryPane([
+            PreviewRepresentation(
+                typeIdentifier: "public.utf8-plain-text", bytes: Data((prefix + "y").utf8)
+            ),
+        ])
+        guard case .content(.text(let text)) = outcome else {
+            Issue.record("Expected the exact capped UTF-8 source prefix, got \(outcome)")
+            return
+        }
+        #expect(Data(text.text.utf8) == Data(prefix.utf8))
+        #expect(text.wasTruncated)
+    }
+
+    @Test func leadingUTF8ContentMarkerDoesNotRepairMalformedText() async {
+        let outcome = await ContentPreview().renderHistoryPane([
+            PreviewRepresentation(
+                typeIdentifier: "public.utf8-plain-text",
+                bytes: Data([0xEF, 0xBB, 0xBF, 0xC3, 0x28])
+            ),
+        ])
+        #expect(outcome == .failed(.malformedRepresentation))
+    }
+
     @Test(arguments: [49_999, 50_000, 50_001])
     func textAtTheDisplayLimitPreservesOnlyTheSourcePrefix(count: Int) async {
         let source = String(repeating: "x", count: count)

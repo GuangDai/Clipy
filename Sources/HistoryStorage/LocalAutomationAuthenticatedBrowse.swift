@@ -5,14 +5,20 @@ import Foundation
 import HistoryCore
 
 internal enum LocalAutomationBrowsePreviewRequest: Sendable, Equatable {
-    case recent(limit: Int)
-    case search(text: String, mode: SearchMode, limit: Int)
+    case recent(limit: Int, after: HistoryPageCursor? = nil)
+    case search(text: String, mode: SearchMode, limit: Int, after: HistoryPageCursor? = nil)
+
+    internal var after: HistoryPageCursor? {
+        switch self {
+        case .recent(_, let after), .search(_, _, _, let after): after
+        }
+    }
 
     internal var externalRead: ExternalRead {
         switch self {
-        case .recent(let limit):
+        case .recent(let limit, _):
             .recent(limit: limit)
-        case .search(let text, let mode, let limit):
+        case .search(let text, let mode, let limit, _):
             .search(text: text, mode: mode, limit: limit)
         }
     }

@@ -192,7 +192,7 @@ internal struct ThumbnailFlightKey: Sendable, Hashable {
 Flow:
 
 1. Enter `ThumbnailService` with the exact `(ID, ContentVersion, dimensions)` key. Without suspending, join an existing source-to-decode task or install the creator task.
-2. The creator task validates positive bounded dimensions, fetches and fully hydrates exactly one item, and requires its current Content Version to equal the requested reference.
+2. The creator task validates positive bounded dimensions and fetches the item's scalar identity/version. It rejects an old reference before accessing content blobs, then fully hydrates the current item through all existing codec checks.
 3. In the same non-suspending `HistoryAuthority` interval, derive Effective Content and select the supported image representation as an immutable byte value.
 4. If no supported image representation exists, complete the shared task with `nil`.
 5. Before an existing-flight caller awaits the shared task, it validates dimensions, existence, and current Content Version through a scalar-only Authority projection. It does not hydrate content. A failed join does not cancel the creator's task.

@@ -4,6 +4,16 @@ import Testing
 
 @Suite("Panel action and revision safety localization")
 struct PanelActionsCopyTests {
+    @Test func representationExportCopyHasEnglishAndChineseValues() throws {
+        let english = try bundle("en")
+        let chinese = try bundle("zh-Hans")
+        #expect(PanelActionsCopy.text("Save As…", bundle: english) == "Save As…")
+        #expect(PanelActionsCopy.text("Save As…", bundle: chinese) == "另存为…")
+        #expect(PanelActionsCopy.format("Save %@ As…", "public.png", bundle: chinese) == "将 public.png 另存为…")
+        #expect(PanelActionsCopy.text("Clipy couldn't save this file. Choose another location and try again.", bundle: chinese)
+            == "Clipy 无法保存此文件。请选择其他位置后重试。")
+    }
+
     @Test("editor byte labels retain English output and follow the view locale")
     func editorByteLabelsFollowLocale() {
         let english = Locale(identifier: "en_US")

@@ -124,11 +124,13 @@ HistoryCore
 ClipboardFormats
 ContentPreview
 ClipyCLIContract
+LocalAutomation
 HistoryDomain
 HistoryStorage
 PasteboardAdapter
 PresentationUI
 ClipyApp
+clipyctl                    # XcodeGen tool embedded in Clipy.app/Contents/MacOS
 xxh3
 HistoryPerfRunner
 HistoryRestartProbe
@@ -142,6 +144,7 @@ HistoryCoreTests
 ClipboardFormatsTests
 ContentPreviewTests
 ClipyCLIContractTests
+LocalAutomationTests
 HistoryDomainTests
 HistoryStorageTests
 HistoryPerfTests
@@ -168,7 +171,22 @@ Text artifacts contain at most 50,000 complete Swift `Character`s as an exact
 source prefix. A separate truncation fact drives a visible UI notice outside
 the selectable body; no synthetic ellipsis is appended to copied source text.
 The preview limit never truncates History's retained values or paste payloads.
-When neither applies, the first exact `public.url` or `public.file-url`
+After image and valid exact plain text, exact `public.rtf` and then
+`public.html` can supply derived plain-text previews. Both consume only
+the copied bytes, with a 1 MiB selected-input limit and at most 50,000
+complete displayed Characters; they do not use document importers, WebKit,
+network requests, or file access. RTF honors scoped encodings and Unicode
+fallback, presents field results without executing instructions, and replaces
+pictures/objects with `[Attachment]` (at most 128), with nesting capped at
+128 and intermediate output at 1 Mi UTF-16 units. HTML recognizes structural
+text separators, UTF-8/BOM UTF-16 and common/numeric character references;
+it suppresses script/style/head/template content and never loads attributes.
+HTML derived output is also limited to 1 MiB of UTF-8. These are text
+extractions, not rich-layout renderings or editable substitutes for the
+retained representations. Unknown entities remain literal, unsupported RTF
+encodings remain explicitly unavailable, and malformed selected rich text
+does not silently switch to another sibling. The existing PDF preview follows
+these text choices. When none applies, the first exact `public.url` or `public.file-url`
 representation can produce an inert reference artifact. That selected input
 is limited to 16 KiB and must be strict UTF-8 with an absolute URL scheme;
 file references additionally require an absolute path. Parsing uses
@@ -185,7 +203,7 @@ Its separate stored filename/address search projection is owned by
 `ContentProjector` (Part V §15), not by the preview renderer.
 
 `HistoryRestartProbe` is likewise a no-product test-evidence executable; it is
-not part of the app or the future `clipyctl` surface. `HistoryPerfTests` imports
+not part of the app or the bundled `clipyctl` surface. `HistoryPerfTests` imports
 the performance executable target only to prove its pure
 §9 helpers and declarative coverage/envelope tables; workload acceptance still
 runs the release executable itself. It runs in its own CI lane
@@ -202,6 +220,17 @@ or History access. It may encode a caller-supplied typed success reply, but it
 never dispatches an operation or fabricates a Gateway result.
 `ClipyCLIContractTests` is a functional test target that depends only on that
 contract target.
+
+`LocalAutomation` connects that pure contract to the app-owned authenticated
+History ingress over a bounded same-user Unix socket. `clipyctl` is an XcodeGen
+tool embedded beside the app executable; it reads one JSON request from stdin
+and forwards the exact protocol output. Its fixed credential and endpoint
+locations cannot be overridden by request content. It may launch its containing
+application and retry connection establishment while the store opens, but never
+resends an operation after transmission. App startup restores an enabled
+listener after store open; default enrollment is disabled, and termination
+joins listener shutdown. Hosted tests launch the bundled executable itself;
+transport and ingress tests remain in their owning package suites.
 
 `ClipyUDSF0Client` and the app-side `CLIPY_UDS_F0` listener are a disposable
 PLAY-PY-F0 signed-runtime discriminator. They exchange only one fixed
@@ -241,10 +270,10 @@ Before “executable specification”:
   History/SwiftData/AppIntents module.
 - `HistoryDomain` imports only Foundation and `HistoryCore`.
 - `import SwiftData` appears only in `HistoryStorage`; ImageIO appears only in
-  HistoryStorage and ContentPreview; Security appears only in the internal F1
-  server-credential implementation in `HistoryStorage`; AppKit only in its
-  adapter; SwiftUI only in Presentation. This Security edge does
-  not authorize a shared access group or client-side Keychain custody.
+  HistoryStorage and ContentPreview; Security supplies only the internal F1
+  secret generator in `HistoryStorage`; AppKit only in its
+  adapter; SwiftUI only in Presentation. Server and client credentials use
+  separate user-private files, not a Keychain access group.
 - No public symbol mentions Canonical Content, Domain facts/plans, SwiftData types, AppKit objects, fingerprints, or internal invalidations.
 - No `@unchecked Sendable`, `nonisolated(unsafe)`, mutable service locator, or second writer exists.
 - Every public struct shown with public construction has a real public initializer; every declared protocol conformance compiles rather than relying on prose synthesis.

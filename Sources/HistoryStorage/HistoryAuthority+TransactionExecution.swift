@@ -66,8 +66,20 @@ extension HistoryAuthority {
                 let externalAuditConfig: GatewayConfigRow?
                 if let auditAppend = plan.auditAppend {
                     guard let connection = auditAppend.connectionID,
-                          let capability = auditAppend.capability,
-                          capability == .manage else {
+                          let capability = auditAppend.capability else {
+                        throw ExternalWriteGateRejection.incoherentPlan
+                    }
+                    // The admitted write capabilities are disjoint between
+                    // connection kinds; retain that kind in the final live
+                    // check without trusting an earlier grant observation.
+                    let connectionKind: ConnectionEnrollKind
+                    switch capability {
+                    case .manage:
+                        connectionKind = .appIntents
+                    case .organize, .deleteItem, .reviseContent:
+                        connectionKind = .localAutomation
+                    case .browse, .readContent, .browsePreview,
+                         .readEffectiveContent:
                         throw ExternalWriteGateRejection.incoherentPlan
                     }
                     let config = try Self.loadGatewayConfig(in: context)
@@ -79,10 +91,7 @@ extension HistoryAuthority {
                     let decision = try Self.targetedExternalAuthorizationDecision(
                         descriptor,
                         connection: connection,
-                        // The current positive write vocabulary is the closed
-                        // X.6 App Intents manage subset. Local Automation has
-                        // no positive Authority write entry in this leaf.
-                        expectedConnectionKind: .appIntents,
+                        expectedConnectionKind: connectionKind,
                         config: config,
                         in: context
                     )

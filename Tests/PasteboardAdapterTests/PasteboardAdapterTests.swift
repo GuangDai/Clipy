@@ -176,8 +176,10 @@ func pasteboardChangeBetweenRepresentationReadsProducesContentFreeRetryOutcome()
     )
     let startChangeCount = pasteboard.changeCount
     var didReplaceContents = false
+    var payloadReads = 0
     var adapter = PasteboardAdapter(pasteboard: pasteboard)
     adapter.payloadReadCompletionHook = { _ in
+        payloadReads += 1
         guard !didReplaceContents else { return }
         didReplaceContents = true
         pasteboard.clearContents()
@@ -191,6 +193,9 @@ func pasteboardChangeBetweenRepresentationReadsProducesContentFreeRetryOutcome()
     let outcome = try #require(adapter.captureOutcome())
 
     #expect(didReplaceContents)
+    // The second old representation cannot contribute to a complete freeze.
+    // Do not invoke its accessor after the first read changed ownership.
+    #expect(payloadReads == 1)
     guard case let .changedDuringRead(changed) = outcome else {
         Issue.record("expected a content-free changed-during-read outcome")
         return

@@ -12,6 +12,8 @@ import HistoryCore
 internal enum ExternalGatewayDebugInstrumentation {
     @TaskLocal internal static var compactionFollowerDidJoin:
         (@Sendable () async -> Void)?
+    @TaskLocal internal static var beforeLocalAutomationWriteCommit:
+        (@Sendable () async -> Void)?
 }
 #endif
 
@@ -29,6 +31,7 @@ internal actor ExternalGateway {
     private let authority: HistoryAuthority
     private let appIntentsConnectionID: ExternalConnectionID
     private let searchWorker: SearchWorker
+    private let revisionPreparation: RevisionPreparationActor
     private let storageClock: any StorageClock
     private var rateLimiter: ExternalRateLimiter
     private let limits: ExternalLimits
@@ -42,12 +45,14 @@ internal actor ExternalGateway {
         authority: HistoryAuthority,
         appIntentsConnectionID: ExternalConnectionID,
         searchWorker: SearchWorker,
-        storageClock: any StorageClock
+        storageClock: any StorageClock,
+        revisionPreparation: RevisionPreparationActor = RevisionPreparationActor()
     ) {
         let initialUptimeNanoseconds = DispatchTime.now().uptimeNanoseconds
         self.authority = authority
         self.appIntentsConnectionID = appIntentsConnectionID
         self.searchWorker = searchWorker
+        self.revisionPreparation = revisionPreparation
         self.storageClock = storageClock
         self.rateLimiter = ExternalRateLimiter(
             initialUptimeNanoseconds: initialUptimeNanoseconds
@@ -65,6 +70,7 @@ internal actor ExternalGateway {
         limits: ExternalLimits = .standard,
         searchWorker: SearchWorker,
         storageClock: any StorageClock,
+        revisionPreparation: RevisionPreparationActor = RevisionPreparationActor(),
         uptimeNanoseconds: @escaping @Sendable () -> UInt64 = {
             DispatchTime.now().uptimeNanoseconds
         }
@@ -72,6 +78,7 @@ internal actor ExternalGateway {
         self.authority = authority
         self.appIntentsConnectionID = appIntentsConnectionID
         self.searchWorker = searchWorker
+        self.revisionPreparation = revisionPreparation
         self.storageClock = storageClock
         self.rateLimiter = rateLimiter
         self.limits = limits
@@ -154,10 +161,90 @@ internal actor ExternalGateway {
         )
         return try await authority.performLocalAutomationBrowsePreview(
             read,
+            after: request.after,
             connection: connection,
             requestedAt: requestedAt,
             searchWorker: searchWorker
         )
+    }
+
+    /// F1 operations share the existing Authority authorization and audit
+    /// owners. Local grants remain independent: organizing cannot delete.
+    internal func performLocalAutomation(
+        _ request: ExternalRequest,
+        asAuthenticated connection: ExternalConnectionID
+    ) async throws -> ExternalResponse {
+        let requestedAt = storageClock.now()
+        let descriptor = ExternalOperationDescriptor.forRequest(
+            request, expectedConnectionKind: .localAutomation
+        )
+        try await beginStructurallyAdmittedOperation(
+            descriptor, expectedConnectionKind: .localAutomation
+        )
+#if DEBUG
+        await ExternalGatewayDebugInstrumentation.beforeLocalAutomationWriteCommit?()
+#endif
+        return try await authority.commitExternal(
+            request: request, connection: connection,
+            expectedConnectionKind: .localAutomation, requestedAt: requestedAt
+        )
+    }
+
+    internal func readLocalAutomationEffectiveContent(
+        _ itemID: HistoryItemID,
+        asAuthenticated connection: ExternalConnectionID
+    ) async throws -> (contentVersion: UInt64, representations: [HistoryRepresentation]) {
+        let requestedAt = storageClock.now()
+        let descriptor = ExternalOperationDescriptor(
+            capability: .readEffectiveContent, operationKind: .readEffectiveContent,
+            requestSummary: .readEffectiveContent(itemID: itemID.rawValue)
+        )
+        try await beginStructurallyAdmittedOperation(
+            descriptor, expectedConnectionKind: .localAutomation
+        )
+        return try await authority.performLocalAutomationEffectiveRead(
+            itemID, descriptor: descriptor, connection: connection, requestedAt: requestedAt
+        )
+    }
+
+    /// An explicitly granted full-Effective replacement uses the same
+    /// two-phase revision preparation, OCC planner and transaction as the UI.
+    internal func reviseLocalAutomationContent(
+        _ itemID: HistoryItemID,
+        expectedContentVersion: UInt64,
+        representations: [HistoryRepresentation],
+        asAuthenticated connection: ExternalConnectionID
+    ) async throws -> HistoryReceipt {
+        guard expectedContentVersion > 0 else {
+            throw ExternalFailure.requestDenied(.invalidInput)
+        }
+        let descriptor = ExternalOperationDescriptor(
+            capability: .reviseContent, operationKind: .reviseContent,
+            requestSummary: .reviseContent(
+                itemID: itemID.rawValue, expectedContentVersion: expectedContentVersion
+            )
+        )
+        let write = ExternalWriteCommitContext(
+            connection: connection, expectedConnectionKind: .localAutomation,
+            descriptor: descriptor, requestedAt: storageClock.now()
+        )
+        try await beginStructurallyAdmittedOperation(descriptor, expectedConnectionKind: .localAutomation)
+        do {
+            let inputs = try await authority.localAutomationRevisionPreparationInputs(
+                itemID: itemID, expected: ContentVersion(rawValue: expectedContentVersion),
+                representations: representations, write: write
+            )
+            let bundle = try await revisionPreparation.prepare(
+                inputs.request, from: inputs.snapshot, retentionPolicies: inputs.retentionPolicies
+            )
+#if DEBUG
+            await ExternalGatewayDebugInstrumentation.beforeLocalAutomationWriteCommit?()
+#endif
+            try Task.checkCancellation()
+            return try await authority.commitRevision(inputs.request, bundle, externalWrite: write)
+        } catch {
+            try await authority.publishExternalWriteFailure(error, write: write)
+        }
     }
 
     /// Applies pure pair admission, the retryable pre-dispatch maintenance

@@ -133,20 +133,22 @@ final class RetentionUsageJourneyUITests: XCTestCase {
         confirm.click()
         XCTAssertTrue(
             waitUntil(timeout: 5) { !confirmationSheet.exists },
-            diagnostic(app, context: "clear-all sheet dismisses after receipt")
+            diagnostic(app, context: "clear-all sheet dismisses")
         )
-        // The sheet dismisses before the clear's Task completes; join the
-        // receipt itself before re-entering the tab, so the tab's single
-        // usage read cannot race the commit.
+
+        // Re-enter immediately: users need not wait on General for Clear's
+        // receipt. If the tab's first usage read precedes that commit, its
+        // receipt-confirmed purge must refresh the now-visible usage. The
+        // runner does not hold Clear, so this exercises the interaction but
+        // does not guarantee that its initial read wins the race.
+        retentionTab.click()
+        assertUsage(itemCount: "0", contentSize: "0 bytes", in: app)
+
+        app.buttons["General"].click()
         XCTAssertTrue(
             app.staticTexts["Removed 2 items."].waitForExistence(timeout: 10),
             diagnostic(app, context: "exact clear-all receipt feedback")
         )
-
-        // Re-entering the Retention tab must show the emptied store, not
-        // the values recorded before the clear.
-        retentionTab.click()
-        assertUsage(itemCount: "0", contentSize: "0 bytes", in: app)
     }
 
     @MainActor

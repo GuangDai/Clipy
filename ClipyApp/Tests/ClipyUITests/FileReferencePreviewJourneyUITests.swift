@@ -97,7 +97,7 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
                 && self.text(of: path) == expectedPath
                 && self.text(of: address) == originalAddress
                 && self.text(of: disclosure)
-                    == "Only the reference is shown. Its destination has not been opened."
+                    == "Only the reference is shown. Loading its contents requires confirmation."
         }, app.debugDescription)
         XCTAssertEqual(rows.count, 1, app.debugDescription)
 
@@ -138,7 +138,7 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
                 && self.text(of: path) == expectedPath
                 && self.text(of: address) == originalAddress
                 && self.text(of: disclosure)
-                    == "Only the reference is shown. Its destination has not been opened."
+                    == "Only the reference is shown. Loading its contents requires confirmation."
         }, app.debugDescription)
         XCTAssertFalse(preview.descendants(matching: .any).matching(
             NSPredicate(format: "label == %@ OR value == %@", fileContentMarker, fileContentMarker)
@@ -170,7 +170,7 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
                 && self.text(of: quickPath) == expectedPath
                 && self.text(of: quickAddress) == originalAddress
                 && self.text(of: quickDisclosure)
-                    == "Only the reference is shown. Its destination has not been opened."
+                    == "Only the reference is shown. Loading its contents requires confirmation."
         }, app.debugDescription)
         XCTAssertEqual(search.value as? String, "draft", app.debugDescription)
         XCTAssertFalse(quickLook.descendants(matching: .any).matching(
@@ -188,12 +188,100 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
                 && self.text(of: path) == expectedPath
                 && self.text(of: address) == originalAddress
                 && self.text(of: disclosure)
-                    == "Only the reference is shown. Its destination has not been opened."
+                    == "Only the reference is shown. Loading its contents requires confirmation."
         }, app.debugDescription)
         XCTAssertFalse(preview.descendants(matching: .any).matching(
             NSPredicate(format: "label == %@ OR value == %@", fileContentMarker, fileContentMarker)
         ).firstMatch.exists, app.debugDescription)
         XCTAssertFalse(FileManager.default.fileExists(atPath: expectedPath))
+    }
+
+    @MainActor
+    func testFileContentsRequireConfirmationAndBackRestoresTheOriginalReference() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("explicit file preview.txt")
+        let originalAddress = file.absoluteString
+        let originalContents = "clipy-file-not-shown-before-confirmation"
+        let loadedContents = "clipy-file-current-contents-after-confirmation"
+        try Data(originalContents.utf8).write(to: file)
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        defer { pasteboard.clearContents() }
+        let item = NSPasteboardItem()
+        let fileType = NSPasteboard.PasteboardType("public.file-url")
+        XCTAssertTrue(item.setData(Data(originalAddress.utf8), forType: fileType))
+        XCTAssertTrue(pasteboard.writeObjects([item]))
+
+        let app = XCUIApplication()
+        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
+        app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
+        app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory.appendingPathComponent("history.store").path
+        app.launch()
+        defer { app.terminate() }
+        let panel = app.descendants(matching: .any)["clipy.panel.root"]
+        XCTAssertTrue(panel.waitForExistence(timeout: 20), app.debugDescription)
+        let rows = panel.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "clipy.history.row.")
+        )
+        XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 1 }, app.debugDescription)
+        let preview = panel.descendants(matching: .any)["clipy.preview.root"]
+        if !preview.waitForExistence(timeout: 3) {
+            app.typeKey(.space, modifierFlags: .control)
+        }
+        XCTAssertTrue(preview.waitForExistence(timeout: 5), app.debugDescription)
+        let request = preview.buttons["clipy.preview.file.request"]
+        let address = preview.descendants(matching: .any)["clipy.preview.reference.address"]
+        let renderedText = preview.descendants(matching: .any)["clipy.preview.text"]
+        XCTAssertTrue(request.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertEqual(text(of: address), originalAddress)
+        XCTAssertFalse(renderedText.exists, app.debugDescription)
+
+        request.click()
+        // AppKit also exposes Cancel/Load File in the Touch Bar. Scope both
+        // actions to the visible confirmation sheet rather than selecting
+        // an offscreen duplicate from the application-wide button query.
+        let confirmation = app.sheets.containing(
+            .button, identifier: "clipy.preview.file.confirm"
+        ).firstMatch
+        let confirm = confirmation.buttons["clipy.preview.file.confirm"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertFalse(renderedText.exists, app.debugDescription)
+        let cancel = confirmation.buttons["Cancel"]
+        XCTAssertTrue(cancel.exists && cancel.isHittable, app.debugDescription)
+        cancel.click()
+        XCTAssertTrue(waitUntil(timeout: 5) { !confirm.exists && request.exists }, app.debugDescription)
+        XCTAssertFalse(renderedText.exists, app.debugDescription)
+        XCTAssertEqual(text(of: address), originalAddress)
+
+        // The second confirmation reads the file's then-current bytes, not a
+        // cached copy captured while it was merely a clipboard reference.
+        try Data(loadedContents.utf8).write(to: file)
+        request.click()
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.debugDescription)
+        confirm.click()
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            renderedText.exists && self.text(of: renderedText) == loadedContents
+        }, app.debugDescription)
+        let back = preview.buttons["clipy.preview.file.back"]
+        XCTAssertTrue(back.exists && back.isHittable, app.debugDescription)
+        XCTAssertTrue(preview.descendants(matching: .any)["clipy.preview.file.disclosure"].exists)
+        XCTAssertEqual(rows.count, 1)
+        back.click()
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            address.exists && self.text(of: address) == originalAddress && !renderedText.exists
+        }, app.debugDescription)
+
+        // Copy remains the original History item even after an explicit file
+        // preview. File contents are never a replacement paste payload.
+        app.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            pasteboard.pasteboardItems?.first?.data(forType: fileType) == Data(originalAddress.utf8)
+                && !panel.exists
+        }, app.debugDescription)
     }
 
     @MainActor

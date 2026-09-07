@@ -27,6 +27,8 @@
 "settings.retention.items.section" = "项目";
 "settings.retention.items.unit" = "个未置顶项目";
 "settings.retention.pinned-over-budget" = "置顶项目已超出此限额。请取消置顶或提高限额。";
+"settings.retention.active-revision-over-budget" = "当前生效的修订版本超出此限额。请提高修订存储限额。";
+"settings.retention.combined-budget-unsatisfiable" = "置顶项目可能超出存储限额，或当前生效的修订版本可能超出其限额。请提高限额，或取消置顶以减少受保护的存储用量。";
 "settings.retention.policies-save-failure" = "无法保存保留策略。";
 "settings.retention.range-hint" = "请输入 %1$@ 到 %2$@ 之间的整数。";
 "settings.retention.read-failure" = "无法读取当前保留设置。";

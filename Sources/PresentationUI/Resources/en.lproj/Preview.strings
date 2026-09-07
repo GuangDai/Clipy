@@ -15,3 +15,16 @@
 "Showing one image from a multi-image item. Copying the item keeps its complete content." = "Showing one image from a multi-image item. Copying the item keeps its complete content.";
 "Showing PDF page 1 of %@. Copying the item keeps its complete content." = "Showing PDF page 1 of %@. Copying the item keeps its complete content.";
 "PDF preview, page 1 of %@" = "PDF preview, page 1 of %@";
+"Preview File Contents…" = "Preview File Contents…";
+"Load File Contents?" = "Load File Contents?";
+"Load File" = "Load File";
+"Cancel" = "Cancel";
+"Back to File Reference" = "Back to File Reference";
+"Showing the file’s current contents. Copying still copies the original file reference." = "Showing the file’s current contents. Copying still copies the original file reference.";
+"Clipy will read this local file once to show a preview. Its current contents are not added to clipboard history. No website will be opened." = "Clipy will read this local file once to show a preview. Its current contents are not added to clipboard history. No website will be opened.";
+"This is not a local file reference." = "This is not a local file reference.";
+"The file could not be read. It may have moved or been deleted." = "The file could not be read. It may have moved or been deleted.";
+"Clipy does not have permission to read this file." = "Clipy does not have permission to read this file.";
+"The file is too large to preview." = "The file is too large to preview.";
+"This file type cannot be previewed." = "This file type cannot be previewed.";
+"Only the reference is shown. Loading its contents requires confirmation." = "Only the reference is shown. Loading its contents requires confirmation.";

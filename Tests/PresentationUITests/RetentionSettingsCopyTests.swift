@@ -36,6 +36,17 @@ struct RetentionSettingsCopyTests {
             + "you apply retention settings. Time passing alone doesn't remove items.")
     }
 
+    @Test("revision-limit recovery does not blame pinned items in Chinese")
+    func revisionBudgetRecoveryCopy() throws {
+        let chinese = try bundle("zh-Hans")
+        #expect(RetentionSettingsCopy.plain(
+            "settings.retention.active-revision-over-budget", "missing", bundle: chinese
+        ) == "当前生效的修订版本超出此限额。请提高修订存储限额。")
+        #expect(RetentionSettingsCopy.plain(
+            "settings.retention.combined-budget-unsatisfiable", "missing", bundle: chinese
+        ) == "置顶项目可能超出存储限额，或当前生效的修订版本可能超出其限额。请提高限额，或取消置顶以减少受保护的存储用量。")
+    }
+
     @Test("receipt plurals preserve zero, one, many and localized grouping",
           arguments: [0, 1, 2, 5_000])
     func englishReceiptPlurals(_ count: Int) throws {

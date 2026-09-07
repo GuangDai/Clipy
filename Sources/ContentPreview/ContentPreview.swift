@@ -126,7 +126,7 @@ package actor ContentPreview {
     package init() {}
 
     /// Common-caller preset: history-owned Effective Content bytes, the
-    /// image/exact-text/PDF/reference selection and fixed history-pane
+    /// image/exact-text/RTF/HTML/PDF/reference selection and fixed history-pane
     /// resource profile. No History identity or lifecycle enters this actor.
     package func renderHistoryPane(
         _ representations: [PreviewRepresentation]
@@ -230,8 +230,25 @@ package actor ContentPreview {
                 wasTruncated: wasTruncated
             )))
         }
+        // Rich formats contribute derived plain text only (06 §5). Their
+        // concrete parsers never import attachments, execute fields/scripts,
+        // or follow copied addresses. Exact plain text above remains preferred.
+        if let rtf = representations.first(where: {
+            $0.typeIdentifier == ClipboardFormatIdentifier.rtf.rawValue
+        }) {
+            return PreviewRTFRenderer.render(rtf.bytes)
+        }
+        if let html = representations.first(where: {
+            $0.typeIdentifier == ClipboardFormatIdentifier.html.rawValue
+        }) {
+            return PreviewHTMLRenderer.render(
+                html.bytes,
+                maximumInputBytes: 1_048_576,
+                maximumOutputBytes: 1_048_576
+            )
+        }
         // A PDF supplies an inert first-page raster when no preferred image
-        // or valid plain text applies. Keep the first exact PDF authoritative
+        // or text applies. Keep the first exact PDF authoritative
         // for this purpose; a malformed one does not skip to a later sibling.
         if let pdf = representations.first(where: {
             $0.typeIdentifier == ClipboardFormatIdentifier.pdf.rawValue
@@ -488,7 +505,10 @@ private enum PreviewTextCodec: Sendable {
     func decode(_ bytes: Data) -> String? {
         switch self {
         case .declared(.utf8):
-            return String(data: bytes, encoding: .utf8)
+            // Preserve every source scalar, including a leading U+FEFF.
+            // Foundation's encoding initializer consumes a UTF-8 signature,
+            // changing the exact selectable prefix required by 06 §5.
+            return String(validating: bytes, as: UTF8.self)
         case .declared(.nativeUTF16), .declared(.externalUTF16):
             // Foundation can decode a valid prefix while ignoring an odd
             // trailing byte. A UTF-16 preview requires complete code units.

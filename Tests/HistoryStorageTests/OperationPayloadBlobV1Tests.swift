@@ -35,7 +35,7 @@ struct OperationPayloadBlobV1Tests {
         ]))
     }
 
-    @Test func allSeventeenRequestTagsRoundTrip() throws {
+    @Test func allEighteenRequestTagsRoundTrip() throws {
         let cases: [(UInt16, OperationPayloadBlobV1, OperationPayloadRecordContextV1)] = [
             (1, .init(request: .recent(limit: 500), result: .page(returnedCount: 3, hasMore: true)), externalContext(operation: .readRecent, capability: .browse)),
             (2, .init(request: .search(queryUTF8ByteCount: 4_096, mode: .regexp, limit: 1), result: .page(returnedCount: 0, hasMore: false)), externalContext(operation: .readSearch, capability: .browsePreview)),
@@ -54,6 +54,7 @@ struct OperationPayloadBlobV1Tests {
             (15, .init(request: .readConnections, result: .connections(returnedCount: 4)), adminContext(operation: .adminReadConnections)),
             (16, .init(request: .readGrants(connectionID: connectionID), result: .grants(returnedCount: 3)), adminContext(connectionID: connectionID, operation: .adminReadGrants)),
             (17, .init(request: .readAudit(since: 42, limit: 500), result: .auditPage(returnedCount: 5, snapshotHead: 77)), adminContext(operation: .adminReadAudit, auditSequence: 77)),
+            (18, .init(request: .reviseContent(itemID: itemID, expectedContentVersion: UInt64.max), result: .affectedItemIDs([itemID])), externalContext(operation: .reviseContent, capability: .reviseContent, changePosition: 10)),
         ]
 
         for (expectedTag, payload, context) in cases {
@@ -192,7 +193,7 @@ struct OperationPayloadBlobV1Tests {
             try OperationPayloadBlobCodec.decode(wrongVersion, context: context)
         }
 
-        for replacement in [UInt16(0), 18, .max] {
+        for replacement in [UInt16(0), 19, .max] {
             var unknownRequest = valid
             unknownRequest.replaceSubrange(2..<4, with: Data.bigEndian(replacement))
             #expect(throws: OperationPayloadCodecRejection.unknownRequestTag(replacement)) {
@@ -501,6 +502,7 @@ struct OperationPayloadBlobV1Tests {
         case 9, 14: requestBodyBytes = 18
         case 12, 15: requestBodyBytes = 0
         case 17: requestBodyBytes = 10
+        case 18: requestBodyBytes = 24
         default: return nil
         }
         let offset = 4 + requestBodyBytes

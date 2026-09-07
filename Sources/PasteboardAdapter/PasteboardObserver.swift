@@ -210,6 +210,19 @@ public final class PasteboardObserver {
         guard self.timer === activeTimer,
               lastChangeCount == observedChangeCount else { return nil }
 
+        // A synchronous promised-data provider may have allowed a privacy
+        // change while the first freeze was in progress (Card 5A / CLIP-1).
+        // The second freeze is another payload read: report revocation to
+        // the owner before retrying, including its synchronous stop/restart.
+        let accessBehavior = accessBehaviorProvider()
+        if accessBehavior != lastAccessBehavior {
+            lastAccessBehavior = accessBehavior
+            accessBehaviorHandler?(accessBehavior)
+        }
+        guard self.timer === activeTimer,
+              lastChangeCount == observedChangeCount,
+              accessBehavior == .allowed else { return nil }
+
         guard let retryOutcome = adapter.captureOutcome() else {
             return firstOutcome
         }

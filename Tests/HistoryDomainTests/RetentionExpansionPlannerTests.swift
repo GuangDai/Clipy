@@ -258,6 +258,36 @@ private func plannedRetirements(
     #expect(plan.retiredItems == 0)
 }
 
+@Test(arguments: [false, true], [569, 570, 571])
+func r2OldestPrefixRespectsByteBoundaryAndProtection(
+    _ reverseInventory: Bool, _ budget: Int
+) throws {
+    let pinned = expansionItem(
+        1, copiedAt: 0, pinned: PinOrdinal(rawValue: 0), canonicalBytes: 50
+    )
+    let primary = expansionItem(2, copiedAt: 0, canonicalBytes: 50)
+    let oldest = expansionItem(3, copiedAt: 100, canonicalBytes: 1)
+    let tied = expansionItem(4, copiedAt: 100, canonicalBytes: 10, revisionBytes: 10)
+    let newer = expansionItem(5, copiedAt: 200, canonicalBytes: 50, revisionBytes: 400)
+    let inventory = [newer, tied, pinned, oldest, primary]
+    // Total 571: 571 needs no victim, 570 removes the one-byte oldest, and
+    // 569 must remove both age-tied rows despite the newer row's 450 bytes.
+    let expected: [HistoryItemID] = switch budget {
+    case 571: []
+    case 570: [oldest.id]
+    default: [oldest.id, tied.id]
+    }
+    let retired = try plannedRetirements(
+        inventory: reverseInventory ? Array(inventory.reversed()) : inventory,
+        policies: HistoryRetentionPolicies(
+            age: nil, storage: StorageRetention(maxTotalBytes: budget), revisions: nil
+        ),
+        protected: [primary.id],
+        now: Date(timeIntervalSinceReferenceDate: 1000)
+    )
+    #expect(retired == expected)
+}
+
 // MARK: - R1-before-R2 union (V2-02 §4.1; RET-SELECT-1(d))
 
 @Test func r1VictimsAreExcludedFromTheProjectedByteTotalAndDeduplicated() throws {
@@ -369,6 +399,49 @@ private func plannedRetirements(
 }
 
 // MARK: - Determinism and D24 postconditions (V2-02 §11)
+
+@Test(arguments: [false, true], [0, 1, 2])
+func largeInventoryRetainsTheSameProtectedOldestPrefix(
+    _ reversed: Bool, _ additionalByteVictims: Int
+) throws {
+    let pinned = expansionItem(1, copiedAt: 10, pinned: PinOrdinal(rawValue: 0), canonicalBytes: 100)
+    let primary = expansionItem(2, copiedAt: 20, canonicalBytes: 100)
+    let aged = expansionItem(3, copiedAt: 100, canonicalBytes: 100)
+    let oldestSurvivor = expansionItem(4, copiedAt: 800, canonicalBytes: 100)
+    let nextSurvivor = expansionItem(5, copiedAt: 850, canonicalBytes: 100)
+    var inventory = [pinned, primary, aged, oldestSurvivor, nextSurvivor]
+    for index in 0..<4_995 {
+        let id = HistoryItemID(rawValue: UUID(uuid: (
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            UInt8(index >> 8), UInt8(index & 0xFF)
+        )))
+        inventory.append(RetentionExpansionItemSummary(
+            id: id, lastCopiedAt: Date(timeIntervalSinceReferenceDate: 900 + Double(index)),
+            pinOrdinal: nil, canonicalBytes: 100, revisionCount: 0, revisionBytes: 0
+        ))
+    }
+    if reversed { inventory.reverse() }
+    let now = Date(timeIntervalSinceReferenceDate: 1000)
+    // All 5,000 rows contribute bytes, including pinned and primary rows.
+    #expect(try plannedRetirements(
+        inventory: inventory,
+        policies: HistoryRetentionPolicies(age: nil, storage: StorageRetention(maxTotalBytes: 500_000), revisions: nil),
+        protected: [primary.id], now: now
+    ).isEmpty)
+    // R1 selects only `aged`. R2 either needs no further victim, exactly
+    // one, or two; later rows must survive every path and both input orders.
+    let victims = try plannedRetirements(
+        inventory: inventory,
+        policies: HistoryRetentionPolicies(
+            age: AgeRetention(maxAge: 300),
+            storage: StorageRetention(maxTotalBytes: 500_000 - 100 * (1 + additionalByteVictims)),
+            revisions: nil
+        ),
+        protected: [primary.id], now: now
+    )
+    let expected = [aged.id] + Array([oldestSurvivor.id, nextSurvivor.id].prefix(additionalByteVictims))
+    #expect(victims == expected)
+}
 
 @Test func identicalFactsInDifferentInventoryOrderProduceIdenticalPlans() throws {
     // D16: a deterministic pure function of (inventory, policies,

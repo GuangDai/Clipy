@@ -67,6 +67,10 @@ private struct KindIsolationCredentialOperations:
         self.values = values
     }
 
+    func connectionIDs() throws -> [ExternalConnectionID] {
+        Array(values.keys)
+    }
+
     mutating func addCredential(
         _ data: Data,
         for connection: ExternalConnectionID

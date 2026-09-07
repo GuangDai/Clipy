@@ -5,6 +5,39 @@ import HistoryCore
 import Testing
 @testable import HistoryDomain
 
+@Test(arguments: [false, true])
+func equivalentTypeSpellingsDoNotAppendARevision(_ useDecomposedCanonical: Bool) throws {
+    let canonicalType = useDecomposedCanonical ? "e\u{301}" : "\u{e9}"
+    let proposedType = useDecomposedCanonical ? "\u{e9}" : "e\u{301}"
+    let canonical = try captureCanonical([(canonicalType, "accent", 1), ("f", "other", 2)])
+    let item = pinRevisionState(id: pinRevisionItemID(1), canonical: canonical)
+    let request = RevisionRequest(
+        itemID: item.id, expected: item.contentVersion, intent: .revert(to: .canonical)
+    )
+    for changed in [false, true] {
+        let proposed = try captureCanonical([
+            (proposedType, changed ? "changed" : "accent", 1), ("f", "other", 2),
+        ])
+        let result = try planRevision(
+            request: request,
+            prepared: PreparedRevision(
+                candidateRevisionID: pinRevisionRevisionID(1),
+                createdAt: Date(timeIntervalSinceReferenceDate: 200),
+                basedOn: item.contentVersion,
+                proposedContent: EffectiveContent(representations: proposed.representations.map(\.content))
+            ),
+            facts: RevisionFacts(item: item)
+        )
+        switch result {
+        case .unchanged:
+            #expect(!changed)
+        case .commit(let plan):
+            #expect(changed)
+            #expect(plan.mutations.count == 1)
+        }
+    }
+}
+
 @Test func removingAnUnpinnedItemEmitsOnlyItsCompleteRetirementPayload() throws {
     let target = pinRevisionItemID(1)
     let retainedPinned = pinRevisionItemID(2)

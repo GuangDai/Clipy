@@ -2,6 +2,7 @@
 /// Native .strings/.stringsdict resources give SwiftPM and Xcode the same
 /// translations and plural rules without a separate catalog compilation step.
 import Foundation
+import HistoryCore
 
 /// The Retention surface's localized copy.
 internal enum RetentionSettingsCopy {
@@ -205,6 +206,37 @@ internal enum RetentionSettingsCopy {
         "settings.retention.budget-unsatisfiable",
         "This budget can't be satisfied with the current history."
     )
+    internal static let activeRevisionOverBudget = plain(
+        "settings.retention.active-revision-over-budget",
+        "An active revision exceeds this limit. Increase the revision storage limit."
+    )
+    internal static let combinedBudgetUnsatisfiable = plain(
+        "settings.retention.combined-budget-unsatisfiable",
+        "Pinned items may exceed the storage budget, or an active revision may exceed its limit. "
+            + "Raise the limits, or unpin items to reduce protected storage."
+    )
+
+    /// V2-02 §8.3 gives pinned R2 bytes and irreducible active R3 bytes the
+    /// same failure. A validated Settings draft's dimensions can rule out a cause, but when
+    /// both limits are enabled the UI must not pretend to know which failed.
+    internal static func failureMessage(
+        for failure: HistoryFailure,
+        policies: HistoryRetentionPolicies
+    ) -> String {
+        switch failure {
+        case .invalidInput(.invalidRetentionPolicy):
+            switch (policies.storage != nil, policies.revisions?.maxRevisionBytesPerItem != nil) {
+            case (true, true): return combinedBudgetUnsatisfiable
+            case (true, false): return pinnedOverBudget
+            case (false, true): return activeRevisionOverBudget
+            case (false, false): return FailurePresentation.message(for: failure)
+            }
+        case .capacityExceeded(.storageBytes):
+            return budgetUnsatisfiable
+        default:
+            return FailurePresentation.message(for: failure)
+        }
+    }
 
     // MARK: Receipt feedback (03a §6; V2-02 §12; deep review Card 10)
 

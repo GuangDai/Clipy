@@ -208,6 +208,7 @@ struct AppCaptureAccessTests {
     @MainActor
     func timedResumeExcludesPausedValuesAndCapturesTheNextCopy() async throws {
         let history = try await ComposedSupport.openMemoryHistory()
+        let deadlineSleep = ControlledPauseDeadlineSleep()
         let pasteboard = ComposedSupport.makePasteboard()
         pasteboard.clearContents()
         pasteboard.setString("before-timed-pause", forType: .string)
@@ -216,8 +217,10 @@ struct AppCaptureAccessTests {
             adapter: PasteboardAdapter(pasteboard: pasteboard),
             observerPollInterval: 0.02,
             initialCaptureAccessBehavior: .allowed,
-            capturePauseDuration: .milliseconds(120),
-            captureAccessBehaviorProvider: { .allowed }
+            captureAccessBehaviorProvider: { .allowed },
+            capturePauseSleep: { duration in
+                try await deadlineSleep.sleep(for: duration)
+            }
         )
         defer { composition.stop() }
         let appDelegate = AppDelegate()
@@ -229,9 +232,13 @@ struct AppCaptureAccessTests {
         pasteboard.clearContents()
         pasteboard.setString("copied-during-timed-pause", forType: .string)
 
-        #expect(await ComposedSupport.waitFor {
-            appDelegate.captureAccessState == .allowed
+        try #require(await ComposedSupport.waitFor {
+            deadlineSleep.startedCount == 1
         })
+        let deadline = try #require(composition.capturePauseTaskForTesting)
+        deadlineSleep.expire(0)
+        await deadline.value
+        #expect(appDelegate.captureAccessState == .allowed)
         #expect(!composition.hasCapturePauseDeadlineForTesting)
         var page = try await history.browse(
             HistoryBrowseRequest(kind: .recent, limit: 10)
@@ -259,6 +266,7 @@ struct AppCaptureAccessTests {
 
         for (behavior, expectedState, label) in cases {
             let history = try await ComposedSupport.openMemoryHistory()
+            let deadlineSleep = ControlledPauseDeadlineSleep()
             let pasteboard = ComposedSupport.makePasteboard()
             pasteboard.clearContents()
             pasteboard.setString("before-timed-\(label)", forType: .string)
@@ -268,11 +276,14 @@ struct AppCaptureAccessTests {
                 adapter: PasteboardAdapter(pasteboard: pasteboard),
                 observerPollInterval: 0.02,
                 initialCaptureAccessBehavior: .allowed,
-                capturePauseDuration: .milliseconds(120),
                 captureAccessBehaviorProvider: {
                     accessBehavior.withLock { $0 }
+                },
+                capturePauseSleep: { duration in
+                    try await deadlineSleep.sleep(for: duration)
                 }
             )
+            defer { composition.stop() }
             let appDelegate = AppDelegate()
             appDelegate.installCompositionForTesting(composition)
 
@@ -285,16 +296,19 @@ struct AppCaptureAccessTests {
                 forType: .string
             )
 
-            #expect(await ComposedSupport.waitFor {
-                appDelegate.captureAccessState == expectedState
+            try #require(await ComposedSupport.waitFor {
+                deadlineSleep.startedCount == 1
             })
+            let deadline = try #require(composition.capturePauseTaskForTesting)
+            deadlineSleep.expire(0)
+            await deadline.value
+            #expect(appDelegate.captureAccessState == expectedState)
             #expect(!composition.hasCapturePauseDeadlineForTesting)
-            try await Task.sleep(for: .milliseconds(150))
+            #expect(!composition.isCaptureObservationActiveForTesting)
             let page = try await history.browse(
                 HistoryBrowseRequest(kind: .recent, limit: 10)
             )
             #expect(page.rows.map(\.title) == ["before-timed-\(label)"])
-            composition.stop()
         }
     }
 
@@ -302,27 +316,37 @@ struct AppCaptureAccessTests {
     @MainActor
     func stopCancelsTimedResume() async throws {
         let history = try await ComposedSupport.openMemoryHistory()
+        let deadlineSleep = ControlledPauseDeadlineSleep()
         let pasteboard = ComposedSupport.makePasteboard()
         let accessReads = Mutex(0)
         let composition = AppComposition.makeForTesting(
             history: history,
             adapter: PasteboardAdapter(pasteboard: pasteboard),
             initialCaptureAccessBehavior: .allowed,
-            capturePauseDuration: .milliseconds(80),
             captureAccessBehaviorProvider: {
                 accessReads.withLock { count in
                     count += 1
                     return .allowed
                 }
+            },
+            capturePauseSleep: { duration in
+                try await deadlineSleep.sleep(for: duration)
             }
         )
+        defer { composition.stop() }
 
         composition.pauseCapture()
         #expect(composition.captureAccessState == .userPaused)
         #expect(composition.hasCapturePauseDeadlineForTesting)
+        try #require(await ComposedSupport.waitFor {
+            deadlineSleep.startedCount == 1
+        })
+        let deadline = try #require(composition.capturePauseTaskForTesting)
         composition.stop()
         let readsAfterStop = accessReads.withLock { $0 }
-        try await Task.sleep(for: .milliseconds(200))
+        #expect(deadline.isCancelled)
+        deadlineSleep.expire(0)
+        await deadline.value
 
         #expect(composition.captureAccessState == .userPaused)
         #expect(!composition.hasCapturePauseDeadlineForTesting)
@@ -333,28 +357,37 @@ struct AppCaptureAccessTests {
     @MainActor
     func manualResumeCancelsTimedResume() async throws {
         let history = try await ComposedSupport.openMemoryHistory()
+        let deadlineSleep = ControlledPauseDeadlineSleep()
         let pasteboard = ComposedSupport.makePasteboard()
         let accessReads = Mutex(0)
         let composition = AppComposition.makeForTesting(
             history: history,
             adapter: PasteboardAdapter(pasteboard: pasteboard),
             initialCaptureAccessBehavior: .allowed,
-            capturePauseDuration: .milliseconds(80),
             captureAccessBehaviorProvider: {
                 accessReads.withLock { count in
                     count += 1
                     return .allowed
                 }
+            },
+            capturePauseSleep: { duration in
+                try await deadlineSleep.sleep(for: duration)
             }
         )
         defer { composition.stop() }
 
         composition.pauseCapture()
         #expect(composition.hasCapturePauseDeadlineForTesting)
+        try #require(await ComposedSupport.waitFor {
+            deadlineSleep.startedCount == 1
+        })
+        let deadline = try #require(composition.capturePauseTaskForTesting)
         composition.resumeCapture()
         #expect(!composition.hasCapturePauseDeadlineForTesting)
         let readsAfterResume = accessReads.withLock { $0 }
-        try await Task.sleep(for: .milliseconds(200))
+        #expect(deadline.isCancelled)
+        deadlineSleep.expire(0)
+        await deadline.value
 
         #expect(composition.captureAccessState == .allowed)
         #expect(accessReads.withLock { $0 } == readsAfterResume)
@@ -379,31 +412,28 @@ struct AppCaptureAccessTests {
         defer { composition.stop() }
 
         composition.pauseCapture()
-        #expect(await ComposedSupport.waitFor {
+        try #require(await ComposedSupport.waitFor {
             deadlineSleep.startedCount == 1
         })
+        let oldDeadline = try #require(composition.capturePauseTaskForTesting)
         composition.resumeCapture()
         composition.pauseCapture()
-        #expect(await ComposedSupport.waitFor {
+        try #require(await ComposedSupport.waitFor {
             deadlineSleep.startedCount == 2
         })
-        #expect(await ComposedSupport.waitFor {
-            deadlineSleep.wasCancelled(0)
-        })
+        let newDeadline = try #require(composition.capturePauseTaskForTesting)
+        #expect(oldDeadline.isCancelled)
 
         // If manual Resume only cleared the old slot without cancelling its
         // task, expiring deadline 0 here would resume the newer Pause.
         deadlineSleep.expire(0)
-        let staleDeadlineResumed = await ComposedSupport.waitFor(timeout: 0.1) {
-            composition.captureAccessState != .userPaused
-        }
-        #expect(!staleDeadlineResumed)
+        await oldDeadline.value
+        #expect(composition.captureAccessState == .userPaused)
         #expect(composition.hasCapturePauseDeadlineForTesting)
 
         deadlineSleep.expire(1)
-        #expect(await ComposedSupport.waitFor {
-            composition.captureAccessState == .allowed
-        })
+        await newDeadline.value
+        #expect(composition.captureAccessState == .allowed)
         #expect(!composition.hasCapturePauseDeadlineForTesting)
     }
 
@@ -504,14 +534,13 @@ struct AppCaptureAccessTests {
 }
 
 /// A deterministic substitute for only the deadline's suspension. Each
-/// invocation parks independently; cancellation remains the production
-/// task's responsibility, and releasing an uncancelled older invocation
-/// would expose the exact stale-deadline bug this harness targets.
+/// invocation parks independently and deliberately ignores cancellation.
+/// Releasing a retired invocation exercises the production task's check
+/// after sleep returns, rather than exiting early through a throwing sleep.
 @MainActor
 private final class ControlledPauseDeadlineSleep {
     private var nextID = 0
-    private var continuations: [Int: AsyncStream<Void>.Continuation] = [:]
-    private var cancelledIDs: Set<Int> = []
+    private var continuations: [Int: CheckedContinuation<Void, Never>] = [:]
 
     private(set) var startedCount = 0
 
@@ -519,27 +548,13 @@ private final class ControlledPauseDeadlineSleep {
         _ = duration
         let id = nextID
         nextID += 1
-        let (stream, continuation) = AsyncStream<Void>.makeStream()
-        continuations[id] = continuation
-        startedCount += 1
-        for await _ in stream {
-            try Task.checkCancellation()
-            continuations[id] = nil
-            return
+        await withCheckedContinuation { continuation in
+            continuations[id] = continuation
+            startedCount += 1
         }
-        continuations[id] = nil
-        if Task.isCancelled {
-            cancelledIDs.insert(id)
-        }
-        throw CancellationError()
     }
 
     func expire(_ id: Int) {
-        continuations[id]?.yield()
-        continuations[id]?.finish()
-    }
-
-    func wasCancelled(_ id: Int) -> Bool {
-        cancelledIDs.contains(id)
+        continuations.removeValue(forKey: id)?.resume()
     }
 }

@@ -256,10 +256,17 @@ package struct CompleteRetentionInventory: Sendable {
     package let allItems: [RetainedItemSummary]
 }
 
+package struct CaptureRetentionFacts: Sendable {
+    package let retainedCount: Int
+    package let unpinnedCount: Int
+    package let oldestUnpinnedItems: [RetainedItemSummary]
+}
+
 package struct IngestFacts: Sendable {
     package let hintedItem: HistoryItemState?
     package let candidates: CompleteDedupCandidates
-    package let retention: CompleteRetentionInventory
+    package let candidateIDExists: Bool
+    package let retention: CaptureRetentionFacts
 }
 ```
 
@@ -269,7 +276,13 @@ Construction guarantees:
 - `candidates.items` contains every retained item whose Canonical signature can cover every incoming signature entry.
 - Every candidate is loaded sufficiently to confirm a canonically equivalent
   type identifier and byte-exact payload bytes.
-- `retention.allItems` contains every retained item exactly once.
+- `candidateIDExists` is the prepared candidate ID's point-read occupancy.
+- `retention` carries exact retained/unpinned counts and the oldest unpinned
+  prefix in `(lastCopiedAt ASC, id ASC)` order. The prefix contains the maximum
+  possible victim count plus one row for excluding a coalescing primary, or
+  every unpinned row if fewer exist; it is empty when no victim is possible.
+  This prefix is not a `CompleteRetentionInventory`. R1/R2 capture expansion
+  loads a separate complete scalar inventory only when those policies apply.
 - Failure to establish any guarantee is a Storage fact-loading failure mapped to `HistoryFailure.temporarilyUnavailable` — `.factProof` for an action-specific fact load, or `.dedupIndexRebuild` when the Signature Index itself cannot be rebuilt to a proved-complete state (Part V §7.1 step 1, §16) — or a persistence-corruption failure. The Domain planner is not invoked with a partial fact.
 
 There is no `.bounded` state and no rule that an empty partial scan permits insertion.

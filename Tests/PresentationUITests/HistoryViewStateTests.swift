@@ -129,7 +129,8 @@ struct HistoryViewStateTests {
             next: nil
         ))
         #expect(!acceptedAfterDeactivation)
-        #expect(state.rows.count == 2)
+        #expect(state.rows.isEmpty)
+        #expect(!state.hasAuthoritativeFirstPage)
 
         // Re-activation starts a new observation (04 §5) whose live stream
         // still receives later pages.
@@ -244,11 +245,9 @@ struct HistoryViewStateTests {
         await history.finishObservation()
     }
 
-    /// A `.snapshotExpired` pagination failure (04 §6) drops the appended
-    /// rows back to the observed first page, resumes pagination from the
-    /// OBSERVED page's cursor — not the expired one — and surfaces the typed
-    /// failure in the banner state.
-    @Test func snapshotExpiredDropsAppendedRowsAndResumesFromObservedCursor() async {
+    /// A `.snapshotExpired` pagination failure (04 §6) drops the old window,
+    /// reobserves the same query, and continues with its fresh first cursor.
+    @Test func snapshotExpiredReobservesTheCurrentQueryBeforeContinuing() async {
         let observedPage = fixturePage(
             rows: [
                 fixtureRow(id: "00000000-0000-0000-0000-000000000041", title: "observed-one"),
@@ -281,11 +280,12 @@ struct HistoryViewStateTests {
         #expect(await pollUntil { state.rows.count == 4 })
         state.loadNextPage()
 
-        // 04 §6 recovery: appended rows dropped, pagination resumes from the
-        // observed page's own cursor, failure surfaced.
+        // Refresh obtains a fresh authoritative first page and retires the
+        // old window and cursor bookmarks before allowing another browse.
         #expect(await pollUntil { state.rows.count == 2 && state.hasNextPage })
+        #expect(await history.observeRequests.count == 2)
         #expect(state.rows.map(\.title) == ["observed-one", "observed-two"])
-        #expect(state.failure == .snapshotExpired(current: ChangePosition(rawValue: 9)))
+        #expect(state.failure == nil)
         #expect(state.failureEpisode == 1)
 
         // The retry browses from the OBSERVED cursor again and re-appends.
@@ -353,8 +353,8 @@ struct HistoryViewStateTests {
             }
         )
         await Task.yield()
-        #expect(state.rows.map(\.title) == ["visible"])
-        #expect(state.hasNextPage)
+        #expect(state.rows.isEmpty)
+        #expect(!state.hasNextPage)
         #expect(!state.isLoadingPage)
 
         await history.finishObservation()
@@ -1406,11 +1406,25 @@ struct HistoryViewStateTests {
         state.deactivate()
     }
 
-    /// The embedded editor's receipt continuation must retarget its Details
+    /// Save and both Revert actions must retarget their Details
     /// owner before the matching revision purge becomes observable. This is
     /// the sole ordering difference from ordinary `revise`; the same receipt
     /// and exact purge are still published afterward.
-    @Test func editorReceivesCommittedReferenceBeforeRevisionPurge() async throws {
+    @Test(arguments: [
+        RevisionIntent.replace(RevisionDraft(decisions: [
+            RevisionDecision(
+                typeIdentifier: "public.utf8-plain-text",
+                action: .replace(bytes: Data("v2".utf8))
+            )
+        ])),
+        .revert(to: .canonical),
+        .revert(to: .revision(RevisionID(rawValue: UUID(
+            uuidString: "00000000-0000-0000-0000-000000009B14"
+        )!)))
+    ])
+    func detailsReceivesCommittedReferenceBeforeRevisionPurge(
+        intent: RevisionIntent
+    ) async throws {
         let itemID = HistoryItemID(
             rawValue: UUID(
                 uuidString: "00000000-0000-0000-0000-000000009B13"
@@ -1436,21 +1450,19 @@ struct HistoryViewStateTests {
         let request = RevisionRequest(
             itemID: itemID,
             expected: old.contentVersion,
-            intent: .replace(
-                RevisionDraft(decisions: [
-                    RevisionDecision(
-                        typeIdentifier: "public.utf8-plain-text",
-                        action: .replace(bytes: Data("v2".utf8))
-                    )
-                ])
-            )
+            intent: intent
         )
         var callbackReference: HistoryItemReference?
         var callbackSawPublishedPurge = true
+        var detailsFence = HistoryDetailsLoadFence()
+        let priorLoadRequest = detailsFence.begin()
+        let priorLoad = try #require(priorLoadRequest)
 
-        _ = try await state.reviseFromEditor(request) { reference in
+        _ = try await state.reviseKeepingDetails(request) { reference in
             callbackReference = reference
             callbackSawPublishedPurge = state.surfacePurge != nil
+            let advanced = detailsFence.advanceReference(from: old, to: reference)
+            #expect(advanced)
         }
 
         #expect(callbackReference == current)
@@ -1458,6 +1470,19 @@ struct HistoryViewStateTests {
         #expect(
             state.surfacePurge?.scope == .revision(old: old, new: current)
         )
+        // The initiating details surface survives its own content purge and
+        // can load the new revision, while an old in-flight read is retired.
+        #expect(detailsFence.reconcile(state.surfacePurge, item: current) == nil)
+        #expect(!detailsFence.isPurged)
+        #expect(!detailsFence.owns(priorLoad))
+        let currentLoadRequest = detailsFence.begin()
+        let currentLoad = try #require(currentLoadRequest)
+        #expect(detailsFence.accepts(
+            currentLoad,
+            returned: current,
+            expected: current,
+            isCancelled: false
+        ))
     }
 
     /// A retention expansion may delete rows or prune revision bytes while

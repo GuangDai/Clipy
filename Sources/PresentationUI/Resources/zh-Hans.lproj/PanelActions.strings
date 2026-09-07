@@ -116,3 +116,8 @@
 "Clipy couldn't update this item." = "Clipy 无法更新此项目。";
 "Clipy couldn't remove this item." = "Clipy 无法移除此项目。";
 "Editing one format leaves other kept formats unchanged. The destination app may use those formats instead." = "编辑一种格式不会改变其他保留的格式。目标应用可能改用这些格式。";
+"Save As…" = "另存为…";
+"Save %@ As…" = "将 %@ 另存为…";
+"Saves the complete bytes of this displayed representation to a file you choose." = "将当前显示表示的完整字节保存到你选择的文件。";
+"The Save dialog is unavailable. Try again." = "无法打开保存对话框。请重试。";
+"Clipy couldn't save this file. Choose another location and try again." = "Clipy 无法保存此文件。请选择其他位置后重试。";

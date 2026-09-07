@@ -18,8 +18,7 @@
 /// §7.1-step-5 inventory load before the step-1 readiness resolution, so the
 /// over-bound store was rejected as `.persistence(.invariantViolation)` and the
 /// `.dedupIndexRebuild` mapping was unreachable. The loader now resolves
-/// readiness from its single complete scalar inventory, using the explicit
-/// capture purpose; an over-bound retained set therefore produces
+/// readiness from its retained-count query; an over-bound retained set produces
 /// `.dedupIndexRebuild` before planning.)
 import Foundation
 import HistoryCore
@@ -178,13 +177,17 @@ private static func makeRow(
     let load = try IngestFactLoader.loadFacts(
         in: context,
         prepared: bundle.domain,
-        signatureIndex: staleIndex
+        signatureIndex: staleIndex,
+        retention: RetentionPolicy(maximumUnpinnedItems: 200)
     )
     let itemID = bundle.domain.candidateID
     #expect(load.signatureIndex.state == .ready)
     #expect(load.signatureIndex.itemIDs == Set([itemID]))
     #expect(load.facts.candidates.items.map(\.id) == [itemID])
-    #expect(load.facts.retention.allItems.map(\.id) == [itemID])
+    #expect(load.facts.retention.retainedCount == 1)
+    #expect(load.facts.retention.unpinnedCount == 1)
+    #expect(load.facts.retention.oldestUnpinnedItems.isEmpty)
+    #expect(load.facts.candidateIDExists)
 }
 
 private static func expectPinnedOrderFailure(

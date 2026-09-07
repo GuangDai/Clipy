@@ -22,6 +22,13 @@ final class PanelSurfacePurgeRelay {
         surface?.apply(purge)
     }
 
+    func acceptCommittedExternalRevision(from old: HistoryItemReference, commit: HistoryCommit) {
+        guard let purge = viewState.acceptCommittedExternalRevision(from: old, commit: commit) else {
+            return
+        }
+        surface?.apply(purge)
+    }
+
     func apply(_ purge: HistorySurfacePurge) {
         surface?.apply(purge)
     }

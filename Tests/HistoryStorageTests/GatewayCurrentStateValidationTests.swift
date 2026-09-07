@@ -422,7 +422,7 @@ struct GatewayCurrentStateValidationTests {
             .browse, .readContent, .manage,
         ]
         let localAutomationGrantable: [ExternalCapability] = [
-            .browsePreview, .readEffectiveContent, .organize, .deleteItem,
+            .browsePreview, .readEffectiveContent, .organize, .deleteItem, .reviseContent,
         ]
         let allCapabilities: [ExternalCapability] = [
             .browse,

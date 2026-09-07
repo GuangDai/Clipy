@@ -119,8 +119,10 @@ package func planItemRetentionExpansion(
 
     // Eligibility (§4.2): never pinned (D13), never a member of `protected`
     // — pinned ∪ {primary} ∪ already-retired-by-count (D14 / plan invariant
-    // 7, `02` §7 and §12).
-    let eligible = inventory.items.filter {
+    // 7, `02` §7 and §12). Keep this as a view: an already-satisfied R2
+    // budget needs no eligibility scan, and victim selection need not retain
+    // a second full inventory merely to filter out protected rows.
+    let eligible = inventory.items.lazy.filter {
         $0.pinOrdinal == nil && !protected.contains($0.id)
     }
 
@@ -130,7 +132,7 @@ package func planItemRetentionExpansion(
     var r1Victims: [RetentionExpansionItemSummary] = []
     if let agePolicy {
         let ageCutoff = now.addingTimeInterval(-agePolicy.maxAge)
-        r1Victims = eligible.filter { $0.lastCopiedAt < ageCutoff }
+        r1Victims = Array(eligible.filter { $0.lastCopiedAt < ageCutoff })
     }
     let r1VictimIDs = Set(r1Victims.map(\.id))
 
@@ -169,22 +171,27 @@ package func planItemRetentionExpansion(
         .retire(itemID: $0.id, reason: .retention)
     }
 
-    if let storagePolicy {
-        var candidates = eligible.filter { !r1VictimIDs.contains($0.id) }
-        // Same eviction-order sort: O(N log N) in candidates; the §9
-        // envelope only rejects quadratic over the measured scales.
-        candidates.sort(by: expansionEvictionRanksBefore)
-        // Retire oldest eligible until the budget is restored — never
-        // further (RET-SELECT-1(b)). Exhausting the candidates while still
-        // over budget is the defensively-total unsatisfiable case documented
-        // above: the pipeline's pre-plan feasibility check prevents it.
-        for item in candidates {
-            guard projectedTotalBytes > storagePolicy.maxTotalBytes else { break }
-            retirements.append(.retire(itemID: item.id, reason: .retention))
-            projectedTotalBytes = checkedByteSubtract(
-                projectedTotalBytes,
-                retainedBytes(of: item)
-            )
+    if let storagePolicy, projectedTotalBytes > storagePolicy.maxTotalBytes {
+        // R1 may already have restored the byte budget. Otherwise the usual
+        // capture overflow needs only its oldest eligible row: find that row
+        // in O(N) without copying/sorting the entire survivor inventory.
+        let candidates = eligible.filter { !r1VictimIDs.contains($0.id) }
+        if let oldest = candidates.min(by: expansionEvictionRanksBefore),
+           checkedByteSubtract(projectedTotalBytes, retainedBytes(of: oldest))
+            <= storagePolicy.maxTotalBytes {
+            retirements.append(.retire(itemID: oldest.id, reason: .retention))
+        } else {
+            // Multi-item reductions still establish the full O(N log N)
+            // eviction order. Keep taking its prefix until the budget holds;
+            // a larger newer item must never displace an older small item.
+            for item in candidates.sorted(by: expansionEvictionRanksBefore) {
+                guard projectedTotalBytes > storagePolicy.maxTotalBytes else { break }
+                retirements.append(.retire(itemID: item.id, reason: .retention))
+                projectedTotalBytes = checkedByteSubtract(
+                    projectedTotalBytes,
+                    retainedBytes(of: item)
+                )
+            }
         }
     }
 

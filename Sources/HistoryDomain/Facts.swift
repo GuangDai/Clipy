@@ -55,6 +55,26 @@ package struct CompleteRetentionInventory: Sendable {
     }
 }
 
+/// Capture needs exact counts and only the oldest unpinned rows that could
+/// become victims. Storage supplies at least the maximum possible victim
+/// count plus one row for excluding a coalescing primary (02 §12).
+/// This is an ordered prefix, never a purported complete retained inventory.
+package struct CaptureRetentionFacts: Sendable {
+    package let retainedCount: Int
+    package let unpinnedCount: Int
+    package let oldestUnpinnedItems: [RetainedItemSummary]
+
+    package init(
+        retainedCount: Int,
+        unpinnedCount: Int,
+        oldestUnpinnedItems: [RetainedItemSummary]
+    ) {
+        self.retainedCount = retainedCount
+        self.unpinnedCount = unpinnedCount
+        self.oldestUnpinnedItems = oldestUnpinnedItems
+    }
+}
+
 /// The complete facts capture planning requires.
 /// docs/02-domain.md §5.1
 ///
@@ -65,15 +85,18 @@ package struct CompleteRetentionInventory: Sendable {
 package struct IngestFacts: Sendable {
     package let hintedItem: HistoryItemState?
     package let candidates: CompleteDedupCandidates
-    package let retention: CompleteRetentionInventory
+    package let candidateIDExists: Bool
+    package let retention: CaptureRetentionFacts
 
     package init(
         hintedItem: HistoryItemState?,
         candidates: CompleteDedupCandidates,
-        retention: CompleteRetentionInventory
+        candidateIDExists: Bool,
+        retention: CaptureRetentionFacts
     ) {
         self.hintedItem = hintedItem
         self.candidates = candidates
+        self.candidateIDExists = candidateIDExists
         self.retention = retention
     }
 }

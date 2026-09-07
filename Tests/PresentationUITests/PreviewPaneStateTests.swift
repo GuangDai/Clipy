@@ -25,6 +25,33 @@ struct PreviewPaneStateTests {
         PreviewPaneState(autoOpenDelay: .zero)
     }
 
+    @Test func criticalPressureStopsDwellButKeepsManualPreviewAndUserPreference() async {
+        let state = makeState()
+        let item = reference()
+        state.handleSelectionChange(item)
+        state.respondToMemoryPressure(.critical)
+        #expect(state.isAutoOpenSuspendedForMemoryPressure)
+        #expect(state.isAutoOpenPreferenceEnabled)
+        state.handleSelectionChange(reference())
+        #expect(!state.isOpen)
+        state.togglePreview(for: item)
+        #expect(state.isOpen)
+        #expect(state.previewedItem == item)
+        state.togglePreview(for: item)
+        state.respondToMemoryPressure(.warning)
+        #expect(state.isAutoOpenSuspendedForMemoryPressure)
+        state.respondToMemoryPressure(.normal)
+        #expect(!state.isOpen)
+        state.handleSelectionChange(item)
+        await waitForScheduledDwell { state.isOpen }
+        #expect(state.previewedItem == item)
+        state.togglePreview(for: item)
+        state.isAutoOpenPreferenceEnabled = false
+        state.respondToMemoryPressure(.critical)
+        state.respondToMemoryPressure(.normal)
+        #expect(!state.isAutoOpenPreferenceEnabled)
+    }
+
     /// Waits for a zero-delay dwell already queued on the MainActor. A clock
     /// deadline can expire before either this test or the dwell regains the
     /// actor on a saturated runner; yielding instead observes causal task
@@ -287,6 +314,30 @@ struct PreviewPaneStateTests {
         #expect(state.previewedItem == second)
     }
 
+    @Test(arguments: [false, true])
+    func purgingVisibleContentPreservesAnotherItemsPendingDwell(isRevision: Bool) async {
+        let state = makeState()
+        defer { state.panelClosed() }
+        let visible = reference()
+        let selected = reference()
+        let replacement = HistoryItemReference(
+            id: visible.id, contentVersion: ContentVersion(rawValue: 2)
+        )
+        state.togglePreview(for: visible)
+        state.handleSelectionChange(selected)
+        // Apply the receipt before the selected item's zero-delay dwell can
+        // run. Only the previously visible item belongs to this purge.
+        state.purge(isRevision
+            ? .revision(old: visible, new: replacement)
+            : .item(visible.id))
+        #expect(state.purgeGeneration == 1)
+        #expect(state.previewedItem == (isRevision ? replacement : nil))
+
+        await waitForScheduledDwell { state.previewedItem == selected }
+        #expect(state.isOpen)
+        #expect(state.previewedItem == selected)
+    }
+
     @Test func dwellRetargetsAnAlreadyOpenPreview() async {
         let state = makeState()
         let first = reference()
@@ -310,9 +361,8 @@ struct PreviewPaneStateTests {
         #expect(state.previewedItem == nil)
     }
 
-    /// Purge generation, not cooperative task cancellation, is the final
-    /// fence: a zero-delay dwell scheduled before Clear cannot reopen the
-    /// pane after the destructive receipt is applied.
+    /// Clear removes the pending exact target and cancels its task before
+    /// the queued zero-delay dwell can reopen the pane.
     @Test func clearPurgeFencesQueuedDwellCompletion() async {
         let state = PreviewPaneState(autoOpenDelay: .zero)
         let item = reference()

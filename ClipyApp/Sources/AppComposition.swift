@@ -7,9 +7,11 @@
 /// caller example docs/03b-instruction-set.md §12; store startup
 /// docs/05-authority-kernel.md §2/§13; roadmap docs/roadmap/06-clipyapp.md
 /// (step 9b).
+import AppKit
 import Foundation
 import HistoryCore
 import HistoryStorage
+import LocalAutomation
 import PasteboardAdapter
 import PresentationUI
 
@@ -220,6 +222,7 @@ final class AppComposition {
     /// task can reach its first `await`, so a second UI gesture is rejected as
     /// `.busy` instead of entering FIFO/latest-wins machinery (CLIP-5).
     private var pasteTask: Task<Void, Never>?
+    private let filePreviewLoader = LocalFilePreviewLoader()
 
 #if DEBUG
     /// App-internal deterministic results used by hosted composition tests
@@ -337,6 +340,10 @@ final class AppComposition {
         .first!
         .appendingPathComponent("Clipy", isDirectory: true)
         .appendingPathComponent("history.store")
+
+    /// Optional automation is composed only after the real store opens.
+    /// Test-only memory compositions never acquire the user's fixed socket.
+    private(set) var localAutomation: LocalAutomationController?
 
     /// Assembles one coherent app graph from the two true boundary values.
     /// View state and observer are always derived here, so tests cannot pair
@@ -474,7 +481,12 @@ final class AppComposition {
                 capturePauseDuration: capturePauseDuration,
                 injectEditorJourney: injectEditorJourney
             )
-            try Task.checkCancellation()
+            do {
+                try Task.checkCancellation()
+            } catch {
+                await composition.stopLocalAutomation()
+                throw error
+            }
             composition.start(
                 workspaceActivity: workspaceActivityProvider()
             )
@@ -517,6 +529,23 @@ final class AppComposition {
                 forcedInitialCaptureAccessBehavior,
             capturePauseDuration: capturePauseDuration
         )
+        if storeURL.standardizedFileURL == defaultStoreURL.standardizedFileURL {
+            let relay = composition.panelSurfacePurgeRelay
+            let controller = LocalAutomationController(
+                ingress: history.localAutomationIngress(
+                    onCommittedRemoval: { itemID in
+                        await relay.acceptCommittedExternalRemoval(itemID)
+                    },
+                    onCommittedRevision: { old, commit in
+                        await relay.acceptCommittedExternalRevision(from: old, commit: commit)
+                    }
+                )
+            )
+            composition.localAutomation = controller
+            // Automation availability does not determine clipboard capture
+            // availability. Settings can retry a listener or custody failure.
+            try? await controller.startIfEnabled()
+        }
 #if DEBUG
         if injectEditorJourney {
             composition.viewState
@@ -547,6 +576,14 @@ final class AppComposition {
         // There is no mailbox, pending queue, or nested task.
         viewState.onPaste = { [weak self] item in
             self?.requestPaste(item)
+        }
+        viewState.onExportRepresentation = { representation in
+            guard let window = NSApp.keyWindow else { return .failure(.unavailable) }
+            return await RepresentationExporter.saveAs(representation, for: window)
+        }
+        let filePreviewLoader = self.filePreviewLoader
+        viewState.filePreviewSettings = FilePreviewSettings { address in
+            try await filePreviewLoader.load(address)
         }
         viewState.onCommittedUserRemoval = { [weak self] purge in
             self?.panelSurfacePurgeRelay.apply(purge)
@@ -591,11 +628,16 @@ final class AppComposition {
     /// publish a late side effect after shutdown.
     func stop() {
         isStarted = false
+        if let localAutomation {
+            Task { await localAutomation.stop() }
+        }
         capturePauseTask?.cancel()
         capturePauseTask = nil
         reconcileCaptureObservation()
         viewState.deactivate()
         viewState.onPaste = { _ in }
+        viewState.filePreviewSettings = nil
+        viewState.onExportRepresentation = { _ in .failure(.unavailable) }
         viewState.onCommittedUserRemoval = { _ in }
         pendingCapture = nil
         drainsPreInactivityPendingCapture = false
@@ -603,9 +645,28 @@ final class AppComposition {
         captureTask = nil
         activeCaptureBytes = 0
         publishCaptureHealthIfChanged()
+        cancelPendingPaste()
+    }
+
+    func stopLocalAutomation() async {
+        await localAutomation?.stop()
+    }
+
+    /// Card 7/14: Copy belongs to the panel session that admitted it. Closing
+    /// that session retires an unresolved payload before it can overwrite the
+    /// pasteboard or close a subsequently reopened panel. The existing
+    /// post-read cancellation check precedes the synchronous MainActor write;
+    /// cancellation never attempts to undo an already completed write.
+    func cancelPendingPaste() {
         pasteTask?.cancel()
         pasteTask = nil
     }
+
+#if DEBUG
+    /// Lets hosted tests join the exact cancelled task after its deliberately
+    /// non-cooperative History read returns, without scheduler-turn guesses.
+    var pendingPasteForTesting: Task<Void, Never>? { pasteTask }
+#endif
 
     /// Card 14C: apply the AppDelegate-owned power/login-session facts without
     /// changing the user's access/Pause choice. Becoming inactive stops new
@@ -744,6 +805,10 @@ final class AppComposition {
     var hasCapturePauseDeadlineForTesting: Bool {
         capturePauseTask != nil
     }
+
+    /// Joins the owned deadline after a test releases its substituted sleep,
+    /// including a non-cooperative return after stop or manual Resume.
+    var capturePauseTaskForTesting: Task<Void, Never>? { capturePauseTask }
 
     /// Content-free Card 14C owner facts for hosted notification tests.
     var isCaptureObservationActiveForTesting: Bool { acceptsCaptures }

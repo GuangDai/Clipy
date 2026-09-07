@@ -325,15 +325,72 @@ struct AppPasteOrchestrationTests {
 
         composition.viewState.requestPaste(item)
         await pausingHistory.waitUntilPastePayloadIsPaused()
+        let pendingPaste = try #require(composition.pendingPasteForTesting)
         composition.stop()
         await pausingHistory.resumePastePayload()
-        await pausingHistory.waitUntilPastePayloadCompleted()
-        await Task.yield()
+        await pendingPaste.value
 
         #expect(pasteboard.changeCount == changeCountBeforeRequest)
         #expect(pasteboard.pasteboardItems?.isEmpty ?? true)
         #expect(completionCount == 0)
         #expect(failures.isEmpty)
+    }
+
+    /// Card 7/14: a payload parked in the old panel session must not write
+    /// into the newly summoned session or dismiss it. Join the actual retired
+    /// task before checking the unchanged private pasteboard, then prove that
+    /// a new explicit Copy still writes and closes through production wiring.
+    @Test @MainActor
+    func panelCloseCancelsUnresolvedCopyAndReopenAcceptsANewCopy() async throws {
+        try ComposedSupport.requireUsablePasteboard()
+        let history = try await ComposedSupport.openMemoryHistory()
+        let receipt = try await history.perform(.capture(
+            ComposedSupport.textCapture(
+                "copy from a fresh panel session",
+                observedAt: Date(timeIntervalSinceReferenceDate: 700_203_275)
+            )
+        ))
+        let item = try #require(
+            ComposedSupport.insertedReference(from: receipt, "session arrange")
+        )
+        let pasteboard = ComposedSupport.makePasteboard()
+        ComposedSupport.setPasteboardContents("previous owner", on: pasteboard)
+        let pausingHistory = PausingPastePayloadHistory(base: history)
+        let composition = AppComposition.makeForTesting(
+            history: pausingHistory,
+            adapter: PasteboardAdapter(pasteboard: pasteboard)
+        )
+        let appDelegate = AppDelegate()
+        appDelegate.installCompositionForTesting(composition)
+        defer {
+            appDelegate.closePanel()
+            composition.stop()
+        }
+        appDelegate.openPanelForTesting()
+        let panel = try #require(appDelegate.panelForTesting)
+        let changeCountBeforeCopy = pasteboard.changeCount
+        composition.viewState.requestPaste(item)
+        await pausingHistory.waitUntilPastePayloadIsPaused()
+        let pendingPaste = try #require(composition.pendingPasteForTesting)
+
+        appDelegate.closePanel()
+        #expect(composition.pendingPasteForTesting == nil)
+        appDelegate.openPanelForTesting()
+        await pausingHistory.resumePastePayload()
+        await pendingPaste.value
+
+        #expect(panel.isPresented)
+        #expect(appDelegate.panelSurfaceState?.isSessionActive == true)
+        #expect(appDelegate.pasteFailure == nil)
+        #expect(pasteboard.changeCount == changeCountBeforeCopy)
+        #expect(pasteboard.string(forType: .string) == "previous owner")
+
+        composition.viewState.requestPaste(item)
+        let newPaste = try #require(composition.pendingPasteForTesting)
+        await newPaste.value
+        #expect(pasteboard.string(forType: .string) == "copy from a fresh panel session")
+        #expect(!panel.isPresented)
+        #expect(appDelegate.pasteFailure == nil)
     }
 
     /// A current-by-ID resolution failure is part of the copy lane's typed,
@@ -524,9 +581,7 @@ private actor PausingPastePayloadHistory: ClipboardHistory {
     private var didPause = false
     private var pauseContinuation: CheckedContinuation<Void, Never>?
     private var observerContinuations: [CheckedContinuation<Void, Never>] = []
-    private(set) var completedPastePayloadCount = 0
     private(set) var resolvedPastePayloadItem: HistoryItemReference?
-    private var completionContinuations: [CheckedContinuation<Void, Never>] = []
 
     init(base: SwiftDataHistory) {
         self.base = base
@@ -542,13 +597,6 @@ private actor PausingPastePayloadHistory: ClipboardHistory {
     func resumePastePayload() {
         pauseContinuation?.resume()
         pauseContinuation = nil
-    }
-
-    func waitUntilPastePayloadCompleted() async {
-        guard completedPastePayloadCount == 0 else { return }
-        await withCheckedContinuation { continuation in
-            completionContinuations.append(continuation)
-        }
     }
 
     func perform(_ action: HistoryAction) async throws -> HistoryReceipt {
@@ -586,12 +634,6 @@ private actor PausingPastePayloadHistory: ClipboardHistory {
             await withCheckedContinuation { continuation in
                 pauseContinuation = continuation
             }
-        }
-        completedPastePayloadCount += 1
-        let completions = completionContinuations
-        completionContinuations.removeAll()
-        for continuation in completions {
-            continuation.resume()
         }
         return payload
     }

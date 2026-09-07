@@ -163,7 +163,16 @@ public final class HistoryPanelSurfaceState {
     public private(set) var appliedPurgeGeneration = 0
     public private(set) var sessionGeneration = 0
     public private(set) var isSessionActive = false
+    public private(set) var memoryPressure: DisplayMemoryPressure = .normal
+    package private(set) var memoryPressureGeneration = 0
     public var isAtListRoot: Bool { detailsPath.isEmpty }
+
+    public func respondToMemoryPressure(_ pressure: DisplayMemoryPressure) {
+        memoryPressure = pressure
+        memoryPressureGeneration += 1
+        thumbnails.respondToMemoryPressure(pressure)
+        previewState.respondToMemoryPressure(pressure)
+    }
     package private(set) var detailsPurgeGeneration = 0
 
     private let previewState: PreviewPaneState
@@ -261,6 +270,7 @@ public final class HistoryPanelSurfaceState {
     public func beginSession(rows: [HistoryRow]) {
         sessionGeneration += 1
         isSessionActive = true
+        thumbnails.isSurfaceActive = true
         detailsPath.removeAll()
         quickLookReference = nil
         selection = PanelSessionSelection.preparedSelection(in: rows)
@@ -273,6 +283,7 @@ public final class HistoryPanelSurfaceState {
     public func endSession() {
         guard isSessionActive else { return }
         isSessionActive = false
+        thumbnails.isSurfaceActive = false
         detailsPath.removeAll()
         isAwaitingInitialSelection = false
         selection = nil
@@ -300,7 +311,8 @@ public final class HistoryPanelSurfaceState {
 
     package func reconcileSessionSelection(
         rows: [HistoryRow],
-        hasAuthoritativeFirstPage: Bool = true
+        hasAuthoritativeFirstPage: Bool = true,
+        selectsVisibleWindow: Bool = false
     ) {
         guard isSessionActive else { return }
         // Query restart synchronously clears `HistoryViewState.rows` before
@@ -322,7 +334,10 @@ public final class HistoryPanelSurfaceState {
         }
         guard rows.contains(where: { $0.item.id == selection }) else {
             isAwaitingInitialSelection = false
-            self.selection = nil
+            // Moving a bounded page window is navigation, not deletion.
+            // Keep a visible keyboard target without executing the evicted ID.
+            self.selection = selectsVisibleWindow
+                ? PanelSessionSelection.preparedSelection(in: rows) : nil
             return
         }
         isAwaitingInitialSelection = false
@@ -596,6 +611,11 @@ public struct HistoryPanelView: View {
             // Keep only this column layout/handle geometry unmirrored; each
             // column restores the user's direction for its own controls/text.
             .environment(\.layoutDirection, .leftToRight)
+            .environment(\.displayMemoryPressure, surfaceState.memoryPressure)
+            .environment(\.displayMemoryPressureGeneration, surfaceState.memoryPressureGeneration)
+            .onChange(of: surfaceState.memoryPressureGeneration, initial: true) { _, _ in
+                sourceIcons?.respondToMemoryPressure(surfaceState.memoryPressure)
+            }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("clipy.panel.root")
             .background { hiddenShortcuts }
@@ -612,7 +632,8 @@ public struct HistoryPanelView: View {
                 previewState.isAutoOpenPreferenceEnabled =
                     newAppearance.isPreviewAutoOpenEnabled
             }
-            .onChange(of: surfaceState.isSessionActive) { _, isActive in
+            .onChange(of: surfaceState.isSessionActive, initial: true) { _, isActive in
+                sourceIcons?.isSurfaceActive = isActive
                 if !isActive { isSearchFieldFocused = false }
             }
             .onChange(of: surfaceState.selection) { _, newSelection in
@@ -632,6 +653,10 @@ public struct HistoryPanelView: View {
                     // an otherwise valid selection; Return remains disabled by
                     // the exact-reference check until authoritative rows return.
                     guard viewState.hasAuthoritativeFirstPage else { return }
+                    if viewState.hasWindowedPages {
+                        reconcileSelectionWithDisplayedDefault()
+                        return
+                    }
                     surfaceState.selection = nil
                     previewState.handleSelectionChange(nil)
                     return
@@ -1053,7 +1078,8 @@ public struct HistoryPanelView: View {
     private func reconcileSelectionWithDisplayedDefault() {
         surfaceState.reconcileSessionSelection(
             rows: viewState.rows,
-            hasAuthoritativeFirstPage: viewState.hasAuthoritativeFirstPage
+            hasAuthoritativeFirstPage: viewState.hasAuthoritativeFirstPage,
+            selectsVisibleWindow: viewState.hasWindowedPages
         )
         retargetHiddenSelectionToDisplayedDefault()
     }
@@ -1242,8 +1268,8 @@ public struct HistoryPanelView: View {
         bundle: Bundle = .module
     ) -> String {
         HistoryCountCopy.items(
-            count: viewState.displayedRows.count,
-            hasNextPage: viewState.hasNextPage,
+            count: viewState.displayedCount,
+            hasNextPage: viewState.displayedCountIsLowerBound,
             locale: locale,
             bundle: bundle
         )

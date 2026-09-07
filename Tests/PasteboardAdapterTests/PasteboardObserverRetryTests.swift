@@ -5,11 +5,15 @@
 import AppKit
 import Foundation
 import HistoryCore
-import Synchronization
 import Testing
 @testable import PasteboardAdapter
 
 #if DEBUG
+@MainActor
+private final class RetryAccessBehavior {
+    var value = PasteboardAccessBehavior.allowed
+}
+
 /// Exercise reentry during either the first freeze or its one ownership
 /// retry. The nested poll consumes the newer generation; returning to the
 /// outer stack must neither read it again nor issue a second callback.
@@ -72,7 +76,12 @@ private func replaceString(
 @Test @MainActor
 func observerRetriesChangedFreezeOnceAndEmitsOnlyStableCompleteOutcome() throws {
     let pasteboard = makeRetryPasteboard()
+    defer { pasteboard.releaseGlobally() }
     replaceString(on: pasteboard, with: "old-generation")
+    #expect(pasteboard.setData(
+        Data("<b>old-generation</b>".utf8),
+        forType: NSPasteboard.PasteboardType("public.html")
+    ))
 
     var payloadReads = 0
     var replacedInitialGeneration = false
@@ -91,6 +100,8 @@ func observerRetriesChangedFreezeOnceAndEmitsOnlyStableCompleteOutcome() throws 
 
     #expect(received.count == 1)
     let outcome = try #require(received.first)
+    // One old payload discovers the ownership change; only the new single
+    // representation is read by the retry. The old sibling stays unread.
     #expect(payloadReads == 2)
     guard case let .complete(value) = outcome else {
         Issue.record("expected the stable retry to be the only complete outcome")
@@ -139,13 +150,13 @@ func observerStopsAfterOneRetryAndEmitsOneTerminalContentFreeOutcome() throws {
 func observerChecksRevocationBeforeReadingChangedPasteboardItems() {
     let pasteboard = makeRetryPasteboard()
     replaceString(on: pasteboard, with: "allowed-generation")
-    let accessBehavior = Mutex(PasteboardAccessBehavior.allowed)
+    let accessBehavior = RetryAccessBehavior()
     var payloadReads = 0
     var adapter = PasteboardAdapter(pasteboard: pasteboard)
     adapter.payloadReadObserver = { _ in payloadReads += 1 }
     let observer = PasteboardObserver(adapter: adapter)
     observer.setAccessBehaviorProviderForTesting {
-        accessBehavior.withLock { $0 }
+        accessBehavior.value
     }
     var accessEvents: [PasteboardAccessBehavior] = []
     var received: [CaptureOutcome] = []
@@ -159,12 +170,68 @@ func observerChecksRevocationBeforeReadingChangedPasteboardItems() {
     #expect(payloadReads == 1)
     #expect(received.count == 1)
 
-    accessBehavior.withLock { $0 = .denied }
+    accessBehavior.value = .denied
     replaceString(on: pasteboard, with: "denied-generation")
     observer.pollForTesting()
 
     #expect(accessEvents == [.allowed, .denied])
     #expect(payloadReads == 1)
+    #expect(received.count == 1)
+}
+
+@Test(arguments: [
+    PasteboardAccessBehavior.denied, .ask, .systemDefault, .unavailable
+]) @MainActor
+func observerRechecksAccessBeforeOwnershipRetry(
+    revokedBehavior: PasteboardAccessBehavior
+) throws {
+    let pasteboard = makeRetryPasteboard()
+    defer { pasteboard.releaseGlobally() }
+    replaceString(on: pasteboard, with: "initially-allowed")
+    let accessBehavior = RetryAccessBehavior()
+    var payloadReads = 0
+    var adapter = PasteboardAdapter(pasteboard: pasteboard)
+    adapter.payloadReadCompletionHook = { _ in
+        payloadReads += 1
+        guard payloadReads == 1 else { return }
+        accessBehavior.value = revokedBehavior
+        replaceString(on: pasteboard, with: "current-after-revocation")
+    }
+    let observer = PasteboardObserver(adapter: adapter, pollInterval: 60)
+    observer.setAccessBehaviorProviderForTesting { accessBehavior.value }
+    defer { observer.stop() }
+    var accessEvents: [PasteboardAccessBehavior] = []
+    var received: [CaptureOutcome] = []
+    observer.start(
+        onAccessBehaviorChanged: { accessEvents.append($0) },
+        handler: { received.append($0) }
+    )
+
+    #expect(accessEvents == [.allowed, revokedBehavior])
+    #expect(payloadReads == 1)
+    #expect(received.isEmpty)
+    observer.pollForTesting()
+    #expect(accessEvents == [.allowed, revokedBehavior])
+    #expect(payloadReads == 1)
+    #expect(received.isEmpty)
+
+    // Without an owner stopping the timer, recovery still observes the
+    // unread current generation once; the refused retry did not consume it.
+    accessBehavior.value = .allowed
+    observer.pollForTesting()
+    #expect(accessEvents == [.allowed, revokedBehavior, .allowed])
+    #expect(payloadReads == 2)
+    #expect(received.count == 1)
+    guard case let .complete(complete) = try #require(received.first) else {
+        Issue.record("expected the complete generation after access recovery")
+        return
+    }
+    #expect(complete.capture.representations == [CapturedRepresentation(
+        typeIdentifier: NSPasteboard.PasteboardType.string.rawValue,
+        bytes: Data("current-after-revocation".utf8)
+    )])
+    observer.pollForTesting()
+    #expect(payloadReads == 2)
     #expect(received.count == 1)
 }
 #endif

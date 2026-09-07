@@ -121,32 +121,23 @@ struct QuickLookReferenceTests {
     }
 
     @Test(arguments: [false, true])
-    func dismissedQuickLookCannotPublishALateDetailsCompletion(revised: Bool) async throws {
-        let history = PausableDetailsHistory()
+    func dismissedQuickLookCannotPublishALatePayloadCompletion(revised: Bool) async throws {
+        let history = PausablePreviewHistory()
         let item = row().item
         let content = [HistoryRepresentation(
             typeIdentifier: "public.utf8-plain-text", bytes: Data("old sensitive content".utf8)
         )]
-        await history.scriptDetails(HistoryDetails(
+        await history.scriptPayload(PastePayload(
             item: item,
-            canonical: content,
-            effective: content,
-            revisions: [],
-            occurrence: CopyOccurrenceSummary(
-                firstCopiedAt: Date(timeIntervalSince1970: 1),
-                lastCopiedAt: Date(timeIntervalSince1970: 1),
-                count: 1,
-                firstSource: nil,
-                lastSource: nil
-            ),
-            pinnedPosition: nil
+            representations: content,
+            lineageHint: item.id
         ))
         let surface = surface(history: history)
         let loader = PreviewContentLoader(history: history)
         let load = Task {
             await loader.load(item: surface.resolvedQuickLookReference(in: [row()]))
         }
-        try #require(await pollUntil { await history.detailRequests == [item.id] })
+        try #require(await pollUntil { await history.payloadRequests == [item.id] })
 
         let latestRows = revised ? [row(version: 2)] : []
         #expect(surface.resolvedQuickLookReference(in: latestRows) == nil)
@@ -154,11 +145,10 @@ struct QuickLookReferenceTests {
         // The overlay is removed with an identity transition. Its embedded
         // HistoryPreviewView.onDisappear invokes this real loader operation.
         loader.clear()
-        await history.resumeDetails(for: item.id)
+        await history.resumePayload(for: item.id)
         await load.value
         #expect(surface.quickLookReference == nil)
         #expect(loader.requestedItem == nil)
         #expect(loader.phase == .unsupported)
-        #expect(loader.occurrence == nil)
     }
 }

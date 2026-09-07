@@ -113,8 +113,11 @@ The current item shape is:
 ```swift
 @Model
 internal final class HistoryItemRow {
+    #Index<HistoryItemRow>([\.pinOrdinal, \.lastCopiedAt, \.idOrder])
+
     @Attribute(.unique)
     var id: UUID
+    var idOrder: String   // id.uuidString, lexical ordering only
 
     var contentVersionRaw: UInt64
 
@@ -379,21 +382,27 @@ Each public action selects one loader. There is no generic partial map.
 
 #### 7.1 Capture
 
-1. Fetch the complete scalar retention inventory once, derive the retained ID
-   set from its already duplicate-checked summaries, and require Signature
-   Index state `.ready` for exactly that set. If the inventory fetch is
-   unavailable or over the hard bound, candidacy cannot be proved and capture
-   returns `.temporarilyUnavailable(.dedupIndexRebuild)` (WS5). If the index is
-   unready or its retained-ID coverage differs, attempt one complete rebuild
+1. Count retained and unpinned items without materializing their rows. Require
+   Signature Index state `.ready`; startup establishes complete membership and
+   each isolated commit maintains it through its delta. An unavailable count
+   or count above the hard bound returns
+   `.temporarilyUnavailable(.dedupIndexRebuild)` (WS5). If the index is
+   unready or its retained count differs, attempt one complete rebuild
    from every retained row's Canonical and signature blobs within the hard
    item bound, recomputing xxh3 before absence becomes negative evidence.
 2. Intersect posting sets for all incoming signature entries.
 3. Fetch and fully decode every candidate ID.
-4. If a lineage hint exists, fetch it separately by ID even when it is absent from the candidate intersection.
-5. Use the same step-1 inventory as the complete retention fact; do not issue
-   a second overlapping table scan or rebuild the retained-ID set merely to
-   compare two same-interval fetches.
-6. Verify candidate IDs, retained IDs, and the actor-owned index value agree before constructing `IngestFacts`.
+4. Resolve a lineage hint from the already decoded candidates, or fetch it by
+   ID when absent from that intersection.
+5. Point-read the prepared candidate ID's occupancy. Fetch only the oldest
+   unpinned prefix needed by the largest possible count-retention effect,
+   plus one row for excluding a coalescing primary. A current `idOrder` UUID
+   text scalar and native compound index on `(pinOrdinal,lastCopiedAt,idOrder)`
+   make this prefix bounded even for equal timestamps; the UUID remains the
+   business identity. No new model or migration is involved.
+6. Construct `IngestFacts` from complete candidates, exact counts, and the
+   bounded `CaptureRetentionFacts` prefix. R1/R2 expansion separately loads
+   the complete scalar inventory only when those policies are enabled.
 
 Steps 1–6 and the subsequent plan→transaction→index-apply sequence execute in
 one non-suspending `HistoryAuthority` interval. Actor isolation is therefore
@@ -627,8 +636,9 @@ Correctness requirements:
 
 The index is actor-owned value state, not a second persistence authority.
 Its complete value is rebuilt or mutated only inside the non-suspending
-Authority interval; readiness plus retained-ID coverage is the complete
-same-interval proof, rather than an otherwise unread generation counter.
+Authority interval. Startup establishes retained-ID coverage and commit
+deltas maintain it; ordinary captures compare the count and point-read
+candidates without rescanning every retained ID.
 
 ### 13. Startup
 
@@ -677,12 +687,11 @@ Within one Authority interval:
   `fetchOffset = anchorOrdinal`, fetches the anchor plus page and lookahead
   (at most `limit + 2`), verifies the complete anchor, then drops it; this
   preserves O(`limit`) work without accepting a malformed cursor;
-- for an unpinned continuation, fetch at most `limit + 2` in the normal case:
-  the inclusive date bound returns the anchor plus `limit` rows and one
-  lookahead. Because the store is not trusted to sort UUID ties, a full slice
-  is ordered by `(lastCopiedAt DESC, id ASC)` and re-fetched up to the hard
-  retained-item bound when consumed same-date rows contaminate the slice head,
-  the anchor is absent, or the true page/lookahead boundary ties;
+- for an unpinned continuation, fetch at most `limit + 2` using the inclusive
+  `(lastCopiedAt DESC, idOrder lexical ASC)` keyset predicate. The persisted
+  UUID text column preserves the business-ID byte order even at equal dates.
+  Verify that the first result matches the full anchor, then drop it. No
+  tie-group expansion, complete-lane fetch, or Swift-side heap is needed;
 - return a value `HistoryPage` and opaque cursor.
 
 No Canonical/revision blob is decoded.
@@ -733,7 +742,7 @@ a partial total. Content blobs are not decoded, and the read writes no state.
 
 #### 14.5 Thumbnail source
 
-`ThumbnailService` installs an exact-key source-to-decode task before its first suspension. The creator asks the Authority to fetch and fully hydrate exactly one item, verify the requested Content Version, derive Effective Content, and return immutable source image bytes. An existing-flight caller instead asks the Authority for a scalar-only dimension/existence/version fence before awaiting that task. ImageIO decode occurs only after all SwiftData objects and context have been released; no joiner rehydrates the content blob.
+`ThumbnailService` installs an exact-key source-to-decode task before its first suspension. The creator asks the Authority to verify the requested Content Version from scalar fields before accessing content blobs, then fully hydrate the current item, derive Effective Content, and return immutable source image bytes. An existing-flight caller uses the same scalar dimension/existence/version check before awaiting that task. Current source reads retain complete codec validation. ImageIO decode occurs only after all SwiftData objects and context have been released; no joiner rehydrates the content blob.
 
 Distinct creators wait for the preceding source-to-decode operation to finish
 before loading their own source. Waiting tasks retain request identity and the

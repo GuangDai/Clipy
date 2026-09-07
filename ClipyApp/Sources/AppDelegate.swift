@@ -16,6 +16,7 @@
 /// production store open; the suites compose their own stacks with private
 /// pasteboards and temp stores.
 import AppKit
+import Dispatch
 import HistoryCore
 import HistoryStorage
 import Observation
@@ -371,6 +372,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// no generic notification router or second lifecycle object is created.
     @ObservationIgnored
     private var workspaceLifecycleNotificationCenter: NotificationCenter?
+    @ObservationIgnored var memoryPressureSource: (any DispatchSourceMemoryPressure)?
+    var displayMemoryPressure: DisplayMemoryPressure = .normal
+#if DEBUG
+    var memoryPressureRegistrationCountForTesting = 0
+    var memoryPressureCancellationCountForTesting = 0
+#endif
     @ObservationIgnored
     private var workspaceLifecycleObserverTokens: [NSObjectProtocol] = []
     private var workspaceActivity = WorkspaceActivityState.active
@@ -411,6 +418,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // session. Register here so the store-open provider receives the
         // authoritative initial session fact.
         installWorkspaceLifecycleObservation()
+        installMemoryPressureObservation()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -434,6 +442,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         stopSummonShortcut()
+        removeMemoryPressureObservation()
         removeWorkspaceLifecycleObservation()
         if let defaultsObserverToken {
             NotificationCenter.default.removeObserver(defaultsObserverToken)
@@ -770,10 +779,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Bookkeeping after every panel close: reset the keep-open pin (it is
-    /// per-session state, never a preference), disarm the preview pane, and
-    /// stop the view-state observation until the next summon.
+    /// per-session state, never a preference), retire its unresolved Copy,
+    /// disarm the preview pane, and stop observation until the next summon.
     private func panelDidClose() {
         isPanelKeepOpenActive = false
+        composition?.cancelPendingPaste()
         panelSurfaceState?.endSession()
         composition?.viewState.deactivate()
     }
@@ -970,6 +980,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         opened.installPanelSurface(panelSurfaceState)
         self.panelSurfaceState = panelSurfaceState
+        panelSurfaceState.respondToMemoryPressure(displayMemoryPressure)
         // Paste ⇒ close the panel (Maccy's paste-dismiss); the panel never
         // activates the app, so the paste target keeps focus.
         opened.onPasteCompleted = { [weak self] in
@@ -1194,6 +1205,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Settings / position configuration
+
+    /// Maintenance and the open-failure Reveal action use the same locator.
+    /// The default parent is Application Support/Clipy; a custom locator may
+    /// share its folder, so the presentation explicitly includes other files.
+    func storageLocationSettings() -> StorageLocationSettings {
+        let directory = compositionStoreURL.deletingLastPathComponent()
+        let usage = StoreFolderUsage(directoryURL: directory)
+        let memory = ProcessMemoryReader()
+        return StorageLocationSettings(
+            directoryPath: directory.path,
+            allocatedBytes: { try await usage.allocatedBytes() },
+            processMemory: { try await memory.read() },
+            reveal: { [weak self] in self?.revealStoreLocation() }
+        )
+    }
 
     // Settings presentation moved to PanelRootView's
     // `@Environment(\.openSettings)` (audit S-5 / SPEC-IMPL-010): the

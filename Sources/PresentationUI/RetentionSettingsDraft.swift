@@ -21,11 +21,24 @@ internal struct RetentionSettingsDraft {
     internal struct Submission: Sendable {
         internal let policies: HistoryRetentionPolicies
         fileprivate let editGeneration: UInt64
+        fileprivate let ageEnabled: Bool
+        fileprivate let ageDaysText: String
+        fileprivate let storageEnabled: Bool
+        fileprivate let storageMiBText: String
+        fileprivate let revisionCountEnabled: Bool
+        fileprivate let revisionCountText: String
+        fileprivate let revisionBytesEnabled: Bool
+        fileprivate let revisionMiBText: String
+        fileprivate let ageValueWasDirty: Bool
+        fileprivate let storageValueWasDirty: Bool
+        fileprivate let revisionCountValueWasDirty: Bool
+        fileprivate let revisionBytesValueWasDirty: Bool
     }
 
     internal struct CountSubmission: Sendable {
         internal let maximumUnpinnedItems: Int
         fileprivate let editGeneration: UInt64
+        fileprivate let countEditGeneration: UInt64
     }
 
     internal static let ageDaysRange: ClosedRange<Int> = 1...3_650
@@ -70,6 +83,7 @@ internal struct RetentionSettingsDraft {
         storage: nil,
         revisions: nil
     )
+    private var countEditGeneration: UInt64 = 0
     private var editGeneration: UInt64 = 0
     private var loadGeneration: UInt64 = 0
     private let locale: Locale
@@ -237,7 +251,7 @@ internal struct RetentionSettingsDraft {
         guard maximumUnpinnedText != text else { return }
         maximumUnpinnedText = text
         maximumUnpinnedValueIsDirty = true
-        recordEdit()
+        recordEdit(isCountEdit: true)
     }
 
     internal mutating func setAgeDaysText(_ text: String) {
@@ -297,7 +311,19 @@ internal struct RetentionSettingsDraft {
                 storage: proposedStoragePolicy,
                 revisions: proposedRevisionPolicy
             ),
-            editGeneration: editGeneration
+            editGeneration: editGeneration,
+            ageEnabled: ageEnabled,
+            ageDaysText: ageDaysText,
+            storageEnabled: storageEnabled,
+            storageMiBText: storageMiBText,
+            revisionCountEnabled: revisionCountEnabled,
+            revisionCountText: revisionCountText,
+            revisionBytesEnabled: revisionBytesEnabled,
+            revisionMiBText: revisionMiBText,
+            ageValueWasDirty: ageValueIsDirty,
+            storageValueWasDirty: storageValueIsDirty,
+            revisionCountValueWasDirty: revisionCountValueIsDirty,
+            revisionBytesValueWasDirty: revisionBytesValueIsDirty
         )
     }
 
@@ -305,7 +331,8 @@ internal struct RetentionSettingsDraft {
         guard let maximumUnpinnedItems else { return nil }
         return CountSubmission(
             maximumUnpinnedItems: maximumUnpinnedItems,
-            editGeneration: editGeneration
+            editGeneration: editGeneration,
+            countEditGeneration: countEditGeneration
         )
     }
 
@@ -345,9 +372,14 @@ internal struct RetentionSettingsDraft {
             )
     }
 
-    /// Accepts an Apply result only for the edit generation that produced
-    /// it. A successful current submission becomes the new exact baseline;
-    /// an intervening edit leaves both its text and dirty state untouched.
+    /// Shows Apply feedback only for the edit generation that produced it.
+    /// Each saved control becomes clean if its text or toggle still matches
+    /// the submitted control, even if another field was edited while saving.
+    /// Comparing actual controls also preserves newer disabled-field text,
+    /// which is absent from the policy DTO (`V2-07` §5.2/§6.3).
+    /// A newly edited rounded field remains dirty even when its text returns
+    /// to the submitted display: it now proposes exact whole units, rather
+    /// than the unedited raw bytes/seconds saved in that submission.
     /// The configured comparison baseline still advances after a stale-UI
     /// success because that submission did commit to History; otherwise the
     /// next draft could compare strictness against policy state that no longer
@@ -358,15 +390,23 @@ internal struct RetentionSettingsDraft {
         successMessage: String
     ) -> Bool {
         configuredPolicies = submission.policies
+        ageValueIsDirty = ageValueIsDirty
+            && (!submission.ageValueWasDirty || ageDaysText != submission.ageDaysText)
+        storageValueIsDirty = storageValueIsDirty
+            && (!submission.storageValueWasDirty || storageMiBText != submission.storageMiBText)
+        revisionCountValueIsDirty = revisionCountValueIsDirty
+            && (!submission.revisionCountValueWasDirty
+                || revisionCountText != submission.revisionCountText)
+        revisionBytesValueIsDirty = revisionBytesValueIsDirty
+            && (!submission.revisionBytesValueWasDirty
+                || revisionMiBText != submission.revisionMiBText)
+        ageToggleIsDirty = ageToggleIsDirty && ageEnabled != submission.ageEnabled
+        storageToggleIsDirty = storageToggleIsDirty && storageEnabled != submission.storageEnabled
+        revisionCountToggleIsDirty = revisionCountToggleIsDirty
+            && revisionCountEnabled != submission.revisionCountEnabled
+        revisionBytesToggleIsDirty = revisionBytesToggleIsDirty
+            && revisionBytesEnabled != submission.revisionBytesEnabled
         guard isCurrent(submission) else { return false }
-        ageValueIsDirty = false
-        storageValueIsDirty = false
-        revisionCountValueIsDirty = false
-        revisionBytesValueIsDirty = false
-        ageToggleIsDirty = false
-        storageToggleIsDirty = false
-        revisionCountToggleIsDirty = false
-        revisionBytesToggleIsDirty = false
         acceptedSuccessMessage = successMessage
         return true
     }
@@ -377,8 +417,10 @@ internal struct RetentionSettingsDraft {
         successMessage: String
     ) -> Bool {
         configuredMaximumUnpinnedItems = submission.maximumUnpinnedItems
+        if submission.countEditGeneration == countEditGeneration {
+            maximumUnpinnedValueIsDirty = false
+        }
         guard isCurrent(submission) else { return false }
-        maximumUnpinnedValueIsDirty = false
         acceptedCountSuccessMessage = successMessage
         return true
     }
@@ -461,8 +503,11 @@ internal struct RetentionSettingsDraft {
         )
     }
 
-    private mutating func recordEdit() {
+    private mutating func recordEdit(isCountEdit: Bool = false) {
         editGeneration += 1
+        if isCountEdit {
+            countEditGeneration += 1
+        }
         acceptedSuccessMessage = nil
         acceptedCountSuccessMessage = nil
     }

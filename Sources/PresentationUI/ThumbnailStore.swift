@@ -60,7 +60,37 @@ public final class ThumbnailStore {
     /// monotonic request token. Removing a target releases that key
     /// immediately without letting a late old completion remove or fill a
     /// newer flight for the same exact reference (deep review Card 9B).
-    private var inFlight: [HistoryItemReference: Int] = [:]
+    private struct Flight {
+        let token: Int
+        let task: Task<Void, Never>
+    }
+    private var inFlight: [HistoryItemReference: Flight] = [:]
+
+    /// Actual row/header appearances distinguish display demand from cold
+    /// retained results. These references own no pixels or History values.
+    private var displayedItems: Set<HistoryItemReference> = []
+    package var isSurfaceActive = true
+    package private(set) var isPrefetchSuspended = false
+
+    package func setDisplayed(_ item: HistoryItemReference, _ displayed: Bool) {
+        if displayed { displayedItems.insert(item) }
+        else { displayedItems.remove(item) }
+    }
+
+    package func respondToMemoryPressure(_ pressure: DisplayMemoryPressure) {
+        switch pressure {
+        case .normal:
+            isPrefetchSuspended = false
+        case .warning:
+            removeEntries { !isSurfaceActive || !displayedItems.contains($0) }
+            for item in inFlight.keys.filter({ !isSurfaceActive || !displayedItems.contains($0) }) {
+                inFlight.removeValue(forKey: item)?.task.cancel()
+            }
+        case .critical:
+            isPrefetchSuspended = true
+            reset()
+        }
+    }
 
     /// Monotone surface-owned purge generation. It is local observability for
     /// destructive invalidation, not a process-wide cache epoch.
@@ -217,7 +247,7 @@ public final class ThumbnailStore {
         // A view task can be cancelled before its MainActor body executes.
         // It no longer expresses demand: neither start independent work nor
         // promote a retained entry on behalf of that retired caller.
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, !isPrefetchSuspended, isSurfaceActive else { return }
         if entries[item] != nil {
             nextRecency += 1
             entries[item]?.recency = nextRecency
@@ -238,16 +268,11 @@ public final class ThumbnailStore {
         }
         nextRequestToken += 1
         let requestToken = nextRequestToken
-        inFlight[item] = requestToken
-        #if DEBUG
-        recordMeasurement(.started, item: item)
-        #endif
-
         let history = self.history
         let pixels = self.pixels
         let renderer = self.renderer
 
-        Task { [weak self] in
+        let task = Task { [weak self] in
             #if DEBUG
             // Timing windows wrap ONLY the awaited segments; the sink's file
             // write happens after the windows close, so a slow append can
@@ -264,7 +289,7 @@ public final class ThumbnailStore {
                 // suspended. Discard its encoded bytes before allocating a
                 // display raster; the final completion fence still covers a
                 // purge that happens during the renderer's own suspension.
-                guard self?.inFlight[item] == requestToken else {
+                guard self?.inFlight[item]?.token == requestToken else {
                     if let self {
                         self.finishWithoutEntry(item: item, requestToken: requestToken)
                         #if DEBUG
@@ -275,9 +300,9 @@ public final class ThumbnailStore {
                     }
                     return
                 }
-                // A reset does not rely on native cancellation: it releases
-                // visible bookkeeping immediately and the request token
-                // rejects any late eager-raster result.
+                // Cancellation releases queued display work when possible;
+                // native work already executing may still finish, so the
+                // request token also rejects any late eager-raster result.
                 let raster: PreviewRaster?
                 #if DEBUG
                 var rasterMs: Double?
@@ -350,6 +375,12 @@ public final class ThumbnailStore {
                 #endif
             }
         }
+        // The MainActor task cannot start until this synchronous method
+        // returns, so its cancellation handle is installed before any await.
+        inFlight[item] = Flight(token: requestToken, task: task)
+        #if DEBUG
+        recordMeasurement(.started, item: item)
+        #endif
     }
 
     /// Privacy purge for this browsing surface. Retained pixels and negative
@@ -357,10 +388,12 @@ public final class ThumbnailStore {
     /// every old flight, while clearing its visible bookkeeping permits a new
     /// request for the same exact reference immediately. A non-cooperative old
     /// history call may still return, but its completion cannot publish.
+    /// Cancelling owned tasks also releases queued display-raster sources.
     public func reset() {
         purgeGeneration += 1
         entries.removeAll()
         retainedDecodedBytes = 0
+        for flight in inFlight.values { flight.task.cancel() }
         inFlight.removeAll()
     }
 
@@ -380,11 +413,13 @@ public final class ThumbnailStore {
         case .item(let id):
             purgeGeneration += 1
             removeEntries { $0.id == id }
-            inFlight = inFlight.filter { $0.key.id != id }
+            for item in inFlight.keys.filter({ $0.id == id }) {
+                inFlight.removeValue(forKey: item)?.task.cancel()
+            }
         case .revision(let item, _):
             purgeGeneration += 1
             removeEntries { $0 == item }
-            inFlight.removeValue(forKey: item)
+            inFlight.removeValue(forKey: item)?.task.cancel()
         }
     }
 
@@ -559,7 +594,7 @@ public final class ThumbnailStore {
         debugFetchCompletionCount += 1
         #endif
         guard
-            inFlight[item] == requestToken
+            inFlight[item]?.token == requestToken
         else {
             #if DEBUG
             debugDiscardedFetchCompletionCount += 1

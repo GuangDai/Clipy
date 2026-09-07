@@ -19,6 +19,7 @@ let package = Package(
         .library(name: "HistoryStorage", targets: ["HistoryStorage"]),
         .library(name: "PasteboardAdapter", targets: ["PasteboardAdapter"]),
         .library(name: "PresentationUI", targets: ["PresentationUI"]),
+        .library(name: "LocalAutomation", targets: ["LocalAutomation"]),
     ],
     dependencies: [
         // Tag 1.4.0 (NOT 2.0.0-rc.x, per docs/roadmap/07-external-deps.md and
@@ -32,6 +33,10 @@ let package = Package(
             dependencies: ["ClipboardFormats"]
         ),
         .target(name: "ClipyCLIContract"),
+        .target(
+            name: "LocalAutomation",
+            dependencies: ["HistoryCore", "HistoryStorage", "ClipyCLIContract"]
+        ),
         .target(name: "HistoryCore"),
         .target(
             name: "HistoryDomain",
@@ -108,6 +113,10 @@ let package = Package(
         .testTarget(
             name: "ClipyCLIContractTests",
             dependencies: ["ClipyCLIContract"]
+        ),
+        .testTarget(
+            name: "LocalAutomationTests",
+            dependencies: ["LocalAutomation", "HistoryCore", "HistoryStorage", "ClipyCLIContract"]
         ),
         .testTarget(
             name: "HistoryCoreTests",

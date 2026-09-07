@@ -1,0 +1,16 @@
+"Maintenance" = "Maintenance";
+"Logical Content Size" = "Logical Content Size";
+"Store Folder Size" = "Store Folder Size";
+"Show in Finder" = "Show in Finder";
+"Refresh" = "Refresh";
+"Unavailable" = "Unavailable";
+"Loading size…" = "Loading size…";
+"Derived Disk Cache" = "Derived Disk Cache";
+"Not Used" = "Not Used";
+"Resident Memory (RSS)" = "Resident Memory (RSS)";
+"Peak Resident Memory" = "Peak Resident Memory";
+"Memory Footprint" = "Memory Footprint";
+"Thumbnail and preview results are retained in memory. This version has no derived disk cache." = "Thumbnail and preview results are retained in memory. This version has no derived disk cache.";
+"Kernel readings for the whole Clipy process. RSS is currently resident memory; footprint is memory charged to the process. Peak RSS is since launch. These values include app and framework work, not just clipboard content or caches." = "Kernel readings for the whole Clipy process. RSS is currently resident memory; footprint is memory charged to the process. Peak RSS is since launch. These values include app and framework work, not just clipboard content or caches.";
+"Originals and retained revisions, excluding database and filesystem overhead." = "Originals and retained revisions, excluding database and filesystem overhead.";
+"Approximate allocated size of all files in this folder, including hidden files and any other data stored here. Linked files and folders are excluded. Live writes and shared disk blocks can affect this estimate." = "Approximate allocated size of all files in this folder, including hidden files and any other data stored here. Linked files and folders are excluded. Live writes and shared disk blocks can affect this estimate.";

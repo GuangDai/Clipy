@@ -302,18 +302,20 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         // complete V4 HCR and Gateway state, so construct the X.5/X.6 actor
         // from the SAME SearchWorker and Storage clock witnesses, then publish
         // the six-actor History facade and its bound X.6 accessor.
+        let revisionPreparation = RevisionPreparationActor()
         let externalGateway = ExternalGateway(
             authority: authority,
             appIntentsConnectionID: appIntentsConnectionID,
             searchWorker: searchWorker,
-            storageClock: storageClock
+            storageClock: storageClock,
+            revisionPreparation: revisionPreparation
         )
         return SwiftDataHistory(
             authority: authority,
             ingestPreparation: IngestPreparationActor(
                 makeCandidateID: makeCandidateID
             ),
-            revisionPreparation: RevisionPreparationActor(),
+            revisionPreparation: revisionPreparation,
             searchWorker: searchWorker,
             thumbnailService: ThumbnailService(),
             externalGateway: externalGateway,
@@ -492,20 +494,10 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
         return AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
             let task = Task {
                 do {
-                    // §5 steps 2–4: the first page (P = page.position), then
-                    // the race-closing recheck — while the durable position
-                    // has moved past the page, a commit interleaved between
-                    // registration and the query, so discard the page and
-                    // query again. Position monotonicity proves freshness,
-                    // not termination under an infinite write stream: v1
-                    // intentionally waits for one query/recheck interval
-                    // without an intervening commit rather than knowingly
-                    // yielding a stale first page (04 §5).
+                    // §5 steps 2–4: query and recheck before publication.
+                    // The same freshness rule applies to replacement search
+                    // pages when a commit lands during evaluation (04 §7).
                     var page = try await firstPage(for: request)
-                    while try await authority.currentPosition() != page.position {
-                        try Task.checkCancellation()
-                        page = try await firstPage(for: request)
-                    }
                     // §5 step 5.
 #if DEBUG
                     await ObservationDebugInstrumentation.pageWillYield?(page)
@@ -519,11 +511,9 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
                     // §5 steps 6–8: an invalidation at or behind the last
                     // yielded page is a buffered wake-up the page already
                     // covers (bufferingNewest(1) has also coalesced any
-                    // burst); a newer one produces ONE replacement page. No
-                    // phase-1 recheck here: the invalidation that woke the
-                    // loop is by construction at or behind the replacement
-                    // query's position (read-after-commit, §1), and a later
-                    // commit simply produces the next wake-up.
+                    // burst); a newer one produces ONE replacement page.
+                    // Recheck that page too: a later commit can supersede
+                    // its snapshot while SearchWorker evaluates off-actor.
                     for try await invalidation in registration.stream {
                         guard invalidation.latestPosition > page.position else {
                             continue
@@ -639,38 +629,27 @@ public struct SwiftDataHistory: ClipboardHistory, Sendable {
 
     // MARK: Observation first page (docs/04-coherence.md §5)
 
-    /// The first-page query of `observe`'s subscribe-before-query loop — a
+    /// The fresh first-page query of `observe`'s subscribe-before-query loop — a
     /// cursorless `browse` for the observation's query shape; observation
     /// intentionally has no cursor (docs/03a-instruction-set.md §7). The
     /// loop reuses it for the phase-1 recheck requeries and for every
     /// phase-2 replacement page (docs/04-coherence.md §5). Empty search uses
-    /// the same scalar recent path as one-shot browse (03b §8); a non-empty
-    /// `.search` page keeps the two-step value pipeline: the Authority captures
-    /// the bounded corpus plus the continuation anchor, and `SearchWorker`
-    /// evaluates off-actor with the Authority's process marker for cursor
-    /// minting (docs/05-authority-kernel.md §14.2; docs/04-coherence.md §6–§7).
+    /// the same scalar recent path as one-shot browse (03b §8). Every page,
+    /// including a replacement, rechecks its source position after off-actor
+    /// search evaluation so superseded results are discarded before yield
+    /// (04 §7). As in initial observation, an uninterrupted write stream may
+    /// delay publication; cancellation exits between reads (04 §5).
     private func firstPage(
         for request: HistoryObservationRequest
     ) async throws -> HistoryPage {
-        switch request.kind {
-        case .recent:
-            return try await authority.recentPage(limit: request.limit, after: nil)
-        case .search(let text, _) where text.isEmpty:
-            return try await authority.recentPage(limit: request.limit, after: nil)
-        case .search:
-            let browseRequest = HistoryBrowseRequest(
-                kind: request.kind,
-                limit: request.limit
-            )
-            let captured = try await authority.searchCorpusSnapshot(
-                for: browseRequest
-            )
-            return try await searchWorker.page(
-                browseRequest,
-                in: captured.snapshot,
-                continuationAnchor: captured.continuationAnchor,
-                processMarker: authority.cursorProcessMarker
-            )
+        let browseRequest = HistoryBrowseRequest(kind: request.kind, limit: request.limit)
+        while true {
+            try Task.checkCancellation()
+            let page = try await browse(browseRequest)
+            try Task.checkCancellation()
+            if try await authority.currentPosition() == page.position {
+                return page
+            }
         }
     }
 }

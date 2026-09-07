@@ -6,9 +6,9 @@
 /// Observation is snapshot replacement, not deltas (docs/04-coherence.md §5):
 /// every incoming `HistoryPage` REPLACES `rows`. The held page is ordinary
 /// caller state, not a cache tier (docs/04-coherence.md §11). Additional
-/// pages are one-shot `browse` requests (docs/03a-instruction-set.md §7) whose
-/// `.snapshotExpired` failure is recovered by resuming from the observed
-/// first page's cursor (docs/04-coherence.md §6).
+/// pages are one-shot `browse` requests (docs/03a-instruction-set.md §7) in a
+/// three-page window. Cursor expiration restarts the current observation
+/// from page one (docs/04-coherence.md §6).
 import ClipboardFormats
 import Foundation
 import HistoryCore
@@ -62,15 +62,17 @@ public final class HistoryViewState {
     /// `PreviewClipboardHistory`.
     public let history: any ClipboardHistory
 
+    /// App-owned preferences for explicit file preview reads.
+    public var filePreviewSettings: FilePreviewSettings?
+
     /// Rows per browse/observation page. Default 50 — inside the Part VI
     /// page/observation row-limit range 1…500 (docs/06-cross-cutting.md §2).
     public let pageLimit: Int
 
     // MARK: - Observed panel state
 
-    /// The full display rows: the latest observed first page plus any
-    /// one-shot appended pages. Replaced wholesale by each observed page
-    /// (docs/04-coherence.md §5).
+    /// At most three consecutive browse pages. Older/Newer navigation drops
+    /// the opposite page's DTOs; observation replaces the window (04 §5/§6).
     public private(set) var rows: [HistoryRow] = []
 
     /// True while a one-shot `browse` pagination request is in flight.
@@ -141,6 +143,14 @@ public final class HistoryViewState {
     /// previews need no wiring.
     public var onPaste: @MainActor @Sendable (HistoryItemReference) -> Void = { _ in }
 
+    /// Explicit Details Save As handoff. The immutable representation comes
+    /// from the displayed Canonical/Effective snapshot; the app owns the
+    /// destination picker and file write (V2-07 §4.1.1).
+    public var onExportRepresentation:
+        @MainActor @Sendable (HistoryRepresentation) async -> Result<Void, RepresentationExportFailure> = {
+            _ in .failure(.unavailable)
+        }
+
     /// App-shell accessibility handoff for one user-initiated remove whose
     /// committed receipt has already published its exact surface purge.
     /// External/background mutations use their own ingress and never invoke
@@ -180,14 +190,27 @@ public final class HistoryViewState {
     /// display holds the final page.
     private var nextPageCursor: HistoryPageCursor?
 
-    /// The rows of the latest OBSERVED first page — the resume point a
-    /// `.snapshotExpired` pagination failure falls back to (docs/
-    /// 04-coherence.md §6).
-    private var observedRows: [HistoryRow] = []
+    /// Only the visible three pages retain rows. Visited request cursors are
+    /// compact navigation bookmarks, without DTOs or accumulated item IDs.
+    private var pageRowCounts: [Int] = []
+    private var visitedPageCursors: [HistoryPageCursor?] = []
+    private var firstLoadedPageIndex = 0
+    private var rowsBeforeWindow = 0
 
-    /// The observed first page's own `next` cursor; the recovery resume
-    /// cursor for `.snapshotExpired` pagination.
-    private var observedCursor: HistoryPageCursor?
+    package var hasPreviousPage: Bool { firstLoadedPageIndex > 0 }
+    package var hasWindowedPages: Bool { visitedPageCursors.count > pageRowCounts.count }
+    package var traversedRowCount: Int { rowsBeforeWindow + rows.count }
+
+    /// Unfiltered counts include rows traversed before this window. A local
+    /// filter cannot classify evicted rows, so its displayed count stays a
+    /// lower bound even at the final older page.
+    package var displayedCount: Int {
+        typeFilter == .all && !showsPinnedOnly ? traversedRowCount : displayedRows.count
+    }
+    package var displayedCountIsLowerBound: Bool {
+        hasNextPage || ((typeFilter != .all || showsPinnedOnly) && hasPreviousPage)
+            || (observedPosition == nil && !rows.isEmpty)
+    }
 
     /// Position of the latest authoritative first page. A receipt may return
     /// after an equal or newer observation; that page must not be erased,
@@ -309,7 +332,9 @@ public final class HistoryViewState {
     /// waiting for that hidden row's appearance would strand its cursor
     /// (review Card 8B; 04 §6).
     package func prefetchNextPageIfNeeded(appearingRowID: HistoryItemID) {
-        guard hasNextPage, !isLoadingPage else { return }
+        // Once the three-page window is full, navigation becomes explicit.
+        // Newly appearing rows must not trigger an endless eviction/prefetch loop.
+        guard hasNextPage, !isLoadingPage, pageRowCounts.count < 3 else { return }
         let lastUnpinned = showsPinnedOnly ? nil : rows.last(where: {
             $0.pinnedPosition == nil && isDisplayed($0)
         })
@@ -358,14 +383,20 @@ public final class HistoryViewState {
         replaceObservationImmediately()
     }
 
-    /// Cancels the observe loop and any pending debounce; safe to call again
-    /// or to follow with `activate()`.
+    /// Cancels browsing and releases this closed surface's rows/cursors.
+    /// Query, mode and filters survive; activate obtains a fresh first page.
     public func deactivate() {
         debounceTask?.cancel()
         debounceTask = nil
         observationTask?.cancel()
         observationTask = nil
         invalidatePagination()
+        observationGeneration += 1
+        hasAuthoritativeFirstPage = false
+        observedPosition = nil
+        rows = []
+        nextPageCursor = nil
+        resetPageWindow()
         isLoadingFirstPage = false
     }
 
@@ -388,13 +419,24 @@ public final class HistoryViewState {
         startObservation()
     }
 
-    /// Appends one one-shot browse page after the last displayed row
-    /// (docs/03a-instruction-set.md §7). On `.snapshotExpired` — the cursor
-    /// predates the retained window or its query shape changed — the appended
-    /// rows are dropped and pagination resumes from the observed first page's
-    /// cursor (docs/04-coherence.md §6).
+    /// Appends the next older page, retiring the newest page when the window
+    /// is full. Expiration restarts the same query at page one (04 §6).
     public func loadNextPage() {
         guard !isLoadingPage, let cursor = nextPageCursor else { return }
+        loadPage(after: cursor, prepending: false)
+    }
+
+    /// Re-read the previous visited page without retaining its old row values.
+    package func loadPreviousPage() {
+        guard !isLoadingPage, hasPreviousPage else { return }
+        loadPage(after: visitedPageCursors[firstLoadedPageIndex - 1], prepending: true)
+    }
+
+    package func returnToLatest() {
+        replaceObservationImmediately()
+    }
+
+    private func loadPage(after cursor: HistoryPageCursor?, prepending: Bool) {
         paginationRequestToken += 1
         let requestToken = paginationRequestToken
         isLoadingPage = true
@@ -416,8 +458,40 @@ public final class HistoryViewState {
                       self.paginationRequestToken == requestToken,
                       self.observationGeneration == generation
                 else { return }
-                self.rows.append(contentsOf: page.rows)
-                self.nextPageCursor = page.next
+                // The first page uses after:nil. A concurrent commit may
+                // therefore return a newer snapshot before observe delivers
+                // it; never combine that page with the old window.
+                guard page.position == self.observedPosition else {
+                    self.replaceObservationImmediately()
+                    return
+                }
+                if prepending {
+                    self.firstLoadedPageIndex -= 1
+                    self.rowsBeforeWindow -= page.rows.count
+                    self.pageRowCounts.insert(page.rows.count, at: 0)
+                    if self.pageRowCounts.count > 3 {
+                        self.rows.removeLast(self.pageRowCounts.removeLast())
+                        let nextIndex = self.firstLoadedPageIndex + self.pageRowCounts.count
+                        self.nextPageCursor = self.visitedPageCursors[nextIndex]
+                    }
+                    self.rows.insert(contentsOf: page.rows, at: 0)
+                } else {
+                    let pageIndex = self.firstLoadedPageIndex + self.pageRowCounts.count
+                    if pageIndex == self.visitedPageCursors.count {
+                        self.visitedPageCursors.append(cursor)
+                    } else {
+                        self.visitedPageCursors[pageIndex] = cursor
+                    }
+                    self.pageRowCounts.append(page.rows.count)
+                    if self.pageRowCounts.count > 3 {
+                        let removedCount = self.pageRowCounts.removeFirst()
+                        self.rows.removeFirst(removedCount)
+                        self.rowsBeforeWindow += removedCount
+                        self.firstLoadedPageIndex += 1
+                    }
+                    self.rows.append(contentsOf: page.rows)
+                    self.nextPageCursor = page.next
+                }
                 self.clearFailure(from: .pagination)
                 self.finishPagination(requestToken)
             } catch let failure as HistoryFailure {
@@ -426,10 +500,12 @@ public final class HistoryViewState {
                       self.observationGeneration == generation
                 else { return }
                 if case .snapshotExpired = failure {
-                    // docs/04-coherence.md §6 recovery: fall back to the
-                    // observed first page and continue from its cursor.
-                    self.rows = self.observedRows
-                    self.nextPageCursor = self.observedCursor
+                    // Reobserve this exact query: the first page may already
+                    // have left the bounded window, and its old cursor is no
+                    // longer an authoritative recovery point (04 §6).
+                    self.publishFailure(failure, from: .pagination)
+                    self.replaceObservationImmediately()
+                    return
                 }
                 self.publishFailure(failure, from: .pagination)
                 self.finishPagination(requestToken)
@@ -593,12 +669,12 @@ public final class HistoryViewState {
         try await performRevision(request, beforePurge: nil)
     }
 
-    /// The embedded editor must hand its receipt-minted exact reference to
-    /// the Details owner before this state publishes the corresponding purge.
+    /// A details-owned edit or revert must hand its receipt-minted exact
+    /// reference to the Details owner before publishing the corresponding purge.
     /// That ordering prevents the old-reference surface from being retired in
     /// the same MainActor turn, while every other revise caller keeps the
     /// ordinary purge behavior above.
-    package func reviseFromEditor(
+    package func reviseKeepingDetails(
         _ request: RevisionRequest,
         onCommittedReference:
             @escaping @MainActor (HistoryItemReference) -> Void
@@ -699,14 +775,26 @@ public final class HistoryViewState {
         publishDestructiveRetentionPurge(receipt)
     }
 
-    /// Composition-root handoff for the current external mutation set's only
-    /// content-destructive case. The app-owned ingress calls this after the
-    /// real Gateway has committed a positive remove and before the App Intent
-    /// returns; pin/unpin/no-op/failure never enter this seam (Card 9B).
+    /// Composition-root removal handoff. The app-owned ingress calls this
+    /// after the real Gateway has committed a positive remove and before
+    /// replying; pin/unpin/no-op/failure never enter this seam (Card 9B).
     public func acceptCommittedExternalRemoval(
         _ itemID: HistoryItemID
     ) -> HistorySurfacePurge {
         publishExactItemPurge(itemID)
+    }
+
+    /// The automation ingress forwards the real revision commit and its
+    /// request's old reference before replying. Use the same commit-position
+    /// rule as a local edit: a late callback never removes already-new rows.
+    public func acceptCommittedExternalRevision(
+        from old: HistoryItemReference,
+        commit: HistoryCommit
+    ) -> HistorySurfacePurge? {
+        guard case .revised(let new) = commit.outcome else { return nil }
+        let scope: HistorySurfacePurge.Scope = commit.hasDestructiveRetentionEffects
+            ? .all : .revision(old: old, new: new)
+        return publishCommittedSurfacePurge(scope, position: commit.position)
     }
 
     /// The authoritative configured retention state (docs/v2/V2-07-ux.md
@@ -745,8 +833,7 @@ public final class HistoryViewState {
         observedPosition = nil
         rows = []
         nextPageCursor = nil
-        observedCursor = nil
-        observedRows = []
+        resetPageWindow()
         clearQueryFailure()
         isLoadingFirstPage = true
     }
@@ -788,8 +875,8 @@ public final class HistoryViewState {
     }
 
     /// Applies one observed page as a full replacement (docs/
-    /// 04-coherence.md §5) and records its own cursor as both the live and
-    /// the recovery resume point. The generation bump discards any in-flight
+    /// 04-coherence.md §5) and resets the bounded navigation window.
+    /// The generation bump discards any in-flight
     /// one-shot append whose rows were captured before this replacement.
     private func applyObservedPage(
         _ page: HistoryPage,
@@ -798,9 +885,11 @@ public final class HistoryViewState {
         invalidatePagination()
         observationGeneration += 1
         rows = page.rows
-        observedRows = page.rows
         nextPageCursor = page.next
-        observedCursor = page.next
+        pageRowCounts = [page.rows.count]
+        visitedPageCursors = [nil]
+        firstLoadedPageIndex = 0
+        rowsBeforeWindow = 0
         observedPosition = page.position
         hasAuthoritativeFirstPage = true
         clearQueryFailure()
@@ -819,6 +908,13 @@ public final class HistoryViewState {
         pendingSearchAnnouncementGeneration = isSearchActive
             ? searchQueryGeneration
             : nil
+    }
+
+    private func resetPageWindow() {
+        pageRowCounts = []
+        visitedPageCursors = []
+        firstLoadedPageIndex = 0
+        rowsBeforeWindow = 0
     }
 
     /// Cancels and invalidates pagination synchronously. The request may
@@ -918,8 +1014,28 @@ public final class HistoryViewState {
         }
 
         guard let scope else { return }
+        let purge = publishCommittedSurfacePurge(scope, position: commit.position)
+        if case (.remove, .removed(let count)) = (action, commit.outcome),
+           count > 0 {
+            onCommittedUserRemoval(purge)
+        }
+        if scope == .unpinned, observationTask != nil {
+            // Pin state in the held page may trail a just-committed Unpin.
+            // Clear every executable row and restart this exact query; only
+            // the post-receipt authoritative snapshot may repopulate it.
+            // A late receipt or a Settings-only mutation must not reopen a
+            // closed browsing surface. An active search debounce already owns
+            // its replacement when no observation task currently exists.
+            replaceObservationImmediately()
+        }
+    }
+
+    private func publishCommittedSurfacePurge(
+        _ scope: HistorySurfacePurge.Scope,
+        position: ChangePosition
+    ) -> HistorySurfacePurge {
         let hasObservedCommit = observedPosition.map {
-            $0 >= commit.position
+            $0 >= position
         } ?? false
         if scope != .unpinned, !hasObservedCommit {
             applyReceiptConfirmedRowPurge(scope)
@@ -930,16 +1046,7 @@ public final class HistoryViewState {
             scope: scope
         )
         surfacePurge = purge
-        if case (.remove, .removed(let count)) = (action, commit.outcome),
-           count > 0 {
-            onCommittedUserRemoval(purge)
-        }
-        if scope == .unpinned {
-            // Pin state in the held page may trail a just-committed Unpin.
-            // Clear every executable row and restart this exact query; only
-            // the post-receipt authoritative snapshot may repopulate it.
-            replaceObservationImmediately()
-        }
+        return purge
     }
 
     /// Capture receipts have no local action-to-outcome scope. Only the
@@ -947,14 +1054,7 @@ public final class HistoryViewState {
     private func publishDestructiveRetentionPurge(_ receipt: HistoryReceipt) {
         guard case .committed(let commit) = receipt,
               commit.hasDestructiveRetentionEffects else { return }
-        let hasObservedCommit = observedPosition.map {
-            $0 >= commit.position
-        } ?? false
-        if !hasObservedCommit {
-            applyReceiptConfirmedRowPurge(.all)
-        }
-        let generation = (surfacePurge?.generation ?? 0) + 1
-        surfacePurge = HistorySurfacePurge(generation: generation, scope: .all)
+        _ = publishCommittedSurfacePurge(.all, position: commit.position)
     }
 
     private func publishExactItemPurge(
@@ -980,7 +1080,10 @@ public final class HistoryViewState {
         invalidatePagination()
         observationGeneration += 1
         nextPageCursor = nil
-        observedCursor = nil
+        resetPageWindow()
+        // Until observation supplies a replacement, the surviving rows are
+        // only a partial display and cannot establish an exact total count.
+        observedPosition = nil
 
         switch scope {
         case .all:
@@ -994,7 +1097,6 @@ public final class HistoryViewState {
         case .revision(let old, _):
             rows.removeAll { $0.item == old }
         }
-        observedRows = rows
     }
 
     /// Publishes one concrete failure occurrence. Equality is deliberately

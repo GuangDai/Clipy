@@ -34,7 +34,8 @@ internal struct ExternalOperationDescriptor: Sendable {
              (.pin, .managePin),
              (.unpin, .manageUnpin),
              (.remove, .manageRemove),
-             (.readEffectiveContent, .readEffectiveContent):
+             (.readEffectiveContent, .readEffectiveContent),
+             (.reviseContent, .reviseContent):
             true
         case (.enroll, _),
              (.grant, _),
@@ -52,7 +53,8 @@ internal struct ExternalOperationDescriptor: Sendable {
              (.pin, _),
              (.unpin, _),
              (.remove, _),
-             (.readEffectiveContent, _):
+             (.readEffectiveContent, _),
+             (.reviseContent, _):
             false
         }
     }
@@ -77,23 +79,30 @@ extension ExternalOperationDescriptor {
     }
 
     /// One owner for the closed manage-subset descriptor mapping.
-    internal static func forRequest(_ request: ExternalRequest) -> Self {
-        switch request {
+    internal static func forRequest(
+        _ request: ExternalRequest,
+        expectedConnectionKind: ConnectionEnrollKind = .appIntents
+    ) -> Self {
+        let organize: ExternalCapability = expectedConnectionKind == .localAutomation
+            ? .organize : .manage
+        let delete: ExternalCapability = expectedConnectionKind == .localAutomation
+            ? .deleteItem : .manage
+        return switch request {
         case .pin(let id):
             Self(
-                capability: .manage,
+                capability: organize,
                 operationKind: .managePin,
                 requestSummary: .pin(itemID: id.rawValue)
             )
         case .unpin(let id):
             Self(
-                capability: .manage,
+                capability: organize,
                 operationKind: .manageUnpin,
                 requestSummary: .unpin(itemID: id.rawValue)
             )
         case .remove(let id):
             Self(
-                capability: .manage,
+                capability: delete,
                 operationKind: .manageRemove,
                 requestSummary: .remove(itemID: id.rawValue)
             )

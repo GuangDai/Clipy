@@ -3,7 +3,7 @@
 /// 02-spec-implementation.md §SPEC-IMPL-007; 05-recommended-target-design.md
 /// §4.1 PREVIEW-FENCE-1) and its bounded off-MainActor image decode outcome
 /// (01-standards.md §S-2; 02 §SPEC-IMPL-002). Driven through
-/// `PausableDetailsHistory`, which suspends every `details(for:)` read until
+/// `PausablePreviewHistory`, which suspends every `pastePayload(for:)` read until
 /// the test resumes it, so reverse completion order is deterministic — no
 /// sleeps on the deciding path.
 import ContentPreview
@@ -31,13 +31,13 @@ struct PreviewContentLoaderTests {
         )
     }
 
-    /// Canned details for one exact reference: the given text and/or image
+    /// Canned payload for one exact reference: the given text and/or image
     /// representations (03b §9 DTOs built through their package inits).
-    private func details(
+    private func payload(
         for item: HistoryItemReference,
         text: String? = nil,
         imageBytes: Data? = nil
-    ) -> HistoryDetails {
+    ) -> PastePayload {
         var effective: [HistoryRepresentation] = []
         if let imageBytes {
             effective.append(
@@ -52,32 +52,49 @@ struct PreviewContentLoaderTests {
                 )
             )
         }
-        return details(for: item, effective: effective)
+        return payload(for: item, effective: effective)
     }
 
-    /// Details fixture for a representation shape outside the text/image
+    /// Payload fixture for a representation shape outside the text/image
     /// convenience above (for example a valid unsupported UTI).
-    private func details(
+    private func payload(
         for item: HistoryItemReference,
         effective: [HistoryRepresentation]
-    ) -> HistoryDetails {
-        HistoryDetails(
+    ) -> PastePayload {
+        PastePayload(
             item: item,
-            canonical: effective,
-            effective: effective,
-            revisions: [],
-            occurrence: CopyOccurrenceSummary(
-                firstCopiedAt: Date(timeIntervalSince1970: 1_787_000_000),
-                lastCopiedAt: Date(timeIntervalSince1970: 1_787_000_600),
-                count: 2,
-                firstSource: "com.example.preview",
-                lastSource: "com.example.preview"
-            ),
-            pinnedPosition: nil
+            representations: effective,
+            lineageHint: item.id
         )
     }
 
     // MARK: - Reference fence (PREVIEW-FENCE-1)
+
+#if DEBUG
+    @Test func supersededPayloadNeverStartsNativeRendering() async throws {
+        let old = reference("00000000-0000-0000-0000-0000000001C1", version: 1)
+        let current = reference("00000000-0000-0000-0000-0000000001C2", version: 1)
+        let history = PausablePreviewHistory()
+        await history.scriptPayload(payload(for: old, imageBytes: fixturePNGData))
+        await history.scriptPayload(payload(for: current, text: "current preview"))
+        let loader = PreviewContentLoader(history: history)
+        let nativeStart: @Sendable () async -> Void = {
+            Issue.record("The superseded payload must be discarded before native rendering")
+        }
+        try await ContentPreviewDebugInstrumentation.$renderDidStart.withValue(nativeStart) {
+            let first = Task { await loader.load(item: old) }
+            try #require(await pollUntil { await history.payloadRequests.count == 1 })
+            let second = Task { await loader.load(item: current) }
+            try #require(await pollUntil { await history.payloadRequests.count == 2 })
+            await history.resumePayload(for: current.id)
+            await second.value
+            await history.resumePayload(for: old.id)
+            await first.value
+        }
+        #expect(loader.requestedItem == current)
+        #expect(loader.phase == .content(.text("current preview")))
+    }
+#endif
 
     /// The pane already holds rendered A while a different selection B is
     /// dwelling. B's revision changes dwell ownership but not the exact
@@ -87,15 +104,15 @@ struct PreviewContentLoaderTests {
         let a = reference("00000000-0000-0000-0000-0000000001A8", version: 1)
         let b = reference("00000000-0000-0000-0000-0000000001B8", version: 1)
         let revisedB = HistoryItemReference(id: b.id, contentVersion: ContentVersion(rawValue: 2))
-        let history = PausableDetailsHistory()
-        await history.scriptDetails(details(for: a, text: "already visible A"))
+        let history = PausablePreviewHistory()
+        await history.scriptPayload(payload(for: a, text: "already visible A"))
         let loader = PreviewContentLoader(history: history)
         let pane = PreviewPaneState(autoOpenDelay: .seconds(3_600))
         defer { pane.panelClosed() }
         pane.togglePreview(for: a)
         let load = Task { await loader.load(item: a) }
-        try #require(await pollUntil { await history.detailRequests.count == 1 })
-        await history.resumeDetails(for: a.id)
+        try #require(await pollUntil { await history.payloadRequests.count == 1 })
+        await history.resumePayload(for: a.id)
         await load.value
 
         pane.handleSelectionChange(b)
@@ -113,7 +130,7 @@ struct PreviewContentLoaderTests {
         #expect(selection.previewTarget(previewedItem: pane.previewedItem) == a)
         #expect(loader.requestedItem == a)
         #expect(loader.phase == .content(.text("already visible A")))
-        #expect(await history.detailRequests == [a.id])
+        #expect(await history.payloadRequests == [a.id])
     }
 
     @Test func independentlyPreviewedItemAdvancesWhileAnotherRowIsSelected() async throws {
@@ -134,7 +151,7 @@ struct PreviewContentLoaderTests {
         pane.togglePreview(for: a1)
         pane.handleSelectionChange(b)
         let initialSelection = PreviewSelectionResolution.resolve(selectedID: b.id, rows: oldRows)
-        let history = OverlappingDetailsHistory()
+        let history = OverlappingPreviewHistory()
         let loader = PreviewContentLoader(history: history)
         let olderLoad = Task {
             await loader.load(item: initialSelection.previewTarget(previewedItem: pane.previewedItem))
@@ -151,9 +168,9 @@ struct PreviewContentLoaderTests {
         pane.refreshOpenPreview(target)
         let newerLoad = Task { await loader.load(item: target) }
         try #require(await pollUntil { await history.requestCount == 2 })
-        await history.resumeRequest(1, with: details(for: a2, text: "current A"))
+        await history.resumeRequest(1, with: payload(for: a2, text: "current A"))
         await newerLoad.value
-        await history.resumeRequest(0, with: details(for: a1, text: "obsolete A"))
+        await history.resumeRequest(0, with: payload(for: a1, text: "obsolete A"))
         await olderLoad.value
 
         #expect(loader.requestedItem == a2)
@@ -173,28 +190,27 @@ struct PreviewContentLoaderTests {
     @Test func lateResultNeverPublishesOverANewerSelection() async {
         let refA = reference("00000000-0000-0000-0000-0000000001A1", version: 1)
         let refB = reference("00000000-0000-0000-0000-0000000001B1", version: 1)
-        let history = PausableDetailsHistory()
-        await history.scriptDetails(details(for: refA, text: "alpha"))
-        await history.scriptDetails(details(for: refB, text: "bravo"))
+        let history = PausablePreviewHistory()
+        await history.scriptPayload(payload(for: refA, text: "alpha"))
+        await history.scriptPayload(payload(for: refB, text: "bravo"))
         let loader = PreviewContentLoader(history: history)
 
         let loadA = Task { await loader.load(item: refA) }
-        #expect(await pollUntil { await history.detailRequests.count == 1 })
+        #expect(await pollUntil { await history.payloadRequests.count == 1 })
         #expect(loader.phase == .loading)
 
         let loadB = Task { await loader.load(item: refB) }
-        #expect(await pollUntil { await history.detailRequests.count == 2 })
+        #expect(await pollUntil { await history.payloadRequests.count == 2 })
         #expect(loader.requestedItem == refB)
 
         // B completes FIRST and publishes.
-        await history.resumeDetails(for: refB.id)
+        await history.resumePayload(for: refB.id)
         await loadB.value
         #expect(loader.phase == .content(.text("bravo")))
-        #expect(loader.occurrence?.lastSource == "com.example.preview")
 
         // Join the older task itself, so the assertion follows its actual
         // completion even on a busy runner.
-        await history.resumeDetails(for: refA.id)
+        await history.resumePayload(for: refA.id)
         await loadA.value
         #expect(loader.phase == .content(.text("bravo")))
         #expect(loader.requestedItem == refB)
@@ -205,7 +221,7 @@ struct PreviewContentLoaderTests {
     /// cannot overwrite the newer episode or mutate its loading state.
     @Test func olderSameReferenceEpisodeCannotPublishOverNewerEpisode() async throws {
         let ref = reference("00000000-0000-0000-0000-0000000001B2", version: 1)
-        let history = OverlappingDetailsHistory()
+        let history = OverlappingPreviewHistory()
         let loader = PreviewContentLoader(history: history)
 
         let olderLoad = Task { await loader.load(item: ref) }
@@ -213,11 +229,11 @@ struct PreviewContentLoaderTests {
         let newerLoad = Task { await loader.load(item: ref) }
         try #require(await pollUntil { await history.requestCount == 2 })
 
-        await history.resumeRequest(1, with: details(for: ref, text: "newer"))
+        await history.resumeRequest(1, with: payload(for: ref, text: "newer"))
         _ = await newerLoad.value
         #expect(loader.phase == .content(.text("newer")))
 
-        await history.resumeRequest(0, with: details(for: ref, text: "older"))
+        await history.resumeRequest(0, with: payload(for: ref, text: "older"))
         _ = await olderLoad.value
         #expect(loader.phase == .content(.text("newer")))
     }
@@ -229,25 +245,25 @@ struct PreviewContentLoaderTests {
     @Test func slowRasterAAfterFastTextBPublishesOnlyB() async throws {
         let refA = reference("00000000-0000-0000-0000-0000000001B3", version: 1)
         let refB = reference("00000000-0000-0000-0000-0000000001B4", version: 1)
-        let history = PausableDetailsHistory()
-        await history.scriptDetails(details(for: refA, imageBytes: fixturePNGData))
-        await history.scriptDetails(details(for: refB, text: "current B"))
+        let history = PausablePreviewHistory()
+        await history.scriptPayload(payload(for: refA, imageBytes: fixturePNGData))
+        await history.scriptPayload(payload(for: refB, text: "current B"))
         let loader = PreviewContentLoader(history: history)
         let gate = PreviewRenderGate()
         let hook: @Sendable () async -> Void = { await gate.parkFirst() }
 
         try await ContentPreviewDebugInstrumentation.$renderDidStart.withValue(hook) {
             let loadA = Task { await loader.load(item: refA) }
-            try #require(await pollUntil { await history.detailRequests.count == 1 })
-            await history.resumeDetails(for: refA.id)
+            try #require(await pollUntil { await history.payloadRequests.count == 1 })
+            await history.resumePayload(for: refA.id)
             await gate.waitUntilParked()
             let parked = await loader.rendererDebugSnapshot()
             #expect(parked.activeJobs == 1)
             #expect(parked.retainedSourceBytes == fixturePNGData.count)
 
             let loadB = Task { await loader.load(item: refB) }
-            try #require(await pollUntil { await history.detailRequests.count == 2 })
-            await history.resumeDetails(for: refB.id)
+            try #require(await pollUntil { await history.payloadRequests.count == 2 })
+            await history.resumePayload(for: refB.id)
             _ = await loadB.value
             #expect(loader.phase == .content(.text("current B")))
 
@@ -266,16 +282,16 @@ struct PreviewContentLoaderTests {
     /// publication immediately; the later old completion remains discarded.
     @Test func panelCloseFencesParkedRendererCompletion() async throws {
         let ref = reference("00000000-0000-0000-0000-0000000001B5", version: 1)
-        let history = PausableDetailsHistory()
-        await history.scriptDetails(details(for: ref, imageBytes: fixturePNGData))
+        let history = PausablePreviewHistory()
+        await history.scriptPayload(payload(for: ref, imageBytes: fixturePNGData))
         let loader = PreviewContentLoader(history: history)
         let gate = PreviewRenderGate()
         let hook: @Sendable () async -> Void = { await gate.parkFirst() }
 
         try await ContentPreviewDebugInstrumentation.$renderDidStart.withValue(hook) {
             let load = Task { await loader.load(item: ref) }
-            try #require(await pollUntil { await history.detailRequests.count == 1 })
-            await history.resumeDetails(for: ref.id)
+            try #require(await pollUntil { await history.payloadRequests.count == 1 })
+            await history.resumePayload(for: ref.id)
             await gate.waitUntilParked()
 
             loader.clear()
@@ -296,22 +312,22 @@ struct PreviewContentLoaderTests {
     @Test func revisionRetargetFencesParkedOldRaster() async throws {
         let refV1 = reference("00000000-0000-0000-0000-0000000001B6", version: 1)
         let refV2 = reference("00000000-0000-0000-0000-0000000001B6", version: 2)
-        let history = PausableDetailsHistory()
-        await history.scriptDetails(details(for: refV1, imageBytes: fixturePNGData))
+        let history = PausablePreviewHistory()
+        await history.scriptPayload(payload(for: refV1, imageBytes: fixturePNGData))
         let loader = PreviewContentLoader(history: history)
         let gate = PreviewRenderGate()
         let hook: @Sendable () async -> Void = { await gate.parkFirst() }
 
         try await ContentPreviewDebugInstrumentation.$renderDidStart.withValue(hook) {
             let oldLoad = Task { await loader.load(item: refV1) }
-            try #require(await pollUntil { await history.detailRequests.count == 1 })
-            await history.resumeDetails(for: refV1.id)
+            try #require(await pollUntil { await history.payloadRequests.count == 1 })
+            await history.resumePayload(for: refV1.id)
             await gate.waitUntilParked()
 
-            await history.scriptDetails(details(for: refV2, text: "revision v2"))
+            await history.scriptPayload(payload(for: refV2, text: "revision v2"))
             let newLoad = Task { await loader.load(item: refV2) }
-            try #require(await pollUntil { await history.detailRequests.count == 2 })
-            await history.resumeDetails(for: refV2.id)
+            try #require(await pollUntil { await history.payloadRequests.count == 2 })
+            await history.resumePayload(for: refV2.id)
             _ = await newLoad.value
             #expect(loader.phase == .content(.text("revision v2")))
 
@@ -324,22 +340,21 @@ struct PreviewContentLoaderTests {
     }
     #endif
 
-    /// A cancelled load publishes nothing: the details read still completes
+    /// A cancelled load publishes nothing: the payload read still completes
     /// (the double is not cancellation-aware), but the cancellation check
     /// after the await discards the result.
     @Test func cancelledLoadPublishesNothing() async throws {
         let refA = reference("00000000-0000-0000-0000-0000000001C1", version: 1)
-        let history = PausableDetailsHistory()
-        await history.scriptDetails(details(for: refA, text: "alpha"))
+        let history = PausablePreviewHistory()
+        await history.scriptPayload(payload(for: refA, text: "alpha"))
         let loader = PreviewContentLoader(history: history)
 
         let task = Task { await loader.load(item: refA) }
-        try #require(await pollUntil { await history.detailRequests.count == 1 })
+        try #require(await pollUntil { await history.payloadRequests.count == 1 })
         task.cancel()
-        await history.resumeDetails(for: refA.id)
+        await history.resumePayload(for: refA.id)
         _ = await task.value  // deterministic: the discarded load ran to its end
         #expect(loader.phase == .loading)
-        #expect(loader.occurrence == nil)
     }
 
     @Test func cancelledBeforeStartingDoesNotRestoreClearedState() async {
@@ -354,26 +369,25 @@ struct PreviewContentLoaderTests {
         #expect(loader.phase == .unsupported)
     }
 
-    /// The version half of the fence: `details(for:)` reads by ID, so a
+    /// The version half of the fence: `pastePayload(for:)` reads by ID, so a
     /// revision that advanced the Content Version mid-load answers with the
     /// CURRENT reference — the loader must not publish it under the
     /// requested (now stale) one (04 §9's caller-side fence convention).
-    @Test func revisedDetailsAreNotAppliedUnderTheRequestingReference() async {
+    @Test func revisedPayloadIsNotAppliedUnderTheRequestingReference() async {
         let refV1 = reference("00000000-0000-0000-0000-0000000001D1", version: 1)
         let refV2 = reference("00000000-0000-0000-0000-0000000001D1", version: 2)
-        let history = PausableDetailsHistory()
+        let history = PausablePreviewHistory()
         // The store answers the item's CURRENT reference (v2)…
-        await history.scriptDetails(details(for: refV2, text: "revised"))
+        await history.scriptPayload(payload(for: refV2, text: "revised"))
         let loader = PreviewContentLoader(history: history)
 
         // …to a load that started at v1.
         let task = Task { await loader.load(item: refV1) }
-        #expect(await pollUntil { await history.detailRequests.count == 1 })
-        await history.resumeDetails(for: refV1.id)
+        #expect(await pollUntil { await history.payloadRequests.count == 1 })
+        await history.resumePayload(for: refV1.id)
         _ = await task.value
         #expect(loader.phase == .failed)
         #expect(!loader.canRetryFailure)
-        #expect(loader.occurrence == nil)
     }
 
     /// When observation advances the selected row from v1 to v2, beginning
@@ -383,26 +397,24 @@ struct PreviewContentLoaderTests {
     @Test func sameIDVersionRetargetInvalidatesOldContentBeforePublishingNew() async throws {
         let refV1 = reference("00000000-0000-0000-0000-0000000001D2", version: 1)
         let refV2 = reference("00000000-0000-0000-0000-0000000001D2", version: 2)
-        let history = PausableDetailsHistory()
+        let history = PausablePreviewHistory()
         let loader = PreviewContentLoader(history: history)
 
-        await history.scriptDetails(details(for: refV1, text: "sensitive v1"))
+        await history.scriptPayload(payload(for: refV1, text: "sensitive v1"))
         let firstLoad = Task { await loader.load(item: refV1) }
-        try #require(await pollUntil { await history.detailRequests.count == 1 })
-        await history.resumeDetails(for: refV1.id)
+        try #require(await pollUntil { await history.payloadRequests.count == 1 })
+        await history.resumePayload(for: refV1.id)
         _ = await firstLoad.value
         #expect(loader.phase == .content(.text("sensitive v1")))
-        #expect(loader.occurrence != nil)
 
-        await history.scriptDetails(details(for: refV2, text: "current v2"))
+        await history.scriptPayload(payload(for: refV2, text: "current v2"))
         let secondLoad = Task { await loader.load(item: refV2) }
-        try #require(await pollUntil { await history.detailRequests.count == 2 })
+        try #require(await pollUntil { await history.payloadRequests.count == 2 })
         #expect(loader.requestedItem == refV2)
         #expect(loader.phase == .loading)
-        #expect(loader.occurrence == nil)
         #expect(loader.appliedImageSize == nil)
 
-        await history.resumeDetails(for: refV2.id)
+        await history.resumePayload(for: refV2.id)
         _ = await secondLoad.value
         #expect(loader.phase == .content(.text("current v2")))
     }
@@ -412,12 +424,12 @@ struct PreviewContentLoaderTests {
     /// a successful answer clears the failure episode.
     @Test func transientFailureRetriesTheSameReferenceAndClearsFailure() async throws {
         let refA = reference("00000000-0000-0000-0000-0000000001E1", version: 1)
-        let history = PausableDetailsHistory()
+        let history = PausablePreviewHistory()
         let loader = PreviewContentLoader(history: history)
 
         let task = Task { await loader.load(item: refA) }
-        try #require(await pollUntil { await history.detailRequests.count == 1 })
-        await history.resumeDetails(
+        try #require(await pollUntil { await history.payloadRequests.count == 1 })
+        await history.resumePayload(
             for: refA.id,
             throwing: .temporarilyUnavailable(.dedupIndexRebuild)
         )
@@ -425,14 +437,13 @@ struct PreviewContentLoaderTests {
         #expect(loader.requestedItem == refA)
         #expect(loader.phase == .failed)
         #expect(loader.canRetryFailure)
-        #expect(loader.occurrence == nil)
 
-        await history.scriptDetails(details(for: refA, text: "recovered"))
+        await history.scriptPayload(payload(for: refA, text: "recovered"))
         let retry = Task { await loader.retry() }
-        try #require(await pollUntil { await history.detailRequests.count == 2 })
+        try #require(await pollUntil { await history.payloadRequests.count == 2 })
         #expect(loader.requestedItem == refA)
         #expect(loader.phase == .loading)
-        await history.resumeDetails(for: refA.id)
+        await history.resumePayload(for: refA.id)
         _ = await retry.value
 
         #expect(loader.requestedItem == refA)
@@ -440,30 +451,29 @@ struct PreviewContentLoaderTests {
         #expect(!loader.canRetryFailure)
     }
 
-    @Test func closingDuringRetryDiscardsItsLateDetails() async throws {
+    @Test func closingDuringRetryDiscardsItsLatePayload() async throws {
         let ref = reference("00000000-0000-0000-0000-0000000001E8", version: 1)
-        let history = PausableDetailsHistory()
+        let history = PausablePreviewHistory()
         let loader = PreviewContentLoader(history: history)
         let firstLoad = Task { await loader.load(item: ref) }
-        try #require(await pollUntil { await history.detailRequests.count == 1 })
-        await history.resumeDetails(
+        try #require(await pollUntil { await history.payloadRequests.count == 1 })
+        await history.resumePayload(
             for: ref.id,
             throwing: .temporarilyUnavailable(.dedupIndexRebuild)
         )
         await firstLoad.value
         try #require(loader.canRetryFailure)
 
-        await history.scriptDetails(details(for: ref, text: "retired retry"))
+        await history.scriptPayload(payload(for: ref, text: "retired retry"))
         let retry = Task { await loader.retry() }
-        try #require(await pollUntil { await history.detailRequests.count == 2 })
+        try #require(await pollUntil { await history.payloadRequests.count == 2 })
         retry.cancel()
         loader.clear()
-        await history.resumeDetails(for: ref.id)
+        await history.resumePayload(for: ref.id)
         await retry.value
 
         #expect(loader.requestedItem == nil)
         #expect(loader.phase == .unsupported)
-        #expect(loader.occurrence == nil)
         #expect(loader.raster == nil)
         #expect(!loader.canRetryFailure)
     }
@@ -477,13 +487,13 @@ struct PreviewContentLoaderTests {
             typeIdentifier: "com.example.unsupported-preview",
             bytes: Data("opaque clipboard bytes".utf8)
         )
-        let history = PausableDetailsHistory()
-        await history.scriptDetails(details(for: ref, effective: [representation]))
+        let history = PausablePreviewHistory()
+        await history.scriptPayload(payload(for: ref, effective: [representation]))
         let loader = PreviewContentLoader(history: history)
 
         let task = Task { await loader.load(item: ref) }
-        try #require(await pollUntil { await history.detailRequests.count == 1 })
-        await history.resumeDetails(for: ref.id)
+        try #require(await pollUntil { await history.payloadRequests.count == 1 })
+        await history.resumePayload(for: ref.id)
         _ = await task.value
 
         #expect(loader.requestedItem == ref)
@@ -491,10 +501,9 @@ struct PreviewContentLoaderTests {
         #expect(!loader.canRetryFailure)
     }
 
-    /// RTF/HTML are valid opaque clipboard representations but have no safe
-    /// semantic renderer in this phase. They settle as unsupported, and the
-    /// Card 9D retry affordance cannot start another History read.
-    @Test func structuredTextWithoutPlainSiblingIsUnsupportedAndNotRetryable() async throws {
+    /// RTF without a plain-text sibling now reaches the offline text parser.
+    /// A loaded result does not expose Retry or issue another History read.
+    @Test func structuredTextWithoutPlainSiblingLoadsWithoutAnotherHistoryRead() async throws {
         let ref = reference("00000000-0000-0000-0000-0000000001E3", version: 1)
         let representations = [
             HistoryRepresentation(
@@ -506,20 +515,20 @@ struct PreviewContentLoaderTests {
                 bytes: Data("<p>Literal HTML</p>".utf8)
             ),
         ]
-        let history = PausableDetailsHistory()
-        await history.scriptDetails(details(for: ref, effective: representations))
+        let history = PausablePreviewHistory()
+        await history.scriptPayload(payload(for: ref, effective: representations))
         let loader = PreviewContentLoader(history: history)
 
         let task = Task { await loader.load(item: ref) }
-        try #require(await pollUntil { await history.detailRequests.count == 1 })
-        await history.resumeDetails(for: ref.id)
+        try #require(await pollUntil { await history.payloadRequests.count == 1 })
+        await history.resumePayload(for: ref.id)
         _ = await task.value
 
-        #expect(loader.phase == .unsupported)
+        #expect(loader.phase == .content(.text("Literal RTF")))
         #expect(!loader.canRetryFailure)
         await loader.retry()
-        #expect(await history.detailRequests.count == 1)
-        #expect(loader.phase == .unsupported)
+        #expect(await history.payloadRequests.count == 1)
+        #expect(loader.phase == .content(.text("Literal RTF")))
     }
 
     /// Caller-input failures are terminal for this exact preview request.
@@ -527,12 +536,12 @@ struct PreviewContentLoaderTests {
     /// only `temporarilyUnavailable` says that retrying later is admitted.
     @Test func invalidHistoryFailureIsNotRetryable() async throws {
         let ref = reference("00000000-0000-0000-0000-0000000001E4", version: 1)
-        let history = PausableDetailsHistory()
+        let history = PausablePreviewHistory()
         let loader = PreviewContentLoader(history: history)
 
         let task = Task { await loader.load(item: ref) }
-        try #require(await pollUntil { await history.detailRequests.count == 1 })
-        await history.resumeDetails(
+        try #require(await pollUntil { await history.payloadRequests.count == 1 })
+        await history.resumePayload(
             for: ref.id,
             throwing: .invalidInput(.unsupportedRepresentationType("public.invalid"))
         )
@@ -541,17 +550,17 @@ struct PreviewContentLoaderTests {
         #expect(loader.phase == .failed)
         #expect(!loader.canRetryFailure)
         await loader.retry()
-        #expect(await history.detailRequests.count == 1)
+        #expect(await history.payloadRequests.count == 1)
     }
 
     @Test func persistenceHistoryFailureIsNotRetryable() async throws {
         let ref = reference("00000000-0000-0000-0000-0000000001E5", version: 1)
-        let history = PausableDetailsHistory()
+        let history = PausablePreviewHistory()
         let loader = PreviewContentLoader(history: history)
 
         let task = Task { await loader.load(item: ref) }
-        try #require(await pollUntil { await history.detailRequests.count == 1 })
-        await history.resumeDetails(
+        try #require(await pollUntil { await history.payloadRequests.count == 1 })
+        await history.resumePayload(
             for: ref.id,
             throwing: .persistence(.corruptStoredValue)
         )
@@ -560,7 +569,7 @@ struct PreviewContentLoaderTests {
         #expect(loader.phase == .failed)
         #expect(!loader.canRetryFailure)
         await loader.retry()
-        #expect(await history.detailRequests.count == 1)
+        #expect(await history.payloadRequests.count == 1)
     }
 
     // MARK: - Bounded off-MainActor decode (S-2/SPEC-IMPL-002)
@@ -570,13 +579,13 @@ struct PreviewContentLoaderTests {
     /// pixels only, never the full encoded bytes.
     @Test func imageContentPublishesTheBoundedDecode() async {
         let ref = reference("00000000-0000-0000-0000-0000000001F1", version: 1)
-        let history = PausableDetailsHistory()
-        await history.scriptDetails(details(for: ref, imageBytes: fixturePNGData))
+        let history = PausablePreviewHistory()
+        await history.scriptPayload(payload(for: ref, imageBytes: fixturePNGData))
         let loader = PreviewContentLoader(history: history)
 
         let task = Task { await loader.load(item: ref) }
-        #expect(await pollUntil { await history.detailRequests.count == 1 })
-        await history.resumeDetails(for: ref.id)
+        #expect(await pollUntil { await history.payloadRequests.count == 1 })
+        await history.resumePayload(for: ref.id)
         _ = await task.value
         #expect(loader.phase == .content(.image))
         #expect(loader.appliedImageSize == CGSize(width: 1, height: 1))
@@ -591,15 +600,15 @@ struct PreviewContentLoaderTests {
     /// not admitted and therefore does not offer Retry.
     @Test func supportedImageDecodeFailureIsNotRetryable() async throws {
         let ref = reference("00000000-0000-0000-0000-0000000001F2", version: 1)
-        let history = PausableDetailsHistory()
-        await history.scriptDetails(
-            details(for: ref, imageBytes: Data([0x00, 0x01, 0x02, 0x03]))
+        let history = PausablePreviewHistory()
+        await history.scriptPayload(
+            payload(for: ref, imageBytes: Data([0x00, 0x01, 0x02, 0x03]))
         )
         let loader = PreviewContentLoader(history: history)
 
         let task = Task { await loader.load(item: ref) }
-        try #require(await pollUntil { await history.detailRequests.count == 1 })
-        await history.resumeDetails(for: ref.id)
+        try #require(await pollUntil { await history.payloadRequests.count == 1 })
+        await history.resumePayload(for: ref.id)
         _ = await task.value
         #expect(loader.phase == .failed)
         #expect(!loader.canRetryFailure)
@@ -615,18 +624,17 @@ struct PreviewContentLoaderTests {
             typeIdentifier: "public.utf8-plain-text",
             bytes: Data([0xFF, 0xFE, 0xFF])
         )
-        let history = PausableDetailsHistory()
-        await history.scriptDetails(details(for: ref, effective: [representation]))
+        let history = PausablePreviewHistory()
+        await history.scriptPayload(payload(for: ref, effective: [representation]))
         let loader = PreviewContentLoader(history: history)
 
         let task = Task { await loader.load(item: ref) }
-        try #require(await pollUntil { await history.detailRequests.count == 1 })
-        await history.resumeDetails(for: ref.id)
+        try #require(await pollUntil { await history.payloadRequests.count == 1 })
+        await history.resumePayload(for: ref.id)
         _ = await task.value
 
         #expect(loader.phase == .failed)
         #expect(!loader.canRetryFailure)
-        #expect(loader.occurrence == nil)
     }
 
     // MARK: - Clearing
@@ -635,18 +643,17 @@ struct PreviewContentLoaderTests {
     /// state synchronously.
     @Test func loadingNilClearsThePaneState() async {
         let refA = reference("00000000-0000-0000-0000-0000000001A2", version: 1)
-        let history = PausableDetailsHistory()
-        await history.scriptDetails(details(for: refA, text: "alpha"))
+        let history = PausablePreviewHistory()
+        await history.scriptPayload(payload(for: refA, text: "alpha"))
         let loader = PreviewContentLoader(history: history)
 
         Task { await loader.load(item: refA) }
-        #expect(await pollUntil { await history.detailRequests.count == 1 })
-        await history.resumeDetails(for: refA.id)
+        #expect(await pollUntil { await history.payloadRequests.count == 1 })
+        await history.resumePayload(for: refA.id)
         #expect(await pollUntil { loader.phase == .content(.text("alpha")) })
 
         await loader.load(item: nil)
         #expect(loader.phase == .unsupported)
-        #expect(loader.occurrence == nil)
         #expect(loader.requestedItem == nil)
     }
 }
@@ -682,25 +689,25 @@ private actor PreviewRenderGate {
 }
 #endif
 
-/// Allows multiple same-ID detail reads to overlap. Each continuation is
+/// Allows multiple same-ID payload reads to overlap. Each continuation is
 /// resumed explicitly by request order, making generation ordering observable
 /// without sleeps or a second storage implementation.
-private actor OverlappingDetailsHistory: ClipboardHistory {
+private actor OverlappingPreviewHistory: ClipboardHistory {
     func usage() async throws -> HistoryUsage {
-        // Overlapping detail completions do not establish a store total.
+        // Overlapping payload completions do not establish a store total.
         throw HistoryFailure.temporarilyUnavailable(.factProof)
     }
 
-    private var continuations: [CheckedContinuation<HistoryDetails, Error>?] = []
+    private var continuations: [CheckedContinuation<PastePayload, Error>?] = []
 
     var requestCount: Int { continuations.count }
 
-    func resumeRequest(_ index: Int, with details: HistoryDetails) {
+    func resumeRequest(_ index: Int, with payload: PastePayload) {
         guard continuations.indices.contains(index),
               let continuation = continuations[index]
         else { return }
         continuations[index] = nil
-        continuation.resume(returning: details)
+        continuation.resume(returning: payload)
     }
 
     func perform(_ action: HistoryAction) async throws -> HistoryReceipt {
@@ -718,13 +725,14 @@ private actor OverlappingDetailsHistory: ClipboardHistory {
     }
 
     func details(for id: HistoryItemID) async throws -> HistoryDetails {
-        try await withCheckedThrowingContinuation { continuation in
-            continuations.append(continuation)
-        }
+        Issue.record("Preview must not request full Details")
+        throw HistoryFailure.notFound(id)
     }
 
     func pastePayload(for id: HistoryItemID) async throws -> PastePayload {
-        throw HistoryFailure.notFound(id)
+        try await withCheckedThrowingContinuation { continuation in
+            continuations.append(continuation)
+        }
     }
 
     func thumbnail(

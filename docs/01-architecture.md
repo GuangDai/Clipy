@@ -10,6 +10,7 @@ All library targets live in one Swift package so package-only implementation voc
 ClipyApp
 ├── PresentationUI ────────→ HistoryCore + ClipboardFormats + ContentPreview
 ├── PasteboardAdapter ─────→ HistoryCore
+├── LocalAutomation ───────→ HistoryCore + HistoryStorage + ClipyCLIContract
 └── HistoryStorage ────────→ HistoryCore + ClipboardFormats
           │                 → HistoryDomain
           ├────────────────→ xxh3
@@ -20,7 +21,9 @@ HistoryDomain ─────────────→ HistoryCore
 ClipboardFormats ────────→ Foundation only
 ContentPreview ──────────→ ClipboardFormats + CoreGraphics + ImageIO
 ClipyCLIContract ────────→ Foundation only
-                            (pure wire contract; no shipped product surface)
+                            (package-only pure wire contract)
+clipyctl ────────────────→ LocalAutomation + AppKit
+                            (XcodeGen tool embedded in Clipy.app/Contents/MacOS)
 
 HistoryPerfRunner ─────────→ HistoryCore + HistoryStorage
                              (proof executable; no shipped product surface)
@@ -40,9 +43,11 @@ There is no `DomainCore` target. The few values that must appear in both the cal
 | `ClipboardFormats` | Package-only, Foundation-only | Open-world exact identifiers and declared string-codec facts | Purpose admission, decoders, bytes, registries, caches, plugins, framework objects |
 | `ContentPreview` | Package-only concrete actor and immutable values | Preview source priority, exact text codecs, fixed resource profiles, eager ImageIO/PDF page rendering, and bounded inert text/raster/copied-address outcomes | History reads, item/reference identity, selection or panel lifecycle, thumbnail request/source/cache policy, external I/O, registries, plugins, or framework objects in its interface |
 | `ClipyCLIContract` | Package-only, Foundation-only, no product | Versioned UTF-8 JSON request/reply values, bounded decoding/encoding, and stable exit classes | File handles or standard-stream side effects, transport, credentials, Gateway/History access, a product CLI, operation dispatch, or fabricated Gateway results |
+| `LocalAutomation` | Public concrete service/client and immutable output | Same-user local socket transport, request-to-ingress calls, fixed endpoint locations, bounded request/reply frames | SwiftData models, a second writer, UI state, clipboard capture, or automatic mutation retries |
+| `clipyctl` | Bundled XcodeGen command-line tool | One stdin JSON request, exact stdout reply, content-free stderr, containing-app cold launch, bounded connection retries | Store access, enrollment/grant decisions, endpoint selection from request input, or installer/symlink management |
 | `HistoryCore` | Public, Foundation-only | `ClipboardHistory`, IDs/tokens, History Actions, request/response DTOs, receipts, typed failures | Canonical state, fingerprints, SwiftData, AppKit, concrete storage |
 | `HistoryDomain` | Package-only, Foundation-only | Content lineage, immutable state, complete fact values, pure planners, semantic mutation plans and invariants | Public ports, I/O, actors, clocks, UUID generation, persistence |
-| `HistoryStorage` | Public concrete adapter plus internal implementation | `SwiftDataHistory`, Authority actor, schema/codecs, fact loaders, version minting, ingest preparation, Signature Index, read projections, observation plumbing, thumbnail production, and the internal F1 server-credential Keychain owner | AppKit pasteboard, UI state, service location, client credential files, or transport |
+| `HistoryStorage` | Public concrete adapter plus internal implementation | `SwiftDataHistory`, Authority actor, schema/codecs, fact loaders, version minting, ingest preparation, Signature Index, read projections, observation plumbing, thumbnail production, and the app-owned Local Automation ingress with enrollment/credential custody | AppKit pasteboard, UI state, service location, or transport |
 | `PasteboardAdapter` | Public adapter values used by the app | NSPasteboard observation/writes and translation to/from `HistoryCore` raw values | Deduplication, Canonical Content, fingerprints, persistence |
 | `PresentationUI` | Public UI assembly | View state and interactions over History DTOs; exact-reference/task/lifecycle fences around ContentPreview | `@Model`, Domain state, persistence rules, change-feed bookkeeping, ImageIO decode |
 | `ClipyApp` | Composition root | Concrete construction, lifecycle, paste orchestration, App Intents entry points, dependency injection, and the app-local external-remove→surface-purge join | Domain decisions, Gateway policy, global event buses, or duplicate persistence paths |
@@ -54,7 +59,7 @@ There is no `DomainCore` target. The few values that must appear in both the cal
 
 #### Access rules
 
-- `public` is reserved for caller-visible `HistoryCore`, the concrete `HistoryStorage` constructor needed by `ClipyApp`, and adapter/UI entry points.
+- `public` is reserved for caller-visible `HistoryCore`, concrete History construction and app-owned automation enrollment, and transport/adapter/UI entry points. Automation operation values remain `package` inside the library graph.
 - Cross-target implementation declarations use Swift `package` access.
 - `ClipboardFormats` states stable exact facts only. Projection, Preview, Details, and Edit retain separate purpose policy; unknown identifiers remain opaque raw values.
 - `ContentPreview` is one concrete deep module, not a renderer protocol,
@@ -109,7 +114,7 @@ The following rejected surfaces are implementation detail, not public abstractio
 | NSPasteboard/AppKit | Framework | `PasteboardAdapter` translates framework values to raw `HistoryCore` capture values and paste payloads back to AppKit. |
 | SwiftUI | Framework | Confined to `PresentationUI`; views receive value snapshots and an injected `any ClipboardHistory`. |
 | ImageIO | Framework | Confined to two concrete behavior owners: `HistoryStorage` produces version-fenced encoded thumbnails; `ContentPreview` eagerly materializes transient display rasters and full-pane preview artifacts. Neither exposes ImageIO/CoreGraphics objects across its actor/module seam, and there is no hypothetical public decoder port. |
-| Security / Data Protection Keychain | True external | The internal `HistoryStorage` `CredentialStore` actor owns only the exact F1 server credential. Production uses `SecRandomCopyBytes` and app-private Data Protection Keychain operations; deterministic correctness tests inject a narrow operations adapter. Client custody, enrollment coordination, and signed/profile evidence remain separate. |
+| Credential randomness / private files | System randomness and local filesystem | The internal `HistoryStorage` `CredentialStore` actor owns the exact F1 server credential in user-private files. `SecRandomCopyBytes` only generates the secret. Server and client files are separate; real-file and process tests exercise custody, while narrow injected failures cover unavailable operations. No Keychain fallback or signing prerequisite is part of this account-wide design. |
 | xxh3 | In-process C dependency | Internal fingerprint function; a package-only deterministic collision double is permitted in Domain/Storage tests. |
 | Fuse 1.4.x | Local library | Confined to `SearchWorker` for the specified fuzzy mode; its matcher remains inside actor isolation. The scaffold pins an exact resolved revision and fixtures lock behavior. |
 | Clock and ID source | In-process injected dependencies | Package-only dependencies used to make planning and receipts deterministic in tests. They are not public application services. |
@@ -353,8 +358,11 @@ real multi-display matrix.
   off-actor work, so a newer exact-text render can complete while an older
   native rasterization is pending. Cancellation remains a publication fence
   and does not promise immediate native preemption.
-  History-pane priority is image, valid exact plain text, exact
-  `com.adobe.pdf`, then an inert copied reference. PDF rendering uses a
+  History-pane priority is image, valid exact plain text, derived offline
+  RTF/HTML text, exact `com.adobe.pdf`, then an inert copied reference.
+  The concrete rich-text parsers consume only copied bytes and produce
+  bounded text without document importers, script execution, or attachment
+  loading; Part VI §5 defines their fixed limits. PDF rendering uses a
   memory data provider and local Core Graphics document/page objects in the
   existing native slot: only the first cropped/rotated page becomes a white-
   backed raster within the 640-pixel/output-byte profile. Password-protected
