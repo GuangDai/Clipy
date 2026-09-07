@@ -201,9 +201,11 @@ struct WS13TransactionFailureTests {
         let firstDetails = try await history.details(for: firstReference.id)
         #expect(firstDetails.item == firstReference)
         #expect(firstDetails.canonical.map(\.typeIdentifier) == ["public.utf8-plain-text"])
-        #expect(firstDetails.canonical.map(\.bytes) == [Data(firstText.utf8)])
+        #expect(firstDetails.title == firstText)
+        #expect(firstDetails.effectiveMatchesCanonical)
+        #expect(firstDetails.canonical.map(\.byteCount) == [firstText.utf8.count])
         #expect(firstDetails.effective.map(\.typeIdentifier) == ["public.utf8-plain-text"])
-        #expect(firstDetails.effective.map(\.bytes) == [Data(firstText.utf8)])
+        #expect(firstDetails.effective.map(\.byteCount) == [firstText.utf8.count])
         #expect(firstDetails.revisions.isEmpty)
         #expect(firstDetails.occurrence.firstCopiedAt == firstObservedAt)
         #expect(firstDetails.occurrence.lastCopiedAt == firstObservedAt)
@@ -215,9 +217,11 @@ struct WS13TransactionFailureTests {
         let secondDetails = try await history.details(for: secondReference.id)
         #expect(secondDetails.item == secondReference)
         #expect(secondDetails.canonical.map(\.typeIdentifier) == ["public.utf8-plain-text"])
-        #expect(secondDetails.canonical.map(\.bytes) == [Data(secondText.utf8)])
+        #expect(secondDetails.title == secondText)
+        #expect(secondDetails.effectiveMatchesCanonical)
+        #expect(secondDetails.canonical.map(\.byteCount) == [secondText.utf8.count])
         #expect(secondDetails.effective.map(\.typeIdentifier) == ["public.utf8-plain-text"])
-        #expect(secondDetails.effective.map(\.bytes) == [Data(secondText.utf8)])
+        #expect(secondDetails.effective.map(\.byteCount) == [secondText.utf8.count])
         #expect(secondDetails.revisions.isEmpty)
         #expect(secondDetails.occurrence.firstCopiedAt == secondObservedAt)
         #expect(secondDetails.occurrence.lastCopiedAt == secondObservedAt)
@@ -225,6 +229,15 @@ struct WS13TransactionFailureTests {
         #expect(secondDetails.occurrence.firstSource == secondSource)
         #expect(secondDetails.occurrence.lastSource == secondSource)
         #expect(secondDetails.pinnedPosition == nil)
+
+        for (details, text) in [(firstDetails, firstText), (secondDetails, secondText)] {
+            for basis in [HistoryContentBasis.canonical, .effective] {
+                let representation = try await history.representation(HistoryRepresentationRequest(
+                    item: details.item, basis: basis, typeIdentifier: "public.utf8-plain-text"
+                ))
+                #expect(representation.bytes == Data(text.utf8))
+            }
+        }
 
         await #expect(throws: HistoryFailure.notFound(rejectedBundle.domain.candidateID)) {
             try await history.details(for: rejectedBundle.domain.candidateID)

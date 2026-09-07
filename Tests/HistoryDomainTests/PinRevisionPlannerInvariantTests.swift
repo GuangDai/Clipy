@@ -61,26 +61,14 @@ internal func pinRevisionState(
     )
 }
 
-@Test func everyClearScopeRetiresExactlyTheProvenAffectedSet() {
-    let first = RetainedItemSummary(
-        id: pinRevisionItemID(1),
-        lastCopiedAt: Date(timeIntervalSinceReferenceDate: 100),
-        pinOrdinal: nil
-    )
-    let second = RetainedItemSummary(
-        id: pinRevisionItemID(2),
-        lastCopiedAt: Date(timeIntervalSinceReferenceDate: 200),
-        pinOrdinal: PinOrdinal(rawValue: 0)
-    )
-
-    let cases: [(scope: ClearScope, affected: [RetainedItemSummary])] = [
-        (.unpinned, [first]),
-        (.all, [first, second]),
+@Test func everyClearScopeRetiresExactlyTheProvenAffectedCount() {
+    let cases: [(scope: ClearScope, affectedCount: Int)] = [
+        (.unpinned, 1), (.all, 2), (.unpinned, 20_000), (.all, 20_000),
     ]
     for clearCase in cases {
         let result = planClear(
             scope: clearCase.scope,
-            facts: ClearFacts(affected: clearCase.affected)
+            facts: ClearFacts(affectedCount: clearCase.affectedCount)
         )
         guard case .commit(let plan) = result,
               case .cleared(let count) = plan.outcome
@@ -88,22 +76,18 @@ internal func pinRevisionState(
             Issue.record("A non-empty clear did not produce a commit")
             continue
         }
-        #expect(count == clearCase.affected.count)
-        #expect(plan.mutations.count == clearCase.affected.count)
-        for (mutation, expectedID) in zip(
-            plan.mutations,
-            clearCase.affected.map(\.id)
-        ) {
-            guard case .retire(let retiredID, .clear) = mutation else {
-                Issue.record("Clear omitted an affected ID or its semantic reason")
-                continue
-            }
-            #expect(retiredID == expectedID)
+        #expect(count == clearCase.affectedCount)
+        #expect(plan.mutations.count == 1)
+        guard case .bulkClear(let scope, let affectedCount) = plan.mutations[0] else {
+            Issue.record("Clear must carry one explicit scope, not expand membership")
+            continue
         }
+        #expect(scope == clearCase.scope)
+        #expect(affectedCount == count)
     }
 
     for scope in [ClearScope.unpinned, .all] {
-        switch planClear(scope: scope, facts: ClearFacts(affected: [])) {
+        switch planClear(scope: scope, facts: ClearFacts(affectedCount: 0)) {
         case .unchanged:
             break
         case .commit:
@@ -371,4 +355,3 @@ internal func pinRevisionState(
     }
     #expect(retiredID == target)
 }
-

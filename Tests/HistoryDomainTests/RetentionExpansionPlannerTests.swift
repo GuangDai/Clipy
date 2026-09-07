@@ -1,10 +1,6 @@
-/// Pure V2-02 expansion-planner tests for R1 (age) + R2 (storage bytes):
-/// docs/v2/V2-02-retention.md §4.1/§4.2 (selection), §6.5 (signature,
-/// non-throwing), §11 (D24). Discharges the Domain half of `RET-SELECT-1`
-/// (strict R1 boundary, oldest-first eviction order, R1-before-R2 union with
-/// no duplicate `HistoryItemID`, victim safety, satisfying-state no-op) plus
-/// the D16 determinism fixture and the checked-overflow fixture
-/// (`V2-roadmap` §6 R.2).
+/// Pure R1/R2 ordered-selection tests (V2-02 §4.1/§4.2): strict age
+/// boundaries, oldest-first prefixes, protection, satisfying-state no-op,
+/// byte accounting, and checked rejection of corrupt scalars.
 import Foundation
 import HistoryCore
 import Testing
@@ -39,38 +35,47 @@ private func expansionItem(
     )
 }
 
-private enum RetentionExpansionPlannerTestError: Error {
-    case unexpectedMutation
-    case countMismatch
-}
-
-/// Runs the planner and extracts the retired IDs, proving every retirement
-/// is `.retire(itemID:, .retention)` and `retiredItems` agrees with the
-/// payload list (D24 dedup surface).
+/// Fixtures model SQL's scalar aggregate and oldest-first cursor. Arrays and
+/// prefix membership materialization exist only here, not in the planner.
 private func plannedRetirements(
     inventory: [RetentionExpansionItemSummary],
     policies: HistoryRetentionPolicies,
-    protected: Set<HistoryItemID> = [],
+    protectedItemID: HistoryItemID? = nil,
     now: Date
 ) throws -> [HistoryItemID] {
-    let plan = planItemRetentionExpansion(
-        inventory: CompleteRetentionExpansionInventory(items: inventory),
-        policies: policies,
-        protected: protected,
-        now: now
+    let ordered = inventory.sorted {
+        RetentionEvictionKey(lastCopiedAt: $0.lastCopiedAt, itemID: $0.id)
+            < RetentionEvictionKey(lastCopiedAt: $1.lastCopiedAt, itemID: $1.id)
+    }
+    var totalBytes = 0
+    for item in ordered {
+        let (footprint, footprintOverflow) = item.canonicalBytes
+            .addingReportingOverflow(item.revisionBytes)
+        let (total, totalOverflow) = totalBytes.addingReportingOverflow(footprint)
+        guard !footprintOverflow, !totalOverflow else { throw DomainRejection.corruptLineage }
+        totalBytes = total
+    }
+    var selection = OrderedRetentionSelection(
+        policies: policies, now: now, protectedItemID: protectedItemID,
+        projectedTotalBytes: totalBytes
     )
-    var ids: [HistoryItemID] = []
-    ids.reserveCapacity(plan.retirements.count)
-    for mutation in plan.retirements {
-        guard case .retire(let itemID, .retention) = mutation else {
-            throw RetentionExpansionPlannerTestError.unexpectedMutation
-        }
-        ids.append(itemID)
+    for item in ordered {
+        if try !selection.consider(item) { break }
     }
-    guard plan.retiredItems == ids.count else {
-        throw RetentionExpansionPlannerTestError.countMismatch
+    guard let prefix = selection.prefix else {
+        #expect(selection.remainingBytes == totalBytes)
+        return []
     }
-    return ids
+    let victims = ordered.filter {
+        prefix.contains(RetainedItemSummary(
+            id: $0.id, lastCopiedAt: $0.lastCopiedAt, pinOrdinal: $0.pinOrdinal
+        ))
+    }
+    #expect(prefix.itemCount == victims.count)
+    #expect(prefix.canonicalBytes == victims.reduce(0) { $0 + $1.canonicalBytes })
+    #expect(prefix.revisionBytes == victims.reduce(0) { $0 + $1.revisionBytes })
+    #expect(selection.remainingBytes == totalBytes - prefix.canonicalBytes - prefix.revisionBytes)
+    return victims.map(\.id)
 }
 
 // MARK: - R1 strict age selection (V2-02 §4.2; RET-SELECT-1(a))
@@ -154,8 +159,8 @@ private func plannedRetirements(
 }
 
 @Test func r1NeverRetiresPinnedPrimaryOrCountVictims() throws {
-    // D13/D14 (V2-02 §4.2): `protected` = pinned ∪ {primary} ∪
-    // already-retired-by-count victims; the pin filter restates D13 locally.
+    // D13/D14 (V2-02 §4.2): pinned rows and the primary remain protected.
+    // A count victim is already absent from the projected retained set.
     let pinnedOld = expansionItem(
         1, copiedAt: 100, pinned: PinOrdinal(rawValue: 0), canonicalBytes: 10
     )
@@ -165,16 +170,17 @@ private func plannedRetirements(
     let policies = HistoryRetentionPolicies(
         age: AgeRetention(maxAge: 100),
         // A budget no retirement can restore: even retiring everything
-        // eligible leaves pinned + primary + count-victim bytes over budget,
-        // so this also proves protection holds under R2 pressure.
+        // eligible leaves pinned + primary bytes over budget, so this
+        // also proves protection holds under R2 pressure.
         storage: StorageRetention(maxTotalBytes: 1),
         revisions: nil
     )
 
     let retired = try plannedRetirements(
-        inventory: [pinnedOld, primaryOld, countVictimOld, eligibleOld],
+        inventory: [pinnedOld, primaryOld, countVictimOld, eligibleOld]
+            .filter { $0.id != countVictimOld.id },
         policies: policies,
-        protected: [primaryOld.id, countVictimOld.id],
+        protectedItemID: primaryOld.id,
         now: Date(timeIntervalSinceReferenceDate: 1000)
     )
     #expect(retired == [eligibleOld.id])
@@ -198,14 +204,10 @@ private func plannedRetirements(
             )
         ),
     ] {
-        let plan = planItemRetentionExpansion(
-            inventory: CompleteRetentionExpansionInventory(items: items),
-            policies: policies,
-            protected: [],
-            now: now
+        let retired = try plannedRetirements(
+            inventory: items, policies: policies, now: now
         )
-        #expect(plan.retirements.isEmpty)
-        #expect(plan.retiredItems == 0)
+        #expect(retired.isEmpty)
     }
 }
 
@@ -232,15 +234,15 @@ private func plannedRetirements(
     let retired = try plannedRetirements(
         inventory: [pinned, oldest, middle, newest, primary],
         policies: policies,
-        protected: [primary.id],
+        protectedItemID: primary.id,
         now: Date(timeIntervalSinceReferenceDate: 1000)
     )
     #expect(retired == [oldest.id])
 }
 
 @Test func alreadySatisfyingStateYieldsNoRetirement() throws {
-    // RET-SELECT-1(e): a satisfying state yields no retirement — the
-    // eviction order is never even established.
+    // RET-SELECT-1(e): a satisfying state yields an empty prefix; the
+    // first surviving eligible row ends the ordered scan.
     let item = expansionItem(1, copiedAt: 100, canonicalBytes: 50)
     let policies = HistoryRetentionPolicies(
         age: nil,
@@ -248,14 +250,12 @@ private func plannedRetirements(
         revisions: nil
     )
 
-    let plan = planItemRetentionExpansion(
-        inventory: CompleteRetentionExpansionInventory(items: [item]),
+    let retired = try plannedRetirements(
+        inventory: [item],
         policies: policies,
-        protected: [],
         now: Date(timeIntervalSinceReferenceDate: 1000)
     )
-    #expect(plan.retirements.isEmpty)
-    #expect(plan.retiredItems == 0)
+    #expect(retired.isEmpty)
 }
 
 @Test(arguments: [false, true], [569, 570, 571])
@@ -282,7 +282,7 @@ func r2OldestPrefixRespectsByteBoundaryAndProtection(
         policies: HistoryRetentionPolicies(
             age: nil, storage: StorageRetention(maxTotalBytes: budget), revisions: nil
         ),
-        protected: [primary.id],
+        protectedItemID: primary.id,
         now: Date(timeIntervalSinceReferenceDate: 1000)
     )
     #expect(retired == expected)
@@ -314,7 +314,7 @@ func r2OldestPrefixRespectsByteBoundaryAndProtection(
     let withinBudget = try plannedRetirements(
         inventory: [pinned, agedVictim, newer, newest, primary],
         policies: policies,
-        protected: [primary.id],
+        protectedItemID: primary.id,
         now: now
     )
     #expect(withinBudget == [agedVictim.id])
@@ -331,7 +331,7 @@ func r2OldestPrefixRespectsByteBoundaryAndProtection(
     let union = try plannedRetirements(
         inventory: [pinned, agedVictim, newer, newest, primary],
         policies: tighter,
-        protected: [primary.id],
+        protectedItemID: primary.id,
         now: now
     )
     #expect(union == [agedVictim.id, newer.id])
@@ -361,41 +361,31 @@ func r2OldestPrefixRespectsByteBoundaryAndProtection(
     let retired = try plannedRetirements(
         inventory: [pinnedHeavy, primaryHeavy, onlyEligible],
         policies: policies,
-        protected: [primaryHeavy.id],
+        protectedItemID: primaryHeavy.id,
         now: Date(timeIntervalSinceReferenceDate: 1000)
     )
     #expect(retired == [onlyEligible.id])
 }
 
-@Test func byteTotalOverflowSaturatesAndNeverWrapsOrUnderRetires() throws {
-    // §4.2 (06 §2 checked arithmetic): two footprints of
-    // Int.max / 2 + 1_000 bytes each cannot be summed without overflowing
-    // Int. Overflow is impossible within the validated 5,000 × 384 MiB
-    // worst case (§8.3) but enforced defensively: the running total
-    // saturates at Int.max — never wraps, never under-retires — while the
-    // typed `.persistence(.invariantViolation)` fail-closed mapping stays
-    // at the Storage pipeline boundary because §6.5 keeps the planner
-    // non-throwing.
-    let older = expansionItem(1, copiedAt: 100, canonicalBytes: Int.max / 2 + 1_000)
-    let newer = expansionItem(2, copiedAt: 200, canonicalBytes: Int.max / 2 + 1_000)
-    let pinned = expansionItem(
-        3, copiedAt: 50, pinned: PinOrdinal(rawValue: 0), canonicalBytes: 10
+@Test func overflowingCandidateBytesAreRejectedWithoutSelectingAVictim() {
+    // A corrupt per-row footprint must not saturate or wrap into an
+    // apparently valid retirement. The fold reports a typed rejection.
+    let corrupt = expansionItem(
+        1, copiedAt: 100, canonicalBytes: Int.max, revisionBytes: 1
     )
-    let policies = HistoryRetentionPolicies(
-        age: nil,
-        storage: StorageRetention(maxTotalBytes: 1_000),
-        revisions: nil
+    var selection = OrderedRetentionSelection(
+        policies: HistoryRetentionPolicies(
+            age: nil, storage: StorageRetention(maxTotalBytes: 1_000), revisions: nil
+        ),
+        now: Date(timeIntervalSinceReferenceDate: 1000),
+        protectedItemID: nil,
+        projectedTotalBytes: Int.max
     )
-
-    let retired = try plannedRetirements(
-        inventory: [pinned, newer, older],
-        policies: policies,
-        protected: [],
-        now: Date(timeIntervalSinceReferenceDate: 1000)
-    )
-    // The saturated total can never reach the budget, so both eligible
-    // victims retire, oldest-first, and the pinned row survives (D13).
-    #expect(retired == [older.id, newer.id])
+    #expect(throws: DomainRejection.corruptLineage) {
+        try selection.consider(corrupt)
+    }
+    #expect(selection.prefix == nil)
+    #expect(selection.remainingBytes == Int.max)
 }
 
 // MARK: - Determinism and D24 postconditions (V2-02 §11)
@@ -426,7 +416,7 @@ func largeInventoryRetainsTheSameProtectedOldestPrefix(
     #expect(try plannedRetirements(
         inventory: inventory,
         policies: HistoryRetentionPolicies(age: nil, storage: StorageRetention(maxTotalBytes: 500_000), revisions: nil),
-        protected: [primary.id], now: now
+        protectedItemID: primary.id, now: now
     ).isEmpty)
     // R1 selects only `aged`. R2 either needs no further victim, exactly
     // one, or two; later rows must survive every path and both input orders.
@@ -437,7 +427,7 @@ func largeInventoryRetainsTheSameProtectedOldestPrefix(
             storage: StorageRetention(maxTotalBytes: 500_000 - 100 * (1 + additionalByteVictims)),
             revisions: nil
         ),
-        protected: [primary.id], now: now
+        protectedItemID: primary.id, now: now
     )
     let expected = [aged.id] + Array([oldestSurvivor.id, nextSurvivor.id].prefix(additionalByteVictims))
     #expect(victims == expected)
@@ -464,19 +454,19 @@ func largeInventoryRetainsTheSameProtectedOldestPrefix(
     let now = Date(timeIntervalSinceReferenceDate: 1000)
 
     let one = try plannedRetirements(
-        inventory: inventoryOrderOne, policies: policies, protected: [primary.id], now: now
+        inventory: inventoryOrderOne, policies: policies, protectedItemID: primary.id, now: now
     )
     let two = try plannedRetirements(
-        inventory: inventoryOrderTwo, policies: policies, protected: [primary.id], now: now
+        inventory: inventoryOrderTwo, policies: policies, protectedItemID: primary.id, now: now
     )
     #expect(one == two)
     #expect(one == [agedVictim.id, newer.id])
 }
 
-@Test func d24VictimSafetyUnionShapeAndCountHold() {
+@Test func d24VictimSafetyUnionShapeAndCountHold() throws {
     // D24 (V2-02 §11): one deduplicated R1 ∪ R2 union whose victims are a
-    // subset of the unprotected, unpinned rows; `retiredItems` counts the
-    // payload retirements exactly.
+    // subset of the unprotected, unpinned rows; the prefix's item count
+    // matches its materialized membership.
     let pinnedA = expansionItem(
         1, copiedAt: 50, pinned: PinOrdinal(rawValue: 0), canonicalBytes: 400
     )
@@ -494,31 +484,22 @@ func largeInventoryRetainsTheSameProtectedOldestPrefix(
         storage: StorageRetention(maxTotalBytes: 800),
         revisions: nil
     )
-    // Post-R1 (eligibleA aged) total: 400 + 300 + 200 + 100 + 250 + 50
-    // = 1300 > 800 → R2 retires eligibleB (250) → 1050 > 800 → eligibleC
-    // (50) → 1000 > 800, no eligible candidate remains: the defensively
-    // total unsatisfiable tail (protected bytes alone exceed the budget;
-    // §6.5 assigns the typed failure to Storage's pre-plan check).
-    let plan = planItemRetentionExpansion(
-        inventory: CompleteRetentionExpansionInventory(
-            items: [pinnedA, eligibleA, primary, eligibleB, pinnedB, countVictim, eligibleC]
-        ),
+    // Count retirement has already removed countVictim. After R1 removes
+    // eligibleA, 400 + 300 + 200 + 250 + 50 = 1200 bytes remain. R2 removes
+    // eligibleB and eligibleC but cannot reach 800: protected bytes alone
+    // total 900. Storage handles infeasibility; Domain preserves protection.
+    let projectedInventory = [
+        pinnedA, eligibleA, primary, eligibleB, pinnedB, countVictim, eligibleC,
+    ].filter { $0.id != countVictim.id }
+    let retiredIDs = try plannedRetirements(
+        inventory: projectedInventory,
         policies: policies,
-        protected: protected,
+        protectedItemID: primary.id,
         now: Date(timeIntervalSinceReferenceDate: 1000)
     )
-
-    var retiredIDs: [HistoryItemID] = []
-    for mutation in plan.retirements {
-        guard case .retire(let itemID, .retention) = mutation else {
-            Issue.record("A non-retire mutation appeared in the expansion plan")
-            return
-        }
-        retiredIDs.append(itemID)
-    }
     #expect(retiredIDs == [eligibleA.id, eligibleB.id, eligibleC.id])
     #expect(Set(retiredIDs).count == retiredIDs.count)
-    #expect(plan.retiredItems == 3)
+    #expect(retiredIDs.count == 3)
     // D24(b): the victim set is disjoint from `protected` (pinned ∪
     // {primary} ∪ count victims) and from every pinned row.
     #expect(Set(retiredIDs).isDisjoint(with: protected))

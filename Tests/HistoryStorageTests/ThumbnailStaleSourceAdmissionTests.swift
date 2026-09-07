@@ -45,9 +45,9 @@ struct ThumbnailStaleSourceAdmissionTests {
             #expect(try await history.authority.thumbnailSource(for: current, pixels: pixels) == nil)
         }
         await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
-            try await history.authority.rawRepresentation(
-                for: current, basis: .effective, typeIdentifier: damagedType
-            )
+            try await history.representation(HistoryRepresentationRequest(
+                item: current, basis: .effective, typeIdentifier: damagedType
+            ))
         }
     }
 

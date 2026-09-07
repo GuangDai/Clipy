@@ -142,7 +142,11 @@ struct CaptureItemIDCollisionRecoveryTests {
 
         let seedDetails = try await history.details(for: Self.collidingID)
         #expect(seedDetails.item == seedReference)
-        #expect(seedDetails.effective.map(\.bytes) == [Data("card-2b-2 seed".utf8)])
+        #expect(seedDetails.effective.map(\.typeIdentifier) == ["public.utf8-plain-text"])
+        let seedValue = try await history.representation(.init(
+            item: seedDetails.item, basis: .effective, typeIdentifier: "public.utf8-plain-text"
+        ))
+        #expect(seedValue.bytes == Data("card-2b-2 seed".utf8))
         #expect(seedDetails.occurrence.count == 1)
         #expect(
             seedDetails.occurrence.lastCopiedAt
@@ -150,10 +154,11 @@ struct CaptureItemIDCollisionRecoveryTests {
         )
         let recoveredDetails = try await history.details(for: Self.recoveredID)
         #expect(recoveredDetails.item == recoveredReference)
-        #expect(
-            recoveredDetails.effective.map(\.bytes)
-                == [Data("card-2b-2 recovered".utf8)]
-        )
+        #expect(recoveredDetails.effective.map(\.typeIdentifier) == ["public.utf8-plain-text"])
+        let recoveredValue = try await history.representation(.init(
+            item: recoveredDetails.item, basis: .effective, typeIdentifier: "public.utf8-plain-text"
+        ))
+        #expect(recoveredValue.bytes == Data("card-2b-2 recovered".utf8))
     }
 
     @Test("an always-occupied source exhausts the fixed bound without a write or publish")
@@ -221,10 +226,11 @@ struct CaptureItemIDCollisionRecoveryTests {
             seedDetails.occurrence.lastCopiedAt
                 == Date(timeIntervalSinceReferenceDate: 20_101)
         )
-        #expect(
-            seedDetails.effective.map(\.bytes)
-                == [Data("card-2b-2 durable seed".utf8)]
-        )
+        #expect(seedDetails.effective.map(\.typeIdentifier) == ["public.utf8-plain-text"])
+        let seedValue = try await history.representation(.init(
+            item: seedDetails.item, basis: .effective, typeIdentifier: "public.utf8-plain-text"
+        ))
+        #expect(seedValue.bytes == Data("card-2b-2 durable seed".utf8))
     }
 
     private static func openHistory(

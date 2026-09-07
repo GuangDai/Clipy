@@ -323,19 +323,25 @@ private static func inheritCanonicalRequest(
         details.item.contentVersion == revisedReference.contentVersion,
         "WS6 (§8): details reference names the current Content Version"
     )
-    // WS6: "Effective-derived … updated" — the effective bytes in details are
-    // the revised bytes, not the Canonical bytes (revision never changes
-    // Canonical Content, docs/02-domain.md §2.6).
-    let effectiveBytes = try #require(details.effective.first(where: { $0.typeIdentifier == "public.utf8-plain-text" })?.bytes)
+    #expect(details.title == revisedText)
+    #expect(!details.effectiveMatchesCanonical)
+    #expect(details.effective.first?.byteCount == revisedText.utf8.count)
+    #expect(details.canonical.first?.byteCount == canonicalText.utf8.count)
+    // WS6: bytes are read explicitly at the version returned by metadata.
+    let effective = try await history.representation(HistoryRepresentationRequest(
+        item: details.item, basis: .effective, typeIdentifier: "public.utf8-plain-text"
+    ))
     #expect(
-        effectiveBytes == Data(revisedText.utf8),
-        "WS6 (§8): details effective content carries the revised bytes"
+        effective.bytes == Data(revisedText.utf8),
+        "WS6 (§8): explicit effective read carries the revised bytes"
     )
     // Canonical bytes are untouched by the revision.
-    let canonicalBytes = try #require(details.canonical.first(where: { $0.typeIdentifier == "public.utf8-plain-text" })?.bytes)
+    let canonical = try await history.representation(HistoryRepresentationRequest(
+        item: details.item, basis: .canonical, typeIdentifier: "public.utf8-plain-text"
+    ))
     #expect(
-        canonicalBytes == Data(canonicalText.utf8),
-        "WS6 (§8): details canonical content is untouched by the revision"
+        canonical.bytes == Data(canonicalText.utf8),
+        "WS6 (§8): explicit canonical read is untouched by the revision"
     )
     // WS6: the active revision summary's title reflects the revised text.
     let activeRevision = try #require(details.revisions.first(where: { $0.isActive }))

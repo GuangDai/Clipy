@@ -138,7 +138,11 @@ static func seedOverBoundSearchBodyRow(
         )
     }
     let details = try await history.details(for: itemID)
-    #expect(details.effective.map(\.bytes) == [Data("projection corruption control".utf8)])
+    #expect(details.effective.map(\.byteCount) == [Data("projection corruption control".utf8).count])
+    let value = try await history.representation(.init(
+        item: details.item, basis: .effective, typeIdentifier: "public.utf8-plain-text"
+    ))
+    #expect(value.bytes == Data("projection corruption control".utf8))
 }
 
 @Test func malformedStoredSearchBodyRejectsPublicSearchButLeavesRecentAvailable() async throws {
@@ -158,7 +162,11 @@ static func seedOverBoundSearchBodyRow(
         }
     }
     let details = try await history.details(for: itemID)
-    #expect(details.effective.map(\.bytes) == [Data("projection corruption control".utf8)])
+    #expect(details.effective.map(\.byteCount) == [Data("projection corruption control".utf8).count])
+    let value = try await history.representation(.init(
+        item: details.item, basis: .effective, typeIdentifier: "public.utf8-plain-text"
+    ))
+    #expect(value.bytes == Data("projection corruption control".utf8))
     let afterFailure = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 10))
     #expect(afterFailure == recent)
 }

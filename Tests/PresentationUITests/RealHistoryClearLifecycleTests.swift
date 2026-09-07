@@ -55,7 +55,7 @@ struct RealHistoryClearLifecycleTests {
 }
 
 /// Only delays delivery after the real writer has committed. All mutation,
-/// observation and read behavior remains the production SwiftData facade.
+/// observation and read behavior remains the production SQLite facade.
 private actor ParkedClearReceiptHistory: ClipboardHistory {
     let base: any ClipboardHistory
     private var continuation: CheckedContinuation<Void, Never>?
@@ -84,6 +84,9 @@ private actor ParkedClearReceiptHistory: ClipboardHistory {
 
     func browse(_ request: HistoryBrowseRequest) async throws -> HistoryPage { try await base.browse(request) }
     func details(for id: HistoryItemID) async throws -> HistoryDetails { try await base.details(for: id) }
+    func representation(_ request: HistoryRepresentationRequest) async throws -> HistoryRepresentation {
+        try await base.representation(request)
+    }
     func pastePayload(for id: HistoryItemID) async throws -> PastePayload { try await base.pastePayload(for: id) }
     func thumbnail(for item: HistoryItemReference, pixels: PixelSize) async throws -> ThumbnailPayload? {
         try await base.thumbnail(for: item, pixels: pixels)

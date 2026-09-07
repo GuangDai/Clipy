@@ -39,7 +39,9 @@ extension HistoryAuthority {
         guard let canonical = contents.first else { throw HistoryFailure.persistence(.corruptStoredValue) }
         let canonicalSources = try reads.representations(in: canonical)
         let canonicalTypes = Set(canonicalSources.map(\.typeIdentifier))
-        let canonicalRepresentations = try canonicalSources.map(reads.read)
+        let canonicalRepresentations = canonicalSources.map {
+            HistoryRepresentationMetadata(typeIdentifier: $0.typeIdentifier, byteCount: $0.byteCount)
+        }
         var effective = canonicalRepresentations
         var revisions: [RevisionSummary] = []
         for content in contents.dropFirst() {
@@ -48,9 +50,13 @@ extension HistoryAuthority {
                 throw HistoryFailure.persistence(.corruptStoredValue)
             }
             let isActive = content.id == item.currentContentID
-            if isActive { effective = try sources.map(reads.read) }
-            // Inactive revisions need only their durable title, type names,
-            // size and time. Their payloads stay unopened even in Details.
+            if isActive {
+                effective = sources.map {
+                    HistoryRepresentationMetadata(typeIdentifier: $0.typeIdentifier, byteCount: $0.byteCount)
+                }
+            }
+            // Every revision needs only its durable title, type names, size
+            // and time. Canonical/current payloads also stay unopened.
             revisions.append(RevisionSummary(
                 id: RevisionID(rawValue: content.id), createdAt: content.createdAt,
                 isActive: isActive, title: content.title,
@@ -58,7 +64,9 @@ extension HistoryAuthority {
             ))
         }
         return (HistoryDetails(
-            item: item.reference, canonical: canonicalRepresentations, effective: effective,
+            item: item.reference, title: item.title,
+            canonical: canonicalRepresentations, effective: effective,
+            effectiveMatchesCanonical: item.effectiveMatchesCanonical,
             revisions: revisions, occurrence: item.occurrence, pinnedPosition: item.pinOrdinal
         ), item.title)
     }
@@ -80,26 +88,24 @@ extension HistoryAuthority {
 
     /// An exact representation read. Identity and version are checked before
     /// any payload access; no caller receives a blob identifier or file URL.
-    internal func rawRepresentation(
-        for item: HistoryItemReference,
-        basis: SQLiteContentBasis,
-        typeIdentifier: String
-    ) throws -> HistoryRepresentation {
+    internal func representation(_ request: HistoryRepresentationRequest) async throws -> HistoryRepresentation {
         try sqliteContentRead {
-            let reads = contentReads
-            try reads.requireCurrent(item)
-            let current = try reads.item(for: item.id)
-            let sources: [SQLiteRepresentationSource]
-            switch basis {
-            case .canonical:
-                sources = try reads.representations(in: reads.canonicalContent(for: current))
-            case .effective:
-                sources = try reads.currentRepresentations(for: current)
+            try database.readTransaction {
+                let reads = contentReads
+                try reads.requireCurrent(request.item)
+                let current = try reads.item(for: request.item.id)
+                let sources: [SQLiteRepresentationSource]
+                switch request.basis {
+                case .canonical:
+                    sources = try reads.representations(in: reads.canonicalContent(for: current))
+                case .effective:
+                    sources = try reads.currentRepresentations(for: current)
+                }
+                guard let source = sources.first(where: { $0.typeIdentifier == request.typeIdentifier }) else {
+                    throw HistoryFailure.invalidInput(.unsupportedRepresentationType(request.typeIdentifier))
+                }
+                return try reads.read(source)
             }
-            guard let source = sources.first(where: { $0.typeIdentifier == typeIdentifier }) else {
-                throw HistoryFailure.invalidInput(.unsupportedRepresentationType(typeIdentifier))
-            }
-            return try reads.read(source)
         }
     }
 

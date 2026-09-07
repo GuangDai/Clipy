@@ -146,7 +146,7 @@ struct WS4ComposedLineageRoundTripTests {
             "WS4: Canonical Content still carries both representations"
         )
         #expect(details.effective.count == 1)
-        #expect(details.effective.first?.bytes == Data(revisedText.utf8))
+        #expect((try await ComposedSupport.firstRepresentation(in: history, details: details, basis: .effective)).bytes == Data(revisedText.utf8))
         #expect(details.occurrence.count == 2)
     }
 

@@ -64,7 +64,7 @@ internal enum HCRStore {
         let blob: Data
         do {
             blob = try AffectedItemsBlobCodec.encode(
-                payload.affectedItemIDs,
+                payload.affectedItems,
                 for: payload.changeKind,
                 limits: limits
             )

@@ -77,18 +77,22 @@ enum WSSupport {
         let revisionBytes: Int
         let currentContentID: UUID
         let canonicalContentID: UUID
+        let effectiveMatchesCanonical: Bool
     }
 
     static func fetchRows(_ database: SQLiteDatabase) throws -> [StoredItem] {
         let rows = try database.prepare("""
             SELECT i.id,i.contentVersion,i.titleUTF8,i.searchBodyUTF8,i.effectiveTypeIdentifiersBlob,
                    i.firstCopiedAt,i.lastCopiedAt,i.copyCount,i.firstSource,i.lastSource,i.pinOrdinal,
-                   i.canonicalBytes,i.revisionCount,i.revisionBytes,i.currentContentID,c.id
+                   i.canonicalBytes,i.revisionCount,i.revisionBytes,i.currentContentID,c.id,
+                   i.effectiveMatchesCanonical
             FROM history_items i LEFT JOIN contents c ON c.itemID=i.id AND c.revisionOrdinal=0
             ORDER BY i.id
             """)
         var result: [StoredItem] = []
         while try rows.step() {
+            let matchesCanonical = try rows.integer(at: 16)
+            try #require(matchesCanonical == 0 || matchesCanonical == 1)
             result.append(try StoredItem(
                 id: #require(UUID(uuidString: rows.text(at: 0))),
                 contentVersionRaw: sqliteUInt64(rows.blob(at: 1)),
@@ -102,7 +106,8 @@ enum WSSupport {
                 canonicalBytes: Int(rows.integer(at: 11)), revisionCount: Int(rows.integer(at: 12)),
                 revisionBytes: Int(rows.integer(at: 13)),
                 currentContentID: #require(UUID(uuidString: rows.text(at: 14))),
-                canonicalContentID: #require(UUID(uuidString: rows.text(at: 15)))
+                canonicalContentID: #require(UUID(uuidString: rows.text(at: 15))),
+                effectiveMatchesCanonical: matchesCanonical == 1
             ))
         }
         return result

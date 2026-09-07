@@ -117,6 +117,10 @@
 "Clipy couldn't remove this item." = "Clipy 无法移除此项目。";
 "Editing one format leaves other kept formats unchanged. The destination app may use those formats instead." = "编辑一种格式不会改变其他保留的格式。目标应用可能改用这些格式。";
 "Save As…" = "另存为…";
+"Show Preview" = "显示预览";
+"Hide Preview" = "隐藏预览";
+"Preview of %@" = "%@ 的预览";
+"Replace requires valid UTF-8 or UTF-16 plain text." = "替换需要有效的 UTF-8 或 UTF-16 纯文本。";
 "Save %@ As…" = "将 %@ 另存为…";
 "Saves the complete bytes of this displayed representation to a file you choose." = "将当前显示表示的完整字节保存到你选择的文件。";
 "The Save dialog is unavailable. Try again." = "无法打开保存对话框。请重试。";

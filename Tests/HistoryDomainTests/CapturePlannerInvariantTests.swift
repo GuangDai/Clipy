@@ -108,7 +108,9 @@ internal func captureFacts(
     candidates: [HistoryItemState],
     retained: [HistoryItemState]? = nil,
     additionalSummaries: [RetainedItemSummary] = [],
-    candidateID: HistoryItemID = capturePlannerID(250)
+    candidateID: HistoryItemID = capturePlannerID(250),
+    maximumUnpinnedItems: Int = 100,
+    hardMaximumRetainedItems: Int = 100
 ) throws -> IngestFacts {
     var confirmedMatch: CaptureMatch?
     if let hintedItem {
@@ -140,13 +142,37 @@ internal func captureFacts(
         if $0.lastCopiedAt != $1.lastCopiedAt { return $0.lastCopiedAt < $1.lastCopiedAt }
         return $0.id < $1.id
     }
+    let count = try captureRetirementCount(
+        confirmedMatch: confirmedMatch, retainedCount: summaries.count,
+        unpinnedCount: unpinned.count,
+        retention: RetentionPolicy(maximumUnpinnedItems: maximumUnpinnedItems),
+        hardMaximumRetainedItems: hardMaximumRetainedItems
+    )
+    let primaryID = confirmedMatch?.id ?? candidateID
+    let victims = Array(unpinned.filter { $0.id != primaryID }.prefix(count))
+    let prefix = victims.last.map { last in
+        RetentionRetirementPrefix(
+            through: RetentionEvictionKey(lastCopiedAt: last.lastCopiedAt, itemID: last.id),
+            excludedItemID: primaryID, itemCount: victims.count,
+            canonicalBytes: victims.reduce(0) { total, victim in
+                // Summary-only fixtures represent one-byte Canonical items.
+                total + (retainedItems.first { $0.id == victim.id }?.canonical.representations
+                    .reduce(0) { $0 + $1.content.bytes.count } ?? 1)
+            },
+            revisionBytes: victims.reduce(0) { total, victim in
+                total + (retainedItems.first { $0.id == victim.id }?.revisions.reduce(0) {
+                    $0 + $1.content.representations.reduce(0) { $0 + $1.bytes.count }
+                } ?? 0)
+            }
+        )
+    }
     return IngestFacts(
         confirmedMatch: confirmedMatch,
         candidateIDExists: summaries.contains { $0.id == candidateID },
         retention: CaptureRetentionFacts(
             retainedCount: summaries.count,
             unpinnedCount: unpinned.count,
-            oldestUnpinnedItems: unpinned
+            retirementPrefix: prefix
         )
     )
 }

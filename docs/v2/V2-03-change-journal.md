@@ -88,26 +88,40 @@ There is no `cacheEnabled`, generation, materializer version, store-instance
 UUID, user retention setting, cursor state, or hash. Fixed internal limits own
 compaction; future J1-only state requires a later immutable schema.
 
-### 0.2 Manual AffectedItemsBlobV1 wire
+### 0.2 Current manual affected-scope wire
 
-The X-HCR codec is not synthesized `Codable`. Its complete network-byte-order
-wire is:
+The current SQLite implementation stores a strict tagged scope in the existing
+`affectedItemsBlob` column. This supersedes the earlier ID-only wire: there is
+one current version (2), no old-format decoder or migration.
 
-```text
-UInt16 formatVersion = 1
-UInt16 itemCount
-itemCount * 16 raw UUID bytes
-```
+All integers use network byte order. The prefix is `UInt16 version = 2` plus
+one scope tag:
 
-The decoder rejects an unknown version, count above
-`HistoryLimits.standard.hardMaximumRetainedItems + 1` (5,001 in the frozen
-profile, computed with checked arithmetic), length other than
-`4 + itemCount * 16`, a duplicate ID, non-ascending UUID raw-byte order, or any
-trailing byte before allocating an output beyond the fixed bound. Producers
-sort by UUID raw bytes ascending and deduplicate before encoding. An item count
-of zero is valid only for `clearAll`, `clearUnpinned`, and victim-free `policySet`;
-every other kind requires at least one ID. No query text or content bytes enter
-this blob.
+| Tag | Scope and following fields |
+|---|---|
+| 1 | Complete explicit IDs: UInt16 count, sorted unique raw UUID16 values |
+| 2 | All items: UInt64 actual retired count |
+| 3 | Unpinned items: UInt64 actual retired count |
+| 4 | Unpinned eviction prefix: UInt64 actual retired count, Double timestamp bits, cutoff UUID16, optional excluded UUID16, optional primary UUID16 |
+| 5 | Conservative whole pre-commit History: UInt64 actual retired item count, UInt64 actual pruned revision count |
+
+Each optional UUID uses a one-byte 0/1 presence flag. Prefix membership is
+unpinned rows at or before the inclusive `(lastCopiedAt, itemID)` cutoff, minus
+the excluded primary. Capture/coalesce/revise include that primary separately;
+a retention-only prefix has no primary change. The conservative retention
+scope does **not** claim every covered item changed. It allows R3 to report
+exact counts without storing an unbounded set of surviving item IDs.
+
+Explicit arrays alone use the 5,001-ID bound. Bulk clear is 11 bytes, a prefix
+at most 69 bytes, and conservative retention 19 bytes regardless of item count.
+The decode envelope is `max(5 + 16 * maxAffectedItemsPerRecord, 69)`.
+The decoder rejects unknown versions/tags, malformed lengths or flags,
+non-finite cutoffs, non-ascending/duplicate explicit IDs, integer overflow,
+trailing data, and kind/scope disagreement. Clear requires a positive actual
+count; policy-only changes use an empty explicit scope or zero/zero retention
+scope. Retention kind is retire if any items retired, otherwise retireRevision
+if revisions were pruned, otherwise policySet. No content or query bytes enter
+this blob. One record still joins History, audit and position in one transaction.
 
 ### 0.3 Migration, bootstrap, validation, and proof ceiling
 
@@ -550,51 +564,21 @@ mirror) treats the row conservatively as "membership/content may have changed
 for all `affectedItemIDs`" and refetches — exactly the cache's conservative floor
 (§7.3).
 
-### 4.4 AffectedItemsBlobV1 codec
+### 4.4 Affected-scope codec
 
-The affected-item list is persisted through the explicit manual wire frozen in
-§0.2, not synthesized `Codable`, mirroring the v1 codec discipline (`05` §4):
+The current manual wire and strict validation are specified in §0.2.
+`HistoryChangeRecordPayload.affectedItems` is a closed immutable
+`HistoryAffectedItems` value: complete explicit IDs, all/unpinned clear,
+an unpinned eviction prefix with optional primary, or conservative retention
+coverage with actual counts. An empty explicit list is only a policy-only
+change, never a substitute for unknown membership.
 
-```swift
-internal struct AffectedItemsBlobV1: Sendable {
-    let formatVersion: UInt16    // exactly 1; network byte order
-    let itemIDs: [UUID]          // encoded as UInt16 count + 16 raw bytes each;
-                                 // sorted raw-byte ASC, unique, <= 5,001
-}
-```
-
-Decode reconstructs through validators and checks, exactly as v1 codecs (`05` §4):
-
-- known `formatVersion` (exactly 1);
-- `itemIDs` count ≤ `JournalLimits.maxAffectedItemsPerRecord` (§4.5) before any
-  output allocation;
-- exact encoded length `4 + count * 16`, using checked arithmetic, with no
-  trailing byte;
-- UUID raw bytes are strictly ascending, which jointly proves deterministic
-  ordering and uniqueness;
-- `itemIDs` is non-empty **unless** the record's `changeKindRaw` encodes a
-  self-describing kind: `.clearAll` / `.clearUnpinned` (the kind conveys the
-  scope; enumerating up to 5,000 UUIDs would be wasteful) or `.policySet` (a
-  retention-policy *value* change that retires no items is self-describing via
-  the kind — the policy value lives in `RetentionExpansionConfigRow` for V2-02
-  rules (`V2-02` §3.3) / the v1 count-policy storage for the v1 count, never in
-  the HCR or `JournalConfigRow`, neither of which carries a policy field; under
-  the symmetric §5.2 rule a policy change that *does* retire items is recorded
-  `.retire` with those victim IDs, so `.policySet` is by construction victim-
-  free). For every other `changeKind`, an empty `itemIDs` is corruption
-  (`.invariantViolation`).
-
-Any violation is `.persistence(.corruptStoredValue)` /
-`.persistence(.invariantViolation)` (`05` §16). The decoder does not silently
-drop IDs, reset to a default, or substitute.
-
-`AffectedItemsBlobV1` is a manual wire codec, like the v1 blobs (`CanonicalBlobV1`
-etc., `05` §4): it is encoded to `Data` for storage and decoded back within
-`HistoryStorage`'s isolation. The blob itself **does not cross an actor
-boundary** — the `HistoryChangeRecord` DTO (§6.3) and the
-`HistoryChangeRecordPayload` (§5.2) carry the **decoded** `[HistoryItemID]`
-array (a `Sendable` value type), not the blob. `Sendable` is derived without an
-escape hatch; no synthesized serializer, hash, or generic envelope participates.
+The codec rejects invalid persisted shapes as
+`.persistence(.corruptStoredValue)`; an empty explicit list for a kind requiring
+item changes remains `.persistence(.invariantViolation)`. It does not drop
+IDs, default, or substitute. The blob is internal to HistoryStorage; no
+synthesized serializer, hash, or generic envelope participates. Journal byte
+accounting remains the exact encoded byte count, including bulk scopes.
 
 ### 4.5 JournalLimits (admission bounds)
 
@@ -605,7 +589,7 @@ and V2-01's `EnrichmentLimits`):
 
 | Bound | V2 value |
 |---|---:|
-| `maxAffectedItemsPerRecord` | `HistoryLimits.standard.hardMaximumRetainedItems + 1` (5,001 in the frozen profile, checked; a capture may create one item and retire all 5,000 prior items in the same commit; `.clearAll`/`.clearUnpinned` rows carry no IDs, §4.4) |
+| `maxAffectedItemsPerRecord` | `HistoryLimits.standard.hardMaximumRetainedItems + 1` (5,001); only bounds complete explicit ID arrays. Bulk scope counts are independent and do not enumerate IDs (§0.2). |
 | `maxJournalRecordCount` (compaction cap) | 10,000 |
 | `maxJournalAgeSeconds` (compaction cap) | 604,800 (7 days) |
 | `maxJournalBytes` (whole-journal affected-items payload cap) | 80 MiB; exactly the checked sum of retained `affectedItemsBlob.count`, tracked by `JournalConfigRow.journalBytes`. This is not a physical SQLite/WAL/index-byte claim; record count/floor bounds are separate. |

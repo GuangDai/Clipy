@@ -699,6 +699,7 @@ private actor OverlappingPreviewHistory: ClipboardHistory {
     }
 
     private var continuations: [CheckedContinuation<PastePayload, Error>?] = []
+    private var payloads: [HistoryItemReference: PastePayload] = [:]
 
     var requestCount: Int { continuations.count }
 
@@ -707,6 +708,7 @@ private actor OverlappingPreviewHistory: ClipboardHistory {
               let continuation = continuations[index]
         else { return }
         continuations[index] = nil
+        payloads[payload.item] = payload
         continuation.resume(returning: payload)
     }
 
@@ -725,14 +727,23 @@ private actor OverlappingPreviewHistory: ClipboardHistory {
     }
 
     func details(for id: HistoryItemID) async throws -> HistoryDetails {
-        Issue.record("Preview must not request full Details")
-        throw HistoryFailure.notFound(id)
+        let payload: PastePayload = try await withCheckedThrowingContinuation { continuation in
+            continuations.append(continuation)
+        }
+        return previewMetadata(for: payload)
     }
 
     func pastePayload(for id: HistoryItemID) async throws -> PastePayload {
-        try await withCheckedThrowingContinuation { continuation in
-            continuations.append(continuation)
+        Issue.record("Preview must not request the complete paste payload")
+        throw HistoryFailure.notFound(id)
+    }
+
+    func representation(_ request: HistoryRepresentationRequest) async throws -> HistoryRepresentation {
+        guard let payload = payloads[request.item],
+              let value = payload.representations.first(where: { $0.typeIdentifier == request.typeIdentifier }) else {
+            throw HistoryFailure.notFound(request.item.id)
         }
+        return value
     }
 
     func thumbnail(

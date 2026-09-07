@@ -64,8 +64,14 @@ struct UTF16LeadingScalarBodySearchTests {
         #expect(presentation.matchedRanges == [UTF16TextRange(location: 0, length: 320)])
 
         let details = try await history.details(for: item.id)
-        #expect(details.canonical.map(\.bytes) == [wire])
-        #expect(details.effective.map(\.bytes) == [wire])
+        #expect(details.canonical.map(\.byteCount) == [wire.count])
+        #expect(details.effective.map(\.byteCount) == [wire.count])
+        for basis in [HistoryContentBasis.canonical, .effective] {
+            let representation = try await history.representation(.init(
+                item: details.item, basis: basis, typeIdentifier: identifier
+            ))
+            #expect(representation.bytes == wire)
+        }
         let payload = try await history.pastePayload(for: item.id)
         #expect(payload.item == item)
         #expect(payload.representations.map(\.typeIdentifier) == [identifier])

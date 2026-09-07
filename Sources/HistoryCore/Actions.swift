@@ -158,6 +158,11 @@ public enum RevisionDecisionAction: Sendable, Hashable {
     /// Carries the Canonical representation's bytes into Effective unchanged.
     case inheritCanonical
 
+    /// Carries this type's current Effective bytes unchanged. If the type is
+    /// currently hidden, this decision is incoherent; use an explicit hide or
+    /// inheritCanonical decision instead (03a §5; metadata-only editor).
+    case inheritCurrent
+
     /// Omits the representation from Effective Content entirely. The
     /// Canonical representation is retained for lineage and general-lane
     /// dedup; hiding never changes Canonical Content or its signature. Hidden

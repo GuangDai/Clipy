@@ -3,6 +3,7 @@
 /// assertions then read the real temporary SQLite journal as the durable oracle.
 import Foundation
 import HistoryCore
+import HistoryDomain
 import Testing
 @testable import HistoryStorage
 
@@ -54,7 +55,7 @@ struct HCRCommitFamilyTests {
         _ action: HistoryAction,
         expecting expectedKind: HistoryChangeKindRawV1,
         in history: SQLiteHistory
-    ) async throws -> (commit: HistoryCommit, affected: [HistoryItemID]) {
+    ) async throws -> (commit: HistoryCommit, affected: HistoryAffectedItems) {
         let before = try await journalState(in: history)
 
         let receipt = try await history.perform(action)
@@ -137,7 +138,7 @@ struct HCRCommitFamilyTests {
             in: history
         )
         let item = try Self.insertedReference(from: inserted.commit)
-        #expect(inserted.affected == [item.id])
+        #expect(inserted.affected == .explicit([item.id]))
 
         let coalesced = try await Self.performCommitted(
             Self.captureAction("same canonical value", offset: 2),
@@ -151,7 +152,7 @@ struct HCRCommitFamilyTests {
             return
         }
         #expect(winner.id == item.id)
-        #expect(coalesced.affected == [item.id])
+        #expect(coalesced.affected == .explicit([item.id]))
     }
 
     @Test("pin, unpin, and remove append the targeted item ID")
@@ -169,24 +170,24 @@ struct HCRCommitFamilyTests {
             expecting: .pin,
             in: history
         )
-        #expect(pinned.affected == [item.id])
+        #expect(pinned.affected == .explicit([item.id]))
 
         let unpinned = try await Self.performCommitted(
             .unpin(item.id),
             expecting: .unpin,
             in: history
         )
-        #expect(unpinned.affected == [item.id])
+        #expect(unpinned.affected == .explicit([item.id]))
 
         let removed = try await Self.performCommitted(
             .remove(item.id),
             expecting: .remove,
             in: history
         )
-        #expect(removed.affected == [item.id])
+        #expect(removed.affected == .explicit([item.id]))
     }
 
-    @Test("clear all and clear unpinned use self-describing empty payloads")
+    @Test("clear all and clear unpinned retain their actual scope and count")
     func clearScopes() async throws {
         let allHistory = try await Self.makeHistory()
         _ = try await Self.performCommitted(
@@ -199,7 +200,12 @@ struct HCRCommitFamilyTests {
             expecting: .clearAll,
             in: allHistory
         )
-        #expect(clearAll.affected.isEmpty)
+        #expect(clearAll.affected == .all(retiredItems: 1))
+        guard case .cleared(let allCount) = clearAll.commit.outcome else {
+            Issue.record("expected clear-all receipt")
+            return
+        }
+        #expect(allCount == 1)
 
         let unpinnedHistory = try await Self.makeHistory()
         let pinnedInsert = try await Self.performCommitted(
@@ -223,7 +229,12 @@ struct HCRCommitFamilyTests {
             expecting: .clearUnpinned,
             in: unpinnedHistory
         )
-        #expect(clearUnpinned.affected.isEmpty)
+        #expect(clearUnpinned.affected == .unpinned(retiredItems: 1))
+        guard case .cleared(let unpinnedCount) = clearUnpinned.commit.outcome else {
+            Issue.record("expected clear-unpinned receipt")
+            return
+        }
+        #expect(unpinnedCount == 1)
     }
 
     @Test("revision append records the revised item")
@@ -243,7 +254,7 @@ struct HCRCommitFamilyTests {
         )
         let revisedItem = try Self.revisedReference(from: revised.commit)
         #expect(revisedItem.id == item.id)
-        #expect(revised.affected == [item.id])
+        #expect(revised.affected == .explicit([item.id]))
     }
 
     @Test("policy-only and retention retirement select distinct families")
@@ -263,7 +274,7 @@ struct HCRCommitFamilyTests {
             return
         }
         #expect(policyRemoved == 0)
-        #expect(policy.affected.isEmpty)
+        #expect(policy.affected == .explicit([]))
 
         let retireHistory = try await Self.makeHistory()
         let oldestInsert = try await Self.performCommitted(
@@ -292,10 +303,13 @@ struct HCRCommitFamilyTests {
             return
         }
         #expect(retiredCount == 1)
-        #expect(retire.affected == [oldest.id])
+        #expect(retire.affected == .unpinnedPrefix(
+            through: RetentionEvictionKey(lastCopiedAt: Self.epoch.addingTimeInterval(50), itemID: oldest.id),
+            excluding: nil, retiredItems: 1, primaryItemID: nil
+        ))
     }
 
-    @Test("retention revision prune records its surviving item")
+    @Test("streamed retention revision prune records conservative scope and exact counts")
     func retentionRevisionPrune() async throws {
         let history = try await Self.makeHistory()
         let inserted = try await Self.performCommitted(
@@ -342,6 +356,6 @@ struct HCRCommitFamilyTests {
         }
         #expect(retiredItems == 0)
         #expect(prunedRevisions == 1)
-        #expect(prune.affected == [item.id])
+        #expect(prune.affected == .retention(retiredItems: 0, prunedRevisions: 1))
     }
 }

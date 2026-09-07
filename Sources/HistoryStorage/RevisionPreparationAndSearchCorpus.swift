@@ -35,6 +35,9 @@ internal struct PreparedRevisionBundle: Sendable {
     let domain: PreparedRevision
     /// Projection of the prepared proposed Effective Content (Part V §15).
     let projection: ContentProjection
+    /// Byte-exact representation-set equality, independent of Canonical
+    /// fingerprints and Unicode-equivalent identifier ordering (02 §2.4).
+    let effectiveMatchesCanonical: Bool
 }
 
 /// The OCC-safe two-phase revision input: the target's validated Canonical
@@ -240,9 +243,9 @@ internal actor RevisionPreparationActor {
             guard actionsByType.count == source.canonical.representations.count else {
                 throw HistoryFailure.invalidInput(.incoherentRevisionDraft)
             }
-            // Resolution preserves the Canonical representation order, so the
-            // proposed content stays in the normalized stable Unicode scalar
-            // order (docs/02-domain.md §2.1) without re-sorting.
+            // Current inheritance preserves that stored identifier spelling.
+            // Equivalent spellings can sort differently, so normalize the
+            // resolved result after all decisions (docs/02-domain.md §2.1).
             var representations: [ContentRepresentation] = []
             representations.reserveCapacity(source.canonical.representations.count)
             for canonicalRepresentation in source.canonical.representations {
@@ -255,6 +258,13 @@ internal actor RevisionPreparationActor {
                 switch action {
                 case .inheritCanonical:
                     representations.append(canonicalRepresentation.content)
+                case .inheritCurrent:
+                    guard let current = source.current.representations.first(where: {
+                        $0.typeIdentifier == typeIdentifier
+                    }) else {
+                        throw HistoryFailure.invalidInput(.incoherentRevisionDraft)
+                    }
+                    representations.append(current)
                 case .replace(let bytes):
                     // A normalized content set forbids empty-bytes
                     // representations (docs/02-domain.md §2.1); an oversized
@@ -283,7 +293,9 @@ internal actor RevisionPreparationActor {
             guard !representations.isEmpty else {
                 throw HistoryFailure.invalidInput(.incoherentRevisionDraft)
             }
-            proposed = EffectiveContent(representations: representations)
+            proposed = EffectiveContent(representations: representations.sorted {
+                $0.typeIdentifier.unicodeScalars.lexicographicallyPrecedes($1.typeIdentifier.unicodeScalars)
+            })
         case .revert(let target):
             switch target {
             case .canonical:
@@ -339,6 +351,9 @@ internal actor RevisionPreparationActor {
         // R3-disabled (byte-for-byte v1) path.
         let candidateRevisionID = makeRevisionID()
         let createdAt = now()
+        let matchesCanonical = proposed.hasSameRepresentations(as: EffectiveContent(
+            representations: source.canonical.representations.map(\.content)
+        ))
 
         // An unchanged proposal consumes no append capacity (02 §11 step 5).
         // The snapshot's current bytes were validated by the Authority. Keep
@@ -353,7 +368,8 @@ internal actor RevisionPreparationActor {
                     basedOn: source.contentVersion,
                     proposedContent: proposed
                 ),
-                projection: ContentProjector.project(proposed, limits: limits)
+                projection: ContentProjector.project(proposed, limits: limits),
+                effectiveMatchesCanonical: matchesCanonical
             )
         }
 
@@ -451,7 +467,8 @@ internal actor RevisionPreparationActor {
                 basedOn: source.contentVersion,
                 proposedContent: proposed
             ),
-            projection: projection
+            projection: projection,
+            effectiveMatchesCanonical: matchesCanonical
         )
     }
 }

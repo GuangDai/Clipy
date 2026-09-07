@@ -20,16 +20,16 @@ import HistoryCore
 import SwiftUI
 
 /// The preview column's content loader (audit 02 §SPEC-IMPL-007; 05 §4.1
-/// PREVIEW-FENCE-1): owns the async Effective-payload read, renderer invocation, and
+/// PREVIEW-FENCE-1): owns metadata and selected-representation reads, renderer invocation, and
 /// exact-reference fence. ContentPreview owns the off-MainActor bounded
 /// decode itself.
 ///
 /// Fence law: a load captures its `HistoryItemReference` at start; after
 /// EVERY await it re-checks cancellation AND that its reference is still
-/// the requested one. The payload itself must also carry that same
-/// reference: `pastePayload(for:)` reads by ID, so a concurrent revision that
+/// the requested one. The metadata must also carry that same
+/// reference: `details(for:)` reads by ID, so a concurrent revision that
 /// advanced the Content Version is invisible to the request — the
-/// `payload.item == item` half pins the version (04 §9's caller-side fence
+/// `details.item == item` check pins the version before an exact representation request (04 §9's caller-side fence
 /// convention). A late or superseded result is DISCARDED without touching
 /// any published state (the newer load owns the phase and applied content).
 /// Starting a new exact reference invalidates the previous publication
@@ -37,11 +37,9 @@ import SwiftUI
 /// a loading placeholder.
 ///
 /// Retention: only the REQUESTED item's applied content lives here — a
-/// bounded decoded image or a capped text body. The full Effective Content
-/// bytes stay inside the concurrent payload-to-render function, never in the
-/// MainActor load frame. Storage's payload read still hydrates its current
-/// lineage; this change avoids the larger Details DTO and inactive titles at
-/// the consumer, not that existing storage work.
+/// bounded decoded image or a capped text body. Only selected representation
+/// bytes enter the concurrent metadata-to-render function, never the
+/// MainActor load frame. Unselected payloads remain in storage.
 @MainActor @Observable
 package final class PreviewContentLoader {
 
@@ -145,7 +143,7 @@ package final class PreviewContentLoader {
     private let renderer = ContentPreview()
 
 #if DEBUG
-    /// Running-app acceptance can make only this loader's first payload read
+    /// Running-app acceptance can make only this loader's first metadata read
     /// transiently unavailable. The one-shot is instance-local: Retry still
     /// replays the same exact reference through the production History read
     /// and ContentPreview renderer, while Release has no failure switch
@@ -369,8 +367,9 @@ package final class PreviewContentLoader {
     }
 
     /// Structured concurrency preserves cancellation and renderer TaskLocals.
-    /// The ID-based read must return the exact requested version before any
-    /// rendering starts; only the bounded artifact returns to MainActor.
+    /// Metadata supplies source priority and byte limits before any payload
+    /// read. Only a selected representation is fetched under the exact version;
+    /// only the bounded artifact returns to MainActor (V2-09 §5).
     @concurrent
     private static func renderPayload(
         for item: HistoryItemReference,
@@ -378,14 +377,30 @@ package final class PreviewContentLoader {
         renderer: ContentPreview,
         isCurrent: @MainActor @Sendable () -> Bool
     ) async throws -> PreviewOutcome? {
-        let payload = try await history.pastePayload(for: item.id)
+        let details = try await history.details(for: item.id)
         try Task.checkCancellation()
-        guard payload.item == item else { return nil }
+        guard details.item == item else { return nil }
         guard await isCurrent() else { return nil }
-        try Task.checkCancellation()
-        return await renderer.renderHistoryPane(payload.representations.map {
-            PreviewRepresentation(typeIdentifier: $0.typeIdentifier, bytes: $0.bytes)
+        let sources = ContentPreview.prepareHistoryPane(details.effective.map {
+            PreviewRepresentationMetadata(typeIdentifier: $0.typeIdentifier, byteCount: $0.byteCount)
         })
+        var outcome = PreviewOutcome.unavailable(.unsupported)
+        for source in sources {
+            try Task.checkCancellation()
+            if let failure = source.preflightFailure { return failure }
+            let representation = try await history.representation(HistoryRepresentationRequest(
+                item: item, basis: .effective, typeIdentifier: source.typeIdentifier
+            ))
+            try Task.checkCancellation()
+            guard await isCurrent() else { return nil }
+            outcome = await renderer.renderSelectedHistoryPane(source, representation: PreviewRepresentation(
+                typeIdentifier: representation.typeIdentifier, bytes: representation.bytes
+            ))
+            try Task.checkCancellation()
+            guard await isCurrent() else { return nil }
+            if !source.permitsFallback(after: outcome) { return outcome }
+        }
+        return outcome
     }
 }
 

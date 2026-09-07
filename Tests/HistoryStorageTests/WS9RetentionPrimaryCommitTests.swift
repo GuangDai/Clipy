@@ -163,7 +163,7 @@ struct WS9RetentionPrimaryCommitTests {
         retention: CaptureRetentionFacts(
             retainedCount: pinnedSummaries.count,
             unpinnedCount: 0,
-            oldestUnpinnedItems: []
+            retirementPrefix: nil
         )
     )
 

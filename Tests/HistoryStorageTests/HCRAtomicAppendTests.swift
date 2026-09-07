@@ -83,7 +83,7 @@ struct HCRAtomicAppendTests {
                 var logicalBytes: UInt64 = 0
                 for seed in seeds {
                     let blob = try AffectedItemsBlobCodec.encode(
-                        [seed.itemID], for: .insert, limits: limits
+                        .explicit([seed.itemID]), for: .insert, limits: limits
                     )
                     logicalBytes += UInt64(blob.count)
                     try authority.database.execute("""
@@ -123,7 +123,7 @@ struct HCRAtomicAppendTests {
                         sequence: sequence,
                         changePositionRaw: sequence,
                         changeKind: .insert,
-                        affectedItemIDs: [itemID],
+                        affectedItems: .explicit([itemID]),
                         createdAt: createdAt
                     ),
                     expectedPreviousPosition: ChangePosition(rawValue: sequence - 1),
@@ -198,7 +198,7 @@ struct HCRAtomicAppendTests {
         #expect(try AffectedItemsBlobCodec.decode(
             record.affectedItemsBlob,
             for: .insert
-        ) == [reference.id])
+        ) == .explicit([reference.id]))
     }
 
     @Test("unchanged planner result appends no HCR and advances no counter")
@@ -238,6 +238,49 @@ struct HCRAtomicAppendTests {
         }
 
         #expect(try await Self.snapshot(in: fixture.authority) == before)
+    }
+
+    @Test("bulk clear and scoped HCR roll back together in both transaction windows",
+          arguments: [ClearScope.all, .unpinned])
+    func bulkClearRollsBackWithJournal(scope: ClearScope) async throws {
+        let fixture = try await Self.makeHistory()
+        let pinned = try await Self.capture("bulk pinned survivor", in: fixture.history)
+        _ = try await fixture.history.perform(.placePinned(pinned.id, at: .first))
+        _ = try await Self.capture("bulk unpinned victim", in: fixture.history)
+        let before = try await Self.snapshot(in: fixture.authority)
+
+        for injection in [InjectedTransactionFailure.beforeHCRAppend, .beforeSingletonUpdate] {
+            await fixture.authority.setTransactionFailureInjection(injection)
+            await #expect(throws: HistoryFailure.persistence(.transaction)) {
+                _ = try await fixture.history.perform(.clear(scope))
+            }
+            #expect(try await Self.snapshot(in: fixture.authority) == before)
+        }
+
+        let receipt = try await fixture.history.perform(.clear(scope))
+        guard case .committed(let commit) = receipt else {
+            Issue.record("expected bulk clear after one-shot injections were consumed")
+            return
+        }
+        let expectedCount = scope == .all ? 2 : 1
+        guard case .cleared(let actualCount) = commit.outcome else {
+            Issue.record("expected a clear receipt")
+            return
+        }
+        #expect(actualCount == expectedCount)
+        let after = try await Self.snapshot(in: fixture.authority)
+        #expect(after.position == before.position + 1)
+        #expect(after.records.count == before.records.count + 1)
+        #expect(after.items.count == (scope == .all ? 0 : 1))
+        if scope == .unpinned {
+            #expect(after.items.map(\.id) == [pinned.id.rawValue])
+        }
+        let record = try #require(after.records.last)
+        let kind: HistoryChangeKindRawV1 = scope == .all ? .clearAll : .clearUnpinned
+        #expect(record.kindRaw == kind.rawValue)
+        let expected: HistoryAffectedItems = scope == .all
+            ? .all(retiredItems: expectedCount) : .unpinned(retiredItems: expectedCount)
+        #expect(try AffectedItemsBlobCodec.decode(record.affectedItemsBlob, for: kind) == expected)
     }
 
     @Test("count cap trims exactly the oldest prefix in the append transaction")
@@ -285,7 +328,9 @@ struct HCRAtomicAppendTests {
             maxAffectedItemsPerRecord: 3,
             maxJournalRecordCount: 10,
             maxJournalAgeSeconds: 1_000,
-            maxJournalBytes: 20,
+            maxJournalBytes: UInt64(try AffectedItemsBlobCodec.encode(
+                .explicit([HistoryItemID(rawValue: UUID())]), for: .insert
+            ).count),
             compactionCadenceCommits: 50
         ))
         let epoch = Date(timeIntervalSinceReferenceDate: 902_200_000)

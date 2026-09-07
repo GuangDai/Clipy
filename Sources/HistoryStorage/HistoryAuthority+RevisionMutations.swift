@@ -193,7 +193,8 @@ extension HistoryAuthority {
                 inputs: .revision(
                     currentVersion: facts.contentVersion,
                     existingRevisions: facts.revisions,
-                    projection: bundle.projection
+                    projection: bundle.projection,
+                    effectiveMatchesCanonical: bundle.effectiveMatchesCanonical
                 ),
                 createdAt: committedAt
             )
@@ -244,26 +245,17 @@ extension HistoryAuthority {
         }
         let victimCount = max(0, retainedCount - pinnedCount - maximumUnpinnedItems)
         state.finalize()
-        var victims: [HistoryItemID] = []
-        if victimCount > 0 {
-            let rows = try database.prepare("""
-                SELECT id FROM history_items WHERE pinOrdinal IS NULL
-                ORDER BY lastCopiedAt, id LIMIT ?
-                """, bindings: [.integer(Int64(victimCount))])
-            defer { rows.finalize() }
-            while try rows.step() {
-                victims.append(HistoryItemID(
-                    rawValue: try HistoryItemRowHydration.uuid(rows.text(at: 0))
-                ))
-            }
-            guard victims.count == victimCount else {
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
-        }
+        let prefix = try RetentionConfigLoading.retirementPrefix(
+            in: database,
+            policies: HistoryRetentionPolicies(age: nil, storage: nil, revisions: nil),
+            now: storageClock.now(), protectedItemID: nil,
+            projectedTotalBytes: RetentionConfigLoading.totalRetainedBytes(in: database),
+            minimumRetiredItems: victimCount
+        )
         let planningResult = planRetention(
             currentPolicy: currentPolicy,
             policy: RetentionPolicy(maximumUnpinnedItems: maximumUnpinnedItems),
-            victimIDs: victims
+            retirementPrefix: prefix
         )
 
         guard case .commit(let mutationPlan) = planningResult else {

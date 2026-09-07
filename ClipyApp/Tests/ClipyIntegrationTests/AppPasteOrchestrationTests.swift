@@ -274,7 +274,7 @@ struct AppPasteOrchestrationTests {
         let currentDetails = try await history.details(for: version1.id)
         #expect(currentDetails.item == version2)
         #expect(
-            currentDetails.effective.first?.bytes == Data(version2Text.utf8)
+            (try await ComposedSupport.firstRepresentation(in: history, details: currentDetails, basis: .effective)).bytes == Data(version2Text.utf8)
         )
         #expect(pasteboard.pasteboardItems?.isEmpty ?? true)
 
@@ -615,6 +615,10 @@ private actor PausingPastePayloadHistory: ClipboardHistory {
 
     func details(for id: HistoryItemID) async throws -> HistoryDetails {
         try await base.details(for: id)
+    }
+
+    func representation(_ request: HistoryRepresentationRequest) async throws -> HistoryRepresentation {
+        try await base.representation(request)
     }
 
     func pastePayload(for id: HistoryItemID) async throws -> PastePayload {

@@ -74,6 +74,10 @@ package struct PreviewClipboardHistory: ClipboardHistory, Sendable {
         throw HistoryFailure.notFound(id)
     }
 
+    package func representation(_ request: HistoryRepresentationRequest) async throws -> HistoryRepresentation {
+        throw HistoryFailure.notFound(request.item.id)
+    }
+
     package func thumbnail(
         for item: HistoryItemReference,
         pixels: PixelSize

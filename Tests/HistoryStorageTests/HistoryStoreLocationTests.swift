@@ -102,8 +102,8 @@ struct HistoryStoreLocationTests {
                 INSERT INTO history_items (
                     id, contentVersion, currentContentID, titleUTF8, searchBodyUTF8,
                     effectiveTypeIdentifiersBlob, firstCopiedAt, lastCopiedAt, copyCount,
-                    canonicalBytes, revisionCount, revisionBytes
-                ) VALUES (?, ?, ?, ?, ?, ?, 1.0, 1.0, ?, ?, 0, 0)
+                    canonicalBytes, revisionCount, revisionBytes, effectiveMatchesCanonical
+                ) VALUES (?, ?, ?, ?, ?, ?, 1.0, 1.0, ?, ?, 0, 0, 1)
                 """, bindings: [
                     .text(item), .blob(sqliteUInt64(1)), .text(content),
                     .blob(Data("blob".utf8)), .blob(Data("blob".utf8)), .blob(Data()),

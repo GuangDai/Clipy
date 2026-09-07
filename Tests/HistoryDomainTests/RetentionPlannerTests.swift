@@ -1,272 +1,107 @@
-/// Pure retention-planner tests (docs/02-domain.md §12, D13/D16/D18–D19).
+/// Pure count-policy planning tests (02 §12, D13/D16/D18–D19).
 import Foundation
 import HistoryCore
 import Testing
 @testable import HistoryDomain
 
 private func retentionID(_ suffix: UInt8) -> HistoryItemID {
-    HistoryItemID(rawValue: UUID(uuid: (
-        0, 0, 0, 0,
-        0, 0,
-        0, 0,
-        0, 0,
-        0, 0, 0, 0, 0, suffix
-    )))
+    capturePlannerID(suffix)
 }
 
-private enum RetentionPlannerTestError: Error {
-    case expectedCommit
-    case unexpectedMutation
+/// Test-only inventory reference: summary fixtures have one Canonical byte
+/// and no revisions. Production selects this boundary and aggregates in SQL.
+internal func retentionTestPrefix(
+    inventory: [RetainedItemSummary],
+    maximumUnpinnedItems: Int
+) -> RetentionRetirementPrefix? {
+    let eligible = inventory.filter { $0.pinOrdinal == nil }.sorted {
+        RetentionEvictionKey(lastCopiedAt: $0.lastCopiedAt, itemID: $0.id)
+            < RetentionEvictionKey(lastCopiedAt: $1.lastCopiedAt, itemID: $1.id)
+    }
+    let victims = eligible.prefix(max(0, eligible.count - maximumUnpinnedItems))
+    return victims.last.map {
+        RetentionRetirementPrefix(
+            through: RetentionEvictionKey(lastCopiedAt: $0.lastCopiedAt, itemID: $0.id),
+            excludedItemID: nil, itemCount: victims.count,
+            canonicalBytes: victims.count, revisionBytes: 0
+        )
+    }
 }
 
-@Test func exactRetentionVictimPrefixPreservesPolicyAndRemovalSemantics() throws {
+@Test func exactRetentionPrefixPreservesPolicyAndRemovalSemantics() {
     let policy = RetentionPolicy(maximumUnpinnedItems: 2)
-    let unchanged = planRetention(currentPolicy: policy, policy: policy, victimIDs: [])
-    if case .commit = unchanged {
+    if case .commit = planRetention(currentPolicy: policy, policy: policy, retirementPrefix: nil) {
         Issue.record("Same policy without required victims must not commit")
     }
-
-    // SQL's time ordering can place a larger business ID first. The planner
-    // must preserve that prefix, not re-sort by identity or infer other victims.
-    let scenarios: [(oldLimit: Int, victims: [HistoryItemID])] = [
-        (3, []),
-        (3, [retentionID(9)]),
-        (3, [retentionID(9), retentionID(1)]),
-        (2, [retentionID(9), retentionID(1)]),
-    ]
-    for scenario in scenarios {
-        let result = planRetention(
-            currentPolicy: RetentionPolicy(maximumUnpinnedItems: scenario.oldLimit),
-            policy: policy,
-            victimIDs: scenario.victims
+    // Boundary identity need not be the largest ID: time ranks first.
+    for count in [1, 2, 5_000] {
+        let prefix = RetentionRetirementPrefix(
+            through: RetentionEvictionKey(
+                lastCopiedAt: Date(timeIntervalSinceReferenceDate: 10), itemID: retentionID(1)),
+            excludedItemID: nil, itemCount: count,
+            canonicalBytes: count * 7, revisionBytes: count * 3
         )
-        guard case .commit(let plan) = result,
-              case .retentionPolicySet(let count) = plan.outcome,
-              !plan.mutations.isEmpty,
-              case .setRetentionPolicy(let maximum) = plan.mutations[0] else {
-            Issue.record("A policy change or required victims must produce one complete plan")
-            continue
-        }
-        #expect(maximum == 2)
-        #expect(count == scenario.victims.count)
-        #expect(plan.mutations.count == scenario.victims.count + 1)
-        let victims = try plan.mutations.dropFirst().map { mutation in
-            guard case .retire(let id, .retention) = mutation else {
-                throw RetentionPlannerTestError.unexpectedMutation
+        for oldLimit in [2, 3] {
+            let result = planRetention(
+                currentPolicy: RetentionPolicy(maximumUnpinnedItems: oldLimit),
+                policy: policy, retirementPrefix: prefix
+            )
+            guard case .commit(let plan) = result,
+                  case .retentionPolicySet(let removedCount) = plan.outcome,
+                  plan.mutations.count == 2,
+                  case .setRetentionPolicy(let maximum) = plan.mutations[0],
+                  case .retirePrefix(let planned) = plan.mutations[1] else {
+                Issue.record("Expected one policy and one bounded retirement payload")
+                continue
             }
-            return id
+            #expect(maximum == 2)
+            #expect(removedCount == count)
+            #expect(planned == prefix)
         }
-        #expect(victims == scenario.victims)
-    }
-}
-
-private func retentionVictims(
-    inventory: [RetainedItemSummary],
-    policy: RetentionPolicy
-) throws -> [HistoryItemID] {
-    let result = planRetention(
-        facts: RetentionFacts(
-            inventory: CompleteRetentionInventory(allItems: inventory),
-            currentPolicy: RetentionPolicy(maximumUnpinnedItems: 3)
-        ),
-        policy: policy
-    )
-    guard case .commit(let plan) = result,
-          case .retentionPolicySet(let removedCount) = plan.outcome,
-          plan.mutations.count == removedCount + 1,
-          case .setRetentionPolicy(let plannedMaximum) = plan.mutations[0],
-          plannedMaximum == policy.maximumUnpinnedItems
-    else {
-        throw RetentionPlannerTestError.expectedCommit
-    }
-    return try plan.mutations.dropFirst().map { mutation in
-        guard case .retire(let itemID, .retention) = mutation else {
-            throw RetentionPlannerTestError.unexpectedMutation
-        }
-        return itemID
-    }
-}
-
-@Test func unchangedRetentionPolicyWithinBoundProducesNoPlan() {
-    let inventory = CompleteRetentionInventory(allItems: [
-        RetainedItemSummary(
-            id: retentionID(3),
-            lastCopiedAt: Date(timeIntervalSinceReferenceDate: 300),
-            pinOrdinal: nil
-        ),
-        RetainedItemSummary(
-            id: retentionID(1),
-            lastCopiedAt: Date(timeIntervalSinceReferenceDate: 100),
-            pinOrdinal: nil
-        ),
-        RetainedItemSummary(
-            id: retentionID(2),
-            lastCopiedAt: Date(timeIntervalSinceReferenceDate: 200),
-            pinOrdinal: PinOrdinal(rawValue: 0)
-        ),
-    ])
-    let policy = RetentionPolicy(maximumUnpinnedItems: 2)
-    let facts = RetentionFacts(
-        inventory: inventory,
-        currentPolicy: policy
-    )
-
-    switch planRetention(facts: facts, policy: policy) {
-    case .unchanged:
-        break
-    case .commit:
-        Issue.record("An already-satisfied retention policy produced a commit")
     }
 }
 
 @Test func changingAnAlreadySatisfiedPolicyCommitsOnlyThePolicyPayload() {
-    let item = RetainedItemSummary(
-        id: retentionID(1),
-        lastCopiedAt: Date(timeIntervalSinceReferenceDate: 100),
-        pinOrdinal: nil
-    )
     let result = planRetention(
-        facts: RetentionFacts(
-            inventory: CompleteRetentionInventory(allItems: [item]),
-            currentPolicy: RetentionPolicy(maximumUnpinnedItems: 3)
-        ),
-        policy: RetentionPolicy(maximumUnpinnedItems: 2)
+        currentPolicy: RetentionPolicy(maximumUnpinnedItems: 3),
+        policy: RetentionPolicy(maximumUnpinnedItems: 2), retirementPrefix: nil
     )
-
     guard case .commit(let plan) = result,
           case .retentionPolicySet(let removedCount) = plan.outcome,
           removedCount == 0,
           plan.mutations.count == 1,
-          case .setRetentionPolicy(let maximum) = plan.mutations[0]
-    else {
-        Issue.record("A changed but already-satisfied policy emitted an incomplete plan")
+          case .setRetentionPolicy(let maximum) = plan.mutations[0] else {
+        Issue.record("A changed satisfied policy must emit only its payload")
         return
     }
     #expect(maximum == 2)
 }
 
-@Test func unchangedButOverLimitPolicyStillRetiresTheCompleteExcess() throws {
-    let oldest = RetainedItemSummary(
-        id: retentionID(1),
-        lastCopiedAt: Date(timeIntervalSinceReferenceDate: 100),
-        pinOrdinal: nil
+@Test func retirementBoundaryUsesTimeThenIDAndExcludesPinnedRows() {
+    let date = Date(timeIntervalSinceReferenceDate: 100)
+    let oldest = RetainedItemSummary(id: retentionID(9),
+        lastCopiedAt: date.addingTimeInterval(-1), pinOrdinal: nil)
+    let smaller = RetainedItemSummary(id: retentionID(1), lastCopiedAt: date, pinOrdinal: nil)
+    let larger = RetainedItemSummary(id: retentionID(2), lastCopiedAt: date, pinOrdinal: nil)
+    let pinned = RetainedItemSummary(id: retentionID(3),
+        lastCopiedAt: date.addingTimeInterval(-2), pinOrdinal: PinOrdinal(rawValue: 0))
+    let prefix = RetentionRetirementPrefix(
+        through: RetentionEvictionKey(lastCopiedAt: date, itemID: smaller.id),
+        excludedItemID: nil, itemCount: 2, canonicalBytes: 2, revisionBytes: 0
     )
-    let newest = RetainedItemSummary(
-        id: retentionID(2),
-        lastCopiedAt: Date(timeIntervalSinceReferenceDate: 200),
-        pinOrdinal: nil
-    )
-    let policy = RetentionPolicy(maximumUnpinnedItems: 1)
+    #expect(prefix.contains(oldest))
+    #expect(prefix.contains(smaller))
+    #expect(!prefix.contains(larger))
+    #expect(!prefix.contains(pinned))
     let result = planRetention(
-        facts: RetentionFacts(
-            inventory: CompleteRetentionInventory(allItems: [newest, oldest]),
-            currentPolicy: policy
-        ),
-        policy: policy
+        currentPolicy: RetentionPolicy(maximumUnpinnedItems: 1),
+        policy: RetentionPolicy(maximumUnpinnedItems: 1), retirementPrefix: prefix
     )
-
     guard case .commit(let plan) = result,
-          case .retentionPolicySet(let removedCount) = plan.outcome,
-          removedCount == 1,
-          plan.mutations.count == 2,
-          case .setRetentionPolicy(let maximum) = plan.mutations[0],
-          case .retire(let retiredID, .retention) = plan.mutations[1]
-    else {
-        Issue.record("An over-limit inventory incorrectly took the policy no-op branch")
+          case .retentionPolicySet(let removedCount) = plan.outcome else {
+        Issue.record("Unchanged over-limit policy must still retire its prefix")
         return
     }
-    #expect(maximum == 1)
-    #expect(retiredID == oldest.id)
-}
-
-@Test func loweringRetentionPolicyProducesCompleteDeterministicVictimPayloads() throws {
-    let oldest = RetainedItemSummary(
-        id: retentionID(1),
-        lastCopiedAt: Date(timeIntervalSinceReferenceDate: 100),
-        pinOrdinal: nil
-    )
-    let middle = RetainedItemSummary(
-        id: retentionID(2),
-        lastCopiedAt: Date(timeIntervalSinceReferenceDate: 200),
-        pinOrdinal: nil
-    )
-    let newest = RetainedItemSummary(
-        id: retentionID(3),
-        lastCopiedAt: Date(timeIntervalSinceReferenceDate: 300),
-        pinOrdinal: nil
-    )
-    let pinnedOldest = RetainedItemSummary(
-        id: retentionID(4),
-        lastCopiedAt: Date(timeIntervalSinceReferenceDate: 1),
-        pinOrdinal: PinOrdinal(rawValue: 0)
-    )
-    let policy = RetentionPolicy(maximumUnpinnedItems: 1)
-
-    #expect(
-        try retentionVictims(
-            inventory: [newest, pinnedOldest, oldest, middle],
-            policy: policy
-        ) == [oldest.id, middle.id]
-    )
-    #expect(
-        try retentionVictims(
-            inventory: [middle, oldest, pinnedOldest, newest],
-            policy: policy
-        ) == [oldest.id, middle.id]
-    )
-}
-
-@Test func equalRecencyVictimsUseTheStableItemIDTieBreaker() throws {
-    let copiedAt = Date(timeIntervalSinceReferenceDate: 100)
-    let smallerID = RetainedItemSummary(
-        id: retentionID(1),
-        lastCopiedAt: copiedAt,
-        pinOrdinal: nil
-    )
-    let largerID = RetainedItemSummary(
-        id: retentionID(2),
-        lastCopiedAt: copiedAt,
-        pinOrdinal: nil
-    )
-    let policy = RetentionPolicy(maximumUnpinnedItems: 1)
-
-    #expect(
-        try retentionVictims(
-            inventory: [largerID, smallerID],
-            policy: policy
-        ) == [smallerID.id]
-    )
-    #expect(
-        try retentionVictims(
-            inventory: [smallerID, largerID],
-            policy: policy
-        ) == [smallerID.id]
-    )
-}
-
-@Test func oneVictimFromALargerInventoryPreservesStableOrdering() throws {
-    let oldestDate = Date(timeIntervalSinceReferenceDate: 100)
-    let expected = RetainedItemSummary(
-        id: retentionID(1),
-        lastCopiedAt: oldestDate,
-        pinOrdinal: nil
-    )
-    let sameAgeLargerID = RetainedItemSummary(
-        id: retentionID(2),
-        lastCopiedAt: oldestDate,
-        pinOrdinal: nil
-    )
-    let newer = (3...5).map { suffix in
-        RetainedItemSummary(
-            id: retentionID(UInt8(suffix)),
-            lastCopiedAt: Date(timeIntervalSinceReferenceDate: Double(suffix * 100)),
-            pinOrdinal: nil
-        )
-    }
-    let inventory = [newer[1], sameAgeLargerID, newer[0], expected, newer[2]]
-
-    #expect(try retentionVictims(
-        inventory: inventory,
-        policy: RetentionPolicy(maximumUnpinnedItems: 4)
-    ) == [expected.id])
+    #expect(removedCount == 2)
+    #expect(plan.mutations.count == 2)
 }

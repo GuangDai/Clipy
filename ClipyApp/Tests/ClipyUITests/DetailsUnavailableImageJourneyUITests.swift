@@ -1,6 +1,6 @@
-/// Real image captures keep their representation metadata separate from the
-/// item-level thumbnail in Details. The existing launch fixture changes only
-/// store location and capture-access posture.
+/// Details opens with metadata only. Explicit image previews read the selected
+/// representation rather than reusing an item-level thumbnail. The existing
+/// launch fixture changes only store location and capture-access posture.
 import AppKit
 import XCTest
 
@@ -43,7 +43,19 @@ final class DetailsUnavailableImageJourneyUITests: XCTestCase {
         assertNoRepresentationImage("public.png", in: details, app: app)
         XCTAssertFalse(details.descendants(matching: .any).matching(
             NSPredicate(format: "label == %@", "Preview unavailable for public.png")
-        ).firstMatch.exists, diagnostic(app, context: "item failure must not classify a representation"))
+        ).firstMatch.exists, diagnostic(app, context: "metadata must not classify unread image bytes"))
+        clickPreview("public.png", in: details, app: app)
+        assertVisibleText("Preview unavailable for public.png", in: details, app: app)
+        assertNoRepresentationImage("public.png", in: details, app: app)
+        // The renderer result can be dismissed and explicitly requested again;
+        // no retry changes the captured bytes or hides their metadata.
+        clickPreview("public.png", in: details, app: app)
+        XCTAssertFalse(details.descendants(matching: .any).matching(
+            NSPredicate(format: "label == %@", "Preview unavailable for public.png")
+        ).firstMatch.exists)
+        clickPreview("public.png", in: details, app: app)
+        assertVisibleText("Preview unavailable for public.png", in: details, app: app)
+        assertVisibleText("4 bytes", in: details, app: app)
         XCTAssertEqual(pasteboard.data(forType: .png), bytes)
     }
 
@@ -83,15 +95,21 @@ final class DetailsUnavailableImageJourneyUITests: XCTestCase {
         let app = XCUIApplication()
         defer { app.terminate() }
         let details = try launchAndOpenCapturedDetails(in: app)
-        // This positive completion boundary makes the absence checks below
-        // non-vacuous: the real item's PNG has decoded, not merely remained
-        // in flight. Observe it before scrolling the header out of view.
-        assertVisibleText("Item thumbnail", in: details, app: app)
+        assertVisibleText("Content type icon", in: details, app: app)
         assertVisibleText("public.png", in: details, app: app)
         assertVisibleText("70 bytes", in: details, app: app)
         assertVisibleText("public.tiff", in: details, app: app)
         assertVisibleText("13 bytes", in: details, app: app)
         assertNoRepresentationImage("public.png", in: details, app: app)
+        assertNoRepresentationImage("public.tiff", in: details, app: app)
+        clickPreview("public.png", in: details, app: app)
+        assertVisibleElement(matching: NSPredicate(
+            format: "identifier == %@", "clipy.details.image-preview.public.png"
+        ), in: details, app: app, context: "explicit PNG preview")
+        // A completed PNG decode cannot stand in for the still-unread TIFF.
+        assertNoRepresentationImage("public.tiff", in: details, app: app)
+        clickPreview("public.tiff", in: details, app: app)
+        assertVisibleText("Preview unavailable for public.tiff", in: details, app: app)
         assertNoRepresentationImage("public.tiff", in: details, app: app)
         XCTAssertEqual(pasteboard.data(forType: .png), png)
         XCTAssertEqual(pasteboard.data(forType: .tiff), tiff)
@@ -147,9 +165,27 @@ final class DetailsUnavailableImageJourneyUITests: XCTestCase {
     @MainActor
     private func assertVisibleText(_ value: String, in details: XCUIElement, app: XCUIApplication) {
         let predicate = NSPredicate(format: "label == %@ OR value == %@", value, value)
+        assertVisibleElement(matching: predicate, in: details, app: app, context: value)
+    }
+
+    @MainActor
+    private func clickPreview(_ type: String, in details: XCUIElement, app: XCUIApplication) {
+        let identifier = "clipy.details.show-preview." + type
+        assertVisibleElement(matching: NSPredicate(format: "identifier == %@", identifier),
+                             in: details, app: app, context: identifier)
+        let button = details.buttons[identifier]
+        XCTAssertTrue(button.isEnabled, diagnostic(app, context: "enabled explicit preview: \(type)"))
+        button.click()
+    }
+
+    @MainActor
+    private func assertVisibleElement(
+        matching predicate: NSPredicate, in details: XCUIElement,
+        app: XCUIApplication, context: String
+    ) {
         let element = details.descendants(matching: .any).matching(predicate).firstMatch
         guard waitUntil(timeout: 10, condition: { element.exists }) else {
-            XCTFail(diagnostic(app, context: "missing Details metadata: \(value)"))
+            XCTFail(diagnostic(app, context: "missing Details element: \(context)"))
             return
         }
         // Grouped Form exposes offscreen children as existing. The observed
@@ -159,7 +195,7 @@ final class DetailsUnavailableImageJourneyUITests: XCTestCase {
         guard let scrollView = details.scrollViews.allElementsBoundByIndex.first(where: {
             $0.descendants(matching: .any).matching(predicate).firstMatch.exists
         }) else {
-            XCTFail(diagnostic(app, context: "owning Details scroll view: \(value)"))
+            XCTFail(diagnostic(app, context: "owning Details scroll view: \(context)"))
             return
         }
         let scrollCoordinate = scrollView.coordinate(
@@ -176,7 +212,7 @@ final class DetailsUnavailableImageJourneyUITests: XCTestCase {
         }
         XCTAssertTrue(
             isFullyVisible(),
-            diagnostic(app, context: "visible Details metadata: \(value)")
+            diagnostic(app, context: "visible Details element: \(context)")
         )
     }
 
@@ -186,7 +222,7 @@ final class DetailsUnavailableImageJourneyUITests: XCTestCase {
     ) {
         XCTAssertFalse(
             details.descendants(matching: .any).matching(
-                NSPredicate(format: "label == %@", "Image preview of \(type)")
+                NSPredicate(format: "identifier == %@", "clipy.details.image-preview." + type)
             ).firstMatch.exists,
             diagnostic(app, context: "item thumbnail must not stand in for \(type)")
         )

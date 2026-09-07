@@ -37,16 +37,15 @@ internal enum MutationFactLoaders {
 
     internal static func loadClearFacts(scope: ClearScope, in database: SQLiteDatabase,
                                        limits: HistoryLimits = .standard) throws -> ClearFacts {
-        let predicate: String
-        switch scope { case .all: predicate = ""; case .unpinned: predicate = " WHERE pinOrdinal IS NULL" }
-        let rows = try database.prepare("SELECT id,lastCopiedAt,pinOrdinal FROM history_items" + predicate + " ORDER BY id")
-        defer { rows.finalize() }
-        var affected: [RetainedItemSummary] = []
-        while try rows.step() {
-            guard affected.count < limits.hardMaximumRetainedItems else { throw corrupt }
-            affected.append(try HistoryItemRowHydration.retainedSummary(rows))
-        }
-        return ClearFacts(affected: affected)
+        let state = try database.prepare(
+            "SELECT retainedItemCount, pinnedItemCount FROM history_state WHERE key = 'retained-history'"
+        )
+        defer { state.finalize() }
+        guard try state.step() else { throw corrupt }
+        let retained = try HistoryItemRowHydration.integer(state, 0)
+        let pinned = try HistoryItemRowHydration.integer(state, 1)
+        guard retained >= 0, pinned >= 0, pinned <= retained else { throw corrupt }
+        return ClearFacts(affectedCount: scope == .all ? retained : retained - pinned)
     }
 
     internal static func revisionSummaries(itemID: HistoryItemID, in database: SQLiteDatabase,

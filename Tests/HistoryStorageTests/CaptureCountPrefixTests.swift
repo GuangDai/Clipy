@@ -5,9 +5,8 @@ import Testing
 @testable import HistoryStorage
 
 struct CaptureCountPrefixTests {
-    /// The capture facts carry two possible oldest victims at a full count
-    /// policy regardless of history size. Equal timestamps deliberately make
-    /// the persisted UUID ordering column decide the bounded store fetch.
+    /// Capture facts carry one cutoff, regardless of the victim count.
+    /// Equal timestamps make persisted UUID order decide the exact prefix.
     @Test(arguments: [8, 32])
     func countCaptureLoadsBoundedOldestPrefixAndRetiresExactTieWinner(retainedCount: Int) async throws {
         let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(
@@ -38,7 +37,10 @@ struct CaptureCountPrefixTests {
         )
         #expect(facts.retention.retainedCount == retainedCount)
         #expect(facts.retention.unpinnedCount == retainedCount)
-        #expect(facts.retention.oldestUnpinnedItems.map(\.id) == Array(ids.prefix(2)))
+        let prefix = try #require(facts.retention.retirementPrefix)
+        #expect(prefix.itemCount == 1)
+        #expect(prefix.through.itemID == ids[0])
+        #expect(prefix.excludedItemID == incoming.domain.candidateID)
         #expect(facts.confirmedMatch == nil)
         #expect(!facts.candidateIDExists)
 
@@ -65,7 +67,7 @@ struct CaptureCountPrefixTests {
         let incoming = try await preparation.prepare(raw)
         let facts = try await history.authority.countPrefixFacts(incoming, maximumUnpinned: 8)
         #expect(facts.retention.retainedCount == 1)
-        #expect(facts.retention.oldestUnpinnedItems.isEmpty)
+        #expect(facts.retention.retirementPrefix == nil)
         #expect(facts.confirmedMatch != nil)
         let receipt = try await history.perform(.capture(raw))
         guard case .committed(let commit) = receipt,

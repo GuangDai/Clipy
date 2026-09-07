@@ -189,8 +189,19 @@ struct ReferenceSearchJourneyTests {
     ) async throws {
         let details = try await history.details(for: item.id)
         #expect(details.item == item)
-        #expect(details.canonical.map(\.bytes) == [canonical])
-        #expect(details.effective.map(\.bytes) == [effective])
+        #expect(details.canonical.map(\.byteCount) == [canonical.count])
+        #expect(details.effective.map(\.byteCount) == [effective.count])
+        #expect(details.effectiveMatchesCanonical == (canonical == effective))
+        let canonicalType = try #require(details.canonical.first?.typeIdentifier)
+        let effectiveType = try #require(details.effective.first?.typeIdentifier)
+        let canonicalValue = try await history.representation(.init(
+            item: item, basis: .canonical, typeIdentifier: canonicalType
+        ))
+        let effectiveValue = try await history.representation(.init(
+            item: item, basis: .effective, typeIdentifier: effectiveType
+        ))
+        #expect(canonicalValue.bytes == canonical)
+        #expect(effectiveValue.bytes == effective)
         let paste = try await history.pastePayload(for: item.id)
         #expect(paste.item == item)
         #expect(paste.representations.map(\.bytes) == [effective])

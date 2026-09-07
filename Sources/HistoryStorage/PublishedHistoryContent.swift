@@ -47,7 +47,7 @@ extension HistoryAuthority {
                     }, newPayloadBytes: &newPayloadBytes, available: available
                 )
             case .updateOccurrence, .setPinOrdinal, .delete, .setRetentionPolicy,
-                    .pruneRevisions, .setRetentionPolicies:
+                    .pruneRevisions, .setRetentionPolicies, .bulkClear, .retirePrefix:
                 break
             }
         }

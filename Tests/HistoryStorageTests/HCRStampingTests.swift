@@ -40,7 +40,7 @@ struct HCRStampingTests {
             outcome: .inserted(reference(first))
         )
         #expect(inserted.changeKind == .insert)
-        #expect(inserted.affectedItemIDs == [first, second, third])
+        #expect(inserted.affectedItems == .explicit([first, second, third]))
 
         let coalesced = try derive(
             mutations: [
@@ -50,7 +50,7 @@ struct HCRStampingTests {
             outcome: .coalesced(reference(second))
         )
         #expect(coalesced.changeKind == .coalesce)
-        #expect(coalesced.affectedItemIDs == [second, third])
+        #expect(coalesced.affectedItems == .explicit([second, third]))
     }
 
     @Test("Pin, unpin, and remove use their explicit stamped payloads")
@@ -60,24 +60,24 @@ struct HCRStampingTests {
             outcome: .placedPinned(second)
         )
         #expect(pinned.changeKind == .pin)
-        #expect(pinned.affectedItemIDs == [second])
+        #expect(pinned.affectedItems == .explicit([second]))
 
         let unpinned = try derive(
             mutations: [.setPinOrdinal(itemID: second, ordinal: nil)],
             outcome: .unpinned(second)
         )
         #expect(unpinned.changeKind == .unpin)
-        #expect(unpinned.affectedItemIDs == [second])
+        #expect(unpinned.affectedItems == .explicit([second]))
 
         let removed = try derive(
             mutations: [.delete(itemID: second, reason: .userRemoval)],
             outcome: .removed(count: 1)
         )
         #expect(removed.changeKind == .remove)
-        #expect(removed.affectedItemIDs == [second])
+        #expect(removed.affectedItems == .explicit([second]))
     }
 
-    @Test("Clear scope is explicit and clear records carry no IDs")
+    @Test("Clear records preserve scope and actual retired count")
     func clearScopeSpellsTheKind() throws {
         let mutations: [StampedMutation] = [
             .delete(itemID: second, reason: .clear),
@@ -89,7 +89,7 @@ struct HCRStampingTests {
             clearScope: .all
         )
         #expect(all.changeKind == .clearAll)
-        #expect(all.affectedItemIDs.isEmpty)
+        #expect(all.affectedItems == .all(retiredItems: 2))
 
         let unpinned = try derive(
             mutations: mutations,
@@ -97,7 +97,7 @@ struct HCRStampingTests {
             clearScope: .unpinned
         )
         #expect(unpinned.changeKind == .clearUnpinned)
-        #expect(unpinned.affectedItemIDs.isEmpty)
+        #expect(unpinned.affectedItems == .unpinned(retiredItems: 2))
     }
 
     @Test("Clear requires scope and non-clear rejects scope")
@@ -127,7 +127,7 @@ struct HCRStampingTests {
             outcome: .revised(reference(second))
         )
         #expect(payload.changeKind == .revise)
-        #expect(payload.affectedItemIDs == [second, third])
+        #expect(payload.affectedItems == .explicit([second, third]))
     }
 
     @Test("Policy primary follows membership then revision effects")
@@ -137,7 +137,7 @@ struct HCRStampingTests {
             outcome: .retentionPolicySet(removedCount: 0)
         )
         #expect(policyOnly.changeKind == .policySet)
-        #expect(policyOnly.affectedItemIDs.isEmpty)
+        #expect(policyOnly.affectedItems == .explicit([]))
 
         let retired = try derive(
             mutations: [
@@ -150,7 +150,7 @@ struct HCRStampingTests {
             )
         )
         #expect(retired.changeKind == .retire)
-        #expect(retired.affectedItemIDs == [second])
+        #expect(retired.affectedItems == .explicit([second]))
 
         let pruned = try derive(
             mutations: [
@@ -163,7 +163,7 @@ struct HCRStampingTests {
             )
         )
         #expect(pruned.changeKind == .retireRevision)
-        #expect(pruned.affectedItemIDs == [first])
+        #expect(pruned.affectedItems == .explicit([first]))
 
         let mixed = try derive(
             mutations: [
@@ -177,7 +177,7 @@ struct HCRStampingTests {
             )
         )
         #expect(mixed.changeKind == .retire)
-        #expect(mixed.affectedItemIDs == [second, third])
+        #expect(mixed.affectedItems == .explicit([second, third]))
     }
 
     @Test("Affected IDs are deduplicated and sorted without truncation")
@@ -198,9 +198,13 @@ struct HCRStampingTests {
             mutations: mutations,
             outcome: .placedPinned(first)
         )
-        #expect(payload.affectedItemIDs.count == maximum)
-        #expect(payload.affectedItemIDs.first == first)
-        #expect(payload.affectedItemIDs.last == Self.itemID(maximum))
+        guard case .explicit(let ids) = payload.affectedItems else {
+            Issue.record("expected explicit pin identities")
+            return
+        }
+        #expect(ids.count == maximum)
+        #expect(ids.first == first)
+        #expect(ids.last == Self.itemID(maximum))
     }
 
     @Test("An impossible affected-ID excess fails instead of truncating")
@@ -249,8 +253,89 @@ struct HCRStampingTests {
         #expect(stamped.hcrAppend.sequence == 41)
         #expect(stamped.hcrAppend.changePositionRaw == 41)
         #expect(stamped.hcrAppend.changeKind == .pin)
-        #expect(stamped.hcrAppend.affectedItemIDs == [first])
+        #expect(stamped.hcrAppend.affectedItems == .explicit([first]))
         #expect(stamped.hcrAppend.createdAt == timestamp)
+    }
+
+    @Test("bulk clear stamping keeps one scope and the exact receipt count")
+    func bulkClearScopeMatchesItsReceipt() throws {
+        for count in [1, 5_001, 1_000_000] {
+            let all = try derive(
+                mutations: [.bulkClear(scope: .all, affectedCount: count)],
+                outcome: .cleared(count: count), clearScope: .all
+            )
+            #expect(all.changeKind == .clearAll)
+            #expect(all.affectedItems == .all(retiredItems: count))
+            let unpinned = try derive(
+                mutations: [.bulkClear(scope: .unpinned, affectedCount: count)],
+                outcome: .cleared(count: count), clearScope: .unpinned
+            )
+            #expect(unpinned.changeKind == .clearUnpinned)
+            #expect(unpinned.affectedItems == .unpinned(retiredItems: count))
+        }
+        #expect(throws: StampingRejection.incoherentPlan) {
+            try derive(
+                mutations: [.bulkClear(scope: .all, affectedCount: 2)],
+                outcome: .cleared(count: 3), clearScope: .all
+            )
+        }
+        #expect(throws: StampingRejection.incoherentPlan) {
+            try derive(
+                mutations: [.bulkClear(scope: .all, affectedCount: 2)],
+                outcome: .cleared(count: 2), clearScope: .unpinned
+            )
+        }
+    }
+
+    @Test("retention prefix carries the eviction key, exclusion and capture primary")
+    func prefixPreservesMembershipAndPrimary() throws {
+        let through = RetentionEvictionKey(lastCopiedAt: timestamp, itemID: third)
+        let prefix = RetentionRetirementPrefix(
+            through: through, excludedItemID: first,
+            itemCount: 1_000_000, canonicalBytes: 1_000_000, revisionBytes: 0
+        )
+        let captured = try derive(
+            mutations: [.retirePrefix(prefix), .create(storedItem(first))],
+            outcome: .inserted(reference(first))
+        )
+        #expect(captured.changeKind == .insert)
+        #expect(captured.affectedItems == .unpinnedPrefix(
+            through: through, excluding: first, retiredItems: 1_000_000, primaryItemID: first
+        ))
+        let policyPrefix = RetentionRetirementPrefix(
+            through: through, excludedItemID: nil,
+            itemCount: 1_000_000, canonicalBytes: 1_000_000, revisionBytes: 0
+        )
+        let retired = try derive(
+            mutations: [.setRetentionPolicy(maximumUnpinnedItems: 1), .retirePrefix(policyPrefix)],
+            outcome: .retentionPolicySet(removedCount: 1_000_000)
+        )
+        #expect(retired.changeKind == .retire)
+        #expect(retired.affectedItems == .unpinnedPrefix(
+            through: through, excluding: nil, retiredItems: 1_000_000, primaryItemID: nil
+        ))
+    }
+
+    @Test("bulk affected payload size is independent of membership and prune counts")
+    func scopePayloadSizeIsConstant() throws {
+        let through = RetentionEvictionKey(lastCopiedAt: timestamp, itemID: third)
+        let cases: [(HistoryChangeKindRawV1, HistoryAffectedItems, HistoryAffectedItems)] = [
+            (HistoryChangeKindRawV1.clearAll,
+             HistoryAffectedItems.all(retiredItems: 1), .all(retiredItems: 1_000_000)),
+            (.clearUnpinned, .unpinned(retiredItems: 1), .unpinned(retiredItems: 1_000_000)),
+            (.insert,
+             .unpinnedPrefix(through: through, excluding: first, retiredItems: 1, primaryItemID: first),
+             .unpinnedPrefix(through: through, excluding: first, retiredItems: 1_000_000, primaryItemID: first)),
+            (.retire, .retention(retiredItems: 1, prunedRevisions: 1),
+             .retention(retiredItems: 1_000_000, prunedRevisions: 1_000_000)),
+        ]
+        for (kind, small, large) in cases {
+            let smallBlob = try AffectedItemsBlobCodec.encode(small, for: kind)
+            let largeBlob = try AffectedItemsBlobCodec.encode(large, for: kind)
+            #expect(largeBlob.count == smallBlob.count)
+            #expect(largeBlob.count <= 69)
+            #expect(try AffectedItemsBlobCodec.decode(largeBlob, for: kind) == large)
+        }
     }
 
     private var occurrence: CopyOccurrence {
@@ -308,6 +393,7 @@ struct HCRStampingTests {
             ),
             removedRevisionIDs: [],
             projection: projection,
+            effectiveMatchesCanonical: false,
             retainedRevisionScalars: RetainedRevisionScalars(count: 1, bytes: 1)
         )
     }

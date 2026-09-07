@@ -60,14 +60,18 @@ struct UTF16LeadingScalarRoundTripTests {
         #expect(page.rows.first?.title.unicodeScalars.map(\.value) == fixture.expectedTitleScalars)
         let details = try await history.details(for: revised.id)
         #expect(details.item == revised)
-        #expect(details.canonical.map(\.bytes) == [fixture.canonical])
+        #expect(details.title.unicodeScalars.map(\.value) == fixture.expectedTitleScalars)
+        #expect(details.canonical.count == 1)
+        let canonical = try await ComposedSupport.firstRepresentation(in: history, details: details, basis: .canonical)
+        #expect(canonical.bytes == fixture.canonical)
         #expect(details.effective.map(\.typeIdentifier) == [fixture.type])
-        #expect(details.effective.map(\.bytes) == [fixture.replacement])
+        let effective = try await ComposedSupport.firstRepresentation(in: history, details: details, basis: .effective)
+        #expect(effective.bytes == fixture.replacement)
         #expect(details.revisions.first?.title.unicodeScalars.map(\.value) == fixture.expectedTitleScalars)
 
         let paste = try await history.pastePayload(for: revised.id)
         #expect(paste.item == revised)
-        #expect(paste.representations == details.effective)
+        #expect(paste.representations == [effective])
         #expect(paste.lineageHint == revised.id)
 
         // The existing hosted driver crosses details → PreviewContentLoader

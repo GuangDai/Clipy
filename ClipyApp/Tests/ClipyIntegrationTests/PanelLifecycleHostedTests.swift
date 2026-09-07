@@ -759,6 +759,11 @@ actor LifecycleObservationHistory: ClipboardHistory {
         throw HistoryFailure.notFound(id)
     }
 
+    func representation(_ request: HistoryRepresentationRequest) async throws -> HistoryRepresentation {
+        Issue.record("The observation-only lifecycle fixture received an unexpected payload request")
+        throw HistoryFailure.notFound(request.item.id)
+    }
+
     func pastePayload(for id: HistoryItemID) async throws -> PastePayload {
         throw HistoryFailure.notFound(id)
     }

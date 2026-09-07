@@ -96,7 +96,16 @@ extension HistoryAuthority {
         in database: SQLiteDatabase
     ) throws -> HistoryReceipt {
         try executeCommitTransaction(stamped, expectedPreviousPosition: expectedPreviousPosition, in: database)
-        invalidationPublisher.publish(HistoryInvalidation(latestPosition: stamped.position))
+        return publishCommittedHistory(HistoryCommit(
+            position: stamped.position, outcome: stamped.receiptOutcome,
+            hasDestructiveRetentionEffects: stamped.hasDestructiveRetentionEffects
+        ))
+    }
+
+    /// Ordinary actions and bounded sweeps publish only after their single
+    /// SQL transaction has returned successfully.
+    internal func publishCommittedHistory(_ commit: HistoryCommit) -> HistoryReceipt {
+        invalidationPublisher.publish(HistoryInvalidation(latestPosition: commit.position))
         _ = try? blobStore.cleanupBatch { id in
             let statement = try database.prepare(
                 "SELECT 1 FROM representations WHERE blobID = ? LIMIT 1",
@@ -105,9 +114,6 @@ extension HistoryAuthority {
             defer { statement.finalize() }
             return try statement.step()
         }
-        return .committed(HistoryCommit(
-            position: stamped.position, outcome: stamped.receiptOutcome,
-            hasDestructiveRetentionEffects: stamped.hasDestructiveRetentionEffects
-        ))
+        return .committed(commit)
     }
 }

@@ -75,10 +75,11 @@ struct ExternalHistoryFacadeTests {
             return
         }
         #expect(details.details.item == reference)
-        #expect(
-            details.details.effective.first?.bytes
-                == Data("external-facade-journey".utf8)
-        )
+        #expect(details.title == "external-facade-journey")
+        #expect(details.details.effective == [HistoryRepresentationMetadata(
+            typeIdentifier: "public.utf8-plain-text",
+            byteCount: Data("external-facade-journey".utf8).count
+        )])
 
         guard case .pastePayload(let payload) = try await facade.read(
             .pastePayload(reference.id)
@@ -88,6 +89,10 @@ struct ExternalHistoryFacadeTests {
         }
         #expect(payload.item == reference)
         #expect(payload.lineageHint == reference.id)
+        #expect(payload.representations == [HistoryRepresentation(
+            typeIdentifier: "public.utf8-plain-text",
+            bytes: Data("external-facade-journey".utf8)
+        )])
 
         guard case .pin(let pinnedID) = try await facade.perform(
             .pin(reference.id)

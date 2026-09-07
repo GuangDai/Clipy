@@ -243,18 +243,39 @@ internal enum IngestFactLoader {
             throw HistoryFailure.persistence(.invariantViolation)
         }
         let unpinned = retained - pinned
-        let possibleVictims = max(0, max(unpinned + 1 - retention.maximumUnpinnedItems,
-                                       retained + 1 - limits.hardMaximumRetainedItems))
-        var oldest: [RetainedItemSummary] = []
-        if possibleVictims > 0 {
-            let rows = try database.prepare("SELECT id,lastCopiedAt,pinOrdinal FROM history_items WHERE pinOrdinal IS NULL ORDER BY lastCopiedAt,id LIMIT ?",
-                                            bindings: [.integer(Int64(possibleVictims + 1))])
-            defer { rows.finalize() }
-            while try rows.step() { oldest.append(try HistoryItemRowHydration.retainedSummary(rows)) }
+        let occupancy = try database.prepare(
+            "SELECT 1 FROM history_items WHERE id=?", bindings: [.text(prepared.candidateID.rawValue.uuidString)]
+        )
+        let candidateIDExists = try occupancy.step()
+        occupancy.finalize()
+        if match == nil, candidateIDExists {
+            // Let the pure planner report the recoverable ID collision
+            // before choosing a prefix that would exclude that occupied ID.
+            return IngestFacts(confirmedMatch: nil, candidateIDExists: true,
+                retention: CaptureRetentionFacts(retainedCount: retained, unpinnedCount: unpinned, retirementPrefix: nil))
         }
-        let occupancy = try database.prepare("SELECT 1 FROM history_items WHERE id=?", bindings: [.text(prepared.candidateID.rawValue.uuidString)])
-        defer { occupancy.finalize() }
-        return IngestFacts(confirmedMatch: match, candidateIDExists: try occupancy.step(),
-            retention: CaptureRetentionFacts(retainedCount: retained, unpinnedCount: unpinned, oldestUnpinnedItems: oldest))
+        let victimCount: Int
+        do {
+            victimCount = try captureRetirementCount(
+                confirmedMatch: match, retainedCount: retained, unpinnedCount: unpinned,
+                retention: retention, hardMaximumRetainedItems: limits.hardMaximumRetainedItems
+            )
+        } catch let rejection as DomainRejection {
+            throw rejection.historyFailure
+        }
+        let incomingBytes = match == nil
+            ? prepared.canonical.representations.reduce(0) { $0 + $1.content.bytes.count } : 0
+        let total = try RetentionConfigLoading.checkedAdd(
+            RetentionConfigLoading.totalRetainedBytes(in: database), incomingBytes
+        )
+        let prefix = try RetentionConfigLoading.retirementPrefix(
+            in: database,
+            policies: HistoryRetentionPolicies(age: nil, storage: nil, revisions: nil),
+            now: prepared.observedAt,
+            protectedItemID: match?.id ?? prepared.candidateID,
+            projectedTotalBytes: total, minimumRetiredItems: victimCount
+        )
+        return IngestFacts(confirmedMatch: match, candidateIDExists: candidateIDExists,
+            retention: CaptureRetentionFacts(retainedCount: retained, unpinnedCount: unpinned, retirementPrefix: prefix))
     }
 }

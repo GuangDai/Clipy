@@ -29,8 +29,18 @@ struct ScalarReadIsolationProofTests {
         // Current paste does not disclose or materialize original bytes.
         let payload = try await history.pastePayload(for: item.id)
         #expect(payload.representations.map(\.bytes) == [Data("current effective".utf8)])
+        let details = try await history.details(for: item.id)
+        #expect(details.item == item)
+        #expect(details.canonical.map(\.byteCount) == [Data("original bytes".utf8).count])
+        #expect(details.effective.map(\.byteCount) == [Data("current effective".utf8).count])
+        let effective = try await history.representation(.init(
+            item: item, basis: .effective, typeIdentifier: "public.utf8-plain-text"
+        ))
+        #expect(effective.bytes == Data("current effective".utf8))
         await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
-            try await history.details(for: item.id)
+            try await history.representation(.init(
+                item: item, basis: .canonical, typeIdentifier: "public.utf8-plain-text"
+            ))
         }
     }
 
@@ -49,8 +59,19 @@ struct ScalarReadIsolationProofTests {
         let history = try await WSSupport.openHistory(storeURL: url)
         let page = try await history.browse(.init(kind: .recent, limit: 10))
         #expect(page.rows.map(\.item) == [item])
+        let details = try await history.details(for: item.id)
+        #expect(details.item == item)
+        #expect(details.revisions.map(\.byteCount) == [Data("current effective".utf8).count])
+        let canonical = try await history.representation(.init(
+            item: item, basis: .canonical, typeIdentifier: "public.utf8-plain-text"
+        ))
+        #expect(canonical.bytes == Data("original bytes".utf8))
         await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) { try await history.pastePayload(for: item.id) }
-        await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) { try await history.details(for: item.id) }
+        await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+            try await history.representation(.init(
+                item: item, basis: .effective, typeIdentifier: "public.utf8-plain-text"
+            ))
+        }
     }
 
     private static func seedRevision(at url: URL) async throws -> HistoryItemReference {

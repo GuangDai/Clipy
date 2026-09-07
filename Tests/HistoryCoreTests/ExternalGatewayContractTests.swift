@@ -181,8 +181,10 @@ import Testing
     )
     let historyDetails = HistoryDetails(
         item: item,
-        canonical: [],
-        effective: [],
+        title: "Effective title",
+        canonical: [HistoryRepresentationMetadata(typeIdentifier: "public.utf8-plain-text", byteCount: 15)],
+        effective: [HistoryRepresentationMetadata(typeIdentifier: "public.utf8-plain-text", byteCount: 15)],
+        effectiveMatchesCanonical: true,
         revisions: [],
         occurrence: occurrence,
         pinnedPosition: 1
@@ -198,6 +200,9 @@ import Testing
     #expect(details.title == "Effective title")
     #expect(details.revisionCount == 0)
     #expect(details.details.item == item)
+    #expect(details.details.title == "Effective title")
+    #expect(details.details.effectiveMatchesCanonical)
+    #expect(details.details.effective.first?.byteCount == 15)
 }
 
 @Test func externalRequestValuesPreserveTheFrozenAppIntentsArguments() {

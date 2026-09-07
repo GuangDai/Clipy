@@ -29,6 +29,18 @@ import Testing
 
 enum ComposedSupport {
 
+    /// Reads one explicitly selected representation at the metadata snapshot's
+    /// version. Tests never restore payload arrays onto metadata-only Details.
+    static func firstRepresentation(
+        in history: any ClipboardHistory, details: HistoryDetails, basis: HistoryContentBasis
+    ) async throws -> HistoryRepresentation {
+        let metadata = basis == .canonical ? details.canonical : details.effective
+        let first = try #require(metadata.first)
+        return try await history.representation(HistoryRepresentationRequest(
+            item: details.item, basis: basis, typeIdentifier: first.typeIdentifier
+        ))
+    }
+
     /// The plain-text type identifier the adapter freezes for
     /// `NSPasteboard.PasteboardType.string` — the same normalized UTI the
     /// ingest path stores (docs/02-domain.md §2.1).
@@ -329,6 +341,10 @@ actor PostInitialObservationSuspendingHistory: ClipboardHistory {
 
     func details(for id: HistoryItemID) async throws -> HistoryDetails {
         try await base.details(for: id)
+    }
+
+    func representation(_ request: HistoryRepresentationRequest) async throws -> HistoryRepresentation {
+        try await base.representation(request)
     }
 
     func pastePayload(for id: HistoryItemID) async throws -> PastePayload {

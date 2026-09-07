@@ -71,7 +71,7 @@ private static func makeRepresentations(count: Int) -> [CapturedRepresentation] 
 /// 06 §2 + 05 §6.1 step 2: the representation byte bound is INCLUSIVE — a
 /// single representation of exactly `maximumRepresentationBytes` (64 MiB)
 /// is admitted and commits as `.inserted`. The admitted payload is retained
-/// whole: detail hydration returns the same byte count (03b §9).
+/// whole: an explicit representation read returns every input byte (03b §9).
 @Test func representationAtExactly64MiBIsAdmitted() async throws {
     let history = try await Self.openMemoryHistory()
     let limit = HistoryLimits.standard.maximumRepresentationBytes
@@ -87,10 +87,15 @@ private static func makeRepresentations(count: Int) -> [CapturedRepresentation] 
     }
     #expect(commit.position.rawValue == 1)
 
-    // The retained Canonical representation is the full 64 MiB (03b §9
-    // detail is the byte-returning read).
+    // Metadata alone cannot establish that the full boundary payload is
+    // readable. Explicitly read and inspect all retained Canonical bytes.
     let details = try await history.details(for: reference.id)
-    #expect(details.canonical.map(\.bytes.count) == [limit])
+    #expect(details.canonical.map(\.byteCount) == [limit])
+    let representation = try await history.representation(.init(
+        item: reference, basis: .canonical, typeIdentifier: "public.data"
+    ))
+    #expect(representation.bytes.count == limit)
+    #expect(representation.bytes.allSatisfy { $0 == 0 })
 }
 
 /// 06 §2 + 05 §6.1 step 2 + 03b §10: one byte over the bound is rejected as

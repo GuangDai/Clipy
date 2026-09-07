@@ -83,9 +83,9 @@ struct WS3ComposedContainmentTests {
             "WS3: Canonical Content keeps both rich representations"
         )
         #expect(
-            details.canonical.contains {
-                $0.typeIdentifier == "public.html" && $0.bytes == Data(html.utf8)
-            },
+            try await history.representation(HistoryRepresentationRequest(
+                item: details.item, basis: .canonical, typeIdentifier: "public.html"
+            )).bytes == Data(html.utf8),
             "WS3: the html Canonical bytes are unchanged"
         )
         #expect(details.occurrence.count == 2)

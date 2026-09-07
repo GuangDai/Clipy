@@ -134,7 +134,7 @@ struct WS14ComposedRestartTests {
         #expect(postRestartDetails.revisions.count == 2)
         #expect(postRestartDetails.occurrence.count == 2)
         #expect(
-            postRestartDetails.effective.first?.bytes
+            (try await ComposedSupport.firstRepresentation(in: restarted, details: postRestartDetails, basis: .effective)).bytes
                 == Data("ws14 composed replacement two".utf8),
             "WS14: Effective Content is the active revision's snapshot"
         )

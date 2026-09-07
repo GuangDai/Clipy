@@ -89,10 +89,10 @@ struct WS1ComposedCaptureInsertTests {
         #expect(details.pinnedPosition == nil)
         #expect(details.canonical.map(\.typeIdentifier).count == 1)
         #expect(
-            details.canonical.first?.bytes == Data(text.utf8),
+            (try await ComposedSupport.firstRepresentation(in: history, details: details, basis: .canonical)).bytes == Data(text.utf8),
             "WS1: full Canonical bytes survive the composed round trip"
         )
-        #expect(details.effective == details.canonical)
+        #expect(details.effectiveMatchesCanonical)
 
         // Paste read (01 §5.6 input): current Effective Content plus a
         // lineage hint equal to the item — the payload `AppComposition.paste`

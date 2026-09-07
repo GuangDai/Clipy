@@ -488,14 +488,23 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
         }
     }
 
-    /// Full detail for one retained item (docs/05-authority-kernel.md §14.3):
-    /// the Authority fetches exactly one row, decodes and validates its full
-    /// lineage, and maps it to the public detail DTO.
+    /// Metadata-only detail for one retained item (V2-09 §5). Payloads remain
+    /// unopened until an explicit representation, paste or thumbnail request.
     public func details(
         for id: HistoryItemID
     ) async throws -> HistoryDetails {
         do {
             return try await authority.details(for: id)
+        } catch {
+            throw Self.translatedFailure(error)
+        }
+    }
+
+    public func representation(
+        _ request: HistoryRepresentationRequest
+    ) async throws -> HistoryRepresentation {
+        do {
+            return try await authority.representation(request)
         } catch {
             throw Self.translatedFailure(error)
         }

@@ -12,6 +12,7 @@ struct HistoryUsageReadValidationTests {
         let original = try await RetainedBytesTestSupport.capture("alpha", in: history)
         let item = try await RetainedBytesTestSupport.revise(original, text: "beta", in: history)
         let before = try await history.usage()
+        let detailsBefore = try await history.details(for: item.id)
         try await history.authority.withTestDatabase { authority in
             try authority.database.execute("""
                 UPDATE representations SET inlineBytes=NULL,blobID=?
@@ -25,9 +26,18 @@ struct HistoryUsageReadValidationTests {
         #expect(before.canonicalBytes == 5)
         #expect(before.revisionBytes == 4)
         #expect(before.totalContentBytes == 9)
+        #expect(try await history.details(for: item.id) == detailsBefore)
         await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
-            try await history.details(for: item.id)
+            try await history.representation(.init(
+                item: item, basis: damageRevision ? .effective : .canonical,
+                typeIdentifier: "public.utf8-plain-text"
+            ))
         }
+        let unaffected = try await history.representation(.init(
+            item: item, basis: damageRevision ? .canonical : .effective,
+            typeIdentifier: "public.utf8-plain-text"
+        ))
+        #expect(unaffected.bytes == Data((damageRevision ? "alpha" : "beta").utf8))
         #expect(try await history.usage() == before)
     }
 

@@ -13,7 +13,7 @@
 /// - `RetentionPlannerTests`: D13, D16, D18–D19 through `planRetention`;
 /// - `RetentionExpansionPlannerTests` (V2-02): D13–D14, D16, D19-as-extended
 ///   by D24, D24(a)/(b) victim-safety and deduplicated-union shape through
-///   `planItemRetentionExpansion` (docs/v2/V2-02-retention.md §4.1/§4.2/
+///   `OrderedRetentionSelection` (docs/v2/V2-02-retention.md §4.1/§4.2/
 ///   §6.5; `RET-SELECT-1` Domain half);
 /// - `RevisionPrunePlannerTests` (V2-02): D3, D16, D23 through
 ///   `planRevisionRetentionExpansion` (docs/v2/V2-02-retention.md §5/§6.5;

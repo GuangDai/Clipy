@@ -1,6 +1,7 @@
 /// Representation metadata must not borrow an item-level thumbnail's pixels
 /// or unavailable state, especially across Canonical/Effective revision bases.
 import Foundation
+import ContentPreview
 import HistoryCore
 import HistoryStorage
 import Testing
@@ -42,15 +43,21 @@ struct DetailsImageMetadataTests {
         #expect(revised.contentVersion.rawValue == 2)
         thumbnails.prefetch(revised)
         try #require(await pollUntil { thumbnails.inFlightCount == 0 })
-        // The header still has its genuine current-item thumbnail. It must
-        // not become a preview of the different Canonical PNG below it.
+        // An independently requested item thumbnail must not become a preview
+        // of the different Canonical PNG in the metadata-only Details overview.
         #expect(thumbnails.imagePixelSize(for: revised) == PixelSize(width: 1, height: 1))
         #expect(!thumbnails.isUnavailable(for: revised))
         let details = try await history.details(for: revised.id)
         let content = try DetailsContentPresentation(details: details)
         #expect(!content.effectiveMatchesCanonical)
-        #expect(details.canonical.map(\.bytes) == [originalBytes])
-        #expect(details.effective.map(\.bytes) == [revisedBytes])
+        let canonical = try await history.representation(HistoryRepresentationRequest(
+            item: details.item, basis: .canonical, typeIdentifier: "public.png"
+        ))
+        let effective = try await history.representation(HistoryRepresentationRequest(
+            item: details.item, basis: .effective, typeIdentifier: "public.png"
+        ))
+        #expect(canonical.bytes == originalBytes)
+        #expect(effective.bytes == revisedBytes)
         expectImageMetadata(try #require(content.canonical.first),
                             type: "public.png", byteCount: originalBytes.count)
         expectImageMetadata(try #require(content.effective.first),
@@ -82,7 +89,20 @@ struct DetailsImageMetadataTests {
                             type: "public.png", byteCount: png.count)
         expectImageMetadata(try #require(content.effective.last),
                             type: "public.tiff", byteCount: tiff.count)
-        #expect(details.effective.map(\.bytes) == [png, tiff])
+        let selectedPNG = try await history.representation(HistoryRepresentationRequest(
+            item: details.item, basis: .effective, typeIdentifier: "public.png"
+        ))
+        let selectedTIFF = try await history.representation(HistoryRepresentationRequest(
+            item: details.item, basis: .effective, typeIdentifier: "public.tiff"
+        ))
+        #expect(selectedPNG.bytes == png)
+        #expect(selectedTIFF.bytes == tiff)
+        let renderer = ContentPreview()
+        let tiffPreview = await renderer.renderHistoryPane([
+            PreviewRepresentation(typeIdentifier: selectedTIFF.typeIdentifier, bytes: selectedTIFF.bytes)
+        ])
+        #expect(tiffPreview == .failed(.malformedRepresentation),
+                "An explicit TIFF preview must not borrow the item's successful PNG thumbnail")
     }
 
     private func expectImageMetadata(
@@ -94,7 +114,6 @@ struct DetailsImageMetadataTests {
         #expect(representation.byteCount == byteCount)
         #expect(representation.isImage)
         #expect(representation.presentation == .metadataOnly)
-        #expect(!representation.showsUnavailablePreviewNotice)
     }
 
     private func capture(

@@ -22,7 +22,7 @@ struct GatewayExternalWriteTests {
         let sequence: UInt64
         let changePosition: UInt64
         let kind: HistoryChangeKindRawV1
-        let affected: [HistoryItemID]
+        let affected: HistoryAffectedItems
     }
 
     private struct DurableSnapshot: Sendable {
@@ -528,7 +528,7 @@ struct GatewayExternalWriteTests {
         #expect(hcr.sequence == expectedPosition)
         #expect(hcr.changePosition == expectedPosition)
         #expect(hcr.kind == kind)
-        #expect(hcr.affected == [itemID])
+        #expect(hcr.affected == .explicit([itemID]))
         #expect(snapshot.gateway.operations.count
             == prior.gateway.operations.count + 1)
         let audit = try #require(snapshot.gateway.operations.last)

@@ -54,7 +54,7 @@ struct WS13ComposedDetailsReviseOCCAndRevisionsTests {
         let details = try await viewState.details(for: inserted.id)
         #expect(details.item == inserted)
         #expect(details.canonical.count == 2)
-        #expect(details.effective == details.canonical)
+        #expect(details.effectiveMatchesCanonical)
         #expect(details.revisions.isEmpty)
 
         // The editor's Save with the CURRENT token succeeds and appends

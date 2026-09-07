@@ -94,8 +94,8 @@ struct OpaquePasteboardRoundTripTests {
             "opaque round-trip capture"
         ))
         let details = try await history.details(for: inserted.id)
-        expectRepresentations(details.canonical, equalTo: expected)
-        expectRepresentations(details.effective, equalTo: expected)
+        try await expectRepresentations(details, basis: .canonical, in: history, equalTo: expected)
+        try await expectRepresentations(details, basis: .effective, in: history, equalTo: expected)
 
         // Exercise the production preview loader and public thumbnail read
         // with these stored bytes. Neither grants semantics by sniffing.
@@ -113,7 +113,10 @@ struct OpaquePasteboardRoundTripTests {
         let payload = try await history.pastePayload(for: inserted.id)
         #expect(payload.item == inserted)
         #expect(payload.lineageHint == inserted.id)
-        expectRepresentations(payload.representations, equalTo: expected)
+        #expect(payload.representations.count == expected.count)
+        #expect(Set(payload.representations.map {
+            CapturedRepresentation(typeIdentifier: $0.typeIdentifier, bytes: $0.bytes)
+        }) == Set(expected))
         ComposedSupport.setPasteboardContents("previous destination content", on: destination)
         let destinationAdapter = PasteboardAdapter(pasteboard: destination)
         try destinationAdapter.write(payload)
@@ -142,20 +145,25 @@ struct OpaquePasteboardRoundTripTests {
         ))
         #expect(coalesced == inserted)
         let finalDetails = try await history.details(for: inserted.id)
-        expectRepresentations(finalDetails.canonical, equalTo: expected)
-        expectRepresentations(finalDetails.effective, equalTo: expected)
+        try await expectRepresentations(finalDetails, basis: .canonical, in: history, equalTo: expected)
+        try await expectRepresentations(finalDetails, basis: .effective, in: history, equalTo: expected)
         #expect(finalDetails.occurrence.count == 2)
         let page = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 10))
         #expect(page.rows.map(\.item) == [inserted])
     }
 
     private func expectRepresentations(
-        _ actual: [HistoryRepresentation],
+        _ details: HistoryDetails, basis: HistoryContentBasis, in history: any ClipboardHistory,
         equalTo expected: [CapturedRepresentation]
-    ) {
+    ) async throws {
+        let actual = basis == .canonical ? details.canonical : details.effective
         #expect(actual.count == expected.count)
-        #expect(Set(actual.map {
-            CapturedRepresentation(typeIdentifier: $0.typeIdentifier, bytes: $0.bytes)
-        }) == Set(expected))
+        #expect(Set(actual.map(\.typeIdentifier)) == Set(expected.map(\.typeIdentifier)))
+        for representation in expected {
+            let loaded = try await history.representation(HistoryRepresentationRequest(
+                item: details.item, basis: basis, typeIdentifier: representation.typeIdentifier
+            ))
+            #expect(loaded.bytes == representation.bytes)
+        }
     }
 }

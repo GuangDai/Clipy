@@ -21,7 +21,7 @@ struct HCRRestartTests {
             let sequence: UInt64
             let changePosition: UInt64
             let kind: HistoryChangeKindRawV1
-            let affectedItemIDs: [HistoryItemID]
+            let affectedItems: HistoryAffectedItems
             let blobByteCount: Int
         }
 
@@ -59,10 +59,10 @@ struct HCRRestartTests {
             .insert,
             .pin,
         ])
-        #expect(reopenedSnapshot.records.map(\.affectedItemIDs) == [
-            [seeded.first.id],
-            [seeded.second.id],
-            [seeded.first.id],
+        #expect(reopenedSnapshot.records.map(\.affectedItems) == [
+            .explicit([seeded.first.id]),
+            .explicit([seeded.second.id]),
+            .explicit([seeded.first.id]),
         ])
         #expect(reopenedSnapshot.journalBytes
             == reopenedSnapshot.records.reduce(UInt64(0)) { partial, record in
@@ -94,11 +94,11 @@ struct HCRRestartTests {
             .pin,
             .unpin,
         ])
-        #expect(continuedSnapshot.records.map(\.affectedItemIDs) == [
-            [seeded.first.id],
-            [seeded.second.id],
-            [seeded.first.id],
-            [seeded.first.id],
+        #expect(continuedSnapshot.records.map(\.affectedItems) == [
+            .explicit([seeded.first.id]),
+            .explicit([seeded.second.id]),
+            .explicit([seeded.first.id]),
+            .explicit([seeded.first.id]),
         ])
         #expect(continuedSnapshot.journalBytes
             == continuedSnapshot.records.reduce(UInt64(0)) { partial, record in
@@ -169,7 +169,7 @@ struct HCRRestartTests {
                 sequence: row.sequence,
                 changePosition: row.changePositionRaw,
                 kind: kind,
-                affectedItemIDs: try AffectedItemsBlobCodec.decode(
+                affectedItems: try AffectedItemsBlobCodec.decode(
                     row.affectedItemsBlob,
                     for: kind
                 ),

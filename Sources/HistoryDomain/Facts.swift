@@ -48,36 +48,22 @@ package struct RetainedItemSummary: Sendable, Hashable {
     }
 }
 
-/// The complete retained-set inventory.
-/// docs/02-domain.md §5.1
-///
-/// `allItems` contains every retained item exactly once. Anything less is a
-/// Storage fact-loading failure raised before planning, never a partial fact.
-package struct CompleteRetentionInventory: Sendable {
-    package let allItems: [RetainedItemSummary]
-
-    package init(allItems: [RetainedItemSummary]) {
-        self.allItems = allItems
-    }
-}
-
-/// Capture needs exact counts and only the oldest unpinned rows that could
-/// become victims. Storage supplies at least the maximum possible victim
-/// count plus one row for excluding a coalescing primary (02 §12).
-/// This is an ordered prefix, never a purported complete retained inventory.
+/// Capture needs exact counts and the selected eviction boundary, not one
+/// retained value per victim. Storage selects the prefix after confirmation,
+/// excluding the primary item from the ordered unpinned lane (02 §12).
 package struct CaptureRetentionFacts: Sendable {
     package let retainedCount: Int
     package let unpinnedCount: Int
-    package let oldestUnpinnedItems: [RetainedItemSummary]
+    package let retirementPrefix: RetentionRetirementPrefix?
 
     package init(
         retainedCount: Int,
         unpinnedCount: Int,
-        oldestUnpinnedItems: [RetainedItemSummary]
+        retirementPrefix: RetentionRetirementPrefix?
     ) {
         self.retainedCount = retainedCount
         self.unpinnedCount = unpinnedCount
-        self.oldestUnpinnedItems = oldestUnpinnedItems
+        self.retirementPrefix = retirementPrefix
     }
 }
 
@@ -189,29 +175,17 @@ package struct RemoveFacts: Sendable {
 /// The complete facts clear planning requires.
 /// docs/02-domain.md §5.4
 ///
-/// `affected` is the complete set selected by the requested scope at the
-/// Authority linearization point. There is no partial clear.
+/// `affectedCount` counts the complete scope at the Authority linearization
+/// point. Scope deletion needs no retained IDs or per-item facts.
 package struct ClearFacts: Sendable {
-    package let affected: [RetainedItemSummary]
+    package let affectedCount: Int
 
-    package init(affected: [RetainedItemSummary]) {
-        self.affected = affected
+    package init(affectedCount: Int) {
+        self.affectedCount = affectedCount
     }
 }
 
 // MARK: - Retention facts (docs/02-domain.md §5.5)
-
-/// The complete facts retention planning requires.
-/// docs/02-domain.md §5.5
-package struct RetentionFacts: Sendable {
-    package let inventory: CompleteRetentionInventory
-    package let currentPolicy: RetentionPolicy
-
-    package init(inventory: CompleteRetentionInventory, currentPolicy: RetentionPolicy) {
-        self.inventory = inventory
-        self.currentPolicy = currentPolicy
-    }
-}
 
 /// The single v1 user retention dimension: maximum unpinned item count.
 /// docs/02-domain.md §5.5

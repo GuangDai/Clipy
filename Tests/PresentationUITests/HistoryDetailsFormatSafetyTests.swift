@@ -6,6 +6,17 @@ import PresentationUI
 import Testing
 
 struct HistoryDetailsFormatSafetyTests {
+    @Test func equalMetadataDoesNotImplyEqualCanonicalAndEffectiveBytes() throws {
+        let canonical = HistoryRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data("A".utf8))
+        let effective = HistoryRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data("B".utf8))
+        let snapshot = details(canonical: [canonical], effective: [effective])
+        #expect(snapshot.canonical == snapshot.effective)
+        let presentation = try DetailsContentPresentation(details: snapshot)
+        #expect(!presentation.effectiveMatchesCanonical,
+                "Revert eligibility comes from the byte-exact commit projection, not byte-count equality")
+        #expect(presentation.canonical[0].presentation == .metadataOnly)
+        #expect(presentation.effective[0].presentation == .metadataOnly)
+    }
 
     /// Literal source vectors distinguish a UTF-16 encoding marker from the
     /// first actual scalar. Details, editor prefill and saved replacement must
@@ -22,10 +33,13 @@ struct HistoryDetailsFormatSafetyTests {
             let representation = HistoryRepresentation(typeIdentifier: fixture.type, bytes: fixture.bytes)
             let snapshot = details(canonical: [representation], effective: [representation])
             let prepared = try DetailsContentPresentation(details: snapshot)
-            #expect(prepared.canonical[0].presentation == .plainText(fixture.text))
-            #expect(prepared.effective[0].presentation == .plainText(fixture.text))
+            #expect(prepared.canonical[0].presentation == .metadataOnly)
+            #expect(prepared.effective[0].presentation == .metadataOnly)
+            #expect(DetailsRepresentationPresentation.resolve(representation) == .plainText(fixture.text))
 
             var draft = ReviseEditorDraft(details: snapshot)
+            let installed = draft.installReplacementSource(representation)
+            #expect(installed)
             #expect(draft.replacementText(for: fixture.type).utf8.elementsEqual(fixture.text.utf8))
             draft.setChoice(.replace, for: fixture.type)
             guard case .replace(let unedited) = draft.revisionRequest().intent else {
@@ -115,12 +129,14 @@ struct HistoryDetailsFormatSafetyTests {
         #expect(prepared.canonical.map(\.typeIdentifier) == canonical.map(\.typeIdentifier))
         #expect(prepared.effective.map(\.byteCount) == effective.map(\.bytes.count))
         #expect(prepared.canonical[0].presentation == .metadataOnly)
-        #expect(prepared.canonical[1].presentation == .plainText(String(repeating: "🦊", count: 500)))
-        #expect(prepared.canonical[2].presentation == .plainText("A"))
+        #expect(prepared.canonical[1].presentation == .metadataOnly)
+        #expect(prepared.canonical[2].presentation == .metadataOnly)
         #expect(prepared.effective[0].presentation == .metadataOnly)
-        #expect(prepared.effective[1].presentation == .metadataOnly, "invalid bytes beyond the displayed prefix still reject the complete input")
-        #expect(prepared.effective[2].presentation == .plainText("B"))
-        #expect(prepared.title == "B", "the title uses the same prepared effective previews")
+        #expect(prepared.effective[1].presentation == .metadataOnly)
+        #expect(prepared.effective[2].presentation == .metadataOnly)
+        #expect(prepared.title == "Metadata title", "the title comes from the scalar projection, not content hydration")
+        #expect(DetailsRepresentationPresentation.resolve(effective[1]) == .metadataOnly,
+                "an explicit preview still rejects malformed text beyond its display prefix")
     }
 
     @Test(arguments: [Data([0xD8, 0x00]), Data([0xD8])])
@@ -134,7 +150,8 @@ struct HistoryDetailsFormatSafetyTests {
         #expect(prepared.effectiveMatchesCanonical)
         #expect(prepared.canonical[0].presentation == .metadataOnly)
         #expect(prepared.effective[0].presentation == .metadataOnly)
-        #expect(prepared.title == nil)
+        #expect(prepared.title == "Metadata title")
+        #expect(DetailsRepresentationPresentation.resolve(representation) == .metadataOnly)
     }
 
     @Test(arguments: [false, true])
@@ -184,7 +201,10 @@ struct HistoryDetailsFormatSafetyTests {
     ) -> HistoryDetails {
         HistoryDetails(
             item: HistoryItemReference(id: HistoryItemID(rawValue: UUID()), contentVersion: .initial),
-            canonical: canonical, effective: effective, revisions: [],
+            title: "Metadata title",
+            canonical: canonical.map { HistoryRepresentationMetadata(typeIdentifier: $0.typeIdentifier, byteCount: $0.bytes.count) },
+            effective: effective.map { HistoryRepresentationMetadata(typeIdentifier: $0.typeIdentifier, byteCount: $0.bytes.count) },
+            effectiveMatchesCanonical: canonical == effective, revisions: [],
             occurrence: CopyOccurrenceSummary(
                 firstCopiedAt: Date(timeIntervalSinceReferenceDate: 1),
                 lastCopiedAt: Date(timeIntervalSinceReferenceDate: 2),

@@ -35,7 +35,13 @@ struct RetainedBytesProjectionLifecycleTests {
         #expect(try await RetainedBytesTestSupport.counts(item.id, in: history) == original)
         #expect(try await history.usage().totalContentBytes == usage.totalContentBytes)
         let details = try await history.details(for: item.id)
-        #expect(details.canonical.reduce(0) { $0 + $1.bytes.count } == 70_017)
+        #expect(details.canonical.reduce(0) { $0 + $1.byteCount } == 70_017)
+        for (type, expected) in [("public.utf8-plain-text", text), ("com.example.opaque", opaque)] {
+            let representation = try await history.representation(.init(
+                item: item, basis: .canonical, typeIdentifier: type
+            ))
+            #expect(representation.bytes == expected)
+        }
         #expect(details.occurrence.count == 2)
         try await RetainedBytesTestSupport.assertAccounting(in: history)
     }
@@ -48,6 +54,12 @@ struct RetainedBytesProjectionLifecycleTests {
         #expect(try await RetainedBytesTestSupport.counts(original.id, in: history)
             == RetainedBytesTestSupport.Counts(canonical: 17, revisions: 2, revisionBytes: 44))
         let before = try await history.details(for: original.id)
+        let canonicalBefore = try await history.representation(.init(
+            item: current, basis: .canonical, typeIdentifier: "public.utf8-plain-text"
+        ))
+        let effectiveBefore = try await history.representation(.init(
+            item: current, basis: .effective, typeIdentifier: "public.utf8-plain-text"
+        ))
         let usage = try await history.usage()
         let receipt = try await history.perform(.setRetentionPolicies(HistoryRetentionPolicies(
             age: nil, storage: nil,
@@ -63,6 +75,12 @@ struct RetainedBytesProjectionLifecycleTests {
         #expect(after.item == current)
         #expect(after.canonical == before.canonical)
         #expect(after.effective == before.effective)
+        #expect(try await history.representation(.init(
+            item: current, basis: .canonical, typeIdentifier: "public.utf8-plain-text"
+        )) == canonicalBefore)
+        #expect(try await history.representation(.init(
+            item: current, basis: .effective, typeIdentifier: "public.utf8-plain-text"
+        )) == effectiveBefore)
         #expect(after.revisions.count == 1)
         #expect(after.revisions.map(\.id) == Array(before.revisions.suffix(1)).map(\.id))
         #expect(try await RetainedBytesTestSupport.counts(original.id, in: history)
@@ -76,6 +94,9 @@ struct RetainedBytesProjectionLifecycleTests {
         let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let item = try await RetainedBytesTestSupport.capture("canonical", in: history)
         let before = try await history.details(for: item.id)
+        let beforeBytes = try await history.representation(.init(
+            item: item, basis: .canonical, typeIdentifier: "public.utf8-plain-text"
+        ))
         let usage = try await history.usage()
         for action in [RetainedBytesTestSupport.revisionAction(item, text: "new content"), .remove(item.id)] {
             await history.authority.setTransactionFailureInjection(.beforeSingletonUpdate)
@@ -84,6 +105,11 @@ struct RetainedBytesProjectionLifecycleTests {
             }
             #expect(try await history.usage() == usage)
             #expect(try await history.details(for: item.id) == before)
+            for basis in [HistoryContentBasis.canonical, .effective] {
+                #expect(try await history.representation(.init(
+                    item: item, basis: basis, typeIdentifier: "public.utf8-plain-text"
+                )) == beforeBytes)
+            }
             try await RetainedBytesTestSupport.assertAccounting(in: history)
         }
     }
