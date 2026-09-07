@@ -39,7 +39,6 @@ struct HistoryDetailsExportTests {
     @Test func exportSelectsCompleteBytesFromTheDisplayedBasis() async throws {
         let textType = "public.utf8-plain-text"
         let opaqueType = "com.example.opaque"
-        let emptyType = "com.example.empty"
         let original = Data([0xEF, 0xBB, 0xBF]) + Data(String(repeating: "original", count: 200).utf8)
         let revised = Data([0xFE, 0xFF, 0x00, 0x41])
         let opaque = Data([0x00, 0xFF, 0x10, 0x00])
@@ -48,7 +47,6 @@ struct HistoryDetailsExportTests {
             representations: [
                 CapturedRepresentation(typeIdentifier: textType, bytes: original),
                 CapturedRepresentation(typeIdentifier: opaqueType, bytes: opaque),
-                CapturedRepresentation(typeIdentifier: emptyType, bytes: Data()),
             ],
             origin: CopyOriginObservation(sourceApplication: nil, lineageHint: nil),
             observedAt: Date(timeIntervalSince1970: 1)
@@ -61,7 +59,6 @@ struct HistoryDetailsExportTests {
             intent: .replace(RevisionDraft(decisions: [
                 RevisionDecision(typeIdentifier: textType, action: .replace(bytes: revised)),
                 RevisionDecision(typeIdentifier: opaqueType, action: .hide),
-                RevisionDecision(typeIdentifier: emptyType, action: .hide),
             ])))))
         let snapshot = try await history.details(for: item.id)
         // Only selection constructs an exact-reference byte request; preparing
@@ -72,7 +69,6 @@ struct HistoryDetailsExportTests {
             (ContentBasis.effective, textType, revised),
             (.canonical, textType, original),
             (.canonical, opaqueType, opaque),
-            (.canonical, emptyType, Data()),
         ] {
             let request = try #require(basis.representation(typeIdentifier: type, in: snapshot))
             #expect(request.item == snapshot.item)
@@ -81,7 +77,9 @@ struct HistoryDetailsExportTests {
             #expect(representation.bytes == expected)
         }
         #expect(ContentBasis.effective.representation(typeIdentifier: opaqueType, in: snapshot) == nil)
-        #expect(ContentBasis.effective.representation(typeIdentifier: emptyType, in: snapshot) == nil)
+        // History rejects empty capture representations. Empty-file export is
+        // exercised directly by RepresentationExportHostedTests, while this
+        // real-store test verifies stored bytes and hidden-type selection.
     }
 }
 
