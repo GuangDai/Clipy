@@ -170,12 +170,11 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
     /// (docs/01-architecture.md §4; Card 2B-2).
     internal static func open(
         configuration: HistoryConfiguration,
+        limits: HistoryLimits = .standard,
         makeCandidateID: @escaping @Sendable () -> HistoryItemID
     ) async throws -> SQLiteHistory {
-        // §13 step 1: configuration validation against the fixed Part VI
-        // safety profile (§2: "always uses the fixed HistoryLimits.standard
-        // safety profile").
-        let limits = HistoryLimits.standard
+        // The public entry uses the fixed profile. V2-09 scale fixtures may
+        // override retained count through the package-only measurement opener.
         guard limits.userMaximumUnpinnedRange.contains(
             configuration.initialMaximumUnpinnedItems
         ) else {

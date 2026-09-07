@@ -25,6 +25,85 @@ struct PreviewPaneStateTests {
         PreviewPaneState(autoOpenDelay: .zero)
     }
 
+    @Test func normalPressureRestoresTheCurrentDwellWithoutAnotherSelectionChange() async {
+        let state = makeState()
+        let item = reference()
+        state.handleSelectionChange(item)
+        state.respondToMemoryPressure(.critical)
+        state.respondToMemoryPressure(.warning)
+        #expect(state.isAutoOpenSuspendedForMemoryPressure)
+        #expect(!state.isOpen)
+
+        state.respondToMemoryPressure(.normal)
+        await waitForScheduledDwell { state.previewedItem == item }
+        #expect(state.isOpen)
+        #expect(state.previewedItem == item)
+    }
+
+    @Test func pressureRecoveryUsesOnlyTheLatestSelectionAndItsRevisedReference() async {
+        let state = makeState()
+        let first = reference()
+        let latest = reference()
+        let revised = HistoryItemReference(
+            id: latest.id,
+            contentVersion: ContentVersion(rawValue: 2)
+        )
+        state.handleSelectionChange(first)
+        state.respondToMemoryPressure(.critical)
+        state.handleSelectionChange(latest)
+        state.purge(.revision(old: latest, new: revised))
+        // A second pressure notification must retain the same current demand.
+        state.respondToMemoryPressure(.critical)
+        state.respondToMemoryPressure(.normal)
+        await waitForScheduledDwell { state.previewedItem == revised }
+        #expect(state.isOpen)
+        #expect(state.previewedItem == revised)
+    }
+
+    @Test func removedPressureSuspendedTargetCannotReopenOnRecovery() {
+        let state = makeState()
+        let item = reference()
+        state.handleSelectionChange(item)
+        state.respondToMemoryPressure(.critical)
+        state.purge(.item(item.id))
+        #expect(state.purgeGeneration == 1)
+        state.respondToMemoryPressure(.normal)
+        // The second purge is an exact synchronous oracle: no pending or
+        // visible reference may have been resurrected by recovery.
+        state.purge(.item(item.id))
+        #expect(state.purgeGeneration == 1)
+        #expect(!state.isOpen)
+    }
+
+    @Test func pressureRecoveryRespectsManualClosePreferenceAndPanelRetirement() {
+        for cancellation in ["manual close", "preference", "panel close", "resign key", "selection cleared"] {
+            let state = makeState()
+            let item = reference()
+            state.handleSelectionChange(item)
+            state.respondToMemoryPressure(.critical)
+            switch cancellation {
+            case "manual close":
+                state.togglePreview(for: item)
+                state.togglePreview(for: item)
+            case "preference":
+                state.isAutoOpenPreferenceEnabled = false
+                state.isAutoOpenPreferenceEnabled = true
+            case "panel close":
+                state.panelClosed()
+                state.panelBecameKey()
+            case "resign key":
+                state.panelResignedKey()
+                state.panelBecameKey()
+            default:
+                state.handleSelectionChange(nil)
+            }
+            state.respondToMemoryPressure(.normal)
+            state.purge(.item(item.id))
+            #expect(state.purgeGeneration == 0, "Retired demand: \(cancellation)")
+            #expect(!state.isOpen)
+        }
+    }
+
     @Test func criticalPressureStopsDwellButKeepsManualPreviewAndUserPreference() async {
         let state = makeState()
         let item = reference()

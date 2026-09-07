@@ -289,26 +289,68 @@ internal enum PreviewHTMLRenderer {
 
         mutating func consumeEntity() throws -> String? {
             let start = index
+            if index != scalars.endIndex, scalars[index] == "#" {
+                return try consumeNumericEntity()
+            }
             var spelling = ""
+            var legacyMatch: (value: String, end: String.Index)?
             while index != scalars.endIndex, spelling.utf8.count <= 32 {
                 let scalar = scalars[index]
                 if scalar == ";" {
                     try advance()
                     if let value = PreviewHTMLEntities.decode(spelling) { return value }
-                    index = start
-                    return nil
+                    break
                 }
-                guard Self.isASCIIAlpha(scalar) || ("0"..."9").contains(scalar)
-                    || scalar == "#" else { break }
+                guard Self.isASCIIAlpha(scalar) || ("0"..."9").contains(scalar) else { break }
                 spelling.unicodeScalars.append(scalar)
                 try advance()
+                if PreviewHTMLEntities.legacyNames.contains(spelling),
+                   let value = PreviewHTMLEntities.decode(spelling) {
+                    legacyMatch = (value, index)
+                }
             }
-            // Common legacy entities also occur without a semicolon at a
-            // word boundary. Unknown references remain literal source text.
-            if spelling.hasPrefix("#") || PreviewHTMLEntities.legacyNames.contains(spelling),
-               let decoded = PreviewHTMLEntities.decode(spelling) { return decoded }
+            // WHATWG §13.2.5.78: text uses the longest supported reference,
+            // including a legacy prefix in `&copycat`. The alphanumeric/=
+            // exception applies only to attributes, which we never render.
+            if let legacyMatch {
+                index = legacyMatch.end
+                return legacyMatch.value
+            }
             index = start
             return nil
+        }
+
+        mutating func consumeNumericEntity() throws -> String? {
+            let start = index
+            try advance() // #
+            var radix: UInt32 = 10
+            if index != scalars.endIndex, scalars[index] == "x" || scalars[index] == "X" {
+                radix = 16
+                try advance()
+            }
+            let digitStart = index
+            var value: UInt32 = 0
+            while index != scalars.endIndex {
+                let scalar = scalars[index].value
+                let digit: UInt32
+                switch scalar {
+                case 48...57: digit = scalar - 48
+                case 65...70 where radix == 16: digit = scalar - 55
+                case 97...102 where radix == 16: digit = scalar - 87
+                default: digit = radix
+                }
+                guard digit < radix else { break }
+                // Consume all digits with bounded storage, even when the
+                // reference exceeds UInt32. All values above Unicode's range
+                // produce the same replacement scalar (WHATWG §13.2.5.84).
+                value = min(0x110000, value * radix + digit)
+                try advance()
+            }
+            guard index != digitStart else { index = start; return nil }
+            if index != scalars.endIndex, scalars[index] == ";" { try advance() }
+            // Missing semicolons do not consume the first non-digit: e.g.
+            // `&#65abc` renders as `Aabc`, not as an unknown reference.
+            return PreviewHTMLEntities.decode("#\(value)")
         }
 
         static func isASCIIAlpha(_ scalar: Unicode.Scalar) -> Bool {

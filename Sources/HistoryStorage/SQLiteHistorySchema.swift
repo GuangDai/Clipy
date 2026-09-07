@@ -186,6 +186,12 @@ internal enum SQLiteHistorySchema {
         CREATE INDEX history_items_retention_order ON history_items(lastCopiedAt ASC, id ASC)
             WHERE pinOrdinal IS NULL
         """,
+        // Prune and cascading item deletion check this incoming content FK
+        // for every removed revision. Without an index each check scans all
+        // retained items, making large Clear/retention transactions quadratic.
+        """
+        CREATE INDEX history_items_current_content ON history_items(currentContentID)
+        """,
         """
         CREATE INDEX representations_dedup ON representations(typeKey, byteCount, fingerprint, contentID)
             WHERE fingerprint IS NOT NULL

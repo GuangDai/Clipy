@@ -70,6 +70,8 @@ extension SearchWorker {
             defer { try? database.close() }
             try database.execute("BEGIN DEFERRED")
             defer { try? database.execute("ROLLBACK") }
+            try database.setReadInterruptionDeadline(lifetimeDeadline)
+            defer { try? database.setReadInterruptionDeadline(nil) }
 
             let positionStatement = try database.prepare(
                 "SELECT changePosition FROM history_state WHERE key = 'retained-history'"
@@ -178,7 +180,8 @@ extension SearchWorker {
                         case .regexp:
                             evaluation = try await evaluateRegexp(
                                 term: admitted.term, in: snapshot, directive: batchDirective,
-                                preparedPattern: regexp, sharedEngineDeadline: regexpDeadline
+                                preparedPattern: regexp,
+                                sharedEngineDeadline: min(regexpDeadline, lifetimeDeadline)
                             )
                         case .fuzzy:
                             evaluation = try await evaluateFuzzy(
@@ -316,6 +319,11 @@ extension SearchWorker {
         } catch let failure as SQLiteFailure {
             switch failure.primaryCode {
             case SQLITE_CORRUPT, SQLITE_NOTADB, SQLITE_FULL: throw failure.historyFailure
+            case SQLITE_INTERRUPT:
+                // The native callback uses these same two stop conditions;
+                // preserve cancellation/deadline failures, never a partial page.
+                try checkSnapshotDeadline(lifetimeDeadline)
+                throw HistoryFailure.temporarilyUnavailable(.factProof)
             default: throw HistoryFailure.temporarilyUnavailable(.factProof)
             }
         }

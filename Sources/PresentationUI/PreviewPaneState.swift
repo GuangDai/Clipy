@@ -73,7 +73,8 @@ public final class PreviewPaneState {
     /// toggle, or panel transition.
     private var autoOpenTask: Task<Void, Never>?
 
-    /// Exact target captured by the pending dwell. Purges can therefore
+    /// Exact target captured by the pending dwell, including a current
+    /// selection waiting for memory pressure to recover. Purges can therefore
     /// invalidate only work owned by the removed/revised item.
     private var pendingAutoOpenItem: HistoryItemReference?
 
@@ -88,17 +89,24 @@ public final class PreviewPaneState {
     private var isAutoOpenSuppressed = false
     package private(set) var isAutoOpenSuspendedForMemoryPressure = false
 
-    /// Critical pressure stops speculative dwell work without overwriting
-    /// the user's preference or preventing an explicit preview request.
+    /// V2-09 §8: critical pressure stops speculative dwell work but retains
+    /// only its current exact target. Normal resumes that demand, preserving
+    /// manual-close, preference and panel-lifecycle cancellation. Repeated
+    /// normal events cannot postpone an already running dwell.
     package func respondToMemoryPressure(_ pressure: DisplayMemoryPressure) {
         switch pressure {
         case .normal:
+            guard isAutoOpenSuspendedForMemoryPressure else { return }
             isAutoOpenSuspendedForMemoryPressure = false
+            if let pendingAutoOpenItem {
+                scheduleAutoOpen(for: pendingAutoOpenItem)
+            }
         case .warning:
             break
         case .critical:
             isAutoOpenSuspendedForMemoryPressure = true
-            cancelPendingAutoOpen()
+            autoOpenTask?.cancel()
+            autoOpenTask = nil
         }
     }
 
@@ -122,7 +130,6 @@ public final class PreviewPaneState {
         }
         guard isAutoOpenEnabled,
               isAutoOpenPreferenceEnabled,
-              !isAutoOpenSuspendedForMemoryPressure,
               !isAutoOpenSuppressed
         else { return }
         scheduleAutoOpen(for: item)
@@ -238,9 +245,9 @@ public final class PreviewPaneState {
     // MARK: - Private
 
     private func scheduleAutoOpen(for item: HistoryItemReference) {
+        pendingAutoOpenItem = item
         guard !isAutoOpenSuspendedForMemoryPressure else { return }
         let delay = autoOpenDelay
-        pendingAutoOpenItem = item
         // Inherits the MainActor from this isolated context; `weak self`
         // keeps a released pane from being pinned by its own dwell task.
         autoOpenTask = Task { [weak self] in

@@ -216,6 +216,7 @@ internal struct SQLiteContentReads {
             bytes = try blobStore.read(id: uuid(id), expectedByteCount: source.byteCount)
         default: throw corrupt
         }
+        try Task.checkCancellation()
         return HistoryRepresentation(typeIdentifier: source.typeIdentifier, bytes: bytes)
     }
 
