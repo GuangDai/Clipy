@@ -16,11 +16,9 @@ final class AdaptiveSettingsJourneyUITests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         NSPasteboard.general.clearContents()
         XCTAssertTrue(NSPasteboard.general.setString("adaptive settings", forType: .string))
-        let resizeTrace = directory.appendingPathComponent("settings-resize-trace.txt")
         let app = XCUIApplication()
         app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
-        app.launchEnvironment["CLIPY_UI_TEST_SETTINGS_RESIZE_TRACE_PATH"] = resizeTrace.path
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory.appendingPathComponent("history.sqlite").path
         app.launch()
@@ -38,19 +36,15 @@ final class AdaptiveSettingsJourneyUITests: XCTestCase {
         ).firstMatch
         XCTAssertTrue(detail.exists, app.debugDescription)
 
-        // Drag AppKit's resize band outside the content. This must change
-        // the real window size; SwiftUI min-width declarations alone left
-        // the Settings window fixed at 780 points on macOS 26.
+        // Exercise the real Settings resize interaction and detail reflow.
+        // Content bounds alone do not enable this interaction; the Settings
+        // scene must also opt into windowResizeBehavior(.enabled).
         let rightEdge = settings.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.65))
             .withOffset(CGVector(dx: 2, dy: 0))
         rightEdge.press(forDuration: 0.1, thenDragTo: rightEdge.withOffset(CGVector(
             dx: 600 - settings.frame.width, dy: 0
         )))
-        XCTAssertTrue(
-            waitUntil { abs(settings.frame.width - 600) <= 3 },
-            app.debugDescription + "\nSettings resize diagnostics:\n"
-                + ((try? String(contentsOf: resizeTrace, encoding: .utf8)) ?? "No trace file was produced.")
-        )
+        XCTAssertTrue(waitUntil { abs(settings.frame.width - 600) <= 3 }, app.debugDescription)
         XCTAssertTrue(appearance.isHittable, app.debugDescription)
         XCTAssertTrue(density.isHittable, app.debugDescription)
         let narrowWidth = settings.frame.width

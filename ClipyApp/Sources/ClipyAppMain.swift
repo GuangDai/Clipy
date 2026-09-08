@@ -32,6 +32,10 @@ struct ClipyAppMain: App {
 
         Settings {
             SettingsRootView(appDelegate: appDelegate)
+                // Settings defaults to disabled resize interaction even when
+                // contentMinSize allows a range. Let SwiftUI own both the
+                // interaction behavior and the existing content constraints.
+                .windowResizeBehavior(.enabled)
         }
         .defaultSize(width: 780, height: 620)
         .windowResizability(.contentMinSize)
@@ -62,10 +66,6 @@ private struct SettingsRootView: View {
                 storageLocation: appDelegate.storageLocationSettings(),
                 localAutomation: composition.localAutomation?.settings
             )
-            .background {
-                SettingsWindowResizeConfiguration()
-                    .frame(width: 0, height: 0)
-            }
             .sheet(isPresented: $isRecordingSummonShortcut) {
                 SummonShortcutRecorderView { chord in
                     appDelegate.endSummonShortcutRecording()

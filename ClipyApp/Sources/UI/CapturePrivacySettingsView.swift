@@ -114,7 +114,9 @@ private struct IgnoredApplicationRow: View {
             }
             .buttonStyle(.borderless)
             .accessibilityLabel(SettingsCopy.removeIgnoredApp(name ?? identifier))
+            .accessibilityIdentifier("clipy.settings.privacy.application." + identifier + ".remove")
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.settings.privacy.application." + identifier)
         .task(id: identifier) {
             guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier) else { return }

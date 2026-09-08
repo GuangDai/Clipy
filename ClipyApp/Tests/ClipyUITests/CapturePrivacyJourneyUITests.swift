@@ -49,7 +49,8 @@ final class CapturePrivacyJourneyUITests: XCTestCase {
         app.buttons["clipy.settings.category.appearance"].click()
         general.click()
         XCTAssertTrue(ignored.waitForExistence(timeout: 5), app.debugDescription)
-        let remove = ignored.buttons.firstMatch
+        let remove = app.buttons["clipy.settings.privacy.application." + identifier + ".remove"]
+        XCTAssertTrue(remove.exists, app.debugDescription)
         SettingsJourneyControls.scroll(remove, into: form, app: app)
         remove.click()
         XCTAssertTrue(waitUntil { !ignored.exists }, app.debugDescription)
