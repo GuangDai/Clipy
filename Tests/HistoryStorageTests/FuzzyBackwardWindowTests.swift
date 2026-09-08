@@ -81,7 +81,8 @@ struct FuzzyBackwardWindowTests {
         for _ in 0..<count {
             let page = try await history.browse(request(cursor: cursor))
             result.append(page)
-            cursor = try #require(page.next)
+            let next: HistoryPageCursor = try #require(page.next)
+            cursor = next
         }
         return result
     }
