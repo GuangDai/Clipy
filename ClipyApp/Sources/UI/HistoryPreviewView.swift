@@ -511,7 +511,6 @@ struct HistoryPreviewView: View {
     @State private var loader: PreviewContentLoader
     @State private var retryGeneration = 0
     @State private var fileConfirmationPresented = false
-    @State private var metadataPresented = false
     @State private var pdfPageSelection: PDFPageSelection?
 
     /// Page selection belongs to this exact content version, including when
@@ -654,19 +653,19 @@ struct HistoryPreviewView: View {
             await loader.load(item: targetItem, pdfPage: requestedPDFPage)
         }
         .onChange(of: targetItem) { _, target in
-            metadataPresented = false
+            previewState.isInformationPresented = false
             fileConfirmationPresented = false
             pdfPageSelection = nil
             if loader.requestedItem != target { loader.clear() }
         }
         .onChange(of: viewState.surfacePurge) { _, purge in
             guard let purge else { return }
-            metadataPresented = false
+            previewState.isInformationPresented = false
             loader.purgePreview(purge.scope, isPinned: observedRow?.pinnedPosition != nil)
             if loader.fileLoadConfirmation == nil { fileConfirmationPresented = false }
         }
         .onDisappear {
-            metadataPresented = false
+            previewState.isInformationPresented = false
             pdfPageSelection = nil
             fileConfirmationPresented = false
             loader.clear()
@@ -899,7 +898,7 @@ struct HistoryPreviewView: View {
                 Text(PreviewCopy.copyCount(occurrence.count, locale: locale))
                     .lineLimit(1)
                 Spacer(minLength: 4)
-                Button { metadataPresented.toggle() } label: {
+                Button { previewState.isInformationPresented.toggle() } label: {
                     Image(systemName: "info.circle")
                         .padding(3)
                 }
@@ -908,7 +907,10 @@ struct HistoryPreviewView: View {
                 .help(PreviewPresentationCopy.text("Preview Information"))
                 .accessibilityLabel(PreviewPresentationCopy.text("Preview Information"))
                 .accessibilityIdentifier("clipy.preview.information")
-                .popover(isPresented: $metadataPresented, arrowEdge: .bottom) {
+                .popover(isPresented: Binding(
+                    get: { previewState.isInformationPresented },
+                    set: { previewState.isInformationPresented = $0 }
+                ), arrowEdge: .bottom) {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(PreviewPresentationCopy.text("Preview Information"))
                             .font(.headline)

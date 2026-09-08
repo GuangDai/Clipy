@@ -1319,7 +1319,7 @@ struct HistoryPanelView: View {
 
     // MARK: Hidden shortcuts
 
-    /// At the list root, Esc dismisses the quick-look overlay first, then
+    /// At the list root, Esc dismisses preview information, then Quick Look, then
     /// clears the search term, and otherwise asks the hosting panel to close
     /// (Maccy's KeyChord `.escape` → `close`). A pushed Details/editor
     /// destination owns Esc itself; retaining this root shortcut there would
@@ -1336,7 +1336,9 @@ struct HistoryPanelView: View {
         Group {
             if surfaceState.detailsPath.isEmpty {
                 Button(PanelFooterCopy.text("Clear Search or Close")) {
-                    if surfaceState.quickLookReference != nil {
+                    if previewState.isInformationPresented {
+                        previewState.isInformationPresented = false
+                    } else if surfaceState.quickLookReference != nil {
                         surfaceState.quickLookReference = nil
                     } else if viewState.isSearchActive {
                         viewState.clearSearch()

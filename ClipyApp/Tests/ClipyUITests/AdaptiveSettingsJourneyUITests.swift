@@ -36,10 +36,12 @@ final class AdaptiveSettingsJourneyUITests: XCTestCase {
         ).firstMatch
         XCTAssertTrue(detail.exists, app.debugDescription)
 
-        // Resize the real AppKit window edge; the detail must reflow instead
-        // of remaining the old fixed 480-point tab within a larger window.
+        // Start in AppKit's resize band outside the content. The inside
+        // edge belongs to the Form's full-height scrollbar on macOS 26;
+        // dragging there leaves the window at its original 780-point width.
+        // The detail must reflow with the actual window resize.
         let rightEdge = settings.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.65))
-            .withOffset(CGVector(dx: -1, dy: 0))
+            .withOffset(CGVector(dx: 2, dy: 0))
         rightEdge.press(forDuration: 0.1, thenDragTo: rightEdge.withOffset(CGVector(
             dx: 600 - settings.frame.width, dy: 0
         )))
@@ -49,7 +51,7 @@ final class AdaptiveSettingsJourneyUITests: XCTestCase {
         let narrowWidth = settings.frame.width
         let narrowDetailWidth = detail.frame.width
         let narrowEdge = settings.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.65))
-            .withOffset(CGVector(dx: -1, dy: 0))
+            .withOffset(CGVector(dx: 2, dy: 0))
         narrowEdge.press(forDuration: 0.1, thenDragTo: narrowEdge.withOffset(CGVector(dx: 100, dy: 0)))
         XCTAssertTrue(waitUntil {
             settings.frame.width > narrowWidth + 50 && detail.frame.width > narrowDetailWidth + 40

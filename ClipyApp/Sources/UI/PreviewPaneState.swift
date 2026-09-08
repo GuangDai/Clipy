@@ -34,6 +34,10 @@ final class PreviewPaneState {
     /// Whether the preview column is visible.
     private(set) var isOpen = false
 
+    /// Shared with the panel's Escape action so the topmost information
+    /// popover closes before search, Quick Look, or the panel itself.
+    var isInformationPresented = false
+
     /// The item whose content the preview column renders; `nil` while
     /// closed. Reference-exact (item ID + Content Version) like every other
     /// panel surface (04 §9 fence convention).

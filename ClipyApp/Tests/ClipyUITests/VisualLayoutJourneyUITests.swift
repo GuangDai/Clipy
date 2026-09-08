@@ -108,6 +108,7 @@ final class VisualLayoutJourneyUITests: XCTestCase {
         attach(app, named: "Preview — Information popover")
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitUntil { !informationContent.exists }, app.debugDescription)
+        XCTAssertTrue(panel.exists && imageRow.exists, "Escape must dismiss information without closing History: \(app.debugDescription)")
 
         imageRow.rightClick()
         let showDetails = app.menuItems["Show Details"]
